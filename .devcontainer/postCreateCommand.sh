@@ -57,14 +57,18 @@ sudo cp -r lumen /usr/local/lib/lua/*/
 
 # install cqueues
 
-luarocks install cqueues
+sudo luarocks install cqueues
 
 # install luaposix
 
-luarocks install luaposix
+sudo luarocks install luaposix
 
 # install bit32
 
-luarocks install bit32
+sudo luarocks install bit32
+
+# install luatz
+
+sudo luarocks install luatz
 
 exit 0

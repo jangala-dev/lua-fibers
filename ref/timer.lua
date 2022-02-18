@@ -42,6 +42,10 @@ local function new_timer_entry()
    return allocate_timer_entry()
 end
 
+--- Creates a new timer entry.
+-- @param t time for th entry
+-- @param obj xxxxxxxxxxx
+-- @return 
 local function make_timer_entry(t, obj)
    local ent = new_timer_entry()
    ent.time, ent.obj = t, obj
@@ -53,6 +57,8 @@ local function recycle_timer_entry(ent)
    timer_entry_freelist[#timer_entry_freelist+1] = ent
 end
 
+--- Creates empty timer slots to populate a new timer wheel.
+-- @return new empty slots for a timer wheel
 local function new_slots()
    local ret = {}
    for slot=0,WHEEL_SLOTS-1 do
@@ -63,33 +69,51 @@ local function new_slots()
    return ret
 end
 
+--- Creates a new timer wheel.
+-- Some description, can be over several lines.
+-- @param now monotonic time (default: system monotonic time)
+-- @param period tick period (default: 1ms)
+-- @return a new timer wheel
 function new_timer_wheel(now, period)
-   now, period = now or engine.now(), period or 1e-3
+   now, period = now or engine.now(), period or 1e-3 -- engine.now() returns monotonic time, which we'll have to replace
    return setmetatable(
       { now=now, period=period, rate=1/period, cur=0,
         slots=new_slots(), outer=false },
       {__index=TimerWheel})
 end
 
+--- Adds a new outer wheel.
+-- Some description, can be over several lines.
+-- @param inner monotonic time (default: system monotonic time)
+-- @param period tick period (default: 1ms)
+-- @return a new timer wheel
 local function add_wheel(inner)
    local base = inner.now + inner.period * (WHEEL_SLOTS - inner.cur)
    inner.outer = new_timer_wheel(base, inner.period * WHEEL_SLOTS)
 end
 
+--- Adds an object to the timer wheel at a relative time.
+-- Some description, can be over several lines.
+-- @param t relative time in seconds
+-- @param obj xxxxxxxxxxx
 function TimerWheel:add_delta(dt, obj)
    return self:add_absolute(self.now + dt, obj)
 end
 
+--- Adds an object to the timer wheel at an absolute time.
+-- Some description, can be over several lines.
+-- @param t absolute time in seconds
+-- @param obj xxxxxxxxxxx
 function TimerWheel:add_absolute(t, obj)
-   local offset = math.max(math.floor((t - self.now) * self.rate), 0)
-   if offset < WHEEL_SLOTS then
-      local idx = band(self.cur + offset, SLOT_INDEX_MASK)
+   local offset = math.max(math.floor((t - self.now) * self.rate), 0) -- the number of ticks ahead to add the event 
+   if offset < WHEEL_SLOTS then -- is the number of ticks needed within the wheel?
+      local idx = band(self.cur + offset, SLOT_INDEX_MASK) -- replace with simple modulus `(self.cur + offset) % WHEEL_SLOTS`
       local ent = make_timer_entry(t, obj)
       push_node(ent, self.slots[idx])
       return ent
    else
-      if not self.outer then add_wheel(self) end
-      return self.outer:add_absolute(t, obj)
+      if not self.outer then add_wheel(self) end -- if no outer wheel then add one
+      return self.outer:add_absolute(t, obj) -- recurses outwards 
    end
 end
 
@@ -148,7 +172,7 @@ local function tick(wheel, sched)
       recycle_timer_entry(ent)
       sched:schedule(obj)
    end
-   wheel.cur = band(wheel.cur + 1, SLOT_INDEX_MASK)
+   wheel.cur = band(wheel.cur + 1, SLOT_INDEX_MASK) -- this is just performing modulus, right?
    wheel.now = wheel.now + wheel.period
    if wheel.cur == 0 then tick_outer(wheel, wheel.outer) end
 end
@@ -171,13 +195,13 @@ function selftest ()
    for i=1,event_count do
       local dt = math.random()
       t = t + dt
-      wheel:add_absolute(t, t)
+      wheel:add_absolute(t, t) -- this is adding a simple number as the payload stored in the timer wheel
    end
    
    local last = 0
    local count = 0
    local check = {}
-   function check:schedule(t)
+   function check:schedule(t) -- in the call to wheel:advance below, this method is called and provided the payload inserted into the wheel, if it were really a scheduler it would resume the coroutine stored in the wheel??
       local now = wheel.now
       -- The timer wheel only guarantees ordering between ticks, not
       -- ordering within a tick.  It doesn't even guarantee insertion
@@ -192,7 +216,10 @@ function selftest ()
       assert(t < wheel.now + wheel.period*1.1)
    end
 
-   wheel:advance(t+1, check)
+   wheel:advance(t+1, check) -- this advances the wheel by t, which is the cumulative time of all the events added above
+   
+   print(count, event_count)
+   
    assert(count == event_count)
 
    print("selftest: ok")

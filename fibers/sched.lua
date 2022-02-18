@@ -1,15 +1,19 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+-- (c) Snabb project
+-- (c) Jangala
+
+-- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 
 -- Fibers.
 
-module(..., package.seeall)
+local syscall = require 'fibers.utils.syscall'
+local timer = require 'fibers.timer'
 
-local C = require('ffi').C -- for usleep
-local timer = require('lib.fibers.timer')
+local MAX_SLEEP_TIME = 10
 
 local Scheduler = {}
+
 -- when a new scheduler is created a new timer wheel is created for it
-function new()
+local function new()
    ret = setmetatable(
       { next={}, cur={}, sources={}, wheel=timer.new_timer_wheel() },
       {__index=Scheduler})
@@ -83,30 +87,30 @@ end
 
 --- Allows the system to sleep until the next task is scheduled in the scheduler.
 function Scheduler:wait_for_events()
-   local now, next_time = C.get_monotonic_time(), self:next_wake_time()
-   -- Limit the sleep to 10 seconds to ensure that our timeout can be
-   -- represented as a u32 in microseconds, and also for strace
-   -- debugging.
-   local timeout = math.min(10, next_time - now)
+   local now, next_time = syscall.monotonic_float() , self:next_wake_time()
+   local timeout = math.min(MAX_SLEEP_TIME, next_time - now)
    if self.event_waiter then
       self.event_waiter:wait_for_events(self, now, timeout)
    else
-      C.usleep(timeout * 1e6)
+      syscall.sleep_float(timeout)
    end
 end
 
+--- Method stops the scheduler.
 function Scheduler:stop()
    self.done = true
 end
 
+--- Method starts the scheduler.
 function Scheduler:main()
    self.done = false
    repeat
       self:wait_for_events()
-      self:run(C.get_monotonic_time())
+      self:run(syscall.monotonic_float())
    until self.done
 end
 
+--- Method cancels tasks and  shuts down the scheduler.
 function Scheduler:shutdown()
    for i=1,100 do
       for i=1,#self.sources do self.sources[i]:cancel_all_tasks(self) end
@@ -118,35 +122,38 @@ end
 
 function selftest ()
    print("selftest: lib.fibers.scheduler")
-   local sched = new()
+   local scheduler = new()
 
    local last, count = 0, 0
    local function task_run(task)
-      local now = sched:now()
+      local now = scheduler:now()
       local t = task.scheduled
       last, count = t, count + 1
       -- Check that tasks run within a tenth a tick of when they should.
       -- Floating-point imprecisions can cause either slightly early or
       -- slightly late ticks.
-      assert(sched:now() - sched.wheel.period*1.1 < t)
-      assert(t < sched:now() + sched.wheel.period*0.1)
+      assert(scheduler:now() - scheduler.wheel.period*1.1 < t)
+      assert(t < scheduler:now() + scheduler.wheel.period*0.1)
    end
 
    local event_count = 1e5
-   local t = sched:now()
+   local t = scheduler:now()
    for i=1,event_count do
       local dt = math.random()
       t = t + dt
-      sched:schedule_at_time(t, {run=task_run, scheduled=t})
+      scheduler:schedule_at_time(t, {run=task_run, scheduled=t})
    end
    
-   for now=sched:now(),t+1,sched.wheel.period do
-      sched:run(now)
+   for now=scheduler:now(),t+1,scheduler.wheel.period do
+      scheduler:run(now)
    end
-   
-   print(count, event_count)
 
    assert(count == event_count)
 
    print("selftest: ok")
 end
+
+return {
+   new = new,
+   selftest = selftest
+}

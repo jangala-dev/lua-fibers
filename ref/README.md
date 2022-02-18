@@ -1,0 +1,1 @@
+This folder contains the unaltered (but annotated code) from the Snabb Project
