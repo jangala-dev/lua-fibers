@@ -13,9 +13,9 @@ local count = 100
 
 --- The go function generates a parameter-free function that can be neatly used
 --- in `fiber.spawn` to bring our example much closer to Go
-local function go(fn, ...)
+local function go(fn, args)
     return function ()
-        fn(unpack(arg))
+        fn(unpack(args))
     end
 end
 
@@ -44,12 +44,12 @@ local function main()
     local done = false
     fiber.spawn(function()
         local ch = channel.new()
-        fiber.spawn(go(generate,ch))
+        fiber.spawn(go(generate, {ch}))
         for i=1,count do
             local prime = ch:get()
             print(prime)
             ch1 = channel.new()
-            fiber.spawn(go(filter, ch, ch1, prime))
+            fiber.spawn(go(filter, {ch, ch1, prime}))
             ch = ch1
         end
         done = true
