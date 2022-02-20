@@ -3,15 +3,15 @@
 -- The original can be found at https://go.dev/play/p/9U22NfrXeq
 -- Notes below
 
---look for packages one folder up.
-package.path = "../?.lua;" .. package.path
+--look for packages one or two folder up.
+package.path = "../../?.lua;../?.lua;" .. package.path
 
 local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
 
 local count = 100
 
---- The go function generates a parameter-free function that can be neatly used
+--- The go function returns a closure that can be neatly used
 --- in `fiber.spawn` to bring our example much closer to Go
 local function go(fn, args)
     return function ()
@@ -52,9 +52,9 @@ local function main()
             fiber.spawn(go(filter, {ch, ch1, prime}))
             ch = ch1
         end
-        done = true
+        fiber.current_scheduler.done = true
     end)
-    while not done do fiber.current_scheduler:run() end
+    fiber.current_scheduler:main()
 end
 
 main()
