@@ -11,12 +11,11 @@ local fiber = require 'fibers.fiber'
 
 local count = 100
 
---- The go function returns a closure that can be neatly used
---- in `fiber.spawn` to bring our example much closer to Go
+--- so simple to recreate Go's go
 local function go(fn, args)
-    return function ()
-        fn(unpack(args))
-    end
+    fiber.spawn(function ()
+        fn(unpack(args or {}))
+    end)
 end
 
 -- Send the sequence 2, 3, 4, ... to channel 'tx'.
@@ -41,20 +40,17 @@ end
 
 -- The prime sieve: Daisy-chain Filter processes.
 local function main()
-    local done = false
-    fiber.spawn(function()
-        local ch = channel.new()
-        fiber.spawn(go(generate, {ch}))
-        for i=1,count do
-            local prime = ch:get()
-            print(prime)
-            ch1 = channel.new()
-            fiber.spawn(go(filter, {ch, ch1, prime}))
-            ch = ch1
-        end
-        fiber.current_scheduler.done = true
-    end)
-    fiber.current_scheduler:main()
+    local ch = channel.new()
+    go(generate, {ch})
+    for i=1,count do
+        local prime = ch:get()
+        print(prime)
+        ch1 = channel.new()
+        go(filter, {ch, ch1, prime})
+        ch = ch1
+    end
+    fiber.current_scheduler.done = true
 end
 
-main()
+fiber.spawn(main)
+fiber.current_scheduler:main()

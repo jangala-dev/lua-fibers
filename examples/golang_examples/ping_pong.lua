@@ -4,37 +4,33 @@ local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
 local sleep = require 'fibers.sleep'
 
---- The go function uses a closure to returns a thunk
+--- so simple to recreate Go's go
 local function go(fn, args)
-    return function ()
-        fn(unpack(args))
-    end
+    fiber.spawn(function ()
+        fn(unpack(args or {}))
+    end)
 end
 
-local function player(board, name)
+local function player(name, board)
     while true do
         local ball = board:get()
         ball = ball + 1
-        print(name.." hits the ball, rally is now "..ball.." shots")
+        print(name, ball)
         sleep.sleep(.1)
         board:put(ball)
     end
 end
 
 local function main()
-    local done = false
-    fiber.spawn(function()
-        local ball = 0
-        local board = channel.new()
-        fiber.spawn(go(player, {board, 'Alice'}))
-        fiber.spawn(go(player, {board, 'Bijal'}))
-        board:put(ball)
-        sleep.sleep(2)
-        -- this pattern, where the master fiber ending causes the scheduler to
-        -- stop and so for the program to end is nice control flow
-        fiber.current_scheduler.done = true
-    end)
-    fiber.current_scheduler:main()
+    local ball = 0
+    local board = channel.new()
+    go(player, {'ping', board})
+    go(player, {'pong', board})
+    board:put(ball) -- game on; toss the ball
+    sleep.sleep(1)
+    board:get() -- game over; grab the ball
+    fiber.current_scheduler.done = true
 end
 
-main()
+fiber.spawn(main)
+fiber.current_scheduler:main()
