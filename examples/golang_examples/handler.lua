@@ -55,7 +55,6 @@ local function main()
   go(worker, { worker1, 5 })
   go(worker, { worker2, 1 })
   go(complete)
-  fiber.current_scheduler:main() 
 end
 
 fiber.spawn(main)
