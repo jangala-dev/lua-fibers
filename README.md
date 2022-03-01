@@ -43,7 +43,12 @@ Of the Snabb modules the following have so far been ported and tested:
 
 After the basic core has been ported, the aim of this library is to implement 
 
-## Original module map
+
+## Implementing Go features
+
+We already have goroutines, channels
+
+## Original Snabb fibers module map
 
 ```mermaid
 graph TD;
