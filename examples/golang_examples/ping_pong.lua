@@ -3,13 +3,7 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
 local sleep = require 'fibers.sleep'
-
---- so simple to recreate Go's go
-local function go(fn, args)
-    fiber.spawn(function ()
-        fn(unpack(args or {}))
-    end)
-end
+local go = require 'fibers.go'
 
 local function player(name, board)
     while true do

@@ -8,15 +8,9 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 
 local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
+local go = require 'fibers.go'
 
 local count = 100
-
---- so simple to recreate Go's go
-local function go(fn, args)
-    fiber.spawn(function ()
-        fn(unpack(args or {}))
-    end)
-end
 
 -- Send the sequence 2, 3, 4, ... to channel 'tx'.
 local function generate(tx)
