@@ -12,6 +12,7 @@ local fiber = require 'fibers.fiber'
 local queue = require 'fibers.queue'
 local go = require 'fibers.go'
 local sleep = require 'fibers.sleep'
+local waitgroup = require 'fibers.waitgroup'
 
 local function new()
     local ret = {}
@@ -22,26 +23,45 @@ local function new()
 end
 
 local function selftest()
-    local m = new()
-    local x = 0
+    print('selftest: fibers.mutex')
+    local function main()
+        local m = new()
+        local wg = waitgroup.new()
+    
+        local num_workers = 1000
+        local x = 0
+    
+        local function worker()
+            sleep.sleep(math.random()/100)
+            m:lock()
+            local temp = x
+            sleep.sleep(math.random()/1000)
+            x = temp + 1
+            m:unlock()
+        end
+    
+        for i=1,num_workers do
+            wg.add()
+            go(function()
+                worker()
+                wg.done()
+            end)
+        end
 
-    local function incrementer()
-        sleep.sleep(math.random()/10)
-        m:lock()
-        local temp = x
-        sleep.sleep(math.random()/1000)
-        x = temp + 1
-        m:unlock()
+        wg.wait()
+        
+        assert(x==num_workers)
+        print('selftest: ok')
     end
 
-    for i=1,1000 do
-        go(incrementer)
-    end
-
-    sleep.sleep(3)
-
-    print(x)
+    go(function()
+        main()
+        fiber.current_scheduler:stop()
+     end)
+     fiber.current_scheduler:main()
 end
 
-fiber.spawn(selftest)
-fiber.current_scheduler:main()
+return {
+    new = new,
+    selftest = selftest
+}
