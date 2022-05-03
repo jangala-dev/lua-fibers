@@ -43,8 +43,10 @@ local function main()
         go(filter, {ch, ch1, prime})
         ch = ch1
     end
-    fiber.current_scheduler.done = true
 end
 
-fiber.spawn(main)
+go(function()
+    main()
+    fiber.current_scheduler:stop()
+end)
 fiber.current_scheduler:main()

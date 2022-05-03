@@ -23,8 +23,10 @@ local function main()
     board:put(ball) -- game on; toss the ball
     sleep.sleep(1)
     board:get() -- game over; grab the ball
-    fiber.current_scheduler.done = true
 end
 
-fiber.spawn(main)
+go(function()
+    main()
+    fiber.current_scheduler:stop()
+end)
 fiber.current_scheduler:main()

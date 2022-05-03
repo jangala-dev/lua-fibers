@@ -30,9 +30,10 @@ local function main()
 			end)
 		):perform()
 	end
-
-    fiber.current_scheduler.done = true
 end
 
-fiber.spawn(main)
+go(function()
+    main()
+    fiber.current_scheduler:stop()
+end)
 fiber.current_scheduler:main()
