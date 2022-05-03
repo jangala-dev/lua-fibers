@@ -4,6 +4,8 @@
 
 -- Go.
 
+package.path = "../?.lua;" .. package.path
+
 local fiber = require 'fibers.fiber'
 
 local M = {}

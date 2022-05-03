@@ -1,6 +1,7 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
 -- Timeout events.
+package.path = "../?.lua;" .. package.path
 
 local op = require('fibers.op')
 local fiber = require('fibers.fiber')

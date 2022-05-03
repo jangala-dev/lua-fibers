@@ -4,6 +4,7 @@
 -- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 
 -- Fibers.
+package.path = "../?.lua;" .. package.path
 
 local syscall = require 'fibers.utils.syscall'
 local timer = require 'fibers.timer'

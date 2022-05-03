@@ -5,6 +5,8 @@
 
 -- Fibers.
 
+package.path = "../?.lua;" .. package.path
+
 local sched = require 'fibers.sched'
 
 local current_fiber = false
@@ -87,7 +89,7 @@ local function stop() current_scheduler:stop() end
 local function main() return current_scheduler:main() end
 
 local function selftest()
-   print('selftest: lib.fibers.fiber')
+   print('selftest: fibers.fiber')
    local equal = require 'fibers.utils.helper'.equal
    local log = {}
    local function record(x) table.insert(log, x) end

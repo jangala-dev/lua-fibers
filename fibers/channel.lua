@@ -2,6 +2,8 @@
 
 -- Concurrent ML channels.
 
+package.path = "../?.lua;" .. package.path
+
 local op = require 'fibers.op'
 
 local Fifo = {}
@@ -97,31 +99,31 @@ end
 
 local function selftest()
    print('selftest: lib.fibers.channel')
-   local helper = require 'utils.helper'
-   local fiber = require 'fiber'
+   local equal = require 'fibers.utils.helper'.equal
+   local fiber = require 'fibers.fiber'
    local ch, log = new(), {}
    local function record(x) table.insert(log, x) end
 
    fiber.spawn(function() record('a'); record(ch:get()) end)
    fiber.spawn(function() record('b'); ch:put('c'); record('d') end)
-   assert(helper.equal(log, {}))
+   assert(equal(log, {}))
    fiber.current_scheduler:run()
    -- One turn: first fiber ran, suspended, then second fiber ran,
    -- completed first, and continued self to end.
-   assert(helper.equal(log, {'a', 'b', 'd'}))
+   assert(equal(log, {'a', 'b', 'd'}))
    fiber.current_scheduler:run()
    -- Next turn schedules first fiber and finishes.
-   assert(helper.equal(log, {'a', 'b', 'd', 'c'}))
+   assert(equal(log, {'a', 'b', 'd', 'c'}))
 
    log = {}
    fiber.spawn(function() record('b'); ch:put('c'); record('d') end)
    fiber.spawn(function() record('a'); record(ch:get()) end)
-   assert(helper.equal(log, {}))
+   assert(equal(log, {}))
    fiber.current_scheduler:run()
    -- Reversed order.
-   assert(helper.equal(log, {'b', 'a', 'c'}))
+   assert(equal(log, {'b', 'a', 'c'}))
    fiber.current_scheduler:run()
-   assert(helper.equal(log, {'b', 'a', 'c', 'd'}))
+   assert(equal(log, {'b', 'a', 'c', 'd'}))
 
    print('selftest: ok')
 end

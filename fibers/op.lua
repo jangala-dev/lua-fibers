@@ -5,6 +5,8 @@
 
 -- Concurrent ML operations.
 
+package.path = "../?.lua;" .. package.path
+
 local fiber = require 'fibers.fiber'
 
 -- A suspension represents an instantiation of an operation that a fiber
