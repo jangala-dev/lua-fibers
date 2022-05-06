@@ -7,7 +7,7 @@ package.path = "../?.lua;" .. package.path
 local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
 
-function prime_sieve(count)
+local function prime_sieve(count)
     local function sieve(p, rx)
         local tx = channel.new()
         fiber.spawn(function ()
@@ -53,4 +53,4 @@ function prime_sieve(count)
     while not done do fiber.current_scheduler:run() end
 end
  
- prime_sieve(100)
+prime_sieve(100)

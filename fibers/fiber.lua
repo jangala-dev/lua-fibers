@@ -18,7 +18,7 @@ Fiber.__index = Fiber
 --- Creates a new fiber. A fiber is simply a table, containing a coroutine
 --- and some status and wait parameters
 -- @param fn function to run in the fiber
-function spawn(fn)
+local function spawn(fn)
    current_scheduler:schedule(
       setmetatable({coroutine=coroutine.create(fn),
                     alive=true, sockets={}}, Fiber))
@@ -80,6 +80,7 @@ function Fiber:wait_for_writable(sd)
 end
 
 local function now() return current_scheduler:now() end
+---@diagnostic disable-next-line: need-check-nil
 local function suspend(block_fn, ...) return current_fiber:suspend(block_fn, ...) end
 
 local function schedule(sched, fiber) sched:schedule(fiber) end
@@ -117,6 +118,5 @@ return {
    now = now,
    suspend = suspend,
    yield = yield,
-   fibers = fibers,
    selftest = selftest
 }

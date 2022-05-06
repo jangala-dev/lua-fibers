@@ -14,7 +14,7 @@ local go = require 'fibers.go'
 
 local function new()
    local done_ch, inc_ch = channel.new(), channel.new()
-   function wg_manager()
+   local function wg_manager()
       local waiting = 0
       while true do
          local inc = inc_ch:get()
@@ -42,14 +42,14 @@ local function selftest()
       local wg = new()
       local final_complete = false
       for i=1,num_workers do
-         wg.add()
+         wg:add()
          go(function()
             worker()
-            wg.done()
+            wg:done()
             if i == num_workers then final_complete = true end
          end)
       end
-      wg.wait()
+      wg:wait()
       assert(final_complete)
       print('selftest: ok')
    end

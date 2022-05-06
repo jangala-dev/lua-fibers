@@ -2,7 +2,7 @@
 -- Copyright Jangala
 
 -- Returns true if x and y are structurally similar (isomorphic).
-function equal (x, y)
+local function equal (x, y)
    if type(x) ~= type(y) then return false end
    if type(x) == 'table' then
       for k, v in pairs(x) do
@@ -12,18 +12,19 @@ function equal (x, y)
          if x[k] == nil then return false end
       end
       return true
-   elseif type(x) == 'cdata' then
-      if x == y then return true end
-      if ffi.typeof(x) ~= ffi.typeof(y) then return false end
-      local size = ffi.sizeof(x)
-      if ffi.sizeof(y) ~= size then return false end
-      return C.memcmp(x, y, size) == 0
+   -- Disabling these lines as we have no CData
+   -- elseif type(x) == 'cdata' then
+   --    if x == y then return true end
+   --    if ffi.typeof(x) ~= ffi.typeof(y) then return false end
+   --    local size = ffi.sizeof(x)
+   --    if ffi.sizeof(y) ~= size then return false end
+   --    return C.memcmp(x, y, size) == 0
    else
       return x == y
    end
 end
 
-function dump(o)
+local function dump(o)
    if type(o) == 'table' then
       local s = '{ '
       for k,v in pairs(o) do

@@ -39,7 +39,7 @@ local function main()
     for i=1,count do
         local prime = ch:get()
         print(prime)
-        ch1 = channel.new()
+        local ch1 = channel.new()
         go(filter, {ch, ch1, prime})
         ch = ch1
     end

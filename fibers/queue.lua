@@ -14,7 +14,7 @@ local Queue = {}
 local function new(bound)
    if bound then assert(bound >= 1) end
    local ch_in, ch_out = channel.new(), channel.new()
-   function service_queue()
+   local function service_queue()
       local q = {}
       while true do
          if #q == 0 then
@@ -61,7 +61,7 @@ local function selftest()
    local function record(x) table.insert(log, x) end
 
    fiber.spawn(function()
-         q = new()
+         local q = new()
          record('a');
          q:put('b');
          record('c');

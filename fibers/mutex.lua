@@ -32,7 +32,6 @@ local function selftest()
         local x = 0
     
         local function worker()
-            sleep.sleep(math.random()/100)
             m:lock()
             local temp = x
             sleep.sleep(math.random()/1000)
@@ -41,14 +40,17 @@ local function selftest()
         end
     
         for i=1,num_workers do
-            wg.add()
+            wg:add()
             go(function()
+                sleep.sleep(math.random()/100)
                 worker()
-                wg.done()
+                wg:done()
             end)
         end
 
-        wg.wait()
+        wg:wait()
+
+        print(x)
         
         assert(x==num_workers)
         print('selftest: ok')

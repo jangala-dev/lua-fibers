@@ -15,7 +15,7 @@ local Scheduler = {}
 
 -- when a new scheduler is created a new timer wheel is created for it
 local function new()
-   ret = setmetatable(
+   local ret = setmetatable(
       { next={}, cur={}, sources={}, wheel=timer.new_timer_wheel() },
       {__index=Scheduler})
    local timer_task_source = { wheel=ret.wheel }
@@ -121,7 +121,7 @@ function Scheduler:shutdown()
    return false
 end
 
-function selftest ()
+local function selftest ()
    print("selftest: lib.fibers.scheduler")
    local scheduler = new()
 
