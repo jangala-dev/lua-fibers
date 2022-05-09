@@ -39,6 +39,7 @@ local function new(bound)
       end
    end
    fiber.spawn(service_queue)
+   fiber.yield()
    local ret = {}
    function ret:put_operation(x)
       assert(x~=nil)
@@ -78,7 +79,6 @@ local function selftest()
    local function run(...)
       log = {}
       fiber.current_scheduler:run()
-      print("expecting", dump({ ... }), "got", dump(log) )
       assert(equal(log, { ... }))
    end
 
