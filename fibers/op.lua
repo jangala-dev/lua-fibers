@@ -106,9 +106,20 @@ local function choice(...)
          table.insert(ops, op)
       end
    end
-   if #ops == 1 then return ops[1] end
+   -- if #ops == 1 then return ops[1] end
    return new_choice_op(ops)
 end
+
+-- :default method
+--
+-- Method that provides a default function that will be executed, if none of the
+-- operations in a choice operation can succeed immediately.
+
+function ChoiceOp:default(func)
+   self.default_func = func
+   return self
+end
+
 
 -- :wrap method
 --
@@ -156,6 +167,7 @@ function ChoiceOp:perform()
       local success, val = op.try_fn()
       if success then return op.wrap_fn(val) end
    end
+   if self.default_func then return self:default_func() end
    local wrap, val = fiber.suspend(block_choice_op, ops)
    return wrap(val)
 end

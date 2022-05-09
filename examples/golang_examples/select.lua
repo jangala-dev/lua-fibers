@@ -34,6 +34,6 @@ end
 
 go(function()
     main()
-    fiber.current_scheduler:stop()
+    fiber.stop()
 end)
-fiber.current_scheduler:main()
+fiber.main()
