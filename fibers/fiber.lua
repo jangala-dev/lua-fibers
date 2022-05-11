@@ -118,5 +118,7 @@ return {
    now = now,
    suspend = suspend,
    yield = yield,
+   stop = stop,
+   main = main,
    selftest = selftest
 }

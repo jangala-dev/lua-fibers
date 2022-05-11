@@ -25,8 +25,8 @@ local function main()
     board:get() -- game over; grab the ball
 end
 
-go(function()
+fiber.spawn(function()
     main()
-    fiber.current_scheduler:stop()
+    fiber.stop()
 end)
-fiber.current_scheduler:main()
+fiber.main()

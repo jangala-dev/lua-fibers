@@ -21,8 +21,8 @@ local function main()
     done:get()
 end
 
-go(function()
+fiber.spawn(function()
     main()
-    fiber.current_scheduler:stop()
- end)
- fiber.current_scheduler:main()
+    fiber.stop()
+end)
+fiber.main()
