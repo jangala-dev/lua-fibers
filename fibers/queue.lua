@@ -39,13 +39,12 @@ local function new(bound)
       end
    end
    fiber.spawn(service_queue)
-   fiber.yield()
    local ret = {}
    function ret:put_operation(x)
       assert(x~=nil)
       return ch_in:put_operation(x)
    end
-   function ret:get_operation()
+   function ret:get_operation()      
       return ch_out:get_operation()
    end
    function ret:put(x) self:put_operation(x):perform() end
@@ -57,7 +56,6 @@ local function selftest()
    print('selftest: fibers.queue')
    local helper = require 'fibers.utils.helper'
    local equal = helper.equal
-   local dump = helper.dump
    local ch, log = new(), {}
    local function record(x) table.insert(log, x) end
 

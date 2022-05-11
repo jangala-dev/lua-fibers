@@ -16,68 +16,24 @@ local function new()
     local ret = {}
     function ret:lock_operation() return q:put_operation(1) end
     function ret:lock() self:lock_operation():perform() end
-    -- need to add panic on unlock of unlocked mutex
     function ret:unlock_operation() return q:get_operation() end
-    function ret:unlock() self:unlock_operation():perform() end
+    function ret:unlock()
+        local function error_func()
+            print("panic: unlock of unlocked mutex\n",debug.traceback())
+            os.exit()
+        end
+        self:unlock_operation()
+            :perform_alt(op.default_op():wrap(error_func))
+    end
     function ret:trylock()
-        return op.choice(self:lock_operation():wrap(function () return true end))
-        :default(function() return false end)
-        :perform()
+        local function failure_op() return false end
+        return self:lock_operation()
+            :wrap(function() return true end)
+            :perform_alt(op.default_op():wrap(failure_op))
     end
     return ret
 end
 
-local function selftest()
-    local fiber = require 'fibers.fiber'
-    local go = require 'fibers.go'
-    local sleep = require 'fibers.sleep'
-    local waitgroup = require 'fibers.waitgroup'
-
-    print('selftest: fibers.mutex')
-    local function main()
-        local m = new()
-        local wg = waitgroup.new()
-        assert(m:trylock())
-        assert(not m:trylock())
-        assert(not m:trylock())
-        m:unlock()
-        
-        local num_workers = 1000
-        local x = 0
-        
-        local function worker()
-            m:lock()
-            local temp = x
-            sleep.sleep(math.random()/1000)
-            x = temp + 1
-            m:unlock()
-        end
-        
-        for i=1,num_workers do
-            wg:add(1)
-            go(function()
-                sleep.sleep(math.random()/100)
-                worker()
-                wg:done()
-            end)
-        end
-        
-        wg:wait()
-        
-        print(x)
-        
-        assert(x==num_workers)
-        print('selftest: ok')
-    end
-
-    go(function()
-        main()
-        fiber.current_scheduler:stop()
-    end)
-    fiber.current_scheduler:main()
-end
-
 return {
     new = new,
-    selftest = selftest
 }

@@ -106,20 +106,9 @@ local function choice(...)
          table.insert(ops, op)
       end
    end
-   -- if #ops == 1 then return ops[1] end
+   if #ops == 1 then return ops[1] end
    return new_choice_op(ops)
 end
-
--- :default method
---
--- Method that provides a default function that will be executed, if none of the
--- operations in a choice operation can succeed immediately.
-
-function ChoiceOp:default(func)
-   self.default_func = func
-   return self
-end
-
 
 -- :wrap method
 --
@@ -144,7 +133,6 @@ end
 -- any).  If the operation can complete immediately, then return
 -- directly.  Otherwise suspend the current fiber and continue only when
 -- the operation completes.
-
 local function block_base_op(sched, fiber, op)
    op.block_fn(new_suspension(sched, fiber), op.wrap_fn)
 end
@@ -167,12 +155,44 @@ function ChoiceOp:perform()
       local success, val = op.try_fn()
       if success then return op.wrap_fn(val) end
    end
-   if self.default_func then return self:default_func() end
    local wrap, val = fiber.suspend(block_choice_op, ops)
    return wrap(val)
 end
 
+-- :perform_alt method
+--
+-- Attempt to perform an operation exactly once, and return the resulting
+-- value (if any).  If the operation can complete immediately, then return
+-- directly.  Otherwise perform the alt operation.
+function BaseOp:perform_alt(alt_op)
+   fiber.yield()
+   local success, val = self.try_fn()
+   if success then return self.wrap_fn(val) end
+   return alt_op:perform()
+end
+
+function ChoiceOp:perform_alt(alt_op)
+   fiber.yield()
+   local ops = self.base_ops
+   local base = math.random(#ops)
+   for i=1,#ops do
+      local op = ops[((i + base) % #ops) + 1]
+      local success, val = op.try_fn()
+      if success then return op.wrap_fn(val) end
+   end
+   return alt_op:perform()
+end
+
+-- default_op function
+--
+-- Returns a default operation which will succeed upon first try.
+local function default_op()
+   local function try() return true end
+   return new_base_op(nil, try, nil)
+end
+
 return {
    new_base_op = new_base_op,
-   choice = choice
+   choice = choice,
+   default_op = default_op
 }
