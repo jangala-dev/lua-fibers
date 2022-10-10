@@ -36,17 +36,24 @@ Of the Snabb modules the following have so far been ported and tested:
 - [x] op.lua
 - [x] sleep.lua
 - [x] channel.lua
-- [ ] epoll.lua
+- [x] epoll.lua
 - [ ] file.lua
-- [ ] cond.lua
-- [ ] queue.lua
+- [x] cond.lua
+- [x] queue.lua
 
 After the basic core has been ported, the aim of this library is to implement 
 
 
 ## Implementing Go features
 
-We already have goroutines, channels
+- [x] default in select case
+- [x] sleep (already provided)
+- [x] mutex
+- [x] waitgroup
+- [ ] rwmutex
+- [ ] atomic
+- [ ] waitgroup
+- [ ] defer (a fiber based defer is [here](https://github.com/qrmoon/fiber/blob/main/fiber.lua)
 
 ## Original Snabb fibers module map
 
@@ -80,3 +87,15 @@ op.lua |
 queue.lua | 
 sleep.lua | 
 timer.lua | 
+
+## Notes
+
+At present, in lumen, we use a double fork method to create a parent which waits
+for the grandchild proces executing an external command to complete, so that we
+don't block in the main process. However, could we use a SIGCHLD signal to do
+this? There's information but also quite a lot of criticism about this approach:
+
+https://stackoverflow.com/questions/71855507/how-can-i-wait-for-both-a-file-descriptor-and-child-state-change-simultanously
+https://lua-l.lua.narkive.com/HHwP2fg9/lua-threading-sockets
+http://lua-users.org/lists/lua-l/2014-09/msg00410.html
+https://luaposix.github.io/luaposix/examples/signal.lua.html
