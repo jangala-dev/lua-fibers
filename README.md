@@ -95,7 +95,7 @@ for the grandchild proces executing an external command to complete, so that we
 don't block in the main process. However, could we use a SIGCHLD signal to do
 this? There's information but also quite a lot of criticism about this approach:
 
-https://stackoverflow.com/questions/71855507/how-can-i-wait-for-both-a-file-descriptor-and-child-state-change-simultanously
-https://lua-l.lua.narkive.com/HHwP2fg9/lua-threading-sockets
-http://lua-users.org/lists/lua-l/2014-09/msg00410.html
-https://luaposix.github.io/luaposix/examples/signal.lua.html
+  - https://stackoverflow.com/questions/71855507/how-can-i-wait-for-both-a-file-descriptor-and-child-state-change-simultanously
+  - https://lua-l.lua.narkive.com/HHwP2fg9/lua-threading-sockets
+  - http://lua-users.org/lists/lua-l/2014-09/msg00410.html
+  - https://luaposix.github.io/luaposix/examples/signal.lua.html
