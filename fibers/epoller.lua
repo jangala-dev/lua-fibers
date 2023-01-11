@@ -10,7 +10,7 @@ package.path = "../?.lua;" .. package.path
 local bit = require('bit32')
 local epoll = require('epoll')
 
-local Epoll = {}
+local Epoller = {}
 
 local INITIAL_MAXEVENTS = 8
 
@@ -19,7 +19,7 @@ local function new()
                  active_events = {},
                  maxevents = INITIAL_MAXEVENTS,
                }
-   return setmetatable(ret, { __index = Epoll })
+   return setmetatable(ret, { __index = Epoller })
 end
 
 RD = epoll.EPOLLIN + epoll.EPOLLRDHUP
@@ -27,7 +27,7 @@ WR = epoll.EPOLLOUT
 RDWR = RD + WR
 ERR = epoll.EPOLLERR + epoll.EPOLLHUP
 
-function Epoll:add(s, events)
+function Epoller:add(s, events)
    local fd = s
    local active = self.active_events[fd] or 0
    local eventmask = bit.bor(events, active, epoll.EPOLLONESHOT)
@@ -35,7 +35,7 @@ function Epoll:add(s, events)
    if not ok then assert(epoll.register(self.epfd, fd, eventmask)) end
 end
 
-function Epoll:poll(timeout)
+function Epoller:poll(timeout)
    -- Returns a table, an iterator would be more efficient.
    -- print("self.epfd", self.epfd)
    -- print("self.maxevents", self.maxevents)
@@ -59,7 +59,7 @@ function Epoll:poll(timeout)
    return events, err
 end
 
-function Epoll:close()
+function Epoller:close()
    self.epfd:close()
    self.epfd = nil
 end
@@ -104,5 +104,9 @@ end
 
 return {
    new = new,
-   selftest = selftest
+   selftest = selftest,
+   RD = RD,
+   WR = WR,
+   RDWR = RDWR,
+   ERR = ERR,
 }
