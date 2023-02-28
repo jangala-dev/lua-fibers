@@ -3,7 +3,6 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 local waitgroup = require 'fibers.waitgroup'
 local fiber = require 'fibers.fiber'
 local sleep = require 'fibers.sleep'
-local op = require 'fibers.op'
 local go = require 'fibers.go'
 
 local num_routines = 1000
@@ -17,7 +16,7 @@ local function main()
 	local wg2 = waitgroup.new()
 
     wg1:add(1)
-	go(function()
+	fiber.spawn(function()
 		sleep.sleep(1)
 		wg1:done()
 	end)
@@ -36,8 +35,8 @@ local function main()
     print("OK", time() - start, "seconds")
 end
 
-go(function()
+fiber.spawn(function()
     main()
-    fiber.current_scheduler:stop()
+    fiber.stop()
 end)
-fiber.current_scheduler:main()
+fiber.main()
