@@ -68,14 +68,11 @@ local function selftest()
    print('selftest: lib.fibers.epoll')
    local S = require 'posix.unistd'
    local equal = require 'fibers.utils.helper'.equal
-   local myepoll = new()
-   print("myepoll", myepoll)
+   local myepoll = assert(new())
    local function poll(timeout)
       local events = {}
       local retvalue, err = myepoll:poll(timeout)
-      print("retvalue", retvalue, "err", err)
       for fd, event in pairs(retvalue) do
-         print("fd", fd, "event", event)
          table.insert(events, {fd=fd, events=event})
       end
       return events
