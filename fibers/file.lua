@@ -25,7 +25,9 @@ end
 -- These three methods are "blocking handler" methods and are called by
 -- lib.stream.file.
 function PollIOHandler:init_nonblocking(fd)
-   fd:nonblock()
+   -- fd:nonblock()
+   print("set nonblock called")
+   epoll.setnonblocking(stdio.fileno(fd))
 end
 function PollIOHandler:wait_for_readable(fd)
    self:fd_readable_op(fd):perform()
@@ -179,23 +181,19 @@ local function selftest()
    fiber.current_scheduler:add_task_source(handler)
 
    local function main()
-      local fd = io.popen("echo hello; sleep 5; echo world")
-      assert(fd)
-      -- local fd = stdio.fileno(fileobj)
+      local f = assert(io.popen("echo hello; sleep 3; echo world"))
       local counter = 0
       local loop = true
       fiber.spawn(function()
          while loop do
-            fd_readable_op(fd):wrap(function()
-               local line = fd:read("*l")
-               if line then 
-                  print("received value: "..line, "counter: "..counter)
-               else
-                  loop = false
-               end
-            end):perform()
+            fd_readable_op(f):perform()
+            local line = f:read("*l")
+            if not line then 
+               assert(counter > 5)
+               f:close()
+               loop = false
+            end
          end
-         print("leaving file fiber")
       end)
       while loop do
          counter = counter + 1
@@ -207,6 +205,7 @@ local function selftest()
       fiber.stop()
    end)
    fiber.main()
+   print("selftest: ok")
 end
 
 return {
