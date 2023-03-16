@@ -14,7 +14,7 @@ setmetatable(M, {
     __call = function(_, fn, args)
         fiber.spawn(function ()
             fn(unpack(args or {}))
-        end)    
+        end)
     end
 })
 

@@ -1,6 +1,8 @@
 -- Copyright Snabb
 -- Copyright Jangala
 
+local sc = require('fibers.utils.syscall')
+
 -- Returns true if x and y are structurally similar (isomorphic).
 local function equal (x, y)
    if type(x) ~= type(y) then return false end
@@ -12,13 +14,12 @@ local function equal (x, y)
          if x[k] == nil then return false end
       end
       return true
-   -- Disabling these lines as we have no CData
-   -- elseif type(x) == 'cdata' then
-   --    if x == y then return true end
-   --    if ffi.typeof(x) ~= ffi.typeof(y) then return false end
-   --    local size = ffi.sizeof(x)
-   --    if ffi.sizeof(y) ~= size then return false end
-   --    return C.memcmp(x, y, size) == 0
+   elseif type(x) == 'cdata' then
+      if x == y then return true end
+      if sc.typeof(x) ~= sc.typeof(y) then return false end
+      local size = sc.sizeof(x)
+      if sc.sizeof(y) ~= size then return false end
+      return sc.ffi.memcmp(x, y, size) == 0
    else
       return x == y
    end

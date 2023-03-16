@@ -1,3 +1,4 @@
+local op = require "fibers.op"
 
 -- (c) Jangala
 
@@ -12,66 +13,40 @@ local fiber = require 'fibers.fiber'
 local cond = require 'fibers.cond'
 
 local function new()
-   local inc_ch = channel.new()
+   local inc_ch, wait_ch = channel.new(), channel.new()
    local at_zero = cond.new()
-   local waiting = 0
    fiber.spawn(function()
-         while true do
-            waiting = waiting + inc_ch:get()
-            if waiting == 0 then
-               at_zero:signal()
+        local wait_count = 0
+        local function inc(x)
+            wait_count = wait_count + x
+            if wait_count == 0 then
+                at_zero:signal()
+            elseif wait_count < 0 then
+                print(debug.traceback())
+                os.exit()
             end
-         end
+        end
+        while true do
+            op.choice(
+                inc_ch:get_operation():wrap(inc),
+                wait_ch:put_operation(wait_count>0)
+            ):perform()
+        end
       end)
    local ret = {}
    function ret:add(x) inc_ch:put(x) end
-   function ret:done() inc_ch:put(-1) end
-   function ret:wait() if waiting > 0 then at_zero:wait() end end
-   return ret
-end
-
-local function selftest()
-   local sleep = require 'fibers.sleep'
-   local go = require 'fibers.go'
-   print('selftest: fibers.waitgroup')
-   local num_routines = 5000
-
-   local function main()
-      local wg1 = new()
-      local wg2 = new()
-
-      -- newly initialisaed waitgroups don't block on wait
-      wg1:wait()
-      wg2:wait()
-      
-      -- test adding higher numbers to the waitgroup
-      wg1:add(2)
-      go(function()
-         sleep.sleep(1)
-         wg1:add(-2)
-      end)
-
-      for i=1,num_routines do
-         wg2:add(1)
-         go(function ()
-            wg1:wait()
-            sleep.sleep(1)
-            wg2:done()
-         end)
+   function ret:done() self:add(-1) end
+   function ret:wait_operation()
+      if wait_ch:get() then
+         return at_zero:wait_operation()
+      else
+         return op.default_op()
       end
-
-      wg2:wait()
-      print('selftest: ok')
    end
-
-   go(function()
-      main()
-      fiber.current_scheduler:stop()
-   end)
-   fiber.current_scheduler:main()
+   function ret:wait() return self:wait_operation():perform() end
+   return ret
 end
 
 return {
     new = new,
-    selftest = selftest
 }

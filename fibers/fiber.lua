@@ -5,19 +5,19 @@
 
 -- Fibers.
 
-package.path = "../?.lua;" .. package.path
-
+-- Required packages
 local sched = require 'fibers.sched'
 
-local current_fiber = false
+-- Package level variables
+local current_fiber
 local current_scheduler = sched.new()
 
+--- Fiber prototype
 local Fiber = {}
 Fiber.__index = Fiber
 
 --- Creates a new fiber. A fiber is simply a table, containing a coroutine
 --- and some status and wait parameters
--- @param fn function to run in the fiber
 local function spawn(fn)
    current_scheduler:schedule(
       setmetatable({coroutine=coroutine.create(fn),
@@ -25,7 +25,6 @@ local function spawn(fn)
 end
 
 --- Resuming a fiber runs the coroutine.
--- @param ... parameters passed to the coroutine
 function Fiber:resume(...)
    assert(self.alive, "dead fiber") -- checks that the fiber is alive
    local saved_current_fiber = current_fiber -- shift the old current fiber into a safe place
@@ -40,8 +39,6 @@ end
 Fiber.run = Fiber.resume
 
 --- Suspending a fiber suspends the coroutine.
--- @param block_fn The block function should arrange to reschedule
--- the fiber when it becomes runnable
 function Fiber:suspend(block_fn, ...)
    assert(current_fiber == self)
    -- The block_fn should arrange to reschedule the fiber when it
@@ -80,7 +77,6 @@ function Fiber:wait_for_writable(sd)
 end
 
 local function now() return current_scheduler:now() end
----@diagnostic disable-next-line: need-check-nil
 local function suspend(block_fn, ...) return current_fiber:suspend(block_fn, ...) end
 
 local function schedule(sched, fiber) sched:schedule(fiber) end

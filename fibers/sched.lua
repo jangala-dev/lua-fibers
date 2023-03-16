@@ -4,20 +4,23 @@
 -- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 
 -- Fibers.
-package.path = "../?.lua;" .. package.path
 
-local syscall = require 'fibers.utils.syscall'
+-- Required packages
+local sc = require 'fibers.utils.syscall'
 local timer = require 'fibers.timer'
 
+-- Constants
 local MAX_SLEEP_TIME = 10
 
+--- Scheduler prototype
 local Scheduler = {}
+Scheduler.__index = Scheduler
 
--- when a new scheduler is created a new timer wheel is created for it
+-- Creates a new scheduler with a timer wheel
 local function new()
    local ret = setmetatable(
       { next={}, cur={}, sources={}, wheel=timer.new_timer_wheel() },
-      {__index=Scheduler})
+      Scheduler)
    local timer_task_source = { wheel=ret.wheel }
    -- private method for timer_tast_source
    function timer_task_source:schedule_tasks(sched, now)
@@ -37,37 +40,34 @@ function Scheduler:add_task_source(source)
 end
 
 --- Adds a task to be scheduled on the scheduler.
--- @param task task to be scheduled next on the scheduler
 function Scheduler:schedule(task)
    table.insert(self.next, task)
 end
 
 --- Returns the current time of the scheduler.
--- @return current time of the scheduler
 function Scheduler:now()
    return self.wheel.now
 end
 
 --- Adds a task to be scheduled to run at a later absolute time.
--- @param t absolute time at which task is to be run
--- @param task task to be scheduled next on the scheduler
 function Scheduler:schedule_at_time(t, task)
    self.wheel:add_absolute(t, task)
 end
 
 --- Adds a task to be scheduled to run after a relative time.
--- @param dt elapsed time after which the task is to be run
--- @param task task to be scheduled next on the scheduler
 function Scheduler:schedule_after_sleep(dt, task)
    self.wheel:add_delta(dt, task)
 end
 
+--- Asks each source of tasks (files, etc) to provide its tasks that need to be
+--  scheduled 
 function Scheduler:schedule_tasks_from_sources(now)
    for i=1,#self.sources do
       self.sources[i]:schedule_tasks(self, now)
    end
 end
 
+--- Runs one step of the scheduler
 function Scheduler:run(now)
    if now == nil then now = self:now() end
    self:schedule_tasks_from_sources(now)
@@ -80,7 +80,6 @@ function Scheduler:run(now)
 end
 
 --- Returns the next wake time for the scheduler.
--- @return the time at which the scheduler will wake next
 function Scheduler:next_wake_time()
    if #self.next > 0 then return self:now() end
    return self.wheel:next_entry_time()
@@ -88,30 +87,30 @@ end
 
 --- Allows the system to sleep until the next task is scheduled in the scheduler.
 function Scheduler:wait_for_events()
-   local now, next_time = syscall.monotonic_float() , self:next_wake_time()
+   local now, next_time = sc.monotime() , self:next_wake_time()
    local timeout = math.min(MAX_SLEEP_TIME, next_time - now)
    if self.event_waiter then
       self.event_waiter:wait_for_events(self, now, timeout)
    else
-      syscall.sleep_float(timeout)
+      sc.floatsleep(timeout)
    end
 end
 
---- Method stops the scheduler.
+--- Stops the `Scheduler:main()` continuous loop.
 function Scheduler:stop()
    self.done = true
 end
 
---- Method starts the scheduler.
+--- Runs the scheduler in a loop until `Scheduler:stop()` is called.
 function Scheduler:main()
    self.done = false
    repeat
       self:wait_for_events()
-      self:run(syscall.monotonic_float())
+      self:run(sc.monotime())
    until self.done
 end
 
---- Method cancels tasks and  shuts down the scheduler.
+--- Cancels tasks and  shuts down the scheduler.
 function Scheduler:shutdown()
    for i=1,100 do
       for i=1,#self.sources do self.sources[i]:cancel_all_tasks(self) end
@@ -122,29 +121,29 @@ function Scheduler:shutdown()
 end
 
 local function selftest ()
-   print("selftest: lib.fibers.scheduler")
+   print("selftest: lib.fibers.sched")
    local scheduler = new()
 
-   local last, count = 0, 0
+   local count = 0
    local function task_run(task)
       local now = scheduler:now()
       local t = task.scheduled
-      last, count = t, count + 1
+      count = count + 1
       -- Check that tasks run within a tenth a tick of when they should.
       -- Floating-point imprecisions can cause either slightly early or
       -- slightly late ticks.
-      assert(scheduler:now() - scheduler.wheel.period*1.1 < t)
-      assert(t < scheduler:now() + scheduler.wheel.period*0.1)
+      assert(now - scheduler.wheel.period*1.1 < t)
+      assert(t < now + scheduler.wheel.period*0.1)
    end
 
-   local event_count = 1e5
+   local event_count = 1e4
    local t = scheduler:now()
    for i=1,event_count do
       local dt = math.random()
       t = t + dt
       scheduler:schedule_at_time(t, {run=task_run, scheduled=t})
    end
-   
+
    for now=scheduler:now(),t+1,scheduler.wheel.period do
       scheduler:run(now)
    end

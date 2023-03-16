@@ -1,15 +1,13 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
--- Timeout events.
-
-package.path = "../?.lua;" .. package.path
+-- File events.
 
 local op = require('fibers.op')
 local fiber = require('fibers.fiber')
 local epoller = require('fibers.epoller')
--- local file = require('lib.stream.file')
+local sc = require('fibers.utils.syscall')
+local file = require('stream.stream.file')
 
-local stdio = require "posix.stdio"
 local bit = require('bit32')
 
 local PollIOHandler = {}
@@ -25,9 +23,7 @@ end
 -- These three methods are "blocking handler" methods and are called by
 -- lib.stream.file.
 function PollIOHandler:init_nonblocking(fd)
-   -- fd:nonblock()
-   print("set nonblock called")
-   epoll.setnonblocking(stdio.fileno(fd))
+   sc.set_nonblock(fd)
 end
 function PollIOHandler:wait_for_readable(fd)
    self:fd_readable_op(fd):perform()
@@ -45,7 +41,7 @@ end
 local function make_block_fn(fd, waiting, poll, events)
    return function(suspension, wrap_fn)
       local task = suspension:complete_task(wrap_fn)
-      local fd = stdio.fileno(fd)
+      -- local fd = sc.fileno(fd)
       add_waiter(fd, waiting, task)
       poll:add(fd, events)
    end
@@ -138,7 +134,7 @@ local function install_poll_io_handler()
    installed = installed + 1
    if installed == 1 then
       installed_poll_handler = new_poll_io_handler()
-      -- file.set_blocking_handler(installed_poll_handler)
+      file.set_blocking_handler(installed_poll_handler)
       fiber.current_scheduler:add_task_source(installed_poll_handler)
    end
    return installed_poll_handler
@@ -175,37 +171,72 @@ end
 
 local function selftest()
    print('selftest: lib.fibers.file')
-   local sleep = require "fibers.sleep"
+   local equal = require 'fibers.utils.helper'.equal
+   local log = {}
+   local function record(x) table.insert(log, x) end
 
-   local handler = install_poll_io_handler()
+   local handler = new_poll_io_handler()
+   file.set_blocking_handler(handler)
    fiber.current_scheduler:add_task_source(handler)
 
-   local function main()
-      local f = assert(io.popen("echo hello; sleep 3; echo world"))
-      local counter = 0
-      local loop = true
-      fiber.spawn(function()
-         while loop do
-            fd_readable_op(f):perform()
-            local line = f:read("*l")
-            if not line then 
-               assert(counter > 5)
-               f:close()
-               loop = false
-            end
-         end
-      end)
-      while loop do
-         counter = counter + 1
-         sleep.sleep(1/3)
-      end
-   end
+   fiber.current_scheduler:run()
+   assert(equal(log, {}))
+
+   local rd, wr = file.pipe()
+   local message = "hello, world\n"
    fiber.spawn(function()
-      main()
-      fiber.stop()
-   end)
-   fiber.main()
-   print("selftest: ok")
+                  record('rd-a')
+                  local str = rd:read_some_chars()
+                  record('rd-b')
+                  record(str)
+               end)
+   fiber.spawn(function()
+                  record('wr-a')
+                  wr:write(message)
+                  record('wr-b')
+                  wr:flush()
+                  record('wr-c')
+               end)
+
+   fiber.current_scheduler:run()
+   assert(equal(log, {'rd-a', 'wr-a', 'wr-b', 'wr-c'}))
+   fiber.current_scheduler:run()
+   assert(equal(log, {'rd-a', 'wr-a', 'wr-b', 'wr-c', 'rd-b', message}))
+
+   print('selftest: ok')
+
+   -- print('REVISED selftest: lib.fibers.file')
+   -- local sleep = require "fibers.sleep"
+
+   -- local handler = install_poll_io_handler()
+   -- fiber.current_scheduler:add_task_source(handler)
+
+   -- local function main()
+   --    local f = assert(io.popen("echo hello; sleep 3; echo world"))
+   --    local counter = 0
+   --    local loop = true
+   --    fiber.spawn(function()
+   --       while loop do
+   --          fd_readable_op(sc.fileno(f)):perform()
+   --          local line = f:read("*l")
+   --          if not line then 
+   --             assert(counter > 5)
+   --             f:close()
+   --             loop = false
+   --          end
+   --       end
+   --    end)
+   --    while loop do
+   --       counter = counter + 1
+   --       sleep.sleep(1/3)
+   --    end
+   -- end
+   -- fiber.spawn(function()
+   --    main()
+   --    fiber.stop()
+   -- end)
+   -- fiber.main()
+   -- print("selftest: ok")
 end
 
 return {

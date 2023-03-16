@@ -11,8 +11,6 @@ local Timeout = {}
 Timeout.__index = Timeout
 
 --- Creates a new operation that will sleep until a specific monotonic time.
--- @param t monotonic time to sleep until
--- @return a new operation that can be composed by the user
 local function sleep_until_op(t)
    local function try()
       return t <= now()
@@ -24,14 +22,11 @@ local function sleep_until_op(t)
 end
 
 --- Sleeps until a specific monotonic time.
--- @param t monotonic time to sleep until
 local function sleep_until(t)
    return sleep_until_op(t):perform()
 end
 
 --- Creates a new operation that will sleep for a specific number of seconds.
--- @param t seconds to sleep for
--- @return a new operation that can be composed by the user
 local function sleep_op(dt)
    local function try() return dt <= 0 end
    local function block(suspension, wrap_fn)
@@ -41,7 +36,6 @@ local function sleep_op(dt)
 end
 
 --- Sleeps for a specific number of seconds.
--- @param t seconds to sleep for
 local function sleep(dt)
    return sleep_op(dt):perform()
 end

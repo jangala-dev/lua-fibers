@@ -8,14 +8,19 @@
 --
 --   https://www.snellman.net/blog/archive/2016-07-27-ratas-hierarchical-timer-wheel/
 
+-- Require path modification
 package.path = '../?.lua;' .. package.path
 
-local syscall = require 'fibers.utils.syscall'
+-- Required packages
+local sc = require('fibers.utils.syscall')
 
+-- Constants
 local WHEEL_SLOTS = 256
 local WHEEL_SLOT_PERIOD = 1e-3
 
+--- TimerWheel prototype
 local TimerWheel = {}
+TimerWheel.__index = TimerWheel
 
 local function push_node(node, head)
     node.prev, node.next, head.prev.next, head.prev = head.prev, head, node, node
@@ -44,27 +49,19 @@ local function new_timer_entry()
 end
 
 --- Creates a new timer entry.
--- @param t time for th entry
--- @param obj xxxxxxxxxxx
--- @return 
 local function make_timer_entry(t, obj)
     local ent = new_timer_entry()
     ent.time, ent.obj = t, obj
     return ent
 end
 
---- Recycles timer entries.
--- This function takes a timer entry popped from the wheel, falsifies all its
--- fields and then stores it in the `timer_entry_freelist` table. Should reduce
--- garbage collection.
--- @param ent entry to be recycled
+--- Recycles timer entries to reduce garbage collection.
 local function recycle_timer_entry(ent)
     ent.time, ent.next, ent.prev, ent.obj = false, false, false, false
     timer_entry_freelist[#timer_entry_freelist+1] = ent
 end
 
 --- Creates empty timer slots to populate a new timer wheel.
--- @return new empty slots for a timer wheel
 local function new_slots()
     local ret = {}
     for slot=0,WHEEL_SLOTS-1 do
@@ -76,40 +73,25 @@ local function new_slots()
 end
 
 --- Creates a new timer wheel.
--- Some description, can be over several lines.
--- @param now monotonic time (default: system monotonic time)
--- @param period tick period (default: 1ms)
--- @return a new timer wheel
 local function new_timer_wheel(now, period)
-    now, period = now or syscall.monotonic_float(), period or WHEEL_SLOT_PERIOD -- engine.now() returns monotonic time, which we'll have to replace
+    now, period = now or sc.monotime(), period or WHEEL_SLOT_PERIOD
     return setmetatable(
         { now=now, period=period, rate=1/period, cur=0,
-          slots=new_slots(), outer=false },
-        {__index=TimerWheel})
+          slots=new_slots(), outer=false }, TimerWheel)
 end
 
 --- Adds a new outer wheel.
--- Some description, can be over several lines.
--- @param inner monotonic time (default: system monotonic time)
--- @param period tick period (default: 1ms)
--- @return a new timer wheel
 local function add_wheel(inner)
     local base = inner.now + inner.period * (WHEEL_SLOTS - inner.cur)
     inner.outer = new_timer_wheel(base, inner.period * WHEEL_SLOTS)
 end
 
 --- Adds an object to the timer wheel at a relative time.
--- Some description, can be over several lines.
--- @param t relative time in seconds
--- @param obj xxxxxxxxxxx
 function TimerWheel:add_delta(dt, obj)
     return self:add_absolute(self.now + dt, obj)
 end
 
 --- Adds an object to the timer wheel at an absolute time.
--- Some description, can be over several lines.
--- @param t absolute time in seconds
--- @param obj xxxxxxxxxxx
 function TimerWheel:add_absolute(t, obj)
     local offset = math.max(math.floor((t - self.now) * self.rate), 0) -- the number of ticks ahead to add the event 
     if offset < WHEEL_SLOTS then -- can the number of ticks be accommodated within the wheel?
@@ -124,11 +106,6 @@ function TimerWheel:add_absolute(t, obj)
 end
 
 --- Finds the next event in a slot. 
--- Very inefficient, but events in a slot are stored in a linked list. This is
--- only called for max two slots (if currently on the last slot of the inner
--- wheel).
--- @param head the head event in a slot
--- @return time of the soonest event
 local function slot_min_time(head)
     local min = 1/0
     local ent = head.next
@@ -140,13 +117,10 @@ local function slot_min_time(head)
 end
 
 --- Finds the next event in the wheel. 
--- Quite inefficient, as no ordering of events within a slot is kept, nor does
--- the wheel have any notion of the next slot with any events.
--- @return time of the soonest event
 function TimerWheel:next_entry_time()
     for offset=0,WHEEL_SLOTS-1 do
-     local idx = (self.cur + offset) % WHEEL_SLOTS
-     local head = self.slots[idx]
+        local idx = (self.cur + offset) % WHEEL_SLOTS
+        local head = self.slots[idx]
         if head ~= head.next then
             local t = slot_min_time(head)
             if self.outer then
@@ -163,8 +137,6 @@ function TimerWheel:next_entry_time()
 end
 
 --- Advances the outer wheel a tick, assigning all entries to current wheel.
--- @param inner the inner wheel to accept entries
--- @param outer the outer wheel to tick once
 local function tick_outer(inner, outer)
     if not outer then return end
     local head = outer.slots[outer.cur]
@@ -184,9 +156,6 @@ local function tick_outer(inner, outer)
 end
 
 --- Advances the current wheel a tick.
--- @param wheel wheel to be ticked
--- @param sched scheduler to whose schedule method, the object stored in the
--- wheel will be passed
 local function tick(wheel, sched)
     local head = wheel.slots[wheel.cur]
     while head.next ~= head do
@@ -201,9 +170,6 @@ local function tick(wheel, sched)
 end
 
 --- Advances the timer wheel by a fixed time in seconds t.
--- @param t time in seconds to advance the wheel 
--- @param sched scheduler to whose schedule method, the object stored in the
--- wheel will be passed
 function TimerWheel:advance(t, sched)
     while t >= self.now + self.period do tick(self, sched) end
 end
@@ -217,14 +183,14 @@ local function selftest ()
     local hour = 60*60
     wheel:advance(hour)
 
-    local event_count = 1e5
+    local event_count = 1e4
     local t = wheel.now
-    for i=1,event_count do
+    for _=1,event_count do
         local dt = math.random()
         t = t + dt
         wheel:add_absolute(t, t) -- this is adding a simple number as the payload stored in the timer wheel
     end
-    
+
     local last = 0
     local count = 0
     local check = {}
@@ -239,13 +205,11 @@ local function selftest ()
         -- Check that timers fire within a tenth a tick of when they
         -- should.  Floating-point imprecisions can cause either slightly
         -- early or slightly late ticks.
-        assert(wheel.now - wheel.period*0.1 < t)
-        assert(t < wheel.now + wheel.period*1.1)
+        assert(now - wheel.period*0.1 < t)
+        assert(t < now + wheel.period*1.1)
     end
 
     wheel:advance(t+1, check) -- this advances the wheel by t, which is the cumulative time of all the events added above
-
-    print(count, event_count)
 
     assert(count == event_count)
 

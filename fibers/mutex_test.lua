@@ -1,7 +1,6 @@
 package.path = "../../?.lua;../?.lua;" .. package.path
 
-
-local go = require 'fibers.go'
+print("program size", collectgarbage("count")*1024)
 local op = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'
@@ -9,7 +8,7 @@ local sleep = require 'fibers.sleep'
 local mutex = require 'fibers.mutex'
 local waitgroup = require 'fibers.waitgroup'
 local syscall = require 'fibers.utils.syscall'
-
+print("program size", collectgarbage("count")*1024)
 
 local function trylock_test(m)
     local wg = waitgroup.new()
@@ -71,7 +70,7 @@ local function var_protector(m)
     local start = syscall.monotonic_float()
     for i=1,num_workers do
         wg:add(1)
-        go(function()
+        fiber.spawn(function()
             for j=1,num_reps do
                 worker()
             end
@@ -159,8 +158,8 @@ local function main()
 
     m:lock()
     m:unlock()
-    assert(m:trylock())
-    assert(not m:trylock())
+    print(assert(m:trylock()), "should return true")
+    print(assert(not m:trylock()), "should also return true")
     m:unlock()
     m:lock()
     m:unlock()
@@ -175,6 +174,7 @@ local function main()
         end)
     end
 
+    
     topwait:wait()
     print("all tests complete")
 end

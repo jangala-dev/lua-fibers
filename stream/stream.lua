@@ -5,31 +5,32 @@
 
 package.path = "../?.lua;" .. package.path
 
+local sc = require('fibers.utils.syscall')
 local buffer = require('fibers.utils.buffer')
 local bit = require('bit32')
 local ffi = require('cffi')
 
 local Stream = {}
-local Stream_mt = {__index = Stream}
+Stream.__index = Stream
 
 local DEFAULT_BUFFER_SIZE = 1024
 
-function open(io, readable, writable, buffer_size)
+local function open(io, readable, writable, buffer_size)
    local ret = setmetatable(
       {io=io, line_buffering=false, random_access=false},
-      Stream_mt)
+      Stream)
    if readable ~= false then 
       ret.rx = buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
    end
    if writable ~= false then 
       ret.tx = buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
    end
-   if io.seek and io:seek('cur', 0) then ret.random_access = true end
+   if io.seek and io:seek(sc.SEEK_CUR, 0) then ret.random_access = true end
    return ret
 end
 
-function is_stream(x)
-   return type(x) == 'table' and getmetatable(x) == Stream_mt
+local function is_stream(x)
+   return type(x) == 'table' and getmetatable(x) == Stream
 end
 
 function Stream:nonblock() self.io:nonblock() end
@@ -371,11 +372,11 @@ function Stream:seek(whence, offset)
    -- the file, to the position given by offset plus a base specified by
    -- the string whence, as follows:
    if not self.random_access then return nil, 'stream is not seekable' end
-   if whence == nil then whence = 'cur' end
+   if whence == nil then whence = sc.SEEK_CUR end
    if offset == nil then offset = 0 end
-   if whence == 'cur' and offset == 0 then
+   if whence == sc.SEEK_CUR and offset == 0 then
       -- Just a position query.
-      local ret, err = self.io:seek('cur', 0)
+      local ret, err = self.io:seek(sc.SEEK_CUR, 0)
       if ret == nil then return ret, err end
       if self.tx and self.tx:read_avail() ~= 0 then
          return ret + self.tx:read_avail()
@@ -437,7 +438,7 @@ end
 -- The result may be nil.
 function Stream:filename() return self.io.filename end
 
-function selftest()
+local function selftest()
    print('selftest: lib.stream')
 
    local rd_io, wr_io = {}, {}
@@ -465,5 +466,6 @@ end
 
 return {
    open = open,
+   is_stream = is_stream,
    selftest = selftest
 }

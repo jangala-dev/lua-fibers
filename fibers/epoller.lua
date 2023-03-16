@@ -28,6 +28,7 @@ RDWR = RD + WR
 ERR = epoll.EPOLLERR + epoll.EPOLLHUP
 
 function Epoller:add(s, events)
+   -- local fd = type(s) == 'number' and s or sc.fileno(s)
    local fd = s
    local active = self.active_events[fd] or 0
    local eventmask = bit.bor(events, active, epoll.EPOLLONESHOT)

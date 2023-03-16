@@ -15,14 +15,8 @@ rm go1.17.2.linux-arm64.tar.gz
 
 # install lua
 
-curl -R -O http://www.lua.org/ftp/lua-5.1.5.tar.gz
-tar -zxf lua-*
-rm lua-5.1.5.tar.gz
-cd lua-*
-make linux test
-sudo make install
-cd ..
-rm -rf lua-*
+sudo apt install lua5.1
+sudo apt install liblua5.1-dev
 
 # install LuaRocks
 
@@ -44,7 +38,7 @@ sudo luarocks install luasocket
 
 # install nixio (the version on luarocks is broken - lovely)
 
-git clone https://github.com/Neopallium/nixio
+git clone https://github.com/jangala-dev/nixio
 cd nixio/
 sudo luarocks make
 
@@ -54,6 +48,7 @@ cd ..
 
 git clone https://github.com/xopxe/lumen
 sudo cp -r lumen /usr/local/lib/lua/*/
+rm -rf lumen
 
 # install cqueues
 
@@ -67,8 +62,23 @@ sudo luarocks install luaposix
 
 sudo luarocks install bit32
 
-# install luatz
+# install afghanistanyn/lua-epoll
 
-sudo luarocks install luatz
+git clone https://github.com/afghanistanyn/lua-epoll
+cd lua-epoll/
+make
+sudo cp epoll.so /usr/local/lib/lua/5.1/epoll.so
+
+# install cffi-lua
+
+sudo apt install meson pkg-config cmake libffi-dev
+
+git clone https://github.com/q66/cffi-lua
+mkdir cffi-lua/build
+cd cffi-lua/build
+sudo meson .. -Dlua_version=5.1 --buildtype=release
+sudo ninja all
+sudo ninja test
+sudo cp cffi.so /usr/local/lib/lua/5.1/cffi.so
 
 exit 0

@@ -110,12 +110,7 @@ local function choice(...)
    return new_choice_op(ops)
 end
 
--- :wrap method
---
--- Return a new operation that, if and when it succeeds, will apply F to
--- the values yielded by performing the wrapped operation, and yield the
--- result as the values of the wrapped operation.
-
+-- :wrap methods
 function BaseOp:wrap(f)
    local wrap_fn, try_fn, block_fn = self.wrap_fn, self.try_fn, self.block_fn
    return new_base_op(function(val) return f(wrap_fn(val)) end, try_fn, block_fn)
@@ -127,7 +122,7 @@ function ChoiceOp:wrap(f)
    return new_choice_op(ops)
 end
 
--- :perform method
+-- :perform methods
 --
 -- Attempt to perform an operation, and return the resulting value (if
 -- any).  If the operation can complete immediately, then return
