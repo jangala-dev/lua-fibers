@@ -7,6 +7,14 @@ local bit = require('bit32')
 local M = { ffi = {} }
 
 -------------------------------------------------------------------------------
+-- Compatibility functions
+
+table.pack = table.pack or function(...)
+    return { n = select("#", ...), ... }
+end
+
+
+-------------------------------------------------------------------------------
 -- Local functions (for efficiency)
 
 local band, bor, bnot, lshift = bit.band, bit.bor, bit.bnot, bit.lshift
@@ -26,7 +34,10 @@ M.O_RDWR = unix.O_RDWR
 M.O_CREAT = unix.O_CREAT 
 M.O_TRUNC = unix.O_TRUNC 
 M.O_APPEND = unix.O_APPEND 
-M.O_EXCL = unix.O_EXCL 
+M.O_EXCL = unix.O_EXCL
+M.O_NONBLOCK = unix.O_NONBLOCK
+M.O_LARGEFILE = ffi.abi('32bit') and 32768 or 0
+
 
 M.F_GETFL = unix.F_GETFL
 M.F_SETFL = unix.F_SETFL
@@ -45,14 +56,15 @@ M.S_IROTH = 4
 M.S_IWOTH = 2
 M.S_IXOTH = 1
 
-M.O_LARGEFILE = ffi.abi('32bit') and 32768 or 0
-
 M.STDIN_FILENO = unix.STDIN_FILENO
 M.STDOUT_FILENO = unix.STDOUT_FILENO
 M.STDERR_FILENO = unix.STDERR_FILENO
 
 M.SIGPIPE = unix.SIGPIPE
 M.SIG_IGN = unix.SIG_IGN
+
+M.CLOCK_REALTIME = unix.CLOCK_REALTIME
+M.CLOCK_MONOTONIC = unix.CLOCK_MONOTONIC
 
 ---- Would be cleaner to implement epoll using our cffi-lua dependency rather
 ---- than carrying on using the afghanistanyn epoll dependency
@@ -73,28 +85,31 @@ M.SIG_IGN = unix.SIG_IGN
 -------------------------------------------------------------------------------
 -- Luafied stdlib syscalls
 
-M.open = unix.open
-M.fopen = unix.fopen
-M.close = unix.close
-M.fileno = unix.fileno
-M.lseek = unix.lseek
-M.rename = unix.rename
-M.fsync = unix.fsync
-M.unlink = unix.unlink
-M.pipe = unix.pipe
-M.fpipe = unix.fpipe
-M.execve = unix.execve
-M.exit = unix.exit
-M.dup2 = unix.dup2
-M.waitpid = unix.waitpid
-M.fstat = unix.fstat
-M.fork = unix.fork
-M.isatty = unix.isatty
-M.sigaction = unix.sigaction
-M.socket = unix.socket
-M.bind = unix.bind
-M.listen = unix.listen
-
+function M.open(path, mode, perm) return unix.open(path, mode, perm) end
+function M.close(fd) return unix.close(fd) end
+function M.fileno(file) return unix.fileno(file) end
+function M.lseek(file, offset, whence) return unix.lseek(file, offset, whence) end
+function M.rename(from, to) return unix.rename(from, to) end
+function M.fsync(fd) return unix.fsync(fd) end
+function M.unlink(path) return unix.unlink(path) end
+function M.pipe(mode) return unix.pipe(mode) end
+function M.execve(path, argv, env) return unix.execve(path, argv, env) end
+function M.exit(status) return unix.exit(status) end
+function M.dup2(fd1, fd2, flags) return unix.dup2(fd1, fd2, flags) end
+function M.waitpid(pid, options) return unix.waitpid(pid, options) end
+-- the fstat function will need changing if we switch to luaposix as its table
+-- values have different keys than lunix 
+function M.fstat(file, ...) return unix.fstat(file, ...) end
+function M.fork() return unix.fork() end
+function M.isatty(fd) return unix.isatty(fd) end
+function M.sigaction(signo, action, oaction) return unix.sigaction(signo, action, oaction) end
+function M.socket(family, socktype, protocol) return unix.socket(family, socktype, protocol) end
+function M.bind(file, sockaddr) return unix.bind(file, sockaddr) end
+function M.listen(fd, backlog) return unix.listen(fd, backlog) end
+function M.strerror(err) return unix.strerror(err) end
+function M.fcntl(fd, ...) return unix.fcntl(fd, ...) end
+function M.clock_gettime(id) return unix.clock_gettime(id) end
+function M.sigtimedwait(set, timeout) return unix.sigtimedwait(set, timeout) end
 
 
 -------------------------------------------------------------------------------
@@ -113,38 +128,35 @@ end
 
 function M.set_nonblock(file)
     local fd = M.fileno(file)
-	local flags = assert(unix.fcntl(fd, unix.F_GETFL))
-	assert( unix.fcntl(fd, unix.F_SETFL, bor(flags, unix.O_NONBLOCK)))
+	local flags = assert(M.fcntl(fd, M.F_GETFL))
+	assert( M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
 end
 
 function M.set_block(file)
     local fd = M.fileno(file)
-	local flags = assert(unix.fcntl(fd, unix.F_GETFL))
-	assert( unix.fcntl(fd, unix.F_SETFL, band(flags, bnot(unix.O_NONBLOCK))))
+	local flags = assert(M.fcntl(fd, M.F_GETFL))
+	assert( M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
 end
 
 function M.monotime()
-    return unix.clock_gettime(unix.CLOCK_MONOTONIC)
+    return M.clock_gettime(M.CLOCK_MONOTONIC)
 end
 
 function M.realtime()
-    return unix.clock_gettime(unix.CLOCK_REALTIME)
+    return M.clock_gettime(M.CLOCK_REALTIME)
 end
 
 function M.floatsleep(sec)
-    local _, _, errno = unix.sigtimedwait("", sec)
-    assert(errno == unix.EAGAIN) -- to make sure sleep wasn't interrupted
+    local _, _, errno = M.sigtimedwait("", sec)
+    assert(errno == M.EAGAIN) -- to make sure sleep wasn't interrupted
 end
 
 
 -------------------------------------------------------------------------------
 -- FFI C structure functions (for efficiency)
 
-
 M.ffi.typeof = ffi.typeof
 M.ffi.sizeof = ffi.sizeof
-
-
 
 ffi.cdef [[
     size_t write(int fildes, const void *buf, size_t nbytes);
@@ -161,7 +173,7 @@ local function wrap_error(retval)
         return retval
     else
         local errno = ffi.errno()
-        return nil, unix.strerror(errno), errno
+        return nil, M.strerror(errno), errno
     end
 end
 
