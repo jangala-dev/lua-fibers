@@ -147,8 +147,10 @@ function M.realtime()
 end
 
 function M.floatsleep(sec)
-    local _, _, errno = M.sigtimedwait("", sec)
-    assert(errno == M.EAGAIN) -- to make sure sleep wasn't interrupted
+    if sec > 0 then
+        local _, _, errno = M.sigtimedwait("", sec)
+        assert(errno == M.EAGAIN) -- to make sure sleep wasn't interrupted
+    end
 end
 
 
