@@ -1,6 +1,14 @@
 -- Copyright Jangala
 
-local unix = require('unix')
+local p_fcntl = require('posix.fcntl')
+local p_unistd = require('posix.unistd')
+local p_stdio = require('posix.stdio')
+local p_wait = require('posix.sys.wait')
+local p_stat = require('posix.sys.stat')
+local p_signal = require('posix.signal')
+local p_socket = require('posix.sys.socket')
+local p_errno = require('posix.errno')
+local p_time = require('posix.time')
 local ffi = require('cffi')
 local bit = require('bit32')
 
@@ -23,48 +31,49 @@ local band, bor, bnot, lshift = bit.band, bit.bor, bit.bnot, bit.lshift
 -------------------------------------------------------------------------------
 -- Syscall constants
 
-M.SEEK_CUR = unix.SEEK_CUR
-M.SEEK_END = unix.SEEK_END
-M.SEEK_SET = unix.SEEK_SET
+M.SEEK_CUR = p_unistd.SEEK_CUR
+M.SEEK_END = p_unistd.SEEK_END
+M.SEEK_SET = p_unistd.SEEK_SET
 
-M.O_ACCMODE = unix.O_ACCMODE
-M.O_RDONLY = unix.O_RDONLY
-M.O_WRONLY = unix.O_WRONLY
-M.O_RDWR = unix.O_RDWR
-M.O_CREAT = unix.O_CREAT 
-M.O_TRUNC = unix.O_TRUNC 
-M.O_APPEND = unix.O_APPEND 
-M.O_EXCL = unix.O_EXCL
-M.O_NONBLOCK = unix.O_NONBLOCK
+M.O_ACCMODE = 3
+M.O_RDONLY = p_fcntl.O_RDONLY
+M.O_WRONLY = p_fcntl.O_WRONLY
+M.O_RDWR = p_fcntl.O_RDWR
+M.O_CREAT = p_fcntl.O_CREAT
+M.O_TRUNC = p_fcntl.O_TRUNC
+M.O_APPEND = p_fcntl.O_APPEND
+M.O_EXCL = p_fcntl.O_EXCL
+M.O_NONBLOCK = p_fcntl.O_NONBLOCK
 M.O_LARGEFILE = ffi.abi('32bit') and 32768 or 0
 
 
-M.F_GETFL = unix.F_GETFL
-M.F_SETFL = unix.F_SETFL
+M.F_GETFL = p_fcntl.F_GETFL
+M.F_SETFL = p_fcntl.F_SETFL
 
-M.EAGAIN = unix.EAGAIN
-M.EWOULDBLOCK = unix.EWOULDBLOCK
-M.EINTR = unix.EINTR
+M.EAGAIN = p_errno.EAGAIN
+M.EWOULDBLOCK = p_errno.EWOULDBLOCK
+M.EINTR = p_errno.EINTR
+M.EINPROGRESS = p_errno.EINPROGRESS
 
-M.S_IRUSR = 256
-M.S_IWUSR = 128
-M.S_IXUSR = 64
-M.S_IRGRP = 32
-M.S_IWGRP = 16
-M.S_IXGRP = 8
-M.S_IROTH = 4
-M.S_IWOTH = 2
-M.S_IXOTH = 1
+M.S_IRUSR = p_stat.S_IRUSR
+M.S_IWUSR = p_stat.S_IWUSR
+M.S_IXUSR = p_stat.S_IXUSR
+M.S_IRGRP = p_stat.S_IRGRP
+M.S_IWGRP = p_stat.S_IWGRP
+M.S_IXGRP = p_stat.S_IXGRP
+M.S_IROTH = p_stat.S_IROTH
+M.S_IWOTH = p_stat.S_IWOTH
+M.S_IXOTH = p_stat.S_IXOTH
 
-M.STDIN_FILENO = unix.STDIN_FILENO
-M.STDOUT_FILENO = unix.STDOUT_FILENO
-M.STDERR_FILENO = unix.STDERR_FILENO
+M.STDIN_FILENO = p_unistd.STDIN_FILENO
+M.STDOUT_FILENO = p_unistd.STDOUT_FILENO
+M.STDERR_FILENO = p_unistd.STDERR_FILENO
 
-M.SIGPIPE = unix.SIGPIPE
-M.SIG_IGN = unix.SIG_IGN
+M.SIGPIPE = p_signal.SIGPIPE
+M.SIG_IGN = p_signal.SIG_IGN
 
-M.CLOCK_REALTIME = unix.CLOCK_REALTIME
-M.CLOCK_MONOTONIC = unix.CLOCK_MONOTONIC
+M.CLOCK_REALTIME = p_time.CLOCK_REALTIME
+M.CLOCK_MONOTONIC = p_time.CLOCK_MONOTONIC
 
 ---- Would be cleaner to implement epoll using our cffi-lua dependency rather
 ---- than carrying on using the afghanistanyn epoll dependency
@@ -85,71 +94,81 @@ M.CLOCK_MONOTONIC = unix.CLOCK_MONOTONIC
 -------------------------------------------------------------------------------
 -- Luafied stdlib syscalls
 
-function M.open(path, mode, perm) return unix.open(path, mode, perm) end
-function M.close(fd) return unix.close(fd) end
-function M.fileno(file) return unix.fileno(file) end
-function M.lseek(file, offset, whence) return unix.lseek(file, offset, whence) end
-function M.rename(from, to) return unix.rename(from, to) end
-function M.fsync(fd) return unix.fsync(fd) end
-function M.unlink(path) return unix.unlink(path) end
-function M.pipe(mode) return unix.pipe(mode) end
-function M.execve(path, argv, env) return unix.execve(path, argv, env) end
-function M.exit(status) return unix.exit(status) end
-function M.dup2(fd1, fd2, flags) return unix.dup2(fd1, fd2, flags) end
-function M.waitpid(pid, options) return unix.waitpid(pid, options) end
--- the fstat function will need changing if we switch to luaposix as its table
--- values have different keys than lunix 
-function M.fstat(file, ...) return unix.fstat(file, ...) end
-function M.fork() return unix.fork() end
-function M.isatty(fd) return unix.isatty(fd) end
-function M.sigaction(signo, action, oaction) return unix.sigaction(signo, action, oaction) end
-function M.socket(family, socktype, protocol) return unix.socket(family, socktype, protocol) end
-function M.bind(file, sockaddr) return unix.bind(file, sockaddr) end
-function M.listen(fd, backlog) return unix.listen(fd, backlog) end
-function M.strerror(err) return unix.strerror(err) end
-function M.fcntl(fd, ...) return unix.fcntl(fd, ...) end
-function M.clock_gettime(id) return unix.clock_gettime(id) end
-function M.sigtimedwait(set, timeout) return unix.sigtimedwait(set, timeout) end
+function M.open(path, mode, perm) return p_fcntl.open(path, mode, perm) end
+function M.close(fd) return p_unistd.close(fd) end
+function M.fileno(file) return p_stdio.fileno(file) end
+function M.lseek(file, offset, whence) return p_unistd.lseek(file, offset, whence) end
+function M.rename(from, to) return p_stdio.rename(from, to) end
+function M.fsync(fd) return p_unistd.fsync(fd) end
+function M.unlink(path) return p_unistd.unlink(path) end
+function M.pipe() return p_unistd.pipe() end
+function M.execve(path, argv, _)
+    table.remove(argv,1)
+    return p_unistd.exec(path, argv)
+end
+function M.exit(status) return os.exit(status) end
+function M.dup2(fd1, fd2) return p_unistd.dup2(fd1, fd2) end
+function M.waitpid(pid, options) return p_wait.wait(pid, options) end
+function M.fstat(file, ...) 
+    local stat = p_stat.fstat(file, ...)
+    return {
+        dev = stat.st_dev,
+        ino = stat.st_ino,
+        mode = stat.st_mode,
+        nlink = stat.st_nlink,
+        uid = stat.st_uid,
+        gid = stat.st_gid,
+        rdev = stat.st_rdev,
+        size = stat.st_size,
+        atime = stat.st_atime,
+        mtime = stat.st_mtime,
+        ctime = stat.st_ctime,
+        blksize = stat.st_blksize,
+        blocks = stat.st_blocks,
+    }
+end
+function M.fork() return p_unistd.fork() end
+function M.isatty(fd) return p_unistd.isatty(fd) end
+function M.signal(signum, handler) return p_signal.signal(signum, handler) end
+function M.socket(family, socktype, protocol) return p_socket.socket(family, socktype, protocol) end
+function M.bind(file, sockaddr) return p_socket.bind(file, sockaddr) end
+function M.listen(fd, backlog) return p_socket.listen(fd, backlog) end
+function M.strerror(err) return p_errno.errno(err) end
+function M.fcntl(fd, ...) return p_fcntl.fcntl(fd, ...) end
+function M.clock_gettime(id) return p_time.clock_gettime(id) end
 
 
 -------------------------------------------------------------------------------
 -- Convenience functions
 
-function M.signal(signum, handler) -- defined in terms of sigaction, see portability notes in Linux man page
-    local oldact = M.sigaction(signum, nil, true)
-    local ok, err = M.sigaction(signum, handler, oldact)
-    if not ok then return nil, err end
-    local num = tonumber(t.intptr(oldact.handler))
-    local ret = sigret[num]
-    if ret then return ret end -- return eg "IGN", "DFL" not a function pointer
-    return oldact.handler
-end
-
-
-function M.set_nonblock(file)
-    local fd = M.fileno(file)
+function M.set_nonblock(fd)
+    -- local fd = M.fileno(file)
 	local flags = assert(M.fcntl(fd, M.F_GETFL))
 	assert( M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
 end
 
-function M.set_block(file)
-    local fd = M.fileno(file)
+function M.set_block(fd)
+    -- local fd = M.fileno(file)
 	local flags = assert(M.fcntl(fd, M.F_GETFL))
 	assert( M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
 end
 
 function M.monotime()
-    return M.clock_gettime(M.CLOCK_MONOTONIC)
+    local time = M.clock_gettime(M.CLOCK_MONOTONIC)
+    return time.tv_sec + time.tv_nsec/1e9
 end
 
 function M.realtime()
-    return M.clock_gettime(M.CLOCK_REALTIME)
+    local time = M.clock_gettime(M.CLOCK_REALTIME)
+    return time.tv_sec + time.tv_nsec/1e9
 end
 
-function M.floatsleep(sec)
-    if sec > 0 then
-        local _, _, errno = M.sigtimedwait("", sec)
-        assert(errno == M.EAGAIN) -- to make sure sleep wasn't interrupted
+function M.floatsleep(t)
+    local sec = t - t%1
+    local nsec = t%1 * 1e9
+    local _, _, _, remaining = p_time.nanosleep({tv_sec=sec, tv_nsec=nsec})
+    while remaining do
+        p_time.nanosleep(remaining)
     end
 end
 
