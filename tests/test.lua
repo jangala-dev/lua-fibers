@@ -6,7 +6,8 @@ local modules = {
     'stream',
     'stream.file',
     'stream.mem',
-    'stream.compat'
+    'stream.compat',
+    'stream.socket',
 }
 
 for _, j in ipairs(modules) do

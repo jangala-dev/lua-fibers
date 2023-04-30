@@ -46,7 +46,6 @@ M.O_EXCL = p_fcntl.O_EXCL
 M.O_NONBLOCK = p_fcntl.O_NONBLOCK
 M.O_LARGEFILE = ffi.abi('32bit') and 32768 or 0
 
-
 M.F_GETFL = p_fcntl.F_GETFL
 M.F_SETFL = p_fcntl.F_SETFL
 
@@ -74,6 +73,19 @@ M.SIG_IGN = p_signal.SIG_IGN
 
 M.CLOCK_REALTIME = p_time.CLOCK_REALTIME
 M.CLOCK_MONOTONIC = p_time.CLOCK_MONOTONIC
+
+M.AF_INET = p_socket.AF_INET
+M.AF_INET6 = p_socket.AF_INET6
+M.AF_NETLINK = p_socket.AF_NETLINK
+M.AF_PACKET = p_socket.AF_PACKET
+M.AF_UNIX = p_socket.AF_UNIX
+M.AF_UNSPEC = p_socket.AF_UNSPEC
+M.SO_ERROR = p_socket.SO_ERROR
+M.SOCK_DGRAM = p_socket.SOCK_DGRAM
+M.SOCK_RAW = p_socket.SOCK_RAW
+M.SOCK_STREAM = p_socket.SOCK_STREAM
+M.SOL_SOCKET = p_socket.SOL_SOCKET
+M.SOMAXCONN = p_socket.SOMAXCONN
 
 ---- Would be cleaner to implement epoll using our cffi-lua dependency rather
 ---- than carrying on using the afghanistanyn epoll dependency
@@ -132,7 +144,12 @@ function M.isatty(fd) return p_unistd.isatty(fd) end
 function M.signal(signum, handler) return p_signal.signal(signum, handler) end
 function M.socket(family, socktype, protocol) return p_socket.socket(family, socktype, protocol) end
 function M.bind(file, sockaddr) return p_socket.bind(file, sockaddr) end
-function M.listen(fd, backlog) return p_socket.listen(fd, backlog) end
+function M.listen(fd, backlog) return p_socket.listen(fd, backlog or M.SOMAXCONN) end
+function M.connect(fd, addr) return p_socket.connect(fd, addr) end
+function M.accept(fd) return p_socket.accept(fd) end
+function M.getpeername(sockfd) return p_socket.getpeername(sockfd) end
+function M.getsockname(sockfd) return p_socket.getsockname(sockfd) end
+function M.getsockopt(fd, level, name) return p_socket.getsockopt(fd, level, name) end
 function M.strerror(err) return p_errno.errno(err) end
 function M.fcntl(fd, ...) return p_fcntl.fcntl(fd, ...) end
 function M.clock_gettime(id) return p_time.clock_gettime(id) end
