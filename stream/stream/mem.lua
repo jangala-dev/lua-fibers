@@ -4,7 +4,9 @@
 
 local stream = require('stream.stream')
 local sc = require('fibers.utils.syscall')
-local ffi = require('cffi')
+
+local is_LuaJIT = ({false, [1] = true})[1]
+local ffi = is_LuaJIT and require('ffi') or require('cffi')
 
 local Mem = {}
 Mem.__index = Mem

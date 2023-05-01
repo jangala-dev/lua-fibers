@@ -2,9 +2,9 @@
 
 -- Ring buffer for bytes
 
-local test_ffi_lib = 'cffi' -- 'cffi' or 'ffi'
+local is_LuaJIT = ({false, [1] = true})[1]
+local ffi = is_LuaJIT and require('ffi') or require('cffi')
 
-local ffi = require(test_ffi_lib)
 local bit = require("bit32")
 
 local band = bit.band
@@ -18,7 +18,7 @@ ffi.cdef [[
 ]]
 
 local function to_uint32(n)
-   return ffi.new('uint32_t[1]', n)[0]
+   return n % 2^32
 end
 
 local function new(size)
@@ -64,10 +64,10 @@ function buffer:read_pos()
 end
 
 function buffer:advance_write(count)
-   self.write_idx = self.write_idx + count
+   self.write_idx = self.write_idx + ffi.cast("uint32_t", count)
 end
 function buffer:advance_read(count)
-   self.read_idx = self.read_idx + count
+   self.read_idx = self.read_idx + ffi.cast("uint32_t", count)
 end
 
 function buffer:write(bytes, count)

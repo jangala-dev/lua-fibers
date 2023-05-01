@@ -8,7 +8,9 @@ package.path = "../?.lua;" .. package.path
 local sc = require('fibers.utils.syscall')
 local buffer = require('fibers.utils.buffer')
 local bit = require('bit32')
-local ffi = require('cffi')
+
+local is_LuaJIT = ({false, [1] = true})[1]
+local ffi = is_LuaJIT and require('ffi') or require('cffi')
 
 local Stream = {}
 Stream.__index = Stream

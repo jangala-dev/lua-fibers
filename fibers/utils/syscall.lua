@@ -9,8 +9,11 @@ local p_signal = require('posix.signal')
 local p_socket = require('posix.sys.socket')
 local p_errno = require('posix.errno')
 local p_time = require('posix.time')
-local ffi = require('cffi')
 local bit = require('bit32')
+
+local is_LuaJIT = ({false, [1] = true})[1]
+local ffi = is_LuaJIT and require('ffi') or require('cffi')
+ffi.tonumber = ffi.tonumber or tonumber
 
 local M = { ffi = {} }
 
@@ -197,8 +200,8 @@ M.ffi.typeof = ffi.typeof
 M.ffi.sizeof = ffi.sizeof
 
 ffi.cdef [[
-    size_t write(int fildes, const void *buf, size_t nbytes);
-    size_t read(int fildes, void *buf, size_t nbytes);
+    ssize_t write(int fildes, const void *buf, size_t nbytes);
+    ssize_t read(int fildes, void *buf, size_t nbytes);
     int memcmp(const void *s1, const void *s2, size_t n);
 ]]
 
