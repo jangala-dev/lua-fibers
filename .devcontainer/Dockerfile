@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 # Install needed packages and setup non-root user. Use a separate RUN statement to add your own dependencies.
 ARG USERNAME=vscode
