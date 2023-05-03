@@ -2,8 +2,8 @@
 
 -- Shim to replace Lua's built-in IO module with streams.
 
-local stream = require('stream.stream')
-local file = require('stream.stream.file')
+local stream = require('fibers.stream')
+local file = require('fibers.stream.file')
 local sc = require('fibers.utils.syscall')
 
 local io = {}

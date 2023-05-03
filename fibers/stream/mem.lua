@@ -2,7 +2,7 @@
 
 -- A memory-backed stream IO implementation.
 
-local stream = require('stream.stream')
+local stream = require('fibers.stream')
 local sc = require('fibers.utils.syscall')
 
 local is_LuaJIT = ({false, [1] = true})[1]

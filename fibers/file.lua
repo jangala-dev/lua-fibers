@@ -6,7 +6,7 @@ local op = require('fibers.op')
 local fiber = require('fibers.fiber')
 local epoller = require('fibers.epoller')
 local sc = require('fibers.utils.syscall')
-local file = require('stream.stream.file')
+local file = require('fibers.stream.file')
 
 local bit = require('bit32')
 
@@ -204,39 +204,6 @@ local function selftest()
    assert(equal(log, {'rd-a', 'wr-a', 'wr-b', 'wr-c', 'rd-b', message}))
 
    print('selftest: ok')
-
-   -- print('REVISED selftest: lib.fibers.file')
-   -- local sleep = require "fibers.sleep"
-
-   -- local handler = install_poll_io_handler()
-   -- fiber.current_scheduler:add_task_source(handler)
-
-   -- local function main()
-   --    local f = assert(io.popen("echo hello; sleep 3; echo world"))
-   --    local counter = 0
-   --    local loop = true
-   --    fiber.spawn(function()
-   --       while loop do
-   --          fd_readable_op(sc.fileno(f)):perform()
-   --          local line = f:read("*l")
-   --          if not line then 
-   --             assert(counter > 5)
-   --             f:close()
-   --             loop = false
-   --          end
-   --       end
-   --    end)
-   --    while loop do
-   --       counter = counter + 1
-   --       sleep.sleep(1/3)
-   --    end
-   -- end
-   -- fiber.spawn(function()
-   --    main()
-   --    fiber.stop()
-   -- end)
-   -- fiber.main()
-   -- print("selftest: ok")
 end
 
 return {

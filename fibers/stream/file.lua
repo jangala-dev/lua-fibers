@@ -4,7 +4,7 @@
 
 package.path = "../../?.lua;../?.lua;" .. package.path
 
-local stream = require('stream.stream')
+local stream = require('fibers.stream')
 local sc = require('fibers.utils.syscall')
 local bit = require('bit32')
 

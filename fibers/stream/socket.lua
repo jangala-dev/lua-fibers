@@ -2,7 +2,7 @@
 
 -- A stream IO implementation for sockets.
 
-local file = require('stream.stream.file')
+local file = require('fibers.stream.file')
 local sc = require('fibers.utils.syscall')
 
 local Socket = {}
