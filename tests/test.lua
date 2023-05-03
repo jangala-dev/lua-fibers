@@ -10,7 +10,7 @@ for _, j in ipairs(modules) do
     require(package_name.."."..j).selftest()
 end
 
-local package_name = 'stream'
+local package_name = 'fibers'
 
 local modules = {
     'stream',
@@ -32,7 +32,7 @@ local modules = {
     'fiber',
     'channel',
     'sleep',
-    'epoller',
+    'epoll',
     'cond',
     'file',
     'queue',

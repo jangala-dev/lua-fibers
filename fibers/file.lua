@@ -4,7 +4,7 @@
 
 local op = require('fibers.op')
 local fiber = require('fibers.fiber')
-local epoller = require('fibers.epoller')
+local epoll = require('fibers.epoll')
 local sc = require('fibers.utils.syscall')
 local file = require('fibers.stream.file')
 
@@ -14,7 +14,7 @@ local PollIOHandler = {}
 local PollIOHandler_mt = { __index=PollIOHandler }
 local function new_poll_io_handler()
    return setmetatable(
-      { epoll=epoller.new(),
+      { epoll=epoll.new(),
         waiting_for_readable={},   -- sock descriptor => array of task
         waiting_for_writable={} }, -- sock descriptor => array of task
       PollIOHandler_mt)
@@ -50,14 +50,14 @@ end
 function PollIOHandler:fd_readable_op(fd)
    local function try() return false end
    local block = make_block_fn(
-      fd, self.waiting_for_readable, self.epoll, epoller.RD)
+      fd, self.waiting_for_readable, self.epoll, epoll.RD)
    return op.new_base_op(nil, try, block)
 end
 
 function PollIOHandler:fd_writable_op(fd)
    local function try() return false end
    local block = make_block_fn(
-      fd, self.waiting_for_writable, self.epoll, epoller.WR)
+      fd, self.waiting_for_writable, self.epoll, epoll.WR)
    return op.new_base_op(nil, try, block)
 end
 
@@ -65,7 +65,7 @@ function PollIOHandler:stream_readable_op(stream)
    local fd = assert(stream.io.fd)
    local function try() return not stream.rx:is_empty() end
    local block = make_block_fn(
-      fd, self.waiting_for_readable, self.epoll, epoller.RD)
+      fd, self.waiting_for_readable, self.epoll, epoll.RD)
    return op.new_base_op(nil, try, block)
 end
 
@@ -94,11 +94,11 @@ function PollIOHandler:schedule_tasks(sched, now, timeout)
    if timeout == nil then timeout = 0 end
    if timeout >= 0 then timeout = timeout * 1e3 end
    for fd, event in pairs(self.epoll:poll(timeout)) do
-      if bit.band(event, epoller.RD + epoller.ERR) ~= 0 then
+      if bit.band(event, epoll.RD + epoll.ERR) ~= 0 then
          local tasks = self.waiting_for_readable[fd]
          schedule_tasks(sched, tasks)
       end
-      if bit.band(event, epoller.WR + epoller.ERR) ~= 0 then
+      if bit.band(event, epoll.WR + epoll.ERR) ~= 0 then
          local tasks = self.waiting_for_writable[fd]
          schedule_tasks(sched, tasks)
       end

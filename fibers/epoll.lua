@@ -8,39 +8,39 @@
 package.path = "../?.lua;" .. package.path
 
 local bit = require('bit32')
-local epoll = require('epoll')
+local libepoll = require('epoll')
 
 local Epoller = {}
 
 local INITIAL_MAXEVENTS = 8
 
 local function new()
-   local ret = { epfd = assert(epoll.create()),
+   local ret = { epfd = assert(libepoll.create()),
                  active_events = {},
                  maxevents = INITIAL_MAXEVENTS,
                }
    return setmetatable(ret, { __index = Epoller })
 end
 
-RD = epoll.EPOLLIN + epoll.EPOLLRDHUP
-WR = epoll.EPOLLOUT
+RD = libepoll.EPOLLIN + libepoll.EPOLLRDHUP
+WR = libepoll.EPOLLOUT
 RDWR = RD + WR
-ERR = epoll.EPOLLERR + epoll.EPOLLHUP
+ERR = libepoll.EPOLLERR + libepoll.EPOLLHUP
 
 function Epoller:add(s, events)
    -- local fd = type(s) == 'number' and s or sc.fileno(s)
    local fd = s
    local active = self.active_events[fd] or 0
-   local eventmask = bit.bor(events, active, epoll.EPOLLONESHOT)
-   local ok, err = epoll.modify(self.epfd, fd, eventmask)
-   if not ok then assert(epoll.register(self.epfd, fd, eventmask)) end
+   local eventmask = bit.bor(events, active, libepoll.EPOLLONESHOT)
+   local ok, err = libepoll.modify(self.epfd, fd, eventmask)
+   if not ok then assert(libepoll.register(self.epfd, fd, eventmask)) end
 end
 
 function Epoller:poll(timeout)
    -- Returns a table, an iterator would be more efficient.
    -- print("self.epfd", self.epfd)
    -- print("self.maxevents", self.maxevents)
-   local events, err = epoll.wait(self.epfd, timeout or 0, self.maxevents)
+   local events, err = libepoll.wait(self.epfd, timeout or 0, self.maxevents)
    if not events then
       error(err)
    end
@@ -87,7 +87,7 @@ local function selftest()
       assert(S.write(wr, "foo") == 3)
       -- The write end isn't active because we haven't re-added it to the
       -- epoll set.
-      assert(equal(poll(), {{fd=rd, events=epoll.EPOLLIN}}))
+      assert(equal(poll(), {{fd=rd, events=libepoll.EPOLLIN}}))
       -- Now nothing is active, so no events even though both sides can
       -- do I/O.
       assert(equal(poll(), {}))
