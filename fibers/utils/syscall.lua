@@ -117,31 +117,11 @@ function M.rename(from, to) return p_stdio.rename(from, to) end
 function M.fsync(fd) return p_unistd.fsync(fd) end
 function M.unlink(path) return p_unistd.unlink(path) end
 function M.pipe() return p_unistd.pipe() end
-function M.execve(path, argv, _)
-    table.remove(argv,1)
-    return p_unistd.exec(path, argv)
-end
+function M.execve(path, argv, _) return p_unistd.exec(path, argv) end
 function M.exit(status) return os.exit(status) end
 function M.dup2(fd1, fd2) return p_unistd.dup2(fd1, fd2) end
 function M.waitpid(pid, options) return p_wait.wait(pid, options) end
-function M.fstat(file, ...) 
-    local stat = p_stat.fstat(file, ...)
-    return {
-        dev = stat.st_dev,
-        ino = stat.st_ino,
-        mode = stat.st_mode,
-        nlink = stat.st_nlink,
-        uid = stat.st_uid,
-        gid = stat.st_gid,
-        rdev = stat.st_rdev,
-        size = stat.st_size,
-        atime = stat.st_atime,
-        mtime = stat.st_mtime,
-        ctime = stat.st_ctime,
-        blksize = stat.st_blksize,
-        blocks = stat.st_blocks,
-    }
-end
+function M.fstat(file, ...) return p_stat.fstat(file, ...) end
 function M.fork() return p_unistd.fork() end
 function M.isatty(fd) return p_unistd.isatty(fd) end
 function M.signal(signum, handler) return p_signal.signal(signum, handler) end
@@ -162,13 +142,11 @@ function M.clock_gettime(id) return p_time.clock_gettime(id) end
 -- Convenience functions
 
 function M.set_nonblock(fd)
-    -- local fd = M.fileno(file)
 	local flags = assert(M.fcntl(fd, M.F_GETFL))
 	assert( M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
 end
 
 function M.set_block(fd)
-    -- local fd = M.fileno(file)
 	local flags = assert(M.fcntl(fd, M.F_GETFL))
 	assert( M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
 end

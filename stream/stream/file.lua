@@ -115,7 +115,7 @@ local function fdopen(fd, flags, filename)
    if mode == sc.O_RDONLY or mode == sc.O_RDWR then readable = true end
    if mode == sc.O_WRONLY or mode == sc.O_RDWR then writable = true end
    local stat = sc.fstat(fd)
-   return stream.open(io, readable, writable, stat and stat.blksize)
+   return stream.open(io, readable, writable, stat and stat.st_blksize)
 end
 
 local modes = {
@@ -208,7 +208,7 @@ local function popen(prog, mode)
       sc.close(parent_half)
       sc.dup2(child_half, mode == 'r' and 1 or 0)
       sc.close(child_half)
-      sc.execve('/bin/sh', { "/bin/sh", "-c", prog })
+      sc.execve('/bin/sh', { "-c", prog })
       sc.write(2, "io.popen: Failed to exec /bin/sh!")
       sc.exit(255)
    end
