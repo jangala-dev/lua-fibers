@@ -7,7 +7,7 @@ package.path = "../?.lua;" .. package.path
 local timer = require 'fibers.timer'
 local sc = require 'fibers.utils.syscall'
 
-local wheel = timer.new_timer_wheel(10, 1e-3)
+local wheel = timer.new(10)
 
 -- At millisecond precision, advancing the wheel by an hour shouldn't
 -- take perceptible time.
@@ -39,11 +39,9 @@ function check:schedule(t) -- in the call to wheel:advance below, this method is
     -- insertion order is preserved.
     assert(last <= t)
     last, count = t, count + 1
-    -- Check that timers fire within a tenth a tick of when they
-    -- should.  Floating-point imprecisions can cause either slightly
-    -- early or slightly late ticks.
-    assert(now - wheel.period*0.1 < t)
-    assert(t < now + wheel.period*1.1)
+    -- Check that timers fire when they should.  
+    assert(now - 1e-4 < t)
+    assert(t < now + 1e-4)
 end
 
 start_time = sc.monotime()

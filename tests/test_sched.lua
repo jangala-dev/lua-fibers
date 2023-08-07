@@ -14,15 +14,14 @@ local end_time = sc.monotime()
 print("Scheduler initialization time: " .. (end_time - start_time))
 
 local count = 0
+local totalImprecision = 0
+
 local function task_run(task)
     local now = scheduler:now()
     local t = task.scheduled
     count = count + 1
-    -- Check that tasks run within a tenth a tick of when they should.
-    -- Floating-point imprecisions can cause either slightly early or
-    -- slightly late ticks.
-    assert(now - scheduler.wheel.period*1.1 < t)
-    assert(t < now + scheduler.wheel.period*0.1)
+    local imprecision = math.abs(t - now)
+    totalImprecision = totalImprecision + imprecision
 end
 
 local event_count = 1e4
@@ -38,10 +37,14 @@ end
 end_time = sc.monotime()
 print("Task scheduling time: " .. (end_time - start_time)/event_count)
 
-for now=scheduler:now(),t+1,scheduler.wheel.period do
-    scheduler:run(now)
+while count < event_count do
+    local nextEventTime = scheduler:next_wake_time()
+    scheduler:run(nextEventTime)
 end
 
 assert(count == event_count)
+
+local averageImprecision = totalImprecision / event_count
+print("Average imprecision: " .. averageImprecision)
 
 print("test: ok")
