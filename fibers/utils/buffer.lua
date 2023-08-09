@@ -3,9 +3,9 @@
 -- Ring buffer for bytes
 
 -- detect LuaJIT (removing dependency on utils.syscall)
-local is_LuaJIT = ({false, [1] = true})[1]
+local is_LuaJIT = rawget(_G, "jit") and true or false
 
-local bit = bit or require 'bit32'
+local bit = rawget(_G, "bit") or require 'bit32'
 local ffi = is_LuaJIT and require 'ffi' or require 'cffi'
 
 local band = bit.band

@@ -7,7 +7,7 @@ local fiber = require 'fibers.fiber'
 local epoll = require 'fibers.epoll'
 local file = require 'fibers.stream.file'
 local sc = require 'fibers.utils.syscall'
-local bit = bit or require 'bit32'
+local bit = rawget(_G, "bit") or require 'bit32'
 
 local PollIOHandler = {}
 local PollIOHandler_mt = { __index=PollIOHandler }

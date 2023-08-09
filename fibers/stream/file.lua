@@ -8,7 +8,8 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 
 local stream = require 'fibers.stream'
 local sc = require 'fibers.utils.syscall'
-local bit = bit or require 'bit32'
+
+local bit = rawget(_G, "bit") or require 'bit32'
 
 -- A blocking handler provides for configurable handling of EWOULDBLOCK
 -- conditions.  The goal is to allow for normal blocking operations, but

@@ -9,7 +9,7 @@ local p_signal = require 'posix.signal'
 local p_socket = require 'posix.sys.socket'
 local p_errno = require 'posix.errno'
 local p_time = require 'posix.time'
-local bit = bit or require 'bit32'
+local bit = rawget(_G, "bit") or require 'bit32'
 
 local M = { ffi = {} } -- used this module format due to large number of exported functions
 
