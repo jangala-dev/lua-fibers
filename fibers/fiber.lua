@@ -23,9 +23,16 @@ Fiber.__index = Fiber
 -- @function spawn
 -- @tparam function fn The function to run in the new fiber.
 local function spawn(fn)
+   -- Capture the traceback
+   local tb = debug.traceback("", 2):match("\n[^\n]*\n(.*)") or ""
+   -- If we're inside another fiber, append the traceback to the parent's traceback
+   if current_fiber and current_fiber.traceback then
+      tb = tb .. "\n" .. current_fiber.traceback
+   end
+
    current_scheduler:schedule(
       setmetatable({coroutine=coroutine.create(fn),
-                    alive=true, sockets={}}, Fiber))
+                    alive=true, sockets={}, traceback=tb}, Fiber))
 end
 
 --- Resumes execution of the fiber.
@@ -39,6 +46,7 @@ function Fiber:resume(...)
    current_fiber = saved_current_fiber -- the KEY bit, we only get here when the coroutine above has yielded, but we then pop back in the fiber we previously displaced
    if not ok then
       print('Error while running fiber: '..tostring(err))
+      print('fibers history:\n' .. self.traceback)
       self.alive = false
    end
 end
@@ -95,6 +103,12 @@ function Fiber:wait_for_writable(sd)
    local s = self:get_socket(sd)
    current_scheduler:schedule_when_writable(s, self)
    return coroutine.yield()
+end
+
+--- Returns the traceback of the fiber.
+-- @function get_traceback
+function Fiber:get_traceback()
+   return self.traceback or "No traceback available"
 end
 
 --- Returns the current time according to the current scheduler.
