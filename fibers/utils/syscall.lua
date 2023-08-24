@@ -14,7 +14,7 @@ local bit = rawget(_G, "bit") or require 'bit32'
 local M = { ffi = {} } -- used this module format due to large number of exported functions
 
 --detect LuaJIT
-M.is_LuaJIT = ({false, [1] = true})[1]
+M.is_LuaJIT = rawget(_G, "jit") and true or false
 
 local ffi = M.is_LuaJIT and require 'ffi' or require 'cffi'
 ffi.tonumber = ffi.tonumber or tonumber
