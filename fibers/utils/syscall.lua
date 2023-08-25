@@ -149,7 +149,7 @@ function M.lseek(file, offset, whence) return p_unistd.lseek(file, offset, whenc
 function M.pipe() return p_unistd.pipe() end
 function M.read(fd, count) return p_unistd.read(fd, count) end
 function M.unlink(path) return p_unistd.unlink(path) end
-function M.write(fd, buf, nbytes, offset) return p_unistd.write(fd, buf, nbytes, offset) end
+function M.write(fd, buf) return p_unistd.write(fd, buf) end
 
 function M.waitpid(pid, options) return p_wait.wait(pid, options) end
 
