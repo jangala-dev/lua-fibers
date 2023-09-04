@@ -20,7 +20,6 @@ local Fiber = {}
 Fiber.__index = Fiber
 
 --- Spawns a new fiber.
--- @function spawn
 -- @tparam function fn The function to run in the new fiber.
 local function spawn(fn)
    -- Capture the traceback
@@ -45,6 +44,7 @@ function Fiber:resume(...)
    local ok, err = coroutine.resume(self.coroutine, ...) -- rev up our coroutine
    current_fiber = saved_current_fiber -- the KEY bit, we only get here when the coroutine above has yielded, but we then pop back in the fiber we previously displaced
    if not ok then
+      spawn(function() collectgarbage() end) -- doesn't work if called directly
       print('Error while running fiber: '..tostring(err))
       print('fibers history:\n' .. self.traceback)
       self.alive = false
@@ -106,7 +106,6 @@ function Fiber:wait_for_writable(sd)
 end
 
 --- Returns the traceback of the fiber.
--- @function get_traceback
 function Fiber:get_traceback()
    return self.traceback or "No traceback available"
 end
@@ -117,7 +116,6 @@ local function now() return current_scheduler:now() end
 
 --- Suspends execution of the current fiber.
 -- The fiber will be resumed when the provided blocking function finishes.
--- @function suspend
 -- @tparam function block_fn The function to block on.
 -- @tparam vararg ... The arguments to pass to the blocking function.
 local function suspend(block_fn, ...) return current_fiber:suspend(block_fn, ...) end
@@ -126,17 +124,48 @@ local function schedule(sched, fiber) sched:schedule(fiber) end
 
 --- Suspends execution of the current fiber.
 -- The fiber will be resumed when the scheduler is ready to run it again.
--- @function yield
 local function yield() return suspend(schedule) end
 
 --- Stops the current scheduler from running more tasks.
--- @function stop
 local function stop() current_scheduler:stop() end
 
 --- Runs the main event loop of the current scheduler.
 -- The scheduler will continue to run tasks and wait for events until stopped.
--- @function main
 local function main() return current_scheduler:main() end
+
+local defer = {}
+defer.__index = defer
+
+local function new_defer()
+    local self = setmetatable({
+        deferredFns = {}
+    },  defer)
+
+    -- Use the newproxy method to create a userdata with __gc
+    local proxy = newproxy(true)
+    getmetatable(proxy).__gc = function()
+        for i=#self.deferredFns, 1, -1 do
+            pcall(self.deferredFns[i])
+        end
+    end
+    self.gcProxy = proxy
+
+   --  -- Ensure the proxy is kept alive until it's time for garbage collection
+   --  self.deferredFns[proxy] = true
+
+    return self
+end
+
+function defer:add(fn, ...)
+    local args = {...}
+    table.insert(self.deferredFns, function() fn(unpack(args)) end)
+end
+
+function defer:done()
+    self.deferredFns[self.gcProxy] = nil
+    self.gcProxy = nil
+    collectgarbage()
+end
 
 return {
    current_scheduler = current_scheduler,
@@ -145,5 +174,6 @@ return {
    suspend = suspend,
    yield = yield,
    stop = stop,
-   main = main
+   main = main,
+   defer = new_defer
 }
