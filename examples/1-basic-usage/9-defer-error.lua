@@ -20,6 +20,8 @@ local function test_function()
     defer:add(print, "Closing file 2")
 
     error("This is an intentional error!")
+    print("We don't get here")
+    defer:done()
 end
 
 local function main()
