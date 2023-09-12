@@ -74,6 +74,14 @@ These dependencies will be installed in a VScode devcontainer automatically. To 
 1. Install dependencies:
    1. luaposix with `luarocks install luaposix`
 
+### Installation with LuaJIT on OpenWRT
+
+This is the simplest set up for running on OpenWRT.  
+
+`opkg update; opkg install luajit`
+
+That's it!
+
 ## Why Fibers?
 
 There are many possible advantages of fibers, in comparison to other async models such as callbacks, async/await, and promises. This is especially in highly complex programs with lots of semi-independent code doing async IO (such as in-process microservices).
