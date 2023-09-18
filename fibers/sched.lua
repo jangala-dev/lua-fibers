@@ -103,6 +103,7 @@ end
 function Scheduler:wait_for_events()
    local now, next_time = sc.monotime() , self:next_wake_time()
    local timeout = math.min(MAX_SLEEP_TIME, next_time - now)
+   timeout = math.max(timeout, 0)
    if self.event_waiter then
       self.event_waiter:wait_for_events(self, now, timeout)
    else
