@@ -22,7 +22,7 @@ Scheduler.__index = Scheduler
 -- @return A new Scheduler.
 local function new()
    local ret = setmetatable(
-      { next={}, cur={}, sources={}, wheel=timer.new() },
+      { next={}, cur={}, sources={}, wheel=timer.new(nil) },
       Scheduler)
    local timer_task_source = { wheel=ret.wheel }
    -- private method for timer_tast_source
