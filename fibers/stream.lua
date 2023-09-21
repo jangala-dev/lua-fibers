@@ -440,6 +440,7 @@ function Stream:write(...)
    -- arguments must be strings or numbers. To write other values, use
    -- tostring or string.format before write.
    for _, arg in ipairs({ ... }) do write1(self, arg) end
+   return true
 end
 
 -- The result may be nil.

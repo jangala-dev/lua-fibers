@@ -7,6 +7,7 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 
 local fiber = require "fibers.fiber"
 local op = require "fibers.op"
+local fio = require "fibers.stream.file"
 local file = require "fibers.file"
 local sleep = require "fibers.sleep"
 local cqueues = require "cqueues"
@@ -14,6 +15,9 @@ local stdio = require "posix.stdio"
 
 print("installing poll handler")
 require 'fibers.file'.install_poll_io_handler()
+
+print("installing stream based IO library")
+require 'fibers.stream.compat'.install()
 
 print("overriding cqueues step")
 local old_step; old_step = cqueues.interpose("step", function(self, timeout)
@@ -110,19 +114,18 @@ end)
 print("spawning heartbeat")
 fiber.spawn(function()
 	print("starting heartbeat")
-	for i=1, 1e6 do
-		print("heartbeat ", i)
-		sleep.sleep(1.1)
+	while true do
+		print("slow heartbeat")
+		sleep.sleep(11)
 	end
 end)
 
 -- And one more to show multiple epolls in action
 print("spawning popen fiber")
 fiber.spawn(function()
-    local fd = assert(io.popen('while true; do echo "non-http fd input received!"; sleep 5; done'))
+    local fd = assert(fio.popen('while true; do echo "non-http fd input received!"; sleep 5; done', 'r'))
     while true do
-        file.fd_readable_op(stdio.fileno(fd)):perform()
-        local line = fd:read("*l")
+		local line = fd:read_line()
         if line then 
             print(line)
         else
