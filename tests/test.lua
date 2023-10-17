@@ -4,6 +4,7 @@ local sep = '-'
 
 local modules = {
     {'utils','ring_buffer'},
+    {'utils','string_buffer'},
     {'stream'},
     {'stream','file'},
     {'stream','mem'},
