@@ -1,10 +1,10 @@
 --- Tests the File implementation.
-print('testing: fibers.file')
+print('testing: fibers.fd')
 
 -- look one level up
 package.path = "../?.lua;" .. package.path
 
-local file = require 'fibers.file'
+local pollio = require 'fibers.pollio'
 local file_stream = require 'fibers.stream.file'
 local fiber = require 'fibers.fiber'
 
@@ -15,7 +15,7 @@ local function record(x) table.insert(log, x) end
 -- local handler = new_poll_io_handler()
 -- file.set_blocking_handler(handler)
 -- fiber.current_scheduler:add_task_source(handler)
-file.install_poll_io_handler()
+pollio.install_poll_io_handler()
 
 fiber.current_scheduler:run()
 assert(equal(log, {}))
