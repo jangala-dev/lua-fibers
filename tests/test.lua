@@ -3,7 +3,7 @@ package.path = "../?.lua;" .. package.path
 local sep = '-'
 
 local modules = {
-    {'utils','buffer'},
+    {'utils','ring_buffer'},
     {'stream'},
     {'stream','file'},
     {'stream','mem'},
