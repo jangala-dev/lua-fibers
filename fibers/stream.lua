@@ -428,6 +428,7 @@ function Stream:setvbuf(mode, size)
       transfer_buffered_bytes(self.tx, new_tx)
       self.tx = new_tx
    end
+   return self
 end
 
 local function write1(stream, arg)
