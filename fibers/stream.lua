@@ -10,7 +10,7 @@
 package.path = "../?.lua;" .. package.path
 
 local sc = require 'fibers.utils.syscall'
-local buffer = require 'fibers.utils.buffer'
+local buffer = require 'fibers.utils.ring_buffer'
 
 local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 
