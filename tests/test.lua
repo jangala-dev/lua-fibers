@@ -17,7 +17,7 @@ local modules = {
     {'cond'},
     {'sleep'},
     {'epoll'},
-    {'file'},
+    {'pollio'},
 }
 
 for _, j in ipairs(modules) do
