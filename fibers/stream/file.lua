@@ -235,29 +235,6 @@ local function popen(prog, mode)
    return stream.open(io, mode == 'r', mode == 'w')
 end
 
-local function popen3(path, argt)
-   local in_r, in_w = assert(sc.pipe())
-   local out_r, out_w = assert(sc.pipe())
-   local err_r, err_w = assert(sc.pipe())
-   local pid = assert(sc.fork())
-   if pid == 0 then -- child_half
-      sc.close(in_w); sc.close(out_r); sc.close(err_r)
-      sc.dup2(in_r, sc.STDIN_FILENO)
-      sc.dup2(out_w, sc.STDOUT_FILENO)
-      sc.dup2(err_w, sc.STDERR_FILENO)
-      sc.close(in_r); sc.close(out_w); sc.close(err_w)
-      -- sc.execve('/bin/sh', { "-c", prog })
-      sc.execp(path, argt)
-      sc.write(sc.STDERR_FILENO, "io.popen3: Failed to exec /bin/sh!")
-      sc.exit(255)
-   end
-   sc.close(in_r); sc.close(out_w); sc.close(err_w)
-   local in_stream = stream.open(new_file_io(in_w), false, true)
-   local out_stream = stream.open(new_file_io(out_r), true, false)
-   local err_stream = stream.open(new_file_io(err_r), true, false)
-   return pid, in_stream, out_stream, err_stream
-end
-
 return {
    init_nonblocking = init_nonblocking,
    wait_for_readable = wait_for_readable,
@@ -268,5 +245,4 @@ return {
    tmpfile = tmpfile,
    pipe = pipe,
    popen = popen,
-   popen3 = popen3
 }
