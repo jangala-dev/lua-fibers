@@ -19,6 +19,7 @@ local modules = {
     {'sleep'},
     {'epoll'},
     {'pollio'},
+    {'exec'},
 }
 
 for _, j in ipairs(modules) do

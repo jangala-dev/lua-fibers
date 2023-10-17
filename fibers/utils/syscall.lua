@@ -77,6 +77,7 @@ M.STDERR_FILENO = p_unistd.STDERR_FILENO
 
 M.SIGPIPE = p_signal.SIGPIPE
 M.SIG_IGN = p_signal.SIG_IGN
+M.SIGCHLD = p_signal.SIGCHLD
 
 M.CLOCK_REALTIME = p_time.CLOCK_REALTIME
 M.CLOCK_MONOTONIC = p_time.CLOCK_MONOTONIC
@@ -120,6 +121,7 @@ function M.open(path, mode, perm) return p_fcntl.open(path, mode, perm) end
 
 function M.strerror(err) return p_errno.errno(err) end
 
+function M.stat(path) return p_stat.stat(path) end
 function M.fstat(file, ...) return p_stat.fstat(file, ...) end
 
 function M.signal(signum, handler) return p_signal.signal(signum, handler) end
@@ -138,8 +140,10 @@ function M.rename(from, to) return p_stdio.rename(from, to) end
 
 function M.clock_gettime(id) return p_time.clock_gettime(id) end
 
+function M.access(path, mode) return p_unistd.access(path, mode) end
 function M.close(fd) return p_unistd.close(fd) end
 function M.dup2(fd1, fd2) return p_unistd.dup2(fd1, fd2) end
+function M.exec(path, argt) return p_unistd.exec(path, argt) end
 function M.execp(path, argt) return p_unistd.execp(path, argt) end
 function M.execve(path, argv, _) return p_unistd.exec(path, argv) end
 function M.fork() return p_unistd.fork() end
@@ -341,5 +345,55 @@ end
 function M.ffi.memcmp(obj1, obj2, nbytes)
     return ffi.tonumber(memcmp(obj1, obj2, nbytes))
 end
+
+-- Explicitly load the pthread and c libraries
+local libpthread = ffi.load("pthread")
+-- local libc = ffi.load("c")
+
+ffi.cdef[[
+typedef struct {
+    uint32_t ssi_signo;    /* Signal number */
+    int32_t  ssi_errno;    /* Error number (unused) */
+    int32_t  ssi_code;     /* Signal code */
+    uint32_t ssi_pid;      /* PID of sender */
+    uint32_t ssi_uid;      /* Real UID of sender */
+    int32_t  ssi_fd;       /* File descriptor (SIGIO) */
+    uint32_t ssi_tid;      /* Kernel timer ID (POSIX timers) */
+    uint32_t ssi_band;     /* Band event (SIGIO) */
+    uint32_t ssi_overrun;  /* POSIX timer overrun count */
+    uint32_t ssi_trapno;   /* Trap number that caused signal */
+    int32_t  ssi_status;   /* Exit status or signal (SIGCHLD) */
+    int32_t  ssi_int;      /* Integer sent by sigqueue(3) */
+    uint64_t ssi_ptr;      /* Pointer sent by sigqueue(3) */
+    uint64_t ssi_utime;    /* User CPU time consumed (SIGCHLD) */
+    uint64_t ssi_stime;    /* System CPU time consumed (SIGCHLD) */
+    uint64_t ssi_addr;     /* Address that generated signal (for hardware-generated signals) */
+    uint16_t ssi_addr_lsb; /* Least significant bit of address (SIGBUS; since Linux 2.6.37) */
+    uint8_t  pad[46];      /* Pad size to 128 bytes */
+} signalfd_siginfo;
+
+typedef struct {
+    unsigned long int __val[1024 / (8 * sizeof (unsigned long int))];
+} __sigset_t;
+
+typedef __sigset_t sigset_t;
+
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigemptyset(sigset_t *set);
+int sigaddset(sigset_t *set, int signum);
+int signalfd(int fd, const sigset_t *mask, int flags);
+]]
+
+function M.sigemptyset(set) return ffi.C.sigemptyset(set) end
+function M.sigaddset(set, signum) return ffi.C.sigaddset(set, signum) end
+function M.signalfd(fd, mask, flags) return ffi.C.signalfd(fd, mask, flags) end
+
+function M.pthread_sigmask(how, set, oldset) return libpthread.pthread_sigmask(how, set, oldset) end
+
+function M.new_sigset() return ffi.new("sigset_t") end
+function M.new_fdsi() return ffi.new("signalfd_siginfo"), ffi.sizeof("signalfd_siginfo") end
+
+
+
 
 return M
