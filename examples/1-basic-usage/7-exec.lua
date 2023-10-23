@@ -21,7 +21,7 @@ local function main()
             stdin_pipe:write('tick\n')
             sleep.sleep(0.2)
          end
-         stdin_pipe:write('BOOM!')
+         stdin_pipe:write('BOOM!\n')
          stdin_pipe:close()
       end)
       while true do
@@ -35,7 +35,8 @@ local function main()
    end)
    -- simple command where we want to simply gather all output
    print("starting combined command")
-   local output, err = exec.command('sh', '-c', 'sleep 1; echo hello world'):combined_output()
+   local output, err = exec.command('sh', '-c', 'sleep 1; echo hello world; exit 255'):combined_output()
+   assert(err, "expected error, but obtained", err)
    print("output:", output)
    fiber.stop()
 end

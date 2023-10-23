@@ -242,6 +242,7 @@ function Cmd:wait()
     end
     self.process_state = self.result_channel:get()
     active_commands[self.process] = nil
+    sc.waitpid(self.process)
     if self.process_state.ssi_status == 0 then
         return nil
     else
