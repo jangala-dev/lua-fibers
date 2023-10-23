@@ -1,4 +1,4 @@
--- usage of the fibers.stream.file.popen3 function
+-- usage of the fibers.exec module
 
 package.path = "../../?.lua;../?.lua;" .. package.path
 
@@ -36,7 +36,7 @@ local function main()
    -- simple command where we want to simply gather all output
    print("starting combined command")
    local output, err = exec.command('sh', '-c', 'sleep 1; echo hello world; exit 255'):combined_output()
-   assert(err, "expected error, but obtained", err)
+   assert(err, "expected error!")
    print("output:", output)
    fiber.stop()
 end
