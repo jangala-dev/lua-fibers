@@ -346,9 +346,8 @@ function M.ffi.memcmp(obj1, obj2, nbytes)
     return ffi.tonumber(memcmp(obj1, obj2, nbytes))
 end
 
--- Explicitly load the pthread and c libraries
+-- Explicitly load the pthread library
 local libpthread = ffi.load("pthread")
--- local libc = ffi.load("c")
 
 ffi.cdef[[
 typedef struct {
@@ -369,7 +368,11 @@ typedef struct {
     uint64_t ssi_stime;    /* System CPU time consumed (SIGCHLD) */
     uint64_t ssi_addr;     /* Address that generated signal (for hardware-generated signals) */
     uint16_t ssi_addr_lsb; /* Least significant bit of address (SIGBUS; since Linux 2.6.37) */
-    uint8_t  pad[46];      /* Pad size to 128 bytes */
+    uint16_t __pad2; 
+    int32_t  ssi_syscall;
+    uint64_t ssi_call_addr;
+    uint32_t ssi_arch;
+    uint8_t  pad[28];      /* Pad size to 128 bytes */
 } signalfd_siginfo;
 
 typedef struct {
@@ -384,6 +387,16 @@ int sigaddset(sigset_t *set, int signum);
 int signalfd(int fd, const sigset_t *mask, int flags);
 ]]
 
+M.SIG_BLOCK = 0
+M.SIG_UNBLOCK = 1
+M.SIG_SETMASK = 2
+
+if ffi.arch == "mips" then
+    M.SIG_BLOCK = 1
+    M.SIG_UNBLOCK = 2
+    M.SIG_SETMASK = 3
+end
+
 function M.sigemptyset(set) return ffi.C.sigemptyset(set) end
 function M.sigaddset(set, signum) return ffi.C.sigaddset(set, signum) end
 function M.signalfd(fd, mask, flags) return ffi.C.signalfd(fd, mask, flags) end
@@ -392,8 +405,5 @@ function M.pthread_sigmask(how, set, oldset) return libpthread.pthread_sigmask(h
 
 function M.new_sigset() return ffi.new("sigset_t") end
 function M.new_fdsi() return ffi.new("signalfd_siginfo"), ffi.sizeof("signalfd_siginfo") end
-
-
-
 
 return M

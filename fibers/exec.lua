@@ -14,7 +14,7 @@ local function signalfd_watcher()
     fiber.spawn(function ()
         pollio.install_poll_io_handler()
     
-        local SIG_BLOCK = 0
+        local SIG_BLOCK = sc.SIG_BLOCK
         local SIGCHLD = sc.SIGCHLD
         local mask = sc.new_sigset()
         local signal_fd
