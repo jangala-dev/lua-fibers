@@ -92,7 +92,7 @@ function Cmd:launch(path, argt)
     assert(active_commands[pid])
     sc.close(in_r); sc.close(out_w); sc.close(err_w)
     local ret_streams = {
-        stdin = file.fdopen(in_w):setvbuf('line'),
+        stdin = file.fdopen(in_w):setvbuf('no'),
         stdout = file.fdopen(out_r),
         stderr = file.fdopen(err_r),
     }
@@ -183,7 +183,7 @@ function Cmd:start()
         local output = v=="stdin" and self.cmd_streams.stdin or self[v]
         fiber.spawn(function()
             while true do
-                local received = input:read_line('keep')
+                local received = input:read_some_chars()
                 output:write(received)
                 if not received then break end
             end
@@ -201,7 +201,7 @@ local function setup_pipe(self, io_type)
     if self.process then return nil, io_type .. "_pipe after process started" end
 
     local rd, wr = file.pipe()
-    wr:setvbuf('line')
+    wr:setvbuf('no')
     if io_type == "stdin" then
         self.stdin = rd
     else

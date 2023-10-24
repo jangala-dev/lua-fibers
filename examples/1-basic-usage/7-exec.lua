@@ -18,14 +18,14 @@ local function main()
       if err then error(err) end
       fiber.spawn(function ()
          for i=1,4 do
-            stdin_pipe:write('tick\n')
+            stdin_pipe:write('tick')
             sleep.sleep(0.2)
          end
-         stdin_pipe:write('BOOM!\n')
+         stdin_pipe:write('BOOM!')
          stdin_pipe:close()
       end)
       while true do
-         local received = stdout_pipe:read_line()
+         local received = stdout_pipe:read_some_chars()
          if not received then break end
          print(received)
       end
