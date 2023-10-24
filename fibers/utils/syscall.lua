@@ -98,22 +98,6 @@ M.SOMAXCONN = p_socket.SOMAXCONN
 
 M.WNOHANG = p_wait.WNOHANG
 
----- Would be cleaner to implement epoll using our cffi-lua dependency rather
----- than carrying on using the afghanistanyn epoll dependency
--- M.EPOLLIN = 0x001
--- M.EPOLLPRI = 0x002
--- M.EPOLLOUT = 0x004
--- M.EPOLLRDNORM = 0x040
--- M.EPOLLRDBAND = 0x080
--- M.EPOLLWRNORM = 0x100
--- M.EPOLLWRBAND = 0x200
--- M.EPOLLMSG = 0x400
--- M.EPOLLERR = 0x008
--- M.EPOLLHUP = 0x010
--- M.EPOLLRDHUP = 0x2000
--- M.EPOLLONESHOT = lshift(1, 30)
--- M.EPOLLET = lshift(1, 31)
-
 -------------------------------------------------------------------------------
 -- Luafied stdlib syscalls
 
@@ -195,12 +179,24 @@ end
 ------------------------------------
 -- epoll
 
-ffi.cdef[[
-    typedef struct epoll_event {
-        uint32_t events;
-        uint64_t data;
-    } epoll_event;
+if ARCH == "x64" or ARCH == "x86" then
+    ffi.cdef[[
+        typedef struct epoll_event {
+            uint8_t raw[12];  // 4 bytes for events + 8 bytes for data
+        } epoll_event;
+    ]]
+elseif ARCH == "mips" or ARCH == "arm64" then
+    ffi.cdef[[
+        typedef struct epoll_event {
+            uint32_t events;
+            uint64_t data;
+        } epoll_event;
+    ]]
+else
+    error(ARCH.." architecture not specified")
+end
 
+ffi.cdef[[
     int epoll_create(int size);
     int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
     int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
@@ -233,6 +229,42 @@ local EPOLL_CTL_DEL = 2
 local EPOLL_CTL_MOD = 3
 
 
+-- Adjust helper functions based on the architecture:
+local get_event
+local set_event
+local get_data
+local set_data
+
+if ARCH == 'x64' or ARCH == 'x86' then
+    get_event = function(ev)
+        return ffi.cast("uint32_t*", ev.raw)[0]
+    end
+    set_event = function(ev, value)
+        ffi.cast("uint32_t*", ev.raw)[0] = value
+    end
+    get_data = function(ev)
+        return ffi.cast("uint64_t*", ev.raw + 4)[0]
+    end
+    set_data = function(ev, value)
+        ffi.cast("uint64_t*", ev.raw + 4)[0] = value
+    end
+elseif ARCH == 'mips' or ARCH == 'arm64' then
+    get_event = function(ev)
+        return ev.events
+    end
+    set_event = function(ev, value)
+        ev.events = value
+    end
+    get_data = function(ev)
+        return ev.data
+    end
+    set_data = function(ev, value)
+        ev.data = value
+    end
+else
+    error(ARCH.." architecture not specified")
+end
+
 -- Returns an epoll file descriptor.
 function M.epoll_create()
     local fd = ffi.C.epoll_create(1)
@@ -245,8 +277,8 @@ end
 -- Register eventmask of a file descriptor onto epoll file descriptor.
 function M.epoll_register(epfd, fd, eventmask)
     local event = ffi.new("struct epoll_event")
-    event.events = eventmask
-    event.data = fd
+    set_event(event, eventmask)
+    set_data(event, fd)
     local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event)
     if res == -1 then
         return false, ffi.string(ffi.C.strerror(ffi.errno()))
@@ -257,8 +289,8 @@ end
 -- Modify eventmask of a file descriptor.
 function M.epoll_modify(epfd, fd, eventmask)
     local event = ffi.new("struct epoll_event")
-    event.events = eventmask
-    event.data = fd
+    set_event(event, eventmask)
+    set_data(event, fd)
     local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_MOD, fd, event)
     if res == -1 then
         return false, ffi.string(ffi.C.strerror(ffi.errno()))
@@ -268,8 +300,7 @@ end
 
 -- Remove a registered file descriptor from the epoll file descriptor.
 function M.epoll_unregister(epfd, fd)
-    local event = ffi.new("struct epoll_event") -- event can be null when removing
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_DEL, fd, event)
+    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nil)
     if res == -1 then
         return false, ffi.string(ffi.C.strerror(ffi.errno()))
     end
@@ -289,8 +320,8 @@ function M.epoll_wait(epfd, timeout, max_events)
 
     -- Loop over the events, inserting them into the table with their fd as the key
     for i = 0, num_events - 1 do
-        local fd = assert(ffi.tonumber(events[i].data))
-        local event = assert(ffi.tonumber(events[i].events))
+        local fd = assert(ffi.tonumber(get_data(events[i])))
+        local event = assert(ffi.tonumber(get_event(events[i])))
         res[fd] = event
     end
 
