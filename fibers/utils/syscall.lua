@@ -176,6 +176,15 @@ function M.floatsleep(t)
     end
 end
 
+local function wrap_error(retval)
+    if retval >= 0 then
+        return retval
+    else
+        local errno = ffi.errno()
+        return nil, M.strerror(errno), errno
+    end
+end
+
 ------------------------------------
 -- epoll
 
@@ -267,11 +276,7 @@ end
 
 -- Returns an epoll file descriptor.
 function M.epoll_create()
-    local fd = ffi.C.epoll_create(1)
-    if fd == -1 then
-        return nil, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return fd
+    return wrap_error(ffi.C.epoll_create(1))
 end
 
 -- Register eventmask of a file descriptor onto epoll file descriptor.
@@ -279,11 +284,7 @@ function M.epoll_register(epfd, fd, eventmask)
     local event = ffi.new("struct epoll_event")
     set_event(event, eventmask)
     set_data(event, fd)
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    return wrap_error(ffi.C.epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event))
 end
 
 -- Modify eventmask of a file descriptor.
@@ -291,20 +292,12 @@ function M.epoll_modify(epfd, fd, eventmask)
     local event = ffi.new("struct epoll_event")
     set_event(event, eventmask)
     set_data(event, fd)
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_MOD, fd, event)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    return wrap_error(ffi.C.epoll_ctl(epfd, EPOLL_CTL_MOD, fd, event))
 end
 
 -- Remove a registered file descriptor from the epoll file descriptor.
 function M.epoll_unregister(epfd, fd)
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nil)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    return wrap_error(ffi.C.epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nil))
 end
 
 -- Wait for events.
@@ -330,13 +323,8 @@ end
 
 -- Close epoll file descriptor.
 function M.epoll_close(epfd)
-    local res = ffi.C.close(epfd)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    return wrap_error(ffi.C.close(epfd))
 end
-
 
 
 -------------------------------------------------------------------------------
@@ -351,31 +339,16 @@ ffi.cdef [[
     int memcmp(const void *s1, const void *s2, size_t n);
 ]]
 
-local ffi_write = ffi.C.write
-local ffi_read = ffi.C.read
-local memcmp = ffi.C.memcmp
-
-local function wrap_error(retval)
-    if retval >= 0 then
-        return retval
-    else
-        local errno = ffi.errno()
-        return nil, M.strerror(errno), errno
-    end
-end
-
 function M.ffi.write(fildes, buf, nbytes)
-    local retval = ffi.tonumber(ffi_write(fildes, buf, nbytes))
-    return wrap_error(retval)
+    return wrap_error(ffi.tonumber(ffi.C.write(fildes, buf, nbytes)))
 end
 
 function M.ffi.read(fildes, buf, nbytes)
-    local retval = ffi.tonumber(ffi_read(fildes, buf, nbytes))
-    return wrap_error(retval)
+    return wrap_error(ffi.tonumber(ffi.C.read(fildes, buf, nbytes)))
 end
 
 function M.ffi.memcmp(obj1, obj2, nbytes)
-    return ffi.tonumber(memcmp(obj1, obj2, nbytes))
+    return ffi.tonumber(ffi.C.memcmp(obj1, obj2, nbytes))
 end
 
 -- Explicitly load the pthread library
@@ -429,11 +402,11 @@ elseif ARCH == "x64" or ARCH == "arm64" or ARCH == "x86" then
     M.SIG_SETMASK = 2
 end
 
-function M.sigemptyset(set) return ffi.C.sigemptyset(set) end
-function M.sigaddset(set, signum) return ffi.C.sigaddset(set, signum) end
-function M.signalfd(fd, mask, flags) return ffi.C.signalfd(fd, mask, flags) end
+function M.sigemptyset(set) return wrap_error(ffi.C.sigemptyset(set)) end
+function M.sigaddset(set, signum) return wrap_error(ffi.C.sigaddset(set, signum)) end
+function M.signalfd(fd, mask, flags) return wrap_error(ffi.C.signalfd(fd, mask, flags)) end
 
-function M.pthread_sigmask(how, set, oldset) return libpthread.pthread_sigmask(how, set, oldset) end
+function M.pthread_sigmask(how, set, oldset) return wrap_error(libpthread.pthread_sigmask(how, set, oldset)) end
 
 function M.new_sigset() return ffi.new("sigset_t") end
 function M.new_fdsi() return ffi.new("signalfd_siginfo"), ffi.sizeof("signalfd_siginfo") end

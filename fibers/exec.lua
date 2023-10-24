@@ -17,13 +17,12 @@ local function signalfd_watcher()
         local SIG_BLOCK = sc.SIG_BLOCK
         local SIGCHLD = sc.SIGCHLD
         local mask = sc.new_sigset()
-        local signal_fd
         
-        sc.sigemptyset(mask)
-        sc.sigaddset(mask, SIGCHLD)
-        sc.pthread_sigmask(SIG_BLOCK, mask, nil)
+        assert(sc.sigemptyset(mask))
+        assert(sc.sigaddset(mask, SIGCHLD))
+        assert(sc.pthread_sigmask(SIG_BLOCK, mask, nil))
         
-        signal_fd = sc.signalfd(-1, mask, 0)
+        local signal_fd = assert(sc.signalfd(-1, mask, 0))
         
         if signal_fd == -1 then
             error("signalfd error")
