@@ -11,6 +11,7 @@ pollio.install_poll_io_handler()
 -- Test 1: Test basic command execution
 local function test_basic_execution()
     local output, err = exec.command('echo', 'Hello, World!'):combined_output()
+    -- remember that echo will append a new line character!
     assert(output == "Hello, World!\n", "Expected 'Hello, World!' but got: " .. output)
     assert(err == nil, "Expected no error but got: ", err)
     print("Test 1: Basic command execution passed!")
@@ -34,7 +35,7 @@ end
 
 -- Test 4: Test command IO redirection
 local function test_io_redirection()
-    local msgs = {"Hello\n", "World\n"}
+    local msgs = {"Hello", "World"}
     local cmd = exec.command('cat')
     local stdin_pipe = assert(cmd:stdin_pipe())
     local stdout_pipe = assert(cmd:stdout_pipe())
@@ -49,10 +50,10 @@ local function test_io_redirection()
     local err = cmd:start()
     assert(err == nil, "Expected no error but got:", err)
     for _, v in ipairs(msgs) do
-        assert(stdout_pipe:read_line('keep') == v)
+        assert(stdout_pipe:read_some_chars() == v)
         signal_chan:put(1)
     end
-    assert(stdout_pipe:read_line('keep') == nil)
+    assert(stdout_pipe:read_some_chars() == nil)
     local err = cmd:wait()
     assert(err == nil, "Expected no error but got:", err)
     assert(cmd.process_state.ssi_status == 0)
