@@ -20,6 +20,7 @@ local ffi = M.is_LuaJIT and require 'ffi' or require 'cffi'
 ffi.tonumber = ffi.tonumber or tonumber
 ffi.type = ffi.type or type
 
+local ARCH = ffi.arch
 
 -------------------------------------------------------------------------------
 -- Compatibility functions
@@ -387,14 +388,14 @@ int sigaddset(sigset_t *set, int signum);
 int signalfd(int fd, const sigset_t *mask, int flags);
 ]]
 
-M.SIG_BLOCK = 0
-M.SIG_UNBLOCK = 1
-M.SIG_SETMASK = 2
-
-if ffi.arch == "mips" then
+if ARCH == "mips" then
     M.SIG_BLOCK = 1
     M.SIG_UNBLOCK = 2
     M.SIG_SETMASK = 3
+elseif ARCH == "x64" or ARCH == "arm64" or ARCH == "x86" then
+    M.SIG_BLOCK = 0
+    M.SIG_UNBLOCK = 1
+    M.SIG_SETMASK = 2
 end
 
 function M.sigemptyset(set) return ffi.C.sigemptyset(set) end
