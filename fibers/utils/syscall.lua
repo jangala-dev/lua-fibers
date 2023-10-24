@@ -185,7 +185,7 @@ if ARCH == "x64" or ARCH == "x86" then
             uint8_t raw[12];  // 4 bytes for events + 8 bytes for data
         } epoll_event;
     ]]
-elseif ARCH == "mips" or ARCH == "arm64" then
+elseif ARCH == "mips" or ARCH == "mipsel" or ARCH == "arm64" then
     ffi.cdef[[
         typedef struct epoll_event {
             uint32_t events;
@@ -248,7 +248,7 @@ if ARCH == 'x64' or ARCH == 'x86' then
     set_data = function(ev, value)
         ffi.cast("uint64_t*", ev.raw + 4)[0] = value
     end
-elseif ARCH == 'mips' or ARCH == 'arm64' then
+elseif ARCH == 'mips' or ARCH == 'arm64' or ARCH == 'mipsel' then
     get_event = function(ev)
         return ev.events
     end
@@ -419,7 +419,7 @@ int sigaddset(sigset_t *set, int signum);
 int signalfd(int fd, const sigset_t *mask, int flags);
 ]]
 
-if ARCH == "mips" then
+if ARCH == "mips" or ARCH == "mipsel" then
     M.SIG_BLOCK = 1
     M.SIG_UNBLOCK = 2
     M.SIG_SETMASK = 3
