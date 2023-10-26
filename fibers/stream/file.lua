@@ -62,7 +62,7 @@ function File:read(buf, count)
    local did_read, err, errno = sc.ffi.read(self.fd, buf, count)
    if errno then
       -- If the read would block, indicate to caller with nil return.
-      if errno == sc.EAGAIN or err == sc.EWOULDBLOCK then return nil end
+      if errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then return nil end
       -- Otherwise, signal an error.
       error(err)
    else
@@ -72,10 +72,10 @@ function File:read(buf, count)
 end
 
 function File:write(buf, count)
-   local did_write, err = sc.ffi.write(self.fd, buf, count)
+   local did_write, err, errno = sc.ffi.write(self.fd, buf, count)
    if err then
-      -- If the read would block, indicate to caller with nil return.
-      if err == sc.EAGAIN or err == sc.EWOULDBLOCK then return nil end
+      -- If the write would block, indicate to caller with nil return.
+      if errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then return nil end
       -- Otherwise, signal an error.
       error(err)
    elseif did_write == 0 then

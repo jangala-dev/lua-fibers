@@ -26,20 +26,20 @@ end
 
 function Socket:accept()
    while true do
-      local fd, err = sc.accept(self.fd)
+      local fd, err, errno = sc.accept(self.fd)
       if fd then
          return file.fdopen(fd)
-      elseif err.AGAIN or err.WOULDBLOCK then
+      elseif errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then
          file.wait_for_readable(self.fd)
       else
-         error(tostring(err))
+         error(err)
       end
    end
 end
 
 function Socket:connect(sa)
-   local ok, _, err = sc.connect(self.fd, sa)
-   if not ok and err == sc.EINPROGRESS then
+   local ok, err, errno = sc.connect(self.fd, sa)
+   if not ok and errno == sc.EINPROGRESS then
       -- Bonkers semantics; see connect(2).
       file.wait_for_writable(self.fd)
       err = assert(sc.getsockopt(self.fd, sc.SOL_SOCKET, sc.SO_ERROR))
@@ -50,7 +50,7 @@ function Socket:connect(sa)
       self.fd = nil
       return file.fdopen(fd)
    end
-   error(sc.strerror(err))
+   error(err)
 end
 
 function Socket:connect_unix(file)
