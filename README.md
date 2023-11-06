@@ -78,7 +78,9 @@ These dependencies will be installed in a VScode devcontainer automatically. To 
 
 This is the simplest set up for running on OpenWRT.  
 
-`opkg update; opkg install luajit`
+`opkg update; opkg install luajit; opkg install luaposix`
+
+Note that `luaposix` should be installed with `opkg` and not with `luarocks` in this context.
 
 That's it!
 
