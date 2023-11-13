@@ -36,7 +36,8 @@ fiber.spawn(function ()
       print("sending:", v)
       -- use the netcat command `nc` to write to a unix domain socket
       local command = 'echo "'..v..'" | nc -U '..sockname
-      exec.command('sh', '-c', command):run()
+      local out, err = exec.command('sh', '-c', command):combined_output()
+      if err then error(out) end
    end
 end)
 
