@@ -352,7 +352,20 @@ function M.ffi.memcmp(obj1, obj2, nbytes)
 end
 
 -- Explicitly load the pthread library
-local libpthread = ffi.load("pthread")
+
+local pthread_names = {
+    "pthread",
+    "libpthread.so.0"
+}
+
+local libpthread, success = nil, nil
+
+for _, v in ipairs(pthread_names) do
+    success, libpthread = pcall(ffi.load, v)
+    if success then break end
+end
+
+if not libpthread then error("libpthread not found") end
 
 ffi.cdef[[
 typedef struct {
