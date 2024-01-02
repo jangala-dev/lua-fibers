@@ -5,6 +5,9 @@ local fiber = require 'fibers.fiber'
 local channel = require "fibers.channel"
 local exec = require 'fibers.exec'
 local pollio = require 'fibers.pollio'
+local sleep = require "fibers.sleep"
+local sc = require 'fibers.utils.syscall'
+
 
 pollio.install_poll_io_handler()
 
@@ -60,6 +63,20 @@ local function test_io_redirection()
     print("Test 4: IO redirection passed!")
 end
 
+-- Test 5: Test command kill 
+local function test_kill()
+    local cmd = exec.command('/bin/sh', '-c', 'sleep 5')
+    local starttime = sc.monotime()
+    local err = cmd:start()
+    assert(err == nil, "Expected no error but got:", err)
+    sleep.sleep(0.5)
+    cmd:kill()
+    assert(cmd:wait() == sc.SIGTERM)
+    local duration = sc.monotime() - starttime
+    assert(duration<1)
+    print("Test 5: Kill passed!")
+end
+
 -- Main test function
 local function main()
     print("testing: fibers.exec")
@@ -67,6 +84,7 @@ local function main()
     test_command_error()
     test_command_with_args()
     test_io_redirection()
+    test_kill()
     print("test: ok")
     fiber.stop()
 end

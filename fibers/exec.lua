@@ -62,6 +62,12 @@ function exec.command(name, ...)
     return self
 end
 
+--- Sets the command to launch with a different pgid.
+-- @param status True if diff pgid desired.
+function Cmd:setpgid(status)
+    self._setpgid = status
+end
+
 --- Launches the command.
 -- @param path The path to the executable.
 -- @param argt Table of arguments.
@@ -76,6 +82,11 @@ function Cmd:launch(path, argt)
     local result_channel = queue.new(1) -- buffered channel len 1
     local pid = assert(sc.fork())
     if pid == 0 then -- child
+        if self._setpgid then
+            local child_pid = sc.getpid()  -- Get child's PID
+            local result, err_msg = sc.setpid('p', child_pid, child_pid)
+            assert(not result, err_msg)
+        end
         for _, v in ipairs(self.external_io_pipes) do v:close() end
         for _, v in ipairs(self.parent_io_pipes) do v:close() end
         sc.close(in_w); sc.dup2(in_r, sc.STDIN_FILENO); sc.close(in_r)
@@ -193,6 +204,26 @@ function Cmd:start()
     end
 end
 
+--- Starts the command.
+-- @return Any error.
+function Cmd:kill()
+    if not self.process then return "process not started" end
+    if self.process_state then return "process has already completed" end
+
+    local pid = not self.setpgid and self.process or -self.process
+    local res, err
+    
+    if not self.setpgid then
+        res, err = sc.kill(self.process)
+    else
+        res, err = sc.killpg(self.process)
+    end
+
+    if not res then
+        return err
+    end
+end
+
 --- Sets up a pipe for the given IO type.
 -- @param io_type The type of IO ("stdin", "stdout", or "stderr").
 -- @return The pipe or an error.
@@ -245,7 +276,7 @@ function Cmd:wait()
     if self.process_state.ssi_status == 0 then
         return nil
     else
-        return "exit code: "..self.process_state.ssi_status
+        return self.process_state.ssi_status
     end
 end
 

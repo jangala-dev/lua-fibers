@@ -62,6 +62,8 @@ M.EWOULDBLOCK = p_errno.EWOULDBLOCK
 M.EINTR = p_errno.EINTR
 M.EINPROGRESS = p_errno.EINPROGRESS
 
+M.SIGTERM = p_signal.SIGTERM
+
 M.S_IRUSR = p_stat.S_IRUSR
 M.S_IWUSR = p_stat.S_IWUSR
 M.S_IXUSR = p_stat.S_IXUSR
@@ -110,6 +112,8 @@ function M.stat(path) return p_stat.stat(path) end
 function M.fstat(file, ...) return p_stat.fstat(file, ...) end
 
 function M.signal(signum, handler) return p_signal.signal(signum, handler) end
+function M.kill(pid, options) return p_signal.kill(pid, options) end
+function M.killpg(pgid, sig) return p_signal.kill(pgid, sig) end
 
 function M.accept(fd) return p_socket.accept(fd) end
 function M.bind(file, sockaddr) return p_socket.bind(file, sockaddr) end
@@ -133,10 +137,12 @@ function M.execp(path, argt) return p_unistd.execp(path, argt) end
 function M.execve(path, argv, _) return p_unistd.exec(path, argv) end
 function M.fork() return p_unistd.fork() end
 function M.fsync(fd) return p_unistd.fsync(fd) end
+function M.getpid() return p_unistd.getpid() end
 function M.isatty(fd) return p_unistd.isatty(fd) end
 function M.lseek(file, offset, whence) return p_unistd.lseek(file, offset, whence) end
 function M.pipe() return p_unistd.pipe() end
 function M.read(fd, count) return p_unistd.read(fd, count) end
+function M.setpid(what, id, gid) return p_unistd.setpid(what, id, gid) end
 function M.unlink(path) return p_unistd.unlink(path) end
 function M.write(fd, buf) return p_unistd.write(fd, buf) end
 
