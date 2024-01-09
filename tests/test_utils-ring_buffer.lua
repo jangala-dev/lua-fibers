@@ -4,7 +4,7 @@ print('testing: fibers.utils.buffer')
 -- look one level up
 package.path = "../?.lua;" .. package.path
 
-local buffer = require 'fibers.utils.buffer'
+local buffer = require 'fibers.utils.ring_buffer'
 local sc = require 'fibers.utils.syscall'
 local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 

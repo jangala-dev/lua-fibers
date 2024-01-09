@@ -46,8 +46,9 @@ function Fiber:resume(...)
    current_fiber = saved_current_fiber -- the KEY bit, we only get here when the coroutine above has yielded, but we then pop back in the fiber we previously displaced
    if not ok then
       print('Error while running fiber: '..tostring(err))
+      print(debug.traceback(self.coroutine))
       print('fibers history:\n' .. self.traceback)
-      self.alive = false
+      os.exit(255)
    end
 end
 Fiber.run = Fiber.resume

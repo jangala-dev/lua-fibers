@@ -7,14 +7,13 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 
 local fiber = require "fibers.fiber"
 local op = require "fibers.op"
-local fio = require "fibers.stream.file"
-local file = require "fibers.file"
+local pollio = require "fibers.pollio"
 local sleep = require "fibers.sleep"
 local cqueues = require "cqueues"
-local stdio = require "posix.stdio"
+local exec = require "fibers.exec"
 
 print("installing poll handler")
-require 'fibers.file'.install_poll_io_handler()
+pollio.install_poll_io_handler()
 
 print("installing stream based IO library")
 require 'fibers.stream.compat'.install()
@@ -32,13 +31,13 @@ local old_step; old_step = cqueues.interpose("step", function(self, timeout)
         local events = self:events()
         -- messy
         if events == 'r' then
-            file.fd_readable_op(self:pollfd()):perform()
+            pollio.fd_readable_op(self:pollfd()):perform()
         elseif events == 'w' then
-            file.fd_writable_op(self:pollfd()):perform()
+            pollio.fd_writable_op(self:pollfd()):perform()
         elseif events == 'rw' then
             op.choice(
-                file.fd_readable_op(self:pollfd()),
-                file.fd_writable_op(self:pollfd())
+                pollio.fd_readable_op(self:pollfd()),
+                pollio.fd_writable_op(self:pollfd())
             ):perform()
         end
 		return old_step(self, 0.0)
@@ -116,23 +115,22 @@ fiber.spawn(function()
 	print("starting heartbeat")
 	while true do
 		print("slow heartbeat")
-		sleep.sleep(11)
+		sleep.sleep(1)
 	end
 end)
 
 -- And one more to show multiple epolls in action
 print("spawning popen fiber")
 fiber.spawn(function()
-    local fd = assert(fio.popen('while true; do echo "non-http fd input received!"; sleep 5; done', 'r'))
-    while true do
-		local line = fd:read_line()
-        if line then 
-            print(line)
-        else
-            fd:close()
-            break
-        end
-    end
+	local cmd = exec.command('sh', '-c', 'while true; do echo "non-http fd input received!"; sleep 5; done')
+	local stdout_pipe = assert(cmd:stdout_pipe())
+	local err = cmd:start()
+	if err then error(err) end
+	while true do
+	   local received = stdout_pipe:read_line()
+	   print(received)
+	end
+
 end)
 
 print("starting fibers")

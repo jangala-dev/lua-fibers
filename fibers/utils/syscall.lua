@@ -20,6 +20,7 @@ local ffi = M.is_LuaJIT and require 'ffi' or require 'cffi'
 ffi.tonumber = ffi.tonumber or tonumber
 ffi.type = ffi.type or type
 
+local ARCH = ffi.arch
 
 -------------------------------------------------------------------------------
 -- Compatibility functions
@@ -61,6 +62,8 @@ M.EWOULDBLOCK = p_errno.EWOULDBLOCK
 M.EINTR = p_errno.EINTR
 M.EINPROGRESS = p_errno.EINPROGRESS
 
+M.SIGTERM = p_signal.SIGTERM
+
 M.S_IRUSR = p_stat.S_IRUSR
 M.S_IWUSR = p_stat.S_IWUSR
 M.S_IXUSR = p_stat.S_IXUSR
@@ -77,6 +80,7 @@ M.STDERR_FILENO = p_unistd.STDERR_FILENO
 
 M.SIGPIPE = p_signal.SIGPIPE
 M.SIG_IGN = p_signal.SIG_IGN
+M.SIGCHLD = p_signal.SIGCHLD
 
 M.CLOCK_REALTIME = p_time.CLOCK_REALTIME
 M.CLOCK_MONOTONIC = p_time.CLOCK_MONOTONIC
@@ -96,22 +100,6 @@ M.SOMAXCONN = p_socket.SOMAXCONN
 
 M.WNOHANG = p_wait.WNOHANG
 
----- Would be cleaner to implement epoll using our cffi-lua dependency rather
----- than carrying on using the afghanistanyn epoll dependency
--- M.EPOLLIN = 0x001
--- M.EPOLLPRI = 0x002
--- M.EPOLLOUT = 0x004
--- M.EPOLLRDNORM = 0x040
--- M.EPOLLRDBAND = 0x080
--- M.EPOLLWRNORM = 0x100
--- M.EPOLLWRBAND = 0x200
--- M.EPOLLMSG = 0x400
--- M.EPOLLERR = 0x008
--- M.EPOLLHUP = 0x010
--- M.EPOLLRDHUP = 0x2000
--- M.EPOLLONESHOT = lshift(1, 30)
--- M.EPOLLET = lshift(1, 31)
-
 -------------------------------------------------------------------------------
 -- Luafied stdlib syscalls
 
@@ -120,9 +108,12 @@ function M.open(path, mode, perm) return p_fcntl.open(path, mode, perm) end
 
 function M.strerror(err) return p_errno.errno(err) end
 
+function M.stat(path) return p_stat.stat(path) end
 function M.fstat(file, ...) return p_stat.fstat(file, ...) end
 
 function M.signal(signum, handler) return p_signal.signal(signum, handler) end
+function M.kill(pid, options) return p_signal.kill(pid, options) end
+function M.killpg(pgid, sig) return p_signal.kill(pgid, sig) end
 
 function M.accept(fd) return p_socket.accept(fd) end
 function M.bind(file, sockaddr) return p_socket.bind(file, sockaddr) end
@@ -138,16 +129,20 @@ function M.rename(from, to) return p_stdio.rename(from, to) end
 
 function M.clock_gettime(id) return p_time.clock_gettime(id) end
 
+function M.access(path, mode) return p_unistd.access(path, mode) end
 function M.close(fd) return p_unistd.close(fd) end
 function M.dup2(fd1, fd2) return p_unistd.dup2(fd1, fd2) end
+function M.exec(path, argt) return p_unistd.exec(path, argt) end
 function M.execp(path, argt) return p_unistd.execp(path, argt) end
 function M.execve(path, argv, _) return p_unistd.exec(path, argv) end
 function M.fork() return p_unistd.fork() end
 function M.fsync(fd) return p_unistd.fsync(fd) end
+function M.getpid() return p_unistd.getpid() end
 function M.isatty(fd) return p_unistd.isatty(fd) end
 function M.lseek(file, offset, whence) return p_unistd.lseek(file, offset, whence) end
 function M.pipe() return p_unistd.pipe() end
 function M.read(fd, count) return p_unistd.read(fd, count) end
+function M.setpid(what, id, gid) return p_unistd.setpid(what, id, gid) end
 function M.unlink(path) return p_unistd.unlink(path) end
 function M.write(fd, buf) return p_unistd.write(fd, buf) end
 
@@ -187,15 +182,36 @@ function M.floatsleep(t)
     end
 end
 
+local function wrap_error(retval)
+    if retval >= 0 then
+        return retval
+    else
+        local errno = ffi.errno()
+        return nil, M.strerror(errno), errno
+    end
+end
+
 ------------------------------------
 -- epoll
 
-ffi.cdef[[
-    typedef struct epoll_event {
-        uint32_t events;
-        uint64_t data;
-    } epoll_event;
+if ARCH == "x64" or ARCH == "x86" then
+    ffi.cdef[[
+        typedef struct epoll_event {
+            uint8_t raw[12];  // 4 bytes for events + 8 bytes for data
+        } epoll_event;
+    ]]
+elseif ARCH == "mips" or ARCH == "mipsel" or ARCH == "arm64" then
+    ffi.cdef[[
+        typedef struct epoll_event {
+            uint32_t events;
+            uint64_t data;
+        } epoll_event;
+    ]]
+else
+    error(ARCH.." architecture not specified")
+end
 
+ffi.cdef[[
     int epoll_create(int size);
     int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
     int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
@@ -228,47 +244,66 @@ local EPOLL_CTL_DEL = 2
 local EPOLL_CTL_MOD = 3
 
 
+-- Adjust helper functions based on the architecture:
+local get_event
+local set_event
+local get_data
+local set_data
+
+if ARCH == 'x64' or ARCH == 'x86' then
+    get_event = function(ev)
+        return ffi.cast("uint32_t*", ev.raw)[0]
+    end
+    set_event = function(ev, value)
+        ffi.cast("uint32_t*", ev.raw)[0] = value
+    end
+    get_data = function(ev)
+        return ffi.cast("uint64_t*", ev.raw + 4)[0]
+    end
+    set_data = function(ev, value)
+        ffi.cast("uint64_t*", ev.raw + 4)[0] = value
+    end
+elseif ARCH == 'mips' or ARCH == 'arm64' or ARCH == 'mipsel' then
+    get_event = function(ev)
+        return ev.events
+    end
+    set_event = function(ev, value)
+        ev.events = value
+    end
+    get_data = function(ev)
+        return ev.data
+    end
+    set_data = function(ev, value)
+        ev.data = value
+    end
+else
+    error(ARCH.." architecture not specified")
+end
+
 -- Returns an epoll file descriptor.
 function M.epoll_create()
-    local fd = ffi.C.epoll_create(1)
-    if fd == -1 then
-        return nil, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return fd
+    return wrap_error(ffi.C.epoll_create(1))
 end
 
 -- Register eventmask of a file descriptor onto epoll file descriptor.
 function M.epoll_register(epfd, fd, eventmask)
     local event = ffi.new("struct epoll_event")
-    event.events = eventmask
-    event.data = fd
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    set_event(event, eventmask)
+    set_data(event, fd)
+    return wrap_error(ffi.C.epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event))
 end
 
 -- Modify eventmask of a file descriptor.
 function M.epoll_modify(epfd, fd, eventmask)
     local event = ffi.new("struct epoll_event")
-    event.events = eventmask
-    event.data = fd
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_MOD, fd, event)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    set_event(event, eventmask)
+    set_data(event, fd)
+    return wrap_error(ffi.C.epoll_ctl(epfd, EPOLL_CTL_MOD, fd, event))
 end
 
 -- Remove a registered file descriptor from the epoll file descriptor.
 function M.epoll_unregister(epfd, fd)
-    local event = ffi.new("struct epoll_event") -- event can be null when removing
-    local res = ffi.C.epoll_ctl(epfd, EPOLL_CTL_DEL, fd, event)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    return wrap_error(ffi.C.epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nil))
 end
 
 -- Wait for events.
@@ -284,8 +319,8 @@ function M.epoll_wait(epfd, timeout, max_events)
 
     -- Loop over the events, inserting them into the table with their fd as the key
     for i = 0, num_events - 1 do
-        local fd = assert(ffi.tonumber(events[i].data))
-        local event = assert(ffi.tonumber(events[i].events))
+        local fd = assert(ffi.tonumber(get_data(events[i])))
+        local event = assert(ffi.tonumber(get_event(events[i])))
         res[fd] = event
     end
 
@@ -294,13 +329,8 @@ end
 
 -- Close epoll file descriptor.
 function M.epoll_close(epfd)
-    local res = ffi.C.close(epfd)
-    if res == -1 then
-        return false, ffi.string(ffi.C.strerror(ffi.errno()))
-    end
-    return true
+    return wrap_error(ffi.C.close(epfd))
 end
-
 
 
 -------------------------------------------------------------------------------
@@ -315,31 +345,89 @@ ffi.cdef [[
     int memcmp(const void *s1, const void *s2, size_t n);
 ]]
 
-local ffi_write = ffi.C.write
-local ffi_read = ffi.C.read
-local memcmp = ffi.C.memcmp
-
-local function wrap_error(retval)
-    if retval >= 0 then
-        return retval
-    else
-        local errno = ffi.errno()
-        return nil, M.strerror(errno), errno
-    end
-end
-
 function M.ffi.write(fildes, buf, nbytes)
-    local retval = ffi.tonumber(ffi_write(fildes, buf, nbytes))
-    return wrap_error(retval)
+    return wrap_error(ffi.tonumber(ffi.C.write(fildes, buf, nbytes)))
 end
 
 function M.ffi.read(fildes, buf, nbytes)
-    local retval = ffi.tonumber(ffi_read(fildes, buf, nbytes))
-    return wrap_error(retval)
+    return wrap_error(ffi.tonumber(ffi.C.read(fildes, buf, nbytes)))
 end
 
 function M.ffi.memcmp(obj1, obj2, nbytes)
-    return ffi.tonumber(memcmp(obj1, obj2, nbytes))
+    return ffi.tonumber(ffi.C.memcmp(obj1, obj2, nbytes))
 end
+
+-- Explicitly load the pthread library
+
+local pthread_names = {
+    "pthread",
+    "libpthread.so.0"
+}
+
+local libpthread, success = nil, nil
+
+for _, v in ipairs(pthread_names) do
+    success, libpthread = pcall(ffi.load, v)
+    if success then break end
+end
+
+if not libpthread then error("libpthread not found") end
+
+ffi.cdef[[
+typedef struct {
+    uint32_t ssi_signo;    /* Signal number */
+    int32_t  ssi_errno;    /* Error number (unused) */
+    int32_t  ssi_code;     /* Signal code */
+    uint32_t ssi_pid;      /* PID of sender */
+    uint32_t ssi_uid;      /* Real UID of sender */
+    int32_t  ssi_fd;       /* File descriptor (SIGIO) */
+    uint32_t ssi_tid;      /* Kernel timer ID (POSIX timers) */
+    uint32_t ssi_band;     /* Band event (SIGIO) */
+    uint32_t ssi_overrun;  /* POSIX timer overrun count */
+    uint32_t ssi_trapno;   /* Trap number that caused signal */
+    int32_t  ssi_status;   /* Exit status or signal (SIGCHLD) */
+    int32_t  ssi_int;      /* Integer sent by sigqueue(3) */
+    uint64_t ssi_ptr;      /* Pointer sent by sigqueue(3) */
+    uint64_t ssi_utime;    /* User CPU time consumed (SIGCHLD) */
+    uint64_t ssi_stime;    /* System CPU time consumed (SIGCHLD) */
+    uint64_t ssi_addr;     /* Address that generated signal (for hardware-generated signals) */
+    uint16_t ssi_addr_lsb; /* Least significant bit of address (SIGBUS; since Linux 2.6.37) */
+    uint16_t __pad2; 
+    int32_t  ssi_syscall;
+    uint64_t ssi_call_addr;
+    uint32_t ssi_arch;
+    uint8_t  pad[28];      /* Pad size to 128 bytes */
+} signalfd_siginfo;
+
+typedef struct {
+    unsigned long int __val[1024 / (8 * sizeof (unsigned long int))];
+} __sigset_t;
+
+typedef __sigset_t sigset_t;
+
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigemptyset(sigset_t *set);
+int sigaddset(sigset_t *set, int signum);
+int signalfd(int fd, const sigset_t *mask, int flags);
+]]
+
+if ARCH == "mips" or ARCH == "mipsel" then
+    M.SIG_BLOCK = 1
+    M.SIG_UNBLOCK = 2
+    M.SIG_SETMASK = 3
+elseif ARCH == "x64" or ARCH == "arm64" or ARCH == "x86" then
+    M.SIG_BLOCK = 0
+    M.SIG_UNBLOCK = 1
+    M.SIG_SETMASK = 2
+end
+
+function M.sigemptyset(set) return wrap_error(ffi.C.sigemptyset(set)) end
+function M.sigaddset(set, signum) return wrap_error(ffi.C.sigaddset(set, signum)) end
+function M.signalfd(fd, mask, flags) return wrap_error(ffi.C.signalfd(fd, mask, flags)) end
+
+function M.pthread_sigmask(how, set, oldset) return wrap_error(libpthread.pthread_sigmask(how, set, oldset)) end
+
+function M.new_sigset() return ffi.new("sigset_t") end
+function M.new_fdsi() return ffi.new("signalfd_siginfo"), ffi.sizeof("signalfd_siginfo") end
 
 return M
