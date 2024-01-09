@@ -83,7 +83,7 @@ TimerHeap.__index = TimerHeap
 --- TimerHeap constructor.
 -- @tparam[opt=now] number now The current time.
 -- @treturn TimerHeap New TimerHeap instance.
-function TimerHeap:new(now)
+local function new(now)
     now = now or sc.monotime()
     return setmetatable({now = now, heap = BinaryHeap:new()}, TimerHeap)
 end
@@ -124,5 +124,5 @@ function TimerHeap:advance(t, sched)
 end
 
 return {
-    new = TimerHeap.new
+    new = new
 }
