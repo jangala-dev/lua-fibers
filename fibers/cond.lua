@@ -5,8 +5,6 @@
 -- fibers waiting for or announcing the occurrence of an event.
 -- @module fibers.cond
 
-package.path = "../?.lua;" .. package.path
-
 local op = require 'fibers.op'
 
 --- Cond class.

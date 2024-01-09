@@ -6,7 +6,6 @@
 --- fibers.op module
 -- Provides Concurrent ML style operations for managing concurrency.
 -- @module fibers.op
-package.path = "../?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
 

@@ -5,8 +5,6 @@
 
 -- Epoll.
 
-package.path = "../?.lua;" .. package.path
-
 local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 

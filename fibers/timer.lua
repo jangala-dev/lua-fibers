@@ -6,9 +6,6 @@
 -- Implements a Binary Heap based timer. This is a time based event scheduler, used for efficiently scheduling and managing events.
 -- @module fibers.timer
 
--- Require path modification
-package.path = '../?.lua;' .. package.path
-
 -- Required packages
 local sc = require 'fibers.utils.syscall'
 
