@@ -123,6 +123,7 @@ function TimerHeap:advance(t, sched)
         self.now = node.time
         sched:schedule(node.obj)
     end
+    self.now = t
 end
 
 return {
