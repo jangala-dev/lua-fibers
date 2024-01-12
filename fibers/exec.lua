@@ -9,6 +9,14 @@ local sc = require 'fibers.utils.syscall'
 
 local active_commands = {}
 
+--[[ 
+we can replace this centralised risky feeling signal based watcher with the new 
+Linux 5.3 call `pidfd_open` which returns an fd that becomes readable when the 
+process has exited. We can get the relevant process info from /proc/[PID]/stat. 
+then `wait`ing. the key advantage is that this approach requires no messing 
+around with a centralised signal handler and each cmd instance can handle its own 
+process.
+]]
 -- Watcher for child process signals.
 local function signalfd_watcher()
     fiber.spawn(function ()
