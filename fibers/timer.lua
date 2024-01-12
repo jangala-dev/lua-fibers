@@ -75,36 +75,36 @@ function BinaryHeap:heapify_down(idx)
     end
 end
 
---- TimerHeap class.
--- @type TimerHeap
-local TimerHeap = {}
-TimerHeap.__index = TimerHeap
+--- Timer class.
+-- @type Timer
+local Timer = {}
+Timer.__index = Timer
 
---- TimerHeap constructor.
+--- Timer constructor.
 -- @tparam[opt=now] number now The current time.
--- @treturn TimerHeap New TimerHeap instance.
+-- @treturn Timer New Timer instance.
 local function new(now)
     now = now or sc.monotime()
-    return setmetatable({now = now, heap = BinaryHeap:new()}, TimerHeap)
+    return setmetatable({now = now, heap = BinaryHeap:new()}, Timer)
 end
 
---- Adds an object to the heap with an absolute time.
+--- Adds an object to the timer with an absolute time.
 -- @tparam number t The absolute time.
--- @tparam any obj The object to add to the heap.
-function TimerHeap:add_absolute(t, obj)
+-- @tparam any obj The object to add to the timer.
+function Timer:add_absolute(t, obj)
     self.heap:push({time = t, obj = obj})
 end
 
---- Adds an object to the heap with a delta time.
+--- Adds an object to the timer with a delta time.
 -- @tparam number dt The delta time.
--- @tparam any obj The object to add to the heap.
-function TimerHeap:add_delta(dt, obj)
+-- @tparam any obj The object to add to the timer.
+function Timer:add_delta(dt, obj)
     return self:add_absolute(self.now + dt, obj)
 end
 
---- Returns the time of the next entry in the heap.
--- @treturn number The time of the next entry in the heap, or infinity if the heap is empty.
-function TimerHeap:next_entry_time()
+--- Returns the time of the next entry in the timer.
+-- @treturn number The time of the next entry in the timer, or infinity if the heap is empty.
+function Timer:next_entry_time()
     if self.heap.size == 0 then
         return 1/0 -- infinity
     end
@@ -114,7 +114,7 @@ end
 --- Advances the timer, popping and scheduling objects from the heap as necessary.
 -- @tparam number t The time to advance the timer to.
 -- @tparam table sched The scheduler to use for scheduling objects.
-function TimerHeap:advance(t, sched)
+function Timer:advance(t, sched)
     while self.heap.size > 0 and t >= self.heap.heap[1].time do
         local node = self.heap:pop()
         self.now = node.time
