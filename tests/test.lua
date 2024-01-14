@@ -20,6 +20,7 @@ local modules = {
     {'epoll'},
     {'pollio'},
     {'exec'},
+    {'waitgroup'},
 }
 
 for _, j in ipairs(modules) do
