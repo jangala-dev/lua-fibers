@@ -30,4 +30,7 @@ sudo ninja all
 sudo ninja test
 sudo cp cffi.so /usr/local/lib/lua/5.1/cffi.so
 
+cd /workspaces/lua-fibers
+pre-commit install
+
 exit 0
