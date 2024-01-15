@@ -2,7 +2,7 @@
 
 sudo apt update -y
 
-sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4
+sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 pre-commit
 
 # install core lua packages
 
@@ -14,6 +14,7 @@ sudo luarocks install bit32
 sudo luarocks install cqueues
 sudo luarocks install http
 sudo luarocks install luaposix
+sudo luarocks install luacheck
 
 # install cffi-lua
 
