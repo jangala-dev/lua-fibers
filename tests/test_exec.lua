@@ -76,7 +76,7 @@ end
 
 -- Main test function
 local function main()
-    local reps = 100
+    local reps = 1000
     print("testing: fibers.exec")
     local tests = {
         test_basic_execution = test_basic_execution,
@@ -86,7 +86,7 @@ local function main()
         test_kill = test_kill,
     }
     for k, v in pairs(tests) do
-        print("starting:", k)
+        io.write(k)
         for i=1, reps do
             v()
         end
