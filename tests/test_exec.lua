@@ -14,10 +14,10 @@ pollio.install_poll_io_handler()
 -- Test 1: Test basic command execution
 local function test_basic_execution()
     local output, err = exec.command('echo', 'Hello, World!'):combined_output()
+    if err then error(err) end
     -- remember that echo will append a new line character!
     assert(output == "Hello, World!\n", "Expected 'Hello, World!' but got: " .. output)
     assert(err == nil, "Expected no error but got: ", err)
-    print("Test 1: Basic command execution passed!")
 end
 
 -- Test 2: Test command error handling
@@ -25,15 +25,14 @@ local function test_command_error()
     local output, err = exec.command('nonexistent_command'):combined_output()
     assert(output == "", "Expected no output but got: " .. output)
     assert(err ~= nil, "Expected an error!")
-    print("Test 2: Command error handling passed!")
 end
 
 -- Test 3: Test command with arguments
 local function test_command_with_args()
     local output, err = exec.command('echo', 'arg1', 'arg2'):combined_output()
+    if err then error(err) end
     assert(output == "arg1 arg2\n", "Expected 'arg1 arg2' but got: " .. output)
     assert(err == nil, "Expected no error but got: ", err)
-    print("Test 3: Command with arguments passed!")
 end
 
 -- Test 4: Test command IO redirection
@@ -59,32 +58,40 @@ local function test_io_redirection()
     assert(stdout_pipe:read_some_chars() == nil)
     local err = cmd:wait()
     assert(err == nil, "Expected no error but got:", err)
-    assert(cmd.process_state.ssi_status == 0)
-    print("Test 4: IO redirection passed!")
+    assert(cmd.process_state == 0)
 end
 
 -- Test 5: Test command kill 
 local function test_kill()
     local cmd = exec.command('/bin/sh', '-c', 'sleep 5')
+    cmd:setpgid(true) -- ensures that children run in a separate process groups
     local starttime = sc.monotime()
     local err = cmd:start()
     assert(err == nil, "Expected no error but got:", err)
-    sleep.sleep(0.5)
+    sleep.sleep(0.001)
     cmd:kill()
     assert(cmd:wait() == sc.SIGTERM)
-    local duration = sc.monotime() - starttime
-    assert(duration<1)
-    print("Test 5: Kill passed!")
+    assert(sc.monotime() - starttime<1)
 end
 
 -- Main test function
 local function main()
+    local reps = 100
     print("testing: fibers.exec")
-    test_basic_execution()
-    test_command_error()
-    test_command_with_args()
-    test_io_redirection()
-    test_kill()
+    local tests = {
+        test_basic_execution = test_basic_execution,
+        test_command_error = test_command_error,
+        test_command_with_args = test_command_with_args,
+        test_io_redirection = test_io_redirection,
+        test_kill = test_kill,
+    }
+    for k, v in pairs(tests) do
+        print("starting:", k)
+        for i=1, reps do
+            v()
+        end
+        print("...passed!")
+    end
     print("test: ok")
     fiber.stop()
 end
