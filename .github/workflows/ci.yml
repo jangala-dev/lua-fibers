@@ -15,5 +15,15 @@ jobs:
         chmod +x .devcontainer/postCreateCommand.sh
         ./.devcontainer/postCreateCommand.sh
 
+    - name: Change Directory
+      run: cd tests
+    
+    - name: Run Tests
+      run: lua.test.lua
+
+    - name: Change Directory
+      run: cd ../
+
     - name: Run Linter
       run: luacheck .
+    
