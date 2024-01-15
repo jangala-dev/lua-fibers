@@ -11,6 +11,8 @@ local cond = require 'fibers.cond'
 local op = require 'fibers.op'
 local sc = require 'fibers.utils.syscall'
 
+require("fibers.pollio").install_poll_io_handler()
+
 -- Set up the queues, channel and condition variable
 local data_q = queues.new()
 local notif_chan = channel.new()

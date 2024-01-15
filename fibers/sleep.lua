@@ -4,8 +4,6 @@
 -- Provides functions to suspend execution of fibers for a certain duration (sleep) or until a specific time.
 -- @module fibers.sleep
 
-package.path = "../?.lua;" .. package.path
-
 local op = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 

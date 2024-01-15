@@ -4,8 +4,6 @@
 -- Provides Concurrent ML style buffered channels for communication between fibers.
 -- @module fibers.queue
 
-package.path = '../?.lua;' .. package.path
-
 local op = require 'fibers.op'
 local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'

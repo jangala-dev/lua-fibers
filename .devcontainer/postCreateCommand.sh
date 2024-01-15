@@ -2,7 +2,7 @@
 
 sudo apt update -y
 
-sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 pre-commit
+sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 netcat pre-commit
 
 # install core lua packages
 

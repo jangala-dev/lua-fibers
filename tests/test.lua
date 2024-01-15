@@ -3,7 +3,8 @@ package.path = "../?.lua;" .. package.path
 local sep = '-'
 
 local modules = {
-    {'utils','buffer'},
+    {'utils','ring_buffer'},
+    {'utils','string_buffer'},
     {'stream'},
     {'stream','file'},
     {'stream','mem'},
@@ -17,7 +18,9 @@ local modules = {
     {'cond'},
     {'sleep'},
     {'epoll'},
-    {'file'},
+    {'pollio'},
+    {'exec'},
+    {'waitgroup'},
 }
 
 for _, j in ipairs(modules) do

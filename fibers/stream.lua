@@ -6,11 +6,8 @@
 -- streams.
 -- @module fibers.stream
 
-
-package.path = "../?.lua;" .. package.path
-
 local sc = require 'fibers.utils.syscall'
-local buffer = require 'fibers.utils.buffer'
+local buffer = require 'fibers.utils.ring_buffer'
 
 local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 
@@ -428,6 +425,7 @@ function Stream:setvbuf(mode, size)
       transfer_buffered_bytes(self.tx, new_tx)
       self.tx = new_tx
    end
+   return self
 end
 
 local function write1(stream, arg)
