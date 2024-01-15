@@ -5,5 +5,9 @@
 		// "args": { "VARIANT": "buster" }
 	},
     "remoteUser": "vscode",
-    "postCreateCommand": "bash .devcontainer/postCreateCommand.sh"
+    "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
+	"extensions": [
+		"sumneko.lua",
+		"rog2.luacheck"
+	]
 }
