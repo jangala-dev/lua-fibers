@@ -19,7 +19,7 @@ jobs:
       run: cd tests
     
     - name: Run Tests
-      run: lua.test.lua
+      run: lua test.lua
 
     - name: Change Directory
       run: cd ../
