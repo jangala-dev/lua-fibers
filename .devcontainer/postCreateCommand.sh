@@ -2,7 +2,7 @@
 
 sudo apt update -y
 
-sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 netcat
+sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 netcat pre-commit
 
 # install core lua packages
 
@@ -14,6 +14,7 @@ sudo luarocks install bit32
 sudo luarocks install cqueues
 sudo luarocks install http
 sudo luarocks install luaposix
+sudo luarocks install luacheck
 
 # install cffi-lua
 
@@ -28,5 +29,8 @@ sudo meson .. -Dlua_version=5.1 --buildtype=release
 sudo ninja all
 sudo ninja test
 sudo cp cffi.so /usr/local/lib/lua/5.1/cffi.so
+
+cd /workspaces/lua-fibers
+pre-commit install
 
 exit 0

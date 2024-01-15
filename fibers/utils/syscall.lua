@@ -25,8 +25,7 @@ local ARCH = ffi.arch
 
 -------------------------------------------------------------------------------
 -- Compatibility functions
-
-table.pack = table.pack or function(...)
+table.pack = table.pack or function(...) -- luacheck: ignore -- Compatibility fallback
     return { n = select("#", ...), ... }
 end
 
