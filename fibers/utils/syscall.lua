@@ -1,3 +1,4 @@
+---@diagnostic disable: inject-field
 -- Copyright Jangala
 
 local p_fcntl = require 'posix.fcntl'
