@@ -86,11 +86,10 @@ local function main()
         test_kill = test_kill,
     }
     for k, v in pairs(tests) do
-        io.write(k)
         for i=1, reps do
             v()
         end
-        print("...passed!")
+        print(k..": passed!")
     end
     print("test: ok")
     fiber.stop()
