@@ -64,14 +64,14 @@ end
 -- Test 5: Test command kill 
 local function test_kill()
     local cmd = exec.command('/bin/sh', '-c', 'sleep 5')
-    cmd:setpgid(true) -- ensures that children run in a separate process groups
+    cmd:setpgid(true) -- ensures that children run in a separate process group
     local starttime = sc.monotime()
     local err = cmd:start()
     assert(err == nil, "Expected no error but got:", err)
     sleep.sleep(0.001)
     cmd:kill()
     assert(cmd:wait() == sc.SIGTERM)
-    assert(sc.monotime() - starttime<1)
+    assert(sc.monotime()-starttime < 1)
 end
 
 -- Main test function

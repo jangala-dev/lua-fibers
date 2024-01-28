@@ -171,15 +171,15 @@ function Cmd:start()
     end
 end
 
---- Starts the command.
+--- Kills the command.
 -- @return Any error.
 function Cmd:kill()
     if not self.process then return "process not started" end
     if self.process_state then return "process has already completed" end
 
-    local res, err = sc.kill(self.setpgid and -self.process or self.process)
+    local res, err, errno = sc.kill(self._setpgid and -self.process or self.process)
 
-    assert(res==0, err)
+    assert(res==0 or errno==sc.ESRCH, err)
 end
 
 --- Sets up a pipe for the given IO type.
