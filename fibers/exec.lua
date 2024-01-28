@@ -3,52 +3,9 @@
 local file = require 'fibers.stream.file'
 local pollio = require 'fibers.pollio'
 local fiber = require 'fibers.fiber'
-local queue = require 'fibers.queue'
+local waitgroup = require 'fibers.waitgroup'
 local string_buffer = require 'fibers.utils.string_buffer'
 local sc = require 'fibers.utils.syscall'
-
-local active_commands = {}
-
---[[ 
-we can replace this centralised risky feeling signal based watcher with the new 
-Linux 5.3 call `pidfd_open` which returns an fd that becomes readable when the 
-process has exited. We can get the relevant process info from /proc/[PID]/stat. 
-then `wait`ing. the key advantage is that this approach requires no messing 
-around with a centralised signal handler and each cmd instance can handle its own 
-process.
-]]
--- Watcher for child process signals.
-local function signalfd_watcher()
-    fiber.spawn(function ()
-        pollio.install_poll_io_handler()
-    
-        local SIG_BLOCK = sc.SIG_BLOCK
-        local SIGCHLD = sc.SIGCHLD
-        local mask = sc.new_sigset()
-        
-        assert(sc.sigemptyset(mask))
-        assert(sc.sigaddset(mask, SIGCHLD))
-        assert(sc.pthread_sigmask(SIG_BLOCK, mask, nil))
-        
-        local signal_fd = assert(sc.signalfd(-1, mask, 0))
-        
-        if signal_fd == -1 then
-            error("signalfd error")
-        end
-        
-        local signal_fd_stream = file.fdopen(signal_fd)
-    
-        while true do
-            local fdsi = sc.new_fdsi()
-            signal_fd_stream:read_struct(fdsi, "signalfd_siginfo")
-            if fdsi.ssi_pid then
-                active_commands[fdsi.ssi_pid]:put(fdsi)
-            end
-        end
-    end)
-end
-
-signalfd_watcher()
 
 local exec = {}
 
@@ -67,6 +24,7 @@ function exec.command(name, ...)
     self.child_io_files = {}
     self.parent_io_pipes = {}
     self.external_io_pipes = {}
+    self.pipe_wg = waitgroup.new()
     return self
 end
 
@@ -84,16 +42,15 @@ function Cmd:launch(path, argt)
     -- Check if the executable exists and is executable
     local status, errstr, _ = sc.access(path, "x")
     if not status then return nil, nil, nil, errstr end
+
     local in_r, in_w = assert(sc.pipe())
     local out_r, out_w = assert(sc.pipe())
     local err_r, err_w = assert(sc.pipe())
-    local result_channel = queue.new(1) -- buffered channel len 1
     local pid = assert(sc.fork())
     if pid == 0 then -- child
         if self._setpgid then
-            local child_pid = sc.getpid()  -- Get child's PID
-            local result, err_msg = sc.setpid('p', child_pid, child_pid)
-            assert(not result, err_msg)
+            local result, err_msg = sc.setpid('p', 0, 0)
+            assert(result==0, err_msg)
         end
         for _, v in ipairs(self.external_io_pipes) do v:close() end
         for _, v in ipairs(self.parent_io_pipes) do v:close() end
@@ -107,15 +64,15 @@ function Cmd:launch(path, argt)
         end
     end
     -- parent
-    active_commands[pid] = result_channel
-    assert(active_commands[pid])
+    local pidfd, err = sc.pidfd_open(pid, 0)
+    assert(pidfd, err)
     sc.close(in_r); sc.close(out_w); sc.close(err_w)
     local ret_streams = {
         stdin = file.fdopen(in_w):setvbuf('no'),
         stdout = file.fdopen(out_r),
         stderr = file.fdopen(err_r),
     }
-    return pid, ret_streams, result_channel, nil
+    return pid, ret_streams, pidfd, nil
 end
 
 --- Gets the combined output of stdout and stderr.
@@ -180,7 +137,7 @@ function Cmd:start()
         if not executablePath then return error_return('"'..self.path..'": executable file not found in $PATH') end
     end
 
-    local pid, cmd_streams, result_channel, err = self:launch(executablePath, self.args)
+    local pid, cmd_streams, pidfd, err = self:launch(executablePath, self.args)
     if not pid then
         return error_return(err)
     end
@@ -188,12 +145,13 @@ function Cmd:start()
     close_child_io()
 
     self.process = pid
-    self.result_channel = result_channel
+    self.pidfd = pidfd
     self.cmd_streams = cmd_streams
 
     local io_types = {"stdin", "stdout", "stderr"}
 
     for _, v in ipairs(io_types) do
+        self.pipe_wg:add(1)
         if not self[v] then
             self[v] = assert(file.open("/dev/null", v == "stdin" and "r" or "w"))
             table.insert(self.parent_io_pipes, self[v])
@@ -208,28 +166,20 @@ function Cmd:start()
             end
             if output.close then output:close() end
             if input.close then input:close() end
+            self.pipe_wg:done()
         end)
     end
 end
 
---- Starts the command.
+--- Kills the command.
 -- @return Any error.
 function Cmd:kill()
     if not self.process then return "process not started" end
     if self.process_state then return "process has already completed" end
 
-    local pid = not self.setpgid and self.process or -self.process
-    local res, err
-    
-    if not self.setpgid then
-        res, err = sc.kill(self.process)
-    else
-        res, err = sc.killpg(self.process)
-    end
+    local res, err, errno = sc.kill(self._setpgid and -self.process or self.process)
 
-    if not res then
-        return err
-    end
+    assert(res==0 or errno==sc.ESRCH, err)
 end
 
 --- Sets up a pipe for the given IO type.
@@ -275,17 +225,12 @@ end
 --- Waits for the command to complete.
 -- @return The completion status or an error.
 function Cmd:wait()
-    if self.process_state then
-        return "Command has already completed"
-    end
-    self.process_state = self.result_channel:get()
-    active_commands[self.process] = nil
-    sc.waitpid(self.process)
-    if self.process_state.ssi_status == 0 then
-        return nil
-    else
-        return self.process_state.ssi_status
-    end
+    pollio.fd_readable_op(self.pidfd):perform()
+    self.pipe_wg:wait()
+    local _, _, status = sc.waitpid(self.process)
+    sc.close(self.pidfd)
+    self.process_state = status
+    if status ~= 0 then return status end
 end
 
 return exec

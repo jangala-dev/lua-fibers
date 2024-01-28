@@ -62,7 +62,9 @@ M.EAGAIN = p_errno.EAGAIN
 M.EWOULDBLOCK = p_errno.EWOULDBLOCK
 M.EINTR = p_errno.EINTR
 M.EINPROGRESS = p_errno.EINPROGRESS
+M.ESRCH = p_errno.ESRCH
 
+M.SIGKILL = p_signal.SIGKILL
 M.SIGTERM = p_signal.SIGTERM
 
 M.S_IRUSR = p_stat.S_IRUSR
@@ -138,6 +140,7 @@ function M.execp(path, argt) return p_unistd.execp(path, argt) end
 function M.execve(path, argv, _) return p_unistd.exec(path, argv) end
 function M.fork() return p_unistd.fork() end
 function M.fsync(fd) return p_unistd.fsync(fd) end
+function M.getpgrp() return p_unistd.getpgrp() end
 function M.getpid() return p_unistd.getpid() end
 function M.isatty(fd) return p_unistd.isatty(fd) end
 function M.lseek(file, offset, whence) return p_unistd.lseek(file, offset, whence) end
@@ -430,5 +433,21 @@ function M.pthread_sigmask(how, set, oldset) return wrap_error(libpthread.pthrea
 
 function M.new_sigset() return ffi.new("sigset_t") end
 function M.new_fdsi() return ffi.new("signalfd_siginfo"), ffi.sizeof("signalfd_siginfo") end
+
+-- Define syscall and pid_t
+ffi.cdef[[
+long syscall(long number, ...);
+typedef int pid_t;
+typedef unsigned int uint;
+]]
+
+local SYS_pidfd_open = 434 -- Good for all our platforms
+
+-- Function to open a pidfd
+function M.pidfd_open(pid, flags)
+    pid = ffi.new("pid_t", pid)  -- Explicitly cast pid to pid_t
+    flags = ffi.new("uint", flags)  -- Explicitly cast flgas to uint
+    return wrap_error(ffi.tonumber(ffi.C.syscall(SYS_pidfd_open, pid, flags)))
+end
 
 return M
