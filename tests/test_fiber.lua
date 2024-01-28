@@ -8,11 +8,26 @@ local fiber = require 'fibers.fiber'
 local sc = require 'fibers.utils.syscall'
 local equal = require 'fibers.utils.helper'.equal
 
+local defscope = fiber.defscope
+local defer, fpcall = fiber.defer, fiber.fpcall
+
 local log = {}
 local function record(x) table.insert(log, x) end
 
-fiber.spawn(function()
-    record('a'); fiber.yield(); record('b'); fiber.yield(); record('c')
+local fn1 = defscope(function()
+    defer(record, 'd')
+    record('b'); fiber.yield()
+    record('c'); fiber.yield()
+    error({'e'})
+    record('z'); fiber.yield()
+end)
+
+fiber.spawn(function ()
+    record('a')
+    fiber.spawn(function()
+        local res = fpcall(fn1)[1]; fiber.yield()
+        record(res)
+    end)
 end)
 
 assert(equal(log, {}))
@@ -23,7 +38,11 @@ assert(equal(log, {'a', 'b'}))
 fiber.current_scheduler:run()
 assert(equal(log, {'a', 'b', 'c'}))
 fiber.current_scheduler:run()
-assert(equal(log, {'a', 'b', 'c'}))
+assert(equal(log, {'a', 'b', 'c', 'd'}))
+fiber.current_scheduler:run()
+assert(equal(log, {'a', 'b', 'c', 'd', 'e'}))
+fiber.current_scheduler:run()
+assert(equal(log, {'a', 'b', 'c', 'd', 'e'}))
 
 -- Test performance
 local start_time = sc.monotime()
