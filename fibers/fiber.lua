@@ -33,12 +33,23 @@ end
 -- @param fn The main function to execute within the scope.
 -- @return A function that represents the scoped execution.
 local function defscope(fn)
-   local function runner(stack, ...) close_frame(stack); return ... end
-
    return function(...)
-      local stack = current_fiber.defer_stack
-      stack[#stack+1] = frame_marker -- new frame
-      return runner(stack, fn(...))
+       local args = {...}
+       local function runner()
+           return fn(unpack(args))
+       end
+
+       local stack = current_fiber.defer_stack
+       stack[#stack+1] = frame_marker
+
+       local ok, result = pcall(runner)
+       close_frame(stack)
+       
+       if not ok then
+           error(result)  -- Reraising the error
+       end
+
+       return result
    end
 end
 
@@ -50,23 +61,6 @@ local function defer(fn, ...)
    local args = {...}
    local stack = current_fiber.defer_stack
    stack[#stack+1] = function() fn(unpack(args)) end
- end
-
- -- Executes a function within a scope and handles deferred functions.
--- Deferred functions are executed in reverse order if an error occurs during execution.
--- @param f The function to execute.
--- @param ... Optional arguments to pass to the function.
--- @return A table with two elements: `ok` (a boolean indicating success) and `...` (the function's return values).
-local function fpcall(f, ...)
-   local function runner(stack, level, ok, ...)
-      local e; if not ok then e = select(1, ...) end
-      while #stack > level do close_frame(stack, e) end
-      return ...
-   end
-
-   local stack = current_fiber.defer_stack
-   local level = #stack
-   return runner(stack, level, pcall(f, ...))
  end
 
 --- The Fiber class

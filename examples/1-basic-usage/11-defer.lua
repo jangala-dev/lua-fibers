@@ -3,7 +3,7 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 local fiber = require 'fibers.fiber'
 
 local defscope = fiber.defscope
-local defer, fpcall = fiber.defer, fiber.fpcall
+local defer = fiber.defer
 
 -- Define some resource type for testing.
 -- In practice, this is a resource we acquire and
@@ -42,7 +42,7 @@ fiber.spawn(function ()
         defer(a.close, a)
         local b = Resource.open('B')
         defer(b.close, b)
-        print(fpcall(test2))
+        print(pcall(test2))
         print("doing another thing")
     end)
 

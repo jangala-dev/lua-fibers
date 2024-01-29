@@ -9,7 +9,7 @@ local sc = require 'fibers.utils.syscall'
 local equal = require 'fibers.utils.helper'.equal
 
 local defscope = fiber.defscope
-local defer, fpcall = fiber.defer, fiber.fpcall
+local defer = fiber.defer
 
 local log = {}
 local function record(x) table.insert(log, x) end
@@ -25,8 +25,8 @@ end)
 fiber.spawn(function ()
     record('a')
     fiber.spawn(function()
-        local res = fpcall(fn1)[1]; fiber.yield()
-        record(res)
+        local ok, res = pcall(fn1); fiber.yield()
+        record(res[1])
     end)
 end)
 

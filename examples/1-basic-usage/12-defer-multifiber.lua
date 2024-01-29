@@ -4,7 +4,7 @@ local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'
 
 local defscope = fiber.defscope
-local defer, fpcall = fiber.defer, fiber.fpcall
+local defer = fiber.defer
 
 local res_chan = channel.new()
 
@@ -17,7 +17,8 @@ local function first()
         error({"error_obj"})
         never_happens = true -- will never happen due to error above
     end)
-    local res = fpcall(test1)
+    local ok, res = pcall(test1)
+    assert(not ok and res)
     assert(happens and not never_happens)
     res_chan:put(res[1])
     print("message from second:", res_chan:get())
