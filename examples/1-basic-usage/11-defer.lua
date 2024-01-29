@@ -3,7 +3,6 @@ package.path = "../../?.lua;../?.lua;" .. package.path
 local fiber = require 'fibers.fiber'
 
 local defscope = fiber.defscope
-local defer = fiber.defer
 
 -- Define some resource type for testing.
 -- In practice, this is a resource we acquire and
@@ -21,30 +20,42 @@ local Resource = {}; do
 end
 
 fiber.spawn(function ()
-    local test3 = defscope(function()
-        local d = Resource.open('D')
-        defer(d.close, d)
-        d:foo()
-        print("as far as we go")
-        error("oops")
-    end)
+    local test3 = function ()
+        local defer, scope = defscope()
+        local func = scope(function()
+            local d = Resource.open('D')
+            defer(d.close, d)
+            d:foo()
+            print("as far as we go")
+            error("oops")
+        end)
+        func()
+    end
 
-    local test2 = defscope(function()
-        defer(function(e) print("a defer called", e) end, "Frank")
-        local c = Resource.open('C')
-        defer(c.close, c)
-        test3()
-    end)
+    local test2 = function ()
+        local defer, scope = defscope()
+        local func = scope(function()
+            defer(function(e) print("a defer called", e) end, "Frank")
+            local c = Resource.open('C')
+            defer(c.close, c)
+            test3()
+        end)
+        func()
+    end
 
-    local test1 = defscope(function()
-        defer(fiber.stop)
-        local a = Resource.open('A')
-        defer(a.close, a)
-        local b = Resource.open('B')
-        defer(b.close, b)
-        print(pcall(test2))
-        print("doing another thing")
-    end)
+    local test1 = function ()
+        local defer, scope = defscope()
+        local func = scope(function()
+            defer(fiber.stop) -- very first defer will be the last one called
+            local a = Resource.open('A')
+            defer(a.close, a)
+            local b = Resource.open('B')
+            defer(b.close, b)
+            print(pcall(test2))
+            print("doing another thing")
+        end)
+        func()
+    end
 
     test1()
 end)

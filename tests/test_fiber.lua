@@ -9,23 +9,26 @@ local sc = require 'fibers.utils.syscall'
 local equal = require 'fibers.utils.helper'.equal
 
 local defscope = fiber.defscope
-local defer = fiber.defer
 
 local log = {}
 local function record(x) table.insert(log, x) end
 
-local fn1 = defscope(function()
-    defer(record, 'd')
-    record('b'); fiber.yield()
-    record('c'); fiber.yield()
-    error({'e'})
-    record('z'); fiber.yield()
-end)
+local fn1 = function ()
+    local defer, scope = defscope()
+    scope(function()
+        defer(record, 'd')
+        record('b'); fiber.yield()
+        record('c'); fiber.yield()
+        error({'e'})
+        record('z'); fiber.yield() -- will never be called
+    end)() -- calls an anonymous scope, could name and call instead
+end
 
 fiber.spawn(function ()
     record('a')
     fiber.spawn(function()
         local ok, res = pcall(fn1); fiber.yield()
+        assert(not ok and res)
         record(res[1])
     end)
 end)

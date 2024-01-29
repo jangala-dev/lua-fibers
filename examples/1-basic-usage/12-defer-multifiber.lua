@@ -4,13 +4,13 @@ local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'
 
 local defscope = fiber.defscope
-local defer = fiber.defer
 
 local res_chan = channel.new()
 
 local function first()
     local never_happens, happens = false, false
-    local test1 = defscope(function()
+    local defer, scope = defscope()
+    local test1 = scope(function()
         defer(function() happens = true end)
         defer(res_chan.put, res_chan, "A")
         defer(res_chan.put, res_chan, "B")
@@ -26,7 +26,8 @@ local function first()
 end
 
 local function second()
-    local test1 = defscope(function()
+    local defer, scope = defscope()
+    local test1 = scope(function()
         defer(res_chan.put, res_chan, "terminating")
         print(res_chan:get()) -- 'B' (defers done in reverse order)
         print(res_chan:get()) -- 'A'

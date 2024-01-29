@@ -13,55 +13,46 @@ local sched = require 'fibers.sched'
 local current_fiber
 local current_scheduler = sched.new()
 
-local frame_marker = {} -- unique value delimiting stack frames
+-- Function to execute all defer calls in a defer stack
+local function execute_defer_stack(defer_stack)
+   for i = #defer_stack, 1, -1 do
+       pcall(defer_stack[i])
+   end
+end
 
-local function close_frame(stack, e)
-   assert(#stack ~= 0, 'Defer stack empty')
-   for i=#stack,1,-1 do  -- release in reverse order of acquire
-      local v; v, stack[i] = stack[i], nil
-      if v == frame_marker then
-         break
-      else
-         v(e)
+local function defscope()
+   local defer_stack = {}
+   local is_scope_opened = false
+
+   local function defer(fn, ...)
+      assert(is_scope_opened, "`defer` must be used within its `scope`.")
+      local args = {...}
+      table.insert(defer_stack, function() fn(unpack(args)) end)
+   end
+
+   local function scope(fn)
+      assert(not is_scope_opened, "a `scope` instance can only be used once.")
+      is_scope_opened = true
+      return function(...)
+         local args = {...}
+         table.insert(current_fiber.defer_stack_stack, defer_stack)
+
+         local function runner() return fn(unpack(args)) end
+         local result = {pcall(runner)}
+
+         local ok = table.remove(result, 1)
+
+         -- Remove the current defer stack and execute all defer functions
+         assert(table.remove(current_fiber.defer_stack_stack) == defer_stack)
+         execute_defer_stack(defer_stack)
+
+         if not ok then error(result[1]) end
+         return unpack(result)
       end
    end
+
+   return defer, scope
 end
-
--- Creates a new scope for deferred function calls.
--- A scope is used to group deferred functions that will execute when the scope exits.
--- When the function provided to `defscope` returns, the deferred functions are executed in reverse order.
--- @param fn The main function to execute within the scope.
--- @return A function that represents the scoped execution.
-local function defscope(fn)
-   return function(...)
-       local args = {...}
-       local function runner()
-           return fn(unpack(args))
-       end
-
-       local stack = current_fiber.defer_stack
-       stack[#stack+1] = frame_marker
-
-       local ok, result = pcall(runner)
-       close_frame(stack)
-       
-       if not ok then
-           error(result)  -- Reraising the error
-       end
-
-       return result
-   end
-end
-
--- Defers the execution of a function until the surrounding scope exits.
--- Deferred functions are executed in reverse order when the scope exits.
--- @param fn The function to defer.
--- @param ... Optional arguments to pass to the deferred function.
-local function defer(fn, ...)
-   local args = {...}
-   local stack = current_fiber.defer_stack
-   stack[#stack+1] = function() fn(unpack(args)) end
- end
 
 --- The Fiber class
 -- Represents a single fiber, or lightweight thread.
@@ -82,7 +73,7 @@ local function spawn(fn)
 
    current_scheduler:schedule(
       setmetatable({coroutine=coroutine.create(fn),
-      alive=true, sockets={}, traceback=tb, defer_stack={}}, Fiber))
+      alive=true, sockets={}, traceback=tb, defer_stack_stack={}}, Fiber))
 end
 
 --- Resumes execution of the fiber.
@@ -96,10 +87,12 @@ function Fiber:resume(...)
    current_fiber = saved_current_fiber -- the KEY bit, we only get here when the coroutine above has yielded, but we then pop back in the fiber we previously displaced
    if not ok then
       print('Error while running fiber: '..tostring(err))
-      print('executing defer calls:')
-      while #self.defer_stack > 0 do close_frame(self.defer_stack) end
       print(debug.traceback(self.coroutine))
       print('fibers history:\n' .. self.traceback)
+      while #self.defer_stack_stack > 0 do
+         local defer_stack = table.remove(self.defer_stack_stack)
+         execute_defer_stack(defer_stack)
+      end
       os.exit(255)
    end
 end
@@ -200,6 +193,4 @@ return {
    stop = stop,
    main = main,
    defscope = defscope,
-   defer = defer,
-   fpcall = fpcall
 }
