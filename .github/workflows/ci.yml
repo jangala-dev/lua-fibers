@@ -1,0 +1,25 @@
+name: Continuous Integration
+
+on: [pull_request]
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v2
+
+    - name: Run custom install script
+      run: |
+        chmod +x .devcontainer/postCreateCommand.sh
+        ./.devcontainer/postCreateCommand.sh
+
+    - name: Run Tests in Tests Directory
+      run: |
+        cd tests
+        lua test.lua
+
+    - name: Run Linter
+      run: luacheck .
+    
