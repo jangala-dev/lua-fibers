@@ -50,6 +50,7 @@ local function test_io_redirection()
         stdin_pipe:close()
     end)
     local err = cmd:start()
+    assert(cmd:start(), "Expected error on starting command twice")
     assert(err == nil, "Expected no error but got:", err)
     for _, v in ipairs(msgs) do
         assert(stdout_pipe:read_some_chars() == v)

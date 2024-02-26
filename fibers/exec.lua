@@ -106,7 +106,7 @@ end
 --- Starts the command.
 -- @return Any error.
 function Cmd:start()
-    if self.process then return nil, "process already started" end
+    if self.process then return "process already started" end
 
     local function close_parent_io()
         for _, fd in ipairs(self.parent_io_pipes) do fd:close() end
