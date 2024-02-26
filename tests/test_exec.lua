@@ -6,6 +6,7 @@ local channel = require "fibers.channel"
 local exec = require 'fibers.exec'
 local pollio = require 'fibers.pollio'
 local sleep = require "fibers.sleep"
+local context = require "fibers.context"
 local sc = require 'fibers.utils.syscall'
 
 
@@ -75,6 +76,17 @@ local function test_kill()
     assert(sc.monotime()-starttime < 1)
 end
 
+-- Test 6: Testing context
+local function test_context()
+    local ctx, _ = context.with_timeout(context.background(), 0.001)
+    local cmd = exec.command_context(ctx, 'sleep', '5')
+    local starttime = sc.monotime()
+    local err = cmd:start()
+    assert(err == nil, "Expected no error but got:", err)
+    assert(cmd:wait() == sc.SIGTERM)
+    assert(sc.monotime()-starttime < 1)
+end
+
 -- Main test function
 local function main()
     local reps = 1000
@@ -85,6 +97,7 @@ local function main()
         test_command_with_args = test_command_with_args,
         test_io_redirection = test_io_redirection,
         test_kill = test_kill,
+        test_context = test_context,
     }
     for k, v in pairs(tests) do
         for i=1, reps do

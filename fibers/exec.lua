@@ -3,6 +3,7 @@
 local file = require 'fibers.stream.file'
 local pollio = require 'fibers.pollio'
 local fiber = require 'fibers.fiber'
+local op = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
 local string_buffer = require 'fibers.utils.string_buffer'
 local sc = require 'fibers.utils.syscall'
@@ -26,6 +27,17 @@ function exec.command(name, ...)
     self.external_io_pipes = {}
     self.pipe_wg = waitgroup.new()
     return self
+end
+
+--- Constructor for Cmd taking a `context`.
+-- @param ctx The context to run the command under.
+-- @param name The name or path of the command to execute.
+-- @param ... Additional arguments for the command.
+-- @return A new Cmd instance.
+function exec.command_context(ctx, name, ...)
+    local cmd = exec.command(name, ...)
+    cmd.ctx = ctx
+    return cmd
 end
 
 --- Sets the command to launch with a different pgid.
@@ -108,6 +120,8 @@ end
 function Cmd:start()
     if self.process then return "process already started" end
 
+    if self.ctx and self.ctx:err() then return "context already complete" end
+
     local function close_parent_io()
         for _, fd in ipairs(self.parent_io_pipes) do fd:close() end
     end
@@ -167,6 +181,18 @@ function Cmd:start()
             if output.close then output:close() end
             if input.close then input:close() end
             self.pipe_wg:done()
+        end)
+    end
+
+    -- Setup a new fiber to listen for context cancellation or command completion
+    if self.ctx then
+        fiber.spawn(function()
+            op.choice(
+                self.ctx:done_op():wrap(function () -- Context was cancelled, kill the command
+                    self:kill()
+                end),
+                pollio.fd_readable_op(self.pidfd) -- Command has completed, we just may not have waited yet
+            ):perform()
         end)
     end
 end
