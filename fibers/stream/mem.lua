@@ -10,7 +10,7 @@ local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 local Mem = {}
 Mem.__index = Mem
 
-INITIAL_SIZE=4096
+local INITIAL_SIZE=4096
 
 local function new_buffer(len) return ffi.new('uint8_t[?]', len) end
 

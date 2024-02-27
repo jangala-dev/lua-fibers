@@ -57,6 +57,6 @@ run('d', 'h', 'f')
 -- 8. Queue resumes and blocks.
 run()
 -- Nothing from here on out.
-for i=1,20 do run() end
+for _=1,20 do run() end
 
 print('test: ok')

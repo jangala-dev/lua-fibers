@@ -22,9 +22,9 @@ assert(equal(log, {'a', 'c', 'd'}))
 fiber.current_scheduler:run()
 assert(equal(log, {'a', 'c', 'd', 'b'}))
 
-fiber.spawn(function() 
+fiber.spawn(function()
    local fiber_count = 1e3
-   for i=1, fiber_count do
+   for _=1, fiber_count do
       fiber.spawn(function() c:wait(); end)
    end
 

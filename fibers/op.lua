@@ -40,9 +40,9 @@ function Suspension:run()
    return self.fiber:resume(self.wrap, self.val)
 end
 
-local function new_suspension(sched, fiber)
+local function new_suspension(sched, fib)
    return setmetatable(
-      { state='waiting', sched=sched, fiber=fiber },
+      { state='waiting', sched=sched, fiber=fib },
       Suspension)
 end
 
@@ -103,7 +103,7 @@ local function choice(...)
    -- Build a flattened list of choices that are all base ops.
    for _, op in ipairs({...}) do
       if op.base_ops then
-         for _, op in ipairs(op.base_ops) do table.insert(ops, op) end
+         for _, base_op in ipairs(op.base_ops) do table.insert(ops, base_op) end
       else
          table.insert(ops, op)
       end
@@ -129,21 +129,21 @@ function ChoiceOp:wrap(f)
    return new_choice_op(ops)
 end
 
-local function block_base_op(sched, fiber, op)
-   op.block_fn(new_suspension(sched, fiber), op.wrap_fn)
+local function block_base_op(sched, fib, op)
+   op.block_fn(new_suspension(sched, fib), op.wrap_fn)
 end
 
 --- Perform the base operation.
 -- @treturn vararg The value returned by the operation.
 function BaseOp:perform()
-   local success, val = self.try_fn()
-   if success then return self.wrap_fn(val) end
-   local wrap, val = fiber.suspend(block_base_op, self)
-   return wrap(val)
+    local success, val = self.try_fn()
+    if success then return self.wrap_fn(val) end
+    local wrap, new_val = fiber.suspend(block_base_op, self)
+    return wrap(new_val)
 end
 
-local function block_choice_op(sched, fiber, ops)
-   local suspension = new_suspension(sched, fiber)
+local function block_choice_op(sched, fib, ops)
+   local suspension = new_suspension(sched, fib)
    for _,op in ipairs(ops) do op.block_fn(suspension, op.wrap_fn) end
 end
 

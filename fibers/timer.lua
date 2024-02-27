@@ -3,7 +3,8 @@
 -- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 
 --- Binary Heap based timer.
--- Implements a Binary Heap based timer. This is a time based event scheduler, used for efficiently scheduling and managing events.
+-- Implements a Binary Heap based timer. This is a time based event scheduler,
+-- used for efficiently scheduling and managing events.
 -- @module fibers.timer
 
 -- Required packages

@@ -61,7 +61,7 @@ fiber.spawn(function()
     local sock = socket.connect_unix(sockname)
     while true do
         -- Use op.choice to handle multiple potentially blocking actions
-        op.choice(  
+        op.choice(
             data_q:get_op():wrap(function(value)
                 print("data received - writing to socket")
                 sock:write(value .. "\n")

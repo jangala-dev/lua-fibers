@@ -1,4 +1,4 @@
--- demonstrates IPC using exec and non-blocking sockets 
+-- demonstrates IPC using exec and non-blocking sockets
 
 package.path = "../../?.lua;../?.lua;" .. package.path
 
@@ -19,7 +19,7 @@ fiber.spawn(function ()
 
     sleep.sleep(2) -- to show that things don't block and are gracefully buffered by sockets
 
-    while true do 
+    while true do
          local peer = assert(server:accept())
          local rec = peer:read_line()
          peer:close()

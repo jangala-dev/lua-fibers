@@ -36,12 +36,12 @@ local function test_event_expiration(event_count)
     local check = {}
     local t = wheel.now
 
-    function check:schedule(t)
+    function check:schedule(tw)
         local now = wheel.now
-        assert(last <= t)
-        last, count = t, count + 1
-        assert(now - 1e-3 < t)
-        assert(t < now + 1e-3)
+        assert(last <= tw)
+        last, count = tw, count + 1
+        assert(now - 1e-3 < tw)
+        assert(tw < now + 1e-3)
     end
 
     for _=1, event_count do

@@ -36,7 +36,8 @@ fiber.spawn(function()
    assert(baseOp:perform_alt(function() return 2 end) == 1, "perform_alt operation failed")
 
    local choiceOp = op.choice(task(1), task(2), task(3))
-   assert(choiceOp:perform_alt(function() return 4 end) >= 1 and choiceOp:perform_alt(function() return 4 end) <= 3, "Choice operation perform_alt failed")
+   assert(choiceOp:perform_alt(function() return 4 end) >= 1 and choiceOp:perform_alt(function() return 4 end) <= 3,
+      "Choice operation perform_alt failed")
    fiber.stop()
 end)
 fiber.main()

@@ -17,9 +17,9 @@ local function socket(domain, stype, protocol)
    return setmetatable({fd=fd}, Socket)
 end
 
-function Socket:listen_unix(file)
+function Socket:listen_unix(f)
    local sa = sc.getsockname(self.fd)
-   sa.path = file
+   sa.path = f
    assert(sc.bind(self.fd, sa))
    assert(sc.listen(self.fd))
 end
@@ -53,29 +53,29 @@ function Socket:connect(sa)
    error(err)
 end
 
-function Socket:connect_unix(file)
+function Socket:connect_unix(f)
    local sa = sc.getsockname(self.fd)
-   sa.path = file
+   sa.path = f
    return self:connect(sa)
 end
 
-local function listen_unix(file, args)
+local function listen_unix(f, args)
    args = args or {}
    local s = socket(sc.AF_UNIX, args.stype or sc.SOCK_STREAM, args.protocol)
-   s:listen_unix(file)
+   s:listen_unix(f)
    if args.ephemeral then
       local parent_close = s.close
       function s:close()
          parent_close(s)
-         sc.unlink(file)
+         sc.unlink(f)
       end
    end
    return s
 end
 
-local function connect_unix(file, stype, protocol)
+local function connect_unix(f, stype, protocol)
    local s = socket(sc.AF_UNIX, stype or sc.SOCK_STREAM, protocol)
-   return s:connect_unix(file)
+   return s:connect_unix(f)
 end
 
 function Socket:close()

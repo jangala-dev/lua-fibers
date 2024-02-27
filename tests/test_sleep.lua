@@ -8,9 +8,9 @@ local sleep = require 'fibers.sleep'
 local fiber = require 'fibers.fiber'
 
 local done = 0
-local wakeup_times = {}
+-- local wakeup_times = {}
 local count = 1e3
-for i=1,count do
+for _=1,count do
    local function fn()
       local start, dt = fiber.now(), math.random()
       sleep.sleep(dt)

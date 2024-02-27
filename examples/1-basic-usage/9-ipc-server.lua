@@ -1,5 +1,5 @@
 --[[
-    This code demos how we can monitor sockets for IPC showing a server that 
+    This code demos how we can monitor sockets for IPC showing a server that
     can handle multiple clients.
 ]]
 
@@ -27,7 +27,12 @@ local server = assert(socket.listen_unix(sockname))
 fiber.spawn(function ()
     while true do
         -- Accept a new connection
-        local peer = assert(server:accept())
+        local peer, err = assert(server:accept())
+
+        if not peer then
+            print("Error accepting connection:", err)
+            break
+        end
 
         -- Spawn a new fiber for each connection to handle client communication
         fiber.spawn(function()
@@ -39,13 +44,13 @@ fiber.spawn(function ()
                 if rec then
                     print("received:", rec)
                     -- Check for a specific command ('exit!') to shut down the server
-                    if rec == "exit!" then 
-                        print("shut down command received") 
-                        break 
+                    if rec == "exit!" then
+                        print("shut down command received")
+                        break
                     end
                 else
                     -- If no data is received (client closed the connection), break the loop
-                    break 
+                    break
                 end
             end
             -- Close the connection to the client
