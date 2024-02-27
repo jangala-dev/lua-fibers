@@ -1,8 +1,8 @@
 --- Channels
 -- Channels are a  conduit through which you can send and receive values.
--- By default, sends and receives block until the other side is ready. 
+-- By default, sends and receives block until the other side is ready.
 -- This allows goroutines to synchronize without explicit locks or condition
--- variables. 
+-- variables.
 --
 -- Example ported from Go's Select https://go.dev/tour/concurrency/2
 
@@ -13,11 +13,11 @@ local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'
 
 local function sum(array, chan)
-    local sum = 0
+    local total = 0
     for _, j in ipairs(array) do
-        sum = sum + j
+        total = total + j
     end
-    chan:put(sum)
+    chan:put(total)
 end
 
 fiber.spawn(function()

@@ -33,9 +33,9 @@ local bit = rawget(_G, "bit") or require 'bit32'
 local blocking_handler
 
 local default_blocking_handler = {}
-function default_blocking_handler:init_nonblocking(fd) end
-function default_blocking_handler:wait_for_readable(fd) end
-function default_blocking_handler:wait_for_writable(fd) end
+function default_blocking_handler:init_nonblocking() end
+function default_blocking_handler:wait_for_readable() end
+function default_blocking_handler:wait_for_writable() end
 
 local function set_blocking_handler(h)
    blocking_handler = h or default_blocking_handler
@@ -146,7 +146,7 @@ local function open(filename, mode, perms)
    -- This set of permissions is what open() uses.  Note that these
    -- permissions will be modulated by the umask.
    if perms == nil then perms = permissions['rw-rw-rw-'] end
-   local fd, err, errno = sc.open(filename, flags, permissions[perms])
+   local fd, err, _ = sc.open(filename, flags, permissions[perms])
    if fd == nil then return nil, err end
    return fdopen(fd, flags, filename)
 end
@@ -156,12 +156,11 @@ local function mktemp(name, perms)
    -- In practice this requires that someone seeds math.random with good
    -- entropy.  In Snabb that is the case (see core.main:initialize()).
    local t = math.random(1e7)
-   local tmpnam, fd, err, errno
+   local tmpnam, fd, err, _
    for i = t, t+10 do
       tmpnam = name .. '.' .. i
       fd, err, _ = sc.open(tmpnam, bit.bor(sc.O_CREAT, sc.O_RDWR, sc.O_EXCL), perms)
       if fd then return fd, tmpnam end
-      i = i + 1
    end
    error("Failed to create temporary file "..tmpnam..": "..err)
 end
@@ -222,7 +221,7 @@ local function popen(prog, mode)
       if not pid then return end
       close(self)
       local ch_pid, status, code
-      repeat 
+      repeat
          ch_pid, status, code = sc.waitpid(pid, sc.WNOHANG)
          -- some kind of sleep here, surely, if used in a fibers context
       until (ch_pid and status ~= 'running') or (not ch_pid and code ~= sc.EINTR)

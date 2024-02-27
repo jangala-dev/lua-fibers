@@ -1,6 +1,6 @@
 --- Fibers
 -- A fiber is a lightweight thread managed by fibers framework, similar to Go's
--- goroutines. Fibers run in the same address space, so access to shared 
+-- goroutines. Fibers run in the same address space, so access to shared
 -- memory must be synchronised.
 --
 -- Example ported from Go's Select https://go.dev/tour/concurrency/1
@@ -12,7 +12,7 @@ local fiber = require 'fibers.fiber'
 local sleep = require 'fibers.sleep'
 
 local function say(string)
-    for i=1,5 do
+    for _=1,5 do
         sleep.sleep(0.1)
         print(string)
     end

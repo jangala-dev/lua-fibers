@@ -81,12 +81,12 @@ local function test_io_redirection()
     end
     assert(stdout_pipe:read_some_chars() == nil)
     stdout_pipe:close()
-    local err = cmd:wait()
+    err = cmd:wait()
     assert(err == nil, "Expected no error but got:", err)
     assert(cmd.process.state == 0)
 end
 
--- Test 5: Test command kill 
+-- Test 5: Test command kill
 local function test_kill()
     local cmd = exec.command('/bin/sh', '-c', 'sleep 5')
     cmd:setpgid(true) -- ensures that children run in a separate process group

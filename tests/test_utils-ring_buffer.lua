@@ -36,7 +36,7 @@ end
 assert_throws(buffer.new, 10)
 local b = buffer.new(16)
 assert_avail(b, 0, 16)
-for i = 1,10 do
+for _ = 1,10 do
    local s = '0123456789'
    write_str(b, s)
    assert_avail(b, #s, 16-#s)
@@ -44,10 +44,10 @@ for i = 1,10 do
    assert_avail(b, 0, 16)
 end
 
-local ptr, avail = b:peek()
+local _, avail = b:peek()
 assert(avail == 0)
 write_str(b, "foo")
-local ptr, avail = b:peek()
+_, avail = b:peek()
 assert(avail > 0)
 
 -- Test wrap of indices.

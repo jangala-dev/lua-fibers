@@ -17,7 +17,7 @@ local function main()
       local err = cmd:start()
       if err then error(err) end
       fiber.spawn(function ()
-         for i=1,4 do
+         for _=1,4 do
             stdin_pipe:write('tick')
             sleep.sleep(0.2)
          end
@@ -29,7 +29,7 @@ local function main()
          if not received then break end
          print(received)
       end
-      local err = cmd:wait() -- gets exit code, etc
+      err = cmd:wait() -- gets exit code, etc
       if err then error(err) end
       print("ticker exited with exit code:", cmd.process_state.ssi_status)
    end)

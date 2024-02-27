@@ -43,7 +43,9 @@ function Fiber:resume(...)
    local saved_current_fiber = current_fiber -- shift the old current fiber into a safe place
    current_fiber = self -- we are the new current fiber
    local ok, err = coroutine.resume(self.coroutine, ...) -- rev up our coroutine
-   current_fiber = saved_current_fiber -- the KEY bit, we only get here when the coroutine above has yielded, but we then pop back in the fiber we previously displaced
+   -- current_fiber = saved_current_fiber the KEY bit, we only get here when the coroutine above has yielded,
+   -- but we then pop back in the fiber we previously displaced
+   current_fiber = saved_current_fiber
    if not ok then
       print('Error while running fiber: '..tostring(err))
       print(debug.traceback(self.coroutine))
@@ -85,7 +87,7 @@ end
 --- Closes the socket associated with the provided descriptor.
 -- @tparam number sd The socket descriptor.
 function Fiber:close_socket(sd)
-   local s = self:get_socket(sd)
+   self:get_socket(sd)
    self.sockets[sd] = nil
    -- FIXME: remove refcount on socket
 end
@@ -123,7 +125,7 @@ local function now() return current_scheduler:now() end
 -- @tparam vararg ... The arguments to pass to the blocking function.
 local function suspend(block_fn, ...) return current_fiber:suspend(block_fn, ...) end
 
-local function schedule(sched, fiber) sched:schedule(fiber) end
+local function schedule(scheduler, fiber) scheduler:schedule(fiber) end
 
 --- Suspends execution of the current fiber.
 -- The fiber will be resumed when the scheduler is ready to run it again.

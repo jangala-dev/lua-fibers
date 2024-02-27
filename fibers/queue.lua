@@ -11,7 +11,7 @@ local fiber = require 'fibers.fiber'
 --- Queue class
 -- Represents a queue for communication between fibers.
 -- @type Queue
-local Queue = {}
+-- local Queue = {}
 
 --- Create a new Queue.
 -- @int[opt] bound The upper bound for the number of items in the queue.
@@ -49,7 +49,7 @@ local function new(bound)
       assert(x~=nil)
       return ch_in:put_op(x)
    end
-   function ret:get_op()      
+   function ret:get_op()
       return ch_out:get_op()
    end
    function ret:put(x) self:put_op(x):perform() end

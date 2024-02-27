@@ -32,7 +32,7 @@ local count = 0
 local function inc()
     count = count + 1
 end
-for i=1, fiber_count do
+for _=1, fiber_count do
     fiber.spawn(function()
         inc(); fiber.yield(); inc(); fiber.yield(); inc()
     end)
@@ -42,7 +42,7 @@ local end_time = sc.monotime()
 print("Fiber creation time: "..(end_time - start_time)/fiber_count)
 
 start_time = sc.monotime()
-for i=1,3*fiber_count do -- run fibers, each fiber yields 3 times
+for _=1,3*fiber_count do -- run fibers, each fiber yields 3 times
     fiber.current_scheduler:run()
 end
 end_time = sc.monotime()

@@ -9,9 +9,9 @@ local sc = require 'fibers.utils.syscall'
 local original_io = _G.io -- Save the original io module
 local io = {}
 
-function io.close(file)
-   if file == nil then file = io.current_output end
-   file:close()
+function io.close(f)
+   if f == nil then f = io.current_output end
+   f:close()
 end
 
 function io.flush()
@@ -26,12 +26,12 @@ end
 
 function io.lines(filename, ...)
    if filename == nil then return io.current_input:lines() end
-   local stream = assert(io.open(filename, 'r'))
-   local iter = stream:lines(...)
+   local fileStream = assert(io.open(filename, 'r'))
+   local iter = fileStream:lines(...)
    return function ()
       local line = { iter() }
       if line[1] == nil then
-         stream:close()
+         fileStream:close()
          return nil
       end
       return unpack(line)

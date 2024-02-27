@@ -1,7 +1,6 @@
 -- waitgroup.lua
 local op = require 'fibers.op'
 local cond = require 'fibers.cond'
-local fiber = require 'fibers.fiber'
 
 local Waitgroup = {}
 Waitgroup.__index = Waitgroup

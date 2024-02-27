@@ -29,7 +29,7 @@ local t = scheduler:now()
 
 -- Measure task scheduling time
 start_time = sc.monotime()
-for i=1,event_count do
+for _=1,event_count do
     local dt = math.random()/1e2
     t = t + dt
     scheduler:schedule_at_time(t, {run=task_run, scheduled=t})

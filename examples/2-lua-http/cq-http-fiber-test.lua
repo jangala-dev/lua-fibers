@@ -2,7 +2,8 @@
 
 print("starting lua-http test")
 
-package.path="./?.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua" .. package.path
+package.path="./?.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua"
+	.. package.path
 package.path = "../../?.lua;../?.lua;" .. package.path
 
 local fiber = require "fibers.fiber"
@@ -24,10 +25,10 @@ local old_step; old_step = cqueues.interpose("step", function(self, timeout)
 		fiber.yield()
 		return old_step(self, timeout)
 	else
-		local t = self:timeout() or math.huge
-		if timeout then
-			t = math.min(t, timeout)
-		end
+		-- local t = self:timeout() or math.huge
+		-- if timeout then
+		-- 	t = math.min(t, timeout)
+		-- end
         local events = self:events()
         -- messy
         if events == 'r' then
@@ -80,8 +81,8 @@ local myserver = assert(http_server.listen {
 	host = "127.0.0.1";
 	port = 8000;
 	onstream = reply;
-	onerror = function(self, context, op, err)
-		local msg = op .. " on " .. tostring(context) .. " failed"
+	onerror = function(_, context, operation, err)
+		local msg = operation .. " on " .. tostring(context) .. " failed"
 		if err then
 			msg = msg .. ": " .. tostring(err)
 		end

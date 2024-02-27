@@ -89,7 +89,7 @@ local function schedule_tasks(sched, tasks)
 end
 
 -- These method is called by the fibers scheduler.
-function PollIOHandler:schedule_tasks(sched, now, timeout)
+function PollIOHandler:schedule_tasks(sched, _, timeout)
    if timeout == nil then timeout = 0 end
    if timeout >= 0 then timeout = timeout * 1e3 end
    for fd, event in pairs(self.epoll:poll(timeout)) do

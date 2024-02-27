@@ -39,15 +39,15 @@ local message_count = 1e4
 local done = 0
 
 fiber.spawn(function ()
-   for i=0, message_count do done = done + ch:get() end
+   for _=0, message_count do done = done + ch:get() end
 end)
 
 fiber.spawn(function ()
-   for i=0, message_count do ch:put(1) end
+   for _=0, message_count do ch:put(1) end
 end)
 
 local start_time = sc.monotime()
-for i=0, message_count do fiber.current_scheduler:run() end
+for _=0, message_count do fiber.current_scheduler:run() end
 local end_time = sc.monotime()
 
 print("Time taken per send/receive: ", (end_time - start_time)/(message_count*2))

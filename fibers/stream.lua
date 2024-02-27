@@ -20,10 +20,10 @@ local function open(io, readable, writable, buffer_size)
    local ret = setmetatable(
       {io=io, line_buffering=false, random_access=false},
       Stream)
-   if readable ~= false then 
+   if readable ~= false then
       ret.rx = buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
    end
-   if writable ~= false then 
+   if writable ~= false then
       ret.tx = buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
    end
    if io.seek and io:seek(sc.SEEK_CUR, 0) then ret.random_access = true end
@@ -117,9 +117,9 @@ function Stream:read_bytes(buf, count)
    if did_read == 0 then return 0 end
    local offset = did_read
    while offset < count do
-      local did_read = self:read_some_bytes(buf + offset, count - offset)
-      if did_read == 0 then break end
-      offset = offset + did_read
+      local did_read_more = self:read_some_bytes(buf + offset, count - offset)
+      if did_read_more == 0 then break end
+      offset = offset + did_read_more
    end
    return offset
 end

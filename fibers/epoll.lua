@@ -20,17 +20,17 @@ local function new()
    return setmetatable(ret, { __index = Epoll })
 end
 
-RD = sc.EPOLLIN + sc.EPOLLRDHUP
-WR = sc.EPOLLOUT
-RDWR = RD + WR
-ERR = sc.EPOLLERR + sc.EPOLLHUP
+local RD = sc.EPOLLIN + sc.EPOLLRDHUP
+local WR = sc.EPOLLOUT
+local RDWR = RD + WR
+local ERR = sc.EPOLLERR + sc.EPOLLHUP
 
 function Epoll:add(s, events)
    -- local fd = type(s) == 'number' and s or sc.fileno(s)
    local fd = s
    local active = self.active_events[fd] or 0
    local eventmask = bit.bor(events, active, sc.EPOLLONESHOT)
-   local ok, err = sc.epoll_modify(self.epfd, fd, eventmask)
+   local ok, _ = sc.epoll_modify(self.epfd, fd, eventmask)
    if not ok then assert(sc.epoll_register(self.epfd, fd, eventmask)) end
 end
 
@@ -45,7 +45,7 @@ function Epoll:poll(timeout)
    local count = 0
    -- Since we add fd's with EPOLL_ONESHOT, now that the event has
    -- fired, the fd is now deactivated.  Record that fact.
-   for fd, event in pairs(events) do
+   for fd, _ in pairs(events) do
       count = count + 1
       self.active_events[fd] = nil
    end

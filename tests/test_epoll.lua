@@ -27,10 +27,10 @@ assert(equal(poll(), {}))
 local rd, wr = sc.pipe()
 
 -- Test adding and polling multiple times
-for i = 1,10 do
-   myepoll:add(rd, RD)
-   myepoll:add(wr, WR)
-   assert(equal(poll(), {{fd=wr, events=WR}}))
+for _ = 1,10 do
+    myepoll:add(rd, epoll.RD)
+    myepoll:add(wr, epoll.WR)
+    assert(equal(poll(), { { fd = wr, events = epoll.WR } }))
    assert(sc.write(wr, "foo") == 3)
    -- The write end isn't active because we haven't re-added it to the
    -- epoll set.
@@ -38,8 +38,8 @@ for i = 1,10 do
    -- Now nothing is active, so no events even though both sides can
    -- do I/O.
    assert(equal(poll(), {}))
-   myepoll:add(rd, RD)
-   myepoll:add(wr, WR)
+    myepoll:add(rd, epoll.RD)
+   myepoll:add(wr, epoll.WR)
    -- Having re-added them though they are indeed active.
    assert(#poll() == 2)
    assert(sc.read(rd, 50) == "foo")
@@ -47,13 +47,13 @@ end
 
 -- Data-specific testing: Here we are ensuring the correct functioning of our epoll data structure.
 -- Simulate a change in epoll_event's internal data
-local eventmask = bit.bor(RD, WR, sc.EPOLLONESHOT)
+local eventmask = bit.bor(epoll.RD, epoll.WR, sc.EPOLLONESHOT)
 myepoll:add(rd, eventmask)
 local events = poll(10)
 for _, evt in ipairs(events) do
     if evt.fd == rd then
-        assert(bit.band(evt.events, RD) ~= 0, "Expected read event not found.")
-        assert(bit.band(evt.events, WR) ~= 0, "Expected write event not found.")
+        assert(bit.band(evt.events, epoll.RD) ~= 0, "Expected read event not found.")
+        assert(bit.band(evt.events, epoll.WR) ~= 0, "Expected write event not found.")
     end
 end
 
@@ -61,8 +61,8 @@ end
 -- Try adding a closed FD
 sc.close(rd)
 local errorThrown = false
-local result, errmsg = pcall(function()
-    myepoll:add(rd, RD)
+local result, _ = pcall(function()
+    myepoll:add(rd, epoll.RD)
 end)
 
 if not result then
@@ -74,11 +74,11 @@ assert(errorThrown, "Expected an error when adding a closed FD.")
 -- Boundary Testing
 -- Adding more FDs than the epoll's current max_events limit.
 local fds = {}
-for i=1, myepoll.maxevents*2 do
+for _=1, myepoll.maxevents*2 do
     local r, w = sc.pipe()
     table.insert(fds, {r, w})
-    pcall(function() myepoll:add(r, RD) end)
-    pcall(function() myepoll:add(w, WR) end)
+    pcall(function() myepoll:add(r, epoll.RD) end)
+    pcall(function() myepoll:add(w, epoll.WR) end)
 end
 for _, fdpair in ipairs(fds) do
     sc.close(fdpair[1])

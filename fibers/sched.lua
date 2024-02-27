@@ -30,7 +30,7 @@ local function new()
       self.wheel:advance(now, sched)
    end
    -- private method for timer_tast_source
-   function timer_task_source:cancel_all_tasks(sched)
+   function timer_task_source:cancel_all_tasks()
       -- Implement me!
    end
    ret:add_task_source(timer_task_source)
@@ -131,7 +131,7 @@ end
 -- If there are still tasks after 100 attempts, returns false.
 -- @treturn boolean Whether the shutdown was successful.
 function Scheduler:shutdown()
-   for i=1,100 do
+   for _=1,100 do
       for i=1,#self.sources do self.sources[i]:cancel_all_tasks(self) end
       if #self.next == 0 then return true end
       self:run()

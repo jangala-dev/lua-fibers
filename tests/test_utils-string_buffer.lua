@@ -10,8 +10,6 @@ local buf = bytes_buffer.new(8) -- small size to force a grow operation soon
 
 -- Writing data to fill the buffer
 
-local string
-
 buf:write("ABCDEFGH")
 
 assert(buf:len() == 8, "Expected length 8 after writes")

@@ -10,8 +10,8 @@ local fiber = require 'fibers.fiber'
 --- Timeout class.
 -- Represents a timeout for a fiber.
 -- @type Timeout
-local Timeout = {}
-Timeout.__index = Timeout
+-- local Timeout = {}
+-- Timeout.__index = Timeout
 
 --- Create a new operation that puts the current fiber to sleep until the time t.
 -- @tparam number t The time to sleep until.

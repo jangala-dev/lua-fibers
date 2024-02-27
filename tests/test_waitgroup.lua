@@ -24,7 +24,7 @@ local function test_simple()
    local numFibers = 5
 
    -- Spawn fibers and add to the waitgroup
-   for i = 1, numFibers do
+   for _ = 1, numFibers do
       wg:add(1)
       fiber.spawn(function()
          sleep.sleep(math.random())  -- Simulate some work
@@ -55,10 +55,10 @@ local function test_complex()
    local start = sc.monotime()
 
    -- Spawn fibers and add to the waitgroup
-   for i = 1, numFibers do one_sec_work(wg) end
+   for _ = 1, numFibers do one_sec_work(wg) end
 
    local done = false
-   
+
    local extra_work_done = false
    local function extra_work()
       if not extra_work_done then

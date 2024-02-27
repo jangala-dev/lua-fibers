@@ -33,7 +33,7 @@ end
 -------------------------------------------------------------------------------
 -- Local functions (for efficiency)
 
-local band, bor, bnot, lshift = bit.band, bit.bor, bit.bnot, bit.lshift
+local band, bor, bnot, _ = bit.band, bit.bor, bit.bnot, bit.lshift
 
 
 -------------------------------------------------------------------------------
@@ -367,9 +367,10 @@ local pthread_names = {
     "libpthread.so.0"
 }
 
-local libpthread, success = nil, nil
+local libpthread = nil
 
 for _, v in ipairs(pthread_names) do
+    local success
     success, libpthread = pcall(ffi.load, v)
     if success then break end
 end
@@ -395,7 +396,7 @@ typedef struct {
     uint64_t ssi_stime;    /* System CPU time consumed (SIGCHLD) */
     uint64_t ssi_addr;     /* Address that generated signal (for hardware-generated signals) */
     uint16_t ssi_addr_lsb; /* Least significant bit of address (SIGBUS; since Linux 2.6.37) */
-    uint16_t __pad2; 
+    uint16_t __pad2;
     int32_t  ssi_syscall;
     uint64_t ssi_call_addr;
     uint32_t ssi_arch;
