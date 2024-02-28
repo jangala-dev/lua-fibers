@@ -13,24 +13,24 @@ local log = {}
 local function record(x) table.insert(log, x) end
 
 fiber.spawn(function()
-      local q = queue.new()
-      record('a');
-      q:put('b');
-      record('c');
-      q:put('d');
-      record('e');
-      record(q:get())
-      q:put('f');
-      record('g');
-      record(q:get())
-      record('h');
-      record(q:get())
+    local q = queue.new()
+    record('a');
+    q:put('b');
+    record('c');
+    q:put('d');
+    record('e');
+    record(q:get())
+    q:put('f');
+    record('g');
+    record(q:get())
+    record('h');
+    record(q:get())
 end)
 
 local function run(...)
-   log = {}
-   fiber.current_scheduler:run()
-   assert(equal(log, { ... }))
+    log = {}
+    fiber.current_scheduler:run()
+    assert(equal(log, { ... }))
 end
 
 -- 1. Main fiber runs, creating queue fiber.  It blocks trying to
@@ -57,6 +57,6 @@ run('d', 'h', 'f')
 -- 8. Queue resumes and blocks.
 run()
 -- Nothing from here on out.
-for _=1,20 do run() end
+for _ = 1, 20 do run() end
 
 print('test: ok')

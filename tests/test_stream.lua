@@ -10,11 +10,14 @@ local rd_io, wr_io = {}, {}
 local rd, wr = stream.open(rd_io, true, false), stream.open(wr_io, false, true)
 
 function rd_io:close() end
+
 function rd_io:read() return 0 end
+
 function wr_io:write(buf, count)
-   rd.rx:write(buf, count)
-   return count
+    rd.rx:write(buf, count)
+    return count
 end
+
 function wr_io:close() end
 
 local message = "hello, world\n"
