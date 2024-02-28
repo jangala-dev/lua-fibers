@@ -441,7 +441,10 @@ typedef int pid_t;
 typedef unsigned int uint;
 ]]
 
-local SYS_pidfd_open = 434 -- Good for all our platforms
+local SYS_pidfd_open = 434 -- Good for (almost) all our platforms
+if ARCH == "mips" or ARCH == "mipsel" then
+    SYS_pidfd_open = 4000 + 434 -- See https://www.linux-mips.org/wiki/Syscall
+end
 
 -- Function to open a pidfd
 function M.pidfd_open(pid, flags)
