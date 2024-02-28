@@ -14,12 +14,12 @@ local server = socket.listen_unix(sockname)
 local client = socket.connect_unix(sockname)
 local peer = server:accept()
 
-local messages = {"hello\n", "world\n"}
+local messages = { "hello\n", "world\n" }
 for _, msg in ipairs(messages) do
-   client:write(msg)
-   client:flush_output()
-   local res = peer:read_some_chars()
-   assert(msg == res)
+    client:write(msg)
+    client:flush_output()
+    local res = peer:read_some_chars()
+    assert(msg == res)
 end
 client:close()
 assert(peer:read_some_chars() == nil)

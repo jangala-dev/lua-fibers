@@ -10,19 +10,19 @@ local fiber = require 'fibers.fiber'
 local done = 0
 -- local wakeup_times = {}
 local count = 1e3
-for _=1,count do
-   local function fn()
-      local start, dt = fiber.now(), math.random()
-      sleep.sleep(dt)
-      local wakeup_time = fiber.now()
-      assert(wakeup_time >= start + dt)
-      done = done + 1
-      -- table.insert(wakeup_times, wakeup_time - (start + dt))
-   end
-   fiber.spawn(fn)
+for _ = 1, count do
+    local function fn()
+        local start, dt = fiber.now(), math.random()
+        sleep.sleep(dt)
+        local wakeup_time = fiber.now()
+        assert(wakeup_time >= start + dt)
+        done = done + 1
+        -- table.insert(wakeup_times, wakeup_time - (start + dt))
+    end
+    fiber.spawn(fn)
 end
-for t=fiber.now(),fiber.now()+1.5,0.01 do
-   fiber.current_scheduler:run(t)
+for t = fiber.now(), fiber.now() + 1.5, 0.01 do
+    fiber.current_scheduler:run(t)
 end
 assert(done == count)
 

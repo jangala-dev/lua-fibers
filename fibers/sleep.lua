@@ -17,41 +17,41 @@ local fiber = require 'fibers.fiber'
 -- @tparam number t The time to sleep until.
 -- @treturn operation The created operation.
 local function sleep_until_op(t)
-   local function try()
-      return t <= fiber.now()
-   end
-   local function block(suspension, wrap_fn)
-      suspension.sched:schedule_at_time(t, suspension:complete_task(wrap_fn))
-   end
-   return op.new_base_op(nil, try, block)
+    local function try()
+        return t <= fiber.now()
+    end
+    local function block(suspension, wrap_fn)
+        suspension.sched:schedule_at_time(t, suspension:complete_task(wrap_fn))
+    end
+    return op.new_base_op(nil, try, block)
 end
 
 --- Put the current fiber to sleep until time t.
 -- @tparam number t The time to sleep until.
 local function sleep_until(t)
-   return sleep_until_op(t):perform()
+    return sleep_until_op(t):perform()
 end
 
 --- Create a new operation that puts the current fiber to sleep for a duration dt.
 -- @tparam number dt The duration to sleep.
 -- @treturn operation The created operation.
 local function sleep_op(dt)
-   local function try() return dt <= 0 end
-   local function block(suspension, wrap_fn)
-      suspension.sched:schedule_after_sleep(dt, suspension:complete_task(wrap_fn))
-   end
-   return op.new_base_op(nil, try, block)
+    local function try() return dt <= 0 end
+    local function block(suspension, wrap_fn)
+        suspension.sched:schedule_after_sleep(dt, suspension:complete_task(wrap_fn))
+    end
+    return op.new_base_op(nil, try, block)
 end
 
 --- Put the current fiber to sleep for a duration dt.
 -- @tparam number dt The duration to sleep.
 local function sleep(dt)
-   return sleep_op(dt):perform()
+    return sleep_op(dt):perform()
 end
 
 return {
-   sleep = sleep,
-   sleep_op = sleep_op,
-   sleep_until = sleep_until,
-   sleep_until_op = sleep_until_op
+    sleep = sleep,
+    sleep_op = sleep_op,
+    sleep_until = sleep_until,
+    sleep_until_op = sleep_until_op
 }
