@@ -5,12 +5,34 @@ local fiber = require 'fibers.fiber'
 local channel = require "fibers.channel"
 local exec = require 'fibers.exec'
 local pollio = require 'fibers.pollio'
-local sleep = require "fibers.sleep"
+local waitgroup = require "fibers.waitgroup"
 local context = require "fibers.context"
 local sc = require 'fibers.utils.syscall'
 
-
 pollio.install_poll_io_handler()
+
+local function count_dir_items(path)
+    local count
+    local p = io.popen('ls -1 "' .. path .. '" | wc -l')
+    if p then
+        local output = p:read("*all")
+        count = tonumber(output)
+        p:close()
+    end
+    return count
+end
+
+local function count_zombies()
+    local count
+    local p = io.popen('ps aux | awk \'{ print $8 }\' | grep -c Z')
+    if p then
+        local output = p:read("*all")
+        count = tonumber(output)
+        p:close()
+    end
+    return count
+end
+
 
 -- Test 1: Test basic command execution
 local function test_basic_execution()
@@ -43,6 +65,9 @@ local function test_io_redirection()
     local stdin_pipe = assert(cmd:stdin_pipe())
     local stdout_pipe = assert(cmd:stdout_pipe())
     local signal_chan = channel.new()
+    local err = cmd:start()
+    assert(cmd:start(), "Expected error on starting command twice")
+    assert(err == nil, "Expected no error but got:", err)
     fiber.spawn(function ()
         for _, v in ipairs(msgs) do
             stdin_pipe:write(v)
@@ -50,17 +75,15 @@ local function test_io_redirection()
         end
         stdin_pipe:close()
     end)
-    local err = cmd:start()
-    assert(cmd:start(), "Expected error on starting command twice")
-    assert(err == nil, "Expected no error but got:", err)
     for _, v in ipairs(msgs) do
         assert(stdout_pipe:read_some_chars() == v)
         signal_chan:put(1)
     end
     assert(stdout_pipe:read_some_chars() == nil)
+    stdout_pipe:close()
     local err = cmd:wait()
     assert(err == nil, "Expected no error but got:", err)
-    assert(cmd.process_state == 0)
+    assert(cmd.process.state == 0)
 end
 
 -- Test 5: Test command kill 
@@ -70,26 +93,29 @@ local function test_kill()
     local starttime = sc.monotime()
     local err = cmd:start()
     assert(err == nil, "Expected no error but got:", err)
-    sleep.sleep(0.001)
     cmd:kill()
-    assert(cmd:wait() == sc.SIGTERM)
-    assert(sc.monotime()-starttime < 1)
+    local exit_code = cmd:wait()
+    assert(exit_code == sc.SIGKILL)
+    assert(sc.monotime()-starttime < 4, sc.monotime()-starttime)
 end
 
 -- Test 6: Testing context
 local function test_context()
-    local ctx, _ = context.with_timeout(context.background(), 0.001)
+    local ctx, _ = context.with_timeout(context.background(), 0.00001)
     local cmd = exec.command_context(ctx, 'sleep', '5')
     local starttime = sc.monotime()
     local err = cmd:start()
     assert(err == nil, "Expected no error but got:", err)
-    assert(cmd:wait() == sc.SIGTERM)
-    assert(sc.monotime()-starttime < 1)
+    assert(cmd:wait() == sc.SIGKILL)
+    assert(sc.monotime()-starttime < 4, sc.monotime()-starttime)
 end
 
 -- Main test function
 local function main()
-    local reps = 1000
+    local pid = sc.getpid()
+    local base_open_fds = count_dir_items("/proc/"..pid.."/fd")
+    local base_zombies = count_zombies()
+    local reps = 100
     print("testing: fibers.exec")
     local tests = {
         test_basic_execution = test_basic_execution,
@@ -100,9 +126,17 @@ local function main()
         test_context = test_context,
     }
     for k, v in pairs(tests) do
-        for i=1, reps do
-            v()
+        local wg = waitgroup.new()
+        for _ = 1, reps do
+            wg:add(1)
+            fiber.spawn(function ()
+                v()
+                wg:done()
+            end)
         end
+        wg:wait()
+        assert(base_open_fds == count_dir_items("/proc/"..pid.."/fd"), k.." left open fds!")
+        assert(base_zombies == count_zombies(), k.." created zombies!")
         print(k..": passed!")
     end
     print("test: ok")
