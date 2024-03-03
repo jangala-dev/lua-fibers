@@ -6,6 +6,7 @@ local stream = require 'fibers.stream'
 local file = require 'fibers.stream.file'
 local sc = require 'fibers.utils.syscall'
 
+local original_io = _G.io -- Save the original io module
 local io = {}
 
 function io.close(file)
@@ -77,6 +78,11 @@ local function install()
    io.output(io.stdout)
 end
 
+local function uninstall()
+   _G.io = original_io
+end
+
 return {
-   install = install
+   install = install,
+   uninstall = uninstall
 }

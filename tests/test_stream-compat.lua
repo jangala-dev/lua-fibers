@@ -12,5 +12,6 @@ _G.io.write('before\n')
 compat.install()
 _G.io.write('after\n')
 assert(_G.io == io)
+compat.uninstall()
 
 print('test: ok')
