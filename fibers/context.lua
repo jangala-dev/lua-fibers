@@ -39,19 +39,19 @@ local function with_cancel(parent)
         values = setmetatable({}, {__index = parent.values})
     }, Context)
 
-    ctx.cancel = function(cause)
-        if ctx.cause then return end
+    function ctx:cancel(cause)
+        if self.cause then return end
         if not cause then cause = "canceled" end
-        ctx.cause = cause
+        self.cause = cause
         wg:done()
-        for _, child in ipairs(ctx.children) do
-            if child.cancel then child.cancel(cause) end
+        for _, child in ipairs(self.children) do
+            if child.cancel then child:cancel(cause) end
         end
     end
 
     table.insert(parent.children, ctx)
 
-    return ctx, ctx.cancel
+    return ctx, function(cause) ctx:cancel(cause) end
 end
 
 --- Creates a new context with a deadline.
@@ -64,7 +64,7 @@ local function with_deadline(parent, deadline)
     local ctx, cancel = with_cancel(parent)
     fiber.spawn(function()
         sleep.sleep_until(deadline)
-        cancel("deadline_exceeded")
+        ctx:cancel("deadline_exceeded")
     end)
     return ctx, cancel
 end
