@@ -10,7 +10,8 @@ local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 
 local PollIOHandler = {}
-local PollIOHandler_mt = { __index = PollIOHandler }
+PollIOHandler. __index = PollIOHandler
+
 local function new_poll_io_handler()
     return setmetatable(
         {
@@ -18,7 +19,7 @@ local function new_poll_io_handler()
             waiting_for_readable = {}, -- sock descriptor => array of task
             waiting_for_writable = {}
         },                         -- sock descriptor => array of task
-        PollIOHandler_mt)
+        PollIOHandler)
 end
 
 -- These three methods are "blocking handler" methods and are called by
