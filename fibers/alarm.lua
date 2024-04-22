@@ -1,6 +1,6 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
--- File events.
+-- Alarms.
 
 local op = require 'fibers.op'
 local fiber = require 'fibers.fiber'
@@ -27,23 +27,16 @@ local function calculate_next(t, epoch)
     local inc_field
     if t.year then
         error("year should not be specified for a relative alarm")
-    elseif t.yday then
+    elseif t.yday then inc_field = "year"
         assert(not (t.month or t.wday or t.day), "neither month, weekday or day of month valid for day of year alarm")
-        inc_field = "year"
-    elseif t.month then
+    elseif t.month then inc_field = "year"
         assert(not t.wday, "day of week not valid for yearly alarm")
-        inc_field = "year"
-    elseif t.day then
+    elseif t.day then inc_field = "month"
         assert(not t.wday, "day of week not valid for monthly alarm")
-        inc_field = "month"
-    elseif t.wday then
-        inc_field = "day"
-    elseif t.hour then
-        inc_field = "day"
-    elseif t.minute then
-        inc_field = "hour"
-    elseif t.sec then
-        inc_field = "minute"
+    elseif t.wday then inc_field = "day"
+    elseif t.hour then inc_field = "day"
+    elseif t.minute then inc_field = "hour"
+    elseif t.sec then inc_field = "min"
     else
         error("a next alarm must specify at least one of yday, month, day, wday, hour, minute or sec")
     end
@@ -62,7 +55,7 @@ local function calculate_next(t, epoch)
     -- now let's get the struct we need
     local new_time, new_table = to_time(new_t)
 
-    -- wday is a weird one and we need to renormalise
+    -- wday and yday are weird ones and we need to renormalise
     if t.wday then
         local increment = (t.wday - new_table.wday + 7) % 7
         new_table.day = new_table.day + increment
@@ -99,7 +92,9 @@ end
 
 local installed_alarm_handler = nil
 
--- Installs the Alarm Handler into the current scheduler
+--- Installs the Alarm Handler into the current scheduler.
+-- Must be called before any alarm operations are used.
+-- @return The installed AlarmHandler instance.
 local function install_alarm_handler()
     if not installed_alarm_handler then
         installed_alarm_handler = new_alarm_handler()
@@ -108,7 +103,8 @@ local function install_alarm_handler()
     return installed_alarm_handler
 end
 
--- Uninstalls the Alarm Handler from the current scheduler
+--- Uninstalls the Alarm Handler from the current scheduler.
+-- This should be called to clean up when the Alarm Handler is no longer needed.
 local function uninstall_alarm_handler()
     if installed_alarm_handler then
         for i, source in ipairs(fiber.current_scheduler.sources) do
@@ -142,7 +138,7 @@ function AlarmHandler:block(time_to_start, t, task)
     end
 end
 
-function AlarmHandler:achieve_realtime()
+function AlarmHandler:realtime_achieved()
     self.realtime = true
     local now = sc.realtime()
     -- Process buffered absolute tasks
@@ -157,6 +153,10 @@ function AlarmHandler:achieve_realtime()
         self:block(time_to_start, next_time, buffered.task)
     end
     self.abs_buffer, self.next_buffer = {}, {} -- Clear the buffer
+end
+
+function AlarmHandler:realtime_lost()
+    self.realtime = false
 end
 
 function AlarmHandler:absolute_op(t)
@@ -192,34 +192,59 @@ function AlarmHandler:next_op(t)
     return op.new_base_op(nil, try, block)
 end
 
-local function achieve_realtime()
-    return assert(installed_alarm_handler):achieve_realtime()
+--- Indicates to the Alarm Handler that real-time has been achieved (through NTP or other methods).
+-- All buffered alarms are scheduled based on the actual system clock,
+-- and new alarms will be scheduled in real-time.
+local function realtime_achieved()
+    return assert(installed_alarm_handler):realtime_achieved()
 end
 
+--- Indicates to the Alarm Handler that real-time has been lost (through NTP or other methods).
+-- All new alarms will be buffered until real-time is achieved.
+local function realtime_lost()
+    return assert(installed_alarm_handler):realtime_lost()
+end
+
+--- Creates an operation for an absolute alarm.
+-- The operation can be performed immediately if in real-time mode,
+-- or buffered to be scheduled upon achieving real-time.
+-- @param t The absolute time (epoch) for the alarm.
+-- @return A BaseOp representing the absolute alarm operation.
 local function absolute_op(t)
     return assert(installed_alarm_handler):absolute_op(t)
 end
 
+--- Schedules a task to run at an absolute time.
+-- Wrapper for `absolute_op` that immediately performs the operation.
+-- @param t The absolute time (epoch) for the alarm.
 local function absolute(t)
-    absolute_op(t):perform()
+    return absolute_op(t):perform()
 end
 
+--- Creates an operation for a next (relative) alarm.
+-- The operation is always buffered until real-time is achieved,
+-- then scheduled based on the calculated next time.
+-- @param t A table specifying the relative time for the alarm.
+-- @return A BaseOp representing the next alarm operation.
 local function next_op(t)
     return assert(installed_alarm_handler):next_op(t)
 end
 
+--- Schedules a task based on a relative next time.
+-- Wrapper for `next_op` that immediately performs the operation.
+-- @param t A table specifying the relative time for the alarm.
 local function next(t)
-    next_op(t):perform()
+    return next_op(t):perform()
 end
 
 -- Public API
 return {
     install_alarm_handler = install_alarm_handler,
     uninstall_alarm_handler = uninstall_alarm_handler,
-    achieve_realtime = achieve_realtime,
+    realtime_achieved = realtime_achieved,
+    realtime_lost = realtime_lost,
     absolute_op = absolute_op,
     absolute = absolute,
     next_op = next_op,
     next = next,
 }
-
