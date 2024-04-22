@@ -13,15 +13,16 @@ end
 
 local function to_time(t)
     local new_t = {year = t.year, month=t.month, day=t.day, hour=t.hour, min=t.min, sec=t.sec}
-    local time = os.time(new_t)
+    local time = os.time(new_t) + t.msec/1e3
     local time_t = os.date("*t", time)
+    time_t.msec = t.msec
     return time, time_t
 end
 
 local function calculate_next(t, epoch)
     -- let's define some constants
-    local periods = {"year", "month", "day", "hour", "min", "sec"}
-    local default = {month=1, day=1, hour=0, min=0, sec=0}
+    local periods = {"year", "month", "day", "hour", "min", "sec", "msec"}
+    local default = {month=1, day=1, hour=0, min=0, sec=0, msec=0}
 
     -- first let's make sure that the provided struct makes sense
     local inc_field
@@ -35,16 +36,18 @@ local function calculate_next(t, epoch)
         assert(not t.wday, "day of week not valid for monthly alarm")
     elseif t.wday then inc_field = "day"
     elseif t.hour then inc_field = "day"
-    elseif t.minute then inc_field = "hour"
+    elseif t.min then inc_field = "hour"
     elseif t.sec then inc_field = "min"
+    elseif t.msec then inc_field = "sec"
     else
-        error("a next alarm must specify at least one of yday, month, day, wday, hour, minute or sec")
+        error("a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec")
     end
 
     -- let's construct the new date table
     local new_t = {}
 
     local now = os.date("*t", epoch)
+    now.msec = (epoch - math.floor(epoch)) * 1e3
 
     local default_switch = false
     for _, name in ipairs(periods) do
@@ -67,7 +70,7 @@ local function calculate_next(t, epoch)
         new_time, new_table = to_time(new_table)
     end
 
-    if new_time < os.time() then
+    if new_time < sc.realtime() then
         new_table[inc_field] = new_table[inc_field] + 1
         new_time, new_table = to_time(new_table)
     end
@@ -185,21 +188,22 @@ function AlarmHandler:next_op(t)
         if not self.realtime then table.insert(self.next_buffer, {t=t, task=task})
             return
         end
-        local now = os.time()
+        local now = sc.realtime()
         local target, _ = calculate_next(t, now)
         self:block(target-now, target, task)
     end
     return op.new_base_op(nil, try, block)
 end
 
---- Indicates to the Alarm Handler that real-time has been achieved (through NTP or other methods).
--- All buffered alarms are scheduled based on the actual system clock,
--- and new alarms will be scheduled in real-time.
+--- Indicates to the Alarm Handler that time synchronisation has been achieved (through NTP or other methods).
+-- Until the user calls realtime_achieved() all alarms will block. When called,
+-- `absolute` alarms will return immediately if their time has elapsed, whereas
+-- `next` alarms will be scheduled for their next instance
 local function realtime_achieved()
     return assert(installed_alarm_handler):realtime_achieved()
 end
 
---- Indicates to the Alarm Handler that real-time has been lost (through NTP or other methods).
+--- Indicates to the Alarm Handler that time synchronisation has been lost.
 -- All new alarms will be buffered until real-time is achieved.
 local function realtime_lost()
     return assert(installed_alarm_handler):realtime_lost()
@@ -241,6 +245,7 @@ end
 return {
     install_alarm_handler = install_alarm_handler,
     uninstall_alarm_handler = uninstall_alarm_handler,
+    calculate_next = calculate_next,
     realtime_achieved = realtime_achieved,
     realtime_lost = realtime_lost,
     absolute_op = absolute_op,

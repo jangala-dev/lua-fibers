@@ -6,9 +6,7 @@ package.path = "../?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
 local alarm = require 'fibers.alarm'
-local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
-local context = require 'fibers.context'
 local sc = require 'fibers.utils.syscall'
 
 alarm.install_alarm_handler()
@@ -20,6 +18,17 @@ local function abs_test(secs)
     local starttime = sc.realtime()
     alarm.absolute(starttime + secs)
     assert(sc.realtime() - starttime < secs + 0.1)
+    print("complete!")
+end
+
+local function next_msec_test(t)
+    io.write("Starting Millisecond test ... ")
+    io.flush()
+    local start = sc.realtime()
+    alarm.next({msec=t})
+    local epoch = sc.realtime()
+    assert(epoch%1 * 1e3 - t < 50, "alarm didn't fire within 0.05 seconds of due time")
+    assert(epoch - start < 1, "next Millisecond should fire within 1 second")
     print("complete!")
 end
 
@@ -114,10 +123,25 @@ local function buffer_test()
     alarm.absolute(t_sleep)
     local finish = sc.realtime()
     assert(finish - start > 1.9 or finish - start < 2.1)
+    -- next let's do nexts
+    local msec_target = 333
+    alarm.realtime_lost()
+    fiber.spawn(function ()
+        sleep.sleep(t_sleep_before_realtime)
+        alarm.realtime_achieved()
+    end)
+    start = sc.realtime()
+    alarm.next({msec=msec_target})
+    finish = sc.realtime()
+    assert(finish - start > 2) -- the event shouldn't fire until realtime_achieved is called
+    assert(finish%1 - math.floor(finish) - msec_target < 50)
+    print("complete!")
+    print(finish)
 end
 
 fiber.spawn(function ()
     abs_test(2)
+    next_msec_test(666)
     next_sec_test(2)
     next_min_test(2)
     next_hour_test(2)
