@@ -168,12 +168,12 @@ end
 
 function M.monotime()
     local time = M.clock_gettime(M.CLOCK_MONOTONIC)
-    return time.tv_sec + time.tv_nsec/1e9
+    return time.tv_sec + time.tv_nsec/1e9, time.tv_sec, time.tv_nsec
 end
 
 function M.realtime()
     local time = M.clock_gettime(M.CLOCK_REALTIME)
-    return time.tv_sec + time.tv_nsec/1e9
+    return time.tv_sec + time.tv_nsec/1e9, time.tv_sec, time.tv_nsec
 end
 
 function M.floatsleep(t)
