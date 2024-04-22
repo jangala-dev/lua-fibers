@@ -29,7 +29,7 @@ function BinaryHeap:push(node)
     self:heapify_up(self.size)
 end
 
---- Pops a node from the heap and reheapify it.
+--- Pops a node from the underlying heap and reheapifies. Does not advance the timer!
 -- @treturn table|nil The root node popped from the heap, nil if the heap is empty.
 function BinaryHeap:pop()
     if self.size == 0 then
@@ -110,6 +110,12 @@ function Timer:next_entry_time()
         return 1/0 -- infinity
     end
     return self.heap.heap[1].time
+end
+
+--- Returns the time of the next entry in the timer.
+-- @treturn number The time of the next entry in the timer, or infinity if the heap is empty.
+function Timer:pop()
+    return self.heap:pop()
 end
 
 --- Advances the timer, popping and scheduling objects from the heap as necessary.
