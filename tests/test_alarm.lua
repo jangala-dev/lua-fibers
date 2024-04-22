@@ -136,7 +136,6 @@ local function buffer_test()
     assert(finish - start > 2) -- the event shouldn't fire until realtime_achieved is called
     assert(finish%1 - math.floor(finish) - msec_target < 50)
     print("complete!")
-    print(finish)
 end
 
 fiber.spawn(function ()
