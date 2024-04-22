@@ -136,7 +136,6 @@ end
 
 function AlarmHandler:block(time_to_start, t, task)
     if time_to_start < fiber.current_scheduler.maxsleep then
-        print("about to sleep fiber for", time_to_start, "seconds")
         fiber.current_scheduler:schedule_after_sleep(time_to_start, task)
     else
         self.abs_timer:add_absolute(t, task)
@@ -144,7 +143,6 @@ function AlarmHandler:block(time_to_start, t, task)
 end
 
 function AlarmHandler:achieve_realtime()
-    print("realtime achieved")
     self.realtime = true
     local now = sc.realtime()
     -- Process buffered absolute tasks
