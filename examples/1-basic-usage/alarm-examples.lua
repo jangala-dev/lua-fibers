@@ -4,7 +4,12 @@ local fiber = require 'fibers.fiber'
 local alarm = require 'fibers.alarm'
 local sc = require 'fibers.utils.syscall'
 
+-- like pollio, the handler needs to be installed as a task source for the scheduler
 alarm.install_alarm_handler()
+
+-- until the user calls realtime_achieved() no alarms will return. absolute
+-- alarms will return immediately if their time has elapsed, whereas next
+-- alarms will be scheduled for their next instance
 alarm.realtime_achieved()
 
 local function set_alarm(t, number)
