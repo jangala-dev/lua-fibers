@@ -10,7 +10,7 @@ local sleep = require 'fibers.sleep'
 local sc = require 'fibers.utils.syscall'
 
 alarm.install_alarm_handler()
-alarm.realtime_achieved()
+alarm.clock_synced()
 
 local function abs_test(secs)
     io.write("Starting Absolute test ... ")
@@ -114,10 +114,10 @@ local function buffer_test()
     io.flush()
     -- first absolutes - easy to test
     local t_sleep, t_sleep_before_realtime = 1, 2
-    alarm.realtime_lost()
+    alarm.clock_desynced()
     fiber.spawn(function ()
         sleep.sleep(t_sleep_before_realtime)
-        alarm.realtime_achieved()
+        alarm.clock_synced()
     end)
     local start = sc.realtime()
     alarm.absolute(t_sleep)
@@ -125,15 +125,15 @@ local function buffer_test()
     assert(finish - start > 1.9 or finish - start < 2.1)
     -- next let's do nexts
     local msec_target = 333
-    alarm.realtime_lost()
+    alarm.clock_desynced()
     fiber.spawn(function ()
         sleep.sleep(t_sleep_before_realtime)
-        alarm.realtime_achieved()
+        alarm.clock_synced()
     end)
     start = sc.realtime()
     alarm.next({msec=msec_target})
     finish = sc.realtime()
-    assert(finish - start > 2) -- the event shouldn't fire until realtime_achieved is called
+    assert(finish - start > 2) -- the event shouldn't fire until clock_synced is called
     assert(finish%1 - math.floor(finish) - msec_target < 50)
     print("complete!")
 end

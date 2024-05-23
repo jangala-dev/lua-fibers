@@ -141,7 +141,7 @@ function AlarmHandler:block(time_to_start, t, task)
     end
 end
 
-function AlarmHandler:realtime_achieved()
+function AlarmHandler:clock_synced()
     self.realtime = true
     local now = sc.realtime()
     -- Process buffered absolute tasks
@@ -158,7 +158,7 @@ function AlarmHandler:realtime_achieved()
     self.abs_buffer, self.next_buffer = {}, {} -- Clear the buffer
 end
 
-function AlarmHandler:realtime_lost()
+function AlarmHandler:clock_desynced()
     self.realtime = false
 end
 
@@ -196,17 +196,17 @@ function AlarmHandler:next_op(t)
 end
 
 --- Indicates to the Alarm Handler that time synchronisation has been achieved (through NTP or other methods).
--- Until the user calls realtime_achieved() all alarms will block. When called,
+-- Until the user calls clock_synced() all alarms will block. When called,
 -- `absolute` alarms will return immediately if their time has elapsed, whereas
 -- `next` alarms will be scheduled for their next instance
-local function realtime_achieved()
-    return assert(installed_alarm_handler):realtime_achieved()
+local function clock_synced()
+    return assert(installed_alarm_handler):clock_synced()
 end
 
 --- Indicates to the Alarm Handler that time synchronisation has been lost.
 -- All new alarms will be buffered until real-time is achieved.
-local function realtime_lost()
-    return assert(installed_alarm_handler):realtime_lost()
+local function clock_desynced()
+    return assert(installed_alarm_handler):clock_desynced()
 end
 
 --- Creates an operation for an absolute alarm.
@@ -246,8 +246,8 @@ return {
     install_alarm_handler = install_alarm_handler,
     uninstall_alarm_handler = uninstall_alarm_handler,
     calculate_next = calculate_next,
-    realtime_achieved = realtime_achieved,
-    realtime_lost = realtime_lost,
+    clock_synced = clock_synced,
+    clock_desynced = clock_desynced,
     absolute_op = absolute_op,
     absolute = absolute,
     next_op = next_op,
