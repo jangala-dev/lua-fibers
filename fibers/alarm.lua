@@ -19,29 +19,36 @@ local function to_time(t)
     return time, time_t
 end
 
-local function calculate_next(t, epoch)
-    -- let's define some constants
-    local periods = {"year", "month", "day", "hour", "min", "sec", "msec"}
-    local default = {month=1, day=1, hour=0, min=0, sec=0, msec=0}
+-- let's define some constants
+local periods = {"year", "month", "day", "hour", "min", "sec", "msec"}
+local default = {month=1, day=1, hour=0, min=0, sec=0, msec=0}
 
-    -- first let's make sure that the provided struct makes sense
+local function validate_next_table(t)
     local inc_field
     if t.year then
-        error("year should not be specified for a relative alarm")
+        return nil, "year should not be specified for a relative alarm"
     elseif t.yday then inc_field = "year"
-        assert(not (t.month or t.wday or t.day), "neither month, weekday or day of month valid for day of year alarm")
+        if t.month or t.wday or t.day then return nil, "neither month, weekday or day of month valid for day of year alarm" end
     elseif t.month then inc_field = "year"
-        assert(not t.wday, "day of week not valid for yearly alarm")
+        if t.wday then return nil, "day of week not valid for yearly alarm" end
     elseif t.day then inc_field = "month"
-        assert(not t.wday, "day of week not valid for monthly alarm")
+        if t.wday then return nil, "day of week not valid for monthly alarm" end
     elseif t.wday then inc_field = "day"
     elseif t.hour then inc_field = "day"
     elseif t.min then inc_field = "hour"
     elseif t.sec then inc_field = "min"
     elseif t.msec then inc_field = "sec"
     else
-        error("a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec")
+        return nil, "a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec"
     end
+
+    return inc_field, nil
+end
+
+local function calculate_next(t, epoch)
+
+    -- first let's make sure that the provided struct makes sense
+    local inc_field, _ = validate_next_table(t) -- the time table is pre-validated
 
     -- let's construct the new date table
     local new_t = {}
@@ -162,7 +169,7 @@ function AlarmHandler:clock_desynced()
     self.realtime = false
 end
 
-function AlarmHandler:absolute_op(t)
+function AlarmHandler:wait_absolute_op(t)
     local time_to_start
     local function try()
         if not self.realtime then return false end
@@ -179,7 +186,7 @@ function AlarmHandler:absolute_op(t)
     return op.new_base_op(nil, try, block)
 end
 
-function AlarmHandler:next_op(t)
+function AlarmHandler:wait_next_op(t)
     local function try()
         return false
     end
@@ -214,15 +221,15 @@ end
 -- or buffered to be scheduled upon achieving real-time.
 -- @param t The absolute time (epoch) for the alarm.
 -- @return A BaseOp representing the absolute alarm operation.
-local function absolute_op(t)
-    return assert(installed_alarm_handler):absolute_op(t)
+local function wait_absolute_op(t)
+    return assert(installed_alarm_handler):wait_absolute_op(t)
 end
 
 --- Schedules a task to run at an absolute time.
 -- Wrapper for `absolute_op` that immediately performs the operation.
 -- @param t The absolute time (epoch) for the alarm.
-local function absolute(t)
-    return absolute_op(t):perform()
+local function wait_absolute(t)
+    return wait_absolute_op(t):perform()
 end
 
 --- Creates an operation for a next (relative) alarm.
@@ -230,26 +237,29 @@ end
 -- then scheduled based on the calculated next time.
 -- @param t A table specifying the relative time for the alarm.
 -- @return A BaseOp representing the next alarm operation.
-local function next_op(t)
-    return assert(installed_alarm_handler):next_op(t)
+-- @return An error if the time table is invalid.
+local function wait_next_op(t)
+    local _, err = validate_next_table(t)
+    return err or assert(installed_alarm_handler):wait_next_op(t)
 end
 
 --- Schedules a task based on a relative next time.
 -- Wrapper for `next_op` that immediately performs the operation.
 -- @param t A table specifying the relative time for the alarm.
-local function next(t)
-    return next_op(t):perform()
+-- @return An error if the time table is invalid.
+local function wait_next(t)
+    local _, err = validate_next_table(t)
+    return err or assert(installed_alarm_handler):wait_next_op(t):perform()
 end
 
 -- Public API
 return {
     install_alarm_handler = install_alarm_handler,
     uninstall_alarm_handler = uninstall_alarm_handler,
-    calculate_next = calculate_next,
     clock_synced = clock_synced,
     clock_desynced = clock_desynced,
-    absolute_op = absolute_op,
-    absolute = absolute,
-    next_op = next_op,
-    next = next,
+    wait_absolute_op = wait_absolute_op,
+    wait_absolute = wait_absolute,
+    wait_next_op = wait_next_op,
+    wait_next = wait_next,
 }
