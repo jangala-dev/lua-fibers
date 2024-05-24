@@ -147,6 +147,67 @@ local function buffer_test()
     print("complete!")
 end
 
+local function validate_next_table_test()
+    io.write("Starting validate_next_table test ... ")
+    io.flush()
+
+    local tests = {
+        {input = {year=2027}, expected_error = "year should not be specified for a relative alarm"},
+        {input = {yday=200}, expected_error = nil},
+        {input = {yday=200, month=7}, expected_error = "neither month, weekday or day of month valid for day of year alarm"},
+        {input = {month=12}, expected_error = nil},
+        {input = {month=6, wday=3}, expected_error = "day of week not valid for yearly alarm"},
+        {input = {day=15}, expected_error = nil},
+        {input = {min=30, sec=45}, expected_error = nil},
+        {input = {}, expected_error = "a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec"}
+    }
+
+    for i, test in ipairs(tests) do
+        local _, result_error = alarm.validate_next_table(test.input)
+        assert((result_error == test.expected_error), string.format("Test %d failed: expected %s, got %s", i, tostring(test.expected_error), tostring(result_error)))
+    end
+    print("complete!")
+end
+
+local function test_next_calc()
+    io.write("Starting Next Calculation test ... ")
+    io.flush()
+
+    local tests = {
+        {
+            description = "Testing Day Increment",
+            epoch = os.time{year=2027, month=5, day=24, hour=0, min=0, sec=0},
+            test_table = {day=25, hour=0, min=0, sec=0},
+            expected_time = os.time{year=2027, month=5, day=25, hour=0, min=0, sec=0}
+        },
+        {
+            description = "Testing Month Wraparound",
+            epoch = os.time{year=3023, month=12, day=31, hour=23, min=59, sec=59},
+            test_table = {month=1, day=1, hour=0, min=0, sec=0},
+            expected_time = os.time{year=3024, month=1, day=1, hour=0, min=0, sec=0}
+        },
+        {
+            description = "Testing Leap Year Day",
+            epoch = os.time{year=2024, month=1, day=1, hour=0, min=0, sec=0},
+            test_table = {month=2, day=29, hour=0, min=0, sec=0},
+            expected_time = os.time{year=2024, month=2, day=29, hour=0, min=0, sec=0}
+        },
+        {
+            description = "Testing Weekday Adjustment",
+            epoch = os.time{year=2024, month=5, day=22, hour=12, min=43},  -- Wednesday
+            test_table = {wday=6, min=12}, -- Targeting Friday
+            expected_time = os.time{year=2024, month=5, day=24, hour=0, min=12, sec=0} -- The next Friday
+        }
+    }
+
+    for _, test in ipairs(tests) do
+        local calculated_time, _ = alarm.calculate_next(test.test_table, test.epoch)
+        assert(calculated_time == test.expected_time, test.description .. ": Failed!")
+    end
+
+    print("complete!")
+end
+
 fiber.spawn(function ()
     abs_test(2)
     next_error()
@@ -159,6 +220,8 @@ fiber.spawn(function ()
     next_month_test(2)
     next_yday_test(2)
     buffer_test()
+    validate_next_table_test()
+    test_next_calc()
     fiber.stop()
 end)
 

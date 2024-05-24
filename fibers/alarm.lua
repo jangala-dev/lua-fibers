@@ -23,6 +23,8 @@ end
 local periods = {"year", "month", "day", "hour", "min", "sec", "msec"}
 local default = {month=1, day=1, hour=0, min=0, sec=0, msec=0}
 
+-- This function validates a table t intended for scheduling an alarm, ensuring
+-- only appropriate fields are specified based on the scheduling type.
 local function validate_next_table(t)
     local inc_field
     if t.year then
@@ -45,6 +47,8 @@ local function validate_next_table(t)
     return inc_field, nil
 end
 
+-- calculates the absolute time until the next occurrence based on a given time
+-- structure t and the current epoch.
 local function calculate_next(t, epoch)
 
     -- first let's make sure that the provided struct makes sense
@@ -59,7 +63,8 @@ local function calculate_next(t, epoch)
     local default_switch = false
     for _, name in ipairs(periods) do
         if not default_switch and t[name] then default_switch = true end
-        new_t[name] = not default_switch and now[name] or t[name] or default[name]
+        if (t.wday or t.yday) and name=="hour" then default_switch = true end
+        new_t[name] = (not default_switch and now[name]) or t[name] or default[name]
     end
 
     -- now let's get the struct we need
@@ -77,7 +82,7 @@ local function calculate_next(t, epoch)
         new_time, new_table = to_time(new_table)
     end
 
-    if new_time < sc.realtime() then
+    if new_time < epoch then
         new_table[inc_field] = new_table[inc_field] + 1
         new_time, new_table = to_time(new_table)
     end
@@ -262,4 +267,6 @@ return {
     wait_absolute = wait_absolute,
     wait_next_op = wait_next_op,
     wait_next = wait_next,
+    validate_next_table = validate_next_table,
+    calculate_next = calculate_next
 }
