@@ -182,7 +182,7 @@ local function validate_next_table_test()
     for _, test in ipairs(tests) do
         local _, result_error = alarm.validate_next_table(test.input)
         assert(
-            result_error == test.expctd_err, 
+            result_error == test.expctd_err,
             string.format("expected %s, got %s", tostring(test.expctd_err), tostring(result_error))
         )
     end

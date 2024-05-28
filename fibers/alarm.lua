@@ -30,16 +30,16 @@ local function validate_next_table(t)
     if t.year then
         return nil, "year should not be specified for a relative alarm"
     elseif t.yday then inc_field = "year"
-        if t.month or t.wday or t.day then 
-            return nil, "neither month, weekday or day of month valid for day of year alarm" 
+        if t.month or t.wday or t.day then
+            return nil, "neither month, weekday or day of month valid for day of year alarm"
         end
     elseif t.month then inc_field = "year"
         if t.wday then
             return nil, "day of week not valid for yearly alarm"
         end
     elseif t.day then inc_field = "month"
-        if t.wday then 
-            return nil, "day of week not valid for monthly alarm" 
+        if t.wday then
+            return nil, "day of week not valid for monthly alarm"
         end
     elseif t.wday then inc_field = "day"
     elseif t.hour then inc_field = "day"
