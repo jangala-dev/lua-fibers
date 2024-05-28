@@ -22,7 +22,7 @@ Scheduler.__index = Scheduler
 -- @return A new Scheduler.
 local function new()
     local ret = setmetatable(
-        { next = {}, cur = {}, sources = {}, wheel = timer.new(nil) },
+        { next = {}, cur = {}, sources = {}, wheel = timer.new(nil), maxsleep = MAX_SLEEP_TIME },
         Scheduler)
     local timer_task_source = { wheel = ret.wheel }
     -- private method for timer_tast_source
@@ -104,7 +104,7 @@ end
 --- Waits for the next scheduled event.
 function Scheduler:wait_for_events()
     local now, next_time = sc.monotime(), self:next_wake_time()
-    local timeout = math.min(MAX_SLEEP_TIME, next_time - now)
+    local timeout = math.min(self.maxsleep, next_time - now)
     timeout = math.max(timeout, 0)
     if self.event_waiter then
         self.event_waiter:wait_for_events(self, now, timeout)
