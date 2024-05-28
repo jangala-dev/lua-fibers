@@ -152,19 +152,39 @@ local function validate_next_table_test()
     io.flush()
 
     local tests = {
-        {input = {year=2027}, expected_error = "year should not be specified for a relative alarm"},
-        {input = {yday=200}, expected_error = nil},
-        {input = {yday=200, month=7}, expected_error = "neither month, weekday or day of month valid for day of year alarm"},
-        {input = {month=12}, expected_error = nil},
-        {input = {month=6, wday=3}, expected_error = "day of week not valid for yearly alarm"},
-        {input = {day=15}, expected_error = nil},
-        {input = {min=30, sec=45}, expected_error = nil},
-        {input = {}, expected_error = "a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec"}
+        {
+            input = {year=2027},
+            expctd_err = "year should not be specified for a relative alarm"},
+        {
+            input = {yday=200},
+            expctd_err = nil},
+        {
+            input = {yday=200, month=7},
+            expctd_err = "neither month, weekday or day of month valid for day of year alarm"},
+        {
+            input = {month=12},
+            expctd_err = nil},
+        {
+            input = {month=6, wday=3},
+            expctd_err = "day of week not valid for yearly alarm"},
+        {
+            input = {day=15},
+            expctd_err = nil},
+        {
+            input = {min=30, sec=45},
+            expctd_err = nil},
+        {
+            input = {},
+            expctd_err = "a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec"
+        }
     }
 
-    for i, test in ipairs(tests) do
+    for _, test in ipairs(tests) do
         local _, result_error = alarm.validate_next_table(test.input)
-        assert((result_error == test.expected_error), string.format("Test %d failed: expected %s, got %s", i, tostring(test.expected_error), tostring(result_error)))
+        assert(
+            result_error == test.expctd_err, 
+            string.format("expected %s, got %s", tostring(test.expctd_err), tostring(result_error))
+        )
     end
     print("complete!")
 end
