@@ -9,6 +9,9 @@
 
 local fiber = require 'fibers.fiber'
 
+local unpack = table.unpack or unpack
+local pack = table.pack or pack
+
 local Suspension = {}
 Suspension.__index = Suspension
 
@@ -17,27 +20,27 @@ CompleteTask.__index = CompleteTask
 
 function Suspension:waiting() return self.state == 'waiting' end
 
-function Suspension:complete(wrap, val)
+function Suspension:complete(wrap, ...)
     assert(self:waiting())
     self.state = 'synchronized'
     self.wrap = wrap
-    self.val = val
+    self.val = {...}
     self.sched:schedule(self)
 end
 
-function Suspension:complete_and_run(wrap, val)
+function Suspension:complete_and_run(wrap, ...)
     assert(self:waiting())
     self.state = 'synchronized'
-    return self.fiber:resume(wrap, val)
+    return self.fiber:resume(wrap, ...)
 end
 
-function Suspension:complete_task(wrap, val)
-    return setmetatable({ suspension = self, wrap = wrap, val = val }, CompleteTask)
+function Suspension:complete_task(wrap, ...)
+    return setmetatable({ suspension = self, wrap = wrap, val = {...} }, CompleteTask)
 end
 
 function Suspension:run()
     assert(not self:waiting())
-    return self.fiber:resume(self.wrap, self.val)
+    return self.fiber:resume(self.wrap, unpack(self.val))
 end
 
 local function new_suspension(sched, fib)
@@ -53,7 +56,7 @@ end
 function CompleteTask:run()
     if self.suspension:waiting() then
         -- Use complete-and-run so that the fiber runs in this turn.
-        self.suspension:complete_and_run(self.wrap, self.val)
+        self.suspension:complete_and_run(self.wrap, unpack(self.val))
     end
 end
 
@@ -78,7 +81,7 @@ BaseOp.__index = BaseOp
 -- @tparam function block_fn The block function.
 -- @treturn BaseOp The created base operation.
 local function new_base_op(wrap_fn, try_fn, block_fn)
-    if wrap_fn == nil then wrap_fn = function(val) return val end end
+    if wrap_fn == nil then wrap_fn = function(...) return ... end end
     return setmetatable(
         { wrap_fn = wrap_fn, try_fn = try_fn, block_fn = block_fn },
         BaseOp)
@@ -117,7 +120,7 @@ end
 -- @treturn BaseOp The created base operation.
 function BaseOp:wrap(f)
     local wrap_fn, try_fn, block_fn = self.wrap_fn, self.try_fn, self.block_fn
-    return new_base_op(function(val) return f(wrap_fn(val)) end, try_fn, block_fn)
+    return new_base_op(function(...) return f(wrap_fn(...)) end, try_fn, block_fn)
 end
 
 --- Wrap the choice operation with the given function.
@@ -136,10 +139,12 @@ end
 --- Perform the base operation.
 -- @treturn vararg The value returned by the operation.
 function BaseOp:perform()
-    local success, val = self.try_fn()
-    if success then return self.wrap_fn(val) end
-    local wrap, new_val = fiber.suspend(block_base_op, self)
-    return wrap(new_val)
+    local retval = pack(self.try_fn())
+    local success = table.remove(retval, 1)
+    if success then return self.wrap_fn(unpack(retval)) end
+    local new_retval = pack(fiber.suspend(block_base_op, self))
+    local wrap = table.remove(new_retval, 1)
+    return wrap(unpack(new_retval))
 end
 
 local function block_choice_op(sched, fib, ops)
@@ -154,11 +159,13 @@ function ChoiceOp:perform()
     local base = math.random(#ops)
     for i = 1, #ops do
         local op = ops[((i + base) % #ops) + 1]
-        local success, val = op.try_fn()
-        if success then return op.wrap_fn(val) end
+        local retval = pack(op.try_fn())
+        local success = table.remove(retval, 1)
+        if success then return op.wrap_fn(unpack(retval)) end
     end
-    local wrap, val = fiber.suspend(block_choice_op, ops)
-    return wrap(val)
+    local retval = pack(fiber.suspend(block_choice_op, ops))
+    local wrap = table.remove(retval, 1)
+    return wrap(unpack(retval))
 end
 
 --- Perform the base operation or return the result of the function if the operation cannot be performed.
