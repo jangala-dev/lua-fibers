@@ -8,10 +8,10 @@ local sc = require 'fibers.utils.syscall'
 local Socket = {}
 Socket.__index = Socket
 
-local sigpipe_handler
+-- local sigpipe_handler
 
 local function socket(domain, stype, protocol)
-    if sigpipe_handler == nil then sigpipe_handler = sc.signal(sc.SIGPIPE, sc.SIG_IGN) end
+    -- if sigpipe_handler == nil then sigpipe_handler = sc.signal(sc.SIGPIPE, sc.SIG_IGN) end
     local fd = assert(sc.socket(domain, stype, protocol or 0))
     file.init_nonblocking(fd)
     return setmetatable({ fd = fd }, Socket)

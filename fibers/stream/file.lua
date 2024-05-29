@@ -7,7 +7,10 @@
 package.path = "../../?.lua;../?.lua;" .. package.path
 
 local stream = require 'fibers.stream'
+local pollio = require 'fibers.pollio'
 local sc = require 'fibers.utils.syscall'
+
+local pio_handler = pollio.install_poll_io_handler()
 
 local bit = rawget(_G, "bit") or require 'bit32'
 
@@ -30,31 +33,14 @@ local bit = rawget(_G, "bit") or require 'bit32'
 -- blocking handler just returns directly, which will cause the stream
 -- to busy-wait until the FD becomes active.
 
-local blocking_handler
-
-local default_blocking_handler = {}
-function default_blocking_handler:init_nonblocking() end
-
-function default_blocking_handler:wait_for_readable() end
-
-function default_blocking_handler:wait_for_writable() end
-
-local function set_blocking_handler(h)
-    blocking_handler = h or default_blocking_handler
-end
-
-set_blocking_handler()
-
-local function init_nonblocking(fd) blocking_handler:init_nonblocking(fd) end
-local function wait_for_readable(fd) blocking_handler:wait_for_readable(fd) end
-local function wait_for_writable(fd) blocking_handler:wait_for_writable(fd) end
-
 local File = {}
-local File_mt = { __index = File }
+File.__index = File
+
+sc.signal(sc.SIGPIPE, sc.SIG_IGN)
 
 local function new_file_io(fd, filename)
-    init_nonblocking(fd)
-    return setmetatable({ fd = fd, filename = filename }, File_mt)
+    pollio.init_nonblocking(fd)
+    return setmetatable({ fd = fd, filename = filename }, File)
 end
 
 function File:nonblock() sc.set_nonblock(self.fd) end
@@ -65,30 +51,31 @@ function File:read(buf, count)
     local did_read, err, errno = sc.ffi.read(self.fd, buf, count)
     if errno then
         -- If the read would block, indicate to caller with nil return.
-        if errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then return nil end
+        if errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then return nil, nil end
         -- Otherwise, signal an error.
-        error(err)
+        return nil, err
     else
         -- Success; return number of bytes read.  If EOF, count is 0.
-        return did_read
+        return did_read, nil
     end
 end
 
 function File:write(buf, count)
+    -- local success, did_write, err, errno = pcall(sc.ffi.write, self.fd, buf, count)
     local did_write, err, errno = sc.ffi.write(self.fd, buf, count)
     if err then
         -- If the write would block, indicate to caller with nil return.
-        if errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then return nil end
+        if errno == sc.EAGAIN or errno == sc.EWOULDBLOCK then return nil, nil end
         -- Otherwise, signal an error.
-        error(err)
+        return nil, err
     elseif did_write == 0 then
         -- This is a bit of a squirrely case: no bytes written, but no
         -- error code.  Return nil to indicate that it's probably a good
         -- idea to wait until the FD is writable again.
-        return nil
+        return nil, nil
     else
         -- Success; return number of bytes written.
-        return did_write
+        return did_write, nil
     end
 end
 
@@ -99,9 +86,17 @@ function File:seek(whence, offset)
     return sc.lseek(self.fd, offset, whence)
 end
 
-function File:wait_for_readable() wait_for_readable(self.fd) end
+function File:wait_for_readable_op() return pollio.fd_readable_op(self.fd) end
 
-function File:wait_for_writable() wait_for_writable(self.fd) end
+function File:wait_for_readable() self:wait_for_readable_op():perform() end
+
+function File:wait_for_writable_op() return pollio.fd_writable_op(self.fd) end
+
+function File:wait_for_writable() self:wait_for_writable_op():perform() end
+
+function File:task_on_readable(t) if self.fd then pio_handler:task_on_readable(self.fd, t) end end
+
+function File:task_on_writable(t) if self.fd then pio_handler:task_on_writable(self.fd, t) end end
 
 function File:close()
     sc.close(self.fd)
@@ -245,10 +240,7 @@ local function popen(prog, mode)
 end
 
 return {
-    init_nonblocking = init_nonblocking,
-    wait_for_readable = wait_for_readable,
-    wait_for_writable = wait_for_writable,
-    set_blocking_handler = set_blocking_handler,
+    init_nonblocking = pollio.init_nonblocking,
     fdopen = fdopen,
     open = open,
     tmpfile = tmpfile,
