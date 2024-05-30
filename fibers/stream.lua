@@ -519,7 +519,8 @@ function Stream:write_op(...)
     local n = select('#', ...)
     for i = 1, n do
         local arg = select(i, ...)
-        if (not type(arg)=="number") and (not type(arg)=="string") then
+        if not (type(arg)=="number") and not (type(arg)=="string") then
+            print(type(arg))
             return nil, 'arguments must be strings or numbers'
         end
     end

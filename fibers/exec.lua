@@ -200,8 +200,8 @@ function Cmd:start()
         fiber.spawn(function()
             while true do
                 local received = input:read_some_chars()
-                output:write(received)
                 if not received then break end
+                output:write(received)
             end
             if input.close then input:close() end
             if output.close then output:close() end
