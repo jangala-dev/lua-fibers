@@ -6,6 +6,8 @@ local stream = require 'fibers.stream'
 local file = require 'fibers.stream.file'
 local sc = require 'fibers.utils.syscall'
 
+local unpack = table.unpack or unpack  -- luacheck: ignore -- Compatibility fallback
+
 local original_io = _G.io -- Save the original io module
 local io = {}
 

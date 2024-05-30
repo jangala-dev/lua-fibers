@@ -9,6 +9,7 @@ local buffer = require 'fibers.utils.ring_buffer'
 local op  = require 'fibers.op'
 
 local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
+local unpack = table.unpack or unpack  -- luacheck: ignore -- Compatibility fallback
 
 local Stream = {}
 Stream.__index = Stream
@@ -168,7 +169,7 @@ local function core_read_op(self, buf, min, max, terminator)
 
             local did_read, err = self.io:read(self.rx.buf, self.rx.size)
             if err then return true, buf, tally, err end
-            if did_read == nil then self._part_read.tally = tally return false end  -- would block indicated by nil return
+            if did_read == nil then self._part_read.tally = tally return false end  -- block indicated by nil return
             if did_read == 0 then return true, buf, tally, nil end -- EOF indicated by 0 return
             self.rx:advance_write(did_read) -- since we copied directly into buffer's storage
         end
@@ -210,7 +211,7 @@ end
 -- @param count The number of bytes to read.
 -- @return operation
 function Stream:read_bytes_op(buf, count)
-    return core_read_op(self, buf, count, count):wrap(function(buf, cnt, err) return buf, cnt, err end)
+    return core_read_op(self, buf, count, count):wrap(function(ret_buf, cnt, err) return ret_buf, cnt, err end)
 end
 
 --- Read a specified number of bytes from the stream.
@@ -274,7 +275,7 @@ end
 -- @return operation
 function Stream:read_chars_op(count)
     local buf = ffi.new('uint8_t[?]', count)
-    return self:read_bytes_op(buf, count):wrap(function(buf, cnt, err) return ffi.string(buf, cnt), err  end)
+    return self:read_bytes_op(buf, count):wrap(function(ret_buf, cnt, err) return ffi.string(ret_buf, cnt), err  end)
 end
 
 --- Read a specified number of characters from the stream.
@@ -291,7 +292,9 @@ end
 function Stream:read_some_chars_op(count)
     if count == nil then count = self.rx.size end
     local buf = ffi.new('uint8_t[?]', count)
-    return core_read_op(self, buf, 1, count):wrap(function(buf, cnt, err) return cnt > 0 and ffi.string(buf, cnt) or nil, err end)
+    return core_read_op(self, buf, 1, count):wrap(
+        function(ret_buf, cnt, err) return cnt > 0 and ffi.string(ret_buf, cnt) or nil, err end
+    )
 end
 
 --- Read up to a specified number of characters from the stream.
@@ -334,9 +337,9 @@ end
 function Stream:read_line_op(style)
     style = style or 'discard'
     local buf = ffi.new('uint8_t[?]', self.rx.size)
-    return core_read_op(self, buf, math.huge, math.huge, "\n"):wrap(function(buf, cnt)
-        return cnt>0 and ffi.string(buf, style=='keep' and cnt or cnt-1) or nil
-    end)
+    return core_read_op(self, buf, math.huge, math.huge, "\n"):wrap(
+        function(ret_buf, cnt) return cnt>0 and ffi.string(ret_buf, style=='keep' and cnt or cnt-1) or nil end
+    )
 end
 
 --- Read a line from the stream.
@@ -516,7 +519,7 @@ function Stream:write_op(...)
     local n = select('#', ...)
     for i = 1, n do
         local arg = select(i, ...)
-        if not type(arg)=="number" and not type(arg)=="string" then
+        if (not type(arg)=="number") and (not type(arg)=="string") then
             return nil, 'arguments must be strings or numbers'
         end
     end
@@ -525,7 +528,7 @@ end
 
 --- Lua 5.1 file:write() method.
 -- Write the value of each of its arguments to the file. The arguments must be
--- strings or numbers. To write other values, use tostring or string.format 
+-- strings or numbers. To write other values, use tostring or string.format
 -- before write.
 -- @param ... data to write (strings or numbers)
 -- @return true on success, or nil plus an error message on failure

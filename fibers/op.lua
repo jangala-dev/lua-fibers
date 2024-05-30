@@ -9,8 +9,10 @@
 
 local fiber = require 'fibers.fiber'
 
-local unpack = table.unpack or unpack
-local pack = table.pack or pack
+local unpack = table.unpack or unpack  -- luacheck: ignore -- Compatibility fallback
+local pack = table.pack or function(...) -- luacheck: ignore -- Compatibility fallback
+    return { n = select("#", ...), ... }
+end
 
 local Suspension = {}
 Suspension.__index = Suspension
