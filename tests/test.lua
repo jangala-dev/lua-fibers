@@ -1,4 +1,5 @@
 package.path = "../?.lua;" .. package.path
+package.path = package.path .. ';/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua'
 
 local sep = '-'
 
