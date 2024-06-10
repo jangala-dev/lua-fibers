@@ -25,6 +25,7 @@ local RD = sc.EPOLLIN + sc.EPOLLRDHUP
 local WR = sc.EPOLLOUT
 local RDWR = RD + WR
 local ERR = sc.EPOLLERR + sc.EPOLLHUP
+local PRI = sc.EPOLLPRI
 
 function Epoll:add(s, events)
     -- local fd = type(s) == 'number' and s or sc.fileno(s)
@@ -70,4 +71,5 @@ return {
     WR = WR,
     RDWR = RDWR,
     ERR = ERR,
+    PRI = PRI,
 }

@@ -17,8 +17,9 @@ local function new_poll_io_handler()
         {
             epoll = epoll.new(),
             waiting_for_readable = {}, -- sock descriptor => array of task
-            waiting_for_writable = {}
-        },                         -- sock descriptor => array of task
+            waiting_for_writable = {}, -- sock descriptor => array of task
+            waiting_for_priority = {} -- sock descriptor => array of task
+        },
         PollIOHandler)
 end
 
@@ -34,6 +35,10 @@ end
 
 function PollIOHandler:wait_for_writable(fd)
     self:fd_writable_op(fd):perform()
+end
+
+function PollIOHandler:wait_for_priority(fd)
+    self:fd_priority_op(fd):perform()
 end
 
 local function add_waiter(fd, waiters, task)
@@ -67,6 +72,13 @@ function PollIOHandler:fd_writable_op(fd)
     return op.new_base_op(nil, try, block)
 end
 
+function PollIOHandler:fd_priority_op(fd)
+    local function try() return false end
+    local block = make_block_fn(
+        fd, self.waiting_for_priority, self.epoll, epoll.PRI)
+    return op.new_base_op(nil, try, block)
+end
+
 function PollIOHandler:stream_readable_op(stream)
     local fd = assert(stream.io.fd)
     local function try() return not stream.rx:is_empty() end
@@ -82,6 +94,13 @@ end
 function PollIOHandler:stream_writable_op(stream)
     local fd = assert(stream.io.fd)
     return self:fd_writable_op(fd)
+end
+
+-- A stream_priority_op is the same as fd_priority_op. Knowing something
+-- about the buffer state doesn't tell us anything useful.
+function PollIOHandler:stream_priority_op(stream)
+    local fd = assert(stream.io.fd)
+    return self:fd_priority_op(fd)
 end
 
 local function schedule_tasks(sched, tasks)
@@ -108,6 +127,10 @@ function PollIOHandler:schedule_tasks(sched, _, timeout)
             local tasks = self.waiting_for_writable[fd]
             schedule_tasks(sched, tasks)
         end
+        if bit.band(event, epoll.PRI + epoll.ERR) ~= 0 then
+            local tasks = self.waiting_for_priority[fd]
+            schedule_tasks(sched, tasks)
+        end
     end
 end
 
@@ -123,6 +146,7 @@ function PollIOHandler:cancel_tasks_for_fd(fd)
     end
     cancel_tasks(self.waiting_for_readable)
     cancel_tasks(self.waiting_for_writable)
+    cancel_tasks(self.waiting_for_priority)
 end
 
 function PollIOHandler:cancel_all_tasks()
@@ -130,6 +154,9 @@ function PollIOHandler:cancel_all_tasks()
         self:cancel_tasks_for_fd(fd)
     end
     for fd, _ in pairs(self.waiting_for_writable) do
+        self:cancel_tasks_for_fd(fd)
+    end
+    for fd, _ in pairs(self.waiting_for_priority) do
         self:cancel_tasks_for_fd(fd)
     end
 end
@@ -168,18 +195,26 @@ end
 local function fd_writable_op(fd)
     return assert(installed_poll_handler):fd_writable_op(fd)
 end
+local function fd_priority_op(fd)
+    return assert(installed_poll_handler):fd_priority_op(fd)
+end
 local function stream_readable_op(stream)
     return assert(installed_poll_handler):stream_readable_op(stream)
 end
 local function stream_writable_op(stream)
     return assert(installed_poll_handler):stream_writable_op(stream)
 end
+local function stream_priority_op(stream)
+    return assert(installed_poll_handler):stream_priority_op(stream)
+end
 
 return {
     fd_readable_op = fd_readable_op,
     fd_writable_op = fd_writable_op,
+    fd_priority_op = fd_priority_op,
     stream_readable_op = stream_readable_op,
     stream_writable_op = stream_writable_op,
+    stream_priority_op = stream_priority_op,
     install_poll_io_handler = install_poll_io_handler,
     uninstall_poll_io_handler = uninstall_poll_io_handler
 }

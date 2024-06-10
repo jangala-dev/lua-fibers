@@ -39,6 +39,8 @@ function default_blocking_handler:wait_for_readable() end
 
 function default_blocking_handler:wait_for_writable() end
 
+function default_blocking_handler:wait_for_priority() end
+
 local function set_blocking_handler(h)
     blocking_handler = h or default_blocking_handler
 end
@@ -48,6 +50,7 @@ set_blocking_handler()
 local function init_nonblocking(fd) blocking_handler:init_nonblocking(fd) end
 local function wait_for_readable(fd) blocking_handler:wait_for_readable(fd) end
 local function wait_for_writable(fd) blocking_handler:wait_for_writable(fd) end
+local function wait_for_priority(fd) blocking_handler:wait_for_priority(fd) end
 
 local File = {}
 local File_mt = { __index = File }
@@ -102,6 +105,8 @@ end
 function File:wait_for_readable() wait_for_readable(self.fd) end
 
 function File:wait_for_writable() wait_for_writable(self.fd) end
+
+function File:wait_for_priority() wait_for_priority(self.fd) end
 
 function File:close()
     sc.close(self.fd)
@@ -248,6 +253,7 @@ return {
     init_nonblocking = init_nonblocking,
     wait_for_readable = wait_for_readable,
     wait_for_writable = wait_for_writable,
+    wait_for_priority = wait_for_priority,
     set_blocking_handler = set_blocking_handler,
     fdopen = fdopen,
     open = open,
