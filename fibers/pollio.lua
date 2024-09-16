@@ -21,19 +21,9 @@ local function new_poll_io_handler()
         PollIOHandler)
 end
 
--- -- These three methods are "blocking handler" methods and are called by
--- -- fibers.stream.file.
 function PollIOHandler:init_nonblocking(fd)
     sc.set_nonblock(fd)
 end
-
--- function PollIOHandler:wait_for_readable(fd)
---     self:fd_readable_op(fd):perform()
--- end
-
--- function PollIOHandler:wait_for_writable(fd)
---     self:fd_writable_op(fd):perform()
--- end
 
 local function add_waiter(fd, waiters, task)
     local tasks = waiters[fd]
