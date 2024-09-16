@@ -1,12 +1,10 @@
 {
   "recommendations": [
-    "dbaeumer.vscode-eslint",
     "ms-azuretools.vscode-docker",
     "ms-vscode-remote.remote-containers",
     "waderyan.gitblame",
-    "vue.volar",
     "sumneko.lua",
     "rog2.luacheck",
-    "golang.go"
+    "tomblind.local-lua-debugger-vscode"
   ]
 }
