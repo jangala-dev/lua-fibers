@@ -24,7 +24,7 @@ end
 
 local function count_zombies()
     local count
-    local p = io.popen('ps aux | awk \'{ print $8 }\' | grep -c Z')
+    local p = io.popen('ps | grep -c " Z "')
     if p then
         local output = p:read("*all")
         count = tonumber(output)
