@@ -4,10 +4,14 @@
 		// [Optional] You can use build args to set options. e.g. 'VARIANT' below affects the image in the Dockerfile
 		// "args": { "VARIANT": "buster" }
 	},
-    "remoteUser": "vscode",
-    "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
-	"extensions": [
-		"sumneko.lua",
-		"rog2.luacheck"
-	]
+	"remoteUser": "vscode",
+	"postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"sumneko.lua",
+				"rog2.luacheck"
+			]
+		}
+	}
 }
