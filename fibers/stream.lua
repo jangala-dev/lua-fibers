@@ -50,41 +50,47 @@ function Stream:nonblock() self.io:nonblock() end
 --- Set the stream to blocking mode.
 function Stream:block() self.io:block() end
 
-local function core_write_op(self, buf, count, flush_needed)
+local function core_write_op(stream, buf, count, flush_needed)
     buf = ffi.cast('uint8_t*', buf)
     local tally = 0
     local write_directly
     local function write_attempt()
         while true do
             if flush_needed then
-                while not self.tx:is_empty() do
-                    local written, err = self.io:write(self.tx:peek()) -- Write current contiguous block
+                while not stream.tx:is_empty() do
+                    local written, err = stream.io:write(stream.tx:peek()) -- Write current contiguous block
                     if err then return true, tally, err end
-                    if written == nil then self._part_write.tally = tally return false end
+                    if written == nil then                                 -- block indicated by nil return
+                        stream._part_write.tally = tally
+                        return false
+                    end
                     if written == 0 then return true, tally, nil end -- EOF
-                    self.tx:advance_read(written)
+                    stream.tx:advance_read(written)
                 end
                 flush_needed = nil
             end
             if tally == count then return true, tally end
             if write_directly then
-                local written, err = self.io:write(buf + tally, count - tally)
+                local written, err = stream.io:write(buf + tally, count - tally)
                 if err then return true, tally, err end
-                if written == nil then self._part_write.tally = tally return false end -- Would block
+                if written == nil then
+                    stream._part_write.tally = tally
+                    return false
+                end                                              -- Would block
                 if written == 0 then return true, tally, nil end -- EOF
                 tally = tally + written
             else
-                local to_write = math.min(self.tx:write_avail(), count - tally)
-                self.tx:write(buf + tally, to_write)
+                local to_write = math.min(stream.tx:write_avail(), count - tally)
+                stream.tx:write(buf + tally, to_write)
                 tally = tally + to_write
                 -- Do we need to flush?
-                flush_needed = self.tx:is_full() or self.line_buffering and self.tx:find('\n')
+                flush_needed = stream.tx:is_full() or stream.line_buffering and stream.tx:find('\n')
             end
         end
     end
     local function try()
-        self._part_write = {buf = buf, count = count, tally = 0}
-        write_directly = count >= self.tx.size -- captures both large writes and no buffering
+        stream._part_write = { buf = buf, count = count, tally = 0 }
+        write_directly = count >= stream.tx.size -- captures both large writes and no buffering
         return write_attempt()
     end
     local function block(suspension, wrap_fn)
@@ -95,13 +101,13 @@ local function core_write_op(self, buf, count, flush_needed)
             if success then
                 suspension:complete(wrap_fn, tally, err)
             else
-                self.io:task_on_writable(task)
+                stream.io:task_on_writable(task)
             end
         end
-        self.io:task_on_writable(task)
+        stream.io:task_on_writable(task)
     end
     local function wrap(...)
-        self._part_write = nil -- clean up on write success
+        stream._part_write = nil -- clean up on write success
         return ...
     end
     return op.new_base_op(wrap, try, block)
@@ -140,42 +146,58 @@ function Stream:write_chars(n)
     return self:write_chars_op(n):perform()
 end
 
-local function core_read_op(self, buf, min, max, terminator)
+-- Extend a C array by at least 'extension' bytes
+-- @param arr C array to extend
+-- @param size current used portion of C array
+-- @param extension intended extra portion of C array to be used
+-- @return arr extended C array
+local function extend(arr, size, extension)
+    if size + extension > ffi.sizeof(arr) then
+        local new_size = math.max(ffi.sizeof(arr) * 2, size + extension)
+        local new_buf = ffi.new('uint8_t[?]', new_size)
+        ffi.copy(new_buf, arr, size) -- Copy existing data to new buffer
+        arr = new_buf
+    end
+
+    return arr
+end
+local function core_read_op(stream, buf, min, max, terminator)
     local tally = 0
+    local function find_terminator()
+        local term_loc = stream.rx:find(terminator)
+        if term_loc then
+            local final = tally + term_loc + #terminator
+            return final, final
+        end
+        return min, max
+    end
     local function read_attempt()
         while true do
             if terminator then
-                local term_loc = self.rx:find(terminator)
-                if term_loc then
-                    local final = tally + term_loc + #terminator
-                    min, max = final, final
-                end
+                min, max = find_terminator()
             end
-            local from_buffer = math.min(self.rx:read_avail(), max - tally)
+            local from_buffer = math.min(stream.rx:read_avail(), max - tally)
 
             -- Extend the buffer if needed
-            if tally + from_buffer > ffi.sizeof(buf) then
-                local new_size = ffi.sizeof(buf) * 2
-                local new_buf = ffi.new('uint8_t[?]', new_size)
-                ffi.copy(new_buf, buf, tally) -- Copy existing data to new buffer
-                buf = new_buf
-                self._part_read.buf = buf
-            end
+            buf = extend(buf, tally, from_buffer)
 
-            self.rx:read(buf + tally, from_buffer)
+            stream.rx:read(buf + tally, from_buffer)
             tally = tally + from_buffer
             if tally >= min then return true, buf, tally end -- min achieved, returning
-            self.rx:reset() -- buffer emptied, so reset for io:read()
+            stream.rx:reset()                                -- buffer emptied, so reset for io:read()
 
-            local did_read, err = self.io:read(self.rx.buf, self.rx.size)
+            local did_read, err = stream.io:read(stream.rx.buf, stream.rx.size)
             if err then return true, buf, tally, err end
-            if did_read == nil then self._part_read.tally = tally return false end  -- block indicated by nil return
+            if did_read == nil then -- block indicated by nil return
+                stream._part_read.tally = tally
+                return false
+            end
             if did_read == 0 then return true, buf, tally, nil end -- EOF indicated by 0 return
-            self.rx:advance_write(did_read) -- since we copied directly into buffer's storage
+            stream.rx:advance_write(did_read)                      -- since we copied directly into buffer's storage
         end
     end
     local function try()
-        self._part_read = {buf = buf, tally = 0}
+        stream._part_read = { buf = buf, tally = 0 }
         return read_attempt()
     end
     local function block(suspension, wrap_fn)
@@ -186,13 +208,13 @@ local function core_read_op(self, buf, min, max, terminator)
             if success then
                 suspension:complete_and_run(wrap_fn, buf, tally, err)
             else
-                self.io:task_on_readable(task)
+                stream.io:task_on_readable(task)
             end
         end
-        self.io:task_on_readable(task)
+        stream.io:task_on_readable(task)
     end
     local function wrap(...)
-        self._part_read = nil -- clean up on write success
+        stream._part_read = nil -- clean up on write success
         return ...
     end
     return op.new_base_op(wrap, try, block)
