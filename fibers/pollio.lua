@@ -5,7 +5,6 @@
 local op = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 local epoll = require 'fibers.epoll'
-local file = require 'fibers.stream.file'
 local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 
@@ -22,18 +21,8 @@ local function new_poll_io_handler()
         PollIOHandler)
 end
 
--- These three methods are "blocking handler" methods and are called by
--- fibers.stream.file.
 function PollIOHandler:init_nonblocking(fd)
     sc.set_nonblock(fd)
-end
-
-function PollIOHandler:wait_for_readable(fd)
-    self:fd_readable_op(fd):perform()
-end
-
-function PollIOHandler:wait_for_writable(fd)
-    self:fd_writable_op(fd):perform()
 end
 
 local function add_waiter(fd, waiters, task)
@@ -51,6 +40,16 @@ local function make_block_fn(fd, waiting, poll, events)
         add_waiter(fd, waiting, task)
         poll:add(fd, events)
     end
+end
+
+function PollIOHandler:task_on_readable(fd, task)
+    add_waiter(fd, self.waiting_for_readable, task)
+    self.epoll:add(fd, epoll.RD)
+end
+
+function PollIOHandler:task_on_writable(fd, task)
+    add_waiter(fd, self.waiting_for_writable, task)
+    self.epoll:add(fd, epoll.WR)
 end
 
 function PollIOHandler:fd_readable_op(fd)
@@ -140,7 +139,7 @@ local function install_poll_io_handler()
     installed = installed + 1
     if installed == 1 then
         installed_poll_handler = new_poll_io_handler()
-        file.set_blocking_handler(installed_poll_handler)
+        -- file.set_blocking_handler(installed_poll_handler)
         fiber.current_scheduler:add_task_source(installed_poll_handler)
     end
     return installed_poll_handler
@@ -162,11 +161,20 @@ local function uninstall_poll_io_handler()
     end
 end
 
+local function init_nonblocking(fd)
+    return assert(installed_poll_handler):init_nonblocking(fd)
+end
 local function fd_readable_op(fd)
     return assert(installed_poll_handler):fd_readable_op(fd)
 end
+local function fd_readable(fd)
+    return fd_readable_op(fd):perform()
+end
 local function fd_writable_op(fd)
     return assert(installed_poll_handler):fd_writable_op(fd)
+end
+local function fd_writable(fd)
+    return fd_writable_op(fd):perform()
 end
 local function stream_readable_op(stream)
     return assert(installed_poll_handler):stream_readable_op(stream)
@@ -176,8 +184,11 @@ local function stream_writable_op(stream)
 end
 
 return {
+    init_nonblocking = init_nonblocking,
     fd_readable_op = fd_readable_op,
+    fd_readable = fd_readable,
     fd_writable_op = fd_writable_op,
+    fd_writable = fd_writable,
     stream_readable_op = stream_readable_op,
     stream_writable_op = stream_writable_op,
     install_poll_io_handler = install_poll_io_handler,

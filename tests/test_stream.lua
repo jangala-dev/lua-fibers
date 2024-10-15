@@ -4,29 +4,39 @@ print('testing: fibers.stream')
 -- look one level up
 package.path = "../?.lua;" .. package.path
 
+local fiber = require 'fibers.fiber'
 local stream = require 'fibers.stream'
 
-local rd_io, wr_io = {}, {}
-local rd, wr = stream.open(rd_io, true, false), stream.open(wr_io, false, true)
+local function test()
+    local rd_io, wr_io = {}, {}
+    local rd, wr = stream.open(rd_io, true, false), stream.open(wr_io, false, true)
 
-function rd_io:close() end
+    function rd_io:close() end
 
-function rd_io:read() return 0 end
+    function rd_io:read() return 0 end
 
-function wr_io:write(buf, count)
-    rd.rx:write(buf, count)
-    return count
+    function wr_io:write(buf, count)
+        rd.rx:write(buf, count)
+        return count
+    end
+
+    function wr_io:close() end
+
+    local message = "hello, world\n"
+    wr:setvbuf('line')
+    wr:write(message)
+    local message2 = rd:read_some_chars()
+    assert(message == message2)
+    assert(rd:read_some_chars() == nil)
+
+    rd:close(); wr:close()
 end
 
-function wr_io:close() end
+fiber.spawn(function ()
+    test()
+    fiber.stop()
+end)
 
-local message = "hello, world\n"
-wr:setvbuf('line')
-wr:write(message)
-local message2 = rd:read_some_chars()
-assert(message == message2)
-assert(rd:read_some_chars() == nil)
-
-rd:close(); wr:close()
+fiber.main()
 
 print('selftest: ok')

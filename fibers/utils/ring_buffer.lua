@@ -107,6 +107,53 @@ function buffer:peek()
     return self.buf + pos, math.min(self:read_avail(), self.size - pos)
 end
 
+function buffer:tail()
+    local pos = self:write_pos()
+    return self.buf + pos, math.min(self:write_avail(), self.size - pos)
+end
+
+function buffer:tostring()
+    local original_read_idx = self.read_idx  -- Store original read index
+    local size = self:read_avail()
+    if size == 0 then return "" end
+
+    local data = ffi.new("uint8_t[?]", size)
+    self:read(data, size)
+    self.read_idx = original_read_idx  -- Restore original read index
+    local buf_string = ffi.string(data, size)
+    return buf_string
+end
+
+function buffer:find(pattern)
+    local buf_string = self:tostring()
+    local found_at = string.find(buf_string, pattern)
+    found_at = found_at and found_at-1
+    return found_at
+end
+
+function buffer:find_string(s)
+    local len = #s
+    local end_idx = self:read_avail()
+    if end_idx < len then return nil end -- Not enough data to contain 's'
+
+    for i = 0, end_idx - len do
+        local found = true
+        for j = 1, len do
+            local buf_idx = self:rewrite_pos(i + j - 1)
+            if ffi.string(self.buf + buf_idx, 1) ~= s:sub(j, j) then
+                found = false
+                break
+            end
+        end
+        if found then
+            return i
+        end
+    end
+
+    return nil -- String not found
+end
+
+
 local buffer_t = ffi.metatype("buffer_t", buffer)
 
 local function new(size)
