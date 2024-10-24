@@ -23,17 +23,12 @@ function Waitgroup:done()
     self:add(-1)
 end
 
+-- Override a conditional wait operation to make a waitgroup operation
+-- @return BaseOp a base op for a waitgroup
 function Waitgroup:wait_op()
-    local function try()
-        return self._counter == 0
-    end
-    local function block(suspension, wrap_fn)
-        if self._counter > 0 then
-            -- Add suspension to the condition variable's wait queue.
-            self._cond.waitq[#self._cond.waitq + 1] = { suspension = suspension, wrap = wrap_fn }
-        end
-    end
-    return op.new_base_op(nil, try, block)
+    local wait_op = self._cond:wait_op()
+    wait_op.try_fn = function() return self._counter <= 0 end
+    return wait_op
 end
 
 function Waitgroup:wait()
