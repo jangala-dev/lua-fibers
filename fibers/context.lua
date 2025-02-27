@@ -85,10 +85,16 @@ end
 -- @param any value The value to add.
 -- @return Context The new context.
 local function with_value(parent, key, value)
-    local ctx = setmetatable({
-        children = {},
-        values = setmetatable({[key] = value}, {__index = parent.values})
-    }, Context)
+    local ctx
+    if parent.cancel then
+        ctx = with_cancel(parent)
+        ctx.values[key] = value
+    else
+        ctx = setmetatable({
+            children = {},
+            values = setmetatable({[key] = value}, {__index = parent.values})
+        }, Context)
+    end
     return ctx
 end
 

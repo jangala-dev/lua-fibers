@@ -79,6 +79,18 @@ local function test_custom_cause()
     print("test_custom_cause passed")
 end
 
+local function test_cancel_on_with_value()
+    local parent = context.background()
+    local ctx, cancel = context.with_cancel(parent)
+    local ctx_2, _ = context.with_value(ctx, "key", "value")
+
+    cancel('cancelled')
+
+    assert(ctx:err() == 'cancelled', "Context should have cancel cause")
+    assert(ctx_2:err() == 'cancelled', "Child context should have cancel cause")
+    assert(ctx_2:value('key') == 'value', "Child context should have the value")
+end
+
 -- Run all tests
 fiber.spawn(function()
     test_background()
@@ -86,6 +98,7 @@ fiber.spawn(function()
     test_with_value()
     test_with_timeout()
     test_custom_cause()
+    test_cancel_on_with_value()
 
     print("All tests passed")
     fiber.stop()
