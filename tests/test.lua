@@ -4,25 +4,26 @@ package.path = package.path .. ';/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua'
 local sep = '-'
 
 local modules = {
-    {'utils','ring_buffer'},
-    {'utils','string_buffer'},
-    {'stream'},
-    {'stream','file'},
-    {'stream','mem'},
-    {'stream','compat'},
-    {'stream','socket'},
-    {'timer'},
-    {'sched'},
-    {'fiber'},
-    {'channel'},
-    {'queue'},
-    {'cond'},
-    {'sleep'},
-    {'epoll'},
-    {'pollio'},
-    {'exec'},
-    {'waitgroup'},
-    {'alarm'}
+    -- {'utils','ring_buffer'},
+    -- {'utils','string_buffer'},
+    -- {'stream'},
+    -- {'stream','file'},
+    -- {'stream','mem'},
+    -- {'stream','compat'},
+    -- {'stream','socket'},
+    -- {'timer'},
+    -- {'sched'},
+    -- {'fiber'},
+    -- {'channel'},
+    -- {'queue'},
+    -- {'cond'},
+    -- {'sleep'},
+    -- {'epoll'},
+    -- {'pollio'},
+    -- {'exec'},
+    -- {'waitgroup'},
+    -- { 'alarm' },
+    { 'context' }
 }
 
 for _, j in ipairs(modules) do
