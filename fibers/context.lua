@@ -1,129 +1,185 @@
---- A Lua context library for managing hierarchies of fibers with cancellation, deadlines, and values.
--- This library provides a way to create and manage context objects, similar to the context package in Go.
--- Each context can carry a set of key-value pairs (values), a cancellation signal, and a deadline.
--- Children contexts can be derived from a parent context, inheriting and extending its values.
+--- A Lua context library for managing hierarchies of fibers with
+--- cancellation, deadlines, and values.
+--- This version more closely follows Go's context pattern:
+---   - Only cancellation contexts (from with_cancel, with_deadline,
+---     with_timeout) trigger cancellation.
+---   - Value contexts merely hold extra keys and defer cancellation to their parent.
+--- Each context is one of:
+---   - base_context: The root logic for value lookup and for deferring .err()
+---     and .done_op() to a parent.
+---   - cancel_context: Extends base_context with a local cancellation cause and
+---     a condition variable for signalling cancellation.
+---   - value_context: Extends base_context with a local key/value, with no local
+---     cancellation.
 -- @module context
 
-local fiber = require 'fibers.fiber'
-local waitgroup = require 'fibers.waitgroup'
-local op = require 'fibers.op'
-local sleep = require 'fibers.sleep'
+local fiber          = require "fibers.fiber"
+local op             = require "fibers.op"
+local cond           = require "fibers.cond"
 
---- Context class.
--- Represents a context in the fiber system.
--- @type Context
-local Context = {}
-Context.__index = Context
+-- ------------------------------------------------------------------------
+-- base_context:
+-- Minimal context that defers cancellation, deadlines and values to its parent.
+-- background() returns a base_context with no parent.
+-- ------------------------------------------------------------------------
+local base_context   = {}
+base_context.__index = base_context
 
---- Creates a new background context.
--- This is the root context for all others; it is never canceled, has no deadline, and carries no values.
--- @return Context A new background context.
-local function background()
-    return setmetatable({
-        values = {},
-        children = {}
-    }, Context)
+--- Create a new base_context with the specified parent.
+--- Typically used internally by derived contexts (cancel_context,
+--- value_context).
+-- @param parent The parent context.
+-- @return A new base_context.
+function base_context:new(parent)
+    local ctx = setmetatable({ parent = parent, children = {} }, self)
+    if parent then table.insert(parent.children, ctx) end
+    return ctx
 end
 
---- Creates a new context with cancellation, derived from a parent context.
--- @param Context parent The parent context from which to derive the new context.
--- @return Context The new context.
--- @return function Cancellation function.
-local function with_cancel(parent)
-    local wg = waitgroup.new()
-    wg:add(1)
-    local ctx = setmetatable({
-        wg = wg,
-        children = {},
-        -- Creates a new table that inherits from 'parent.values', enabling access to parent's values + overriding.
-        values = setmetatable({}, {__index = parent.values})
-    }, Context)
-
-    function ctx:cancel(cause)
-        if self.cause then return end
-        if not cause then cause = "canceled" end
-        self.cause = cause
-        wg:done()
-        for _, child in ipairs(self.children) do
-            if child.cancel then child:cancel(cause) end
-        end
+--- Returns an op that completes when this context is done.
+--- For a background context (no parent), the op never completes.
+function base_context:done_op()
+    if self.parent then
+        return self.parent:done_op()
+    else
+        -- Background context: never cancelled, so done_op never completes.
+        return op.new_base_op(nil, function() return false end, function() end)
     end
+end
 
-    table.insert(parent.children, ctx)
+--- Returns any cancellation cause if known.
+--- If none exists, defers to the parent.
+-- @return The cancellation cause or nil.
+function base_context:err()
+    return self.parent and self.parent:err() or nil
+end
 
+--- Lookup a value in this context.
+--- By default, the lookup defers to the parent.
+-- @param key The key to look up.
+-- @return The associated value, or nil.
+function base_context:value(key)
+    return self.parent and self.parent:value(key) or nil
+end
+
+-- ------------------------------------------------------------------------
+-- cancel_context:
+-- A context that can be cancelled locally or via its parent.
+-- It uses a condition variable to signal cancellation.
+-- ------------------------------------------------------------------------
+local cancel_context = {}
+cancel_context.__index = cancel_context
+setmetatable(cancel_context, { __index = base_context })
+
+--- Create a new cancel_context with the specified parent.
+--- This arranges for the child's cancellation if the parent is cancelled.
+-- @param parent The parent context.
+-- @return A new cancel_context.
+function cancel_context:new(parent)
+    local base = base_context.new(self, parent)
+    base.cond = cond.new() -- condition variable for signalling cancellation
+    base.cause = nil       -- local cancellation cause
+    return base
+end
+
+--- Cancel this context with an optional cause.
+--- If no cause is provided, "canceled" is used.
+-- @param cause The cancellation reason.
+function cancel_context:cancel(cause)
+    if self.cause then return end
+    self.cause = cause or "canceled"
+    self.cond:signal() -- signal cancellation to waiters
+    for _, child in ipairs(self.children) do
+        if child.cancel then child:cancel(cause) end
+    end
+end
+
+--- Returns an op that completes when this context is cancelled.
+--- This op is a choice between the parent's done op and the local cond wait op.
+function cancel_context:done_op()
+    local local_op = self.cond:wait_op()
+    if self.parent then
+        return op.choice(self.parent:done_op(), local_op)
+    else
+        return local_op
+    end
+end
+
+--- Overridden err() that checks for a local cancellation cause.
+function cancel_context:err()
+    return self.cause or (self.parent and self.parent:err() or nil)
+end
+
+-- ------------------------------------------------------------------------
+-- value_context:
+-- A simple context that stores one additional key/value pair.
+-- It defers all cancellation to the parent.
+-- ------------------------------------------------------------------------
+local value_context = {}
+value_context.__index = value_context
+setmetatable(value_context, { __index = base_context })
+
+--- Create a new value_context with the specified parent, key and value.
+function value_context:new(parent, key, val)
+    local ctx = base_context.new(self, parent)
+    ctx.key, ctx.val = key, val
+    return ctx
+end
+
+--- Lookup a value in this context.
+--- If the key matches this context's key, its value is returned;
+--- otherwise, the lookup defers to the parent.
+-- @param k The key to look up.
+-- @return The associated value, or nil.
+function value_context:value(k)
+    return k == self.key and self.val or base_context.value(self, k)
+end
+
+-- ------------------------------------------------------------------------
+-- Top-level functions for external use.
+-- ------------------------------------------------------------------------
+
+--- The root context that is never cancelled and holds no values.
+-- @return A new background context.
+local function background()
+    return setmetatable({ parent = nil, children = {} }, base_context)
+end
+
+--- Returns a child cancel_context and a cancellation function.
+-- @param The parent context.
+-- @return The new cancel_context and a function to cancel it.
+local function with_cancel(parent)
+    local ctx = cancel_context:new(parent)
     return ctx, function(cause) ctx:cancel(cause) end
 end
 
---- Creates a new context with a deadline.
--- The context will be canceled automatically when the deadline is exceeded.
--- @param Context parent The parent context.
--- @param number deadline The time at which to cancel the context.
--- @return Context The new context.
--- @return function Cancellation function.
+--- Returns a cancel_context that is automatically cancelled when the specified deadline is reached.
+-- @param The parent context.
+-- @param The deadline at which the context will be cancelled.
+-- @return The new with_deadline_context and a function to cancel it.
 local function with_deadline(parent, deadline)
-    local ctx, cancel = with_cancel(parent)
-    fiber.spawn(function()
-        sleep.sleep_until(deadline)
-        ctx:cancel("deadline_exceeded")
-    end)
-    return ctx, cancel
+    local ctx, cancel_fn = with_cancel(parent)
+    fiber.current_scheduler:schedule_at_time(deadline, { run = function() ctx:cancel("deadline_exceeded") end })
+    return ctx, cancel_fn
 end
 
---- Creates a new context with a timeout.
--- The context will be canceled automatically after the timeout duration.
--- @param parent The parent context.
--- @param timeout The duration in seconds after which to cancel the context.
--- @return Context The new context.
--- @return function Cancellation function.
+--- Returns a cancel_context that is automatically cancelled after timeout seconds.
+-- @param The parent context.
+-- @param The timeout at which the context will be cancelled.
+-- @return The new with_timeout_context and a function to cancel it.
 local function with_timeout(parent, timeout)
     return with_deadline(parent, fiber.now() + timeout)
 end
 
---- Creates a new context with an additional key-value pair.
--- @param Context parent The parent context.
--- @param string key The key for the value to add.
--- @param any value The value to add.
--- @return Context The new context.
-local function with_value(parent, key, value)
-    local ctx
-    if parent.cancel then
-        ctx = with_cancel(parent)
-        ctx.values[key] = value
-    else
-        ctx = setmetatable({
-            children = {},
-            values = setmetatable({[key] = value}, {__index = parent.values})
-        }, Context)
-    end
-    return ctx
-end
-
---- Returns an operation that can be used in `op.choice` to wait for the context to be done.
--- @return function An operation that can be used with `op.choice`.
-function Context:done_op()
-    if not self.wg then
-        return op.new_base_op(nil, function() return true end, nil)
-    end
-    return self.wg:wait_op()
-end
-
---- Accesses a value stored in the context.
--- @param string key The key for the value to retrieve.
--- @return any The value associated with the given key, or nil if not found.
-function Context:value(key)
-    return self.values[key]
-end
-
---- Returns the cause of the cancellation, if any.
--- @return string|nil A string describing the cause of cancellation, or nil if not canceled.
-function Context:err()
-    return self.cause
+--- Returns a value_context that stores a key/value pair.
+local function with_value(parent, key, val)
+    return value_context:new(parent, key, val)
 end
 
 return {
-    background = background,
-    with_cancel = with_cancel,
+    background    = background,
+    with_cancel   = with_cancel,
     with_deadline = with_deadline,
-    with_timeout = with_timeout,
-    with_value = with_value
+    with_timeout  = with_timeout,
+    with_value    = with_value
 }

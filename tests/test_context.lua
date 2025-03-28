@@ -28,7 +28,7 @@ local function test_with_cancel()
     end)
 
     cancel()
-    sleep.sleep(0.01) -- Give time for cancellation to propagate
+    fiber.yield() -- Give time for cancellation to propagate
 
     assert(is_cancelled, "Child context should be cancelled when parent is cancelled")
     print("test_with_cancel passed")
@@ -58,7 +58,7 @@ local function test_with_timeout()
         is_cancelled = true
     end)
 
-    sleep.sleep(0.1) -- Give time for timeout to trigger
+    sleep.sleep(0.02) -- Give time for timeout to trigger
 
     assert(is_cancelled, "Context should be cancelled after timeout")
     print("test_with_timeout passed")
@@ -72,7 +72,7 @@ local function test_custom_cause()
     local custom_cause = "Custom Cancel Reason"
 
     cancel(custom_cause)
-    sleep.sleep(0.1) -- Give time for cancellation to propagate
+    fiber.yield() -- Give time for cancellation to propagate
 
     assert(ctx:err() == custom_cause, "Context should have the custom cancel cause")
     assert(ctx_2:err() == custom_cause, "Child context should have the custom cancel cause")
@@ -83,14 +83,18 @@ local function test_cancel_on_with_value()
     local parent = context.background()
     local ctx, cancel = context.with_cancel(parent)
     local ctx_2, _ = context.with_value(ctx, "key", "value")
+    local ctx_3, _ = context.with_value(ctx_2, "key2", "value2")
 
     cancel('cancelled')
+    fiber.yield() -- Give time for cancellation to propagate
 
     assert(ctx:err() == 'cancelled', "Context should have cancel cause")
     assert(ctx_2:err() == 'cancelled', "Child context should have cancel cause")
     assert(ctx_2:value('key') == 'value', "Child context should have the value")
+    assert(ctx_3:err() == 'cancelled', "Child context should have cancel cause")
+    assert(ctx_3:value('key') == 'value', "Child context should have the value")
+    assert(ctx_3:value('key2') == 'value2', "Child context should have the value")
 end
-
 -- Run all tests
 fiber.spawn(function()
     test_background()
