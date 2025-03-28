@@ -33,6 +33,7 @@ function Epoll:add(s, events)
     local eventmask = bit.bor(events, active, sc.EPOLLONESHOT)
     local ok, _ = sc.epoll_modify(self.epfd, fd, eventmask)
     if not ok then assert(sc.epoll_register(self.epfd, fd, eventmask)) end
+    self.active_events[fd] = eventmask
 end
 
 function Epoll:poll(timeout)

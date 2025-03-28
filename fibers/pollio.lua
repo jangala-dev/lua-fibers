@@ -9,7 +9,7 @@ local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 
 local PollIOHandler = {}
-PollIOHandler. __index = PollIOHandler
+PollIOHandler.__index = PollIOHandler
 
 local function new_poll_io_handler()
     return setmetatable(
@@ -156,7 +156,7 @@ local function uninstall_poll_io_handler()
                 break
             end
         end
-        installed_poll_handler.poll:close()
+        installed_poll_handler.epoll:close()
         installed_poll_handler = nil
     end
 end
