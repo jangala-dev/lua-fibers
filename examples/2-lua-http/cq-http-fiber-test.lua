@@ -1,58 +1,27 @@
 -- inspired by https://gist.github.com/daurnimator/f1c7965b47a5658b88300403645541aa
 
-print("starting lua-http test")
-
 package.path="./?.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua"
 	.. package.path
 package.path = "../../?.lua;../?.lua;" .. package.path
 
+require "fibers_cqueues"
 local fiber = require "fibers.fiber"
-local op = require "fibers.op"
 local pollio = require "fibers.pollio"
 local sleep = require "fibers.sleep"
-local cqueues = require "cqueues"
 local exec = require "fibers.exec"
+local websocket = require "http.websocket"
 
 print("installing poll handler")
 pollio.install_poll_io_handler()
-
-print("installing stream based IO library")
-require 'fibers.stream.compat'.install()
-
-print("overriding cqueues step")
-local old_step; old_step = cqueues.interpose("step", function(self, timeout)
-	if cqueues.running() then
-		fiber.yield()
-		return old_step(self, timeout)
-	else
-		-- local t = self:timeout() or math.huge
-		-- if timeout then
-		-- 	t = math.min(t, timeout)
-		-- end
-        local events = self:events()
-        -- messy
-        if events == 'r' then
-            pollio.fd_readable_op(self:pollfd()):perform()
-        elseif events == 'w' then
-            pollio.fd_writable_op(self:pollfd()):perform()
-        elseif events == 'rw' then
-            op.choice(
-                pollio.fd_readable_op(self:pollfd()),
-                pollio.fd_writable_op(self:pollfd())
-            ):perform()
-        end
-		return old_step(self, 0.0)
-	end
-end)
 
 local http_headers = require "http.headers"
 local http_server = require "http.server"
 local http_util = require "http.util"
 
-local function reply(myserver, stream) -- luacheck: ignore 212
+local function reply(_, stream) -- luacheck: ignore 212
 	-- Read in headers
 	local req_headers = assert(stream:get_headers())
-	local req_method = req_headers:get ":method"
+	local req_method = req_headers:get(":method")
 
 	-- Log request to stdout
 	assert(io.stdout:write(string.format('[%s] "%s %s HTTP/%g"  "%s" "%s"\n',
@@ -94,7 +63,6 @@ local myserver = assert(http_server.listen {
 print("overriding server's 'add_stream' method")
 function myserver:add_stream(stream)
 	fiber.spawn(function()
-		fiber.yield() -- want to be called from main loop; not from :add_stream callee
 		local ok, err = http_util.yieldable_pcall(self.onstream, self, stream)
 		stream:shutdown()
 		if not ok then
@@ -131,7 +99,20 @@ fiber.spawn(function()
 	   local received = stdout_pipe:read_line()
 	   print(received)
 	end
+end)
 
+-- Why not throw in some websockets?
+fiber.spawn(function()
+	local ws = websocket.new_from_uri("wss://ws.kraken.com")
+	assert(ws:connect())
+	local subscribe_message = [[ { "event": "subscribe", "subscription": { "name": "ticker" }, "pair": ["XBT/USD"]} ]]
+	assert(ws:send(subscribe_message))
+	for i = 1, 1000 do
+		local message = assert(ws:receive())
+		if #message ~= 21 then print(message) end
+	end
+
+	assert(ws:close())
 end)
 
 print("starting fibers")
