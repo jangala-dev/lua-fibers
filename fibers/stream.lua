@@ -297,7 +297,13 @@ end
 -- @return operation
 function Stream:read_chars_op(count)
     local buf = ffi.new('uint8_t[?]', count)
-    return self:read_bytes_op(buf, count):wrap(function(ret_buf, cnt, err) return ffi.string(ret_buf, cnt), err  end)
+    return self:read_bytes_op(buf, count):wrap(function(ret_buf, cnt, err)
+        if cnt == 0 then
+            return nil, err
+        else
+            return ffi.string(ret_buf, cnt), err
+        end
+    end)
 end
 
 --- Read a specified number of characters from the stream.
