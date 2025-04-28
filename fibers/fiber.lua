@@ -42,11 +42,11 @@ end
 --- Resumes execution of the fiber.
 -- If the fiber is already dead, this will throw an error.
 -- @tparam vararg ... The arguments to pass to the fiber.
-function Fiber:resume(...)
+function Fiber:resume(wrap, ...)
     assert(self.alive, "dead fiber")                     -- checks that the fiber is alive
     local saved_current_fiber = current_fiber            -- shift the old current fiber into a safe place
     current_fiber = self                                 -- we are the new current fiber
-    local ok, err = coroutine.resume(self.coroutine, ...) -- rev up our coroutine
+    local ok, err = coroutine.resume(self.coroutine, wrap, ...) -- rev up our coroutine
     -- current_fiber = saved_current_fiber the KEY bit, we only get here when the coroutine above has yielded,
     -- but we then pop back in the fiber we previously displaced
     current_fiber = saved_current_fiber
