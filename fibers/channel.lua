@@ -5,21 +5,7 @@
 -- @module fibers.channel
 
 local op = require 'fibers.op'
-
-local Fifo = {}
-Fifo.__index = Fifo
-local function new_fifo() return setmetatable({}, Fifo) end
-function Fifo:push(x) table.insert(self, x) end
-
-function Fifo:empty() return #self == 0 end
-
-function Fifo:peek()
-    assert(not self:empty()); return self[1]
-end
-
-function Fifo:pop()
-    assert(not self:empty()); return table.remove(self, 1)
-end
+local fifo = require 'fibers.utils.fifo'
 
 --- Channel class
 -- Represents a communication channel between fibers.
@@ -30,7 +16,7 @@ local Channel = {}
 -- @treturn Channel The created Channel.
 local function new()
     return setmetatable(
-        { getq = new_fifo(), putq = new_fifo() },
+        { getq = fifo.new(), putq = fifo.new() },
         { __index = Channel })
 end
 

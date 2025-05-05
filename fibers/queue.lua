@@ -7,6 +7,7 @@
 local op = require 'fibers.op'
 local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
+local fifo = require 'fibers.utils.fifo'
 
 --- Queue class
 -- Represents a queue for communication between fibers.
@@ -20,25 +21,25 @@ local function new(bound)
     if bound then assert(bound >= 1) end
     local ch_in, ch_out = channel.new(), channel.new()
     local function service_queue()
-        local q = {}
+        local q = fifo.new()
         while true do
-            if #q == 0 then
+            if q:empty() then
                 -- Empty.
-                table.insert(q, ch_in:get())
-            elseif bound and #q >= bound then
+                q:push(ch_in:get())
+            elseif bound and q:length() >= bound then
                 -- Full.
-                ch_out:put(q[1])
-                table.remove(q, 1)
+                ch_out:put(q:pop())
             else
+                local is_put = false
                 local getop = ch_in:get_op()
-                local putop = ch_out:put_op(q[1])
+                local putop = ch_out:put_op(q:peek()):wrap(function() is_put = true end)
                 local val = op.choice(getop, putop):perform()
-                if val == nil then
+                if is_put then
                     -- Put operation succeeded.
-                    table.remove(q, 1)
+                    q:pop()
                 else
                     -- Get operation succeeded.
-                    table.insert(q, val)
+                    q:push(val)
                 end
             end
         end
@@ -46,7 +47,6 @@ local function new(bound)
     fiber.spawn(service_queue)
     local ret = {}
     function ret:put_op(x)
-        assert(x ~= nil)
         return ch_in:put_op(x)
     end
 
