@@ -83,6 +83,7 @@ function Cmd:launch(path, argt)
 
     self.process.pid = assert(sc.fork())
     if self.process.pid == 0 then -- child
+        sc.prctl(sc.PR_SET_PDEATHSIG, sc.SIGKILL) -- Die if parent exits
         if self._setpgid then
             local result, err_msg = sc.setpid('p', 0, 0)
             assert(result==0, err_msg)

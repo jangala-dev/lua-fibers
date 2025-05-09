@@ -186,6 +186,7 @@ function M.floatsleep(t)
 end
 
 local function wrap_error(retval)
+
     if retval >= 0 then
         return retval
     else
@@ -453,4 +454,17 @@ function M.pidfd_open(pid, flags)
     return wrap_error(ffi.tonumber(ffi.C.syscall(SYS_pidfd_open, pid, flags)))
 end
 
+-- prctl section
+ffi.cdef [[
+int prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5);
+]]
+
+M.PR_SET_PDEATHSIG = 1
+
+function M.prctl(option, arg2, arg3, arg4, arg5)
+    arg3 = arg3 or 0
+    arg4 = arg4 or 0
+    arg5 = arg5 or 0
+    return wrap_error(ffi.C.prctl(option, arg2, arg3, arg4, arg5))
+end
 return M
