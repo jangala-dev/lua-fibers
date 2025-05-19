@@ -160,6 +160,7 @@ function AlarmHandler:block(time_to_start, t, task)
 end
 
 function AlarmHandler:clock_synced()
+    if self.realtime then return end
     self.realtime = true
     local now = sc.realtime()
     -- Process buffered absolute tasks
