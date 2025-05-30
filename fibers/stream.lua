@@ -50,6 +50,21 @@ function Stream:nonblock() self.io:nonblock() end
 --- Set the stream to blocking mode.
 function Stream:block() self.io:block() end
 
+-- Extend a C array by at least 'extension' bytes
+-- @param arr C array to extend
+-- @param size current used portion of C array
+-- @param extension intended extra portion of C array to be used
+-- @return arr extended C array
+local function extend(arr, size, extension)
+    if size + extension > ffi.sizeof(arr) then
+        local new_size = math.max(ffi.sizeof(arr) * 2, size + extension)
+        local new_buf = ffi.new('uint8_t[?]', new_size)
+        ffi.copy(new_buf, arr, size) -- Copy existing data to new buffer
+        arr = new_buf
+    end
+
+    return arr
+end
 local function core_write_op(stream, buf, count, flush_needed)
     buf = ffi.cast('uint8_t*', buf)
     local tally = 0
@@ -121,46 +136,19 @@ function Stream:reset_partial_write()
     self._part_write = nil
 end
 
-function Stream:write_bytes_op(buf, count)
-    return core_write_op(self, buf, count)
-end
-
---- Write a sequence of bytes to the stream.
--- @param buf pointer to data buffer
--- @param count number of bytes to write
--- @return number of bytes written
--- @return error encountered during the write
-function Stream:write_bytes(buf, count)
-    return self:write_bytes_op(buf, count):perform()
-end
-
-function Stream:write_chars_op(n)
-    return self:write_bytes_op(ffi.cast('uint8_t*', n), #n)
+function Stream:write_chars_op(str)
+    local buf = ffi.cast('uint8_t*', str)
+    return core_write_op(self, buf, #str)
 end
 
 --- Write a string to the stream.
 -- @param n string to write
 -- @return number of bytes written
 -- @return error encountered during the write
-function Stream:write_chars(n)
-    return self:write_chars_op(n):perform()
+function Stream:write_chars(str)
+    return self:write_chars_op(str):perform()
 end
 
--- Extend a C array by at least 'extension' bytes
--- @param arr C array to extend
--- @param size current used portion of C array
--- @param extension intended extra portion of C array to be used
--- @return arr extended C array
-local function extend(arr, size, extension)
-    if size + extension > ffi.sizeof(arr) then
-        local new_size = math.max(ffi.sizeof(arr) * 2, size + extension)
-        local new_buf = ffi.new('uint8_t[?]', new_size)
-        ffi.copy(new_buf, arr, size) -- Copy existing data to new buffer
-        arr = new_buf
-    end
-
-    return arr
-end
 local function core_read_op(stream, buf, min, max, terminator)
     local tally = 0
     local function find_terminator()
@@ -232,81 +220,14 @@ function Stream:reset_partial_read()
     self._part_read = nil
 end
 
---- Operation to read a specified number of bytes from the stream.
--- @param buf The buffer to store the read data.
--- @param count The number of bytes to read.
--- @return operation
-function Stream:read_bytes_op(buf, count)
-    return core_read_op(self, buf, count, count):wrap(function(ret_buf, cnt, err) return ret_buf, cnt, err end)
-end
-
---- Read a specified number of bytes from the stream.
--- This function blocks until the exact number of bytes is read or the stream is closed.
--- @param buf The buffer to store the read data.
--- @param count The number of bytes to read.
--- @return the buffer
--- @return the number of bytes read
--- @return error during read, if any
-function Stream:read_bytes(buf, count)
-    return self:read_bytes_op(buf, count):perform()
-end
-
---- Operation to read up to a specified number of bytes from the stream.
--- @param buf The buffer to store the read data.
--- @param count The number of bytes to read.
--- @return operation
-function Stream:read_some_bytes_op(buf, count)
-    return core_read_op(self, buf, 1, count):wrap(function(_, cnt, err) return cnt, err end)
-end
-
---- Read up to a specified number of bytes from the stream.
--- @param buf buffer to read into
--- @param count maximum number of bytes to read
--- @return number of bytes read
--- @return error during read, if any
-function Stream:read_some_bytes(buf, count)
-    return self:read_some_bytes_op(buf, count):perform()
-end
-
---- Operation to read all bytes from the stream into a buffer.
--- @return operation
-function Stream:read_all_bytes_op()
-    local buf = ffi.new('uint8_t[?]', self.rx.size)
-    return self:read_bytes_op(buf, math.huge)
-end
-
---- Read all bytes from the stream into a buffer.
--- @return buffer containing all read bytes
--- @return error during read, if any
-function Stream:read_all_bytes()
-    return self:read_all_bytes_op():perform()
-end
-
---- Operation to read all bytes from the stream into a buffer.
--- @return operation
-function Stream:read_byte_op()
-    local buf = ffi.new('uint8_t[?]', 1)
-    return core_read_op(self, buf, 1, 1):wrap(function(_, cnt, err) return cnt==1 and buf[0] or nil, err end)
-end
-
---- Read a single byte from the stream.
--- @return the byte read, or nil if at end of file
--- @return error during read, if any
-function Stream:read_byte()
-    return self:read_byte_op():perform()
-end
-
 --- Operation to read a specified number of characters from the stream.
 -- @param count number of characters to read
 -- @return operation
 function Stream:read_chars_op(count)
     local buf = ffi.new('uint8_t[?]', count)
-    return self:read_bytes_op(buf, count):wrap(function(ret_buf, cnt, err)
-        if cnt == 0 then
-            return nil, err
-        else
-            return ffi.string(ret_buf, cnt), err
-        end
+    return core_read_op(self, buf, count, count):wrap(function(ret_buf, cnt, err)
+        if cnt == 0 then return nil, err end
+        return ffi.string(ret_buf, cnt), err
     end)
 end
 
@@ -324,9 +245,9 @@ end
 function Stream:read_some_chars_op(count)
     if count == nil then count = self.rx.size end
     local buf = ffi.new('uint8_t[?]', count)
-    return core_read_op(self, buf, 1, count):wrap(
-        function(ret_buf, cnt, err) return cnt > 0 and ffi.string(ret_buf, cnt) or nil, err end
-    )
+    return core_read_op(self, buf, 1, count):wrap(function(ret_buf, cnt, err)
+        return cnt > 0 and ffi.string(ret_buf, cnt) or nil, err
+    end)
 end
 
 --- Read up to a specified number of characters from the stream.
@@ -340,7 +261,10 @@ end
 --- Operation to read all characters from the stream.
 -- @return operation
 function Stream:read_all_chars_op()
-    return self:read_all_bytes_op():wrap(function(buf, cnt, err) return ffi.string(buf, cnt), err end)
+    local buf = ffi.new('uint8_t[?]', self.rx.size)
+    return core_read_op(self, buf, math.huge, math.huge):wrap(function(buf, cnt, err)
+        return ffi.string(buf, cnt), err
+    end)
 end
 
 --- Read all characters from the stream.
@@ -353,7 +277,10 @@ end
 --- Operation to read a single character from the stream.
 -- @return operation
 function Stream:read_char_op()
-    return self:read_byte_op():wrap(function(byte) return byte and string.char(byte) or nil end)
+    local buf = ffi.new('uint8_t[?]', 1)
+    return core_read_op(self, buf, 1, 1):wrap(function(_, cnt, err)
+        return cnt == 1 and string.char(buf[0]) or nil, err
+    end)
 end
 
 --- Read a single character from the stream.
@@ -369,9 +296,10 @@ end
 function Stream:read_line_op(style)
     style = style or 'discard'
     local buf = ffi.new('uint8_t[?]', self.rx.size)
-    return core_read_op(self, buf, math.huge, math.huge, "\n"):wrap(
-        function(ret_buf, cnt) return cnt>0 and ffi.string(ret_buf, style=='keep' and cnt or cnt-1) or nil end
-    )
+    return core_read_op(self, buf, math.huge, math.huge, "\n"):wrap(function(ret_buf, cnt)
+        if cnt == 0 then return nil end
+        return ffi.string(ret_buf, style == 'keep' and cnt or cnt - 1)
+    end)
 end
 
 --- Read a line from the stream.
@@ -440,24 +368,14 @@ function Stream:read_op(...)
     if #args > 1 then error('multiple formats unimplemented') end
     local format = args[1]
     if format == '*n' then
-        -- "*n": reads a number; this is the only format that returns a
-        -- number instead of a string.
         error('read numbers unimplemented')
     elseif format == '*a' then
-        -- "*a": reads the whole file, starting at the current
-        -- position. On end of file, it returns the empty string.
         return self:read_all_chars_op()
     elseif format == '*l' then
-        -- "*l": reads the next line (skipping the end of line), returning
-        -- nil on end of file.
         return self:read_line_op('discard')
     elseif format == '*L' then
-        -- "*L": reads the next line keeping the end of line (if present),
-        -- returning nil on end of file.  (Lua 5.2, present in LuaJIT.)
         return self:read_line_op('keep')
     else
-        -- /number/: reads a string with up to this number of characters,
-        -- returning nil on end of file.
         assert(type(format) == 'number' and format > 0, 'bad format')
         local number = format
         return self:read_chars_op(number)
@@ -497,21 +415,12 @@ function Stream:seek(whence, offset)
     return self.io:seek(whence, offset)
 end
 
-local function transfer_buffered_bytes(old, new)
-    while old:read_avail() > 0 do
-        local buf, count = old:peek()
-        new:write(buf, count)
-        old:advance_read(count)
-    end
-end
-
 --- Set the buffering mode for the stream.
 -- Adjusts the buffering strategy for the stream's input and output.
 -- @param mode The buffering mode: 'no', 'line', or 'full'.
 -- @param size The size of the buffer, in bytes. Defaults to DEFAULT_BUFFER_SIZE if not specified.
 -- @return The stream object.
 function Stream:setvbuf(mode, size)
-    -- Sets the buffering mode for an output file.
     if mode == 'no' then
         self.line_buffering, size = false, 1
     elseif mode == 'line' then
@@ -522,22 +431,31 @@ function Stream:setvbuf(mode, size)
         error('bad mode', mode)
     end
 
-    if size == nil then size = DEFAULT_BUFFER_SIZE end
+    size = size or DEFAULT_BUFFER_SIZE
+
+    local function transfer_buffered_bytes(old, new)
+        while old:read_avail() > 0 do
+            local buf, count = old:peek()
+            new:write(buf, count)
+            old:advance_read(count)
+        end
+    end
     if self.rx and self.rx.size ~= size then
         if self.rx:read_avail() > size then
-            error('existing buffered input is too much for new buffer size')
+            error('existing buffered input exceeds new buffer size')
         end
         local new_rx = buffer.new(size)
         transfer_buffered_bytes(self.rx, new_rx)
         self.rx = new_rx
     end
+
     if self.tx and self.tx.size ~= size then
-        -- Note >= rather than > as we never leave tx buffers full.
         while self.tx:read_avail() >= size do self:flush() end
         local new_tx = buffer.new(size)
         transfer_buffered_bytes(self.tx, new_tx)
         self.tx = new_tx
     end
+
     return self
 end
 
