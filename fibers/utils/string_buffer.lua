@@ -32,13 +32,13 @@ function str_buffer:string()
 end
 
 function str_buffer:write(data)
-    if not data then return end
+    assert(type(data) == "string", "write requires a string")
+    if #data == 0 then return end
     local len = #data
-
-    if self.buf:write_avail() < len then
-        self:grow(len - self.buf:write_avail())
+    local avail = self.buf:write_avail()
+    if avail < len then
+        self:grow(len - avail)
     end
-
     local cdata = ffi.new("uint8_t[?]", len)
     ffi.copy(cdata, data, len)
     self.buf:write(cdata, len)
@@ -53,12 +53,16 @@ end
 
 function str_buffer:read(n)
     local count = n or self.buf:read_avail()
+    assert(count >= 0, "read: negative count")
+    assert(count <= self.buf:read_avail(), "read: buffer underflow")
     local buffer = ffi.new('uint8_t[?]', count)
     self.buf:read(buffer, count)
     return ffi.string(buffer, count)
 end
 
 function str_buffer:next(n)
+    assert(n >= 0, "next: negative count")
+    assert(n <= self.buf:read_avail(), "next: buffer underflow")
     local buffer = ffi.new('uint8_t[?]', n)
     self.buf:read(buffer, n)
     return ffi.string(buffer, n)
@@ -69,26 +73,23 @@ function str_buffer:unread_char()
 end
 
 function str_buffer:grow(n)
-    if n < 0 then
-        error("str_buffer: negative count")
-    end
+    assert(n >= 0, "grow: negative count")
 
     local new_size = self:cap() + n
-    -- Round up to the nearest power of 2 for efficiency.
     local power = 1
-    while power < new_size do
-        power = power * 2
-    end
+    while power < new_size do power = power * 2 end
     new_size = power
 
     local new_buf = ring_buffer.new(new_size)
 
-    -- Handle wrap around
-    local first_chunk_len = math.min(self.buf:read_avail(), self.buf.size - self.buf:read_pos())
-    local second_chunk_len = self.buf:read_avail() - first_chunk_len
+    local read_pos = self.buf:read_pos()
+    local read_avail = self.buf:read_avail()
+    local first_chunk_len = math.min(read_avail, self.buf.size - read_pos)
+    local second_chunk_len = read_avail - first_chunk_len
 
-    -- Copy from old buffer to the new buffer in two steps if wrapped around
-    new_buf:write(self.buf.buf + self.buf:read_pos(), first_chunk_len)
+    assert(new_buf:write_avail() >= read_avail, "new buffer too small")
+
+    new_buf:write(self.buf.buf + read_pos, first_chunk_len)
     if second_chunk_len > 0 then
         new_buf:write(self.buf.buf, second_chunk_len)
     end
