@@ -2,7 +2,6 @@
 
 -- Ring buffer for bytes
 
--- detect LuaJIT (removing dependency on utils.syscall)
 local is_LuaJIT = rawget(_G, "jit") and true or false
 
 local bit = rawget(_G, "bit") or require 'bit32'
@@ -11,23 +10,26 @@ local ffi = is_LuaJIT and require 'ffi' or require 'cffi'
 local band = bit.band
 
 ffi.cdef [[
-   typedef struct {
-      uint32_t read_idx, write_idx;
-      uint32_t size;
-      uint8_t buf[?];
-   } buffer_t;
+    typedef struct {
+        uint32_t read_idx, write_idx;
+        uint32_t size;
+        uint32_t _pad;               // force 8-byte alignment
+        uint8_t buf[?];
+    } buffer_t;
 ]]
 
 local function to_uint32(n)
-    return n % 2 ^ 32
+    return band(n, 0xffffffff)
 end
 
 local buffer = {}
 buffer.__index = buffer
 
 function buffer:init(size)
-    assert(size ~= 0 and band(size, size - 1) == 0, "size not power of two")
+    assert(type(size) == "number" and size > 0, "size must be positive integer")
+    assert(band(size, size - 1) == 0, "size must be power of two")
     self.size = size
+    self:reset()
     return self
 end
 
@@ -64,41 +66,66 @@ function buffer:read_pos()
 end
 
 function buffer:advance_write(count)
-    self.write_idx = self.write_idx + ffi.cast("uint32_t", count)
+    assert(type(count) == "number" and count >= 0, "advance_write requires non-negative count")
+    assert(count <= self:write_avail(), "advance_write out of range")
+    self.write_idx = to_uint32(self.write_idx + count)
 end
 
 function buffer:advance_read(count)
-    self.read_idx = self.read_idx + ffi.cast("uint32_t", count)
+    assert(type(count) == "number" and count >= 0, "advance_read requires non-negative count")
+    assert(count <= self:read_avail(), "advance_read out of range")
+    self.read_idx = to_uint32(self.read_idx + count)
 end
 
+function buffer:unadvance_read(count)
+    assert(count >= 0 and to_uint32(count) <= self.read_idx, "unadvance_read out of range")
+    self.read_idx = to_uint32(self.read_idx - count)
+end
 function buffer:write(bytes, count)
-    if count > self:write_avail() then error('write xrun') end
+    assert(count and count >= 0, "invalid write count")
+    assert(count <= self:write_avail(), 'write xrun')
     local pos = self:write_pos()
     local count1 = math.min(self.size - pos, count)
-    ffi.copy(self.buf + pos, bytes, count1)
-    ffi.copy(self.buf, bytes + count1, count - count1)
+    if count1 > 0 then
+        ffi.copy(self.buf + pos, bytes, count1)
+    end
+    if count > count1 then
+        ffi.copy(self.buf, bytes + count1, count - count1)
+    end
     self:advance_write(count)
 end
 
 function buffer:rewrite(offset, bytes, count)
-    if offset + count > self:read_avail() then error('rewrite xrun') end
+    assert(type(offset) == "number" and offset >= 0, "invalid offset")
+    assert(count and count >= 0, "invalid count")
+    assert(offset + count <= self:read_avail(), 'rewrite xrun')
     local pos = self:rewrite_pos(offset)
     local count1 = math.min(self.size - pos, count)
-    ffi.copy(self.buf + pos, bytes, count1)
-    ffi.copy(self.buf, bytes + count1, count - count1)
+    if count1 > 0 then
+        ffi.copy(self.buf + pos, bytes, count1)
+    end
+    if count > count1 then
+        ffi.copy(self.buf, bytes + count1, count - count1)
+    end
 end
 
 function buffer:read(bytes, count)
-    if count > self:read_avail() then error('read xrun') end
+    assert(count and count >= 0, "invalid read count")
+    assert(count <= self:read_avail(), 'read xrun')
     local pos = self:read_pos()
     local count1 = math.min(self.size - pos, count)
-    ffi.copy(bytes, self.buf + pos, count1)
-    ffi.copy(bytes + count1, self.buf, count - count1)
+    if count1 > 0 then
+        ffi.copy(bytes, self.buf + pos, count1)
+    end
+    if count > count1 then
+        ffi.copy(bytes + count1, self.buf, count - count1)
+    end
     self:advance_read(count)
 end
 
 function buffer:drop(count)
-    if count > self:read_avail() then error('read xrun') end
+    assert(count and count >= 0, "invalid drop count")
+    assert(count <= self:read_avail(), 'drop xrun')
     self:advance_read(count)
 end
 
@@ -113,29 +140,27 @@ function buffer:tail()
 end
 
 function buffer:tostring()
-    local original_read_idx = self.read_idx  -- Store original read index
+    local original_read_idx = self.read_idx
     local size = self:read_avail()
     if size == 0 then return "" end
-
     local data = ffi.new("uint8_t[?]", size)
     self:read(data, size)
-    self.read_idx = original_read_idx  -- Restore original read index
-    local buf_string = ffi.string(data, size)
-    return buf_string
+    self.read_idx = original_read_idx
+    return ffi.string(data, size)
 end
 
 function buffer:find(pattern)
+    assert(type(pattern) == "string" and #pattern > 0, "find requires non-empty string")
     local buf_string = self:tostring()
     local found_at = string.find(buf_string, pattern)
-    found_at = found_at and found_at-1
-    return found_at
+    return found_at and (found_at - 1) or nil
 end
 
 function buffer:find_string(s)
+    assert(type(s) == "string" and #s > 0, "find_string requires non-empty string")
     local len = #s
     local end_idx = self:read_avail()
-    if end_idx < len then return nil end -- Not enough data to contain 's'
-
+    if end_idx < len then return nil end
     for i = 0, end_idx - len do
         local found = true
         for j = 1, len do
@@ -145,21 +170,16 @@ function buffer:find_string(s)
                 break
             end
         end
-        if found then
-            return i
-        end
+        if found then return i end
     end
-
-    return nil -- String not found
+    return nil
 end
-
 
 local buffer_t = ffi.metatype("buffer_t", buffer)
 
 local function new(size)
-    local ret = buffer_t(size)
-    ret:init(size)
-    return ret
+    assert(type(size) == "number" and size > 0, "new() requires a positive size")
+    return buffer_t(size):init(size)
 end
 
 return {
