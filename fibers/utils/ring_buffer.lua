@@ -77,6 +77,10 @@ function buffer:advance_read(count)
     self.read_idx = to_uint32(self.read_idx + count)
 end
 
+function buffer:unadvance_read(count)
+    assert(count >= 0 and to_uint32(count) <= self.read_idx, "unadvance_read out of range")
+    self.read_idx = to_uint32(self.read_idx - count)
+end
 function buffer:write(bytes, count)
     assert(count and count >= 0, "invalid write count")
     assert(count <= self:write_avail(), 'write xrun')

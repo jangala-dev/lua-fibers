@@ -65,8 +65,7 @@ function str_buffer:next(n)
 end
 
 function str_buffer:unread_char()
-    -- for simplicity, we'll just advance the read index backward by 1
-    self.buf:advance_read(-1)
+    return self.buf:unadvance_read(1)
 end
 
 function str_buffer:grow(n)
