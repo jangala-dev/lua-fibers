@@ -4,6 +4,7 @@ package.path = package.path .. ';/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua'
 local sep = '-'
 
 local modules = {
+    { 'utils',    'fixed_buffer' },
     { 'stream' },
     { 'stream',   'file' },
     { 'stream',   'mem' },

@@ -3,7 +3,7 @@ print('testing: fibers.utils.fixed_buffer')
 
 package.path = "../?.lua;" .. package.path
 
-local buffer = require 'fibers.utils.ring_buffer' -- This now refers to your new fixed_buffer
+local buffer = require 'fibers.utils.fixed_buffer'
 local sc = require 'fibers.utils.syscall'
 local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 
