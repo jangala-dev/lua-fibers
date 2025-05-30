@@ -5,9 +5,24 @@ local pollio = require 'fibers.pollio'
 local fiber = require 'fibers.fiber'
 local op = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
-local string_buffer = require 'fibers.utils.string_buffer'
+local buffer = require 'string.buffer'
 local sc = require 'fibers.utils.syscall'
 
+local function new_output_collector()
+    local b = buffer.new()
+
+    return setmetatable({}, {
+        __index = {
+            write = function(_, data)
+                b:put(data)
+            end,
+            tostring = function()
+                return b:tostring()
+            end,
+            close = function() end, -- no-op for compatibility
+        }
+    })
+end
 local io_names = {"stdin", "stdout", "stderr"}
 
 local function close_all(...)
@@ -127,21 +142,21 @@ end
 --- Gets the combined output of stdout and stderr.
 -- @return The combined output and any error.
 function Cmd:combined_output()
-    local buf = string_buffer.new()
+    local buf = new_output_collector()
     self.pipes.ext_cmd.stdout, self.pipes.ext_cmd.stderr = buf, buf
     local err = self:run()
-    if err then return buf:read(), err end
-    return buf:read(), nil
+    if err then return buf:tostring(), err end
+    return buf:tostring(), nil
 end
 
 --- Gets the output of stdout.
 -- @return The output and any error.
 function Cmd:output()
-    local buf = string_buffer.new()
+    local buf = new_output_collector()
     self.pipes.ext_cmd.stdout = buf
     local err = self:run()
-    if err then return buf:read(), err end
-    return buf:read(), nil
+    if err then return buf:tostring(), err end
+    return buf:tostring(), nil
 end
 
 --- Starts the command and waits for it to complete.
@@ -203,8 +218,7 @@ function Cmd:start()
                 if not received then break end
                 output:write(received)
             end
-            if input.close then input:close() end
-            if output.close then output:close() end
+            input:close(); output:close()
             self.pipes.ext_cmd[v], self.pipes.child_cmd[v] = nil, nil
             self.pipes.wg:done()
         end)

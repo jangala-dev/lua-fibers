@@ -6,7 +6,7 @@ sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-de
 
 # install core lua packages
 
-sudo apt install -y lua5.1 liblua5.1-dev luajit luarocks
+sudo apt install -y lua5.1 liblua5.1-dev luarocks
 
 # install luarocks packages
 
@@ -29,6 +29,13 @@ sudo meson .. -Dlua_version=5.1 --buildtype=release
 sudo ninja all
 sudo ninja test
 sudo cp cffi.so /usr/local/lib/lua/5.1/cffi.so
+
+cd /tmp
+git clone https://github.com/LuaJIT/LuaJIT
+cd LuaJIT/
+make && sudo make install
+cd /tmp
+rm -rf LuaJIT
 
 cd /workspaces/lua-fibers
 pre-commit install
