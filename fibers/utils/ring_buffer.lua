@@ -11,17 +11,14 @@ local ffi = is_LuaJIT and require 'ffi' or require 'cffi'
 local band = bit.band
 
 ffi.cdef [[
-typedef struct {
-    uint32_t read_idx, write_idx;
-    uint32_t size;
-    uint32_t _pad;               // force 8-byte alignment
-    uint8_t buf[?];
-} buffer_t;
-
-void *memmove(void *dst, const void *src, size_t len);
+    typedef struct {
+        uint32_t read_idx, write_idx;
+        uint32_t size;
+        uint32_t _pad;               // force 8-byte alignment
+        uint8_t buf[?];
+    } buffer_t;
 ]]
 
-local C = ffi.C
 local function to_uint32(n)
     return band(n, 0xffffffff)
 end
@@ -81,8 +78,8 @@ function buffer:write(bytes, count)
     assert(count <= self:write_avail(), 'write xrun')
     local pos = self:write_pos()
     local count1 = math.min(self.size - pos, count)
-    if count1 > 0 then C.memmove(self.buf + pos, bytes, count1) end
-    if count > count1 then C.memmove(self.buf, bytes + count1, count - count1) end
+    if count1 > 0 then ffi.copy(self.buf + pos, bytes, count1) end
+    if count > count1 then ffi.copy(self.buf, bytes + count1, count - count1) end
     self:advance_write(count)
 end
 
@@ -90,8 +87,8 @@ function buffer:rewrite(offset, bytes, count)
     assert(offset + count <= self:read_avail(), 'rewrite xrun')
     local pos = self:rewrite_pos(offset)
     local count1 = math.min(self.size - pos, count)
-    if count1 > 0 then C.memmove(self.buf + pos, bytes, count1) end
-    if count > count1 then C.memmove(self.buf, bytes + count1, count - count1) end
+    if count1 > 0 then ffi.copy(self.buf + pos, bytes, count1) end
+    if count > count1 then ffi.copy(self.buf, bytes + count1, count - count1) end
 end
 
 function buffer:read(bytes, count)
