@@ -2,7 +2,6 @@
 
 -- Ring buffer for bytes
 
--- detect LuaJIT (removing dependency on utils.syscall)
 local is_LuaJIT = rawget(_G, "jit") and true or false
 
 local bit = rawget(_G, "bit") or require 'bit32'
@@ -27,8 +26,10 @@ local buffer = {}
 buffer.__index = buffer
 
 function buffer:init(size)
-    assert(size ~= 0 and band(size, size - 1) == 0, "size not power of two")
+    assert(type(size) == "number" and size > 0, "size must be positive integer")
+    assert(band(size, size - 1) == 0, "size must be power of two")
     self.size = size
+    self:reset()
     return self
 end
 
@@ -65,42 +66,61 @@ function buffer:read_pos()
 end
 
 function buffer:advance_write(count)
-    assert(count >= 0 and count <= self:write_avail(), "advance_write out of range")
+    assert(type(count) == "number" and count >= 0, "advance_write requires non-negative count")
+    assert(count <= self:write_avail(), "advance_write out of range")
     self.write_idx = to_uint32(self.write_idx + count)
 end
 
 function buffer:advance_read(count)
-    assert(count >= 0 and count <= self:read_avail(), "advance_read out of range")
+    assert(type(count) == "number" and count >= 0, "advance_read requires non-negative count")
+    assert(count <= self:read_avail(), "advance_read out of range")
     self.read_idx = to_uint32(self.read_idx + count)
 end
 
 function buffer:write(bytes, count)
+    assert(count and count >= 0, "invalid write count")
     assert(count <= self:write_avail(), 'write xrun')
     local pos = self:write_pos()
     local count1 = math.min(self.size - pos, count)
-    if count1 > 0 then ffi.copy(self.buf + pos, bytes, count1) end
-    if count > count1 then ffi.copy(self.buf, bytes + count1, count - count1) end
+    if count1 > 0 then
+        ffi.copy(self.buf + pos, bytes, count1)
+    end
+    if count > count1 then
+        ffi.copy(self.buf, bytes + count1, count - count1)
+    end
     self:advance_write(count)
 end
 
 function buffer:rewrite(offset, bytes, count)
+    assert(type(offset) == "number" and offset >= 0, "invalid offset")
+    assert(count and count >= 0, "invalid count")
     assert(offset + count <= self:read_avail(), 'rewrite xrun')
     local pos = self:rewrite_pos(offset)
     local count1 = math.min(self.size - pos, count)
-    if count1 > 0 then ffi.copy(self.buf + pos, bytes, count1) end
-    if count > count1 then ffi.copy(self.buf, bytes + count1, count - count1) end
+    if count1 > 0 then
+        ffi.copy(self.buf + pos, bytes, count1)
+    end
+    if count > count1 then
+        ffi.copy(self.buf, bytes + count1, count - count1)
+    end
 end
 
 function buffer:read(bytes, count)
+    assert(count and count >= 0, "invalid read count")
     assert(count <= self:read_avail(), 'read xrun')
     local pos = self:read_pos()
     local count1 = math.min(self.size - pos, count)
-    if count1 > 0 then ffi.copy(bytes, self.buf + pos, count1) end
-    if count > count1 then ffi.copy(bytes + count1, self.buf, count - count1) end
+    if count1 > 0 then
+        ffi.copy(bytes, self.buf + pos, count1)
+    end
+    if count > count1 then
+        ffi.copy(bytes + count1, self.buf, count - count1)
+    end
     self:advance_read(count)
 end
 
 function buffer:drop(count)
+    assert(count and count >= 0, "invalid drop count")
     assert(count <= self:read_avail(), 'drop xrun')
     self:advance_read(count)
 end
@@ -126,12 +146,14 @@ function buffer:tostring()
 end
 
 function buffer:find(pattern)
+    assert(type(pattern) == "string" and #pattern > 0, "find requires non-empty string")
     local buf_string = self:tostring()
     local found_at = string.find(buf_string, pattern)
     return found_at and (found_at - 1) or nil
 end
 
 function buffer:find_string(s)
+    assert(type(s) == "string" and #s > 0, "find_string requires non-empty string")
     local len = #s
     local end_idx = self:read_avail()
     if end_idx < len then return nil end
@@ -152,8 +174,8 @@ end
 local buffer_t = ffi.metatype("buffer_t", buffer)
 
 local function new(size)
-    local ret = buffer_t(size)
-    return ret:init(size)
+    assert(type(size) == "number" and size > 0, "new() requires a positive size")
+    return buffer_t(size):init(size)
 end
 
 return {
