@@ -4,11 +4,11 @@
 -- in a fiber-based concurrency framework.
 -- @module fibers.stream
 
-local sc = require 'fibers.utils.syscall'
-local buffer              = require 'fibers.utils.fixed_buffer'
-local op  = require 'fibers.op'
+local sc                  = require 'fibers.utils.syscall'
+local op                  = require 'fibers.op'
+local fixed_buffer        = require 'fibers.utils.fixed_buffer'
+local buffer              = require 'string.buffer'
 
-local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 local unpack = table.unpack or unpack  -- luacheck: ignore -- Compatibility fallback
 
 local Stream = {}
@@ -28,10 +28,10 @@ local function open(io, readable, writable, buffer_size)
         { io = io, line_buffering = false, random_access = false },
         Stream)
     if readable ~= false then
-        ret.rx = buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
+        ret.rx = fixed_buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
     end
     if writable ~= false then
-        ret.tx = buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
+        ret.tx = fixed_buffer.new(buffer_size or DEFAULT_BUFFER_SIZE)
     end
     if io.seek and io:seek(sc.SEEK_CUR, 0) then ret.random_access = true end
     return ret
@@ -50,67 +50,64 @@ function Stream:nonblock() self.io:nonblock() end
 --- Set the stream to blocking mode.
 function Stream:block() self.io:block() end
 
--- Extend a C array by at least 'extension' bytes
--- @param arr C array to extend
--- @param size current used portion of C array
--- @param extension intended extra portion of C array to be used
--- @return arr extended C array
-local function extend(arr, size, extension)
-    if size + extension > ffi.sizeof(arr) then
-        local new_size = math.max(ffi.sizeof(arr) * 2, size + extension)
-        local new_buf = ffi.new('uint8_t[?]', new_size)
-        ffi.copy(new_buf, arr, size) -- Copy existing data to new buffer
-        arr = new_buf
+local function core_write_op(stream, buf, count, flush_needed)
+    local ptr = nil
+    if buf then
+        ptr, _ = buf:ref()
     end
 
-    return arr
-end
-local function core_write_op(stream, buf, count, flush_needed)
-    buf = ffi.cast('uint8_t*', buf)
     local tally = 0
     local write_directly
+
     local function write_attempt()
         while true do
+            -- Flush buffered writes first
             if flush_needed then
                 while not stream.tx:is_empty() do
-                    local written, err = stream.io:write(stream.tx:peek()) -- Write current contiguous block
+                    local written, err = stream.io:write(stream.tx:peek())
                     if err then return true, tally, err end
-                    if written == nil then                                 -- block indicated by nil return
+                    if written == nil then
                         stream._part_write.tally = tally
                         return false
                     end
-                    if written == 0 then return true, tally, nil end -- EOF
+                    if written == 0 then return true, tally, nil end
                     stream.tx:advance_read(written)
                 end
                 flush_needed = nil
             end
-            if tally == count then return true, tally end
+            if tally == count then
+                return true, tally
+            end
             if write_directly then
-                local written, err = stream.io:write(buf + tally, count - tally)
+                assert(ptr, "write_directly requires a non-nil buffer")
+                local written, err = stream.io:write(ptr + tally, count - tally)
                 if err then return true, tally, err end
                 if written == nil then
                     stream._part_write.tally = tally
                     return false
-                end                                              -- Would block
-                if written == 0 then return true, tally, nil end -- EOF
+                end
+                if written == 0 then return true, tally, nil end
                 tally = tally + written
             else
+                assert(ptr, "buffer required for buffered write")
                 local to_write = math.min(stream.tx:write_avail(), count - tally)
-                stream.tx:write(buf + tally, to_write)
+                stream.tx:write(ptr + tally, to_write)
                 tally = tally + to_write
-                -- Do we need to flush?
-                flush_needed = stream.tx:is_full() or stream.line_buffering and stream.tx:find('\n')
+                flush_needed = stream.tx:is_full() or
+                    (stream.line_buffering and stream.tx:find('\n'))
             end
         end
     end
+
     local function try()
         stream._part_write = { buf = buf, count = count, tally = 0 }
-        write_directly = count >= stream.tx.size -- captures both large writes and no buffering
+        write_directly = buf ~= nil and count >= stream.tx.size
         return write_attempt()
     end
+
     local function block(suspension, wrap_fn)
         local task = {}
-        task.run = function(_)
+        task.run = function()
             if not suspension:waiting() then return end
             local success, _, err = write_attempt()
             if success then
@@ -121,12 +118,16 @@ local function core_write_op(stream, buf, count, flush_needed)
         end
         stream.io:task_on_writable(task)
     end
+
     local function wrap(...)
-        stream._part_write = nil -- clean up on write success
+        stream._part_write = nil
         return ...
     end
+
     return op.new_base_op(wrap, try, block)
 end
+
+
 
 function Stream:partial_write()
     if self._part_write then return self._part_write.tally end
@@ -137,7 +138,8 @@ function Stream:reset_partial_write()
 end
 
 function Stream:write_chars_op(str)
-    local buf = ffi.cast('uint8_t*', str)
+    local buf = require("string.buffer").new()
+    buf:set(str) -- zero-copy reference to the string
     return core_write_op(self, buf, #str)
 end
 
@@ -159,39 +161,41 @@ local function core_read_op(stream, buf, min, max, terminator)
         end
         return min, max
     end
+
     local function read_attempt()
         while true do
             if terminator then
                 min, max = find_terminator()
             end
+
             local from_buffer = math.min(stream.rx:read_avail(), max - tally)
-
-            -- Extend the buffer if needed
-            buf = extend(buf, tally, from_buffer)
-
-            stream.rx:read(buf + tally, from_buffer)
+            local ptr = buf:reserve(from_buffer)
+            stream.rx:read(ptr, from_buffer)
+            buf:commit(from_buffer)
             tally = tally + from_buffer
-            if tally >= min then return true, buf, tally end -- min achieved, returning
-            stream.rx:reset()                                -- buffer emptied, so reset for io:read()
-            local ptr, _ = stream.rx:reserve(stream.rx.size)
-            local did_read, err = stream.io:read(ptr, stream.rx.size)
+            if tally >= min then return true, buf, tally end
 
+            stream.rx:reset()
+            local ptr2, _ = stream.rx:reserve(stream.rx.size)
+            local did_read, err = stream.io:read(ptr2, stream.rx.size)
             stream.rx:commit(did_read or 0)
 
             if err then
                 return true, buf, tally, err
-            elseif did_read == nil then -- Would block
+            elseif did_read == nil then
                 stream._part_read.tally = tally
                 return false
-            elseif did_read == 0 then -- EOF
+            elseif did_read == 0 then
                 return true, buf, tally, nil
             end
         end
     end
+
     local function try()
         stream._part_read = { buf = buf, tally = 0 }
         return read_attempt()
     end
+
     local function block(suspension, wrap_fn)
         local task = {}
         task.run = function()
@@ -205,15 +209,19 @@ local function core_read_op(stream, buf, min, max, terminator)
         end
         stream.io:task_on_readable(task)
     end
+
     local function wrap(...)
-        stream._part_read = nil -- clean up on write success
+        stream._part_read = nil
         return ...
     end
+
     return op.new_base_op(wrap, try, block)
 end
 
 function Stream:partial_read()
-    if self._part_read then return self._part_read.tally, ffi.string(self._part_read.buf, self._part_read.tally) end
+    if self._part_read then
+        return self._part_read.tally, self._part_read.buf:tostring()
+    end
 end
 
 function Stream:reset_partial_read()
@@ -224,10 +232,10 @@ end
 -- @param count number of characters to read
 -- @return operation
 function Stream:read_chars_op(count)
-    local buf = ffi.new('uint8_t[?]', count)
+    local buf = buffer.new(count)
     return core_read_op(self, buf, count, count):wrap(function(ret_buf, cnt, err)
         if cnt == 0 then return nil, err end
-        return ffi.string(ret_buf, cnt), err
+        return ret_buf:tostring(), err
     end)
 end
 
@@ -244,9 +252,9 @@ end
 -- @return operation
 function Stream:read_some_chars_op(count)
     if count == nil then count = self.rx.size end
-    local buf = ffi.new('uint8_t[?]', count)
+    local buf = buffer.new(count)
     return core_read_op(self, buf, 1, count):wrap(function(ret_buf, cnt, err)
-        return cnt > 0 and ffi.string(ret_buf, cnt) or nil, err
+        return cnt > 0 and ret_buf:tostring() or nil, err
     end)
 end
 
@@ -261,9 +269,9 @@ end
 --- Operation to read all characters from the stream.
 -- @return operation
 function Stream:read_all_chars_op()
-    local buf = ffi.new('uint8_t[?]', self.rx.size)
-    return core_read_op(self, buf, math.huge, math.huge):wrap(function(buf, cnt, err)
-        return ffi.string(buf, cnt), err
+    local buf = buffer.new(self.rx.size)
+    return core_read_op(self, buf, math.huge, math.huge):wrap(function(ret_buf, cnt, err)
+        return ret_buf:tostring(), err
     end)
 end
 
@@ -277,9 +285,9 @@ end
 --- Operation to read a single character from the stream.
 -- @return operation
 function Stream:read_char_op()
-    local buf = ffi.new('uint8_t[?]', 1)
-    return core_read_op(self, buf, 1, 1):wrap(function(_, cnt, err)
-        return cnt == 1 and string.char(buf[0]) or nil, err
+    local buf = buffer.new(1)
+    return core_read_op(self, buf, 1, 1):wrap(function(ret_buf, cnt, err)
+        return cnt == 1 and ret_buf:tostring() or nil, err
     end)
 end
 
@@ -295,10 +303,11 @@ end
 -- @return operation
 function Stream:read_line_op(style)
     style = style or 'discard'
-    local buf = ffi.new('uint8_t[?]', self.rx.size)
+    local buf = buffer.new(self.rx.size)
     return core_read_op(self, buf, math.huge, math.huge, "\n"):wrap(function(ret_buf, cnt)
         if cnt == 0 then return nil end
-        return ffi.string(ret_buf, style == 'keep' and cnt or cnt - 1)
+        local str = ret_buf:tostring()
+        return style == 'keep' and str or str:sub(1, -2)
     end)
 end
 
@@ -444,14 +453,14 @@ function Stream:setvbuf(mode, size)
         if self.rx:read_avail() > size then
             error('existing buffered input exceeds new buffer size')
         end
-        local new_rx = buffer.new(size)
+        local new_rx = fixed_buffer.new(size)
         transfer_buffered_bytes(self.rx, new_rx)
         self.rx = new_rx
     end
 
     if self.tx and self.tx.size ~= size then
         while self.tx:read_avail() >= size do self:flush() end
-        local new_tx = buffer.new(size)
+        local new_tx = fixed_buffer.new(size)
         transfer_buffered_bytes(self.tx, new_tx)
         self.tx = new_tx
     end
