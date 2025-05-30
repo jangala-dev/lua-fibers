@@ -5,7 +5,7 @@
 -- @module fibers.stream
 
 local sc = require 'fibers.utils.syscall'
-local buffer = require 'fibers.utils.ring_buffer'
+local buffer              = require 'fibers.utils.fixed_buffer'
 local op  = require 'fibers.op'
 
 local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
@@ -185,15 +185,19 @@ local function core_read_op(stream, buf, min, max, terminator)
             tally = tally + from_buffer
             if tally >= min then return true, buf, tally end -- min achieved, returning
             stream.rx:reset()                                -- buffer emptied, so reset for io:read()
+            local ptr, _ = stream.rx:reserve(stream.rx.size)
+            local did_read, err = stream.io:read(ptr, stream.rx.size)
 
-            local did_read, err = stream.io:read(stream.rx.buf, stream.rx.size)
-            if err then return true, buf, tally, err end
-            if did_read == nil then -- block indicated by nil return
+            stream.rx:commit(did_read or 0)
+
+            if err then
+                return true, buf, tally, err
+            elseif did_read == nil then -- Would block
                 stream._part_read.tally = tally
                 return false
+            elseif did_read == 0 then -- EOF
+                return true, buf, tally, nil
             end
-            if did_read == 0 then return true, buf, tally, nil end -- EOF indicated by 0 return
-            stream.rx:advance_write(did_read)                      -- since we copied directly into buffer's storage
         end
     end
     local function try()
