@@ -53,7 +53,7 @@ function Stream:block() self.io:block() end
 local function core_write_op(stream, buf, count, flush_needed)
     local ptr = nil
     if buf then
-        ptr, _ = buf:ref()
+        ptr = buf:ref()
     end
 
     local tally = 0
@@ -270,7 +270,7 @@ end
 -- @return operation
 function Stream:read_all_chars_op()
     local buf = buffer.new(self.rx.size)
-    return core_read_op(self, buf, math.huge, math.huge):wrap(function(ret_buf, cnt, err)
+    return core_read_op(self, buf, math.huge, math.huge):wrap(function(ret_buf, _, err)
         return ret_buf:tostring(), err
     end)
 end

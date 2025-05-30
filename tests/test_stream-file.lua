@@ -10,9 +10,6 @@ local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 local channel = require 'fibers.channel'
 local file = require 'fibers.stream.file'
-local sc = require 'fibers.utils.syscall'
-
-local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 
 local function test()
     local rd, wr = file.pipe()
