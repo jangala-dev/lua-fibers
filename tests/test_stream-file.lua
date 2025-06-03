@@ -10,9 +10,6 @@ local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 local channel = require 'fibers.channel'
 local file = require 'fibers.stream.file'
-local sc = require 'fibers.utils.syscall'
-
-local ffi = sc.is_LuaJIT and require 'ffi' or require 'cffi'
 
 local function test()
     local rd, wr = file.pipe()
@@ -51,9 +48,9 @@ local function test_long_read_first()
         wr:close()
     end)
 
-    local buf, count = rd:read_all_bytes()
-    assert(count==#message)
-    assert(message==ffi.string(buf, count))
+    local message2 = rd:read_all_chars()
+    assert(#message2 == #message)
+    assert(message2 == message)
 
     rd:close()
 end
@@ -145,10 +142,10 @@ local function test_long_write_first()
     local chan = channel.new()
     local message = string.rep("a", 2^24)
 
-    local buf, count
+    local message2
 
     fiber.spawn(function ()
-        buf, count = rd:read_all_bytes()
+        message2 = rd:read_all_chars()
         rd:close()
         chan:put(1)
     end)
@@ -158,8 +155,8 @@ local function test_long_write_first()
 
     chan:get()
 
-    assert(count==#message)
-    assert(message==ffi.string(buf, count))
+    assert(#message2 == #message)
+    assert(message2 == message)
 end
 
 local function test_tiny_writes()
@@ -173,9 +170,9 @@ local function test_tiny_writes()
         wr:close()
     end)
 
-    local buf, count = rd:read_all_bytes()
-    assert(count==#message)
-    assert(message==ffi.string(buf, count))
+    local message2 = rd:read_all_chars()
+    assert(#message2 == #message)
+    assert(message2 == message)
 
     rd:close()
 end
@@ -189,9 +186,9 @@ local function test_single()
         wr:close()
     end)
 
-    assert(rd:read_byte() == 97)
+    assert(string.byte(rd:read_char()) == 97)
     assert(rd:read_char() == "a")
-    assert(rd:read_byte() == nil)
+    assert(rd:read_char() == nil)
 
     rd:close()
 end
