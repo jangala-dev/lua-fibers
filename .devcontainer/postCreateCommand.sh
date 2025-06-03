@@ -33,7 +33,9 @@ sudo cp cffi.so /usr/local/lib/lua/5.1/cffi.so
 cd /tmp
 git clone https://github.com/LuaJIT/LuaJIT
 cd LuaJIT/
+git checkout v2.1.ROLLING
 make && sudo make install
+sudo ln -sf "$(ls -1 /usr/local/bin/luajit-2.1* | sort | tail -n 1)" /usr/local/bin/luajit
 cd /tmp
 rm -rf LuaJIT
 
