@@ -200,7 +200,7 @@ end
 function Cmd:stdin_pipe()
     self.pipes.child.stdin, self.pipes.parent.stdin = sc.pipe()
     assert(self.pipes.child.stdin and self.pipes.parent.stdin)
-    return file.fdopen(self.pipes.parent.stdin)
+    return file.fdopen(self.pipes.parent.stdin):setvbuf('no')
 end
 
 

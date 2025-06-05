@@ -72,7 +72,6 @@ local function test_io_redirection()
     fiber.spawn(function ()
         for _, v in ipairs(msgs) do
             stdin_pipe:write(v)
-            stdin_pipe:flush_output()
             signal_chan:get()
         end
         stdin_pipe:close()
