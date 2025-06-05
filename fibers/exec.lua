@@ -136,15 +136,23 @@ function Cmd:start()
         end
 
         -- pipework
-        sc.close(ready_read)
-        for k, v in pairs(self.pipes.child) do
-            sc.close(self.pipes.parent[k])
-            assert(sc.dup2(v, io_mappings[k]))
-            sc.close(v)
+        for name, fd in pairs(io_mappings) do
+            local child_fd = self.pipes.child[name]
+
+            if child_fd then
+                sc.close(self.pipes.parent[name])
+            else
+                local flags = (fd == sc.STDIN_FILENO) and sc.O_RDONLY or sc.O_WRONLY
+                child_fd = assert(sc.open("/dev/null", flags))
+            end
+
+            assert(sc.dup2(child_fd, fd))
+
+            if self.pipes.child[name] then
+                sc.close(child_fd)
+            end
         end
-
         sc.close(ready_write)
-
         local _, execp_err, errno = sc.execp(self.path, self.args) -- will not return unless unsuccessful
         if execp_err then
             sc.exit(errno)                                   -- exit with non-zero status
