@@ -2,6 +2,7 @@
 package.path = "../../?.lua;../?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
+local sleep = require 'fibers.sleep'
 local channel = require "fibers.channel"
 local exec = require 'fibers.exec'
 local pollio = require 'fibers.pollio'
@@ -71,6 +72,7 @@ local function test_io_redirection()
     fiber.spawn(function ()
         for _, v in ipairs(msgs) do
             stdin_pipe:write(v)
+            stdin_pipe:flush_output()
             signal_chan:get()
         end
         stdin_pipe:close()
@@ -110,6 +112,30 @@ local function test_context()
     assert(sc.monotime()-starttime < 4, sc.monotime()-starttime)
 end
 
+-- Test 7: Cancel context during output
+local function test_cancel_during_output()
+    local ctx, cancel = context.with_cancel(context.background())
+    local cmd = exec.command_context(ctx, '/bin/sh', '-c', 'for i in $(seq 1 10000); do echo y; sleep 0.001; done')
+
+    fiber.spawn(function()
+        -- Let it run for a short moment, then cancel
+        sleep.sleep(0.001)
+        cancel()
+    end)
+
+    local _, err = cmd:combined_output()
+    assert(err == sc.SIGKILL, "Expected error due to cancellation")
+end
+
+-- Test 8: Context already cancelled before start
+local function test_cancel_before_start()
+    local ctx, cancel = context.with_cancel(context.background())
+    cancel()
+
+    local cmd = exec.command_context(ctx, '/bin/true')
+    local err = cmd:start()
+    assert(err ~= nil, "Expected start() to fail due to cancelled context")
+end
 -- Main test function
 local function main()
     local pid = sc.getpid()
@@ -124,6 +150,8 @@ local function main()
         test_io_redirection = test_io_redirection,
         test_kill = test_kill,
         test_context = test_context,
+        test_cancel_during_output = test_cancel_during_output,
+        test_cancel_before_start = test_cancel_before_start
     }
     for k, v in pairs(tests) do
         local wg = waitgroup.new()
