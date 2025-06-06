@@ -53,7 +53,6 @@ end
 function Cmd:_output_collector(pipes)
 
     local function close_pipes()
-        -- close from the tail so table.remove does not skip entries
         for i = #pipes, 1, -1 do
             pipes[i]:close()
             pipes[i] = nil
@@ -143,6 +142,7 @@ function Cmd:start()
             assert(sc.dup2(child_fd, fd))
             if child_fd ~= fd then sc.close(child_fd) end -- always close duplicate if distinct
         end
+
         sc.close(ready_read)
         sc.set_cloexec(ready_write)                        -- Close on successful exec
         local _, _, errno = sc.execp(self.path, self.args) -- will not return unless unsuccessful
@@ -154,22 +154,17 @@ function Cmd:start()
     end
     -- parent
     self.process.pid = pid
+    for _, v in pairs(self.pipes.child) do sc.close(v) end
+
     sc.close(ready_write)
-    for _, v in pairs(self.pipes.child) do
-        sc.close(v)
-    end
     ready_read = file.fdopen(ready_read)
     local byte = ready_read:read_char() -- will politely block until child is ready
     ready_read:close()
     if byte then
-        local errno = string.byte(byte)
-        return "child failed to start: errno=" .. tostring(errno)
+        return "child failed to start: errno=" .. string.byte(byte)
     end
 
-    local pidfd, pidfd_err = sc.pidfd_open(self.process.pid, 0)
-    if not pidfd then return pidfd_err end
-
-    self.process.pidfd = pidfd
+    self.process.pidfd = assert(sc.pidfd_open(self.process.pid, 0))
 
     return nil
 end
@@ -185,30 +180,23 @@ function Cmd:kill()
     assert(res==0 or errno==sc.ESRCH, err)
 end
 
+function Cmd:_pipe_creator(stdio)
+    local rd, wr = assert(sc.pipe())
+    self.pipes.parent[stdio] = (stdio == 'stdin') and wr or rd
+    self.pipes.child[stdio] = (stdio == 'stdin') and rd or wr
+    return file.fdopen(self.pipes.parent[stdio])
+end
 --- Creates a pipe for stdout. Call `:close()` when finished.
 -- @return The stdout pipe or an error.
-function Cmd:stdout_pipe()
-    self.pipes.parent.stdout, self.pipes.child.stdout = sc.pipe()
-    assert(self.pipes.parent.stdout and self.pipes.child.stdout)
-    return file.fdopen(self.pipes.parent.stdout)
-end
+function Cmd:stdout_pipe() return self:_pipe_creator('stdout') end
 
 --- Creates a pipe for stderr. Call `:close()` when finished.
 -- @return The stderr pipe or an error.
-function Cmd:stderr_pipe()
-    self.pipes.parent.stderr, self.pipes.child.stderr = sc.pipe()
-    assert(self.pipes.parent.stderr and self.pipes.child.stderr)
-    return file.fdopen(self.pipes.parent.stderr)
-end
+function Cmd:stderr_pipe() return self:_pipe_creator('stderr') end
 
 --- Creates a pipe for stdin. Call `:close()` when finished.
 -- @return The stdin pipe or an error.
-function Cmd:stdin_pipe()
-    self.pipes.child.stdin, self.pipes.parent.stdin = sc.pipe()
-    assert(self.pipes.child.stdin and self.pipes.parent.stdin)
-    return file.fdopen(self.pipes.parent.stdin):setvbuf('no')
-end
-
+function Cmd:stdin_pipe() return self:_pipe_creator('stdin'):setvbuf('no') end
 
 --- Waits for the command to complete.
 -- @return The completion status or an error.
