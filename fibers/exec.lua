@@ -130,6 +130,7 @@ function Cmd:start()
 
     local pid = assert(sc.fork())
     if pid == 0 then -- child
+        sc.prctl(sc.PR_SET_PDEATHSIG, sc.SIGKILL) -- kill child if parent dies
         if self._setpgid then assert(sc.setpid('p', 0, 0) == 0) end
 
         -- pipework
