@@ -2,6 +2,7 @@
 package.path = "../../?.lua;../?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
+local sleep = require 'fibers.sleep'
 local channel = require "fibers.channel"
 local exec = require 'fibers.exec'
 local pollio = require 'fibers.pollio'
@@ -33,7 +34,6 @@ local function count_zombies()
     return count
 end
 
-
 -- Test 1: Test basic command execution
 local function test_basic_execution()
     local output, err = exec.command('echo', 'Hello, World!'):combined_output()
@@ -46,7 +46,7 @@ end
 -- Test 2: Test command error handling
 local function test_command_error()
     local output, err = exec.command('nonexistent_command'):combined_output()
-    assert(output == "", "Expected no output but got: " .. output)
+    assert(output == nil, "Expected no output but got: ", output)
     assert(err ~= nil, "Expected an error!")
 end
 
@@ -110,6 +110,32 @@ local function test_context()
     assert(sc.monotime()-starttime < 4, sc.monotime()-starttime)
 end
 
+-- Test 7: Cancel context during output
+local function test_cancel_during_output()
+    local ctx, cancel = context.with_cancel(context.background())
+    local cmd = exec.command_context(ctx, '/bin/sh', '-c', 'for i in $(seq 1 10000); do echo y; sleep 0.001; done')
+        :setpgid(true)
+
+    fiber.spawn(function()
+        -- Let it run for a short moment, then cancel
+        sleep.sleep(0.00001)
+        cancel()
+    end)
+
+    local err = cmd:run()
+    assert(err == sc.SIGKILL, "Expected error due to cancellation")
+end
+
+-- Test 8: Context already cancelled before start
+local function test_cancel_before_start()
+    local ctx, cancel = context.with_cancel(context.background())
+    cancel()
+
+    local cmd = exec.command_context(ctx, '/bin/true')
+    local err = cmd:start()
+    assert(err ~= nil, "Expected start() to fail due to cancelled context")
+end
+
 -- Main test function
 local function main()
     local pid = sc.getpid()
@@ -124,6 +150,8 @@ local function main()
         test_io_redirection = test_io_redirection,
         test_kill = test_kill,
         test_context = test_context,
+        test_cancel_during_output = test_cancel_during_output,
+        test_cancel_before_start = test_cancel_before_start
     }
     for k, v in pairs(tests) do
         local wg = waitgroup.new()

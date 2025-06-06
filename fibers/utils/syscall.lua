@@ -56,6 +56,9 @@ M.O_LARGEFILE = ffi.abi('32bit') and 32768 or 0
 
 M.F_GETFL = p_fcntl.F_GETFL
 M.F_SETFL = p_fcntl.F_SETFL
+M.F_GETFD = p_fcntl.F_GETFD
+M.F_SETFD = p_fcntl.F_SETFD
+M.FD_CLOEXEC = p_fcntl.FD_CLOEXEC
 
 M.EAGAIN = p_errno.EAGAIN
 M.EWOULDBLOCK = p_errno.EWOULDBLOCK
@@ -166,6 +169,10 @@ function M.set_block(fd)
 	assert( M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
 end
 
+function M.set_cloexec(fd)
+    local flags = assert(M.fcntl(fd, M.F_GETFD))
+    assert(M.fcntl(fd, M.F_SETFD, bor(flags, M.FD_CLOEXEC)))
+end
 function M.monotime()
     local time = M.clock_gettime(M.CLOCK_MONOTONIC)
     return time.tv_sec + time.tv_nsec/1e9, time.tv_sec, time.tv_nsec

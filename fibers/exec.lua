@@ -2,43 +2,15 @@
 -- Provides facilities for executing external commands asynchronously using fibers.
 local file = require 'fibers.stream.file'
 local pollio = require 'fibers.pollio'
-local fiber = require 'fibers.fiber'
 local op = require 'fibers.op'
-local waitgroup = require 'fibers.waitgroup'
 local buffer = require 'string.buffer'
 local sc = require 'fibers.utils.syscall'
 
-local function new_output_collector()
-    local b = buffer.new()
-
-    return setmetatable({}, {
-        __index = {
-            write = function(_, data)
-                b:put(data)
-            end,
-            tostring = function()
-                return b:tostring()
-            end,
-            close = function() end, -- no-op for compatibility
-        }
-    })
-end
-local io_names = {"stdin", "stdout", "stderr"}
-
-local function close_all(...)
-    local n = select('#', ...)
-    for i = 1, n do
-        local list = select(i, ...)
-        for k, v in pairs(list) do
-            if type(v) == "number" then
-                sc.close(v)
-            elseif v.close then
-                v:close()
-            end
-            list[k] = nil
-        end
-    end
-end
+local io_mappings = {
+    stdin = sc.STDIN_FILENO,
+    stdout = sc.STDOUT_FILENO,
+    stderr = sc.STDERR_FILENO
+}
 
 -- Define the command type
 local Cmd = {}
@@ -55,10 +27,7 @@ local function command(name, ...)
     self.process = {}
     self.pipes = {
         child = {},
-        child_cmd = {},
-        ext_cmd = {},
-        ext = {},
-        wg = waitgroup.new(),
+        parent = {}
     }
     return self
 end
@@ -78,163 +47,126 @@ end
 -- @param status True if diff pgid desired.
 function Cmd:setpgid(status)
     self._setpgid = status
+    return self
 end
 
---- Launches the command.
--- @param path The path to the executable.
--- @param argt Table of arguments.
--- @return pid, cmd_streams, result_channel, error
-function Cmd:launch(path, argt)
-    -- Check if the executable exists and is executable
-    local status, errstr, _ = sc.access(path, "x")
-    if not status then return errstr end
+function Cmd:_output_collector(pipes)
 
-    self.pipes.child.stdin, self.pipes.child_cmd.stdin = assert(sc.pipe())
-    self.pipes.child_cmd.stdout, self.pipes.child.stdout = assert(sc.pipe())
-    self.pipes.child_cmd.stderr, self.pipes.child.stderr = assert(sc.pipe())
-
-    local ready_read, ready_write = assert(sc.pipe())
-    ready_read = file.fdopen(ready_read)
-
-    self.process.pid = assert(sc.fork())
-    if self.process.pid == 0 then -- child
-        if self._setpgid then
-            local result, err_msg = sc.setpid('p', 0, 0)
-            assert(result==0, err_msg)
-        end
-        -- close all the parent pipes
-        close_all(self.pipes.ext, self.pipes.ext_cmd, self.pipes.child_cmd)
-        ready_read:close()
-
-        sc.dup2(self.pipes.child.stdin, sc.STDIN_FILENO)
-        sc.dup2(self.pipes.child.stdout, sc.STDOUT_FILENO)
-        sc.dup2(self.pipes.child.stderr, sc.STDERR_FILENO)
-
-        close_all(self.pipes.child)
-
-        sc.close(ready_write)
-
-        local _, err, errno = sc.exec(path, argt) -- will not return unless unsuccessful
-        if err then
-            io.stderr:write(err .. "\n") -- will be sent over the stderr pipe
-            sc.exit(errno) -- exit with non-zero status
+    local function close_pipes()
+        for i = #pipes, 1, -1 do
+            pipes[i]:close()
+            pipes[i] = nil
         end
     end
-    -- parent
-    close_all(self.pipes.child)
 
-    sc.close(ready_write)
-    ready_read:read_some_chars()
-    ready_read:close()
-
-    local pidfd, err = sc.pidfd_open(self.process.pid, 0)
-    self.process.pidfd = assert(pidfd, err)
-
-    for k, v in pairs(self.pipes.child_cmd) do
-        self.pipes.child_cmd[k] = file.fdopen(v)
+    local err = self:start()
+    if err then
+        close_pipes()
+        return nil, err
     end
 
-    self.pipes.child_cmd.stdin:setvbuf('no')
+    local buf = buffer.new()
 
-    return nil
+    while #pipes > 0 do
+        local ops = {}
+
+        -- build a read operation for each still-open pipe
+        for idx, pipe in ipairs(pipes) do
+            ops[#ops + 1] = pipe:read_some_chars_op():wrap(function(chunk)
+                if chunk then
+                    buf:put(chunk)
+                else -- EOF: close and mark for removal
+                    pipe:close()
+                    table.remove(pipes, idx)
+                end
+            end)
+        end
+
+        if self.ctx then
+            ops[#ops + 1] = self.ctx:done_op():wrap(close_pipes)
+        end
+
+        op.choice(unpack(ops)):perform()
+    end
+
+    return buf:tostring(), self:wait()
 end
 
---- Gets the combined output of stdout and stderr.
--- @return The combined output and any error.
+--- Gets combined stdout + stderr as a single string.
+-- @return output string on success, or nil + error on failure
 function Cmd:combined_output()
-    local buf = new_output_collector()
-    self.pipes.ext_cmd.stdout, self.pipes.ext_cmd.stderr = buf, buf
-    local err = self:run()
-    if err then return buf:tostring(), err end
-    return buf:tostring(), nil
+    if self.ctx and self.ctx:err() then return nil, "context cancelled" end
+
+    local pipes = { self:stdout_pipe(), self:stderr_pipe() }
+    return self:_output_collector(pipes)
 end
 
 --- Gets the output of stdout.
 -- @return The output and any error.
 function Cmd:output()
-    local buf = new_output_collector()
-    self.pipes.ext_cmd.stdout = buf
-    local err = self:run()
-    if err then return buf:tostring(), err end
-    return buf:tostring(), nil
+    if self.ctx and self.ctx:err() then return nil, "context cancelled" end
+
+    local pipes = { self:stdout_pipe() }
+    return self:_output_collector(pipes)
 end
 
 --- Starts the command and waits for it to complete.
 -- @return Any error.
 function Cmd:run()
     local err = self:start()
-    if err then
-        close_all(self.pipes.ext_cmd, self.pipes.child_cmd)
-        return err
-    end
-    return self:wait()
+    return err and err or self:wait()
 end
 
 --- Starts the command.
 -- @return Any error.
 function Cmd:start()
     if self.process.pid then return "process already started" end
-
     if self.ctx and self.ctx:err() then
-        close_all(self.pipes.ext_cmd)
-        return "context already complete"
+        for _, v in pairs(self.pipes.child) do sc.close(v) end
+        return "context cancelled"
     end
 
-    local executable_path
-    -- Check if a path is provided
-    if self.path:find("/") then
-        executable_path = self.path
-    else
-        -- Search for the executable in the PATH
-        for dir in os.getenv("PATH"):gmatch("[^:]+") do
-            local full_path = dir .. "/" .. self.path
-            if sc.access(full_path, "x") then
-                executable_path = full_path
-                break
-            end
+    local ready_read, ready_write = assert(sc.pipe())
+
+    local pid = assert(sc.fork())
+    if pid == 0 then -- child
+        if self._setpgid then assert(sc.setpid('p', 0, 0) == 0) end
+
+        -- pipework
+        for name, fd in pairs(io_mappings) do
+            if self.pipes.parent[name] then sc.close(self.pipes.parent[name]) end
+
+            local child_fd = self.pipes.child[name] or
+                assert(sc.open("/dev/null", (fd == sc.STDIN_FILENO) and sc.O_RDONLY or sc.O_WRONLY))
+
+            assert(sc.dup2(child_fd, fd))
+            if child_fd ~= fd then sc.close(child_fd) end -- always close duplicate if distinct
         end
-        if not executable_path then
-            close_all(self.pipes.ext_cmd)
-            return '"'..self.path..'": executable file not found in $PATH'
+
+        sc.close(ready_read)
+        sc.set_cloexec(ready_write)                        -- Close on successful exec
+        local _, _, errno = sc.execp(self.path, self.args) -- will not return unless unsuccessful
+        if errno then
+            sc.write(ready_write, string.char(errno))      -- Write errno to pipe
+            sc.close(ready_write)
+            sc.exit(1)
         end
     end
+    -- parent
+    self.process.pid = pid
+    for _, v in pairs(self.pipes.child) do sc.close(v) end
 
-    local err = self:launch(executable_path, self.args)
-    if err then
-        close_all(self.pipes.ext_cmd, self.pipes.child_cmd, self.pipes.child)
-        return err
+    sc.close(ready_write)
+    ready_read = file.fdopen(ready_read)
+    local byte = ready_read:read_char() -- will politely block until child is ready
+    ready_read:close()
+    if byte then
+        return "child failed to start: errno=" .. string.byte(byte)
     end
 
-    for _, v in ipairs(io_names) do
-        self.pipes.wg:add(1)
-        if not self.pipes.ext_cmd[v] then
-            self.pipes.ext_cmd[v] = assert(file.open("/dev/null", v == "stdin" and "r" or "w"))
-        end
-        local input = v=="stdin" and self.pipes.ext_cmd[v] or self.pipes.child_cmd[v]
-        local output = v=="stdin" and self.pipes.child_cmd[v] or self.pipes.ext_cmd[v]
-        fiber.spawn(function()
-            while true do
-                local received = input:read_some_chars()
-                if not received then break end
-                output:write(received)
-            end
-            input:close(); output:close()
-            self.pipes.ext_cmd[v], self.pipes.child_cmd[v] = nil, nil
-            self.pipes.wg:done()
-        end)
-    end
+    self.process.pidfd = assert(sc.pidfd_open(self.process.pid, 0))
 
-    -- Setup a new fiber to listen for context cancellation or command completion
-    if self.ctx then
-        fiber.spawn(function()
-            op.choice(
-                self.ctx:done_op():wrap(function () -- Context was cancelled, kill the command
-                    self:kill()
-                end),
-                pollio.fd_readable_op(self.process.pidfd) -- Command has completed, we just may not have waited yet
-            ):perform()
-        end)
-    end
+    return nil
 end
 
 --- Kills the command.
@@ -243,54 +175,45 @@ function Cmd:kill()
     if not self.process.pid then return "process not started" end
     if self.process.state then return "process has already completed" end
 
-    local res, err, errno = sc.kill(self._setpgid and -self.process.pid or self.process.pid, sc.SIGKILL)
+    local target = self._setpgid and -self.process.pid or self.process.pid
+    local res, err, errno = sc.kill(target, sc.SIGKILL)
     assert(res==0 or errno==sc.ESRCH, err)
 end
 
---- Sets up a pipe for the given IO type.
--- @param io_type The type of IO ("stdin", "stdout", or "stderr").
--- @return The pipe or an error.
-local function setup_pipe(self, io_type)
-    if self.pipes.ext_cmd[io_type] then return nil, io_type .. " pipe already created" end
-    if self.process.pid then return nil, io_type .. "_pipe after process started" end
-
-    local rd, wr = file.pipe()
-    wr = wr:setvbuf('no')
-
-    local cmd_end, ext_end = wr, rd
-
-    if io_type == "stdin" then
-        cmd_end, ext_end = rd, wr
-    end
-
-    self.pipes.ext_cmd[io_type] = cmd_end
-    self.pipes.ext[io_type] = ext_end
-
-    return ext_end, nil
+function Cmd:_pipe_creator(stdio)
+    local rd, wr = assert(sc.pipe())
+    self.pipes.parent[stdio] = (stdio == 'stdin') and wr or rd
+    self.pipes.child[stdio] = (stdio == 'stdin') and rd or wr
+    return file.fdopen(self.pipes.parent[stdio])
 end
-
 --- Creates a pipe for stdout. Call `:close()` when finished.
 -- @return The stdout pipe or an error.
-function Cmd:stdout_pipe() return setup_pipe(self, "stdout") end
+function Cmd:stdout_pipe() return self:_pipe_creator('stdout') end
 
 --- Creates a pipe for stderr. Call `:close()` when finished.
 -- @return The stderr pipe or an error.
-function Cmd:stderr_pipe() return setup_pipe(self, "stderr") end
+function Cmd:stderr_pipe() return self:_pipe_creator('stderr') end
 
 --- Creates a pipe for stdin. Call `:close()` when finished.
 -- @return The stdin pipe or an error.
-function Cmd:stdin_pipe() return setup_pipe(self, "stdin") end
-
+function Cmd:stdin_pipe() return self:_pipe_creator('stdin'):setvbuf('no') end
 
 --- Waits for the command to complete.
 -- @return The completion status or an error.
 function Cmd:wait()
-    pollio.fd_readable_op(self.process.pidfd):perform()
-    self.pipes.wg:wait()
+    local ops = { pollio.fd_readable_op(self.process.pidfd) }
+
+    if self.ctx then
+        ops[#ops + 1] = self.ctx:done_op():wrap(function()
+            self:kill()
+            pollio.fd_readable_op(self.process.pidfd):perform()
+        end)
+    end
+
+    op.choice(unpack(ops)):perform()
     local _, _, status = sc.waitpid(self.process.pid)
     self.process.state = status
     sc.close(self.process.pidfd)
-    close_all(self.pipes.child, self.pipes.child_cmd, self.pipes.ext_cmd)
     if status ~= 0 then return status end
 end
 
