@@ -47,14 +47,16 @@ end
 -- @param status True if diff pgid desired.
 function Cmd:setpgid(status)
     self._setpgid = status
+    return self
 end
 
 function Cmd:_output_collector(pipes)
 
     local function close_pipes()
-        for idx, pipe in ipairs(pipes) do
-            pipe:close()
-            table.remove(pipes, idx)
+        -- close from the tail so table.remove does not skip entries
+        for i = #pipes, 1, -1 do
+            pipes[i]:close()
+            pipes[i] = nil
         end
     end
 
@@ -81,7 +83,9 @@ function Cmd:_output_collector(pipes)
             end)
         end
 
-        ops[#ops + 1] = self.ctx and self.ctx:done_op():wrap(close_pipes)
+        if self.ctx then
+            ops[#ops + 1] = self.ctx:done_op():wrap(close_pipes)
+        end
 
         op.choice(unpack(ops)):perform()
     end
@@ -123,39 +127,29 @@ function Cmd:start()
         return "context cancelled"
     end
 
-    local ready_read, ready_write = sc.pipe()
-    assert(ready_read and ready_write)
+    local ready_read, ready_write = assert(sc.pipe())
 
-    local pid, err = sc.fork()
-    assert(pid ~= nil, err)
-
+    local pid = assert(sc.fork())
     if pid == 0 then -- child
-        if self._setpgid then
-            local result, err_msg = sc.setpid('p', 0, 0)
-            assert(result == 0, err_msg)
-        end
+        if self._setpgid then assert(sc.setpid('p', 0, 0) == 0) end
 
         -- pipework
         for name, fd in pairs(io_mappings) do
-            local child_fd = self.pipes.child[name]
+            if self.pipes.parent[name] then sc.close(self.pipes.parent[name]) end
 
-            if child_fd then
-                sc.close(self.pipes.parent[name])
-            else
-                local flags = (fd == sc.STDIN_FILENO) and sc.O_RDONLY or sc.O_WRONLY
-                child_fd = assert(sc.open("/dev/null", flags))
-            end
+            local child_fd = self.pipes.child[name] or
+                assert(sc.open("/dev/null", (fd == sc.STDIN_FILENO) and sc.O_RDONLY or sc.O_WRONLY))
 
             assert(sc.dup2(child_fd, fd))
-
-            if self.pipes.child[name] then
-                sc.close(child_fd)
-            end
+            if child_fd ~= fd then sc.close(child_fd) end -- always close duplicate if distinct
         end
-        sc.close(ready_write)
-        local _, execp_err, errno = sc.execp(self.path, self.args) -- will not return unless unsuccessful
-        if execp_err then
-            sc.exit(errno)                                   -- exit with non-zero status
+        sc.close(ready_read)
+        sc.set_cloexec(ready_write)                        -- Close on successful exec
+        local _, _, errno = sc.execp(self.path, self.args) -- will not return unless unsuccessful
+        if errno then
+            sc.write(ready_write, string.char(errno))      -- Write errno to pipe
+            sc.close(ready_write)
+            sc.exit(1)
         end
     end
     -- parent
@@ -165,8 +159,12 @@ function Cmd:start()
         sc.close(v)
     end
     ready_read = file.fdopen(ready_read)
-    ready_read:read_some_chars() -- will politely block until child is ready
+    local byte = ready_read:read_char() -- will politely block until child is ready
     ready_read:close()
+    if byte then
+        local errno = string.byte(byte)
+        return "child failed to start: errno=" .. tostring(errno)
+    end
 
     local pidfd, pidfd_err = sc.pidfd_open(self.process.pid, 0)
     if not pidfd then return pidfd_err end
@@ -217,10 +215,12 @@ end
 function Cmd:wait()
     local ops = { pollio.fd_readable_op(self.process.pidfd) }
 
-    ops[#ops + 1] = self.ctx and self.ctx:done_op():wrap(function()
-        self:kill()
-        pollio.fd_readable_op(self.process.pidfd):perform()
-    end)
+    if self.ctx then
+        ops[#ops + 1] = self.ctx:done_op():wrap(function()
+            self:kill()
+            pollio.fd_readable_op(self.process.pidfd):perform()
+        end)
+    end
 
     op.choice(unpack(ops)):perform()
     local _, _, status = sc.waitpid(self.process.pid)
