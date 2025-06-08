@@ -50,6 +50,19 @@ function Cmd:setpgid(status)
     return self
 end
 
+-- Re-emits the specified signals to the child process (or its process group,
+-- if setpgid(true) is used). This mirrors the behaviour of Go’s exec.Cmd and
+-- allows child processes to receive termination signals like SIGINT or SIGTERM.
+function Cmd:forward_signals(signals)
+    for _, sig in ipairs(signals) do
+        sc.signal(sig, function()
+            if self.process and self.process.pid then
+                local target = self._setpgid and -self.process.pid or self.process.pid
+                sc.kill(target, sig)
+            end
+        end)
+    end
+end
 function Cmd:_output_collector(pipes)
 
     local function close_pipes()
