@@ -11,13 +11,14 @@ local fifo = require 'fibers.utils.fifo'
 -- Represents a communication channel between fibers.
 -- @type Channel
 local Channel = {}
+Channel.__index = Channel
 
 --- Create a new Channel.
 -- @treturn Channel The created Channel.
 local function new()
     return setmetatable(
         { getq = fifo.new(), putq = fifo.new() },
-        { __index = Channel })
+        Channel)
 end
 
 --- Create a put operation for the Channel.
