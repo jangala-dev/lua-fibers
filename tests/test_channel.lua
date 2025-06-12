@@ -1,65 +1,92 @@
---- Tests the Channel implementation.
 print('testing: fibers.channel')
 
--- look one level up
 package.path = "../?.lua;" .. package.path
 
-
-local channel = require 'fibers.channel'
 local fiber = require 'fibers.fiber'
-local sc = require 'fibers.utils.syscall'
-local equal = require 'fibers.utils.helper'.equal
+local channel = require 'fibers.channel'
 
-local ch, log = channel.new(), {}
-local function record(x) table.insert(log, x) end
+local function test_unbuffered()
+    local chan = channel.new()
+    fiber.spawn(function() chan:put(42) end)
+    assert(chan:get() == 42, "basic transfer")
+
+    local received, signal = true, channel.new()
+    fiber.spawn(function()
+        received = chan:get()
+        signal:put(true)
+    end)
+    fiber.spawn(function()
+        chan:put(nil)
+        signal:put(true)
+    end)
+    signal:get()
+    signal:get()
+    assert(received == nil, "blocking transfer")
+    print("Unbuffered passed")
+end
+
+local function test_buffered()
+    local chan, signal = channel.new(2), channel.new()
+    local results = {}
+
+    fiber.spawn(function()
+        for i = 1, 3 do
+            chan:put(i)
+            table.insert(results, "put " .. i)
+        end
+        signal:put(true)
+    end)
+    fiber.spawn(function()
+        for i = 1, 3 do
+            assert(chan:get() == i)
+            table.insert(results, "get " .. i)
+        end
+        signal:put(true)
+    end)
+
+    signal:get()
+    signal:get()
+    assert(results[3] == "get 1" and results[6] == "put 3", "buffered order")
+    print("Bounded buffered passed")
+end
+
+local function test_unbounded()
+    local chan = channel.new(math.huge)
+    for i = 1, 1000 do chan:put(i) end
+    for i = 1, 1000 do assert(chan:get() == i) end
+
+    local blocked = true
+    fiber.spawn(function()
+        chan:get()
+        blocked = false
+    end)
+    assert(blocked, "get should block")
+    print("Unbounded passed")
+end
+
+local function test_concurrent()
+    local chan, signal, results = channel.new(1), channel.new(), {}
+    fiber.spawn(function()
+        for i = 1, 10 do chan:put(i) end
+        signal:put()
+    end)
+    fiber.spawn(function()
+        for _ = 1, 10 do table.insert(results, chan:get()) end
+        signal:put()
+    end)
+    signal:get()
+    signal:get()
+    for i = 1, 10 do assert(results[i] == i) end
+    print("Concurrent passed")
+end
 
 fiber.spawn(function()
-    record('a'); record(ch:get())
-end)
-fiber.spawn(function()
-    record('b'); ch:put('c'); record('d')
-end)
-assert(equal(log, {}))
-fiber.current_scheduler:run()
--- One turn: first fiber ran, suspended, then second fiber ran,
--- completed first, and continued self to end.
-assert(equal(log, { 'a', 'b', 'd' }))
-fiber.current_scheduler:run()
--- Next turn schedules first fiber and finishes.
-assert(equal(log, { 'a', 'b', 'd', 'c' }))
-
-log = {}
-fiber.spawn(function()
-    record('b'); ch:put('c'); record('d')
-end)
-fiber.spawn(function()
-    record('a'); record(ch:get())
-end)
-assert(equal(log, {}))
-fiber.current_scheduler:run()
--- Reversed order.
-assert(equal(log, { 'b', 'a', 'c' }))
-fiber.current_scheduler:run()
-assert(equal(log, { 'b', 'a', 'c', 'd' }))
-
--- Performance test.
-local message_count = 1e4
-local done = 0
-
-fiber.spawn(function()
-    for _ = 0, message_count do done = done + ch:get() end
+    test_unbuffered()
+    test_buffered()
+    test_unbounded()
+    test_concurrent()
+    print("All channel tests passed!")
+    fiber.stop()
 end)
 
-fiber.spawn(function()
-    for _ = 0, message_count do ch:put(1) end
-end)
-
-local start_time = sc.monotime()
-for _ = 0, message_count do fiber.current_scheduler:run() end
-local end_time = sc.monotime()
-
-print("Time taken per send/receive: ", (end_time - start_time) / (message_count * 2))
-
-assert(done == message_count)
-
-print('test: ok')
+fiber.main()
