@@ -174,7 +174,6 @@ end
 -- @tparam function f The function.
 -- @treturn vararg The value returned by the operation or the function.
 function BaseOp:perform_alt(f)
-    fiber.yield() -- lessens race possibility
     local success, val = self.try_fn()
     if success then return self.wrap_fn(val) end
     return f()
@@ -184,7 +183,6 @@ end
 -- @tparam function f The function.
 -- @treturn vararg The value returned by the operation or the function.
 function ChoiceOp:perform_alt(f)
-    fiber.yield() -- lessens race possibility
     local ops = self.base_ops
     local base = math.random(#ops)
     for i = 1, #ops do
