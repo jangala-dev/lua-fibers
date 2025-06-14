@@ -23,7 +23,7 @@ Cmd.__index = Cmd -- set metatable
 local function command(name, ...)
     local self = setmetatable({}, Cmd)
     self.path = name
-    self.args = {...}
+    self.args = { ... }
     self.process = {}
     self.pipes = {
         child = {},
@@ -50,8 +50,28 @@ function Cmd:setpgid(status)
     return self
 end
 
-function Cmd:_output_collector(pipes)
+--- Sets the signal to send to the child process on parent death.
+--- @param sig integer The signal to send.
+function Cmd:setprdeathsig(sig)
+    self._prdeathsig = sig
+    return self
+end
+-- Re-emits the specified signals to the child process (or its process group,
+-- if setpgid(true) is used). This mirrors the behaviour of Go’s exec.Cmd and
+-- allows child processes to receive termination signals like SIGINT or SIGTERM.
+function Cmd:forward_signals(...)
+    local signals = { ... }
+    for _, sig in ipairs(signals) do
+        sc.signal(sig, function()
+            if self.process and self.process.pid then
+                local target = self._setpgid and -self.process.pid or self.process.pid
+                sc.kill(target, sig)
+            end
+        end)
+    end
+end
 
+function Cmd:_output_collector(pipes)
     local function close_pipes()
         for i = #pipes, 1, -1 do
             pipes[i]:close()
@@ -130,6 +150,7 @@ function Cmd:start()
 
     local pid = assert(sc.fork())
     if pid == 0 then -- child
+        if self._prdeathsig then sc.prctl(sc.PR_SET_PDEATHSIG, self._prdeathsig) end
         if self._setpgid then assert(sc.setpid('p', 0, 0) == 0) end
 
         -- pipework
@@ -177,7 +198,7 @@ function Cmd:kill()
 
     local target = self._setpgid and -self.process.pid or self.process.pid
     local res, err, errno = sc.kill(target, sc.SIGKILL)
-    assert(res==0 or errno==sc.ESRCH, err)
+    assert(res == 0 or errno == sc.ESRCH, err)
 end
 
 function Cmd:_pipe_creator(stdio)
@@ -186,6 +207,7 @@ function Cmd:_pipe_creator(stdio)
     self.pipes.child[stdio] = (stdio == 'stdin') and rd or wr
     return file.fdopen(self.pipes.parent[stdio])
 end
+
 --- Creates a pipe for stdout. Call `:close()` when finished.
 -- @return The stdout pipe or an error.
 function Cmd:stdout_pipe() return self:_pipe_creator('stdout') end

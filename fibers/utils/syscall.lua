@@ -105,6 +105,7 @@ M.SOMAXCONN = p_socket.SOMAXCONN
 
 M.WNOHANG = p_wait.WNOHANG
 
+M.PR_SET_PDEATHSIG = 1
 -------------------------------------------------------------------------------
 -- Luafied stdlib syscalls
 
@@ -229,6 +230,8 @@ ffi.cdef[[
     int fcntl(int fd, int cmd, ...);
     int close(int fd);
     char *strerror(int errnum);
+
+    int prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5);
 ]]
 
 M.EPOLLIN = 0x00000001
@@ -342,6 +345,14 @@ function M.epoll_close(epfd)
     return wrap_error(ffi.C.close(epfd))
 end
 
+function M.prctl(option, arg2, arg3, arg4, arg5)
+    arg2 = arg2 or 0
+    arg3 = arg3 or 0
+    arg4 = arg4 or 0
+    arg5 = arg5 or 0
+
+    return wrap_error(ffi.C.prctl(option, arg2, arg3, arg4, arg5))
+end
 
 -------------------------------------------------------------------------------
 -- FFI C structure functions (for efficiency)
