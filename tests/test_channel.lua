@@ -27,26 +27,28 @@ end
 
 local function test_buffered()
     local chan, signal = channel.new(2), channel.new()
-    local results = {}
 
     fiber.spawn(function()
-        for i = 1, 3 do
+        for i = 1, 4 do
             chan:put(i)
-            table.insert(results, "put " .. i)
         end
         signal:put(true)
     end)
     fiber.spawn(function()
-        for i = 1, 3 do
+        for i = 1, 2 do
             assert(chan:get() == i)
-            table.insert(results, "get " .. i)
         end
-        signal:put(true)
     end)
 
     signal:get()
+    fiber.spawn(function()
+        chan:put(5)
+        signal:put(true)
+    end)
+    assert(chan:get() == 3)
     signal:get()
-    assert(results[3] == "get 1" and results[6] == "put 3", "buffered order")
+    assert(chan:get() == 4)
+    assert(chan:get() == 5)
     print("Bounded buffered passed")
 end
 
@@ -67,7 +69,7 @@ end
 local function test_concurrent()
     local chan, signal, results = channel.new(1), channel.new(), {}
     fiber.spawn(function()
-        for i = 1, 10 do chan:put(i) end
+        for i = 1, 11 do chan:put(i) end
         signal:put()
     end)
     fiber.spawn(function()
