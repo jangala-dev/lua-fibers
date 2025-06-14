@@ -5,33 +5,30 @@
 -- @module fibers.channel
 
 local op = require 'fibers.op'
-
-local Fifo = {}
-Fifo.__index = Fifo
-local function new_fifo() return setmetatable({}, Fifo) end
-function Fifo:push(x) table.insert(self, x) end
-
-function Fifo:empty() return #self == 0 end
-
-function Fifo:peek()
-    assert(not self:empty()); return self[1]
-end
-
-function Fifo:pop()
-    assert(not self:empty()); return table.remove(self, 1)
-end
+local fifo = require 'fibers.utils.fifo'
 
 --- Channel class
 -- Represents a communication channel between fibers.
 -- @type Channel
 local Channel = {}
+Channel.__index = Channel
 
 --- Create a new Channel.
 -- @treturn Channel The created Channel.
-local function new()
-    return setmetatable(
-        { getq = new_fifo(), putq = new_fifo() },
-        { __index = Channel })
+local function new(buffer_size)
+    buffer_size = buffer_size or 0 -- Default to unbuffered
+
+    local buffer = nil
+    if buffer_size > 0 then
+        buffer = fifo.new()
+    end
+
+    return setmetatable({
+        buffer = buffer,
+        buffer_size = buffer_size,
+        getq = fifo.new(), -- Queue of waiting receivers
+        putq = fifo.new(), -- Queue of waiting senders
+    }, Channel)
 end
 
 --- Create a put operation for the Channel.
@@ -40,28 +37,31 @@ end
 -- @param val The value to put into the Channel.
 -- @treturn BaseOp The created put operation.
 function Channel:put_op(val)
-    local getq, putq = self.getq, self.putq
+    local getq, putq, buffer, buffer_size = self.getq, self.putq, self.buffer, self.buffer_size
     local function try()
+        -- Case 1: If there's a waiting receiver, complete the rendezvous immediately
         while not getq:empty() do
             local remote = getq:pop()
             if remote.suspension:waiting() then
                 remote.suspension:complete(remote.wrap, val)
                 return true
             end
-            -- Otherwise the remote suspension is already completed, in
-            -- which case we did the right thing to pop off the dead
-            -- suspension from the getq.
+            -- Otherwise the remote suspension is already completed, pop and continue
         end
+        -- Case 2: If we have a buffer with space, add the value to the buffer
+        if buffer and buffer:length() < buffer_size then
+            buffer:push(val)
+            return true
+        end
+        -- Case 3: No receivers and no buffer space
         return false
     end
     local function block(suspension, wrap_fn)
-        -- First, a bit of GC.
+        -- First, GC for canceled operations
         while not putq:empty() and not putq:peek().suspension:waiting() do
             putq:pop()
         end
-        -- We have suspended the current fiber; arrange for the fiber
-        -- to be resumed by a get operation by adding it to the channel's
-        -- putq.
+        -- No space in buffer and no receivers, so block
         putq:push({ suspension = suspension, wrap = wrap_fn, val = val })
     end
     return op.new_base_op(nil, try, block)
@@ -72,28 +72,38 @@ end
 -- a sender fiber to receive one value from the channel.
 -- @treturn BaseOp The created get operation.
 function Channel:get_op()
-    local getq, putq = self.getq, self.putq
-    local function try()
+    local getq, putq, buffer = self.getq, self.putq, self.buffer
+    -- Attempt to service one sender from putq
+    local function pop_from_putq()
         while not putq:empty() do
             local remote = putq:pop()
             if remote.suspension:waiting() then
                 remote.suspension:complete(remote.wrap)
-                return true, remote.val
+                return remote
             end
-            -- Otherwise the remote suspension is already completed, in
-            -- which case we did the right thing to pop off the dead
-            -- suspension from the putq.
         end
+        return nil
+    end
+    local function try()
+        local remote = pop_from_putq()
+        -- Case 1: Take from buffer if available
+        if buffer and buffer:length() > 0 then
+            local val = buffer:pop()
+            -- Attempt to refill buffer with one sender
+            if remote then buffer:push(remote.val) end
+            return true, val
+        end
+        -- Case 2: No buffer value; try to take directly from a sender
+        if remote then return true, remote.val end
+        -- Case 3: Nothing available so block
         return false
     end
     local function block(suspension, wrap_fn)
-        -- First, a bit of GC.
+        -- Clear any stale entries
         while not getq:empty() and not getq:peek().suspension:waiting() do
             getq:pop()
         end
-        -- We have suspended the current fiber; arrange for the fiber to
-        -- be resumed by a put operation by adding it to the channel's
-        -- getq.
+        -- Block this receiver
         getq:push({ suspension = suspension, wrap = wrap_fn })
     end
     return op.new_base_op(nil, try, block)
