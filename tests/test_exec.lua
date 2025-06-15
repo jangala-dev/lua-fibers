@@ -136,6 +136,87 @@ local function test_cancel_before_start()
     assert(err ~= nil, "Expected start() to fail due to cancelled context")
 end
 
+local function test_cleanup_on_crash(id)
+    local function is_process_running(pid)
+        local f = assert(io.popen('ps -p ' .. pid .. ' | wc -l'))
+        local output = f:read("*all")
+        f:close()
+        return tonumber(output) > 1 -- More than 1 means the process is running
+    end
+    local temp_script_dir = "/tmp/crash_test" .. id .. ".lua"
+
+    local script = [[
+        package.path = "../../?.lua;../?.lua;" .. package.path
+        local fiber = require 'fibers.fiber'
+        local exec = require 'fibers.exec'
+        local sleep = require 'fibers.sleep'
+        local pollio = require 'fibers.pollio'
+        local sc = require 'fibers.utils.syscall'
+        pollio.install_poll_io_handler()
+
+        fiber.spawn(function ()
+            local cmd = exec.command('sleep', '1')
+            cmd:setprdeathsig(sc.SIGKILL)
+            local err = cmd:start()
+            if err then
+                error(err)
+            end
+            io.stdout:write(tostring(cmd.process.pid) .. "\n")
+            io.stdout:flush()
+            sleep.sleep(0.01)
+            print(obj.obj)
+        end)
+
+        fiber.main()
+    ]]
+
+    -- Write the script to a temporary file
+    local file = assert(io.open(temp_script_dir, "w"))
+    file:write(script)
+    file:close()
+
+    -- Execute the script using luajit
+    local cmd = exec.command('luajit', temp_script_dir)
+    local stdout = assert(cmd:stdout_pipe())
+    assert(cmd:start() == nil, "Expected no error on start")
+
+    -- Wait for line output from script
+    local lines
+    for _ = 1, 10 do
+        lines = stdout:read_line()
+        if lines then
+            break
+        end
+        sleep.sleep(0.01) -- Wait a bit for output
+    end
+    local exit_code = cmd:wait()
+    stdout:close()
+    assert(exit_code ~= 0, "Expected non-zero exit code due to crash")
+
+    os.remove(temp_script_dir)
+
+    -- Get the process ID of the sleep command
+    local pid = lines and tonumber(lines:match("^(%d+)"))
+    assert(pid, "Expected a valid process ID from output: " .. tostring(lines or 'nil'))
+    local is_running = is_process_running(pid)
+
+    -- If we have a valid pid, make sure to cleanup the sleep command explicitly
+    if pid and pid > 0 and is_running then
+        -- Send SIGKILL to the process
+        local kill_cmd = assert(io.popen('kill -9 ' .. tostring(pid)))
+        kill_cmd:close()
+
+        -- Give a small amount of time for the kill to take effect
+        sleep.sleep(0.1)
+
+        local running = is_process_running(pid)
+
+        assert(not running,
+            "Process " .. pid .. " still exists after kill")
+    end
+
+    assert(not is_running, "Child sleep command is still running")
+end
 -- Main test function
 local function main()
     local pid = sc.getpid()
@@ -151,14 +232,15 @@ local function main()
         test_kill = test_kill,
         test_context = test_context,
         test_cancel_during_output = test_cancel_during_output,
-        test_cancel_before_start = test_cancel_before_start
+        test_cancel_before_start = test_cancel_before_start,
+        test_cleanup_on_crash = test_cleanup_on_crash,
     }
     for k, v in pairs(tests) do
         local wg = waitgroup.new()
-        for _ = 1, reps do
+        for i = 1, reps do
             wg:add(1)
             fiber.spawn(function ()
-                v()
+                v(i)
                 wg:done()
             end)
         end
