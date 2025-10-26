@@ -20,19 +20,30 @@ Scheduler.__index = Scheduler
 --- Creates a new Scheduler.
 -- @function new
 -- @return A new Scheduler.
-local function new()
+local function new(get_time)
+    -- get_time is an optional monotonic time source (defaults to sc.monotime)
+    local now_src = get_time or sc.monotime
     local ret = setmetatable(
-        { next = {}, cur = {}, sources = {}, wheel = timer.new(nil), maxsleep = MAX_SLEEP_TIME },
-        Scheduler)
+        {
+            next         = {},                   -- runnable tasks (will run next turn)
+            cur          = {},                   -- tasks being run this turn
+            sources      = {},                   -- task sources (timer, poller, etc.)
+            wheel        = timer.new(now_src()), -- timer wheel seeded from the same clock
+            maxsleep     = MAX_SLEEP_TIME,       -- upper bound on sleep between polls
+            get_time     = now_src,              -- single source of "current" monotonic time
+            event_waiter = nil                   -- (set by add_task_source when poller present)
+        },
+        Scheduler
+    )
+
+    -- Timer task source: advances the wheel and schedules due tasks.
     local timer_task_source = { wheel = ret.wheel }
-    -- private method for timer_tast_source
     function timer_task_source:schedule_tasks(sched, now)
         self.wheel:advance(now, sched)
     end
-
-    -- private method for timer_tast_source
     function timer_task_source:cancel_all_tasks()
-        -- Implement me!
+        -- No-op: advancing with 'now' drains due tasks; nothing to cancel explicitly.
+        -- (Keep for Scheduler:shutdown() symmetry.)
     end
 
     ret:add_task_source(timer_task_source)
@@ -50,6 +61,11 @@ end
 -- @param task Task to be scheduled.
 function Scheduler:schedule(task)
     table.insert(self.next, task)
+end
+
+-- Helper for "current monotonic time"
+function Scheduler:monotime()
+    return self.get_time()
 end
 
 --- Gets the current time from the timer wheel.
@@ -84,7 +100,7 @@ end
 -- If a specific time is provided, tasks scheduled for that time are run.
 -- @tparam number now (optional) The time to run tasks for.
 function Scheduler:run(now)
-    if now == nil then now = self:now() end
+    if now == nil then now = self:monotime() end
     self:schedule_tasks_from_sources(now)
     self.cur, self.next = self.next, self.cur
     for i = 1, #self.cur do
@@ -103,7 +119,7 @@ end
 
 --- Waits for the next scheduled event.
 function Scheduler:wait_for_events()
-    local now, next_time = sc.monotime(), self:next_wake_time()
+    local now, next_time = self:monotime(), self:next_wake_time()
     local timeout = math.min(self.maxsleep, next_time - now)
     timeout = math.max(timeout, 0)
     if self.event_waiter then
@@ -124,7 +140,7 @@ function Scheduler:main()
     self.done = false
     repeat
         self:wait_for_events()
-        self:run(sc.monotime())
+        self:run(self:monotime())
     until self.done
 end
 
