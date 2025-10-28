@@ -110,47 +110,75 @@ M.PR_SET_PDEATHSIG = 1
 -- Luafied stdlib syscalls
 
 function M.fcntl(fd, ...) return p_fcntl.fcntl(fd, ...) end
+
 function M.open(path, mode, perm) return p_fcntl.open(path, mode, perm) end
 
 function M.strerror(err) return p_errno.errno(err) end
 
 function M.stat(path) return p_stat.stat(path) end
+
 function M.fstat(file, ...) return p_stat.fstat(file, ...) end
 
 function M.signal(signum, handler) return p_signal.signal(signum, handler) end
+
 function M.kill(pid, options) return p_signal.kill(pid, options) end
+
 function M.killpg(pgid, sig) return p_signal.kill(pgid, sig) end
 
 function M.accept(fd) return p_socket.accept(fd) end
+
 function M.bind(file, sockaddr) return p_socket.bind(file, sockaddr) end
+
 function M.connect(fd, addr) return p_socket.connect(fd, addr) end
+
 function M.getpeername(sockfd) return p_socket.getpeername(sockfd) end
+
 function M.getsockname(sockfd) return p_socket.getsockname(sockfd) end
+
 function M.getsockopt(fd, level, name) return p_socket.getsockopt(fd, level, name) end
+
 function M.listen(fd, backlog) return p_socket.listen(fd, backlog or M.SOMAXCONN) end
+
 function M.socket(family, socktype, protocol) return p_socket.socket(family, socktype, protocol) end
 
 function M.fileno(file) return p_stdio.fileno(file) end
+
 function M.rename(from, to) return p_stdio.rename(from, to) end
 
 function M.clock_gettime(id) return p_time.clock_gettime(id) end
 
 function M.access(path, mode) return p_unistd.access(path, mode) end
+
 function M.close(fd) return p_unistd.close(fd) end
+
 function M.dup2(fd1, fd2) return p_unistd.dup2(fd1, fd2) end
+
 function M.exec(path, argt) return p_unistd.exec(path, argt) end
+
 function M.execp(path, argt) return p_unistd.execp(path, argt) end
+
 function M.execve(path, argv, _) return p_unistd.exec(path, argv) end
+
 function M.fork() return p_unistd.fork() end
+
 function M.fsync(fd) return p_unistd.fsync(fd) end
+
 function M.getpgrp() return p_unistd.getpgrp() end
+
 function M.getpid() return p_unistd.getpid() end
+
 function M.isatty(fd) return p_unistd.isatty(fd) end
+
 function M.lseek(file, offset, whence) return p_unistd.lseek(file, offset, whence) end
+
 function M.pipe() return p_unistd.pipe() end
+
 function M.read(fd, count) return p_unistd.read(fd, count) end
+
 function M.setpid(what, id, gid) return p_unistd.setpid(what, id, gid) end
+
 function M.unlink(path) return p_unistd.unlink(path) end
+
 function M.write(fd, buf) return p_unistd.write(fd, buf) end
 
 function M.waitpid(pid, options) return p_wait.wait(pid, options) end
@@ -161,33 +189,34 @@ function M.exit(status) return os.exit(status) end
 -- Convenience functions
 
 function M.set_nonblock(fd)
-	local flags = assert(M.fcntl(fd, M.F_GETFL))
-	assert( M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
+    local flags = assert(M.fcntl(fd, M.F_GETFL))
+    assert(M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
 end
 
 function M.set_block(fd)
-	local flags = assert(M.fcntl(fd, M.F_GETFL))
-	assert( M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
+    local flags = assert(M.fcntl(fd, M.F_GETFL))
+    assert(M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
 end
 
 function M.set_cloexec(fd)
     local flags = assert(M.fcntl(fd, M.F_GETFD))
     assert(M.fcntl(fd, M.F_SETFD, bor(flags, M.FD_CLOEXEC)))
 end
+
 function M.monotime()
     local time = M.clock_gettime(M.CLOCK_MONOTONIC)
-    return time.tv_sec + time.tv_nsec/1e9, time.tv_sec, time.tv_nsec
+    return time.tv_sec + time.tv_nsec / 1e9, time.tv_sec, time.tv_nsec
 end
 
 function M.realtime()
     local time = M.clock_gettime(M.CLOCK_REALTIME)
-    return time.tv_sec + time.tv_nsec/1e9, time.tv_sec, time.tv_nsec
+    return time.tv_sec + time.tv_nsec / 1e9, time.tv_sec, time.tv_nsec
 end
 
 function M.floatsleep(t)
-    local sec = t - t%1
-    local nsec = t%1 * 1e9
-    local _, _, _, remaining = p_time.nanosleep({tv_sec=sec, tv_nsec=nsec})
+    local sec = t - t % 1
+    local nsec = t % 1 * 1e9
+    local _, _, _, remaining = p_time.nanosleep({ tv_sec = sec, tv_nsec = nsec })
     while remaining do
         p_time.nanosleep(remaining)
     end
@@ -206,23 +235,23 @@ end
 -- epoll
 
 if ARCH == "x64" or ARCH == "x86" then
-    ffi.cdef[[
+    ffi.cdef [[
         typedef struct epoll_event {
             uint8_t raw[12];  // 4 bytes for events + 8 bytes for data
         } epoll_event;
     ]]
 elseif ARCH == "mips" or ARCH == "mipsel" or ARCH == "arm64" then
-    ffi.cdef[[
+    ffi.cdef [[
         typedef struct epoll_event {
             uint32_t events;
             uint64_t data;
         } epoll_event;
     ]]
 else
-    error(ARCH.." architecture not specified")
+    error(ARCH .. " architecture not specified")
 end
 
-ffi.cdef[[
+ffi.cdef [[
     int epoll_create(int size);
     int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
     int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
@@ -247,7 +276,7 @@ M.EPOLLWRBAND = 0x00000200
 M.EPOLLMSG = 0x00000400
 M.EPOLLRDHUP = 0x00002000
 
-M.EPOLLEXCLUSIVE =  bit.lshift(1, 28)
+M.EPOLLEXCLUSIVE = bit.lshift(1, 28)
 M.EPOLLWAKEUP = bit.lshift(1, 29)
 M.EPOLLONESHOT = bit.lshift(1, 30)
 M.EPOLLET = bit.lshift(1, 31)
@@ -290,7 +319,7 @@ elseif ARCH == 'mips' or ARCH == 'arm64' or ARCH == 'mipsel' then
         ev.data = value
     end
 else
-    error(ARCH.." architecture not specified")
+    error(ARCH .. " architecture not specified")
 end
 
 -- Returns an epoll file descriptor.
@@ -395,7 +424,7 @@ end
 
 if not libpthread then error("libpthread not found") end
 
-ffi.cdef[[
+ffi.cdef [[
 typedef struct {
     uint32_t ssi_signo;    /* Signal number */
     int32_t  ssi_errno;    /* Error number (unused) */
@@ -444,31 +473,105 @@ elseif ARCH == "x64" or ARCH == "arm64" or ARCH == "x86" then
 end
 
 function M.sigemptyset(set) return wrap_error(ffi.C.sigemptyset(set)) end
+
 function M.sigaddset(set, signum) return wrap_error(ffi.C.sigaddset(set, signum)) end
+
 function M.signalfd(fd, mask, flags) return wrap_error(ffi.C.signalfd(fd, mask, flags)) end
 
 function M.pthread_sigmask(how, set, oldset) return wrap_error(libpthread.pthread_sigmask(how, set, oldset)) end
 
 function M.new_sigset() return ffi.new("sigset_t") end
+
 function M.new_fdsi() return ffi.new("signalfd_siginfo"), ffi.sizeof("signalfd_siginfo") end
 
 -- Define syscall and pid_t
-ffi.cdef[[
+ffi.cdef [[
 long syscall(long number, ...);
 typedef int pid_t;
 typedef unsigned int uint;
 ]]
 
-local SYS_pidfd_open = 434 -- Good for (almost) all our platforms
+local SYS_pidfd_open = 434      -- Good for (almost) all our platforms
 if ARCH == "mips" or ARCH == "mipsel" then
     SYS_pidfd_open = 4000 + 434 -- See https://www.linux-mips.org/wiki/Syscall
 end
 
 -- Function to open a pidfd
 function M.pidfd_open(pid, flags)
-    pid = ffi.new("pid_t", pid)  -- Explicitly cast pid to pid_t
-    flags = ffi.new("uint", flags)  -- Explicitly cast flgas to uint
+    pid = ffi.new("pid_t", pid)    -- Explicitly cast pid to pid_t
+    flags = ffi.new("uint", flags) -- Explicitly cast flgas to uint
     return wrap_error(ffi.tonumber(ffi.C.syscall(SYS_pidfd_open, pid, flags)))
 end
+
+-- Termios constants and baudrate support
+M.TCSANOW = 0   -- Make changes now without waiting for data to complete
+M.TCSADRAIN = 1 -- Wait until all output written to fildes is transmitted
+M.TCSAFLUSH = 2 -- Flush input/output buffers and make the change
+
+-- Baudrate constants
+M.BAUDRATES = {
+    [1200] = 9,
+    [2400] = 11,
+    [4800] = 12,
+    [9600] = 13,
+    [19200] = 14,
+    [38400] = 15,
+    [57600] = 4097,
+    [115200] = 4098,
+    [230400] = 4099,
+    [460800] = 4100,
+    [500000] = 4101,
+    [576000] = 4102,
+    [921600] = 4103,
+    [1000000] = 4104,
+    [1152000] = 4105,
+    [1500000] = 4106,
+    [2000000] = 4107,
+    [2500000] = 4108,
+    [3000000] = 4109,
+    [3500000] = 4110,
+    [4000000] = 4111
+}
+
+-- Define termios structs/functions for direct baudrate control
+ffi.cdef [[
+typedef unsigned int speed_t;
+typedef unsigned char cc_t;
+typedef unsigned int tcflag_t;
+
+struct termios {
+    tcflag_t c_iflag;
+    tcflag_t c_oflag;
+    tcflag_t c_cflag;
+    tcflag_t c_lflag;
+    cc_t c_line;
+    cc_t c_cc[32];
+    speed_t c_ispeed;
+    speed_t c_ospeed;
+};
+
+int tcgetattr(int fd, struct termios *termios_p);
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
+speed_t cfgetospeed(const struct termios *termios_p);
+speed_t cfgetispeed(const struct termios *termios_p);
+int cfsetospeed(struct termios *termios_p, speed_t speed);
+int cfsetispeed(struct termios *termios_p, speed_t speed);
+]]
+
+function M.new_termios() return ffi.new("struct termios") end
+
+function M.tcgetattr(fd, termios_p) return wrap_error(ffi.C.tcgetattr(fd, termios_p)) end
+
+function M.tcsetattr(fd, optional_actions, termios_p)
+    return wrap_error(ffi.C.tcsetattr(fd, optional_actions, termios_p))
+end
+
+function M.cfgetospeed(termios_p) return ffi.tonumber(ffi.C.cfgetospeed(termios_p)) end
+
+function M.cfgetispeed(termios_p) return ffi.tonumber(ffi.C.cfgetispeed(termios_p)) end
+
+function M.cfsetospeed(termios_p, speed) return wrap_error(ffi.C.cfsetospeed(termios_p, speed)) end
+
+function M.cfsetispeed(termios_p, speed) return wrap_error(ffi.C.cfsetispeed(termios_p, speed)) end
 
 return M
