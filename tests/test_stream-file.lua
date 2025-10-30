@@ -10,6 +10,9 @@ local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 local channel = require 'fibers.channel'
 local file = require 'fibers.stream.file'
+local compat    = require 'fibers.stream.compat'
+
+compat.install()
 
 local function test()
     local rd, wr = file.pipe()
@@ -23,7 +26,7 @@ local function test()
     assert(rd:read_some_chars() == nil)
     rd:close()
 
-    local subprocess = file.popen('echo "hello"; echo "world"', 'r')
+    local subprocess = assert(io.popen('echo "hello"; echo "world"', 'r'))
     local lines = {}
     while true do
         local line, err = subprocess:read_line()
