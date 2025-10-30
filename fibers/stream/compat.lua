@@ -2,6 +2,7 @@
 
 -- Shim to replace Lua's built-in IO module with streams.
 
+local exec = require 'fibers.exec'
 local stream = require 'fibers.stream'
 local file = require 'fibers.stream.file'
 local sc = require 'fibers.utils.syscall'
@@ -48,9 +49,42 @@ function io.output(new)
     io.current_output = new
 end
 
+
 function io.popen(prog, mode)
-    return file.popen(prog, mode)
+    assert(type(prog) == 'string', "io.popen: prog must be a string")
+    mode = mode or 'r'
+    assert(mode == 'r' or mode == 'w', "io.popen: mode must be 'r' or 'w'")
+
+    -- launch via /bin/sh -c (Lua-compatible semantics)
+    local cmd = exec.command('sh', '-c', prog)
+
+    -- get a Stream for the appropriate end
+    local s = (mode == 'r') and cmd:stdout_pipe() or cmd:stdin_pipe()
+
+    local err = cmd:start()
+    if err then
+        pcall(function() s:close() end)
+        return nil, "failed to start: " .. tostring(err)
+    end
+
+    -- Override the *underlying IO* close, not the Stream close.
+    -- Stream:close() will call this and forward the return values.
+    local io_close = s.io.close
+    function s.io:close()
+        -- close our pipe end first
+        local _, _, _, _ = pcall(io_close, self)
+        -- wait for child using pidfd (handled inside exec:wait)
+        local status = cmd:wait() -- nil on success, non-zero exit code on failure
+        if status and status ~= 0 then
+            return nil, "exit", status
+        else
+            return true, "exit", 0
+        end
+    end
+
+    return s
 end
+
 
 function io.read(...)
     return io.current_input:read(...)

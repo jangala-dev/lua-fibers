@@ -100,13 +100,17 @@ function PollIOHandler:schedule_tasks(sched, _, timeout)
     if timeout >= 0 then timeout = timeout * 1e3 end
     for fd, event in pairs(self.epoll:poll(timeout)) do
         if bit.band(event, epoll.RD + epoll.ERR) ~= 0 then
-            local tasks = self.waiting_for_readable[fd]
-            schedule_tasks(sched, tasks)
+            schedule_tasks(sched, self.waiting_for_readable[fd])
+            self.waiting_for_readable[fd] = nil
         end
         if bit.band(event, epoll.WR + epoll.ERR) ~= 0 then
-            local tasks = self.waiting_for_writable[fd]
-            schedule_tasks(sched, tasks)
+            schedule_tasks(sched, self.waiting_for_writable[fd])
+            self.waiting_for_writable[fd] = nil
         end
+        local mask = 0
+        if self.waiting_for_readable[fd] ~= nil then mask = bit.bor(mask, epoll.RD) end
+        if self.waiting_for_writable[fd] ~= nil then mask = bit.bor(mask, epoll.WR) end
+        if mask ~= 0 then self.epoll:add(fd, mask) end
     end
 end
 

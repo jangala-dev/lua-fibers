@@ -197,53 +197,10 @@ local function pipe()
     return fdopen(rd, sc.O_RDONLY), fdopen(wr, sc.O_WRONLY)
 end
 
-local function popen(prog, mode)
-    assert(type(prog) == 'string')
-    assert(mode == 'r' or mode == 'w')
-    local parent_half, child_half
-    do
-        local rd, wr = assert(sc.pipe())
-        if mode == 'r' then
-            parent_half, child_half = rd, wr
-        else
-            parent_half, child_half = wr, rd
-        end
-    end
-    local pid = assert(sc.fork())
-    if pid == 0 then
-        sc.close(parent_half)
-        sc.dup2(child_half, mode == 'r' and 1 or 0)
-        sc.close(child_half)
-        sc.execve('/bin/sh', { "-c", prog })
-        sc.write(2, "io.popen: Failed to exec /bin/sh!")
-        sc.exit(255)
-    end
-    sc.close(child_half)
-    local io = new_file_io(parent_half)
-    local close = io.close
-    function io:close()
-        if not pid then return end
-        close(self)
-        local ch_pid, status, code
-        repeat
-            ch_pid, status, code = sc.waitpid(pid, sc.WNOHANG)
-            -- some kind of sleep here, surely, if used in a fibers context
-        until (ch_pid and status ~= 'running') or (not ch_pid and code ~= sc.EINTR)
-        pid = nil
-        local retval1 = (status == "exited" and code == 0) or nil
-        local retval2 = status == "exited" and "exit" or "signal"
-        local retval3 = code
-        return retval1, retval2, retval3
-    end
-
-    return stream.open(io, mode == 'r', mode == 'w')
-end
-
 return {
     init_nonblocking = pollio.init_nonblocking,
     fdopen = fdopen,
     open = open,
     tmpfile = tmpfile,
     pipe = pipe,
-    popen = popen,
 }
