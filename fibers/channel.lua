@@ -1,134 +1,97 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+-- fibers/channel.lua
+local scope_mod = require 'fibers.scope'
+local op        = require 'fibers.op'
+local fifo      = require 'fibers.utils.fifo'
 
---- fibers.channel module
--- Provides Concurrent ML style channels for communication between fibers.
--- @module fibers.channel
-
-local op = require 'fibers.op'
-local fifo = require 'fibers.utils.fifo'
-
---- Channel class
--- Represents a communication channel between fibers.
--- @type Channel
 local Channel = {}
 Channel.__index = Channel
 
---- Create a new Channel.
--- @treturn Channel The created Channel.
 local function new(buffer_size)
-    buffer_size = buffer_size or 0 -- Default to unbuffered
-
-    local buffer = nil
-    if buffer_size > 0 then
-        buffer = fifo.new()
-    end
-
+    buffer_size = buffer_size or 0
     return setmetatable({
-        buffer = buffer,
+        buffer      = buffer_size > 0 and fifo.new() or nil,
         buffer_size = buffer_size,
-        getq = fifo.new(), -- Queue of waiting receivers
-        putq = fifo.new(), -- Queue of waiting senders
+        getq        = fifo.new(), -- receivers: nodes {susp=<Suspension>}
+        putq        = fifo.new(), -- senders:   nodes {susp=<Suspension>, val=<any>}
     }, Channel)
 end
 
---- Create a put operation for the Channel.
--- Make an operation that if and when it completes will rendezvous with
--- a receiver fiber to send VAL over the channel.
--- @param val The value to put into the Channel.
--- @treturn BaseOp The created put operation.
+local function pop_live(q)
+    while not q:empty() do
+        local n = q:pop()
+        if not n.removed and n.susp and n.susp:waiting() then return n end
+    end
+end
 function Channel:put_op(val)
     local getq, putq, buffer, buffer_size = self.getq, self.putq, self.buffer, self.buffer_size
+
     local function try()
-        -- Case 1: If there's a waiting receiver, complete the rendezvous immediately
-        while not getq:empty() do
-            local remote = getq:pop()
-            if remote.suspension:waiting() then
-                remote.suspension:complete(remote.wrap, val)
-                return true
-            end
-            -- Otherwise the remote suspension is already completed, pop and continue
+        local rx = pop_live(getq)
+        if rx then
+            rx.susp:complete(val)
+            return true
         end
-        -- Case 2: If we have a buffer with space, add the value to the buffer
         if buffer and buffer:length() < buffer_size then
             buffer:push(val)
             return true
         end
-        -- Case 3: No receivers and no buffer space
         return false
     end
-    local function block(suspension, wrap_fn)
-        -- First, GC for canceled operations
-        while not putq:empty() and not putq:peek().suspension:waiting() do
-            putq:pop()
-        end
-        -- No space in buffer and no receivers, so block
-        putq:push({ suspension = suspension, wrap = wrap_fn, val = val })
+
+    local function install(ctx, susp)
+        local node = { susp = susp, val = val }
+        putq:push(node)
+        ctx.defer_loser(function() node.removed = true end) -- O(1)
+        -- no commit hook needed; receiver completes us
     end
-    return op.new_base_op(nil, try, block)
+
+    return op.new(nil, try, install)
 end
 
---- Create a get operation for the Channel.
--- Make an operation that if and when it completes will rendezvous with
--- a sender fiber to receive one value from the channel.
--- @treturn BaseOp The created get operation.
 function Channel:get_op()
     local getq, putq, buffer = self.getq, self.putq, self.buffer
-    -- Attempt to service one sender from putq
-    local function pop_from_putq()
-        while not putq:empty() do
-            local remote = putq:pop()
-            if remote.suspension:waiting() then
-                remote.suspension:complete(remote.wrap)
-                return remote
-            end
-        end
-        return nil
-    end
+
     local function try()
-        local remote = pop_from_putq()
-        -- Case 1: Take from buffer if available
         if buffer and buffer:length() > 0 then
-            local val = buffer:pop()
-            -- Attempt to refill buffer with one sender
-            if remote then buffer:push(remote.val) end
-            return true, val
+            local v = buffer:pop()
+            local tx = pop_live(putq)
+            if tx then
+                buffer:push(tx.val); tx.susp:complete()
+            end
+            return true, v
         end
-        -- Case 2: No buffer value; try to take directly from a sender
-        if remote then return true, remote.val end
-        -- Case 3: Nothing available so block
+        local tx = pop_live(putq)
+        if tx then
+            tx.susp:complete()
+            return true, tx.val
+        end
         return false
     end
-    local function block(suspension, wrap_fn)
-        -- Clear any stale entries
-        while not getq:empty() and not getq:peek().suspension:waiting() do
-            getq:pop()
-        end
-        -- Block this receiver
-        getq:push({ suspension = suspension, wrap = wrap_fn })
+
+    local function install(ctx, susp)
+        local node = { susp = susp }
+        getq:push(node)
+        ctx.defer_loser(function() node.removed = true end) -- O(1)
     end
-    return op.new_base_op(nil, try, block)
+
+    return op.new(nil, try, install)
 end
 
---- Put a message into the Channel.
--- Send message on the channel.  If there is already another fiber
--- waiting to receive a message on this channel, give it our message and
--- continue.  Otherwise, block until a receiver becomes available.
--- @tparam any message The message to put into the Channel.
-function Channel:put(message)
-    self:put_op(message):perform()
+function Channel:get(scope)
+    scope = scope or scope_mod.current()
+    if not scope then return false, "no-scope" end
+    local ok, v_or_cause = scope:wait(self:get_op())
+    return ok, v_or_cause
 end
 
---- Get a message from the Channel.
--- Receive a message from the channel and return it.  If there is
--- already another fiber waiting to send a message on this channel, take
--- its message directly.  Otherwise, block until a sender becomes
--- available.
--- @treturn any The message retrieved from the Channel.
-function Channel:get()
-    return self:get_op():perform()
+function Channel:put(val, scope)
+    scope = scope or scope_mod.current()
+    if not scope then return false, "no-scope" end
+    local ok, cause = scope:wait(self:put_op(val))
+    -- successful puts have no value payload
+    return ok, ok and nil or cause
 end
-
---- @export
+-- Optional convenience methods using a current scope when present can be added later.
 return {
     new = new
 }
