@@ -77,7 +77,9 @@ end
 --- BaseOp class
 -- Represents a base operation.
 -- @type BaseOp
-local BaseOp = {}
+local BaseOp = {
+    wrap_fn = id_wrap,
+}
 BaseOp.__index = BaseOp
 
 --- Create a new base operation.
@@ -142,13 +144,13 @@ end
 -- @treturn BaseOp The created base operation.
 function BaseOp:wrap(f)
     -- Preserve delayed semantics for guards.
-    if self._guard_builder then
-        local prev_wrap = self.wrap_fn or id_wrap
+    if self._guard_builder or self._with_nack_builder then
         local composed = function(...)
-            return f(prev_wrap(...))
+            return f(self.wrap_fn(...))
         end
         local base = new_base_op(composed, self.try_fn, self.block_fn)
         base._guard_builder = self._guard_builder
+        base._with_nack_builder = self._with_nack_builder
         return base
     end
     local wrap_fn, try_fn, block_fn = self.wrap_fn, self.try_fn, self.block_fn
@@ -210,6 +212,20 @@ local function new_cond()
         signal  = signal,
     }
 end
+-- CML-style withNack: delayed event with a negative-ack event.
+-- g(nack_ev) is evaluated once per synchronization. If some *other*
+-- event in the same synchronization commits, nack_ev becomes enabled.
+local function with_nack(g)
+    local base = new_base_op(
+        nil,
+        function() return false end,
+        function()
+            error("with_nack block_fn should never be called directly")
+        end
+    )
+    base._with_nack_builder = g
+    return base
+end
 -- Resolve a single event (BaseOp or ChoiceOp) into a list of BaseOps,
 -- composing an outer wrap on top if provided.
 local function resolve_event(ev, outer_wrap, out)
@@ -226,16 +242,33 @@ local function resolve_event(ev, outer_wrap, out)
         -- then resolve the resulting event.
         local inner_ev = ev._guard_builder()
 
-        local guard_wrap = ev.wrap_fn or id_wrap
         local composed_outer = function(...)
-            local mid = pack(guard_wrap(...))
+            local mid = pack(ev.wrap_fn(...))
             return outer_wrap(unpack(mid, 1, mid.n))
         end
 
         resolve_event(inner_ev, composed_outer, out)
+    elseif ev._with_nack_builder then
+        -- with_nack: create a per-sync condition and nack event.
+        local cond           = new_cond()
+        local nack_ev        = cond.wait_op() -- this is the nack event g() sees
+        local inner_ev       = ev._with_nack_builder(nack_ev)
+
+        local with_wrap      = ev.wrap_fn
+        local composed_outer = function(...)
+            local mid = pack(with_wrap(...))
+            return outer_wrap(unpack(mid, 1, mid.n))
+        end
+
+        -- Flatten the inner event, tagging all resulting ops with this cond.
+        local start_index    = #out + 1
+        resolve_event(inner_ev, composed_outer, out)
+        for i = start_index, #out do
+            out[i]._nack_cond = cond
+        end
     else
         -- Plain BaseOp: compose inner wrap under outer_wrap.
-        local inner_wrap = ev.wrap_fn or id_wrap
+        local inner_wrap = ev.wrap_fn
         local composed_wrap = function(...)
             local mid = pack(inner_wrap(...))
             return outer_wrap(unpack(mid, 1, mid.n))
@@ -255,6 +288,18 @@ local function resolve_choice_ops(base_ops)
     return resolved
 end
 
+-- Trigger nack events for all *losing* with_nack arms in this choice.
+local function trigger_nacks(ops, winner)
+    local winner_cond = winner and winner._nack_cond or nil
+    local seen = {}
+    for _, op in ipairs(ops) do
+        local cond = op._nack_cond
+        if cond and cond ~= winner_cond and not seen[cond] then
+            seen[cond] = true
+            cond.signal()
+        end
+    end
+end
 -- Treat a delayed event (guard) as a 1-arm choice so guard semantics
 -- and choice semantics share the same resolution path.
 local function perform_delayed(self)
@@ -264,7 +309,7 @@ end
 -- @treturn vararg The value returned by the operation.
 function BaseOp:perform()
     -- Delayed events (guards) go through choice resolution.
-    if self._guard_builder then
+    if self._guard_builder or self._with_nack_builder then
         return perform_delayed(self)
     end
     local retval = pack(self.try_fn())
@@ -277,7 +322,14 @@ end
 
 local function block_choice_op(sched, fib, ops)
     local suspension = new_suspension(sched, fib)
-    for _, op in ipairs(ops) do op.block_fn(suspension, op.wrap_fn) end
+    for _, op in ipairs(ops) do
+        -- Per-choice unique wrapper simply delegates to the op's own wrap_fn.
+        local function choice_wrap(...)
+            return op.wrap_fn(...)
+        end
+        op._choice_wrap = choice_wrap
+        op.block_fn(suspension, choice_wrap)
+    end
 end
 
 --- Perform the choice operation.
@@ -287,14 +339,27 @@ function ChoiceOp:perform()
     local ops = resolve_choice_ops(self.base_ops)
     local n = #ops
     local base = math.random(n)
+    -- Fast path: use try_fn directly and commit if any arm is ready.
     for i = 1, n do
         local op = ops[((i + base) % n) + 1]
         local retval = pack(op.try_fn())
         local success = table.remove(retval, 1)
-        if success then return op.wrap_fn(unpack(retval)) end
+        if success then
+            trigger_nacks(ops, op)
+            return op.wrap_fn(unpack(retval))
+        end
     end
+    -- Slow path: block on all ops via block_choice_op.
     local retval = pack(fiber.suspend(block_choice_op, ops))
     local wrap = table.remove(retval, 1)
+    local winner
+    for _, op in ipairs(ops) do
+        if op._choice_wrap == wrap then
+            winner = op
+            break
+        end
+    end
+    trigger_nacks(ops, winner)
     return wrap(unpack(retval))
 end
 
@@ -302,7 +367,7 @@ end
 -- @tparam function f The function.
 -- @treturn vararg The value returned by the operation or the function.
 function BaseOp:perform_alt(f)
-    if self._guard_builder then
+    if self._guard_builder or self._with_nack_builder then
         return new_choice_op({ self }):perform_alt(f)
     end
     local success, val = self.try_fn()
@@ -320,7 +385,10 @@ function ChoiceOp:perform_alt(f)
     for i = 1, n do
         local op = ops[((i + base) % n) + 1]
         local success, val = op.try_fn()
-        if success then return op.wrap_fn(val) end
+        if success then
+            trigger_nacks(ops, op)
+            return op.wrap_fn(val)
+        end
     end
     return f()
 end
@@ -330,4 +398,5 @@ return {
     choice      = choice,
     guard       = guard,
     new_cond    = new_cond,
+    with_nack   = with_nack,
 }
