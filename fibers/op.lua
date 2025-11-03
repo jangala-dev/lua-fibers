@@ -168,6 +168,48 @@ local function block_base_op(sched, fib, op)
     op.block_fn(new_suspension(sched, fib), op.wrap_fn)
 end
 
+-- Simple one-shot condition primitive: all current and future waiters
+-- wake once signal() is called. Used by fibers.cond as a thin wrapper.
+local function new_cond()
+    local state = {
+        triggered = false,
+        waiters   = {}, -- array of CompleteTask
+    }
+
+    local function wait_op()
+        local function try()
+            return state.triggered
+        end
+        local function block(suspension, wrap_fn)
+            if state.triggered then
+                -- Already signalled: complete immediately.
+                suspension:complete(wrap_fn)
+            else
+                -- Store a CompleteTask; we'll schedule it on signal().
+                table.insert(state.waiters, suspension:complete_task(wrap_fn))
+            end
+        end
+        return new_base_op(nil, try, block)
+    end
+
+    local function signal()
+        if state.triggered then return end
+        state.triggered = true
+        -- Wake all waiters (if still waiting) on their schedulers.
+        for i = 1, #state.waiters do
+            local task = state.waiters[i]
+            state.waiters[i] = nil
+            if task and task.suspension and task.suspension:waiting() then
+                task.suspension.sched:schedule(task)
+            end
+        end
+    end
+
+    return {
+        wait_op = wait_op,
+        signal  = signal,
+    }
+end
 -- Resolve a single event (BaseOp or ChoiceOp) into a list of BaseOps,
 -- composing an outer wrap on top if provided.
 local function resolve_event(ev, outer_wrap, out)
@@ -287,4 +329,5 @@ return {
     new_base_op = new_base_op,
     choice      = choice,
     guard       = guard,
+    new_cond    = new_cond,
 }

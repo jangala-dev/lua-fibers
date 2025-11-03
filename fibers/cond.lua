@@ -1,58 +1,35 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
-
 --- fibers.cond module.
--- This module implements a condition variable, a rendezvous point for
--- fibers waiting for or announcing the occurrence of an event.
+-- Thin wrapper around the core condition primitive in fibers.op.
+-- A Cond is a one-shot, signal-all rendezvous: once signalled,
+-- all current and future waiters complete.
 -- @module fibers.cond
 
 local op = require 'fibers.op'
 
---- Cond class.
--- Represents a condition variable.
--- @type Cond
 local Cond = {}
+Cond.__index = Cond
 
 --- Create a new condition variable.
 -- @treturn Cond The new condition variable.
 local function new()
-    return setmetatable({ waitq = {} }, { __index = Cond })
+    -- op.new_cond() returns a table with wait_op() and signal().
+    local prim = op.new_cond()
+    return setmetatable(prim, Cond)
 end
 
---- Create a new operation that will put the fiber into a wait state on the condition variable.
+--- Operation that waits on the condition.
+-- This is provided by op.new_cond() as prim.wait_op.
 -- @treturn operation The created operation.
-function Cond:wait_op()
-    local function try() return not self.waitq end
-    local function gc()
-        local i = 1
-        while i <= #self.waitq do
-            if self.waitq[i].suspension:waiting() then
-                i = i + 1
-            else
-                table.remove(self.waitq, i)
-            end
-        end
-    end
-    local function block(suspension, wrap_fn)
-        gc()
-        table.insert(self.waitq, { suspension = suspension, wrap = wrap_fn })
-    end
-    return op.new_base_op(nil, try, block)
-end
+-- function Cond:wait_op() ... end  -- inherited from prim
 
 --- Put the fiber into a wait state on the condition variable.
-function Cond:wait() return self:wait_op():perform() end
+function Cond:wait()
+    return self:wait_op():perform()
+end
 
 --- Wake up all fibers that are waiting on this condition variable.
-function Cond:signal()
-    if self.waitq ~= nil then
-        for _, remote in ipairs(self.waitq) do
-            if remote.suspension:waiting() then
-                remote.suspension:complete(remote.wrap)
-            end
-        end
-        self.waitq = nil
-    end
-end
+-- This is provided by op.new_cond() as prim.signal().
+-- function Cond:signal() ... end  -- inherited from prim
 
 return {
     new = new
