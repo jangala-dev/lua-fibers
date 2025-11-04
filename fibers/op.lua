@@ -1,7 +1,3 @@
--- (c) Snabb project
--- (c) Jangala
-
--- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 --- fibers.op module
 -- Provides Concurrent ML style operations for managing concurrency.
 -- Events are CML-style: primitive leaves, choices, guards, with_nack,
@@ -9,8 +5,10 @@
 
 local fiber  = require 'fibers.fiber'
 
-local unpack = table.unpack or unpack -- luacheck: ignore
-local pack   = table.pack or function(...) return { n = select("#", ...), ... } end -- luacheck: ignore
+local unpack = rawget(table, "unpack") or _G.unpack
+local pack   = rawget(table, "pack") or function(...)
+    return { n = select("#", ...), ... }
+end
 
 local function id_wrap(...) return ... end
 
@@ -192,7 +190,7 @@ local function compile_event(ev, outer_wrap, out, nacks)
     outer_wrap = outer_wrap or id_wrap
     nacks      = nacks or {}
 
-    local kind = ev.kind or 'prim'
+    local kind = ev.kind
 
     if kind == 'choice' then
         for _, sub in ipairs(ev.events) do
