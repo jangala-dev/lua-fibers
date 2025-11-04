@@ -1,7 +1,11 @@
+-- (c) Snabb project
+-- (c) Jangala
+
+-- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 --- fibers.op module
 -- Provides Concurrent ML style operations for managing concurrency.
--- Events are CML-style: they can be primitive, choices, guards, with_nack,
--- or wrapped. Synchronization compiles an event tree into primitive leaves.
+-- Events are CML-style: primitive leaves, choices, guards, with_nack,
+-- and wraps. Synchronization compiles an event tree into primitive leaves.
 
 local fiber  = require 'fibers.fiber'
 
@@ -79,8 +83,8 @@ local Event = {}
 Event.__index = Event
 
 -- Primitive event (leaf).
--- try_fn()  -> success:boolean, ...
--- block_fn(suspension, wrap_fn) sets up async completion.
+--   try_fn() -> success:boolean, ...
+--   block_fn(suspension, wrap_fn) sets up async completion.
 local function new_base_op(wrap_fn, try_fn, block_fn)
     return setmetatable(
         {
@@ -98,7 +102,9 @@ local function choice(...)
     local events = {}
     for _, ev in ipairs({ ... }) do
         if ev.kind == 'choice' then
-            for _, sub in ipairs(ev.events) do events[#events + 1] = sub end
+            for _, sub in ipairs(ev.events) do
+                events[#events + 1] = sub
+            end
         else
             events[#events + 1] = ev
         end
@@ -113,6 +119,7 @@ local function guard(g)
 end
 
 -- with_nack g: delayed event; g(nack_ev) evaluated once per synchronization.
+-- nack_ev is an Event that becomes ready iff this with_nack is *not* chosen.
 local function with_nack(g)
     return setmetatable({ kind = 'with_nack', builder = g }, Event)
 end
@@ -129,6 +136,7 @@ end
 ----------------------------------------------------------------------
 -- Simple one-shot condition primitive (used for with_nack; also exported)
 ----------------------------------------------------------------------
+
 local function new_cond()
     local state = {
         triggered = false,
@@ -171,47 +179,56 @@ end
 -- Compile an event tree into primitive leaves
 --
 -- A compiled leaf has:
---   { try_fn, block_fn, wrap, nack_cond }
--- where wrap(...) is the final post-processing function for this leaf.
+--   {
+--     try_fn,
+--     block_fn,
+--     wrap,          -- final wrap function for this leaf
+--     nacks = {...}, -- list of all active with_nack conds on this path
+--   }
 ----------------------------------------------------------------------
 
-local function compile_event(ev, outer_wrap, out, nack_cond)
+local function compile_event(ev, outer_wrap, out, nacks)
     out        = out or {}
     outer_wrap = outer_wrap or id_wrap
+    nacks      = nacks or {}
 
-    local kind = ev.kind
+    local kind = ev.kind or 'prim'
 
     if kind == 'choice' then
         for _, sub in ipairs(ev.events) do
-            compile_event(sub, outer_wrap, out, nack_cond)
+            compile_event(sub, outer_wrap, out, nacks)
         end
 
     elseif kind == 'guard' then
         local inner = ev.builder()
-        compile_event(inner, outer_wrap, out, nack_cond)
+        compile_event(inner, outer_wrap, out, nacks)
 
     elseif kind == 'with_nack' then
         local cond    = new_cond()
         local nack_ev = cond.wait_op() -- Event
         local inner   = ev.builder(nack_ev)
-        compile_event(inner, outer_wrap, out, cond)
+        -- Extend the current nack list for this subtree
+        local child_nacks             = { unpack(nacks) }
+        child_nacks[#child_nacks + 1] = cond
+
+        compile_event(inner, outer_wrap, out, child_nacks)
 
     elseif kind == 'wrap' then
         local f         = ev.wrap_fn
         local new_outer = function(...)
             return outer_wrap(f(...))
         end
-        compile_event(ev.inner, new_outer, out, nack_cond)
+        compile_event(ev.inner, new_outer, out, nacks)
 
     else -- 'prim'
         local final_wrap = function(...)
             return outer_wrap(ev.wrap_fn(...))
         end
         out[#out + 1] = {
-            try_fn    = ev.try_fn,
-            block_fn  = ev.block_fn,
-            wrap      = final_wrap,
-            nack_cond = nack_cond,
+            try_fn   = ev.try_fn,
+            block_fn = ev.block_fn,
+            wrap     = final_wrap,
+            nacks    = nacks,
         }
     end
 
@@ -222,14 +239,31 @@ end
 -- Nack triggering and non-blocking attempt
 ----------------------------------------------------------------------
 
+-- Signal all with_nack conds that belong exclusively to losing arms.
 local function trigger_nacks(ops, winner_index)
-    local winner_cond = winner_index and ops[winner_index].nack_cond or nil
-    local seen = {}
-    for _, op in ipairs(ops) do
-        local cond = op.nack_cond
-        if cond and cond ~= winner_cond and not seen[cond] then
-            seen[cond] = true
-            cond.signal()
+    -- Build a set of conds to *skip* (all on the winner path).
+    local winner = {}
+    if winner_index then
+        local wnacks = ops[winner_index].nacks
+        if wnacks then
+            for i = 1, #wnacks do
+                winner[wnacks[i]] = true
+            end
+        end
+    end
+
+    -- Signal each losing cond once.
+    local signaled = {}
+    for i = 1, #ops do
+        local nacks = ops[i].nacks
+        if nacks then
+            for j = 1, #nacks do
+                local cond = nacks[j]
+                if cond and not winner[cond] and not signaled[cond] then
+                    signaled[cond] = true
+                    cond.signal()
+                end
+            end
         end
     end
 end
@@ -250,6 +284,7 @@ local function try_ready(ops)
     end
     return nil
 end
+
 -- Apply a leaf's wrap to its retval_pack.
 local function apply_wrap(wrap, retval)
     return wrap(unpack(retval, 2, retval.n))
@@ -258,6 +293,7 @@ end
 ----------------------------------------------------------------------
 -- Blocking choice path
 ----------------------------------------------------------------------
+
 local function block_choice_op(sched, fib, ops)
     local suspension = new_suspension(sched, fib)
     for _, op in ipairs(ops) do
@@ -266,7 +302,7 @@ local function block_choice_op(sched, fib, ops)
 end
 
 ----------------------------------------------------------------------
--- Event methods: perform & perform_alt
+-- Event methods: perform, poll, perform_alt
 ----------------------------------------------------------------------
 
 -- Perform this event (primitive or composite), possibly blocking.
@@ -284,7 +320,7 @@ function Event:perform()
     local suspended = pack(fiber.suspend(block_choice_op, ops))
     local wrap      = suspended[1]
 
-    -- Find the winning leaf by matching wrap function.
+    -- Find the winning leaf by matching its wrap function.
     local winner_index
     for i, op in ipairs(ops) do
         if op.wrap == wrap then
@@ -293,6 +329,7 @@ function Event:perform()
         end
     end
     trigger_nacks(ops, winner_index)
+
     return wrap(unpack(suspended, 2, suspended.n))
 end
 
