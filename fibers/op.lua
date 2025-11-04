@@ -143,10 +143,6 @@ function ChoiceOp:wrap(f)
     return new_choice_op(ops)
 end
 
-local function block_base_op(sched, fib, op)
-    op.block_fn(new_suspension(sched, fib), op.wrap_fn)
-end
-
 -- Simple one-shot condition primitive: all current and future waiters
 -- wake once signal() is called. Used by fibers.cond as a thin wrapper.
 local function new_cond()
@@ -274,6 +270,25 @@ local function resolve_choice_ops(base_ops)
     return resolved
 end
 
+-- Try once to commit on this event (BaseOp, ChoiceOp, or delayed event),
+-- non-blocking. Returns winner_op, retval_pack, ops | nil.
+local function try_once(ev)
+    -- Normalise to a list of logical events.
+    local logicals = ev.base_ops and ev.base_ops or { ev }
+
+    -- Expand guards / with_nack / nested choices into plain BaseOps.
+    local ops = resolve_choice_ops(logicals)
+    local n = #ops
+    if n == 0 then return nil, nil, ops end
+
+    local base = math.random(n)
+    for i = 1, n do
+        local op = ops[((i + base) % n) + 1]
+        local retval = pack(op.try_fn())
+        if retval[1] then return op, retval, ops end
+    end
+    return nil, nil, ops
+end
 -- Trigger nack events for all *losing* with_nack arms in this choice.
 local function trigger_nacks(ops, winner)
     local winner_cond = winner and winner._nack_cond or nil
@@ -286,26 +301,13 @@ local function trigger_nacks(ops, winner)
         end
     end
 end
--- Treat a delayed event (guard) as a 1-arm choice so guard semantics
--- and choice semantics share the same resolution path.
-local function perform_delayed(self)
-    return choice(self):perform()
-end
---- Perform the base operation.
--- @treturn vararg The value returned by the operation.
-function BaseOp:perform()
-    -- Delayed events (guards) go through choice resolution.
-    if self._guard_builder or self._with_nack_builder then
-        return perform_delayed(self)
-    end
-    local retval = pack(self.try_fn())
-    local success = retval[1]
-    if success then
-        return self.wrap_fn(unpack(retval, 2, retval.n))
-    end
-    local new_retval = pack(fiber.suspend(block_base_op, self))
-    local wrap = new_retval[1]
-    return wrap(unpack(new_retval, 2, new_retval.n))
+-- Public CML-style poll: non-blocking synchronization attempt.
+-- Returns (true, ...results) if some arm commits, or (false) otherwise.
+local function poll(ev)
+    local winner, retval, ops = try_once(ev)
+    if not winner then return false end
+    trigger_nacks(ops, winner)
+    return true, winner.wrap_fn(unpack(retval, 2, retval.n))
 end
 
 local function block_choice_op(sched, fib, ops)
@@ -320,66 +322,52 @@ end
 --- Perform the choice operation.
 -- @treturn vararg The value returned by the operation.
 function ChoiceOp:perform()
-    -- Expand guards (and nested choices) once for this synchronization.
-    local ops = resolve_choice_ops(self.base_ops)
-    local n = #ops
-    local base = math.random(n)
-    -- Fast path: use try_fn directly and commit if any arm is ready.
-    for i = 1, n do
-        local op = ops[((i + base) % n) + 1]
-        local retval = pack(op.try_fn())
-        local success = retval[1]
-        if success then
-            trigger_nacks(ops, op)
-            return op.wrap_fn(unpack(retval, 2, retval.n))
-        end
+    -- Fast path: non-blocking attempt using the shared core.
+    local winner, retval, ops = try_once(self)
+    if winner then
+        trigger_nacks(ops, winner)
+        return winner.wrap_fn(unpack(retval, 2, retval.n))
     end
-    -- Slow path: block on all ops via block_choice_op.
-    local retval = pack(fiber.suspend(block_choice_op, ops))
-    local wrap = retval[1]
-    local winner
+
+    -- Slow path: block on all resolved ops.
+    local suspended = pack(fiber.suspend(block_choice_op, ops))
+    local wrap = suspended[1]
+    local winner_after
     for _, op in ipairs(ops) do
         if op._choice_wrap == wrap then
-            winner = op
+            winner_after = op
             break
         end
     end
-    trigger_nacks(ops, winner)
-    return wrap(unpack(retval, 2, retval.n))
+    trigger_nacks(ops, winner_after)
+    return wrap(unpack(suspended, 2, suspended.n))
 end
 
---- Perform the base operation or return the result of the function if the operation cannot be performed.
--- @tparam function f The function.
--- @treturn vararg The value returned by the operation or the function.
-function BaseOp:perform_alt(f)
-    if self._guard_builder or self._with_nack_builder then
-        return new_choice_op({ self }):perform_alt(f)
-    end
-    local retval = pack(self.try_fn())
-    local success = retval[1]
-    if success then
-        return self.wrap_fn(unpack(retval, 2, retval.n))
-    end
-    return f()
+--- Perform the base operation.
+-- We treat any single event (including guards/with_nack) as a 1-arm
+-- choice so it shares the exact same resolution / blocking path as
+-- ChoiceOp:perform.
+function BaseOp:perform()
+    return new_choice_op({ self }):perform()
 end
 
 --- Perform the choice operation or return the result of the function if the operation cannot be performed.
 -- @tparam function f The function.
 -- @treturn vararg The value returned by the operation or the function.
 function ChoiceOp:perform_alt(f)
-    local ops = resolve_choice_ops(self.base_ops)
-    local n = #ops
-    local base = math.random(n)
-    for i = 1, n do
-        local op = ops[((i + base) % n) + 1]
-        local retval = pack(op.try_fn())
-        local success = retval[1]
-        if success then
-            trigger_nacks(ops, op)
-            return op.wrap_fn(unpack(retval, 2, retval.n))
-        end
+    local ret = pack(poll(self))
+    local ready = ret[1]
+    if ready then
+        return unpack(ret, 2, ret.n)
     end
     return f()
+end
+
+--- Perform the base operation or return the result of the function if the operation cannot be performed.
+-- @tparam function f The function.
+-- @treturn vararg The value returned by the operation or the function.
+function BaseOp:perform_alt(f)
+    return new_choice_op({ self }):perform_alt(f)
 end
 
 return {
@@ -388,4 +376,5 @@ return {
     guard       = guard,
     new_cond    = new_cond,
     with_nack   = with_nack,
+    poll        = poll,
 }
