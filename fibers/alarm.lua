@@ -240,7 +240,7 @@ end
 -- Wrapper for `absolute_op` that immediately performs the operation.
 -- @param t The absolute time (epoch) for the alarm.
 local function wait_absolute(t)
-    return wait_absolute_op(t):perform()
+    return op.perform(wait_absolute_op(t))
 end
 
 --- Creates an operation for a next (relative) alarm.
@@ -260,7 +260,7 @@ end
 -- @return An error if the time table is invalid.
 local function wait_next(t)
     local _, err = validate_next_table(t)
-    return err or assert(installed_alarm_handler):wait_next_op(t):perform()
+    return err or op.perform(assert(installed_alarm_handler):wait_next_op(t))
 end
 
 -- Public API

@@ -47,7 +47,7 @@ function Waitgroup:wait_op()
 end
 
 function Waitgroup:wait()
-    self:wait_op():perform()
+    return op.perform(self:wait_op())
 end
 
 return {

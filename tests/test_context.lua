@@ -6,6 +6,7 @@ package.path = "../?.lua;" .. package.path
 
 local context = require 'fibers.context'
 local fiber = require 'fibers.fiber'
+local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 
 -- Test Background Context
@@ -23,7 +24,7 @@ local function test_with_cancel()
 
     local is_cancelled = false
     fiber.spawn(function()
-        child_ctx:done_op():perform()
+        op.perform(child_ctx:done_op())
         is_cancelled = true
     end)
 
@@ -54,7 +55,7 @@ local function test_with_timeout()
 
     local is_cancelled = false
     fiber.spawn(function()
-        ctx:done_op():perform()
+        op.perform(ctx:done_op())
         is_cancelled = true
     end)
 

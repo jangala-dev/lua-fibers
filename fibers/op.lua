@@ -409,48 +409,30 @@ end
 ----------------------------------------------------------------------
 
 -- Perform this event (primitive or composite), possibly blocking.
-function Event:perform()
-    local ops = compile_event(self)
+local function perform(ev)
+    local leaves = compile_event(ev)
 
-    -- Fast path: non-blocking attempt.
-    local idx, retval = try_ready(ops)
+    -- Fast path
+    local idx, retval = try_ready(leaves)
     if idx then
-        trigger_nacks(ops, idx)
-        return apply_wrap(ops[idx].wrap, retval)
+        trigger_nacks(leaves, idx)
+        return apply_wrap(leaves[idx].wrap, retval)
     end
 
-    -- Slow path: block on all compiled leaves.
-    local suspended = pack(fiber.suspend(block_choice_op, ops))
+    -- Slow path
+    local suspended = pack(fiber.suspend(block_choice_op, leaves))
     local wrap      = suspended[1]
 
-    -- Find the winning leaf by matching its wrap function.
     local winner_index
-    for i, op in ipairs(ops) do
-        if op.wrap == wrap then
+    for i, leaf in ipairs(leaves) do
+        if leaf.wrap == wrap then
             winner_index = i
             break
         end
     end
 
-    trigger_nacks(ops, winner_index)
-
+    trigger_nacks(leaves, winner_index)
     return wrap(unpack(suspended, 2, suspended.n))
-end
-
--- perform_alt: biased alternative.
---
--- Semantics:
---   * Give `self` a brief chance to commit (one scheduler "turn").
---   * If it commits, return its result.
---   * If it does not commit by then, cleanly abort it via normal
---     nack/abort semantics and run fallback_thunk() instead.
---
--- NOTE: Unlike a poll-based implementation, this still runs guards,
--- with_nack, bracket, on_abort, etc., and ensures RAII cleanups run
--- on both the success and abort paths.
-function Event:perform_alt(fallback_thunk)
-    assert(type(fallback_thunk) == "function", "perform_alt expects a function")
-    return self:or_else(fallback_thunk):perform()
 end
 
 ----------------------------------------------------------------------
@@ -495,6 +477,7 @@ end
 ----------------------------------------------------------------------
 
 return {
+    perform        = perform,
     new_base_op    = new_base_op, -- primitive event constructor
     choice         = choice,
     guard          = guard,
@@ -503,5 +486,5 @@ return {
     bracket        = bracket,
     always         = always,
     never          = never,
-    -- Event instances have methods: wrap, on_abort, perform, perform_alt.
+    -- Event instances have methods: wrap, on_abort.
 }
