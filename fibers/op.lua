@@ -424,29 +424,44 @@ function Event:perform_alt(f)
 end
 
 ----------------------------------------------------------------------
--- (Reference) bracket sketch on top of on_abort
+-- bracket : (acquire, release, use) -> 'a event
 --
--- Not exported here, but this is how we'd build RAII-style bracket:
+-- acquire()          : -> resource
+-- release(resource, aborted:boolean)
+-- use(resource)      : -> Event (the main action)
 --
---   local function bracket(acquire, release, use)
---       return guard(function()
---           local r = acquire()
---           local ev = use(r)
---           return ev
---               :wrap(function(x)
---                   pcall(release, r, false) -- normal
---                   return x
---               end)
---               :on_abort(function()
---                   pcall(release, r, true)  -- lost / cancelled
---               end)
---       end)
---   end
+-- Semantics:
+--   * acquire is run once, at sync time (inside a guard).
+--   * if the resulting event `ev` WINS:
+--       - its result is returned
+--       - release(res, false) is called (best-effort, pcall)
+--   * if the resulting event PARTICIPATES in a choice but LOSES:
+--       - release(res, true) is called (via on_abort / nack machinery)
 --
--- `on_abort` is implemented via new_abort_cond + trigger_nacks, which
--- shares the same “only fire when the whole event loses” semantics as
--- with_nack. Nested with_nack tests should therefore pass.
+-- This is *purely an Event combinator*; no new fiber is spawned.
 ----------------------------------------------------------------------
+
+local function bracket(acquire, release, use)
+    assert(type(acquire) == "function", "bracket: acquire must be a function")
+    assert(type(release) == "function", "bracket: release must be a function")
+    assert(type(use)     == "function", "bracket: use must be a function")
+
+    return guard(function()
+        -- pre-sync / setup
+        local res = acquire()
+        local ev  = use(res)
+
+        -- commit & abort behaviour layered as wraps:
+        return ev
+            :wrap(function(...) -- normal completion path
+                pcall(release, res, false)
+                return ...
+            end)
+            :on_abort(function() -- chosen-away / cancelled path
+                pcall(release, res, true)
+            end)
+    end)
+end
 
 ----------------------------------------------------------------------
 -- Public API
@@ -458,5 +473,6 @@ return {
     guard       = guard,
     with_nack   = with_nack,
     new_cond    = new_cond,
+    bracket     = bracket,
     -- Event instances have methods: wrap, on_abort, perform, poll, perform_alt.
 }
