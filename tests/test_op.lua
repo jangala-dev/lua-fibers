@@ -1,5 +1,5 @@
 -- fibers/op comprehensive test
-print("testing: fibers.op (CML events)")
+print("testing: fibers.op")
 
 -- look one level up
 package.path = "../?.lua;" .. package.path
