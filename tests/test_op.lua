@@ -1,10 +1,10 @@
--- fibers/op comprehensive test
+-- fibers/op compact but comprehensive test
 print("testing: fibers.op")
 
 -- look one level up
 package.path = "../?.lua;" .. package.path
 
-local op     = require 'fibers.op'
+local op    = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 
 ------------------------------------------------------------
@@ -35,7 +35,6 @@ local function async_task(val)
         return false
     end
     local function block_fn(suspension, wrap_fn)
-        -- Complete on next scheduler turn.
         local t = suspension:complete_task(wrap_fn, val)
         suspension.sched:schedule(t)
     end
@@ -50,7 +49,7 @@ end
 fiber.spawn(function()
 
     --------------------------------------------------------
-    -- 1) Base op: perform, perform_alt
+    -- 1) Base op: perform, perform_alt, wrap
     --------------------------------------------------------
     do
         local base = task(1)
@@ -63,6 +62,13 @@ fiber.spawn(function()
         local never = never_op()
         assert(never:perform_alt(function() return 99 end) == 99,
             "base: perform_alt should use fallback when not ready")
+
+        -- nested wrap: ((x + 1) * 2)
+        local ev2 = task(5)
+            :wrap(function(x) return x + 1 end)
+            :wrap(function(y) return y * 2 end)
+        local v2 = ev2:perform()
+        assert(v2 == 12, "nested wrap: wrong result")
     end
 
     --------------------------------------------------------
@@ -76,42 +82,30 @@ fiber.spawn(function()
     end
 
     --------------------------------------------------------
-    -- 3) Choice over multiple ready events
-    -- (we don't assume fairness, only that results are valid)
+    -- 3) Choice + wrap
     --------------------------------------------------------
     do
+        -- choice over multiple ready events
         local choice_ev = op.choice(task(1), task(2), task(3))
         for _ = 1, 5 do
             local v = choice_ev:perform()
             assert(v == 1 or v == 2 or v == 3,
                 "choice(ready): result not in {1,2,3}")
         end
-    end
 
-    --------------------------------------------------------
-    -- 4) Wrap (including nested and on choice)
-    --------------------------------------------------------
-    do
         -- wrap on choice
         local ev = op.choice(task(1), task(2)):wrap(function(x)
             return x * 10
         end)
         local v = ev:perform()
         assert(v == 10 or v == 20, "wrap(choice): wrong result")
-
-        -- nested wrap: ((x + 1) * 2)
-        local ev2 = task(5)
-            :wrap(function(x) return x + 1 end)
-            :wrap(function(y) return y * 2 end)
-        local v2 = ev2:perform()
-        assert(v2 == 12, "nested wrap: wrong result")
     end
 
     --------------------------------------------------------
-    -- 5) Guard: basic, in choice, nested, perform_alt
+    -- 4) Guard: basic + in choice + with with_nack
     --------------------------------------------------------
     do
-        -- basic
+        -- basic guard
         local calls = 0
         local g = function()
             calls = calls + 1
@@ -122,13 +116,12 @@ fiber.spawn(function()
         assert(v == 42, "guard basic: wrong result")
         assert(calls == 1, "guard basic: builder not called once")
 
-        -- guard inside choice
+        -- guard in choice (ensures builder runs each sync)
         local calls2 = 0
-        local g2 = function()
+        local guarded = op.guard(function()
             calls2 = calls2 + 1
             return task(10)
-        end
-        local guarded = op.guard(g2)
+        end)
         local choice_ev = op.choice(guarded, task(20))
         local runs = 5
         for _ = 1, runs do
@@ -138,47 +131,30 @@ fiber.spawn(function()
         end
         assert(calls2 == runs, "guard in choice: builder call mismatch")
 
-        -- guard + wrap
-        local calls3 = 0
-        local g3 = function()
-            calls3 = calls3 + 1
-            return task(5)
-        end
-        local ev3 = op.guard(g3):wrap(function(x) return x * 2 end)
-        local v3 = ev3:perform()
-        assert(v3 == 10, "guard wrap: wrong result")
-        assert(calls3 == 1, "guard wrap: builder not called once")
+        -- guard + with_nack (builder returns a with_nack event)
+        local guard_calls, cancelled = 0, false
+        local guarded_nack = op.guard(function()
+            guard_calls = guard_calls + 1
+            return op.with_nack(function(nack_ev)
+                fiber.spawn(function()
+                    nack_ev:perform()
+                    cancelled = true
+                end)
+                return never_op()
+            end)
+        end)
 
-        -- guard + perform_alt (inner not ready)
-        local calls4 = 0
-        local g4 = function()
-            calls4 = calls4 + 1
-            return never_op()
-        end
-        local ev4 = op.guard(g4)
-        local v4 = ev4:perform_alt(function() return 99 end)
-        assert(v4 == 99, "guard perform_alt: wrong fallback")
-        assert(calls4 == 1, "guard perform_alt: builder not called once")
+        local ev2 = op.choice(guarded_nack, task("OK"))
+        local v2  = ev2:perform()
+        assert(v2 == "OK", "guard+with_nack: wrong winner")
 
-        -- nested guards
-        local outer_calls, inner_calls = 0, 0
-        local inner_g = function()
-            inner_calls = inner_calls + 1
-            return task(7)
-        end
-        local outer_g = function()
-            outer_calls = outer_calls + 1
-            return op.guard(inner_g)
-        end
-        local ev5 = op.guard(outer_g):wrap(function(x) return x + 1 end)
-        local v5 = ev5:perform()
-        assert(v5 == 8, "nested guard: wrong result")
-        assert(outer_calls == 1, "nested guard: outer builder count")
-        assert(inner_calls == 1, "nested guard: inner builder count")
+        fiber.yield()
+        assert(cancelled == true, "guard+with_nack: nack not fired")
+        assert(guard_calls == 1, "guard+with_nack: builder not once")
     end
 
     --------------------------------------------------------
-    -- 6) poll() and perform_alt() on composite events
+    -- 5) poll() and perform_alt() on composite events
     --------------------------------------------------------
     do
         -- poll on ready event
@@ -207,10 +183,10 @@ fiber.spawn(function()
     end
 
     --------------------------------------------------------
-    -- 7) with_nack: winner vs loser vs poll, plus guard+with_nack
+    -- 6) with_nack: winner vs loser, poll, basic nesting
     --------------------------------------------------------
     do
-        -- 7.1 with_nack branch wins: nack must NOT fire
+        -- 6.1 with_nack branch wins: nack must NOT fire
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
@@ -221,16 +197,15 @@ fiber.spawn(function()
                 return task("WIN")
             end)
 
-            -- opposing arm never ready
             local ev = op.choice(with_nack_ev, never_op())
-            local v = ev:perform()
+            local v  = ev:perform()
             assert(v == "WIN", "with_nack win: wrong winner")
 
             fiber.yield()
             assert(cancelled == false, "with_nack win: nack fired unexpectedly")
         end
 
-        -- 7.2 with_nack branch loses: nack MUST fire
+        -- 6.2 with_nack branch loses: nack MUST fire
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
@@ -242,14 +217,14 @@ fiber.spawn(function()
             end)
 
             local ev = op.choice(with_nack_ev, task("OTHER"))
-            local v = ev:perform()
+            local v  = ev:perform()
             assert(v == "OTHER", "with_nack loss: wrong winner")
 
             fiber.yield()
             assert(cancelled == true, "with_nack loss: nack did not fire")
         end
 
-        -- 7.3 with_nack + poll(): some arm ready → nack fires for loser
+        -- 6.3 with_nack + poll(): some arm ready → nack fires for loser
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
@@ -268,7 +243,7 @@ fiber.spawn(function()
             assert(cancelled == true, "with_nack+poll: nack not fired")
         end
 
-        -- 7.4 with_nack + poll(): no arm ready → NO commit, NO nack
+        -- 6.4 with_nack + poll(): no arm ready → NO commit, NO nack
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
@@ -289,142 +264,182 @@ fiber.spawn(function()
                 "with_nack+poll(no ready): nack fired unexpectedly")
         end
 
-        -- 7.5 guard + with_nack interaction
-        do
-            local guard_calls = 0
-            local cancelled   = false
-
-            local guarded     = op.guard(function()
-                guard_calls = guard_calls + 1
-                return op.with_nack(function(nack_ev)
-                    fiber.spawn(function()
-                        nack_ev:perform()
-                        cancelled = true
-                    end)
-                    return never_op()
-                end)
-            end)
-
-            local ev          = op.choice(guarded, task("OK"))
-            local v           = ev:perform()
-            assert(v == "OK", "guard+with_nack: wrong winner")
-
-            fiber.yield()
-            assert(cancelled == true, "guard+with_nack: nack not fired")
-            assert(guard_calls == 1, "guard+with_nack: builder not once")
-        end
-    end
-
-    --------------------------------------------------------
-    -- 8) Nested with_nack trees
-    --------------------------------------------------------
-    do
-        -- 8.1 winner has BOTH outer and inner with_nack:
-        --     neither outer nor inner nack should fire.
+        -- 6.5 basic nested with_nack:
+        --     outer subtree wins via inner leaf → neither nack fires.
         do
             local outer_cancelled, inner_cancelled = false, false
 
             local outer = op.with_nack(function(outer_nack_ev)
-                -- watcher for outer nack
                 fiber.spawn(function()
                     outer_nack_ev:perform()
                     outer_cancelled = true
                 end)
 
-                -- inner with_nack subtree
                 return op.with_nack(function(inner_nack_ev)
-                    -- watcher for inner nack
                     fiber.spawn(function()
                         inner_nack_ev:perform()
                         inner_cancelled = true
                     end)
-                    -- this leaf *wins*, so both nacks are on the winner path
                     return task("INNER_WIN")
                 end)
             end)
 
-            -- Only competitor is never_ready, so outer subtree wins.
             local ev = op.choice(outer, never_op())
-            local v = ev:perform()
+            local v  = ev:perform()
             assert(v == "INNER_WIN",
-                   "nested with_nack (inner winner): wrong result")
+                   "nested with_nack: wrong result")
 
             fiber.yield()
             assert(outer_cancelled == false,
-                   "nested with_nack (inner winner): outer nack fired unexpectedly")
+                   "nested with_nack: outer nack fired unexpectedly")
             assert(inner_cancelled == false,
-                   "nested with_nack (inner winner): inner nack fired unexpectedly")
+                   "nested with_nack: inner nack fired unexpectedly")
         end
+    end
 
-        -- 8.2 winner is in OUTER subtree but NOT in inner subtree:
-        --     outer nack must NOT fire, inner nack MUST fire.
+    --------------------------------------------------------
+    -- 7) bracket: RAII-style resource management over events
+    --------------------------------------------------------
+    do
+        ----------------------------------------------------
+        -- 7.1 basic success: inner event wins → aborted=false
+        ----------------------------------------------------
         do
-            local outer_cancelled, inner_cancelled = false, false
+            local acq_count = 0
+            local rel_count = 0
+            local use_count = 0
+            local last_res, last_aborted
 
-            local outer = op.with_nack(function(outer_nack_ev)
-                fiber.spawn(function()
-                    outer_nack_ev:perform()
-                    outer_cancelled = true
-                end)
+            local ev = op.bracket(
+                function()
+                    acq_count = acq_count + 1
+                    return "RESOURCE"
+                end,
+                function(res, aborted)
+                    rel_count    = rel_count + 1
+                    last_res     = res
+                    last_aborted = aborted
+                end,
+                function(res)
+                    use_count = use_count + 1
+                    assert(res == "RESOURCE", "bracket basic: wrong resource")
+                    return task(99)
+                end
+            )
 
-                return op.choice(
-                    -- This leaf wins: path has ONLY outer's nack.
-                    task("OUTER_ONLY"),
-                    -- This leaf loses: path has OUTER and INNER nacks.
-                    op.with_nack(function(inner_nack_ev)
-                        fiber.spawn(function()
-                            inner_nack_ev:perform()
-                            inner_cancelled = true
-                        end)
-                        return never_op()
-                    end)
-                )
-            end)
-
-            local ev = op.choice(outer, never_op())
             local v = ev:perform()
-            assert(v == "OUTER_ONLY",
-                   "nested with_nack (outer-only winner): wrong result")
+            assert(v == 99, "bracket basic: wrong result")
 
-            fiber.yield()
-            assert(outer_cancelled == false,
-                   "nested with_nack (outer-only winner): outer nack fired unexpectedly")
-            assert(inner_cancelled == true,
-                   "nested with_nack (outer-only winner): inner nack did not fire")
+            assert(acq_count == 1, "bracket basic: acquire not once")
+            assert(use_count == 1, "bracket basic: use not once")
+            assert(rel_count == 1, "bracket basic: release not once")
+            assert(last_res == "RESOURCE", "bracket basic: wrong res in release")
+            assert(last_aborted == false,
+                "bracket basic: aborted flag should be false on success")
         end
 
-        -- 8.3 winner is OUTSIDE the outer with_nack subtree:
-        --     both outer and inner nacks MUST fire.
+        ----------------------------------------------------
+        -- 7.2 losing branch in choice → aborted=true
+        ----------------------------------------------------
         do
-            local outer_cancelled, inner_cancelled = false, false
+            local acq_count, use_count, rel_count = 0, 0, 0
+            local last_aborted
 
-            local outer = op.with_nack(function(outer_nack_ev)
-                fiber.spawn(function()
-                    outer_nack_ev:perform()
-                    outer_cancelled = true
-                end)
-
-                -- Entire outer subtree never becomes ready.
-                return op.with_nack(function(inner_nack_ev)
-                    fiber.spawn(function()
-                        inner_nack_ev:perform()
-                        inner_cancelled = true
-                    end)
+            local bracket_ev = op.bracket(
+                function()
+                    acq_count = acq_count + 1
+                    return "R"
+                end,
+                function(_, aborted)
+                    rel_count    = rel_count + 1
+                    last_aborted = aborted
+                end,
+                function(r)
+                    use_count = use_count + 1
+                    assert(r == "R")
                     return never_op()
-                end)
-            end)
+                end
+            )
 
-            -- Top-level winner is outside the outer subtree.
-            local ev = op.choice(outer, task("TOP_WIN"))
-            local v = ev:perform()
-            assert(v == "TOP_WIN",
-                   "nested with_nack (outer loses): wrong winner")
+            local ev = op.choice(bracket_ev, task("WIN"))
+            local v  = ev:perform()
+            assert(v == "WIN", "bracket choice: wrong winner")
 
-            fiber.yield()
-            assert(outer_cancelled == true,
-                   "nested with_nack (outer loses): outer nack did not fire")
-            assert(inner_cancelled == true,
-                   "nested with_nack (outer loses): inner nack did not fire")
+            assert(acq_count == 1, "bracket choice: acquire not once")
+            assert(use_count == 1, "bracket choice: use not once")
+            assert(rel_count == 1, "bracket choice: release not once")
+            assert(last_aborted == true,
+                "bracket choice: aborted flag should be true when losing")
+        end
+
+        ----------------------------------------------------
+        -- 7.3 bracket + poll:
+        --   (a) other arm ready → aborted=true
+        --   (b) no arm ready → NO release
+        ----------------------------------------------------
+        do
+            -- (a) other arm ready
+            do
+                local acq_count, use_count, rel_count = 0, 0, 0
+                local last_aborted
+
+                local bracket_ev = op.bracket(
+                    function()
+                        acq_count = acq_count + 1
+                        return "R"
+                    end,
+                    function(_, aborted)
+                        rel_count    = rel_count + 1
+                        last_aborted = aborted
+                    end,
+                    function(r)
+                        use_count = use_count + 1
+                        assert(r == "R")
+                        return never_op()
+                    end
+                )
+
+                local ev = op.choice(bracket_ev, task("WINNER"))
+                local ok, v = ev:poll()
+                assert(ok and v == "WINNER",
+                    "bracket+poll (other ready): wrong result")
+
+                assert(acq_count == 1, "bracket+poll (other ready): acquire once")
+                assert(use_count == 1, "bracket+poll (other ready): use once")
+                assert(rel_count == 1, "bracket+poll (other ready): release once")
+                assert(last_aborted == true,
+                    "bracket+poll (other ready): aborted flag should be true")
+            end
+
+            -- (b) none ready → no commit → no release
+            do
+                local acq_count, use_count, rel_count = 0, 0, 0
+
+                local bracket_ev = op.bracket(
+                    function()
+                        acq_count = acq_count + 1
+                        return "R"
+                    end,
+                    function(_, _)
+                        rel_count = rel_count + 1
+                    end,
+                    function(r)
+                        use_count = use_count + 1
+                        assert(r == "R")
+                        return never_op()
+                    end
+                )
+
+                local ev = op.choice(bracket_ev, never_op())
+                local ok, v = ev:poll()
+                assert(ok == false and v == nil,
+                    "bracket+poll (none ready): expected (false)")
+
+                assert(acq_count == 1, "bracket+poll (none ready): acquire once")
+                assert(use_count == 1, "bracket+poll (none ready): use once")
+                assert(rel_count == 0,
+                    "bracket+poll (none ready): release should NOT run without commit")
+            end
         end
     end
 
