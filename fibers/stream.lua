@@ -148,7 +148,7 @@ end
 -- @return number of bytes written
 -- @return error encountered during the write
 function Stream:write_chars(str)
-    return self:write_chars_op(str):perform()
+    return op.perform(self:write_chars_op(str))
 end
 
 local function core_read_op(stream, buf, min, max, terminator)
@@ -244,7 +244,7 @@ end
 -- @return string containing the characters read
 -- @return error during read, if any
 function Stream:read_chars(count)
-    return self:read_chars_op(count):perform()
+    return op.perform(self:read_chars_op(count))
 end
 
 --- Operation to read up to a specified number of characters from the stream.
@@ -263,7 +263,7 @@ end
 -- @return string containing the characters read
 -- @return error during read, if any
 function Stream:read_some_chars(count)
-    return self:read_some_chars_op(count):perform()
+    return op.perform(self:read_some_chars_op(count))
 end
 
 --- Operation to read all characters from the stream.
@@ -279,7 +279,7 @@ end
 -- @return string containing all characters read
 -- @return error during read, if any
 function Stream:read_all_chars()
-    return self:read_all_chars_op():perform()
+    return op.perform(self:read_all_chars_op())
 end
 
 --- Operation to read a single character from the stream.
@@ -295,7 +295,7 @@ end
 -- @return the character read, or nil if at end of file
 -- @return error during read, if any
 function Stream:read_char()
-    return self:read_char_op():perform()
+    return op.perform(self:read_char_op())
 end
 
 --- Operation to read a line from the stream.
@@ -316,7 +316,7 @@ end
 -- @return the line read, or nil if at end of file
 -- @return error during read, if any
 function Stream:read_line(style)
-    return self:read_line_op(style):perform()
+    return op.perform(self:read_line_op(style))
 end
 
 function Stream:flush_input()
@@ -335,7 +335,7 @@ end
 
 --- Flush the output buffer, writing all buffered data to the underlying IO.
 function Stream:flush_output()
-    return self:flush_output_op():perform()
+    return op.perform(self:flush_output_op())
 end
 
 Stream.flush = Stream.flush_output
@@ -397,7 +397,7 @@ end
 -- @return the data read from the stream according to the specified format, or nil on end of file
 -- @return error during read, if any
 function Stream:read(...)
-    return self:read_op(...):perform()
+    return op.perform(self:read_op(...))
 end
 
 --- Get or set the file position.
@@ -492,7 +492,7 @@ end
 -- @param ... data to write (strings or numbers)
 -- @return true on success, or nil plus an error message on failure
 function Stream:write(...)
-    return self:write_op(...):perform()
+    return op.perform(self:write_op(...))
 end
 
 -- The result may be nil.

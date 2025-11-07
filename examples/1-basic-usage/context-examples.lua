@@ -20,8 +20,7 @@ local function sub_task_1(ctx)
         cancel("work_completed") -- Cancel the context (optional, as it will timeout)
     end)
 
-    local done_op = deadline_ctx:done_op()
-    op.choice(done_op):perform() -- Wait for the context to be done
+    op.perform(deadline_ctx:done_op()) -- Wait for the context to be done
     print("Sub-Task 1 status: " .. (deadline_ctx:err() or "completed"))
 end
 
@@ -33,8 +32,7 @@ local function sub_task_2(ctx)
         cancel("work_completed") -- Cancel the context when work is done
     end)
 
-    local done_op = cancel_ctx:done_op()
-    op.choice(done_op):perform() -- Wait for the context to be done
+    op.perform(cancel_ctx:done_op()) -- Wait for the context to be done
     print("Sub-Task 2 status: " .. (cancel_ctx:err() or "completed"))
 end
 

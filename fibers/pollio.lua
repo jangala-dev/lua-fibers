@@ -172,13 +172,13 @@ local function fd_readable_op(fd)
     return assert(installed_poll_handler):fd_readable_op(fd)
 end
 local function fd_readable(fd)
-    return fd_readable_op(fd):perform()
+    return op.perform(fd_readable_op(fd))
 end
 local function fd_writable_op(fd)
     return assert(installed_poll_handler):fd_writable_op(fd)
 end
 local function fd_writable(fd)
-    return fd_writable_op(fd):perform()
+    return op.perform(fd_writable_op(fd))
 end
 local function stream_readable_op(stream)
     return assert(installed_poll_handler):stream_readable_op(stream)

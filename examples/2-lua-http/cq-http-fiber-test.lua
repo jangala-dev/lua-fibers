@@ -32,14 +32,15 @@ local old_step; old_step = cqueues.interpose("step", function(self, timeout)
         local events = self:events()
         -- messy
         if events == 'r' then
-            pollio.fd_readable_op(self:pollfd()):perform()
+            op.perform(pollio.fd_readable_op(self:pollfd()))
         elseif events == 'w' then
-            pollio.fd_writable_op(self:pollfd()):perform()
+            op.perform(pollio.fd_writable_op(self:pollfd()))
         elseif events == 'rw' then
-            op.choice(
-                pollio.fd_readable_op(self:pollfd()),
-                pollio.fd_writable_op(self:pollfd())
-            ):perform()
+            op.perform(
+				op.choice(
+					pollio.fd_readable_op(self:pollfd()),
+					pollio.fd_writable_op(self:pollfd())
+            ))
         end
 		return old_step(self, 0.0)
 	end

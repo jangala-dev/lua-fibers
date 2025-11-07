@@ -7,25 +7,13 @@ package.path = "../?.lua;" .. package.path
 local op    = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 
+local perform = op.perform
+local always  = op.always
+local never   = op.never
+
 ------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------
-
--- Ready primitive event that returns val.
-local function task(val)
-    local wrap_fn  = function(x) return x end
-    local try_fn   = function() return true, val end
-    local block_fn = function() end
-    return op.new_base_op(wrap_fn, try_fn, block_fn)
-end
-
--- Primitive that never becomes ready (try=false, no block).
-local function never_op()
-    local wrap_fn  = function(x) return x end
-    local try_fn   = function() return false end
-    local block_fn = function() end
-    return op.new_base_op(wrap_fn, try_fn, block_fn)
-end
 
 -- Primitive that *forces* the blocking path then completes once.
 local function async_task(val)
@@ -49,44 +37,44 @@ end
 fiber.spawn(function()
 
     --------------------------------------------------------
-    -- 1) Base op: perform, perform_alt, wrap
+    -- 1) Base event: perform, or_else, wrap
     --------------------------------------------------------
     do
-        local base = task(1)
-        assert(base:perform() == 1, "base: perform failed")
+        local base = always(1)
+        assert(perform(base) == 1, "base: perform failed")
 
-        -- perform_alt: event wins, fallback ignored
-        local base2 = task(2)
-        local palt1 = base2:perform_alt(function() return 9 end)
-        assert(palt1 == 2, "base: perform_alt should use event result")
+        -- or_else: event wins, fallback ignored
+        local base2  = always(2)
+        local ev1    = base2:or_else(function() return 9 end)
+        local palt1  = perform(ev1)
+        assert(palt1 == 2, "base: or_else should use event result")
 
-        -- perform_alt: never-ready event → fallback wins
-        local never = never_op()
-        local palt2 = never:perform_alt(function() return 99 end)
-        assert(palt2 == 99, "base: perform_alt should use fallback when event can't commit")
+        -- or_else: never-ready event → fallback wins
+        local ev2   = never():or_else(function() return 99 end)
+        local palt2 = perform(ev2)
+        assert(palt2 == 99, "base: or_else should use fallback when event can't commit")
 
-        -- perform_alt: async event should still win (gets a chance next turn)
+        -- or_else: async event should still win (gets a chance next turn)
         do
-            local won
             local fallback_called = false
-            local ev, tries = async_task(123)
-            local r = ev:perform_alt(function()
+            local ev_async, tries = async_task(123)
+            local ev = ev_async:or_else(function()
                 fallback_called = true
                 return -1
             end)
-            won = (r == 123)
-            assert(won, "perform_alt(async): expected main event to win")
+            local r = perform(ev)
+            assert(r == 123, "or_else(async): expected main event to win")
             assert(tries() == 1, "async_task: try_fn not called exactly once")
             assert(fallback_called == false,
-                "perform_alt(async): fallback should not run when event commits")
+                "or_else(async): fallback should not run when event commits")
         end
 
         -- nested wrap: ((x + 1) * 2)
-        local ev2 = task(5)
+        local ev3 = always(5)
             :wrap(function(x) return x + 1 end)
             :wrap(function(y) return y * 2 end)
-        local v2 = ev2:perform()
-        assert(v2 == 12, "nested wrap: wrong result")
+        local v3 = perform(ev3)
+        assert(v3 == 12, "nested wrap: wrong result")
     end
 
     --------------------------------------------------------
@@ -94,7 +82,7 @@ fiber.spawn(function()
     --------------------------------------------------------
     do
         local ev, tries = async_task(42)
-        local v = ev:perform()
+        local v = perform(ev)
         assert(v == 42, "async_task: wrong result")
         assert(tries() == 1, "async_task: try_fn not called exactly once")
     end
@@ -104,18 +92,18 @@ fiber.spawn(function()
     --------------------------------------------------------
     do
         -- choice over multiple ready events
-        local choice_ev = op.choice(task(1), task(2), task(3))
+        local choice_ev = op.choice(always(1), always(2), always(3))
         for _ = 1, 5 do
-            local v = choice_ev:perform()
+            local v = perform(choice_ev)
             assert(v == 1 or v == 2 or v == 3,
                 "choice(ready): result not in {1,2,3}")
         end
 
         -- wrap on choice
-        local ev = op.choice(task(1), task(2)):wrap(function(x)
+        local ev = op.choice(always(1), always(2)):wrap(function(x)
             return x * 10
         end)
-        local v = ev:perform()
+        local v = perform(ev)
         assert(v == 10 or v == 20, "wrap(choice): wrong result")
     end
 
@@ -127,10 +115,10 @@ fiber.spawn(function()
         local calls = 0
         local g = function()
             calls = calls + 1
-            return task(42)
+            return always(42)
         end
         local ev = op.guard(g)
-        local v = ev:perform()
+        local v = perform(ev)
         assert(v == 42, "guard basic: wrong result")
         assert(calls == 1, "guard basic: builder not called once")
 
@@ -138,12 +126,12 @@ fiber.spawn(function()
         local calls2 = 0
         local guarded = op.guard(function()
             calls2 = calls2 + 1
-            return task(10)
+            return always(10)
         end)
-        local choice_ev = op.choice(guarded, task(20))
+        local choice_ev = op.choice(guarded, always(20))
         local runs = 5
         for _ = 1, runs do
-            local r = choice_ev:perform()
+            local r = perform(choice_ev)
             assert(r == 10 or r == 20,
                 "guard in choice: result not in {10,20}")
         end
@@ -155,15 +143,15 @@ fiber.spawn(function()
             guard_calls = guard_calls + 1
             return op.with_nack(function(nack_ev)
                 fiber.spawn(function()
-                    nack_ev:perform()
+                    perform(nack_ev)
                     cancelled = true
                 end)
-                return never_op()
+                return never()
             end)
         end)
 
-        local ev2 = op.choice(guarded_nack, task("OK"))
-        local v2  = ev2:perform()
+        local ev2 = op.choice(guarded_nack, always("OK"))
+        local v2  = perform(ev2)
         assert(v2 == "OK", "guard+with_nack: wrong winner")
 
         fiber.yield()
@@ -172,19 +160,21 @@ fiber.spawn(function()
     end
 
     --------------------------------------------------------
-    -- 5) perform_alt on composite events
+    -- 5) or_else on composite events
     --------------------------------------------------------
     do
-        -- composite ready: choice(task, task)
-        local comp_ready = op.choice(task(1), task(2))
-        local r1 = comp_ready:perform_alt(function() return 99 end)
+        -- composite ready: choice(always, always)
+        local comp_ready = op.choice(always(1), always(2))
+        local ev1 = comp_ready:or_else(function() return 99 end)
+        local r1 = perform(ev1)
         assert(r1 == 1 or r1 == 2,
-            "perform_alt(composite ready): wrong result")
+            "or_else(composite ready): wrong result")
 
         -- composite never-ready: choice(never, never) → fallback
-        local comp_never = op.choice(never_op(), never_op())
-        local r2 = comp_never:perform_alt(function() return 42 end)
-        assert(r2 == 42, "perform_alt(composite none): fallback not used")
+        local comp_never = op.choice(never(), never())
+        local ev2 = comp_never:or_else(function() return 42 end)
+        local r2 = perform(ev2)
+        assert(r2 == 42, "or_else(composite none): fallback not used")
     end
 
     --------------------------------------------------------
@@ -196,14 +186,14 @@ fiber.spawn(function()
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
                 fiber.spawn(function()
-                    nack_ev:perform()
+                    perform(nack_ev)
                     cancelled = true
                 end)
-                return task("WIN")
+                return always("WIN")
             end)
 
-            local ev = op.choice(with_nack_ev, never_op())
-            local v  = ev:perform()
+            local ev = op.choice(with_nack_ev, never())
+            local v  = perform(ev)
             assert(v == "WIN", "with_nack win: wrong winner")
 
             fiber.yield()
@@ -215,14 +205,14 @@ fiber.spawn(function()
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
                 fiber.spawn(function()
-                    nack_ev:perform()
+                    perform(nack_ev)
                     cancelled = true
                 end)
-                return never_op()
+                return never()
             end)
 
-            local ev = op.choice(with_nack_ev, task("OTHER"))
-            local v  = ev:perform()
+            local ev = op.choice(with_nack_ev, always("OTHER"))
+            local v  = perform(ev)
             assert(v == "OTHER", "with_nack loss: wrong winner")
 
             fiber.yield()
@@ -236,21 +226,21 @@ fiber.spawn(function()
 
             local outer = op.with_nack(function(outer_nack_ev)
                 fiber.spawn(function()
-                    outer_nack_ev:perform()
+                    perform(outer_nack_ev)
                     outer_cancelled = true
                 end)
 
                 return op.with_nack(function(inner_nack_ev)
                     fiber.spawn(function()
-                        inner_nack_ev:perform()
+                        perform(inner_nack_ev)
                         inner_cancelled = true
                     end)
-                    return task("INNER_WIN")
+                    return always("INNER_WIN")
                 end)
             end)
 
-            local ev = op.choice(outer, never_op())
-            local v  = ev:perform()
+            local ev = op.choice(outer, never())
+            local v  = perform(ev)
             assert(v == "INNER_WIN",
                    "nested with_nack: wrong result")
 
@@ -288,11 +278,11 @@ fiber.spawn(function()
                 function(res)
                     use_count = use_count + 1
                     assert(res == "RESOURCE", "bracket basic: wrong resource")
-                    return task(99)
+                    return always(99)
                 end
             )
 
-            local v = ev:perform()
+            local v = perform(ev)
             assert(v == 99, "bracket basic: wrong result")
 
             assert(acq_count == 1, "bracket basic: acquire not once")
@@ -322,12 +312,12 @@ fiber.spawn(function()
                 function(r)
                     use_count = use_count + 1
                     assert(r == "R")
-                    return never_op()
+                    return never()
                 end
             )
 
-            local ev = op.choice(bracket_ev, task("WIN"))
-            local v  = ev:perform()
+            local ev = op.choice(bracket_ev, always("WIN"))
+            local v  = perform(ev)
             assert(v == "WIN", "bracket choice: wrong winner")
 
             assert(acq_count == 1, "bracket choice: acquire not once")
@@ -338,7 +328,7 @@ fiber.spawn(function()
         end
 
         ----------------------------------------------------
-        -- 7.3 bracket + perform_alt:
+        -- 7.3 bracket + or_else:
         --   bracket arm never commits → aborted=true, fallback used
         ----------------------------------------------------
         do
@@ -357,25 +347,27 @@ fiber.spawn(function()
                 function(r)
                     use_count = use_count + 1
                     assert(r == "R")
-                    return never_op()
+                    return never()
                 end
             )
 
-            local res = bracket_ev:perform_alt(function()
+            local ev = bracket_ev:or_else(function()
                 fallback_called = true
                 return "FALLBACK"
             end)
 
-            assert(res == "FALLBACK",
-                "bracket+perform_alt: expected fallback result")
-            assert(fallback_called == true,
-                "bracket+perform_alt: fallback thunk not called")
+            local res = perform(ev)
 
-            assert(acq_count == 1, "bracket+perform_alt: acquire once")
-            assert(use_count == 1, "bracket+perform_alt: use once")
-            assert(rel_count == 1, "bracket+perform_alt: release once")
+            assert(res == "FALLBACK",
+                "bracket+or_else: expected fallback result")
+            assert(fallback_called == true,
+                "bracket+or_else: fallback thunk not called")
+
+            assert(acq_count == 1, "bracket+or_else: acquire once")
+            assert(use_count == 1, "bracket+or_else: use once")
+            assert(rel_count == 1, "bracket+or_else: release once")
             assert(last_aborted == true,
-                "bracket+perform_alt: aborted flag should be true when losing")
+                "bracket+or_else: aborted flag should be true when losing")
         end
     end
 

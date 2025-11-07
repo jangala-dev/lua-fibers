@@ -106,7 +106,7 @@ function Cmd:_output_collector(pipes)
             ops[#ops + 1] = self.ctx:done_op():wrap(close_pipes)
         end
 
-        op.choice(unpack(ops)):perform()
+        op.perform(op.choice(unpack(ops)))
     end
 
     return buf:tostring(), self:wait()
@@ -228,11 +228,11 @@ function Cmd:wait()
     if self.ctx then
         ops[#ops + 1] = self.ctx:done_op():wrap(function()
             self:kill()
-            pollio.fd_readable_op(self.process.pidfd):perform()
+            op.perform(pollio.fd_readable_op(self.process.pidfd))
         end)
     end
 
-    op.choice(unpack(ops)):perform()
+    op.perform(op.choice(unpack(ops)))
     local _, _, status = sc.waitpid(self.process.pid)
     self.process.state = status
     sc.close(self.process.pidfd)

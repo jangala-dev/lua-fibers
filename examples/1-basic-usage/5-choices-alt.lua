@@ -38,7 +38,7 @@ fiber.spawn(function()
     local boom = after(0.5)
     local done = false
     repeat
-        op.choice(
+        local task = op.choice(
             ticker:get_op():wrap(function()
                 print("tick.")
             end),
@@ -46,10 +46,11 @@ fiber.spawn(function()
                 print("BOOM!")
                 done = true
             end)
-        ):perform_alt(function()
+        ):or_else(function()
             print("    .")
             sleep.sleep(0.05)
         end)
+        op.perform(task)
     until done
 
     fiber.stop()

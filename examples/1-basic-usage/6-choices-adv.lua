@@ -61,7 +61,7 @@ fiber.spawn(function()
     local sock = socket.connect_unix(sockname)
     while true do
         -- Use op.choice to handle multiple potentially blocking actions
-        op.choice(
+        local task = op.choice(
             data_q:get_op():wrap(function(value)
                 print("data received - writing to socket")
                 sock:write(value .. "\n")
@@ -79,7 +79,8 @@ fiber.spawn(function()
             sleep.sleep_op(0.5):wrap(function()
                 print("yawn - nothing happening")
             end)
-        ):perform()
+        )
+        op.perform(task)
     end
 end)
 

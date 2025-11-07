@@ -16,7 +16,7 @@ local function fibonacci(c, quit)
     local x, y = 0, 1
     local done = false
     repeat
-        op.choice(
+        local task = op.choice(
             c:put_op(x):wrap(function()
                 x, y = y, x+y
             end),
@@ -24,7 +24,8 @@ local function fibonacci(c, quit)
                 print("quit")
                 done = true
             end)
-        ):perform()
+        )
+        op.perform(task)
     until done
 end
 

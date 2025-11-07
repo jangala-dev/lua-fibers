@@ -77,10 +77,11 @@ local function test_read_op()
         wg:done()
     end)
 
-    local chars, err = op.choice(
+    local task = op.choice(
         rd:read_all_chars_op(),
         sleep.sleep_op(0.01):wrap(function () return nil, 'timeout' end)
-    ):perform()
+    )
+    local chars, err = op.perform(task)
 
     assert(not chars and err == 'timeout')
 
@@ -118,10 +119,11 @@ local function test_write_op()
         wg:done()
     end)
 
-    local written, err = op.choice(
+    local task = op.choice(
         wr:write_chars_op(msg..msg2),
         sleep.sleep_op(0.01):wrap(function () return nil, 'timeout' end)
-    ):perform()
+    )
+    local written, err = op.perform(task)
 
     assert(not written and err=='timeout')
 

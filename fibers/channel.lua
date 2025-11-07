@@ -115,7 +115,7 @@ end
 -- continue.  Otherwise, block until a receiver becomes available.
 -- @tparam any message The message to put into the Channel.
 function Channel:put(message)
-    self:put_op(message):perform()
+    return op.perform(self:put_op(message))
 end
 
 --- Get a message from the Channel.
@@ -125,7 +125,7 @@ end
 -- available.
 -- @treturn any The message retrieved from the Channel.
 function Channel:get()
-    return self:get_op():perform()
+    return op.perform(self:get_op())
 end
 
 --- @export
