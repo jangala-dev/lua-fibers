@@ -29,7 +29,6 @@
 --   - else_next_turn(ev, fallback_ev): biased choice; prefer ev, but
 --     if it doesn't commit "by next turn", abort it cleanly and run
 --     fallback_ev (in a separate sync).
---   - Event:perform_alt(thunk): use else_next_turn(self, always_thunk).
 
 local fiber  = require 'fibers.fiber'
 

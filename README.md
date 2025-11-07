@@ -7,15 +7,17 @@ local function fibonacci(c, quit)
     local x, y = 0, 1
     local done = false
     repeat
-        op.choice(
-            c:put_op(x):wrap(function(value)
-                x, y = y, x+y
-            end),
-            quit:get_op():wrap(function(value)
-                print("quit")
-                done = true
-            end)
-        ):perform()
+        perform(
+            choice(
+                c:put_op(x):wrap(function(value)
+                    x, y = y, x+y
+                end),
+                quit:get_op():wrap(function(value)
+                    print("quit")
+                    done = true
+                end)
+            )
+        )
     until done
 end
 
@@ -35,7 +37,7 @@ end)
 fiber.main()
 ```
 
-Ported from the Snabb Project's [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [`streams`](https://github.com/snabbco/snabb/tree/master/src/lib/stream) libraries, written by 
+Ported from the Snabb Project's [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [`streams`](https://github.com/snabbco/snabb/tree/master/src/lib/stream) libraries, written by
 Andy Wingo as an implementation of Reppy et al's Concurrent ML(CML), and a fibers-based reimplementation of Lua's streams enabling smooth non-blocking access to files and sockets.
 
 Inspired by Andy's [blog post](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) introducing fibers on Lua
@@ -55,7 +57,7 @@ with the following points to bear in mind:
 ## Installation
 
 This is a pure Lua (with FFI) module with the following dependencies:
-  - lua-posix (for micro/nano timing and sleeping options, for forking and 
+  - lua-posix (for micro/nano timing and sleeping options, for forking and
   other syscall operations)
   - libffi and lua-cffi (if not using LuaJIT)
   - lua-bit32 (if not using LuaJIT)
@@ -76,7 +78,7 @@ These dependencies will be installed in a VScode devcontainer automatically. To 
 
 ### Installation with LuaJIT on OpenWRT
 
-This is the simplest set up for running on OpenWRT.  
+This is the simplest set up for running on OpenWRT.
 
 `opkg update; opkg install luajit; opkg install luaposix`
 
@@ -111,15 +113,15 @@ This library implements a simple version of Concurrent ML(CML), and provides pri
 
 ## Progress
 
-All of the Snabb 'fibers' modules the following have so far been ported and 
-tested. All of Snabb's 'stream' module has also been ported, which can do 
-non-blocking reads and writes from file descriptors using familiar `line` 
-and `all` approaches. 
+All of the Snabb 'fibers' modules the following have so far been ported and
+tested. All of Snabb's 'stream' module has also been ported, which can do
+non-blocking reads and writes from file descriptors using familiar `line`
+and `all` approaches.
 
 We use the `cffi` module to port Wingo's `luajit` C ffi based
 buffers implementation in a way that will work across multiple architectures, as
 Lua versions of these buffers would be inefficient and lead to allocation and
-garbage collection without a substantial investment of time. 
+garbage collection without a substantial investment of time.
 
 ## Structured concurrency
 

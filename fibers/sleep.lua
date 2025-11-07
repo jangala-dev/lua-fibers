@@ -7,6 +7,8 @@
 local op = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 
+local perform = op.perform
+
 --- Timeout class.
 -- Represents a timeout for a fiber.
 -- @type Timeout
@@ -29,7 +31,7 @@ end
 --- Put the current fiber to sleep until time t.
 -- @tparam number t The time to sleep until.
 local function sleep_until(t)
-    return op.perform(sleep_until_op(t))
+    return perform(sleep_until_op(t))
 end
 
 --- Create a new operation that puts the current fiber to sleep for a duration dt.
@@ -46,7 +48,7 @@ end
 --- Put the current fiber to sleep for a duration dt.
 -- @tparam number dt The duration to sleep.
 local function sleep(dt)
-    return op.perform(sleep_op(dt))
+    return perform(sleep_op(dt))
 end
 
 return {

@@ -8,6 +8,8 @@ local epoll = require 'fibers.epoll'
 local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 
+local perform = op.perform
+
 local PollIOHandler = {}
 PollIOHandler.__index = PollIOHandler
 
@@ -172,13 +174,13 @@ local function fd_readable_op(fd)
     return assert(installed_poll_handler):fd_readable_op(fd)
 end
 local function fd_readable(fd)
-    return op.perform(fd_readable_op(fd))
+    return perform(fd_readable_op(fd))
 end
 local function fd_writable_op(fd)
     return assert(installed_poll_handler):fd_writable_op(fd)
 end
 local function fd_writable(fd)
-    return op.perform(fd_writable_op(fd))
+    return perform(fd_writable_op(fd))
 end
 local function stream_readable_op(stream)
     return assert(installed_poll_handler):stream_readable_op(stream)
