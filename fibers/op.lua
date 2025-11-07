@@ -24,8 +24,12 @@
 --   - after a choice commits, we figure out which conds are associated
 --     exclusively with losing arms and signal those once.
 --
--- This gives you efficient abort/bracket behaviour while preserving
--- CML’s algebra for nested with_nack.
+-- We also provide:
+--   - bracket(acquire, release, use): RAII-style resource protocol.
+--   - else_next_turn(ev, fallback_ev): biased choice; prefer ev, but
+--     if it doesn't commit "by next turn", abort it cleanly and run
+--     fallback_ev (in a separate sync).
+--   - Event:perform_alt(thunk): use else_next_turn(self, always_thunk).
 
 local fiber  = require 'fibers.fiber'
 
@@ -222,7 +226,7 @@ local function new_abort_cond(abort_fn)
             local ok, err = pcall(abort_fn)
             -- Best-effort: ignore errors, or log if you like.
             if not ok then
-                print("abort handler error: "..tostring(err))
+                print("abort handler error: " .. tostring(err))
             end
         end
     }
@@ -278,8 +282,8 @@ local function compile_event(ev, outer_wrap, out, nacks)
         compile_event(ev.inner, new_outer, out, nacks)
 
     elseif kind == 'abort' then
-        local cond         = new_abort_cond(ev.abort_fn)
-        local child_nacks  = { unpack(nacks) }
+        local cond        = new_abort_cond(ev.abort_fn)
+        local child_nacks = { unpack(nacks) }
         child_nacks[#child_nacks + 1] = cond
         compile_event(ev.inner, outer_wrap, out, child_nacks)
 
@@ -308,7 +312,9 @@ end
 --   - For each loser leaf, signal any nacks not in the winner set.
 --   - Each cond object is responsible for idempotence.
 local function trigger_nacks(ops, winner_index)
-    if not winner_index then return end
+    if not winner_index then
+        error("trigger_nacks: no winner_index (internal error)")
+    end
 
     local winner_set = {}
     local wnacks     = ops[winner_index].nacks
@@ -323,7 +329,7 @@ local function trigger_nacks(ops, winner_index)
         if i ~= winner_index then
             local nacks = ops[i].nacks
             if nacks then
-                for j = 1, #nacks do
+                for j = #nacks, 1, -1 do
                     local cond = nacks[j]
                     if cond
                         and not winner_set[cond]
@@ -372,7 +378,33 @@ local function block_choice_op(sched, fib, ops)
 end
 
 ----------------------------------------------------------------------
--- Event methods: perform, poll, perform_alt
+-- Small primitive: next-turn event
+--
+-- next_turn_op(): primitive event that is never ready in the fast path;
+-- if forced to block, it completes itself on the *next scheduler turn*.
+--
+-- This is used to bias choices: we can race some event `ev` against
+-- next_turn_op() and fallback logic, so `ev` gets "one turn" to commit
+-- before we give up and choose the fallback.
+----------------------------------------------------------------------
+
+local function next_turn_op()
+    local function try()
+        -- Never ready in fast path.
+        return false
+    end
+
+    local function block(suspension, wrap_fn)
+        -- Schedule completion for the *next* turn.
+        local task = suspension:complete_task(wrap_fn)
+        suspension.sched:schedule(task)
+    end
+
+    return new_base_op(nil, try, block)
+end
+
+----------------------------------------------------------------------
+-- Event methods: perform, perform_alt
 ----------------------------------------------------------------------
 
 -- Perform this event (primitive or composite), possibly blocking.
@@ -404,23 +436,25 @@ function Event:perform()
     return wrap(unpack(suspended, 2, suspended.n))
 end
 
--- poll: non-blocking synchronization attempt.
--- Returns (true, ...results) if some arm commits, or (false) otherwise.
-function Event:poll()
-    local ops = compile_event(self)
-    local idx, retval = try_ready(ops)
-    if not idx then return false end
-    trigger_nacks(ops, idx)
-    return true, apply_wrap(ops[idx].wrap, retval)
-end
-
--- perform_alt: non-blocking; if no arm ready, call f().
-function Event:perform_alt(f)
-    local res = pack(self:poll())
-    if res[1] then
-        return unpack(res, 2, res.n)
-    end
-    return f()
+-- perform_alt: biased alternative.
+--
+-- Semantics:
+--   * Give `self` a brief chance to commit (one scheduler "turn").
+--   * If it commits, return its result.
+--   * If it does not commit by then, cleanly abort it via normal
+--     nack/abort semantics and run fallback_thunk() instead.
+--
+-- NOTE: Unlike a poll-based implementation, this still runs guards,
+-- with_nack, bracket, on_abort, etc., and ensures RAII cleanups run
+-- on both the success and abort paths.
+function Event:perform_alt(fallback_thunk)
+  assert(type(fallback_thunk) == "function", "perform_alt expects a function")
+  return choice(
+    self,
+    next_turn_op():wrap(function()
+      return fallback_thunk()
+    end)
+  ):perform()
 end
 
 ----------------------------------------------------------------------
@@ -442,25 +476,22 @@ end
 ----------------------------------------------------------------------
 
 local function bracket(acquire, release, use)
-    assert(type(acquire) == "function", "bracket: acquire must be a function")
-    assert(type(release) == "function", "bracket: release must be a function")
-    assert(type(use)     == "function", "bracket: use must be a function")
-
-    return guard(function()
-        -- pre-sync / setup
-        local res = acquire()
-        local ev  = use(res)
-
-        -- commit & abort behaviour layered as wraps:
-        return ev
-            :wrap(function(...) -- normal completion path
-                pcall(release, res, false)
-                return ...
-            end)
-            :on_abort(function() -- chosen-away / cancelled path
-                pcall(release, res, true)
-            end)
-    end)
+  return guard(function()
+    local res = acquire()
+    local ok, ev = pcall(use, res)
+    if not ok then
+      pcall(release, res, true)     -- ensure cleanup on builder failure
+      error(ev)
+    end
+    return ev
+      :wrap(function(...)
+        pcall(release, res, false)
+        return ...
+      end)
+      :on_abort(function()
+        pcall(release, res, true)
+      end)
+  end)
 end
 
 ----------------------------------------------------------------------
@@ -468,11 +499,12 @@ end
 ----------------------------------------------------------------------
 
 return {
-    new_base_op = new_base_op, -- primitive event constructor
-    choice      = choice,
-    guard       = guard,
-    with_nack   = with_nack,
-    new_cond    = new_cond,
-    bracket     = bracket,
-    -- Event instances have methods: wrap, on_abort, perform, poll, perform_alt.
+    new_base_op    = new_base_op, -- primitive event constructor
+    choice         = choice,
+    guard          = guard,
+    with_nack      = with_nack,
+    new_cond       = new_cond,
+    bracket        = bracket,
+
+    -- Event instances have methods: wrap, on_abort, perform, perform_alt.
 }
