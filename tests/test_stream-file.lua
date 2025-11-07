@@ -14,6 +14,8 @@ local compat    = require 'fibers.stream.compat'
 
 compat.install()
 
+local perform, choice = op.perform, op.choice
+
 local function test()
     local rd, wr = file.pipe()
     local message = "hello, world\n"
@@ -77,11 +79,11 @@ local function test_read_op()
         wg:done()
     end)
 
-    local task = op.choice(
+    local task = choice(
         rd:read_all_chars_op(),
         sleep.sleep_op(0.01):wrap(function () return nil, 'timeout' end)
     )
-    local chars, err = op.perform(task)
+    local chars, err = perform(task)
 
     assert(not chars and err == 'timeout')
 
@@ -119,11 +121,11 @@ local function test_write_op()
         wg:done()
     end)
 
-    local task = op.choice(
+    local task = choice(
         wr:write_chars_op(msg..msg2),
         sleep.sleep_op(0.01):wrap(function () return nil, 'timeout' end)
     )
-    local written, err = op.perform(task)
+    local written, err = perform(task)
 
     assert(not written and err=='timeout')
 

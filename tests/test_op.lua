@@ -7,7 +7,7 @@ package.path = "../?.lua;" .. package.path
 local op    = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 
-local perform = op.perform
+local perform, choice = op.perform, op.choice
 local always  = op.always
 local never   = op.never
 
@@ -92,7 +92,7 @@ fiber.spawn(function()
     --------------------------------------------------------
     do
         -- choice over multiple ready events
-        local choice_ev = op.choice(always(1), always(2), always(3))
+        local choice_ev = choice(always(1), always(2), always(3))
         for _ = 1, 5 do
             local v = perform(choice_ev)
             assert(v == 1 or v == 2 or v == 3,
@@ -100,7 +100,7 @@ fiber.spawn(function()
         end
 
         -- wrap on choice
-        local ev = op.choice(always(1), always(2)):wrap(function(x)
+        local ev = choice(always(1), always(2)):wrap(function(x)
             return x * 10
         end)
         local v = perform(ev)
@@ -128,7 +128,7 @@ fiber.spawn(function()
             calls2 = calls2 + 1
             return always(10)
         end)
-        local choice_ev = op.choice(guarded, always(20))
+        local choice_ev = choice(guarded, always(20))
         local runs = 5
         for _ = 1, runs do
             local r = perform(choice_ev)
@@ -150,7 +150,7 @@ fiber.spawn(function()
             end)
         end)
 
-        local ev2 = op.choice(guarded_nack, always("OK"))
+        local ev2 = choice(guarded_nack, always("OK"))
         local v2  = perform(ev2)
         assert(v2 == "OK", "guard+with_nack: wrong winner")
 
@@ -164,14 +164,14 @@ fiber.spawn(function()
     --------------------------------------------------------
     do
         -- composite ready: choice(always, always)
-        local comp_ready = op.choice(always(1), always(2))
+        local comp_ready = choice(always(1), always(2))
         local ev1 = comp_ready:or_else(function() return 99 end)
         local r1 = perform(ev1)
         assert(r1 == 1 or r1 == 2,
             "or_else(composite ready): wrong result")
 
         -- composite never-ready: choice(never, never) → fallback
-        local comp_never = op.choice(never(), never())
+        local comp_never = choice(never(), never())
         local ev2 = comp_never:or_else(function() return 42 end)
         local r2 = perform(ev2)
         assert(r2 == 42, "or_else(composite none): fallback not used")
@@ -192,7 +192,7 @@ fiber.spawn(function()
                 return always("WIN")
             end)
 
-            local ev = op.choice(with_nack_ev, never())
+            local ev = choice(with_nack_ev, never())
             local v  = perform(ev)
             assert(v == "WIN", "with_nack win: wrong winner")
 
@@ -211,7 +211,7 @@ fiber.spawn(function()
                 return never()
             end)
 
-            local ev = op.choice(with_nack_ev, always("OTHER"))
+            local ev = choice(with_nack_ev, always("OTHER"))
             local v  = perform(ev)
             assert(v == "OTHER", "with_nack loss: wrong winner")
 
@@ -239,7 +239,7 @@ fiber.spawn(function()
                 end)
             end)
 
-            local ev = op.choice(outer, never())
+            local ev = choice(outer, never())
             local v  = perform(ev)
             assert(v == "INNER_WIN",
                    "nested with_nack: wrong result")
@@ -316,7 +316,7 @@ fiber.spawn(function()
                 end
             )
 
-            local ev = op.choice(bracket_ev, always("WIN"))
+            local ev = choice(bracket_ev, always("WIN"))
             local v  = perform(ev)
             assert(v == "WIN", "bracket choice: wrong winner")
 

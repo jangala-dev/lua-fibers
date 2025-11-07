@@ -7,6 +7,8 @@ local fiber = require 'fibers.fiber'
 local timer = require 'fibers.timer'
 local sc = require 'fibers.utils.syscall'
 
+local perform = op.perform
+
 local function days_in_year(y)
     return y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0) and 366 or 365
 end
@@ -240,7 +242,7 @@ end
 -- Wrapper for `absolute_op` that immediately performs the operation.
 -- @param t The absolute time (epoch) for the alarm.
 local function wait_absolute(t)
-    return op.perform(wait_absolute_op(t))
+    return perform(wait_absolute_op(t))
 end
 
 --- Creates an operation for a next (relative) alarm.
@@ -260,7 +262,7 @@ end
 -- @return An error if the time table is invalid.
 local function wait_next(t)
     local _, err = validate_next_table(t)
-    return err or op.perform(assert(installed_alarm_handler):wait_next_op(t))
+    return err or perform(assert(installed_alarm_handler):wait_next_op(t))
 end
 
 -- Public API

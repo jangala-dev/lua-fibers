@@ -9,6 +9,8 @@ local fiber = require 'fibers.fiber'
 local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 
+local perform = op.perform
+
 -- Test Background Context
 local function test_background()
     local ctx = context.background()
@@ -24,7 +26,7 @@ local function test_with_cancel()
 
     local is_cancelled = false
     fiber.spawn(function()
-        op.perform(child_ctx:done_op())
+        perform(child_ctx:done_op())
         is_cancelled = true
     end)
 
@@ -55,7 +57,7 @@ local function test_with_timeout()
 
     local is_cancelled = false
     fiber.spawn(function()
-        op.perform(ctx:done_op())
+        perform(ctx:done_op())
         is_cancelled = true
     end)
 
