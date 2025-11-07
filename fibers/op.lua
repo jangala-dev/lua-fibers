@@ -151,6 +151,43 @@ local function with_nack(g)
     return setmetatable({ kind = 'with_nack', builder = g }, Event)
 end
 
+-- next_turn_op: primitive event that is never ready in the fast path;
+-- if forced to block, it completes itself on the *next scheduler turn*.
+local function next_turn_op()
+    local function try()
+        return false
+    end
+
+    local function block(suspension, wrap_fn)
+        local task = suspension:complete_task(wrap_fn)
+        suspension.sched:schedule(task)
+    end
+
+    return new_base_op(nil, try, block)
+end
+
+local function always(value)
+    return new_base_op(nil,
+        function() return true, value end,
+        function() error("always: block_fn should never run") end)
+end
+
+local function never()
+    -- An event that never becomes ready
+    return new_base_op(nil,
+        function() return false end,
+        function() end)
+end
+
+function Event:or_else(fallback_thunk)
+    return choice(
+        self,
+        next_turn_op():wrap(function()
+            return fallback_thunk()
+        end)
+    )
+end
+
 -- Wrap event with a post-processing function f (commit phase).
 -- This is another node in the tree; composed at compile time.
 function Event:wrap(f)
@@ -174,13 +211,15 @@ end
 -- Simple one-shot condition primitive (used for with_nack; also exported)
 ----------------------------------------------------------------------
 
-local function new_cond()
+local function new_cond(opts)
     local state = {
         triggered = false,
-        waiters   = {}, -- array of CompleteTask
+        waiters   = {},        -- optional
+        abort_fn  = opts and opts.abort_fn or nil,
     }
 
     local function wait_op()
+        assert(not state.abort_fn, "abort-only cond has no wait_op")
         local function try()
             return state.triggered
         end
@@ -198,6 +237,7 @@ local function new_cond()
     local function signal()
         if state.triggered then return end
         state.triggered = true
+        -- wake waiters, if any
         for i = 1, #state.waiters do
             local task = state.waiters[i]
             state.waiters[i] = nil
@@ -208,27 +248,15 @@ local function new_cond()
                 task.suspension.sched:schedule(task)
             end
         end
+        -- fire abort handler, if any
+        if state.abort_fn then
+            pcall(state.abort_fn)
+        end
     end
 
     return {
-        wait_op = wait_op,
+        wait_op = state.abort_fn and nil or wait_op,
         signal  = signal,
-    }
-end
-
--- Abort-cond: like a nack-cond, but its signal() just runs abort_fn.
-local function new_abort_cond(abort_fn)
-    local triggered = false
-    return {
-        signal = function()
-            if triggered then return end
-            triggered = true
-            local ok, err = pcall(abort_fn)
-            -- Best-effort: ignore errors, or log if you like.
-            if not ok then
-                print("abort handler error: " .. tostring(err))
-            end
-        end
     }
 end
 
@@ -282,12 +310,13 @@ local function compile_event(ev, outer_wrap, out, nacks)
         compile_event(ev.inner, new_outer, out, nacks)
 
     elseif kind == 'abort' then
-        local cond        = new_abort_cond(ev.abort_fn)
+        local cond        = new_cond{ abort_fn = ev.abort_fn }
         local child_nacks = { unpack(nacks) }
         child_nacks[#child_nacks + 1] = cond
         compile_event(ev.inner, outer_wrap, out, child_nacks)
 
     else -- 'prim'
+        -- Each leaf gets a unique final_wrap closure so identity comparison in
         local final_wrap = function(...)
             return outer_wrap(ev.wrap_fn(...))
         end
@@ -312,9 +341,7 @@ end
 --   - For each loser leaf, signal any nacks not in the winner set.
 --   - Each cond object is responsible for idempotence.
 local function trigger_nacks(ops, winner_index)
-    if not winner_index then
-        error("trigger_nacks: no winner_index (internal error)")
-    end
+    assert(winner_index, "trigger_nacks: no winner_index (internal error)")
 
     local winner_set = {}
     local wnacks     = ops[winner_index].nacks
@@ -378,32 +405,6 @@ local function block_choice_op(sched, fib, ops)
 end
 
 ----------------------------------------------------------------------
--- Small primitive: next-turn event
---
--- next_turn_op(): primitive event that is never ready in the fast path;
--- if forced to block, it completes itself on the *next scheduler turn*.
---
--- This is used to bias choices: we can race some event `ev` against
--- next_turn_op() and fallback logic, so `ev` gets "one turn" to commit
--- before we give up and choose the fallback.
-----------------------------------------------------------------------
-
-local function next_turn_op()
-    local function try()
-        -- Never ready in fast path.
-        return false
-    end
-
-    local function block(suspension, wrap_fn)
-        -- Schedule completion for the *next* turn.
-        local task = suspension:complete_task(wrap_fn)
-        suspension.sched:schedule(task)
-    end
-
-    return new_base_op(nil, try, block)
-end
-
-----------------------------------------------------------------------
 -- Event methods: perform, perform_alt
 ----------------------------------------------------------------------
 
@@ -448,13 +449,8 @@ end
 -- with_nack, bracket, on_abort, etc., and ensures RAII cleanups run
 -- on both the success and abort paths.
 function Event:perform_alt(fallback_thunk)
-  assert(type(fallback_thunk) == "function", "perform_alt expects a function")
-  return choice(
-    self,
-    next_turn_op():wrap(function()
-      return fallback_thunk()
-    end)
-  ):perform()
+    assert(type(fallback_thunk) == "function", "perform_alt expects a function")
+    return self:or_else(fallback_thunk):perform()
 end
 
 ----------------------------------------------------------------------
@@ -505,6 +501,7 @@ return {
     with_nack      = with_nack,
     new_cond       = new_cond,
     bracket        = bracket,
-
+    always         = always,
+    never          = never,
     -- Event instances have methods: wrap, on_abort, perform, perform_alt.
 }
