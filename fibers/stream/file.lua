@@ -7,8 +7,11 @@
 package.path = "../../?.lua;../?.lua;" .. package.path
 
 local stream = require 'fibers.stream'
+local op = require 'fibers.op'
 local pollio = require 'fibers.pollio'
 local sc = require 'fibers.utils.syscall'
+
+local perform = op.perform
 
 local pio_handler = pollio.install_poll_io_handler()
 
@@ -88,11 +91,11 @@ end
 
 function File:wait_for_readable_op() return pollio.fd_readable_op(self.fd) end
 
-function File:wait_for_readable() self:wait_for_readable_op():perform() end
+function File:wait_for_readable() perform(self:wait_for_readable_op()) end
 
 function File:wait_for_writable_op() return pollio.fd_writable_op(self.fd) end
 
-function File:wait_for_writable() self:wait_for_writable_op():perform() end
+function File:wait_for_writable() perform(self:wait_for_writable_op()) end
 
 function File:task_on_readable(t) if self.fd then pio_handler:task_on_readable(self.fd, t) end end
 

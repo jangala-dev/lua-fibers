@@ -13,6 +13,8 @@ local sleep = require "fibers.sleep"
 local cqueues = require "cqueues"
 local exec = require "fibers.exec"
 
+local perform, choice = op.perform, op.choice
+
 print("installing poll handler")
 pollio.install_poll_io_handler()
 
@@ -32,14 +34,15 @@ local old_step; old_step = cqueues.interpose("step", function(self, timeout)
         local events = self:events()
         -- messy
         if events == 'r' then
-            pollio.fd_readable_op(self:pollfd()):perform()
+            perform(pollio.fd_readable_op(self:pollfd()))
         elseif events == 'w' then
-            pollio.fd_writable_op(self:pollfd()):perform()
+            perform(pollio.fd_writable_op(self:pollfd()))
         elseif events == 'rw' then
-            op.choice(
-                pollio.fd_readable_op(self:pollfd()),
-                pollio.fd_writable_op(self:pollfd())
-            ):perform()
+            perform(
+				choice(
+					pollio.fd_readable_op(self:pollfd()),
+					pollio.fd_writable_op(self:pollfd())
+            ))
         end
 		return old_step(self, 0.0)
 	end

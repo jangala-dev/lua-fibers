@@ -1,6 +1,8 @@
 -- waitgroup.lua
 local op = require 'fibers.op'
 
+local perform = op.perform
+
 local Waitgroup = {}
 Waitgroup.__index = Waitgroup
 
@@ -47,7 +49,7 @@ function Waitgroup:wait_op()
 end
 
 function Waitgroup:wait()
-    self:wait_op():perform()
+    return perform(self:wait_op())
 end
 
 return {

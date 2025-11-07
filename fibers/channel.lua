@@ -7,6 +7,8 @@
 local op = require 'fibers.op'
 local fifo = require 'fibers.utils.fifo'
 
+local perform = op.perform
+
 --- Channel class
 -- Represents a communication channel between fibers.
 -- @type Channel
@@ -115,7 +117,7 @@ end
 -- continue.  Otherwise, block until a receiver becomes available.
 -- @tparam any message The message to put into the Channel.
 function Channel:put(message)
-    self:put_op(message):perform()
+    return perform(self:put_op(message))
 end
 
 --- Get a message from the Channel.
@@ -125,7 +127,7 @@ end
 -- available.
 -- @treturn any The message retrieved from the Channel.
 function Channel:get()
-    return self:get_op():perform()
+    return perform(self:get_op())
 end
 
 --- @export

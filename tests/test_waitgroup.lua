@@ -11,11 +11,14 @@ local op = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
 local sc = require 'fibers.utils.syscall'
 
+local perform, choice = op.perform, op.choice
+
 local function test_nowait()
     local wg = waitgroup.new()
-    wg:wait_op():perform_alt(function()
+    local task = wg:wait_op():or_else(function()
         error("blocked on empty waitgroup")
     end)
+    perform(task)
     print("No wait test: ok")
 end
 
@@ -32,9 +35,12 @@ local function test_simple()
         end)
     end
 
-    wg:wait_op():wrap(function()
-        error("waitgroup didn't block when it should have")
-    end):perform_alt(function() end)
+    perform(
+        wg:wait_op():wrap(function()
+            error("waitgroup didn't block when it should have")
+        end)
+        :or_else(function() end)
+    )
 
     wg:wait()
     print("Simple test: ok")
@@ -68,10 +74,12 @@ local function test_complex()
     end
 
     while not done do
-        op.choice(
-            wg:wait_op():wrap(function() done = true end),
-            sleep.sleep_op(0.9):wrap(extra_work)
-        ):perform()
+        perform(
+            choice(
+                wg:wait_op():wrap(function() done = true end),
+                sleep.sleep_op(0.9):wrap(extra_work)
+            )
+        )
     end
 
     assert(sc.monotime() - start > 1.5)

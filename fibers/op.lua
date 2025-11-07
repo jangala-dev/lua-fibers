@@ -1,7 +1,34 @@
 --- fibers.op module
 -- Provides Concurrent ML style operations for managing concurrency.
 -- Events are CML-style: primitive leaves, choices, guards, with_nack,
--- and wraps. Synchronization compiles an event tree into primitive leaves.
+-- wraps, and an extra abort combinator (on_abort).
+--
+-- Core event AST kinds:
+--   prim      : primitive leaf { try_fn, block_fn, wrap_fn }
+--   choice    : non-empty list of events
+--   guard     : delayed event builder (run once per sync)
+--   with_nack : CML-style nack combinator
+--   wrap      : post-commit mapper (composed at compile time)
+--   abort     : attach abort handler to an event (run if this arm loses)
+--
+-- Semantics sketch
+-- ----------------
+-- We keep CML-style semantics for with_nack:
+--   - with_nack g gets a nack event that becomes enabled iff the
+--     *entire* resulting event loses in an enclosing choice.
+--   - nested with_nack behaves correctly: outer nacks only fire when
+--     the outer event loses, not when internal subchoices resolve.
+--
+-- `on_abort(ev, f)` is implemented in terms of the same "nack" machinery:
+--   - each abort scope behaves like a nack-cond whose signal() runs f().
+--   - after a choice commits, we figure out which conds are associated
+--     exclusively with losing arms and signal those once.
+--
+-- We also provide:
+--   - bracket(acquire, release, use): RAII-style resource protocol.
+--   - else_next_turn(ev, fallback_ev): biased choice; prefer ev, but
+--     if it doesn't commit "by next turn", abort it cleanly and run
+--     fallback_ev (in a separate sync).
 
 local fiber  = require 'fibers.fiber'
 
@@ -75,6 +102,7 @@ end
 -- kind = 'guard'     : { builder = function() -> Event }
 -- kind = 'with_nack' : { builder = function(nack_ev) -> Event }
 -- kind = 'wrap'      : { inner = Event, wrap_fn = f }
+-- kind = 'abort'     : { inner = Event, abort_fn = f }
 ----------------------------------------------------------------------
 
 local Event = {}
@@ -116,13 +144,50 @@ local function guard(g)
     return setmetatable({ kind = 'guard', builder = g }, Event)
 end
 
--- with_nack g: delayed event; g(nack_ev) evaluated once per synchronization.
--- nack_ev is an Event that becomes ready iff this with_nack is *not* chosen.
+-- CML-style with_nack: builder gets a nack event that becomes ready
+-- iff this event participates in a choice and *loses*.
 local function with_nack(g)
     return setmetatable({ kind = 'with_nack', builder = g }, Event)
 end
 
--- Wrap event with a post-processing function f.
+-- next_turn_op: primitive event that is never ready in the fast path;
+-- if forced to block, it completes itself on the *next scheduler turn*.
+local function next_turn_op()
+    local function try()
+        return false
+    end
+
+    local function block(suspension, wrap_fn)
+        local task = suspension:complete_task(wrap_fn)
+        suspension.sched:schedule(task)
+    end
+
+    return new_base_op(nil, try, block)
+end
+
+local function always(value)
+    return new_base_op(nil,
+        function() return true, value end,
+        function() error("always: block_fn should never run") end)
+end
+
+local function never()
+    -- An event that never becomes ready
+    return new_base_op(nil,
+        function() return false end,
+        function() end)
+end
+
+function Event:or_else(fallback_thunk)
+    return choice(
+        self,
+        next_turn_op():wrap(function()
+            return fallback_thunk()
+        end)
+    )
+end
+
+-- Wrap event with a post-processing function f (commit phase).
 -- This is another node in the tree; composed at compile time.
 function Event:wrap(f)
     return setmetatable(
@@ -131,17 +196,29 @@ function Event:wrap(f)
     )
 end
 
+-- Attach an abort handler to this event.
+-- f() is run iff this event participates in a choice and *does not win*.
+function Event:on_abort(f)
+    assert(type(f) == 'function', "on_abort expects a function")
+    return setmetatable(
+        { kind = 'abort', inner = self, abort_fn = f },
+        Event
+    )
+end
+
 ----------------------------------------------------------------------
 -- Simple one-shot condition primitive (used for with_nack; also exported)
 ----------------------------------------------------------------------
 
-local function new_cond()
+local function new_cond(opts)
     local state = {
         triggered = false,
-        waiters   = {}, -- array of CompleteTask
+        waiters   = {},        -- optional
+        abort_fn  = opts and opts.abort_fn or nil,
     }
 
     local function wait_op()
+        assert(not state.abort_fn, "abort-only cond has no wait_op")
         local function try()
             return state.triggered
         end
@@ -149,7 +226,8 @@ local function new_cond()
             if state.triggered then
                 suspension:complete(wrap_fn)
             else
-                state.waiters[#state.waiters + 1] = suspension:complete_task(wrap_fn)
+                state.waiters[#state.waiters + 1] =
+                    suspension:complete_task(wrap_fn)
             end
         end
         return new_base_op(nil, try, block)
@@ -158,17 +236,25 @@ local function new_cond()
     local function signal()
         if state.triggered then return end
         state.triggered = true
+        -- wake waiters, if any
         for i = 1, #state.waiters do
             local task = state.waiters[i]
             state.waiters[i] = nil
-            if task and task.suspension and task.suspension:waiting() then
+            if task
+                and task.suspension
+                and task.suspension:waiting()
+            then
                 task.suspension.sched:schedule(task)
             end
+        end
+        -- fire abort handler, if any
+        if state.abort_fn then
+            pcall(state.abort_fn)
         end
     end
 
     return {
-        wait_op = wait_op,
+        wait_op = state.abort_fn and nil or wait_op,
         signal  = signal,
     }
 end
@@ -181,8 +267,13 @@ end
 --     try_fn,
 --     block_fn,
 --     wrap,          -- final wrap function for this leaf
---     nacks = {...}, -- list of all active with_nack conds on this path
+--     nacks = {...}, -- list of all active nack/abort conds on this path
 --   }
+--
+-- Semantics:
+--   - Each with_nack or abort node adds a cond to the nacks list.
+--   - After a winner leaf is chosen, we find which conds appear only
+--     on losing paths and signal those once (CML-style nack).
 ----------------------------------------------------------------------
 
 local function compile_event(ev, outer_wrap, out, nacks)
@@ -203,12 +294,11 @@ local function compile_event(ev, outer_wrap, out, nacks)
 
     elseif kind == 'with_nack' then
         local cond    = new_cond()
-        local nack_ev = cond.wait_op() -- Event
+        local nack_ev = cond.wait_op()
         local inner   = ev.builder(nack_ev)
-        -- Extend the current nack list for this subtree
-        local child_nacks             = { unpack(nacks) }
-        child_nacks[#child_nacks + 1] = cond
 
+        local child_nacks = { unpack(nacks) }
+        child_nacks[#child_nacks + 1] = cond
         compile_event(inner, outer_wrap, out, child_nacks)
 
     elseif kind == 'wrap' then
@@ -218,7 +308,14 @@ local function compile_event(ev, outer_wrap, out, nacks)
         end
         compile_event(ev.inner, new_outer, out, nacks)
 
+    elseif kind == 'abort' then
+        local cond        = new_cond{ abort_fn = ev.abort_fn }
+        local child_nacks = { unpack(nacks) }
+        child_nacks[#child_nacks + 1] = cond
+        compile_event(ev.inner, outer_wrap, out, child_nacks)
+
     else -- 'prim'
+        -- Each leaf gets a unique final_wrap closure so identity comparison in
         local final_wrap = function(...)
             return outer_wrap(ev.wrap_fn(...))
         end
@@ -237,29 +334,36 @@ end
 -- Nack triggering and non-blocking attempt
 ----------------------------------------------------------------------
 
--- Signal all with_nack conds that belong exclusively to losing arms.
+-- Signal all conds that belong exclusively to losing arms.
+-- This is the original CML-style logic:
+--   - Build set of nacks on the winner path.
+--   - For each loser leaf, signal any nacks not in the winner set.
+--   - Each cond object is responsible for idempotence.
 local function trigger_nacks(ops, winner_index)
-    -- Build a set of conds to *skip* (all on the winner path).
-    local winner = {}
-    if winner_index then
-        local wnacks = ops[winner_index].nacks
-        if wnacks then
-            for i = 1, #wnacks do
-                winner[wnacks[i]] = true
-            end
+    assert(winner_index, "trigger_nacks: no winner_index (internal error)")
+
+    local winner_set = {}
+    local wnacks     = ops[winner_index].nacks
+    if wnacks then
+        for i = 1, #wnacks do
+            winner_set[wnacks[i]] = true
         end
     end
 
-    -- Signal each losing cond once.
     local signaled = {}
     for i = 1, #ops do
-        local nacks = ops[i].nacks
-        if nacks then
-            for j = 1, #nacks do
-                local cond = nacks[j]
-                if cond and not winner[cond] and not signaled[cond] then
-                    signaled[cond] = true
-                    cond.signal()
+        if i ~= winner_index then
+            local nacks = ops[i].nacks
+            if nacks then
+                for j = #nacks, 1, -1 do
+                    local cond = nacks[j]
+                    if cond
+                        and not winner_set[cond]
+                        and not signaled[cond]
+                    then
+                        signaled[cond] = true
+                        cond.signal()
+                    end
                 end
             end
         end
@@ -300,54 +404,71 @@ local function block_choice_op(sched, fib, ops)
 end
 
 ----------------------------------------------------------------------
--- Event methods: perform, poll, perform_alt
+-- Event methods: perform, perform_alt
 ----------------------------------------------------------------------
 
 -- Perform this event (primitive or composite), possibly blocking.
-function Event:perform()
-    local ops = compile_event(self)
+local function perform(ev)
+    local leaves = compile_event(ev)
 
-    -- Fast path: non-blocking attempt.
-    local idx, retval = try_ready(ops)
+    -- Fast path
+    local idx, retval = try_ready(leaves)
     if idx then
-        trigger_nacks(ops, idx)
-        return apply_wrap(ops[idx].wrap, retval)
+        trigger_nacks(leaves, idx)
+        return apply_wrap(leaves[idx].wrap, retval)
     end
 
-    -- Slow path: block on all compiled leaves.
-    local suspended = pack(fiber.suspend(block_choice_op, ops))
+    -- Slow path
+    local suspended = pack(fiber.suspend(block_choice_op, leaves))
     local wrap      = suspended[1]
 
-    -- Find the winning leaf by matching its wrap function.
     local winner_index
-    for i, op in ipairs(ops) do
-        if op.wrap == wrap then
+    for i, leaf in ipairs(leaves) do
+        if leaf.wrap == wrap then
             winner_index = i
             break
         end
     end
-    trigger_nacks(ops, winner_index)
 
+    trigger_nacks(leaves, winner_index)
     return wrap(unpack(suspended, 2, suspended.n))
 end
 
--- poll: non-blocking synchronization attempt.
--- Returns (true, ...results) if some arm commits, or (false) otherwise.
-function Event:poll()
-    local ops = compile_event(self)
-    local idx, retval = try_ready(ops)
-    if not idx then return false end
-    trigger_nacks(ops, idx)
-    return true, apply_wrap(ops[idx].wrap, retval)
-end
+----------------------------------------------------------------------
+-- bracket : (acquire, release, use) -> 'a event
+--
+-- acquire()          : -> resource
+-- release(resource, aborted:boolean)
+-- use(resource)      : -> Event (the main action)
+--
+-- Semantics:
+--   * acquire is run once, at sync time (inside a guard).
+--   * if the resulting event `ev` WINS:
+--       - its result is returned
+--       - release(res, false) is called (best-effort, pcall)
+--   * if the resulting event PARTICIPATES in a choice but LOSES:
+--       - release(res, true) is called (via on_abort / nack machinery)
+--
+-- This is *purely an Event combinator*; no new fiber is spawned.
+----------------------------------------------------------------------
 
--- perform_alt: non-blocking; if no arm ready, call f().
-function Event:perform_alt(f)
-    local res = pack(self:poll())
-    if res[1] then
-        return unpack(res, 2, res.n)
+local function bracket(acquire, release, use)
+  return guard(function()
+    local res = acquire()
+    local ok, ev = pcall(use, res)
+    if not ok then
+      pcall(release, res, true)     -- ensure cleanup on builder failure
+      error(ev)
     end
-    return f()
+    return ev
+      :wrap(function(...)
+        pcall(release, res, false)
+        return ...
+      end)
+      :on_abort(function()
+        pcall(release, res, true)
+      end)
+  end)
 end
 
 ----------------------------------------------------------------------
@@ -355,9 +476,14 @@ end
 ----------------------------------------------------------------------
 
 return {
-    new_base_op = new_base_op, -- primitive event constructor
-    choice      = choice,
-    guard       = guard,
-    with_nack   = with_nack,
-    new_cond    = new_cond,
+    perform        = perform,
+    new_base_op    = new_base_op, -- primitive event constructor
+    choice         = choice,
+    guard          = guard,
+    with_nack      = with_nack,
+    new_cond       = new_cond,
+    bracket        = bracket,
+    always         = always,
+    never          = never,
+    -- Event instances have methods: wrap, on_abort.
 }
