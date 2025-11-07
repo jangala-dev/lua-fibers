@@ -11,6 +11,8 @@ local cond = require 'fibers.cond'
 local op = require 'fibers.op'
 local sc = require 'fibers.utils.syscall'
 
+local perform, choice = op.perform, op.choice
+
 require("fibers.pollio").install_poll_io_handler()
 
 -- Set up the queues, channel and condition variable
@@ -60,8 +62,8 @@ fiber.spawn(function()
     socket.socket(sc.AF_UNIX, sc.SOCK_STREAM, 0):listen_unix(sockname)
     local sock = socket.connect_unix(sockname)
     while true do
-        -- Use op.choice to handle multiple potentially blocking actions
-        op.choice(
+        -- Use choice to handle multiple potentially blocking actions
+        local task = choice(
             data_q:get_op():wrap(function(value)
                 print("data received - writing to socket")
                 sock:write(value .. "\n")
@@ -79,7 +81,8 @@ fiber.spawn(function()
             sleep.sleep_op(0.5):wrap(function()
                 print("yawn - nothing happening")
             end)
-        ):perform()
+        )
+        perform(task)
     end
 end)
 

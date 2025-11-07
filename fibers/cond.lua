@@ -6,6 +6,8 @@
 
 local op = require 'fibers.op'
 
+local perform = op.perform
+
 local Cond = {}
 Cond.__index = Cond
 
@@ -24,7 +26,7 @@ end
 
 --- Put the fiber into a wait state on the condition variable.
 function Cond:wait()
-    return self:wait_op():perform()
+    return perform(self:wait_op())
 end
 
 --- Wake up all fibers that are waiting on this condition variable.

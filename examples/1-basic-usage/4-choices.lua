@@ -12,11 +12,13 @@ local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'
 local op = require 'fibers.op'
 
+local perform, choice = op.perform, op.choice
+
 local function fibonacci(c, quit)
     local x, y = 0, 1
     local done = false
     repeat
-        op.choice(
+        local task = choice(
             c:put_op(x):wrap(function()
                 x, y = y, x+y
             end),
@@ -24,7 +26,8 @@ local function fibonacci(c, quit)
                 print("quit")
                 done = true
             end)
-        ):perform()
+        )
+        perform(task)
     until done
 end
 
