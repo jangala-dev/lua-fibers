@@ -1,4 +1,4 @@
--- fibers/op compact but comprehensive test
+-- fibers/op compact but comprehensive test (no poll)
 print("testing: fibers.op")
 
 -- look one level up
@@ -55,13 +55,31 @@ fiber.spawn(function()
         local base = task(1)
         assert(base:perform() == 1, "base: perform failed")
 
+        -- perform_alt: event wins, fallback ignored
         local base2 = task(2)
-        assert(base2:perform_alt(function() return 9 end) == 2,
-            "base: perform_alt should use event result")
+        local palt1 = base2:perform_alt(function() return 9 end)
+        assert(palt1 == 2, "base: perform_alt should use event result")
 
+        -- perform_alt: never-ready event → fallback wins
         local never = never_op()
-        assert(never:perform_alt(function() return 99 end) == 99,
-            "base: perform_alt should use fallback when not ready")
+        local palt2 = never:perform_alt(function() return 99 end)
+        assert(palt2 == 99, "base: perform_alt should use fallback when event can't commit")
+
+        -- perform_alt: async event should still win (gets a chance next turn)
+        do
+            local won
+            local fallback_called = false
+            local ev, tries = async_task(123)
+            local r = ev:perform_alt(function()
+                fallback_called = true
+                return -1
+            end)
+            won = (r == 123)
+            assert(won, "perform_alt(async): expected main event to win")
+            assert(tries() == 1, "async_task: try_fn not called exactly once")
+            assert(fallback_called == false,
+                "perform_alt(async): fallback should not run when event commits")
+        end
 
         -- nested wrap: ((x + 1) * 2)
         local ev2 = task(5)
@@ -154,36 +172,23 @@ fiber.spawn(function()
     end
 
     --------------------------------------------------------
-    -- 5) poll() and perform_alt() on composite events
+    -- 5) perform_alt on composite events
     --------------------------------------------------------
     do
-        -- poll on ready event
-        local ok, v = task(123):poll()
-        assert(ok and v == 123, "poll(ready): wrong result")
-
-        -- poll on never-ready
-        local ok2, v2 = never_op():poll()
-        assert(ok2 == false and v2 == nil, "poll(never): expected (false)")
-
-        -- poll on composite none-ready
-        local comp = op.choice(never_op(), never_op())
-        local ok3, v3 = comp:poll()
-        assert(ok3 == false and v3 == nil, "poll(composite none): expected (false)")
-
-        -- perform_alt on composite (ready)
+        -- composite ready: choice(task, task)
         local comp_ready = op.choice(task(1), task(2))
         local r1 = comp_ready:perform_alt(function() return 99 end)
         assert(r1 == 1 or r1 == 2,
             "perform_alt(composite ready): wrong result")
 
-        -- perform_alt on composite (none ready)
+        -- composite never-ready: choice(never, never) → fallback
         local comp_never = op.choice(never_op(), never_op())
         local r2 = comp_never:perform_alt(function() return 42 end)
         assert(r2 == 42, "perform_alt(composite none): fallback not used")
     end
 
     --------------------------------------------------------
-    -- 6) with_nack: winner vs loser, poll, basic nesting
+    -- 6) with_nack: winner vs loser, basic nesting
     --------------------------------------------------------
     do
         -- 6.1 with_nack branch wins: nack must NOT fire
@@ -224,47 +229,7 @@ fiber.spawn(function()
             assert(cancelled == true, "with_nack loss: nack did not fire")
         end
 
-        -- 6.3 with_nack + poll(): some arm ready → nack fires for loser
-        do
-            local cancelled = false
-            local with_nack_ev = op.with_nack(function(nack_ev)
-                fiber.spawn(function()
-                    nack_ev:perform()
-                    cancelled = true
-                end)
-                return never_op()
-            end)
-
-            local ev = op.choice(with_nack_ev, task("WINNER"))
-            local ok, v = ev:poll()
-            assert(ok and v == "WINNER", "with_nack+poll: wrong result")
-
-            fiber.yield()
-            assert(cancelled == true, "with_nack+poll: nack not fired")
-        end
-
-        -- 6.4 with_nack + poll(): no arm ready → NO commit, NO nack
-        do
-            local cancelled = false
-            local with_nack_ev = op.with_nack(function(nack_ev)
-                fiber.spawn(function()
-                    nack_ev:perform()
-                    cancelled = true
-                end)
-                return never_op()
-            end)
-
-            local ev = op.choice(with_nack_ev, never_op())
-            local ok, v = ev:poll()
-            assert(ok == false and v == nil,
-                "with_nack+poll(no ready): expected no commit")
-
-            fiber.yield()
-            assert(cancelled == false,
-                "with_nack+poll(no ready): nack fired unexpectedly")
-        end
-
-        -- 6.5 basic nested with_nack:
+        -- 6.3 basic nested with_nack:
         --     outer subtree wins via inner leaf → neither nack fires.
         do
             local outer_cancelled, inner_cancelled = false, false
@@ -373,73 +338,44 @@ fiber.spawn(function()
         end
 
         ----------------------------------------------------
-        -- 7.3 bracket + poll:
-        --   (a) other arm ready → aborted=true
-        --   (b) no arm ready → NO release
+        -- 7.3 bracket + perform_alt:
+        --   bracket arm never commits → aborted=true, fallback used
         ----------------------------------------------------
         do
-            -- (a) other arm ready
-            do
-                local acq_count, use_count, rel_count = 0, 0, 0
-                local last_aborted
+            local acq_count, use_count, rel_count = 0, 0, 0
+            local last_aborted, fallback_called
 
-                local bracket_ev = op.bracket(
-                    function()
-                        acq_count = acq_count + 1
-                        return "R"
-                    end,
-                    function(_, aborted)
-                        rel_count    = rel_count + 1
-                        last_aborted = aborted
-                    end,
-                    function(r)
-                        use_count = use_count + 1
-                        assert(r == "R")
-                        return never_op()
-                    end
-                )
+            local bracket_ev = op.bracket(
+                function()
+                    acq_count = acq_count + 1
+                    return "R"
+                end,
+                function(_, aborted)
+                    rel_count    = rel_count + 1
+                    last_aborted = aborted
+                end,
+                function(r)
+                    use_count = use_count + 1
+                    assert(r == "R")
+                    return never_op()
+                end
+            )
 
-                local ev = op.choice(bracket_ev, task("WINNER"))
-                local ok, v = ev:poll()
-                assert(ok and v == "WINNER",
-                    "bracket+poll (other ready): wrong result")
+            local res = bracket_ev:perform_alt(function()
+                fallback_called = true
+                return "FALLBACK"
+            end)
 
-                assert(acq_count == 1, "bracket+poll (other ready): acquire once")
-                assert(use_count == 1, "bracket+poll (other ready): use once")
-                assert(rel_count == 1, "bracket+poll (other ready): release once")
-                assert(last_aborted == true,
-                    "bracket+poll (other ready): aborted flag should be true")
-            end
+            assert(res == "FALLBACK",
+                "bracket+perform_alt: expected fallback result")
+            assert(fallback_called == true,
+                "bracket+perform_alt: fallback thunk not called")
 
-            -- (b) none ready → no commit → no release
-            do
-                local acq_count, use_count, rel_count = 0, 0, 0
-
-                local bracket_ev = op.bracket(
-                    function()
-                        acq_count = acq_count + 1
-                        return "R"
-                    end,
-                    function(_, _)
-                        rel_count = rel_count + 1
-                    end,
-                    function(r)
-                        use_count = use_count + 1
-                        assert(r == "R")
-                        return never_op()
-                    end
-                )
-
-                local ev = op.choice(bracket_ev, never_op())
-                local ok, v = ev:poll()
-                assert(ok == false and v == nil,
-                    "bracket+poll (none ready): expected (false)")
-
-                assert(acq_count == 1, "bracket+poll (none ready): acquire once")
-                assert(use_count == 1, "bracket+poll (none ready): use once")
-                assert(rel_count == 0,
-                    "bracket+poll (none ready): release should NOT run without commit")
-            end
+            assert(acq_count == 1, "bracket+perform_alt: acquire once")
+            assert(use_count == 1, "bracket+perform_alt: use once")
+            assert(rel_count == 1, "bracket+perform_alt: release once")
+            assert(last_aborted == true,
+                "bracket+perform_alt: aborted flag should be true when losing")
         end
     end
 
