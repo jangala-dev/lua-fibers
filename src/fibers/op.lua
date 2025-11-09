@@ -567,6 +567,7 @@ end
 
 return {
     perform        = perform,
+    perform_raw    = perform,
     new_base_op    = new_base_op, -- primitive event constructor
     choice         = choice,
     guard          = guard,
@@ -575,7 +576,5 @@ return {
     bracket        = bracket,
     always         = always,
     never          = never,
-    -- wrap_handler   = wrap_handler,
-    -- finally        = finally,
     -- Event instances have methods: wrap, on_abort.
 }

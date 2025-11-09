@@ -11,7 +11,7 @@ local channel = require 'fibers.channel'
 local sleep = require 'fibers.sleep'
 local op = require 'fibers.op'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 
 -- time.After() is a Go library function
 local function after(t)

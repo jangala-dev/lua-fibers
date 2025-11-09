@@ -6,10 +6,9 @@ package.path = "../src/?.lua;" .. package.path
 
 local context = require 'fibers.context'
 local fiber = require 'fibers.fiber'
-local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 -- Test Background Context
 local function test_background()

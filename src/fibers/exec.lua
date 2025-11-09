@@ -6,7 +6,7 @@ local op = require 'fibers.op'
 local buffer = require 'string.buffer'
 local sc = require 'fibers.utils.syscall'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 
 local io_mappings = {
     stdin = sc.STDIN_FILENO,

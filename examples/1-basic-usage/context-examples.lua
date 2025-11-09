@@ -5,7 +5,7 @@ local context = require 'fibers.context'
 local sleep = require 'fibers.sleep'
 local op = require 'fibers.op'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 -- Simulated work function
 local function do_work(task_name, duration)

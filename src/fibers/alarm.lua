@@ -7,7 +7,7 @@ local fiber = require 'fibers.fiber'
 local timer = require 'fibers.timer'
 local sc = require 'fibers.utils.syscall'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local function days_in_year(y)
     return y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0) and 366 or 365

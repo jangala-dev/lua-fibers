@@ -1,7 +1,7 @@
 -- waitgroup.lua
 local op = require 'fibers.op'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local Waitgroup = {}
 Waitgroup.__index = Waitgroup

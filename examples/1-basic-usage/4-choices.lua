@@ -12,7 +12,7 @@ local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'
 local op = require 'fibers.op'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 
 local function fibonacci(c, quit)
     local x, y = 0, 1

@@ -7,7 +7,7 @@
 local op = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 --- Timeout class.
 -- Represents a timeout for a fiber.

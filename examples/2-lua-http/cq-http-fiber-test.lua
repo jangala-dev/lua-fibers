@@ -13,7 +13,7 @@ local sleep = require "fibers.sleep"
 local cqueues = require "cqueues"
 local exec = require "fibers.exec"
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 
 print("installing poll handler")
 pollio.install_poll_io_handler()

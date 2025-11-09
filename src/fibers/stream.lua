@@ -9,7 +9,7 @@ local op                  = require 'fibers.op'
 local fixed_buffer        = require 'fibers.utils.fixed_buffer'
 local buffer              = require 'string.buffer'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local unpack = table.unpack or unpack  -- luacheck: ignore -- Compatibility fallback
 

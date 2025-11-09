@@ -11,7 +11,7 @@ local cond = require 'fibers.cond'
 local op = require 'fibers.op'
 local sc = require 'fibers.utils.syscall'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 
 require("fibers.pollio").install_poll_io_handler()
 

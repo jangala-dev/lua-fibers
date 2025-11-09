@@ -7,7 +7,7 @@ package.path = "../src/?.lua;" .. package.path
 local op    = require 'fibers.op'
 local fiber = require 'fibers.fiber'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 local always  = op.always
 local never   = op.never
 

@@ -17,6 +17,8 @@ local fiber          = require "fibers.fiber"
 local op             = require "fibers.op"
 local cond           = require "fibers.cond"
 
+local perform = require 'fibers.performer'.perform
+
 -- ------------------------------------------------------------------------
 -- base_context:
 -- Minimal context that defers cancellation, deadlines and values to its parent.
@@ -103,6 +105,10 @@ function cancel_context:done_op()
     else
         return local_op
     end
+end
+
+function cancel_context:done()
+    return perform(self:done_op())
 end
 
 --- Overridden err() that checks for a local cancellation cause.

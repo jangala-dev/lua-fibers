@@ -7,7 +7,7 @@
 local op = require 'fibers.op'
 local fifo = require 'fibers.utils.fifo'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 --- Channel class
 -- Represents a communication channel between fibers.

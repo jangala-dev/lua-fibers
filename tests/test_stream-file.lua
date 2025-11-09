@@ -14,7 +14,7 @@ local compat    = require 'fibers.stream.compat'
 
 compat.install()
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 
 local function test()
     local rd, wr = file.pipe()
