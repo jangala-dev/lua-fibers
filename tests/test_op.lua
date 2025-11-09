@@ -371,6 +371,145 @@ fiber.spawn(function()
         end
     end
 
+    --------------------------------------------------------
+    -- 8) wrap_handler: exception in post-sync, plus pre-sync error
+    --------------------------------------------------------
+    do
+        -- 8.1 error in a post-synchronisation wrap is caught and
+        --     mapped to a recovery event.
+        do
+            local handler_called = false
+
+            local base = always(10)
+
+            local ev = base
+                :wrap_handler(function(ex)
+                    handler_called = true
+                    assert(tostring(ex):match("boom"),
+                        "wrap_handler: unexpected exception value")
+                    return always("recovered")
+                end)
+                :wrap(function()
+                    -- post-sync action that fails
+                    error("boom")
+                end)
+
+            local r = perform(ev)
+            assert(r == "recovered",
+                "wrap_handler: expected recovery result")
+            assert(handler_called,
+                "wrap_handler: handler was not invoked")
+        end
+
+        -- 8.2 guard builder error is *not* caught by wrap_handler
+        do
+            local g_ev = op.guard(function()
+                error("builder-fail")
+            end)
+
+            local handled = g_ev:wrap_handler(function(_)
+                return always("ignored")
+            end)
+
+            local ok, err = pcall(function()
+                perform(handled)
+            end)
+            assert(not ok, "wrap_handler: should not catch guard builder errors")
+            assert(tostring(err):match("builder%-fail"),
+                "wrap_handler: wrong error propagated for guard builder")
+        end
+
+        -- 8.3 wrap_handler: nesting order (innermost first)
+        do
+            local log = {}
+
+            -- Base event whose post-sync action fails.
+            local base = always(1):wrap(function()
+                error("boom-inner")
+            end)
+
+            -- Inner handler: sees the original exception and rethrows via a new event.
+            local ev_inner = base:wrap_handler(function(ex)
+                table.insert(log, "inner:" .. tostring(ex))
+                -- Rethrow as a different error so the outer handler can distinguish it.
+                return always(true):wrap(function()
+                    error("inner-rethrow")
+                end)
+            end)
+
+            -- Outer handler: should see the *rethrown* exception, not the original.
+            local ev = ev_inner:wrap_handler(function(ex)
+                table.insert(log, "outer:" .. tostring(ex))
+                return always("ok")
+            end)
+
+            local res = perform(ev)
+
+            assert(res == "ok",
+                "wrap_handler nesting: final result mismatch")
+            assert(#log == 2,
+                "wrap_handler nesting: expected two handlers invoked")
+
+            -- Innermost handler must see the original error first.
+            assert(log[1]:match("^inner:.*boom%-inner"),
+                "wrap_handler nesting: inner handler did not see original exception first")
+
+            -- Outermost handler must see the rethrown error.
+            assert(log[2]:match("^outer:.*inner%-rethrow"),
+                "wrap_handler nesting: outer handler did not see rethrown exception")
+        end
+    end
+
+
+    --------------------------------------------------------
+    -- 9) finally: cleanup on success and on failure
+    --------------------------------------------------------
+    do
+        -- 9.1 success path: cleanup(false, nil) once, result propagated
+        do
+            local calls = {}
+            local base  = always(7)
+
+            local ev    = base:finally(function(aborted, exn)
+                calls[#calls + 1] = { aborted = aborted, exn = exn }
+            end)
+
+            local r     = perform(ev)
+            assert(r == 7, "finally(success): wrong result")
+            assert(#calls == 1, "finally(success): cleanup not called once")
+            assert(calls[1].aborted == false,
+                "finally(success): aborted should be false")
+            assert(calls[1].exn == nil,
+                "finally(success): exn should be nil")
+        end
+
+        -- 9.2 failure in post-sync action: cleanup(true, exn), then rethrow
+        do
+            local calls = {}
+
+            local base = always(1):wrap(function(_)
+                -- simulate user post-sync failure
+                error("post-sync-fail")
+            end)
+
+            local ev = base:finally(function(aborted, exn)
+                calls[#calls + 1] = { aborted = aborted, exn = exn }
+            end)
+
+            local ok, err = pcall(function()
+                perform(ev)
+            end)
+            assert(not ok, "finally(error): expected re-raise of exception")
+            assert(tostring(err):match("post%-sync%-fail"),
+                "finally(error): wrong exception propagated")
+
+            assert(#calls == 1, "finally(error): cleanup not called once")
+            assert(calls[1].aborted == true,
+                "finally(error): aborted should be true")
+            assert(calls[1].exn ~= nil,
+                "finally(error): exn should be non-nil")
+        end
+    end
     print("fibers.op tests: ok")
     fiber.stop()
 end)
