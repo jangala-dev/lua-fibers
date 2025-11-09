@@ -33,7 +33,7 @@
 --     if it doesn't commit "by next turn", abort it cleanly and run
 --     fallback_ev (in a separate sync).
 
-local fiber  = require 'fibers.fiber'
+local runtime  = require 'fibers.runtime'
 
 local unpack = rawget(table, "unpack") or _G.unpack
 local pack   = rawget(table, "pack") or function(...)
@@ -471,7 +471,7 @@ perform = function(ev)
     end
 
     -- Slow path
-    local suspended = pack(fiber.suspend(block_choice_op, leaves))
+    local suspended = pack(runtime.suspend(block_choice_op, leaves))
     local wrap      = suspended[1]
 
     local winner_index
