@@ -2,7 +2,7 @@
 print('testing: fibers.waitgroup')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 -- test_waitgroup.lua
 local fiber = require 'fibers.fiber'

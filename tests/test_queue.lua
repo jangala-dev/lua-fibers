@@ -2,7 +2,7 @@
 print('testing: fibers.queue')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local queue = require 'fibers.queue'
 local fiber = require 'fibers.fiber'

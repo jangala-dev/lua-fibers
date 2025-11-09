@@ -2,7 +2,7 @@
 print('testing: fibers.fiber')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
 local sc = require 'fibers.utils.syscall'

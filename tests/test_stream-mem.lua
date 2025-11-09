@@ -2,7 +2,7 @@
 print('testing: fibers.stream.mem')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local mem = require 'fibers.stream.mem'
 local sc = require 'fibers.utils.syscall'

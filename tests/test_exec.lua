@@ -1,5 +1,7 @@
 -- test_fibers_exec.lua
-package.path = "../../?.lua;../?.lua;" .. package.path
+
+-- look one level up
+package.path = "../src/?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
 local sleep = require 'fibers.sleep'
@@ -146,28 +148,28 @@ local function test_cleanup_on_crash(id)
     local temp_script_dir = "/tmp/crash_test" .. id .. ".lua"
 
     local script = [[
-        package.path = "../../?.lua;../?.lua;" .. package.path
-        local fiber = require 'fibers.fiber'
-        local exec = require 'fibers.exec'
-        local sleep = require 'fibers.sleep'
-        local pollio = require 'fibers.pollio'
-        local sc = require 'fibers.utils.syscall'
-        pollio.install_poll_io_handler()
+            package.path = "../src/?.lua;" .. package.path
+            local fiber = require 'fibers.fiber'
+            local exec = require 'fibers.exec'
+            local sleep = require 'fibers.sleep'
+            local pollio = require 'fibers.pollio'
+            local sc = require 'fibers.utils.syscall'
+            pollio.install_poll_io_handler()
 
-        fiber.spawn(function ()
-            local cmd = exec.command('sleep', '1')
-            cmd:setprdeathsig(sc.SIGKILL)
-            local err = cmd:start()
-            if err then
-                error(err)
-            end
-            io.stdout:write(tostring(cmd.process.pid) .. "\n")
-            io.stdout:flush()
-            sleep.sleep(0.01)
-            print(obj.obj)
-        end)
+            fiber.spawn(function ()
+                local cmd = exec.command('sleep', '1')
+                cmd:setprdeathsig(sc.SIGKILL)
+                local err = cmd:start()
+                if err then
+                    error(err)
+                end
+                io.stdout:write(tostring(cmd.process.pid) .. "\n")
+                io.stdout:flush()
+                sleep.sleep(0.01)
+                print(obj.obj)
+            end)
 
-        fiber.main()
+            fiber.main()
     ]]
 
     -- Write the script to a temporary file

@@ -2,7 +2,7 @@
 print("test: fibers.sched")
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local sched = require 'fibers.sched'
 local sc = require 'fibers.utils.syscall'

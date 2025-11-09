@@ -1,16 +1,16 @@
 -- fibers/scope.lua
 ---
 -- Basic scope module (stage 2).
--- Provides a tree of Scope objects and a per-fibre “current scope”.
+-- Provides a tree of Scope objects and a per-fiber “current scope”.
 --
 -- At this stage:
 --   - A single root scope exists for the process.
---   - Each fibre may have an associated current scope.
---   - scope.current() returns the current scope for the fibre,
---     or the process-wide current scope when not in a fibre.
+--   - Each fiber may have an associated current scope.
+--   - scope.current() returns the current scope for the fiber,
+--     or the process-wide current scope when not in a fiber.
 --   - scope.run(fn, ...) runs fn in a fresh child scope in the
---     current context (fibre or non-fibre).
---   - scope.root():spawn(fn, ...) spawns a new fibre whose current
+--     current context (fiber or non-fiber).
+--   - scope.root():spawn(fn, ...) spawns a new fiber whose current
 --     scope is that scope for the duration of fn.
 --
 -- Policies (failure, cancellation, resource limits) are *not* yet
@@ -31,7 +31,7 @@ Scope.__index = Scope
 -- Weak-keyed table mapping Fiber objects to their current Scope.
 local fiber_scopes = setmetatable({}, { __mode = "k" })
 
--- Process-wide root scope and “current scope” when *not* in a fibre.
+-- Process-wide root scope and “current scope” when *not* in a fiber.
 local root_scope
 local global_scope
 
@@ -57,7 +57,7 @@ local function root()
     return root_scope
 end
 
--- Internal: current fibre object, or nil if not in a fibre.
+-- Internal: current fiber object, or nil if not in a fiber.
 local function current_fiber()
     if runtime.current_fiber then
         return runtime.current_fiber()
@@ -66,8 +66,8 @@ local function current_fiber()
 end
 
 --- Return the current Scope.
--- Inside a fibre: the fibre's mapped scope, or the root if none.
--- Outside a fibre: the process-wide current scope, defaulting to root.
+-- Inside a fiber: the fiber's mapped scope, or the root if none.
+-- Outside a fiber: the process-wide current scope, defaulting to root.
 local function current()
     local fib = current_fiber()
     if fib then
@@ -99,7 +99,7 @@ local function with_scope(scope, fn, ...)
 end
 
 --- Run a function inside a fresh child scope of the current scope.
--- Synchronous: runs in the current fibre or process context.
+-- Synchronous: runs in the current fiber or process context.
 --   body_fn :: function(Scope, ...): ...
 local function run(body_fn, ...)
     local parent = current()
@@ -113,12 +113,12 @@ function Scope:new_child()
     return new_scope(self)
 end
 
---- Spawn a child fibre attached to this scope.
+--- Spawn a child fiber attached to this scope.
 --   fn  :: function(Scope, ...): ()
 --   ... :: arguments passed to fn
 --
--- The new fibre's current scope is set to 'self' for the duration
--- of fn, and any previous mapping for that fibre (normally none)
+-- The new fiber's current scope is set to 'self' for the duration
+-- of fn, and any previous mapping for that fiber (normally none)
 -- is restored afterwards.
 function Scope:spawn(fn, ...)
     local args = { ... }

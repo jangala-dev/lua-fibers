@@ -1,6 +1,6 @@
 print('testing: fibers.channel')
 
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local fiber = require 'fibers.fiber'
 local channel = require 'fibers.channel'

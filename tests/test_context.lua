@@ -2,7 +2,7 @@
 print('testing: fibers.context')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local context = require 'fibers.context'
 local fiber = require 'fibers.fiber'

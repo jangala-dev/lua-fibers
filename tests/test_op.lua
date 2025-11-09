@@ -2,7 +2,7 @@
 print("testing: fibers.op")
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local op    = require 'fibers.op'
 local fiber = require 'fibers.fiber'

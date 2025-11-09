@@ -2,7 +2,7 @@
 print('testing: fibers.cond')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local cond = require 'fibers.cond'
 local fiber = require 'fibers.fiber'

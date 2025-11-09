@@ -2,7 +2,7 @@
 print('testing: fibers.fd')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local pollio = require 'fibers.pollio'
 local file_stream = require 'fibers.stream.file'

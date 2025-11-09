@@ -2,7 +2,7 @@
 print("test: fibers.scope")
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local runtime = require "fibers.runtime"
 local scope   = require "fibers.scope"
