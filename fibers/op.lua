@@ -4,12 +4,13 @@
 -- wraps, and an extra abort combinator (on_abort).
 --
 -- Core event AST kinds:
---   prim      : primitive leaf { try_fn, block_fn, wrap_fn }
---   choice    : non-empty list of events
---   guard     : delayed event builder (run once per sync)
---   with_nack : CML-style nack combinator
---   wrap      : post-commit mapper (composed at compile time)
---   abort     : attach abort handler to an event (run if this arm loses)
+--   prim         : primitive leaf { try_fn, block_fn, wrap_fn }
+--   choice       : non-empty list of events
+--   guard        : delayed event builder (run once per sync)
+--   with_nack    : CML-style nack combinator
+--   wrap         : post-commit mapper (composed at compile time)
+--   abort        : attach abort handler to an event (run if this arm loses)
+--   wrap_handler : CML-style exception handler (see wrap_handler below)
 --
 -- Semantics sketch
 -- ----------------
@@ -26,6 +27,8 @@
 --
 -- We also provide:
 --   - bracket(acquire, release, use): RAII-style resource protocol.
+--   - wrap_handler(ev, h): CML-style wrapHandler (exn -> event).
+--   - finally(ev, cleanup): derived "always run cleanup" combinator.
 --   - else_next_turn(ev, fallback_ev): biased choice; prefer ev, but
 --     if it doesn't commit "by next turn", abort it cleanly and run
 --     fallback_ev (in a separate sync).
@@ -97,16 +100,20 @@ end
 ----------------------------------------------------------------------
 -- Event type (unifies primitive and composite events)
 --
--- kind = 'prim'      : { try_fn, block_fn, wrap_fn }
--- kind = 'choice'    : { events = { Event, ... } }
--- kind = 'guard'     : { builder = function() -> Event }
--- kind = 'with_nack' : { builder = function(nack_ev) -> Event }
--- kind = 'wrap'      : { inner = Event, wrap_fn = f }
--- kind = 'abort'     : { inner = Event, abort_fn = f }
+-- kind = 'prim'         : { try_fn, block_fn, wrap_fn }
+-- kind = 'choice'       : { events = { Event, ... } }
+-- kind = 'guard'        : { builder = function() -> Event }
+-- kind = 'with_nack'    : { builder = function(nack_ev) -> Event }
+-- kind = 'wrap'         : { inner = Event, wrap_fn = f }
+-- kind = 'abort'        : { inner = Event, abort_fn = f }
+-- kind = 'wrap_handler' : { inner = Event, handler = function(ex) -> Event }
 ----------------------------------------------------------------------
 
 local Event = {}
 Event.__index = Event
+
+-- forward declaration so compile_event can call perform
+local perform
 
 -- Primitive event (leaf).
 --   try_fn() -> success:boolean, ...
@@ -206,6 +213,16 @@ function Event:on_abort(f)
     )
 end
 
+-- Attach an exception handler for post-synchronisation
+-- actions. h(ex) must return a replacement event to synchronise on.
+function Event:wrap_handler(handler)
+    assert(type(handler) == 'function', "wrap_handler expects a function")
+    return setmetatable(
+        { kind = 'wrap_handler', inner = self, handler = handler },
+        Event
+    )
+end
+
 ----------------------------------------------------------------------
 -- Simple one-shot condition primitive (used for with_nack; also exported)
 ----------------------------------------------------------------------
@@ -272,25 +289,28 @@ end
 --
 -- Semantics:
 --   - Each with_nack or abort node adds a cond to the nacks list.
---   - After a winner leaf is chosen, we find which conds appear only
---     on losing paths and signal those once (CML-style nack).
+--   - Each wrap_handler node adds a handler to the handlers list.
+--   - At the leaf, we build a final wrap function that:
+--       * runs the normal wrap chain
+--       * then applies the wrap_handler chain (innermost first) using pcall.
 ----------------------------------------------------------------------
 
-local function compile_event(ev, outer_wrap, out, nacks)
+local function compile_event(ev, outer_wrap, out, nacks, handlers)
     out        = out or {}
     outer_wrap = outer_wrap or id_wrap
     nacks      = nacks or {}
+    handlers   = handlers or {}
 
     local kind = ev.kind
 
     if kind == 'choice' then
         for _, sub in ipairs(ev.events) do
-            compile_event(sub, outer_wrap, out, nacks)
+            compile_event(sub, outer_wrap, out, nacks, handlers)
         end
 
     elseif kind == 'guard' then
         local inner = ev.builder()
-        compile_event(inner, outer_wrap, out, nacks)
+        compile_event(inner, outer_wrap, out, nacks, handlers)
 
     elseif kind == 'with_nack' then
         local cond    = new_cond()
@@ -299,26 +319,58 @@ local function compile_event(ev, outer_wrap, out, nacks)
 
         local child_nacks = { unpack(nacks) }
         child_nacks[#child_nacks + 1] = cond
-        compile_event(inner, outer_wrap, out, child_nacks)
+        compile_event(inner, outer_wrap, out, child_nacks, handlers)
 
     elseif kind == 'wrap' then
         local f         = ev.wrap_fn
         local new_outer = function(...)
             return outer_wrap(f(...))
         end
-        compile_event(ev.inner, new_outer, out, nacks)
+        compile_event(ev.inner, new_outer, out, nacks, handlers)
 
     elseif kind == 'abort' then
         local cond        = new_cond{ abort_fn = ev.abort_fn }
         local child_nacks = { unpack(nacks) }
         child_nacks[#child_nacks + 1] = cond
-        compile_event(ev.inner, outer_wrap, out, child_nacks)
+        compile_event(ev.inner, outer_wrap, out, child_nacks, handlers)
+
+    elseif kind == 'wrap_handler' then
+        -- Accumulate handlers; innermost handler should see the exception first.
+        local child_handlers = { unpack(handlers) }
+        child_handlers[#child_handlers + 1] = ev.handler
+        compile_event(ev.inner, outer_wrap, out, nacks, child_handlers)
 
     else -- 'prim'
-        -- Each leaf gets a unique final_wrap closure so identity comparison in
-        local final_wrap = function(...)
+        -- Core wrap chain for this leaf (no exception handling yet).
+        local function core(...)
             return outer_wrap(ev.wrap_fn(...))
         end
+
+        -- If there are handlers, wrap the core in them, innermost first.
+        local wrapped = core
+        if #handlers > 0 then
+            for i = #handlers, 1, -1 do
+                local h = handlers[i]
+                local prev = wrapped
+                wrapped = function(...)
+                    local res = pack(pcall(prev, ...))
+                    local ok  = res[1]
+                    if ok then
+                        return unpack(res, 2, res.n)
+                    end
+                    -- res[2] is the exception (CML: pass exn to handler)
+                    local ex  = res[2]
+                    local hev = h(ex)
+                    -- Handler returns an event; synchronise on it.
+                    return perform(hev)
+                end
+            end
+        end
+
+        local final_wrap = function(...)
+            return wrapped(...)
+        end
+
         out[#out + 1] = {
             try_fn   = ev.try_fn,
             block_fn = ev.block_fn,
@@ -404,11 +456,11 @@ local function block_choice_op(sched, fib, ops)
 end
 
 ----------------------------------------------------------------------
--- Event methods: perform, perform_alt
+-- Event methods: perform
 ----------------------------------------------------------------------
 
 -- Perform this event (primitive or composite), possibly blocking.
-local function perform(ev)
+perform = function(ev)
     local leaves = compile_event(ev)
 
     -- Fast path
@@ -435,6 +487,42 @@ local function perform(ev)
 end
 
 ----------------------------------------------------------------------
+-- finally : (ev, cleanup) -> ev'
+--
+-- cleanup(aborted:boolean, exn:any|nil)
+--
+-- Semantics:
+--   * on normal post-sync completion:
+--       cleanup(false, nil) is called (best-effort, protected).
+--   * if a post-sync action raises:
+--       cleanup(true, exn) is called (best-effort) and the same
+--       exception is re-raised.
+--   * Exceptions from guard/with_nack builders are not intercepted.
+----------------------------------------------------------------------
+
+function Event:finally(cleanup)
+    -- Success path: only runs if the entire event (including any inner
+    -- wrap_handler handlers) completes without raising.
+    local function success_wrap(...)
+        pcall(cleanup, false, nil)
+        return ...
+    end
+
+    local function handler(ex)
+        -- Error path: run cleanup(true, ex) and rethrow.
+        return always(true):wrap(function()
+            pcall(cleanup, true, ex)
+            error(ex)
+        end)
+    end
+
+    -- Important: wrap_handler on ev, then a wrap on top.
+    -- This ensures success_wrap runs only on the success path,
+    -- and handler is responsible for the error path.
+    return self:wrap_handler(handler):wrap(success_wrap)
+end
+
+----------------------------------------------------------------------
 -- bracket : (acquire, release, use) -> 'a event
 --
 -- acquire()          : -> resource
@@ -453,22 +541,24 @@ end
 ----------------------------------------------------------------------
 
 local function bracket(acquire, release, use)
-  return guard(function()
-    local res = acquire()
-    local ok, ev = pcall(use, res)
-    if not ok then
-      pcall(release, res, true)     -- ensure cleanup on builder failure
-      error(ev)
-    end
-    return ev
-      :wrap(function(...)
-        pcall(release, res, false)
-        return ...
-      end)
-      :on_abort(function()
-        pcall(release, res, true)
-      end)
-  end)
+    return guard(function()
+        local res = acquire()
+
+        local ok, ev = pcall(use, res)
+        if not ok then
+            local ex = ev
+            pcall(release, res, true)
+            error(ex)
+        end
+
+        local wrapped = ev:finally(function(aborted, _)
+            pcall(release, res, aborted)
+        end)
+
+        return wrapped:on_abort(function()
+            pcall(release, res, true)
+        end)
+    end)
 end
 
 ----------------------------------------------------------------------
@@ -485,5 +575,7 @@ return {
     bracket        = bracket,
     always         = always,
     never          = never,
+    -- wrap_handler   = wrap_handler,
+    -- finally        = finally,
     -- Event instances have methods: wrap, on_abort.
 }
