@@ -29,7 +29,7 @@ local function test_simple()
     for _ = 1, numFibers do
         wg:add(1)
         fibers.spawn(function()
-            sleep.sleep(math.random()) -- Simulate some work
+            sleep.sleep(0.1) -- Simulate some work
             wg:done()
         end)
     end
@@ -45,6 +45,36 @@ local function test_simple()
     print("Simple test: ok")
 end
 
+local function test_reuse()
+    local wg = waitgroup.new()
+    -- Spawn fibers and add to the waitgroup
+    wg:add(1)
+    fibers.spawn(function()
+        sleep.sleep(0.1) -- Simulate some work
+        wg:done()
+    end)
+
+    wg:wait()
+
+    wg:add(1)
+    local blocked = false
+    fibers.spawn(function()
+        sleep.sleep(0.1) -- Simulate some work
+        wg:done()
+    end)
+
+    perform(
+        wg:wait_op()
+        :or_else(function () blocked = true end)
+    )
+    assert(blocked, "Reused Waitgroup should block.")
+
+    wg:wait()
+
+    print("Reuse test: ok")
+end
+
+
 local function test_complex()
     local wg = waitgroup.new()
     local numFibers = 5
@@ -52,7 +82,7 @@ local function test_complex()
     local function one_sec_work(w)
         w:add(1)
         fibers.spawn(function()
-            sleep.sleep(1) -- Simulate some work
+            sleep.sleep(0.1) -- Simulate some work
             w:done()
         end)
     end
@@ -76,12 +106,12 @@ local function test_complex()
         perform(
             choice(
                 wg:wait_op():wrap(function() done = true end),
-                sleep.sleep_op(0.9):wrap(extra_work)
+                sleep.sleep_op(0.09):wrap(extra_work)
             )
         )
     end
 
-    assert(sc.monotime() - start > 1.5)
+    assert(sc.monotime() - start > 0.05)
     print("Complex test: ok")
 end
 
@@ -89,6 +119,7 @@ end
 local function main()
     test_nowait()
     test_simple()
+    test_reuse()
     test_complex()
 end
 

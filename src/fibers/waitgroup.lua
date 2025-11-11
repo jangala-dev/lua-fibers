@@ -1,26 +1,41 @@
--- waitgroup.lua
-local op = require 'fibers.op'
-
+-- fibers/waitgroup.lua
+local op      = require 'fibers.op'
 local perform = require 'fibers.performer'.perform
 
 local Waitgroup = {}
 Waitgroup.__index = Waitgroup
 
 local function new()
-    -- Use the core condition primitive directly: { wait_op = ..., signal = ... }
-    local wg = setmetatable({
+    return setmetatable({
         _counter = 0,
-        _cond    = op.new_cond(),
+        _cond    = nil,   -- per-generation condition; nil when idle
     }, Waitgroup)
-    return wg
 end
 
-function Waitgroup:add(count)
-    self._counter = self._counter + count
-    if self._counter < 0 then
+function Waitgroup:add(delta)
+    if delta == 0 then
+        return
+    end
+
+    local old_waiters = self._counter
+    local new_waiters = old_waiters + delta
+
+    if new_waiters < 0 then
         error("waitgroup counter goes negative")
-    elseif self._counter == 0 then
-        self._cond.signal()
+    end
+
+    self._counter = new_waiters
+
+    if new_waiters == 0 then
+        -- This generation completes: wake any waiters.
+        if self._cond then
+            self._cond.signal()
+        end
+        -- _cond remains a triggered cond for this generation; a new
+        -- generation will allocate a fresh cond when counter rises from 0.
+    elseif old_waiters == 0 and new_waiters > 0 then
+        -- Starting a new generation: new condition for new work.
+        self._cond = op.new_cond()
     end
 end
 
@@ -29,20 +44,25 @@ function Waitgroup:done()
 end
 
 function Waitgroup:wait_op()
-    -- Take the underlying cond's wait op (a BaseOp).
-    local cond_op = self._cond.wait_op()
     local function try()
         return self._counter == 0
     end
 
     local function block(suspension, wrap_fn)
+        -- Re-check after try(): counter may have become zero meanwhile.
         if self._counter == 0 then
-            -- Became zero after try() but before block() ran.
             suspension:complete(wrap_fn)
-        else
-            -- Delegate blocking to the underlying condition's block_fn.
-            cond_op.block_fn(suspension, wrap_fn)
+            return
         end
+
+        -- At this point we are in an active generation.
+        local cond = self._cond
+        if not cond then
+            error("waitgroup internal error: missing condition for active generation")
+        end
+
+        local cond_op = cond.wait_op()
+        cond_op.block_fn(suspension, wrap_fn)
     end
 
     return op.new_primitive(nil, try, block)
@@ -53,5 +73,5 @@ function Waitgroup:wait()
 end
 
 return {
-    new = new
+    new = new,
 }
