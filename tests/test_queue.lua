@@ -2,17 +2,17 @@
 print('testing: fibers.queue')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local queue = require 'fibers.queue'
-local fiber = require 'fibers.fiber'
+local runtime = require 'fibers.runtime'
 local helper = require 'fibers.utils.helper'
 local equal = helper.equal
 
 local log = {}
 local function record(x) table.insert(log, x) end
 
-fiber.spawn(function()
+runtime.spawn(function()
     local q = queue.new()
     record('a')
     q:put('b')
@@ -29,7 +29,7 @@ end)
 
 local function run(...)
     log = {}
-    fiber.current_scheduler:run()
+    runtime.current_scheduler:run()
     assert(equal(log, { ... }))
 end
 

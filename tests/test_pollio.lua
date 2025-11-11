@@ -2,11 +2,11 @@
 print('testing: fibers.fd')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local pollio = require 'fibers.pollio'
 local file_stream = require 'fibers.stream.file'
-local fiber = require 'fibers.fiber'
+local runtime = require 'fibers.runtime'
 
 local equal = require 'fibers.utils.helper'.equal
 local log = {}
@@ -14,21 +14,21 @@ local function record(x) table.insert(log, x) end
 
 -- local handler = new_poll_io_handler()
 -- file.set_blocking_handler(handler)
--- fiber.current_scheduler:add_task_source(handler)
+-- runtime.current_scheduler:add_task_source(handler)
 pollio.install_poll_io_handler()
 
-fiber.current_scheduler:run()
+runtime.current_scheduler:run()
 assert(equal(log, {}))
 
 local rd, wr = file_stream.pipe()
 local message = "hello, world\n"
-fiber.spawn(function()
+runtime.spawn(function()
     record('rd-a')
     local str = rd:read_some_chars()
     record('rd-b')
     record(str)
 end)
-fiber.spawn(function()
+runtime.spawn(function()
     record('wr-a')
     wr:write(message)
     record('wr-b')
@@ -36,9 +36,9 @@ fiber.spawn(function()
     record('wr-c')
 end)
 
-fiber.current_scheduler:run()
+runtime.current_scheduler:run()
 assert(equal(log, { 'rd-a', 'wr-a', 'wr-b', 'wr-c' }))
-fiber.current_scheduler:run()
+runtime.current_scheduler:run()
 assert(equal(log, { 'rd-a', 'wr-a', 'wr-b', 'wr-c', 'rd-b', message }))
 
 print('test: ok')

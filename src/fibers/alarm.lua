@@ -3,11 +3,11 @@
 -- Alarms.
 
 local op = require 'fibers.op'
-local fiber = require 'fibers.fiber'
+local runtime = require 'fibers.runtime'
 local timer = require 'fibers.timer'
 local sc = require 'fibers.utils.syscall'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local function days_in_year(y)
     return y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0) and 366 or 365
@@ -121,7 +121,7 @@ local installed_alarm_handler = nil
 local function install_alarm_handler()
     if not installed_alarm_handler then
         installed_alarm_handler = new_alarm_handler()
-        fiber.current_scheduler:add_task_source(installed_alarm_handler)
+        runtime.current_scheduler:add_task_source(installed_alarm_handler)
     end
     return installed_alarm_handler
 end
@@ -130,9 +130,9 @@ end
 -- This should be called to clean up when the Alarm Handler is no longer needed.
 local function uninstall_alarm_handler()
     if installed_alarm_handler then
-        for i, source in ipairs(fiber.current_scheduler.sources) do
+        for i, source in ipairs(runtime.current_scheduler.sources) do
             if source == installed_alarm_handler then
-                table.remove(fiber.current_scheduler.sources, i)
+                table.remove(runtime.current_scheduler.sources, i)
                 break
             end
         end
@@ -154,8 +154,8 @@ function AlarmHandler:schedule_tasks(sched)
 end
 
 function AlarmHandler:block(time_to_start, t, task)
-    if time_to_start < fiber.current_scheduler.maxsleep then
-        fiber.current_scheduler:schedule_after_sleep(time_to_start, task)
+    if time_to_start < runtime.current_scheduler.maxsleep then
+        runtime.current_scheduler:schedule_after_sleep(time_to_start, task)
     else
         self.abs_timer:add_absolute(t, task)
     end
@@ -196,7 +196,7 @@ function AlarmHandler:wait_absolute_op(t)
         end
         self:block(time_to_start, t, task)
     end
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 function AlarmHandler:wait_next_op(t)
@@ -212,7 +212,7 @@ function AlarmHandler:wait_next_op(t)
         local target, _ = calculate_next(t, now)
         self:block(target-now, target, task)
     end
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 --- Indicates to the Alarm Handler that time synchronisation has been achieved (through NTP or other methods).

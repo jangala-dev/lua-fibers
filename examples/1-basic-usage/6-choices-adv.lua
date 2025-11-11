@@ -1,17 +1,16 @@
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
 -- Importing the necessary modules
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
 local channel = require 'fibers.channel'
 local queues = require 'fibers.queue'
 local socket = require 'fibers.stream.socket'
 local file = require 'fibers.stream.file'
 local cond = require 'fibers.cond'
-local op = require 'fibers.op'
 local sc = require 'fibers.utils.syscall'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = fibers.perform, fibers.choice
 
 require("fibers.pollio").install_poll_io_handler()
 
@@ -21,37 +20,37 @@ local notif_chan = channel.new()
 local exit_cond = cond.new()
 
 -- Data Producer fiber
-fiber.spawn(function()
+local function producer()
     while true do
         -- sleep for some time to simulate work
         sleep.sleep(math.random())
         -- Send data to the queue
         data_q:put(os.date('%Y-%m-%d %H:%M:%S'))
     end
-end)
+end
 
 -- Notifier fiber
-fiber.spawn(function()
+local function notifier()
     while true do
         -- sleep for some time to simulate work
         sleep.sleep(4 * math.random())
         -- Send data to the channel
         notif_chan:put(1)
     end
-end)
+end
 
 -- Exit signaller
-fiber.spawn(function()
+local function exit()
     while true do
         -- sleep for some time to simulate work
         sleep.sleep(30 * math.random())
         -- Signal the condition
         exit_cond:signal()
     end
-end)
+end
 
 -- Consumer fiber
-fiber.spawn(function()
+local function consumer()
     -- file to write data to
     local filename = "/tmp/data.txt"
     os.execute("rm "..filename)
@@ -84,6 +83,13 @@ fiber.spawn(function()
         )
         perform(task)
     end
-end)
+end
 
-fiber.main()
+local function main()
+    fibers.spawn(producer)
+    fibers.spawn(notifier)
+    fibers.spawn(exit)
+    consumer()
+end
+
+fibers.run(main)

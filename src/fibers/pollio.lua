@@ -3,12 +3,12 @@
 -- File events.
 
 local op = require 'fibers.op'
-local fiber = require 'fibers.fiber'
+local runtime = require 'fibers.runtime'
 local epoll = require 'fibers.epoll'
 local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local PollIOHandler = {}
 PollIOHandler.__index = PollIOHandler
@@ -58,14 +58,14 @@ function PollIOHandler:fd_readable_op(fd)
     local function try() return false end
     local block = make_block_fn(
         fd, self.waiting_for_readable, self.epoll, epoll.RD)
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 function PollIOHandler:fd_writable_op(fd)
     local function try() return false end
     local block = make_block_fn(
         fd, self.waiting_for_writable, self.epoll, epoll.WR)
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 function PollIOHandler:stream_readable_op(stream)
@@ -73,7 +73,7 @@ function PollIOHandler:stream_readable_op(stream)
     local function try() return not stream.rx:is_empty() end
     local block = make_block_fn(
         fd, self.waiting_for_readable, self.epoll, epoll.RD)
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 -- A stream_writable_op is the same as fd_writable_op, as a stream's
@@ -146,7 +146,7 @@ local function install_poll_io_handler()
     if installed == 1 then
         installed_poll_handler = new_poll_io_handler()
         -- file.set_blocking_handler(installed_poll_handler)
-        fiber.current_scheduler:add_task_source(installed_poll_handler)
+        runtime.current_scheduler:add_task_source(installed_poll_handler)
     end
     return installed_poll_handler
 end
@@ -156,9 +156,9 @@ local function uninstall_poll_io_handler()
     if installed == 0 then
         -- file.set_blocking_handler(nil)
         -- FIXME: Remove task source.
-        for i, source in ipairs(fiber.current_scheduler.sources) do
+        for i, source in ipairs(runtime.current_scheduler.sources) do
             if source == installed_poll_handler then
-                table.remove(fiber.current_scheduler.sources, i)
+                table.remove(runtime.current_scheduler.sources, i)
                 break
             end
         end

@@ -2,12 +2,12 @@
 print("testing: fibers.op")
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
-local op    = require 'fibers.op'
-local fiber = require 'fibers.fiber'
+local op     = require 'fibers.op'
+local runtime = require 'fibers.runtime'
 
-local perform, choice = op.perform, op.choice
+local perform, choice = require 'fibers.performer'.perform, op.choice
 local always  = op.always
 local never   = op.never
 
@@ -26,7 +26,7 @@ local function async_task(val)
         local t = suspension:complete_task(wrap_fn, val)
         suspension.sched:schedule(t)
     end
-    local ev = op.new_base_op(nil, try_fn, block_fn)
+    local ev = op.new_primitive(nil, try_fn, block_fn)
     return ev, function() return tries end
 end
 
@@ -34,7 +34,7 @@ end
 -- Run all tests inside a single top-level fiber
 ------------------------------------------------------------
 
-fiber.spawn(function()
+runtime.spawn(function()
 
     --------------------------------------------------------
     -- 1) Base event: perform, or_else, wrap
@@ -54,7 +54,7 @@ fiber.spawn(function()
         local palt2 = perform(ev2)
         assert(palt2 == 99, "base: or_else should use fallback when event can't commit")
 
-        -- or_else: async event should still win (gets a chance next turn)
+        -- or_else: async event is not ready now, so fallback wins
         do
             local fallback_called = false
             local ev_async, tries = async_task(123)
@@ -63,10 +63,11 @@ fiber.spawn(function()
                 return -1
             end)
             local r = perform(ev)
-            assert(r == 123, "or_else(async): expected main event to win")
-            assert(tries() == 1, "async_task: try_fn not called exactly once")
-            assert(fallback_called == false,
-                "or_else(async): fallback should not run when event commits")
+
+            assert(r == -1, "or_else(async): expected fallback to win")
+            assert(tries() == 1, "async_task: try_fn should be called exactly once")
+            assert(fallback_called == true,
+                "or_else(async): fallback should run when event is not ready")
         end
 
         -- nested wrap: ((x + 1) * 2)
@@ -142,7 +143,7 @@ fiber.spawn(function()
         local guarded_nack = op.guard(function()
             guard_calls = guard_calls + 1
             return op.with_nack(function(nack_ev)
-                fiber.spawn(function()
+                runtime.spawn(function()
                     perform(nack_ev)
                     cancelled = true
                 end)
@@ -154,7 +155,7 @@ fiber.spawn(function()
         local v2  = perform(ev2)
         assert(v2 == "OK", "guard+with_nack: wrong winner")
 
-        fiber.yield()
+        runtime.yield()
         assert(cancelled == true, "guard+with_nack: nack not fired")
         assert(guard_calls == 1, "guard+with_nack: builder not once")
     end
@@ -185,7 +186,7 @@ fiber.spawn(function()
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
-                fiber.spawn(function()
+                runtime.spawn(function()
                     perform(nack_ev)
                     cancelled = true
                 end)
@@ -196,7 +197,7 @@ fiber.spawn(function()
             local v  = perform(ev)
             assert(v == "WIN", "with_nack win: wrong winner")
 
-            fiber.yield()
+            runtime.yield()
             assert(cancelled == false, "with_nack win: nack fired unexpectedly")
         end
 
@@ -204,7 +205,7 @@ fiber.spawn(function()
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
-                fiber.spawn(function()
+                runtime.spawn(function()
                     perform(nack_ev)
                     cancelled = true
                 end)
@@ -215,7 +216,7 @@ fiber.spawn(function()
             local v  = perform(ev)
             assert(v == "OTHER", "with_nack loss: wrong winner")
 
-            fiber.yield()
+            runtime.yield()
             assert(cancelled == true, "with_nack loss: nack did not fire")
         end
 
@@ -225,13 +226,13 @@ fiber.spawn(function()
             local outer_cancelled, inner_cancelled = false, false
 
             local outer = op.with_nack(function(outer_nack_ev)
-                fiber.spawn(function()
+                runtime.spawn(function()
                     perform(outer_nack_ev)
                     outer_cancelled = true
                 end)
 
                 return op.with_nack(function(inner_nack_ev)
-                    fiber.spawn(function()
+                    runtime.spawn(function()
                         perform(inner_nack_ev)
                         inner_cancelled = true
                     end)
@@ -244,7 +245,7 @@ fiber.spawn(function()
             assert(v == "INNER_WIN",
                    "nested with_nack: wrong result")
 
-            fiber.yield()
+            runtime.yield()
             assert(outer_cancelled == false,
                    "nested with_nack: outer nack fired unexpectedly")
             assert(inner_cancelled == false,
@@ -511,7 +512,7 @@ fiber.spawn(function()
         end
     end
     print("fibers.op tests: ok")
-    fiber.stop()
+    runtime.stop()
 end)
 
-fiber.main()
+runtime.main()

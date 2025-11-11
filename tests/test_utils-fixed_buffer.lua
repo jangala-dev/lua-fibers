@@ -1,7 +1,7 @@
 --- Tests the fixed_buffer implementation.
 print('testing: fibers.utils.fixed_buffer')
 
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local buffer = require 'fibers.utils.fixed_buffer'
 local sc = require 'fibers.utils.syscall'

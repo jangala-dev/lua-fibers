@@ -2,7 +2,7 @@
 print("test: fibers.timer")
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local timer = require 'fibers.timer'
 local sc = require 'fibers.utils.syscall'

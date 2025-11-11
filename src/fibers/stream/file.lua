@@ -7,11 +7,10 @@
 package.path = "../../?.lua;../?.lua;" .. package.path
 
 local stream = require 'fibers.stream'
-local op = require 'fibers.op'
 local pollio = require 'fibers.pollio'
 local sc = require 'fibers.utils.syscall'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local pio_handler = pollio.install_poll_io_handler()
 

@@ -3,10 +3,10 @@
     can handle multiple clients.
 ]]
 
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
 -- Importing necessary modules
-local fiber = require "fibers.fiber"
+local fibers = require "fibers"
 local sleep = require "fibers.sleep"
 local socket = require 'fibers.stream.socket'
 local sc = require 'fibers.utils.syscall'
@@ -24,7 +24,7 @@ sc.unlink(sockname)
 local server = assert(socket.listen_unix(sockname))
 
 -- Spawn a fiber to handle incoming connections
-fiber.spawn(function ()
+local function start_server()
     while true do
         -- Accept a new connection
         local peer, err = assert(server:accept())
@@ -35,7 +35,7 @@ fiber.spawn(function ()
         end
 
         -- Spawn a new fiber for each connection to handle client communication
-        fiber.spawn(function()
+        fibers.spawn(function()
             while true do
                 -- Read a line from the connected client
                 local rec = peer:read_line()
@@ -59,17 +59,21 @@ fiber.spawn(function ()
     end
     -- After the server is stopped, remove the socket file and stop the fiber
     sc.unlink(sockname)
-    fiber.stop()
-end)
+end
 
 -- Spawn another fiber to periodically print a heartbeat message
-fiber.spawn(function ()
+local function heartbeat()
     while true do
         print("hb")
         -- Sleep for 1 second before printing the next heartbeat
         sleep.sleep(1)
     end
-end)
+end
+
+local function main()
+    fibers.spawn(start_server)
+    fibers.spawn(heartbeat)
+end
 
 -- Start the main fiber loop
-fiber.main()
+fibers.run(main)

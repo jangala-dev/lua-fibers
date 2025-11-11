@@ -1,4 +1,4 @@
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 package.path = package.path .. ';/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua'
 
 local sep = '-'
@@ -12,7 +12,7 @@ local modules = {
     { 'stream',   'socket' },
     { 'timer' },
     { 'sched' },
-    { 'fiber' },
+    { 'runtime' },
     { 'channel' },
     { 'queue' },
     { 'cond' },
@@ -22,7 +22,8 @@ local modules = {
     { 'exec' },
     { 'waitgroup' },
     { 'alarm' },
-    { 'context' }
+    { 'context' },
+    { 'scope' },
 }
 
 for _, j in ipairs(modules) do

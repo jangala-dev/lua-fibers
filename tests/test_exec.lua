@@ -1,7 +1,9 @@
 -- test_fibers_exec.lua
-package.path = "../../?.lua;../?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+-- look one level up
+package.path = "../src/?.lua;" .. package.path
+
+local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
 local channel = require "fibers.channel"
 local exec = require 'fibers.exec'
@@ -68,7 +70,7 @@ local function test_io_redirection()
     local err = cmd:start()
     assert(cmd:start(), "Expected error on starting command twice")
     assert(err == nil, "Expected no error but got:", err)
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         for _, v in ipairs(msgs) do
             stdin_pipe:write(v)
             signal_chan:get()
@@ -116,7 +118,7 @@ local function test_cancel_during_output()
     local cmd = exec.command_context(ctx, '/bin/sh', '-c', 'for i in $(seq 1 10000); do echo y; sleep 0.001; done')
         :setpgid(true)
 
-    fiber.spawn(function()
+    fibers.spawn(function()
         -- Let it run for a short moment, then cancel
         sleep.sleep(0.00001)
         cancel()
@@ -146,28 +148,28 @@ local function test_cleanup_on_crash(id)
     local temp_script_dir = "/tmp/crash_test" .. id .. ".lua"
 
     local script = [[
-        package.path = "../../?.lua;../?.lua;" .. package.path
-        local fiber = require 'fibers.fiber'
-        local exec = require 'fibers.exec'
-        local sleep = require 'fibers.sleep'
-        local pollio = require 'fibers.pollio'
-        local sc = require 'fibers.utils.syscall'
-        pollio.install_poll_io_handler()
+            package.path = "../src/?.lua;" .. package.path
+            local fibers = require 'fibers'
+            local exec = require 'fibers.exec'
+            local sleep = require 'fibers.sleep'
+            local pollio = require 'fibers.pollio'
+            local sc = require 'fibers.utils.syscall'
+            pollio.install_poll_io_handler()
 
-        fiber.spawn(function ()
-            local cmd = exec.command('sleep', '1')
-            cmd:setprdeathsig(sc.SIGKILL)
-            local err = cmd:start()
-            if err then
-                error(err)
+            local function main()
+                local cmd = exec.command('sleep', '1')
+                cmd:setprdeathsig(sc.SIGKILL)
+                local err = cmd:start()
+                if err then
+                    error(err)
+                end
+                io.stdout:write(tostring(cmd.process.pid) .. "\n")
+                io.stdout:flush()
+                sleep.sleep(0.01)
+                print(obj.obj)
             end
-            io.stdout:write(tostring(cmd.process.pid) .. "\n")
-            io.stdout:flush()
-            sleep.sleep(0.01)
-            print(obj.obj)
-        end)
 
-        fiber.main()
+            fibers.run(main)
     ]]
 
     -- Write the script to a temporary file
@@ -217,6 +219,7 @@ local function test_cleanup_on_crash(id)
 
     assert(not is_running, "Child sleep command is still running")
 end
+
 -- Main test function
 local function main()
     local pid = sc.getpid()
@@ -239,7 +242,7 @@ local function main()
         local wg = waitgroup.new()
         for i = 1, reps do
             wg:add(1)
-            fiber.spawn(function ()
+            fibers.spawn(function ()
                 v(i)
                 wg:done()
             end)
@@ -250,8 +253,6 @@ local function main()
         print(k..": passed!")
     end
     print("test: ok")
-    fiber.stop()
 end
 
-fiber.spawn(main)
-fiber.main()
+fibers.run(main)

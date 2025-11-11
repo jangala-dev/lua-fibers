@@ -2,9 +2,9 @@
 print('testing: fibers.stream')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local stream = require 'fibers.stream'
 
 local function test()
@@ -32,11 +32,10 @@ local function test()
     rd:close(); wr:close()
 end
 
-fiber.spawn(function ()
+local function main()
     test()
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)
 
 print('selftest: ok')

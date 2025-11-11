@@ -6,10 +6,9 @@
 --
 -- Example ported from Go's Select https://go.dev/tour/concurrency/2
 
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-package.path = "../../?.lua;../?.lua;" .. package.path
-
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local channel = require 'fibers.channel'
 
 local function sum(array, chan)
@@ -20,14 +19,13 @@ local function sum(array, chan)
     chan:put(total)
 end
 
-fiber.spawn(function()
+local function main()
     local s = {7, 2, 8, -9, 4, 0}
     local chan = channel.new()
-    fiber.spawn(function() sum({unpack(s,1,#s/2)}, chan) end)
-    fiber.spawn(function() sum({unpack(s,#s/2+1,#s)}, chan) end)
+    fibers.spawn(function() sum({unpack(s,1,#s/2)}, chan) end)
+    fibers.spawn(function() sum({unpack(s,#s/2+1,#s)}, chan) end)
     local x, y = chan:get(), chan:get()
     print(x, y, x+y)
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)

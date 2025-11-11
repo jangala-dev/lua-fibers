@@ -5,9 +5,9 @@
 -- @module fibers.sleep
 
 local op = require 'fibers.op'
-local fiber = require 'fibers.fiber'
+local runtime = require 'fibers.runtime'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 --- Timeout class.
 -- Represents a timeout for a fiber.
@@ -20,12 +20,12 @@ local perform = op.perform
 -- @treturn operation The created operation.
 local function sleep_until_op(t)
     local function try()
-        return t <= fiber.now()
+        return t <= runtime.now()
     end
     local function block(suspension, wrap_fn)
         suspension.sched:schedule_at_time(t, suspension:complete_task(wrap_fn))
     end
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 --- Put the current fiber to sleep until time t.
@@ -42,7 +42,7 @@ local function sleep_op(dt)
     local function block(suspension, wrap_fn)
         suspension.sched:schedule_after_sleep(dt, suspension:complete_task(wrap_fn))
     end
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 --- Put the current fiber to sleep for a duration dt.

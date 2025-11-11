@@ -2,9 +2,9 @@
 print('testing: fibers.alarm')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local alarm = require 'fibers.alarm'
 local sleep = require 'fibers.sleep'
 local sc = require 'fibers.utils.syscall'
@@ -124,7 +124,7 @@ local function buffer_test()
     -- first absolutes - easy to test
     local t_sleep, t_sleep_before_realtime = 1, 2
     alarm.clock_desynced()
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         sleep.sleep(t_sleep_before_realtime)
         alarm.clock_synced()
     end)
@@ -135,7 +135,7 @@ local function buffer_test()
     -- next let's do nexts
     local msec_target = 333
     alarm.clock_desynced()
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         sleep.sleep(t_sleep_before_realtime)
         alarm.clock_synced()
     end)
@@ -228,7 +228,7 @@ local function test_next_calc()
     print("complete!")
 end
 
-fiber.spawn(function ()
+local function main()
     abs_test(2)
     next_error()
     next_msec_test(666)
@@ -242,7 +242,6 @@ fiber.spawn(function ()
     buffer_test()
     validate_next_table_test()
     test_next_calc()
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)

@@ -2,7 +2,7 @@
 print('testing: fibers.stream.compat')
 
 -- look one level up
-package.path = "../?.lua;" .. package.path
+package.path = "../src/?.lua;" .. package.path
 
 local compat = require 'fibers.stream.compat'
 

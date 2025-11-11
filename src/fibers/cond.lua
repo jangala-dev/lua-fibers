@@ -6,7 +6,7 @@
 
 local op = require 'fibers.op'
 
-local perform = op.perform
+local perform = require 'fibers.performer'.perform
 
 local Cond = {}
 Cond.__index = Cond

@@ -13,9 +13,11 @@
 ---     cancellation.
 -- @module context
 
-local fiber          = require "fibers.fiber"
+local runtime          = require "fibers.runtime"
 local op             = require "fibers.op"
 local cond           = require "fibers.cond"
+
+local perform = require 'fibers.performer'.perform
 
 -- ------------------------------------------------------------------------
 -- base_context:
@@ -43,7 +45,7 @@ function base_context:done_op()
         return self.parent:done_op()
     else
         -- Background context: never cancelled, so done_op never completes.
-        return op.new_base_op(nil, function() return false end, function() end)
+        return op.new_primitive(nil, function() return false end, function() end)
     end
 end
 
@@ -105,6 +107,10 @@ function cancel_context:done_op()
     end
 end
 
+function cancel_context:done()
+    return perform(self:done_op())
+end
+
 --- Overridden err() that checks for a local cancellation cause.
 function cancel_context:err()
     return self.cause or (self.parent and self.parent:err() or nil)
@@ -159,7 +165,7 @@ end
 -- @return The new with_deadline_context and a function to cancel it.
 local function with_deadline(parent, deadline)
     local ctx, cancel_fn = with_cancel(parent)
-    fiber.current_scheduler:schedule_at_time(deadline, { run = function() ctx:cancel("deadline_exceeded") end })
+    runtime.current_scheduler:schedule_at_time(deadline, { run = function() ctx:cancel("deadline_exceeded") end })
     return ctx, cancel_fn
 end
 
@@ -168,7 +174,7 @@ end
 -- @param The timeout at which the context will be cancelled.
 -- @return The new with_timeout_context and a function to cancel it.
 local function with_timeout(parent, timeout)
-    return with_deadline(parent, fiber.now() + timeout)
+    return with_deadline(parent, runtime.now() + timeout)
 end
 
 --- Returns a value_context that stores a key/value pair.
