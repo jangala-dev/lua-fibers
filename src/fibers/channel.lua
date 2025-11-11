@@ -1,24 +1,15 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
-
---- fibers.channel module
+-- fibers.channel
 -- Provides Concurrent ML style channels for communication between fibers.
--- @module fibers.channel
 
-local op = require 'fibers.op'
-local fifo = require 'fibers.utils.fifo'
-
+local op      = require 'fibers.op'
+local fifo    = require 'fibers.utils.fifo'
 local perform = require 'fibers.performer'.perform
 
---- Channel class
--- Represents a communication channel between fibers.
--- @type Channel
 local Channel = {}
 Channel.__index = Channel
 
---- Create a new Channel.
--- @treturn Channel The created Channel.
 local function new(buffer_size)
-    buffer_size = buffer_size or 0 -- Default to unbuffered
+    buffer_size = buffer_size or 0
 
     local buffer = nil
     if buffer_size > 0 then
@@ -26,111 +17,143 @@ local function new(buffer_size)
     end
 
     return setmetatable({
-        buffer = buffer,
+        buffer      = buffer,
         buffer_size = buffer_size,
-        getq = fifo.new(), -- Queue of waiting receivers
-        putq = fifo.new(), -- Queue of waiting senders
+        getq        = fifo.new(), -- waiting receivers
+        putq        = fifo.new(), -- waiting senders
     }, Channel)
 end
 
---- Create a put operation for the Channel.
--- Make an operation that if and when it completes will rendezvous with
--- a receiver fiber to send VAL over the channel.
--- @param val The value to put into the Channel.
--- @treturn BaseOp The created put operation.
-function Channel:put_op(val)
-    local getq, putq, buffer, buffer_size = self.getq, self.putq, self.buffer, self.buffer_size
-    local function try()
-        -- Case 1: If there's a waiting receiver, complete the rendezvous immediately
-        while not getq:empty() do
-            local remote = getq:pop()
-            if remote.suspension:waiting() then
-                remote.suspension:complete(remote.wrap, val)
-                return true
-            end
-            -- Otherwise the remote suspension is already completed, pop and continue
+----------------------------------------------------------------------
+-- Helpers: pop active entries (skip cancelled ones)
+----------------------------------------------------------------------
+
+local function pop_active(q)
+    while not q:empty() do
+        local entry = q:pop()
+        if not entry.cancelled then
+            return entry
         end
-        -- Case 2: If we have a buffer with space, add the value to the buffer
+    end
+    return nil
+end
+
+----------------------------------------------------------------------
+-- PUT side
+----------------------------------------------------------------------
+
+function Channel:put_op(val)
+    local getq, putq = self.getq, self.putq
+    local buffer, buffer_size = self.buffer, self.buffer_size
+
+    -- Per-operation state for this event instance.
+    local entry = {
+        val        = val,
+        cancelled  = false,
+        suspension = nil,
+        wrap       = nil,
+    }
+
+    local function try()
+        -- Case 1: rendezvous with a waiting receiver.
+        local recv = pop_active(getq)
+        if recv then
+            recv.suspension:complete(recv.wrap, val)
+            return true
+        end
+        -- Case 2: buffered channel with available space.
         if buffer and buffer:length() < buffer_size then
             buffer:push(val)
             return true
         end
-        -- Case 3: No receivers and no buffer space
+        -- Case 3: no receiver and no buffer space.
         return false
     end
+
     local function block(suspension, wrap_fn)
-        -- First, GC for canceled operations
-        while not putq:empty() and not putq:peek().suspension:waiting() do
-            putq:pop()
-        end
-        -- No space in buffer and no receivers, so block
-        putq:push({ suspension = suspension, wrap = wrap_fn, val = val })
+        entry.suspension = suspension
+        entry.wrap       = wrap_fn
+        entry.cancelled  = false
+        putq:push(entry)
     end
-    return op.new_primitive(nil, try, block)
+
+    local prim = op.new_primitive(nil, try, block)
+
+    -- Mark this entry as cancelled if this put loses in a choice / is aborted.
+    return prim:on_abort(function()
+        entry.cancelled = true
+    end)
 end
 
---- Create a get operation for the Channel.
--- Make an operation that if and when it completes will rendezvous with
--- a sender fiber to receive one value from the channel.
--- @treturn BaseOp The created get operation.
+----------------------------------------------------------------------
+-- GET side
+----------------------------------------------------------------------
+
 function Channel:get_op()
-    local getq, putq, buffer = self.getq, self.putq, self.buffer
-    -- Attempt to service one sender from putq
-    local function pop_from_putq()
-        while not putq:empty() do
-            local remote = putq:pop()
-            if remote.suspension:waiting() then
-                remote.suspension:complete(remote.wrap)
-                return remote
-            end
+    local getq, putq = self.getq, self.putq
+    local buffer     = self.buffer
+
+    local entry = {
+        cancelled  = false,
+        suspension = nil,
+        wrap       = nil,
+    }
+
+    local function pop_sender()
+        local sender = pop_active(putq)
+        if not sender then
+            return nil
         end
-        return nil
+        -- Having chosen this sender, complete its suspension immediately.
+        sender.suspension:complete(sender.wrap)
+        return sender
     end
+
     local function try()
-        local remote = pop_from_putq()
-        -- Case 1: Take from buffer if available
+        local remote = pop_sender()
+        -- Case 1: take from buffer if there is a buffered value.
         if buffer and buffer:length() > 0 then
-            local val = buffer:pop()
-            -- Attempt to refill buffer with one sender
-            if remote then buffer:push(remote.val) end
-            return true, val
+            local v = buffer:pop()
+            -- If there was a sender waiting, refill the buffer with its value.
+            if remote then
+                buffer:push(remote.val)
+            end
+            return true, v
         end
-        -- Case 2: No buffer value; try to take directly from a sender
-        if remote then return true, remote.val end
-        -- Case 3: Nothing available so block
+        -- Case 2: no buffered value; take directly from a sender.
+        if remote then
+            return true, remote.val
+        end
+        -- Case 3: nothing available.
         return false
     end
+
     local function block(suspension, wrap_fn)
-        -- Clear any stale entries
-        while not getq:empty() and not getq:peek().suspension:waiting() do
-            getq:pop()
-        end
-        -- Block this receiver
-        getq:push({ suspension = suspension, wrap = wrap_fn })
+        entry.suspension = suspension
+        entry.wrap       = wrap_fn
+        entry.cancelled  = false
+        getq:push(entry)
     end
-    return op.new_primitive(nil, try, block)
+
+    local prim = op.new_primitive(nil, try, block)
+
+    return prim:on_abort(function()
+        entry.cancelled = true
+    end)
 end
 
---- Put a message into the Channel.
--- Send message on the channel.  If there is already another fiber
--- waiting to receive a message on this channel, give it our message and
--- continue.  Otherwise, block until a receiver becomes available.
--- @tparam any message The message to put into the Channel.
+----------------------------------------------------------------------
+-- Synchronous wrappers
+----------------------------------------------------------------------
+
 function Channel:put(message)
     return perform(self:put_op(message))
 end
 
---- Get a message from the Channel.
--- Receive a message from the channel and return it.  If there is
--- already another fiber waiting to send a message on this channel, take
--- its message directly.  Otherwise, block until a sender becomes
--- available.
--- @treturn any The message retrieved from the Channel.
 function Channel:get()
     return perform(self:get_op())
 end
 
---- @export
 return {
-    new = new
+    new = new,
 }
