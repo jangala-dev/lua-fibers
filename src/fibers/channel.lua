@@ -66,7 +66,7 @@ function Channel:put_op(val)
         -- No space in buffer and no receivers, so block
         putq:push({ suspension = suspension, wrap = wrap_fn, val = val })
     end
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 --- Create a get operation for the Channel.
@@ -108,7 +108,7 @@ function Channel:get_op()
         -- Block this receiver
         getq:push({ suspension = suspension, wrap = wrap_fn })
     end
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 --- Put a message into the Channel.

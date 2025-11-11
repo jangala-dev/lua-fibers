@@ -1,8 +1,8 @@
 -- usage of the fibers.exec module
 
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
 local exec = require 'fibers.exec'
 local pollio = require 'fibers.pollio'
@@ -10,13 +10,13 @@ local pollio = require 'fibers.pollio'
 pollio.install_poll_io_handler()
 
 local function main()
-    fiber.spawn(function() -- long running process where we want to periodically deal with output
+    fibers.spawn(function() -- long running process where we want to periodically deal with output
         local cmd = exec.command('cat')
         local stdin_pipe = assert(cmd:stdin_pipe())
         local stdout_pipe = assert(cmd:stdout_pipe())
         local err = cmd:start()
         if err then error(err) end
-        fiber.spawn(function()
+        fibers.spawn(function()
             for _ = 1, 4 do
                 stdin_pipe:write('tick')
                 sleep.sleep(0.2)
@@ -38,8 +38,6 @@ local function main()
     local output, err = exec.command('sh', '-c', 'sleep 1; echo hello world; exit 255'):combined_output()
     assert(err, "expected error!")
     print("output:", output)
-    fiber.stop()
 end
 
-fiber.spawn(main)
-fiber.main()
+fibers.run(main)

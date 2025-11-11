@@ -1,6 +1,6 @@
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local alarm = require 'fibers.alarm'
 local sc = require 'fibers.utils.syscall'
 
@@ -20,7 +20,7 @@ local function set_alarm(t, number)
     print("alarm "..number, "fired at:", os.date("%A %d %B %Y at %H:%M:", sec)..os.date("%S", sec) + nsec/1e9)
 end
 
-fiber.spawn(function ()
+local function main()
     local _, sec, nsec = sc.realtime()
     print("Time now:", os.date("%A %d %B %Y at %H:%M:", sec)..os.date("%S", sec) + nsec/1e9, os.date("TZ: %z:", sec))
 
@@ -36,10 +36,10 @@ fiber.spawn(function ()
     }
 
     for i, j in ipairs(alarm_times) do
-        fiber.spawn(function ()
+        fibers.spawn(function ()
             set_alarm(j, i)
         end)
     end
-end)
+end
 
-fiber.main()
+fibers.run(main)

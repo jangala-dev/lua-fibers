@@ -4,7 +4,7 @@ print('testing: fibers.stream.socket')
 -- look one level up
 package.path = "../src/?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local socket = require 'fibers.stream.socket'
 local sc = require 'fibers.utils.syscall'
 
@@ -33,10 +33,10 @@ local function test()
 end
 
 
-fiber.spawn(function ()
+local function main()
     test()
-    fiber.stop()
-end)
-fiber.main()
+end
+
+fibers.run(main)
 
 print('test: ok')

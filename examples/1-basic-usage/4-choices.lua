@@ -6,13 +6,12 @@
 -- Example ported from Go's Select https://go.dev/tour/concurrency/5
 
 
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local channel = require 'fibers.channel'
-local op = require 'fibers.op'
 
-local perform, choice = require 'fibers.performer'.perform, op.choice
+local perform, choice = fibers.perform, fibers.choice
 
 local function fibonacci(c, quit)
     local x, y = 0, 1
@@ -31,17 +30,16 @@ local function fibonacci(c, quit)
     until done
 end
 
-fiber.spawn(function()
+local function main()
     local c = channel.new()
     local quit = channel.new()
-    fiber.spawn(function()
+    fibers.spawn(function()
         for _=1, 10 do
             print(c:get())
         end
         quit:put(0)
     end)
     fibonacci(c, quit)
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)

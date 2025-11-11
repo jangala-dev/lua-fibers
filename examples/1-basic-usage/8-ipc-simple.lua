@@ -1,8 +1,8 @@
 -- demonstrates IPC using exec and non-blocking sockets
 
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-local fiber = require "fibers.fiber"
+local fibers = require "fibers"
 local exec = require "fibers.exec"
 local sleep = require "fibers.sleep"
 local socket = require 'fibers.stream.socket'
@@ -15,7 +15,7 @@ local sockname = '/tmp/test-sock'
 sc.unlink(sockname)
 local server = assert(socket.listen_unix(sockname))
 
-fiber.spawn(function()
+local function receiver()
     sleep.sleep(2) -- to show that things don't block and are gracefully buffered by sockets
 
     while true do
@@ -29,10 +29,9 @@ fiber.spawn(function()
         end
     end
     sc.unlink(sockname)
-    fiber.stop()
-end)
+end
 
-fiber.spawn(function()
+local function sender()
     local messages = { "apple", "pear", "exit!" }
     for _, v in ipairs(messages) do
         print("sending:", v)
@@ -41,13 +40,15 @@ fiber.spawn(function()
         local out, err = exec.command('sh', '-c', command):combined_output()
         if err then error(out) end
     end
-end)
+end
 
-fiber.spawn(function()
+local function main()
+    fibers.spawn(sender)
+    fibers.spawn(receiver)
     while true do
         print("hb")
         sleep.sleep(1)
     end
-end)
+end
 
-fiber.main()
+fibers.run(main)

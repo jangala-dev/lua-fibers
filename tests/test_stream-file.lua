@@ -4,9 +4,8 @@ print('testing: fibers.stream.file')
 -- look one level up
 package.path = "../src/?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local waitgroup = require "fibers.waitgroup"
-local op = require 'fibers.op'
 local sleep = require 'fibers.sleep'
 local channel = require 'fibers.channel'
 local file = require 'fibers.stream.file'
@@ -14,7 +13,7 @@ local compat    = require 'fibers.stream.compat'
 
 compat.install()
 
-local perform, choice = require 'fibers.performer'.perform, op.choice
+local perform, choice = fibers.perform, fibers.choice
 
 local function test()
     local rd, wr = file.pipe()
@@ -48,7 +47,7 @@ local function test_long_read_first()
     local rd, wr = file.pipe()
     local message = string.rep("a", 2^24)
 
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         wr:write_chars(message)
         wr:close()
     end)
@@ -69,7 +68,7 @@ local function test_read_op()
     local wg = waitgroup.new()
     wg:add(1)
 
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         local count, err = wr:write_chars(msg1)
         assert(count==#msg1 and not err)
         sleep.sleep(0.05)
@@ -111,7 +110,7 @@ local function test_write_op()
     local wg = waitgroup.new()
     wg:add(1)
 
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         sleep.sleep(0.1)
         local chars, err = rd:read_chars(2^16)
         assert(chars==string.rep("a", 2^16) and not err)
@@ -151,7 +150,7 @@ local function test_long_write_first()
 
     local message2
 
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         message2 = rd:read_all_chars()
         rd:close()
         chan:put(1)
@@ -170,7 +169,7 @@ local function test_tiny_writes()
     local rd, wr = file.pipe()
     local message = string.rep("a", 2^16)
 
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         for c in message:gmatch"." do
             wr:write(c)
         end
@@ -188,7 +187,7 @@ local function test_single()
     local rd, wr = file.pipe()
     local message = "aa"
 
-    fiber.spawn(function ()
+    fibers.spawn(function ()
         wr:write_chars(message)
         wr:close()
     end)
@@ -225,7 +224,7 @@ local function test_lua()
     rd:close()
 end
 
-fiber.spawn(function ()
+local function main()
     test()
     test_read_op()
     test_write_op()
@@ -234,8 +233,8 @@ fiber.spawn(function ()
     test_tiny_writes()
     test_single()
     test_lua()
-    fiber.stop()
-end)
-fiber.main()
+end
+
+fibers.run(main)
 
 print('test: ok')

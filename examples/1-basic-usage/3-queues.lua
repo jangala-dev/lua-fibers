@@ -5,19 +5,17 @@
 --
 -- Example ported from Go's Select https://go.dev/tour/concurrency/3
 
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-package.path = "../../?.lua;../?.lua;" .. package.path
-
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local queue = require 'fibers.queue'
 
-fiber.spawn(function()
+local function main()
     local q = queue.new(2)
     q:put(1)
     q:put(2)
     print(q:get())
     print(q:get())
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)

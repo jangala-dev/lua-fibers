@@ -5,13 +5,12 @@ print('testing: fibers.waitgroup')
 package.path = "../src/?.lua;" .. package.path
 
 -- test_waitgroup.lua
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
-local op = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
 local sc = require 'fibers.utils.syscall'
 
-local perform, choice = require 'fibers.performer'.perform, op.choice
+local perform, choice = fibers.perform, fibers.choice
 
 local function test_nowait()
     local wg = waitgroup.new()
@@ -29,7 +28,7 @@ local function test_simple()
     -- Spawn fibers and add to the waitgroup
     for _ = 1, numFibers do
         wg:add(1)
-        fiber.spawn(function()
+        fibers.spawn(function()
             sleep.sleep(math.random()) -- Simulate some work
             wg:done()
         end)
@@ -52,7 +51,7 @@ local function test_complex()
 
     local function one_sec_work(w)
         w:add(1)
-        fiber.spawn(function()
+        fibers.spawn(function()
             sleep.sleep(1) -- Simulate some work
             w:done()
         end)
@@ -91,9 +90,7 @@ local function main()
     test_nowait()
     test_simple()
     test_complex()
-    fiber.stop()
 end
 
 -- Start the main function in fiber context
-fiber.spawn(main)
-fiber.main()
+fibers.run(main)

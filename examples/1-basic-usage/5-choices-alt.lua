@@ -4,19 +4,18 @@
 --
 -- Example ported from Go's Select https://go.dev/tour/concurrency/6
 
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local channel = require 'fibers.channel'
 local sleep = require 'fibers.sleep'
-local op = require 'fibers.op'
 
-local perform, choice = require 'fibers.performer'.perform, op.choice
+local perform, choice = fibers.perform, fibers.choice
 
 -- time.After() is a Go library function
 local function after(t)
     local chan = channel.new()
-    fiber.spawn(function()
+    fibers.spawn(function()
         sleep.sleep(t)
         chan:put(1)
     end)
@@ -26,7 +25,7 @@ end
 -- time.Tick() is a Go library function
 local function tick(t)
     local chan = channel.new()
-    fiber.spawn(function()
+    fibers.spawn(function()
         while true do
             sleep.sleep(t)
             chan:put(1)
@@ -35,7 +34,7 @@ local function tick(t)
     return chan
 end
 
-fiber.spawn(function()
+local function main()
     local ticker = tick(0.1)
     local boom = after(0.5)
     local done = false
@@ -54,8 +53,6 @@ fiber.spawn(function()
         end)
         perform(task)
     until done
+end
 
-    fiber.stop()
-end)
-
-fiber.main()
+fibers.run(main)

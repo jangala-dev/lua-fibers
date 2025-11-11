@@ -126,7 +126,7 @@ local function core_write_op(stream, buf, count, flush_needed)
         return ...
     end
 
-    return op.new_base_op(wrap, try, block)
+    return op.new_primitive(wrap, try, block)
 end
 
 
@@ -217,7 +217,7 @@ local function core_read_op(stream, buf, min, max, terminator)
         return ...
     end
 
-    return op.new_base_op(wrap, try, block)
+    return op.new_primitive(wrap, try, block)
 end
 
 function Stream:partial_read()

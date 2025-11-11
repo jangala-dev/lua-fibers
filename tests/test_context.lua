@@ -5,7 +5,7 @@ print('testing: fibers.context')
 package.path = "../src/?.lua;" .. package.path
 
 local context = require 'fibers.context'
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
 
 local perform = require 'fibers.performer'.perform
@@ -24,13 +24,13 @@ local function test_with_cancel()
     local child_ctx, _ = context.with_cancel(ctx)
 
     local is_cancelled = false
-    fiber.spawn(function()
+    fibers.spawn(function()
         perform(child_ctx:done_op())
         is_cancelled = true
     end)
 
     cancel()
-    fiber.yield() -- Give time for cancellation to propagate
+    sleep.sleep(0.1) -- Give time for cancellation to propagate
 
     assert(is_cancelled, "Child context should be cancelled when parent is cancelled")
     print("test_with_cancel passed")
@@ -55,7 +55,7 @@ local function test_with_timeout()
     local ctx, _ = context.with_timeout(parent, 0.01)
 
     local is_cancelled = false
-    fiber.spawn(function()
+    fibers.spawn(function()
         perform(ctx:done_op())
         is_cancelled = true
     end)
@@ -74,7 +74,7 @@ local function test_custom_cause()
     local custom_cause = "Custom Cancel Reason"
 
     cancel(custom_cause)
-    fiber.yield() -- Give time for cancellation to propagate
+    sleep.sleep(0.01) -- Give time for cancellation to propagate
 
     assert(ctx:err() == custom_cause, "Context should have the custom cancel cause")
     assert(ctx_2:err() == custom_cause, "Child context should have the custom cancel cause")
@@ -88,7 +88,7 @@ local function test_cancel_on_with_value()
     local ctx_3, _ = context.with_value(ctx_2, "key2", "value2")
 
     cancel('cancelled')
-    fiber.yield() -- Give time for cancellation to propagate
+    sleep.sleep(0.01) -- Give time for cancellation to propagate
 
     assert(ctx:err() == 'cancelled', "Context should have cancel cause")
     assert(ctx_2:err() == 'cancelled', "Child context should have cancel cause")
@@ -98,7 +98,7 @@ local function test_cancel_on_with_value()
     assert(ctx_3:value('key2') == 'value2', "Child context should have the value")
 end
 -- Run all tests
-fiber.spawn(function()
+local function main()
     test_background()
     test_with_cancel()
     test_with_value()
@@ -107,7 +107,6 @@ fiber.spawn(function()
     test_cancel_on_with_value()
 
     print("All tests passed")
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)

@@ -1,7 +1,7 @@
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
 -- Importing the necessary modules from the fibers framework
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local file = require 'fibers.stream.file'
 local socket = require 'fibers.stream.socket'
 local sc = require 'fibers.utils.syscall'
@@ -21,7 +21,7 @@ end
 local sock = socket.connect_unix(socketPath)
 
 -- Fiber to read from stdin and write to the socket
-fiber.spawn(function()
+local function main()
     while true do
         local line = stdin:read('*l')
         if line then
@@ -35,8 +35,7 @@ fiber.spawn(function()
     -- Close the socket once done
     stdin:close()
     sock:close()
-    fiber.stop()
-end)
+end
 
 -- Start the main fiber loop
-fiber.main()
+fibers.run(main)

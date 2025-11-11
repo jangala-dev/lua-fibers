@@ -2,20 +2,20 @@ print('testing: fibers.channel')
 
 package.path = "../src/?.lua;" .. package.path
 
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local channel = require 'fibers.channel'
 
 local function test_unbuffered()
     local chan = channel.new()
-    fiber.spawn(function() chan:put(42) end)
+    fibers.spawn(function() chan:put(42) end)
     assert(chan:get() == 42, "basic transfer")
 
     local received, signal = true, channel.new()
-    fiber.spawn(function()
+    fibers.spawn(function()
         received = chan:get()
         signal:put(true)
     end)
-    fiber.spawn(function()
+    fibers.spawn(function()
         chan:put(nil)
         signal:put(true)
     end)
@@ -28,20 +28,20 @@ end
 local function test_buffered()
     local chan, signal = channel.new(2), channel.new()
 
-    fiber.spawn(function()
+    fibers.spawn(function()
         for i = 1, 4 do
             chan:put(i)
         end
         signal:put(true)
     end)
-    fiber.spawn(function()
+    fibers.spawn(function()
         for i = 1, 2 do
             assert(chan:get() == i)
         end
     end)
 
     signal:get()
-    fiber.spawn(function()
+    fibers.spawn(function()
         chan:put(5)
         signal:put(true)
     end)
@@ -58,7 +58,7 @@ local function test_unbounded()
     for i = 1, 1000 do assert(chan:get() == i) end
 
     local blocked = true
-    fiber.spawn(function()
+    fibers.spawn(function()
         chan:get()
         blocked = false
     end)
@@ -68,11 +68,11 @@ end
 
 local function test_concurrent()
     local chan, signal, results = channel.new(1), channel.new(), {}
-    fiber.spawn(function()
+    fibers.spawn(function()
         for i = 1, 11 do chan:put(i) end
         signal:put()
     end)
-    fiber.spawn(function()
+    fibers.spawn(function()
         for _ = 1, 10 do table.insert(results, chan:get()) end
         signal:put()
     end)
@@ -82,13 +82,12 @@ local function test_concurrent()
     print("Concurrent passed")
 end
 
-fiber.spawn(function()
+local function main()
     test_unbuffered()
     test_buffered()
     test_unbounded()
     test_concurrent()
     print("All channel tests passed!")
-    fiber.stop()
-end)
+end
 
-fiber.main()
+fibers.run(main)

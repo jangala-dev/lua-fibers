@@ -45,7 +45,7 @@ function Waitgroup:wait_op()
         end
     end
 
-    return op.new_base_op(nil, try, block)
+    return op.new_primitive(nil, try, block)
 end
 
 function Waitgroup:wait()

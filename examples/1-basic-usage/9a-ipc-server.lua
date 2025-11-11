@@ -4,10 +4,10 @@
 ]]
 package.path = "../?.lua;" .. package.path .. ";/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua"
 
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
 -- Importing necessary modules
-local fiber = require "fibers.fiber"
+local fibers = require "fibers"
 local socket = require 'fibers.stream.socket'
 local sc = require 'fibers.utils.syscall'
 
@@ -21,7 +21,7 @@ local sockname = '/tmp/ntpd-sock'
 sc.unlink(sockname)
 
 -- Spawn a fiber to handle incoming connections
-fiber.spawn(function ()
+local function main()
 
     -- Create and start listening on the Unix domain socket
     local server = assert(socket.listen_unix(sockname))
@@ -36,7 +36,7 @@ fiber.spawn(function ()
         end
 
         -- Spawn a new fiber for each connection to handle client communication
-        fiber.spawn(function()
+        fibers.spawn(function()
             while true do
                 -- Read a line from the connected client
                 local rec = peer:read_line()
@@ -56,8 +56,7 @@ fiber.spawn(function ()
     end
     -- After the server is stopped, remove the socket file and stop the fiber
     sc.unlink(sockname)
-    fiber.stop()
-end)
+end
 
 -- Start the main fiber loop
-fiber.main()
+fibers.run(main)

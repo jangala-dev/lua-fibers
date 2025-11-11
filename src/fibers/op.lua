@@ -118,7 +118,7 @@ local perform
 -- Primitive event (leaf).
 --   try_fn() -> success:boolean, ...
 --   block_fn(suspension, wrap_fn) sets up async completion.
-local function new_base_op(wrap_fn, try_fn, block_fn)
+local function new_primitive(wrap_fn, try_fn, block_fn)
     return setmetatable(
         {
             kind     = 'prim',
@@ -157,42 +157,31 @@ local function with_nack(g)
     return setmetatable({ kind = 'with_nack', builder = g }, Event)
 end
 
--- next_turn_op: primitive event that is never ready in the fast path;
--- if forced to block, it completes itself on the *next scheduler turn*.
-local function next_turn_op()
+local function always(...)
+    local results = { ... }
     local function try()
-        return false
+        return true, unpack(results)
     end
-
-    local function block(suspension, wrap_fn)
-        local task = suspension:complete_task(wrap_fn)
-        suspension.sched:schedule(task)
-    end
-
-    return new_base_op(nil, try, block)
+    local function block() error("always: block_fn should never run") end  -- never reached
+    return new_primitive(nil, try, block)
 end
 
-local function always(value)
-    return new_base_op(nil,
-        function() return true, value end,
-        function() error("always: block_fn should never run") end)
-end
 
 local function never()
     -- An event that never becomes ready
-    return new_base_op(nil,
+    return new_primitive(nil,
         function() return false end,
         function() end)
 end
 
-function Event:or_else(fallback_thunk)
-    return choice(
-        self,
-        next_turn_op():wrap(function()
-            return fallback_thunk()
-        end)
-    )
-end
+-- function Event:or_else(fallback_thunk)
+--     return choice(
+--         self,
+--         next_turn_op():wrap(function()
+--             return fallback_thunk()
+--         end)
+--     )
+-- end
 
 -- Wrap event with a post-processing function f (commit phase).
 -- This is another node in the tree; composed at compile time.
@@ -247,24 +236,23 @@ local function new_cond(opts)
                     suspension:complete_task(wrap_fn)
             end
         end
-        return new_base_op(nil, try, block)
+        return new_primitive(nil, try, block)
     end
 
     local function signal()
         if state.triggered then return end
         state.triggered = true
-        -- wake waiters, if any
         for i = 1, #state.waiters do
             local task = state.waiters[i]
             state.waiters[i] = nil
             if task
-                and task.suspension
-                and task.suspension:waiting()
+            and task.suspension
+            and task.suspension:waiting()
             then
-                task.suspension.sched:schedule(task)
+                -- Run the completion *now*, in this turn.
+                task:run()
             end
         end
-        -- fire abort handler, if any
         if state.abort_fn then
             pcall(state.abort_fn)
         end
@@ -341,40 +329,34 @@ local function compile_event(ev, outer_wrap, out, nacks, handlers)
         compile_event(ev.inner, outer_wrap, out, nacks, child_handlers)
 
     else -- 'prim'
-        -- Core wrap chain for this leaf (no exception handling yet).
-        local function core(...)
-            return outer_wrap(ev.wrap_fn(...))
-        end
+        local function wrapped(...)
+            local function core(...)
+                return outer_wrap(ev.wrap_fn(...))
+            end
 
-        -- If there are handlers, wrap the core in them, innermost first.
-        local wrapped = core
-        if #handlers > 0 then
-            for i = #handlers, 1, -1 do
-                local h = handlers[i]
-                local prev = wrapped
-                wrapped = function(...)
-                    local res = pack(pcall(prev, ...))
-                    local ok  = res[1]
-                    if ok then
-                        return unpack(res, 2, res.n)
+            local f = core
+            if #handlers > 0 then
+                for i = #handlers, 1, -1 do
+                    local h    = handlers[i]
+                    local prev = f
+                    f = function(...)
+                        local res = pack(pcall(prev, ...))
+                        if res[1] then
+                            return unpack(res, 2, res.n)
+                        end
+                        local ex  = res[2]
+                        local hev = h(ex)
+                        return perform(hev)
                     end
-                    -- res[2] is the exception (CML: pass exn to handler)
-                    local ex  = res[2]
-                    local hev = h(ex)
-                    -- Handler returns an event; synchronise on it.
-                    return perform(hev)
                 end
             end
-        end
-
-        local final_wrap = function(...)
-            return wrapped(...)
+            return f(...)
         end
 
         out[#out + 1] = {
             try_fn   = ev.try_fn,
             block_fn = ev.block_fn,
-            wrap     = final_wrap,
+            wrap     = wrapped,
             nacks    = nacks,
         }
     end
@@ -392,28 +374,30 @@ end
 --   - For each loser leaf, signal any nacks not in the winner set.
 --   - Each cond object is responsible for idempotence.
 local function trigger_nacks(ops, winner_index)
-    assert(winner_index, "trigger_nacks: no winner_index (internal error)")
-
-    local winner_set = {}
-    local wnacks     = ops[winner_index].nacks
-    if wnacks then
-        for i = 1, #wnacks do
-            winner_set[wnacks[i]] = true
+    local winner_set
+    if winner_index then
+        winner_set = {}
+        local wnacks = ops[winner_index].nacks
+        if wnacks then
+            for i = 1, #wnacks do
+                winner_set[wnacks[i]] = true
+            end
         end
     end
 
-    local signaled = {}
+    local function is_winner_cond(cond)
+        return winner_set and winner_set[cond] or false
+    end
+
+    local signalled = {}
     for i = 1, #ops do
-        if i ~= winner_index then
+        if not winner_index or i ~= winner_index then
             local nacks = ops[i].nacks
             if nacks then
                 for j = #nacks, 1, -1 do
                     local cond = nacks[j]
-                    if cond
-                        and not winner_set[cond]
-                        and not signaled[cond]
-                    then
-                        signaled[cond] = true
+                    if cond and not is_winner_cond(cond) and not signalled[cond] then
+                        signalled[cond] = true
                         cond.signal()
                     end
                 end
@@ -444,6 +428,31 @@ local function apply_wrap(wrap, retval)
     return wrap(unpack(retval, 2, retval.n))
 end
 
+function Event:or_else(fallback_thunk)
+    assert(type(fallback_thunk) == "function", "or_else expects a function")
+
+    return guard(function()
+        -- Compile `self` once for this synchronisation.
+        local leaves = compile_event(self)
+
+        -- Non-blocking attempt to commit to `self`.
+        local idx, retval = try_ready(leaves)
+        if idx then
+            -- Normal CML semantics: `self` wins, fire nacks for losers.
+            trigger_nacks(leaves, idx)
+            local results = { apply_wrap(leaves[idx].wrap, retval) }
+            return always(unpack(results))
+        end
+
+        -- No leaf of `self` is ready now → `self` loses as a whole.
+        -- Fire all nacks/abort handlers hanging off `self`.
+        trigger_nacks(leaves, nil)
+
+        local results = { fallback_thunk() }
+        return always(unpack(results))
+    end)
+end
+
 ----------------------------------------------------------------------
 -- Blocking choice path
 ----------------------------------------------------------------------
@@ -463,17 +472,18 @@ end
 perform = function(ev)
     local leaves = compile_event(ev)
 
-    -- Fast path
+    -- Fast path: try once using the same semantics as fast_commit().
     local idx, retval = try_ready(leaves)
     if idx then
         trigger_nacks(leaves, idx)
         return apply_wrap(leaves[idx].wrap, retval)
     end
 
-    -- Slow path
+    -- Slow path: we now block all leaves using block_choice_op.
     local suspended = pack(runtime.suspend(block_choice_op, leaves))
     local wrap      = suspended[1]
 
+    -- Identify winning leaf by its wrap function.
     local winner_index
     for i, leaf in ipairs(leaves) do
         if leaf.wrap == wrap then
@@ -568,7 +578,7 @@ end
 return {
     perform        = perform,
     perform_raw    = perform,
-    new_base_op    = new_base_op, -- primitive event constructor
+    new_primitive  = new_primitive, -- primitive event constructor
     choice         = choice,
     guard          = guard,
     with_nack      = with_nack,
@@ -576,5 +586,6 @@ return {
     bracket        = bracket,
     always         = always,
     never          = never,
+    Event          = Event,
     -- Event instances have methods: wrap, on_abort.
 }

@@ -4,9 +4,9 @@ print("starting lua-http test")
 
 package.path="./?.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua"
 	.. package.path
-package.path = "../../?.lua;../?.lua;" .. package.path
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-local fiber = require "fibers.fiber"
+local fibers = require "fibers"
 local op = require "fibers.op"
 local pollio = require "fibers.pollio"
 local sleep = require "fibers.sleep"
@@ -24,7 +24,7 @@ require 'fibers.stream.compat'.install()
 print("overriding cqueues step")
 local old_step; old_step = cqueues.interpose("step", function(self, timeout)
 	if cqueues.running() then
-		fiber.yield()
+		sleep.sleep(0)
 		return old_step(self, timeout)
 	else
 		-- local t = self:timeout() or math.huge
@@ -96,8 +96,8 @@ local myserver = assert(http_server.listen {
 -- Override :add_stream to call onstream in a new fiber (instead of new cqueues coroutine)
 print("overriding server's 'add_stream' method")
 function myserver:add_stream(stream)
-	fiber.spawn(function()
-		fiber.yield() -- want to be called from main loop; not from :add_stream callee
+	fibers.spawn(function()
+		sleep.sleep(0) -- want to be called from main loop; not from :add_stream callee
 		local ok, err = http_util.yieldable_pcall(self.onstream, self, stream)
 		stream:shutdown()
 		if not ok then
@@ -106,36 +106,39 @@ function myserver:add_stream(stream)
 	end)
 end
 
--- Run server in its own lua-fiber
-print("spawning server")
-fiber.spawn(function()
-	print("starting server")
-	assert(myserver:loop())
-end)
+local function main()
+	-- Run server in its own lua-fiber
+	print("spawning server")
+	fibers.spawn(function()
+		print("starting server")
+		assert(myserver:loop())
+	end)
 
--- Start another fiber that just prints+sleeps in a loop to show off non-blocking-ness of http server
-print("spawning heartbeat")
-fiber.spawn(function()
-	print("starting heartbeat")
-	while true do
-		print("slow heartbeat")
-		sleep.sleep(1)
-	end
-end)
+	-- Start another fiber that just prints+sleeps in a loop to show off non-blocking-ness of http server
+	print("spawning heartbeat")
+	fibers.spawn(function()
+		print("starting heartbeat")
+		while true do
+			print("slow heartbeat")
+			sleep.sleep(1)
+		end
+	end)
 
--- And one more to show multiple epolls in action
-print("spawning popen fiber")
-fiber.spawn(function()
-	local cmd = exec.command('sh', '-c', 'while true; do echo "non-http fd input received!"; sleep 5; done')
-	local stdout_pipe = assert(cmd:stdout_pipe())
-	local err = cmd:start()
-	if err then error(err) end
-	while true do
-	   local received = stdout_pipe:read_line()
-	   print(received)
-	end
+	-- And one more to show multiple epolls in action
+	print("spawning popen fiber")
+	fibers.spawn(function()
+		local cmd = exec.command('sh', '-c', 'while true; do echo "non-http fd input received!"; sleep 5; done')
+		local stdout_pipe = assert(cmd:stdout_pipe())
+		local err = cmd:start()
+		if err then error(err) end
+		while true do
+		   local received = stdout_pipe:read_line()
+		   print(received)
+		end
 
-end)
+	end)
+end
+
 
 print("starting fibers")
-fiber.main()
+fibers.run(main)

@@ -5,10 +5,9 @@
 --
 -- Example ported from Go's Select https://go.dev/tour/concurrency/1
 
+package.path = "../../src/?.lua;../?.lua;" .. package.path
 
-package.path = "../../?.lua;../?.lua;" .. package.path
-
-local fiber = require 'fibers.fiber'
+local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
 
 local function say(string)
@@ -18,11 +17,7 @@ local function say(string)
     end
 end
 
-fiber.spawn(function()
-    fiber.spawn(function() say("world") end)
+fibers.run(function()
+    fibers.spawn(function() say("world") end)
     say("hello")
-
-    fiber.stop()
 end)
-
-fiber.main()
