@@ -62,7 +62,13 @@ local function test_unbounded()
         chan:get()
         blocked = false
     end)
+
+    -- At this point, there is no value available, so get() must have blocked.
     assert(blocked, "get should block")
+
+    -- Now provide a value so the spawned fibre can complete.
+    chan:put(123)
+
     print("Unbounded passed")
 end
 
