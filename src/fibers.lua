@@ -33,23 +33,19 @@ fibers.perform = performer.perform
 fibers.now = runtime.now
 
 --- Run a main function under the scheduler's root scope.
---   main_fn :: function(Scope, ...): ()
+--   main_fn :: function(Scope, ...): ...
 function fibers.run(main_fn, ...)
     local root = scope_mod.root()
     local args = { ... }
 
-    root:spawn(function()
-        -- Run main_fn inside a child scope of the current scope (root).
-        local res = pack(
-            pcall(function()
-                return scope_mod.run(main_fn, unpack(args))
-            end)
-        )
+    -- Run main_fn inside a child scope of the root, in its own fibre.
+    root:spawn(function(s)
+        local status, err = scope_mod.run(main_fn, unpack(args))
         -- In all cases, stop the scheduler so runtime.main() returns.
         runtime.stop()
-        -- If the main scope failed, treat as fatal for the process.
-        if not res[1] then
-            print(unpack(res, 2, res.n))
+        -- Treat non-ok main scope as fatal for the process.
+        if status ~= "ok" then
+            print(err)
             os.exit(255)
         end
     end)

@@ -7,6 +7,23 @@
 
 local sched = require 'fibers.sched'
 
+local function id(...)
+    return ...
+end
+
+-- Queue of uncaught fibre errors to be consumed by supervisors.
+local error_queue   = {}
+local error_waiters = {}
+
+-- Task object used to wake a fibre waiting for an error.
+local WaiterTask = {}
+WaiterTask.__index = WaiterTask
+
+function WaiterTask:run()
+    -- Resume the waiting fibre with (wrap, fiber, err).
+    self.waiter:resume(id, self.err_fiber, self.err)
+end
+
 local _current_fiber
 local current_scheduler = sched.new()
 
@@ -48,11 +65,24 @@ function Fiber:resume(wrap, ...)
     -- current_fiber = saved_current_fiber the KEY bit, we only get here when the coroutine above has yielded,
     -- but we then pop back in the fiber we previously displaced
     _current_fiber = saved_current_fiber
+    if coroutine.status(self.coroutine) == "dead" then
+        self.alive = false
+    end
     if not ok then
-        print('Error while running fiber: ' .. tostring(err))
-        print(debug.traceback(self.coroutine))
-        print('fibers history:\n' .. self.traceback)
-        os.exit(255)
+        -- Report uncaught error to error consumers.
+        if #error_waiters > 0 then
+            local waiter = table.remove(error_waiters, 1)
+            current_scheduler:schedule(setmetatable({
+                waiter    = waiter.fiber,
+                err_fiber = self,
+                err       = err,
+            }, WaiterTask))
+        else
+            error_queue[#error_queue + 1] = {
+                fiber = self,
+                err   = err,
+            }
+        end
     end
 end
 
@@ -98,6 +128,29 @@ local function stop()
     current_scheduler:stop()
 end
 
+local function wait_fiber_error()
+    -- Fast path: if an error is already queued, return it immediately.
+    if #error_queue > 0 then
+        local rec = table.remove(error_queue, 1)
+        return rec.fiber, rec.err
+    end
+
+    -- Otherwise, we must be in a fibre and suspend until an error arrives.
+    assert(_current_fiber, "wait_fiber_error must be called from within a fiber")
+
+    local function block_fn(sched, fib)
+        -- Record this fibre as waiting for an error. When an error
+        -- arrives, the failing fibre will arrange to schedule a task
+        -- that resumes this fibre with (fiber, err).
+        error_waiters[#error_waiters + 1] = { fiber = fib }
+    end
+
+    local wrap, err_fiber, err = _current_fiber:suspend(block_fn)
+    -- wrap should be the identity function; ignore it.
+    return err_fiber, err
+end
+
+
 --- Runs the main event loop of the current scheduler.
 -- The scheduler will continue to run tasks and wait for events until stopped.
 -- @function main
@@ -111,9 +164,10 @@ return {
     current_fiber     = current_fiber,
 
     -- time and suspension
-    now     = now,
-    suspend = suspend,
-    yield   = yield,
+    now              = now,
+    suspend          = suspend,
+    yield            = yield,
+    wait_fiber_error = wait_fiber_error,
 
     -- fiber management
     spawn = spawn,

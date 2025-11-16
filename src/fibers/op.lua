@@ -476,13 +476,13 @@ function Event:finally(cleanup)
     -- Success path: only runs if this event wins and completes its wraps
     -- without raising.
     local function success_wrap(...)
-        pcall(cleanup, false)
+        cleanup(false)
         return ...
     end
 
     -- Abort path: runs if this event participates in a choice and loses.
     local function abort_action()
-        pcall(cleanup, true)
+        cleanup(true)
     end
 
     return self:wrap(success_wrap):on_abort(abort_action)
@@ -521,13 +521,13 @@ local function bracket(acquire, release, use)
 
         -- Success path: event wins and completes → release(res, false) once.
         local wrapped = ev:wrap(function(...)
-            pcall(release, res, false)
+            release(res, false)
             return ...
         end)
 
         -- Losing path: event participates in a choice but loses → release(res, true) once.
         return wrapped:on_abort(function()
-            pcall(release, res, true)
+            release(res, true)
         end)
     end)
 end
