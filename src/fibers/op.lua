@@ -219,40 +219,47 @@ end
 local function new_cond(opts)
     local state = {
         triggered = false,
-        waiters   = {},        -- optional
+        waiters   = {},        -- list of { suspension = ..., wrap = ... }
         abort_fn  = opts and opts.abort_fn or nil,
     }
 
     local function wait_op()
         assert(not state.abort_fn, "abort-only cond has no wait_op")
+
         local function try()
             return state.triggered
         end
+
         local function block(suspension, wrap_fn)
             if state.triggered then
+                -- Already triggered: complete immediately via the scheduler.
                 suspension:complete(wrap_fn)
             else
-                state.waiters[#state.waiters + 1] =
-                    suspension:complete_task(wrap_fn)
+                -- Record this suspension + wrap for later signalling.
+                state.waiters[#state.waiters + 1] = {
+                    suspension = suspension,
+                    wrap       = wrap_fn,
+                }
             end
         end
+
         return new_primitive(nil, try, block)
     end
 
     local function signal()
         if state.triggered then return end
         state.triggered = true
+
+        -- Complete all recorded waiters via the scheduler.
         for i = 1, #state.waiters do
-            local task = state.waiters[i]
+            local remote = state.waiters[i]
             state.waiters[i] = nil
-            if task
-            and task.suspension
-            and task.suspension:waiting()
-            then
-                -- Run the completion *now*, in this turn.
-                task:run()
+
+            if remote and remote.suspension and remote.suspension:waiting() then
+                remote.suspension:complete(remote.wrap)
             end
         end
+
         if state.abort_fn then
             pcall(state.abort_fn)
         end

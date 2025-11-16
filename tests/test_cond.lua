@@ -22,9 +22,9 @@ runtime.spawn(function()
 end)
 assert(equal(log, {}))
 runtime.current_scheduler:run()
--- assert(equal(log, { 'a', 'c', 'd' }))
+assert(equal(log, { 'a', 'c', 'd' }))
 runtime.current_scheduler:run()
-assert(equal(log, { 'a', 'c', 'b', 'd' }))
+assert(equal(log, { 'a', 'c', 'd', 'b' }))
 
 runtime.spawn(function()
     local fiber_count = 1e3
