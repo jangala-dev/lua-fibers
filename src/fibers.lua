@@ -21,9 +21,6 @@ local channel   = require 'fibers.channel'
 local op        = require 'fibers.op'
 
 local unpack = rawget(table, "unpack") or _G.unpack
-local pack   = rawget(table, "pack") or function(...)
-    return { n = select("#", ...), ... }
-end
 
 local fibers = {}
 
@@ -39,7 +36,7 @@ function fibers.run(main_fn, ...)
     local args = { ... }
 
     -- Run main_fn inside a child scope of the root, in its own fibre.
-    root:spawn(function(s)
+    root:spawn(function()
         local status, err = scope_mod.run(main_fn, unpack(args))
         -- In all cases, stop the scheduler so runtime.main() returns.
         runtime.stop()
