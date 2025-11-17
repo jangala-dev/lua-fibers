@@ -138,14 +138,14 @@ local function wait_fiber_error()
     -- Otherwise, we must be in a fibre and suspend until an error arrives.
     assert(_current_fiber, "wait_fiber_error must be called from within a fiber")
 
-    local function block_fn(sched, fib)
+    local function block_fn(_, fib)
         -- Record this fibre as waiting for an error. When an error
         -- arrives, the failing fibre will arrange to schedule a task
         -- that resumes this fibre with (fiber, err).
         error_waiters[#error_waiters + 1] = { fiber = fib }
     end
 
-    local wrap, err_fiber, err = _current_fiber:suspend(block_fn)
+    local _, err_fiber, err = _current_fiber:suspend(block_fn)
     -- wrap should be the identity function; ignore it.
     return err_fiber, err
 end

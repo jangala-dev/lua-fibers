@@ -29,8 +29,10 @@ end
 
 local performResume, handleReturnValue
 local oldpcall, oldxpcall = pcall, xpcall
-local pack   = table.pack   or function(...) return { n = select("#", ...), ... } end
-local unpack = table.unpack or unpack
+local unpack = rawget(table, "unpack") or _G.unpack
+local pack   = rawget(table, "pack") or function(...)
+    return { n = select("#", ...), ... }
+end
 local running = coroutine.running
 local coromap = setmetatable({}, { __mode = "k" })
 
@@ -49,7 +51,7 @@ function performResume(err, co, ...)
     return handleReturnValue(err, co, coroutine.resume(co, ...))
 end
 
-local function id(trace, ...)
+local function id(trace)
     return trace
 end
 

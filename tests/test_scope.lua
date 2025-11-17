@@ -195,9 +195,9 @@ local function test_run_success_and_failure()
     assert(success_scope:parent() == root, "success scope parent should be root")
 
     -- Failure case: body error becomes scope failure; scope.run does not throw.
-    local fail_scope
-    local st_fail, err_fail = scope.run(function(s)
-        fail_scope = s
+    -- local fail_scope
+    local st_fail, err_fail = scope.run(function()
+        -- fail_scope = s
         error("body failure")
     end)
 
@@ -376,7 +376,7 @@ end
 -------------------------------------------------------------------------------
 
 local function test_fail_fast_from_child_fibre()
-    local root = scope.root()
+    -- local root = scope.root()
     local test_scope
 
     local st, serr = scope.run(function(s)
