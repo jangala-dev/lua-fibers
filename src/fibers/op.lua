@@ -19,6 +19,7 @@
 --   surrounding scope / fibre machinery.
 
 local runtime  = require 'fibers.runtime'
+local safe  = require 'coxpcall'
 
 local unpack = rawget(table, "unpack") or _G.unpack
 local pack   = rawget(table, "pack") or function(...)
@@ -236,7 +237,7 @@ local function new_cond(opts)
         end
 
         if state.abort_fn then
-            pcall(state.abort_fn)
+            safe.pcall(state.abort_fn)
         end
     end
 

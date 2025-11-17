@@ -41,10 +41,9 @@ local runtime   = require 'fibers.runtime'
 local op        = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
 
+local safe = require 'coxpcall'
+
 local unpack = rawget(table, "unpack") or _G.unpack
-local pack   = rawget(table, "pack") or function(...)
-    return { n = select("#", ...), ... }
-end
 
 local Scope = {}
 Scope.__index = Scope
@@ -140,27 +139,6 @@ local function current()
     return global_scope or root()
 end
 
---- Internal helper: run fn(scope, ...) with 'scope' as current in this context.
--- Returns the raw multiple values from fn.
-local function with_scope(scope_obj, fn, ...)
-    local fib = current_fiber()
-    if fib then
-        local prev = fiber_scopes[fib]
-        fiber_scopes[fib] = scope_obj
-
-        local res = { fn(scope_obj, ...) }
-        fiber_scopes[fib] = prev
-        return unpack(res)
-    else
-        local prev = global_scope or root()
-        global_scope = scope_obj
-
-        local res = { fn(scope_obj, ...) }
-        global_scope = prev
-        return unpack(res)
-    end
-end
-
 ----------------------------------------------------------------------
 -- Scope methods: lifecycle and failure
 ----------------------------------------------------------------------
@@ -226,6 +204,7 @@ end
 --     and this scope's status becomes "failed" with cancellation
 --     propagated to children.
 function Scope:spawn(fn, ...)
+    assert(self._status == "running", "cannot spawn on a non-running scope")
     local args = { ... }
     self._wg:add(1)
 
@@ -295,10 +274,14 @@ function Scope:_start_join_worker()
     if self._join_worker_started then return end
     self._join_worker_started = true
 
-    -- System fibre: not attached to this scope, so its operation is
-    -- not affected by this scope's cancellation. It runs under the
-    -- root scope's cancellation policy.
     runtime.spawn(function()
+        -- Attach this worker to the scope
+        local fib = current_fiber()
+        local prev = fib and fiber_scopes[fib]
+        if fib then
+            fiber_scopes[fib] = self
+        end
+
         -- Wait for child fibres of this scope to complete.
         op.perform_raw(self._wg:wait_op())
 
@@ -308,12 +291,28 @@ function Scope:_start_join_worker()
             self._error  = nil
         end
 
-        -- Run defers in LIFO order.
+        -- Run defers in LIFO order, protected.
         local defers = self._defers
         for i = #defers, 1, -1 do
             local f = defers[i]
             defers[i] = nil
-            f(self)
+
+            local ok, err = safe.pcall(f, self)
+            if not ok then
+                -- Treat defer failures as scope failures, but do not crash process.
+                if self._status == "ok" then
+                    self._status = "failed"
+                    self._error  = self._error or err
+                else
+                    local failures = self._failures
+                    failures[#failures + 1] = err
+                end
+            end
+        end
+
+        -- Restore previous scope mapping for this fibre
+        if fib then
+            fiber_scopes[fib] = prev
         end
 
         -- Signal join completion.
