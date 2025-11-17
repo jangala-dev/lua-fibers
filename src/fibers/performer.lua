@@ -20,7 +20,15 @@ local function current_scope()
     return scope_mod.current and scope_mod.current() or nil
 end
 
+local function assert_event(ev)
+    if type(ev) ~= "table" or getmetatable(ev) ~= op.Event then
+        error(("perform: expected Event, got %s (%s)"):format(type(ev), tostring(ev)), 3)
+    end
+end
+
 function M.perform(ev)
+    assert_event(ev)
+
     local s = current_scope()
     if s and s.sync then
         return s:sync(ev)
