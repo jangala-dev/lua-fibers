@@ -25,13 +25,13 @@ local function new(buffer_size)
 end
 
 ----------------------------------------------------------------------
--- Helpers: pop active entries (skip cancelled ones)
+-- Helpers: pop active entries based on suspension state
 ----------------------------------------------------------------------
 
 local function pop_active(q)
     while not q:empty() do
         local entry = q:pop()
-        if not entry.cancelled then
+        if not entry.suspension or entry.suspension:waiting() then
             return entry
         end
     end
@@ -49,7 +49,6 @@ function Channel:put_op(val)
     -- Per-operation state for this event instance.
     local entry = {
         val        = val,
-        cancelled  = false,
         suspension = nil,
         wrap       = nil,
     }
@@ -73,16 +72,10 @@ function Channel:put_op(val)
     local function block(suspension, wrap_fn)
         entry.suspension = suspension
         entry.wrap       = wrap_fn
-        entry.cancelled  = false
         putq:push(entry)
     end
 
-    local prim = op.new_primitive(nil, try, block)
-
-    -- Mark this entry as cancelled if this put loses in a choice / is aborted.
-    return prim:on_abort(function()
-        entry.cancelled = true
-    end)
+    return op.new_primitive(nil, try, block)
 end
 
 ----------------------------------------------------------------------
@@ -94,7 +87,6 @@ function Channel:get_op()
     local buffer     = self.buffer
 
     local entry = {
-        cancelled  = false,
         suspension = nil,
         wrap       = nil,
     }
@@ -131,15 +123,10 @@ function Channel:get_op()
     local function block(suspension, wrap_fn)
         entry.suspension = suspension
         entry.wrap       = wrap_fn
-        entry.cancelled  = false
         getq:push(entry)
     end
 
-    local prim = op.new_primitive(nil, try, block)
-
-    return prim:on_abort(function()
-        entry.cancelled = true
-    end)
+    return op.new_primitive(nil, try, block)
 end
 
 ----------------------------------------------------------------------
