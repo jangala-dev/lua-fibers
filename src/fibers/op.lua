@@ -457,39 +457,6 @@ perform = function(ev)
 end
 
 ----------------------------------------------------------------------
--- finally : (ev, cleanup) -> ev'
---
--- cleanup(aborted:boolean)
---
--- Semantics:
---   * on normal post-sync completion:
---       cleanup(false) is called (best-effort, protected).
---   * if the event *loses* in a choice (via on_abort):
---       cleanup(true) is called (best-effort, protected).
---
--- Exceptions from ev's wrap or primitives are not intercepted here;
--- they are handled by the surrounding scope as fibre failures.
-----------------------------------------------------------------------
-
-function Event:finally(cleanup)
-    assert(type(cleanup) == "function", "finally expects a function")
-
-    -- Success path: only runs if this event wins and completes its wraps
-    -- without raising.
-    local function success_wrap(...)
-        cleanup(false)
-        return ...
-    end
-
-    -- Abort path: runs if this event participates in a choice and loses.
-    local function abort_action()
-        cleanup(true)
-    end
-
-    return self:wrap(success_wrap):on_abort(abort_action)
-end
-
-----------------------------------------------------------------------
 -- bracket : (acquire, release, use) -> 'a event
 --
 -- acquire()          : -> resource
@@ -531,6 +498,31 @@ local function bracket(acquire, release, use)
             release(res, true)
         end)
     end)
+end
+
+----------------------------------------------------------------------
+-- finally : (ev, cleanup) -> ev'
+--
+-- cleanup(aborted:boolean)
+--
+-- Semantics:
+--   * on normal post-sync completion:
+--       cleanup(false) is called (best-effort, protected).
+--   * if the event *loses* in a choice (via on_abort):
+--       cleanup(true) is called (best-effort, protected).
+--
+-- Exceptions from ev's wrap or primitives are not intercepted here;
+-- they are handled by the surrounding scope as fibre failures.
+----------------------------------------------------------------------
+
+function Event:finally(cleanup)
+    assert(type(cleanup) == "function", "finally expects a function")
+
+    return bracket(
+        function() return nil end,  -- no real resource
+        function(_, aborted) cleanup(aborted) end, -- release
+        function() return self end -- use: just this event
+    )
 end
 
 ----------------------------------------------------------------------
