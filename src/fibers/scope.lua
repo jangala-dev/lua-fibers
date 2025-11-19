@@ -40,6 +40,7 @@
 local runtime   = require 'fibers.runtime'
 local op        = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
+local cond         = require 'fibers.cond'
 
 local safe = require 'coxpcall'
 
@@ -80,9 +81,9 @@ local function new_scope(parent)
         _wg      = waitgroup.new(),  -- waitgroup for child fibres
         _defers  = {},               -- LIFO list of deferred handlers
 
-        -- Cancellation and join conditions
-        _cancel_cond = op.new_cond(), -- signalled on cancel/failure
-        _join_cond   = op.new_cond(), -- signalled when scope is closed
+        -- Cancellation and join conditions (generic conds)
+        _cancel_cond         = cond.new(), -- signalled on cancel/failure
+        _join_cond           = cond.new(), -- signalled when scope is closed
 
         -- Join worker flag
         _join_worker_started = false,
@@ -183,7 +184,7 @@ function Scope:cancel(reason)
     end
 
     -- Signal cancellation to any waiters.
-    self._cancel_cond.signal()
+    self._cancel_cond:signal()
 
     -- Propagate to children.
     local children = self._children
@@ -316,7 +317,7 @@ function Scope:_start_join_worker()
         end
 
         -- Signal join completion.
-        self._join_cond.signal()
+        self._join_cond:signal()
     end)
 end
 
@@ -324,7 +325,7 @@ end
 -- Returns (status, error) when synchronised.
 function Scope:join_ev()
     self:_start_join_worker()
-    local ev = self._join_cond.wait_op()
+    local ev = self._join_cond:wait_op()
     return ev:wrap(function()
         return self._status, self._error
     end)
@@ -333,7 +334,7 @@ end
 --- Event that fires when the scope is cancelled or fails.
 -- Returns the cancellation/failure reason when synchronised.
 function Scope:done_ev()
-    local ev = self._cancel_cond.wait_op()
+    local ev = self._cancel_cond:wait_op()
     return ev:wrap(function()
         return self._error or "scope cancelled"
     end)
@@ -347,7 +348,7 @@ end
 -- Convention for cancellable events:
 --   ok:boolean, value1_or_reason, value2
 local function cancel_event(self)
-    local ev = self._cancel_cond.wait_op()
+    local ev = self._cancel_cond:wait_op()
     return ev:wrap(function()
         return false, self._error or "scope cancelled", nil
     end)

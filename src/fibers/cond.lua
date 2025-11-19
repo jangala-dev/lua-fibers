@@ -1,38 +1,40 @@
---- fibers.cond module.
--- Thin wrapper around the core condition primitive in fibers.op.
--- A Cond is a one-shot, signal-all rendezvous: once signalled,
--- all current and future waiters complete.
--- @module fibers.cond
+-- fibers/cond.lua
+---
+-- Generic condition events built on top of signaller and op.
+--
+-- A cond has:
+--   cond.wait_op() -> Event
+--   cond.signal()  -- idempotent
 
-local op = require 'fibers.op'
-
-local perform = require 'fibers.performer'.perform
+local op        = require 'fibers.op'
+local signaller = require 'fibers.signaller'
+local perform   = require 'fibers.performer'.perform
 
 local Cond = {}
 Cond.__index = Cond
 
---- Create a new condition variable.
--- @treturn Cond The new condition variable.
-local function new()
-    -- op.new_cond() returns a table with wait_op() and signal().
-    local prim = op.new_cond()
-    return setmetatable(prim, Cond)
+function Cond:wait_op()
+    return op.new_primitive(
+        nil,
+        function() return self.sig.triggered end,
+        function(resumer, wrap_fn) self.sig:add_waiter(resumer, wrap_fn) end
+    )
 end
 
---- Operation that waits on the condition.
--- This is provided by op.new_cond() as prim.wait_op.
--- @treturn operation The created operation.
--- function Cond:wait_op() ... end  -- inherited from prim
-
---- Put the fiber into a wait state on the condition variable.
 function Cond:wait()
     return perform(self:wait_op())
 end
 
---- Wake up all fibers that are waiting on this condition variable.
--- This is provided by op.new_cond() as prim.signal().
--- function Cond:signal() ... end  -- inherited from prim
+function Cond:signal()
+    return self.sig:signal()
+end
+
+local function new()
+    return setmetatable({
+        sig = signaller.new(),
+    }, Cond)
+end
 
 return {
-    new = new
+    new = new,
 }

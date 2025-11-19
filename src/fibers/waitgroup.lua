@@ -1,6 +1,7 @@
 -- fibers/waitgroup.lua
-local op      = require 'fibers.op'
-local perform = require 'fibers.performer'.perform
+local op          = require 'fibers.op'
+local perform     = require 'fibers.performer'.perform
+local cond_mod    = require 'fibers.cond'
 
 local Waitgroup = {}
 Waitgroup.__index = Waitgroup
@@ -17,25 +18,24 @@ function Waitgroup:add(delta)
         return
     end
 
-    local old_waiters = self._counter
-    local new_waiters = old_waiters + delta
+    local old = self._counter
+    local new = old + delta
 
-    if new_waiters < 0 then
+    if new < 0 then
         error("waitgroup counter goes negative")
     end
 
-    self._counter = new_waiters
+    self._counter = new
 
-    if new_waiters == 0 then
-        -- This generation completes: wake any waiters.
+    if new == 0 then
+        -- This generation completes: wake any waiters and drop the cond.
         if self._cond then
-            self._cond.signal()
+            self._cond:signal()
+            self._cond = nil
         end
-        -- _cond remains a triggered cond for this generation; a new
-        -- generation will allocate a fresh cond when counter rises from 0.
-    elseif old_waiters == 0 and new_waiters > 0 then
+    elseif old == 0 and new > 0 then
         -- Starting a new generation: new condition for new work.
-        self._cond = op.new_cond()
+        self._cond = cond_mod.new()
     end
 end
 
@@ -44,28 +44,18 @@ function Waitgroup:done()
 end
 
 function Waitgroup:wait_op()
-    local function try()
-        return self._counter == 0
-    end
-
-    local function block(suspension, wrap_fn)
-        -- Re-check after try(): counter may have become zero meanwhile.
+    -- Build the event lazily at sync time.
+    return op.guard(function()
+        -- If there is nothing outstanding, fire immediately.
         if self._counter == 0 then
-            suspension:complete(wrap_fn)
-            return
+            return op.always()
         end
 
-        -- At this point we are in an active generation.
-        local cond = self._cond
-        if not cond then
-            error("waitgroup internal error: missing condition for active generation")
-        end
+        -- Active generation: delegate to the generation's condition.
+        local cond = assert(self._cond, "waitgroup internal error: missing condition for active generation")
 
-        local cond_op = cond.wait_op()
-        cond_op.block_fn(suspension, wrap_fn)
-    end
-
-    return op.new_primitive(nil, try, block)
+        return cond:wait_op()
+    end)
 end
 
 function Waitgroup:wait()
