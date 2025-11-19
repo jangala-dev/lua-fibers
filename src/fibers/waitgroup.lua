@@ -18,22 +18,22 @@ function Waitgroup:add(delta)
         return
     end
 
-    local old = self._counter
-    local new = old + delta
+    local old_count = self._counter
+    local new_count = old_count + delta
 
-    if new < 0 then
+    if new_count < 0 then
         error("waitgroup counter goes negative")
     end
 
-    self._counter = new
+    self._counter = new_count
 
-    if new == 0 then
+    if new_count == 0 then
         -- This generation completes: wake any waiters and drop the cond.
         if self._cond then
             self._cond:signal()
             self._cond = nil
         end
-    elseif old == 0 and new > 0 then
+    elseif old_count == 0 and new_count > 0 then
         -- Starting a new generation: new condition for new work.
         self._cond = cond_mod.new()
     end
