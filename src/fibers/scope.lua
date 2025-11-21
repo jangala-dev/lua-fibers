@@ -146,14 +146,12 @@ end
 
 --- Internal: record a failure in this scope and cancel children.
 function Scope:_record_failure(err)
-    if self._status == "running" or self._status == "cancelled" then
+    if self._status == "running" then
         self._status = "failed"
-        if self._error == nil then
-            self._error = err
-        end
-        -- Fail-fast: cancel this scope and descendants.
+        self._error  = self._error or err
         self:cancel(self._error)
     else
+        -- already "cancelled" or "failed": just record it
         local failures = self._failures
         failures[#failures + 1] = err
     end
@@ -208,6 +206,16 @@ function Scope:spawn(fn, ...)
     assert(self._status == "running", "cannot spawn on a non-running scope")
     local args = { ... }
     self._wg:add(1)
+
+    -- Note:
+    --   * On normal completion of fn, this wrapper calls _wg:done().
+    --   * If fn raises and the fibre aborts, this wrapper is not run.
+    --     In that case the supervisor fibre installed in scope.root()
+    --     observes the failure via runtime.wait_fiber_error() and calls
+    --     _wg:done() on this scope on the failing fibre's behalf.
+    --   * Do not call _wg:done() from fn or from other error paths:
+    --     every child fibre must account for exactly one decrement,
+    --     either here or via the supervisor, but never both.
 
     runtime.spawn(function()
         local fib  = current_fiber()
