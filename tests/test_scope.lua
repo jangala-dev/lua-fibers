@@ -8,6 +8,7 @@ local runtime   = require "fibers.runtime"
 local scope     = require "fibers.scope"
 local op        = require "fibers.op"
 local performer = require "fibers.performer"
+local cond_mod  = require "fibers.cond"
 
 -------------------------------------------------------------------------------
 -- 1. Structural tests
@@ -81,7 +82,7 @@ local function test_inside_fibers()
     local grandchild_in_fiber
 
     -- Use a cond to wait for the spawned fibre to finish.
-    local done = op.new_cond()
+    local done = cond_mod.new()
 
     -- Spawn a fibre anchored to the root scope.
     root:spawn(function(s)
@@ -115,11 +116,11 @@ local function test_inside_fibers()
         -- After inner run, current() should be back to root for this fibre
         assert(scope.current() == root, "after scope.run in fibre, current() should be root again")
 
-        done.signal()
+        done:signal()
     end)
 
     -- Drive until the child fibre finishes.
-    performer.perform(done.wait_op())
+    performer.perform(done:wait_op())
 
     -- After that, we are still inside the test fibre; current() should be root.
     assert(scope.current() == root, "after inner fibre completes, current() should be root in test fibre")
@@ -383,17 +384,17 @@ local function test_fail_fast_from_child_fibre()
         test_scope = s
 
         -- Use a condition to ensure the child fibre runs before we exit the body.
-        local cond = op.new_cond()
+        local cond = cond_mod.new()
 
         -- Spawn a child fibre that signals, then fails.
         s:spawn(function(_)
-            cond.signal()
+            cond:signal()
             error("child fibre failure")
         end)
 
         -- Wait for the cond via performer, so we do not exit
         -- the body until after the child has signalled.
-        performer.perform(cond.wait_op())
+        performer.perform(cond:wait_op())
     end)
 
     assert(st == "failed", "scope.run should report failed when a child fibre fails")

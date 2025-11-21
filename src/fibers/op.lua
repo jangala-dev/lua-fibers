@@ -578,7 +578,6 @@ return {
     choice         = choice,
     guard          = guard,
     with_nack      = with_nack,
-    new_cond       = new_cond,
     bracket        = bracket,
     always         = always,
     never          = never,
