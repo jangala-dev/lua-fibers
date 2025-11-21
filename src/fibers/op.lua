@@ -465,15 +465,18 @@ end
 --
 -- Semantics:
 --   * acquire is run once, at sync time (inside a guard).
+--   * use(res) must return an Event; it is not performed here.
 --   * if the resulting event `ev` WINS:
 --       - its result is returned
---       - release(res, false) is called (best-effort, pcall)
+--       - release(res, false) is called exactly once
 --   * if the resulting event PARTICIPATES in a choice but LOSES:
---       - release(res, true) is called (via on_abort / nack machinery)
+--       - release(res, true) is called exactly once, via on_abort
 --
--- This combinator does not interpret Lua errors from acquire/use as
--- normal control flow. Any uncaught error there fails the running
--- fibre and is recorded at the scope level.
+-- Error handling:
+--   * Errors raised by acquire, use, or release propagate as normal
+--     Lua errors from the performing fibre.
+--   * This combinator does not interpret or catch such errors; they
+--     are handled by the surrounding scope / supervision machinery.
 ----------------------------------------------------------------------
 
 local function bracket(acquire, release, use)
@@ -506,13 +509,16 @@ end
 -- cleanup(aborted:boolean)
 --
 -- Semantics:
---   * on normal post-sync completion:
---       cleanup(false) is called (best-effort, protected).
---   * if the event *loses* in a choice (via on_abort):
---       cleanup(true) is called (best-effort, protected).
+--   * On normal post-sync completion (this event wins):
+--       cleanup(false) is called once.
+--   * If the event participates in a choice but LOSES (via on_abort):
+--       cleanup(true) is called once.
 --
--- Exceptions from ev's wrap or primitives are not intercepted here;
--- they are handled by the surrounding scope as fibre failures.
+-- This is expressed in terms of bracket, with no additional policy:
+--   * cleanup is run in the performing fibre.
+--   * Errors raised by cleanup propagate as normal Lua errors and
+--     are not intercepted here; they are handled by the surrounding
+--     scope / supervision machinery.
 ----------------------------------------------------------------------
 
 function Event:finally(cleanup)
