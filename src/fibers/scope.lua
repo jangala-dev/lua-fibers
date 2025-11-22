@@ -59,6 +59,24 @@ local fiber_scopes = setmetatable({}, { __mode = "k" })
 local root_scope
 local global_scope
 
+-- Handler for uncaught errors from fibres not associated with any Scope.
+-- Default policy: treat them as failures of the root scope.
+local function default_unscoped_error_handler(fib, err)
+    if root_scope then
+        root_scope:_record_failure(err)
+    else
+        -- Root not yet initialised: conservative fallback is to log.
+        io.stderr:write("Unscoped fibre error before root initialised: " .. tostring(err) .. "\n")
+    end
+end
+
+local unscoped_error_handler = default_unscoped_error_handler
+
+local function set_unscoped_error_handler(handler)
+    assert(type(handler) == "function", "unscoped error handler must be a function")
+    unscoped_error_handler = handler
+end
+
 ----------------------------------------------------------------------
 -- Internal helpers
 ----------------------------------------------------------------------
@@ -117,9 +135,8 @@ local function root()
                     -- ensure the scope's waitgroup is decremented for this fibre
                     s._wg:done()
                 else
-                    -- Unscoped fibre failure: treat as fatal for now.
-                    print("Unscoped fibre error: " .. tostring(err))
-                    os.exit(255)
+                    -- Delegate unscoped fibre failures to the handler.
+                    unscoped_error_handler(fib, err)
                 end
             end
         end)
@@ -532,9 +549,10 @@ end
 ----------------------------------------------------------------------
 
 return {
-    root     = root,
-    current  = current,
-    run      = run,
-    with_ev  = with_ev,
-    Scope    = Scope,
+    root                       = root,
+    current                    = current,
+    run                        = run,
+    with_ev                    = with_ev,
+    Scope                      = Scope,
+    set_unscoped_error_handler = set_unscoped_error_handler,
 }
