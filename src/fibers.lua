@@ -1,71 +1,109 @@
--- fibers.lua
 ---
 -- Top-level facade for the fibers library.
+--
 -- Provides a small, convenient surface over the lower-level modules:
---   - runtime (scheduler and fibers),
---   - op (CML engine),
---   - scope (structured concurrency),
+--   - runtime    (scheduler and fibers),
+--   - op         (CML engine),
+--   - scope      (structured concurrency),
 --   - primitives (sleep, channel, etc.).
 --
--- At this stage, scopes carry no policies; they simply form a tree
--- and track the current scope per fiber.
+-- Scopes currently carry no policies; they form a tree and track the
+-- current scope per fiber.
 --
 -- @module fibers
 
-local runtime   = require 'fibers.runtime'
-local scope_mod = require 'fibers.scope'
-local performer = require 'fibers.performer'
-
-local sleep_mod = require 'fibers.sleep'
-local channel   = require 'fibers.channel'
-local op        = require 'fibers.op'
+local Runtime   = require 'fibers.runtime'
+local Scope = require 'fibers.scope'
+local Performer = require 'fibers.performer'
 
 local unpack = rawget(table, "unpack") or _G.unpack
+local pack   = rawget(table, "pack")   or function(...)
+    return { n = select("#", ...), ... }
+end
 
 local fibers = {}
 
--- Perform an event under the current scope.
-fibers.perform = performer.perform
+----------------------------------------------------------------------
+-- Core entry points
+----------------------------------------------------------------------
 
-fibers.now = runtime.now
+--- Perform an event under the current scope (if any).
+-- Delegates to the scope-aware performer.
+fibers.perform = Performer.perform
+
+--- Monotonic time source from the underlying scheduler.
+fibers.now = Runtime.now
 
 --- Run a main function under the scheduler's root scope.
---   main_fn :: function(Scope, ...): ...
+--
+--   main_fn :: function(Scope, ...): ...results...
+--
+-- Behaviour:
+--   * A process-wide root scope is created on first use.
+--   * A child scope of that root is created via scope.run.
+--   * main_fn is run in its own fibre under that child scope.
+--   * All fibres spawned under that child are tracked.
+--   * When the child scope has closed (ok/failed/cancelled, defers run),
+--     this function returns:
+--         status, err, ...results_from_main_fn...
+--
+--   status :: "ok" | "failed" | "cancelled"
+--   err    :: primary error / cancellation reason, or nil on "ok".
+--
+-- This function does not exit the process. It stops the scheduler and
+-- hands the status and error back to the caller.
 function fibers.run(main_fn, ...)
-    local root = scope_mod.root()
+    local root = Scope.root()
     local args = { ... }
 
-    -- Run main_fn inside a child scope of the root, in its own fibre.
+    local status, err
+    local results      -- may be nil or a packed table
+
     root:spawn(function()
-        local status, err = scope_mod.run(main_fn, unpack(args))
-        -- In all cases, stop the scheduler so runtime.main() returns.
-        runtime.stop()
-        -- Treat non-ok main scope as fatal for the process.
-        if status ~= "ok" then
-            print(err)
-            os.exit(255)
+        -- scope.run creates a child scope of the current scope,
+        -- runs main_fn(body_scope, ...) in its own fibre, and returns
+        -- (status, err, ...results_from_body_fn...).
+        local packed = pack(Scope.run(main_fn, unpack(args)))
+        status, err  = packed[1], packed[2]
+
+        if packed.n > 2 then
+            -- Preserve any results from main_fn, including nils.
+            local out = { n = packed.n - 2 }
+            local j   = 1
+            for i = 3, packed.n do
+                out[j] = packed[i]
+                j = j + 1
+            end
+            results = out
+        else
+            results = nil
         end
+
+        -- In all cases, stop the scheduler so runtime.main() returns.
+        Runtime.stop()
     end)
 
-    runtime.main()
+    -- Drive the scheduler until stopped by the main scope.
+    Runtime.main()
+
+    if results then
+        return status, err, unpack(results, 1, results.n or #results)
+    else
+        return status, err
+    end
 end
 
---- Spawn a fiber under the current scope.
+----------------------------------------------------------------------
+-- Spawn
+----------------------------------------------------------------------
+
+--- Spawn a fibre under the current scope.
+--
+--   fn  :: function(Scope, ...): ()
+--   ... :: arguments passed to fn
 function fibers.spawn(fn, ...)
-    local s = scope_mod.current()
+    local s = Scope.current()
     return s:spawn(fn, ...)
 end
-
-fibers.sleep   = sleep_mod.sleep
-fibers.channel = channel.new
-
-fibers.scope = scope_mod
-fibers.op    = op
-
-fibers.choice    = op.choice
-fibers.guard     = op.guard
-fibers.with_nack = op.with_nack
-fibers.always    = op.always
-fibers.never     = op.never
 
 return fibers

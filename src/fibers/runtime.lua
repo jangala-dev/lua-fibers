@@ -117,6 +117,7 @@ end
 -- The fiber will be resumed when the scheduler is ready to run it again.
 -- @function yield
 local function yield()
+    assert(current_fiber(), "can only yield from inside a fiber")
     return suspend(function(scheduler, fiber)
         scheduler:schedule(fiber)
     end)

@@ -69,29 +69,28 @@ end
 local function new_scope(parent)
     local s = setmetatable({
         _parent    = parent,
-        _children  = {},
+        _children  = setmetatable({}, { __mode = "k" }),  -- weak keys
 
         -- Status and failure tracking
-        _status      = "running",    -- "running" | "ok" | "failed" | "cancelled"
-        _error       = nil,          -- primary error / cancellation cause
-        _failures    = {},           -- additional failures
-        failure_mode = "fail_fast",  -- placeholder for future policies
+        _status      = "running",
+        _error       = nil,
+        _failures    = {},
+        failure_mode = "fail_fast",
 
         -- Concurrency tracking
-        _wg      = waitgroup.new(),  -- waitgroup for child fibres
-        _defers  = {},               -- LIFO list of deferred handlers
+        _wg      = waitgroup.new(),
+        _defers  = {},
 
-        -- Cancellation and join conditions (generic conds)
-        _cancel_cond         = cond.new(), -- signalled on cancel/failure
-        _join_cond           = cond.new(), -- signalled when scope is closed
+        -- Cancellation and join conditions
+        _cancel_cond         = cond.new(),
+        _join_cond           = cond.new(),
 
-        -- Join worker flag
         _join_worker_started = false,
     }, Scope)
 
     if parent then
-        local children = parent._children
-        children[#children + 1] = s
+        -- store child as a weak key
+        parent._children[s] = true
     end
 
     return s
@@ -108,10 +107,6 @@ local function root()
         runtime.spawn(function()
             while true do
                 local fib, err = runtime.wait_fiber_error()
-                if not fib then
-                    -- If runtime chooses to return nil, terminate.
-                    break
-                end
                 local s = fiber_scopes[fib]
                 if s then
                     -- mark failure + cancel children
@@ -149,7 +144,8 @@ function Scope:_record_failure(err)
     if self._status == "running" then
         self._status = "failed"
         self._error  = self._error or err
-        self:cancel(self._error)
+        -- Failure implies cancellation of children and done_ev.
+        self:_propagate_cancel(self._error)
     else
         -- already "cancelled" or "failed": just record it
         local failures = self._failures
@@ -169,29 +165,40 @@ function Scope:defer(handler)
     defers[#defers + 1] = handler
 end
 
+function Scope:_propagate_cancel(reason)
+    local r = reason or self._error or "scope cancelled"
+
+    -- Wake done_ev waiters.
+    self._cancel_cond:signal()
+
+    -- Propagate to children (weak-key set).
+    local children = self._children
+    for child in pairs(children) do
+        if child then
+            child:cancel(r)
+        end
+    end
+end
+
 --- Cancel this scope and its children with an optional reason.
 -- Idempotent: multiple calls are safe.
 function Scope:cancel(reason)
+    -- Once a scope is "ok", it is terminal: ignore or assert.
+    assert(self._status ~= "ok", "cannot cancel a scope that has already completed ok")
+
     local r = reason or self._error or "scope cancelled"
 
-    if self._status == "running" or self._status == "ok" then
+    if self._status == "running" then
         self._status = "cancelled"
         if self._error == nil then
             self._error = r
         end
+        -- Only now do we notify others.
+        self:_propagate_cancel(r)
     end
 
-    -- Signal cancellation to any waiters.
-    self._cancel_cond:signal()
-
-    -- Propagate to children.
-    local children = self._children
-    for i = 1, #children do
-        local c = children[i]
-        if c then
-            c:cancel(r)
-        end
-    end
+    -- For "failed" or already "cancelled" scopes we do nothing here.
+    -- Their propagation is handled by _record_failure or the first cancel.
 end
 
 --- Spawn a child fibre attached to this scope.
@@ -247,8 +254,10 @@ end
 function Scope:children()
     local out = {}
     local ch  = self._children or {}
-    for i, child in ipairs(ch) do
+    local i   = 1
+    for child in pairs(ch) do
         out[i] = child
+        i = i + 1
     end
     return out
 end
@@ -461,6 +470,7 @@ end
 -- On failure or cancellation, no Lua error is thrown here; callers
 -- should branch on status.
 local function run(body_fn, ...)
+    assert(runtime.current_fiber(), "scope.run must be called from inside a fiber")
     local parent = current()
     local child  = new_scope(parent)
     local args   = { ... }
