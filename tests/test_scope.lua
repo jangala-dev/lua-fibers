@@ -166,9 +166,150 @@ local function test_with_ev_basic()
     local a, b = performer.perform(ev)
     assert(a == 99 and b == "ok", "with_ev should propagate child event results")
 
+    -- After perform, current() should be restored to the parent.
+    assert(scope.current() == parent,
+           "after with_ev perform, current() should be restored to parent scope")
+
     assert(child_scope ~= nil, "with_ev should have created a child scope")
     local st, err = child_scope:status()
     assert(st == "ok" and err == nil, "with_ev child scope should end ok on success")
+end
+
+-- Failure in the with_ev builder should be confined to the with_ev child scope.
+local function test_with_ev_failure_confined_to_child()
+    local outer_scope
+    local child_scope
+
+    local st, serr = scope.run(function(s)
+        outer_scope = s
+
+        local ev = scope.with_ev(function(child)
+            child_scope = child
+            assert(scope.current() == child,
+                   "inside failing with_ev, current() should be child scope")
+            assert(child:parent() == s,
+                   "with_ev child parent should be the surrounding scope.run scope")
+
+            error("with_ev builder failure")
+        end)
+
+        -- The error above is caught by the Scope:spawn wrapper for this body fibre.
+        performer.perform(ev)
+
+        -- Not reached.
+    end)
+
+    -- The outer scope remains ok; the failure is local to the with_ev child.
+    assert(st == "ok" and serr == nil,
+           "outer scope.run should still succeed when with_ev child fails")
+
+    assert(outer_scope ~= nil, "outer_scope should have been set")
+    assert(child_scope ~= nil, "with_ev failure test should have created child scope")
+
+    local cst, cerr = child_scope:status()
+    assert(cst == "failed", "with_ev child should be failed after builder error")
+    assert(tostring(cerr):find("with_ev builder failure", 1, true),
+           "with_ev child error should mention builder failure")
+end
+
+-- with_ev used in a choice where it loses should lead to a cancelled child scope.
+local function test_with_ev_abort_on_choice()
+    local outer_scope
+    local child_scope
+
+    local st, serr, winner = scope.run(function(s)
+        outer_scope = s
+
+        local ev_with = scope.with_ev(function(child)
+            child_scope = child
+            assert(scope.current() == child,
+                   "inside with_ev arm of choice, current() should be child scope")
+            assert(child:parent() == s,
+                   "with_ev child parent in choice should be outer scope")
+
+            -- This arm never becomes ready; it will lose the choice.
+            return op.never()
+        end)
+
+        local ev_choice = op.choice(ev_with, op.always("right"))
+        local res = performer.perform(ev_choice)
+        assert(res == "right", "choice should pick the always('right') arm")
+
+        -- After the choice, current() should be restored.
+        assert(scope.current() == s,
+               "after with_ev choice, current() should be restored to outer scope")
+
+        return res
+    end)
+
+    assert(st == "ok" and serr == nil,
+           "outer scope.run should succeed when with_ev arm loses a choice")
+    assert(winner == "right",
+           "outer scope.run should return the winning choice result")
+
+    assert(outer_scope ~= nil, "outer_scope should have been set")
+    assert(child_scope ~= nil, "with_ev choice test should have created child scope")
+
+    local cst, cerr = child_scope:status()
+    assert(cst == "cancelled",
+           "with_ev child should be cancelled when its event loses a choice")
+    assert(cerr == "scope aborted",
+           "with_ev aborted child error should be 'scope aborted'")
+end
+
+-- Failure in a fibre spawned under a with_ev child scope should fail that child,
+-- but not its outer scope.
+local function test_with_ev_child_fibre_failure()
+    local outer_scope
+    local child_scope
+
+    local st, serr = scope.run(function(s)
+        outer_scope = s
+
+        local ev = scope.with_ev(function(child)
+            child_scope = child
+            assert(child:parent() == s,
+                   "with_ev child parent should be outer scope in child-fibre test")
+
+            -- A condition used only to keep one child fibre blocked.
+            local c = cond_mod.new()
+
+            -- Failing child fibre under the with_ev scope.
+            child:spawn(function(_)
+                error("with_ev child fibre failure")
+            end)
+
+            -- Another child fibre that blocks on a cond and is cancelled
+            -- via the with_ev scope's cancellation.
+            child:spawn(function(_)
+                local ok2, reason2 = performer.perform(c:wait_op())
+                -- Under failure, this fibre should see a cancellation result.
+                assert(ok2 == false, "blocked child fibre should observe cancellation ok=false")
+                assert(reason2 ~= nil, "blocked child fibre should receive a cancellation reason")
+            end)
+
+            -- The main event for with_ev completes successfully.
+            return op.always("ok")
+        end)
+
+        local res = performer.perform(ev)
+        assert(res == "ok", "with_ev main event should still return its result")
+
+        -- At this point, with_ev's release will have waited for the child scope
+        -- to close, including both spawned child fibres and defers.
+    end)
+
+    assert(st == "ok" and serr == nil,
+           "outer scope.run should remain ok after with_ev child-fibre failure")
+
+    assert(outer_scope ~= nil, "outer_scope should have been set")
+    assert(child_scope ~= nil, "with_ev child-fibre test should have created child scope")
+
+    local cst, cerr = child_scope:status()
+    assert(cst == "failed",
+           "with_ev child scope should be failed after a child fibre failure")
+    assert(tostring(cerr):find("with_ev child fibre failure", 1, true),
+           "with_ev child scope error should mention the child fibre failure")
 end
 
 -------------------------------------------------------------------------------
@@ -196,9 +337,7 @@ local function test_run_success_and_failure()
     assert(success_scope:parent() == root, "success scope parent should be root")
 
     -- Failure case: body error becomes scope failure; scope.run does not throw.
-    -- local fail_scope
     local st_fail, err_fail = scope.run(function()
-        -- fail_scope = s
         error("body failure")
     end)
 
@@ -252,6 +391,33 @@ local function test_defers_lifo_and_failure()
     assert(#order == 2, "two defers should have run")
     assert(order[1] == "second" and order[2] == "first",
            "defers should run in LIFO order even on failure")
+end
+
+-- Defer failures after a successful body should turn the scope to 'failed'
+-- and surface the defer error as primary, but still preserve body results.
+local function test_defer_failure_marks_scope_failed()
+    local scope_ref
+
+    local st, serr, body_res = scope.run(function(s)
+        scope_ref = s
+        s:defer(function()
+            error("defer failure")
+        end)
+        return "body-result"
+    end)
+
+    assert(st == "failed",
+           "scope.run should report failed if a defer handler fails")
+    assert(tostring(serr):find("defer failure", 1, true),
+           "defer failure should be the primary error")
+
+    local st2, serr2 = scope_ref:status()
+    assert(st2 == "failed", "scope status should be failed after defer failure")
+    assert(tostring(serr2):find("defer failure", 1, true),
+           "scope error should mention the defer failure")
+
+    assert(body_res == "body-result",
+           "scope.run should still return body results even if defers fail")
 end
 
 -------------------------------------------------------------------------------
@@ -311,6 +477,38 @@ local function test_sync_respects_cancellation()
     local st2, serr2 = cancelled_scope:status()
     assert(st2 == "cancelled", "cancelled_scope should be cancelled")
     assert(serr2 == "cancel before sync", "cancelled_scope error should be the cancellation reason")
+end
+
+-- Cancellation racing with a blocking sync: cancel the scope while a fibre
+-- is blocked on a wait_op.
+local function test_sync_cancellation_race()
+    local race_scope
+
+    local st, serr, ok_ev, reason_ev = scope.run(function(s)
+        race_scope = s
+        local cond = cond_mod.new()
+
+        -- Canceller fibre: let the main fibre block first, then cancel.
+        s:spawn(function(_)
+            runtime.yield()
+            s:cancel("race cancel")
+        end)
+
+        local ok2, reason2 = performer.perform(cond:wait_op())
+        return ok2, reason2
+    end)
+
+    assert(st == "cancelled", "scope.run should report cancelled in race test")
+    assert(serr == "race cancel",
+           "race cancellation reason should be 'race cancel'")
+
+    assert(ok_ev == false, "blocking event should observe ok=false when cancelled")
+    assert(reason_ev == "race cancel",
+           "blocking event should see the race cancellation reason")
+
+    local st2, serr2 = race_scope:status()
+    assert(st2 == "cancelled" and serr2 == "race cancel",
+           "race_scope should be cancelled with the correct reason")
 end
 
 -------------------------------------------------------------------------------
@@ -377,7 +575,6 @@ end
 -------------------------------------------------------------------------------
 
 local function test_fail_fast_from_child_fibre()
-    -- local root = scope.root()
     local test_scope
 
     local st, serr = scope.run(function(s)
@@ -419,14 +616,25 @@ local function main()
     runtime.spawn_raw(function()
         test_outside_fibers()
         test_inside_fibers()
+
         test_with_ev_basic()
+        test_with_ev_failure_confined_to_child()
+        test_with_ev_abort_on_choice()
+        test_with_ev_child_fibre_failure()
+
         test_run_success_and_failure()
         test_run_explicit_cancel()
+
         test_defers_lifo_and_failure()
+        test_defer_failure_marks_scope_failed()
+
         test_sync_wraps_event_failure()
         test_sync_respects_cancellation()
+        test_sync_cancellation_race()
+
         test_join_and_done_events()
         test_fail_fast_from_child_fibre()
+
         io.stdout:write("OK\n")
         runtime.stop()
     end)

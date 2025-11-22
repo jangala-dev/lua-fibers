@@ -123,19 +123,19 @@ local function root()
         root_scope   = new_scope(nil)
         global_scope = root_scope
 
-        -- Supervisor fibre: translate uncaught fibre errors into
-        -- scope failures and cancellations.
         runtime.spawn_raw(function()
             while true do
                 local fib, err = runtime.wait_fiber_error()
                 local s = fiber_scopes[fib]
+
                 if s then
-                    -- mark failure + cancel children
+                    -- Fibres that were not started via Scope:spawn but
+                    -- have an associated scope (e.g. internal helpers)
+                    -- can still be treated as scope failures.
                     s:_record_failure(err)
-                    -- ensure the scope's waitgroup is decremented for this fibre
-                    s._wg:done()
+                    -- Note: NO _wg:done() here.
                 else
-                    -- Delegate unscoped fibre failures to the handler.
+                    -- Completely unscoped fibres go to the global handler.
                     unscoped_error_handler(fib, err)
                 end
             end
@@ -225,38 +225,45 @@ end
 --   fn  :: function(Scope, ...): ()
 --   ... :: arguments passed to fn
 --
--- Fail-fast semantics:
---   - If fn raises, the fibre dies, runtime reports the failure,
---     and this scope's status becomes "failed" with cancellation
---     propagated to children.
+-- Behaviour:
+--   * The new fibre inherits this scope as its current scope.
+--   * The scope’s waitgroup is incremented on creation and decremented
+--     when the fibre finishes, whether normally or due to an error.
+--   * Any uncaught error in fn is caught by the scope machinery,
+--     recorded as a failure of the scope that was current at the point
+--     of error, and does not propagate as a Lua error.
+--
+-- The scope enters “failed” status on the first such error, with
+-- cancellation propagated to any child scopes.
 function Scope:spawn(fn, ...)
     assert(self._status == "running", "cannot spawn on a non-running scope")
     local args = pack(...)
     self._wg:add(1)
 
-    -- Note:
-    --   * On normal completion of fn, this wrapper calls _wg:done().
-    --   * If fn raises and the fibre aborts, this wrapper is not run.
-    --     In that case the supervisor fibre installed in scope.root()
-    --     observes the failure via runtime.wait_fiber_error() and calls
-    --     _wg:done() on this scope on the failing fibre's behalf.
-    --   * Do not call _wg:done() from fn or from other error paths:
-    --     every child fibre must account for exactly one decrement,
-    --     either here or via the supervisor, but never both.
-
     runtime.spawn_raw(function()
         local fib  = current_fiber()
         local prev = fib and fiber_scopes[fib] or nil
+
         if fib then
+            -- Dynamic current scope for this fibre.
             fiber_scopes[fib] = self
         end
 
-        fn(self, unpack(args, 1, args.n))
+        -- Run user code under this scope; catch uncaught errors.
+        local ok, err = safe.pcall(fn, self, unpack(args, 1, args.n))
 
+        if not ok then
+            -- Attribute failure to the scope that was current at the point of error.
+            local s = fib and (fiber_scopes[fib] or self) or self
+            s:_record_failure(err)
+        end
+
+        -- Restore previous dynamic scope mapping.
         if fib then
             fiber_scopes[fib] = prev
         end
 
+        -- Lifetime accounting: this fibre always belonged to `self`.
         self._wg:done()
     end)
 end
@@ -507,17 +514,20 @@ end
 --
 -- Behaviour:
 --   * A child scope of scope.current() is created.
---   * body_fn is run in a *separate fibre* with that child as current.
---   * All fibres spawned under that child are tracked.
---   * When the child scope has closed (ok/failed/cancelled, defers run),
---     this function returns:
+--   * body_fn is run in a *separate fibre* with that child as the
+--     dynamic current scope.
+--   * All fibres spawned under that child are tracked via its waitgroup.
+--   * Uncaught errors in body_fn (or its descendant fibres) are recorded
+--     as failures of the child scope but do not escape as Lua errors.
+--   * When the child scope reaches a terminal state (ok/failed/cancelled)
+--     and its defers have run, this function returns:
 --         status, error, ...results_from_body_fn...
 --
 --   status :: "ok" | "failed" | "cancelled"
 --   error  :: primary error / cancellation reason, or nil on "ok".
 --
--- On failure or cancellation, no Lua error is thrown here; callers
--- should branch on status.
+-- The caller receives status information only; failure or cancellation
+-- does not raise a Lua error here.
 local function run(body_fn, ...)
     assert(runtime.current_fiber(), "scope.run must be called from inside a fiber")
     local parent = current()
