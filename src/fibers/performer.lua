@@ -8,6 +8,7 @@
 -- @module fibers.performer
 
 local op = require 'fibers.op'
+local runtime = require 'fibers.runtime'
 
 local scope_mod
 
@@ -27,6 +28,7 @@ local function assert_event(ev)
 end
 
 function M.perform(ev)
+    assert(runtime.current_fiber(), "perform: must be called from inside a fiber (use fibers.run as an entry point)")
     assert_event(ev)
 
     local s = current_scope()

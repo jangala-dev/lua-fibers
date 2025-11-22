@@ -392,7 +392,9 @@ end
 --- Synchronise on an event under this scope.
 -- Equivalent to op.perform_raw(self:run_ev(ev)).
 function Scope:sync(ev)
+    -- Scope-level synchronisation only occurs from inside a fiber
     assert(runtime.current_fiber(), "scope:sync must be called from inside a fiber (use fibers.run as an entry point)")
+
     -- Fast pre-check: do not start new work on a non-running scope.
     local status, err = self:status()
     if status ~= "running" then

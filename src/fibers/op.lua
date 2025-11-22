@@ -413,6 +413,7 @@ end
 -- Any Lua error raised during wraps or primitives is not caught here;
 -- it will abort the current fibre and be handled by the scope layer.
 perform = function(ev)
+    assert(runtime.current_fiber(), "perform_raw must be called from inside a fiber (use fibers.run as an entry point)")
     local leaves = compile_event(ev)
 
     -- Fast path: non-blocking attempt.
