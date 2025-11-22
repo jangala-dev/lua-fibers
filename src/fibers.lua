@@ -1,4 +1,4 @@
----
+-- fibers.lua
 -- Top-level facade for the fibers library.
 --
 -- Provides a small, convenient surface over the lower-level modules:
