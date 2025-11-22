@@ -104,7 +104,7 @@ local function root()
 
         -- Supervisor fibre: translate uncaught fibre errors into
         -- scope failures and cancellations.
-        runtime.spawn(function()
+        runtime.spawn_raw(function()
             while true do
                 local fib, err = runtime.wait_fiber_error()
                 local s = fiber_scopes[fib]
@@ -183,8 +183,8 @@ end
 --- Cancel this scope and its children with an optional reason.
 -- Idempotent: multiple calls are safe.
 function Scope:cancel(reason)
-    -- Once a scope is "ok", it is terminal: ignore or assert.
-    assert(self._status ~= "ok", "cannot cancel a scope that has already completed ok")
+    -- Once a scope is "ok", it is terminal: ignore.
+    if self._status == "ok" then return end
 
     local r = reason or self._error or "scope cancelled"
 
@@ -224,7 +224,7 @@ function Scope:spawn(fn, ...)
     --     every child fibre must account for exactly one decrement,
     --     either here or via the supervisor, but never both.
 
-    runtime.spawn(function()
+    runtime.spawn_raw(function()
         local fib  = current_fiber()
         local prev = fib and fiber_scopes[fib] or nil
         if fib then
@@ -292,7 +292,7 @@ function Scope:_start_join_worker()
     if self._join_worker_started then return end
     self._join_worker_started = true
 
-    runtime.spawn(function()
+    runtime.spawn_raw(function()
         -- Attach this worker to the scope
         local fib = current_fiber()
         local prev = fib and fiber_scopes[fib]

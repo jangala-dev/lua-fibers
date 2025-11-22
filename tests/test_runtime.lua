@@ -11,7 +11,7 @@ local equal = require 'fibers.utils.helper'.equal
 local log = {}
 local function record(x) table.insert(log, x) end
 
-runtime.spawn(function()
+runtime.spawn_raw(function()
     record('a'); runtime.yield(); record('b'); runtime.yield(); record('c')
 end)
 
@@ -33,7 +33,7 @@ local function inc()
     count = count + 1
 end
 for _=1, fiber_count do
-    runtime.spawn(function()
+    runtime.spawn_raw(function()
         inc(); runtime.yield(); inc(); runtime.yield(); inc()
     end)
 end

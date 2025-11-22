@@ -14,10 +14,10 @@ local equal = require 'fibers.utils.helper'.equal
 local c, log = cond.new(), {}
 local function record(x) table.insert(log, x) end
 
-runtime.spawn(function()
+runtime.spawn_raw(function()
     record('a'); c:wait(); record('b')
 end)
-runtime.spawn(function()
+runtime.spawn_raw(function()
     record('c'); c:signal(); record('d')
 end)
 assert(equal(log, {}))
@@ -26,10 +26,10 @@ assert(equal(log, { 'a', 'c', 'd' }))
 runtime.current_scheduler:run()
 assert(equal(log, { 'a', 'c', 'd', 'b' }))
 
-runtime.spawn(function()
+runtime.spawn_raw(function()
     local fiber_count = 1e3
     for _ = 1, fiber_count do
-        runtime.spawn(function() c:wait(); end)
+        runtime.spawn_raw(function() c:wait(); end)
     end
 
     sleep.sleep(1)

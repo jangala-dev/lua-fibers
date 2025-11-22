@@ -12,6 +12,7 @@
 --
 -- @module fibers
 
+local Op   = require 'fibers.op'
 local Runtime   = require 'fibers.runtime'
 local Scope = require 'fibers.scope'
 local Performer = require 'fibers.performer'
@@ -34,6 +35,9 @@ fibers.perform = Performer.perform
 --- Monotonic time source from the underlying scheduler.
 fibers.now = Runtime.now
 
+--- Monotonic time source from the underlying scheduler.
+fibers.choice = Op.choice
+
 --- Run a main function under the scheduler's root scope.
 --
 --   main_fn :: function(Scope, ...): ...results...
@@ -53,6 +57,8 @@ fibers.now = Runtime.now
 -- This function does not exit the process. It stops the scheduler and
 -- hands the status and error back to the caller.
 function fibers.run(main_fn, ...)
+    assert(not Runtime.current_fiber(),
+       "fibers.run must not be called from inside a fiber")
     local root = Scope.root()
     local args = { ... }
 

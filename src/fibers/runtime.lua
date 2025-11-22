@@ -171,7 +171,7 @@ return {
     wait_fiber_error = wait_fiber_error,
 
     -- fiber management
-    spawn = spawn,
+    spawn_raw = spawn,
     stop  = stop,
     main  = main,
 }

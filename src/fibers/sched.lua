@@ -1,5 +1,4 @@
--- (c) Snabb project
--- (c) Jangala
+-- fibers/sched.lua
 
 -- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
 

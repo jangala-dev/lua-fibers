@@ -19,7 +19,7 @@ for _ = 1, count do
         done = done + 1
         -- table.insert(wakeup_times, wakeup_time - (start + dt))
     end
-    runtime.spawn(fn)
+    runtime.spawn_raw(fn)
 end
 for t = runtime.now(), runtime.now() + 1.5, 0.01 do
     runtime.current_scheduler:run(t)

@@ -21,7 +21,7 @@ local modules = {
     { 'pollio' },
     { 'exec' },
     { 'waitgroup' },
-    { 'alarm' },
+    -- { 'alarm' },
     { 'context' },
     { 'scope' },
 }

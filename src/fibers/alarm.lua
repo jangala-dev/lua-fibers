@@ -1,280 +1,185 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+-- fibers/alarm.lua
+--
+-- Wall-clock based alarms integrated with the fibres runtime.
+--
+-- Each alarm is driven by a recurrence function:
+--   next_time(last_fired :: epoch|nil, now :: epoch) -> next_epoch|nil
+--
+-- Semantics:
+--   * When next_time returns nil, the alarm becomes exhausted.
+--   * When the alarm fires, callers receive:
+--       true, alarm, last_fired_epoch, ...
+--   * Once the alarm is exhausted, callers receive exactly once:
+--       false, "no_more_recurrences", alarm, last_fired_epoch|nil
+--     after which further wait_op() calls never fire.
+--   * Multiple alarms scheduled for the same wall time will fire
+--     in successive synchronisations (via CML choice and per-alarm state).
+--
+-- Time initialisation:
+--   * alarm.new() and alarm:wait_op() are safe before real time is known.
+--   * No wait_op() will complete until set_time_source(...) has been called.
+--   * A wait_op() started before set_time_source will first wait for time
+--     to become ready, then for the next recurrence.
 
--- Alarms.
+local op        = require 'fibers.op'
+local sleep_mod = require 'fibers.sleep'
+local perform   = require 'fibers.performer'.perform
+local cond_mod  = require 'fibers.cond'
 
-local op = require 'fibers.op'
-local runtime = require 'fibers.runtime'
-local timer = require 'fibers.timer'
-local sc = require 'fibers.utils.syscall'
+local Alarm = {}
+Alarm.__index = Alarm
 
-local perform = require 'fibers.performer'.perform
+----------------------------------------------------------------------
+-- Wall-clock source and "time ready" condition
+----------------------------------------------------------------------
 
-local function days_in_year(y)
-    return y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0) and 366 or 365
+-- Wall-clock "now" function (epoch seconds); replaced once real time is known.
+local wall_now   = os.time
+local time_ready = false
+
+-- Generic one-shot condition for “time is ready”.
+local time_ready_cond = cond_mod.new()
+
+--- Install the wall-clock time source.
+-- May be called once, when real time is known (RTC, NTP, GNSS, etc.).
+local function set_time_source(now_fn)
+    assert(type(now_fn) == "function", "set_time_source expects a function")
+    assert(not time_ready, "set_time_source may only be called once")
+
+    wall_now   = now_fn
+    time_ready = true
+
+    -- Wake any fibres that were waiting for time to become ready.
+    time_ready_cond:signal()
 end
 
-local function to_time(t)
-    local new_t = {year = t.year, month=t.month, day=t.day, hour=t.hour, min=t.min, sec=t.sec}
-    local time = os.time(new_t) + t.msec/1e3
-    local time_t = os.date("*t", time)
-    time_t.msec = t.msec
-    return time, time_t
+----------------------------------------------------------------------
+-- Alarm object API
+--
+-- Internal state:
+--   _state     : "active" | "exhausted_pending" | "exhausted_done"
+--   _last      : last fired wall-clock epoch (or nil)
+--   _next_wall : next scheduled wall-clock epoch (or nil)
+----------------------------------------------------------------------
+
+function Alarm:is_active()
+    return self._state == "active"
 end
 
--- let's define some constants
-local periods = {"year", "month", "day", "hour", "min", "sec", "msec"}
-local default = {month=1, day=1, hour=0, min=0, sec=0, msec=0}
+--- Cancel the alarm permanently.
+-- No further firings or exhaustion notification will be delivered.
+function Alarm:cancel()
+    self._state     = "exhausted_done"
+    self._next_wall = nil
+end
 
--- This function validates a table t intended for scheduling an alarm, ensuring
--- only appropriate fields are specified based on the scheduling type.
-local function validate_next_table(t)
-    local inc_field
-    if t.year then
-        return nil, "year should not be specified for a relative alarm"
-    elseif t.yday then inc_field = "year"
-        if t.month or t.wday or t.day then
-            return nil, "neither month, weekday or day of month valid for day of year alarm"
+-- Internal: ensure _next_wall is populated or update state on exhaustion.
+function Alarm:_ensure_next(now)
+    if self._next_wall or self._state ~= "active" then
+        return self._next_wall
+    end
+
+    local t = self._next_time(self._last, now)
+    if not t then
+        -- No further recurrences: schedule exhaustion notification.
+        self._state = "exhausted_pending"
+        return nil
+    end
+
+    self._next_wall = t
+    return t
+end
+
+--- Main CML-style operation: wait for the alarm to fire once.
+--
+-- Returns an Event which, when performed, yields either:
+--
+--   * On successful firing:
+--       true, alarm, last_fired_epoch, ...
+--
+--   * Once, when the recurrence sequence is exhausted:
+--       false, "no_more_recurrences", alarm, last_fired_epoch|nil
+--
+-- After the exhaustion notification has been delivered, further
+-- wait_op() calls return an Event that never fires.
+--
+-- Before set_time_source is called, a wait_op() will first block
+-- until time becomes ready, and then behave exactly as if wait_op()
+-- had been called afterwards.
+function Alarm:wait_op()
+    return op.guard(function()
+        -- Fully inert: no more results of any kind.
+        if self._state == "exhausted_done" then
+            return op.never()
         end
-    elseif t.month then inc_field = "year"
-        if t.wday then
-            return nil, "day of week not valid for yearly alarm"
+
+        -- Time not yet initialised: wait once for readiness, then recurse.
+        if not time_ready then
+            local ev = time_ready_cond:wait_op()
+            return ev:wrap(function()
+                -- At this point, time_ready is true; perform a fresh wait.
+                return perform(self:wait_op())
+            end)
         end
-    elseif t.day then inc_field = "month"
-        if t.wday then
-            return nil, "day of week not valid for monthly alarm"
+
+        -- Normal path: real time is available.
+        local now = wall_now()
+        self:_ensure_next(now)
+
+        -- If the recurrence has just been exhausted, deliver the
+        -- one-off exhaustion notification and then become inert.
+        if self._state == "exhausted_pending" then
+            self._state = "exhausted_done"
+            return op.always(false, "no_more_recurrences", self, self._last)
         end
-    elseif t.wday then inc_field = "day"
-    elseif t.hour then inc_field = "day"
-    elseif t.min then inc_field = "hour"
-    elseif t.sec then inc_field = "min"
-    elseif t.msec then inc_field = "sec"
-    else
-        return nil, "a next alarm must specify at least one of yday, month, day, wday, hour, minute, sec or msec"
-    end
 
-    return inc_field, nil
+        -- We have a valid next_wall at this point.
+        local next_wall = assert(self._next_wall, "alarm internal error: missing next_wall")
+        local dt        = next_wall - now
+        if dt < 0 then dt = 0 end
+
+        -- Relative sleep using monotonic time, followed by state update.
+        return sleep_mod.sleep_op(dt):wrap(function(...)
+            -- Only update state on successful firing (not on abort).
+            self._last      = next_wall
+            self._next_wall = nil
+            return true, self, self._last, ...
+        end)
+    end)
 end
 
--- calculates the absolute time until the next occurrence based on a given time
--- structure t and the current epoch.
-local function calculate_next(t, epoch)
+-- Convenience alias: treat the alarm itself as an Event factory.
+Alarm.event = Alarm.wait_op
 
-    -- first let's make sure that the provided struct makes sense
-    local inc_field, _ = validate_next_table(t) -- the time table is pre-validated
+----------------------------------------------------------------------
+-- Constructors
+----------------------------------------------------------------------
 
-    -- let's construct the new date table
-    local new_t = {}
+--- Create a new alarm.
+--
+-- params.next_time :: function(last_epoch|nil, now_epoch) -> next_epoch|nil
+-- params.policy    :: optional policy table (DST, gaps, overlaps, etc.)
+-- params.label     :: optional label for identification/logging
+local function new(params)
+    assert(type(params) == "table", "alarm.new expects a parameter table")
+    local next_time = params.next_time
+    assert(type(next_time) == "function", "alarm.new: next_time function required")
 
-    local now = os.date("*t", epoch)
-    now.msec = (epoch - math.floor(epoch)) * 1e3
+    local self = setmetatable({
+        _next_time = next_time,
+        _policy    = params.policy,
+        _label     = params.label or "",
 
-    local default_switch = false
-    for _, name in ipairs(periods) do
-        if not default_switch and t[name] then default_switch = true end
-        if (t.wday or t.yday) and name=="hour" then default_switch = true end
-        new_t[name] = (not default_switch and now[name]) or t[name] or default[name]
-    end
+        _last      = nil,           -- last fired wall-clock epoch
+        _next_wall = nil,           -- next scheduled wall-clock epoch
+        _state     = "active",      -- lifecycle state
+    }, Alarm)
 
-    -- now let's get the struct we need
-    local new_time, new_table = to_time(new_t)
-
-    -- wday and yday are weird ones and we need to renormalise
-    if t.wday then
-        local increment = (t.wday - new_table.wday + 7) % 7
-        new_table.day = new_table.day + increment
-        new_time, new_table = to_time(new_table)
-    elseif t.yday then
-        local no_days = days_in_year(new_table.year)
-        local increment = (t.yday - new_table.yday + no_days) % no_days
-        new_table.day = new_table.day + increment
-        new_time, new_table = to_time(new_table)
-    end
-
-    if new_time < epoch then
-        new_table[inc_field] = new_table[inc_field] + 1
-        new_time, new_table = to_time(new_table)
-    end
-
-    return new_time, new_table
+    return self
 end
 
-
-local AlarmHandler = {}
-AlarmHandler.__index = AlarmHandler
-
-local function new_alarm_handler()
-    local now = sc.realtime()
-    return setmetatable(
-        {
-            realtime = false,
-            abs_buffer = {},
-            next_buffer = {},
-            abs_timer = timer.new(now), -- Task list for absolute time scheduling
-        }, AlarmHandler)
-end
-
-local installed_alarm_handler = nil
-
---- Installs the Alarm Handler into the current scheduler.
--- Must be called before any alarm operations are used.
--- @return The installed AlarmHandler instance.
-local function install_alarm_handler()
-    if not installed_alarm_handler then
-        installed_alarm_handler = new_alarm_handler()
-        runtime.current_scheduler:add_task_source(installed_alarm_handler)
-    end
-    return installed_alarm_handler
-end
-
---- Uninstalls the Alarm Handler from the current scheduler.
--- This should be called to clean up when the Alarm Handler is no longer needed.
-local function uninstall_alarm_handler()
-    if installed_alarm_handler then
-        for i, source in ipairs(runtime.current_scheduler.sources) do
-            if source == installed_alarm_handler then
-                table.remove(runtime.current_scheduler.sources, i)
-                break
-            end
-        end
-        installed_alarm_handler = nil
-    end
-end
-
-function AlarmHandler:schedule_tasks(sched)
-    local now = sc.realtime()
-
-    self.abs_timer:advance(now, sched)
-
-    while true do
-        local next_time = self.abs_timer:next_entry_time() - now
-        if next_time > sched.maxsleep then break end -- an empty timer will return 'inf' here so nil check not needed
-        local task = self.abs_timer:pop()
-        sched:schedule_after_sleep(next_time, task.obj)
-    end
-end
-
-function AlarmHandler:block(time_to_start, t, task)
-    if time_to_start < runtime.current_scheduler.maxsleep then
-        runtime.current_scheduler:schedule_after_sleep(time_to_start, task)
-    else
-        self.abs_timer:add_absolute(t, task)
-    end
-end
-
-function AlarmHandler:clock_synced()
-    self.realtime = true
-    local now = sc.realtime()
-    -- Process buffered absolute tasks
-    for _, buffered in ipairs(self.abs_buffer) do
-        local time_to_start = buffered.t - now
-        self:block(time_to_start, buffered.t, buffered.task)
-    end
-    -- Process next tasks
-    for _, buffered in ipairs(self.next_buffer) do
-        local next_time = calculate_next(buffered.t, now)
-        local time_to_start = next_time - now
-        self:block(time_to_start, next_time, buffered.task)
-    end
-    self.abs_buffer, self.next_buffer = {}, {} -- Clear the buffer
-end
-
-function AlarmHandler:clock_desynced()
-    self.realtime = false
-end
-
-function AlarmHandler:wait_absolute_op(t)
-    local time_to_start
-    local function try()
-        if not self.realtime then return false end
-        time_to_start = t - sc.realtime()
-        if time_to_start < 0 then return true end
-    end
-    local function block(suspension, wrap_fn)
-        local task = suspension:complete_task(wrap_fn)
-        if not self.realtime then table.insert(self.abs_buffer, {t=t, task=task})
-            return
-        end
-        self:block(time_to_start, t, task)
-    end
-    return op.new_primitive(nil, try, block)
-end
-
-function AlarmHandler:wait_next_op(t)
-    local function try()
-        return false
-    end
-    local function block(suspension, wrap_fn)
-        local task = suspension:complete_task(wrap_fn)
-        if not self.realtime then table.insert(self.next_buffer, {t=t, task=task})
-            return
-        end
-        local now = sc.realtime()
-        local target, _ = calculate_next(t, now)
-        self:block(target-now, target, task)
-    end
-    return op.new_primitive(nil, try, block)
-end
-
---- Indicates to the Alarm Handler that time synchronisation has been achieved (through NTP or other methods).
--- Until the user calls clock_synced() all alarms will block. When called,
--- `absolute` alarms will return immediately if their time has elapsed, whereas
--- `next` alarms will be scheduled for their next instance
-local function clock_synced()
-    return assert(installed_alarm_handler):clock_synced()
-end
-
---- Indicates to the Alarm Handler that time synchronisation has been lost.
--- All new alarms will be buffered until real-time is achieved.
-local function clock_desynced()
-    return assert(installed_alarm_handler):clock_desynced()
-end
-
---- Creates an operation for an absolute alarm.
--- The operation can be performed immediately if in real-time mode,
--- or buffered to be scheduled upon achieving real-time.
--- @param t The absolute time (epoch) for the alarm.
--- @return A BaseOp representing the absolute alarm operation.
-local function wait_absolute_op(t)
-    return assert(installed_alarm_handler):wait_absolute_op(t)
-end
-
---- Schedules a task to run at an absolute time.
--- Wrapper for `absolute_op` that immediately performs the operation.
--- @param t The absolute time (epoch) for the alarm.
-local function wait_absolute(t)
-    return perform(wait_absolute_op(t))
-end
-
---- Creates an operation for a next (relative) alarm.
--- The operation is always buffered until real-time is achieved,
--- then scheduled based on the calculated next time.
--- @param t A table specifying the relative time for the alarm.
--- @return A BaseOp representing the next alarm operation.
--- @return An error if the time table is invalid.
-local function wait_next_op(t)
-    local _, err = validate_next_table(t)
-    return err or assert(installed_alarm_handler):wait_next_op(t)
-end
-
---- Schedules a task based on a relative next time.
--- Wrapper for `next_op` that immediately performs the operation.
--- @param t A table specifying the relative time for the alarm.
--- @return An error if the time table is invalid.
-local function wait_next(t)
-    local _, err = validate_next_table(t)
-    return err or perform(assert(installed_alarm_handler):wait_next_op(t))
-end
-
--- Public API
 return {
-    install_alarm_handler = install_alarm_handler,
-    uninstall_alarm_handler = uninstall_alarm_handler,
-    clock_synced = clock_synced,
-    clock_desynced = clock_desynced,
-    wait_absolute_op = wait_absolute_op,
-    wait_absolute = wait_absolute,
-    wait_next_op = wait_next_op,
-    wait_next = wait_next,
-    validate_next_table = validate_next_table,
-    calculate_next = calculate_next
+    Alarm           = Alarm,
+    new             = new,
+    set_time_source = set_time_source,
 }

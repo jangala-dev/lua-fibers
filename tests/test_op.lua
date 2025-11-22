@@ -34,7 +34,7 @@ end
 -- Run all tests inside a single top-level fiber
 ------------------------------------------------------------
 
-runtime.spawn(function()
+runtime.spawn_raw(function()
 
     --------------------------------------------------------
     -- 1) Base event: perform, or_else, wrap
@@ -143,7 +143,7 @@ runtime.spawn(function()
         local guarded_nack = op.guard(function()
             guard_calls = guard_calls + 1
             return op.with_nack(function(nack_ev)
-                runtime.spawn(function()
+                runtime.spawn_raw(function()
                     perform(nack_ev)
                     cancelled = true
                 end)
@@ -186,7 +186,7 @@ runtime.spawn(function()
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
-                runtime.spawn(function()
+                runtime.spawn_raw(function()
                     perform(nack_ev)
                     cancelled = true
                 end)
@@ -205,7 +205,7 @@ runtime.spawn(function()
         do
             local cancelled = false
             local with_nack_ev = op.with_nack(function(nack_ev)
-                runtime.spawn(function()
+                runtime.spawn_raw(function()
                     perform(nack_ev)
                     cancelled = true
                 end)
@@ -226,13 +226,13 @@ runtime.spawn(function()
             local outer_cancelled, inner_cancelled = false, false
 
             local outer = op.with_nack(function(outer_nack_ev)
-                runtime.spawn(function()
+                runtime.spawn_raw(function()
                     perform(outer_nack_ev)
                     outer_cancelled = true
                 end)
 
                 return op.with_nack(function(inner_nack_ev)
-                    runtime.spawn(function()
+                    runtime.spawn_raw(function()
                         perform(inner_nack_ev)
                         inner_cancelled = true
                     end)

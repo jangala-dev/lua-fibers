@@ -416,7 +416,7 @@ local function main()
 
     -- Run all tests inside a single top-level fibre so that scope.run
     -- and performer.perform are always called from within the scheduler.
-    runtime.spawn(function()
+    runtime.spawn_raw(function()
         test_outside_fibers()
         test_inside_fibers()
         test_with_ev_basic()

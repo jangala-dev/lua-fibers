@@ -12,7 +12,7 @@ local equal = helper.equal
 local log = {}
 local function record(x) table.insert(log, x) end
 
-runtime.spawn(function()
+runtime.spawn_raw(function()
     local q = queue.new()
     record('a')
     q:put('b')
