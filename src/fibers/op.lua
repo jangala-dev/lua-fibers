@@ -20,6 +20,7 @@
 
 local runtime  = require 'fibers.runtime'
 local safe  = require 'coxpcall'
+local oneshot  = require 'fibers.oneshot'
 
 local unpack = rawget(table, "unpack") or _G.unpack
 local pack   = rawget(table, "pack") or function(...)
@@ -186,63 +187,44 @@ function Event:on_abort(f)
 end
 
 ----------------------------------------------------------------------
--- Simple one-shot condition primitive (used for with_nack; also exported)
+-- Simple one-shot condition primitive (used for with_nack)
 ----------------------------------------------------------------------
 
 local function new_cond(opts)
-    local state = {
-        triggered = false,
-        waiters   = {},        -- list of { suspension = ..., wrap = ... }
-        abort_fn  = opts and opts.abort_fn or nil,
-    }
+    local abort_fn = opts and opts.abort_fn or nil
+
+    -- Oneshot runs abort_fn (if any) after all waiters have been invoked.
+    local os = oneshot.new(function()
+        if abort_fn then
+            safe.pcall(abort_fn)
+        end
+    end)
 
     local function wait_op()
-        assert(not state.abort_fn, "abort-only cond has no wait_op")
+        assert(not abort_fn, "abort-only cond has no wait_op")
 
         local function try()
-            return state.triggered
+            return os:is_triggered()
         end
 
         local function block(suspension, wrap_fn)
-            if state.triggered then
-                -- Already triggered: complete immediately via the scheduler.
-                suspension:complete(wrap_fn)
-            else
-                -- Record this suspension + wrap for later signalling.
-                state.waiters[#state.waiters + 1] = {
-                    suspension = suspension,
-                    wrap       = wrap_fn,
-                }
-            end
+            -- If already triggered, add_waiter will run the thunk immediately.
+            os:add_waiter(function()
+                if suspension:waiting() then
+                    suspension:complete(wrap_fn)
+                end
+            end)
         end
 
         return new_primitive(nil, try, block)
     end
 
     local function signal()
-        if state.triggered then return end
-        state.triggered = true
-
-        -- Complete all recorded waiters via the scheduler.
-        for i = 1, #state.waiters do
-            local remote = state.waiters[i]
-            state.waiters[i] = nil
-
-            if remote
-            and remote.suspension
-            and remote.suspension:waiting()
-            then
-                remote.suspension:complete(remote.wrap)
-            end
-        end
-
-        if state.abort_fn then
-            safe.pcall(state.abort_fn)
-        end
+        os:signal()
     end
 
     return {
-        wait_op = state.abort_fn and nil or wait_op,
+        wait_op = abort_fn and nil or wait_op,
         signal  = signal,
     }
 end
@@ -289,6 +271,7 @@ local function compile_event(ev, outer_wrap, out, nacks)
         compile_event(inner, outer_wrap, out, child_nacks)
 
     elseif kind == 'wrap' then
+        -- Wraps compose in declaration order: ev:wrap(f1):wrap(f2) → f2(f1(...)).
         local f         = ev.wrap_fn
         local new_outer = function(...)
             return outer_wrap(f(...))

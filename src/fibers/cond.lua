@@ -1,23 +1,35 @@
--- fibers/cond.lua
+--- fibers/cond.lua
 ---
--- Generic condition events built on top of signaller and op.
+-- Generic condition events built on top of oneshot and op.
 --
 -- A cond has:
---   cond.wait_op() -> Event
---   cond.signal()  -- idempotent
+--   cond:wait_op() -> Event
+--   cond:wait()    -- blocking, via performer
+--   cond:signal()  -- idempotent
 
 local op        = require 'fibers.op'
-local signaller = require 'fibers.signaller'
+local oneshot   = require 'fibers.oneshot'
 local perform   = require 'fibers.performer'.perform
 
 local Cond = {}
 Cond.__index = Cond
 
 function Cond:wait_op()
+    local os = self._os
+
     return op.new_primitive(
         nil,
-        function() return self.sig.triggered end,
-        function(resumer, wrap_fn) self.sig:add_waiter(resumer, wrap_fn) end
+        function()
+            return os:is_triggered()
+        end,
+        function(resumer, wrap_fn)
+            -- Arrange to complete this suspension when the condition fires.
+            os:add_waiter(function()
+                if resumer:waiting() then
+                    resumer:complete(wrap_fn)
+                end
+            end)
+        end
     )
 end
 
@@ -26,12 +38,12 @@ function Cond:wait()
 end
 
 function Cond:signal()
-    return self.sig:signal()
+    return self._os:signal()
 end
 
 local function new()
     return setmetatable({
-        sig = signaller.new(),
+        _os = oneshot.new(),  -- no extra callback
     }, Cond)
 end
 
