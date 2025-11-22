@@ -45,6 +45,9 @@ local cond         = require 'fibers.cond'
 local safe = require 'coxpcall'
 
 local unpack = rawget(table, "unpack") or _G.unpack
+local pack   = rawget(table, "pack")   or function(...)
+    return { n = select("#", ...), ... }
+end
 
 local Scope = {}
 Scope.__index = Scope
@@ -374,14 +377,44 @@ end
 --- Transform an event to obey this scope's failure and cancellation policy.
 -- Returns a new Event; does not perform it.
 function Scope:run_ev(ev)
-    local cancel_ev = cancel_event(self)
-    return op.choice(ev, cancel_ev)
+    -- Build a fresh event per synchronisation, so we can look at the
+    -- scope status at sync time rather than at definition time.
+    return op.guard(function()
+        local status, err = self:status()
+
+        -- If not running, short-circuit to cancellation result
+        if status ~= "running" then
+            return op.always(false, err or "scope cancelled", nil)
+        end
+
+        -- Normal path
+        local cancel_ev = cancel_event(self)
+        return op.choice(ev, cancel_ev)
+    end)
 end
 
 --- Synchronise on an event under this scope.
 -- Equivalent to op.perform_raw(self:run_ev(ev)).
 function Scope:sync(ev)
-    return op.perform_raw(self:run_ev(ev))
+    -- Fast pre-check: do not start new work on a non-running scope.
+    local status, err = self:status()
+    if status ~= "running" then
+        return false, err or "scope cancelled", nil
+    end
+
+    -- Perform the cancellable event
+    local results = pack(op.perform_raw(self:run_ev(ev)))
+
+    -- Re-check the scope status once the event has completed.
+    status, err = self:status()
+
+    -- If scope has failed/cancelled )treat as authoritative
+    if status ~= "running" and status ~= "ok" then
+        return false, err or "scope cancelled", nil
+    end
+
+    -- Scope still "running" or "ok"
+    return unpack(results, 1, results.n)
 end
 
 ----------------------------------------------------------------------
