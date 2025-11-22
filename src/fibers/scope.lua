@@ -214,7 +214,7 @@ end
 --     propagated to children.
 function Scope:spawn(fn, ...)
     assert(self._status == "running", "cannot spawn on a non-running scope")
-    local args = { ... }
+    local args = pack(...)
     self._wg:add(1)
 
     -- Note:
@@ -234,11 +234,7 @@ function Scope:spawn(fn, ...)
             fiber_scopes[fib] = self
         end
 
-        if #args > 0 then
-            fn(self, unpack(args))
-        else
-            fn(self)
-        end
+        fn(self, unpack(args, 1, args.n))
 
         if fib then
             fiber_scopes[fib] = prev
@@ -396,6 +392,7 @@ end
 --- Synchronise on an event under this scope.
 -- Equivalent to op.perform_raw(self:run_ev(ev)).
 function Scope:sync(ev)
+    assert(runtime.current_fiber(), "scope:sync must be called from inside a fiber (use fibers.run as an entry point)")
     -- Fast pre-check: do not start new work on a non-running scope.
     local status, err = self:status()
     if status ~= "running" then
@@ -506,14 +503,14 @@ local function run(body_fn, ...)
     assert(runtime.current_fiber(), "scope.run must be called from inside a fiber")
     local parent = current()
     local child  = new_scope(parent)
-    local args   = { ... }
+    local args   = pack(...)
 
     -- store body results on the child scope
     child._result = nil
 
     -- body fibre under the child scope
     child:spawn(function(s)
-        local res = { body_fn(s, unpack(args)) }
+        local res = pack(body_fn(s, unpack(args, 1, args.n)))
         s._result = res
     end)
 
@@ -522,7 +519,7 @@ local function run(body_fn, ...)
 
     local res = child._result
     if res then
-        return status, err, unpack(res)
+        return status, err, unpack(res, 1, res.n)
     else
         return status, err
     end

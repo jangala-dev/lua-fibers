@@ -47,7 +47,7 @@ function Suspension:complete(wrap, ...)
     assert(self:waiting())
     self.state = 'synchronized'
     self.wrap  = wrap
-    self.val   = { ... }
+    self.val   = pack(...)
     self.sched:schedule(self)
 end
 
@@ -58,12 +58,12 @@ function Suspension:complete_and_run(wrap, ...)
 end
 
 function Suspension:complete_task(wrap, ...)
-    return setmetatable({ suspension = self, wrap = wrap, val = { ... } }, CompleteTask)
+    return setmetatable({ suspension = self, wrap = wrap, val = pack(...) }, CompleteTask)
 end
 
 function Suspension:run()
     assert(not self:waiting())
-    return self.fiber:resume(self.wrap, unpack(self.val))
+    return self.fiber:resume(self.wrap, unpack(self.val, 1, self.val.n))
 end
 
 local function new_suspension(sched, fib)
@@ -73,7 +73,7 @@ end
 -- A CompleteTask completes a suspension (if still waiting) when run.
 function CompleteTask:run()
     if self.suspension:waiting() then
-        self.suspension:complete_and_run(self.wrap, unpack(self.val))
+        self.suspension:complete_and_run(self.wrap, unpack(self.val, 1, self.val.n))
     end
 end
 
@@ -152,9 +152,9 @@ local function with_nack(g)
 end
 
 local function always(...)
-    local results = { ... }
+    local results = pack(...)
     local function try()
-        return true, unpack(results)
+        return true, unpack(results, 1, results.n)
     end
     local function block() error("always: block_fn should never run") end  -- never reached
     return new_primitive(nil, try, block)
@@ -381,16 +381,16 @@ function Event:or_else(fallback_thunk)
         if idx then
             -- Normal CML semantics: `self` wins, fire nacks for losers.
             trigger_nacks(leaves, idx)
-            local results = { apply_wrap(leaves[idx].wrap, retval) }
-            return always(unpack(results))
+            local results = pack(apply_wrap(leaves[idx].wrap, retval))
+            return always(unpack(results, 1, results.n))
         end
 
         -- No leaf of `self` is ready now → `self` loses as a whole.
         -- Fire all nacks/abort handlers hanging off `self`.
         trigger_nacks(leaves, nil)
 
-        local results = { fallback_thunk() }
-        return always(unpack(results))
+        local results = pack(fallback_thunk())
+        return always(unpack(results, 1, results.n))
     end)
 end
 

@@ -35,7 +35,6 @@ fibers.perform = Performer.perform
 --- Monotonic time source from the underlying scheduler.
 fibers.now = Runtime.now
 
---- Monotonic time source from the underlying scheduler.
 fibers.choice = Op.choice
 
 --- Run a main function under the scheduler's root scope.
@@ -60,7 +59,7 @@ function fibers.run(main_fn, ...)
     assert(not Runtime.current_fiber(),
        "fibers.run must not be called from inside a fiber")
     local root = Scope.root()
-    local args = { ... }
+    local args = pack(...)
 
     local status, err
     local results      -- may be nil or a packed table
@@ -69,7 +68,7 @@ function fibers.run(main_fn, ...)
         -- scope.run creates a child scope of the current scope,
         -- runs main_fn(body_scope, ...) in its own fibre, and returns
         -- (status, err, ...results_from_body_fn...).
-        local packed = pack(Scope.run(main_fn, unpack(args)))
+        local packed = pack(Scope.run(main_fn, unpack(args, 1, args.n or #args)))
         status, err  = packed[1], packed[2]
 
         if packed.n > 2 then
