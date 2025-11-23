@@ -1,19 +1,21 @@
---- fibers/cond.lua
+-- fibers/cond.lua
 ---
--- Generic condition events built on top of oneshot and op.
---
--- A cond has:
---   cond:wait_op() -> Event
---   cond:wait()    -- blocking, via performer
---   cond:signal()  -- idempotent
+-- Generic condition operations built on top of oneshot and op.
+-- A condition can be waited on via an Op or by blocking in the current fiber.
+---@module 'fibers.cond'
 
-local op        = require 'fibers.op'
-local oneshot   = require 'fibers.oneshot'
-local perform   = require 'fibers.performer'.perform
+local op      = require 'fibers.op'
+local oneshot = require 'fibers.oneshot'
+local perform = require 'fibers.performer'.perform
 
+--- Condition variable backed by a one-shot.
+---@class Cond
+---@field _os Oneshot
 local Cond = {}
 Cond.__index = Cond
 
+--- Build an Op that becomes ready when the condition fires.
+---@return Op
 function Cond:wait_op()
     local os = self._os
 
@@ -22,8 +24,10 @@ function Cond:wait_op()
         function()
             return os:is_triggered()
         end,
+        --- Arrange to complete this suspension when the condition fires.
+        ---@param resumer Suspension
+        ---@param wrap_fn WrapFn
         function(resumer, wrap_fn)
-            -- Arrange to complete this suspension when the condition fires.
             os:add_waiter(function()
                 if resumer:waiting() then
                     resumer:complete(wrap_fn)
@@ -33,14 +37,19 @@ function Cond:wait_op()
     )
 end
 
+--- Block the current fiber until the condition fires.
+---@return any ...
 function Cond:wait()
     return perform(self:wait_op())
 end
 
+--- Signal the condition (idempotent).
 function Cond:signal()
     return self._os:signal()
 end
 
+--- Create a new condition.
+---@return Cond
 local function new()
     return setmetatable({
         _os = oneshot.new(),  -- no extra callback
