@@ -1,19 +1,19 @@
 -- fibers/performer.lua
 ---
--- Scope-aware performer.
--- Preferred entry point for synchronising on events in normal code.
+-- Scope-aware performer for ops.
+-- Preferred entry point for synchronising on ops in normal code.
 -- Delegates to the current scope if available, otherwise falls back
 -- to the raw op.perform.
---
--- @module fibers.performer
+---@module 'fibers.performer'
 
-local op = require 'fibers.op'
-local runtime = require 'fibers.runtime'
+local Op      = require 'fibers.op'
+local Runtime = require 'fibers.runtime'
 
+---@type any
 local scope_mod
 
-local M = {}
-
+--- Get the current scope if the scope module has been loaded.
+---@return Scope|nil
 local function current_scope()
     if not scope_mod then
         scope_mod = require 'fibers.scope'
@@ -21,22 +21,30 @@ local function current_scope()
     return scope_mod.current and scope_mod.current() or nil
 end
 
-local function assert_event(ev)
-    if type(ev) ~= "table" or getmetatable(ev) ~= op.Event then
-        error(("perform: expected Event, got %s (%s)"):format(type(ev), tostring(ev)), 3)
+--- Check that a value is an Op instance.
+---@param op any
+local function assert_op(op)
+    if type(op) ~= "table" or getmetatable(op) ~= Op.Op then
+        error(("perform: expected op, got %s (%s)"):format(type(op), tostring(op)), 3)
     end
 end
 
-function M.perform(ev)
-    assert(runtime.current_fiber(), "perform: must be called from inside a fiber (use fibers.run as an entry point)")
-    assert_event(ev)
+--- Perform an op under the current scope, if any.
+--- Must be called from inside a fiber.
+---@param op Op
+---@return any ...
+local function perform(op)
+    assert(Runtime.current_fiber(), "perform: must be called from inside a fiber (use fibers.run as an entry point)")
+    assert_op(op)
 
     local s = current_scope()
     if s and s.sync then
-        return s:sync(ev)
+        return s:sync(op)
     else
-        return op.perform_raw(ev)
+        return Op.perform_raw(op)
     end
 end
 
-return M
+return {
+    perform = perform,
+}

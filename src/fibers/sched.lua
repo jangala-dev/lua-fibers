@@ -1,44 +1,66 @@
 -- fibers/sched.lua
 
--- Use of this source code is governed by the XXXXXXXXX license; see COPYING.
-
---- Core scheduler for fibre tasks.
--- @module fibers.sched
+--- Core cooperative scheduler for fiber tasks.
+---@module 'fibers.sched'
 
 local sc    = require 'fibers.utils.syscall'
 local timer = require 'fibers.timer'
 
 local MAX_SLEEP_TIME = 10
 
+--- A runnable task with a :run() method invoked by the scheduler.
+---@class Task
+---@field run fun(self: Task)
+
+--- A source of tasks (timers, pollers, etc.) that can enqueue work on a scheduler.
+---@class TaskSource
+---@field schedule_tasks fun(self: TaskSource, sched: Scheduler, now: number)
+---@field cancel_all_tasks fun(self: TaskSource, sched: Scheduler)|nil
+---@field wait_for_events fun(self: TaskSource, sched: Scheduler, now: number, timeout: number)|nil
+
+--- Main scheduler state and API.
+---@class Scheduler
+---@field next Task[]              # tasks runnable next turn
+---@field cur Task[]               # tasks being run this turn
+---@field sources TaskSource[]     # timer, poller, etc.
+---@field wheel Timer              # timer wheel using the same clock
+---@field maxsleep number          # maximum sleep interval in seconds
+---@field get_time fun(): number   # monotonic time source
+---@field event_waiter TaskSource|nil  # single source used for blocking waits (if any)
+---@field done boolean
 local Scheduler = {}
 Scheduler.__index = Scheduler
 
---- Create a new scheduler.
--- @tparam[opt] function get_time monotonic time source (defaults to sc.monotime)
+--- Create a new scheduler instance.
+---@param get_time? fun(): number # monotonic time source (defaults to sc.monotime)
+---@return Scheduler
 local function new(get_time)
     local now_src = get_time or sc.monotime
     local now     = now_src()
 
     local ret = setmetatable({
-        next         = {},             -- tasks runnable next turn
-        cur          = {},             -- tasks being run this turn
-        sources      = {},             -- timer, poller, etc.
-        wheel        = timer.new(now), -- timer wheel on same clock
+        next         = {},
+        cur          = {},
+        sources      = {},
+        wheel        = timer.new(now),
         maxsleep     = MAX_SLEEP_TIME,
         get_time     = now_src,
-        event_waiter = nil,            -- optional poller
+        event_waiter = nil,
         done         = false,
     }, Scheduler)
 
-    -- Timer source: advances wheel and schedules due tasks.
+    --- Timer source: advances the wheel and schedules due tasks.
+    ---@class TimerTaskSource : TaskSource
+    ---@field wheel Timer
     local timer_task_source = { wheel = ret.wheel }
 
+    --- Advance the timer wheel and schedule any due tasks.
+    ---@param sched Scheduler
+    ---@param now_ number
     function timer_task_source:schedule_tasks(sched, now_)
         self.wheel:advance(now_, sched)
     end
 
-    -- Timers are not cleared; future timers simply never run once
-    -- the scheduler stops.
     function timer_task_source:cancel_all_tasks()
     end
 
@@ -46,8 +68,11 @@ local function new(get_time)
     return ret
 end
 
---- Register a task source.
--- A source must support :schedule_tasks(sched, now).
+--- Register a task source with this scheduler.
+--- A source must implement :schedule_tasks(sched, now).
+--- If the source implements :wait_for_events, it becomes the scheduler's
+--- sole event waiter (overwriting any previous one).
+---@param source TaskSource
 function Scheduler:add_task_source(source)
     table.insert(self.sources, source)
     if source.wait_for_events then
@@ -55,39 +80,49 @@ function Scheduler:add_task_source(source)
     end
 end
 
---- Schedule a task object with a :run() method.
+--- Schedule a task to be run on the next turn.
+---@param task Task
 function Scheduler:schedule(task)
     table.insert(self.next, task)
 end
 
+--- Get current monotonic time from the scheduler's clock source.
+---@return number
 function Scheduler:monotime()
     return self.get_time()
 end
 
---- Last time seen by the timer wheel.
+--- Get the last time observed by the timer wheel.
+---@return number
 function Scheduler:now()
     return self.wheel.now
 end
 
---- Schedule at an absolute time.
+--- Schedule a task at an absolute time.
+---@param t number # absolute time on the scheduler clock
+---@param task Task
 function Scheduler:schedule_at_time(t, task)
     self.wheel:add_absolute(t, task)
 end
 
---- Schedule after a delay from the wheel's current time.
+--- Schedule a task after a delay from the wheel's current time.
+---@param dt number # delay in seconds
+---@param task Task
 function Scheduler:schedule_after_sleep(dt, task)
     self.wheel:add_delta(dt, task)
 end
 
---- Ask all sources to queue ready tasks.
+--- Ask all registered sources to enqueue any ready tasks.
+---@param now number
 function Scheduler:schedule_tasks_from_sources(now)
     for i = 1, #self.sources do
         self.sources[i]:schedule_tasks(self, now)
     end
 end
 
---- Run all tasks currently scheduled.
--- If now is nil, uses monotonic time.
+--- Run all tasks currently scheduled as runnable.
+--- If now is nil, the current monotonic time is used.
+---@param now? number
 function Scheduler:run(now)
     if now == nil then
         now = self:monotime()
@@ -104,10 +139,10 @@ function Scheduler:run(now)
     end
 end
 
---- Time of the next thing that may need attention.
--- If there are runnable tasks, returns now() (i.e. do not sleep).
--- Otherwise delegates to the timer wheel, which returns either a time
--- or math.huge when empty.
+--- Compute the next time the scheduler may need to wake.
+--- If there are runnable tasks, returns now() (do not sleep).
+--- Otherwise defers to the timer wheel, which returns a time or math.huge.
+---@return number
 function Scheduler:next_wake_time()
     if #self.next > 0 then
         return self:now()
@@ -116,7 +151,7 @@ function Scheduler:next_wake_time()
 end
 
 --- Block until the next event or timeout.
--- Uses an event_waiter (poller) if present, otherwise sleeps.
+--- Uses an event_waiter (e.g. poller) if present, otherwise sleeps.
 function Scheduler:wait_for_events()
     local now       = self:monotime()
     local next_time = self:next_wake_time()
@@ -133,12 +168,13 @@ function Scheduler:wait_for_events()
     end
 end
 
---- Stop the main loop.
+--- Request that the scheduler main loop stops after the current iteration.
 function Scheduler:stop()
     self.done = true
 end
 
---- Main event loop.
+--- Run the scheduler main loop until stopped.
+--- Repeatedly waits for events and runs ready tasks.
 function Scheduler:main()
     self.done = false
     repeat
@@ -147,9 +183,11 @@ function Scheduler:main()
     until self.done
 end
 
---- Attempt to drain runnable work and ask sources to cancel.
--- Does not clear timers; future timers remain queued but will never fire
--- once the scheduler is no longer driven.
+--- Attempt to drain runnable work and ask sources to cancel outstanding tasks.
+--- Sources are given an opportunity to cancel pending work; the scheduler
+--- continues to drive sources (including timers) while draining.
+--- Returns true if the runnable queue is drained within the iteration limit.
+---@return boolean drained # true if work queue drained, false on iteration limit
 function Scheduler:shutdown()
     for _ = 1, 100 do
         for i = 1, #self.sources do
@@ -169,5 +207,5 @@ function Scheduler:shutdown()
 end
 
 return {
-    new = new
+    new = new,
 }

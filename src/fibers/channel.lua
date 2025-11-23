@@ -1,13 +1,23 @@
 -- fibers.channel
--- Provides Concurrent ML style channels for communication between fibers.
+-- Concurrent ML style channels for communication between fibers.
+---@module 'fibers.channel'
 
 local op      = require 'fibers.op'
 local fifo    = require 'fibers.utils.fifo'
 local perform = require 'fibers.performer'.perform
 
+--- Bidirectional communication channel between fibers.
+---@class Channel
+---@field buffer table|nil     # optional FIFO buffer (nil for unbuffered)
+---@field buffer_size integer
+---@field getq table           # queue of waiting receivers
+---@field putq table           # queue of waiting senders
 local Channel = {}
 Channel.__index = Channel
 
+--- Create a new channel.
+---@param buffer_size? integer # buffered capacity (0 or nil for unbuffered)
+---@return Channel
 local function new(buffer_size)
     buffer_size = buffer_size or 0
 
@@ -28,6 +38,9 @@ end
 -- Helpers: pop active entries based on suspension state
 ----------------------------------------------------------------------
 
+--- Pop the next entry whose suspension is still waiting, if any.
+---@param q any
+---@return table|nil
 local function pop_active(q)
     while not q:empty() do
         local entry = q:pop()
@@ -38,15 +51,19 @@ local function pop_active(q)
     return nil
 end
 
-----------------------------------------------------------------------
--- PUT side
-----------------------------------------------------------------------
-
+--- Op that sends val on the channel.
+--- For unbuffered channels, this synchronises with a receiver; for buffered
+--- channels, it may complete when space is available in the buffer.
+---@param val any
+---@return Op
 function Channel:put_op(val)
     local getq, putq = self.getq, self.putq
     local buffer, buffer_size = self.buffer, self.buffer_size
 
-    -- Per-operation state for this event instance.
+    ---@class ChannelPutEntry
+    ---@field val any
+    ---@field suspension Suspension|nil
+    ---@field wrap WrapFn|nil
     local entry = {
         val        = val,
         suspension = nil,
@@ -69,6 +86,9 @@ function Channel:put_op(val)
         return false
     end
 
+    --- Enqueue as a waiting sender when the put cannot complete immediately.
+    ---@param suspension Suspension
+    ---@param wrap_fn WrapFn
     local function block(suspension, wrap_fn)
         entry.suspension = suspension
         entry.wrap       = wrap_fn
@@ -78,14 +98,16 @@ function Channel:put_op(val)
     return op.new_primitive(nil, try, block)
 end
 
-----------------------------------------------------------------------
--- GET side
-----------------------------------------------------------------------
-
+--- Op that receives a value from the channel.
+--- May take from the buffer or rendezvous directly with a sender.
+---@return Op
 function Channel:get_op()
     local getq, putq = self.getq, self.putq
     local buffer     = self.buffer
 
+    ---@class ChannelGetEntry
+    ---@field suspension Suspension|nil
+    ---@field wrap WrapFn|nil
     local entry = {
         suspension = nil,
         wrap       = nil,
@@ -120,6 +142,9 @@ function Channel:get_op()
         return false
     end
 
+    --- Enqueue as a waiting receiver when no value is immediately available.
+    ---@param suspension Suspension
+    ---@param wrap_fn WrapFn
     local function block(suspension, wrap_fn)
         entry.suspension = suspension
         entry.wrap       = wrap_fn
@@ -129,14 +154,14 @@ function Channel:get_op()
     return op.new_primitive(nil, try, block)
 end
 
-----------------------------------------------------------------------
--- Synchronous wrappers
-----------------------------------------------------------------------
-
+--- Synchronously send message on the channel.
+---@param message any
 function Channel:put(message)
     return perform(self:put_op(message))
 end
 
+--- Synchronously receive a message from the channel.
+---@return any
 function Channel:get()
     return perform(self:get_op())
 end
