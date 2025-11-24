@@ -38,8 +38,8 @@ local function perform(op)
     assert_op(op)
 
     local s = current_scope()
-    if s and s.sync then
-        return s:sync(op)
+    if s and s.perform then
+        return s:perform(op)
     else
         return Op.perform_raw(op)
     end

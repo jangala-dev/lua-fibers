@@ -576,7 +576,7 @@ local function first_ready(ops)
     end)
 end
 
---- Choice over a table of named ops, returning (name, ...results...).
+--- Choice over a table of namedå ops, returning (name, ...results...).
 ---@param arms table<string, Op>
 ---@return Op
 local function named_choice(arms)

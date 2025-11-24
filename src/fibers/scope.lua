@@ -26,13 +26,13 @@ end
 ---@field _status ScopeStatus
 ---@field _error any
 ---@field _failures any[]
----@field failure_mode "fail_fast"          # reserved for future modes
+---@field failure_mode string               # e.g. "fail_fast"
 ---@field _wg Waitgroup
 ---@field _defers fun(self: Scope)[]        # LIFO defers
 ---@field _cancel_cond Cond
 ---@field _join_cond Cond
 ---@field _join_worker_started boolean
----@field _result table|nil                 # packed results used by run()
+---@field _result table|nil                 # used by run()
 local Scope = {}
 Scope.__index = Scope
 
@@ -346,7 +346,8 @@ end
 ----------------------------------------------------------------------
 
 --- Internal: build a cancellation op for this scope.
---- The result convention is (ok:boolean, value1_or_reason, value2).
+--- The particular return values are ignored by Scope:sync/Scope:perform;
+--- only the fact that this op can win in a choice is important.
 ---@param self Scope
 ---@return Op
 local function cancel_op(self)
@@ -362,43 +363,51 @@ end
 ---@return Op
 function Scope:run_op(ev)
     return op.guard(function()
-        local status, err = self:status()
-
-        if status ~= "running" then
-            return op.always(false, err or "scope cancelled", nil)
-        end
-
         local this_cancel_op = cancel_op(self)
         return op.choice(ev, this_cancel_op)
     end)
 end
 
 --- Perform an op under this scope, obeying its cancellation rules.
---- The result convention is (ok, value1, value2):
----   - ok == true  if the op completed and the scope remained running/ok
----   - ok == false if the scope had already failed/cancelled, or fails/
----                  cancels before the call returns; in that case value1
----                  is the failure/cancellation reason and value2 is nil.
+--- On success returns true followed by the op's result values.
+--- On failure or cancellation returns false and an error value.
 ---@param ev Op
 ---@return boolean ok
 ---@return any ...
 function Scope:sync(ev)
-    assert(runtime.current_fiber(), "scope:sync must be called from inside a fiber (use fibers.run as an entry point)")
+    assert(runtime.current_fiber(),
+        "scope:sync must be called from inside a fiber (use fibers.run as an entry point)")
 
     local status, err = self:status()
     if status ~= "running" then
-        return false, err or "scope cancelled", nil
+        return false, err or "scope cancelled"
     end
 
     local results = pack(op.perform_raw(self:run_op(ev)))
 
     status, err = self:status()
-
     if status ~= "running" and status ~= "ok" then
-        return false, err or "scope cancelled", nil
+        return false, err or "scope cancelled"
     end
 
-    return unpack(results, 1, results.n)
+    return true, unpack(results, 1, results.n)
+end
+
+--- Perform an op under this scope, raising on failure or cancellation.
+--- On success returns the op's result values.
+---@param ev Op
+---@return any ...
+function Scope:perform(ev)
+    -- sync does the fibre assertion and fail-fast logic
+    local results = pack(self:sync(ev))
+
+    local ok = results[1]
+    if not ok then
+        -- results[2] is the error value from sync
+        error(results[2])
+    end
+
+    return unpack(results, 2, results.n)
 end
 
 ----------------------------------------------------------------------

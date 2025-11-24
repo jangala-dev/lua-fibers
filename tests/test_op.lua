@@ -37,24 +37,24 @@ end
 runtime.spawn_raw(function()
 
     --------------------------------------------------------
-    -- 1) Base event: perform, or_else, wrap
+    -- 1) Base op: perform, or_else, wrap
     --------------------------------------------------------
     do
         local base = always(1)
         assert(perform(base) == 1, "base: perform failed")
 
-        -- or_else: event wins, fallback ignored
+        -- or_else: op wins, fallback ignored
         local base2  = always(2)
         local ev1    = base2:or_else(function() return 9 end)
         local palt1  = perform(ev1)
-        assert(palt1 == 2, "base: or_else should use event result")
+        assert(palt1 == 2, "base: or_else should use op result")
 
-        -- or_else: never-ready event → fallback wins
+        -- or_else: never-ready op → fallback wins
         local ev2   = never():or_else(function() return 99 end)
         local palt2 = perform(ev2)
-        assert(palt2 == 99, "base: or_else should use fallback when event can't commit")
+        assert(palt2 == 99, "base: or_else should use fallback when op can't commit")
 
-        -- or_else: async event is not ready now, so fallback wins
+        -- or_else: async op is not ready now, so fallback wins
         do
             local fallback_called = false
             local ev_async, tries = async_task(123)
@@ -67,7 +67,7 @@ runtime.spawn_raw(function()
             assert(r == -1, "or_else(async): expected fallback to win")
             assert(tries() == 1, "async_task: try_fn should be called exactly once")
             assert(fallback_called == true,
-                "or_else(async): fallback should run when event is not ready")
+                "or_else(async): fallback should run when op is not ready")
         end
 
         -- nested wrap: ((x + 1) * 2)
@@ -92,7 +92,7 @@ runtime.spawn_raw(function()
     -- 3) Choice + wrap
     --------------------------------------------------------
     do
-        -- choice over multiple ready events
+        -- choice over multiple ready ops
         local choice_ev = choice(always(1), always(2), always(3))
         for _ = 1, 5 do
             local v = perform(choice_ev)
@@ -138,7 +138,7 @@ runtime.spawn_raw(function()
         end
         assert(calls2 == runs, "guard in choice: builder call mismatch")
 
-        -- guard + with_nack (builder returns a with_nack event)
+        -- guard + with_nack (builder returns a with_nack op)
         local guard_calls, cancelled = 0, false
         local guarded_nack = op.guard(function()
             guard_calls = guard_calls + 1
@@ -161,7 +161,7 @@ runtime.spawn_raw(function()
     end
 
     --------------------------------------------------------
-    -- 5) or_else on composite events
+    -- 5) or_else on composite ops
     --------------------------------------------------------
     do
         -- composite ready: choice(always, always)
@@ -254,11 +254,11 @@ runtime.spawn_raw(function()
     end
 
     --------------------------------------------------------
-    -- 7) bracket: RAII-style resource management over events
+    -- 7) bracket: RAII-style resource management over ops
     --------------------------------------------------------
     do
         ----------------------------------------------------
-        -- 7.1 basic success: inner event wins → aborted=false
+        -- 7.1 basic success: inner op wins → aborted=false
         ----------------------------------------------------
         do
             local acq_count = 0
@@ -378,7 +378,7 @@ runtime.spawn_raw(function()
     -- In the new model:
     --   finally(cleanup) is about lifetime:
     --     * cleanup(false) on normal success
-    --     * cleanup(true) if the event participates in a choice and loses
+    --     * cleanup(true) if the op participates in a choice and loses
     --   It does not intercept Lua errors; those are handled by scopes.
     --------------------------------------------------------
     do
@@ -398,11 +398,11 @@ runtime.spawn_raw(function()
                 "finally(success): aborted should be false")
         end
 
-        -- 8.2 abort path: event loses in a choice → cleanup(true)
+        -- 8.2 abort path: op loses in a choice → cleanup(true)
         do
             local calls = {}
 
-            -- This event never commits, so in choice it always loses.
+            -- This op never commits, so in choice it always loses.
             local base = never():finally(function(aborted)
                 calls[#calls + 1] = aborted
             end)

@@ -157,14 +157,14 @@ local function test_with_op_basic()
         assert(scope.current() == child, "inside with_op build_op, current() should be child scope")
         assert(child:parent() == parent, "with_op child parent should be current scope")
 
-        -- simple event that returns two values
+        -- simple op that returns two values
         return op.always(true):wrap(function()
             return 99, "ok"
         end)
     end)
 
     local a, b = performer.perform(ev)
-    assert(a == 99 and b == "ok", "with_op should propagate child event results")
+    assert(a == 99 and b == "ok", "with_op should propagate child op results")
 
     -- After perform, current() should be restored to the parent.
     assert(scope.current() == parent,
@@ -252,7 +252,7 @@ local function test_with_op_abort_on_choice()
 
     local cst, cerr = child_scope:status()
     assert(cst == "cancelled",
-           "with_op child should be cancelled when its event loses a choice")
+           "with_op child should be cancelled when its op loses a choice")
     assert(cerr == "scope aborted",
            "with_op aborted child error should be 'scope aborted'")
 end
@@ -288,12 +288,12 @@ local function test_with_op_child_fiber_failure()
                 assert(reason2 ~= nil, "blocked child fiber should receive a cancellation reason")
             end)
 
-            -- The main event for with_op completes successfully.
+            -- The main op for with_op completes successfully.
             return op.always("ok")
         end)
 
         local res = performer.perform(ev)
-        assert(res == "ok", "with_op main event should still return its result")
+        assert(res == "ok", "with_op main op should still return its result")
 
         -- At this point, with_op's release will have waited for the child scope
         -- to close, including both spawned child fibers and defers.
@@ -428,7 +428,7 @@ local function test_sync_wraps_op_failure()
     -- Op whose post-wrap raises: tests that scope sees failure.
     local ev = op.always(123):wrap(function(v)
         assert(v == 123, "inner always should pass its value")
-        error("event post-wrap failure")
+        error("op post-wrap failure")
     end)
 
     local failed_scope
@@ -439,19 +439,19 @@ local function test_sync_wraps_op_failure()
         performer.perform(ev)
     end)
 
-    assert(st == "failed", "scope.run should report failure when event post-wrap fails")
-    assert(tostring(serr):find("event post-wrap failure", 1, true),
-           "scope error should mention the event failure")
+    assert(st == "failed", "scope.run should report failure when op post-wrap fails")
+    assert(tostring(serr):find("op post-wrap failure", 1, true),
+           "scope error should mention the op failure")
 
     local st2, serr2 = failed_scope:status()
-    assert(st2 == "failed", "scope should be failed after event failure")
-    assert(tostring(serr2):find("event post-wrap failure", 1, true),
-           "scope error should mention the event failure")
+    assert(st2 == "failed", "scope should be failed after op failure")
+    assert(tostring(serr2):find("op post-wrap failure", 1, true),
+           "scope error should mention the op failure")
 end
 
 local function test_sync_respects_cancellation()
-    -- Race a never-ready event against cancellation; cancellation should win
-    -- and be reflected as (ok=false, reason, nil) at the event level, and
+    -- Race a never-ready op against cancellation; cancellation should win
+    -- and be reflected as (ok=false, reason) at the sync level, and
     -- as status 'cancelled' at the scope level.
     local ev = op.never()
 
@@ -460,17 +460,17 @@ local function test_sync_respects_cancellation()
         cancelled_scope = s
         s:cancel("cancel before sync")
 
-        local ok2, reason2 = performer.perform(ev)
-        assert(ok2 == false, "performer.perform should return ok=false after cancellation")
+        local ok2, reason2 = s:sync(ev)
+        assert(ok2 == false, "Scope:sync should return ok=false after cancellation")
         assert(reason2 == "cancel before sync",
-               "performer.perform should return cancellation reason")
+               "Scope:sync should return cancellation reason")
         return ok2, reason2
     end)
 
     assert(st == "cancelled", "scope should be cancelled")
     assert(serr == "cancel before sync", "cancellation reason should be preserved")
 
-    assert(ok_op == false, "scope.run should return the event ok flag from body")
+    assert(ok_op == false, "scope.run should return the op ok flag from body")
     assert(reason_op == "cancel before sync",
            "scope.run should return the cancellation reason from body")
 
@@ -494,7 +494,7 @@ local function test_sync_cancellation_race()
             s:cancel("race cancel")
         end)
 
-        local ok2, reason2 = performer.perform(cond:wait_op())
+        local ok2, reason2 = s:sync(cond:wait_op())
         return ok2, reason2
     end)
 
@@ -502,9 +502,9 @@ local function test_sync_cancellation_race()
     assert(serr == "race cancel",
            "race cancellation reason should be 'race cancel'")
 
-    assert(ok_op == false, "blocking event should observe ok=false when cancelled")
+    assert(ok_op == false, "blocking op should observe ok=false when cancelled")
     assert(reason_op == "race cancel",
-           "blocking event should see the race cancellation reason")
+           "blocking op should see the race cancellation reason")
 
     local st2, serr2 = race_scope:status()
     assert(st2 == "cancelled" and serr2 == "race cancel",
@@ -515,7 +515,7 @@ end
 -- 5. join_op and done_op (on failed/cancelled scopes)
 -------------------------------------------------------------------------------
 
-local function test_join_and_done_opents()
+local function test_join_and_done_ops()
     -- Failed scope: body error.
     local failed_scope
     local st_fail, err_fail = scope.run(function(s)
@@ -632,7 +632,7 @@ local function main()
         test_sync_respects_cancellation()
         test_sync_cancellation_race()
 
-        test_join_and_done_opents()
+        test_join_and_done_ops()
         test_fail_fast_from_child_fiber()
 
         io.stdout:write("OK\n")
