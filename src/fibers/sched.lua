@@ -157,9 +157,8 @@ function Scheduler:wait_for_events()
     local next_time = self:next_wake_time()
 
     local timeout = math.min(self.maxsleep, next_time - now)
-    if timeout < 0 then
-        timeout = 0
-    end
+
+    if timeout < 0 then timeout = 0 end
 
     if self.event_waiter then
         self.event_waiter:wait_for_events(self, now, timeout)
@@ -197,9 +196,7 @@ function Scheduler:shutdown()
             end
         end
 
-        if #self.next == 0 then
-            return true
-        end
+        if #self.next == 0 then return true end
 
         self:run()
     end
