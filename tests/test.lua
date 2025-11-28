@@ -4,12 +4,15 @@ package.path = package.path .. ';/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua'
 local sep = '-'
 
 local modules = {
-    { 'utils',    'fixed_buffer' },
-    { 'stream' },
-    { 'stream',   'file' },
-    { 'stream',   'mem' },
-    { 'stream',   'compat' },
-    { 'stream',   'socket' },
+    { 'utils',    'bytes' },
+    { 'utils',    'bytes_stress' },
+    { 'io',   'file' },
+    { 'io',   'mem' },
+    { 'io',   'stream' },
+    { 'io',   'socket' },
+    { 'io',   'proc_backend' },
+    -- { 'io',   'pollio' },
+    { 'pollio' },
     { 'timer' },
     { 'sched' },
     { 'runtime' },
@@ -18,11 +21,9 @@ local modules = {
     { 'cond' },
     { 'sleep' },
     { 'epoll' },
-    { 'pollio' },
-    { 'exec' },
+    { 'process' },
     { 'waitgroup' },
     -- { 'alarm' },
-    { 'context' },
     { 'scope' },
 }
 
