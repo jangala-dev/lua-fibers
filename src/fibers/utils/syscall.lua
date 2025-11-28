@@ -10,6 +10,7 @@ local p_signal = require 'posix.signal'
 local p_socket = require 'posix.sys.socket'
 local p_errno = require 'posix.errno'
 local p_time = require 'posix.time'
+local p_stdlib = require 'posix.stdlib'
 local bit = rawget(_G, "bit") or require 'bit32'
 
 local M = { ffi = {} } -- used this module format due to large number of exported functions
@@ -189,26 +190,32 @@ function M.unlink(path) return p_unistd.unlink(path) end
 
 function M.write(fd, buf) return p_unistd.write(fd, buf) end
 
-function M.waitpid(pid, options) return p_wait.wait(pid, options) end
+function M.wait(pid, options) return p_wait.wait(pid, options) end
 
 function M.exit(status) return os.exit(status) end
+
+function M.getenv(name) return p_stdlib.getenv(name) end
+
+function M.setenv(name, value, overwrite) return p_stdlib.setenv(name, value, overwrite) end
+
+function M._exit(status) return p_unistd._exit(status) end
 
 -------------------------------------------------------------------------------
 -- Convenience functions
 
 function M.set_nonblock(fd)
     local flags = assert(M.fcntl(fd, M.F_GETFL))
-    assert(M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
+    return assert(M.fcntl(fd, M.F_SETFL, bor(flags, M.O_NONBLOCK)))
 end
 
 function M.set_block(fd)
     local flags = assert(M.fcntl(fd, M.F_GETFL))
-    assert(M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
+    return assert(M.fcntl(fd, M.F_SETFL, band(flags, bnot(M.O_NONBLOCK))))
 end
 
 function M.set_cloexec(fd)
     local flags = assert(M.fcntl(fd, M.F_GETFD))
-    assert(M.fcntl(fd, M.F_SETFD, bor(flags, M.FD_CLOEXEC)))
+    return assert(M.fcntl(fd, M.F_SETFD, bor(flags, M.FD_CLOEXEC)))
 end
 
 function M.monotime()
