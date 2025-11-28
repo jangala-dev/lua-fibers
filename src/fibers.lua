@@ -24,58 +24,69 @@ end
 ----------------------------------------------------------------------
 
 --- Run a main function under the scheduler's root scope.
---
--- main_fn is called as main_fn(scope, ...).
---
--- Returns:
---   status :: "ok" | "failed" | "cancelled"
---   err    :: primary error / cancellation reason, or nil on "ok".
+---
+--- main_fn is called as main_fn(scope, ...).
+---
+--- On success:
+---   returns ...results... from main_fn directly.
+---
+--- On failure or cancellation:
+---   raises the primary error / cancellation reason.
+---
 ---@param main_fn fun(s: Scope, ...): any
 ---@param ... any
----@return ScopeStatus status
----@return any err
----@return any ...
+---@return any ...  -- only results from main_fn on success
 local function run(main_fn, ...)
-    assert(not Runtime.current_fiber(),
-       "fibers.run must not be called from inside a fiber")
-    local root = Scope.root()
-    local args = pack(...)
+  assert(not Runtime.current_fiber(),
+    "fibers.run must not be called from inside a fiber")
 
-    local status, err
-    local results  -- may be nil or a packed table
+  local root = Scope.root()
+  local args = pack(...)
 
-    root:spawn(function()
-        -- scope.run creates a child scope of the current scope,
-        -- runs main_fn(body_scope, ...) in its own fiber, and returns
-        -- (status, err, ...results_from_body_fn...).
-        local packed = pack(Scope.run(main_fn, unpack(args, 1, args.n or #args)))
-        status, err  = packed[1], packed[2]
+  -- Outcome container populated by the child fibre.
+  local outcome = {
+    status  = nil,  -- "ok" | "failed" | "cancelled"
+    err     = nil,  -- primary error / reason
+    results = nil,  -- packed results from main_fn on success
+  }
 
-        if packed.n > 2 then
-            -- Preserve any results from main_fn, including nils.
-            local out = { n = packed.n - 2 }
-            local j   = 1
-            for i = 3, packed.n do
-                out[j] = packed[i]
-                j = j + 1
-            end
-            results = out
-        else
-            results = nil
-        end
+  root:spawn(function()
+    -- Scope.run creates a child scope and runs main_fn(body_scope, ...),
+    -- returning (status, err, ...results...).
+    local packed        = pack(Scope.run(main_fn, unpack(args, 1, args.n)))
+    outcome.status      = packed[1]
+    outcome.err         = packed[2]
 
-        -- In all cases, stop the scheduler so runtime.main() returns.
-        Runtime.stop()
-    end)
-
-    -- Drive the scheduler until stopped by the main scope.
-    Runtime.main()
-
-    if results then
-        return status, err, unpack(results, 1, results.n or #results)
-    else
-        return status, err
+    if packed.n > 2 and outcome.status == "ok" then
+      local out = { n = packed.n - 2 }
+      local j   = 1
+      for i = 3, packed.n do
+        out[j] = packed[i]
+        j = j + 1
+      end
+      outcome.results = out
     end
+
+    -- Stop the scheduler so Runtime.main() returns.
+    Runtime.stop()
+  end)
+
+  -- Drive the scheduler until the main scope decides to stop it.
+  Runtime.main()
+
+  -- Interpret the outcome.
+  local status, err, results = outcome.status, outcome.err, outcome.results
+
+  if status ~= "ok" then
+    -- Re-raise the primary error / cancellation reason.
+    -- This may be any Lua value (string, table, etc.).
+    error(err or status)
+  end
+
+  if results then
+    return unpack(results, 1, results.n)
+  end
+  -- No results from main_fn: return nothing.
 end
 
 ----------------------------------------------------------------------
@@ -117,4 +128,5 @@ return {
     run_scope                  = Scope.run,
     scope_op                   = Scope.with_op,
     set_unscoped_error_handler = Scope.set_unscoped_error_handler,
+    current_scope              = Scope.current
 }
