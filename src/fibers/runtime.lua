@@ -43,7 +43,7 @@ function WaiterTask:run()
 end
 
 --- Cooperative fiber object managed by the runtime.
----@class Fiber
+---@class Fiber : Task
 ---@field coroutine thread
 ---@field alive boolean
 ---@field sockets table<any, any>
