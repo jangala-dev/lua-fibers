@@ -22,7 +22,7 @@ local function id_wrap(...) return ... end
 ----------------------------------------------------------------------
 
 --- A suspension of a fiber waiting on an op.
----@class Suspension
+---@class Suspension : Task
 ---@field state "waiting"|"synchronized"   # whether the suspension is still pending
 ---@field sched Scheduler                  # scheduler used to reschedule the fiber
 ---@field fiber Fiber                      # fiber object to resume
