@@ -7,11 +7,13 @@ package.path = "../src/?.lua;" .. package.path
 local timer = require 'fibers.timer'
 local sc = require 'fibers.utils.syscall'
 
+local noop_sched = { schedule = function() end }
+
 local function test_advance_time()
     local wheel = timer.new(10)
     local hour = 60 * 60
     local start_time = sc.monotime()
-    wheel:advance(hour)
+    wheel:advance(hour, noop_sched)
     local end_time = sc.monotime()
     print("Time to advance wheel by an hour: "..(end_time - start_time).." seconds")
 end
@@ -79,7 +81,7 @@ local function test_advance_now_update()
     local wheel = timer.new(sc.monotime())
     local advance_time = 100 -- Advance by 100 seconds
     local start_time = wheel.now
-    wheel:advance(start_time + advance_time)
+    wheel:advance(start_time + advance_time, noop_sched)
     local expected_time = start_time + advance_time
     assert(wheel.now == expected_time, "Advance method failed to update 'now' correctly")
     print("Test for 'now' update in advance method passed")
