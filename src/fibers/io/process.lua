@@ -1,4 +1,4 @@
--- fibers/process.lua
+-- fibers/io/process.lua
 --
 -- Process abstraction built on top of proc_backend, streams and CML Ops.
 --
@@ -12,6 +12,8 @@ local file_io  = require 'fibers.io.file'
 local proc_mod = require 'fibers.io.proc_backend'
 local poller   = require 'fibers.io.poller'
 local sleep    = require 'fibers.sleep'
+
+local safe    = require 'coxpcall'
 
 ---@class SpawnOptions
 ---@field argv string[]                          # required, argv[1] is executable
@@ -351,10 +353,10 @@ function Process:shutdown(grace)
       end)
     )
 
-    local ok, is_exit = pcall(op.perform_raw, ev)
+    local ok, is_exit = safe.pcall(op.perform_raw, ev)
     if not ok or not is_exit then
       self:kill()
-      pcall(function()
+      safe.pcall(function()
         self:wait_raw()
       end)
     end
@@ -384,7 +386,7 @@ local function with_process(spec, build_op)
       if aborted then
         proc:shutdown(1.0)
       else
-        pcall(function()
+        safe.pcall(function()
           proc:wait_raw()
         end)
         proc:close()
