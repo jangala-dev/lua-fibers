@@ -4,7 +4,7 @@ print('testing: fibers.epoll')
 -- look one level up
 package.path = "../src/?.lua;" .. package.path
 
-local epoll = require 'fibers.epoll'
+local epoll = require 'fibers.io.epoll'
 local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 

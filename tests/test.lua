@@ -19,7 +19,7 @@ local modules = {
     { 'queue' },
     { 'cond' },
     { 'sleep' },
-    { 'epoll' },
+    -- { 'epoll' },
     { 'waitgroup' },
     -- { 'alarm' },
     { 'scope' },
