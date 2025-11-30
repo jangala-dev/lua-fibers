@@ -1,5 +1,3 @@
--- tests/test_utils-bytes.lua
-
 print('testing: fibers.utils.bytes')
 
 -- look one level up
@@ -8,26 +6,36 @@ package.path = "../src/?.lua;" .. package.path
 -- Tests for fibers.utils.bytes
 --  - always exercises the pure Lua backend
 --  - additionally exercises the FFI backend if available
+--  - also exercises the top-level shim (whatever it chooses)
 --  - all backends are tested via the unified string-level API:
 --        RingBuf:  new, read_avail, write_avail, is_empty, put, take,
 --                  tostring, find, reset
 --        LinearBuf:new, append, tostring, reset
---    plus an extra FFI-only test for reserve/commit on LinearBuf.
+--    plus an extra FFI-only test for reserve/commit on LinearBuf,
+--    but only if the object actually supports reserve/commit and an
+--    ffi/cffi library is available.
 
 local function get_ffi()
   local is_LuaJIT = rawget(_G, "jit") and true or false
-  local ok, ffi
+  local ok, ffi_mod
   if is_LuaJIT then
-    ok, ffi = pcall(require, "ffi")
+    ok, ffi_mod = pcall(require, "ffi")
   else
-    ok, ffi = pcall(require, "cffi")
+    ok, ffi_mod = pcall(require, "cffi")
   end
   if not ok then return nil end
-  return ffi
+  return ffi_mod
 end
 
-local bytes = require "fibers.utils.bytes"
-local ffi   = get_ffi()
+local bytes_shim   = require "fibers.utils.bytes"
+local lua_backend  = require "fibers.utils.bytes.lua"
+
+local ok_ffi_backend, ffi_backend = pcall(require, "fibers.utils.bytes.ffi")
+if not ok_ffi_backend then
+  ffi_backend = nil
+end
+
+local ffi_obj = get_ffi()
 
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
@@ -68,6 +76,10 @@ local function test_ring_basic(impl)
   assert_eq(s, "hello", "take(5) returns 'hello'")
   assert_eq(rb:read_avail(), 0,    "read_avail after full take")
   assert(rb:is_empty(),            "is_empty after draining")
+
+  rb:reset()
+  assert_eq(rb:read_avail(), 0, "read_avail after reset")
+  assert(rb:is_empty(),         "is_empty after reset")
 end
 
 local function test_ring_wrap(impl)
@@ -109,25 +121,30 @@ local function test_linear_basic(impl)
 end
 
 ------------------------------------------------------------
--- FFI-only extra test for reserve/commit on LinearBuf
+-- Optional FFI test for reserve/commit on LinearBuf
 ------------------------------------------------------------
 
-local function test_linear_reserve_commit_ffi(impl, ffi_obj)
-  if not ffi_obj then
+local function test_linear_reserve_commit_ffi(impl, ffi_mod)
+  -- Only applicable if we have an ffi/cffi module.
+  if not ffi_mod then
     return
   end
-  if not impl or not impl.LinearBuf then
+  if not impl or not impl.LinearBuf or not impl.LinearBuf.new then
+    return
+  end
+
+  local lb = impl.LinearBuf.new(32)
+
+  -- Only run if this backend actually exposes a pointer-level API.
+  if type(lb.reserve) ~= "function" or type(lb.commit) ~= "function" then
     return
   end
 
   print("  LinearBuf reserve/commit (FFI)...")
 
-  local LinearBuf = impl.LinearBuf
-  local lb = LinearBuf.new(32)
-
   -- reserve/commit path
   local p = lb:reserve(5)
-  ffi_obj.copy(p, "hello", 5)
+  ffi_mod.copy(p, "hello", 5)
   lb:commit(5)
   assert_eq(lb:tostring(), "hello", "LinearBuf tostring after reserve/commit")
 
@@ -140,14 +157,18 @@ end
 -- Run tests for a given backend
 ------------------------------------------------------------
 
-local function run_backend_tests(name, impl, has_ffi_flag, ffi_obj)
+local function run_backend_tests(name, impl, ffi_mod)
   print(("testing bytes backend: %s"):format(name))
+
+  if not impl or not impl.RingBuf or not impl.LinearBuf then
+    error(("backend %s missing RingBuf/LinearBuf"):format(name))
+  end
+
   test_ring_basic(impl)
   test_ring_wrap(impl)
   test_linear_basic(impl)
-  if has_ffi_flag then
-    test_linear_reserve_commit_ffi(impl, ffi_obj)
-  end
+  test_linear_reserve_commit_ffi(impl, ffi_mod)
+
   print(("backend %s: OK\n"):format(name))
 end
 
@@ -158,17 +179,26 @@ end
 print("testing fibers.utils.bytes")
 
 -- Always test pure Lua backend
-if not bytes.lua or not bytes.lua.RingBuf or not bytes.lua.LinearBuf then
-  error("bytes.lua backend not available")
+if not lua_backend or not lua_backend.is_supported or not lua_backend.is_supported() then
+  error("Lua bytes backend not available or not supported")
+end
+run_backend_tests("lua", lua_backend, nil)
+
+-- Test FFI backend if present and supported
+if ffi_backend and ffi_backend.is_supported and ffi_backend.is_supported() then
+  if not ffi_obj then
+    print("ffi backend available but no ffi/cffi library; skipping pointer-level FFI test")
+  end
+  run_backend_tests("ffi", ffi_backend, ffi_obj)
+else
+  print("ffi backend not available or not supported; skipping FFI backend tests\n")
 end
 
-run_backend_tests("lua", bytes.lua, false, nil)
-
--- Test FFI backend if present
-if bytes.ffi and bytes.ffi.RingBuf and bytes.ffi.LinearBuf and ffi then
-  run_backend_tests("ffi", bytes.ffi, true, ffi)
+-- Test the top-level shim (whatever it chose)
+if bytes_shim and bytes_shim.RingBuf and bytes_shim.LinearBuf then
+  run_backend_tests("shim", bytes_shim, ffi_obj)
 else
-  print("ffi backend not available or no ffi/cffi; skipping FFI tests\n")
+  error("bytes shim backend missing RingBuf/LinearBuf")
 end
 
 print("all bytes tests done")

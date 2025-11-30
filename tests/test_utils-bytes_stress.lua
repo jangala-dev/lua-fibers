@@ -1,20 +1,27 @@
--- tests/test_bytes_stress.lua
 --
 -- Stress tests for fibers.utils.bytes
 --  - always exercises the pure Lua backend
 --  - also exercises the FFI backend if available
+--  - also exercises the top-level shim (default backend)
 --
 -- Uses a simple reference model (Lua strings) to verify correctness
 -- under randomised workloads, via the unified string-level interface:
 --   RingBuf:put(str), RingBuf:take(n), RingBuf:tostring()
 --   LinearBuf:append(str), LinearBuf:tostring()
+--
 
 print('testing: fibers.utils.bytes stress')
 
 -- look one level up
 package.path = "../src/?.lua;" .. package.path
 
-local bytes = require "fibers.utils.bytes"
+local bytes_shim   = require "fibers.utils.bytes"
+local lua_backend  = require "fibers.utils.bytes.lua"
+
+local ok_ffi_backend, ffi_backend = pcall(require, "fibers.utils.bytes.ffi")
+if not ok_ffi_backend then
+  ffi_backend = nil
+end
 
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
@@ -168,24 +175,37 @@ end
 
 local function run_backend(label, impl)
   print(("testing bytes backend (stress): %s"):format(label))
+
+  if not impl or not impl.RingBuf or not impl.LinearBuf then
+    error(("backend %s missing RingBuf/LinearBuf"):format(label))
+  end
+
   stress_ring(impl, label)
   stress_linear(impl, label)
+
   print(("backend %s: OK\n"):format(label))
 end
 
 print("testing fibers.utils.bytes (stress)")
 
 -- Always test pure Lua backend
-if not bytes.lua or not bytes.lua.RingBuf or not bytes.lua.LinearBuf then
-  error("bytes.lua backend not available")
+if not lua_backend or not lua_backend.is_supported or not lua_backend.is_supported() then
+  error("Lua bytes backend not available or not supported")
 end
-run_backend("lua", bytes.lua)
+run_backend("lua", lua_backend)
 
--- Test FFI backend if present
-if bytes.ffi and bytes.ffi.RingBuf and bytes.ffi.LinearBuf then
-  run_backend("ffi", bytes.ffi)
+-- Test FFI backend if present and supported
+if ffi_backend and ffi_backend.is_supported and ffi_backend.is_supported() then
+  run_backend("ffi", ffi_backend)
 else
-  print("ffi backend not available; skipping FFI stress\n")
+  print("ffi backend not available or not supported; skipping FFI stress\n")
+end
+
+-- Also test the shim (which chooses a default backend)
+if bytes_shim and bytes_shim.RingBuf and bytes_shim.LinearBuf then
+  run_backend("shim", bytes_shim)
+else
+  error("bytes shim backend missing RingBuf/LinearBuf")
 end
 
 print("all bytes stress tests done")
