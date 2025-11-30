@@ -26,14 +26,11 @@ local perform    = require 'fibers.performer'.perform
 
 ---@class Socket
 ---@field fd integer|nil
----@field listen_unix fun(self: Socket, path: string): (boolean|nil, string|nil)
----@field accept_op fun(self: Socket): Op
----@field accept fun(self: Socket): (Stream|nil, string|nil)
----@field connect_op fun(self: Socket, sa: any): Op
----@field connect fun(self: Socket, sa: any): (Stream|nil, string|nil)
----@field connect_unix_op fun(self: Socket, path: string): Op
----@field connect_unix fun(self: Socket, path: string): (Stream|nil, string|nil)
----@field close fun(self: Socket): (boolean, string|nil)
+---@field accept fun(self: Socket): (boolean|nil), any
+---@field listen_unix fun(self: Socket, path: string): (boolean|nil), any
+---@field connect_unix fun(self: Socket, path: string): (Stream|nil), any
+---@field close fun(self: Socket): boolean, any
+
 local Socket = {}
 Socket.__index = Socket
 
