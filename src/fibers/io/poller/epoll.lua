@@ -1,15 +1,15 @@
 -- fibers/io/poller/epoll.lua
 --
 -- Linux epoll-based poller backend.
--- Supports LuaJIT (ffi) and PUC Lua with cffi.
+-- Supports LuaJIT (ffi) and PUC Lua with cffi via ffi_compat.
 -- Intended to be selected via fibers.io.poller.
+--
+---@module 'fibers.io.poller.epoll'
 
-local runtime = require 'fibers.runtime'
-local wait    = require 'fibers.wait'
-local safe    = require 'coxpcall'
-
-local bit     = rawget(_G, "bit") or require 'bit32'
-local ffi_c   = require 'fibers.utils.ffi_compat'
+local core   = require 'fibers.io.poller.core'
+local safe   = require 'coxpcall'
+local bit    = rawget(_G, "bit") or require 'bit32'
+local ffi_c  = require 'fibers.utils.ffi_compat'
 
 ----------------------------------------------------------------------
 -- FFI / CFFI setup via ffi_compat
@@ -31,7 +31,7 @@ local EBADF  = 9
 local ARCH = ffi.arch or ((jit and jit.arch) or "x64")
 
 ----------------------------------------------------------------------
--- Low-level epoll bindings (local to this file)
+-- Low-level epoll bindings
 ----------------------------------------------------------------------
 
 ffi.cdef[[
@@ -145,7 +145,7 @@ end
 
 local function epoll_wait(epfd, timeout_ms, max_events)
   local events = ffi.new("struct epoll_event[?]", max_events)
-  local n      = C.epoll_wait(epfd, events, max_events, timeout_ms)
+  local n      = C.epoll_wait(epfd, events, max_events, timeout_ms or 0)
   if n == -1 then
     local errno = get_errno()
     if errno == EINTR then
@@ -174,7 +174,7 @@ end
 -- Epoll wrapper object
 ----------------------------------------------------------------------
 
----@class Epoll
+---@class EpollState
 ---@field epfd integer
 ---@field active_events table<integer, integer>
 ---@field maxevents integer
@@ -209,7 +209,7 @@ end
 function Epoll:poll(timeout_ms)
   local events, err, errno = epoll_wait(self.epfd, timeout_ms or 0, self.maxevents)
   if not events then
-    error(err or "epoll_wait failed (errno " .. tostring(errno) .. ")")
+    error(err or ("epoll_wait failed (errno " .. tostring(errno) .. ")"))
   end
 
   local count = 0
@@ -222,7 +222,7 @@ function Epoll:poll(timeout_ms)
     self.maxevents = self.maxevents * 2
   end
 
-  return events, nil
+  return events
 end
 
 function Epoll:del(fd)
@@ -233,7 +233,7 @@ function Epoll:del(fd)
       self.active_events[fd] = nil
       return
     end
-    error(err or "epoll_ctl(DEL) failed (errno " .. tostring(errno) .. ")")
+    error(err or ("epoll_ctl(DEL) failed (errno " .. tostring(errno) .. ")"))
   end
   self.active_events[fd] = nil
 end
@@ -244,106 +244,44 @@ function Epoll:close()
 end
 
 ----------------------------------------------------------------------
--- Poller TaskSource built on Epoll
+-- Backend ops for poller.core
 ----------------------------------------------------------------------
 
----@class Poller : TaskSource
----@field ep Epoll
----@field rd Waitset
----@field wr Waitset
-local Poller = {}
-Poller.__index = Poller
-
-local function new_poller()
-  return setmetatable({
-    ep = new_epoll(),
-    rd = wait.new_waitset(),
-    wr = wait.new_waitset(),
-  }, Poller)
+local function new_backend()
+  return new_epoll()
 end
 
-local function recompute_mask(self, fd)
-  local need_rd = not self.rd:is_empty(fd)
-  local need_wr = not self.wr:is_empty(fd)
+local function on_wait_change(ep, fd, want_rd, want_wr)
   local mask = 0
-  if need_rd then mask = bit.bor(mask, RD) end
-  if need_wr then mask = bit.bor(mask, WR) end
+  if want_rd then mask = bit.bor(mask, RD) end
+  if want_wr then mask = bit.bor(mask, WR) end
 
   if mask ~= 0 then
-    self.ep:add(fd, mask)
+    ep:add(fd, mask)
   else
-    self.ep:del(fd)
+    ep:del(fd)
   end
 end
 
---- Register a task as waiting on an fd for read or write readiness.
----@param fd integer
----@param dir '"rd"'|'"wr"'
----@param task Task
----@return WaitToken
-function Poller:wait(fd, dir, task)
-  assert(type(fd) == 'number', "fd must be number")
-  assert(dir == "rd" or dir == "wr", "dir must be 'rd' or 'wr'")
+local function poll_backend(ep, timeout_ms, _rd_ws, _wr_ws)
+  -- ep:poll already returns fd -> epoll event bits.
+  local evmap = ep:poll(timeout_ms)
+  local events = {}
 
-  local ws    = (dir == "rd") and self.rd or self.wr
-  local token = ws:add(fd, task)
-
-  recompute_mask(self, fd)
-
-  local original_unlink = token.unlink
-  local owner           = self
-
-  function token.unlink(tok)
-    local emptied = original_unlink(tok)
-    if emptied then
-      recompute_mask(owner, fd)
-    end
-    return emptied
+  for fd, ev in pairs(evmap) do
+    local flags = {
+      rd  = bit.band(ev, RD + ERR) ~= 0,
+      wr  = bit.band(ev, WR + ERR) ~= 0,
+      err = bit.band(ev, ERR) ~= 0,
+    }
+    events[fd] = flags
   end
 
-  return token
+  return events
 end
 
---- TaskSource hook: poll epoll and schedule ready tasks.
----@param sched Scheduler
----@param _ number|nil
----@param timeout number|nil  -- seconds
-function Poller:schedule_tasks(sched, _, timeout)
-  if timeout == nil then timeout = 0 end
-  if timeout >= 0 then timeout = timeout * 1e3 end
-
-  local events = self.ep:poll(timeout)
-  for fd, ev in pairs(events) do
-    if bit.band(ev, RD + ERR) ~= 0 then
-      self.rd:notify_all(fd, sched)
-    end
-    if bit.band(ev, WR + ERR) ~= 0 then
-      self.wr:notify_all(fd, sched)
-    end
-    recompute_mask(self, fd)
-  end
-end
-
-Poller.wait_for_events = Poller.schedule_tasks
-
-function Poller:close()
-  self.ep:close()
-  self.ep = nil
-end
-
-----------------------------------------------------------------------
--- Singleton and capability probe
-----------------------------------------------------------------------
-
-local singleton
-
-local function get()
-  if singleton then return singleton end
-  singleton = new_poller()
-  local sched = runtime.current_scheduler
-  assert(sched.add_task_source, "scheduler must implement add_task_source")
-  sched:add_task_source(singleton)
-  return singleton
+local function close_backend(ep)
+  ep:close()
 end
 
 local function is_supported()
@@ -354,8 +292,12 @@ local function is_supported()
   return ok
 end
 
-return {
-  get          = get,
-  Poller       = Poller,
-  is_supported = is_supported,
+local ops = {
+  new_backend    = new_backend,
+  on_wait_change = on_wait_change,
+  poll           = poll_backend,
+  close_backend  = close_backend,
+  is_supported   = is_supported,
 }
+
+return core.build_poller(ops)

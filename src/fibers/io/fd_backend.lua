@@ -5,24 +5,11 @@
 --   1. FFI-based (no luaposix dependency),
 --   2. luaposix-based (no FFI dependency).
 --
--- Backend contract towards fibers.io.stream:
---   * kind()              -> "fd"
---   * fileno()            -> fd
---   * read_string(max)    -> str|nil, err|nil
---        - str == nil  : would block
---        - str == ""   : EOF
---   * write_string(str)   -> n|nil, err|nil
---        - n == nil    : would block
---   * on_readable(task)   -> token{ unlink = fn }
---   * on_writable(task)   -> token{ unlink = fn }
---   * close()             -> ok, err|nil
---   * seek(whence, off)   -> pos|nil, err|nil
---        - whence: "set" | "cur" | "end"
 ---@module 'fibers.io.fd_backend'
 
 local candidates = {
-  'fibers.io.fd_backend.ffi',   -- FFI / libc
-  -- 'fibers.io.fd_backend.posix', -- luaposix
+  'fibers.io.fd_backend.ffi',    -- FFI / libc
+  'fibers.io.fd_backend.posix',  -- luaposix
 }
 
 for _, name in ipairs(candidates) do

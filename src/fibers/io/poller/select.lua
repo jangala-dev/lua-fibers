@@ -2,61 +2,39 @@
 --
 -- posix.poll()-based poller backend (no epoll required).
 -- Intended to be selected via fibers.io.poller.
-
+--
 ---@module 'fibers.io.poller.select'
 
-local runtime = require 'fibers.runtime'
-local wait    = require 'fibers.wait'
+local core = require 'fibers.io.poller.core'
 
 -- Try to load luaposix poll support.
 local ok, poll_mod = pcall(require, 'posix.poll')
 if not ok or type(poll_mod) ~= "table" or type(poll_mod.poll) ~= "function" then
-  -- Backend is present but unusable on this platform.
   return {
     is_supported = function() return false end,
   }
 end
+local errno_mod = require 'posix.errno'
 
 local poll_fn = poll_mod.poll
 
----@class Waitset
----@field buckets table<any, Task[]>
+----------------------------------------------------------------------
+-- Backend ops for poller.core
+----------------------------------------------------------------------
 
----@class SelectPoller : TaskSource
----@field rd Waitset   # fd -> tasks waiting for read
----@field wr Waitset   # fd -> tasks waiting for write
-local SelectPoller = {}
-SelectPoller.__index = SelectPoller
-
-local function new_poller()
-  return setmetatable({
-    rd = wait.new_waitset(),
-    wr = wait.new_waitset(),
-  }, SelectPoller)
-end
-
---- Register a task as waiting on an fd for read or write readiness.
----@param fd integer
----@param dir '"rd"'|'"wr"'
----@param task Task
----@return WaitToken
-function SelectPoller:wait(fd, dir, task)
-  assert(type(fd) == 'number', "fd must be number")
-  assert(dir == "rd" or dir == "wr", "dir must be 'rd' or 'wr'")
-
-  local ws = (dir == "rd") and self.rd or self.wr
-  return ws:add(fd, task)
+local function new_backend()
+  -- No persistent kernel state required for poll(); everything is
+  -- derived from the current waitsets on each poll call.
+  return {}
 end
 
 --- Build the fds table in the shape expected by posix.poll.poll:
 ---   fds[fd] = { events = { IN = true, OUT = true } }
----@param self SelectPoller
----@return table
-local function build_fds(self)
+local function build_fds(rd_waitset, wr_waitset)
   local fds = {}
 
   -- Any fd with one or more read waiters gets IN.
-  for fd, list in pairs(self.rd.buckets) do
+  for fd, list in pairs(rd_waitset.buckets) do
     if list and #list > 0 then
       local e = fds[fd]
       if not e then
@@ -68,7 +46,7 @@ local function build_fds(self)
   end
 
   -- Any fd with one or more write waiters gets OUT.
-  for fd, list in pairs(self.wr.buckets) do
+  for fd, list in pairs(wr_waitset.buckets) do
     if list and #list > 0 then
       local e = fds[fd]
       if not e then
@@ -82,78 +60,51 @@ local function build_fds(self)
   return fds
 end
 
---- TaskSource hook: poll and schedule any ready tasks.
----@param sched Scheduler
----@param _ number|nil        -- current monotonic time (unused)
----@param timeout number|nil  -- seconds
-function SelectPoller:schedule_tasks(sched, _, timeout)
-  -- Convert timeout from seconds to milliseconds for posix.poll.
-  local timeout_ms
-  if timeout == nil then
-    timeout_ms = 0
-  elseif timeout < 0 then
-    timeout_ms = -1
-  else
-    timeout_ms = math.floor(timeout * 1e3 + 0.5)
-  end
-
-  local fds = build_fds(self)
+local function poll_backend(_, timeout_ms, rd_waitset, wr_waitset)
+  local fds = build_fds(rd_waitset, wr_waitset)
 
   -- poll() with nfds == 0 is defined and just sleeps for timeout.
-  local nready, err, errno = poll_fn(fds, timeout_ms)
+  local nready, err, eno = poll_fn(fds, timeout_ms)
   if nready == nil then
-    -- Treat as a hard failure: surfaced as a normal Lua error, which
-    -- will be caught by the scope/fibre machinery.
-    error(("%s (errno %s)"):format(tostring(err), tostring(errno)))
+    -- Treat EINTR as a benign interruption (e.g. SIGCHLD), same as epoll backend.
+    if eno == errno_mod.EINTR then
+      return {}
+    end
+    error(("%s (errno %s)"):format(tostring(err), tostring(eno)))
   end
-
   if nready == 0 then
-    return
+    return {}
   end
 
-  -- Wake tasks for any fd that reported events.
-  --
+  local events = {}
+
   -- luaposix reports readiness in fds[fd].revents with flags
   -- such as IN, OUT, ERR, HUP, NVAL.
   for fd, info in pairs(fds) do
     local re = info.revents
     if re then
-      if re.IN or re.HUP or re.ERR or re.NVAL then
-        self.rd:notify_all(fd, sched)
-      end
-      if re.OUT or re.ERR or re.NVAL then
-        self.wr:notify_all(fd, sched)
+      local rd_flag  = re.IN  or re.HUP or re.ERR or re.NVAL
+      local wr_flag  = re.OUT or re.ERR or re.NVAL
+      local err_flag = re.ERR or re.NVAL
+
+      if rd_flag or wr_flag or err_flag then
+        events[fd] = {
+          rd  = not not rd_flag,
+          wr  = not not wr_flag,
+          err = not not err_flag,
+        }
       end
     end
   end
+
+  return events
 end
 
--- Used as the scheduler's event_waiter.
-SelectPoller.wait_for_events = SelectPoller.schedule_tasks
-
-function SelectPoller:close()
-  self.rd:clear_all()
-  self.wr:clear_all()
-end
-
--- Singleton wiring (mirrors the epoll poller pattern).
-local singleton
-
-local function get()
-  if singleton then return singleton end
-  singleton = new_poller()
-  local sched = runtime.current_scheduler
-  assert(sched.add_task_source, "scheduler must implement add_task_source")
-  sched:add_task_source(singleton)
-  return singleton
-end
-
-local function is_supported()
-  return true
-end
-
-return {
-  get          = get,
-  Poller       = SelectPoller,
-  is_supported = is_supported,
+local ops = {
+  new_backend  = new_backend,
+  poll         = poll_backend,
+  -- on_wait_change: not needed for poll(); state is rebuilt each time.
+  is_supported = function() return true end,
 }
+
+return core.build_poller(ops)
