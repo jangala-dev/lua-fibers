@@ -22,8 +22,6 @@ local ffi = M.is_LuaJIT and require 'ffi' or require 'cffi'
 ffi.tonumber = ffi.tonumber or tonumber
 ffi.type = ffi.type or type
 
-local ARCH = ffi.arch
-
 -------------------------------------------------------------------------------
 -- Compatibility functions
 table.pack = table.pack or function(...) -- luacheck: ignore -- Compatibility fallback
@@ -237,16 +235,6 @@ function M.floatsleep(t)
     end
 end
 
-local function wrap_error(retval)
-    if retval >= 0 then
-        return retval
-    else
-        local errno = ffi.errno()
-        return nil, M.strerror(errno), errno
-    end
-end
-
-
 -------------------------------------------------------------------------------
 -- FFI C structure functions (for efficiency)
 
@@ -271,23 +259,23 @@ function M.ffi.memcmp(obj1, obj2, nbytes)
     return ffi.tonumber(ffi.C.memcmp(obj1, obj2, nbytes))
 end
 
--- Define syscall and pid_t
-ffi.cdef [[
-long syscall(long number, ...);
-typedef int pid_t;
-typedef unsigned int uint;
-]]
+-- -- Define syscall and pid_t
+-- ffi.cdef [[
+-- long syscall(long number, ...);
+-- typedef int pid_t;
+-- typedef unsigned int uint;
+-- ]]
 
-local SYS_pidfd_open = 434      -- Good for (almost) all our platforms
-if ARCH == "mips" or ARCH == "mipsel" then
-    SYS_pidfd_open = 4000 + 434 -- See https://www.linux-mips.org/wiki/Syscall
-end
+-- local SYS_pidfd_open = 434      -- Good for (almost) all our platforms
+-- if ARCH == "mips" or ARCH == "mipsel" then
+--     SYS_pidfd_open = 4000 + 434 -- See https://www.linux-mips.org/wiki/Syscall
+-- end
 
--- Function to open a pidfd
-function M.pidfd_open(pid, flags)
-    pid = ffi.new("pid_t", pid)    -- Explicitly cast pid to pid_t
-    flags = ffi.new("uint", flags) -- Explicitly cast flgas to uint
-    return wrap_error(ffi.tonumber(ffi.C.syscall(SYS_pidfd_open, pid, flags)))
-end
+-- -- Function to open a pidfd
+-- function M.pidfd_open(pid, flags)
+--     pid = ffi.new("pid_t", pid)    -- Explicitly cast pid to pid_t
+--     flags = ffi.new("uint", flags) -- Explicitly cast flgas to uint
+--     return wrap_error(ffi.tonumber(ffi.C.syscall(SYS_pidfd_open, pid, flags)))
+-- end
 
 return M

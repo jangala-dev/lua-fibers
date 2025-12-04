@@ -1,12 +1,14 @@
--- tests/test_proc_backend.lua
+-- tests/test_exec_backend.lua
+--
+-- Backend-level tests for fibers.io.exec_backend.
+-- Uses the real backend but does not involve fibers or the scheduler.
 
--- Uses the real scheduler, ops and wait/waitset machinery.
-print('testing: fibers.io.proc_backend')
+print('testing: fibers.io.exec_backend')
 
 -- look one level up
 package.path = "../src/?.lua;" .. package.path
 
-local proc_backend = require 'fibers.io.proc_backend'
+local proc_backend = require 'fibers.io.exec_backend'
 local sc           = require 'fibers.utils.syscall'
 local stdlib       = require 'posix.stdlib'
 
@@ -26,12 +28,14 @@ local function read_all(fd)
   return table.concat(chunks)
 end
 
+-- Block in a simple loop on nonblock_wait until the child is finished.
+-- New backend contract: nonblock_wait() → done:boolean, code, signal, err
 local function wait_blocking(backend)
   while true do
-    local exited, status, code, sig, err = backend:nonblock_wait()
-    assert(not err, "nonblock_wait error: " .. tostring(err))
+    local exited, code, sig, err = backend:nonblock_wait()
+    assert(err == nil, "nonblock_wait error: " .. tostring(err))
     if exited then
-      return status, code, sig
+      return code, sig
     end
   end
 end
@@ -48,14 +52,15 @@ local function test_simple_exit()
     stdin_fd  = nil,
     stdout_fd = nil,
     stderr_fd = nil,
+    flags     = nil,
   }
 
-  local backend, err = proc_backend.spawn(spec)
-  assert(backend, "spawn failed: " .. tostring(err))
+  local backend, err = proc_backend.start(spec)
+  assert(backend, "start failed: " .. tostring(err))
 
-  local status, code, sig = wait_blocking(backend)
+  local code, sig = wait_blocking(backend)
   assert(code == 7,
-    ("expected exit code 7, got %s (status %s)"):format(tostring(code), tostring(status)))
+    ("expected exit code 7, got %s"):format(tostring(code)))
   assert(sig == nil, "expected no terminating signal")
 end
 
@@ -77,10 +82,11 @@ local function test_env_inherit()
     stdin_fd  = nil,
     stdout_fd = wr,      -- child stdout -> pipe write end
     stderr_fd = wr,      -- send stderr the same way for simplicity
+    flags     = nil,
   }
 
-  local backend, err = proc_backend.spawn(spec)
-  assert(backend, "spawn failed: " .. tostring(err))
+  local backend, err = proc_backend.start(spec)
+  assert(backend, "start failed: " .. tostring(err))
 
   -- Parent no longer needs write end.
   assert(sc.close(wr))
@@ -88,9 +94,9 @@ local function test_env_inherit()
   local out = read_all(rd)
   assert(sc.close(rd))
 
-  local _, code, sig = wait_blocking(backend)
+  local code, sig = wait_blocking(backend)
   assert(code == 0, "expected shell to exit 0")
-  assert(sig == nil)
+  assert(sig == nil, "expected no terminating signal")
 
   assert(out == "parent_inherit\n",
     ("expected 'parent_inherit', got %q"):format(out))
@@ -113,19 +119,20 @@ local function test_env_override()
     stdin_fd  = nil,
     stdout_fd = wr,
     stderr_fd = wr,
+    flags     = nil,
   }
 
-  local backend, err = proc_backend.spawn(spec)
-  assert(backend, "spawn failed: " .. tostring(err))
+  local backend, err = proc_backend.start(spec)
+  assert(backend, "start failed: " .. tostring(err))
 
   assert(sc.close(wr))
 
   local out = read_all(rd)
   assert(sc.close(rd))
 
-  local _, code, sig = wait_blocking(backend)
+  local code, sig = wait_blocking(backend)
   assert(code == 0, "expected shell to exit 0")
-  assert(sig == nil)
+  assert(sig == nil, "expected no terminating signal")
 
   assert(out == "child_value\n",
     ("expected 'child_value', got %q"):format(out))
