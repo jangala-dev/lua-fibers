@@ -3,7 +3,7 @@
 --- Core cooperative scheduler for fiber tasks.
 ---@module 'fibers.sched'
 
-local sc    = require 'fibers.utils.syscall'
+local time  = require 'fibers.utils.time'
 local timer = require 'fibers.timer'
 
 local MAX_SLEEP_TIME = 10
@@ -32,10 +32,10 @@ local Scheduler = {}
 Scheduler.__index = Scheduler
 
 --- Create a new scheduler instance.
----@param get_time? fun(): number # monotonic time source (defaults to sc.monotime)
+---@param get_time? fun(): number # monotonic time source (defaults to fibers.utils.time.now)
 ---@return Scheduler
 local function new(get_time)
-    local now_src = get_time or sc.monotime
+    local now_src = get_time or time.now
     local now     = now_src()
 
     local ret = setmetatable({
@@ -157,13 +157,13 @@ function Scheduler:wait_for_events()
     local next_time = self:next_wake_time()
 
     local timeout = math.min(self.maxsleep, next_time - now)
-
     if timeout < 0 then timeout = 0 end
 
     if self.event_waiter then
         self.event_waiter:wait_for_events(self, now, timeout)
     else
-        sc.floatsleep(timeout)
+        -- No poller installed; fall back to process-blocking sleep.
+        time.sleep_blocking(timeout)
     end
 end
 
