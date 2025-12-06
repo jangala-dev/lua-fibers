@@ -1,49 +1,22 @@
 -- fibers/io/fd_backend/core.lua
---
--- Core glue for fd-backed StreamBackend implementations.
---
--- This module owns the public FdBackend shape and semantics.
--- Platform backends provide only low-level primitives; build_backend
--- wires those into a concrete { new, is_supported } module.
---
----@module 'fibers.io.fd_backend.core'
 
 local poller = require 'fibers.io.poller'
 
 ---@class FdBackend
----@field filename string|nil  -- optional filename for diagnostics
----@field _fd integer|nil      -- underlying OS file descriptor (or nil if closed)
----@field _ops table           -- low-level operations table (see build_backend)
-
+---@field filename string|nil
+---@field _fd integer|nil
+---@field _ops table
 local FdBackend = {}
 FdBackend.__index = FdBackend
 
-----------------------------------------------------------------------
--- Public methods (contract lives here)
-----------------------------------------------------------------------
-
---- Backend kind identifier.
----@return '"fd"'
 function FdBackend:kind()
   return "fd"
 end
 
---- Underlying file descriptor number, or nil if closed.
----@return integer|nil
 function FdBackend:fileno()
   return self._fd
 end
 
---- Read up to max bytes as a Lua string.
----
---- Semantics:
----   * s == nil, err == nil      : would block
----   * s == nil, err ~= nil      : hard error
----   * s == ""                   : EOF
----   * s ~= ""                   : data
----
----@param max? integer
----@return string|nil s, string|nil err
 function FdBackend:read_string(max)
   if not self._fd then
     return nil, "closed"
@@ -51,22 +24,12 @@ function FdBackend:read_string(max)
 
   max = max or 4096
   if max <= 0 then
-    -- Matches existing posix/ffi backends.
     return "", nil
   end
 
   return self._ops.read(self._fd, max)
 end
 
---- Write a Lua string.
----
---- Semantics:
----   * n == nil, err == nil      : would block
----   * n == nil, err ~= nil      : hard error
----   * n >= 0                    : bytes written
----
----@param str string
----@return integer|nil n, string|nil err
 function FdBackend:write_string(str)
   if not self._fd then
     return nil, "closed"
@@ -74,19 +37,12 @@ function FdBackend:write_string(str)
 
   local len = #str
   if len == 0 then
-    -- Existing behaviour: zero-length write is a cheap no-op.
     return 0, nil
   end
 
   return self._ops.write(self._fd, str, len)
 end
 
---- Seek within the file descriptor.
----
---- whence: "set" | "cur" | "end"
----@param whence '"set"'|'"cur"'|'"end"'
----@param off integer
----@return integer|nil pos, string|nil err
 function FdBackend:seek(whence, off)
   if not self._fd then
     return nil, "closed"
@@ -94,27 +50,14 @@ function FdBackend:seek(whence, off)
   return self._ops.seek(self._fd, whence, off)
 end
 
---- Register for readability events on this fd.
----@param task Task
----@return WaitToken
 function FdBackend:on_readable(task)
   return poller.get():wait(assert(self._fd, "closed fd"), "rd", task)
 end
 
---- Register for writability events on this fd.
----@param task Task
----@return WaitToken
 function FdBackend:on_writable(task)
   return poller.get():wait(assert(self._fd, "closed fd"), "wr", task)
 end
 
---- Close the backend and underlying fd.
----
---- Returns:
----   ok  : true on success, false on failure
----   err : error string or nil
----
----@return boolean ok, string|nil err
 function FdBackend:close()
   if self._fd == nil then
     return true, nil
@@ -123,8 +66,6 @@ function FdBackend:close()
   local fd = self._fd
   self._fd = nil
 
-  -- Matches old behaviour: fd is considered closed from the Lua side
-  -- even if close() reports an error.
   return self._ops.close(fd)
 end
 
@@ -134,17 +75,40 @@ end
 
 --- Build a concrete fd backend module from low-level ops.
 ---
---- ops must provide:
----   set_nonblock(fd) -> ok, err|nil, errno|nil
+--- Required ops:
+---   set_nonblock(fd) -> ok:boolean, err|nil
 ---   read(fd, max)    -> s|nil, err|nil
----   write(fd, str, len) -> n|nil, err|nil
+---   write(fd, s, len)-> n|nil, err|nil
 ---   seek(fd, whence, off) -> pos|nil, err|nil
----   close(fd)        -> ok, err|nil
+---   close(fd)        -> ok:boolean, err|nil
 ---
---- ops.is_supported() -> boolean (optional)
+--- Optional file ops (used by fibers.io.file):
+---   open_file(path, mode, perms) -> fd|nil, err|nil
+---   pipe() -> rd_fd|nil, wr_fd|nil, err|nil
+---   mktemp(prefix, perms) -> fd|nil, tmpname_or_err
+---   fsync(fd) -> ok:boolean, err|nil
+---   rename(old, new) -> ok:boolean, err|nil
+---   unlink(path) -> ok:boolean, err|nil
+---   decode_access(flags) -> readable:boolean, writable:boolean
+---   ignore_sigpipe() -> ok:boolean, err|nil
+---
+--- Optional socket ops (used by fibers.io.socket):
+---   socket(domain, stype, protocol) -> fd|nil, err|nil
+---   bind(fd, sa) -> ok:boolean, err|nil
+---   listen(fd) -> ok:boolean, err|nil
+---   accept(fd) -> newfd|nil, err|nil, again:boolean
+---   connect_start(fd, sa) -> ok:boolean|nil, err|nil, inprogress:boolean
+---   connect_finish(fd) -> ok:boolean, err|nil
+---
+--- Optional metadata:
+---   modes        : table<string, integer>
+---   permissions  : table<string, integer>
+---   AF_UNIX      : integer
+---   SOCK_STREAM  : integer
+---   is_supported() -> boolean
 ---
 ---@param ops table
----@return table backend_module  -- { new = fn, is_supported = fn }
+---@return table backend_module
 local function build_backend(ops)
   local required = { "set_nonblock", "read", "write", "seek", "close" }
   for _, k in ipairs(required) do
@@ -178,9 +142,151 @@ local function build_backend(ops)
     return true
   end
 
+  --------------------------------------------------------------------
+  -- File-level helpers
+  --------------------------------------------------------------------
+
+  local function open_file(path, mode, perms)
+    assert(type(ops.open_file) == "function",
+      "fd_backend backend does not implement open_file")
+    return ops.open_file(path, mode, perms)
+  end
+
+  local function pipe()
+    assert(type(ops.pipe) == "function",
+      "fd_backend backend does not implement pipe")
+    return ops.pipe()
+  end
+
+  local function mktemp(prefix, perms)
+    assert(type(ops.mktemp) == "function",
+      "fd_backend backend does not implement mktemp")
+    return ops.mktemp(prefix, perms)
+  end
+
+  local function fsync(fd)
+    if not ops.fsync then
+      return true, nil
+    end
+    return ops.fsync(fd)
+  end
+
+  local function rename(oldpath, newpath)
+    assert(type(ops.rename) == "function",
+      "fd_backend backend does not implement rename")
+    return ops.rename(oldpath, newpath)
+  end
+
+  local function unlink(path)
+    assert(type(ops.unlink) == "function",
+      "fd_backend backend does not implement unlink")
+    return ops.unlink(path)
+  end
+
+  local function decode_access(flags)
+    if not ops.decode_access then
+      error("fd_backend backend does not implement decode_access")
+    end
+    return ops.decode_access(flags)
+  end
+
+  local function ignore_sigpipe()
+    if ops.ignore_sigpipe then
+      return ops.ignore_sigpipe()
+    end
+    return true, nil
+  end
+
+  local function init_nonblocking(fd)
+    return ops.set_nonblock(fd)
+  end
+
+  local function close_fd(fd)
+    return ops.close(fd)
+  end
+
+  --------------------------------------------------------------------
+  -- Socket-level helpers (optional)
+  --------------------------------------------------------------------
+
+  local function socket(domain, stype, protocol)
+    if not ops.socket then
+      error("fd_backend backend does not implement socket()")
+    end
+    return ops.socket(domain, stype, protocol or 0)
+  end
+
+  local function bind(fd, sa)
+    if not ops.bind then
+      error("fd_backend backend does not implement bind()")
+    end
+    return ops.bind(fd, sa)
+  end
+
+  local function listen(fd)
+    if not ops.listen then
+      error("fd_backend backend does not implement listen()")
+    end
+    return ops.listen(fd)
+  end
+
+  --- accept(fd) -> newfd|nil, err|nil, again:boolean
+  local function accept(fd)
+    if not ops.accept then
+      error("fd_backend backend does not implement accept()")
+    end
+    local newfd, err, again = ops.accept(fd)
+    return newfd, err, again
+  end
+
+  --- connect_start(fd, sa) -> ok|nil, err|nil, inprogress:boolean
+  local function connect_start(fd, sa)
+    if not ops.connect_start then
+      error("fd_backend backend does not implement connect_start()")
+    end
+    local ok, err, inprogress = ops.connect_start(fd, sa)
+    return ok, err, inprogress
+  end
+
+  --- connect_finish(fd) -> ok:boolean, err|nil
+  local function connect_finish(fd)
+    if not ops.connect_finish then
+      error("fd_backend backend does not implement connect_finish()")
+    end
+    return ops.connect_finish(fd)
+  end
+
   return {
-    new          = new,
-    is_supported = is_supported,
+    new            = new,
+    is_supported   = is_supported,
+
+    -- low-level helper
+    set_nonblock   = init_nonblocking,
+    close_fd       = close_fd,
+
+    -- file-level helpers
+    open_file      = open_file,
+    pipe           = pipe,
+    mktemp         = mktemp,
+    fsync          = fsync,
+    rename         = rename,
+    unlink         = unlink,
+    decode_access  = decode_access,
+    ignore_sigpipe = ignore_sigpipe,
+
+    -- socket-level helpers
+    socket         = socket,
+    bind           = bind,
+    listen         = listen,
+    accept         = accept,
+    connect_start  = connect_start,
+    connect_finish = connect_finish,
+
+    -- metadata (if provided)
+    modes          = ops.modes       or {},
+    permissions    = ops.permissions or {},
+    AF_UNIX        = ops.AF_UNIX,
+    SOCK_STREAM    = ops.SOCK_STREAM,
   }
 end
 

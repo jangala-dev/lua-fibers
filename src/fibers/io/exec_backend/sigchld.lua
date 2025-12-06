@@ -432,8 +432,15 @@ local function spawn(spec)
 end
 
 local function poll(state)
+  -- Fast path: if the child is already marked as exited, just report it.
+  if state.exited then
+    return true, state.code, state.signal, state.err
+  end
+  -- Ensure progress even when no scheduler is running
+  reap_known_children()
   return poll_state(state)
 end
+
 
 local function register_wait(state, task, _, _)
   start_reaper()

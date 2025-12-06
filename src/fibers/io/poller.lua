@@ -6,7 +6,7 @@
 
 local candidates = {
   'fibers.io.poller.epoll',   -- Linux + FFI/epoll
-  -- 'fibers.io.poller.select',  -- luaposix poll/select
+  'fibers.io.poller.select',  -- luaposix poll/select
 }
 
 for _, name in ipairs(candidates) do

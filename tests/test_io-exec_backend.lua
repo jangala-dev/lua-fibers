@@ -9,34 +9,31 @@ print('testing: fibers.io.exec_backend')
 package.path = "../src/?.lua;" .. package.path
 
 local proc_backend = require 'fibers.io.exec_backend'
-local sc           = require 'fibers.utils.syscall'
 local stdlib       = require 'posix.stdlib'
 
-local function read_all(fd)
-  local chunks = {}
-  while true do
-    local s, err, errno = sc.read(fd, 4096)
-    assert(s ~= nil or err, "read returned nil without error")
-    if s == nil then
-      error(("read failed: %s (errno %s)"):format(tostring(err), tostring(errno)))
-    end
-    if #s == 0 then
-      break
-    end
-    chunks[#chunks + 1] = s
-  end
-  return table.concat(chunks)
+----------------------------------------------------------------------
+-- ExecStreamConfig helpers
+----------------------------------------------------------------------
+
+local function inherit_stream()
+  return { mode = "inherit" }
 end
 
--- Block in a simple loop on nonblock_wait until the child is finished.
--- New backend contract: nonblock_wait() → done:boolean, code, signal, err
+----------------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------------
+
+-- Block in a simple loop on the backend's poll operation until the
+-- child is finished.
+-- exec_backend.core wires ops.poll(state) -> done:boolean, code|nil, signal|nil, err|nil
 local function wait_blocking(backend)
   while true do
-    local exited, code, sig, err = backend:nonblock_wait()
-    assert(err == nil, "nonblock_wait error: " .. tostring(err))
-    if exited then
+    local done, code, sig, err = backend._ops.poll(backend._state)
+    assert(err == nil, "poll error: " .. tostring(err))
+    if done then
       return code, sig
     end
+    -- Busy wait is acceptable here: tests are short-lived and single-process.
   end
 end
 
@@ -46,17 +43,20 @@ end
 
 local function test_simple_exit()
   local spec = {
-    argv      = { "sh", "-c", "exit 7" },
-    cwd       = nil,
-    env       = nil,
-    stdin_fd  = nil,
-    stdout_fd = nil,
-    stderr_fd = nil,
-    flags     = nil,
+    argv   = { "sh", "-c", "exit 7" },
+    cwd    = nil,
+    env    = nil,
+    flags  = nil,
+    stdin  = inherit_stream(),
+    stdout = inherit_stream(),
+    stderr = inherit_stream(),
   }
 
-  local backend, err = proc_backend.start(spec)
-  assert(backend, "start failed: " .. tostring(err))
+  -- start() now returns a ProcHandle: { backend = ExecBackend, stdin, stdout, stderr }
+  local handle, err = proc_backend.start(spec)
+  assert(handle, "start failed: " .. tostring(err))
+
+  local backend = assert(handle.backend, "no backend in handle")
 
   local code, sig = wait_blocking(backend)
   assert(code == 7,
@@ -72,34 +72,33 @@ local function test_env_inherit()
   -- Ensure a parent variable is set.
   assert(stdlib.setenv("PROC_BACKEND_TEST", "parent_inherit"))
 
-  -- Pipe to capture stdout.
-  local rd, wr = assert(sc.pipe())
+  -- Shell script checks inherited value and exits 0 only on match.
+  local script = [[
+    if [ "$PROC_BACKEND_TEST" = "parent_inherit" ]; then
+      exit 0
+    else
+      exit 42
+    fi
+  ]]
 
   local spec = {
-    argv      = { "sh", "-c", 'printf "%s\n" "$PROC_BACKEND_TEST"' },
-    cwd       = nil,
-    env       = nil,     -- inherit environment
-    stdin_fd  = nil,
-    stdout_fd = wr,      -- child stdout -> pipe write end
-    stderr_fd = wr,      -- send stderr the same way for simplicity
-    flags     = nil,
+    argv   = { "sh", "-c", script },
+    cwd    = nil,
+    env    = nil,               -- inherit environment
+    flags  = nil,
+    stdin  = inherit_stream(),
+    stdout = inherit_stream(),
+    stderr = inherit_stream(),
   }
 
-  local backend, err = proc_backend.start(spec)
-  assert(backend, "start failed: " .. tostring(err))
-
-  -- Parent no longer needs write end.
-  assert(sc.close(wr))
-
-  local out = read_all(rd)
-  assert(sc.close(rd))
+  local handle, err = proc_backend.start(spec)
+  assert(handle, "start failed: " .. tostring(err))
+  local backend = assert(handle.backend, "no backend in handle")
 
   local code, sig = wait_blocking(backend)
-  assert(code == 0, "expected shell to exit 0")
   assert(sig == nil, "expected no terminating signal")
-
-  assert(out == "parent_inherit\n",
-    ("expected 'parent_inherit', got %q"):format(out))
+  assert(code == 0,
+    ("expected exit code 0 from env inherit test, got %s"):format(tostring(code)))
 end
 
 ----------------------------------------------------------------------
@@ -107,35 +106,35 @@ end
 ----------------------------------------------------------------------
 
 local function test_env_override()
-  -- Parent value that should be hidden/overridden.
+  -- Parent value that should be overridden in the child.
   assert(stdlib.setenv("PROC_BACKEND_TEST", "parent_value"))
 
-  local rd, wr = assert(sc.pipe())
+  local script = [[
+    if [ "$PROC_BACKEND_TEST" = "child_value" ]; then
+      exit 0
+    else
+      exit 43
+    fi
+  ]]
 
   local spec = {
-    argv      = { "sh", "-c", 'printf "%s\n" "$PROC_BACKEND_TEST"' },
-    cwd       = nil,
-    env       = { PROC_BACKEND_TEST = "child_value" }, -- override
-    stdin_fd  = nil,
-    stdout_fd = wr,
-    stderr_fd = wr,
-    flags     = nil,
+    argv   = { "sh", "-c", script },
+    cwd    = nil,
+    env    = { PROC_BACKEND_TEST = "child_value" }, -- override
+    flags  = nil,
+    stdin  = inherit_stream(),
+    stdout = inherit_stream(),
+    stderr = inherit_stream(),
   }
 
-  local backend, err = proc_backend.start(spec)
-  assert(backend, "start failed: " .. tostring(err))
-
-  assert(sc.close(wr))
-
-  local out = read_all(rd)
-  assert(sc.close(rd))
+  local handle, err = proc_backend.start(spec)
+  assert(handle, "start failed: " .. tostring(err))
+  local backend = assert(handle.backend, "no backend in handle")
 
   local code, sig = wait_blocking(backend)
-  assert(code == 0, "expected shell to exit 0")
   assert(sig == nil, "expected no terminating signal")
-
-  assert(out == "child_value\n",
-    ("expected 'child_value', got %q"):format(out))
+  assert(code == 0,
+    ("expected exit code 0 from env override test, got %s"):format(tostring(code)))
 end
 
 ----------------------------------------------------------------------

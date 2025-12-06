@@ -1,6 +1,6 @@
 -- fibers/io/poller/select.lua
 --
--- posix.poll()-based poller backend (no epoll required).
+-- luaposix.poll()-based poller backend (no epoll required).
 -- Intended to be selected via fibers.io.poller.
 --
 ---@module 'fibers.io.poller.select'

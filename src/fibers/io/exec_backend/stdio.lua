@@ -73,8 +73,11 @@ function M.build_child_stdio(spec, open_dev_null, make_pipe, set_cloexec, close_
 
   --- Configure a single stdio stream.
   --- kind: "stdin" | "stdout" | "stderr"
-  --- cfg : ExecStreamConfig
+  --- cfg : ExecStreamConfig|nil
   local function configure_stream(kind, cfg)
+    -- Allow callers to omit stdin/stdout/stderr in the spec; treat as inherit.
+    cfg = cfg or { mode = "inherit" }
+
     local is_output = (kind ~= "stdin")
     local field     = kind .. "_fd"
     local mode      = cfg.mode or "inherit"
@@ -90,8 +93,8 @@ function M.build_child_stdio(spec, open_dev_null, make_pipe, set_cloexec, close_
       if not fd then
         return false, err
       end
-      child_only[fd]       = true
-      child_spec[field]    = fd
+      child_only[fd]    = true
+      child_spec[field] = fd
       return true
 
     -- pipe (child ↔ parent)
@@ -131,10 +134,12 @@ function M.build_child_stdio(spec, open_dev_null, make_pipe, set_cloexec, close_
 
     -- stderr = "stdout"
     elseif kind == "stderr" and mode == "stdout" then
-      local out_cfg  = spec.stdout
-      local out_mode = out_cfg and (out_cfg.mode or "inherit") or "inherit"
+      -- stdout config may itself be missing; default to inherit in that case.
+      local out_cfg  = spec.stdout or { mode = "inherit" }
+      local out_mode = out_cfg.mode or "inherit"
+
       if out_mode == "inherit" and child_spec.stdout_fd == nil then
-        -- Share the inherited stdout (fd 1).
+        -- Share inherited stdout (fd 1).
         child_spec.stderr_fd = 1
       elseif child_spec.stdout_fd ~= nil then
         -- Share whatever stdout was configured to use.
@@ -148,6 +153,7 @@ function M.build_child_stdio(spec, open_dev_null, make_pipe, set_cloexec, close_
       return false, "invalid " .. kind .. " mode: " .. tostring(mode)
     end
   end
+
 
   do
     local ok, err = configure_stream("stdin", spec.stdin)

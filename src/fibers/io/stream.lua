@@ -133,7 +133,7 @@ local function make_read_step(stream, buf, min, max, terminator)
       if err then
         return true, buf, tally, err
       end
-      if data == nil then
+      if not data then
         if tally >= min then
           return true, buf, tally
         end
