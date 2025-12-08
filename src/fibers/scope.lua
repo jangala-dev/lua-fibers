@@ -398,7 +398,7 @@ end
 ---@param ev Op
 ---@return any ...
 function Scope:perform(ev)
-    -- sync does the fibre assertion and fail-fast logic
+    -- sync does the fiber assertion and fail-fast logic
     local results = pack(self:sync(ev))
 
     local ok = results[1]

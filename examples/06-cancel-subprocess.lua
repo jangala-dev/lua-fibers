@@ -3,13 +3,13 @@
 --   * Capturing stdout via a pipe
 --   * Using boolean_choice to race process completion vs timeout
 --   * Cancelling a scope on timeout and letting structured
---     concurrency clean up the subprocess and helper fibres
+--     concurrency clean up the subprocess and helper fibers
 --
 -- Style:
 --   * fibers.run(main) exposes the root scope as an argument.
 --   * fibers.spawn(fn, ...) uses the current scope implicitly.
 --   * Timeout is expressed algebraically via boolean_choice,
---     rather than a separate watchdog fibre.
+--     rather than a separate watchdog fiber.
 
 package.path = "../src/?.lua;" .. package.path
 
@@ -31,7 +31,7 @@ local sleep_op      = sleep.sleep_op
 run(function()
   print("[root] starting subprocess example")
 
-  -- Run the subprocess and its helper fibres inside a child scope.
+  -- Run the subprocess and its helper fibers inside a child scope.
   -- We use run_scope so that we can interpret status and reason at
   -- a clear supervision boundary.
   local status, reason = fibers.run_scope(function()
@@ -51,7 +51,7 @@ run(function()
     }
 
     ------------------------------------------------------------------
-    -- 2. Reader fibre: drain stdout until EOF or error
+    -- 2. Reader fiber: drain stdout until EOF or error
     ------------------------------------------------------------------
 
     spawn(function()
@@ -115,7 +115,7 @@ run(function()
     ------------------------------------------------------------------
     --
     -- This cancels:
-    --   * the reader fibre,
+    --   * the reader fiber,
     --   * any other children in this scope, and
     --   * the Command’s scope defer will run _on_scope_exit(), which
     --     calls shutdown_op and waits for the process to die.

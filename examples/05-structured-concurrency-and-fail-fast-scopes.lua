@@ -27,7 +27,7 @@ local function main()
   print("Main: starting child scope")
 
   local status, err = run_scope(function(child_scope)
-    -- All fibres spawned here are supervised by child_scope.
+    -- All fibers spawned here are supervised by child_scope.
     spawn(sometimes_fails, "flaky",   0.3, 4)
     spawn(sibling,         "sibling", 0.2)
 

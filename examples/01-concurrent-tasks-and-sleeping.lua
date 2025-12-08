@@ -1,10 +1,10 @@
--- Introduce multiple fibres and time-based suspension.
+-- Introduce multiple fibers and time-based suspension.
 --
--- fibers.spawn(fn, ...) attaches a new fibre to the current scope and
+-- fibers.spawn(fn, ...) attaches a new fiber to the current scope and
 -- returns immediately.
--- sleep(dt) yields the current fibre for approximately dt seconds; other
+-- sleep(dt) yields the current fiber for approximately dt seconds; other
 -- fibers continue to run.
--- When all fibres in the root scope complete, the scheduler stops and
+-- When all fibers in the root scope complete, the scheduler stops and
 -- run(main) returns.
 
 package.path = "../src/?.lua;" .. package.path
@@ -29,10 +29,10 @@ local function main()
   spawn(worker, "medium", 0.5, 4)
   spawn(worker, "slow",  1.0, 3)
 
-  -- Unlike Go our main fibre will wait for its scope to finish.
+  -- Unlike Go our main fiber will wait for its scope to finish.
   -- Once all children complete, scope reaches status "ok"
   -- and fibers.run() returns.
-  print("Main fibre returning; children will keep the scheduler busy")
+  print("Main fiber returning; children will keep the scheduler busy")
 end
 
 run(main)
