@@ -5,34 +5,34 @@ print("test: fibers.timer")
 package.path = "../src/?.lua;" .. package.path
 
 local timer = require 'fibers.timer'
-local sc = require 'fibers.utils.syscall'
+local time = require 'fibers.utils.time'
 
 local noop_sched = { schedule = function() end }
 
 local function test_advance_time()
     local wheel = timer.new(10)
     local hour = 60 * 60
-    local start_time = sc.monotime()
+    local start_time = time.monotonic()
     wheel:advance(hour, noop_sched)
-    local end_time = sc.monotime()
+    local end_time = time.monotonic()
     print("Time to advance wheel by an hour: "..(end_time - start_time).." seconds")
 end
 
 local function test_event_scheduling(event_count)
-    local wheel = timer.new(sc.monotime())
+    local wheel = timer.new(time.monotonic())
     local t = wheel.now
-    local start_time = sc.monotime()
+    local start_time = time.monotonic()
     for _=1, event_count do
         local dt = math.random()
         t = t + dt
         wheel:add_absolute(t, t)
     end
-    local end_time = sc.monotime()
+    local end_time = time.monotonic()
     print("Time to add "..event_count.." events: "..(end_time - start_time).." seconds")
 end
 
 local function test_event_expiration(event_count)
-    local wheel = timer.new(sc.monotime())
+    local wheel = timer.new(time.monotonic())
     local last = 0
     local count = 0
     local check = {}
@@ -52,15 +52,15 @@ local function test_event_expiration(event_count)
         wheel:add_absolute(t, t)
     end
 
-    local start_time = sc.monotime()
+    local start_time = time.monotonic()
     wheel:advance(t + 1, check)
-    local end_time = sc.monotime()
+    local end_time = time.monotonic()
     print("Time to advance wheel to expire "..event_count.." events: "..(end_time - start_time).." seconds")
     assert(count == event_count)
 end
 
 local function test_large_intervals()
-    local wheel = timer.new(sc.monotime())
+    local wheel = timer.new(time.monotonic())
     local far_future = 1e6 -- Far future time
     local event_triggered = false
     wheel:add_absolute(wheel.now + far_future, 'far_future_event')
@@ -69,7 +69,7 @@ local function test_large_intervals()
 end
 
 local function test_small_intervals()
-    local wheel = timer.new(sc.monotime())
+    local wheel = timer.new(time.monotonic())
     local very_near_future = 1e-6 -- Very near future time
     local event_triggered = false
     wheel:add_absolute(wheel.now + very_near_future, 'near_future_event')
@@ -78,7 +78,7 @@ local function test_small_intervals()
 end
 
 local function test_advance_now_update()
-    local wheel = timer.new(sc.monotime())
+    local wheel = timer.new(time.monotonic())
     local advance_time = 100 -- Advance by 100 seconds
     local start_time = wheel.now
     wheel:advance(start_time + advance_time, noop_sched)

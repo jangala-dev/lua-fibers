@@ -1,72 +1,88 @@
--- fibers.utils.time.core
+-- fibers/utils/time/core.lua
 --
--- Contract and helpers for time providers.
-
----@module 'fibers.utils.time.core'
-
----@class TimeSourceOps
----@field name string|nil
----@field impl string|nil
----@field monotonic boolean|nil
----@field now fun(): number
----@field resolution number|nil
----@field sleep fun(dt:number)|nil  -- optional process-blocking sleep
-
----@class TimeSource
+-- Core glue for time backends.
+--
+---@class TimeSourceInfo
 ---@field name string
----@field impl string
+---@field resolution number
 ---@field monotonic boolean
----@field now fun(): number
----@field resolution number|nil
----@field sleep fun(dt:number)|nil
+---@field epoch string|nil
 
-local M = {}
+---@class TimeSleepInfo
+---@field name string
+---@field resolution number
+---@field clock "realtime"|"monotonic"|string
 
---- Build a normalised TimeSource from a backend ops table.
----@param ops TimeSourceOps
----@return TimeSource
-function M.build_source(ops)
-  assert(type(ops) == "table", "time source ops must be a table")
-  assert(type(ops.now) == "function", "time source requires now()")
+---@class TimeOps
+---@field realtime       fun(): number
+---@field monotonic      fun(): number
+---@field realtime_info  TimeSourceInfo
+---@field monotonic_info TimeSourceInfo
+---@field _block         fun(dt: number): boolean, string|nil
+---@field block_info     TimeSleepInfo
+---@field is_supported   fun(): boolean|nil  -- optional
 
-  local src = {
-    name       = ops.name or "time",
-    impl       = ops.impl or ops.name or "time",
-    monotonic  = ops.monotonic ~= false,
-    now        = ops.now,
-    resolution = ops.resolution,
-    sleep      = ops.sleep,
-  }
+local function build_backend(ops)
+  assert(type(ops) == "table", "time backend ops must be a table")
+  assert(type(ops.realtime) == "function", "time ops.realtime must be a function")
+  assert(type(ops.monotonic) == "function", "time ops.monotonic must be a function")
+  assert(type(ops._block) == "function", "time ops._block must be a function")
+  assert(type(ops.realtime_info) == "table", "time ops.realtime_info must be a table")
+  assert(type(ops.monotonic_info) == "table", "time ops.monotonic_info must be a table")
+  assert(type(ops.block_info) == "table", "time ops.block_info must be a table")
 
-  return src
-end
+  local function realtime()
+    return ops.realtime()
+  end
 
---- Estimate timer resolution by sampling consecutive now() calls.
----
---- This is inherently a busy-loop; only use at initialisation.
----@param now_fn fun(): number
----@param samples? integer
----@return number|nil
-function M.estimate_resolution(now_fn, samples)
-  samples = samples or 256
-  assert(type(now_fn) == "function", "estimate_resolution: now_fn must be a function")
+  local function monotonic()
+    return ops.monotonic()
+  end
 
-  local best = math.huge
-  local last = now_fn()
+  local function block(dt)
+    assert(type(dt) == "number" and dt >= 0, "block: dt must be a non-negative number")
+    return ops._block(dt)
+  end
 
-  for _ = 1, samples do
-    local t  = now_fn()
-    local dt = t - last
-    last     = t
-    if dt > 0 and dt < best then
-      best = dt
+  local function info()
+    return {
+      realtime  = ops.realtime_info,
+      monotonic = ops.monotonic_info,
+      sleep     = ops.block_info,
+    }
+  end
+
+  local function realtime_source()
+    return ops.realtime_info
+  end
+
+  local function monotonic_source()
+    return ops.monotonic_info
+  end
+
+  local function block_source()
+    return ops.block_info
+  end
+
+  local function is_supported()
+    if type(ops.is_supported) == "function" then
+      return not not ops.is_supported()
     end
+    return true
   end
 
-  if best == math.huge or best <= 0 then
-    return nil
-  end
-  return best
+  return {
+    realtime         = realtime,
+    monotonic        = monotonic,
+    _block           = block,
+    info             = info,
+    realtime_source  = realtime_source,
+    monotonic_source = monotonic_source,
+    block_source     = block_source,
+    is_supported     = is_supported,
+  }
 end
 
-return M
+return {
+  build_backend = build_backend,
+}

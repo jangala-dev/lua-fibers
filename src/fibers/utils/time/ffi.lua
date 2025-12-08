@@ -1,39 +1,46 @@
--- fibers.utils.time.ffi
+-- fibers/utils/time/ffi.lua
 --
--- FFI-based time provider using clock_gettime() and nanosleep().
+-- Time backend using clock_gettime(2) and nanosleep(2) via ffi_compat.
+-- Linux-oriented; requires fibers.utils.ffi_compat.
 --
 ---@module 'fibers.utils.time.ffi'
 
-local core   = require 'fibers.utils.time.core'
-local ffi_c  = require 'fibers.utils.ffi_compat'
+local core  = require 'fibers.utils.time.core'
+local ffi_c = require 'fibers.utils.ffi_compat'
 
 if not (ffi_c.is_supported and ffi_c.is_supported()) then
   return { is_supported = function() return false end }
 end
 
-local ffi    = ffi_c.ffi
-local C      = ffi_c.C
-local toint  = ffi_c.tonumber
-local errno  = ffi_c.errno
+local ffi       = ffi_c.ffi
+local C         = ffi_c.C
+local toint     = ffi_c.tonumber
+local get_errno = ffi_c.errno
 
 ffi.cdef[[
   typedef long time_t;
+  typedef long suseconds_t;
+
   struct timespec {
     time_t tv_sec;
     long   tv_nsec;
   };
 
   int clock_gettime(int clk_id, struct timespec *tp);
+  int clock_getres(int clk_id, struct timespec *tp);
   int nanosleep(const struct timespec *req, struct timespec *rem);
-
   char *strerror(int errnum);
 ]]
 
--- Linux / POSIX clock ids.
-local CLOCK_MONOTONIC     = 1
-local CLOCK_MONOTONIC_RAW = 4
+-- Linux/glibc constants.
+local CLOCK_REALTIME  = 0
+local CLOCK_MONOTONIC = 1
 
 local EINTR = 4
+
+----------------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------------
 
 local function strerror(e)
   local s = C.strerror(e)
@@ -43,110 +50,118 @@ local function strerror(e)
   return ffi.string(s)
 end
 
-local function make_now(clock_id)
+local function ts_to_seconds(ts)
+  return tonumber(ts.tv_sec) + tonumber(ts.tv_nsec) * 1e-9
+end
+
+local function read_clock(clk_id)
   local ts = ffi.new("struct timespec[1]")
-
-  return function()
-    local rc = toint(C.clock_gettime(clock_id, ts))
-    if rc ~= 0 then
-      local e = errno()
-      error("clock_gettime failed: " .. strerror(e))
-    end
-    local t = ts[0]
-    return tonumber(t.tv_sec) + tonumber(t.tv_nsec) * 1e-9
+  local rc = toint(C.clock_gettime(clk_id, ts))
+  if rc ~= 0 then
+    local e = get_errno()
+    error("clock_gettime failed: " .. strerror(e))
   end
+  return ts_to_seconds(ts[0])
 end
 
-local function probe_clock(clock_id)
-  local ok, now_or_err = pcall(make_now, clock_id)
-  if not ok then
-    return nil, now_or_err
+local function clock_resolution(clk_id)
+  local ts = ffi.new("struct timespec[1]")
+  local rc = toint(C.clock_getres(clk_id, ts))
+  if rc ~= 0 then
+    -- Fall back to a conservative default (1 ms) if the query fails.
+    return 1e-3
   end
-  local now = now_or_err
-
-  local ok2, t = pcall(now)
-  if not ok2 or type(t) ~= "number" then
-    return nil, t
-  end
-
-  return now, nil
+  return ts_to_seconds(ts[0])
 end
 
-local function sleep_blocking(dt)
-  if dt <= 0 then return end
+----------------------------------------------------------------------
+-- Blocking sleep
+----------------------------------------------------------------------
 
-  local sec  = math.floor(dt)
-  local nsec = math.floor((dt - sec) * 1e9)
-  if nsec < 0 then nsec = 0 end
-  if nsec >= 1e9 then
-    sec  = sec + 1
-    nsec = nsec - 1e9
+local function _block(dt)
+  if dt <= 0 then
+    return true, nil
   end
 
   local req = ffi.new("struct timespec[1]")
+  local rem = ffi.new("struct timespec[1]")
+
+  local sec  = math.floor(dt)
+  local frac = dt - sec
+  local nsec = math.floor(frac * 1e9 + 0.5)
+  if nsec >= 1000000000 then
+    sec  = sec + 1
+    nsec = nsec - 1000000000
+  end
+
   req[0].tv_sec  = sec
   req[0].tv_nsec = nsec
 
   while true do
-    local rc = toint(C.nanosleep(req, req))
+    local rc = toint(C.nanosleep(req, rem))
     if rc == 0 then
-      break
+      return true, nil
     end
-    local e = errno()
-    if e ~= EINTR then
-      break
+    local e = get_errno()
+    if e == EINTR then
+      -- Interrupted; continue with remaining time.
+      req[0].tv_sec  = rem[0].tv_sec
+      req[0].tv_nsec = rem[0].tv_nsec
+    else
+      return false, "nanosleep failed: " .. strerror(e)
     end
-    -- EINTR: req now holds remaining time; loop again.
   end
 end
 
-local function build()
-  -- Prefer MONOTONIC_RAW, fall back to MONOTONIC.
-  local now, err = probe_clock(CLOCK_MONOTONIC_RAW)
-  local impl     = "ffi.clock_gettime(CLOCK_MONOTONIC_RAW)"
+----------------------------------------------------------------------
+-- Metadata and support
+----------------------------------------------------------------------
 
-  if not now then
-    now, err = probe_clock(CLOCK_MONOTONIC)
-    impl     = "ffi.clock_gettime(CLOCK_MONOTONIC)"
-  end
-
-  if not now then
-    error(err or "no usable clock_gettime clock")
-  end
-
-  local src = core.build_source{
-    name      = "clock_gettime",
-    impl      = impl,
-    monotonic = true,
-    now       = now,
-    sleep     = sleep_blocking,
-  }
-
-  src.resolution = src.resolution or core.estimate_resolution(src.now)
-
-  return src
-end
+local realtime_res  = clock_resolution(CLOCK_REALTIME)
+local monotonic_res = clock_resolution(CLOCK_MONOTONIC)
 
 local function is_supported()
-  local ok, res = pcall(build)
-  if not ok then
-    return false
-  end
-  return res and true or false
+  -- Probe both clocks once; treat errors as lack of support.
+  local ok = pcall(function()
+    read_clock(CLOCK_REALTIME)
+    read_clock(CLOCK_MONOTONIC)
+  end)
+  return ok
 end
 
-if not is_supported() then
-  return { is_supported = function() return false end }
-end
+local ops = {
+  realtime = function()
+    return read_clock(CLOCK_REALTIME)
+  end,
 
-local src = build()
+  monotonic = function()
+    return read_clock(CLOCK_MONOTONIC)
+  end,
 
-return {
+  realtime_info = {
+    name       = "clock_gettime(CLOCK_REALTIME)",
+    resolution = realtime_res,
+    monotonic  = false,
+    epoch      = "unix",
+  },
+
+  monotonic_info = {
+    name       = "clock_gettime(CLOCK_MONOTONIC)",
+    resolution = monotonic_res,
+    monotonic  = true,
+    epoch      = "unspecified",
+  },
+
+  _block = _block,
+
+  block_info = {
+    name       = "nanosleep",
+    resolution = monotonic_res,
+    clock      = "monotonic",
+  },
+
   is_supported = is_supported,
-  now          = src.now,
-  resolution   = src.resolution,
-  source       = src.name,
-  impl         = src.impl,
-  monotonic    = src.monotonic,
-  sleep        = src.sleep,
 }
+
+
+return core.build_backend(ops)

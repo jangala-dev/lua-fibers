@@ -32,6 +32,8 @@ local stream_mod = require 'fibers.io.stream'
 
 local perform = fibers.perform
 
+math.randomseed(os.time())
+
 ----------------------------------------------------------------------
 -- 1. tmpfile round-trip
 ----------------------------------------------------------------------

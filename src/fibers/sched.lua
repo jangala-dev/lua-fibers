@@ -32,10 +32,10 @@ local Scheduler = {}
 Scheduler.__index = Scheduler
 
 --- Create a new scheduler instance.
----@param get_time? fun(): number # monotonic time source (defaults to fibers.utils.time.now)
+---@param get_time? fun(): number # monotonic time source (defaults to fibers.utils.time.monotonic)
 ---@return Scheduler
 local function new(get_time)
-    local now_src = get_time or time.now
+    local now_src = get_time or time.monotonic
     local now     = now_src()
 
     local ret = setmetatable({
@@ -163,7 +163,7 @@ function Scheduler:wait_for_events()
         self.event_waiter:wait_for_events(self, now, timeout)
     else
         -- No poller installed; fall back to process-blocking sleep.
-        time.sleep_blocking(timeout)
+        time._block(timeout)
     end
 end
 

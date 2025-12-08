@@ -5,7 +5,7 @@ print('testing: fibers.fiber')
 package.path = "../src/?.lua;" .. package.path
 
 local runtime = require 'fibers.runtime'
-local sc = require 'fibers.utils.syscall'
+local time = require 'fibers.utils.time'
 local equal = require 'fibers.utils.helper'.equal
 
 local log = {}
@@ -26,7 +26,7 @@ runtime.current_scheduler:run()
 assert(equal(log, {'a', 'b', 'c'}))
 
 -- Test performance
-local start_time = sc.monotime()
+local start_time = time.monotonic()
 local fiber_count = 1e4
 local count = 0
 local function inc()
@@ -38,14 +38,14 @@ for _=1, fiber_count do
     end)
 end
 
-local end_time = sc.monotime()
+local end_time = time.monotonic()
 print("Fiber creation time: "..(end_time - start_time)/fiber_count)
 
-start_time = sc.monotime()
+start_time = time.monotonic()
 for _=1,3*fiber_count do -- run fibers, each fiber yields 3 times
     runtime.current_scheduler:run()
 end
-end_time = sc.monotime()
+end_time = time.monotonic()
 print("Fiber operation time: "..(end_time - start_time)/(2*3*fiber_count))
 
 assert(count == 3*fiber_count)

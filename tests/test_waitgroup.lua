@@ -8,7 +8,7 @@ package.path = "../src/?.lua;" .. package.path
 local fibers = require 'fibers'
 local sleep = require 'fibers.sleep'
 local waitgroup = require 'fibers.waitgroup'
-local sc = require 'fibers.utils.syscall'
+local time = require 'fibers.utils.time'
 
 local perform, choice = fibers.perform, fibers.choice
 
@@ -87,7 +87,7 @@ local function test_complex()
         end)
     end
 
-    local start = sc.monotime()
+    local start = time.monotonic()
 
     -- Spawn fibers and add to the waitgroup
     for _ = 1, numFibers do one_sec_work(wg) end
@@ -111,7 +111,7 @@ local function test_complex()
         )
     end
 
-    assert(sc.monotime() - start > 0.05)
+    assert(time.monotonic() - start > 0.05)
     print("Complex test: ok")
 end
 

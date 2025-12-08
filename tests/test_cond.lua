@@ -7,7 +7,7 @@ package.path = "../src/?.lua;" .. package.path
 local cond = require 'fibers.cond'
 local runtime = require 'fibers.runtime'
 local sleep = require 'fibers.sleep'
-local sc = require 'fibers.utils.syscall'
+local time = require 'fibers.utils.time'
 
 local equal = require 'fibers.utils.helper'.equal
 
@@ -34,9 +34,9 @@ runtime.spawn_raw(function()
 
     sleep.sleep(1)
 
-    local start_time = sc.monotime()
+    local start_time = time.monotonic()
     c:signal()
-    local end_time = sc.monotime()
+    local end_time = time.monotonic()
 
     print("Time taken to signal fiber: ", (end_time - start_time) / fiber_count)
     runtime.stop()

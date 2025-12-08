@@ -1,8 +1,8 @@
--- tests/test_exec.lua
+-- tests/test_io-exec.lua
 --
 -- Ad hoc tests and usage examples for fibers.io.exec.
 --
--- Run as:  luajit test_exec.lua
+-- Run as:  luajit test_io-exec.lua
 
 print("testing: fibers.io.exec")
 
@@ -13,6 +13,85 @@ local fibers = require 'fibers'
 local exec   = require 'fibers.io.exec'
 local op     = require 'fibers.op'
 local sleep  = require 'fibers.sleep'
+local poller = require 'fibers.io.poller'
+
+----------------------------------------------------------------------
+-- Helpers for shell-based FD / zombie counting
+----------------------------------------------------------------------
+
+local function warm_up_exec_backend()
+  -- Run a trivial command once to force backend initialisation
+  fibers.run(function()
+    local proc = exec.command{
+      "sh", "-c", "true",
+      stdin  = "null",
+      stdout = "null",
+      stderr = "null",
+    }
+    local status, code, _, err = fibers.perform(proc:run_op())
+    assert(err == nil,          "warm-up wait error: " .. tostring(err))
+    assert(status == "exited",  "warm-up status: " .. tostring(status))
+    assert(code == 0,           "warm-up exit code: " .. tostring(code))
+  end)
+end
+
+local function shell_capture(cmd)
+  local p, perr = io.popen(cmd, "r")
+  assert(p, "io.popen failed: " .. tostring(perr))
+  local out = p:read("*a") or ""
+  p:close()
+  return out
+end
+
+-- Force poller initialisation so its FDs are part of the baseline.
+poller.get()
+
+-- Force exec backend initialisation (self-pipe, reaper, etc.).
+warm_up_exec_backend()
+
+-- Count open FDs of the parent (luajit) process using /proc and $PPID.
+local function get_fd_count_for_parent()
+  local script = [=[
+ls "/proc/$PPID/fd" 2>/dev/null | wc -l
+]=]
+  local ok, out = pcall(shell_capture, script)
+  if not ok then
+    return nil
+  end
+  local n = out:match("(%d+)")
+  return n and tonumber(n) or nil
+end
+
+-- Count zombie children (state 'Z') of the parent (luajit) process.
+-- Uses /proc/*/stat and awk; best-effort only.
+local function get_zombie_count_for_parent()
+  local script = [=[
+parent="$PPID"
+count=0
+for stat in /proc/[0-9]*/stat; do
+  [ -r "$stat" ] || continue
+  set -- $(awk '{print $4, $3}' "$stat" 2>/dev/null)
+  ppid="$1"
+  state="$2"
+  if [ "$ppid" = "$parent" ] && [ "$state" = "Z" ]; then
+    count=$((count+1))
+  fi
+done
+printf '%s\n' "$count"
+]=]
+  local ok, out = pcall(shell_capture, script)
+  if not ok then
+    return nil
+  end
+  local n = out:match("(%d+)")
+  return n and tonumber(n) or nil
+end
+
+local baseline_fd_count     = get_fd_count_for_parent()
+local baseline_zombie_count = get_zombie_count_for_parent()
+
+print(("baseline: fds=%s zombies=%s")
+  :format(tostring(baseline_fd_count), tostring(baseline_zombie_count)))
 
 ----------------------------------------------------------------------
 -- Tests
@@ -49,9 +128,9 @@ local function stdin_stdout_pipe_round_trip()
   }
   assert(proc, "command creation failed")
 
-  local stdin_stream, sin_err  = proc:stdin_stream()
+  local stdin_stream, sin_err   = proc:stdin_stream()
   local stdout_stream, sout_err = proc:stdout_stream()
-  assert(stdin_stream and not sin_err,  "expected stdin stream, got error: " .. tostring(sin_err))
+  assert(stdin_stream and not sin_err,   "expected stdin stream, got error: " .. tostring(sin_err))
   assert(stdout_stream and not sout_err, "expected stdout stream, got error: " .. tostring(sout_err))
 
   local msg = "line1\nline2\n"
@@ -91,9 +170,9 @@ local function stderr_pipe_vs_stderr_is_stdout()
 
   local out1,   oerr1   = out_stream1:read_all()
   local errout1, eerr1  = err_stream1:read_all()
-  assert(oerr1  == nil,       "stdout read error: " .. tostring(oerr1))
-  assert(eerr1  == nil,       "stderr read error: " .. tostring(eerr1))
-  assert(out1   == "out\n",   ("unexpected stdout: %q"):format(out1))
+  assert(oerr1   == nil,      "stdout read error: " .. tostring(oerr1))
+  assert(eerr1   == nil,      "stderr read error: " .. tostring(eerr1))
+  assert(out1    == "out\n",  ("unexpected stdout: %q"):format(out1))
   assert(errout1 == "err\n",  ("unexpected stderr: %q"):format(errout1))
 
   fibers.perform(proc1:run_op())
@@ -136,10 +215,10 @@ local function output_op_normal_completion()
   assert(proc, "command creation failed")
 
   local out, status, code, sig, err = fibers.perform(proc:output_op())
-  assert(err == nil,        "output_op error: " .. tostring(err))
+  assert(err == nil,         "output_op error: " .. tostring(err))
   assert(status == "exited", "expected status 'exited'")
-  assert(code == 0,         "expected exit code 0")
-  assert(sig == nil,        "expected no signal")
+  assert(code == 0,          "expected exit code 0")
+  assert(sig == nil,         "expected no signal")
 
   -- /bin/sh echo will append a newline.
   assert(out == "bracket\n", ("unexpected output from output_op: %q"):format(out))
@@ -150,7 +229,7 @@ local function wait_op_with_timeout_pattern()
   print("running: wait_op_with_timeout_pattern")
 
   local proc = exec.command{
-    "/bin/sh", "-c", "sleep 0.5",
+    "/bin/sh", "-c", "sleep 1",
     stdin  = "null",
     stdout = "null",
     stderr = "null",
@@ -234,11 +313,102 @@ local function spawn_op_basic_usage()
   assert(out == "via_op",    ("unexpected stdout from spawn_ev: %q"):format(out))
 
   local status, code, sig, werr = fibers.perform(proc:run_op())
-  assert(werr == nil,    "wait error: " .. tostring(werr))
-  assert(status == "exited", "expected status 'exited'")
-  assert(sig == nil,     "expected no signal")
-  assert(code == 0,      "expected exit 0 from spawned process")
+  assert(werr == nil,         "wait error: " .. tostring(werr))
+  assert(status == "exited",  "expected status 'exited'")
+  assert(sig == nil,          "expected no signal")
+  assert(code == 0,           "expected exit 0 from spawned process")
 end
+
+----------------------------------------------------------------------
+-- 8. Torture: many short-lived processes in sequence.
+----------------------------------------------------------------------
+
+local function many_short_lived_processes_stress()
+  print("running: many_short_lived_processes_stress")
+
+  local N = 50
+
+  for i = 1, N do
+    local proc = exec.command{
+      "sh", "-c", ("printf 'run-%d'; exit %d"):format(i, i % 256),
+      stdin  = "null",
+      stdout = "pipe",
+      stderr = (i % 2 == 0) and "null" or "pipe",
+    }
+    assert(proc, ("command creation failed at iteration %d"):format(i))
+
+    local stdout_stream, serr = proc:stdout_stream()
+    assert(stdout_stream and not serr,
+      ("stdout stream error at iteration %d: %s"):format(i, tostring(serr)))
+
+    local out, rerr = stdout_stream:read_all()
+    assert(rerr == nil,
+      ("read_all error at iteration %d: %s"):format(i, tostring(rerr)))
+    assert(out == ("run-%d"):format(i),
+      ("unexpected stdout at iteration %d: %q"):format(i, out))
+
+    local status, code, sig, werr = fibers.perform(proc:run_op())
+    assert(werr == nil,
+      ("wait error at iteration %d: %s"):format(i, tostring(werr)))
+    assert(status == "exited",
+      ("status not 'exited' at iteration %d: %s"):format(i, tostring(status)))
+    assert(sig == nil,
+      ("signal not nil at iteration %d: %s"):format(i, tostring(sig)))
+    assert(code == i % 256,
+      ("exit code mismatch at iteration %d: got %d, expected %d")
+        :format(i, code, i % 256))
+  end
+end
+
+----------------------------------------------------------------------
+-- 9. Torture: large stdout via output_op.
+----------------------------------------------------------------------
+
+local function large_output_output_op_stress()
+  print("running: large_output_output_op_stress")
+
+  local lines = 5000
+  local script = ([[
+i=1
+while [ $i -le %d ]; do
+  echo "line-$i"
+  i=$((i+1))
+done
+]]):format(lines)
+
+  local proc = exec.command{
+    "sh", "-c", script,
+    stdin  = "null",
+    stdout = "pipe",
+    stderr = "pipe",
+  }
+  assert(proc, "command creation failed")
+
+  local out, status, code, sig, err = fibers.perform(proc:output_op())
+  assert(err == nil,         "output_op error: " .. tostring(err))
+  assert(status == "exited", "expected status 'exited'")
+  assert(code == 0,          "expected exit code 0")
+  assert(sig == nil,         "expected no signal")
+
+  local count = 0
+  for line in out:gmatch("([^\n]*)\n") do
+    if line ~= "" then
+      count = count + 1
+    end
+  end
+  assert(count == lines,
+    ("unexpected number of lines from large_output_output_op_stress: got %d, expected %d")
+      :format(count, lines))
+
+  assert(out:find("line-1", 1, true),
+    "large output missing 'line-1'")
+  assert(out:find("line-" .. tostring(lines), 1, true),
+    "large output missing last line marker")
+end
+
+----------------------------------------------------------------------
+-- Main
+----------------------------------------------------------------------
 
 local function main()
   simple_exit_code()
@@ -248,8 +418,32 @@ local function main()
   wait_op_with_timeout_pattern()
   shutdown_long_running_process()
   spawn_op_basic_usage()
+  many_short_lived_processes_stress()
+  large_output_output_op_stress()
 end
 
 fibers.run(main)
 
-print("test_exec.lua: all assertions passed")
+local final_fd_count     = get_fd_count_for_parent()
+local final_zombie_count = get_zombie_count_for_parent()
+
+print(("final: fds=%s zombies=%s")
+  :format(tostring(final_fd_count), tostring(final_zombie_count)))
+
+if baseline_fd_count and final_fd_count then
+  assert(final_fd_count == baseline_fd_count,
+    ("FD leak detected: baseline=%d final=%d")
+      :format(baseline_fd_count, final_fd_count))
+else
+  print("FD leak check skipped (could not read /proc or count FDs)")
+end
+
+if baseline_zombie_count and final_zombie_count then
+  assert(final_zombie_count <= baseline_zombie_count,
+    ("zombie leak detected: baseline=%d final=%d")
+      :format(baseline_zombie_count, final_zombie_count))
+else
+  print("Zombie leak check skipped (could not read /proc or count zombies)")
+end
+
+print("test_io-exec.lua: all assertions passed")
