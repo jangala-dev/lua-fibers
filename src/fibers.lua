@@ -95,12 +95,19 @@ end
 
 --- Spawn a fiber under the current scope.
 ---
---- fn is called as fn(scope, ...).
----@param fn fun(s: Scope, ...): any
+--- fn is called as fn(...).
+---@param fn fun(...): any
 ---@param ... any
 local function spawn(fn, ...)
-    local s = Scope.current()
-    return s:spawn(fn, ...)
+  local s    = Scope.current()
+  local args = { ... }
+
+  -- Wrapper that discards the scope parameter injected by Scope:spawn.
+  local function shim(_, ...)
+    return fn(...)
+  end
+
+  return s:spawn(shim, unpack(args))
 end
 
 return {
