@@ -43,7 +43,7 @@ local function run(main_fn, ...)
   local root = Scope.root()
   local args = pack(...)
 
-  -- Outcome container populated by the child fibre.
+  -- Outcome container populated by the child fiber.
   local outcome = {
     status  = nil,  -- "ok" | "failed" | "cancelled"
     err     = nil,  -- primary error / reason
