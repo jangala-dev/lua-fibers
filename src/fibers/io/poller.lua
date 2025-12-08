@@ -5,8 +5,8 @@
 -- to a pure-luaposix select/poll implementation.
 
 local candidates = {
-  -- 'fibers.io.poller.epoll',   -- Linux + FFI/epoll
-  -- 'fibers.io.poller.select',  -- luaposix poll/select
+  'fibers.io.poller.epoll',   -- Linux + FFI/epoll
+  'fibers.io.poller.select',  -- luaposix poll/select
   'fibers.io.poller.nixio',  -- nixio poll/select
 }
 

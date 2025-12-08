@@ -8,8 +8,8 @@
 ---@module 'fibers.io.fd_backend'
 
 local candidates = {
-  -- 'fibers.io.fd_backend.ffi',    -- FFI / libc
-  -- 'fibers.io.fd_backend.posix',  -- luaposix
+  'fibers.io.fd_backend.ffi',    -- FFI / libc
+  'fibers.io.fd_backend.posix',  -- luaposix
   'fibers.io.fd_backend.nixio',  -- nixio
 }
 
