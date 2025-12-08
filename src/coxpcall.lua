@@ -36,10 +36,24 @@ end
 local running = coroutine.running
 local coromap = setmetatable({}, { __mode = "k" })
 
+local function id(trace)
+    return trace
+end
+
 function handleReturnValue(err, co, status, ...)
     if not status then
-        return false, err(debug.traceback(co, (...)), ...)
+        -- Error path from coroutine.resume(co, ...)
+        if err == id then
+            -- pcall semantics: propagate the original error object unchanged
+            -- coroutine.resume returns (false, errmsg, ...), so just
+            -- pass those “...” through as pcall would.
+            return false, ...
+        else
+            -- xpcall semantics: run the error handler on a traceback
+            return false, err(debug.traceback(co, (...)), ...)
+        end
     end
+
     if coroutine.status(co) == 'suspended' then
         return performResume(err, co, coroutine.yield(...))
     else
@@ -49,10 +63,6 @@ end
 
 function performResume(err, co, ...)
     return handleReturnValue(err, co, coroutine.resume(co, ...))
-end
-
-local function id(trace)
-    return trace
 end
 
 local function coxpcall(f, err, ...)
