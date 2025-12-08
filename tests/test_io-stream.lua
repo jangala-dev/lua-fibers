@@ -94,7 +94,7 @@ local function test()
 
   local message = "hello, world\n"
 
-  -- Writer runs in a fibre, so the first read will block and use on_readable.
+  -- Writer runs in a fiber, so the first read will block and use on_readable.
   fibers.spawn(function()
     sleep.sleep(0.01)
     local n, err = wr:write(message)

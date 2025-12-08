@@ -25,7 +25,7 @@ end
 ---@field _children table<Scope, boolean>   # weak-key set of child scopes
 ---@field _status ScopeStatus
 ---@field _error any
----@field _failures any[]
+---@field _defer_failures any[]
 ---@field failure_mode string               # e.g. "fail_fast"
 ---@field _wg Waitgroup
 ---@field _defers fun(self: Scope)[]        # LIFO defers
@@ -87,7 +87,7 @@ local function new_scope(parent)
 
         _status      = "running",
         _error       = nil,
-        _failures    = {},
+        _defer_failures    = {},
         failure_mode = "fail_fast",
 
         _wg      = waitgroup.new(),
@@ -152,11 +152,12 @@ function Scope:_record_failure(err)
         self._status = "failed"
         self._error  = self._error or err
         self:_propagate_cancel(self._error)
-    else
-        local failures = self._failures
-        failures[#failures + 1] = err
     end
+    -- Ignore subsequent fiber failures; we treat them as
+    -- cancellation noise. Defer failures are recorded in
+    -- the join worker logic.
 end
+
 
 --- Create a new child scope of this scope (no body, no current() change).
 ---@return Scope
@@ -260,11 +261,11 @@ function Scope:status()
     return self._status, self._error
 end
 
---- Return a shallow copy of additional failures recorded on this scope.
+--- Return a shallow copy of non-primary defer failures recorded on this scope.
 ---@return any[]
-function Scope:failures()
+function Scope:defer_failures()
     local out = {}
-    local f   = self._failures or {}
+    local f   = self._defer_failures or {}
     for i, v in ipairs(f) do
         out[i] = v
     end
@@ -306,7 +307,7 @@ function Scope:_start_join_worker()
                     self._status = "failed"
                     self._error  = self._error or err
                 else
-                    local failures = self._failures
+                    local failures = self._defer_failures
                     failures[#failures + 1] = err
                 end
             end
@@ -470,14 +471,17 @@ end
 --- Run a function inside a fresh child scope of the current scope.
 ---
 --- The body runs as body_fn(child_scope, ...).
+---
 --- Returns:
----   status :: "ok" | "failed" | "cancelled"
----   err    :: primary error or cancellation reason (nil on "ok")
----   ...    :: any results returned from body_fn
+---   status         :: "ok" | "failed" | "cancelled"
+---   err            :: primary error or cancellation reason (nil on "ok")
+---   defer_failures :: array of non-primary errors from deferred function recorded on the child scope
+---   ...            :: any results returned from body_fn (only present on "ok")
 ---@param body_fn fun(s: Scope, ...): ...
 ---@param ... any
 ---@return ScopeStatus status
 ---@return any err
+---@return any[] defer_failures
 ---@return any ...
 local function run(body_fn, ...)
     assert(runtime.current_fiber(), "scope.run must be called from inside a fiber")
@@ -494,11 +498,16 @@ local function run(body_fn, ...)
 
     local status, err = op.perform_raw(child:join_op())
 
+    -- Shallow copy of non-primary defer failures; will be {} when there are none.
+    local extra = child:defer_failures()
+
     local res = child._result
     if res then
-        return status, err, unpack(res, 1, res.n)
+        -- status, primary_err, defer_failures, ...body results...
+        return status, err, extra, unpack(res, 1, res.n)
     else
-        return status, err
+        -- status, primary_err, defer_failures
+        return status, err, extra
     end
 end
 

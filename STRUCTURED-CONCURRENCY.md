@@ -56,14 +56,17 @@ end)
 
 ```lua
 fibers.run(function(scope)
-  fibers.spawn(function(child_scope)
-    -- child_scope is the same scope as scope here
+  fibers.spawn(function()
+    -- This runs under the same current scope as 'scope'
+    local this_scope = fibers.current_scope()
+    -- ...
   end)
 end)
 ```
 
 * Spawns a new fiber *under the current scope*.
-* The function is called as `fn(scope, ...)`, where `scope` is the current scope at the point of the call.
+* The function is called as `fn(...)`.
+* If you need the scope inside the spawned fiber, call `fibers.current_scope()`.
 * Returns immediately; there is no handle. Lifetime is managed via the scope.
 
 This is the primary way to introduce concurrency under the current scope.
@@ -71,7 +74,7 @@ This is the primary way to introduce concurrency under the current scope.
 ### 2.3 `fibers.run_scope(body_fn, ...)`
 
 ```lua
-local status, err, result1, result2 = fibers.run_scope(function(child_scope, arg)
+local status, err, defer_failures, result1, result2 = fibers.run_scope(function(child_scope, arg)
   -- child_scope is a new child of the current scope
   return "ok:" .. arg, 42
 end, "value")
@@ -86,12 +89,13 @@ end, "value")
 * Returns:
 
   ```lua
-  status :: "ok" | "failed" | "cancelled"
-  err    :: primary error or cancellation reason (nil when status == "ok")
-  ...    :: results from body_fn (only when status == "ok")
+  status         :: "ok" | "failed" | "cancelled"
+  err            :: primary error or cancellation reason (nil when status == "ok")
+  defer_failures :: array of additional errors from deferred handlers
+  ...            :: results from body_fn (only when status == "ok")
   ```
 
-This gives a way to treat a block of concurrent work as a value-returning operation, with explicit success/failure information.
+This gives a way to treat a block of concurrent work as a value-returning operation, with explicit success/failure information. If the scope would otherwise have completed successfully, the first failing defer promotes the scope to `"failed"` and becomes the primary `err`; only subsequent defer errors are recorded in `defer_failures`.
 
 ### 2.4 `fibers.scope_op(build_op)`
 
@@ -153,17 +157,20 @@ Each scope has a status:
 Internally, a scope also tracks:
 
 * a primary error or cancellation reason (`_error`), and
-* any additional failures in a list (`_failures`).
+* any additional errors from deferred handlers in a list (`_defer_failures`).
 
 ### 3.1 How failures are recorded
 
 If a fiber running in a scope raises a Lua error:
 
-* The scope records a failure (if it is still `"running"`), sets its status to `"failed"`, and stores the first error as the primary error.
-* The scope then **propagates cancellation** to all child scopes.
-* Further errors in the same scope are appended to the failures list.
+If a fiber running in a scope raises a Lua error while the scope is `"running"`:
 
-If the scope is already `"failed"` or `"cancelled"`, new errors are just recorded in the list.
+* The scope records a failure, sets its status to `"failed"`, and stores that error as the primary error (if none is recorded yet).
+* The scope then propagates cancellation to all child scopes.
+
+Subsequent errors from other fibers in the same scope are treated as cancellation noise and are not accumulated.
+
+Errors raised by deferred handlers are handled separately and are described in section 4.
 
 ### 3.2 How cancellation works
 
@@ -185,10 +192,10 @@ Cancellation can arise from:
 Scopes passed into your functions support:
 
 ```lua
-local status, err = scope:status()
-local additional = scope:failures()
-local parent     = scope:parent()
-local children   = scope:children()
+local status, err  = scope:status()
+local defer_errors = scope:defer_failures()
+local parent       = scope:parent()
+local children     = scope:children()
 ```
 
 These methods are mainly useful for diagnostics or building higher-level abstractions; most user code interacts via `fibers.run_scope` and `fibers.perform`.
@@ -211,7 +218,7 @@ Defers run when the scope transitions from `"running"` to a terminal state (`"ok
 * If a defer raises an error:
 
   * If the scope was `"ok"`, it becomes `"failed"` and the defer’s error becomes the primary error.
-  * Otherwise the error is added to the failures list.
+  * Otherwise the error is added to the scope’s `defer_failures` list.
 
 A typical pattern is to attach resources to the current scope:
 
@@ -273,11 +280,13 @@ Example: run a set of workers and treat failure as data rather than an exception
 local fibers = require 'fibers'
 local sleep  = require 'fibers.sleep'
 
-local function run_workers(parent_scope, n)
+local function run_workers(n)
   return fibers.run_scope(function(scope)
     for i = 1, n do
-      fibers.spawn(function(child_scope, idx)
-        -- Each worker has the same parent child-scope.
+      fibers.spawn(function(idx)
+        -- Each worker runs under the same child scope created by run_scope.
+        local child_scope = fibers.current_scope()
+
         fibers.perform(sleep.sleep_op(0.1 * idx))
         if idx == 3 then
           error("worker " .. idx .. " failed")
@@ -288,7 +297,7 @@ local function run_workers(parent_scope, n)
 end
 
 fibers.run(function(scope)
-  local status, err = run_workers(scope, 5)
+  local status, err, defer_failures = run_workers(5)
 
   if status == "ok" then
     print("all workers completed successfully")

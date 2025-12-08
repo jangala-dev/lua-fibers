@@ -16,27 +16,36 @@ local sleep  = require 'fibers.sleep'
 
 fibers.run(function(scope)
   -- Start two child tasks under the main scope.
-  fibers.spawn(function(s)
+  fibers.spawn(function()
     sleep.sleep(0.5)
     print("first: finished ok")
   end)
 
-  fibers.spawn(function(s)
+  fibers.spawn(function()
     sleep.sleep(0.2)
     error("second: something went wrong")
   end)
 
-  -- Block until the main scope’s child scope has finished.
-  local status, err = fibers.run_scope(function(child)
-    -- Do more work here if you like.
+  -- Run some work in a nested child scope and observe its outcome.
+  local status, err, defer_errors = fibers.run_scope(function(child)
+    -- child is a Scope; if you want to associate work explicitly with it:
+    -- child:spawn(function(s) ... end)
+    --
+    -- or just use ambient spawn:
+    -- fibers.spawn(function() ... end)
   end)
 
-  print("main scope status:", status, err)
+  print("child scope status:", status, err)
+  if #defer_errors > 0 then
+    print("child scope defer failures:")
+    for i, e in ipairs(defer_errors) do
+      print("  [" .. i .. "]", e)
+    end
+  end
 end)
 ```
 
-If any child fails, its scope records the error, cancels its siblings and runs defers to clean up resources. The top-level `fibers.run` then re-raises the primary failure.
-
+If any child fails, its scope records the error, cancels its siblings and runs defers to clean up resources. The top-level `fibers.run` re-raises the primary failure for the outermost run, while `fibers.run_scope` returns the status, primary error and any additional defer-time failures.
 ---
 
 ### Use channels and timeouts with the event algebra
@@ -50,7 +59,7 @@ fibers.run(function(scope)
   local c = chan.new()
 
   -- Producer
-  fibers.spawn(function(s)
+  fibers.spawn(function()
     sleep.sleep(0.1)
     c:put("hello")
   end)
@@ -111,7 +120,7 @@ The `Command` is attached to the current scope. On scope exit it is given a grac
 
 ## Concepts in brief
 
-A **fiber** is a lightweight task scheduled by the runtime. `fibers.run` starts the scheduler and a root supervision scope; `fibers.spawn` creates more fibers under the current scope.
+A **fiber** is a lightweight task scheduled by the runtime. `fibers.run` starts the scheduler and a root supervision scope; `fibers.spawn` creates more fibers under the current scope; if you need the scope explicitly you can obtain it via `fibers.current_scope()` or by using `fibers.run_scope`, which passes the child scope to its body.
 
 An **operation (`Op`)** represents something that may block: reading from a channel, waiting for a timeout, waiting for a process to exit, and so on. Operations can be composed with `choice`, guarded, bracketed with acquire/release logic, or wrapped to add behaviour. They are not tied to a particular task until performed.
 

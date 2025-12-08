@@ -9,7 +9,7 @@ local spawn   = fibers.spawn
 local perform = fibers.perform
 local choice  = fibers.choice
 
-run(function()
+local function main()
   -- Buffered channel with capacity 1 so a late send will not block.
   local c = chan.new(1)
 
@@ -43,4 +43,6 @@ run(function()
   end
 
   print("[main] returning from Example 3")
-end)
+end
+
+run(main)

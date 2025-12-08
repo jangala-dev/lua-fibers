@@ -12,7 +12,7 @@ local function main(root_scope)
   print("[root] starting; status:", root_scope:status())
 
   -- Create a child scope under the root.
-  local status, err = run_scope(function()
+  local status, err, extra_errs = run_scope(function()
     local s = current_scope()
     print("[child] scope created; status:", s:status())
 
@@ -39,8 +39,8 @@ local function main(root_scope)
     -- No explicit wait is needed; run_scope handles join/defers.
   end)
 
-  print("[root] child scope returned; status:", status, "error:", err)
-
+  print("[root] child scope returned; status:", status, "error:", err, "extra errors:", #extra_errs)
+  for _, v in ipairs(extra_errs) do print(v) end
   -- status will be "failed"; err will be the primary error from worker1.
 end
 

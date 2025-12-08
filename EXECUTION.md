@@ -4,10 +4,17 @@ This document describes how to start and manage external processes using this li
 
 It focuses on usage from the top-level `fibers.lua` entry points:
 
-- `fibers.run` – to initialise the scheduler and root scope.
-- `fibers.spawn` – to start fibers inside the current scope.
+- `fibers.run` – initialises the scheduler and root scope.
+- `fibers.spawn(fn, ...)` – starts a new fiber in the *current* scope.
 
 The process execution API itself is provided by `fibers.exec`.
+
+Typical imports:
+
+```lua
+local fibers = require 'fibers'
+local exec   = require 'fibers.exec'
+````
 
 ---
 
@@ -15,22 +22,24 @@ The process execution API itself is provided by `fibers.exec`.
 
 The execution subsystem provides:
 
-- A `Command` abstraction for a single external process.
-- Structured lifetime management: each `Command` is owned by the scope in which it is created.
-- Configurable stdin/stdout/stderr:
-  - inherit from the parent process
-  - connect to `/dev/null`
-  - pipe via `Stream`
-  - reuse another stream (including `stdout` for `stderr`)
-- Operations (`Op`s) for:
-  - waiting for process completion
-  - graceful shutdown with a timeout and forced kill
-  - capturing stdout (and optionally stderr) as a string
+* A `Command` abstraction for a single external process.
+* Structured lifetime management: each `Command` is owned by the scope in which it is created.
+* Configurable stdin/stdout/stderr:
+
+  * inherit from the parent process
+  * connect to `/dev/null`
+  * pipe via `Stream`
+  * reuse another stream (including `stdout` for `stderr`)
+* Operations (`Op`s) for:
+
+  * waiting for process completion
+  * graceful shutdown with a timeout and forced kill
+  * capturing stdout (and optionally stderr) as a string
 
 The underlying implementation uses platform-specific backends:
 
-- Linux `pidfd` when available.
-- A portable `SIGCHLD` + self-pipe backend otherwise.
+* Linux `pidfd` when available.
+* A portable `SIGCHLD` + self-pipe backend otherwise.
 
 These details are hidden behind the `fibers.exec` interface.
 
@@ -54,13 +63,13 @@ fibers.run(function(scope)
   local out, status, code_or_sig, err =
     scope:perform(cmd:output_op())
 
-  if status == "ok" or status == "exited" and code_or_sig == 0 then
+  if status == "ok" or (status == "exited" and code_or_sig == 0) then
     print("ls output:\n" .. out)
   else
     print("ls failed:", status, code_or_sig, err)
   end
 end)
-````
+```
 
 Key points:
 
@@ -180,7 +189,7 @@ The status is one of:
 * `"running"` – process has been started and is still running.
 * `"exited"` – process exited normally.
 * `"signalled"` – process terminated due to a signal.
-* `"failed"` – failure to start or manage the process (e.g. `exec` error).
+* `"failed"` – failure to start or manage the process (for example `exec` error).
 
 For `"exited"` and `"signalled"` the second result is:
 
@@ -189,7 +198,7 @@ For `"exited"` and `"signalled"` the second result is:
 
 For `"failed"` the second result is `nil` and the third result is an error string.
 
-Note that the process is only started when you first use one of the operations below (`run_op`, `shutdown_op`, `output_op`, etc), or when you explicitly request a piped stream.
+Note that the process is only started when you first use one of the operations below (`run_op`, `shutdown_op`, `output_op`, and so on), or when you explicitly request a piped stream.
 
 ---
 
@@ -213,9 +222,10 @@ Behaviour:
 Example: streaming a child’s output line by line while it runs:
 
 ```lua
-fibers.run(function(scope)
-  local exec = require 'fibers.exec'
+local fibers = require 'fibers'
+local exec   = require 'fibers.exec'
 
+fibers.run(function(scope)
   local cmd = exec.command{
     "ping", "-n", "5", "example.org",
     stdout = "pipe",
@@ -225,6 +235,7 @@ fibers.run(function(scope)
   local out_stream, err = cmd:stdout_stream()
   assert(out_stream, err)
 
+  -- Stream output in a child scope of the main scope.
   scope:spawn(function(child_scope)
     while true do
       local line, lerr = child_scope:perform(out_stream:read_line_op())
@@ -295,7 +306,7 @@ Behaviour:
    * `kill()` if provided; otherwise fall back to `send_signal()` again.
 6. Wait for the process to complete, then return the final status.
 
-`shutdown_op` is suitable to call during normal control flow (e.g. when you decide to stop a worker) and is also used automatically when the owning scope exits (see below).
+`shutdown_op` is suitable to call during normal control flow (for example when you decide to stop a worker) and is also used automatically when the owning scope exits (see below).
 
 ---
 
@@ -359,7 +370,7 @@ The behaviour is otherwise the same as `output_op`, but with stderr directed to 
 If you want to send a signal yourself, use `kill`:
 
 ```lua
-local ok, err = cmd:kill()        -- default signal (backend-chosen)
+local ok, err  = cmd:kill()        -- default signal (backend-chosen)
 local ok2, err2 = cmd:kill("TERM") -- if the backend supports named signals
 ```
 
@@ -411,9 +422,10 @@ In general:
 ### Fire-and-wait with captured output
 
 ```lua
-fibers.run(function(scope)
-  local exec = require 'fibers.exec'
+local fibers = require 'fibers'
+local exec   = require 'fibers.exec'
 
+fibers.run(function(scope)
   local cmd = exec.command("uname", "-a")
   local out, status, code, signal, err =
     scope:perform(cmd:output_op())
@@ -428,24 +440,41 @@ end)
 
 ### Long-lived worker terminated with the scope
 
-```lua
-fibers.run(function(scope)
-  local exec = require 'fibers.exec'
+Here we run a long-lived process in its own child scope using `scope.run`. The updated `scope.run` returns:
 
-  local cmd = exec.command("some-daemon", "--foreground", {
+```lua
+status, err, defer_failures, ...body_results
+```
+
+In many cases only `status` and `err` are required.
+
+```lua
+local fibers    = require 'fibers'
+local exec      = require 'fibers.exec'
+local scope_mod = require 'fibers.scope'
+
+fibers.run(function(scope)
+  local cmd = exec.command{
+    "some-daemon", "--foreground",
     stdout = "inherit",
     stderr = "inherit",
-  })
+  }
 
-  -- Run worker in a child scope.
-  local status, err = Scope.run(function(child_scope)
-    -- Wait until the worker dies or the scope is cancelled.
-    local st, code, sig, cerr =
-      child_scope:perform(cmd:run_op())
-    return st, code, sig, cerr
-  end)
+  -- Run worker in a child scope for clearer lifetime boundaries.
+  local status, err, defer_failures, child_status, code, sig, cerr =
+    scope_mod.run(function(child_scope)
+      -- Wait until the worker dies or the child scope is cancelled.
+      return child_scope:perform(cmd:run_op())
+    end)
 
-  print("worker finished:", status, err)
+  print("worker scope finished:", status, err)
+
+  -- Optional: record any errors from deferred cleanup in the worker scope.
+  for i, derr in ipairs(defer_failures) do
+    print("worker defer failure[" .. i .. "]:", derr)
+  end
+
+  -- child_status/code/sig/cerr are the results from cmd:run_op(), if needed.
 end)
 ```
 
@@ -453,4 +482,4 @@ Here, even if the outer `scope` fails due to some other fiber error, the `Comman
 
 ---
 
-This concludes the overview of process execution in this library. The API is designed so that all interactions with external processes are expressed as `Op`s, and their lifetimes are governed by the same structured concurrency rules as fibers and other resources.
+This concludes the overview of process execution in this library. All interactions with external processes are expressed as `Op`s, and their lifetimes are governed by the same structured concurrency rules as fibers and other resources.

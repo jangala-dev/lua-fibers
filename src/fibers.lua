@@ -57,10 +57,10 @@ local function run(main_fn, ...)
     outcome.status      = packed[1]
     outcome.err         = packed[2]
 
-    if packed.n > 2 and outcome.status == "ok" then
-      local out = { n = packed.n - 2 }
+    if packed.n > 3 and outcome.status == "ok" then
+      local out = { n = packed.n - 3 }
       local j   = 1
-      for i = 3, packed.n do
+      for i = 4, packed.n do
         out[j] = packed[i]
         j = j + 1
       end

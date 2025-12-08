@@ -7,6 +7,7 @@ fibers.run(function()
   -- worker(s) runs inside a fresh child scope s.
   local function worker()
     local s = fibers.current_scope()
+
     s:defer(function()
       print("defer 1 (outer)")
     end)
@@ -23,14 +24,13 @@ fibers.run(function()
     error("worker body failed")
   end
 
-  local status, err = fibers.run_scope(worker)
+  local status, err, def_errs = fibers.run_scope(worker)
 
   print("worker scope status:", status)
   print("worker scope primary error:", err)
 
-  local extra = fibers.current_scope():failures()
-  print("worker scope extra failures:", #extra)
-  for i, e in ipairs(extra) do
+  print("worker scope extra failures:", #def_errs)
+  for i, e in ipairs(def_errs) do
     print(("  [%d] %s"):format(i, tostring(e)))
   end
 end)

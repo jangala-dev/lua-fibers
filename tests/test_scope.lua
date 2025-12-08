@@ -217,7 +217,7 @@ local function test_with_op_abort_on_choice()
     local outer_scope
     local child_scope
 
-    local st, serr, winner = scope.run(function(s)
+    local st, serr, _, winner = scope.run(function(s)
         outer_scope = s
 
         local ev_with = scope.with_op(function(child)
@@ -321,7 +321,7 @@ local function test_run_success_and_failure()
 
     -- Success case: scope.run returns status ok and body results.
     local success_scope
-    local st, err, a, b = scope.run(function(s)
+    local st, err, _, a, b = scope.run(function(s)
         success_scope = s
         local st0, err0 = s:status()
         assert(st0 == "running" and err0 == nil, "inside body, status should be running")
@@ -398,7 +398,7 @@ end
 local function test_defer_failure_marks_scope_failed()
     local scope_ref
 
-    local st, serr, body_res = scope.run(function(s)
+    local st, serr, _, body_res = scope.run(function(s)
         scope_ref = s
         s:defer(function()
             error("defer failure")
@@ -456,7 +456,7 @@ local function test_sync_respects_cancellation()
     local ev = op.never()
 
     local cancelled_scope
-    local st, serr, ok_op, reason_op = scope.run(function(s)
+    local st, serr, _, ok_op, reason_op = scope.run(function(s)
         cancelled_scope = s
         s:cancel("cancel before sync")
 
@@ -484,7 +484,7 @@ end
 local function test_sync_cancellation_race()
     local race_scope
 
-    local st, serr, ok_op, reason_op = scope.run(function(s)
+    local st, serr, _, ok_op, reason_op = scope.run(function(s)
         race_scope = s
         local cond = cond_mod.new()
 

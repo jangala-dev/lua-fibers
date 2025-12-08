@@ -127,7 +127,7 @@ Scopes (`fibers.scope`) represent supervision domains and form a tree:
   - a LIFO stack of defers to run on exit;
   - a cancellation condition and a join condition;
   - a status: `"running" | "ok" | "failed" | "cancelled"`;
-  - a primary error/cancellation reason plus a list of additional failures.
+  - a primary error or cancellation reason, plus a list of additional failures from deferred cleanup handlers.
 
 Scopes are obtained via:
 
@@ -149,7 +149,8 @@ Scopes implement fail-fast supervision:
 
 - if any fiber in a scope raises an uncaught error:
   - the scope status becomes `"failed"` (if it was `"running"`);
-  - the primary error is recorded (later failures go into the `_failures` list);
+  - the primary error is recorded;
+  - further uncaught errors from sibling fibers are treated as cancellation noise rather than changing the primary error;
   - cancellation is propagated to all child scopes.
 
 Cancellation is observable as an event:
@@ -163,8 +164,8 @@ When a scope exits:
 2. if still `"running"`, status is updated to `"ok"`;
 3. defers are run in LIFO order;
 4. any errors in defers either:
-   - turn `"ok"` into `"failed"` and record a primary error; or
-   - are appended to `_failures` if the scope was already failed/cancelled;
+   - if the scope would otherwise have been `"ok"`, turn it into `"failed"` and record the first defer error as the primary error; subsequent defer errors (if any) are recorded separately; or
+   - if the scope is already `"failed"` or `"cancelled"`, are recorded in the scope’s _defer_failures list without changing the primary error;5. the join condition is signalled, making `join_op` ready.
 5. the join condition is signalled, making `join_op` ready.
 
 #### Ops under scopes

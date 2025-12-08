@@ -1,5 +1,5 @@
 -- Demonstrates:
---   * Running an external process with fibers.exec
+--   * Running an external process with fibers.io.exec
 --   * Capturing stdout via a pipe
 --   * Using boolean_choice to race process completion vs timeout
 --   * Cancelling a scope on timeout and letting structured
@@ -28,13 +28,13 @@ local sleep_op      = sleep.sleep_op
 -- Main entry point
 ----------------------------------------------------------------------
 
-run(function()
+local function main()
   print("[root] starting subprocess example")
 
   -- Run the subprocess and its helper fibers inside a child scope.
   -- We use run_scope so that we can interpret status and reason at
   -- a clear supervision boundary.
-  local status, reason = fibers.run_scope(function()
+  local status, reason, _ = fibers.run_scope(function()
     print("[subscope] starting child process")
 
     ------------------------------------------------------------------
@@ -129,4 +129,6 @@ run(function()
   --------------------------------------------------------------------
 
   print("[root] subprocess scope completed; status:", status, "reason:", reason)
-end)
+end
+
+run(main)

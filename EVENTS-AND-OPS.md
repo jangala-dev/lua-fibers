@@ -51,7 +51,7 @@ local fibers = require "fibers"
 
 fibers.run(function(scope)
   local ch = require "fibers.channel".new()
-  fibers.spawn(function(child_scope)
+  fibers.spawn(function()
     ch:put("hello from child")      -- uses channel’s own perform()
   end)
 

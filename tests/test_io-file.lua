@@ -357,14 +357,14 @@ local function test_merge_lines_op()
   }
 
   -- Spawn writers under the top-level scope; ignore the scope argument.
-  fibers.spawn(function(_, w)
+  fibers.spawn(function(w)
     local _, err = w:write("line-a\n")
     assert(err == nil, "writer a write error: " .. tostring(err))
     local ok, cerr = w:close()
     assert(ok, "writer a close error: " .. tostring(cerr))
   end, w1)
 
-  fibers.spawn(function(_, w)
+  fibers.spawn(function(w)
     local _, err = w:write("line-b\n")
     assert(err == nil, "writer b write error: " .. tostring(err))
     local ok, cerr = w:close()
