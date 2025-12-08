@@ -473,6 +473,7 @@ local function close_state(state)
 end
 
 local function is_supported()
+  if rawget(_G, "jit") then return false end -- rare LuaJit instability
   return psignal.SIGCHLD ~= nil
 end
 

@@ -55,7 +55,7 @@ local function read_fd(fd, max)
   return s, nil
 end
 
-local function write_fd(fd, str, _len)
+local function write_fd(fd, str, _)
   local n, err, eno = unistd.write(fd, str)
   if n == nil then
     if eno == errno.EAGAIN or eno == errno.EWOULDBLOCK then
@@ -236,10 +236,6 @@ end
 
 ----------------------------------------------------------------------
 -- Socket helpers on top of posix.sys.socket
-----------------------------------------------------------------------
-
-----------------------------------------------------------------------
--- Socket helpers on top of posix.sys.socket (AF_UNIX focus)
 ----------------------------------------------------------------------
 
 --- Create a socket fd.

@@ -20,8 +20,9 @@
 ---@field stderr Stream|nil
 
 local candidates = {
-  'fibers.io.exec_backend.pidfd',   -- Linux pidfd backend
-  'fibers.io.exec_backend.sigchld', -- Portable SIGCHLD + self-pipe backend (luaposix)
+  -- 'fibers.io.exec_backend.pidfd',   -- Linux pidfd backend
+  -- 'fibers.io.exec_backend.sigchld', -- Portable SIGCHLD + self-pipe backend (luaposix)
+  'fibers.io.exec_backend.nixio', -- Portable SIGCHLD + self-pipe backend (luaposix)
 }
 
 local chosen

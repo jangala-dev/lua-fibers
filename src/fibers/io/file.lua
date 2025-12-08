@@ -66,7 +66,8 @@ end
 ---@param filename? string
 ---@return Stream
 local function fdopen(fd, flags_or_mode, filename)
-  assert(type(fd) == "number", "fdopen: fd must be a number")
+  -- assert(type(fd) == "number", "fdopen: fd must be a number")
+  assert(type(fd) ~= nil, "fdopen: fd must be non-nil")
 
   local readable, writable
 
