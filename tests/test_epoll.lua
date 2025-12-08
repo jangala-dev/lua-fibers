@@ -8,7 +8,20 @@ local epoll = require 'fibers.io.epoll'
 local sc = require 'fibers.utils.syscall'
 local bit = rawget(_G, "bit") or require 'bit32'
 
-local equal = require 'fibers.utils.helper'.equal
+local function equal(x, y)
+    if type(x) ~= type(y) then return false end
+    if type(x) == 'table' then
+        for k, v in pairs(x) do
+            if not equal(v, y[k]) then return false end
+        end
+        for k, _ in pairs(y) do
+            if x[k] == nil then return false end
+        end
+        return true
+    else
+        return x == y
+    end
+end
 
 local myepoll = assert(epoll.new())
 local function poll(timeout)
