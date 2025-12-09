@@ -94,12 +94,8 @@ local function main()
     --
 
     local proc_won, status2, code, signal, err = perform(boolean_choice(
-      cmd:run_op():wrap(function(st, c, sig, e)
-        return true, st, c, sig, e
-      end),
-      sleep_op(3.0):wrap(function()
-        return false
-      end)
+      cmd:run_op(),
+      sleep_op(3.0)
     ))
 
     if proc_won then
