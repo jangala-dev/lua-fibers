@@ -26,7 +26,7 @@ local function main(parent_scope)
   end)
 
   ----------------------------------------------------------------------
-  -- Reader fibre in the parent scope
+  -- Reader fiber in the parent scope
   ----------------------------------------------------------------------
   fibers.spawn(function()
     print("[parent-reader] started")
@@ -85,7 +85,7 @@ local function main(parent_scope)
   ----------------------------------------------------------------------
   assert(w_stream:close())
 
-  -- Wait until the reader fibre has drained the stream and signalled completion.
+  -- Wait until the reader fiber has drained the stream and signalled completion.
   perform(reader_done:wait_op())
   print("[parent] reader has signalled completion")
 end
