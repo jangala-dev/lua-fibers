@@ -17,7 +17,6 @@ local modules = {
     { 'sched' },
     { 'runtime' },
     { 'channel' },
-    { 'queue' },
     { 'cond' },
     { 'sleep' },
     { 'waitgroup' },
