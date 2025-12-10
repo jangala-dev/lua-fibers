@@ -1,6 +1,6 @@
 -- fibers/alarm.lua
 --
--- Wall-clock based alarms integrated with the fibres runtime.
+-- Wall-clock based alarms integrated with the fibers runtime.
 --
 -- Each alarm is driven by a recurrence function:
 --   next_time(last_fired :: epoch|nil, now :: epoch) -> next_epoch|nil
@@ -20,28 +20,50 @@
 --   * No wait_op() will complete until set_time_source(...) has been called.
 --   * A wait_op() started before set_time_source will first wait for time
 --     to become ready, then for the next recurrence.
+--
+-- Clock / civil time changes:
+--   * alarm.time_changed() notifies all waiting alarms that the mapping
+--     from monotonic time to civil time (UTC/zone) has changed.
+--   * A wait_op() that is currently sleeping for the next recurrence
+--     will be pre-empted, recompute its next firing time, and sleep again.
+--   * This uses best-effort choice semantics: if a timer and a clock
+--     change become ready together, either may win the choice.
 
 local op        = require 'fibers.op'
 local sleep_mod = require 'fibers.sleep'
 local perform   = require 'fibers.performer'.perform
 local cond_mod  = require 'fibers.cond'
+local time      = require 'fibers.utils.time'
 
+---@class Alarm
+---@field _next_time fun(last: number|nil, now: number): number|nil
+---@field _policy any
+---@field _label string
+---@field _last number|nil
+---@field _next_wall number|nil
+---@field _state "active"|"exhausted_pending"|"exhausted_done"
 local Alarm = {}
 Alarm.__index = Alarm
 
 ----------------------------------------------------------------------
--- Wall-clock source and "time ready" condition
+-- Wall-clock source, readiness, and clock-change signalling
 ----------------------------------------------------------------------
 
 -- Wall-clock "now" function (epoch seconds); replaced once real time is known.
-local wall_now   = os.time
+local wall_now   = time.realtime
 local time_ready = false
 
--- Generic one-shot condition for “time is ready”.
+-- One-shot condition for “time is ready”.
 local time_ready_cond = cond_mod.new()
 
+-- Multi-shot condition for “clock / civil time has changed”.
+-- This is recreated on every change so that each wait sees at most
+-- one wake-up per change generation.
+local clock_change_cond = cond_mod.new()
+
 --- Install the wall-clock time source.
--- May be called once, when real time is known (RTC, NTP, GNSS, etc.).
+--- May be called once, when real time is known (RTC, NTP, GNSS, etc.).
+---@param now_fn fun(): number
 local function set_time_source(now_fn)
     assert(type(now_fn) == "function", "set_time_source expects a function")
     assert(not time_ready, "set_time_source may only be called once")
@@ -49,8 +71,28 @@ local function set_time_source(now_fn)
     wall_now   = now_fn
     time_ready = true
 
-    -- Wake any fibres that were waiting for time to become ready.
+    -- Wake any fibers that were waiting for time to become ready.
     time_ready_cond:signal()
+
+    -- Treat "time became known" as a clock change for any alarms that
+    -- might start waiting after this point.
+    clock_change_cond:signal()
+    clock_change_cond = cond_mod.new()
+end
+
+--- Notify alarms that the civil time mapping has changed.
+--- Call this when:
+---   * the system's wall clock is adjusted (e.g. after NTP sync), or
+---   * the time zone used by recurrence functions has changed.
+local function time_changed()
+    if not time_ready then
+        -- Before time_ready, no alarm has gone past the readiness gate,
+        -- so there is nothing meaningful to reschedule.
+        return
+    end
+
+    clock_change_cond:signal()
+    clock_change_cond = cond_mod.new()
 end
 
 ----------------------------------------------------------------------
@@ -67,13 +109,15 @@ function Alarm:is_active()
 end
 
 --- Cancel the alarm permanently.
--- No further firings or exhaustion notification will be delivered.
+--- No further firings or exhaustion notification will be delivered.
 function Alarm:cancel()
     self._state     = "exhausted_done"
     self._next_wall = nil
 end
 
 -- Internal: ensure _next_wall is populated or update state on exhaustion.
+---@param now number
+---@return number|nil
 function Alarm:_ensure_next(now)
     if self._next_wall or self._state ~= "active" then
         return self._next_wall
@@ -92,7 +136,7 @@ end
 
 --- Main CML-style operation: wait for the alarm to fire once.
 --
--- Returns an Event which, when performed, yields either:
+-- Returns an Op which, when performed, yields either:
 --
 --   * On successful firing:
 --       true, alarm, last_fired_epoch, ...
@@ -101,11 +145,15 @@ end
 --       false, "no_more_recurrences", alarm, last_fired_epoch|nil
 --
 -- After the exhaustion notification has been delivered, further
--- wait_op() calls return an Event that never fires.
+-- wait_op() calls return an Op that never fires.
 --
 -- Before set_time_source is called, a wait_op() will first block
 -- until time becomes ready, and then behave exactly as if wait_op()
 -- had been called afterwards.
+--
+-- If alarm.time_changed() is called while this wait_op() is sleeping
+-- for its next firing time, the sleep will be pre-empted and the
+-- next firing time will be recomputed from the updated civil time.
 function Alarm:wait_op()
     return op.guard(function()
         -- Fully inert: no more results of any kind.
@@ -138,12 +186,28 @@ function Alarm:wait_op()
         local dt        = next_wall - now
         if dt < 0 then dt = 0 end
 
-        -- Relative sleep using monotonic time, followed by state update.
-        return sleep_mod.sleep_op(dt):wrap(function(...)
-            -- Only update state on successful firing (not on abort).
-            self._last      = next_wall
-            self._next_wall = nil
-            return true, self, self._last, ...
+        -- Build a race between:
+        --   * sleeping until the scheduled time; and
+        --   * a clock/civil-time change.
+        --
+        -- sleep_op(dt) yields no user-level values on success.
+        local sleep_ev  = sleep_mod.sleep_op(dt)
+        local change_ev = clock_change_cond:wait_op()
+
+        local choice_ev = op.boolean_choice(sleep_ev, change_ev)
+
+        return choice_ev:wrap(function(is_sleep)
+            if is_sleep then
+                -- Timer completed: commit this firing.
+                self._last      = next_wall
+                self._next_wall = nil
+                return true, self, self._last
+            else
+                -- Clock or time zone changed before the timer fired:
+                -- clear the stale schedule and recompute under new civil time.
+                self._next_wall = nil
+                return perform(self:wait_op())
+            end
         end)
     end)
 end
@@ -160,6 +224,8 @@ Alarm.event = Alarm.wait_op
 -- params.next_time :: function(last_epoch|nil, now_epoch) -> next_epoch|nil
 -- params.policy    :: optional policy table (DST, gaps, overlaps, etc.)
 -- params.label     :: optional label for identification/logging
+---@param params { next_time: fun(last: number|nil, now: number): number|nil, policy?: any, label?: string }
+---@return Alarm
 local function new(params)
     assert(type(params) == "table", "alarm.new expects a parameter table")
     local next_time = params.next_time
@@ -182,4 +248,5 @@ return {
     Alarm           = Alarm,
     new             = new,
     set_time_source = set_time_source,
+    time_changed    = time_changed,
 }

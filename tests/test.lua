@@ -13,6 +13,7 @@ local modules = {
     { 'io',   'exec_backend' },
     { 'io',   'exec' },
     { 'timer' },
+    { 'alarm' },
     { 'sched' },
     { 'runtime' },
     { 'channel' },
@@ -20,7 +21,6 @@ local modules = {
     { 'cond' },
     { 'sleep' },
     { 'waitgroup' },
-    -- { 'alarm' },
     { 'scope' },
 }
 
