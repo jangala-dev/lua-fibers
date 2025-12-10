@@ -155,7 +155,7 @@ Scopes implement fail-fast supervision:
 
 Cancellation is observable as an event:
 
-- `Scope:done_op()` – an Op that becomes ready when the scope is cancelled or fails (but not on success), returning the error or cancellation reason;
+- `Scope:not_ok_op()` – an Op that becomes ready when the scope is cancelled or fails (but not on success), returning the error or cancellation reason;
 - `Scope:join_op()` – an Op that becomes ready once the scope reaches a *terminal* status (after all child fibers and defers have completed), returning `(status, err)`.
 
 When a scope exits:
@@ -541,7 +541,7 @@ Users can still catch and handle expected errors locally. Unexpected errors bubb
 Cancellation is expressed as part of the event algebra:
 
 - each scope has a cancellation condition;
-- `Scope:done_op()` and the internal `cancel_op(scope)` both reuse this condition to build Ops that become ready on cancellation;
+- `Scope:not_ok_op()` and the internal `cancel_op(scope)` both reuse this condition to build Ops that become ready on cancellation;
 - `Scope:run_op(ev)` races a user Op against cancellation;
 - `Scope:sync` and `Scope:perform` enforce that operations in failed or cancelled scopes do not silently proceed.
 

@@ -335,7 +335,7 @@ end
 --- Op that fires when the scope is cancelled or fails.
 --- Returns the cancellation or failure reason when performed.
 ---@return Op
-function Scope:done_op()
+function Scope:not_ok_op()
     local ev = self._cancel_cond:wait_op()
     return ev:wrap(function()
         return self._error or "scope cancelled"

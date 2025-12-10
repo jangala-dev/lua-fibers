@@ -512,10 +512,10 @@ local function test_sync_cancellation_race()
 end
 
 -------------------------------------------------------------------------------
--- 5. join_op and done_op (on failed/cancelled scopes)
+-- 5. join_op and not_ok_op() (on failed/cancelled scopes)
 -------------------------------------------------------------------------------
 
-local function test_join_and_done_ops()
+local function test_join_and_not_ok_op()
     -- Failed scope: body error.
     local failed_scope
     local st_fail, err_fail = scope.run(function(s)
@@ -536,12 +536,12 @@ local function test_join_and_done_ops()
     end
 
     do
-        local ev = failed_scope:done_op()
+        local ev = failed_scope:not_ok_op()
         local reason = performer.perform(ev)
-        -- For a failed scope we also call cancel(error), so done_op
+        -- For a failed scope we also call cancel(error), so not_ok_op()
         -- should be triggered and report the same error.
         assert(tostring(reason):find("join test failure", 1, true),
-               "done_op on failed scope should report the failure reason")
+               "not_ok_op() on failed scope should report the failure reason")
     end
 
     -- Cancelled scope (explicit cancel, not body error).
@@ -563,10 +563,10 @@ local function test_join_and_done_ops()
     end
 
     do
-        local ev = cancelled_scope:done_op()
+        local ev = cancelled_scope:not_ok_op()
         local reason = performer.perform(ev)
         assert(reason == "stop again",
-               "done_op on cancelled scope should report cancellation reason")
+               "not_ok_op() on cancelled scope should report cancellation reason")
     end
 end
 
@@ -632,7 +632,7 @@ local function main()
         test_sync_respects_cancellation()
         test_sync_cancellation_race()
 
-        test_join_and_done_ops()
+        test_join_and_not_ok_op()
         test_fail_fast_from_child_fiber()
 
         io.stdout:write("OK\n")

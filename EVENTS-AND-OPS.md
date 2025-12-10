@@ -36,7 +36,7 @@ Examples:
 * Timers: `sleep.sleep_op(dt)`
 * Streams: `stream:read_line_op()`, `stream:write_string_op("...")`
 * Processes: `cmd:run_op()`, `cmd:output_op()`
-* Scopes: `scope:join_op()`, `scope:done_op()`
+* Scopes: `scope:join_op()`, `scope:not_ok_op()`
 
 These all return `Op` values.
 
@@ -296,7 +296,7 @@ A common pattern is “operation or cancellation, whichever first”:
 ```lua
 local scope  = fibers.current_scope()
 local body   = ch:get_op()
-local cancel = scope:done_op()
+local cancel = scope:not_ok_op()
 
 local ev = fibers.choice(body, cancel)
 
