@@ -15,6 +15,7 @@ sudo luarocks install cqueues
 sudo luarocks install http
 sudo luarocks install luaposix
 sudo luarocks install luacheck
+sudo luarocks install luajit
 
 # install cffi-lua
 
@@ -30,14 +31,13 @@ sudo ninja all
 sudo ninja test
 sudo cp cffi.so /usr/local/lib/lua/5.1/cffi.so
 
+# install nixio
+
 cd /tmp
-git clone https://github.com/LuaJIT/LuaJIT
-cd LuaJIT/
-git checkout v2.1.ROLLING
-make && sudo make install
-sudo ln -sf "$(ls -1 /usr/local/bin/luajit-2.1* | sort | tail -n 1)" /usr/local/bin/luajit
-cd /tmp
-rm -rf LuaJIT
+sudo rm -rf cffi-lua
+git clone https://github.com/Neopallium/nixio/
+cd nixio
+sudo make install
 
 cd /workspaces/lua-fibers
 pre-commit install

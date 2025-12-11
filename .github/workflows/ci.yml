@@ -15,11 +15,16 @@ jobs:
         chmod +x .devcontainer/postCreateCommand.sh
         ./.devcontainer/postCreateCommand.sh
 
-    - name: Run luajit 2.17 Tests in Tests Directory
+    - name: Run lua 5.1 Tests in Tests Directory
+      run: |
+        cd tests
+        lua test.lua
+
+    - name: Run luajit 2.1 Tests in Tests Directory
       run: |
         cd tests
         luajit test.lua
 
     - name: Run Linter
       run: luacheck .
-    
+
