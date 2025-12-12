@@ -443,7 +443,7 @@ end)
 Here we run a long-lived process in its own child scope using `scope.run`. The updated `scope.run` returns:
 
 ```lua
-status, err, finally_failures, ...body_results
+status, err, extra_errors, ...body_results
 ```
 
 In many cases only `status` and `err` are required.
@@ -461,7 +461,7 @@ fibers.run(function(scope)
   }
 
   -- Run worker in a child scope for clearer lifetime boundaries.
-  local status, err, extra_failures, child_status, code, sig, cerr =
+  local status, err, extra_errors, child_status, code, sig, cerr =
     scope_mod.run(function(child_scope)
       -- Wait until the worker dies or the child scope is cancelled.
       return child_scope:perform(cmd:run_op())
@@ -470,7 +470,7 @@ fibers.run(function(scope)
   print("worker scope finished:", status, err)
 
   -- Optional: record any errors from finaliser cleanup in the worker scope.
-  for i, derr in ipairs(extra_failures) do
+  for i, derr in ipairs(extra_errors) do
     print("worker extra failure[" .. i .. "]:", derr)
   end
 
