@@ -13,12 +13,6 @@
 ---@field stdout ExecStreamConfig
 ---@field stderr ExecStreamConfig
 
----@class ProcHandle
----@field backend ExecBackend
----@field stdin Stream|nil
----@field stdout Stream|nil
----@field stderr Stream|nil
-
 --- Backend module interface.
 ---@class ExecBackendModule
 ---@field is_supported fun(): boolean

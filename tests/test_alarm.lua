@@ -335,7 +335,7 @@ local function test_exhaustion_after_reschedule()
 
   local al = alarm_mod.new{ next_time = next_time }
 
-  local r1, r2 = {}
+  local r1, r2 = {}, {}
 
   fibers.spawn(function()
     -- First wait: should fire once.

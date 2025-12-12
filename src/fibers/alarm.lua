@@ -219,12 +219,14 @@ Alarm.event = Alarm.wait_op
 -- Constructors
 ----------------------------------------------------------------------
 
+---@class AlarmNewParams
+---@field next_time fun(last: number|nil, now: number): number|nil
+---@field policy any?
+---@field label string?
+
 --- Create a new alarm.
---
--- params.next_time :: function(last_epoch|nil, now_epoch) -> next_epoch|nil
--- params.policy    :: optional policy table (DST, gaps, overlaps, etc.)
--- params.label     :: optional label for identification/logging
----@param params { next_time: fun(last: number|nil, now: number): number|nil, policy?: any, label?: string }
+---
+---@param params AlarmNewParams
 ---@return Alarm
 local function new(params)
     assert(type(params) == "table", "alarm.new expects a parameter table")
