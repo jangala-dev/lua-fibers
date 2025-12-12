@@ -124,10 +124,10 @@ Scopes (`fibers.scope`) represent supervision domains and form a tree:
   - a parent (except the root);
   - a weak set of child scopes;
   - a waitgroup tracking child fibers;
-  - a LIFO stack of defers to run on exit;
+  - a LIFO stack of `finally` handlers to run on exit;
   - a cancellation condition and a join condition;
   - a status: `"running" | "ok" | "failed" | "cancelled"`;
-  - a primary error or cancellation reason, plus a list of additional failures from deferred cleanup handlers.
+  - a primary error or cancellation reason, plus a list of additional failures from finalisation handlers.
 
 Scopes are obtained via:
 
@@ -156,16 +156,16 @@ Scopes implement fail-fast supervision:
 Cancellation is observable as an event:
 
 - `Scope:not_ok_op()` – an Op that becomes ready when the scope is cancelled or fails (but not on success), returning the error or cancellation reason;
-- `Scope:join_op()` – an Op that becomes ready once the scope reaches a *terminal* status (after all child fibers and defers have completed), returning `(status, err)`.
+- `Scope:join_op()` – an Op that becomes ready once the scope reaches a *terminal* status (after all child fibers and `finally` handlers have completed), returning `(status, err)`.
 
 When a scope exits:
 
 1. a join worker waits for the internal waitgroup (all child fibers finished);
 2. if still `"running"`, status is updated to `"ok"`;
-3. defers are run in LIFO order;
-4. any errors in defers either:
-   - if the scope would otherwise have been `"ok"`, turn it into `"failed"` and record the first defer error as the primary error; subsequent defer errors (if any) are recorded separately; or
-   - if the scope is already `"failed"` or `"cancelled"`, are recorded in the scope’s _defer_failures list without changing the primary error;5. the join condition is signalled, making `join_op` ready.
+3. registered `finally` handlers are run in LIFO order;
+4. any errors in `finally` handlers either:
+   - if the scope would otherwise have been `"ok"`, turn it into `"failed"` and record the first finaliser error as the primary error; subsequent finaliser errors (if any) are recorded separately; or
+   - if the scope is already `"failed"` or `"cancelled"`, are recorded in the scope’s list of additional finaliser failures without changing the primary error;
 5. the join condition is signalled, making `join_op` ready.
 
 #### Ops under scopes
@@ -468,7 +468,7 @@ Lifecycle Ops:
 Scope integration:
 
 - `exec.command` must be called from inside a fiber (it asserts `Runtime.current_fiber()`), and binds the `Command` to the current scope;
-- the scope registers a `defer` that:
+- the scope registers a `finally` handler that:
   - on scope exit:
     - performs a best-effort `shutdown_op`;
     - closes any owned stdio streams;
@@ -550,9 +550,9 @@ The same pattern is used in the exec subsystem:
 - shutdown races process exit against a timer and then escalates;
 - `perform_with_scope_or_raw` ensures that exec helpers honour scope cancellation where appropriate, but can still complete shutdown once the owning scope is no longer running.
 
-### 5.3 Defers and resource cleanup
+### 5.3 Finalisers and resource cleanup
 
-Each scope maintains LIFO defers via `scope:defer(fn)`:
+Each scope maintains LIFO finalisers via `scope:finally(fn)`:
 
 - run exactly once when the scope exits (after child fibers finish);
 - can be used to:
@@ -560,10 +560,10 @@ Each scope maintains LIFO defers via `scope:defer(fn)`:
   - shut down child processes;
   - release other resources tied to the scope’s lifetime.
 
-Errors in defers:
+Errors in finalisers:
 
 - convert `"ok"` into `"failed"` and record an error; or
-- are appended to `_failures` if the scope was already failed or cancelled.
+- are appended to the scope’s collection of additional failures if the scope was already failed or cancelled.
 
 `fibers.exec` uses this mechanism extensively to ensure that child processes are not left running beyond their scope.
 
@@ -628,7 +628,7 @@ From non-fiber code:
 Inside `main_fn(scope, ...)`:
 
 - use `fibers.spawn(fn, ...)` to create child fibers under `scope`;
-- use `fibers.run_scope`/`Scope.run` or `fibers.scope_op`/`Scope.with_op` to create further nested scopes where needed;
+- use `fibers.run_scope`/`Scope.run` or `fibers.with_scope_op`/`Scope.with_op` to create further nested scopes where needed;
 - perform Ops via:
   - `fibers.perform(ev)` (uses the current scope); or
   - `scope:perform(ev)` / `scope:sync(ev)`.
@@ -658,7 +658,7 @@ Express waits and coordination in terms of the event algebra and scopes:
 
 - bind logical units of work (requests, sessions, jobs) to their own scopes:
   - cancel the scope to cancel all associated work and resources;
-  - use defers to tie external resources to that scope.
+  - use `scope:finally` to tie external resources to that scope.
 
 ---
 

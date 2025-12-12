@@ -398,7 +398,7 @@ Each `Command` is created with reference to the current scope:
 
 * `exec.command` asserts that it is called from inside a fiber.
 * The `Scope` returned by `Scope.current()` at that point is recorded.
-* A `defer` handler is registered on that scope which:
+* A `finally` handler is registered on that scope which:
 
   * performs a best-effort shutdown of the process; and
   * closes any streams owned by the command; and
@@ -443,7 +443,7 @@ end)
 Here we run a long-lived process in its own child scope using `scope.run`. The updated `scope.run` returns:
 
 ```lua
-status, err, defer_failures, ...body_results
+status, err, finally_failures, ...body_results
 ```
 
 In many cases only `status` and `err` are required.
@@ -461,7 +461,7 @@ fibers.run(function(scope)
   }
 
   -- Run worker in a child scope for clearer lifetime boundaries.
-  local status, err, defer_failures, child_status, code, sig, cerr =
+  local status, err, extra_failures, child_status, code, sig, cerr =
     scope_mod.run(function(child_scope)
       -- Wait until the worker dies or the child scope is cancelled.
       return child_scope:perform(cmd:run_op())
@@ -469,16 +469,16 @@ fibers.run(function(scope)
 
   print("worker scope finished:", status, err)
 
-  -- Optional: record any errors from deferred cleanup in the worker scope.
-  for i, derr in ipairs(defer_failures) do
-    print("worker defer failure[" .. i .. "]:", derr)
+  -- Optional: record any errors from finaliser cleanup in the worker scope.
+  for i, derr in ipairs(extra_failures) do
+    print("worker extra failure[" .. i .. "]:", derr)
   end
 
   -- child_status/code/sig/cerr are the results from cmd:run_op(), if needed.
 end)
 ```
 
-Here, even if the outer `scope` fails due to some other fiber error, the `Command`’s defer handler will shut down the process and release its resources.
+Here, even if the outer `scope` fails due to some other fiber error, the `Command`’s finaliser will shut down the process and release its resources.
 
 ---
 

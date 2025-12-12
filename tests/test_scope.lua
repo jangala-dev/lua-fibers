@@ -296,7 +296,7 @@ local function test_with_op_child_fiber_failure()
         assert(res == "ok", "with_op main op should still return its result")
 
         -- At this point, with_op's release will have waited for the child scope
-        -- to close, including both spawned child fibers and defers.
+        -- to close, including both spawned child fibers and finalisers.
     end)
 
     assert(st == "ok" and serr == nil,
@@ -368,14 +368,14 @@ end
 -- 3. Defers: LIFO ordering and execution on failure
 -------------------------------------------------------------------------------
 
-local function test_defers_lifo_and_failure()
+local function test_finalisers_lifo_and_failure()
     local order = {}
     local scope_ref
 
     local st, serr = scope.run(function(s)
         scope_ref = s
-        s:defer(function() table.insert(order, "first") end)
-        s:defer(function() table.insert(order, "second") end)
+        s:finally(function() table.insert(order, "first") end)
+        s:finally(function() table.insert(order, "second") end)
         error("boom in body")
     end)
 
@@ -388,36 +388,36 @@ local function test_defers_lifo_and_failure()
     assert(tostring(serr2):find("boom in body", 1, true),
            "scope error should mention the body error")
 
-    assert(#order == 2, "two defers should have run")
+    assert(#order == 2, "two finalisers should have run")
     assert(order[1] == "second" and order[2] == "first",
-           "defers should run in LIFO order even on failure")
+           "finalisers should run in LIFO order even on failure")
 end
 
 -- Defer failures after a successful body should turn the scope to 'failed'
--- and surface the defer error as primary, but still preserve body results.
-local function test_defer_failure_marks_scope_failed()
+-- and surface the finaliser error as primary, but still preserve body results.
+local function test_extra_failure_marks_scope_failed()
     local scope_ref
 
     local st, serr, _, body_res = scope.run(function(s)
         scope_ref = s
-        s:defer(function()
-            error("defer failure")
+        s:finally(function()
+            error("finaliser failure")
         end)
         return "body-result"
     end)
 
     assert(st == "failed",
-           "scope.run should report failed if a defer handler fails")
-    assert(tostring(serr):find("defer failure", 1, true),
-           "defer failure should be the primary error")
+           "scope.run should report failed if a finaliser fails")
+    assert(tostring(serr):find("finaliser failure", 1, true),
+           "finaliser failure should be the primary error")
 
     local st2, serr2 = scope_ref:status()
-    assert(st2 == "failed", "scope status should be failed after defer failure")
-    assert(tostring(serr2):find("defer failure", 1, true),
-           "scope error should mention the defer failure")
+    assert(st2 == "failed", "scope status should be failed after finaliser failure")
+    assert(tostring(serr2):find("finaliser failure", 1, true),
+           "scope error should mention the finaliser failure")
 
     assert(body_res == "body-result",
-           "scope.run should still return body results even if defers fail")
+           "scope.run should still return body results even if finalisers fail")
 end
 
 -------------------------------------------------------------------------------
@@ -625,8 +625,8 @@ local function main()
         test_run_success_and_failure()
         test_run_explicit_cancel()
 
-        test_defers_lifo_and_failure()
-        test_defer_failure_marks_scope_failed()
+        test_finalisers_lifo_and_failure()
+        test_extra_failure_marks_scope_failed()
 
         test_sync_wraps_op_failure()
         test_sync_respects_cancellation()

@@ -8,14 +8,14 @@ fibers.run(function()
   local function worker()
     local s = fibers.current_scope()
 
-    s:defer(function()
-      print("defer 1 (outer)")
+    s:finally(function()
+      print("finaliser 1 (outer)")
     end)
 
-    s:defer(function()
-      print("defer 2 (inner)")
+    s:finally(function()
+      print("finaliser 2 (inner)")
       -- This error is recorded as an additional failure.
-      error("defer 2 failed")
+      error("finaliser 2 failed")
     end)
 
     print("worker body starting")

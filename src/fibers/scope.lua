@@ -25,10 +25,10 @@ end
 ---@field _children table<Scope, boolean>   # weak-key set of child scopes
 ---@field _status ScopeStatus
 ---@field _error any
----@field _defer_failures any[]
+---@field _finally_failures any[]
 ---@field failure_mode string               # e.g. "fail_fast"
 ---@field _wg Waitgroup
----@field _defers fun(self: Scope)[]        # LIFO defers
+---@field _finalisers fun(self: Scope)[]        # LIFO finalisers
 ---@field _cancel_cond Cond
 ---@field _join_cond Cond
 ---@field _join_worker_started boolean
@@ -87,11 +87,11 @@ local function new_scope(parent)
 
         _status      = "running",
         _error       = nil,
-        _defer_failures    = {},
+        _finally_failures    = {},
         failure_mode = "fail_fast",
 
         _wg      = waitgroup.new(),
-        _defers  = {},
+        _finalisers  = {},
 
         _cancel_cond         = cond.new(),
         _join_cond           = cond.new(),
@@ -165,11 +165,12 @@ function Scope:new_child()
     return new_scope(self)
 end
 
---- Register a deferred handler to run when the scope closes (LIFO).
+--- Register a finaliser to run when the scope closes (LIFO).
 ---@param handler fun(self: Scope)
-function Scope:defer(handler)
-    local defers = self._defers
-    defers[#defers + 1] = handler
+function Scope:finally(handler)
+    assert(type(handler) == "function", "scope:finally expects a function")
+    local finalisers = self._finalisers
+    finalisers[#finalisers + 1] = handler
 end
 
 ---@param reason any|nil
@@ -261,11 +262,11 @@ function Scope:status()
     return self._status, self._error
 end
 
---- Return a shallow copy of non-primary defer failures recorded on this scope.
+--- Return a shallow copy of non-primary finaliser failures recorded on this scope.
 ---@return any[]
-function Scope:defer_failures()
+function Scope:finally_failures()
     local out = {}
-    local f   = self._defer_failures or {}
+    local f   = self._finally_failures or {}
     for i, v in ipairs(f) do
         out[i] = v
     end
@@ -276,7 +277,7 @@ end
 -- Join and done ops
 ----------------------------------------------------------------------
 
--- Internal: start a join worker that awaits children, runs defers and
+-- Internal: start a join worker that awaits children, runs finalisers and
 -- finalises status, then signals _join_cond.
 function Scope:_start_join_worker()
     if self._join_worker_started then return end
@@ -296,18 +297,22 @@ function Scope:_start_join_worker()
             self._error  = nil
         end
 
-        local defers = self._defers
-        for i = #defers, 1, -1 do
-            local f = defers[i]
-            defers[i] = nil
+        local status      = self._status
+        local primary_err = self._error
+        local aborted     = (status ~= "ok")
 
-            local ok, err = safe.pcall(f, self)
+        local finalisers = self._finalisers
+        for i = #finalisers, 1, -1 do
+            local f = finalisers[i]
+            finalisers[i] = nil
+
+            local ok, err = safe.pcall(f, aborted, status, primary_err)
             if not ok then
                 if self._status == "ok" then
                     self._status = "failed"
                     self._error  = self._error or err
                 else
-                    local failures = self._defer_failures
+                    local failures = self._finally_failures
                     failures[#failures + 1] = err
                 end
             end
@@ -475,13 +480,13 @@ end
 --- Returns:
 ---   status         :: "ok" | "failed" | "cancelled"
 ---   err            :: primary error or cancellation reason (nil on "ok")
----   defer_failures :: array of non-primary errors from deferred function recorded on the child scope
+---   extra_failures :: array of non-primary errors from finaliser function recorded on the child scope
 ---   ...            :: any results returned from body_fn (only present on "ok")
 ---@param body_fn fun(s: Scope, ...): ...
 ---@param ... any
 ---@return ScopeStatus status
 ---@return any err
----@return any[] defer_failures
+---@return any[] finally_failures
 ---@return any ...
 local function run(body_fn, ...)
     assert(runtime.current_fiber(), "scope.run must be called from inside a fiber")
@@ -498,15 +503,15 @@ local function run(body_fn, ...)
 
     local status, err = op.perform_raw(child:join_op())
 
-    -- Shallow copy of non-primary defer failures; will be {} when there are none.
-    local extra = child:defer_failures()
+    -- Shallow copy of non-primary finaliser failures; will be {} when there are none.
+    local extra = child:finally_failures()
 
     local res = child._result
     if res then
-        -- status, primary_err, defer_failures, ...body results...
+        -- status, primary_err, extra_failures, ...body results...
         return status, err, extra, unpack(res, 1, res.n)
     else
-        -- status, primary_err, defer_failures
+        -- status, primary_err, extra_failures
         return status, err, extra
     end
 end

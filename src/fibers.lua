@@ -133,7 +133,7 @@ return {
 
     -- Scope utilities re-exported
     run_scope                  = Scope.run,
-    scope_op                   = Scope.with_op,
+    with_scope_op              = Scope.with_op,
     set_unscoped_error_handler = Scope.set_unscoped_error_handler,
     current_scope              = Scope.current
 }

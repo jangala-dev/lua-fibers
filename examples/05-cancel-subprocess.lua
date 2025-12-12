@@ -90,7 +90,7 @@ local function main()
     -- Note:
     --   * If the timeout wins, we do not try to handle cancellation
     --     inside the subscope. Instead we cancel the subscope from
-    --     here and let its defers (including Command’s defer) run.
+    --     here and let its finalisers (including Command’s finaliser) run.
     --
 
     local proc_won, status2, code, signal, err = perform(boolean_choice(
@@ -113,7 +113,7 @@ local function main()
     -- This cancels:
     --   * the reader fiber,
     --   * any other children in this scope, and
-    --   * the Command’s scope defer will run _on_scope_exit(), which
+    --   * the Command’s scope finaliser will run _on_scope_exit(), which
     --     calls shutdown_op and waits for the process to die.
     --
     print("[subscope] timeout reached; cancelling subprocess scope")

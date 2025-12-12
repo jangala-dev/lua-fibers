@@ -112,7 +112,7 @@ end
 
 --- Perform an op using the current scope when it is still running,
 --- otherwise fall back to a raw perform. This lets normal calls to
---- exec ops honour scope cancellation, while scope defers can still
+--- exec ops honour scope cancellation, while scope finalisers can still
 --- run cleanup after the scope has reached a terminal state.
 ---@param ev Op
 ---@return any ...
@@ -578,11 +578,11 @@ end
 -- Scope cleanup
 ----------------------------------------------------------------------
 
---- Scope defer handler: best-effort shutdown and resource cleanup.
+--- Scope finaliser: best-effort shutdown and resource cleanup.
 function Command:_on_scope_exit()
     if self._started and not self._done then
         -- Best-effort shutdown. Any error here will be caught by the
-        -- scope's defer machinery and recorded as a scope failure.
+        -- scope's finaliser machinery and recorded as a scope failure.
         op.perform_raw(self:shutdown_op(self._shutdown_grace))
     end
 
@@ -645,7 +645,7 @@ local function command_from_spec(spec)
         _err            = nil,
     }, Command)
 
-    scope:defer(function()
+    scope:finally(function()
         cmd:_on_scope_exit()
     end)
 

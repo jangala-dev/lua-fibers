@@ -22,7 +22,7 @@ The library uses *structured concurrency*:
 - Every fiber runs inside a *scope*.
 - Scopes form a tree. A scope may have child scopes.
 - Failures are tracked per scope and cause *fail-fast* cancellation of that scope and its children.
-- Resources (streams, processes, etc.) are attached to scopes and cleaned up via defers when a scope finishes.
+- Resources (streams, processes, etc.) are attached to scopes and cleaned up via finalisers when a scope finishes. Finalisers are told whether the scope finished successfully or was aborted (failed or cancelled).
 
 A useful way to think about this is:
 
@@ -74,7 +74,7 @@ This is the primary way to introduce concurrency under the current scope.
 ### 2.3 `fibers.run_scope(body_fn, ...)`
 
 ```lua
-local status, err, defer_failures, result1, result2 = fibers.run_scope(function(child_scope, arg)
+local status, err, extra_failures, result1, result2 = fibers.run_scope(function(child_scope, arg)
   -- child_scope is a new child of the current scope
   return "ok:" .. arg, 42
 end, "value")
@@ -91,11 +91,16 @@ end, "value")
   ```lua
   status         :: "ok" | "failed" | "cancelled"
   err            :: primary error or cancellation reason (nil when status == "ok")
-  defer_failures :: array of additional errors from deferred handlers
+  extra_failures :: array of additional errors from finalisers
   ...            :: results from body_fn (only when status == "ok")
   ```
 
-This gives a way to treat a block of concurrent work as a value-returning operation, with explicit success/failure information. If the scope would otherwise have completed successfully, the first failing defer promotes the scope to `"failed"` and becomes the primary `err`; only subsequent defer errors are recorded in `defer_failures`.
+This gives a way to treat a block of concurrent work as a value-returning operation, with explicit success/failure information. When the child scope drains (all fibers complete) it runs its finalisers in LIFO order, passing each `(aborted, status, err)` where:
+* `status` is the final scope status (`"ok"`, `"failed"`, `"cancelled"`),
+* `err` is the primary error / cancellation reason (if any), and
+* `aborted` is `true` when `status ~= "ok"`.
+
+If the scope would otherwise have completed successfully, the first failing finaliser promotes the scope to `"failed"` and becomes the primary `err`; only subsequent finaliser errors are recorded in `extra_failures`.
 
 ### 2.4 `fibers.scope_op(build_op)`
 
@@ -151,13 +156,13 @@ Each scope has a status:
 
 * `"running"` – initial state.
 * `"ok"` – scope completed successfully.
-* `"failed"` – a fiber in the scope raised an error, or a defer handler failed.
+* `"failed"` – a fiber in the scope raised an error, or a finaliser failed.
 * `"cancelled"` – scope was cancelled explicitly or by a parent’s failure.
 
 Internally, a scope also tracks:
 
 * a primary error or cancellation reason (`_error`), and
-* any additional errors from deferred handlers in a list (`_defer_failures`).
+* any additional errors from finalisers in a list (`_extra_failures`).
 
 ### 3.1 How failures are recorded
 
@@ -170,7 +175,7 @@ If a fiber running in a scope raises a Lua error while the scope is `"running"`:
 
 Subsequent errors from other fibers in the same scope are treated as cancellation noise and are not accumulated.
 
-Errors raised by deferred handlers are handled separately and are described in section 4.
+Errors raised by finalisers are handled separately and are described in section 4.
 
 ### 3.2 How cancellation works
 
@@ -193,7 +198,7 @@ Scopes passed into your functions support:
 
 ```lua
 local status, err  = scope:status()
-local defer_errors = scope:defer_failures()
+local extra_errors = scope:extra_failures()
 local parent       = scope:parent()
 local children     = scope:children()
 ```
@@ -202,23 +207,52 @@ These methods are mainly useful for diagnostics or building higher-level abstrac
 
 ---
 
-## 4. Resource management with defers
+## 4. Resource management with finalisers
 
-Each scope maintains a LIFO list of deferred handlers, registered with:
+Each scope maintains a LIFO list of finalisers, registered with:
 
 ```lua
-scope:defer(function(s)
-  -- cleanup work; s is the same scope
+scope:finally(function(aborted, status, err)
+  -- cleanup work
 end)
-```
+````
 
-Defers run when the scope transitions from `"running"` to a terminal state (`"ok"`, `"failed"`, `"cancelled"`):
+Finalisers run when the scope transitions from `"running"` to a terminal state (`"ok"`, `"failed"`, `"cancelled"`), after all child fibers in that scope have finished:
 
 * They run in reverse registration order (LIFO).
-* If a defer raises an error:
 
-  * If the scope was `"ok"`, it becomes `"failed"` and the defer’s error becomes the primary error.
-  * Otherwise the error is added to the scope’s `defer_failures` list.
+* Each finaliser is called as:
+
+  ```lua
+  function(aborted, status, err) end
+  ```
+
+  where:
+
+  * `status` is the final scope status (`"ok"`, `"failed"`, `"cancelled"`),
+  * `err` is the primary error or cancellation reason (if any), and
+  * `aborted` is `true` when `status ~= "ok"` (that is, on failure or cancellation).
+
+* If a finaliser raises an error:
+
+  * If the scope was `"ok"`, it becomes `"failed"` and the finaliser’s error becomes the primary error.
+  * Otherwise the error is added to the scope’s `extra_failures` list.
+
+You can ignore any arguments you do not need. All of the following are valid:
+
+```lua
+-- Only care whether the scope was aborted
+scope:finally(function(aborted)
+  if aborted then
+    log("scope aborted")
+  end
+end)
+
+-- Care about full status information
+scope:finally(function(aborted, status, err)
+  log(("scope finished: status=%s err=%s"):format(status, tostring(err)))
+end)
+```
 
 A typical pattern is to attach resources to the current scope:
 
@@ -230,10 +264,17 @@ fibers.run(function(scope)
   local f, err = file.open("output.log", "w")
   if not f then error(err) end
 
-  scope:defer(function()
+  scope:finally(function(aborted, status, serr)
     local ok, cerr = f:close()
     if not ok then
-      error(cerr or "close failed")
+      -- Treat close failure as a scope failure if we otherwise succeeded.
+      if not aborted then
+        error(cerr or "close failed")
+      else
+        -- On an already-failed/cancelled scope, you might just log.
+        io.stderr:write("close failed during aborted scope: "
+          .. tostring(cerr) .. "\n")
+      end
     end
   end)
 
@@ -241,7 +282,7 @@ fibers.run(function(scope)
 end)
 ```
 
-Many library components, such as process `Command` objects, register their own defers against the owning scope so that processes and pipes are cleaned up automatically when the scope ends.
+Many library components, such as process `Command` objects, register their own finalisers against the owning scope so that processes and pipes are cleaned up automatically when the scope ends. Because finalisers see `(aborted, status, err)`, they can distinguish between normal shutdown and cleanup during failure or cancellation and behave accordingly.
 
 ---
 
@@ -297,7 +338,7 @@ local function run_workers(n)
 end
 
 fibers.run(function(scope)
-  local status, err, defer_failures = run_workers(5)
+  local status, err, extra_failures = run_workers(5)
 
   if status == "ok" then
     print("all workers completed successfully")
@@ -367,8 +408,8 @@ Key points:
 Structured concurrency underpins the rest of the library:
 
 * **Channels and other primitives** expose operations (`*_op`) that you run using `fibers.perform`. The current scope’s cancellation rules apply to all of them.
-* **I/O** (`fibers.io.stream`, `fibers.io.file`, `fibers.io.socket`) creates streams and sockets that are typically tied to the lifecycle of a scope via `scope:defer`.
-* **Process execution** (`fibers.exec`) registers a defer on the owning scope to ensure processes are shut down and associated streams are closed when the scope exits.
+* **I/O** (`fibers.io.stream`, `fibers.io.file`, `fibers.io.socket`) creates streams and sockets that are typically tied to the lifecycle of a scope via `scope:finally`.
+* **Process execution** (`fibers.exec`) registers a finaliser on the owning scope to ensure processes are shut down and associated streams are closed when the scope exits.
 
 As a result, an application built around scopes can use “scope ends” as the primary signal for cleaning up everything associated with that logical unit of work.
 
@@ -397,7 +438,7 @@ In most applications this is not required; errors in user code should normally b
 * Use `fibers.spawn` to start fibers under the current scope.
 * Use `fibers.run_scope` when you want a sub-task with its own scope and a `(status, err, ...)` result.
 * Use `fibers.scope_op` when you need a scoped block to participate directly in `choice` and other event combinators.
-* Use `scope:defer` to attach resource cleanup to the scope lifetime.
+* Use `scope:finally` to attach resource cleanup to the scope lifetime.
 * Use `fibers.perform` to run operations so that cancellation and failure follow the scope tree.
 
 This provides a disciplined way to structure concurrent programs so that lifetimes, failures and cleanup are explicit, bounded, and predictable.

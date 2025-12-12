@@ -6,7 +6,7 @@ local exec     = require "fibers.io.exec"
 local file     = require "fibers.io.file"
 local cond_mod = require "fibers.cond"
 
-local scope_op     = fibers.scope_op
+local with_scope_op     = fibers.with_scope_op
 local named_choice = fibers.named_choice
 local perform      = fibers.perform
 
@@ -20,8 +20,8 @@ local function main(parent_scope)
   local reader_done = cond_mod.new()
 
   -- Ensure streams are closed even if something goes wrong.
-  parent_scope:defer(function()
-    print("[parent] defer: closing shared streams")
+  parent_scope:finally(function()
+    print("[parent] finaliser: closing shared streams")
     assert(r_stream:close()); assert(w_stream:close())
   end)
 
@@ -48,7 +48,7 @@ local function main(parent_scope)
   ----------------------------------------------------------------------
   -- Child scope as an Op: command writes ticks to the shared stream
   ----------------------------------------------------------------------
-  local child_scope_op = scope_op(function()
+  local child_scope_op = with_scope_op(function()
     print("[child] building child scope op")
 
     local script = [[for i in 0 1 2 3 4 5 6 7 8 9; do echo "tick $i"; sleep 1; done]]
