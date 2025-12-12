@@ -2,11 +2,11 @@
 
 sudo apt update -y
 
-sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 netcat pre-commit
+sudo apt install -y apt-utils unzip curl wget git build-essential libreadline-dev dialog libssl-dev m4 netcat-traditional pre-commit
 
 # install core lua packages
 
-sudo apt install -y lua5.1 liblua5.1-dev luarocks
+sudo apt install -y lua5.1 liblua5.1-0-dev luarocks
 
 # install luarocks packages
 
