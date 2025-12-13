@@ -399,3 +399,9 @@ fibers.run(main)
 ```
 
 From that point on, application code is structured in terms of scopes, operations and normal Lua functions. The runtime ensures that blocking work is expressed as ops, long-lived work is owned by scopes, and everything is shut down cleanly.
+
+---
+
+## Acknowledgements
+
+The design of *fibers* owes a substantial debt to Andy Wingo’s work on lightweight concurrency and Concurrent ML in Lua. In particular, the library was shaped by his article [“lightweight concurrency in lua”](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) and by the original [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [stream](https://github.com/snabbco/snabb/tree/master/src/lib/stream) implementations in Snabb’s codebase, which provided both the conceptual model and many of the practical patterns used here. Any good ideas you find in *fibers* are quite likely to have appeared there first!
