@@ -2,24 +2,24 @@
 print('testing: fibers.fd')
 
 -- look one level up
-package.path = "../src/?.lua;" .. package.path
+package.path = '../src/?.lua;' .. package.path
 
 local file_stream = require 'fibers.io.file'
 local runtime = require 'fibers.runtime'
 
 local function equal(x, y)
-    if type(x) ~= type(y) then return false end
-    if type(x) == 'table' then
-        for k, v in pairs(x) do
-            if not equal(v, y[k]) then return false end
-        end
-        for k, _ in pairs(y) do
-            if x[k] == nil then return false end
-        end
-        return true
-    else
-        return x == y
-    end
+	if type(x) ~= type(y) then return false end
+	if type(x) == 'table' then
+		for k, v in pairs(x) do
+			if not equal(v, y[k]) then return false end
+		end
+		for k, _ in pairs(y) do
+			if x[k] == nil then return false end
+		end
+		return true
+	else
+		return x == y
+	end
 end
 
 local log = {}
@@ -29,19 +29,19 @@ runtime.current_scheduler:run()
 assert(equal(log, {}))
 
 local rd, wr = file_stream.pipe()
-local message = "hello, world\n"
-runtime.spawn_raw(function()
-    record('rd-a')
-    local str = rd:read_string{min=1,max=math.huge}
-    record('rd-b')
-    record(str)
+local message = 'hello, world\n'
+runtime.spawn_raw(function ()
+	record('rd-a')
+	local str = rd:read_string { min = 1, max = math.huge }
+	record('rd-b')
+	record(str)
 end)
-runtime.spawn_raw(function()
-    record('wr-a')
-    wr:write(message)
-    record('wr-b')
-    wr:flush()
-    record('wr-c')
+runtime.spawn_raw(function ()
+	record('wr-a')
+	wr:write(message)
+	record('wr-b')
+	wr:flush()
+	record('wr-c')
 end)
 
 runtime.current_scheduler:run()

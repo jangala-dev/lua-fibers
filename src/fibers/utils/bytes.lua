@@ -36,16 +36,15 @@
 ---@field is_supported fun(): boolean
 
 local candidates = {
-  'fibers.utils.bytes.ffi',
-  'fibers.utils.bytes.lua',
+	'fibers.utils.bytes.ffi',
+	'fibers.utils.bytes.lua',
 }
 
 for _, name in ipairs(candidates) do
-  local ok, mod = pcall(require, name)
-  if ok and type(mod) == "table" and mod.is_supported and mod.is_supported() then
-    return mod
-  end
+	local ok, mod = pcall(require, name)
+	if ok and type(mod) == 'table' and mod.is_supported and mod.is_supported() then
+		return mod
+	end
 end
 
-
-error("fibers.utils.bytes: no suitable bytes backend available on this platform")
+error('fibers.utils.bytes: no suitable bytes backend available on this platform')

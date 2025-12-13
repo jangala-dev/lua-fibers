@@ -21,13 +21,13 @@
 
 local op = require 'fibers.op'
 
-local unpack = rawget(table, "unpack") or _G.unpack
-local pack   = rawget(table, "pack") or function(...)
-    return { n = select("#", ...), ... }
+local unpack = rawget(table, 'unpack') or _G.unpack
+local pack   = rawget(table, 'pack') or function (...)
+	return { n = select('#', ...), ... }
 end
 
 local function id_wrap(...)
-    return ...
+	return ...
 end
 
 ----------------------------------------------------------------------
@@ -51,16 +51,16 @@ Waitset.__index = Waitset
 --- Create a new Waitset instance.
 ---@return Waitset
 local function new_waitset()
-    return setmetatable({ buckets = {} }, Waitset)
+	return setmetatable({ buckets = {} }, Waitset)
 end
 
 --- Remove element at index i by swapping with the tail.
 ---@param t Task[]
 ---@param i integer
 local function remove_at(t, i)
-    local n = #t
-    t[i] = t[n]
-    t[n] = nil
+	local n = #t
+	t[i] = t[n]
+	t[n] = nil
 end
 
 --- Add a task under a given key.
@@ -73,61 +73,61 @@ end
 ---@param task Task
 ---@return WaitToken
 function Waitset:add(key, task)
-    local buckets = self.buckets
-    local list = buckets[key]
-    if not list then
-        list = {}
-        buckets[key] = list
-    end
+	local buckets = self.buckets
+	local list = buckets[key]
+	if not list then
+		list = {}
+		buckets[key] = list
+	end
 
-    list[#list + 1] = task
-    local idx      = #list
-    local unlinked = false
+	list[#list + 1] = task
+	local idx       = #list
+	local unlinked  = false
 
-    ---@class WaitToken
-    local token = {
-        _waitset = self,
-        key      = key,
-        task     = task,
-    }
+	---@class WaitToken
+	local token = {
+		_waitset = self,
+		key      = key,
+		task     = task,
+	}
 
-    --- Unlink this task from the waitset.
-    --- Best-effort: falls back to a reverse scan if the stored index
-    --- has been invalidated by earlier removals.
-    ---@param tok WaitToken
-    ---@return boolean bucket_empty
-    function token.unlink(tok)
-        if unlinked then
-            return false
-        end
-        unlinked = true
+	--- Unlink this task from the waitset.
+	--- Best-effort: falls back to a reverse scan if the stored index
+	--- has been invalidated by earlier removals.
+	---@param tok WaitToken
+	---@return boolean bucket_empty
+	function token.unlink(tok)
+		if unlinked then
+			return false
+		end
+		unlinked = true
 
-        local bs = tok._waitset.buckets
-        local l  = bs[tok.key]
-        if not l or #l == 0 then
-            return false
-        end
+		local bs = tok._waitset.buckets
+		local l  = bs[tok.key]
+		if not l or #l == 0 then
+			return false
+		end
 
-        -- Best-effort removal; index may be stale.
-        if idx <= #l and l[idx] == tok.task then
-            remove_at(l, idx)
-        else
-            for i = #l, 1, -1 do
-                if l[i] == tok.task then
-                    remove_at(l, i)
-                    break
-                end
-            end
-        end
+		-- Best-effort removal; index may be stale.
+		if idx <= #l and l[idx] == tok.task then
+			remove_at(l, idx)
+		else
+			for i = #l, 1, -1 do
+				if l[i] == tok.task then
+					remove_at(l, i)
+					break
+				end
+			end
+		end
 
-        if #l == 0 then
-            bs[tok.key] = nil
-            return true
-        end
-        return false
-    end
+		if #l == 0 then
+			bs[tok.key] = nil
+			return true
+		end
+		return false
+	end
 
-    return token
+	return token
 end
 
 --- Take and remove all waiters for a key.
@@ -136,12 +136,12 @@ end
 ---@param key any
 ---@return Task[]|nil
 function Waitset:take_all(key)
-    local list = self.buckets[key]
-    if not list then
-        return nil
-    end
-    self.buckets[key] = nil
-    return list
+	local list = self.buckets[key]
+	if not list then
+		return nil
+	end
+	self.buckets[key] = nil
+	return list
 end
 
 --- Take and remove a single waiter (LIFO) for a key.
@@ -150,65 +150,65 @@ end
 ---@param key any
 ---@return Task|nil
 function Waitset:take_one(key)
-    local list = self.buckets[key]
-    if not list or #list == 0 then
-        return nil
-    end
-    local idx  = #list
-    local task = list[idx]
-    list[idx] = nil
-    if #list == 0 then
-        self.buckets[key] = nil
-    end
-    return task
+	local list = self.buckets[key]
+	if not list or #list == 0 then
+		return nil
+	end
+	local idx  = #list
+	local task = list[idx]
+	list[idx]  = nil
+	if #list == 0 then
+		self.buckets[key] = nil
+	end
+	return task
 end
 
 --- Return whether there are no waiters for this key.
 ---@param key any
 ---@return boolean
 function Waitset:is_empty(key)
-    local list = self.buckets[key]
-    return not list or #list == 0
+	local list = self.buckets[key]
+	return not list or #list == 0
 end
 
 --- Return the number of waiters for this key.
 ---@param key any
 ---@return integer
 function Waitset:size(key)
-    local list = self.buckets[key]
-    return list and #list or 0
+	local list = self.buckets[key]
+	return list and #list or 0
 end
 
 --- Remove all waiters for a single key without notifying them.
 ---@param key any
 function Waitset:clear_key(key)
-    self.buckets[key] = nil
+	self.buckets[key] = nil
 end
 
 --- Remove all waiters for all keys without notifying them.
 function Waitset:clear_all()
-    self.buckets = {}
+	self.buckets = {}
 end
 
 --- Notify and schedule all waiters for a key.
 ---@param key any
 ---@param scheduler Scheduler
 function Waitset:notify_all(key, scheduler)
-    local list = self:take_all(key)
-    if not list then return end
-    for i = 1, #list do
-        scheduler:schedule(list[i])
-        list[i] = nil
-    end
+	local list = self:take_all(key)
+	if not list then return end
+	for i = 1, #list do
+		scheduler:schedule(list[i])
+		list[i] = nil
+	end
 end
 
 --- Notify and schedule a single waiter (LIFO) for a key.
 ---@param key any
 ---@param scheduler Scheduler
 function Waitset:notify_one(key, scheduler)
-    local task = self:take_one(key)
-    if not task then return end
-    scheduler:schedule(task)
+	local task = self:take_one(key)
+	if not task then return end
+	scheduler:schedule(task)
 end
 
 ----------------------------------------------------------------------
@@ -245,75 +245,75 @@ end
 ---@param wrap_fn? WrapFn
 ---@return Op
 local function waitable(register, step, wrap_fn)
-    assert(type(register) == "function", "waitable: register must be a function")
-    assert(type(step)     == "function", "waitable: step must be a function")
+	assert(type(register) == 'function', 'waitable: register must be a function')
+	assert(type(step) == 'function', 'waitable: step must be a function')
 
-    wrap_fn = wrap_fn or id_wrap
+	wrap_fn = wrap_fn or id_wrap
 
-    return op.guard(function()
-        -- Token for this synchronisation (one per compiled leaf).
-        local token
+	return op.guard(function ()
+		-- Token for this synchronisation (one per compiled leaf).
+		local token
 
-        -- Fast path: single non-blocking attempt.
-        -- step() must not yield; if it raises, this fiber fails.
-        local function try()
-            return step()
-        end
+		-- Fast path: single non-blocking attempt.
+		-- step() must not yield; if it raises, this fiber fails.
+		local function try()
+			return step()
+		end
 
-        --- Blocking path: register a task that will re-run step
-        --- after the external condition changes.
-        ---
-        --- The same task is re-used across wake-ups; token is updated
-        --- to track the latest registration.
-        ---@param suspension Suspension
-        ---@param leaf_wrap WrapFn
-        local function block(suspension, leaf_wrap)
-            ---@class WaitTask : Task
-            local task
+		--- Blocking path: register a task that will re-run step
+		--- after the external condition changes.
+		---
+		--- The same task is re-used across wake-ups; token is updated
+		--- to track the latest registration.
+		---@param suspension Suspension
+		---@param leaf_wrap WrapFn
+		local function block(suspension, leaf_wrap)
+			---@class WaitTask : Task
+			local task
 
-            task = {
-                run = function()
-                    if not suspension:waiting() then
-                        return
-                    end
+			task = {
+				run = function ()
+					if not suspension:waiting() then
+						return
+					end
 
-                    -- Re-check readiness.
-                    local res  = pack(step())
-                    local done = res[1]
-                    if done then
-                        -- Complete with the leaf's final wrap.
-                        return suspension:complete(
-                            leaf_wrap,
-                            unpack(res, 2, res.n)
-                        )
-                    end
+					-- Re-check readiness.
+					local res  = pack(step())
+					local done = res[1]
+					if done then
+						-- Complete with the leaf's final wrap.
+						return suspension:complete(
+							leaf_wrap,
+							unpack(res, 2, res.n)
+						)
+					end
 
-                    -- Not done yet; re-register for another wake-up.
-                    if token and token.unlink then
-                        token:unlink()
-                    end
+					-- Not done yet; re-register for another wake-up.
+					if token and token.unlink then
+						token:unlink()
+					end
 
-                    token = register(task, suspension, leaf_wrap)
-                end,
-            }
+					token = register(task, suspension, leaf_wrap)
+				end,
+			}
 
-            -- Initial registration for this synchronisation.
-            token = register(task, suspension, leaf_wrap)
-        end
+			-- Initial registration for this synchronisation.
+			token = register(task, suspension, leaf_wrap)
+		end
 
-        local prim = op.new_primitive(wrap_fn, try, block)
+		local prim = op.new_primitive(wrap_fn, try, block)
 
-        -- If this op participates in a choice and loses, ensure any
-        -- extant registration is cancelled once for this synchronisation.
-        return prim:on_abort(function()
-            if token and token.unlink then
-                token:unlink()
-            end
-        end)
-    end)
+		-- If this op participates in a choice and loses, ensure any
+		-- extant registration is cancelled once for this synchronisation.
+		return prim:on_abort(function ()
+			if token and token.unlink then
+				token:unlink()
+			end
+		end)
+	end)
 end
 
 return {
-    new_waitset = new_waitset,
-    waitable    = waitable,
+	new_waitset = new_waitset,
+	waitable    = waitable,
 }

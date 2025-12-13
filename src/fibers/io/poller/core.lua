@@ -32,25 +32,25 @@ Poller.__index = Poller
 ----------------------------------------------------------------------
 
 local function recompute_mask(self, fd)
-  local ops = self._ops
-  if not ops.on_wait_change then
-    return
-  end
-  local want_rd = not self.rd:is_empty(fd)
-  local want_wr = not self.wr:is_empty(fd)
-  ops.on_wait_change(self.backend_state, fd, want_rd, want_wr)
+	local ops = self._ops
+	if not ops.on_wait_change then
+		return
+	end
+	local want_rd = not self.rd:is_empty(fd)
+	local want_wr = not self.wr:is_empty(fd)
+	ops.on_wait_change(self.backend_state, fd, want_rd, want_wr)
 end
 
 local function seconds_to_ms(timeout)
-  if timeout == nil then
-    -- Non-blocking poll.
-    return 0
-  elseif timeout < 0 then
-    -- “Infinite” block.
-    return -1
-  else
-    return math.floor(timeout * 1e3 + 0.5)
-  end
+	if timeout == nil then
+		-- Non-blocking poll.
+		return 0
+	elseif timeout < 0 then
+		-- “Infinite” block.
+		return -1
+	else
+		return math.floor(timeout * 1e3 + 0.5)
+	end
 end
 
 ----------------------------------------------------------------------
@@ -63,29 +63,29 @@ end
 ---@param task Task
 ---@return WaitToken
 function Poller:wait(fd, dir, task)
-  -- assert(type(fd) == "number", "fd must be number")
-  assert(type(fd) ~= nil, "fd must be non-nil")
-  assert(dir == "rd" or dir == "wr", "dir must be 'rd' or 'wr'")
+	-- assert(type(fd) == "number", "fd must be number")
+	assert(type(fd) ~= nil, 'fd must be non-nil')
+	assert(dir == 'rd' or dir == 'wr', "dir must be 'rd' or 'wr'")
 
-  local ws    = (dir == "rd") and self.rd or self.wr
-  local token = ws:add(fd, task)
+	local ws    = (dir == 'rd') and self.rd or self.wr
+	local token = ws:add(fd, task)
 
-  -- Update backend subscription / mask.
-  recompute_mask(self, fd)
+	-- Update backend subscription / mask.
+	recompute_mask(self, fd)
 
-  -- Wrap unlink to keep backend state in sync with waitsets.
-  local original_unlink = token.unlink
-  local owner           = self
+	-- Wrap unlink to keep backend state in sync with waitsets.
+	local original_unlink = token.unlink
+	local owner           = self
 
-  function token.unlink(tok)
-    local emptied = original_unlink(tok)
-    if emptied then
-      recompute_mask(owner, fd)
-    end
-    return emptied
-  end
+	function token.unlink(tok)
+		local emptied = original_unlink(tok)
+		if emptied then
+			recompute_mask(owner, fd)
+		end
+		return emptied
+	end
 
-  return token
+	return token
 end
 
 --- TaskSource hook: wait for events and schedule ready tasks.
@@ -93,36 +93,36 @@ end
 ---@param _ number|nil        -- current monotonic time (unused)
 ---@param timeout number|nil  -- seconds
 function Poller:schedule_tasks(sched, _, timeout)
-  local ops = self._ops
+	local ops = self._ops
 
-  local timeout_ms = seconds_to_ms(timeout)
-  local events     = ops.poll(self.backend_state, timeout_ms, self.rd, self.wr)
-  if not events then
-    -- Backend chose to do nothing (e.g. no fds registered).
-    return
-  end
+	local timeout_ms = seconds_to_ms(timeout)
+	local events     = ops.poll(self.backend_state, timeout_ms, self.rd, self.wr)
+	if not events then
+		-- Backend chose to do nothing (e.g. no fds registered).
+		return
+	end
 
-  for fd, flags in pairs(events) do
-    if flags.rd or flags.err then
-      self.rd:notify_all(fd, sched)
-    end
-    if flags.wr or flags.err then
-      self.wr:notify_all(fd, sched)
-    end
+	for fd, flags in pairs(events) do
+		if flags.rd or flags.err then
+			self.rd:notify_all(fd, sched)
+		end
+		if flags.wr or flags.err then
+			self.wr:notify_all(fd, sched)
+		end
 
-    -- Re-arm / update backend subscription after delivering events.
-    recompute_mask(self, fd)
-  end
+		-- Re-arm / update backend subscription after delivering events.
+		recompute_mask(self, fd)
+	end
 end
 
 -- Used by the scheduler.
 Poller.wait_for_events = Poller.schedule_tasks
 
 function Poller:close()
-  if self.backend_state and self._ops.close_backend then
-    self._ops.close_backend(self.backend_state)
-  end
-  self.backend_state = nil
+	if self.backend_state and self._ops.close_backend then
+		self._ops.close_backend(self.backend_state)
+	end
+	self.backend_state = nil
 end
 
 ----------------------------------------------------------------------
@@ -136,48 +136,48 @@ end
 ---@param ops table
 ---@return table poller_module  -- { get = fn, Poller = Poller, is_supported = fn }
 local function build_poller(ops)
-  assert(type(ops) == "table", "poller ops must be a table")
-  assert(type(ops.new_backend) == "function", "ops.new_backend must be a function")
-  assert(type(ops.poll)        == "function", "ops.poll must be a function")
+	assert(type(ops) == 'table', 'poller ops must be a table')
+	assert(type(ops.new_backend) == 'function', 'ops.new_backend must be a function')
+	assert(type(ops.poll) == 'function', 'ops.poll must be a function')
 
-  local function new_poller()
-    local backend_state = ops.new_backend()
-    local self = {
-      backend_state = backend_state,
-      rd            = wait.new_waitset(),
-      wr            = wait.new_waitset(),
-      _ops          = ops,
-    }
-    return setmetatable(self, Poller)
-  end
+	local function new_poller()
+		local backend_state = ops.new_backend()
+		local self = {
+			backend_state = backend_state,
+			rd            = wait.new_waitset(),
+			wr            = wait.new_waitset(),
+			_ops          = ops,
+		}
+		return setmetatable(self, Poller)
+	end
 
-  local singleton
+	local singleton
 
-  local function get()
-    if singleton then
-      return singleton
-    end
-    singleton = new_poller()
-    local sched = runtime.current_scheduler
-    assert(sched.add_task_source, "scheduler must implement add_task_source")
-    sched:add_task_source(singleton)
-    return singleton
-  end
+	local function get()
+		if singleton then
+			return singleton
+		end
+		singleton = new_poller()
+		local sched = runtime.current_scheduler
+		assert(sched.add_task_source, 'scheduler must implement add_task_source')
+		sched:add_task_source(singleton)
+		return singleton
+	end
 
-  local function is_supported()
-    if type(ops.is_supported) == "function" then
-      return not not ops.is_supported()
-    end
-    return true
-  end
+	local function is_supported()
+		if type(ops.is_supported) == 'function' then
+			return not not ops.is_supported()
+		end
+		return true
+	end
 
-  return {
-    get          = get,
-    Poller       = Poller,
-    is_supported = is_supported,
-  }
+	return {
+		get          = get,
+		Poller       = Poller,
+		is_supported = is_supported,
+	}
 end
 
 return {
-  build_poller = build_poller,
+	build_poller = build_poller,
 }

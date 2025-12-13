@@ -17,45 +17,45 @@ Cond.__index = Cond
 --- Build an Op that becomes ready when the condition fires.
 ---@return Op
 function Cond:wait_op()
-    local os = self._os
+	local os = self._os
 
-    return op.new_primitive(
-        nil,
-        function()
-            return os:is_triggered()
-        end,
-        --- Arrange to complete this suspension when the condition fires.
-        ---@param resumer Suspension
-        ---@param wrap_fn WrapFn
-        function(resumer, wrap_fn)
-            os:add_waiter(function()
-                if resumer:waiting() then
-                    resumer:complete(wrap_fn)
-                end
-            end)
-        end
-    )
+	return op.new_primitive(
+		nil,
+		function ()
+			return os:is_triggered()
+		end,
+		--- Arrange to complete this suspension when the condition fires.
+		---@param resumer Suspension
+		---@param wrap_fn WrapFn
+		function (resumer, wrap_fn)
+			os:add_waiter(function ()
+				if resumer:waiting() then
+					resumer:complete(wrap_fn)
+				end
+			end)
+		end
+	)
 end
 
 --- Block the current fiber until the condition fires.
 ---@return any ...
 function Cond:wait()
-    return perform(self:wait_op())
+	return perform(self:wait_op())
 end
 
 --- Signal the condition (idempotent).
 function Cond:signal()
-    return self._os:signal()
+	return self._os:signal()
 end
 
 --- Create a new condition.
 ---@return Cond
 local function new()
-    return setmetatable({
-        _os = oneshot.new(),  -- no extra callback
-    }, Cond)
+	return setmetatable({
+		_os = oneshot.new(), -- no extra callback
+	}, Cond)
 end
 
 return {
-    new = new,
+	new = new,
 }

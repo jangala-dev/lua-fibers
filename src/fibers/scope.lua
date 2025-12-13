@@ -85,10 +85,10 @@ local function new_scope(parent)
 		_parent   = parent,
 		_children = setmetatable({}, { __mode = 'k' }),
 
-		_status           = 'running',
-		_error            = nil,
+		_status       = 'running',
+		_error        = nil,
 		_extra_errors = {},
-		failure_mode      = 'fail_fast',
+		failure_mode  = 'fail_fast',
 
 		_wg         = waitgroup.new(),
 		_finalisers = {},

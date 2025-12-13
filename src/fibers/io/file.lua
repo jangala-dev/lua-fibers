@@ -17,9 +17,9 @@ local fd_back = require 'fibers.io.fd_backend'
 
 -- Best-effort: ignore SIGPIPE so write failures report via errno/return codes.
 do
-  if fd_back.ignore_sigpipe then
-    fd_back.ignore_sigpipe() -- errors are treated as non-fatal
-  end
+	if fd_back.ignore_sigpipe then
+		fd_back.ignore_sigpipe() -- errors are treated as non-fatal
+	end
 end
 
 ----------------------------------------------------------------------
@@ -27,27 +27,29 @@ end
 ----------------------------------------------------------------------
 
 -- We keep the string conventions, but leave numeric mapping to the backend.
----@type table<string, boolean>
+---@param mode string The file mode string (e.g., "r", "w", "a", "r+", "w+", "a+")
+---@return boolean readable Returns true if the mode allows reading
+---@return boolean writable Returns true if the mode allows writing
 local function mode_access(mode)
-  assert(type(mode) == "string", "mode must be a string")
-  local plus = mode:find("+", 1, true) ~= nil
-  local c    = mode:sub(1, 1)
+	assert(type(mode) == 'string', 'mode must be a string')
+	local plus = mode:find('+', 1, true) ~= nil
+	local c    = mode:sub(1, 1)
 
-  if c == "r" then
-    if plus then
-      return true, true
-    else
-      return true, false
-    end
-  elseif c == "w" or c == "a" then
-    if plus then
-      return true, true
-    else
-      return false, true
-    end
-  else
-    error("invalid mode: " .. tostring(mode))
-  end
+	if c == 'r' then
+		if plus then
+			return true, true
+		else
+			return true, false
+		end
+	elseif c == 'w' or c == 'a' then
+		if plus then
+			return true, true
+		else
+			return false, true
+		end
+	else
+		error('invalid mode: ' .. tostring(mode))
+	end
 end
 
 ----------------------------------------------------------------------
@@ -66,29 +68,29 @@ end
 ---@param filename? string
 ---@return Stream
 local function fdopen(fd, flags_or_mode, filename)
-  -- assert(type(fd) == "number", "fdopen: fd must be a number")
-  assert(type(fd) ~= nil, "fdopen: fd must be non-nil")
+	-- assert(type(fd) == "number", "fdopen: fd must be a number")
+	assert(type(fd) ~= nil, 'fdopen: fd must be non-nil')
 
-  local readable, writable
+	local readable, writable
 
-  local t = type(flags_or_mode)
-  if t == "number" then
-    assert(fd_back.decode_access, "backend does not implement decode_access")
-    readable, writable = fd_back.decode_access(flags_or_mode)
-  elseif t == "string" then
-    readable, writable = mode_access(flags_or_mode)
-  elseif t == "table" then
-    readable = not not flags_or_mode.readable
-    writable = not not flags_or_mode.writable
-  else
-    error("fdopen: invalid flags_or_mode: " .. tostring(flags_or_mode))
-  end
+	local t = type(flags_or_mode)
+	if t == 'number' then
+		assert(fd_back.decode_access, 'backend does not implement decode_access')
+		readable, writable = fd_back.decode_access(flags_or_mode)
+	elseif t == 'string' then
+		readable, writable = mode_access(flags_or_mode)
+	elseif t == 'table' then
+		readable = not not flags_or_mode.readable
+		writable = not not flags_or_mode.writable
+	else
+		error('fdopen: invalid flags_or_mode: ' .. tostring(flags_or_mode))
+	end
 
-  local io = fd_back.new(fd, { filename = filename })
+	local io = fd_back.new(fd, { filename = filename })
 
-  -- We no longer try to adjust buffer size based on fstat; stream.open
-  -- will apply its default buffer sizes.
-  return stream.open(io, readable, writable)
+	-- We no longer try to adjust buffer size based on fstat; stream.open
+	-- will apply its default buffer sizes.
+	return stream.open(io, readable, writable)
 end
 
 ----------------------------------------------------------------------
@@ -105,14 +107,14 @@ end
 ---@param perms? integer|string
 ---@return Stream|nil f, string|nil err
 local function open_file(filename, mode, perms)
-  mode = mode or "r"
+	mode = mode or 'r'
 
-  local fd, err = fd_back.open_file(filename, mode, perms)
-  if not fd then
-    return nil, err
-  end
+	local fd, err = fd_back.open_file(filename, mode, perms)
+	if not fd then
+		return nil, err
+	end
 
-  return fdopen(fd, mode, filename)
+	return fdopen(fd, mode, filename)
 end
 
 ----------------------------------------------------------------------
@@ -122,14 +124,14 @@ end
 --- Create a unidirectional pipe as two Streams (read, write).
 ---@return Stream r_stream, Stream w_stream
 local function pipe()
-  local rd, wr, err = fd_back.pipe()
-  if not rd then
-    error(err or "pipe() failed")
-  end
+	local rd, wr, err = fd_back.pipe()
+	if not rd then
+		error(err or 'pipe() failed')
+	end
 
-  local r_stream = fdopen(rd, "r")
-  local w_stream = fdopen(wr, "w")
-  return r_stream, w_stream
+	local r_stream = fdopen(rd, 'r')
+	local w_stream = fdopen(wr, 'w')
+	return r_stream, w_stream
 end
 
 ----------------------------------------------------------------------
@@ -143,12 +145,12 @@ end
 ---@param perms? integer|string
 ---@return integer|nil fd, string tmpname_or_err
 local function mktemp(prefix, perms)
-  perms = perms or "rw-r--r--"
-  local fd, tmpnam_or_err = fd_back.mktemp(prefix, perms)
-  if not fd then
-    return nil, tmpnam_or_err
-  end
-  return fd, tmpnam_or_err
+	perms = perms or 'rw-r--r--'
+	local fd, tmpnam_or_err = fd_back.mktemp(prefix, perms)
+	if not fd then
+		return nil, tmpnam_or_err
+	end
+	return fd, tmpnam_or_err
 end
 
 --- Create a temporary file wrapped as a Stream, with unlink-on-close semantics.
@@ -156,79 +158,79 @@ end
 ---@param tmpdir? string
 ---@return Stream|nil f, string|nil err
 local function tmpfile(perms, tmpdir)
-  perms  = perms or "rw-r--r--"
-  tmpdir = tmpdir or os.getenv("TMPDIR") or "/tmp"
-  ---@cast tmpdir string
+	perms  = perms or 'rw-r--r--'
+	tmpdir = tmpdir or os.getenv('TMPDIR') or '/tmp'
+	---@cast tmpdir string
 
-  local fd, tmpnam_or_err = mktemp(tmpdir .. "/tmp", perms)
-  if not fd then
-    return nil, tmpnam_or_err
-  end
+	local fd, tmpnam_or_err = mktemp(tmpdir .. '/tmp', perms)
+	if not fd then
+		return nil, tmpnam_or_err
+	end
 
-  ---@type Stream
-  local f = fdopen(fd, "r+", tmpnam_or_err)
+	---@type Stream
+	local f = fdopen(fd, 'r+', tmpnam_or_err)
 
-  -- We want unlink-on-close semantics by default, with a way to
-  -- disable that via :rename().
-  local io = f.io
-  assert(io, "tmpfile backend missing")
-  ---@cast io StreamBackend
+	-- We want unlink-on-close semantics by default, with a way to
+	-- disable that via :rename().
+	local io = f.io
+	assert(io, 'tmpfile backend missing')
+	---@cast io StreamBackend
 
-  local old_close = assert(io.close, "tmpfile backend missing close()")
+	local old_close = assert(io.close, 'tmpfile backend missing close()')
 
-  --- Rename the temporary file and disable unlink-on-close behaviour.
-  ---@param newname string
-  ---@return boolean|nil ok, string|nil err
-  function f:rename(newname)
-    -- Flush buffered data first (various stream flavours).
-    if self.flush_output then
-      self:flush_output()
-    elseif self.flush then
-      self:flush()
-    end
+	--- Rename the temporary file and disable unlink-on-close behaviour.
+	---@param newname string
+	---@return boolean|nil ok, string|nil err
+	function f:rename(newname)
+		-- Flush buffered data first (various stream flavours).
+		if self.flush_output then
+			self:flush_output()
+		elseif self.flush then
+			self:flush()
+		end
 
-    local real_fd = io.fileno and io:fileno() or fd
-    if real_fd then
-      fd_back.fsync(real_fd)
-    end
+		local real_fd = io.fileno and io:fileno() or fd
+		if real_fd then
+			fd_back.fsync(real_fd)
+		end
 
-    local fname = assert(io.filename, "tmpfile has no filename")
-    local ok, err = fd_back.rename(fname, newname)
-    if not ok then
-      return nil, ("failed to rename %s to %s: %s"):format(
-        tostring(fname),
-        tostring(newname),
-        tostring(err)
-      )
-    end
+		local fname = assert(io.filename, 'tmpfile has no filename')
+		local ok, err = fd_back.rename(fname, newname)
+		if not ok then
+			return nil, ('failed to rename %s to %s: %s'):format(
+				tostring(fname),
+				tostring(newname),
+				tostring(err)
+			)
+		end
 
-    io.filename = newname
-    -- Disable remove-on-close: restore original close.
-    io.close = old_close
-    return true
-  end
+		io.filename = newname
+		-- Disable remove-on-close: restore original close.
+		io.close = old_close
+		return true
+	end
 
-  --- Close the fd and unlink the temporary file.
-  ---@return boolean ok, string|nil err
-  function io:close()
-    local ok, err = old_close(self)
-    if not ok then
-      return ok, err
-    end
+	--- Close the fd and unlink the temporary file.
+	---@return boolean ok, string|nil err
+	function io:close()
+		local ok, err = old_close(self)
+		if not ok then
+			return ok, err
+		end
 
-    local fname = assert(self.filename, "tmpfile has no filename")
-    local ok2, err2 = fd_back.unlink(fname)
-    if not ok2 then
-      return false, ("failed to remove %s: %s"):format(
-        tostring(fname),
-        tostring(err2)
-      )
-    end
+		local fname = assert(self.filename, 'tmpfile has no filename')
+		local ok2, err2 = fd_back.unlink(fname)
+		if not ok2 then
+			return false, ('failed to remove %s: %s'):format(
+				tostring(fname),
+				tostring(err2)
+			)
+		end
 
-    return true, nil
-  end
+		return true, nil
+	end
 
-  return f
+	return f
 end
 
 ----------------------------------------------------------------------
@@ -239,7 +241,7 @@ end
 ---@param fd integer
 ---@return boolean ok, string|nil err
 local function init_nonblocking(fd)
-  return fd_back.set_nonblock(fd)
+	return fd_back.set_nonblock(fd)
 end
 
 ----------------------------------------------------------------------
@@ -247,15 +249,15 @@ end
 ----------------------------------------------------------------------
 
 return {
-  fdopen           = fdopen,
-  open             = open_file,
-  pipe             = pipe,
-  mktemp           = mktemp,
-  tmpfile          = tmpfile,
-  init_nonblocking = init_nonblocking,
+	fdopen           = fdopen,
+	open             = open_file,
+	pipe             = pipe,
+	mktemp           = mktemp,
+	tmpfile          = tmpfile,
+	init_nonblocking = init_nonblocking,
 
-  -- For callers that previously used file.modes / file.permissions,
-  -- re-export backend metadata if present.
-  modes            = fd_back.modes or {},
-  permissions      = fd_back.permissions or {},
+	-- For callers that previously used file.modes / file.permissions,
+	-- re-export backend metadata if present.
+	modes       = fd_back.modes or {},
+	permissions = fd_back.permissions or {},
 }

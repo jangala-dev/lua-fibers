@@ -11,24 +11,24 @@
 ---@module 'fibers.utils.time'
 
 local candidates = {
-  'fibers.utils.time.ffi',
-  'fibers.utils.time.luaposix',
-  'fibers.utils.time.nixio',
-  'fibers.utils.time.linux',
+	'fibers.utils.time.ffi',
+	'fibers.utils.time.luaposix',
+	'fibers.utils.time.nixio',
+	'fibers.utils.time.linux',
 }
 
 local chosen
 
 for _, name in ipairs(candidates) do
-  local ok, mod = pcall(require, name)
-  if ok and type(mod) == "table" and mod.is_supported and mod.is_supported() then
-    chosen = mod
-    break
-  end
+	local ok, mod = pcall(require, name)
+	if ok and type(mod) == 'table' and mod.is_supported and mod.is_supported() then
+		chosen = mod
+		break
+	end
 end
 
 if not chosen then
-  error("fibers.utils.time: no suitable time backend available on this platform")
+	error('fibers.utils.time: no suitable time backend available on this platform')
 end
 
 return chosen

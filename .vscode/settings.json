@@ -1,8 +1,8 @@
 {
-    "editor.tabSize": 2,
+    "editor.tabSize": 4,
     "editor.indentSize": "tabSize",
     "editor.insertSpaces": true,
-    "editor.formatOnSave": false,
+    "editor.formatOnSave": true,
     "editor.formatOnSaveMode": "modifications",
     "editor.codeActionsOnSave": {
       "source.fixAll.eslint": "never"

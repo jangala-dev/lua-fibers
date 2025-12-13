@@ -65,19 +65,19 @@ local clock_change_cond = cond_mod.new()
 --- May be called once, when real time is known (RTC, NTP, GNSS, etc.).
 ---@param now_fn fun(): number
 local function set_time_source(now_fn)
-    assert(type(now_fn) == "function", "set_time_source expects a function")
-    assert(not time_ready, "set_time_source may only be called once")
+	assert(type(now_fn) == 'function', 'set_time_source expects a function')
+	assert(not time_ready, 'set_time_source may only be called once')
 
-    wall_now   = now_fn
-    time_ready = true
+	wall_now   = now_fn
+	time_ready = true
 
-    -- Wake any fibers that were waiting for time to become ready.
-    time_ready_cond:signal()
+	-- Wake any fibers that were waiting for time to become ready.
+	time_ready_cond:signal()
 
-    -- Treat "time became known" as a clock change for any alarms that
-    -- might start waiting after this point.
-    clock_change_cond:signal()
-    clock_change_cond = cond_mod.new()
+	-- Treat "time became known" as a clock change for any alarms that
+	-- might start waiting after this point.
+	clock_change_cond:signal()
+	clock_change_cond = cond_mod.new()
 end
 
 --- Notify alarms that the civil time mapping has changed.
@@ -85,14 +85,14 @@ end
 ---   * the system's wall clock is adjusted (e.g. after NTP sync), or
 ---   * the time zone used by recurrence functions has changed.
 local function time_changed()
-    if not time_ready then
-        -- Before time_ready, no alarm has gone past the readiness gate,
-        -- so there is nothing meaningful to reschedule.
-        return
-    end
+	if not time_ready then
+		-- Before time_ready, no alarm has gone past the readiness gate,
+		-- so there is nothing meaningful to reschedule.
+		return
+	end
 
-    clock_change_cond:signal()
-    clock_change_cond = cond_mod.new()
+	clock_change_cond:signal()
+	clock_change_cond = cond_mod.new()
 end
 
 ----------------------------------------------------------------------
@@ -105,33 +105,33 @@ end
 ----------------------------------------------------------------------
 
 function Alarm:is_active()
-    return self._state == "active"
+	return self._state == 'active'
 end
 
 --- Cancel the alarm permanently.
 --- No further firings or exhaustion notification will be delivered.
 function Alarm:cancel()
-    self._state     = "exhausted_done"
-    self._next_wall = nil
+	self._state     = 'exhausted_done'
+	self._next_wall = nil
 end
 
 -- Internal: ensure _next_wall is populated or update state on exhaustion.
 ---@param now number
 ---@return number|nil
 function Alarm:_ensure_next(now)
-    if self._next_wall or self._state ~= "active" then
-        return self._next_wall
-    end
+	if self._next_wall or self._state ~= 'active' then
+		return self._next_wall
+	end
 
-    local t = self._next_time(self._last, now)
-    if not t then
-        -- No further recurrences: schedule exhaustion notification.
-        self._state = "exhausted_pending"
-        return nil
-    end
+	local t = self._next_time(self._last, now)
+	if not t then
+		-- No further recurrences: schedule exhaustion notification.
+		self._state = 'exhausted_pending'
+		return nil
+	end
 
-    self._next_wall = t
-    return t
+	self._next_wall = t
+	return t
 end
 
 --- Main CML-style operation: wait for the alarm to fire once.
@@ -155,61 +155,61 @@ end
 -- for its next firing time, the sleep will be pre-empted and the
 -- next firing time will be recomputed from the updated civil time.
 function Alarm:wait_op()
-    return op.guard(function()
-        -- Fully inert: no more results of any kind.
-        if self._state == "exhausted_done" then
-            return op.never()
-        end
+	return op.guard(function ()
+		-- Fully inert: no more results of any kind.
+		if self._state == 'exhausted_done' then
+			return op.never()
+		end
 
-        -- Time not yet initialised: wait once for readiness, then recurse.
-        if not time_ready then
-            local ev = time_ready_cond:wait_op()
-            return ev:wrap(function()
-                -- At this point, time_ready is true; perform a fresh wait.
-                return perform(self:wait_op())
-            end)
-        end
+		-- Time not yet initialised: wait once for readiness, then recurse.
+		if not time_ready then
+			local ev = time_ready_cond:wait_op()
+			return ev:wrap(function ()
+				-- At this point, time_ready is true; perform a fresh wait.
+				return perform(self:wait_op())
+			end)
+		end
 
-        -- Normal path: real time is available.
-        local now = wall_now()
-        self:_ensure_next(now)
+		-- Normal path: real time is available.
+		local now = wall_now()
+		self:_ensure_next(now)
 
-        -- If the recurrence has just been exhausted, deliver the
-        -- one-off exhaustion notification and then become inert.
-        if self._state == "exhausted_pending" then
-            self._state = "exhausted_done"
-            return op.always(false, "no_more_recurrences", self, self._last)
-        end
+		-- If the recurrence has just been exhausted, deliver the
+		-- one-off exhaustion notification and then become inert.
+		if self._state == 'exhausted_pending' then
+			self._state = 'exhausted_done'
+			return op.always(false, 'no_more_recurrences', self, self._last)
+		end
 
-        -- We have a valid next_wall at this point.
-        local next_wall = assert(self._next_wall, "alarm internal error: missing next_wall")
-        local dt        = next_wall - now
-        if dt < 0 then dt = 0 end
+		-- We have a valid next_wall at this point.
+		local next_wall = assert(self._next_wall, 'alarm internal error: missing next_wall')
+		local dt        = next_wall - now
+		if dt < 0 then dt = 0 end
 
-        -- Build a race between:
-        --   * sleeping until the scheduled time; and
-        --   * a clock/civil-time change.
-        --
-        -- sleep_op(dt) yields no user-level values on success.
-        local sleep_ev  = sleep_mod.sleep_op(dt)
-        local change_ev = clock_change_cond:wait_op()
+		-- Build a race between:
+		--   * sleeping until the scheduled time; and
+		--   * a clock/civil-time change.
+		--
+		-- sleep_op(dt) yields no user-level values on success.
+		local sleep_ev  = sleep_mod.sleep_op(dt)
+		local change_ev = clock_change_cond:wait_op()
 
-        local choice_ev = op.boolean_choice(sleep_ev, change_ev)
+		local choice_ev = op.boolean_choice(sleep_ev, change_ev)
 
-        return choice_ev:wrap(function(is_sleep)
-            if is_sleep then
-                -- Timer completed: commit this firing.
-                self._last      = next_wall
-                self._next_wall = nil
-                return true, self, self._last
-            else
-                -- Clock or time zone changed before the timer fired:
-                -- clear the stale schedule and recompute under new civil time.
-                self._next_wall = nil
-                return perform(self:wait_op())
-            end
-        end)
-    end)
+		return choice_ev:wrap(function (is_sleep)
+			if is_sleep then
+				-- Timer completed: commit this firing.
+				self._last      = next_wall
+				self._next_wall = nil
+				return true, self, self._last
+			else
+				-- Clock or time zone changed before the timer fired:
+				-- clear the stale schedule and recompute under new civil time.
+				self._next_wall = nil
+				return perform(self:wait_op())
+			end
+		end)
+	end)
 end
 
 -- Convenience alias: treat the alarm itself as an Event factory.
@@ -229,26 +229,26 @@ Alarm.event = Alarm.wait_op
 ---@param params AlarmNewParams
 ---@return Alarm
 local function new(params)
-    assert(type(params) == "table", "alarm.new expects a parameter table")
-    local next_time = params.next_time
-    assert(type(next_time) == "function", "alarm.new: next_time function required")
+	assert(type(params) == 'table', 'alarm.new expects a parameter table')
+	local next_time = params.next_time
+	assert(type(next_time) == 'function', 'alarm.new: next_time function required')
 
-    local self = setmetatable({
-        _next_time = next_time,
-        _policy    = params.policy,
-        _label     = params.label or "",
+	local self = setmetatable({
+		_next_time = next_time,
+		_policy    = params.policy,
+		_label     = params.label or '',
 
-        _last      = nil,           -- last fired wall-clock epoch
-        _next_wall = nil,           -- next scheduled wall-clock epoch
-        _state     = "active",      -- lifecycle state
-    }, Alarm)
+		_last      = nil, -- last fired wall-clock epoch
+		_next_wall = nil, -- next scheduled wall-clock epoch
+		_state     = 'active', -- lifecycle state
+	}, Alarm)
 
-    return self
+	return self
 end
 
 return {
-    Alarm           = Alarm,
-    new             = new,
-    set_time_source = set_time_source,
-    time_changed    = time_changed,
+	Alarm           = Alarm,
+	new             = new,
+	set_time_source = set_time_source,
+	time_changed    = time_changed,
 }

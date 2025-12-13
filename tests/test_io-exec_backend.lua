@@ -6,7 +6,7 @@
 print('testing: fibers.io.exec_backend')
 
 -- look one level up
-package.path = "../src/?.lua;" .. package.path
+package.path = '../src/?.lua;' .. package.path
 
 local proc_backend = require 'fibers.io.exec_backend'
 local stdlib       = require 'posix.stdlib'
@@ -16,7 +16,7 @@ local stdlib       = require 'posix.stdlib'
 ----------------------------------------------------------------------
 
 local function inherit_stream()
-  return { mode = "inherit" }
+	return { mode = 'inherit' }
 end
 
 ----------------------------------------------------------------------
@@ -27,14 +27,14 @@ end
 -- child is finished.
 -- exec_backend.core wires ops.poll(state) -> done:boolean, code|nil, signal|nil, err|nil
 local function wait_blocking(backend)
-  while true do
-    local done, code, sig, err = backend._ops.poll(backend._state)
-    assert(err == nil, "poll error: " .. tostring(err))
-    if done then
-      return code, sig
-    end
-    -- Busy wait is acceptable here: tests are short-lived and single-process.
-  end
+	while true do
+		local done, code, sig, err = backend._ops.poll(backend._state)
+		assert(err == nil, 'poll error: ' .. tostring(err))
+		if done then
+			return code, sig
+		end
+		-- Busy wait is acceptable here: tests are short-lived and single-process.
+	end
 end
 
 ----------------------------------------------------------------------
@@ -42,26 +42,26 @@ end
 ----------------------------------------------------------------------
 
 local function test_simple_exit()
-  local spec = {
-    argv   = { "sh", "-c", "exit 7" },
-    cwd    = nil,
-    env    = nil,
-    flags  = nil,
-    stdin  = inherit_stream(),
-    stdout = inherit_stream(),
-    stderr = inherit_stream(),
-  }
+	local spec = {
+		argv   = { 'sh', '-c', 'exit 7' },
+		cwd    = nil,
+		env    = nil,
+		flags  = nil,
+		stdin  = inherit_stream(),
+		stdout = inherit_stream(),
+		stderr = inherit_stream(),
+	}
 
-  -- start() now returns a ProcHandle: { backend = ExecBackend, stdin, stdout, stderr }
-  local handle, err = proc_backend.start(spec)
-  assert(handle, "start failed: " .. tostring(err))
+	-- start() now returns a ProcHandle: { backend = ExecBackend, stdin, stdout, stderr }
+	local handle, err = proc_backend.start(spec)
+	assert(handle, 'start failed: ' .. tostring(err))
 
-  local backend = assert(handle.backend, "no backend in handle")
+	local backend = assert(handle.backend, 'no backend in handle')
 
-  local code, sig = wait_blocking(backend)
-  assert(code == 7,
-    ("expected exit code 7, got %s"):format(tostring(code)))
-  assert(sig == nil, "expected no terminating signal")
+	local code, sig = wait_blocking(backend)
+	assert(code == 7,
+		('expected exit code 7, got %s'):format(tostring(code)))
+	assert(sig == nil, 'expected no terminating signal')
 end
 
 ----------------------------------------------------------------------
@@ -69,11 +69,11 @@ end
 ----------------------------------------------------------------------
 
 local function test_env_inherit()
-  -- Ensure a parent variable is set.
-  assert(stdlib.setenv("PROC_BACKEND_TEST", "parent_inherit"))
+	-- Ensure a parent variable is set.
+	assert(stdlib.setenv('PROC_BACKEND_TEST', 'parent_inherit'))
 
-  -- Shell script checks inherited value and exits 0 only on match.
-  local script = [[
+	-- Shell script checks inherited value and exits 0 only on match.
+	local script = [[
     if [ "$PROC_BACKEND_TEST" = "parent_inherit" ]; then
       exit 0
     else
@@ -81,24 +81,24 @@ local function test_env_inherit()
     fi
   ]]
 
-  local spec = {
-    argv   = { "sh", "-c", script },
-    cwd    = nil,
-    env    = nil,               -- inherit environment
-    flags  = nil,
-    stdin  = inherit_stream(),
-    stdout = inherit_stream(),
-    stderr = inherit_stream(),
-  }
+	local spec = {
+		argv   = { 'sh', '-c', script },
+		cwd    = nil,
+		env    = nil, -- inherit environment
+		flags  = nil,
+		stdin  = inherit_stream(),
+		stdout = inherit_stream(),
+		stderr = inherit_stream(),
+	}
 
-  local handle, err = proc_backend.start(spec)
-  assert(handle, "start failed: " .. tostring(err))
-  local backend = assert(handle.backend, "no backend in handle")
+	local handle, err = proc_backend.start(spec)
+	assert(handle, 'start failed: ' .. tostring(err))
+	local backend = assert(handle.backend, 'no backend in handle')
 
-  local code, sig = wait_blocking(backend)
-  assert(sig == nil, "expected no terminating signal")
-  assert(code == 0,
-    ("expected exit code 0 from env inherit test, got %s"):format(tostring(code)))
+	local code, sig = wait_blocking(backend)
+	assert(sig == nil, 'expected no terminating signal')
+	assert(code == 0,
+		('expected exit code 0 from env inherit test, got %s'):format(tostring(code)))
 end
 
 ----------------------------------------------------------------------
@@ -106,10 +106,10 @@ end
 ----------------------------------------------------------------------
 
 local function test_env_override()
-  -- Parent value that should be overridden in the child.
-  assert(stdlib.setenv("PROC_BACKEND_TEST", "parent_value"))
+	-- Parent value that should be overridden in the child.
+	assert(stdlib.setenv('PROC_BACKEND_TEST', 'parent_value'))
 
-  local script = [[
+	local script = [[
     if [ "$PROC_BACKEND_TEST" = "child_value" ]; then
       exit 0
     else
@@ -117,24 +117,24 @@ local function test_env_override()
     fi
   ]]
 
-  local spec = {
-    argv   = { "sh", "-c", script },
-    cwd    = nil,
-    env    = { PROC_BACKEND_TEST = "child_value" }, -- override
-    flags  = nil,
-    stdin  = inherit_stream(),
-    stdout = inherit_stream(),
-    stderr = inherit_stream(),
-  }
+	local spec = {
+		argv   = { 'sh', '-c', script },
+		cwd    = nil,
+		env    = { PROC_BACKEND_TEST = 'child_value' }, -- override
+		flags  = nil,
+		stdin  = inherit_stream(),
+		stdout = inherit_stream(),
+		stderr = inherit_stream(),
+	}
 
-  local handle, err = proc_backend.start(spec)
-  assert(handle, "start failed: " .. tostring(err))
-  local backend = assert(handle.backend, "no backend in handle")
+	local handle, err = proc_backend.start(spec)
+	assert(handle, 'start failed: ' .. tostring(err))
+	local backend = assert(handle.backend, 'no backend in handle')
 
-  local code, sig = wait_blocking(backend)
-  assert(sig == nil, "expected no terminating signal")
-  assert(code == 0,
-    ("expected exit code 0 from env override test, got %s"):format(tostring(code)))
+	local code, sig = wait_blocking(backend)
+	assert(sig == nil, 'expected no terminating signal')
+	assert(code == 0,
+		('expected exit code 0 from env override test, got %s'):format(tostring(code)))
 end
 
 ----------------------------------------------------------------------
@@ -142,10 +142,10 @@ end
 ----------------------------------------------------------------------
 
 local function main()
-  test_simple_exit()
-  test_env_inherit()
-  test_env_override()
-  io.stdout:write("proc_backend tests passed\n")
+	test_simple_exit()
+	test_env_inherit()
+	test_env_override()
+	io.stdout:write('proc_backend tests passed\n')
 end
 
 main()
