@@ -28,11 +28,13 @@ function Cond:wait_op()
 		---@param resumer Suspension
 		---@param wrap_fn WrapFn
 		function (resumer, wrap_fn)
-			os:add_waiter(function ()
+			local cancel = os:add_waiter(function ()
 				if resumer:waiting() then
 					resumer:complete(wrap_fn)
 				end
 			end)
+			-- ensure the waiter closure does not remain referenced if the wait is cancelled
+			resumer:add_cleanup(cancel)
 		end
 	)
 end

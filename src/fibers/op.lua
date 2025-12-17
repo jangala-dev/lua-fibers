@@ -42,6 +42,34 @@ function Suspension:waiting()
 	return self.state == 'waiting'
 end
 
+function Suspension:add_cleanup(f)
+	assert(type(f) == 'function', 'cleanup must be a function')
+	if self.cleaned then
+		-- already completed; run immediately (best-effort)
+		safe.pcall(f)
+		return
+	end
+	local cs = self.cleanups
+	if not cs then
+		cs = {}
+		self.cleanups = cs
+	end
+	cs[#cs + 1] = f
+end
+
+function Suspension:_run_cleanups()
+	if self.cleaned then return end
+	self.cleaned = true
+
+	local cs = self.cleanups
+	self.cleanups = nil
+	if not cs then return end
+
+	for i = #cs, 1, -1 do
+		safe.pcall(cs[i])
+		cs[i] = nil
+	end
+end
 --- Mark a suspension as complete and enqueue it on the scheduler.
 ---@param wrap WrapFn
 ---@param ... any
@@ -50,6 +78,7 @@ function Suspension:complete(wrap, ...)
 	self.state = 'synchronized'
 	self.wrap  = wrap
 	self.val   = pack(...)
+	self:_run_cleanups()
 	self.sched:schedule(self)
 end
 
@@ -60,6 +89,7 @@ end
 function Suspension:complete_and_run(wrap, ...)
 	assert(self:waiting())
 	self.state = 'synchronized'
+	self:_run_cleanups()
 	return self.fiber:resume(wrap, ...)
 end
 
@@ -81,7 +111,13 @@ end
 ---@param fib any
 ---@return Suspension
 local function new_suspension(sched, fib)
-	return setmetatable({ state = 'waiting', sched = sched, fiber = fib }, Suspension)
+	return setmetatable({
+		state    = 'waiting',
+		sched    = sched,
+		fiber    = fib,
+		cleanups = nil,
+		cleaned  = false,
+	}, Suspension)
 end
 
 --- A CompleteTask completes a suspension (if still waiting) when run.
@@ -266,11 +302,13 @@ local function new_cond(opts)
 
 		local function block(suspension, wrap_fn)
 			-- If already triggered, add_waiter will run the thunk immediately.
-			os:add_waiter(function ()
+			local cancel = os:add_waiter(function ()
 				if suspension:waiting() then
 					suspension:complete(wrap_fn)
 				end
 			end)
+			-- ensure we drop the waiter closure if this suspension completes via another arm
+			suspension:add_cleanup(cancel)
 		end
 
 		return new_primitive(nil, try, block)
