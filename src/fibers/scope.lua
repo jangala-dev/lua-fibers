@@ -18,6 +18,7 @@ local pack   = rawget(table, 'pack') or function (...)
 end
 
 ---@alias ScopeStatus "running"|"ok"|"failed"|"cancelled"
+---@alias ScopeFinaliser fun(aborted: boolean, status: ScopeStatus, primary_err: any)
 
 --- Supervision scope for structured concurrency.
 ---@class Scope
@@ -28,7 +29,7 @@ end
 ---@field _extra_errors any[]
 ---@field failure_mode string               # e.g. "fail_fast"
 ---@field _wg Waitgroup
----@field _finalisers fun(self: Scope)[]    # LIFO finalisers
+---@field _finalisers ScopeFinaliser[]      # LIFO finalisers; called as f(aborted, status, primary_err)
 ---@field _cancel_cond Cond
 ---@field _join_cond Cond
 ---@field _join_worker_started boolean
@@ -164,8 +165,11 @@ function Scope:new_child()
 	return new_scope(self)
 end
 
---- Register a finaliser to run when the scope closes (LIFO).
----@param handler fun(self: Scope)
+--- Finalisers are called as handler(aborted, status, primary_err), where:
+---   aborted     = (status ~= "ok")
+---   status      = terminal status ("ok"|"failed"|"cancelled")
+---   primary_err = primary error/reason (nil when status == "ok")
+---@param handler ScopeFinaliser
 function Scope:finally(handler)
 	assert(type(handler) == 'function', 'scope:finally expects a function')
 	local finalisers = self._finalisers
