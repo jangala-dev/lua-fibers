@@ -437,9 +437,9 @@ end
 local function try_ready(ops)
 	local n = #ops
 	if n == 0 then return nil end
-	local base = math.random(n)
-	for i = 1, n do
-		local idx    = ((i + base) % n) + 1
+	local start = math.random(n)
+	for k = 0, n - 1 do
+		local idx    = ((start + k - 1) % n) + 1
 		local op     = ops[idx]
 		local retval = pack(op.try_fn())
 		if retval[1] then
