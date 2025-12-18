@@ -32,7 +32,8 @@ end
 ---@field _finalisers ScopeFinaliser[]      # LIFO finalisers; called as f(aborted, status, primary_err)
 ---@field _cancel_cond Cond
 ---@field _join_cond Cond
----@field _join_worker_started boolean
+---@field _join_finalising boolean          # true while some joiner is running finalisation
+---@field _join_finalised boolean           # true once finalisation has completed (join_cond signalled)
 ---@field _result table|nil                 # used by run()
 local Scope = {}
 Scope.__index = Scope
@@ -96,7 +97,8 @@ local function new_scope(parent)
 
 		_cancel_cond         = cond.new(),
 		_join_cond           = cond.new(),
-		_join_worker_started = false,
+		_join_finalising = false,
+		_join_finalised  = false,
 	}, Scope)
 
 	if parent then
@@ -280,63 +282,104 @@ end
 -- Join and done ops
 ----------------------------------------------------------------------
 
--- Internal: start a join worker that awaits children, runs finalisers and
--- finalises status, then signals _join_cond.
-function Scope:_start_join_worker()
-	if self._join_worker_started then return end
-	self._join_worker_started = true
+--- Internal: run join finalisation exactly once, then signal _join_cond.
+--- This runs in the calling fiber (a joiner) with this scope installed as current().
+function Scope:_finalise_join_once()
+	if self._join_finalised then
+		return
+	end
 
-	runtime.spawn_raw(function ()
-		local fib  = current_fiber()
-		local prev = fib and fiber_scopes[fib]
-		if fib then
-			fiber_scopes[fib] = self
-		end
+	-- Install this scope as current for the duration of finalisation.
+	local fib  = current_fiber()
+	local prev = fib and fiber_scopes[fib]
+	if fib then
+		fiber_scopes[fib] = self
+	end
 
-		op.perform_raw(self._wg:wait_op())
+	-- Drain children first (idempotent; wait_op is immediate once drained).
+	op.perform_raw(self._wg:wait_op())
 
-		if self._status == 'running' then
-			self._status = 'ok'
-			self._error  = nil
-		end
+	-- If still running after children complete, mark success.
+	if self._status == 'running' then
+		self._status = 'ok'
+		self._error  = nil
+	end
 
-		local status      = self._status
-		local primary_err = self._error
-		local aborted     = (status ~= 'ok')
+	local status      = self._status
+	local primary_err = self._error
+	local aborted     = (status ~= 'ok')
 
-		local finalisers = self._finalisers
-		for i = #finalisers, 1, -1 do
-			local f = finalisers[i]
-			finalisers[i] = nil
+	-- Run finalisers LIFO; record failures as before.
+	local finalisers = self._finalisers
+	for i = #finalisers, 1, -1 do
+		local f = finalisers[i]
+		finalisers[i] = nil
 
-			local ok, err = safe.pcall(f, aborted, status, primary_err)
-			if not ok then
-				if self._status == 'ok' then
-					self._status = 'failed'
-					self._error  = self._error or err
-				else
-					local failures = self._extra_errors
-					failures[#failures + 1] = err
-				end
+		local ok, err = safe.pcall(f, aborted, status, primary_err)
+		if not ok then
+			if self._status == 'ok' then
+				self._status = 'failed'
+				self._error  = self._error or err
+			else
+				local failures = self._extra_errors
+				failures[#failures + 1] = err
 			end
 		end
+	end
 
-		if fib then
-			fiber_scopes[fib] = prev
-		end
+	if fib then
+		fiber_scopes[fib] = prev
+	end
 
-		self._join_cond:signal()
-	end)
+	self._join_finalised = true
+	self._join_cond:signal()
 end
 
 --- Op that fires once the scope has reached a terminal status.
 --- Returns (status, error) when performed.
 ---@return Op
 function Scope:join_op()
-	self:_start_join_worker()
-	local ev = self._join_cond:wait_op()
-	return ev:wrap(function ()
-		return self._status, self._error
+	return op.guard(function ()
+		-- Fast path: already finalised.
+		if self._join_finalised then
+			return op.always(self._status, self._error)
+		end
+
+		-- Wait for children to drain, then finalise (or wait for another joiner).
+		return self._wg:wait_op():wrap(function ()
+			-- Another joiner may have completed finalisation while we were waiting.
+			if self._join_finalised then
+				return self._status, self._error
+			end
+
+			-- If a joiner is already running finalisation, wait for its signal.
+			if self._join_finalising then
+				op.perform_raw(self._join_cond:wait_op())
+				return self._status, self._error
+			end
+
+			-- Become the finalising joiner.
+			self._join_finalising = true
+			-- Best-effort: ensure flags are consistent even if a bug escapes safe.pcall.
+			local ok, err = safe.pcall(function ()
+				self:_finalise_join_once()
+			end)
+			if not ok then
+				-- Treat an unexpected failure in join finalisation as a scope failure.
+				if self._status == 'ok' or self._status == 'running' then
+					self._status = 'failed'
+					self._error  = self._error or err
+				else
+					self._extra_errors[#self._extra_errors + 1] = err
+				end
+				-- Ensure joiners do not block forever.
+				self._join_finalised = true
+				self._join_cond:signal()
+			end
+			self._join_finalising = false
+
+			return self._status, self._error
+		end)
 	end)
 end
 
