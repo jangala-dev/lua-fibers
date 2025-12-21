@@ -80,37 +80,32 @@ local function raise_any(err)
 	error(err, 0)
 end
 
----@param fn fun(): any
----@param handler fun(e:any): any
----@return boolean ok, any err
-local function protected_call(fn, handler)
-	if DEBUG then
-		-- Full diagnostics path
-		return safe.xpcall(fn, handler)
-	else
-		-- Compact path (yield-safe)
-		return safe.pcall(fn)
-	end
-end
-
--- Preserve cancellation sentinel; otherwise return traceback string.
+-- Preserve cancellation sentinel; otherwise return either traceback or compact string.
 local function tb_handler(e)
 	if is_cancelled(e) then return e end
-	return debug.traceback(tostring(e), 2)
+	local msg = tostring(e)
+	if DEBUG then return debug.traceback(msg, 2) end
+	return msg
 end
 
--- Join must not be interruptible by cancellation: render cancellation as a traceback.
+-- Join must not be interruptible by cancellation: convert cancellation to non-cancellation fault.
 local function join_tb_handler(e)
 	if is_cancelled(e) then
-		return debug.traceback('join raised cancellation: ' .. tostring(cancel_reason(e)), 2)
+		local msg = 'join raised cancellation: ' .. tostring(cancel_reason(e))
+		if DEBUG then return debug.traceback(msg, 2) end
+		return msg
 	end
-	return debug.traceback(tostring(e), 2)
+	local msg = tostring(e)
+	if DEBUG then return debug.traceback(msg, 2) end
+	return msg
 end
 
--- Finalisers preserve cancellation sentinel so we can treat it explicitly.
+-- Finalisers preserve cancellation sentinel (so you can treat it explicitly).
 local function finaliser_tb_handler(e)
 	if is_cancelled(e) then return e end
-	return debug.traceback(tostring(e), 2)
+	local msg = tostring(e)
+	if DEBUG then return debug.traceback(msg, 2) end
+	return msg
 end
 
 ----------------------------------------------------------------------
@@ -548,7 +543,7 @@ function Scope:spawn(fn, ...)
 		local prev = fib and fiber_scopes[fib] or nil
 		if fib then fiber_scopes[fib] = self end
 
-		local ok, err = protected_call(function () return fn(self, unpack(args, 1, args.n)) end, tb_handler)
+		local ok, err = safe.xpcall(function () return fn(self, unpack(args, 1, args.n)) end, tb_handler)
 
 		if not ok then self:_record_fault(err, { tag = 'fibre_failed' }) end
 
@@ -599,7 +594,7 @@ function Scope:_finalise_join_body()
 		local f = fs[i]
 		fs[i] = nil
 
-		local ok, err = protected_call(function ()
+		local ok, err = safe.xpcall(function ()
 			return f(aborted, st, (st == 'failed') and primary or nil)
 		end, finaliser_tb_handler)
 
@@ -626,7 +621,7 @@ function Scope:_start_join_worker()
 		local fib, prev = install_current_scope(self)
 
 		local child_outcomes
-		local ok, err = protected_call(function ()
+		local ok, err = safe.xpcall(function ()
 			child_outcomes = self:_finalise_join_body()
 		end, join_tb_handler)
 
@@ -747,7 +742,7 @@ local function run(body_fn, ...)
 	local ok, e
 	local results
 
-	ok, e = protected_call(function ()
+	ok, e = safe.xpcall(function ()
 		results = pack(body_fn(child, unpack(args, 1, args.n)))
 	end, tb_handler)
 
@@ -792,7 +787,7 @@ local function with_op(build_op)
 		end
 
 		local function use()
-			local ok, body = protected_call(function () return build_op(child) end, tb_handler)
+			local ok, body = safe.xpcall(function () return build_op(child) end, tb_handler)
 
 			if not ok then
 				child:_record_fault(body, { tag = 'with_build_failed' })

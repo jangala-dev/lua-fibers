@@ -24,7 +24,7 @@ fibers.run(function ()
 		error('worker body failed')
 	end
 
-	local status, primary, rep = fibers.run_scope(worker)
+	local status, rep, primary = fibers.run_scope(worker)
 
 	print('status:', status)
 	print('primary:', primary)
