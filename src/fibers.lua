@@ -37,7 +37,7 @@ end
 ---@return any ...
 local function run(main_fn, ...)
 	assert(not Runtime.current_fiber(),
-		'fibers.run must not be called from inside a fibre')
+		'fibers.run must not be called from inside a fiber')
 
 	local root = Scope.root()
 	local args = pack(...)
@@ -55,7 +55,7 @@ local function run(main_fn, ...)
 		--   on not ok: st,  rep, primary
 		local r = pack(Scope.run(main_fn, unpack(args, 1, args.n)))
 
-		local st  = r[1]
+		local st   = r[1]
 		-- local rep = r[2]
 		box.status = st
 		-- box.report = rep
@@ -91,7 +91,7 @@ end
 -- Spawn
 ----------------------------------------------------------------------
 
---- Spawn a fibre under the current scope.
+--- Spawn a fiber under the current scope.
 --- fn is called as fn(...).
 ---@param fn fun(...): any
 ---@param ... any
@@ -112,7 +112,7 @@ end
 ----------------------------------------------------------------------
 
 --- Perform an op under the current scope, returning status-first.
---- Must be called from inside a fibre.
+--- Must be called from inside a fiber.
 ---@param ev any
 ---@return string status
 ---@return any ...
@@ -143,8 +143,8 @@ return {
 	boolean_choice = Op.boolean_choice,
 
 	-- Scope utilities re-exported
-	run_scope                  = Scope.run,     -- now returns: st, rep, ...
-	with_scope_op              = Scope.with_op, -- now yields: st, rep, ...
+	run_scope                  = Scope.run, -- now returns: st, rep, ...
+	run_scope_op               = Scope.run_op, -- now yields: st, rep, ...
 	set_unscoped_error_handler = Scope.set_unscoped_error_handler,
 	current_scope              = Scope.current,
 }

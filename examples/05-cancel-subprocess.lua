@@ -3,7 +3,7 @@
 --   * Capturing stdout via a pipe
 --   * Using boolean_choice to race process completion vs timeout
 --   * Cancelling a scope on timeout and letting structured
---     concurrency clean up the subprocess and helper fibres
+--     concurrency clean up the subprocess and helper fibers
 --
 -- Notes for the current scope semantics:
 --   * fibers.run_scope(fn, ...) returns:
@@ -30,7 +30,7 @@ local sleep_op       = sleep.sleep_op
 local function main()
 	print('[root] starting subprocess example')
 
-	-- Run the subprocess and its helper fibres inside a child scope.
+	-- Run the subprocess and its helper fibers inside a child scope.
 	-- Use run_scope so we can interpret status and primary at a clear boundary.
 	local st, value_or_primary, _ = fibers.run_scope(function (s)
 		print('[subscope] starting child process')
@@ -49,7 +49,7 @@ local function main()
 		}
 
 		------------------------------------------------------------------
-		-- 2. Reader fibre: drain stdout until EOF or error
+		-- 2. Reader fiber: drain stdout until EOF or error
 		------------------------------------------------------------------
 
 		spawn(function ()
@@ -92,7 +92,7 @@ local function main()
 		-- 4. Timeout: cancel the subscope
 		------------------------------------------------------------------
 		--
-		-- This cancels the reader fibre and any other work in the scope.
+		-- This cancels the reader fiber and any other work in the scope.
 		-- The Command’s scope finaliser will then perform a best-effort,
 		-- non-interruptible shutdown and close any owned streams.
 		--

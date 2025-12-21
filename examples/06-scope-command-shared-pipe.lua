@@ -5,7 +5,7 @@ local sleep  = require 'fibers.sleep'
 local exec   = require 'fibers.io.exec'
 local file   = require 'fibers.io.file'
 
-local with_scope_op = fibers.with_scope_op
+local run_scope_op = fibers.run_scope_op
 local named_choice  = fibers.named_choice
 local perform       = fibers.perform
 
@@ -15,15 +15,15 @@ local function main(parent_scope)
 	----------------------------------------------------------------------
 	local r_stream, w_stream = file.pipe()
 
-	-- Finaliser runs only after the scope has drained spawned fibres and joined children.
+	-- Finaliser runs only after the scope has drained spawned fibers and joined children.
 	parent_scope:finally(function ()
-		print('[parent] finaliser: closing streams (runs after reader fibre has finished)')
+		print('[parent] finaliser: closing streams (runs after reader fiber has finished)')
 		assert(r_stream:close())
 		assert(w_stream:close())
 	end)
 
 	----------------------------------------------------------------------
-	-- Reader fibre in the parent scope (no explicit join/wait needed)
+	-- Reader fiber in the parent scope (no explicit join/wait needed)
 	----------------------------------------------------------------------
 	do
 		local ok, err = fibers.spawn(function ()
@@ -44,12 +44,12 @@ local function main(parent_scope)
 	----------------------------------------------------------------------
 	-- Child scope as an Op: command writes ticks to the shared stream
 	--
-	-- with_scope_op yields:
+	-- run_scope_op yields:
 	--   scope_st, value_or_primary, report
 	-- where on scope_st == 'ok', value_or_primary is a packed table of
 	-- cmd:run_op() results: { [1]=cmd_st, [2]=code, [3]=signal, [4]=err, n=4 }
 	----------------------------------------------------------------------
-	local child_scope_op = with_scope_op(function (_)
+	local child_scope_op = run_scope_op(function (_)
 		print('[child] building child scope op')
 
 		local script = [[for i in 0 1 2 3 4 5 6 7 8 9; do echo "tick $i"; sleep 1; done]]
@@ -78,7 +78,7 @@ local function main(parent_scope)
 	local which, a, b, c = perform(ev)
 
 	if which == 'timeout' then
-		print('[parent] choice: timeout (child scope was aborted and joined by with_scope_op)')
+		print('[parent] choice: timeout (child scope was aborted and joined by run_scope_op)')
 	else
 		local scope_st, value_or_primary, _ = a, b, c
 
@@ -107,11 +107,11 @@ local function main(parent_scope)
 
 	----------------------------------------------------------------------
 	-- Important point:
-	-- We do not wait for the reader fibre explicitly.
+	-- We do not wait for the reader fiber explicitly.
 	--
 	-- We close the writer to provoke EOF, then return from main.
 	-- The surrounding scope join (performed by fibers.run) will wait
-	-- until the reader fibre exits, then run finalisers, then return.
+	-- until the reader fiber exits, then run finalisers, then return.
 	----------------------------------------------------------------------
 	assert(w_stream:close())
 	print('[parent] returning from main (reader may still be draining)')
@@ -119,4 +119,4 @@ end
 
 fibers.run(main)
 
-print('[outside] fibers.run returned (all scoped work, including reader fibre, has completed)')
+print('[outside] fibers.run returned (all scoped work, including reader fiber, has completed)')

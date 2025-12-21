@@ -595,7 +595,7 @@ end
 ---@param spec ExecSpec
 ---@return Command
 local function command_from_spec(spec)
-	assert(Runtime.current_fiber(), 'exec.command must be called from inside a fibre')
+	assert(Runtime.current_fiber(), 'exec.command must be called from inside a fiber')
 	local scope = ScopeMod.current()
 
 	local argv = {}
