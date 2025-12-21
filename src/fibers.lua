@@ -44,23 +44,31 @@ local function run(main_fn, ...)
 
 	local box = {
 		status  = nil, -- 'ok'|'cancelled'|'failed'
-		value   = nil, -- primary/reason (for non-ok)
-		results = nil, -- packed results table (for ok)
+		primary = nil, -- primary/reason (for non-ok)
+		results = nil, -- packed results (for ok)
 		-- report = nil, -- optional: ScopeReport
 	}
 
 	root:spawn(function ()
-		-- Scope.run returns: st, value_or_primary, report
-		local st, v, _ = Scope.run(main_fn, unpack(args, 1, args.n))
+		-- Scope.run returns:
+		--   on ok:     'ok', rep, ...results...
+		--   on not ok: st,  rep, primary
+		local r = pack(Scope.run(main_fn, unpack(args, 1, args.n)))
+
+		local st  = r[1]
+		-- local rep = r[2]
 		box.status = st
+		-- box.report = rep
 
 		if st == 'ok' then
-			-- v is the packed results table (may be empty but non-nil by convention)
-			box.results = v
-			-- box.report  = _rep
+			-- Preserve multi-return values for handoff back to the caller.
+			if r.n > 2 then
+				box.results = pack(unpack(r, 3, r.n))
+			else
+				box.results = pack()
+			end
 		else
-			box.value = v
-			-- box.report = _rep
+			box.primary = r[3]
 		end
 
 		Runtime.stop()
@@ -76,7 +84,7 @@ local function run(main_fn, ...)
 		return
 	end
 
-	raise_string(box.value or box.status or 'fibers.run: missing status')
+	raise_string(box.primary or box.status or 'fibers.run: missing status')
 end
 
 ----------------------------------------------------------------------
@@ -135,8 +143,8 @@ return {
 	boolean_choice = Op.boolean_choice,
 
 	-- Scope utilities re-exported
-	run_scope                  = Scope.run,
-	with_scope_op              = Scope.with_op,
+	run_scope                  = Scope.run,     -- now returns: st, rep, ...
+	with_scope_op              = Scope.with_op, -- now yields: st, rep, ...
 	set_unscoped_error_handler = Scope.set_unscoped_error_handler,
 	current_scope              = Scope.current,
 }

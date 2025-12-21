@@ -11,10 +11,14 @@
 --   * scope-aware ops:
 --       - try(ev) -> 'ok'|'failed'|'cancelled', ...
 --       - perform(ev) raises on failed/cancelled (using a cancellation sentinel)
---   * boundaries:
---       - join_op() -> status, primary, report
---       - run(fn, ...) -> status, value_or_primary, report   (value is packed results table on ok)
---       - with_op(build_op) -> Op yielding status, value_or_primary, report
+--   * boundaries (status-first, report-second):
+--       - join_op() -> status, report, primary|nil
+--       - run(fn, ...) -> status, report, ...          (on not-ok: ... is primary)
+--       - with_op(build_op) -> Op yielding status, report, ... (on not-ok: ... is primary)
+--
+-- Notes:
+--   * Returning variable arity across boundaries follows Lua conventions.
+--     As with any multi-return in Lua, trailing nil results are not preserved.
 --
 -- Deliberate non-feature:
 --   * no implicit upward propagation of child failure into parent failure.
@@ -325,17 +329,21 @@ local function new_scope(parent)
 		_order    = {},
 		_wg       = waitgroup.new(),
 
-		_closed = false,
-		_close_os = oneshot.new(),
+		_closed       = false,
+		_close_reason = nil,
+		_close_os     = oneshot.new(),
 
-		_cancelled = false,
-		_cancel_os = oneshot.new(),
+		_cancelled     = false,
+		_cancel_reason = nil,
+		_cancel_os     = oneshot.new(),
 
-		_extra_errors = {},
-		_fault_os = oneshot.new(),
+		_primary_error = nil,
+		_extra_errors  = {},
+		_fault_os      = oneshot.new(),
 
 		_finalisers   = {},
 		_join_started = false,
+		_join_outcome = nil,
 		_join_os      = oneshot.new(),
 	}, Scope)
 
@@ -408,7 +416,6 @@ end
 ---@return Scope|nil child, any|nil err
 function Scope:child()
 	if should_reject_admission(self) then return nil, admission_error(self) end
-
 	return new_scope(self), nil
 end
 
@@ -571,7 +578,8 @@ function Scope:_finalise_join_body()
 	for i = 1, #children do
 		local ch = children[i]
 		if ch and ch._parent == self then
-			local st, primary, rep = op.perform_raw(ch:join_op())
+			-- join_op() yields: st, report, primary
+			local st, rep, primary = op.perform_raw(ch:join_op())
 			child_outcomes[#child_outcomes + 1] = {
 				id      = ch._id,
 				status  = st,
@@ -639,14 +647,14 @@ function Scope:_start_join_worker()
 	end)
 end
 
----@return Op -- yields: status, primary, report
+---@return Op -- yields: status, report, primary|nil
 function Scope:join_op()
 	return op.new_primitive(
 		nil,
 		function ()
 			local out = self._join_outcome
 			if out then
-				return true, out.st, out.primary, out.report
+				return true, out.st, out.report, out.primary
 			end
 			return false
 		end,
@@ -655,10 +663,10 @@ function Scope:join_op()
 				if suspension:waiting() then
 					local out = self._join_outcome
 					if out then
-						suspension:complete(wrap_fn, out.st, out.primary, out.report)
+						suspension:complete(wrap_fn, out.st, out.report, out.primary)
 					else
 						local st, primary = terminal_status(self)
-						suspension:complete(wrap_fn, st, primary, make_report(self, {}))
+						suspension:complete(wrap_fn, st, make_report(self, {}), primary)
 					end
 				end
 			end)
@@ -718,9 +726,9 @@ end
 -- Boundaries
 ----------------------------------------------------------------------
 
--- scope.run(body_fn, ...) -> (status, value_or_primary, report)
---   on ok:        'ok', packed_results, report
---   on not ok:    st,  primary,       report
+-- scope.run(body_fn, ...) -> (status, report, ...)
+--   on ok:        'ok', rep, ...body results...
+--   on not ok:    st,  rep, primary
 local function run(body_fn, ...)
 	assert(type(body_fn) == 'function', 'scope.run expects a function body')
 	assert(runtime.current_fiber(), 'scope.run must be called from inside a fibre')
@@ -729,7 +737,9 @@ local function run(body_fn, ...)
 	local child, err = parent:child()
 
 	-- Parent is not admitting; treat as cancelled boundary.
-	if not child then return 'cancelled', err, make_report(parent, {}) end
+	if not child then
+		return 'cancelled', make_report(parent, {}), err
+	end
 
 	local args = pack(...)
 	local fib, prev = install_current_scope(child)
@@ -745,20 +755,26 @@ local function run(body_fn, ...)
 
 	if not ok then child:_record_fault(e, { tag = 'run_body_failed' }) end
 
-	local st, primary, rep = op.perform_raw(child:join_op())
-	if st == 'ok' then return 'ok', (results or pack()), rep end
+	-- join_op() yields: st, rep, primary
+	local st, rep, primary = op.perform_raw(child:join_op())
+	if st == 'ok' then
+		local r = results or pack()
+		return 'ok', rep, unpack(r, 1, r.n)
+	end
 
-	return st, primary, rep
+	return st, rep, primary
 end
 
--- scope.with_op(build_op) -> Op producing (status, value_or_primary, report)
+-- scope.with_op(build_op) -> Op producing (status, report, ...)
 local function with_op(build_op)
 	assert(type(build_op) == 'function', 'scope.with_op expects a function')
 
 	return op.guard(function ()
 		local parent = current()
 		local child, err = parent:child()
-		if not child then return op.always('cancelled', err, make_report(parent, {})) end
+		if not child then
+			return op.always('cancelled', make_report(parent, {}), err)
+		end
 
 		local function acquire()
 			local fib, prev = install_current_scope(child)
@@ -795,11 +811,18 @@ local function with_op(build_op)
 		return op.bracket(acquire, release, use):wrap(function (body_st, ...)
 			local body_vals = pack(...)
 
-			local join_st, join_primary, rep = op.perform_raw(child:join_op())
+			-- join_op() yields: st, rep, primary
+			local join_st, rep, join_primary = op.perform_raw(child:join_op())
 
-			if join_st ~= 'ok' then return join_st, join_primary, rep end
-			if body_st == 'ok' then return 'ok', body_vals, rep end
-			return body_st, body_vals[1], rep
+			if join_st ~= 'ok' then
+				return join_st, rep, join_primary
+			end
+
+			if body_st == 'ok' then
+				return 'ok', rep, unpack(body_vals, 1, body_vals.n)
+			end
+
+			return body_st, rep, body_vals[1]
 		end)
 	end)
 end
@@ -821,5 +844,5 @@ return {
 	cancel_reason = cancel_reason,
 
 	set_unscoped_error_handler = set_unscoped_error_handler,
-	set_debug = set_debug
+	set_debug                 = set_debug,
 }

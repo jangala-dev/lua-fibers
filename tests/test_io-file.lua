@@ -156,7 +156,7 @@ end
 local function test_cancellation_cancels_blocked_read()
 	-- Use scope.run to create a nested child scope whose cancellation
 	-- does not affect the top-level scope used by fibers.run.
-	local status, err = scope_mod.run(function (child)
+	local status, rep, primary = scope_mod.run(function (child)
 		local r, w = file_mod.pipe()
 		assert(r and w, 'pipe() did not return read and write streams')
 
@@ -173,9 +173,6 @@ local function test_cancellation_cancels_blocked_read()
 			eof_ok = true,
 		})
 
-		-- Under Scope:run_ev semantics, cancellation races the IO op.
-		-- When cancellation wins, the cancel_op returns:
-		--   false, reason, nil
 		assert(v1 == false,
 			'expected first result false from cancelled op, got ' .. tostring(v1))
 		assert(v2 == 'test cancellation',
@@ -183,8 +180,6 @@ local function test_cancellation_cancels_blocked_read()
 		assert(v3 == nil,
 			'expected third result nil from cancel_op, got ' .. tostring(v3))
 
-		-- Close streams to avoid leaks; at this point cancellation has
-		-- already been signalled.
 		local okr, errr = r:close()
 		local okw, errw = w:close()
 		assert(okr, 'reader close failed after cancellation: ' .. tostring(errr))
@@ -192,14 +187,17 @@ local function test_cancellation_cancels_blocked_read()
 	end)
 
 	if status == 'failed' then
-		error(err)
+		-- rep is available for debugging if you want it; primary is the error.
+		error(primary)
 	end
 
-	-- From the outer point of view, the nested scope should report as cancelled.
 	assert(status == 'cancelled',
 		"expected child scope status 'cancelled', got " .. tostring(status))
-	assert(err == 'test cancellation',
-		'unexpected child scope cancellation error: ' .. tostring(err))
+	assert(primary == 'test cancellation',
+		'unexpected child scope cancellation reason: ' .. tostring(primary))
+
+	-- If you want to sanity-check the report exists:
+	assert(type(rep) == 'table', 'expected a scope report table')
 end
 
 ----------------------------------------------------------------------
