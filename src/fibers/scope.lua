@@ -1,565 +1,807 @@
----
--- Structured concurrency scopes.
+-- fibers/scope.lua
 --
--- Scopes form a tree of supervision domains with fail-fast semantics.
--- Each fiber runs within a current scope; cancellation and failures
--- are tracked per-scope and propagated to children.
+-- Stable core structured concurrency scopes that complement the Op layer.
+--
+-- Guarantees:
+--   * structural lifetime: attached children are joined
+--   * admission gate: close() stops new spawn/child; join starts by closing admission
+--   * downward cancellation: cancel() cascades to attached children
+--   * fail-fast within a scope: first fault marks failed and cancels the scope
+--   * join/finalisation is non-interruptible: runs in a join worker using op.perform_raw
+--   * scope-aware ops:
+--       - try(ev) -> 'ok'|'failed'|'cancelled', ...
+--       - perform(ev) raises on failed/cancelled (using a cancellation sentinel)
+--   * boundaries:
+--       - join_op() -> status, primary, report
+--       - run(fn, ...) -> status, value_or_primary, report   (value is packed results table on ok)
+--       - with_op(build_op) -> Op yielding status, value_or_primary, report
+--
+-- Deliberate non-feature:
+--   * no implicit upward propagation of child failure into parent failure.
+--     Child outcomes are reported, not escalated.
+--
 ---@module 'fibers.scope'
 
 local runtime   = require 'fibers.runtime'
-local op        = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
-local cond      = require 'fibers.cond'
+local oneshot   = require 'fibers.oneshot'
+local op        = require 'fibers.op'
 local safe      = require 'coxpcall'
+
+-- Debug flag: when true, capture full tracebacks via xpcall handlers.
+-- When false, use yield-safe pcall and keep errors compact.
+local DEBUG = false
+
+local function set_debug(v)
+	DEBUG = not not v
+end
 
 local unpack = rawget(table, 'unpack') or _G.unpack
 local pack   = rawget(table, 'pack') or function (...)
 	return { n = select('#', ...), ... }
 end
 
----@alias ScopeStatus "running"|"ok"|"failed"|"cancelled"
----@alias ScopeFinaliser fun(aborted: boolean, status: ScopeStatus, primary_err: any)
+----------------------------------------------------------------------
+-- Cancellation sentinel (robust, non-colliding)
+----------------------------------------------------------------------
 
---- Supervision scope for structured concurrency.
----@class Scope
----@field _parent Scope|nil
----@field _children table<Scope, boolean>   # weak-key set of child scopes
----@field _status ScopeStatus
----@field _error any
----@field _extra_errors any[]
----@field failure_mode string               # e.g. "fail_fast"
----@field _wg Waitgroup
----@field _finalisers ScopeFinaliser[]      # LIFO finalisers; called as f(aborted, status, primary_err)
----@field _cancel_cond Cond
----@field _join_cond Cond
----@field _join_finalising boolean          # true while some joiner is running finalisation
----@field _join_finalised boolean           # true once finalisation has completed (join_cond signalled)
----@field _result table|nil                 # used by run()
-local Scope = {}
-Scope.__index = Scope
+local CANCEL_MT = {}
+CANCEL_MT.__name = 'fibers.cancelled'
 
--- Weak-keyed table mapping Fiber objects to their current Scope.
----@type table<Fiber, Scope>
-local fiber_scopes = setmetatable({}, { __mode = 'k' })
+---@class Cancelled
+---@field reason any
 
--- Process-wide root scope and “current scope” when not in a fiber.
----@type Scope|nil
-local root_scope
----@type Scope|nil
-local global_scope
+---@param reason any
+---@return Cancelled
+local function cancelled(reason)
+	return setmetatable({ reason = reason }, CANCEL_MT)
+end
 
--- Handler for uncaught errors from fibers not associated with any Scope.
----@param _ any
 ---@param err any
-local function default_unscoped_error_handler(_, err)
-	if root_scope then
-		root_scope:_record_failure(err)
+---@return boolean
+local function is_cancelled(err)
+	return type(err) == 'table' and getmetatable(err) == CANCEL_MT
+end
+
+---@param err any
+---@return any|nil
+local function cancel_reason(err)
+	return is_cancelled(err) and err.reason or nil
+end
+
+local function raise_any(err)
+	-- Raise the value verbatim so cancellation sentinels (tables/userdata)
+	-- remain distinguishable. tb_handler() will stringify non-cancellation
+	-- errors for reporting.
+	error(err, 0)
+end
+
+---@param fn fun(): any
+---@param handler fun(e:any): any
+---@return boolean ok, any err
+local function protected_call(fn, handler)
+	if DEBUG then
+		-- Full diagnostics path
+		return safe.xpcall(fn, handler)
 	else
-		io.stderr:write('Unscoped fiber error before root initialised: ' .. tostring(err) .. '\n')
+		-- Compact path (yield-safe)
+		return safe.pcall(fn)
 	end
 end
 
----@type fun(fib: any, err: any)
+-- Preserve cancellation sentinel; otherwise return traceback string.
+local function tb_handler(e)
+	if is_cancelled(e) then return e end
+	return debug.traceback(tostring(e), 2)
+end
+
+-- Join must not be interruptible by cancellation: render cancellation as a traceback.
+local function join_tb_handler(e)
+	if is_cancelled(e) then
+		return debug.traceback('join raised cancellation: ' .. tostring(cancel_reason(e)), 2)
+	end
+	return debug.traceback(tostring(e), 2)
+end
+
+-- Finalisers preserve cancellation sentinel so we can treat it explicitly.
+local function finaliser_tb_handler(e)
+	if is_cancelled(e) then return e end
+	return debug.traceback(tostring(e), 2)
+end
+
+----------------------------------------------------------------------
+-- Types / state
+----------------------------------------------------------------------
+
+---@class ScopeChildOutcome
+---@field id integer
+---@field status '"ok"'|'"failed"'|'"cancelled"'
+---@field primary any
+---@field report ScopeReport
+
+---@class ScopeReport
+---@field id integer
+---@field extra_errors any[]
+---@field children ScopeChildOutcome[]
+
+---@class ScopeJoinOutcome
+---@field st '"ok"'|'"failed"'|'"cancelled"'
+---@field primary any
+---@field report ScopeReport
+
+---@class Scope
+---@field _id integer
+---@field _parent Scope|nil
+---@field _children table<Scope, boolean>
+---@field _order Scope[]
+---@field _wg Waitgroup
+---@field _closed boolean
+---@field _close_reason any|nil
+---@field _close_os Oneshot
+---@field _cancelled boolean
+---@field _cancel_reason any|nil
+---@field _cancel_os Oneshot
+---@field _primary_error any|nil
+---@field _extra_errors any[]
+---@field _fault_os Oneshot
+---@field _finalisers function[]
+---@field _join_started boolean
+---@field _join_outcome ScopeJoinOutcome|nil
+---@field _join_os Oneshot
+local Scope = {}
+Scope.__index = Scope
+
+-- Weak-key map: Fiber -> Scope for attribution of uncaught runtime fibre errors.
+local fiber_scopes = setmetatable({}, { __mode = 'k' })
+
+local root_scope, global_scope
+local next_id = 0
+
+local function current_fiber()
+	return runtime.current_fiber()
+end
+
+----------------------------------------------------------------------
+-- Unscoped error handling
+----------------------------------------------------------------------
+
+local function default_unscoped_error_handler(_, err)
+	io.stderr:write('Unscoped fibre error: ' .. tostring(err) .. '\n')
+end
+
 local unscoped_error_handler = default_unscoped_error_handler
 
---- Set the handler for uncaught errors in fibers that have no scope.
----@param handler fun(fib: Fiber, err: any)
+---@param handler fun(fib:any, err:any)
 local function set_unscoped_error_handler(handler)
 	assert(type(handler) == 'function', 'unscoped error handler must be a function')
 	unscoped_error_handler = handler
 end
 
 ----------------------------------------------------------------------
--- Internal helpers
+-- Current scope install/restore
 ----------------------------------------------------------------------
 
---- Internal: current fiber object, or nil if not in a fiber.
----@return Fiber|nil
-local function current_fiber()
-	return runtime.current_fiber()
+local function install_current_scope(s)
+	local fib = current_fiber()
+	if fib then
+		local prev = fiber_scopes[fib]
+		fiber_scopes[fib] = s
+		return fib, prev
+	end
+	local prev = global_scope or root_scope or s
+	global_scope = s
+	return nil, prev
 end
 
---- Internal: create a new Scope with the given parent.
----@param parent Scope|nil
----@return Scope
+local function restore_current_scope(fib, prev)
+	if fib then
+		fiber_scopes[fib] = prev
+	else
+		global_scope = prev
+	end
+end
+
+----------------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------------
+
+local function copy_array(t)
+	local out = {}
+	for i = 1, #t do out[i] = t[i] end
+	return out
+end
+
+local function snapshot_children_set(self)
+	local snap = {}
+	for ch in pairs(self._children) do snap[#snap + 1] = ch end
+	return snap
+end
+
+local function oneshot_status_op(is_ready, os, get_st_v)
+	return op.new_primitive(
+		nil,
+		function ()
+			if is_ready() then
+				local st, v = get_st_v()
+				return true, st, v
+			end
+			return false
+		end,
+		function (suspension, wrap_fn)
+			local cancel = os:add_waiter(function ()
+				if suspension:waiting() then
+					local st, v = get_st_v()
+					suspension:complete(wrap_fn, st, v)
+				end
+			end)
+			suspension:add_cleanup(cancel)
+		end
+	)
+end
+
+local function terminal_status(self)
+	-- Failure takes precedence over cancellation.
+	if self._primary_error ~= nil then return 'failed', self._primary_error end
+	if self._cancelled then return 'cancelled', self._cancel_reason end
+	return 'ok', nil
+end
+
+local function make_report(self, child_outcomes)
+	return {
+		id           = self._id,
+		extra_errors = copy_array(self._extra_errors),
+		children     = child_outcomes or {},
+	}
+end
+
+local function should_reject_admission(self)
+	return self._closed
+		or self._cancelled
+		or self._primary_error ~= nil
+		or self._join_started
+		or self._join_outcome ~= nil
+end
+
+----------------------------------------------------------------------
+-- Observational status (non-blocking snapshot)
+----------------------------------------------------------------------
+
+--- Return a snapshot of this scope's current status.
+---
+--- This is intentionally observational: it does not synchronise or wait.
+--- For waiting, use join_op()/cancel_op()/fault_op()/not_ok_op().
+---
+--- Returns:
+---   'running',   nil
+---   'failed',    primary_error
+---   'cancelled', reason
+---   'ok',        nil             (only once join has completed successfully)
+---@return string st
+---@return any v
+function Scope:status()
+	-- If join has completed, return the terminal state captured there.
+	local out = self._join_outcome
+	if out then return out.st, out.primary end
+
+	-- Live view (pre-join).
+	if self._primary_error ~= nil then return 'failed', self._primary_error end
+	if self._cancelled then return 'cancelled', self._cancel_reason end
+	return 'running', nil
+end
+
+--- The admission gate is deliberately not part of status(), because
+--- "closed" is not a terminal outcome; it is simply "not admitting more work".
+---
+--- Returns:
+---   'open',   nil
+---   'closed', reason|nil
+---@return string st
+---@return any reason
+function Scope:admission()
+	if self._closed then return 'closed', self._close_reason end
+	return 'open', nil
+end
+
+local function admission_error(self)
+	-- Keep this intentionally simple and non-taxonomic.
+	if self._join_outcome ~= nil or self._join_started then return 'scope is joining' end
+	if self._primary_error ~= nil then return 'scope has failed' end
+	if self._cancelled then return 'scope is cancelled' end
+	if self._closed then return 'scope is closed' end
+	return 'scope is not admitting work'
+end
+
+----------------------------------------------------------------------
+-- Construction / root / current
+----------------------------------------------------------------------
+
 local function new_scope(parent)
+	next_id = next_id + 1
+
 	local s = setmetatable({
+		_id       = next_id,
 		_parent   = parent,
-		_children = setmetatable({}, { __mode = 'k' }),
+		_children = {},
+		_order    = {},
+		_wg       = waitgroup.new(),
 
-		_status       = 'running',
-		_error        = nil,
+		_closed = false,
+		_close_os = oneshot.new(),
+
+		_cancelled = false,
+		_cancel_os = oneshot.new(),
+
 		_extra_errors = {},
-		failure_mode  = 'fail_fast',
+		_fault_os = oneshot.new(),
 
-		_wg         = waitgroup.new(),
-		_finalisers = {},
-
-		_cancel_cond         = cond.new(),
-		_join_cond           = cond.new(),
-		_join_finalising = false,
-		_join_finalised  = false,
+		_finalisers   = {},
+		_join_started = false,
+		_join_os      = oneshot.new(),
 	}, Scope)
 
 	if parent then
 		parent._children[s] = true
+		parent._order[#parent._order + 1] = s
+
+		-- Downward cancellation propagates immediately to new children.
+		if parent._cancelled then s:cancel(parent._cancel_reason) end
 	end
 
 	return s
 end
 
---- Return the process-wide root scope, creating it if needed.
----@return Scope
 local function root()
-	if not root_scope then
-		root_scope   = new_scope(nil)
-		global_scope = root_scope
+	if root_scope then return root_scope end
 
-		-- Error pump: attribute uncaught fiber errors to scopes.
-		runtime.spawn_raw(function ()
-			while true do
-				local fib, err = runtime.wait_fiber_error()
+	root_scope   = new_scope(nil)
+	global_scope = root_scope
+
+	-- Error pump: route uncaught runtime errors to the owning scope when possible.
+	runtime.spawn_raw(function ()
+		while true do
+			local fib, err = runtime.wait_fiber_error()
+			-- Ignore cancellation sentinels.
+			if not is_cancelled(err) then
 				local s = fiber_scopes[fib]
-
 				if s then
-					s:_record_failure(err)
+					s:_record_fault(err, { tag = 'unhandled_fibre_error' })
 				else
 					unscoped_error_handler(fib, err)
 				end
 			end
-		end)
-	end
+		end
+	end)
+
 	return root_scope
 end
 
---- Return the current Scope.
---- Inside a fiber: the fiber's scope or the root if none.
---- Outside a fiber: the process-wide current scope, defaulting to root.
----@return Scope
 local function current()
 	local fib = current_fiber()
-	if fib then
-		return fiber_scopes[fib] or root()
-	end
+	if fib then return fiber_scopes[fib] or root() end
 	return global_scope or root()
 end
 
 ----------------------------------------------------------------------
--- Scope methods: lifecycle and failure
+-- Child management (attachment)
 ----------------------------------------------------------------------
 
---- Internal: record a failure in this scope and cancel children.
----@param err any
-function Scope:_record_failure(err)
-	if self._status == 'running' then
-		self._status = 'failed'
-		self._error  = self._error or err
-		self:_propagate_cancel(self._error)
-	end
-	-- Ignore subsequent fiber failures; we treat them as
-	-- cancellation noise. Defer failures are recorded in
-	-- the join worker logic.
-end
+function Scope:_remove_child(child)
+	if child._parent ~= self then return end
+	self._children[child] = nil
 
---- Create a new child scope of this scope (no body, no current() change).
----@return Scope
-function Scope:new_child()
-	return new_scope(self)
-end
-
---- Finalisers are called as handler(aborted, status, primary_err), where:
----   aborted     = (status ~= "ok")
----   status      = terminal status ("ok"|"failed"|"cancelled")
----   primary_err = primary error/reason (nil when status == "ok")
----@param handler ScopeFinaliser
-function Scope:finally(handler)
-	assert(type(handler) == 'function', 'scope:finally expects a function')
-	local finalisers = self._finalisers
-	finalisers[#finalisers + 1] = handler
-end
-
----@param reason any|nil
-function Scope:_propagate_cancel(reason)
-	local r = reason or self._error or 'scope cancelled'
-
-	self._cancel_cond:signal()
-
-	local children = self._children
-	for child in pairs(children) do
-		if child then
-			child:cancel(r)
+	local ord = self._order
+	for i = #ord, 1, -1 do
+		if ord[i] == child then
+			table.remove(ord, i)
+			break
 		end
 	end
+
+	child._parent = nil
 end
 
---- Cancel this scope and its children with an optional reason.
---- Idempotent; subsequent calls after terminal success are ignored.
+function Scope:_detach_from_parent()
+	local p = self._parent
+	if p then p:_remove_child(self) end
+end
+
+---@return Scope|nil child, any|nil err
+function Scope:child()
+	if should_reject_admission(self) then return nil, admission_error(self) end
+
+	return new_scope(self), nil
+end
+
+----------------------------------------------------------------------
+-- Admission gate (close)
+----------------------------------------------------------------------
+
+---@param reason any|nil
+function Scope:close(reason)
+	if self._join_outcome ~= nil then return end
+
+	if not self._closed then
+		self._closed = true
+		self._close_reason = (reason ~= nil) and reason or self._close_reason
+		self._close_os:signal()
+	elseif self._close_reason == nil and reason ~= nil then
+		self._close_reason = reason
+	end
+end
+
+---@return Op -- yields: 'closed', reason
+function Scope:close_op()
+	return oneshot_status_op(
+		function () return self._closed end,
+		self._close_os,
+		function () return 'closed', self._close_reason end
+	)
+end
+
+----------------------------------------------------------------------
+-- Cancellation / faults
+----------------------------------------------------------------------
+
 ---@param reason any|nil
 function Scope:cancel(reason)
-	if self._status == 'ok' then return end
+	if self._join_outcome ~= nil then return end
 
-	local r = reason or self._error or 'scope cancelled'
+	-- Cancellation implies admission is closed (useful for accept loops and similar).
+	self:close(reason)
 
-	if self._status == 'running' then
-		self._status = 'cancelled'
-		if self._error == nil then
-			self._error = r
-		end
-		self:_propagate_cancel(r)
+	if not self._cancelled then
+		self._cancelled = true
+		self._cancel_reason = (reason ~= nil) and reason or (self._cancel_reason or 'scope cancelled')
+		self._cancel_os:signal()
+	elseif self._cancel_reason == nil and reason ~= nil then
+		self._cancel_reason = reason
+	end
+
+	-- Cancel attached children (snapshot avoids mutation hazards).
+	local snap = snapshot_children_set(self)
+	for i = 1, #snap do snap[i]:cancel(self._cancel_reason) end
+end
+
+-- Record a fault in this scope. Cancellation escaping from bodies is control flow.
+---@param err any
+---@param _? table
+function Scope:_record_fault(err, _)
+	if is_cancelled(err) then
+		self:cancel(cancel_reason(err))
+		return
+	end
+
+	local e = err
+	if type(e) ~= 'string' and type(e) ~= 'number' then
+		e = tostring(e)
+	end
+
+	if self._primary_error == nil then
+		self._primary_error = e
+		self._fault_os:signal()
+		-- Fail-fast: cancel the scope to stop sibling work.
+		self:cancel(e)
+	else
+		self._extra_errors[#self._extra_errors + 1] = e
 	end
 end
 
---- Spawn a child fiber attached to this scope.
---- The fiber runs fn(self, ...) with this scope as its current scope.
----@param fn fun(s: Scope, ...): any
+---@return Op -- yields: 'cancelled', reason
+function Scope:cancel_op()
+	return oneshot_status_op(
+		function () return self._cancelled end,
+		self._cancel_os,
+		function () return 'cancelled', self._cancel_reason end
+	)
+end
+
+---@return Op -- yields: 'failed', primary
+function Scope:fault_op()
+	return oneshot_status_op(
+		function () return self._primary_error ~= nil end,
+		self._fault_os,
+		function () return 'failed', self._primary_error end
+	)
+end
+
+---@return Op -- yields: 'failed', primary | 'cancelled', reason
+function Scope:not_ok_op()
+	-- Re-check on wake so failure wins even if cancellation also became ready.
+	return op.choice(self:fault_op(), self:cancel_op()):wrap(function ()
+		if self._primary_error ~= nil then return 'failed', self._primary_error end
+		return 'cancelled', self._cancel_reason
+	end)
+end
+
+----------------------------------------------------------------------
+-- Finalisers
+----------------------------------------------------------------------
+
+---@param f fun(aborted:boolean, status:string, primary:any|nil)
+function Scope:finally(f)
+	assert(type(f) == 'function', 'scope:finally expects a function')
+	self._finalisers[#self._finalisers + 1] = f
+end
+
+----------------------------------------------------------------------
+-- Spawning (attached obligations)
+----------------------------------------------------------------------
+
+---@param fn fun(s:Scope, ...): any
 ---@param ... any
+---@return boolean ok, any|nil err
 function Scope:spawn(fn, ...)
-	assert(self._status == 'running', 'cannot spawn on a non-running scope')
+	if should_reject_admission(self) then return false, admission_error(self) end
+
 	local args = pack(...)
 	self._wg:add(1)
 
 	runtime.spawn_raw(function ()
-		local fib  = current_fiber()
+		local fib = current_fiber()
 		local prev = fib and fiber_scopes[fib] or nil
+		if fib then fiber_scopes[fib] = self end
 
-		if fib then
-			fiber_scopes[fib] = self
-		end
+		local ok, err = protected_call(function () return fn(self, unpack(args, 1, args.n)) end, tb_handler)
 
-		local ok, err = safe.pcall(fn, self, unpack(args, 1, args.n))
+		if not ok then self:_record_fault(err, { tag = 'fibre_failed' }) end
 
-		if not ok then
-			local s = fib and (fiber_scopes[fib] or self) or self
-			s:_record_failure(err)
-		end
-
-		if fib then
-			fiber_scopes[fib] = prev
-		end
-
+		if fib then fiber_scopes[fib] = prev end
 		self._wg:done()
 	end)
-end
 
---- Return this scope's parent, or nil for the root scope.
----@return Scope|nil
-function Scope:parent()
-	return self._parent
-end
-
---- Return a shallow copy of this scope's children.
----@return Scope[]
-function Scope:children()
-	local out = {}
-	local ch  = self._children or {}
-	local i   = 1
-	for child in pairs(ch) do
-		out[i] = child
-		i = i + 1
-	end
-	return out
-end
-
---- Return this scope's status and primary error (if any).
----@return ScopeStatus status
----@return any err
-function Scope:status()
-	return self._status, self._error
-end
-
---- Return a shallow copy of non-primary finaliser failures recorded on this scope.
----@return any[]
-function Scope:extra_errors()
-	local out = {}
-	local f   = self._extra_errors or {}
-	for i, v in ipairs(f) do
-		out[i] = v
-	end
-	return out
+	return true, nil
 end
 
 ----------------------------------------------------------------------
--- Join and done ops
+-- Join (non-interruptible finalisation)
 ----------------------------------------------------------------------
 
---- Internal: run join finalisation exactly once, then signal _join_cond.
---- This runs in the calling fiber (a joiner) with this scope installed as current().
-function Scope:_finalise_join_once()
-	if self._join_finalised then
-		return
-	end
+function Scope:_finalise_join_body()
+	-- Joining closes admission (but does not imply cancellation).
+	self:close('joining')
 
-	-- Install this scope as current for the duration of finalisation.
-	local fib  = current_fiber()
-	local prev = fib and fiber_scopes[fib]
-	if fib then
-		fiber_scopes[fib] = self
-	end
+	-- Snapshot children in attachment order.
+	local children = copy_array(self._order)
+	local child_outcomes = {}
 
-	-- Drain children first (idempotent; wait_op is immediate once drained).
+	-- Drain spawned fibres.
 	op.perform_raw(self._wg:wait_op())
 
-	-- If still running after children complete, mark success.
-	if self._status == 'running' then
-		self._status = 'ok'
-		self._error  = nil
+	-- Join children in attachment order.
+	for i = 1, #children do
+		local ch = children[i]
+		if ch and ch._parent == self then
+			local st, primary, rep = op.perform_raw(ch:join_op())
+			child_outcomes[#child_outcomes + 1] = {
+				id      = ch._id,
+				status  = st,
+				primary = primary,
+				report  = rep,
+			}
+			self:_remove_child(ch)
+		end
 	end
 
-	local status      = self._status
-	local primary_err = self._error
-	local aborted     = (status ~= 'ok')
+	-- Run finalisers (LIFO). Any finaliser error becomes a fault.
+	local st, primary = terminal_status(self)
+	local aborted = (st ~= 'ok')
 
-	-- Run finalisers LIFO; record failures as before.
-	local finalisers = self._finalisers
-	for i = #finalisers, 1, -1 do
-		local f = finalisers[i]
-		finalisers[i] = nil
+	local fs = self._finalisers
+	for i = #fs, 1, -1 do
+		local f = fs[i]
+		fs[i] = nil
 
-		local ok, err = safe.pcall(f, aborted, status, primary_err)
+		local ok, err = protected_call(function ()
+			return f(aborted, st, (st == 'failed') and primary or nil)
+		end, finaliser_tb_handler)
+
 		if not ok then
-			if self._status == 'ok' then
-				self._status = 'failed'
-				self._error  = self._error or err
+			if is_cancelled(err) then
+				self:_record_fault('finaliser raised cancellation: ' .. tostring(cancel_reason(err)),
+					{ tag = 'finaliser_cancelled' })
 			else
-				local failures = self._extra_errors
-				failures[#failures + 1] = err
+				self:_record_fault(err, { tag = 'finaliser_failed' })
 			end
+			st, primary = terminal_status(self)
+			aborted = (st ~= 'ok')
 		end
 	end
 
-	if fib then
-		fiber_scopes[fib] = prev
-	end
-
-	self._join_finalised = true
-	self._join_cond:signal()
+	return child_outcomes
 end
 
---- Op that fires once the scope has reached a terminal status.
---- Returns (status, error) when performed.
----@return Op
+function Scope:_start_join_worker()
+	if self._join_started then return end
+	self._join_started = true
+
+	runtime.spawn_raw(function ()
+		local fib, prev = install_current_scope(self)
+
+		local child_outcomes
+		local ok, err = protected_call(function ()
+			child_outcomes = self:_finalise_join_body()
+		end, join_tb_handler)
+
+		restore_current_scope(fib, prev)
+
+		if not ok then
+			self:_record_fault(err, { tag = 'join_failed' })
+		end
+
+		local st, primary = terminal_status(self)
+		local rep = make_report(self, child_outcomes or {})
+
+		self._join_outcome = { st = st, primary = primary, report = rep }
+		self._join_os:signal()
+
+		-- Avoid retaining completed children in long-lived parents.
+		self:_detach_from_parent()
+	end)
+end
+
+---@return Op -- yields: status, primary, report
 function Scope:join_op()
-	return op.guard(function ()
-		-- Fast path: already finalised.
-		if self._join_finalised then
-			return op.always(self._status, self._error)
-		end
-
-		-- Wait for children to drain, then finalise (or wait for another joiner).
-		return self._wg:wait_op():wrap(function ()
-			-- Another joiner may have completed finalisation while we were waiting.
-			if self._join_finalised then
-				return self._status, self._error
+	return op.new_primitive(
+		nil,
+		function ()
+			local out = self._join_outcome
+			if out then
+				return true, out.st, out.primary, out.report
 			end
-
-			-- If a joiner is already running finalisation, wait for its signal.
-			if self._join_finalising then
-				op.perform_raw(self._join_cond:wait_op())
-				return self._status, self._error
-			end
-
-			-- Become the finalising joiner.
-			self._join_finalising = true
-			-- Best-effort: ensure flags are consistent even if a bug escapes safe.pcall.
-			local ok, err = safe.pcall(function ()
-				self:_finalise_join_once()
-			end)
-			if not ok then
-				-- Treat an unexpected failure in join finalisation as a scope failure.
-				if self._status == 'ok' or self._status == 'running' then
-					self._status = 'failed'
-					self._error  = self._error or err
-				else
-					self._extra_errors[#self._extra_errors + 1] = err
+			return false
+		end,
+		function (suspension, wrap_fn)
+			local cancel = self._join_os:add_waiter(function ()
+				if suspension:waiting() then
+					local out = self._join_outcome
+					if out then
+						suspension:complete(wrap_fn, out.st, out.primary, out.report)
+					else
+						local st, primary = terminal_status(self)
+						suspension:complete(wrap_fn, st, primary, make_report(self, {}))
+					end
 				end
-				-- Ensure joiners do not block forever.
-				self._join_finalised = true
-				self._join_cond:signal()
-			end
-			self._join_finalising = false
-
-			return self._status, self._error
-		end)
-	end)
-end
-
---- Op that fires when the scope is cancelled or fails.
---- Returns the cancellation or failure reason when performed.
----@return Op
-function Scope:not_ok_op()
-	local ev = self._cancel_cond:wait_op()
-	return ev:wrap(function ()
-		return self._error or 'scope cancelled'
-	end)
+			end)
+			suspension:add_cleanup(cancel)
+			self:_start_join_worker()
+		end
+	)
 end
 
 ----------------------------------------------------------------------
--- Failure and cancellation wrapping for Ops
+-- Scope-aware op performance (status-first)
 ----------------------------------------------------------------------
 
---- Internal: build a cancellation op for this scope.
---- The particular return values are ignored by Scope:sync/Scope:perform;
---- only the fact that this op can win in a choice is important.
----@param self Scope
----@return Op
-local function cancel_op(self)
-	local ev = self._cancel_cond:wait_op()
-	return ev:wrap(function ()
-		return false, self._error or 'scope cancelled', nil
-	end)
+local function assert_op_value(ev)
+	if type(ev) ~= 'table' or getmetatable(ev) ~= op.Op then
+		error(('scope: expected op, got %s (%s)'):format(type(ev), tostring(ev)), 3)
+	end
 end
 
---- Wrap an op so that it observes this scope's cancellation and failure state.
---- Returns a new Op; does not perform it.
 ---@param ev Op
----@return Op
+---@return Op -- yields: 'ok', ... | 'failed', primary | 'cancelled', reason
 function Scope:run_op(ev)
+	assert_op_value(ev)
+
 	return op.guard(function ()
-		local this_cancel_op = cancel_op(self)
-		return op.choice(ev, this_cancel_op)
+		if self._primary_error ~= nil then return op.always('failed', self._primary_error) end
+		if self._cancelled then return op.always('cancelled', self._cancel_reason) end
+
+		local body = ev:wrap(function (...)
+			if self._primary_error ~= nil then return 'failed', self._primary_error end
+			if self._cancelled then return 'cancelled', self._cancel_reason end
+			return 'ok', ...
+		end)
+
+		return op.choice(body, self:not_ok_op())
 	end)
 end
 
---- Perform an op under this scope, obeying its cancellation rules.
---- On success returns true followed by the op's result values.
---- On failure or cancellation returns false and an error value.
 ---@param ev Op
----@return boolean ok
----@return any ...
-function Scope:sync(ev)
-	assert(runtime.current_fiber(),
-		'scope:sync must be called from inside a fiber (use fibers.run as an entry point)')
-
-	local status, err = self:status()
-	if status ~= 'running' then
-		return false, err or 'scope cancelled'
-	end
-
-	local results = pack(op.perform_raw(self:run_op(ev)))
-
-	status, err = self:status()
-	if status ~= 'running' and status ~= 'ok' then
-		return false, err or 'scope cancelled'
-	end
-
-	return true, unpack(results, 1, results.n)
+---@return '"ok"'|'"failed"'|'"cancelled"', ...
+function Scope:try(ev)
+	assert(runtime.current_fiber(), 'scope:try must be called from inside a fibre')
+	return op.perform_raw(self:run_op(ev))
 end
 
---- Perform an op under this scope, raising on failure or cancellation.
---- On success returns the op's result values.
 ---@param ev Op
 ---@return any ...
 function Scope:perform(ev)
-	-- sync does the fiber assertion and fail-fast logic
-	local results = pack(self:sync(ev))
-
-	local ok = results[1]
-	if not ok then
-		-- results[2] is the error value from sync
-		error(results[2])
-	end
-
-	return unpack(results, 2, results.n)
+	local r = pack(self:try(ev))
+	local st = r[1]
+	if st == 'ok' then return unpack(r, 2, r.n) end
+	if st == 'cancelled' then raise_any(cancelled(r[2])) end
+	raise_any(r[2] or 'scope failed')
 end
 
 ----------------------------------------------------------------------
--- Scope as an op: with_op
+-- Boundaries
 ----------------------------------------------------------------------
 
---- Create an Op that runs a child scope whose body is an Op.
---- build_op(child_scope) must return an Op; the child scope is current()
---- for the duration of the body.
----@param build_op fun(child_scope: Scope): Op
----@return Op
+-- scope.run(body_fn, ...) -> (status, value_or_primary, report)
+--   on ok:        'ok', packed_results, report
+--   on not ok:    st,  primary,       report
+local function run(body_fn, ...)
+	assert(type(body_fn) == 'function', 'scope.run expects a function body')
+	assert(runtime.current_fiber(), 'scope.run must be called from inside a fibre')
+
+	local parent = current()
+	local child, err = parent:child()
+
+	-- Parent is not admitting; treat as cancelled boundary.
+	if not child then return 'cancelled', err, make_report(parent, {}) end
+
+	local args = pack(...)
+	local fib, prev = install_current_scope(child)
+
+	local ok, e
+	local results
+
+	ok, e = protected_call(function ()
+		results = pack(body_fn(child, unpack(args, 1, args.n)))
+	end, tb_handler)
+
+	restore_current_scope(fib, prev)
+
+	if not ok then child:_record_fault(e, { tag = 'run_body_failed' }) end
+
+	local st, primary, rep = op.perform_raw(child:join_op())
+	if st == 'ok' then return 'ok', (results or pack()), rep end
+
+	return st, primary, rep
+end
+
+-- scope.with_op(build_op) -> Op producing (status, value_or_primary, report)
 local function with_op(build_op)
+	assert(type(build_op) == 'function', 'scope.with_op expects a function')
+
 	return op.guard(function ()
 		local parent = current()
-		local child  = new_scope(parent)
+		local child, err = parent:child()
+		if not child then return op.always('cancelled', err, make_report(parent, {})) end
 
 		local function acquire()
-			local fib = current_fiber()
-			if fib then
-				local prev = fiber_scopes[fib]
-				fiber_scopes[fib] = child
-				return { kind = 'fiber', fib = fib, prev = prev }
-			else
-				local prev = global_scope or root()
-				global_scope = child
-				return { kind = 'global', prev = prev }
-			end
+			local fib, prev = install_current_scope(child)
+			return { fib = fib, prev = prev }
 		end
 
-		---@param token { kind: "fiber"|"global", fib?: any, prev: Scope }
-		---@param aborted boolean
 		local function release(token, aborted)
-			if token.kind == 'fiber' then
-				fiber_scopes[token.fib] = token.prev
-			else
-				global_scope = token.prev
-			end
+			restore_current_scope(token.fib, token.prev)
 
-			if aborted and child._status == 'running' then
-				child._status = 'cancelled'
-				child._error  = child._error or 'scope aborted'
-				child:cancel(child._error)
+			if aborted then
+				-- Losing a choice is an external abort: cancel and join deterministically.
+				child:cancel('aborted')
+				safe.pcall(function () op.perform_raw(child:join_op()) end)
 			end
-
-			op.perform_raw(child:join_op())
 		end
 
 		local function use()
-			return build_op(child)
+			local ok, body = protected_call(function () return build_op(child) end, tb_handler)
+
+			if not ok then
+				child:_record_fault(body, { tag = 'with_build_failed' })
+				return op.always('failed', child._primary_error or body)
+			end
+
+			if type(body) ~= 'table' or getmetatable(body) ~= op.Op then
+				local msg = ('scope.with_op: build_op must return an Op (got %s)'):format(type(body))
+				child:_record_fault(msg, { tag = 'with_build_not_op' })
+				return op.always('failed', msg)
+			end
+
+			return child:run_op(body)
 		end
 
-		return op.bracket(acquire, release, use)
+		return op.bracket(acquire, release, use):wrap(function (body_st, ...)
+			local body_vals = pack(...)
+
+			local join_st, join_primary, rep = op.perform_raw(child:join_op())
+
+			if join_st ~= 'ok' then return join_st, join_primary, rep end
+			if body_st == 'ok' then return 'ok', body_vals, rep end
+			return body_st, body_vals[1], rep
+		end)
 	end)
-end
-
-----------------------------------------------------------------------
--- scope.run: run a child scope in its own fiber
-----------------------------------------------------------------------
-
---- Run a function inside a fresh child scope of the current scope.
----
---- The body runs as body_fn(child_scope, ...).
----
---- Returns:
----   status         :: "ok" | "failed" | "cancelled"
----   err            :: primary error or cancellation reason (nil on "ok")
----   extra_failures :: array of non-primary errors from finaliser function recorded on the child scope
----   ...            :: any results returned from body_fn (only present on "ok")
----@param body_fn fun(s: Scope, ...): ...
----@param ... any
----@return ScopeStatus status
----@return any err
----@return any[] extra_errors
----@return any ...
-local function run(body_fn, ...)
-	assert(runtime.current_fiber(), 'scope.run must be called from inside a fiber')
-	local parent = current()
-	local child  = new_scope(parent)
-	local args   = pack(...)
-
-	child._result = nil
-
-	child:spawn(function (s)
-		local res = pack(body_fn(s, unpack(args, 1, args.n)))
-		s._result = res
-	end)
-
-	local status, err = op.perform_raw(child:join_op())
-
-	-- Shallow copy of non-primary finaliser failures; will be {} when there are none.
-	local extra = child:extra_errors()
-
-	local res = child._result
-	if res then
-		-- status, primary_err, extra_failures, ...body results...
-		return status, err, extra, unpack(res, 1, res.n)
-	else
-		-- status, primary_err, extra_failures
-		return status, err, extra
-	end
 end
 
 ----------------------------------------------------------------------
@@ -569,9 +811,15 @@ end
 return {
 	root    = root,
 	current = current,
-	run     = run,
-	with_op = with_op,
 	Scope   = Scope,
 
+	run     = run,
+	with_op = with_op,
+
+	cancelled     = cancelled,
+	is_cancelled  = is_cancelled,
+	cancel_reason = cancel_reason,
+
 	set_unscoped_error_handler = set_unscoped_error_handler,
+	set_debug = set_debug
 }

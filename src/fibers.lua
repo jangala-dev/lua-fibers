@@ -1,12 +1,4 @@
 -- fibers.lua
--- Top-level facade for the fibers library.
---
--- Provides a small, convenient surface over the lower-level modules:
---   - runtime    (scheduler and fibers),
---   - op         (CML engine),
---   - scope      (structured concurrency),
---   - primitives (sleep, channel, etc.).
---
 ---@module 'fibers'
 
 local Op        = require 'fibers.op'
@@ -19,8 +11,15 @@ local pack   = rawget(table, 'pack') or function (...)
 	return { n = select('#', ...), ... }
 end
 
+local function raise_string(err)
+	if type(err) == 'string' or type(err) == 'number' then
+		error(err, 0)
+	end
+	error(tostring(err), 0)
+end
+
 ----------------------------------------------------------------------
--- Core entry points
+-- Core entry point
 ----------------------------------------------------------------------
 
 --- Run a main function under the scheduler's root scope.
@@ -31,78 +30,68 @@ end
 ---   returns ...results... from main_fn directly.
 ---
 --- On failure or cancellation:
----   raises the primary error / cancellation reason.
+---   raises a string/number (never a table).
 ---
----@param main_fn fun(s: Scope, ...): any
+---@param main_fn fun(s: any, ...): any
 ---@param ... any
----@return any ...  -- only results from main_fn on success
+---@return any ...
 local function run(main_fn, ...)
 	assert(not Runtime.current_fiber(),
-		'fibers.run must not be called from inside a fiber')
+		'fibers.run must not be called from inside a fibre')
 
 	local root = Scope.root()
 	local args = pack(...)
 
-	-- Outcome container populated by the child fiber.
-	local outcome = {
-		status  = nil, -- "ok" | "failed" | "cancelled"
-		err     = nil, -- primary error / reason
-		results = nil, -- packed results from main_fn on success
+	local box = {
+		status  = nil, -- 'ok'|'cancelled'|'failed'
+		value   = nil, -- primary/reason (for non-ok)
+		results = nil, -- packed results table (for ok)
+		-- report = nil, -- optional: ScopeReport
 	}
 
 	root:spawn(function ()
-		-- Scope.run creates a child scope and runs main_fn(body_scope, ...),
-		-- returning (status, err, ...results...).
-		local packed   = pack(Scope.run(main_fn, unpack(args, 1, args.n)))
-		outcome.status = packed[1]
-		outcome.err    = packed[2]
+		-- Scope.run returns: st, value_or_primary, report
+		local st, v, _ = Scope.run(main_fn, unpack(args, 1, args.n))
+		box.status = st
 
-		if packed.n > 3 and outcome.status == 'ok' then
-			local out = { n = packed.n - 3 }
-			local j   = 1
-			for i = 4, packed.n do
-				out[j] = packed[i]
-				j = j + 1
-			end
-			outcome.results = out
+		if st == 'ok' then
+			-- v is the packed results table (may be empty but non-nil by convention)
+			box.results = v
+			-- box.report  = _rep
+		else
+			box.value = v
+			-- box.report = _rep
 		end
 
-		-- Stop the scheduler so Runtime.main() returns.
 		Runtime.stop()
 	end)
 
-	-- Drive the scheduler until the main scope decides to stop it.
 	Runtime.main()
 
-	-- Interpret the outcome.
-	local status, err, results = outcome.status, outcome.err, outcome.results
-
-	if status ~= 'ok' then
-		-- Re-raise the primary error / cancellation reason.
-		-- This may be any Lua value (string, table, etc.).
-		error(err or status)
+	if box.status == 'ok' then
+		local res = box.results
+		if res and res.n and res.n > 0 then
+			return unpack(res, 1, res.n)
+		end
+		return
 	end
 
-	if results then
-		return unpack(results, 1, results.n)
-	end
-	-- No results from main_fn: return nothing.
+	raise_string(box.value or box.status or 'fibers.run: missing status')
 end
 
 ----------------------------------------------------------------------
 -- Spawn
 ----------------------------------------------------------------------
 
---- Spawn a fiber under the current scope.
----
+--- Spawn a fibre under the current scope.
 --- fn is called as fn(...).
 ---@param fn fun(...): any
 ---@param ... any
+---@return boolean ok, any|nil err
 local function spawn(fn, ...)
 	local s    = Scope.current()
 	local args = { ... }
 
-	-- Wrapper that discards the scope parameter injected by Scope:spawn.
 	local function shim(_, ...)
 		return fn(...)
 	end
@@ -110,11 +99,26 @@ local function spawn(fn, ...)
 	return s:spawn(shim, unpack(args))
 end
 
+----------------------------------------------------------------------
+-- Optional helper: non-raising perform under current scope
+----------------------------------------------------------------------
+
+--- Perform an op under the current scope, returning status-first.
+--- Must be called from inside a fibre.
+---@param ev any
+---@return string status
+---@return any ...
+local function try_perform(ev)
+	local s = Scope.current()
+	return s:try(ev)
+end
+
 return {
 	spawn = spawn,
 	run   = run,
 
-	perform = Performer.perform,
+	perform     = Performer.perform,
+	try_perform = try_perform,
 
 	now = Runtime.now,
 
@@ -125,7 +129,6 @@ return {
 	never     = Op.never,
 	bracket   = Op.bracket,
 
-	-- Higher-level choice helpers
 	race           = Op.race,
 	first_ready    = Op.first_ready,
 	named_choice   = Op.named_choice,
@@ -135,5 +138,5 @@ return {
 	run_scope                  = Scope.run,
 	with_scope_op              = Scope.with_op,
 	set_unscoped_error_handler = Scope.set_unscoped_error_handler,
-	current_scope              = Scope.current
+	current_scope              = Scope.current,
 }

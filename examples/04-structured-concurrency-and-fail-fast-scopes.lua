@@ -26,23 +26,16 @@ end
 local function main()
 	print('Main: starting child scope')
 
-	local status, err = run_scope(function (child_scope)
-		-- All fibers spawned here are supervised by child_scope.
+	local status, value_or_primary, _ = run_scope(function (child_scope)
 		spawn(sometimes_fails, 'flaky', 0.3, 4)
 		spawn(sibling, 'sibling', 0.2)
 
-		-- Block until child_scope terminates:
-		-- - if flaky fails, child_scope becomes "failed" and cancels siblings.
-		-- - if everything finishes, status is "ok".
-		local s, e = child_scope:status()
-		print('Child initial status:', s, e)
+		print('Child initial status:', child_scope:status())
 
-		-- wait for completion using the scope join op
-		local ok, join_err = child_scope:sync(child_scope:join_op())
-		print('child_scope:join_op() ->', ok, join_err)
+		-- No explicit join here; just return.
 	end)
 
-	print('Main: child scope finished with:', status, err)
+	print('Main: child scope finished with:', status, value_or_primary)
 
 	if status ~= 'ok' then
 		print('Main: treating non-ok child status as error')

@@ -24,13 +24,12 @@ fibers.run(function ()
 		error('worker body failed')
 	end
 
-	local status, err, def_errs = fibers.run_scope(worker)
+	local status, primary, rep = fibers.run_scope(worker)
 
-	print('worker scope status:', status)
-	print('worker scope primary error:', err)
-
-	print('worker scope extra failures:', #def_errs)
-	for i, e in ipairs(def_errs) do
-		print(('  [%d] %s'):format(i, tostring(e)))
+	print('status:', status)
+	print('primary:', primary)
+	print('extra failures:', #rep.extra_errors)
+	for i, e in ipairs(rep.extra_errors) do
+	print(('  [%d] %s'):format(i, tostring(e)))
 	end
 end)

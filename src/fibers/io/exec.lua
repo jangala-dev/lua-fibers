@@ -1,12 +1,17 @@
 -- fibers/io/exec.lua - Structured process execution bound to scopes
----@module 'fibers.exec'
+---@module 'fibers.io.exec'
 
 local Runtime    = require 'fibers.runtime'
-local Scope      = require 'fibers.scope'
+local ScopeMod   = require 'fibers.scope'
 local op         = require 'fibers.op'
 local sleep      = require 'fibers.sleep'
 local proc_mod   = require 'fibers.io.exec_backend'
 local stream_mod = require 'fibers.io.stream'
+
+local unpack = rawget(table, 'unpack') or _G.unpack
+local pack   = rawget(table, 'pack') or function (...)
+	return { n = select('#', ...), ... }
+end
 
 local DEFAULT_SHUTDOWN_GRACE = 1.0
 
@@ -14,7 +19,7 @@ local DEFAULT_SHUTDOWN_GRACE = 1.0
 ---@alias ExecStdout "inherit"|"null"|"pipe"|Stream
 ---@alias ExecStderr "inherit"|"null"|"pipe"|"stdout"|Stream
 
---- ExecSpec: argv[1] is the program to exec; argv[2..n] are its arguments.
+--- ExecSpec: argv[1] is the programme to exec; argv[2..n] are its arguments.
 ---@class ExecSpec
 ---@field [integer] string            # argv elements (1..n)
 ---@field cwd string|nil
@@ -101,20 +106,32 @@ local function assert_not_started(self)
 	end
 end
 
---- Perform an op using the current scope when it is still running,
---- otherwise fall back to a raw perform. This lets normal calls to
---- exec ops honour scope cancellation, while scope finalisers can still
---- run cleanup after the scope has reached a terminal state.
+--- Perform an op using the current scope when it is still running, otherwise fall back to raw.
+---
+--- Important: use Scope:try (status-first) rather than Scope:perform to avoid raising
+--- cancellation sentinels from inside op commit/wrap code paths.
 ---@param ev Op
 ---@return any ...
 local function perform_with_scope_or_raw(ev)
-	local s = Scope.current()
-	if s and s.perform then
-		local status = s:status()
-		if status == 'running' then
-			return s:perform(ev)
+	local s = ScopeMod.current()
+
+	-- Scope:status() returns (st, v). We only care about the first.
+	local st = s and s.status and s:status() or nil
+	if s and s.try and st == 'running' then
+		local r = pack(s:try(ev))
+		local rst = r[1]
+		if rst == 'ok' then
+			return unpack(r, 2, r.n)
 		end
+		-- If cancelled/failed, return a conventional triple where the last
+		-- value carries an error string. This avoids throwing from here.
+		local msg = r[2]
+		if msg == nil then
+			msg = (rst == 'cancelled') and 'scope cancelled' or 'scope failed'
+		end
+		return nil, nil, tostring(msg)
 	end
+
 	return op.perform_raw(ev)
 end
 
@@ -184,8 +201,7 @@ function Command:_ensure_started()
 	self._pid    = proc_handle.backend and proc_handle.backend.pid or nil
 	self._status = 'running'
 
-	-- If the backend created pipe streams for us, record them and mark them as owned
-	-- so they are cleaned up in _on_scope_exit.
+	-- If the backend created pipe streams for us, record them and mark them as owned.
 	if proc_handle.stdin then
 		self._stdin.stream = proc_handle.stdin
 		self._stdin.owned  = true
@@ -206,63 +222,42 @@ end
 -- Configuration setters
 ----------------------------------------------------------------------
 
---- Set the stdin configuration for this command.
----@param v ExecStdin|nil
----@return Command
 function Command:set_stdin(v)
 	assert_not_started(self)
 	self._stdin = norm_stream(v, false)
 	return self
 end
 
---- Set the stdout configuration for this command.
----@param v ExecStdout|nil
----@return Command
 function Command:set_stdout(v)
 	assert_not_started(self)
 	self._stdout = norm_stream(v, false)
 	return self
 end
 
---- Set the stderr configuration for this command.
----@param v ExecStderr|nil
----@return Command
 function Command:set_stderr(v)
 	assert_not_started(self)
 	self._stderr = norm_stream(v, true)
 	return self
 end
 
---- Set the working directory for this command.
----@param v string|nil
----@return Command
 function Command:set_cwd(v)
 	assert_not_started(self)
 	self._cwd = v
 	return self
 end
 
---- Set the environment for this command.
----@param v table<string,string|nil>|nil
----@return Command
 function Command:set_env(v)
 	assert_not_started(self)
 	self._env = v
 	return self
 end
 
---- Set backend-specific flags for this command.
----@param v table|nil
----@return Command
 function Command:set_flags(v)
 	assert_not_started(self)
 	self._flags = v or {}
 	return self
 end
 
---- Set the shutdown grace period in seconds.
----@param v number
----@return Command
 function Command:set_shutdown_grace(v)
 	assert_not_started(self)
 	self._shutdown_grace = v
@@ -273,10 +268,6 @@ end
 -- Introspection
 ----------------------------------------------------------------------
 
---- Return this command's status, exit code or signal (if any), and primary error.
----@return CommandStatus status
----@return integer|nil code_or_signal
----@return string|nil err
 function Command:status()
 	local st = self._status
 
@@ -290,18 +281,13 @@ function Command:status()
 		return st, nil, nil
 	end
 
-	-- Fallback for any unexpected status value.
 	return st, nil, self._err
 end
 
---- Return the process ID, if known.
----@return integer|nil pid
 function Command:pid()
 	return self._pid
 end
 
---- Return a shallow copy of the argv array.
----@return string[]
 function Command:argv()
 	local out = {}
 	for i, v in ipairs(self._argv) do
@@ -314,10 +300,6 @@ end
 -- Signalling
 ----------------------------------------------------------------------
 
---- Send a signal or termination request to the process.
----@param sig any|nil
----@return boolean ok
----@return string|nil err
 function Command:kill(sig)
 	if self._done then
 		return true, nil
@@ -334,12 +316,10 @@ function Command:kill(sig)
 		return false, 'no backend available'
 	end
 
-	-- If the caller supplied an explicit signal/token and the backend exposes send_signal, pass it through.
 	if sig ~= nil and backend.send_signal then
 		return backend:send_signal(sig)
 	end
 
-	-- Otherwise, prefer a forceful kill if implemented, fall back to terminate or a default send_signal.
 	if backend.kill then
 		return backend:kill()
 	elseif backend.terminate then
@@ -355,9 +335,6 @@ end
 -- Stream accessors
 ----------------------------------------------------------------------
 
---- Return a readable stdin stream for this command, if configured.
----@return Stream|nil stream
----@return string|nil err
 function Command:stdin_stream()
 	local cfg = self._stdin
 	if cfg.mode == 'inherit' or cfg.mode == 'null' then
@@ -373,9 +350,6 @@ function Command:stdin_stream()
 	return nil
 end
 
---- Return a readable stdout stream for this command, if configured.
----@return Stream|nil stream
----@return string|nil err
 function Command:stdout_stream()
 	local cfg = self._stdout
 	if cfg.mode == 'inherit' or cfg.mode == 'null' then
@@ -391,9 +365,6 @@ function Command:stdout_stream()
 	return nil
 end
 
---- Return a readable stderr stream for this command, if configured.
----@return Stream|nil stream
----@return string|nil err
 function Command:stderr_stream()
 	local cfg = self._stderr
 	if cfg.mode == 'inherit' or cfg.mode == 'null' then
@@ -416,14 +387,6 @@ end
 -- Ops: wait/run/shutdown/output
 ----------------------------------------------------------------------
 
---- Op that completes when the process exits.
----
---- When performed, returns:
----   status : CommandStatus
----   code   : integer|nil
----   signal : integer|nil
----   err    : string|nil
----@return Op
 function Command:run_op()
 	return op.guard(function ()
 		local ok, proc, err = self:_ensure_started()
@@ -441,15 +404,6 @@ function Command:run_op()
 	end)
 end
 
---- Op that attempts graceful shutdown, then forceful kill after a grace period.
----
---- When performed, returns:
----   status : CommandStatus
----   code   : integer|nil
----   signal : integer|nil
----   err    : string|nil
----@param grace number|nil
----@return Op
 function Command:shutdown_op(grace)
 	return op.guard(function ()
 		local ok, proc, err = self:_ensure_started()
@@ -499,11 +453,8 @@ function Command:shutdown_op(grace)
 				end
 			end
 
-			-- Wait for the process to complete.
-			-- Use the current scope if it is still running so that
-			-- callers see cancellation; fall back to a raw perform
-			-- during scope cleanup (where the owning scope is already
-			-- in a terminal state).
+			-- Wait for completion, using the current scope when running (status-first),
+			-- otherwise falling back to raw waiting.
 			local code2, signal2, err2 = perform_with_scope_or_raw(proc.backend:wait_op())
 			self:_record_exit(code2, signal2, err2)
 			local err_final = kill_err or err2
@@ -512,15 +463,6 @@ function Command:shutdown_op(grace)
 	end)
 end
 
---- Op that collects stdout and waits for the process to exit.
----
---- When performed, returns:
----   output : string
----   status : CommandStatus
----   code   : integer|nil
----   signal : integer|nil
----   err    : string|nil
----@return Op
 function Command:output_op()
 	return op.guard(function ()
 		-- If stdout is currently inherited, default to piping for this helper.
@@ -546,15 +488,6 @@ function Command:output_op()
 	end)
 end
 
---- Op that collects combined stdout+stderr and waits for exit.
----
---- When performed, returns:
----   output : string
----   status : CommandStatus
----   code   : integer|nil
----   signal : integer|nil
----   err    : string|nil
----@return Op
 function Command:combined_output_op()
 	if self._stderr.mode == 'pipe' or self._stderr.mode == 'stream' then
 		error('combined_output_op: stderr must not already be a pipe or stream')
@@ -566,15 +499,73 @@ function Command:combined_output_op()
 end
 
 ----------------------------------------------------------------------
+-- Finaliser-only shutdown (non-interruptible)
+----------------------------------------------------------------------
+
+--- Best-effort shutdown used during scope finalisation.
+--- This path must not be interruptible by scope cancellation.
+---@param grace number|nil
+function Command:_shutdown_uninterruptible(grace)
+	if not (self._started and not self._done) then
+		return
+	end
+
+	local ok, proc = self:_ensure_started()
+	if not (ok and proc and proc.backend) then
+		return
+	end
+
+	local g = grace or self._shutdown_grace or DEFAULT_SHUTDOWN_GRACE
+
+	-- Polite termination.
+	if proc.backend.terminate then
+		proc.backend:terminate()
+	elseif proc.backend.send_signal then
+		proc.backend:send_signal()
+	end
+
+	-- Race exit against grace timer without involving scope cancellation.
+	local is_exit, _, _, _, _ = op.perform_raw(
+		op.boolean_choice(
+			self:run_op():wrap(function (st, c, sig, perr)
+				return true, st, c, sig, perr
+			end),
+			sleep.sleep_op(g):wrap(function ()
+				return false
+			end)
+		)
+	)
+
+	if not is_exit then
+		-- Escalate.
+		if proc.backend.kill then
+			proc.backend:kill()
+		elseif proc.backend.send_signal then
+			proc.backend:send_signal()
+		end
+
+		-- Ensure the process is waited for (uninterruptible).
+		local code2, signal2, err2 = op.perform_raw(proc.backend:wait_op())
+		self:_record_exit(code2, signal2, err2)
+
+		-- Preserve any earlier status data if present.
+		-- (status/code/signal/e are unused here by design.)
+		return
+	end
+
+	-- If it exited during the grace period, run_op has already recorded status.
+	-- Nothing more to do here.
+	return
+end
+
+----------------------------------------------------------------------
 -- Scope cleanup
 ----------------------------------------------------------------------
 
---- Scope finaliser: best-effort shutdown and resource cleanup.
 function Command:_on_scope_exit()
 	if self._started and not self._done then
-		-- Best-effort shutdown. Any error here will be caught by the
-		-- scope's finaliser machinery and recorded as a scope failure.
-		op.perform_raw(self:shutdown_op(self._shutdown_grace))
+		-- Non-interruptible best-effort shutdown.
+		self:_shutdown_uninterruptible(self._shutdown_grace)
 	end
 
 	for _, name in ipairs { 'stdin', 'stdout', 'stderr' } do
@@ -601,12 +592,11 @@ end
 -- Command construction
 ----------------------------------------------------------------------
 
---- Construct a Command from an ExecSpec.
 ---@param spec ExecSpec
 ---@return Command
 local function command_from_spec(spec)
-	assert(Runtime.current_fiber(), 'exec.command must be called from inside a fiber')
-	local scope = Scope.current()
+	assert(Runtime.current_fiber(), 'exec.command must be called from inside a fibre')
+	local scope = ScopeMod.current()
 
 	local argv = {}
 	local i    = 1
@@ -652,12 +642,6 @@ local exec = {}
 ---@class ExecBackendModule
 ---@field start fun(spec: ExecSpec): ProcHandle|nil, string|nil
 
---- Create a new Command.
----
---- Overloads:
----   exec.command(spec: ExecSpec) -> Command
----   exec.command(argv1: string, ...) -> Command
----
 ---@overload fun(spec: ExecSpec): Command
 ---@param ... any
 ---@return Command
