@@ -683,7 +683,7 @@ end
 
 ---@param ev Op
 ---@return Op -- yields: 'ok', ... | 'failed', primary | 'cancelled', reason
-function Scope:run_op(ev)
+function Scope:try_op(ev)
 	assert_op_value(ev)
 
 	return op.guard(function ()
@@ -704,7 +704,7 @@ end
 ---@return '"ok"'|'"failed"'|'"cancelled"', ...
 function Scope:try(ev)
 	assert(runtime.current_fiber(), 'scope:try must be called from inside a fibre')
-	return op.perform_raw(self:run_op(ev))
+	return op.perform_raw(self:try_op(ev))
 end
 
 ---@param ev Op
@@ -800,7 +800,7 @@ local function with_op(build_op)
 				return op.always('failed', msg)
 			end
 
-			return child:run_op(body)
+			return child:try_op(body)
 		end
 
 		return op.bracket(acquire, release, use):wrap(function (body_st, ...)
@@ -838,6 +838,7 @@ return {
 	is_cancelled  = is_cancelled,
 	cancel_reason = cancel_reason,
 
+	set_debug = set_debug,
+
 	set_unscoped_error_handler = set_unscoped_error_handler,
-	set_debug                 = set_debug,
 }
