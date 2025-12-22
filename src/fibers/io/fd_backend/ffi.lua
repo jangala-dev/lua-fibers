@@ -167,7 +167,7 @@ local function read_fd(fd, max)
 	if n < 0 then
 		local e = get_errno()
 		if e == EAGAIN or e == EWOULDBLOCK then
-			return nil, nil -- would block
+			return nil, nil, 'rd' -- would block
 		end
 		return nil, strerror(e)
 	end
@@ -191,7 +191,7 @@ local function write_fd(fd, str, len)
 	if n < 0 then
 		local e = get_errno()
 		if e == EAGAIN or e == EWOULDBLOCK then
-			return nil, nil -- would block
+			return nil, nil, 'wr' -- would block
 		end
 		return nil, strerror(e)
 	end
