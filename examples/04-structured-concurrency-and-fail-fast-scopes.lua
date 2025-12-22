@@ -26,7 +26,7 @@ end
 local function main()
 	print('Main: starting child scope')
 
-	local status, value_or_primary, _ = run_scope(function (child_scope)
+	local status, _, value_or_primary, _ = run_scope(function (child_scope)
 		spawn(sometimes_fails, 'flaky', 0.3, 4)
 		spawn(sibling, 'sibling', 0.2)
 

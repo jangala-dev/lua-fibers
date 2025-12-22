@@ -9,6 +9,7 @@ local scope_mod = require 'fibers.scope'
 local op        = require 'fibers.op'
 local performer = require 'fibers.performer'
 local cond_mod  = require 'fibers.cond'
+local safe      = require 'coxpcall'
 
 -------------------------------------------------------------------------------
 -- Helpers
@@ -222,7 +223,7 @@ local function test_cancellation_sentinel_and_non_failure()
 			s:cancel('cancel-reason')
 		end)
 
-		local ok, err = pcall(function ()
+		local ok, err = safe.pcall(function ()
 			s:perform(c:wait_op())
 		end)
 
@@ -585,7 +586,7 @@ local function main()
 	-- Capture any failure ourselves so it does not become an uncaught fiber error,
 	-- and so we can always stop the scheduler.
 	root:spawn(function (_)
-		local ok, err = xpcall(function ()
+		local ok, err = safe.xpcall(function ()
 			run_all_tests()
 		end, function (e)
 			return debug.traceback(tostring(e), 2)

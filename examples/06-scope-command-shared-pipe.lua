@@ -1,3 +1,15 @@
+-- 06-scope-command-shared-pipe.lua
+--
+-- Demonstrates:
+--   * parent scope owning a shared pipe
+--   * a reader fiber in the parent scope draining that pipe
+--   * a child scope boundary run as an Op (fibers.run_scope_op)
+--   * racing the child scope against a timeout
+--
+-- Key point for the revised scope.run_op semantics:
+--   The boundary body must PERFORM any Op it wants to run.
+--   Returning an Op value merely returns that Op as a value; it does not execute it.
+
 package.path = '../src/?.lua;' .. package.path
 
 local fibers = require 'fibers'
@@ -6,8 +18,8 @@ local exec   = require 'fibers.io.exec'
 local file   = require 'fibers.io.file'
 
 local run_scope_op = fibers.run_scope_op
-local named_choice  = fibers.named_choice
-local perform       = fibers.perform
+local named_choice = fibers.named_choice
+local perform      = fibers.perform
 
 local function main(parent_scope)
 	----------------------------------------------------------------------
@@ -18,8 +30,9 @@ local function main(parent_scope)
 	-- Finaliser runs only after the scope has drained spawned fibers and joined children.
 	parent_scope:finally(function ()
 		print('[parent] finaliser: closing streams (runs after reader fiber has finished)')
-		assert(r_stream:close())
-		assert(w_stream:close())
+		-- Best-effort close; guard against double-close from the body.
+		pcall(function () assert(r_stream:close()) end)
+		pcall(function () assert(w_stream:close()) end)
 	end)
 
 	----------------------------------------------------------------------
@@ -44,12 +57,14 @@ local function main(parent_scope)
 	----------------------------------------------------------------------
 	-- Child scope as an Op: command writes ticks to the shared stream
 	--
-	-- run_scope_op yields:
-	--   scope_st, value_or_primary, report
-	-- where on scope_st == 'ok', value_or_primary is a packed table of
-	-- cmd:run_op() results: { [1]=cmd_st, [2]=code, [3]=signal, [4]=err, n=4 }
+	-- IMPORTANT (revised semantics):
+	--   run_scope_op yields:
+	--     on ok:     'ok', report, ...body_results...
+	--     on not ok: st,  report, primary
+	--
+	-- Therefore the child body must PERFORM cmd:run_op() and return its results.
 	----------------------------------------------------------------------
-	local child_scope_op = run_scope_op(function (_)
+	local child_scope_op = run_scope_op(function (_child_scope)
 		print('[child] building child scope op')
 
 		local script = [[for i in 0 1 2 3 4 5 6 7 8 9; do echo "tick $i"; sleep 1; done]]
@@ -60,47 +75,43 @@ local function main(parent_scope)
 		}
 
 		print('[child] starting command')
-		return cmd:run_op()
+
+		-- Run the command under the child scope and return its results as values.
+		-- Assumed contract for cmd:run_op() when performed:
+		--   cmd_st, code, signal, err
+		local cmd_st, code, signal, cmd_err = fibers.perform(cmd:run_op())
+		return cmd_st, code, signal, cmd_err
 	end)
 
 	----------------------------------------------------------------------
 	-- Race the child scope against a timeout
 	----------------------------------------------------------------------
-	local timeout_op = sleep.sleep_op(3):wrap(function ()
-		return 'timeout'
-	end)
-
 	local ev = named_choice {
 		child_scope_done = child_scope_op,
-		timeout          = timeout_op,
+		timeout          = sleep.sleep_op(3),
 	}
 
-	local which, a, b, c = perform(ev)
+	-- named_choice returns: which, ...winner_results...
+	local which, st, _, v1, v2, v3, v4 = perform(ev)
 
 	if which == 'timeout' then
 		print('[parent] choice: timeout (child scope was aborted and joined by run_scope_op)')
 	else
-		local scope_st, value_or_primary, _ = a, b, c
-
-		if scope_st == 'ok' then
-			local vals = value_or_primary
-			local cmd_st  = vals[1]
-			local code    = vals[2]
-			local signal  = vals[3]
-			local cmd_err = vals[4]
-
+		if st == 'ok' then
+			local cmd_st, code, signal, cmd_err = v1, v2, v3, v4
 			print('[parent] choice: child_scope_done',
 				'cmd_st=', cmd_st,
 				'code=', code,
 				'signal=', signal,
 				'err=', cmd_err
 			)
-			-- report is available if you want to inspect child outcomes
-			-- print('[parent] child report id:', report.id)
+			-- Report is available if you want to inspect child outcomes.
+			-- print('[parent] child report id:', rep.id)
 		else
+			local primary = v1
 			print('[parent] child scope ended:',
-				'scope_st=', scope_st,
-				'primary=', value_or_primary
+				'scope_st=', st,
+				'primary=', primary
 			)
 		end
 	end
@@ -113,7 +124,7 @@ local function main(parent_scope)
 	-- The surrounding scope join (performed by fibers.run) will wait
 	-- until the reader fiber exits, then run finalisers, then return.
 	----------------------------------------------------------------------
-	assert(w_stream:close())
+	pcall(function () assert(w_stream:close()) end)
 	print('[parent] returning from main (reader may still be draining)')
 end
 

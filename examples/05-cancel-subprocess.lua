@@ -32,7 +32,7 @@ local function main()
 
 	-- Run the subprocess and its helper fibers inside a child scope.
 	-- Use run_scope so we can interpret status and primary at a clear boundary.
-	local st, value_or_primary, _ = fibers.run_scope(function (s)
+	local st, _, value_or_primary = fibers.run_scope(function (s)
 		print('[subscope] starting child process')
 
 		------------------------------------------------------------------

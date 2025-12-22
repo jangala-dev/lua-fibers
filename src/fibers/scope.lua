@@ -90,22 +90,27 @@ end
 -- Error normalisation policy (xpcall handlers)
 ----------------------------------------------------------------------
 
----@param kind '"body"'|'"join"'|'"finaliser"'
----@return fun(e:any): any
+---@param kind 'body'|'join'|'finaliser'
+---@return fun(e:any, tb:string|nil): any
 local function make_xpcall_handler(kind)
-	return function (e)
+	return function (e, tb)
 		if is_cancelled(e) then
 			if kind == 'join' then
 				local msg = 'join raised cancellation: ' .. tostring(cancel_reason(e))
-				if DEBUG then return debug.traceback(msg, 2) end
+				if DEBUG then
+					-- Prefer a supplied traceback; otherwise fall back to local stack.
+					return tb or debug.traceback(msg, 2)
+				end
 				return msg
 			end
-			-- body/finaliser: propagate cancellation sentinel for control flow
 			return e
 		end
 
 		local msg = tostring(e)
-		if DEBUG then return debug.traceback(msg, 2) end
+		if DEBUG then
+			-- Prefer failing-coroutine traceback if supplied.
+			return tb or debug.traceback(msg, 2)
+		end
 		return msg
 	end
 end
@@ -120,7 +125,7 @@ local finaliser_handler = make_xpcall_handler('finaliser')
 
 ---@class ScopeChildOutcome
 ---@field id integer
----@field status "ok"|"failed"|"cancelled"
+---@field status 'ok'|'failed'|'cancelled'
 ---@field primary any
 ---@field report ScopeReport
 
@@ -130,13 +135,9 @@ local finaliser_handler = make_xpcall_handler('finaliser')
 ---@field children ScopeChildOutcome[]
 
 ---@class ScopeJoinOutcome
----@field st "ok"|"failed"|"cancelled"
+---@field st 'ok'|'failed'|'cancelled'
 ---@field primary any
 ---@field report ScopeReport
-
----@class ScopeTerminal
----@field failed any|nil     -- primary failure (string/number) if failed
----@field cancelled any|nil  -- cancellation reason if cancelled
 
 ---@class Scope
 ---@field _id integer
@@ -147,7 +148,8 @@ local finaliser_handler = make_xpcall_handler('finaliser')
 ---@field _closed boolean
 ---@field _close_reason any|nil
 ---@field _close_os Oneshot
----@field _terminal ScopeTerminal|nil
+---@field _failed_primary any|nil   -- primary failure (string/number) if failed
+---@field _cancel_reason any|nil    -- cancellation reason if cancelled
 ---@field _cancel_os Oneshot
 ---@field _extra_errors any[]
 ---@field _fault_os Oneshot
@@ -191,24 +193,22 @@ end
 -- Current scope install/restore (fiber-local only)
 ----------------------------------------------------------------------
 
----@param s Scope
----@return any fib_or_nil, Scope|nil prev
 local function install_current_scope(s)
-	local fib = current_fiber()
-	if not fib then
-		return nil, nil
-	end
+	local fib = assert(current_fiber(), 'scope internal invariant violated: no current fiber')
 	local prev = fiber_scopes[fib]
 	fiber_scopes[fib] = s
 	return fib, prev
 end
 
----@param fib any|nil
----@param prev Scope|nil
 local function restore_current_scope(fib, prev)
-	if fib then
-		fiber_scopes[fib] = prev
-	end
+	fiber_scopes[fib] = prev
+end
+
+local function xpcall_in_scope(self, handler, f)
+	local fib, prev = install_current_scope(self)
+	local ok, res = safe.xpcall(f, handler)
+	restore_current_scope(fib, prev)
+	return ok, res
 end
 
 ----------------------------------------------------------------------
@@ -260,11 +260,10 @@ local function oneshot_value_op(is_ready, os, get_values, on_block)
 end
 
 ---@param self Scope
----@return "ok"|"failed"|"cancelled", any
+---@return 'ok'|'failed'|'cancelled', any
 local function terminal_status(self)
-	local t = self._terminal
-	if t and t.failed ~= nil then return 'failed', t.failed end
-	if t and t.cancelled ~= nil then return 'cancelled', t.cancelled end
+	if self._failed_primary ~= nil then return 'failed', self._failed_primary end
+	if self._cancel_reason ~= nil then return 'cancelled', self._cancel_reason end
 	return 'ok', nil
 end
 
@@ -284,10 +283,8 @@ end
 ---@return string|nil
 local function reject_reason(self)
 	if self._join_outcome ~= nil or self._join_started then return 'scope is joining' end
-
-	local t = self._terminal
-	if t and t.failed ~= nil then return 'scope has failed' end
-	if t and t.cancelled ~= nil then return 'scope is cancelled' end
+	if self._failed_primary ~= nil then return 'scope has failed' end
+	if self._cancel_reason ~= nil then return 'scope is cancelled' end
 
 	if self._closed then return 'scope is closed' end
 	return nil
@@ -303,9 +300,8 @@ function Scope:status()
 	local out = self._join_outcome
 	if out then return out.st, out.primary end
 
-	local t = self._terminal
-	if t and t.failed ~= nil then return 'failed', t.failed end
-	if t and t.cancelled ~= nil then return 'cancelled', t.cancelled end
+	if self._failed_primary ~= nil then return 'failed', self._failed_primary end
+	if self._cancel_reason ~= nil then return 'cancelled', self._cancel_reason end
 	return 'running', nil
 end
 
@@ -332,11 +328,9 @@ local function new_scope(parent)
 		_order    = {},
 		_wg       = waitgroup.new(),
 
-		_closed       = false,
-		_close_reason = nil,
-		_close_os     = oneshot.new(),
+		_closed   = false,
+		_close_os = oneshot.new(),
 
-		_terminal  = nil,
 		_cancel_os = oneshot.new(),
 
 		_extra_errors = {},
@@ -344,7 +338,6 @@ local function new_scope(parent)
 
 		_finalisers   = {},
 		_join_started = false,
-		_join_outcome = nil,
 		_join_os      = oneshot.new(),
 	}, Scope)
 
@@ -353,9 +346,8 @@ local function new_scope(parent)
 		parent._order[#parent._order + 1] = s
 
 		-- Downward cancellation propagates immediately to new children.
-		local pt = parent._terminal
-		if pt and pt.cancelled ~= nil then
-			s:cancel(pt.cancelled)
+		if parent._cancel_reason ~= nil then
+			s:cancel(parent._cancel_reason)
 		end
 	end
 
@@ -466,97 +458,58 @@ function Scope:cancel(reason)
 	-- Cancellation implies admission is closed.
 	self:close(reason)
 
-	local t = self._terminal
-	if not t then
-		t = { failed = nil, cancelled = nil }
-		self._terminal = t
-	end
-
-	if t.cancelled == nil then
-		t.cancelled = (reason ~= nil) and reason or 'scope cancelled'
+	if self._cancel_reason == nil then
+		self._cancel_reason = (reason ~= nil) and reason or 'scope cancelled'
 		self._cancel_os:signal()
 	end
 
 	-- Cancel attached children (snapshot avoids mutation hazards).
 	local snap = snapshot_children_set(self)
-	for i = 1, #snap do snap[i]:cancel(t.cancelled) end
+	for i = 1, #snap do snap[i]:cancel(self._cancel_reason) end
 end
 
----@param err any
 function Scope:_record_fault(err)
 	if is_cancelled(err) then
-		self:cancel(cancel_reason(err))
-		return
+		return self:cancel(cancel_reason(err))
 	end
 
-	-- Normalise error to a reportable primitive (string/number).
-	local e = err
-	if type(e) ~= 'string' and type(e) ~= 'number' then
-		e = tostring(e)
-	end
+	local e = (type(err) == 'string' or type(err) == 'number') and err or tostring(err)
 
-	local t = self._terminal
-	if t and t.failed ~= nil then
-		-- Subsequent faults are recorded as extra errors.
+	if self._failed_primary ~= nil then
 		self._extra_errors[#self._extra_errors + 1] = e
 		return
 	end
 
-	if not t then
-		t = { failed = nil, cancelled = nil }
-		self._terminal = t
-	end
-
-	-- First fault becomes primary; fail-fast by cancelling.
-	t.failed = e
+	self._failed_primary = e
 	self._fault_os:signal()
 
-	-- Ensure cancellation is requested (without overriding an existing reason).
-	if t.cancelled == nil then
-		t.cancelled = e
-		self._cancel_os:signal()
-	end
-
-	-- Downward cancellation stops siblings/children.
-	self:cancel(t.cancelled)
+	-- single source of truth for cancellation + downward cascade
+	self:cancel(e)
 end
 
 ---@return Op
 function Scope:cancel_op()
 	return oneshot_value_op(
-		function ()
-			local t = self._terminal
-			return t ~= nil and t.cancelled ~= nil
-		end,
+		function () return self._cancel_reason ~= nil end,
 		self._cancel_os,
-		function ()
-			local t = self._terminal
-			return 'cancelled', t and t.cancelled or nil
-		end
+		function () return 'cancelled', self._cancel_reason end
 	)
 end
 
 ---@return Op
 function Scope:fault_op()
 	return oneshot_value_op(
-		function ()
-			local t = self._terminal
-			return t ~= nil and t.failed ~= nil
-		end,
+		function () return self._failed_primary ~= nil end,
 		self._fault_os,
-		function ()
-			local t = self._terminal
-			return 'failed', t and t.failed or nil
-		end
+		function () return 'failed', self._failed_primary end
 	)
 end
 
 ---@return Op
 function Scope:not_ok_op()
 	return op.choice(self:fault_op(), self:cancel_op()):wrap(function ()
-		local t = self._terminal
-		if t and t.failed ~= nil then return 'failed', t.failed end
-		return 'cancelled', t and t.cancelled or nil
+		if self._failed_primary ~= nil then return 'failed', self._failed_primary end
+		return 'cancelled', self._cancel_reason
 	end)
 end
 
@@ -585,15 +538,11 @@ function Scope:spawn(fn, ...)
 	self._wg:add(1)
 
 	runtime.spawn_raw(function ()
-		local fib, prev = install_current_scope(self)
-
-		local ok, err = safe.xpcall(function ()
+		local ok, err = xpcall_in_scope(self, tb_handler, function ()
 			return fn(self, unpack(args, 1, args.n))
-		end, tb_handler)
-
-		restore_current_scope(fib, prev)
-
+		end)
 		if not ok then self:_record_fault(err) end
+
 		self._wg:done()
 	end)
 
@@ -659,15 +608,11 @@ function Scope:_start_join_worker()
 	self._join_started = true
 
 	runtime.spawn_raw(function ()
-		local fib, prev = install_current_scope(self)
-
 		local child_outcomes
-		local ok, err = safe.xpcall(function ()
+
+		local ok, err = xpcall_in_scope(self, join_tb_handler, function ()
 			child_outcomes = self:_finalise_join_body()
-		end, join_tb_handler)
-
-		restore_current_scope(fib, prev)
-
+		end)
 		if not ok then self:_record_fault(err) end
 
 		local st, primary = terminal_status(self)
@@ -686,11 +631,8 @@ function Scope:join_op()
 		function () return self._join_outcome ~= nil end,
 		self._join_os,
 		function ()
-			local out = self._join_outcome
-			if out then return out.st, out.report, out.primary end
-			-- Defensive fallback.
-			local st, primary = terminal_status(self)
-			return st, make_report(self, {}), primary
+			local out = assert(self._join_outcome, 'join signalled without outcome')
+			return out.st, out.report, out.primary
 		end,
 		function () self:_start_join_worker() end
 	)
@@ -713,14 +655,12 @@ function Scope:try_op(ev)
 	assert_op_value(ev)
 
 	return op.guard(function ()
-		local t = self._terminal
-		if t and t.failed ~= nil then return op.always('failed', t.failed) end
-		if t and t.cancelled ~= nil then return op.always('cancelled', t.cancelled) end
+		if self._failed_primary ~= nil then return op.always('failed', self._failed_primary) end
+		if self._cancel_reason ~= nil then return op.always('cancelled', self._cancel_reason) end
 
 		local body = ev:wrap(function (...)
-			local t2 = self._terminal
-			if t2 and t2.failed ~= nil then return 'failed', t2.failed end
-			if t2 and t2.cancelled ~= nil then return 'cancelled', t2.cancelled end
+			if self._failed_primary ~= nil then return 'failed', self._failed_primary end
+			if self._cancel_reason ~= nil then return 'cancelled', self._cancel_reason end
 			return 'ok', ...
 		end)
 
@@ -729,7 +669,7 @@ function Scope:try_op(ev)
 end
 
 ---@param ev Op
----@return "ok"|"failed"|"cancelled", ...
+---@return 'ok'|'failed'|'cancelled', ...
 function Scope:try(ev)
 	assert(runtime.current_fiber(), 'scope:try must be called from inside a fiber')
 	return op.perform_raw(self:try_op(ev))
@@ -760,22 +700,33 @@ local function run_op(body_fn, ...)
 	return op.guard(function ()
 		local parent = current()
 
+		-- Admission fast path: return an already-ready op.
+		local why = reject_reason(parent)
+		if why then return op.always('cancelled', make_report(parent, {}), why) end
+
+		-- Per-perform state (initially unset).
 		local child     = nil
 		local child_err = nil
 		local results   = nil
 
 		local function start_once()
-			if child ~= nil or child_err ~= nil then return end
+			if child ~= nil or child_err ~= nil then
+				return
+			end
 
 			child, child_err = parent:child()
-			if not child then return end
+			if not child then
+				return
+			end
 
 			local ok_spawn, spawn_err = child:spawn(function (s)
 				local ok, err = safe.xpcall(function ()
 					results = pack(body_fn(s, unpack(args, 1, args.n)))
 				end, tb_handler)
 
-				if not ok then s:_record_fault(err) end
+				if not ok then
+					s:_record_fault(err)
+				end
 
 				s:close('body complete')
 				s:_start_join_worker()
@@ -789,12 +740,8 @@ local function run_op(body_fn, ...)
 		end
 
 		local function complete_from_join(suspension, wrap_fn)
-			local out = child and child._join_outcome or nil
-			if not out then
-				local st, primary = terminal_status(child)
-				suspension:complete(wrap_fn, st, make_report(child, {}), primary)
-				return
-			end
+			local out = assert(child and child._join_outcome,
+				'scope violated: child join signalled without outcome')
 
 			if out.st == 'ok' then
 				local r = results or pack()
@@ -804,13 +751,8 @@ local function run_op(body_fn, ...)
 			end
 		end
 
-		local function try_fn()
-			local why = reject_reason(parent)
-			if why then
-				return true, 'cancelled', make_report(parent, {}), why
-			end
-			return false
-		end
+		-- This op does not have a meaningful non-blocking completion path.
+		local function try_fn() return false end
 
 		local function block_fn(suspension, wrap_fn)
 			start_once()
@@ -821,10 +763,13 @@ local function run_op(body_fn, ...)
 			end
 
 			local cancel_join = child._join_os:add_waiter(function ()
-				if suspension:waiting() then complete_from_join(suspension, wrap_fn) end
+				if suspension:waiting() then
+					complete_from_join(suspension, wrap_fn)
+				end
 			end)
 			suspension:add_cleanup(cancel_join)
 
+			-- Defensive fast completion.
 			if child._join_outcome and suspension:waiting() then
 				complete_from_join(suspension, wrap_fn)
 			end
@@ -834,6 +779,7 @@ local function run_op(body_fn, ...)
 
 		return ev:on_abort(function ()
 			if not child then return end
+
 			child:cancel('aborted')
 			child:_start_join_worker()
 			safe.pcall(function () op.perform_raw(child:join_op()) end)
@@ -843,7 +789,7 @@ end
 
 ---@param body_fn fun(s:Scope, ...): ...
 ---@param ... any
----@return '"ok"'|'"failed"'|'"cancelled"', ScopeReport, any ...
+---@return 'ok'|'failed'|'cancelled', ScopeReport, any ...
 local function run(body_fn, ...)
 	assert(type(body_fn) == 'function', 'scope.run expects a function body')
 	assert(runtime.current_fiber(), 'scope.run must be called from inside a fiber')
