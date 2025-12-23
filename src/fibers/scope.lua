@@ -153,7 +153,7 @@ local finaliser_handler = make_xpcall_handler('finaliser')
 ---@field _cancel_os Oneshot
 ---@field _extra_errors any[]
 ---@field _fault_os Oneshot
----@field _finalisers function[]
+---@field _finalisers any[]
 ---@field _join_started boolean
 ---@field _join_outcome ScopeJoinOutcome|nil
 ---@field _join_os Oneshot
@@ -518,9 +518,16 @@ end
 ----------------------------------------------------------------------
 
 ---@param f fun(aborted:boolean, status:string, primary:any|nil)
+---@return fun() detach
 function Scope:finally(f)
 	assert(type(f) == 'function', 'scope:finally expects a function')
-	self._finalisers[#self._finalisers + 1] = f
+	local rec = { fn = f }
+	self._finalisers[#self._finalisers + 1] = rec
+
+	return function ()
+		-- idempotent: dropping fn releases closure references
+		rec.fn = nil
+	end
 end
 
 ----------------------------------------------------------------------
@@ -582,21 +589,25 @@ function Scope:_finalise_join_body()
 
 	local fs = self._finalisers
 	for i = #fs, 1, -1 do
-		local f = fs[i]
+		local rec = fs[i]
 		fs[i] = nil
 
-		local ok, err = safe.xpcall(function ()
-			return f(aborted, st, (st == 'failed') and primary or nil)
-		end, finaliser_handler)
+		local f = rec and rec.fn or nil
+		if f then
+			rec.fn = nil
+			local ok, err = safe.xpcall(function ()
+				return f(aborted, st, (st == 'failed') and primary or nil)
+			end, finaliser_handler)
 
-		if not ok then
-			if is_cancelled(err) then
-				self:_record_fault('finaliser raised cancellation: ' .. tostring(cancel_reason(err)))
-			else
-				self:_record_fault(err)
+			if not ok then
+				if is_cancelled(err) then
+					self:_record_fault('finaliser raised cancellation: ' .. tostring(cancel_reason(err)))
+				else
+					self:_record_fault(err)
+				end
+				st, primary = terminal_status(self)
+				aborted = (st ~= 'ok')
 			end
-			st, primary = terminal_status(self)
-			aborted = (st ~= 'ok')
 		end
 	end
 
