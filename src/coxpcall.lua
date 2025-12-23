@@ -1,4 +1,13 @@
 -- coxpcall.lua
+--
+-- Coroutine-safe pcall/xpcall for Lua 5.1-style environments.
+-- If the host already provides yield-safe pcall/xpcall (e.g. LuaJIT), this
+-- module returns the native functions unchanged.
+--
+-- This version aims to make Lua 5.1 tracebacks look closer to LuaJIT by:
+--   * using debug.traceback(co, ...) for the failing coroutine, and
+--   * splicing in “outer” call-site frames by walking the coroutine parent chain,
+--     inserting a synthetic “[C]: in function 'xpcall'” boundary each hop.
 
 local M = {}
 
@@ -16,7 +25,6 @@ end
 
 -- Fast path: environment already has coroutine-safe pcall/xpcall
 if isCoroutineSafe(pcall) and isCoroutineSafe(xpcall) then
-	-- No globals; just return plain ones
 	M.pcall   = pcall
 	M.xpcall  = xpcall
 	M.running = coroutine.running
@@ -40,18 +48,91 @@ local function id(trace)
 	return trace
 end
 
+local function filter_outer_tb(tb)
+	if type(tb) ~= 'string' or tb == '' then
+		return nil
+	end
+
+	local kept = {}
+	for line in tb:gmatch('[^\n]+') do
+		if line ~= 'stack traceback:'
+			and not line:match('^%s*$')
+			and not line:match('%(tail call%)')
+			and not line:find('coxpcall.lua', 1, true)
+			and not line:find("in function 'coroutine.resume'", 1, true)
+			and not line:find('handleReturnValue', 1, true)
+			and not line:find('performResume', 1, true)
+		then
+			kept[#kept + 1] = line
+		end
+	end
+
+	if #kept == 0 then
+		return nil
+	end
+	return table.concat(kept, '\n')
+end
+
+local function splice_chain(tb_inner, co, marker)
+	if type(tb_inner) ~= 'string' or tb_inner == '' then
+		return tb_inner
+	end
+	if not (debug and debug.traceback) then
+		return tb_inner
+	end
+
+	marker = marker or "\t[C]: in function 'xpcall'"
+
+	local out = tb_inner
+	local parent = coromap[co]
+
+	while parent do
+		-- Level 3: drop the debug.traceback frame and the splice helper.
+		local tb_outer = debug.traceback(parent, '', 3)
+		tb_outer = filter_outer_tb(tb_outer) or ''
+
+		if tb_outer and tb_outer ~= '' then
+			out = out .. '\n' .. marker .. '\n' .. tb_outer
+		end
+
+		parent = coromap[parent]
+	end
+
+	return out
+end
+
 function handleReturnValue(err, co, status, ...)
 	if not status then
 		-- Error path from coroutine.resume(co, ...)
 		if err == id then
 			-- pcall semantics: propagate the original error object unchanged
-			-- coroutine.resume returns (false, errmsg, ...), so just
-			-- pass those “...” through as pcall would.
 			return false, ...
-		else
-			-- xpcall semantics: run the error handler on a traceback
-			return false, err(debug.traceback(co, (...)), ...)
 		end
+
+		local e = ...
+
+		-- Compute the failing coroutine traceback and splice in outer call-site frames.
+		local tb
+		if debug and debug.traceback then
+			tb = debug.traceback(co, tostring(e))
+			tb = splice_chain(tb, co)
+		else
+			tb = tostring(e)
+		end
+
+		-- Preserve idiom: xpcall(f, debug.traceback)
+		if err == debug.traceback then
+			return false, tb
+		end
+
+		-- Call handler with (error_object, traceback_string). A 1-arg handler
+		-- will ignore the second argument.
+		local ok_h, handled = oldpcall(err, e, tb)
+		if not ok_h then
+			-- If the handler itself faults, xpcall reports that fault.
+			return false, handled
+		end
+		return false, handled
 	end
 
 	if coroutine.status(co) == 'suspended' then

@@ -1,645 +1,685 @@
---- Tests the Scope implementation.
-print('test: fibers.scope')
+--- Revised tests for fibers.scope (status-first: st, rep, ...).
+---
+--- This suite aims to test contractual behaviour, avoid overfitting to
+--- incidental implementation details, and cover concurrency edges:
+---   - idempotent ops (join_op / close_op / cancel_op / fault_op)
+---   - join non-interruptibility (finalisers always run)
+---   - failure vs cancellation precedence
+---   - admission races around run_op
+---   - report structure (children ordering + nested reports)
+---   - runtime uncaught error attribution path (best-effort; see note)
+---
+print('test: fibers.scope (revised contract-oriented suite)')
 
--- look one level up
 package.path = '../src/?.lua;' .. package.path
 
 local runtime   = require 'fibers.runtime'
-local scope     = require 'fibers.scope'
+local scope_mod = require 'fibers.scope'
 local op        = require 'fibers.op'
 local performer = require 'fibers.performer'
 local cond_mod  = require 'fibers.cond'
+local safe      = require 'coxpcall'
+
+-- Capture unscoped fiber errors during tests.
+local unscoped = { n = 0, last = nil }
+
+scope_mod.set_unscoped_error_handler(function (_, err)
+	unscoped.n = unscoped.n + 1
+	unscoped.last = err
+end)
 
 -------------------------------------------------------------------------------
--- 1. Structural tests
+-- Helpers
 -------------------------------------------------------------------------------
 
-local function test_outside_fibers()
-	local root = scope.root()
-
-	-- current() outside any fiber should be the root (process-wide current scope)
-	assert(scope.current() == root, 'outside fibers, current() should be root')
-
-	local outer_scope
-	local inner_scope
-
-	local st, err = scope.run(function (s)
-		outer_scope = s
-
-		-- Inside run, current() should be this child scope
-		assert(scope.current() == s, 'inside scope.run, current() should be child scope')
-		assert(s:parent() == root, 'outer scope parent must be root')
-
-		-- root should see this child in its children list
-		local rc = root:children()
-		local found_outer = false
-		for _, c in ipairs(rc) do
-			if c == s then
-				found_outer = true
-				break
-			end
-		end
-		assert(found_outer, 'root:children() should contain outer scope')
-
-		-- Nested run creates a grandchild of s
-		local st2, err2 = scope.run(function (child2)
-			inner_scope = child2
-			assert(scope.current() == child2, 'inside nested run, current() should be nested child')
-			assert(child2:parent() == s, 'nested scope parent must be outer scope')
-
-			local sc = s:children()
-			local found_inner = false
-			for _, c in ipairs(sc) do
-				if c == child2 then
-					found_inner = true
-					break
-				end
-			end
-			assert(found_inner, 'outer scope children() should contain nested scope')
-		end)
-
-		assert(st2 == 'ok' and err2 == nil,
-			'nested scope.run should complete with status ok')
-
-		-- After nested run, current() should be back to the outer scope
-		assert(scope.current() == s, 'after nested run, current() should be outer scope again')
-	end)
-
-	assert(st == 'ok' and err == nil, 'outer scope.run should complete with status ok')
-
-	assert(outer_scope ~= nil, 'outer_scope should have been set')
-	assert(inner_scope ~= nil, 'inner_scope should have been set')
-	assert(outer_scope ~= inner_scope, 'outer and inner scopes must differ')
-
-	-- After scope.run returns, current() outside fibers should be root again
-	assert(scope.current() == scope.root(), 'after scope.run, current() should be root outside fibers')
+local function assert_contains(hay, needle, msg)
+	assert(type(hay) == 'string', 'assert_contains expects string haystack')
+	assert(hay:find(needle, 1, true), msg or ('expected to find ' .. tostring(needle)))
 end
 
-local function test_inside_fibers()
-	local root = scope.root()
+local function assert_is_report(rep, msg)
+	assert(type(rep) == 'table', msg or 'expected report table')
+	assert(rep.id ~= nil, msg or 'expected report.id')
+	assert(type(rep.extra_errors) == 'table', msg or 'expected report.extra_errors table')
+	assert(type(rep.children) == 'table', msg or 'expected report.children table')
+end
 
-	local child_in_fiber
-	local grandchild_in_fiber
+local function run_in_root(fn)
+	-- Run the suite in a fiber whose current scope is the root.
+	-- Capture any failure so it does not become an uncaught fiber error.
+	local outcome = { ok = true, err = nil }
 
-	-- Use a cond to wait for the spawned fiber to finish.
-	local done = cond_mod.new()
-
-	-- Spawn a fiber anchored to the root scope.
-	root:spawn(function (s)
-		-- In this fiber, s is the scope used for spawn -> root
-		assert(s == root, 'spawn(fn) on root should pass root as scope')
-		assert(scope.current() == root, 'inside spawned fiber, current() should be root initially')
-
-		-- Create a child scope inside the fiber
-		local st, err = scope.run(function (child)
-			child_in_fiber = child
-			assert(scope.current() == child, 'inside scope.run in fiber, current() should be child')
-			assert(child:parent() == root, 'child-in-fiber parent must be root')
-
-			-- Create a grandchild scope
-			local st2, err2 = scope.run(function (grandchild)
-				grandchild_in_fiber = grandchild
-				assert(scope.current() == grandchild, 'inside nested run in fiber, current() should be grandchild')
-				assert(grandchild:parent() == child, 'grandchild parent must be child')
-			end)
-
-			assert(st2 == 'ok' and err2 == nil,
-				'nested scope.run in fiber should complete with status ok')
-
-			-- After nested run, current() should be back to child
-			assert(scope.current() == child, 'after nested run in fiber, current() should be child again')
+	local root = scope_mod.root()
+	root:spawn(function ()
+		local ok, err = safe.xpcall(fn, function (e)
+			return debug.traceback(tostring(e), 2)
 		end)
-
-		assert(st == 'ok' and err == nil,
-			'scope.run in fiber should complete with status ok')
-
-		-- After inner run, current() should be back to root for this fiber
-		assert(scope.current() == root, 'after scope.run in fiber, current() should be root again')
-
-		done:signal()
+		outcome.ok = ok
+		outcome.err = err
+		runtime.stop()
 	end)
 
-	-- Drive until the child fiber finishes.
-	performer.perform(done:wait_op())
+	runtime.main()
 
-	-- After that, we are still inside the test fiber; current() should be root.
-	assert(scope.current() == root, 'after inner fiber completes, current() should be root in test fiber')
-
-	-- Check that scopes created inside the fiber were recorded
-	assert(child_in_fiber ~= nil, 'child_in_fiber should have been set')
-	assert(grandchild_in_fiber ~= nil, 'grandchild_in_fiber should have been set')
-	assert(child_in_fiber:parent() == root, 'child_in_fiber parent must be root')
-	assert(grandchild_in_fiber:parent() == child_in_fiber, 'grandchild_in_fiber parent must be child_in_fiber')
-
-	-- Check that root children include the child created in this fiber.
-	local rc = root:children()
-	local found_child = false
-	for _, s in ipairs(rc) do
-		if s == child_in_fiber then
-			found_child = true
-			break
-		end
+	if not outcome.ok then
+		error(outcome.err or 'scope tests failed')
 	end
-	assert(found_child, 'root:children() should contain child_in_fiber')
 end
 
 -------------------------------------------------------------------------------
--- 1b. basic scope.with_op behaviour
+-- 0. Outside-fiber current() behaviour (policy test; keep minimal)
 -------------------------------------------------------------------------------
 
-local function test_with_op_basic()
-	local parent = scope.current()
-	local child_scope
-
-	local ev = scope.with_op(function (child)
-		child_scope = child
-		-- inside build_op, current scope should be the child
-		assert(scope.current() == child, 'inside with_op build_op, current() should be child scope')
-		assert(child:parent() == parent, 'with_op child parent should be current scope')
-
-		-- simple op that returns two values
-		return op.always(true):wrap(function ()
-			return 99, 'ok'
-		end)
-	end)
-
-	local a, b = performer.perform(ev)
-	assert(a == 99 and b == 'ok', 'with_op should propagate child op results')
-
-	-- After perform, current() should be restored to the parent.
-	assert(scope.current() == parent,
-		'after with_op perform, current() should be restored to parent scope')
-
-	assert(child_scope ~= nil, 'with_op should have created a child scope')
-	local st, err = child_scope:status()
-	assert(st == 'ok' and err == nil, 'with_op child scope should end ok on success')
+local function test_outside_fiber_current_is_root()
+	local r = scope_mod.root()
+	assert(scope_mod.current() == r, 'outside fibers, current() should be root scope')
 end
 
--- Failure in the with_op builder should be confined to the with_op child scope.
-local function test_with_op_failure_confined_to_child()
-	local outer_scope
-	local child_scope
+-------------------------------------------------------------------------------
+-- 1. Current scope installation and restoration (run and nested run)
+-------------------------------------------------------------------------------
 
-	local st, serr = scope.run(function (s)
-		outer_scope = s
+local function test_current_scope_run_restores()
+	local root = scope_mod.root()
+	assert(scope_mod.current() == root, 'test fiber should see current() == root')
 
-		local ev = scope.with_op(function (child)
-			child_scope = child
-			assert(scope.current() == child,
-				'inside failing with_op, current() should be child scope')
-			assert(child:parent() == s,
-				'with_op child parent should be the surrounding scope.run scope')
+	local outer_ref, inner_ref
 
-			error('with_op builder failure')
+	local st, rep, outer_val = scope_mod.run(function (s)
+		outer_ref = s
+		assert(scope_mod.current() == s, 'inside scope.run, current() should be the child scope')
+
+		local st2, rep2, a, b, c = scope_mod.run(function (s2)
+			inner_ref = s2
+			assert(scope_mod.current() == s2, 'inside nested run, current() should be nested child')
+			return 1, 2, 3
 		end)
 
-		-- The error above is caught by the Scope:spawn wrapper for this body fiber.
-		performer.perform(ev)
+		assert(st2 == 'ok', 'nested run should succeed')
+		assert_is_report(rep2, 'nested run should return a report')
+		assert(a == 1 and b == 2 and c == 3, 'nested run should return body values')
 
-		-- Not reached.
+		assert(scope_mod.current() == s, 'after nested run, current() should restore to outer child')
+		return 'outer-result'
 	end)
 
-	-- The outer scope remains ok; the failure is local to the with_op child.
-	assert(st == 'ok' and serr == nil,
-		'outer scope.run should still succeed when with_op child fails')
+	assert(st == 'ok', 'outer run should succeed')
+	assert_is_report(rep, 'outer run should return a report')
+	assert(outer_val == 'outer-result', 'outer run should return body values')
 
-	assert(outer_scope ~= nil, 'outer_scope should have been set')
-	assert(child_scope ~= nil, 'with_op failure test should have created child scope')
+	assert(scope_mod.current() == root, 'after run returns, current() should restore to root')
 
-	local cst, cerr = child_scope:status()
-	assert(cst == 'failed', 'with_op child should be failed after builder error')
-	assert(tostring(cerr):find('with_op builder failure', 1, true),
-		'with_op child error should mention builder failure')
+	assert(outer_ref and inner_ref and outer_ref ~= inner_ref, 'outer/inner scopes must be captured and differ')
+
+	-- join_op should be idempotent and immediate after run has joined.
+	local jst, jrep, jprimary = op.perform_raw(outer_ref:join_op())
+	assert(jst == 'ok' and jprimary == nil, 'join_op on joined ok scope should be ok')
+	assert_is_report(jrep, 'join_op should return a report')
+	assert(jrep.id == rep.id, 'join_op report id should match the run report id')
 end
 
--- with_op used in a choice where it loses should lead to a cancelled child scope.
-local function test_with_op_abort_on_choice()
-	local outer_scope
-	local child_scope
+-------------------------------------------------------------------------------
+-- 2. Structural lifetime and join ordering (attachment order)
+-------------------------------------------------------------------------------
 
-	local st, serr, _, winner = scope.run(function (s)
-		outer_scope = s
+local function test_structural_lifetime_children_joined_in_order()
+	local child1_ref, child2_ref
+	local child1_done, child2_done = false, false
 
-		local ev_with = scope.with_op(function (child)
-			child_scope = child
-			assert(scope.current() == child,
-				'inside with_op arm of choice, current() should be child scope')
-			assert(child:parent() == s,
-				'with_op child parent in choice should be outer scope')
+	local st, rep, parent_val = scope_mod.run(function (s)
+		local c1, err1 = s:child()
+		assert(c1, 'expected child1, got err: ' .. tostring(err1))
+		child1_ref = c1
 
-			-- This arm never becomes ready; it will lose the choice.
-			return op.never()
+		local c2, err2 = s:child()
+		assert(c2, 'expected child2, got err: ' .. tostring(err2))
+		child2_ref = c2
+
+		local ok1 = c1:spawn(function ()
+			runtime.yield()
+			child1_done = true
+		end)
+		assert(ok1, 'child1:spawn should be admitted')
+
+		local ok2 = c2:spawn(function ()
+			runtime.yield()
+			child2_done = true
+		end)
+		assert(ok2, 'child2:spawn should be admitted')
+
+		return 'parent-ok'
+	end)
+
+	assert(st == 'ok', 'parent scope should be ok')
+	assert_is_report(rep, 'parent report must be present')
+	assert(parent_val == 'parent-ok', 'parent run should return body values')
+
+	assert(child1_done and child2_done, 'parent join should wait for attached children work')
+
+	-- Attachment order is a stated guarantee; test it.
+	assert(#rep.children == 2, 'expected two child outcomes')
+	assert(rep.children[1].id == child1_ref._id, 'first child outcome should correspond to first attachment')
+	assert(rep.children[2].id == child2_ref._id, 'second child outcome should correspond to second attachment')
+	assert(rep.children[1].status == 'ok' and rep.children[2].status == 'ok', 'children should end ok')
+
+	-- Joined child scopes should reject new work (admission gated by join).
+	local ch, err = child1_ref:child()
+	assert(ch == nil and err ~= nil, 'joined child should reject new child')
+	assert_contains(tostring(err), 'scope is joining', 'rejection should mention joining')
+end
+
+-------------------------------------------------------------------------------
+-- 3. Admission gate: close() rejects spawn/child; close_op is idempotent
+-------------------------------------------------------------------------------
+
+local function test_admission_close_and_close_op_idempotent()
+	local st, rep, body_val = scope_mod.run(function (s)
+		local ast = s:admission()
+		assert(ast == 'open', 'new scope admission should be open')
+
+		s:close()
+		s:close('closed-later') -- policy: allow setting reason after close if none set
+
+		local ast2, areason2 = s:admission()
+		assert(ast2 == 'closed', 'close should close admission')
+		assert(areason2 == 'closed-later', 'close should record a later reason if none was set earlier')
+
+		local ok, err = s:spawn(function () end)
+		assert(ok == false and err ~= nil, 'spawn should be rejected when scope is closed')
+		assert_contains(tostring(err), 'scope is closed', 'close rejection should mention closed')
+
+		local child, cerr = s:child()
+		assert(child == nil and cerr ~= nil, 'child should be rejected when scope is closed')
+		assert_contains(tostring(cerr), 'scope is closed', 'child rejection should mention closed')
+
+		-- close_op should resolve and be repeatable.
+		local cst, creason = op.perform_raw(s:close_op())
+		assert(cst == 'closed' and creason == 'closed-later', 'close_op yields closed + reason')
+
+		local cst2, creason2 = op.perform_raw(s:close_op())
+		assert(cst2 == 'closed' and creason2 == 'closed-later', 'close_op is idempotent')
+
+		return 'ok'
+	end)
+
+	assert(st == 'ok', 'run should succeed')
+	assert_is_report(rep, 'report should be present')
+	assert(body_val == 'ok', 'body result should be returned')
+end
+
+-------------------------------------------------------------------------------
+-- 4. cancel(): rejects new work; cancel_op idempotent; cancel reason policy
+-------------------------------------------------------------------------------
+
+local function test_cancel_and_cancel_op_idempotent()
+	local st, rep, primary = scope_mod.run(function (s)
+		s:cancel('bye')
+	end)
+
+	assert(st == 'cancelled' and primary == 'bye', 'explicit cancel yields cancelled + reason')
+	assert_is_report(rep, 'cancelled scope should return a report')
+
+	-- cancel_op should return cancelled and be idempotent (even post-join).
+	local st2, rep2, primary2 = scope_mod.run(function (s)
+		s:cancel('first')
+		s:cancel('second') -- current policy: first wins
+		local ost, oval = op.perform_raw(s:cancel_op())
+		assert(ost == 'cancelled', 'cancel_op yields cancelled')
+		assert(oval == 'first', 'cancel reason should follow first-wins policy')
+	end)
+
+	assert(st2 == 'cancelled' and primary2 == 'first', 'scope should be cancelled with first reason')
+	assert_is_report(rep2, 'cancelled scope should return report')
+end
+
+-------------------------------------------------------------------------------
+-- 5. Cancellation sentinel behaviour (perform raises sentinel; try returns status)
+-------------------------------------------------------------------------------
+
+local function test_cancellation_sentinel_and_try_semantics()
+	local st, rep, primary = scope_mod.run(function (s)
+		local c = cond_mod.new()
+
+		s:spawn(function ()
+			runtime.yield()
+			s:cancel('cancel-reason')
 		end)
 
-		local ev_choice = op.choice(ev_with, op.always('right'))
+		local ok, err = safe.pcall(function ()
+			s:perform(c:wait_op())
+		end)
+
+		assert(ok == false, 'perform should raise on cancellation')
+		assert(scope_mod.is_cancelled(err), 'raised value should be cancellation sentinel')
+		assert(scope_mod.cancel_reason(err) == 'cancel-reason', 'sentinel should carry reason')
+
+		local t_st, t_val = s:try(c:wait_op())
+		assert(t_st == 'cancelled' and t_val == 'cancel-reason', 'try returns cancelled + reason')
+	end)
+
+	assert(st == 'cancelled' and primary == 'cancel-reason', 'scope ends cancelled with correct reason')
+	assert_is_report(rep, 'cancelled report must be present')
+end
+
+-------------------------------------------------------------------------------
+-- 6. Fail-fast: first fault cancels scope; siblings observe failure (not cancellation)
+-------------------------------------------------------------------------------
+
+local function test_fail_fast_and_siblings_observe_failed()
+	local observed_st, observed_primary
+
+	local st, rep, primary = scope_mod.run(function (s)
+		local c = cond_mod.new()
+
+		s:spawn(function ()
+			observed_st, observed_primary = s:try(c:wait_op())
+		end)
+
+		s:spawn(function ()
+			error('boom')
+		end)
+
+		runtime.yield()
+	end)
+
+	assert(st == 'failed', 'scope should fail on first fault')
+	assert_contains(tostring(primary), 'boom', 'primary should mention boom')
+
+	assert(observed_st == 'failed', 'blocked sibling should observe failed on fault')
+	assert_contains(tostring(observed_primary), 'boom', 'blocked sibling should observe primary fault')
+
+	assert_is_report(rep, 'report must be present')
+	assert(#rep.extra_errors == 0, 'extra_errors should be empty when no further faults')
+end
+
+-------------------------------------------------------------------------------
+-- 7. Failure takes precedence over cancellation (race)
+-------------------------------------------------------------------------------
+
+local function test_failure_precedes_cancellation()
+	local st, rep, primary = scope_mod.run(function (s)
+		s:spawn(function ()
+			runtime.yield()
+			s:cancel('cancelling')
+		end)
+		s:spawn(function ()
+			runtime.yield()
+			error('failing')
+		end)
+		runtime.yield()
+		runtime.yield()
+	end)
+
+	assert(st == 'failed', 'failure should take precedence over cancellation')
+	assert_contains(tostring(primary), 'failing')
+	assert_is_report(rep, 'report must be present')
+end
+
+-------------------------------------------------------------------------------
+-- 8. fault_op / not_ok_op behaviour and idempotency
+-------------------------------------------------------------------------------
+
+local function test_fault_ops_and_not_ok_precedence()
+	local st1, rep1, primary1 = scope_mod.run(function (s)
+		s:spawn(function ()
+			runtime.yield()
+			error('fault-here')
+		end)
+
+		local ost, oval = op.perform_raw(s:fault_op())
+		assert(ost == 'failed', 'fault_op yields failed')
+		assert_contains(tostring(oval), 'fault-here', 'fault_op yields primary fault')
+
+		local nst, nval = op.perform_raw(s:not_ok_op())
+		assert(nst == 'failed', 'not_ok_op yields failed when a fault occurs')
+		assert_contains(tostring(nval), 'fault-here', 'not_ok_op yields the primary fault')
+	end)
+
+	assert(st1 == 'failed', 'scope should be failed on fault')
+	assert_contains(tostring(primary1), 'fault-here')
+	assert_is_report(rep1, 'failed report must be present')
+end
+
+-------------------------------------------------------------------------------
+-- 9. Finalisers: LIFO order; join non-interruptible (finalisers run under cancel)
+-------------------------------------------------------------------------------
+
+local function test_finalisers_lifo_and_join_non_interruptible()
+	-- (A) LIFO finalisers in the straightforward case
+	local order = {}
+	local st, rep, body_val = scope_mod.run(function (s)
+		s:finally(function () table.insert(order, 'first') end)
+		s:finally(function () table.insert(order, 'second') end)
+		return 'ok'
+	end)
+
+	assert(st == 'ok' and body_val == 'ok', 'ok scope should return body result')
+	assert_is_report(rep, 'report must be present')
+	assert(#order == 2 and order[1] == 'second' and order[2] == 'first', 'finalisers run LIFO')
+
+	-- (B) Join is non-interruptible: finalisers must run even if cancelled mid-join.
+	--
+	-- This test focuses on:
+	--   * the CHILD reaches terminal state and runs its finalisers
+	--   * the PARENT does not become not-ok because the child was cancelled
+	local ran = false
+	local child_ref
+
+	local pst, prep, pprimary = scope_mod.run(function (s)
+		local ch = assert(s:child())
+		child_ref = ch
+
+		local blocker = cond_mod.new()
+
+		ch:spawn(function ()
+			-- This should be interrupted by cancellation (via ch:perform semantics).
+			ch:perform(blocker:wait_op())
+		end)
+
+		ch:finally(function ()
+			ran = true
+		end)
+
+		-- Start joining the child in a sibling fiber.
+		s:spawn(function ()
+			op.perform_raw(ch:join_op())
+		end)
+
+		-- Let join start, then cancel the child.
+		runtime.yield()
+		ch:cancel('cancel-during-join')
+
+		-- Give the join worker time to complete.
+		runtime.yield()
+
+		-- Parent body completes without error.
+		return 'parent-ok'
+	end)
+
+	-- If this fails, print what actually happened to the parent so you can diagnose.
+	assert(pst == 'ok', ('parent scope should remain ok in join test; got st=%s primary=%s')
+		:format(tostring(pst), tostring(pprimary)))
+	assert_is_report(prep, 'parent report must be present')
+
+	-- Now assert the child actually finished cancelled and ran finalisers.
+	assert(child_ref ~= nil, 'child scope must be captured')
+
+	-- If join has completed, status() may be 'cancelled'/'failed'/'ok'; if not, it could be 'running'.
+	-- We make it deterministic by calling join_op now (idempotent).
+	local jst, jrep, jprim = op.perform_raw(child_ref:join_op())
+	assert(jst == 'cancelled', ('child should end cancelled; got %s'):format(tostring(jst)))
+	assert(jprim == 'cancel-during-join', 'child cancellation reason should be preserved')
+	assert_is_report(jrep, 'child join should return a report')
+
+	assert(ran, 'child finaliser must run even if cancelled during join')
+end
+
+-------------------------------------------------------------------------------
+-- 10. Finaliser cancellation sentinel becomes fault (policy test)
+-------------------------------------------------------------------------------
+
+local function test_cancel_sentinel_in_finaliser_becomes_fault()
+	local st, rep, primary = scope_mod.run(function (s)
+		s:finally(function ()
+			error(scope_mod.cancelled('finaliser-cancel'))
+		end)
+		return 'ok'
+	end)
+
+	assert(st == 'failed', 'cancellation sentinel in finaliser should fail scope (policy)')
+	assert_is_report(rep, 'failed report must be present')
+	assert_contains(tostring(primary), 'finaliser raised cancellation', 'primary should mention finaliser cancellation')
+	assert_contains(tostring(primary), 'finaliser-cancel', 'primary should include cancellation reason')
+end
+
+-------------------------------------------------------------------------------
+-- 11. Reports: nested child report structure (depth 2)
+-------------------------------------------------------------------------------
+
+local function test_reports_nested_children_depth_two()
+	local child_ref, grand_ref
+
+	local st, rep, body_val = scope_mod.run(function (s)
+		local ch = assert(s:child())
+		child_ref = ch
+		local gch = assert(ch:child())
+		grand_ref = gch
+
+		gch:spawn(function ()
+			error('grandchild-fault')
+		end)
+
+		return 'ok'
+	end)
+
+	-- Contract: no implicit upward failure propagation.
+	assert(st == 'ok' and body_val == 'ok', 'parent scope should remain ok when attached children fail')
+	assert_is_report(rep, 'report must be present')
+
+	-- Parent report should contain child outcome; child report should contain grandchild outcome.
+	assert(#rep.children == 1, 'expected one child outcome')
+	assert(rep.children[1].id == child_ref._id, 'child outcome id should match')
+	assert(rep.children[1].report and rep.children[1].report.id == child_ref._id, 'child report should be present')
+
+	local child_rep = rep.children[1].report
+	assert(
+		type(child_rep.children) == 'table' and #child_rep.children == 1,
+		'child report should include one grandchild outcome'
+	)
+	assert(child_rep.children[1].id == grand_ref._id, 'grandchild outcome id should match')
+	assert(child_rep.children[1].status == 'failed', 'grandchild should have failed')
+	assert_contains(tostring(child_rep.children[1].primary), 'grandchild-fault',
+	'grandchild primary should mention fault')
+end
+
+-------------------------------------------------------------------------------
+-- 12. Join closes admission: spawn/child rejected once joining has started
+-------------------------------------------------------------------------------
+
+local function test_join_closes_admission_and_rejects_new_work()
+	local st, rep, body_val = scope_mod.run(function (s)
+		local child = assert(s:child())
+
+		local blocker      = cond_mod.new()
+		local join_started = cond_mod.new()
+
+		child:spawn(function ()
+			child:perform(blocker:wait_op())
+		end)
+
+		s:spawn(function ()
+			join_started:signal()
+			op.perform_raw(child:join_op())
+		end)
+
+		performer.perform(join_started:wait_op())
+		runtime.yield()
+
+		local ok1, e1 = child:spawn(function () end)
+		assert(ok1 == false and e1 ~= nil, 'spawn should be rejected once join has started')
+		assert_contains(tostring(e1), 'scope is joining', 'spawn rejection should mention joining')
+
+		local c2, e2 = child:child()
+		assert(c2 == nil and e2 ~= nil, 'child() should be rejected once join has started')
+		assert_contains(tostring(e2), 'scope is joining', 'child rejection should mention joining')
+
+		blocker:signal()
+		return 'ok'
+	end)
+
+	assert(st == 'ok' and body_val == 'ok', 'join/admission test should complete ok')
+	assert_is_report(rep, 'report must be present')
+end
+
+-------------------------------------------------------------------------------
+-- 13. run_op: basic success, confinement of failure, and abort on choice loss
+-------------------------------------------------------------------------------
+
+local function test_run_op_basic_and_failure_confinement()
+	local parent = scope_mod.current()
+	local child_ref
+
+	local ev = scope_mod.run_op(function (child)
+		child_ref = child
+		assert(scope_mod.current() == child, 'inside run_op body, current() should be child')
+		local a, b = child:perform(op.always(99, 'ok'))
+		return a, b
+	end)
+
+	local st, rep, a, b = performer.perform(ev)
+	assert(st == 'ok', 'run_op should return ok on success')
+	assert_is_report(rep, 'run_op should return report')
+	assert(a == 99 and b == 'ok', 'run_op should return body values')
+	assert(rep.id == child_ref._id, 'run_op report id should match child scope id')
+
+	assert(scope_mod.current() == parent, 'after run_op, current() should remain parent in this fiber')
+	local cst, cprimary = child_ref:status()
+	assert(cst == 'ok' and cprimary == nil, 'child scope should be ok after success')
+
+	-- Failure confinement: failing run_op should not fail outer scope.
+	local outer_st, outer_rep, outer_val = scope_mod.run(function ()
+		local cref
+		local ev2 = scope_mod.run_op(function (child)
+			cref = child
+			error('run_op body failure')
+		end)
+
+		local wst, wrep, wprimary = performer.perform(ev2)
+		assert(wst == 'failed', 'run_op should yield failed on body error')
+		assert_contains(tostring(wprimary), 'run_op body failure')
+		assert_is_report(wrep, 'run_op should return report even on failure')
+		assert(wrep.id == cref._id, 'report id should be child id')
+
+		return 'outer-ok'
+	end)
+
+	assert(outer_st == 'ok' and outer_val == 'outer-ok', 'outer scope should remain ok')
+	assert_is_report(outer_rep, 'outer report must be present')
+end
+
+local function test_run_op_abort_on_choice_loss()
+	local child_ref
+
+	local st, rep, outer_val = scope_mod.run(function (s)
+		local ready = cond_mod.new()
+
+		-- Ensure choice blocks so run_op starts.
+		s:spawn(function ()
+			runtime.yield()
+			ready:signal()
+		end)
+
+		local ev_with = scope_mod.run_op(function (child)
+			child_ref = child
+			child:perform(op.never())
+			return 'unexpected'
+		end)
+
+		local ev_right = ready:wait_op():wrap(function () return 'right' end)
+		local ev_choice = op.choice(ev_with, ev_right)
+
 		local res = performer.perform(ev_choice)
-		assert(res == 'right', "choice should pick the always('right') arm")
-
-		-- After the choice, current() should be restored.
-		assert(scope.current() == s,
-			'after with_op choice, current() should be restored to outer scope')
-
+		assert(res == 'right', 'choice should select right arm once ready')
 		return res
 	end)
 
-	assert(st == 'ok' and serr == nil,
-		'outer scope.run should succeed when with_op arm loses a choice')
-	assert(winner == 'right',
-		'outer scope.run should return the winning choice result')
+	assert(st == 'ok' and outer_val == 'right', 'outer scope should remain ok and return right')
+	assert_is_report(rep, 'outer report must be present')
 
-	assert(outer_scope ~= nil, 'outer_scope should have been set')
-	assert(child_scope ~= nil, 'with_op choice test should have created child scope')
-
-	local cst, cerr = child_scope:status()
-	assert(cst == 'cancelled',
-		'with_op child should be cancelled when its op loses a choice')
-	assert(cerr == 'scope aborted',
-		"with_op aborted child error should be 'scope aborted'")
+	assert(child_ref ~= nil, 'run_op should create child scope on blocking path')
+	local cst, cprimary = child_ref:status()
+	assert(cst == 'cancelled', 'aborted run_op child should be cancelled')
+	assert(cprimary == 'aborted', "aborted child cancellation reason should be 'aborted'")
 end
 
--- Failure in a fiber spawned under a with_op child scope should fail that child,
--- but not its outer scope.
-local function test_with_op_child_fiber_failure()
-	local outer_scope
-	local child_scope
+-------------------------------------------------------------------------------
+-- 14. Admission race around run_op (parent closes before run_op can start)
+-------------------------------------------------------------------------------
 
-	local st, serr = scope.run(function (s)
-		outer_scope = s
+local function test_run_op_parent_closed_before_start_is_cancelled()
+	local st, rep = scope_mod.run(function (s)
+		s:close('no more')
 
-		local ev = scope.with_op(function (child)
-			child_scope = child
-			assert(child:parent() == s,
-				'with_op child parent should be outer scope in child-fiber test')
-
-			-- A condition used only to keep one child fiber blocked.
-			local c = cond_mod.new()
-
-			-- Failing child fiber under the with_op scope.
-			child:spawn(function (_)
-				error('with_op child fiber failure')
-			end)
-
-			-- Another child fiber that blocks on a cond and is cancelled
-			-- via the with_op scope's cancellation.
-			child:spawn(function (_)
-				local ok2, reason2 = performer.perform(c:wait_op())
-				-- Under failure, this fiber should see a cancellation result.
-				assert(ok2 == false, 'blocked child fiber should observe cancellation ok=false')
-				assert(reason2 ~= nil, 'blocked child fiber should receive a cancellation reason')
-			end)
-
-			-- The main op for with_op completes successfully.
-			return op.always('ok')
+		local ev = scope_mod.run_op(function ()
+			return 1
 		end)
 
-		local res = performer.perform(ev)
-		assert(res == 'ok', 'with_op main op should still return its result')
-
-		-- At this point, with_op's release will have waited for the child scope
-		-- to close, including both spawned child fibers and finalisers.
+		local wst, wrep, wprimary = performer.perform(ev)
+		assert(wst == 'cancelled', 'run_op should be cancelled when parent is closed')
+		assert_contains(tostring(wprimary), 'scope is closed')
+		assert_is_report(wrep, 'run_op should return a report')
+		assert(wrep.id == s._id, 'run_op cancelled report should be based on parent scope')
 	end)
 
-	assert(st == 'ok' and serr == nil,
-		'outer scope.run should remain ok after with_op child-fiber failure')
-
-	assert(outer_scope ~= nil, 'outer_scope should have been set')
-	assert(child_scope ~= nil, 'with_op child-fiber test should have created child scope')
-
-	local cst, cerr = child_scope:status()
-	assert(cst == 'failed',
-		'with_op child scope should be failed after a child fiber failure')
-	assert(tostring(cerr):find('with_op child fiber failure', 1, true),
-		'with_op child scope error should mention the child fiber failure')
+	assert(st == 'ok', 'outer scope should remain ok')
+	assert_is_report(rep, 'outer report must be present')
 end
 
 -------------------------------------------------------------------------------
--- 2. Status transitions for scope.run (success, failure, cancellation)
+-- 15. Uncaught runtime fiber error attribution (best-effort)
 -------------------------------------------------------------------------------
 
-local function test_run_success_and_failure()
-	local root = scope.root()
+local function test_uncaught_raw_fiber_is_unscoped_by_default()
+	-- Reset capture.
+	unscoped.n = 0
+	unscoped.last = nil
 
-	-- Success case: scope.run returns status ok and body results.
-	local success_scope
-	local st, err, _, a, b = scope.run(function (s)
-		success_scope = s
-		local st0, err0 = s:status()
-		assert(st0 == 'running' and err0 == nil, 'inside body, status should be running')
-		return 42, 'x'
-	end)
-
-	assert(st == 'ok' and err == nil,
-		'scope.run should report status ok on success')
-	assert(a == 42 and b == 'x', 'scope.run should return body results on success')
-
-	local st_ok, err_ok = success_scope:status()
-	assert(st_ok == 'ok' and err_ok == nil, 'successful scope should end with status ok and no error')
-	assert(success_scope:parent() == root, 'success scope parent should be root')
-
-	-- Failure case: body error becomes scope failure; scope.run does not throw.
-	local st_fail, err_fail = scope.run(function ()
-		error('body failure')
-	end)
-
-	assert(st_fail == 'failed', 'scope.run should report status failed on body error')
-	assert(err_fail ~= nil, 'failed scope should have a primary error recorded')
-	assert(tostring(err_fail):find('body failure', 1, true),
-		'failed scope primary error should mention the body failure')
-end
-
-local function test_run_explicit_cancel()
-	-- If the body explicitly cancels the scope, scope.run should
-	-- report status 'cancelled' and the cancellation reason.
-	local cancelled_scope
-	local st, serr = scope.run(function (s)
-		cancelled_scope = s
-		s:cancel('stop here')
-	end)
-
-	assert(st == 'cancelled', 'scope.run should report cancelled when scope is cancelled inside body')
-	assert(serr == 'stop here', 'cancelled scope error should be the cancellation reason')
-
-	local st2, serr2 = cancelled_scope:status()
-	assert(st2 == 'cancelled', "cancelled scope should have status 'cancelled'")
-	assert(serr2 == 'stop here', 'cancelled scope error should be the cancellation reason')
-end
-
--------------------------------------------------------------------------------
--- 3. Defers: LIFO ordering and execution on failure
--------------------------------------------------------------------------------
-
-local function test_finalisers_lifo_and_failure()
-	local order = {}
-	local scope_ref
-
-	local st, serr = scope.run(function (s)
-		scope_ref = s
-		s:finally(function () table.insert(order, 'first') end)
-		s:finally(function () table.insert(order, 'second') end)
-		error('boom in body')
-	end)
-
-	assert(st == 'failed', 'scope.run should report failure when body errors')
-	assert(tostring(serr):find('boom in body', 1, true),
-		'primary error should mention the body error')
-
-	local st2, serr2 = scope_ref:status()
-	assert(st2 == 'failed', 'scope should be failed after body error')
-	assert(tostring(serr2):find('boom in body', 1, true),
-		'scope error should mention the body error')
-
-	assert(#order == 2, 'two finalisers should have run')
-	assert(order[1] == 'second' and order[2] == 'first',
-		'finalisers should run in LIFO order even on failure')
-end
-
--- Defer failures after a successful body should turn the scope to 'failed'
--- and surface the finaliser error as primary, but still preserve body results.
-local function test_extra_failure_marks_scope_failed()
-	local scope_ref
-
-	local st, serr, _, body_res = scope.run(function (s)
-		scope_ref = s
-		s:finally(function ()
-			error('finaliser failure')
+	local st, rep, body_val = scope_mod.run(function (_)
+		runtime.spawn_raw(function ()
+			error('raw-fiber-boom')
 		end)
-		return 'body-result'
+		runtime.yield()
+		return 'ok'
 	end)
 
-	assert(st == 'failed',
-		'scope.run should report failed if a finaliser fails')
-	assert(tostring(serr):find('finaliser failure', 1, true),
-		'finaliser failure should be the primary error')
+	-- Contract: raw fibers are not scope-attributed, so they do not fail the scope.
+	assert(st == 'ok' and body_val == 'ok', 'parent scope should remain ok when a raw fiber errors')
+	assert_is_report(rep, 'report must be present')
 
-	local st2, serr2 = scope_ref:status()
-	assert(st2 == 'failed', 'scope status should be failed after finaliser failure')
-	assert(tostring(serr2):find('finaliser failure', 1, true),
-		'scope error should mention the finaliser failure')
-
-	assert(body_res == 'body-result',
-		'scope.run should still return body results even if finalisers fail')
+	-- But the unscoped handler must see the error.
+	assert(unscoped.n >= 1, 'unscoped handler should observe the raw fiber error')
+	assert_contains(tostring(unscoped.last), 'raw-fiber-boom', 'unscoped error should include raw-fiber-boom')
 end
 
 -------------------------------------------------------------------------------
--- 4. Scope:sync via performer.perform: failure and cancellation paths
+-- Suite entry
 -------------------------------------------------------------------------------
 
-local function test_sync_wraps_op_failure()
-	-- Op whose post-wrap raises: tests that scope sees failure.
-	local ev = op.always(123):wrap(function (v)
-		assert(v == 123, 'inner always should pass its value')
-		error('op post-wrap failure')
-	end)
+local function run_all_tests()
+	test_outside_fiber_current_is_root()
 
-	local failed_scope
-	local st, serr = scope.run(function (s)
-		failed_scope = s
-		-- This performance will cause this fiber to fail;
-		-- scope should record status 'failed'.
-		performer.perform(ev)
-	end)
+	test_current_scope_run_restores()
+	test_structural_lifetime_children_joined_in_order()
 
-	assert(st == 'failed', 'scope.run should report failure when op post-wrap fails')
-	assert(tostring(serr):find('op post-wrap failure', 1, true),
-		'scope error should mention the op failure')
+	test_admission_close_and_close_op_idempotent()
+	test_cancel_and_cancel_op_idempotent()
 
-	local st2, serr2 = failed_scope:status()
-	assert(st2 == 'failed', 'scope should be failed after op failure')
-	assert(tostring(serr2):find('op post-wrap failure', 1, true),
-		'scope error should mention the op failure')
-end
+	test_cancellation_sentinel_and_try_semantics()
+	test_fail_fast_and_siblings_observe_failed()
+	test_failure_precedes_cancellation()
 
-local function test_sync_respects_cancellation()
-	-- Race a never-ready op against cancellation; cancellation should win
-	-- and be reflected as (ok=false, reason) at the sync level, and
-	-- as status 'cancelled' at the scope level.
-	local ev = op.never()
+	test_fault_ops_and_not_ok_precedence()
 
-	local cancelled_scope
-	local st, serr, _, ok_op, reason_op = scope.run(function (s)
-		cancelled_scope = s
-		s:cancel('cancel before sync')
+	test_finalisers_lifo_and_join_non_interruptible()
+	test_cancel_sentinel_in_finaliser_becomes_fault()
 
-		local ok2, reason2 = s:sync(ev)
-		assert(ok2 == false, 'Scope:sync should return ok=false after cancellation')
-		assert(reason2 == 'cancel before sync',
-			'Scope:sync should return cancellation reason')
-		return ok2, reason2
-	end)
+	test_reports_nested_children_depth_two()
 
-	assert(st == 'cancelled', 'scope should be cancelled')
-	assert(serr == 'cancel before sync', 'cancellation reason should be preserved')
+	test_join_closes_admission_and_rejects_new_work()
 
-	assert(ok_op == false, 'scope.run should return the op ok flag from body')
-	assert(reason_op == 'cancel before sync',
-		'scope.run should return the cancellation reason from body')
+	test_run_op_basic_and_failure_confinement()
+	test_run_op_abort_on_choice_loss()
+	test_run_op_parent_closed_before_start_is_cancelled()
 
-	local st2, serr2 = cancelled_scope:status()
-	assert(st2 == 'cancelled', 'cancelled_scope should be cancelled')
-	assert(serr2 == 'cancel before sync', 'cancelled_scope error should be the cancellation reason')
-end
-
--- Cancellation racing with a blocking sync: cancel the scope while a fiber
--- is blocked on a wait_op.
-local function test_sync_cancellation_race()
-	local race_scope
-
-	local st, serr, _, ok_op, reason_op = scope.run(function (s)
-		race_scope = s
-		local cond = cond_mod.new()
-
-		-- Canceller fiber: let the main fiber block first, then cancel.
-		s:spawn(function (_)
-			runtime.yield()
-			s:cancel('race cancel')
-		end)
-
-		local ok2, reason2 = s:sync(cond:wait_op())
-		return ok2, reason2
-	end)
-
-	assert(st == 'cancelled', 'scope.run should report cancelled in race test')
-	assert(serr == 'race cancel',
-		"race cancellation reason should be 'race cancel'")
-
-	assert(ok_op == false, 'blocking op should observe ok=false when cancelled')
-	assert(reason_op == 'race cancel',
-		'blocking op should see the race cancellation reason')
-
-	local st2, serr2 = race_scope:status()
-	assert(st2 == 'cancelled' and serr2 == 'race cancel',
-		'race_scope should be cancelled with the correct reason')
-end
-
--------------------------------------------------------------------------------
--- 5. join_op and not_ok_op() (on failed/cancelled scopes)
--------------------------------------------------------------------------------
-
-local function test_join_and_not_ok_op()
-	-- Failed scope: body error.
-	local failed_scope
-	local st_fail, err_fail = scope.run(function (s)
-		failed_scope = s
-		error('join test failure')
-	end)
-
-	assert(st_fail == 'failed', 'failed scope.run should report failed')
-	assert(tostring(err_fail):find('join test failure', 1, true),
-		'failed scope error should mention the body failure')
-
-	do
-		local ev = failed_scope:join_op()
-		local st, jerr = performer.perform(ev)
-		assert(st == 'failed', "join_op on failed scope should report 'failed'")
-		assert(tostring(jerr):find('join test failure', 1, true),
-			'join_op error should mention the body failure')
-	end
-
-	do
-		local ev = failed_scope:not_ok_op()
-		local reason = performer.perform(ev)
-		-- For a failed scope we also call cancel(error), so not_ok_op()
-		-- should be triggered and report the same error.
-		assert(tostring(reason):find('join test failure', 1, true),
-			'not_ok_op() on failed scope should report the failure reason')
-	end
-
-	-- Cancelled scope (explicit cancel, not body error).
-	local cancelled_scope
-	local st_cancel, err_cancel = scope.run(function (s)
-		cancelled_scope = s
-		s:cancel('stop again')
-	end)
-
-	assert(st_cancel == 'cancelled', 'cancelled scope.run should report cancelled')
-	assert(err_cancel == 'stop again',
-		'cancelled scope.run should report the cancellation reason')
-
-	do
-		local ev = cancelled_scope:join_op()
-		local st, jerr = performer.perform(ev)
-		assert(st == 'cancelled' and jerr == 'stop again',
-			"join_op on cancelled scope should report 'cancelled' and reason")
-	end
-
-	do
-		local ev = cancelled_scope:not_ok_op()
-		local reason = performer.perform(ev)
-		assert(reason == 'stop again',
-			'not_ok_op() on cancelled scope should report cancellation reason')
-	end
-end
-
--------------------------------------------------------------------------------
--- 6. Fail-fast from child fibers (via performer.perform)
--------------------------------------------------------------------------------
-
-local function test_fail_fast_from_child_fiber()
-	local test_scope
-
-	local st, serr = scope.run(function (s)
-		test_scope = s
-
-		-- Use a condition to ensure the child fiber runs before we exit the body.
-		local cond = cond_mod.new()
-
-		-- Spawn a child fiber that signals, then fails.
-		s:spawn(function (_)
-			cond:signal()
-			error('child fiber failure')
-		end)
-
-		-- Wait for the cond via performer, so we do not exit
-		-- the body until after the child has signalled.
-		performer.perform(cond:wait_op())
-	end)
-
-	assert(st == 'failed', 'scope.run should report failed when a child fiber fails')
-	assert(tostring(serr):find('child fiber failure', 1, true),
-		'primary error should mention child fiber failure')
-
-	local st2, serr2 = test_scope:status()
-	assert(st2 == 'failed', 'scope status should be failed after child fiber failure')
-	assert(tostring(serr2):find('child fiber failure', 1, true),
-		'scope primary error should mention child fiber failure')
+	test_uncaught_raw_fiber_is_unscoped_by_default()
 end
 
 -------------------------------------------------------------------------------
 -- Main
 -------------------------------------------------------------------------------
 
-local function main()
-	io.stdout:write('Running scope tests...\n')
-
-	-- Run all tests inside a single top-level fiber so that scope.run
-	-- and performer.perform are always called from within the scheduler.
-	runtime.spawn_raw(function ()
-		test_outside_fibers()
-		test_inside_fibers()
-
-		test_with_op_basic()
-		test_with_op_failure_confined_to_child()
-		test_with_op_abort_on_choice()
-		test_with_op_child_fiber_failure()
-
-		test_run_success_and_failure()
-		test_run_explicit_cancel()
-
-		test_finalisers_lifo_and_failure()
-		test_extra_failure_marks_scope_failed()
-
-		test_sync_wraps_op_failure()
-		test_sync_respects_cancellation()
-		test_sync_cancellation_race()
-
-		test_join_and_not_ok_op()
-		test_fail_fast_from_child_fiber()
-
-		io.stdout:write('OK\n')
-		runtime.stop()
-	end)
-
-	runtime.main()
-end
-
-main()
+run_in_root(function ()
+	io.stdout:write('Running revised scope tests...\n')
+	run_all_tests()
+	io.stdout:write('OK\n')
+end)
