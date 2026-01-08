@@ -77,7 +77,7 @@ local function read_fd(fd, max)
 
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		-- Would block, signal “not ready yet”.
-		return nil, nil
+		return nil, nil, 'rd'
 	end
 
 	if not eno or eno == 0 then
@@ -110,7 +110,7 @@ local function write_fd(fd, str, len)
 
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		-- Would block.
-		return nil, nil
+		return nil, nil, 'wr'
 	end
 
 	return nil, errno_msg(msg or 'write failed', eno)

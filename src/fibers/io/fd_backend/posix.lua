@@ -48,7 +48,7 @@ local function read_fd(fd, max)
 	local s, err, eno = unistd.read(fd, max)
 	if s == nil then
 		if eno == errno.EAGAIN or eno == errno.EWOULDBLOCK then
-			return nil, nil
+			return nil, nil, 'rd'
 		end
 		return nil, errno_msg('read failed', err, eno)
 	end
@@ -59,7 +59,7 @@ local function write_fd(fd, str, _)
 	local n, err, eno = unistd.write(fd, str)
 	if n == nil then
 		if eno == errno.EAGAIN or eno == errno.EWOULDBLOCK then
-			return nil, nil
+			return nil, nil, 'wr'
 		end
 		return nil, errno_msg('write failed', err, eno)
 	end

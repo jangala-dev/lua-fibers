@@ -129,7 +129,7 @@ local function make_read_step(stream, buf, min, max, terminator)
 				return true, buf, tally, 'buffer capacity exhausted'
 			end
 
-			local data, err = stream.io:read_string(room)
+			local data, err, want = stream.io:read_string(room)
 			if err then
 				return true, buf, tally, err
 			end
@@ -137,7 +137,7 @@ local function make_read_step(stream, buf, min, max, terminator)
 				if tally >= min then
 					return true, buf, tally
 				end
-				return false
+				return false, want
 			end
 			if #data == 0 then
 				return true, buf, tally
@@ -165,12 +165,12 @@ local function make_write_step(stream, src_str)
 		end
 
 		local chunk = src_str:sub(offset + 1)
-		local n, err = stream.io:write_string(chunk)
+		local n, err, want = stream.io:write_string(chunk)
 		if err then
 			return true, offset, err
 		end
 		if n == nil then
-			return false
+			return false, want
 		end
 		if n == 0 then
 			return true, offset
@@ -210,7 +210,10 @@ function Stream:read_into_op(buf, opts)
 	end
 
 	return wait.waitable(
-		function (task)
+		function (task, _, _, want)
+			if want == 'wr' then
+				return self.io:on_writable(task)
+			end
 			return self.io:on_readable(task)
 		end,
 		step,
@@ -249,7 +252,10 @@ function Stream:write_string_op(str)
 	end
 
 	return wait.waitable(
-		function (task)
+		function (task, _, _, want)
+			if want == 'rd' then
+				return self.io:on_readable(task)
+			end
 			return self.io:on_writable(task)
 		end,
 		step,

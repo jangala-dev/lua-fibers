@@ -77,8 +77,8 @@ end
 ---
 --- Required ops:
 ---   set_nonblock(fd) -> ok:boolean, err|nil
----   read(fd, max)    -> s|nil, err|nil
----   write(fd, s, len)-> n|nil, err|nil
+---   read(fd, max)    -> s|nil, err|nil, want?
+---   write(fd, s, len)-> n|nil, err|nil, want?
 ---   seek(fd, whence, off) -> pos|nil, err|nil
 ---   close(fd)        -> ok:boolean, err|nil
 ---

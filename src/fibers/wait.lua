@@ -215,6 +215,12 @@ end
 -- waitable: (register, step, wrap_fn?) -> Op
 ----------------------------------------------------------------------
 
+local function normalise_want(want)
+	if want == 'rd' or want == 'wr' or want == 'any' then
+		return want
+	end
+	return nil
+end
 --- Build a waitable Op from a register function and step function.
 --
 --   step() -> done:boolean, ...
@@ -240,7 +246,7 @@ end
 --
 -- The op participates fully in choice/with_nack/on_abort; if it loses
 -- a choice, any outstanding registration is cancelled via token:unlink().
----@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn): WaitToken
+---@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn, want: any): WaitToken
 ---@param step fun(): boolean, ...
 ---@param wrap_fn? WrapFn
 ---@return Op
@@ -251,64 +257,68 @@ local function waitable(register, step, wrap_fn)
 	wrap_fn = wrap_fn or id_wrap
 
 	return op.guard(function ()
-		-- Token for this synchronisation (one per compiled leaf).
 		local token
 
-		-- Fast path: single non-blocking attempt.
-		-- step() must not yield; if it raises, this fiber fails.
+		local function unlink_token()
+			if token and token.unlink then
+				token:unlink()
+			end
+			token = nil
+		end
 		local function try()
 			return step()
 		end
 
-		--- Blocking path: register a task that will re-run step
-		--- after the external condition changes.
-		---
-		--- The same task is re-used across wake-ups; token is updated
-		--- to track the latest registration.
-		---@param suspension Suspension
-		---@param leaf_wrap WrapFn
 		local function block(suspension, leaf_wrap)
 			---@class WaitTask : Task
 			local task
 
+			local function register_with_want(want)
+				unlink_token()
+
+				if want == 'any' then
+					local t1 = register(task, suspension, leaf_wrap, 'rd')
+					local t2 = register(task, suspension, leaf_wrap, 'wr')
+					token = {
+						unlink = function ()
+							if t1 and t1.unlink then t1:unlink() end
+							if t2 and t2.unlink then t2:unlink() end
+						end,
+					}
+				else
+					token = register(task, suspension, leaf_wrap, want)
+				end
+			end
 			task = {
 				run = function ()
 					if not suspension:waiting() then
 						return
 					end
 
-					-- Re-check readiness.
 					local res  = pack(step())
 					local done = res[1]
 					if done then
-						-- Complete with the leaf's final wrap.
-						return suspension:complete(
-							leaf_wrap,
-							unpack(res, 2, res.n)
-						)
+						unlink_token()
+						return suspension:complete(leaf_wrap, unpack(res, 2, res.n))
 					end
 
-					-- Not done yet; re-register for another wake-up.
-					if token and token.unlink then
-						token:unlink()
-					end
-
-					token = register(task, suspension, leaf_wrap)
+					register_with_want(normalise_want(res[2]))
 				end,
 			}
 
-			-- Initial registration for this synchronisation.
-			token = register(task, suspension, leaf_wrap)
+			-- Initial drive: decide readiness *before* registering.
+			local first = pack(step())
+			if first[1] then
+				return suspension:complete(leaf_wrap, unpack(first, 2, first.n))
+			end
+
+			register_with_want(normalise_want(first[2]))
 		end
 
 		local prim = op.new_primitive(wrap_fn, try, block)
 
-		-- If this op participates in a choice and loses, ensure any
-		-- extant registration is cancelled once for this synchronisation.
 		return prim:on_abort(function ()
-			if token and token.unlink then
-				token:unlink()
-			end
+			unlink_token()
 		end)
 	end)
 end
