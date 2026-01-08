@@ -5,11 +5,11 @@
 --   * Cancelling a scope on timeout and letting structured
 --     concurrency clean up the subprocess and helper fibers
 --
--- Style:
---   * fibers.run(main) exposes the root scope as an argument.
---   * fibers.spawn(fn, ...) uses the current scope implicitly.
---   * Timeout is expressed algebraically via boolean_choice,
---     rather than a separate watchdog fiber.
+-- Notes for the current scope semantics:
+--   * fibers.run_scope(fn, ...) returns:
+--       - 'ok', packed_results_table, report
+--       - 'failed'|'cancelled', primary, report
+--   * Command cleanup runs as a scope finaliser and is non-interruptible.
 
 package.path = '../src/?.lua;' .. package.path
 
@@ -21,7 +21,6 @@ local run            = fibers.run
 local spawn          = fibers.spawn
 local perform        = fibers.perform
 local boolean_choice = fibers.boolean_choice
-local current_scope  = fibers.current_scope
 local sleep_op       = sleep.sleep_op
 
 ----------------------------------------------------------------------
@@ -32,9 +31,8 @@ local function main()
 	print('[root] starting subprocess example')
 
 	-- Run the subprocess and its helper fibers inside a child scope.
-	-- We use run_scope so that we can interpret status and reason at
-	-- a clear supervision boundary.
-	local status, reason, _ = fibers.run_scope(function ()
+	-- Use run_scope so we can interpret status and primary at a clear boundary.
+	local st, _, value_or_primary = fibers.run_scope(function (s)
 		print('[subscope] starting child process')
 
 		------------------------------------------------------------------
@@ -45,9 +43,9 @@ local function main()
 
 		local cmd = exec.command {
 			'sh', '-c', script,
-			stdin  = 'null', -- no input
-			stdout = 'pipe', -- capture output
-			stderr = 'inherit', -- pass through
+			stdin  = 'null',     -- no input
+			stdout = 'pipe',     -- capture output
+			stderr = 'inherit',  -- pass through
 		}
 
 		------------------------------------------------------------------
@@ -78,20 +76,6 @@ local function main()
 		------------------------------------------------------------------
 		-- 3. Race process completion against a timeout
 		------------------------------------------------------------------
-		--
-		-- boolean_choice(opA, opB) returns:
-		--   * true  + results from opA if A wins
-		--   * false + results from opB if B wins
-		--
-		-- We wrap the two arms so that:
-		--   * The command arm returns:   true,  status, code, signal, err
-		--   * The timeout arm returns:   false
-		--
-		-- Note:
-		--   * If the timeout wins, we do not try to handle cancellation
-		--     inside the subscope. Instead we cancel the subscope from
-		--     here and let its finalisers (including Command’s finaliser) run.
-		--
 
 		local proc_won, status2, code, signal, err = perform(boolean_choice(
 			cmd:run_op(),
@@ -99,8 +83,6 @@ local function main()
 		))
 
 		if proc_won then
-			-- Process finished before the timeout and the scope has not
-			-- yet been cancelled or failed.
 			print(('[subscope] command finished: status=%s code=%s signal=%s err=%s')
 				:format(tostring(status2), tostring(code), tostring(signal), tostring(err)))
 			return
@@ -110,21 +92,20 @@ local function main()
 		-- 4. Timeout: cancel the subscope
 		------------------------------------------------------------------
 		--
-		-- This cancels:
-		--   * the reader fiber,
-		--   * any other children in this scope, and
-		--   * the Command’s scope finaliser will run _on_scope_exit(), which
-		--     calls shutdown_op and waits for the process to die.
+		-- This cancels the reader fiber and any other work in the scope.
+		-- The Command’s scope finaliser will then perform a best-effort,
+		-- non-interruptible shutdown and close any owned streams.
 		--
 		print('[subscope] timeout reached; cancelling subprocess scope')
-		current_scope():cancel('timeout')
+		s:cancel('timeout')
 	end)
 
 	--------------------------------------------------------------------
 	-- 5. Supervision boundary: interpret the outcome
 	--------------------------------------------------------------------
 
-	print('[root] subprocess scope completed; status:', status, 'reason:', reason)
+	local reason = (st == 'ok') and nil or value_or_primary
+	print('[root] subprocess scope completed; status:', st, 'reason:', reason)
 end
 
 run(main)

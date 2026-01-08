@@ -3,50 +3,66 @@
 `fibers` is a small library for running many concurrent tasks in one Lua process, with:
 
 - structured lifetimes (supervision scopes),
-- cancellable operations (the “event algebra”),
+- cancellable operations (“Ops”),
 - integrated I/O and subprocess handling.
 
-It is aimed at Lua programmers who want to write robust, highly concurrent services and tools while staying in a single-threaded, easy-to-reason-about model.
+It is intended for Lua programs that need high levels of concurrency while remaining single-threaded and cooperative.
 
-The main pattern is:
+A typical entry point is:
 
 ```lua
 local fibers = require 'fibers'
 
 local function main(scope)
-  -- normal code here
+  -- application code here
 end
 
 fibers.run(main)
 ```
 
-Inside `main` you work in terms of scopes, operations and ordinary Lua functions. The runtime, poller and backends handle scheduling and clean-up.
+Inside `main` you work in terms of scopes, operations, and ordinary Lua functions. The runtime, poller, and backends handle scheduling and clean-up.
 
 ---
 
 ## Highlights
 
-* **Fail-fast supervision scopes**
+### Fail-fast supervision scopes
 
-  Every fiber runs in a scope. If a child fails, its scope records the error, cancels siblings and runs finalisers to unwind resources. Failures are reported at `fibers.run` / `fibers.run_scope` boundaries; most application code can simply `error` or `assert` and let the scope handle it.
+Every fiber runs in a scope. If a fiber fails, its scope records the first failure as the *primary* failure, cancels sibling work in that scope, and runs finalisers to unwind resources.
 
-* **First-class operations (“Ops”)**
+Outcomes are reported at `fibers.run` and `fibers.run_scope` boundaries. In most cases application code can use `error`/`assert` and rely on the scope boundary for reporting.
 
-  Anything that may block is represented as an `Op`: channel sends/receives, sleeps, I/O readiness, subprocess exit, scope completion, and so on. Ops can be combined with `choice`, `named_choice`, `boolean_choice`, `guard`, `bracket`, and `wrap`. Lean in to the algebra: it is highly composable and can often replace explicit helper fibers.
+### First-class operations (“Ops”)
 
-* **Scopes as operations**
+Anything that may block is represented as an `Op`: channel send/receive, sleeps, I/O readiness, stream reads/writes, subprocess completion, scope join, and so on.
 
-  Scopes themselves can be expressed as operations, so entire trees of work can be raced against other events (timeouts, cancellation triggers, I/O) using the same algebra as for channels and timers.
+Ops can be combined using:
 
-* **Integrated I/O and subprocesses**
+* `choice`, `named_choice`, `boolean_choice`, `race`
+* `guard`
+* `bracket`
+* `:wrap`
+* and (for advanced use) `with_nack` / abort behaviour.
 
-  Non-blocking file descriptors are wrapped as buffered `Stream` objects. Readiness integrates with the poller. The exec layer runs subprocesses with configurable stdio, exposes their lifetime as ops, and ensures they are shut down with their owning scope.
+### Scope boundaries as operations
+
+A scope boundary can itself be expressed as an `Op` via `fibers.run_scope_op`, so an entire subtree of work can be raced against other events (timeouts, cancellation triggers, I/O) using the same combinators used for channels and timers.
+
+### Integrated I/O and subprocesses
+
+Non-blocking file descriptors are wrapped as buffered `Stream` objects. Readiness integrates with the poller. The exec layer runs subprocesses with configurable stdio, exposes their lifetime as ops, and ensures they are shut down with their owning scope.
 
 ---
 
 ## Examples
 
 ### 1. Fail fast and inspect failures at the boundary
+
+`fibers.run_scope` returns:
+
+* `status` (`"ok"|"failed"|"cancelled"`)
+* a `report` snapshot
+* either results (on `"ok"`) or the primary error/reason (on not-ok)
 
 ```lua
 local fibers = require 'fibers'
@@ -59,47 +75,39 @@ local function main()
     print("first: finished ok")
   end)
 
-  -- Run some work in a nested child scope and observe its outcome.
-  local status, err, extra_errors = fibers.run_scope(function(child)
+  -- Run work in a nested child scope and observe its outcome.
+  local status, report, value_or_primary = fibers.run_scope(function(child)
     child:finally(function()
       print("finaliser 1 (outer)")
     end)
 
     child:finally(function()
       print("finaliser 2 (inner)")
-      -- This error is recorded as an additional failure.
+      -- If the scope is already failed/cancelled, this becomes a secondary error.
+      -- If the scope was otherwise ok, this becomes the primary failure.
       error("finaliser 2 failed")
     end)
 
-    -- Child begins its work and fails
     sleep.sleep(0.1)
     error("child: boom")
   end)
 
-  print("child scope status:", status, err)
-  if #extra_errors > 0 then
-    print("child scope finaliser failures:")
-    for i, e in ipairs(extra_errors) do
+  print("child scope status:", status, tostring(value_or_primary))
+
+  if report and report.extra_errors and #report.extra_errors > 0 then
+    print("secondary errors:")
+    for i, e in ipairs(report.extra_errors) do
       print("  [" .. i .. "]", e)
     end
   end
-
-  -- No need for extra blocking; run_scope already joins its child scope.
 end
 
 fibers.run(main)
 ```
 
-Inside scopes you can freely `error` or `assert`. Uncaught failures:
+Inside scopes you can allow errors to escape; the scope records the first failure, cancels siblings, runs finalisers, and reports the outcome at the boundary.
 
-* are recorded by the scope,
-* cancel sibling work,
-* run finalisers for clean-up,
-* and are reported at `fibers.run` / `fibers.run_scope`.
-
-There is usually no need for `pcall` in normal concurrent code; you inspect failures at the boundaries instead of catching them everywhere.
-
-If the top-level `main` fails, `fibers.run(main)` re-raises the primary failure.
+If the top-level `main` fails, `fibers.run(main)` raises the primary failure.
 
 ---
 
@@ -123,7 +131,6 @@ local function main()
     local read_op    = c:get_op()
     local timeout_op = sleep.sleep_op(1.0)
 
-    -- One Op representing “either read or timeout”.
     local ev = fibers.named_choice{
       data    = read_op,
       timeout = timeout_op,
@@ -145,63 +152,61 @@ end
 fibers.run(main)
 ```
 
-Here:
-
-* the channel receive and the timer are both first-class operations,
-* they participate in `named_choice`,
-* they observe scope cancellation automatically, and
-* they can be combined in the same way as other primitives.
-
-You do not need a special `with_timeout()` helper; racing an operation against `sleep.sleep_op` is the intended pattern.
+This is the intended timeout pattern: race an op against `sleep.sleep_op(...)` using `choice`/`named_choice`.
 
 ---
 
 ### 3. Race an entire subtree of work against a timeout
 
-Scopes themselves can be expressed as operations using `fibers.scope_op`. That allows whole trees of work to be raced as a single unit.
+Use `fibers.run_scope_op` to represent a structured subtree as an op. The op resolves when the child scope has joined (including finalisers and attached children).
 
 ```lua
 local fibers = require 'fibers'
 local sleep  = require 'fibers.sleep'
 
 local function main()
-  -- Build an Op that runs a child scope and completes when that scope does.
   local function subtree_op()
-    return fibers.scope_op(function(child)
-      -- Launch some work under the child scope.
+    return fibers.run_scope_op(function(child)
+      -- Launch work under the child scope.
       child:spawn(function()
         sleep.sleep(2.0)
         print("subtree: finished")
       end)
 
-      -- Represent the whole subtree as an Op:
-      -- this Op becomes ready when the child scope reaches a terminal state.
-      return child:join_op()
+      -- Return values from the boundary function if needed.
+      return "started"
     end)
   end
 
-  -- Race the subtree against a 1s timeout.
-  local ev = fibers.boolean_choice(
-    subtree_op(),           -- true branch: subtree finishes (ok/failed/cancelled)
-    sleep.sleep_op(1.0)     -- false branch: timeout
-  )
+  -- Race the subtree boundary against a 1s timeout.
+  local ev = fibers.named_choice{
+    subtree = subtree_op(),        -- yields: st, rep, results/primary
+    timeout = sleep.sleep_op(1.0), -- yields: nothing
+  }
 
-  local subtree_won, status = fibers.perform(ev)
+  local which, st, rep, v = fibers.perform(ev)
 
-  if subtree_won then
-    print("subtree completed with status:", status)
-  else
+  if which == "timeout" then
     print("timed out; subtree scope has been cancelled")
+    return
+  end
+
+  -- which == "subtree"
+  if st == "ok" then
+    print("subtree boundary ok:", tostring(v))
+  else
+    print("subtree boundary not ok:", st, tostring(v))
+  end
+
+  if rep and rep.extra_errors and #rep.extra_errors > 0 then
+    print("subtree secondary errors:", #rep.extra_errors)
   end
 end
 
 fibers.run(main)
 ```
 
-Because scopes are composable as ops:
-
-* you can express “do this whole batch of work, but only until X” in the same algebra you use for channels and timers;
-* losing branches are cancelled and cleaned up via scope finalisers.
+If `subtree_op` loses in an outer `choice`, its child scope is cancelled with reason `"aborted"` and then joined deterministically.
 
 ---
 
@@ -215,7 +220,7 @@ local function main()
   fibers.run_scope(function()
     local cmd = exec.command{
       "ls", "-l",
-      stdout = "pipe",  -- capture stdout
+      stdout = "pipe",
     }
 
     -- output_op returns:
@@ -233,13 +238,7 @@ end
 fibers.run(main)
 ```
 
-The `Command` is attached to the current scope. On scope exit:
-
-* it is given a grace period to shut down politely,
-* then killed if still running,
-* and any owned streams and backend handles are closed.
-
-From user code, process operations are just more ops: they can be raced against timeouts, scope cancellation, or other events using the same tools as channels and timers.
+The `Command` is attached to the current scope. On scope exit it is shut down and its streams/handles are cleaned up.
 
 ---
 
@@ -249,10 +248,10 @@ From user code, process operations are just more ops: they can be raced against 
 
 A **fiber** is a lightweight task scheduled by the runtime.
 
-* `fibers.run(main)` starts the scheduler and a root supervision scope, runs `main` inside a fiber, and returns only when the root scope has finished and cleaned up.
+* `fibers.run(main)` starts the scheduler and runs `main` inside a scope under the process root.
 * `fibers.spawn(fn, ...)` creates new fibers under the current scope and calls `fn(...)` in them.
 
-Once you are inside `fibers.run`, there are no “coloured” functions beyond the requirement that blocking ops must be performed from inside a fiber. You do not manually join fibers; scopes track them and clean them up.
+You do not manually join fibers; scopes track obligations and join deterministically.
 
 ### Scopes
 
@@ -261,78 +260,48 @@ A **scope** is a supervision domain with a tree structure and fail-fast semantic
 * Each fiber runs within some scope.
 * When a scope fails or is cancelled:
 
-  * child scopes are cancelled,
-  * child fibers stop as their ops observe cancellation,
-  * finalisers registered with `scope:finally` run in LIFO order to clean up resources.
-* Scopes record:
+  * admission is closed,
+  * attached child scopes are cancelled,
+  * in-flight operations observe cancellation via `fibers.perform`,
+  * finalisers run in LIFO order during join.
 
-  * a status (`"running"`, `"ok"`, `"failed"`, `"cancelled"`),
-  * a primary error or cancellation reason,
-  * any additional finaliser-time failures.
+Scope outcomes are reported via boundaries as:
 
-Scopes can be:
+```lua
+status, report, ...         -- on ok: ... are results
+status, report, primary     -- on not-ok: primary is error/reason
+```
 
-* observed from outside via `fibers.run_scope` or `scope:join_op()` / `scope:done_op()`, and
-* wrapped as operations via `fibers.scope_op`, so that entire subtrees of work can participate in `choice`.
+The `report` contains:
 
-Inside a scope, normal code typically does not wait for the scope itself; it registers finalisers and lets the parent scope observe status.
+* `extra_errors`: secondary errors after the primary has been established;
+* `children`: joined child outcomes with nested reports.
 
 ### Operations (`Op`)
 
-An **operation** (`Op`) represents something that may block:
+An **operation** represents something that may block.
 
-* channel sends and receives,
-* sleeps and timeouts,
-* I/O readiness and stream reads/writes,
-* subprocess completion,
-* scope completion or cancellation,
-* and any other primitive you build in the same style.
+Ops can be combined with `choice`/`race`/`named_choice` and related combinators. To perform an op:
 
-Ops are not tied to a particular fiber until they are performed. They can be:
-
-* combined with `fibers.choice`, `fibers.named_choice`, `fibers.boolean_choice`, and `fibers.race`,
-* delayed with `fibers.guard`,
-* bracketed with acquire/release logic via `fibers.bracket`,
-* post-processed via `:wrap`,
-* given abort behaviour using negative acknowledgements (`with_nack` / `on_abort`).
-
-To perform an operation:
-
-* use `fibers.perform(op)` inside a fiber, which:
-
-  * honours the current scope’s cancellation rules,
-  * treats scope failure as an error,
-  * and otherwise returns the operation’s results.
-
-Where you genuinely need non-cancellable behaviour (for example, in some finalisers), lower-level functions are available (`perform_raw`), but most application code should use `fibers.perform`.
+* use `fibers.perform(op)` inside a fiber (raises on failure/cancellation), or
+* use `fibers.try_perform(op)` when you want status-first results.
 
 ### I/O and streams
 
-The **I/O layer** wraps non-blocking file descriptors in buffered `Stream` objects:
+The I/O layer wraps non-blocking file descriptors in buffered `Stream` objects and exposes operations such as:
 
-* integrates readability/writability with the poller (epoll, or poll/select),
-* exposes operations such as:
+* `read_line_op`, `read_all_op`, `read_exactly_op`
+* `write_string_op`
 
-  * `read_line_op`, `read_all_op`, `read_exactly_op`,
-  * `write_string_op`, and their synchronous wrappers,
-* supports files, pipes, UNIX sockets and other backends through adaptor modules.
-
-Since `Stream` operations are ops, they can be raced and cancelled like any other blocking activity.
+Because these are ops, they can be raced and cancelled in the same way as channels and timers.
 
 ### Subprocesses
 
-The **exec layer** runs subprocesses under scopes:
+The exec layer runs subprocesses under scopes:
 
-* builds a `Command` from an argv vector and stdio configuration,
-* starts the process lazily when you first use it,
-* exposes its lifetime as ops:
-
-  * `run_op` – wait for exit,
-  * `shutdown_op` – attempt graceful shutdown with a grace period then force kill,
-  * `output_op` – capture stdout (and optionally stderr) and wait for exit,
-* attaches process clean-up to scope finalisers, so that processes are always shut down when their owning scope ends.
-
-Again, callers mostly see these as just another family of ops.
+* constructs commands and stdio wiring,
+* exposes lifecycle as ops (`run_op`, `shutdown_op`, `output_op`, etc.),
+* attaches clean-up to scope finalisers so processes are shut down on scope exit.
 
 ---
 
@@ -340,18 +309,16 @@ Again, callers mostly see these as just another family of ops.
 
 Inside a scope:
 
-* letting an error escape a fiber is the normal way to signal failure;
-* the scope tracks the first failure as its primary error and cancels siblings;
-* finalisers run regardless and may themselves fail, in which case finaliser failures are recorded separately.
+* letting an error escape a fiber is a normal way to signal failure;
+* the first failure becomes the scope’s primary failure and triggers cancellation of siblings;
+* additional failures (including finaliser failures once the scope is already not-ok) are recorded as secondary errors in `report.extra_errors`.
 
 At the boundary:
 
-* `fibers.run(main)` re-raises the primary error of the root scope (or returns normally on success),
-* `fibers.run_scope(fn)` returns:
+* `fibers.run(main)` raises the primary failure/reason (or returns on success),
+* `fibers.run_scope(fn)` returns `status, report, ...` as described above.
 
-  * `status`, `err`, `extra_errors`, and any results returned by `fn`.
-
-Because errors are funnelled through scopes in this way, `pcall` is rarely needed in ordinary concurrent code. You use it only where you truly want local recovery.
+Because failures are handled at boundaries, `pcall` is usually only needed where you intend local recovery.
 
 ---
 
@@ -364,44 +331,45 @@ Because errors are funnelled through scopes in this way, `pcall` is rarely neede
 
 ### Backend support
 
-`fibers` uses a pluggable backend for polling and subprocess handling. You need at least one of the following stacks available:
+`fibers` uses a pluggable backend for polling and subprocess handling. You need at least one compatible stack available.
 
 * **FFI backend (preferred)**
-  * LuaJIT, or PUC Lua with [cffi-lua](https://github.com/q66/cffi-lua)
+
+  * LuaJIT, or PUC Lua with cffi-lua
   * Uses `epoll` for I/O and `pidfd` for process completion.
 
 * **luaposix backend**
+
   * `luaposix`
   * Uses `poll`/`select` plus `SIGCHLD` for process completion.
 
 * **nixio backend**
+
   * `nixio`
   * Uses a double-fork scheme for process completion and `poll` for I/O.
 
-The library will prefer an FFI-based backend when available, and otherwise fall back to a `luaposix`-based or `nixio`-based backend.
-
-OS-specific code is isolated in these backends (`fibers.io.*_backend` and the poller), so adding support for other platforms (eg. FreeBSD, macOS, Windows) should be largely a matter of implementing a compatible backend.
+OS-specific code is isolated in backends (`fibers.io.*_backend` and the poller), so adding support for other platforms is mostly a matter of implementing a compatible backend.
 
 ### Installation
 
-Add the repository to your `package.path` (and `package.cpath` if necessary) so that modules such as `fibers`, `fibers.channel`, `fibers.sleep`, `fibers.io.file` and `fibers.exec` can be `require`d.
+Add the repository to your `package.path` (and `package.cpath` if necessary) so that modules such as `fibers`, `fibers.channel`, `fibers.sleep`, `fibers.io.file`, and `fibers.exec` can be `require`d.
 
 Once available, the typical entry point is:
 
 ```lua
 local fibers = require 'fibers'
 
-local function main()
+local function main(scope)
   -- application code here
 end
 
 fibers.run(main)
 ```
 
-From that point on, application code is structured in terms of scopes, operations and normal Lua functions. The runtime ensures that blocking work is expressed as ops, long-lived work is owned by scopes, and everything is shut down cleanly.
+From that point on, application code is structured in terms of scopes, operations, and ordinary Lua functions. The runtime ensures that blocking work is expressed as ops, long-lived work is owned by scopes, and everything is shut down cleanly.
 
 ---
 
 ## Acknowledgements
 
-The design of *fibers* owes a substantial debt to Andy Wingo’s work on lightweight concurrency and Concurrent ML in Lua. In particular, the library was shaped by his article [“lightweight concurrency in lua”](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) and by the original [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [stream](https://github.com/snabbco/snabb/tree/master/src/lib/stream) implementations in Snabb’s codebase, which provided both the conceptual model and many of the practical patterns used here. Any good ideas you find in *fibers* are quite likely to have appeared there first!
+The design of *fibers* owes a substantial debt to Andy Wingo’s work on lightweight concurrency and Concurrent ML in Lua. In particular, the library was shaped by his article [“lightweight concurrency in lua”](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) and by the original [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [stream](https://github.com/snabbco/snabb/tree/master/src/lib/stream) implementations in Snabb’s codebase, which provided both the conceptual model and many of the practical patterns used here. Many good ideas you may find in *fibers* are quite likely to have appeared there first!
