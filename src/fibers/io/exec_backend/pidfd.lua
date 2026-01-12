@@ -32,6 +32,7 @@ end
 -- FFI declarations and constants
 ----------------------------------------------------------------------
 
+local jit = rawget(_G, "jit")
 local ARCH = ffi.arch or ((jit and jit.arch) or 'x64')
 
 ffi.cdef [[

@@ -26,6 +26,7 @@ local file_io = require 'fibers.io.file'
 local stdio   = require 'fibers.io.exec_backend.stdio'
 
 local bit = rawget(_G, 'bit') or require 'bit32'
+local jit = rawget(_G, "jit")
 
 local DEV_NULL = '/dev/null'
 

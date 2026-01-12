@@ -28,6 +28,7 @@ local EINTR  = 4
 local ENOENT = 2
 local EBADF  = 9
 
+local jit = rawget(_G, "jit")
 local ARCH = ffi.arch or ((jit and jit.arch) or 'x64')
 
 ----------------------------------------------------------------------

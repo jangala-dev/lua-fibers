@@ -25,7 +25,7 @@ if not ok_bit or not bit_mod then
 end
 local bit = bit_mod
 
----@class sockaddr_un_cdata : ffi.cdata*
+---@class sockaddr_un_cdata
 ---@field sun_family integer
 ---@field sun_path string|integer[]
 
