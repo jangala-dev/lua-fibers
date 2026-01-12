@@ -36,7 +36,7 @@ end
 -- @tparam number dt The duration to sleep.
 -- @treturn operation The created operation.
 local function sleep_op(dt)
-    local function try() return dt <= 0 end
+    local function try() return dt < 0 end
     local function block(suspension, wrap_fn)
         suspension.sched:schedule_after_sleep(dt, suspension:complete_task(wrap_fn))
     end
