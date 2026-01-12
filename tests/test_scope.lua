@@ -9,7 +9,7 @@
 ---   - report structure (children ordering + nested reports)
 ---   - runtime uncaught error attribution path (best-effort; see note)
 ---
-print('test: fibers.scope (revised contract-oriented suite)')
+print('test: fibers.scope')
 
 package.path = '../src/?.lua;' .. package.path
 

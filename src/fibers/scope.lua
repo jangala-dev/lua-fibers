@@ -40,6 +40,7 @@ local runtime   = require 'fibers.runtime'
 local waitgroup = require 'fibers.waitgroup'
 local oneshot   = require 'fibers.oneshot'
 local op        = require 'fibers.op'
+local dlist     = require 'fibers.utils.dlist'
 local safe      = require 'coxpcall'
 
 local DEBUG = false
@@ -153,7 +154,7 @@ local finaliser_handler = make_xpcall_handler('finaliser')
 ---@field _cancel_os Oneshot
 ---@field _extra_errors any[]
 ---@field _fault_os Oneshot
----@field _finalisers any[]
+---@field _finalisers DList
 ---@field _join_started boolean
 ---@field _join_outcome ScopeJoinOutcome|nil
 ---@field _join_os Oneshot
@@ -336,7 +337,7 @@ local function new_scope(parent)
 		_extra_errors = {},
 		_fault_os     = oneshot.new(),
 
-		_finalisers   = {},
+		_finalisers   = dlist.new(),
 		_join_started = false,
 		_join_os      = oneshot.new(),
 	}, Scope)
@@ -521,12 +522,16 @@ end
 ---@return fun() detach
 function Scope:finally(f)
 	assert(type(f) == 'function', 'scope:finally expects a function')
-	local rec = { fn = f }
-	self._finalisers[#self._finalisers + 1] = rec
+
+	-- Guard: once join has started (or finished), finaliser ordering cannot be preserved.
+	if self._join_started or self._join_outcome ~= nil then
+		error('scope:finally: scope is joining', 2)
+	end
+
+	local node = self._finalisers:push_tail(f)
 
 	return function ()
-		-- idempotent: dropping fn releases closure references
-		rec.fn = nil
+		node:remove() -- idempotent
 	end
 end
 
@@ -587,14 +592,13 @@ function Scope:_finalise_join_body()
 	local st, primary = terminal_status(self)
 	local aborted = (st ~= 'ok')
 
-	local fs = self._finalisers
-	for i = #fs, 1, -1 do
-		local rec = fs[i]
-		fs[i] = nil
+	local node = self._finalisers.tail
+	while node do
+		local prev = node.prev
+		local f = node.value
+		node:remove() -- ensure it cannot be run twice, and drop refs early
 
-		local f = rec and rec.fn or nil
 		if f then
-			rec.fn = nil
 			local ok, err = safe.xpcall(function ()
 				return f(aborted, st, (st == 'failed') and primary or nil)
 			end, finaliser_handler)
@@ -609,6 +613,8 @@ function Scope:_finalise_join_body()
 				aborted = (st ~= 'ok')
 			end
 		end
+
+		node = prev
 	end
 
 	return child_outcomes
