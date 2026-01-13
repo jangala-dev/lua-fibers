@@ -371,13 +371,13 @@ local function test_finalisers_lifo_and_join_non_interruptible()
 
 		local blocker = cond_mod.new()
 
-		ch:spawn(function ()
+		ch:spawn(function (cs)
+			cs:finally(function ()
+				ran = true
+			end)
+
 			-- This should be interrupted by cancellation (via ch:perform semantics).
 			ch:perform(blocker:wait_op())
-		end)
-
-		ch:finally(function ()
-			ran = true
 		end)
 
 		-- Start joining the child in a sibling fiber.

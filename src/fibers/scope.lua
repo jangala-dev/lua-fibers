@@ -155,6 +155,7 @@ local finaliser_handler = make_xpcall_handler('finaliser')
 ---@field _extra_errors any[]
 ---@field _fault_os Oneshot
 ---@field _finalisers DList
+---@field _finalising boolean
 ---@field _join_started boolean
 ---@field _join_outcome ScopeJoinOutcome|nil
 ---@field _join_os Oneshot
@@ -323,23 +324,17 @@ local function new_scope(parent)
 	next_id = next_id + 1
 
 	local s = setmetatable({
-		_id       = next_id,
-		_parent   = parent,
-		_children = {},
-		_order    = {},
-		_wg       = waitgroup.new(),
-
-		_closed   = false,
-		_close_os = oneshot.new(),
-
-		_cancel_os = oneshot.new(),
-
+		_id           = next_id,
+		_parent       = parent,
+		_children     = {},
 		_extra_errors = {},
-		_fault_os     = oneshot.new(),
-
+		_order        = {},
 		_finalisers   = dlist.new(),
-		_join_started = false,
+		_close_os     = oneshot.new(),
+		_cancel_os    = oneshot.new(),
+		_fault_os     = oneshot.new(),
 		_join_os      = oneshot.new(),
+		_wg           = waitgroup.new(),
 	}, Scope)
 
 	if parent then
@@ -523,9 +518,19 @@ end
 function Scope:finally(f)
 	if type(f) ~= 'function' then error('scope:finally expects a function', 2) end
 
-	-- Guard: once join has started (or finished), finaliser ordering cannot be preserved.
-	if self._join_started or self._join_outcome ~= nil then
-		error('scope:finally: scope is joining', 2)
+	-- Restrict registration to fibres currently running in this scope.
+	local fib = current_fiber()
+	if not fib then
+		error('scope:finally must be called from inside a fiber', 2)
+	end
+	local cur = fiber_scopes[fib] or root()
+	if cur ~= self then
+		error('scope:finally must be called from within the target scope', 2)
+	end
+
+	-- Boundary: refuse once finalisation has begun, or once join outcome is fixed.
+	if self._finalising or self._join_outcome ~= nil then
+		error('scope:finally: scope is finalising or has joined', 2)
 	end
 
 	local node = self._finalisers:push_tail(f)
@@ -591,6 +596,10 @@ function Scope:_finalise_join_body()
 
 	local st, primary = terminal_status(self)
 	local aborted = (st ~= 'ok')
+
+	-- Freeze finaliser registration at the start of finalisation.
+	self._finalising = true
+
 
 	local node = self._finalisers.tail
 	while node do

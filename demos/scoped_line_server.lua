@@ -28,7 +28,7 @@ end
 local SH = os.getenv('SH') or '/bin/sh'
 
 math.randomseed(os.time())
-local SOCK_PATH = ('/tmp/fibers-demo-%d-%d.sock'):format(os.time(), math.random(1, 10^9))
+local SOCK_PATH = ('/tmp/fibers-demo-%d-%d.sock'):format(os.time(), math.random(1, 10 ^ 9))
 
 -- External work implemented via sh:
 --   * sleep briefly (fall back to 1s if fractional sleep unsupported)
@@ -43,7 +43,7 @@ local function perform_named_choice(arms)
 end
 
 local function handle_client(scope, stream)
-	scope:finally(function()
+	scope:finally(function ()
 		stream:close()
 	end)
 
@@ -51,7 +51,7 @@ local function handle_client(scope, stream)
 
 	local WORKERS = 2
 	for _ = 1, WORKERS do
-		fibers.spawn(function()
+		fibers.spawn(function ()
 			while true do
 				local job = jobs:get()
 				if job == nil then
@@ -83,11 +83,11 @@ local function handle_client(scope, stream)
 		-- Read a line with timeout and cancellation awareness.
 		local which, a, b = perform_named_choice {
 			line = stream:read_line_op { max = 4096 },
-			timeout = sleep.sleep_op(30.0):wrap(function()
+			timeout = sleep.sleep_op(30.0):wrap(function ()
 				return nil, 'read timeout'
 			end),
-			cancelled = scope:not_ok_op():wrap(function(reason)
-				return nil, tostring(reason)
+			cancelled = scope:not_ok_op():wrap(function (st, reason)
+				return nil, ('%s: %s'):format(st, tostring(reason))
 			end),
 		}
 
@@ -115,11 +115,11 @@ local function handle_client(scope, stream)
 
 		local _, resp = perform_named_choice {
 			resp = reply:get_op(),
-			timeout = sleep.sleep_op(10.0):wrap(function()
+			timeout = sleep.sleep_op(10.0):wrap(function ()
 				return { err = 'worker timeout' }
 			end),
-			cancelled = scope:not_ok_op():wrap(function(reason)
-				return { err = 'cancelled: ' .. tostring(reason) }
+			cancelled = scope:not_ok_op():wrap(function (st, reason)
+				return { err = 'cancelled: ' .. ('%s: %s'):format(st, tostring(reason)) }
 			end),
 		}
 
@@ -139,7 +139,7 @@ local function server_loop(scope, path)
 		error(err)
 	end
 
-	scope:finally(function()
+	scope:finally(function ()
 		server:close()
 	end)
 
@@ -148,8 +148,8 @@ local function server_loop(scope, path)
 	while true do
 		local which, a, b = perform_named_choice {
 			accept = server:accept_op(),
-			cancelled = scope:not_ok_op():wrap(function(reason)
-				return nil, tostring(reason)
+			cancelled = scope:not_ok_op():wrap(function (st, reason)
+				return nil, ('%s: %s'):format(st, tostring(reason))
 			end),
 		}
 
@@ -162,8 +162,8 @@ local function server_loop(scope, path)
 		if not client_stream then
 			log('accept error: ' .. tostring(aerr))
 		else
-			local client_scope = scope:new_child()
-			client_scope:spawn(function(cs)
+			local client_scope = scope:child()
+			client_scope:spawn(function (cs)
 				handle_client(cs, client_stream)
 			end)
 		end
@@ -182,7 +182,7 @@ local function demo_client(scope, path)
 		error('client connect failed: ' .. tostring(err))
 	end
 
-	scope:finally(function()
+	scope:finally(function ()
 		stream:close()
 	end)
 
@@ -202,28 +202,26 @@ local function demo_client(scope, path)
 	end
 end
 
-fibers.run(function(scope)
+fibers.run(function (scope)
 	log('socket path: ' .. SOCK_PATH)
 	log('sh: ' .. SH)
 
 	-- Server in a child scope.
-	local server_scope = scope:new_child()
-	server_scope:spawn(function(ss)
+	local server_scope = scope:child()
+	server_scope:spawn(function (ss)
 		server_loop(ss, SOCK_PATH)
 	end)
 
 	-- Client in a child scope; no pcall. We observe outcome via join_op().
-	local client_scope = scope:new_child()
-	client_scope:spawn(function(cs)
+	local client_scope = scope:child()
+	client_scope:spawn(function (cs)
 		demo_client(cs, SOCK_PATH)
 	end)
 
 	-- Wait for client completion with a hard timeout for the demo harness.
 	local which, a, b = perform_named_choice {
-		joined = client_scope:join_op(), -- returns (status, err)
-		timeout = sleep.sleep_op(10.0):wrap(function()
-			return 'timeout', 'client join timed out'
-		end),
+		joined = client_scope:join_op():wrap(function (st, _, primary) return st, primary end),
+		timeout = sleep.sleep_op(10.0):wrap(function () return 'timeout', 'client join timed out' end),
 	}
 
 	-- Stop the server regardless, then decide what to do about the client outcome.
