@@ -34,7 +34,7 @@ end
 ---@param op Op
 ---@return any ...
 local function perform(op)
-	assert(Runtime.current_fiber(), 'perform: must be called from inside a fiber (use fibers.run as an entry point)')
+	if not Runtime.current_fiber() then error('perform be called from inside a fiber', 2) end
 	assert_op(op)
 
 	local s = current_scope()

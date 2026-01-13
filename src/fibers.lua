@@ -36,8 +36,8 @@ end
 ---@param ... any
 ---@return any ...
 local function run(main_fn, ...)
-	assert(not Runtime.current_fiber(),
-		'fibers.run must not be called from inside a fiber')
+    if Runtime.current_fiber() then  error('fibers.run must not be called from inside a fiber', 2) end
+    if type(main_fn) ~= 'function' then error('fibers.run expects a function', 2) end
 
 	local root = Scope.root()
 	local args = pack(...)
@@ -97,6 +97,8 @@ end
 ---@param ... any
 ---@return boolean ok, any|nil err
 local function spawn(fn, ...)
+    if type(fn) ~= 'function' then error('fibers.spawn expects a function', 2) end
+
 	local s    = Scope.current()
 	local args = { ... }
 

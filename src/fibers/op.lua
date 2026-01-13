@@ -43,7 +43,8 @@ function Suspension:waiting()
 end
 
 function Suspension:add_cleanup(f)
-	assert(type(f) == 'function', 'cleanup must be a function')
+    if type(f) ~= 'function' then error('cleanup must be a function', 2) end
+
 	if self.cleaned then
 		-- already completed; run immediately (best-effort)
 		safe.pcall(f)
@@ -186,6 +187,10 @@ local perform
 ---@param block_fn BlockFn
 ---@return Op
 local function new_primitive(wrap_fn, try_fn, block_fn)
+    if type(try_fn) ~= 'function' then error('new_primitive: try_fn must be a function', 2) end
+	if type(block_fn) ~= 'function' then error('new_primitive: block_fn must be a function', 2) end
+	if wrap_fn ~= nil and type(wrap_fn) ~= 'function' then error('new_primitive: wrap_fn must be a function or nil', 2) end
+
 	return setmetatable(
 		{
 			kind     = 'prim',
@@ -204,6 +209,7 @@ end
 local function choice(...)
 	local ops = {}
 	for _, op in ipairs({ ... }) do
+		if type(op) ~= 'table' or getmetatable(op) ~= Op then error('choice expects Op values', 2) end
 		if op.kind == 'choice' then
 			for _, sub in ipairs(op.ops) do
 				ops[#ops + 1] = sub
@@ -212,6 +218,7 @@ local function choice(...)
 			ops[#ops + 1] = op
 		end
 	end
+	if #ops == 0 then error('choice expects at least one op', 2) end
 	if #ops == 1 then return ops[1] end
 	return setmetatable({ kind = 'choice', ops = ops }, Op)
 end
@@ -220,6 +227,7 @@ end
 ---@param g fun(): Op
 ---@return Op
 local function guard(g)
+	if type(g) ~= 'function' then error('guard expects a function', 2) end
 	return setmetatable({ kind = 'guard', builder = g }, Op)
 end
 
@@ -228,6 +236,7 @@ end
 ---@param g fun(nack_op: Op): Op
 ---@return Op
 local function with_nack(g)
+	if type(g) ~= 'function' then error('with_nack expects a function', 2) end
 	return setmetatable({ kind = 'with_nack', builder = g }, Op)
 end
 
@@ -258,6 +267,7 @@ end
 ---@param f WrapFn
 ---@return Op
 function Op:wrap(f)
+	if type(f) ~= 'function' then error('wrap expects a function', 2) end
 	return setmetatable(
 		{ kind = 'wrap', inner = self, wrap_fn = f },
 		Op
@@ -269,7 +279,7 @@ end
 ---@param f fun()
 ---@return Op
 function Op:on_abort(f)
-	assert(type(f) == 'function', 'on_abort expects a function')
+	if type(f) ~= 'function' then error('on_abort expects a function', 2) end
 	return setmetatable(
 		{ kind = 'abort', inner = self, abort_fn = f },
 		Op
@@ -466,7 +476,7 @@ end
 ---@param fallback_thunk fun(): any
 ---@return Op
 function Op:or_else(fallback_thunk)
-	assert(type(fallback_thunk) == 'function', 'or_else expects a function')
+    if type(fallback_thunk) ~= 'function' then error('or_else expects a function', 2) end
 
 	-- Fast path: primitive non-blocking attempt (no compile, no nacks).
 	if self.kind == 'prim' then
@@ -539,7 +549,9 @@ end
 ---@param op Op
 ---@return any ...
 perform = function (op)
-	assert(runtime.current_fiber(), 'perform_raw must be called from inside a fiber (use fibers.run as an entry point)')
+	if not runtime.current_fiber() then
+		error('perform_raw must be called from inside a fiber (use fibers.run as an entry point)', 2)
+	end
 
 	-- Fast path: top-level guard.
 	if op.kind == 'guard' then
@@ -597,9 +609,9 @@ end
 ---@param use fun(resource: any): Op
 ---@return Op
 local function bracket(acquire, release, use)
-	assert(type(acquire) == 'function', 'bracket: acquire must be a function')
-	assert(type(release) == 'function', 'bracket: release must be a function')
-	assert(type(use) == 'function', 'bracket: use must be a function')
+	if type(acquire) ~= 'function' then error('bracket: acquire must be a function', 2) end
+	if type(release) ~= 'function' then error('bracket: release must be a function', 2) end
+	if type(use) ~= 'function' then error('bracket: use must be a function', 2) end
 
 	return guard(function ()
 		local res = acquire()
@@ -625,8 +637,7 @@ end
 ---@param cleanup fun(aborted: boolean)
 ---@return Op
 function Op:finally(cleanup)
-	assert(type(cleanup) == 'function', 'finally expects a function')
-
+	if type(cleanup) ~= 'function' then error('finally expects a function', 2) end
 	return bracket(
 		function () return nil end,
 		function (_, aborted) cleanup(aborted) end,
@@ -643,7 +654,7 @@ end
 ---@param on_win fun(index: integer, ...: any): ...
 ---@return Op
 local function race(ops, on_win)
-	assert(type(on_win) == 'function', 'race expects on_win callback')
+    if type(on_win) ~= 'function' then error('race expects on_win callback', 2) end
 	local wrapped = {}
 	for i, op in ipairs(ops) do
 		wrapped[i] = op:wrap(function (...)

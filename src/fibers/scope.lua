@@ -186,7 +186,7 @@ local unscoped_error_handler = default_unscoped_error_handler
 
 ---@param handler fun(fib:any, err:any)
 local function set_unscoped_error_handler(handler)
-	assert(type(handler) == 'function', 'unscoped error handler must be a function')
+	if type(handler) ~= 'function' then error('unscoped error handler must be a function', 2) end
 	unscoped_error_handler = handler
 end
 
@@ -521,7 +521,7 @@ end
 ---@param f fun(aborted:boolean, status:string, primary:any|nil)
 ---@return fun() detach
 function Scope:finally(f)
-	assert(type(f) == 'function', 'scope:finally expects a function')
+	if type(f) ~= 'function' then error('scope:finally expects a function', 2) end
 
 	-- Guard: once join has started (or finished), finaliser ordering cannot be preserved.
 	if self._join_started or self._join_outcome ~= nil then
@@ -688,7 +688,7 @@ end
 ---@param ev Op
 ---@return 'ok'|'failed'|'cancelled', ...
 function Scope:try(ev)
-	assert(runtime.current_fiber(), 'scope:try must be called from inside a fiber')
+	if not runtime.current_fiber() then error('scope:try must be called from inside a fiber', 2) end
 	return op.perform_raw(self:try_op(ev))
 end
 
@@ -710,7 +710,7 @@ end
 ---@param ... any
 ---@return Op
 local function run_op(body_fn, ...)
-	assert(type(body_fn) == 'function', 'scope.run_op expects a function')
+	if type(body_fn) ~= 'function' then error('scope.run_op expects a function', 2) end
 
 	local args = pack(...)
 
@@ -808,8 +808,8 @@ end
 ---@param ... any
 ---@return 'ok'|'failed'|'cancelled', ScopeReport, any ...
 local function run(body_fn, ...)
-	assert(type(body_fn) == 'function', 'scope.run expects a function body')
-	assert(runtime.current_fiber(), 'scope.run must be called from inside a fiber')
+	if type(body_fn) ~= 'function' then error('scope.run expects a function body', 2) end
+	if not runtime.current_fiber() then error('scope.run must be called from inside a fiber', 2) end
 	return op.perform_raw(run_op(body_fn, ...))
 end
 
