@@ -468,6 +468,30 @@ end
 function Op:or_else(fallback_thunk)
 	assert(type(fallback_thunk) == 'function', 'or_else expects a function')
 
+	-- Fast path: primitive non-blocking attempt (no compile, no nacks).
+	if self.kind == 'prim' then
+		-- Cache fields into locals to avoid repeated table lookups in hot loops.
+		local try_fn  = assert(self.try_fn)
+		local wrap_fn = assert(self.wrap_fn)
+
+		-- This op is itself primitive and always non-blocking.
+		return new_primitive(
+			nil, -- identity wrap at this level
+			function ()
+				local r = pack(try_fn())
+				if r[1] then
+					-- Apply the primitive’s wrap_fn on success.
+					return true, wrap_fn(unpack(r, 2, r.n))
+				end
+				-- Fallback is executed when not ready.
+				return true, fallback_thunk()
+			end,
+			function ()
+				error('or_else(prim): block_fn should never run')
+			end
+		)
+	end
+
 	return guard(function ()
 		local leaves = compile_op(self)
 
@@ -500,6 +524,12 @@ local function block_choice_op(sched, fib, ops)
 	end
 end
 
+local function block_prim_op(sched, fib, prim)
+	local suspension = new_suspension(sched, fib)
+	-- For a top-level primitive, the leaf wrap is just prim.wrap_fn.
+	prim.block_fn(suspension, prim.wrap_fn)
+end
+
 ----------------------------------------------------------------------
 -- Op methods: perform
 ----------------------------------------------------------------------
@@ -510,6 +540,26 @@ end
 ---@return any ...
 perform = function (op)
 	assert(runtime.current_fiber(), 'perform_raw must be called from inside a fiber (use fibers.run as an entry point)')
+
+	-- Fast path: top-level guard.
+	if op.kind == 'guard' then
+		-- Builder is executed once per synchronisation, as today.
+		return perform(op.builder())
+	end
+
+	-- Fast path: single primitive op (no compile, no nacks, no winner scan).
+	if op.kind == 'prim' then
+		local r = pack(op.try_fn())
+		if r[1] then
+			return op.wrap_fn(unpack(r, 2, r.n))
+		end
+
+		-- Suspend; resume returns (wrap, ...values...). Apply wrap to values.
+		local suspended = pack(runtime.suspend(block_prim_op, op))
+		local wrap = suspended[1]
+		return wrap(unpack(suspended, 2, suspended.n))
+	end
+
 	local leaves = compile_op(op)
 
 	-- Fast path: non-blocking attempt.
