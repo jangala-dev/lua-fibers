@@ -298,6 +298,163 @@ local function test_clone_after_close_is_inert()
 end
 
 ----------------------------------------------------------------------
+-- new tests: full policies
+----------------------------------------------------------------------
+
+local function test_full_policy_block_still_blocks_when_buffer_full()
+	local tx, rx = mailbox.new(1, { full = 'block' })
+
+	assert_eq(tx:send('x'), true)
+
+	local wg = wg_mod.new()
+	wg:add(1)
+
+	local sent_done = false
+	local sent_ok
+
+	fibers.spawn(function ()
+		-- Must block until 'x' is received.
+		sent_ok = tx:send('y')
+		sent_done = true
+		-- close-for-send
+		tx:close('done')
+		wg:done()
+	end)
+
+	sleep.sleep(0.03)
+	assert_falsy(sent_done, 'expected sender to still be blocked when buffer is full under block policy')
+
+	-- Drain one value, unblocking the sender.
+	assert_eq(rx:recv(), 'x')
+	wg:wait()
+
+	assert_truthy(sent_done, 'sender should complete once space becomes available')
+	assert_eq(sent_ok, true, 'blocked send should succeed once unblocked')
+
+	assert_eq(rx:recv(), 'y')
+	assert_eq(rx:recv(), nil)
+	assert_eq(rx:why(), 'done')
+end
+
+local function test_full_policy_drop_newest_buffered_drops_and_counts()
+	local tx, rx = mailbox.new(2, { full = 'drop_newest' })
+
+	assert_eq(tx:send('a'), true)
+	assert_eq(tx:send('b'), true)
+
+	-- Now full: these should not block and should be dropped.
+	assert_eq(tx:send('c'), true)
+	assert_eq(tx:send('d'), true)
+
+	-- Close and drain.
+	tx:close('done')
+
+	local xs = collect_iter(rx)
+	assert_eq(#xs, 2)
+	assert_eq(xs[1], 'a')
+	assert_eq(xs[2], 'b')
+
+	-- Drop accounting should reflect 2 discarded sends.
+	assert_eq(tx:dropped(), 2)
+	assert_eq(rx:dropped(), 2)
+	assert_eq(rx:why(), 'done')
+end
+
+local function test_full_policy_drop_oldest_buffered_replaces_oldest_and_counts()
+	local tx, rx = mailbox.new(2, { full = 'drop_oldest' })
+
+	assert_eq(tx:send(1), true)
+	assert_eq(tx:send(2), true)
+
+	-- Full: these should evict 1 then 2, leaving {3,4}.
+	assert_eq(tx:send(3), true)
+	assert_eq(tx:send(4), true)
+
+	tx:close('done')
+
+	local xs = collect_iter(rx)
+	assert_eq(#xs, 2)
+	assert_eq(xs[1], 3)
+	assert_eq(xs[2], 4)
+
+	assert_eq(tx:dropped(), 2)
+	assert_eq(rx:dropped(), 2)
+	assert_eq(rx:why(), 'done')
+end
+
+local function test_full_policy_drop_newest_rendezvous_drops_without_receiver()
+	local tx, rx = mailbox.new(0, { full = 'drop_newest' })
+
+	-- No receiver waiting: should not block, should drop.
+	assert_eq(tx:send('lost'), true)
+
+	assert_eq(tx:dropped(), 1)
+	assert_eq(rx:dropped(), 1)
+
+	-- Confirm nothing was delivered: recv should timeout.
+	local tag = fibers.perform(
+		op.choice(
+			rx:recv_op():wrap(function (v) return 'msg', v end),
+			sleep.sleep_op(0.03):wrap(function () return 'timeout' end)
+		)
+	)
+	assert_eq(tag, 'timeout')
+
+	tx:close('done')
+	assert_eq(rx:recv(), nil)
+	assert_eq(rx:why(), 'done')
+end
+
+local function test_full_policy_drop_oldest_rendezvous_behaves_like_drop_newest()
+	local tx, rx = mailbox.new(0, { full = 'drop_oldest' })
+
+	-- No receiver waiting: should not block, should drop (oldest == newest for rendezvous).
+	assert_eq(tx:send('lost'), true)
+	assert_eq(tx:dropped(), 1)
+
+	local tag = fibers.perform(
+		op.choice(
+			rx:recv_op():wrap(function (v) return 'msg', v end),
+			sleep.sleep_op(0.03):wrap(function () return 'timeout' end)
+		)
+	)
+	assert_eq(tag, 'timeout')
+
+	tx:close('done')
+	assert_eq(rx:recv(), nil)
+	assert_eq(rx:why(), 'done')
+end
+
+local function test_full_policy_drop_does_not_drop_when_receiver_waiting()
+	local tx, rx = mailbox.new(0, { full = 'drop_newest' })
+
+	local wg = wg_mod.new()
+	wg:add(2)
+
+	local got
+
+	fibers.spawn(function ()
+		got = rx:recv()
+		wg:done()
+	end)
+
+	fibers.spawn(function ()
+		sleep.sleep(0.02) -- ensure receiver is waiting
+		assert_eq(tx:send('delivered'), true)
+		tx:close('done')
+		wg:done()
+	end)
+
+	wg:wait()
+
+	assert_eq(got, 'delivered')
+	assert_eq(tx:dropped(), 0)
+	assert_eq(rx:dropped(), 0)
+	assert_eq(rx:recv(), nil)
+	assert_eq(rx:why(), 'done')
+end
+
+----------------------------------------------------------------------
 -- main
 ----------------------------------------------------------------------
 
@@ -312,6 +469,12 @@ local function main()
 	test_close_wakes_blocked_receiver()
 	test_close_wakes_blocked_sender()
 	test_clone_after_close_is_inert()
+	test_full_policy_block_still_blocks_when_buffer_full()
+	test_full_policy_drop_newest_buffered_drops_and_counts()
+	test_full_policy_drop_oldest_buffered_replaces_oldest_and_counts()
+	test_full_policy_drop_newest_rendezvous_drops_without_receiver()
+	test_full_policy_drop_oldest_rendezvous_behaves_like_drop_newest()
+	test_full_policy_drop_does_not_drop_when_receiver_waiting()
 
 	print('All mailbox tests passed!')
 end

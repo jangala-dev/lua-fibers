@@ -16,6 +16,13 @@
 --       - tx:clone() creates a new counted sender handle.
 --       - each counted handle should be closed once finished.
 --       - mailbox closes-for-send when the last counted handle closes.
+--
+-- Full policies (when no receiver is waiting and the mailbox is full):
+--   * "block"       : sender blocks until space/receiver is available (default)
+--   * "drop_newest" : drop the incoming value; send succeeds immediately
+--   * "drop_oldest" : drop the oldest buffered value (if any), enqueue the new one; send succeeds immediately
+--
+-- For rendezvous mailboxes (capacity == 0), "drop_oldest" behaves like "drop_newest".
 
 ---@module 'fibers.mailbox'
 
@@ -33,6 +40,8 @@ local perform = require 'fibers.performer'.perform
 ---@field closed boolean
 ---@field reason any|nil
 ---@field senders integer  -- counted sender handles still open
+---@field full '"block"'|'"drop_newest"'|'"drop_oldest"'
+---@field dropped integer  -- total number of dropped messages due to full policy
 
 ---@class MailboxTx
 ---@field _st MailboxState
@@ -109,12 +118,28 @@ end
 -- Construction
 ----------------------------------------------------------------------
 
+---@param full any
+---@return '"block"'|'"drop_newest"'|'"drop_oldest"'
+local function norm_full_policy(full, capacity)
+	if full == nil then full = 'block' end
+	if full ~= 'block' and full ~= 'drop_newest' and full ~= 'drop_oldest' then
+		error('mailbox.new: invalid full policy: ' .. tostring(full), 3)
+	end
+	-- Rendezvous mailboxes have no buffer; drop_oldest collapses to drop_newest.
+	if capacity == 0 and full == 'drop_oldest' then
+		full = 'drop_newest'
+	end
+	return full
+end
+
 --- Create a mailbox. Returns (tx, rx).
 ---@param capacity? integer  # 0 or nil -> rendezvous; >0 -> buffered capacity
+---@param opts? { full?: '"block"'|'"drop_newest"'|'"drop_oldest"' }
 ---@return MailboxTx tx, MailboxRx rx
-local function new(capacity)
+local function new(capacity, opts)
 	capacity = capacity or 0
-	assert(type(capacity) == 'number' and capacity >= 0, 'mailbox.new: capacity must be >= 0')
+	opts = opts or {}
+	local full = norm_full_policy(opts.full, capacity)
 
 	---@type MailboxState
 	local st = {
@@ -125,6 +150,8 @@ local function new(capacity)
 		closed  = false,
 		reason  = nil,
 		senders = 1,
+		full    = full,
+		dropped = 0,
 	}
 
 	local tx = setmetatable({ _st = st, _closed = false, _counted = true }, Tx)
@@ -140,6 +167,12 @@ end
 ---@return any|nil
 function Tx:why()
 	return self._st.reason
+end
+
+--- Return total number of dropped messages due to the full policy.
+---@return integer
+function Tx:dropped()
+	return self._st.dropped or 0
 end
 
 --- Clone this sender handle (multi-producer).
@@ -191,9 +224,26 @@ function Tx:send_op(v)
 
 	local st = self._st
 	local getq, putq, buf, cap = st.getq, st.putq, st.buf, st.cap
+	local full = st.full
+
+	local function handle_full()
+		if full == 'block' then
+			return false
+		end
+		st.dropped = st.dropped + 1
+		if full == 'drop_oldest' and buf then
+			-- buffer is full, so there is an oldest element to evict
+			buf:pop()
+			buf:push(v)
+		end
+		-- drop_newest does nothing further (discard v)
+		return true
+	end
 
 	local function try()
-		if st.closed or self._closed then return true, nil end
+		if st.closed or self._closed then
+			return true, nil
+		end
 
 		-- Rendezvous with a waiting receiver.
 		local recv = pop_active(getq)
@@ -202,17 +252,19 @@ function Tx:send_op(v)
 			return true, true
 		end
 
-		-- Buffered enqueue.
+		-- Buffered enqueue when there is space.
 		if buf and buf:length() < cap then
 			buf:push(v)
 			return true, true
 		end
 
+		-- Full (buffered) or no receiver (rendezvous): apply full policy.
+		if handle_full() then
+			return true, true
+		end
 		return false
 	end
 
-	---@param suspension Suspension
-	---@param wrap_fn WrapFn
 	local function block(suspension, wrap_fn)
 		if st.closed or self._closed then
 			return suspension:complete(wrap_fn, nil)
@@ -240,6 +292,12 @@ function Rx:why()
 	return self._st.reason
 end
 
+--- Return total number of dropped messages due to the full policy.
+---@return integer
+function Rx:dropped()
+	return self._st.dropped or 0
+end
+
 --- Op that receives the next message.
 --- When performed: a non-nil value, or nil when closed and drained.
 ---@return Op
@@ -259,9 +317,13 @@ function Rx:recv_op()
 			return true, v
 		end
 
-		if snd then return true, snd.val end
+		if snd then
+			return true, snd.val
+		end
 
-		if st.closed then return true, nil end
+		if st.closed then
+			return true, nil
+		end
 
 		return false
 	end
