@@ -1,8 +1,8 @@
 # DESIGN-NOTES
 
-This document records the main design choices behind the `fibers` library and the intended architectural boundaries for extension and porting.
+This document captures the design choices behind `fibers`, and where the seams are for extension and porting. It assumes you already know the usual concurrent-programming vocabulary, and wants to tell you what *this* library is trying to be (and what it is trying hard *not* to be).
 
-It is aimed at readers who are already comfortable with concurrent programming.
+The short version: **Ops describe waiting**, **scopes describe lifetime**, and everything else lines up behind those two ideas.
 
 ---
 
@@ -10,174 +10,160 @@ It is aimed at readers who are already comfortable with concurrent programming.
 
 `fibers` provides:
 
-- a cooperative scheduler and lightweight fibers;
-- an algebra of *operations* (“Ops”) for describing blocking, choice and abort behaviour;
-- structured concurrency scopes with fail-fast supervision;
-- a small set of primitives (sleep, channels, I/O streams, processes).
+* a cooperative scheduler and lightweight fibers;
+* an algebra of *operations* (“Ops”) for blocking, choice, abort, and cleanup;
+* structured concurrency scopes with fail-fast supervision;
+* a small “standard kit”: sleep, channels, streams, sockets, processes.
 
-Key ideas:
+The key design choices:
 
-- treat “things that may block or complete in the future” as first-class values (Ops);
-- treat lifetimes (scopes, fibers, I/O, child processes) as part of the same coordination model;
-- constrain lifetimes to a tree of scopes, so work and resources terminate together.
+* **Waiting is a value**: “this might complete later” is represented as an `Op`, not as “call this and hope it doesn’t block”.
+* **Lifetime is a tree**: scopes form a tree; work and resources live and die within that tree.
+* **One model for everything**: in-memory primitives, kernel I/O readiness, and subprocess completion all show up as Ops, and are governed by scopes.
 
-The same machinery is used for in-memory primitives (channels, timers), I/O, and child processes.
+If you can race a channel receive against a timeout, you can do the same with `accept()`, `read_line()`, `waitpid()`, or “join this entire subtree”.
 
 ---
 
 ## 2. Heritage and influences
 
-The design draws on several existing models:
+This is a hybrid of several well-known ideas:
 
-- **CSP**
-  - synchronous channels and rendezvous;
-  - emphasis on message passing and composition.
+* **CSP**: rendezvous channels; composition through message passing.
+* **Concurrent ML (CML)**: first-class events; choice; “losing arms” get abort signals (negative acknowledgements).
+* **Structured concurrency** (Trio, Kotlin coroutines, Eio): scopes as supervision domains; tree-shaped lifetime; cancellation as a normal termination mode.
+* **Actor/supervision systems** (Erlang/OTP): organise failure; “let it fail” locally, recover at boundaries.
 
-- **Concurrent ML (CML)**
-  - first-class events and an algebra for combining them;
-  - choice over multiple events with abort behaviour (negative acknowledgements).
+`fibers` is not a direct port. It borrows the *shapes*:
 
-- **Structured concurrency** (e.g. Trio, Kotlin coroutines, OCaml Eio)
-  - scopes as supervision domains;
-  - fail-fast semantics and tree-shaped lifetime.
-
-- **Actor/supervision systems** (e.g. Erlang/OTP)
-  - failures organised along a supervision tree;
-  - “let it fail” with recovery at boundaries.
-
-The library is not a direct port of any single system. It uses:
-
-- CML-style events as “Ops”;
-- a scope tree for lifetime and failure accounting;
-- CSP-style channels expressed as Ops;
-- I/O and process execution expressed as further Ops.
+* CML-style events become **Ops**.
+* a supervision tree becomes a **scope tree**.
+* CSP-style channels are expressed as **Ops**.
+* I/O and processes become **more Ops**.
 
 ---
 
 ## 3. Core concurrency model
 
-### 3.1 Fibers and scheduler
+### 3.1 Fibers and the scheduler
 
-The scheduler (`fibers.runtime`) manages **fibers**: lightweight, cooperatively scheduled execution contexts.
+The runtime (`fibers.runtime`) manages **fibers**: cooperatively scheduled coroutines.
 
-Fibers:
+* `fibers.spawn(fn, ...)` creates a fiber under the current scope.
+* A fiber yields only when it performs an op (directly or via helpers like sleep, channels, I/O).
+* There is no parallel execution inside one scheduler; concurrency is interleaving, not pre-emptive multithreading.
 
-- are spawned via `fibers.spawn(fn, ...)`, under the current scope;
-- yield control only by *performing* Ops (directly or via helpers such as sleep, channels, I/O);
-- do not run in parallel within a single scheduler; concurrency is interleaving rather than pre-emptive multithreading.
+The scheduler also hosts **task sources** (poller, timers, etc.) which can re-schedule fibers when an external condition changes.
 
-The scheduler works with task sources (poller, timers, etc.) which re-schedule fibers when external conditions change.
+Finally, the runtime exposes an error pump (`wait_fiber_error`) so uncaught fiber failures can be attributed and handled above the runtime layer (by scopes).
 
-`fibers.runtime` also provides an error pump interface (`wait_fiber_error`) so uncaught fiber errors can be attributed and handled at a higher layer (scopes).
+### 3.2 Ops: the event algebra
 
-### 3.2 Ops and the event algebra
+Ops (`fibers.op`) represent deferred blocking operations. A primitive op is defined by:
 
-Ops (`fibers.op`) represent deferred blocking operations. Each Op is a value describing:
+* how to check readiness without blocking (`try`);
+* how to arrange suspension and future wake-up (`block`);
+* and a commit-phase wrapper (`wrap`) that is only applied on completion.
 
-- how to check readiness without blocking;
-- how to register interest and suspend;
-- how to resume the fiber when ready.
+Primitive ops are constructed with:
 
-Primitive Ops are built with `op.new_primitive(wrap, try, block)`:
+```lua
+op.new_primitive(wrap, try, block)
+```
 
-- `try()` is a non-blocking probe returning:
-  - `true, ...results...` when ready; or
-  - `false` when not ready (must block);
-- `block(suspension, wrap)` registers the suspension with some external mechanism (timer wheel, poller, waitset, etc.).
+* `try()` is a non-blocking probe:
 
-On top of primitives, the library provides combinators:
+  * returns `true, ...results...` if ready;
+  * returns `false` if not ready.
+* `block(suspension, wrap)` registers interest (timer wheel, poller, waitset, etc.) and must arrange eventual completion.
 
-- `op.choice(a, b, ...)` – wait for the first ready leaf;
-- `op.named_choice{ name = op, ... }`, `op.boolean_choice(a, b)`;
-- `op.guard(f)` – build an Op lazily (at perform time);
-- `op.with_nack(f)` and `:on_abort(f)` – abort behaviour for losing arms in a choice;
-- `op.bracket(acquire, release, use)` – ensure release runs on both success and abort;
-- `op.always(...)` / `op.never()` – immediate and never-ready events;
-- helper forms: `race`, `first_ready`.
+Everything else is composition:
 
-Ops are passive until performed.
+* `op.choice(...)` / `named_choice` / `boolean_choice` / `race`
+* `op.guard(f)` (lazy construction at perform-time)
+* `op.with_nack(f)` and `:on_abort(f)` (losing-arm behaviour)
+* `op.bracket(acquire, release, use)` / `:finally(cleanup)`
+* `op.always(...)` / `op.never()`
+
+Ops are **passive** until performed.
 
 #### Performing Ops
 
-There are two relevant ways to perform Ops in normal code:
+There are two execution modes, and they exist for a reason:
 
-- `fibers.perform(op)` (via `fibers.performer.perform`)
-  - must be called from inside a fiber;
-  - uses the current scope when available (and therefore honours cancellation and fail-fast semantics);
-  - otherwise falls back to `op.perform_raw(op)`.
+* `fibers.perform(ev)`
 
-- `op.perform_raw(op)`
-  - executes an Op directly in the current fiber without consulting scope state;
-  - used by scope internals (notably join/finalisation) and other carefully controlled paths.
+  * must be called from inside a fiber;
+  * performs under the current scope (so cancellation and fail-fast semantics are honoured).
 
-Most user-facing code should use `fibers.perform` (or `fibers.try_perform` when status-first handling is required).
+* `op.perform_raw(ev)`
+
+  * performs without consulting scope state;
+  * used in carefully controlled internal paths (notably join/finalisation) where you must not be interrupted by cancellation.
+
+User code should almost always use `fibers.perform`. There is intentionally no top-level `try_perform`: the intended style is “throw freely; handle at boundaries; clean up with `finally`”.
 
 ### 3.3 Structured concurrency scopes
 
-Scopes (`fibers.scope`) are supervision domains and form a tree.
+Scopes (`fibers.scope`) are supervision domains arranged as a tree.
 
 A scope provides:
 
-- **admission gating**: `close(reason)` stops new work being admitted (spawn/child); join also closes admission;
-- **downward cancellation**: `cancel(reason)` closes admission and cancels attached children;
-- **fail-fast semantics**: the first non-cancellation error becomes the primary failure, and triggers cancellation of the scope to stop siblings;
-- **deterministic join**: join runs in a join worker and uses `op.perform_raw` so it is not interrupted by the scope’s own cancellation;
-- **finalisers**: LIFO `scope:finally(fn)` handlers run during join.
+* **admission gating**: `close(reason)` stops new work (spawn/child); join also closes admission;
+* **downward cancellation**: `cancel(reason)` closes admission and cancels attached children;
+* **fail-fast semantics**: the first non-cancellation error becomes the primary failure and triggers cancellation to stop siblings;
+* **deterministic join**: join runs in a join worker and uses `op.perform_raw` so finalisation is not interrupted by scope cancellation;
+* **finalisers**: `scope:finally(fn)` runs during join in LIFO order.
 
-Scopes track a status with the observable values:
+Observable status (informally):
 
-- `"running"` (pre-join, no failure/cancellation recorded)
-- `"failed"` (primary failure recorded)
-- `"cancelled"` (cancellation reason recorded)
-- `"ok"` (only after join completes successfully)
+* `"running"`: active, not yet terminal
+* `"failed"`: primary failure recorded
+* `"cancelled"`: cancellation recorded
+* terminal outcome materialises at join (`"ok"|"failed"|"cancelled"`)
 
-A scope also carries a `report` snapshot produced at join:
+A join report has the shape:
 
 ```lua
 report = {
   id           = <scope id>,
-  extra_errors = { ... },  -- secondary errors after the primary is established
-  children     = { ... },  -- child outcomes (each includes nested report)
+  extra_errors = { ... },
+  children     = { ... },
 }
 ```
 
 #### Current scope attribution
 
-Scope attribution is fiber-local:
+Attribution is fiber-local:
 
-* inside a fiber: `Scope.current()` returns the fiber’s scope (defaulting to the process root);
-* outside a fiber: `Scope.current()` returns the process root.
+* inside a fiber: `Scope.current()` is that fiber’s scope (defaulting to root);
+* outside fibers: `Scope.current()` is root.
 
-There is no separate “global current scope” distinct from root. This keeps attribution rules simple and avoids cross-context leakage.
-
-A weak-key map (fiber → scope) is used to attribute uncaught runtime fiber errors to the owning scope.
+Uncaught runtime fiber errors are attributed using a weak-key map `fiber -> scope`, so scope accounting stays accurate without creating memory leaks.
 
 #### Failure and cancellation policy
 
-The scope uses a single primary record:
+Scopes keep one “primary” record:
 
-* on failure: the scope records `_failed_primary` and then calls `cancel(_failed_primary)`;
-* cancellation reason becomes the value propagated downwards to child scopes;
-* subsequent errors, once a primary has been established, are appended to `report.extra_errors` and do not replace the primary.
+* on failure: record `_failed_primary`, then cancel the scope with that value (single source of truth);
+* the cancellation reason propagates down to children;
+* subsequent errors are appended to `extra_errors` and do not replace the primary.
 
-A cancellation sentinel (`fibers.cancelled`) is used for cancellation-as-control-flow across error channels. Escaping cancellation is treated as cancellation, not failure.
+Cancellation is represented internally using a robust sentinel (`fibers.cancelled`) so it can travel through Lua’s error channel without colliding with ordinary errors. Escaping cancellation is treated as cancellation, not failure.
 
 #### Join and finalisation
 
-Join is represented as an Op:
+Join is represented as an op:
 
-* `Scope:join_op()` becomes ready once join has completed and the scope has reached a terminal state;
-* it yields:
+* `Scope:join_op()` becomes ready once the join worker finishes;
+* it yields `st, report, primary_or_nil`.
 
-```lua
-st, report, primary_or_nil
-```
+Finalisation order:
 
-Finalisers run during join, after:
-
-1. admission is closed;
-2. the scope’s internal waitgroup drains (all spawned fibers complete);
-3. attached child scopes join in attachment order.
+1. admission closes;
+2. the scope’s internal waitgroup drains (spawned fibers complete);
+3. attached child scopes join in attachment order;
+4. finalisers run in LIFO order.
 
 Finalisers are called as:
 
@@ -185,22 +171,16 @@ Finalisers are called as:
 fn(aborted, st, primary_if_failed_or_nil)
 ```
 
-where:
-
-* `aborted` is `true` when `st ~= "ok"`;
-* `st` is `"ok"|"failed"|"cancelled"`;
-* the third argument is the primary value only when `st == "failed"`.
-
 If a finaliser raises:
 
-* if the scope would otherwise be ok, the first such error becomes the primary failure;
-* if the scope is already failed or cancelled, the error is recorded as a secondary error.
+* if the scope would otherwise be ok, the first finaliser error becomes the primary failure;
+* if the scope is already failed/cancelled, it becomes a secondary error.
 
-#### Scope-aware operation performance
+#### Scope-aware op performance
 
-Scopes integrate with Ops via a “race body vs not-ok” pattern.
+Scopes integrate with ops by racing “the body” against “scope not-ok”, and re-checking after completion:
 
-* `Scope:try_op(ev)` returns an Op that yields:
+* `Scope:try_op(ev)` yields one of:
 
 ```lua
 "ok", ...results...
@@ -208,138 +188,138 @@ Scopes integrate with Ops via a “race body vs not-ok” pattern.
 "cancelled", reason
 ```
 
-* `Scope:try(ev)` performs `try_op(ev)` (must be called inside a fiber).
-* `Scope:perform(ev)` returns results on ok; on failure it raises the primary; on cancellation it raises a cancellation sentinel.
+* `Scope:perform(ev)` returns results on ok; raises on failed/cancelled.
 
-The core rule is: successful results are only returned when the scope remains ok; if the scope has failed or been cancelled, the operation is treated as not-ok.
+The rule is deliberately strict: **results are only returned if the scope remains ok**. If the scope has already failed or been cancelled, performing is treated as not-ok.
 
 ### 3.4 Scope boundaries as values
 
-Scope boundaries are exposed in two forms:
+Boundaries are exposed in two forms:
 
-* `Scope.run(body_fn, ...)`
-
-  * runs `body_fn(child_scope, ...)` in a fresh child scope;
-  * waits until that scope joins;
-  * returns status-first:
+* `Scope.run(body_fn, ...)` returns status-first:
 
 ```lua
-st, report, ...         -- on ok: ... are results
+st, report, ...         -- on ok
 st, report, primary     -- on not-ok
 ```
 
-* `Scope.run_op(body_fn, ...)`
+* `Scope.run_op(body_fn, ...)` returns an op that resolves when the child scope has joined.
 
-  * returns an Op that performs the same boundary;
-  * suitable for use in `choice`/`race` (timeouts, cancellation triggers, etc.);
-  * on abort (losing a choice), the child scope is cancelled with reason `"aborted"` and then joined deterministically.
+On abort (losing a choice), the boundary op cancels the child scope with reason `"aborted"` and then joins it deterministically.
 
-A notable design choice is that the boundary Op is intentionally not “fast-path eager”: its primitive `try` path does not attempt completion without blocking. This simplifies correctness and avoids subtle partial-state completion races; the boundary is driven by the child join.
+A design note that matters in practice: the boundary op is not “eager”. Its readiness is driven by the child join, rather than trying to opportunistically fast-path completion. This keeps correctness simple and avoids partial-state races.
 
 ### 3.5 Waitsets and `waitable`
 
-`fibers.wait` provides infrastructure for building blocking primitives.
+`fibers.wait` is the glue for building “real” blocking primitives in a disciplined way.
 
 #### Waitset
 
-`Waitset` is a keyed set of scheduler tasks:
+`Waitset` is a keyed set of scheduler tasks (fd, pid, object key, anything):
 
 * `add(key, task)` returns a token with `token:unlink()`;
-* `take_one(key)` / `take_all(key)` remove and return waiters;
-* `notify_one(key, sched)` / `notify_all(key, sched)` schedule waiting tasks;
+* `take_one` / `take_all`;
+* `notify_one` / `notify_all`;
 * `clear_key`, `clear_all`, `is_empty`, `size`.
 
-It is used by poller backends (read/write readiness keyed by fd), and by process backends (waiters keyed by pid or pidfd).
+Pollers typically key by fd and direction; process backends key by pid or pidfd.
 
 #### `waitable(register, step, wrap)`
 
-`waitable` builds an Op from:
+`waitable` builds an op from:
 
-* a non-blocking `step()` returning:
+* a non-blocking `step()`:
 
-  * `true, ...` when ready; or
-  * `false` when not ready;
-* a `register(task, suspension, leaf_wrap)` that arranges for `task:run()` to be called when progress may have occurred.
+  * returns `true, ...` when ready;
+  * returns `false` when not ready;
+* a `register(task, suspension, leaf_wrap)` which arranges for `task:run()` to be called when progress may have occurred.
 
-It ensures that:
+Crucially:
 
-* the operation participates correctly in `choice` and abort behaviour;
-* outstanding registrations are cancelled on abort via `token:unlink()`.
+* registrations are cancelled on abort via `token:unlink()`.
 
-This pattern is used for timers, poller readiness, stream I/O, socket accept/connect, and process completion.
+This is the mechanism that makes “race read against timeout” safe: losing arms do not keep dangling fd interest in the poller. In practice, this pattern underpins stream I/O, socket accept/connect, and process completion.
 
 ---
 
 ## 4. I/O architecture
 
-The I/O stack is layered to separate platform-neutral abstractions from platform-specific backends.
+The I/O stack is intentionally layered so that portability work is concentrated in backends.
 
 ### 4.1 Streams and `StreamBackend`
 
-`fibers.io.stream` defines a buffered `Stream` over an abstract `StreamBackend`.
+`fibers.io.stream` defines a buffered `Stream` over a `StreamBackend`.
 
-A `StreamBackend` is expected to provide:
+A backend provides:
 
-* `read_string(max)` -> `data|nil, err|nil`;
-* `write_string(data)` -> `bytes_written|nil, err|nil`;
-* `on_readable(task)` / `on_writable(task)` -> `WaitToken`;
-* `close()`, and optionally `seek`, `nonblock`, `block`, `fileno`, `filename`.
+* `read_string(max)` / `write_string(data)`
+* `on_readable(task)` / `on_writable(task)` → `WaitToken`
+* `close()`
+* optionally `seek`, `nonblock`, `block`, `fileno`, `filename`
 
-`Stream` exposes:
+`Stream` then exposes ops:
 
-* core Ops: `read_string_op`, `write_string_op`, etc.;
-* derived Ops: `read_line_op`, `read_exactly_op`, `read_all_op`;
-* Lua-compatible `read_op`/`write_op` forms;
-* synchronous wrappers calling `fibers.perform`, therefore respecting scope semantics.
+* core: `read_string_op`, `write_string_op`
+* derived: `read_line_op`, `read_exactly_op`, `read_all_op`
+* Lua-compat: `read_op` / `write_op`
+
+Synchronous wrappers call `fibers.perform`, so scope cancellation and fail-fast behaviour apply automatically.
 
 ### 4.2 Poller and readiness
 
-A poller is a task source that converts kernel readiness into scheduled tasks, typically through keyed waitsets.
+A poller is a scheduler task source that translates kernel readiness into scheduled tasks, typically by:
 
-Backends (epoll, poll/select) are intended to be interchangeable behind a stable interface.
+* keeping waitsets for read and write readiness,
+* polling with a timeout,
+* notifying and scheduling tasks for ready keys.
+
+Backends (epoll, poll/select, etc.) are intended to be interchangeable behind a stable interface.
 
 ### 4.3 Files and sockets
 
 `fibers.io.file` and `fibers.io.socket` are thin layers over:
 
-* an fd backend (`fibers.io.fd_backend`) that performs system calls and integrates with the poller;
-* `Stream` as the user-facing buffered interface.
+* an fd backend (`fibers.io.fd_backend`) that does syscalls and integrates with the poller;
+* `Stream` as the user-facing interface.
 
-Socket accept/connect are expressed as Ops using `waitable`, so they can be composed in `choice` and respect scope cancellation.
+Socket accept/connect are expressed as ops (typically via `waitable`), so they compose with `choice` and respect scope cancellation.
 
 ---
 
-## 5. Error handling, cancellation and lifetimes
+## 5. Error handling, cancellation, and lifetimes
 
 ### 5.1 Fail-fast supervision
 
-Error handling is organised around scopes:
+Errors are organised around scopes:
 
-* an uncaught error in any fiber is attributed to that fiber’s current scope;
-* the first such error becomes the scope’s primary failure and triggers cancellation of the scope;
-* cancellation is propagated down the tree to attached children.
+* uncaught errors in fibers are attributed to the fiber’s scope;
+* the first becomes the scope’s primary failure and triggers cancellation;
+* cancellation propagates down to attached child scopes.
 
-This supports “let it fail” within a scope, and boundary-based reporting.
+This supports “let it fail” locally and reporting at boundaries.
 
 ### 5.2 Cancellation as an event
 
-Cancellation is integrated into the event algebra:
+Cancellation is not bolted on as a separate signalling system; it participates in the same model:
 
-* a scope provides `fault_op`, `cancel_op`, and `not_ok_op`;
+* scopes provide `fault_op`, `cancel_op`, `not_ok_op`;
 * `Scope:try_op(ev)` races the body against scope not-ok and re-checks after completion;
-* `fibers.perform` therefore returns results only when the scope remains ok.
+* `fibers.perform` therefore only returns results when the scope remains ok.
 
-The same approach is used in higher-level facilities, such as timeouts (race an operation against `sleep.sleep_op`) and aborting entire subtrees (abort behaviour on `run_op`).
+Timeouts and aborting subtrees are then just ordinary compositions:
 
-### 5.3 Finalisers and resource cleanup
+* timeout = `choice(op, sleep_op(dt))`
+* abort subtree = `run_scope_op(...)` losing in an outer choice
 
-Scopes provide LIFO finalisers via `scope:finally(fn)`:
+### 5.3 Finalisers and cleanup
 
-* run exactly once during join (after child fibers drain, and after joining attached children);
-* are passed enough information to distinguish normal exit from failure/cancellation;
-* errors in finalisers are captured and recorded as primary or secondary errors according to whether the scope was otherwise ok.
+Finalisers are the main mechanism for tying external resources to a unit of work:
 
-This is the primary mechanism for tying external resources to a unit of work.
+* run exactly once during join;
+* receive enough context to distinguish ok/failed/cancelled;
+* errors are recorded as primary/secondary depending on whether the scope was otherwise ok.
+
+This is a deliberate push away from “try to catch everything and limp on”. Instead: register cleanup, throw, and let the boundary report.
 
 ---
 
@@ -347,24 +327,24 @@ This is the primary mechanism for tying external resources to a unit of work.
 
 ### 6.1 Futures and async/await
 
-In many future-based models:
+In many future-based systems:
 
-* a future is the primary unit of concurrency and cancellation;
-* structured concurrency is layered on.
+* futures are the primary unit of concurrency/cancellation;
+* structured concurrency is layered on top.
 
-In this library:
+In `fibers`:
 
-* the primary representation of “waiting” is the Op;
-* cancellation is primarily a scope property, not an operation-local property;
-* lifetimes are grouped into a scope tree, with boundaries as explicit results.
+* the primary representation of waiting is the op;
+* cancellation is primarily a scope property;
+* boundaries are explicit values (direct returns or ops) that compose with the same algebra.
 
 ### 6.2 Go-style goroutines and channels
 
-The combination of fibers and channels is similar in spirit to Go. The main differences are:
+There are familiar similarities (fibers + channels), but:
 
-* selection is expressed via the event algebra (`choice`, `named_choice`) rather than a language `select`;
+* selection is expressed via the op algebra (`choice`, `named_choice`), not a language `select`;
 * scopes enforce lifetime and cancellation boundaries for groups of fibers;
-* blocking operations are explicit values (Ops) which can be composed without helper fibers.
+* blocking operations are explicit values, so you can compose without “helper goroutines”.
 
 ### 6.3 Actor/supervision systems
 
@@ -373,13 +353,13 @@ The scope tree resembles a supervision tree:
 * failures are attributed to a domain and prompt coordinated shutdown;
 * cleanup is deterministic via join and finalisers.
 
-The model remains cooperative and single-scheduler, with channels/streams rather than actor mailboxes as the primary communication tools.
+The execution model remains single-scheduler and cooperative; channels/streams are the primary coordination tools rather than actor mailboxes.
 
 ---
 
 ## 7. Intended usage patterns
 
-### 7.1 Application entry point
+### 7.1 Entry point
 
 From non-fiber code:
 
@@ -387,46 +367,50 @@ From non-fiber code:
 
 Inside `main_fn(scope, ...)`:
 
-* use `fibers.spawn(fn, ...)` to create child fibers under the current scope;
-* use `fibers.run_scope(fn, ...)` to create nested supervision domains and observe outcomes;
-* use `fibers.run_scope_op(fn, ...)` when you need a scope boundary to participate in `choice`/`race`;
-* perform Ops via `fibers.perform(ev)` (or `fibers.try_perform(ev)` when status-first handling is required).
+* use `fibers.spawn(fn, ...)` for concurrent work under the current scope;
+* use `fibers.run_scope(fn, ...)` when you want a boundary with structured outcomes;
+* use `fibers.run_scope_op(fn, ...)` when a boundary must participate in `choice`/`race`;
+* perform ops via `fibers.perform(ev)`.
+
+The default posture is “throw, don’t catch”; boundaries are where you observe outcomes.
 
 ### 7.2 I/O services
 
-Use the top-level modules:
+Use the public modules:
 
-* `fibers.io.file` for file streams and pipes;
-* `fibers.io.socket` for UNIX sockets;
-* `fibers.channel` for in-memory communication;
-* `fibers.sleep` for timers.
+* `fibers.io.file` (streams, pipes, tmpfiles)
+* `fibers.io.socket` (UNIX sockets)
+* `fibers.io.stream` (buffered stream ops)
+* `fibers.channel` (in-memory coordination)
+* `fibers.sleep` (timers)
 
-Avoid depending directly on platform-specific backends in application code. This keeps portability concerns confined to backend modules.
+Avoid depending on platform-specific backends in application code. Portability lives in backend modules.
 
 ### 7.3 Coordination and cancellation
 
-Express coordination using the event algebra and scope boundaries:
+Express coordination using ops and scope boundaries:
 
-* race I/O against timeouts with `named_choice`;
-* coordinate multiple producers/consumers through channels;
-* bind requests/sessions/jobs to their own scope and cancel that scope to stop all related work and cleanup.
+* race I/O against timeouts with `named_choice` or `boolean_choice`;
+* coordinate producers/consumers via channels;
+* bind requests/sessions/jobs to their own scope; cancel that scope to stop and clean up *everything* related to the job.
 
 ---
 
-## 8. Extension points and future work
+## 8. Extension points and porting seams
 
-The architecture is intended to be open to new backends and platforms.
+The library is built so that “porting” is mostly a backend exercise, not a redesign.
 
 ### 8.1 Poller backends
 
-To integrate a new kernel event mechanism:
+To add a new kernel event mechanism:
 
-* implement a backend module providing:
+* implement:
 
-  * `new_backend()`;
-  * `poll(state, timeout_ms, rd_waitset, wr_waitset)`;
-  * optional `on_wait_change`, `close_backend`, `is_supported`;
-* add it to the candidate list in the poller selection module.
+  * `new_backend()`
+  * `poll(state, timeout_ms, rd_waitset, wr_waitset)`
+  * optional `on_wait_change`, `close_backend`, `is_supported`
+
+* add it to the poller candidate list.
 
 ### 8.2 FD and stream backends
 
@@ -434,34 +418,32 @@ To support new handle types or platforms:
 
 * implement an fd backend providing:
 
-  * non-blocking mode control;
-  * read/write primitives;
-  * readiness registration integrated with the poller;
-  * file helpers (open, pipe, tmpfile support) and, where relevant, socket helpers.
+  * non-blocking control
+  * read/write primitives
+  * readiness registration via the poller
+  * file helpers (open, pipe, tmpfile) and socket helpers where relevant
 
-Streams (`fibers.io.stream`) should not need modification.
+Streams should not need modification.
 
 ### 8.3 Exec backends
 
-To add process management on other platforms:
+To add process management support:
 
-* implement an exec backend providing:
+* implement:
 
-  * spawn/start;
-  * non-blocking status polling;
-  * readiness registration as an Op via `waitable` patterns;
-  * termination/kill, and backend cleanup.
+  * process start/spawn
+  * non-blocking status checks
+  * readiness registration (often via `waitable` + waitsets)
+  * termination/kill and backend cleanup
 
-The higher-level `fibers.exec` layer should remain stable.
+The high-level `fibers.io.exec` layer is intended to remain stable.
 
 ### 8.4 Cross-platform targets
 
-While current implementations target Unix-like platforms, the layering is designed so that:
+Current implementations focus on Unix-like platforms, but the layering is designed so that:
 
-* the public APIs for I/O and exec are independent of any particular syscall interface;
-* backends encapsulate dependencies on epoll/select, signals, fork/exec, pidfd, and so on.
-
-The intention is that new platform support is primarily a backend exercise, not a model redesign.
+* public I/O and exec APIs do not encode a syscall model;
+* backends encapsulate epoll/select, signals, fork/exec, pidfd, etc.
 
 ---
 
@@ -469,11 +451,11 @@ The intention is that new platform support is primarily a backend exercise, not 
 
 The main design choices are:
 
-* adopt a CML-style event algebra (Ops) as the common representation for all blocking behaviour;
-* treat scope lifetime boundaries as values (direct returns or Ops) so they compose with the same algebra;
-* organise concurrent work into a tree of scopes with fail-fast supervision and structured cancellation;
-* express channels, timers, I/O and processes uniformly in terms of Ops and scopes;
-* keep top-level I/O and exec modules free of direct system call dependencies, delegating those concerns to pluggable backends;
-* make `fibers.perform` scope-aware so application code consistently observes structured cancellation when run inside fibers.
+* adopt a CML-style event algebra (Ops) as the common representation of blocking;
+* treat scope boundaries as values (direct returns or ops) so they compose with the same algebra;
+* organise concurrent work into a scope tree with fail-fast supervision and structured cancellation;
+* express channels, timers, I/O, and processes uniformly in terms of Ops and scopes;
+* keep syscalls and platform specifics inside pluggable backends;
+* make `fibers.perform` scope-aware so application code consistently observes cancellation and failure.
 
-The result is a small, coherent foundation for building concurrent systems with explicit lifetime boundaries and predictable cleanup.
+The result is a small, coherent foundation for building concurrent systems where lifetime is explicit, waiting is composable, and cleanup is predictable-even when things go wrong.

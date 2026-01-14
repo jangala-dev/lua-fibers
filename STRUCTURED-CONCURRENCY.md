@@ -1,54 +1,71 @@
 # Structured concurrency
 
-This document describes how the library organises concurrent work using *scopes*, and how to use the top-level API in `fibers.lua` to manage lifetimes, failure, and cancellation.
+This document explains how `fibers` organises concurrent work using **scopes**, and how the top-level API in `fibers.lua` helps you keep lifetimes, failure, cancellation, and cleanup on a short lead.
 
-The focus is on:
+It covers:
 
 * `fibers.run`
 * `fibers.spawn`
 * `fibers.run_scope`
 * `fibers.run_scope_op`
 * `fibers.current_scope`
-* `fibers.perform` and `fibers.try_perform`
+* `fibers.perform`
 
-Lower-level details of the scheduler and the op algebra are covered elsewhere.
+It deliberately does **not** cover scheduler internals or the full op algebra. Think of this as “how to write code that behaves well under stress”.
 
 ---
 
 ## 1. Overview
 
-The library uses structured concurrency:
+`fibers` uses structured concurrency:
 
-* Every fiber runs inside a *scope*.
-* Scopes form a tree: a scope may have child scopes.
-* The first non-cancellation fault in a scope becomes the **primary failure** for that scope and triggers **fail-fast cancellation** of that scope and its descendants.
-* Scopes provide deterministic finalisation: attached child scopes are joined in attachment order, and finalisers run in LIFO order.
+* Every fiber runs inside a **scope**.
+* Scopes form a **tree**: a scope can have child scopes.
+* The first non-cancellation fault in a scope becomes its **primary failure** and triggers **fail-fast cancellation** of the scope and its descendants.
+* Scopes provide **deterministic finalisation**:
 
-A scope is a supervision context. It owns a set of fibers and resources, and it reaches a terminal state only once its obligations have drained and its finalisers have run.
+  * attached child scopes are joined in attachment order;
+  * finalisers run in LIFO order.
+
+A scope is a supervision context. It owns a set of running fibers and resources, and it only becomes “done” once:
+
+1. its fibers have drained,
+2. its child scopes have joined,
+3. its finalisers have run.
+
+If you remember one thing: *work should not outlive the scope that started it*.
 
 ---
 
 ## 2. Top-level API
 
-### 2.1 `fibers.run(main_fn, ...)`
+## 2.1 `fibers.run(main_fn, ...)`
 
 ```lua
-local fibers = require 'fibers'
+local fibers = require "fibers"
 
 fibers.run(function(scope, ...)
   -- scope is a root-attached scope for this run
 end)
 ```
 
-* Creates the scheduler and the process root scope.
-* Runs `main_fn(scope, ...)` inside a fresh child scope beneath the root.
-* Drives the scheduler until that child scope reaches a terminal state and joins.
-* On success, returns the values returned by `main_fn`.
-* On failure or cancellation, raises the primary error / reason to the calling thread.
+`fibers.run`:
 
-`fibers.run` must be called from outside any fiber.
+* must be called from **outside** any fiber;
+* creates the scheduler and the process root scope;
+* runs `main_fn(scope, ...)` inside a fresh child scope beneath the root;
+* drives the scheduler until that child scope reaches a terminal state and joins.
 
-### 2.2 `fibers.spawn(fn, ...)`
+Results:
+
+* on success: returns the values returned by `main_fn`;
+* on failure/cancellation: raises the **primary** error/reason to the calling thread.
+
+This is the “one door in / one door out” boundary for your program.
+
+---
+
+## 2.2 `fibers.spawn(fn, ...)`
 
 ```lua
 fibers.run(function(scope)
@@ -59,17 +76,21 @@ fibers.run(function(scope)
 end)
 ```
 
-* Spawns a new fiber under the **current scope**.
-* Calls `fn(...)` in that fiber.
-* Returns immediately; lifetime is managed via the scope (no join handle).
+`fibers.spawn`:
 
-### 2.3 `fibers.run_scope(body_fn, ...)`
+* spawns a new fiber under the **current scope**;
+* calls `fn(...)` in that fiber;
+* returns immediately.
+
+There is no join handle. The scope owns the lifetime and joins deterministically.
+
+---
+
+## 2.3 `fibers.run_scope(body_fn, ...)`
 
 `fibers.run_scope` is a re-export of `Scope.run`.
 
 ```lua
-local fibers = require 'fibers'
-
 fibers.run(function()
   local st, rep, a, b = fibers.run_scope(function(child_scope, x)
     fibers.spawn(function()
@@ -88,27 +109,27 @@ end)
 
 Behaviour:
 
-* Must be called from inside a fiber.
-* Creates a new child scope of the current scope.
-* Spawns a fiber in that child scope to run `body_fn(child_scope, ...)`.
-* Joins the child scope deterministically and returns:
+* must be called from inside a fiber;
+* creates a fresh child scope of the current scope;
+* runs `body_fn(child_scope, ...)` inside that scope;
+* joins the child scope deterministically and returns:
 
-  ```lua
-  status :: "ok" | "failed" | "cancelled"
-  report :: ScopeReport
-  ...    :: results from body_fn (only when status == "ok")
-           OR primary value (only when status ~= "ok")
-  ```
+```lua
+status :: "ok" | "failed" | "cancelled"
+report :: ScopeReport
+...    :: results from body_fn        (only when status == "ok")
+       :: primary error/reason value  (only when status ~= "ok")
+```
 
-The `ScopeReport` has the shape:
+`ScopeReport` shape:
 
 ```lua
 report.id           -- scope id
-report.extra_errors -- array of secondary errors (see section 3)
-report.children     -- array of child outcomes (joined children)
+report.extra_errors -- array of secondary errors
+report.children     -- array of joined child outcomes
 ```
 
-Each `child` outcome contains:
+Child outcomes:
 
 ```lua
 child.id
@@ -117,15 +138,19 @@ child.primary
 child.report   -- nested ScopeReport
 ```
 
-### 2.4 `fibers.run_scope_op(body_fn, ...)`
+Use `run_scope` when you want a clean boundary that turns “exceptions inside” into “status + report outside”.
+
+---
+
+## 2.4 `fibers.run_scope_op(body_fn, ...)`
 
 `fibers.run_scope_op` is a re-export of `Scope.run_op`.
 
-This returns an `Op` which, when performed, runs `body_fn` in a fresh child scope and resolves when that child scope joins.
+It returns an `Op` which, when performed, runs `body_fn` in a fresh child scope and resolves when that child scope joins.
 
 ```lua
-local fibers = require 'fibers'
-local sleep  = require 'fibers.sleep'
+local fibers = require "fibers"
+local sleep  = require "fibers.sleep"
 
 local function work_op()
   return fibers.run_scope_op(function(s)
@@ -142,10 +167,14 @@ end)
 
 Key points:
 
-* The child scope is cancelled and joined deterministically if the op is aborted as a losing arm in an outer `choice`.
-* This is the supported way to make “run a structured sub-task” participate in the op algebra (timeouts, races, etc.).
+* If this op loses as an arm in an outer `choice`, the child scope is cancelled (reason `"aborted"`) and then joined deterministically.
+* This is the supported way to make “run a structured subtree” participate in the op algebra (timeouts, races, readiness, etc.).
 
-### 2.5 `fibers.current_scope()`
+If you find yourself wanting “spawn a big thing and maybe cancel it later”, this is usually the shape you want.
+
+---
+
+## 2.5 `fibers.current_scope()`
 
 ```lua
 local s = fibers.current_scope()
@@ -154,62 +183,78 @@ local s = fibers.current_scope()
 * Inside a fiber: returns the scope associated with that fiber (defaults to the root if none is set).
 * Outside a fiber: returns the process root scope.
 
-Most user code receives scopes as parameters (e.g. from `fibers.run` or `fibers.run_scope`). `fibers.current_scope()` is useful when you need access to the scope without threading it through arguments.
+Most code should accept scopes as parameters (from `fibers.run` or `fibers.run_scope`). `current_scope()` is for when threading a scope through arguments would be noise rather than clarity.
 
-### 2.6 `fibers.perform(op)` and `fibers.try_perform(op)`
+---
+
+## 2.6 `fibers.perform(op)`
 
 ```lua
-local fibers = require 'fibers'
-local sleep  = require 'fibers.sleep'
+local fibers = require "fibers"
+local sleep  = require "fibers.sleep"
 
 fibers.run(function()
   fibers.perform(sleep.sleep_op(0.5))
 end)
 ```
 
-* `fibers.perform(op)` performs an `Op` under the current scope:
+`fibers.perform(op)`:
 
-  * returns results on success;
-  * raises on failure; and
-  * raises a cancellation sentinel on cancellation.
-* `fibers.try_perform(op)` performs under the current scope but returns status-first:
+* performs an `Op` under the current scope;
+* returns results on success;
+* raises on failure;
+* raises on cancellation.
 
-  ```lua
-  st, ... = fibers.try_perform(op)
-  -- st is "ok"|"failed"|"cancelled"
-  ```
+This is deliberate: *inside a scope, “throw and unwind” is normal*. The scope boundary is where you translate exceptions into a status/report.
 
-If you need to distinguish cancellation from failure when catching errors, use the helpers exposed by `fibers.scope` (`is_cancelled`, `cancel_reason`) unless you choose to re-export them from `fibers.lua`.
+If you need status-first behaviour, use an explicit boundary:
+
+* `fibers.run_scope(...)` (returns status/report/results),
+* `fibers.run_scope_op(...)` (an op yielding status/report/results),
+* or scope methods directly (for library code that is intentionally doing something special).
 
 ---
 
 ## 3. Scope lifecycle and reporting
 
-A scope has two related notions of “status”:
+A scope has two closely related notions of status:
 
-* **Observational status** from `scope:status()`:
+### Observational status (`scope:status()`)
 
-  ```lua
-  "running"
-  "failed", primary
-  "cancelled", reason
-  "ok" (only after join completes)
-  ```
+* `"running"`
+* `"failed", primary`
+* `"cancelled", reason`
+* `"ok"` (only once join has completed)
 
-* **Terminal status** (used by `join_op`, `run`, `run_op`): `"ok"|"failed"|"cancelled"` with failure taking precedence if both a failure and cancellation are recorded.
+This is a snapshot: useful for diagnostics, not a completion mechanism.
 
-### 3.1 Primary failure and secondary errors
+### Terminal status (what boundaries return)
 
-* The first non-cancellation fault becomes `_failed_primary` and triggers cancellation of the scope.
-* Any subsequent faults (including failures in finalisers and late-arriving fiber errors) are recorded in `report.extra_errors`.
+Boundaries (`join_op`, `run`, `run_op`) return:
 
-This is deliberately conservative: the primary error answers “what caused this scope to fail”, and the report provides additional diagnostics without changing the primary cause.
+* `"ok" | "failed" | "cancelled"`
+
+If both failure and cancellation are recorded, **failure wins**: cancellation is a consequence of failure (fail-fast), not a competing explanation.
+
+---
+
+## 3.1 Primary failure and secondary errors
+
+Rules of the road:
+
+* The first non-cancellation fault becomes the scope’s **primary failure** and triggers cancellation.
+* Later faults (finalisers failing, late fiber errors, etc.) are recorded as **secondary errors** in `report.extra_errors`.
+
+This is intentionally conservative:
+
+* the primary answers “what caused this scope to stop being OK?”;
+* the report answers “what else went wrong on the way out?”.
 
 ---
 
 ## 4. Resource management with finalisers
 
-Finalisers are registered with:
+Finalisers attach cleanup to a scope’s lifetime:
 
 ```lua
 scope:finally(function(aborted, status, primary_or_nil)
@@ -219,42 +264,45 @@ end)
 
 Finalisers run during join, after:
 
-1. spawned fibers in the scope have drained;
+1. spawned fibers in the scope have drained,
 2. attached child scopes have been joined (in attachment order).
 
-Finaliser calling convention:
+Calling convention:
 
 * `aborted` is `true` when terminal status is not `"ok"`;
 * `status` is `"ok"|"failed"|"cancelled"`;
-* `primary_or_nil` is provided only when `status == "failed"` (cancellation is not treated as failure for this argument).
+* `primary_or_nil` is provided only when `status == "failed"`.
 
 If a finaliser raises:
 
-* if the scope was otherwise `"ok"`, the finaliser error becomes the primary failure for the scope;
-* otherwise the error is recorded in `extra_errors` and the primary remains unchanged.
+* if the scope was otherwise `"ok"`, the finaliser error becomes the primary failure;
+* otherwise it is recorded in `extra_errors` and the primary stays the same.
+
+Practical advice: treat finalisers as “best-effort cleanup”, not as a second place to do real work.
 
 ---
 
 ## 5. Cancellation and operations
 
-Operations integrate with scopes through `scope:try_op` and the top-level performers:
+Scopes integrate with ops so cancellation and failure have real teeth:
 
-* If the scope is already failed or cancelled, `try_op` resolves immediately with `"failed"` or `"cancelled"`.
-* Otherwise, the operation races against the scope’s “not ok” condition.
-* After completion, the scope is checked again; if it transitioned while the operation completed, the result is treated as not ok.
+* If a scope is already failed or cancelled, ops under it resolve as not-ok immediately (via the scope performer).
+* Otherwise, a performed op implicitly races against the scope becoming not-ok.
+* After the op completes, the scope is checked again; if the scope transitioned while the op was completing, the outcome is treated as not-ok.
 
-In practice:
+What this means in practice:
 
-* use `fibers.perform(op)` for direct-style code (raise-on-not-ok);
-* use `fibers.try_perform(op)` or `scope:try(op)` when you want to handle failure/cancellation as data.
+* `fibers.perform(op)` is the default. It either gives you the result or unwinds the stack.
+* Timeouts are written as op choice, not as “check a flag in a loop”.
+* Losing arms in a `choice` are expected to clean up promptly (many primitives use abort hooks or unlink tokens so they stop waiting on fds, timers, etc.).
 
 ---
 
-## 6. Example: structured workers with explicit outcome
+## 6. Example: structured workers with an explicit outcome
 
 ```lua
-local fibers = require 'fibers'
-local sleep  = require 'fibers.sleep'
+local fibers = require "fibers"
+local sleep  = require "fibers.sleep"
 
 local function run_workers(n)
   return fibers.run_scope(function(scope)
@@ -286,13 +334,17 @@ fibers.run(function()
 end)
 ```
 
+This style gives you one place to interpret outcomes: the boundary. Inside, workers just throw.
+
 ---
 
 ## 7. Example: racing a structured task against a timeout
 
+The simplest “timeout” pattern is still the best one: race work against sleep.
+
 ```lua
-local fibers = require 'fibers'
-local sleep  = require 'fibers.sleep'
+local fibers = require "fibers"
+local sleep  = require "fibers.sleep"
 
 local function task_op()
   return fibers.run_scope_op(function(scope)
@@ -302,17 +354,25 @@ local function task_op()
 end
 
 fibers.run(function()
-  local st, rep, v_or_primary = fibers.perform(
-    fibers.boolean_choice(
-      task_op(),
-      sleep.sleep_op(0.5):wrap(function() return "timeout" end)
-    )
-  )
-  -- Interpret results based on the op you chose to race.
+  local which, st, rep, v_or_primary = fibers.perform(fibers.named_choice{
+    task    = task_op(),         -- yields: st, rep, results/primary
+    timeout = sleep.sleep_op(0.5),
+  })
+
+  if which == "timeout" then
+    print("timed out; task scope cancelled and joined")
+    return
+  end
+
+  if st == "ok" then
+    print("task ok:", v_or_primary)
+  else
+    print("task not ok:", st, v_or_primary)
+  end
 end)
 ```
 
-(How you tag results is up to you; the key point is that `run_scope_op` composes as an `Op`.)
+The important bit is not the tagging; it’s that `run_scope_op` makes “a whole subtree” act like a single op, with deterministic cleanup when it loses.
 
 ---
 
@@ -320,7 +380,7 @@ end)
 
 Most user code runs inside scopes created through `fibers.run`, `fibers.spawn`, and `fibers.run_scope`.
 
-The runtime can still encounter fibers that are not associated with a scope (for example, internal fibers or externally spawned fibers that do not install scope attribution). Uncaught errors from such fibers are passed to the unscoped error handler:
+If the runtime encounters a fiber that is not associated with any scope (typically internal fibers or externally spawned ones), uncaught errors are sent to the unscoped error handler:
 
 ```lua
 fibers.set_unscoped_error_handler(function(fib, err)
@@ -331,15 +391,17 @@ end)
 
 The default handler writes to stderr.
 
+If you see this handler firing in application code, it is usually a sign that something started work “off the books”.
+
 ---
 
 ## 9. Summary
 
 * Use `fibers.run` once at the top level.
 * Use `fibers.spawn` to start concurrent fibers under the current scope.
-* Use `fibers.run_scope` when you want a sub-task with its own scope and a status/report outcome.
-* Use `fibers.run_scope_op` to race or compose a structured sub-task within the op algebra.
-* Use `scope:finally` to attach resource cleanup to a scope’s lifetime.
-* Use `fibers.perform` / `fibers.try_perform` to run ops so cancellation and failure follow the scope tree.
+* Use `fibers.run_scope` for a structured subtree with a status/report outcome.
+* Use `fibers.run_scope_op` when you want that subtree to participate in `choice` (timeouts, races, etc.).
+* Use `scope:finally` (and op `bracket`/`:finally`) for cleanup.
+* Use `fibers.perform` for waiting; let it throw, and interpret outcomes at boundaries.
 
-This keeps lifetimes bounded, failure and cancellation explicit, and cleanup deterministic.
+This keeps lifetimes bounded, makes failure and cancellation meaningful, and makes cleanup predictable—even when things go wrong.
