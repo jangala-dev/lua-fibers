@@ -109,26 +109,11 @@ local function spawn(fn, ...)
 	return s:spawn(shim, unpack(args))
 end
 
-----------------------------------------------------------------------
--- Optional helper: non-raising perform under current scope
-----------------------------------------------------------------------
-
---- Perform an op under the current scope, returning status-first.
---- Must be called from inside a fiber.
----@param ev any
----@return string status
----@return any ...
-local function try_perform(ev)
-	local s = Scope.current()
-	return s:try(ev)
-end
-
 return {
 	spawn = spawn,
 	run   = run,
 
 	perform     = Performer.perform,
-	try_perform = try_perform,
 
 	now = Runtime.now,
 
