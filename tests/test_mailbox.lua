@@ -336,15 +336,15 @@ local function test_full_policy_block_still_blocks_when_buffer_full()
 	assert_eq(rx:why(), 'done')
 end
 
-local function test_full_policy_drop_newest_buffered_drops_and_counts()
-	local tx, rx = mailbox.new(2, { full = 'drop_newest' })
+local function test_full_policy_reject_newest_buffered_drops_and_counts()
+	local tx, rx = mailbox.new(2, { full = 'reject_newest' })
 
 	assert_eq(tx:send('a'), true)
 	assert_eq(tx:send('b'), true)
 
 	-- Now full: these should not block and should be dropped.
-	assert_eq(tx:send('c'), true)
-	assert_eq(tx:send('d'), true)
+	assert_eq(tx:send('c'), false)
+	assert_eq(tx:send('d'), false)
 
 	-- Close and drain.
 	tx:close('done')
@@ -382,11 +382,11 @@ local function test_full_policy_drop_oldest_buffered_replaces_oldest_and_counts(
 	assert_eq(rx:why(), 'done')
 end
 
-local function test_full_policy_drop_newest_rendezvous_drops_without_receiver()
-	local tx, rx = mailbox.new(0, { full = 'drop_newest' })
+local function test_full_policy_reject_newest_rendezvous_drops_without_receiver()
+	local tx, rx = mailbox.new(0, { full = 'reject_newest' })
 
 	-- No receiver waiting: should not block, should drop.
-	assert_eq(tx:send('lost'), true)
+	assert_eq(tx:send('lost'), false)
 
 	assert_eq(tx:dropped(), 1)
 	assert_eq(rx:dropped(), 1)
@@ -405,11 +405,11 @@ local function test_full_policy_drop_newest_rendezvous_drops_without_receiver()
 	assert_eq(rx:why(), 'done')
 end
 
-local function test_full_policy_drop_oldest_rendezvous_behaves_like_drop_newest()
+local function test_full_policy_drop_oldest_rendezvous_behaves_like_reject_newest()
 	local tx, rx = mailbox.new(0, { full = 'drop_oldest' })
 
 	-- No receiver waiting: should not block, should drop (oldest == newest for rendezvous).
-	assert_eq(tx:send('lost'), true)
+	assert_eq(tx:send('lost'), false)
 	assert_eq(tx:dropped(), 1)
 
 	local tag = fibers.perform(
@@ -426,7 +426,7 @@ local function test_full_policy_drop_oldest_rendezvous_behaves_like_drop_newest(
 end
 
 local function test_full_policy_drop_does_not_drop_when_receiver_waiting()
-	local tx, rx = mailbox.new(0, { full = 'drop_newest' })
+	local tx, rx = mailbox.new(0, { full = 'reject_newest' })
 
 	local wg = wg_mod.new()
 	wg:add(2)
@@ -470,10 +470,10 @@ local function main()
 	test_close_wakes_blocked_sender()
 	test_clone_after_close_is_inert()
 	test_full_policy_block_still_blocks_when_buffer_full()
-	test_full_policy_drop_newest_buffered_drops_and_counts()
+	test_full_policy_reject_newest_buffered_drops_and_counts()
 	test_full_policy_drop_oldest_buffered_replaces_oldest_and_counts()
-	test_full_policy_drop_newest_rendezvous_drops_without_receiver()
-	test_full_policy_drop_oldest_rendezvous_behaves_like_drop_newest()
+	test_full_policy_reject_newest_rendezvous_drops_without_receiver()
+	test_full_policy_drop_oldest_rendezvous_behaves_like_reject_newest()
 	test_full_policy_drop_does_not_drop_when_receiver_waiting()
 
 	print('All mailbox tests passed!')

@@ -9,8 +9,9 @@
 --       - nil when the mailbox is closed and drained.
 --     rx:why() yields the close reason (if any).
 --   * tx:send(v) returns:
---       - true if accepted/delivered,
---       - nil if the mailbox is closed (send rejected).
+--       - true                if the message was accepted (delivered or enqueued),
+--       - false, "full"       if the message was not accepted due to capacity/policy,
+--       - nil                 if the mailbox is closed (send rejected).
 --     tx:why() yields the close reason (if any).
 --   * Multi-producer:
 --       - tx:clone() creates a new counted sender handle.
@@ -18,11 +19,12 @@
 --       - mailbox closes-for-send when the last counted handle closes.
 --
 -- Full policies (when no receiver is waiting and the mailbox is full):
---   * "block"       : sender blocks until space/receiver is available (default)
---   * "drop_newest" : drop the incoming value; send succeeds immediately
---   * "drop_oldest" : drop the oldest buffered value (if any), enqueue the new one; send succeeds immediately
+--   * "block"         : sender blocks until space/receiver is available (default)
+--   * "reject_newest" : reject the incoming value; send returns false, "full"
+--   * "drop_oldest"   : drop the oldest buffered value (if any), enqueue the new one;
+--                     send returns true (accepted), and dropped counter increments
 --
--- For rendezvous mailboxes (capacity == 0), "drop_oldest" behaves like "drop_newest".
+-- For rendezvous mailboxes (capacity == 0), "drop_oldest" behaves like "reject_newest".
 
 ---@module 'fibers.mailbox'
 
@@ -40,7 +42,7 @@ local perform = require 'fibers.performer'.perform
 ---@field closed boolean
 ---@field reason any|nil
 ---@field senders integer  -- counted sender handles still open
----@field full '"block"'|'"drop_newest"'|'"drop_oldest"'
+---@field full '"block"'|'"reject_newest"'|'"drop_oldest"'
 ---@field dropped integer  -- total number of dropped messages due to full policy
 
 ---@class MailboxTx
@@ -106,7 +108,7 @@ local function close_state(st, reason)
 		recv.suspension:complete(recv.wrap, v)
 	end
 
-	-- Reject senders.
+	-- Reject senders (nil result means "closed").
 	while true do
 		local snd = pop_active(st.putq)
 		if not snd then break end
@@ -119,22 +121,22 @@ end
 ----------------------------------------------------------------------
 
 ---@param full any
----@return '"block"'|'"drop_newest"'|'"drop_oldest"'
+---@return '"block"'|'"reject_newest"'|'"drop_oldest"'
 local function norm_full_policy(full, capacity)
 	if full == nil then full = 'block' end
-	if full ~= 'block' and full ~= 'drop_newest' and full ~= 'drop_oldest' then
+	if full ~= 'block' and full ~= 'reject_newest' and full ~= 'drop_oldest' then
 		error('mailbox.new: invalid full policy: ' .. tostring(full), 3)
 	end
-	-- Rendezvous mailboxes have no buffer; drop_oldest collapses to drop_newest.
+	-- Rendezvous mailboxes have no buffer; drop_oldest collapses to reject_newest.
 	if capacity == 0 and full == 'drop_oldest' then
-		full = 'drop_newest'
+		full = 'reject_newest'
 	end
 	return full
 end
 
 --- Create a mailbox. Returns (tx, rx).
 ---@param capacity? integer  # 0 or nil -> rendezvous; >0 -> buffered capacity
----@param opts? { full?: '"block"'|'"drop_newest"'|'"drop_oldest"' }
+---@param opts? { full?: '"block"'|'"reject_newest"'|'"drop_oldest"' }
 ---@return MailboxTx tx, MailboxRx rx
 local function new(capacity, opts)
 	capacity = capacity or 0
@@ -170,6 +172,8 @@ function Tx:why()
 end
 
 --- Return total number of dropped messages due to the full policy.
+--- For reject_newest: counts incoming messages dropped (and send returns false,"full").
+--- For drop_oldest: counts buffered messages evicted to admit new ones.
 ---@return integer
 function Tx:dropped()
 	return self._st.dropped or 0
@@ -216,7 +220,10 @@ function Tx:close(reason)
 end
 
 --- Op that sends a message.
---- When performed: true on success, nil when closed (send rejected).
+--- When performed:
+---   * true             : accepted (delivered or enqueued)
+---   * false, "full"    : not accepted due to capacity/policy (reject_newest)
+---   * nil              : mailbox closed (send rejected)
 ---@param v any  # MUST NOT be nil
 ---@return Op
 function Tx:send_op(v)
@@ -226,22 +233,33 @@ function Tx:send_op(v)
 	local getq, putq, buf, cap = st.getq, st.putq, st.buf, st.cap
 	local full = st.full
 
+	-- Full-policy handler returns:
+	--   ready:boolean_for_op, result1, result2
+	-- where ready==true means the op is ready and result* are returned to the caller.
 	local function handle_full()
 		if full == 'block' then
+			-- Not ready; must block.
 			return false
 		end
+
+		-- Some message is being discarded due to boundedness.
 		st.dropped = st.dropped + 1
+
 		if full == 'drop_oldest' and buf then
-			-- buffer is full, so there is an oldest element to evict
+			-- Evict one buffered value to admit the new one.
+			-- (For cap==0, drop_oldest is normalised away to reject_newest.)
 			buf:pop()
 			buf:push(v)
+			return true, true
 		end
-		-- drop_newest does nothing further (discard v)
-		return true
+
+		-- reject_newest: do not admit v.
+		return true, false, 'full'
 	end
 
 	local function try()
 		if st.closed or self._closed then
+			-- Ready: closed is signalled to caller by nil result.
 			return true, nil
 		end
 
@@ -259,16 +277,15 @@ function Tx:send_op(v)
 		end
 
 		-- Full (buffered) or no receiver (rendezvous): apply full policy.
-		if handle_full() then
-			return true, true
-		end
-		return false
+		return handle_full()
 	end
 
 	local function block(suspension, wrap_fn)
 		if st.closed or self._closed then
+			-- Resume sender with nil (closed).
 			return suspension:complete(wrap_fn, nil)
 		end
+		-- Only used for "block" policy.
 		putq:push { val = v, suspension = suspension, wrap = wrap_fn }
 	end
 
@@ -278,6 +295,7 @@ end
 --- Synchronously send a message.
 ---@param v any
 ---@return boolean|nil ok
+---@return string|nil reason  -- "full" when ok==false
 function Tx:send(v)
 	return perform(self:send_op(v))
 end
@@ -309,10 +327,14 @@ function Rx:recv_op()
 		-- Prefer unblocking a waiting sender (if present); we may still return
 		-- a buffered value first.
 		local snd = pop_active(putq)
-		if snd then snd.suspension:complete(snd.wrap, true) end
+		if snd then
+			-- Sender was accepted (delivered or enqueued-by-refill below).
+			snd.suspension:complete(snd.wrap, true)
+		end
 
 		if buf and buf:length() > 0 then
 			local v = buf:pop()
+			-- If there was a sender waiting, refill the buffer with its value.
 			if snd then buf:push(snd.val) end
 			return true, v
 		end
