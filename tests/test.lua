@@ -18,6 +18,7 @@ local modules = {
 	{ 'runtime' },
 	{ 'channel' },
 	{ 'mailbox' },
+	{ 'pulse' },
 	{ 'cond' },
 	{ 'sleep' },
 	{ 'waitgroup' },
