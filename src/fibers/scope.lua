@@ -136,6 +136,7 @@ local finaliser_handler = tb_handler
 ---@field _fault_os Oneshot
 ---@field _finalisers DList
 ---@field _finalising boolean
+---@field _started boolean
 ---@field _join_started boolean
 ---@field _join_outcome ScopeJoinOutcome|nil
 ---@field _join_os Oneshot
@@ -257,7 +258,7 @@ end
 local function reject_reason(self)
 	if self._join_outcome ~= nil or self._join_started then return 'scope is joining' end
 	if self._failed_primary ~= nil then return 'scope has failed' end
-	if self._cancel_reason  ~= nil then return 'scope is cancelled' end
+	if self._cancel_reason ~= nil then return 'scope is cancelled' end
 	if self._closed then return 'scope is closed' end
 	return nil
 end
@@ -480,7 +481,9 @@ function Scope:finally(f)
 	if not fib then error('scope:finally must be called from inside a fiber', 2) end
 
 	local cur = fiber_scopes[fib] or root()
-	if cur ~= self then error('scope:finally must be called from within the target scope', 2) end
+	if self._started and cur ~= self then
+		error('once started scope:finally must be called from within the target scope', 2)
+	end
 
 	if self._finalising or self._join_outcome ~= nil then
 		error('scope:finally: scope is finalising or has joined', 2)
@@ -500,6 +503,9 @@ end
 function Scope:spawn(fn, ...)
 	local why = reject_reason(self)
 	if why then return false, why end
+
+	-- From this point, treat the scope as having started work.
+	self._started = true
 
 	local args = pack(...)
 	self._wg:add(1)
@@ -579,6 +585,7 @@ end
 
 function Scope:_start_join_worker()
 	if self._join_started then return end
+	self._started = true
 	self._join_started = true
 
 	runtime.spawn_raw(function ()
