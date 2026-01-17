@@ -213,46 +213,48 @@ end
 
 ----------------------------------------------------------------------
 -- waitable: (register, step, wrap_fn?) -> Op
+-- waitable2: (register, probe_step, run_step, wrap_fn?) -> Op
 ----------------------------------------------------------------------
 
+-- Normalise "want" without restricting it to rd/wr/any.
+--   * nil/false -> nil
+--   * 'any' is treated specially by register_with_want
+--   * everything else is passed through to register(...)
 local function normalise_want(want)
-	if want == 'rd' or want == 'wr' or want == 'any' then
-		return want
+	if want == nil or want == false then
+		return nil
 	end
-	return nil
+	return want
 end
---- Build a waitable Op from a register function and step function.
+
+--- Build a waitable Op from a register function and two step functions.
 --
---   step() -> done:boolean, ...
+--   probe_step() -> done:boolean, ...
+--     * Must be non-blocking and must not yield.
+--     * Should be side-effect neutral when returning done==false.
+--     * May return (false, want) where want is any token understood by register().
 --
---     * done == true  : the operation is ready to commit now;
---                       remaining values are the result.
---     * done == false : not ready; the register() function must
---                       arrange a future call to task:run().
+--   run_step() -> done:boolean, ...
+--     * Must be non-blocking and must not yield.
+--     * May perform stateful progress (e.g. fill buffers, advance state machines).
 --
---   register(task, suspension, leaf_wrap) -> token
+--   register(task, suspension, leaf_wrap, want) -> token
+--     * Must arrange for task:run() when progress may be possible.
+--     * want is passed through (except 'any', see below).
+--     * token:unlink() (if present) is called on abort to cancel registration.
 --
---     * Must arrange for task:run() to be invoked when progress may
---       have been made (fd readable, space available, timer expired).
---     * Returns a token table which may define token:unlink() to
---       cancel any outstanding registration for this synchronisation.
+-- Special want:
+--   * want == 'any' registers both ('rd' and 'wr') and unlinks both on abort.
 --
---   wrap_fn (optional) is used as the primitive wrap for the Op.
---
--- Requirements on step and register:
---   - Both must be non-blocking and must not yield.
---   - Errors raised by step/register are not caught here; they are
---     treated as bugs and surfaced by the surrounding scope/fiber.
---
--- The op participates fully in choice/with_nack/on_abort; if it loses
--- a choice, any outstanding registration is cancelled via token:unlink().
 ---@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn, want: any): WaitToken
----@param step fun(): boolean, ...
+---@param probe_step fun(): boolean, ...
+---@param run_step fun(): boolean, ...
 ---@param wrap_fn? WrapFn
 ---@return Op
-local function waitable(register, step, wrap_fn)
-	assert(type(register) == 'function', 'waitable: register must be a function')
-	assert(type(step) == 'function', 'waitable: step must be a function')
+local function waitable2(register, probe_step, run_step, wrap_fn)
+	assert(type(register) == 'function', 'waitable2: register must be a function')
+	assert(type(probe_step) == 'function', 'waitable2: probe_step must be a function')
+	assert(type(run_step) == 'function', 'waitable2: run_step must be a function')
 
 	wrap_fn = wrap_fn or id_wrap
 
@@ -266,8 +268,18 @@ local function waitable(register, step, wrap_fn)
 			end
 			token = nil
 		end
+
+		local function set_want_from_probe()
+			local pres = pack(probe_step())
+			if not pres[1] then
+				last_want = normalise_want(pres[2])
+			else
+				last_want = nil
+			end
+		end
+
 		local function try()
-			local res = pack(step())
+			local res = pack(probe_step())
 			if not res[1] then
 				last_want = normalise_want(res[2])
 			else
@@ -296,24 +308,35 @@ local function waitable(register, step, wrap_fn)
 					token = register(task, suspension, leaf_wrap, want)
 				end
 			end
+
 			task = {
 				run = function ()
 					if not suspension:waiting() then
 						return
 					end
 
-					local res  = pack(step())
+					local res  = pack(run_step())
 					local done = res[1]
 					if done then
 						unlink_token()
 						return suspension:complete(leaf_wrap, unpack(res, 2, res.n))
 					end
 
-					last_want = normalise_want(res[2])
+					-- If run_step did not specify a want, derive it from probe_step.
+					-- This avoids stalling after partial progress when the primitive
+					-- is still not complete.
+					local w = normalise_want(res[2])
+					if w == nil then
+						set_want_from_probe()
+					else
+						last_want = w
+					end
+
 					register_with_want(last_want)
 				end,
 			}
 
+			-- Register based on last_want as computed by the most recent try().
 			register_with_want(last_want)
 		end
 
@@ -325,7 +348,17 @@ local function waitable(register, step, wrap_fn)
 	end)
 end
 
+--- Backwards-compatible wrapper: a single step is used for both probe and run.
+---@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn, want: any): WaitToken
+---@param step fun(): boolean, ...
+---@param wrap_fn? WrapFn
+---@return Op
+local function waitable(register, step, wrap_fn)
+	return waitable2(register, step, step, wrap_fn)
+end
+
 return {
 	new_waitset = new_waitset,
 	waitable    = waitable,
+	waitable2    = waitable2,
 }

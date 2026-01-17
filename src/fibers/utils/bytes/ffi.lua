@@ -162,6 +162,46 @@ local function RingBuf_new(size)
 	return ring_mt.init(self, size)
 end
 
+function ring_mt:capacity()
+	return self.size
+end
+
+function ring_mt:advance_read(n)
+	assert(type(n) == 'number' and n >= 0, 'RingBuf:advance_read expects non-negative count')
+	local avail = self:read_avail()
+	assert(n <= avail, 'RingBuf:advance_read out of range')
+	if n == 0 then return end
+	self.read_idx = self.read_idx + ffi.cast('uint32_t', n)
+end
+
+function ring_mt:peek(n)
+	assert(type(n) == 'number' and n >= 0, 'RingBuf:peek expects non-negative count')
+	local avail = self:read_avail()
+	if avail == 0 or n == 0 then
+		return ''
+	end
+	if n > avail then
+		n = avail
+	end
+
+	-- Like tostring() but only for n bytes, and without mutating read_idx.
+	local tmp   = ffi.new('uint8_t[?]', n)
+	local size  = self.size
+	local start = pos(self, self.read_idx)
+	local first = math.min(n, size - start)
+
+	if first > 0 then
+		ffi.copy(tmp, self.buf + start, first)
+	end
+
+	local rest = n - first
+	if rest > 0 then
+		ffi.copy(tmp + first, self.buf, rest)
+	end
+
+	return ffi.string(tmp, n)
+end
+
 ----------------------------------------------------------------------
 -- LinearBuf
 ----------------------------------------------------------------------
