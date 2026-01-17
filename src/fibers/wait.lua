@@ -221,10 +221,7 @@ end
 --   * 'any' is treated specially by register_with_want
 --   * everything else is passed through to register(...)
 local function normalise_want(want)
-	if want == nil or want == false then
-		return nil
-	end
-	return want
+	return (want == nil or want == false) and nil or want
 end
 
 --- Build a waitable Op from a register function and two step functions.
@@ -259,94 +256,75 @@ local function waitable2(register, probe_step, run_step, wrap_fn)
 	wrap_fn = wrap_fn or id_wrap
 
 	return op.guard(function ()
-		local token
-		local last_want
+		local token, last_want, cleanup_added
 
-		local function unlink_token()
-			if token and token.unlink then
-				token:unlink()
-			end
+		local function unlink()
+			local t = token
 			token = nil
+			if t and t.unlink then t:unlink() end
 		end
 
-		local function set_want_from_probe()
-			local pres = pack(probe_step())
-			if not pres[1] then
-				last_want = normalise_want(pres[2])
+		local function capture_want(step_fn)
+			local r = pack(step_fn())
+			last_want = r[1] and nil or normalise_want(r[2])
+			return r
+		end
+
+		local function register_any(task, suspension, leaf_wrap)
+			local t1 = register(task, suspension, leaf_wrap, 'rd')
+			local t2 = register(task, suspension, leaf_wrap, 'wr')
+			return {
+				unlink = function ()
+					if t1 and t1.unlink then t1:unlink() end
+					if t2 and t2.unlink then t2:unlink() end
+				end,
+			}
+		end
+
+		local function arm(task, suspension, leaf_wrap, want)
+			if not cleanup_added then
+				cleanup_added = true
+				suspension:add_cleanup(unlink)
+			end
+
+			unlink()
+
+			if want == 'any' then
+				token = register_any(task, suspension, leaf_wrap)
 			else
-				last_want = nil
+				token = register(task, suspension, leaf_wrap, want)
 			end
 		end
 
 		local function try()
-			local res = pack(probe_step())
-			if not res[1] then
-				last_want = normalise_want(res[2])
-			else
-				last_want = nil
-			end
-			return unpack(res, 1, res.n)
+			local r = capture_want(probe_step)
+			return unpack(r, 1, r.n)
 		end
 
 		local function block(suspension, leaf_wrap)
-			---@class WaitTask : Task
 			local task
-
-			local function register_with_want(want)
-				unlink_token()
-
-				if want == 'any' then
-					local t1 = register(task, suspension, leaf_wrap, 'rd')
-					local t2 = register(task, suspension, leaf_wrap, 'wr')
-					token = {
-						unlink = function ()
-							if t1 and t1.unlink then t1:unlink() end
-							if t2 and t2.unlink then t2:unlink() end
-						end,
-					}
-				else
-					token = register(task, suspension, leaf_wrap, want)
-				end
-			end
-
 			task = {
 				run = function ()
-					if not suspension:waiting() then
-						return
+					if not suspension:waiting() then return end
+
+					local r = capture_want(run_step)
+					if r[1] then
+						unlink()
+						return suspension:complete(leaf_wrap, unpack(r, 2, r.n))
 					end
 
-					local res  = pack(run_step())
-					local done = res[1]
-					if done then
-						unlink_token()
-						return suspension:complete(leaf_wrap, unpack(res, 2, res.n))
-					end
-
-					-- If run_step did not specify a want, derive it from probe_step.
-					-- This avoids stalling after partial progress when the primitive
-					-- is still not complete.
-					local w = normalise_want(res[2])
-					if w == nil then
-						set_want_from_probe()
-					else
-						last_want = w
-					end
-
-					register_with_want(last_want)
+					arm(task, suspension, leaf_wrap, last_want)
 				end,
 			}
 
-			-- Register based on last_want as computed by the most recent try().
-			register_with_want(last_want)
+			-- Use want captured by the most recent try().
+			arm(task, suspension, leaf_wrap, last_want)
 		end
 
-		local prim = op.new_primitive(wrap_fn, try, block)
-
-		return prim:on_abort(function ()
-			unlink_token()
-		end)
+		return op.new_primitive(wrap_fn, try, block):on_abort(unlink)
 	end)
 end
+
 
 --- Backwards-compatible wrapper: a single step is used for both probe and run.
 ---@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn, want: any): WaitToken
