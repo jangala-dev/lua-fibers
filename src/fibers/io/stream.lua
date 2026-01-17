@@ -212,81 +212,169 @@ end
 ---@param min integer
 ---@param max integer
 ---@param terminator string|nil
----@return fun(): boolean, ...
-local function make_read_step(stream, buf, min, max, terminator)
-	local tally      = 0
-	local found_term = false
+---@return fun(): boolean, ...  -- probe_step()
+---@return fun(): boolean, ...  -- run_step()
+local function make_read_steps(stream, buf, min, max, terminator)
+	local tally = 0
 
-	local function adjust_for_terminator()
-		if not terminator then return end
+	-- When we clamp to a terminator, we record the exact target length.
+	-- “complete” will only be true when we return exactly at this boundary.
+	local term_target = nil
+
+	-- Hint remembered from the last backend “would block” return.
+	-- Used by probe_step so it can return an informative want without doing IO.
+	local want_hint = nil
+
+	local function is_terminator_enabled()
+		return terminator ~= nil and terminator ~= ''
+	end
+
+	local function maybe_clamp_to_terminator()
+		if term_target or not is_terminator_enabled() then
+			return
+		end
+		if not stream.rx then
+			return
+		end
 		local loc = stream.rx:find(terminator)
 		if loc then
-			found_term = true
 			local final = tally + loc + #terminator
+			-- Only clamp if it fits within max; otherwise this is not a “complete line”
+			-- under the requested limit.
 			if final <= max then
+				term_target = final
 				min, max = final, final
 			end
 		end
 	end
 
-	return function ()
+	local function completion_flag(err)
+		-- Complete only when:
+		--   * we clamped to a terminator target, and
+		--   * we are returning exactly at that target, and
+		--   * there is no error.
+		return (err == nil) and (term_target ~= nil) and (tally == term_target)
+	end
+
+	local function done(err)
+		want_hint = nil
+		return true, buf, tally, err, completion_flag(err)
+	end
+
+	local function drain_from_rx()
+		local avail = stream.rx:read_avail()
+		if avail <= 0 or tally >= max then
+			return
+		end
+		local need = math.min(avail, max - tally)
+		if need <= 0 then
+			return
+		end
+		local chunk = stream.rx:take(need)
+		if chunk and #chunk > 0 then
+			buf:append(chunk)
+			tally = tally + #chunk
+		end
+	end
+
+	-- Probe step:
+	--   * must not call io:read_string(...)
+	--   * may commit (consume) only when it can complete immediately
+	local function probe_step()
+		if stream._sticky_rerr then
+			return done(stream._sticky_rerr)
+		end
+
+		if stream._closed or not stream.io then
+			return done('closed')
+		end
+
+		if not stream.rx then
+			return done('not readable')
+		end
+
+		maybe_clamp_to_terminator()
+
+		-- If we already have enough committed bytes, we can complete.
+		if tally >= min then
+			return done(nil)
+		end
+
+		-- Only commit (drain) if it would make us complete without backend IO.
+		local avail = stream.rx:read_avail()
+		if avail > 0 and tally < max then
+			local possible = tally + math.min(avail, max - tally)
+			if possible >= min then
+				-- Drain and complete.
+				drain_from_rx()
+				if tally >= min then
+					return done(nil)
+				end
+			end
+		end
+
+		-- Not ready. Provide a want hint if we have one; otherwise nil.
+		return false, want_hint
+	end
+
+	-- Run step:
+	--   * may call backend IO
+	--   * may perform progress; returns false,want when it would block
+	local function run_step()
 		while true do
 			if stream._sticky_rerr then
-				return true, buf, tally, stream._sticky_rerr, found_term
+				return done(stream._sticky_rerr)
 			end
 
-			-- Closed beats capability checks: a previously-readable stream that is
-			-- closed must report 'closed', not 'not readable'.
 			if stream._closed or not stream.io then
-				return true, buf, tally, 'closed', found_term
+				return done('closed')
 			end
 
 			if not stream.rx then
-				return true, buf, tally, 'not readable', found_term
+				return done('not readable')
 			end
 
-			adjust_for_terminator()
+			maybe_clamp_to_terminator()
 
-			local avail = stream.rx:read_avail()
-			if avail > 0 and tally < max then
-				local need  = math.min(avail, max - tally)
-				local chunk = stream.rx:take(need)
-				if #chunk > 0 then
-					buf:append(chunk)
-					tally = tally + #chunk
-					if tally >= min then
-						return true, buf, tally, nil, found_term
-					end
-				end
+			-- Drain whatever is already buffered.
+			drain_from_rx()
+			if tally >= min then
+				return done(nil)
 			end
 
 			local io = stream.io
 			if not (io and io.read_string) then
-				return true, buf, tally, 'backend does not support read_string', found_term
+				return done('backend does not support read_string')
 			end
 
 			local room = stream.rx:write_avail()
 			if room <= 0 then
-				return true, buf, tally, 'buffer capacity exhausted', found_term
+				-- Preserve old behaviour: hard error when we cannot make progress.
+				return done('buffer capacity exhausted')
 			end
 
 			local data, err, want = io:read_string(room)
-			if err then
+			if err ~= nil then
 				stream._sticky_rerr = err
-				return true, buf, tally, err, found_term
+				return done(err)
 			end
 
 			if data == nil then
+				want_hint = want
 				return false, want
 			end
 
 			if data == '' then
-				return true, buf, tally, nil, found_term
+				-- EOF
+				return done(nil)
 			end
 
 			stream.rx:put(data)
+			-- Loop and try draining again.
 		end
 	end
+
+	return probe_step, run_step
 end
 
 function Stream:read_into_op(buf, opts)
@@ -298,12 +386,24 @@ function Stream:read_into_op(buf, opts)
 	local terminator = opts.terminator
 	local eof_ok     = not not opts.eof_ok
 
-	local step = make_read_step(self, buf, min, max, terminator)
+	local probe_step, run_step = make_read_steps(self, buf, min, max, terminator)
+
+	-- Ensure we run the task at least once on first block when want is unknown,
+	-- so run_step can discover a correct want via backend IO (if needed),
+	-- without defaulting to 'any' (which can cause EPOLLOUT churn).
+	local primed = false
 
 	local function register(task, suspension, _, want)
 		local io = self.io
 		if not io then
 			-- ensure the task runs again and the step observes closure
+			suspension.sched:schedule(task)
+			return with_term(self, task, NO_TOKEN)
+		end
+
+		if want == nil and not primed then
+			primed = true
+			-- Run once promptly to learn want / fill buffers.
 			suspension.sched:schedule(task)
 			return with_term(self, task, NO_TOKEN)
 		end
@@ -314,16 +414,16 @@ function Stream:read_into_op(buf, opts)
 		return with_term(self, task, io:on_readable(task))
 	end
 
-	local ev = wait.waitable2(register, step, step)
+	local ev = wait.waitable2(register, probe_step, run_step)
 
-	return ev:wrap(function (ret_buf, cnt, err, found_term)
+	return ev:wrap(function (ret_buf, cnt, err, complete)
 		if cnt == 0 and not eof_ok then
 			if err == nil then
 				return nil, 0, 'eof', false
 			end
 			return nil, 0, err, false
 		end
-		return ret_buf, cnt, err, not not found_term
+		return ret_buf, cnt, err, not not complete
 	end)
 end
 
