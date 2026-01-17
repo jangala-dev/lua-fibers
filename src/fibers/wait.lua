@@ -258,6 +258,7 @@ local function waitable(register, step, wrap_fn)
 
 	return op.guard(function ()
 		local token
+		local last_want
 
 		local function unlink_token()
 			if token and token.unlink then
@@ -266,7 +267,13 @@ local function waitable(register, step, wrap_fn)
 			token = nil
 		end
 		local function try()
-			return step()
+			local res = pack(step())
+			if not res[1] then
+				last_want = normalise_want(res[2])
+			else
+				last_want = nil
+			end
+			return unpack(res, 1, res.n)
 		end
 
 		local function block(suspension, leaf_wrap)
@@ -302,17 +309,12 @@ local function waitable(register, step, wrap_fn)
 						return suspension:complete(leaf_wrap, unpack(res, 2, res.n))
 					end
 
-					register_with_want(normalise_want(res[2]))
+					last_want = normalise_want(res[2])
+					register_with_want(last_want)
 				end,
 			}
 
-			-- Initial drive: decide readiness *before* registering.
-			local first = pack(step())
-			if first[1] then
-				return suspension:complete(leaf_wrap, unpack(first, 2, first.n))
-			end
-
-			register_with_want(normalise_want(first[2]))
+			register_with_want(last_want)
 		end
 
 		local prim = op.new_primitive(wrap_fn, try, block)

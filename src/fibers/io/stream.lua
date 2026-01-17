@@ -102,6 +102,10 @@ local function make_read_step(stream, buf, min, max, terminator)
 
 	return function ()
 		while true do
+			if not stream.rx or not stream.io then
+				return true, buf, tally, 'stream closed'
+			end
+
 			adjust_for_terminator()
 
 			local avail = stream.rx:read_avail()
@@ -156,6 +160,10 @@ local function make_write_step(stream, src_str)
 	local len    = #src_str
 
 	return function ()
+		if not stream.io then
+			return true, offset, 'stream closed'
+		end
+
 		if offset == len then
 			return true, len
 		end
@@ -210,11 +218,18 @@ function Stream:read_into_op(buf, opts)
 	end
 
 	return wait.waitable(
-		function (task, _, _, want)
-			if want == 'wr' then
-				return self.io:on_writable(task)
+		function (task, suspension, _, want)
+			local io = self.io
+			if not io then
+				-- ensure the task runs again and the step observes closure
+				suspension.sched:schedule(task)
+				return { unlink = function () end }
 			end
-			return self.io:on_readable(task)
+
+			if want == 'wr' then
+				return io:on_writable(task)
+			end
+			return io:on_readable(task)
 		end,
 		step,
 		wrap
@@ -252,11 +267,18 @@ function Stream:write_string_op(str)
 	end
 
 	return wait.waitable(
-		function (task, _, _, want)
-			if want == 'rd' then
-				return self.io:on_readable(task)
+		function (task, suspension, _, want)
+			local io = self.io
+			if not io then
+				-- ensure the task runs again and the step observes closure
+				suspension.sched:schedule(task)
+				return { unlink = function () end }
 			end
-			return self.io:on_writable(task)
+
+			if want == 'rd' then
+				return io:on_readable(task)
+			end
+			return io:on_writable(task)
 		end,
 		step,
 		wrap
