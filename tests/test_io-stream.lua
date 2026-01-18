@@ -25,7 +25,7 @@ local function assert_eq(a, b, msg)
 end
 
 local function assert_truthy(v, msg)
-	if not v then error(msg or 'expected truthy', 2) end
+	if not v then error(msg or 'expected truthy') end
 end
 
 local function assert_ok_or_zero(v, msg)

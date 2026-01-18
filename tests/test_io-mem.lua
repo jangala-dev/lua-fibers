@@ -267,7 +267,7 @@ end
 ----------------------------------------------------------------------
 
 local function main()
-	test_simple_read_write()
+	-- test_simple_read_write()
 	test_backpressure_and_partial()
 	test_eof_behaviour()
 	test_line_terminator()

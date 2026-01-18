@@ -28,6 +28,7 @@ local LinearBuf = bytes.LinearBuf
 ---@field line_buffering boolean
 ---@field _ws Waitset
 ---@field _closed boolean
+---@field _closing boolean
 ---@field _sticky_rerr any|nil
 ---@field _sticky_werr any|nil
 ---@field _big string|nil
@@ -35,6 +36,7 @@ local LinearBuf = bytes.LinearBuf
 ---@field _pump_task Task
 ---@field _pump_token WaitToken|nil
 ---@field _pump_scheduled boolean
+---@field _rd_owner any|nil
 ---@field _wr_owner any|nil
 local Stream = {}
 Stream.__index = Stream
@@ -46,6 +48,7 @@ local BIG_WRITE_CHUNK     = 64 * 1024
 local K_TERM   = 'term'
 local K_SPACE  = 'space'
 local K_DRAIN  = 'drain'
+local K_RDGATE = 'rd_gate'
 local K_WRGATE = 'wr_gate'
 
 ----------------------------------------------------------------------
@@ -54,6 +57,15 @@ local K_WRGATE = 'wr_gate'
 
 local function sched()
 	return runtime.current_scheduler
+end
+
+-- waitable2 wrap helper: allow steps to return a commit thunk (choice-safe).
+-- If the first value is a function, it will be called to produce final results.
+local function thunk_wrap(v1, ...)
+	if type(v1) == 'function' then
+		return v1(...)
+	end
+	return v1, ...
 end
 
 local function token2(t1, t2)
@@ -74,12 +86,16 @@ local function reg_term(self, task) return self._ws:add(K_TERM, task) end
 local function reg_internal(self, key, task) return self._ws:add(key, task) end
 
 local function with_term(self, task, tok) return token2(tok or NO_TOKEN, reg_term(self, task)) end
-local function with_term_internal(self, task, key) return token2(reg_internal(self, key, task), reg_term(self, task)) end
+
+local function with_term_internal(self, task, key)
+	return token2(reg_internal(self, key, task), reg_term(self, task))
+end
 
 local function broadcast(self)
 	notify_all(self, K_TERM)
 	notify_all(self, K_SPACE)
 	notify_all(self, K_DRAIN)
+	notify_all(self, K_RDGATE)
 	notify_all(self, K_WRGATE)
 end
 
@@ -99,29 +115,14 @@ local function open(io_backend, readable, writable, bufsize)
 		io              = io_backend,
 		line_buffering  = false,
 		_ws             = wait.new_waitset(),
-		_closed         = false,
-		_sticky_rerr    = nil,
-		_sticky_werr    = nil,
-		_big            = nil,
 		_big_off        = 0,
-		_pump_token     = nil,
 		_pump_scheduled = false,
-		_wr_owner       = nil,
 	}, Stream)
 
-	if readable ~= false then
-		s.rx = RingBuf.new(bufsize)
-	end
-	if writable ~= false then
-		s.tx = RingBuf.new(bufsize)
-	end
+	if readable ~= false then s.rx = RingBuf.new(bufsize) end
+	if writable ~= false then s.tx = RingBuf.new(bufsize) end
 
-	s._pump_task = {
-		run = function ()
-			s:_pump()
-		end,
-	}
-
+	s._pump_task = { run = function () s:_pump() end }
 	return s
 end
 
@@ -137,6 +138,16 @@ end
 
 function Stream:block()
 	if self.io and self.io.block then self.io:block() end
+end
+
+-- Begin closing the stream: wake any blocked operations promptly.
+-- This does not tear down buffers or the backend; terminate() still does that.
+function Stream:_begin_close(_)
+	if self._closed then
+		return broadcast(self)
+	end
+	if not self._closing then self._closing = true end
+	return broadcast(self)
 end
 
 ----------------------------------------------------------------------
@@ -156,14 +167,14 @@ function Stream:terminate(_)
 	end
 
 	self._closed = true
-
-	-- Cancel any outstanding pump wait.
+	self._closing = true
+	self._rd_owner = nil
+	self._wr_owner = nil
 	self:_unlink_pump_wait()
 
 	local io = self.io
 	self.io = nil
 
-	-- Drop buffers immediately.
 	self.rx, self.tx = nil, nil
 	self._big, self._big_off = nil, 0
 
@@ -176,6 +187,15 @@ end
 
 ---@return Op
 function Stream:close_op()
+	-- Mark closing immediately so blocked ops wake and observe closure promptly.
+	-- Still attempt a graceful flush on writable streams.
+	self:_begin_close('closing')
+
+	-- Idempotence: if already terminated, close succeeds.
+	if self._closed then
+		return op.always(true, nil)
+	end
+
 	-- Close is graceful on writable streams (flush then terminate),
 	-- and immediate on read-only streams.
 	if not self.tx then
@@ -187,9 +207,7 @@ function Stream:close_op()
 
 	return self:flush_op():wrap(function (ok, err)
 		self:terminate('closed')
-		if ok == nil then
-			return nil, err
-		end
+		if ok == nil then return nil, err end
 		return true, nil
 	end)
 end
@@ -207,31 +225,21 @@ end
 ---@return fun(): boolean, ...  -- run_step()
 local function make_read_steps(stream, buf, min, max, terminator)
 	local tally = 0
-
-	-- When we clamp to a terminator, we record the exact target length.
 	local term_target = nil
-
-	-- Hint remembered from the last backend “would block” return.
 	local want_hint = nil
 
-	local function is_terminator_enabled()
+	local function term_enabled()
 		return terminator ~= nil and terminator ~= ''
 	end
 
-	local function maybe_clamp_to_terminator()
-		if term_target or not is_terminator_enabled() then
-			return
-		end
-		if not stream.rx then
-			return
-		end
+	local function maybe_clamp()
+		if term_target or not term_enabled() or not stream.rx then return end
 		local loc = stream.rx:find(terminator)
-		if loc then
-			local final = tally + loc + #terminator
-			if final <= max then
-				term_target = final
-				min, max = final, final
-			end
+		if not loc then return end
+		local final = tally + loc + #terminator
+		if final <= max then
+			term_target = final
+			min, max = final, final
 		end
 	end
 
@@ -240,18 +248,20 @@ local function make_read_steps(stream, buf, min, max, terminator)
 		return true, buf, tally, err
 	end
 
-	local function drain_from_rx()
-		if not stream.rx then
-			return
+	local function done_thunk(err, drain_fn)
+		return true, function ()
+			if drain_fn then drain_fn() end
+			want_hint = nil
+			return buf, tally, err
 		end
+	end
+
+	local function drain_once()
+		if not stream.rx then return end
 		local avail = stream.rx:read_avail()
-		if avail <= 0 or tally >= max then
-			return
-		end
+		if avail <= 0 or tally >= max then return end
 		local need = math.min(avail, max - tally)
-		if need <= 0 then
-			return
-		end
+		if need <= 0 then return end
 		local chunk = stream.rx:take(need)
 		if chunk and #chunk > 0 then
 			buf:append(chunk)
@@ -259,87 +269,83 @@ local function make_read_steps(stream, buf, min, max, terminator)
 		end
 	end
 
-	-- Drain repeatedly until no progress or max reached.
-	local function drain_all_from_rx()
-		if not stream.rx then
-			return
-		end
+	local function drain_all()
+		if not stream.rx then return end
 		while tally < max do
 			local before = tally
-			drain_from_rx()
-			if tally == before then
-				break
-			end
+			drain_once()
+			if tally == before then break end
 		end
+	end
+
+	-- Terminal checks that do not perform backend IO.
+	-- IMPORTANT: probe_step must be non-destructive under op.choice.
+	-- Any draining from rx must happen only in a commit thunk.
+	local function terminal_noio_probe()
+		if stream._sticky_rerr then
+			-- Choice-safe: do not drain here; drain in commit thunk.
+			maybe_clamp()
+			return done_thunk(stream._sticky_rerr, drain_all)
+		end
+		if stream._closed or stream._closing or not stream.io then
+			return done('closed')
+		end
+		if not stream.rx then
+			return done('not readable')
+		end
+		return nil
+	end
+
+	local function terminal_noio_run()
+		if stream._sticky_rerr then
+			maybe_clamp()
+			drain_all()
+			return done(stream._sticky_rerr)
+		end
+		if stream._closed or stream._closing or not stream.io then return done('closed') end
+		if not stream.rx then return done('not readable') end
+		return nil
 	end
 
 	-- Probe step:
 	--   * must not call io:read_string(...)
-	--   * may commit (consume) only when it can complete immediately
+	--   * must be non-destructive under op.choice
 	local function probe_step()
-		if stream._sticky_rerr then
-			maybe_clamp_to_terminator()
-			drain_all_from_rx()
-			return done(stream._sticky_rerr)
-		end
+		local ok, a, b, c = terminal_noio_probe()
+		if ok then return ok, a, b, c end
 
-		if stream._closed or not stream.io then
-			return done('closed')
-		end
+		maybe_clamp()
+		if tally >= min then return done(nil) end
 
-		if not stream.rx then
-			return done('not readable')
-		end
-
-		maybe_clamp_to_terminator()
-
-		-- If we already have enough committed bytes, we can complete.
-		if tally >= min then
-			return done(nil)
-		end
-
-		-- Only commit (drain) if it would make us complete without backend IO.
-		local avail = stream.rx:read_avail()
-		if avail > 0 and tally < max then
-			local possible = tally + math.min(avail, max - tally)
-			if possible >= min then
-				drain_from_rx()
-				if tally >= min then
-					return done(nil)
+		-- Choice-safe fast path: if rx already contains enough bytes to
+		-- satisfy min (after any terminator clamp), return a commit thunk
+		-- that performs the drain.
+		local rx = stream.rx
+		if rx and tally < max then
+			local avail = rx:read_avail()
+			if avail > 0 then
+				local possible = tally + math.min(avail, max - tally)
+				if possible >= min then
+					return done_thunk(nil, drain_once)
 				end
 			end
 		end
 
-		-- Not ready. Provide a want hint if we have one; otherwise nil.
 		return false, want_hint
 	end
 
 	-- Run step:
 	--   * may call backend IO
-	--   * may perform progress; returns false,want when it would block
+	--   * returns false,want when it would block
 	local function run_step()
 		while true do
-			if stream._sticky_rerr then
-				maybe_clamp_to_terminator()
-				drain_all_from_rx()
-				return done(stream._sticky_rerr)
-			end
+			local ok, b, n, e = terminal_noio_run()
+			if ok then return ok, b, n, e end
 
-			if stream._closed or not stream.io then
-				return done('closed')
-			end
+			maybe_clamp()
 
-			if not stream.rx then
-				return done('not readable')
-			end
-
-			maybe_clamp_to_terminator()
-
-			-- Drain whatever is already buffered.
-			drain_from_rx()
-			if tally >= min then
-				return done(nil)
-			end
+			drain_once()
+			if tally >= min then return done(nil) end
 
 			local io = stream.io
 			if not (io and io.read_string) then
@@ -368,7 +374,6 @@ local function make_read_steps(stream, buf, min, max, terminator)
 			end
 
 			stream.rx:put(data)
-			-- Loop and try draining again.
 		end
 	end
 
@@ -389,14 +394,50 @@ function Stream:read_into_op(buf, opts)
 
 	local probe_step, run_step = make_read_steps(self, buf, min, max, terminator)
 
-	-- Prime once: ensure we run the task at least once on first block when want is unknown,
-	-- so run_step can discover a correct want via backend IO (if needed).
+	-- Read gate: allow only one in-flight read op at a time.
+	local owner     = {}
+	local have_lock = false
+
+	local function acquire_lock()
+		if have_lock then return true end
+		if self._rd_owner == nil or self._rd_owner == owner then
+			self._rd_owner = owner
+			have_lock      = true
+			return true
+		end
+		return false
+	end
+
+	local function release_lock()
+		if have_lock and self._rd_owner == owner then
+			self._rd_owner = nil
+			have_lock      = false
+			notify_one(self, K_RDGATE)
+		end
+	end
+
+	local function gate_step(step_fn)
+		return function (...)
+			-- If another read op owns the gate, wait on K_RDGATE.
+			if not acquire_lock() then
+				return false, K_RDGATE
+			end
+			return step_fn(...)
+		end
+	end
+
+	probe_step = gate_step(probe_step)
+	run_step   = gate_step(run_step)
+
 	local primed = false
 
 	local function register(task, suspension, _, want)
+		if want == K_RDGATE then
+			return with_term_internal(self, task, K_RDGATE)
+		end
+
 		local io = self.io
 		if not io then
-			-- ensure the task runs again and the step observes closure
 			suspension.sched:schedule(task)
 			return with_term(self, task, NO_TOKEN)
 		end
@@ -413,10 +454,19 @@ function Stream:read_into_op(buf, opts)
 		return with_term(self, task, io:on_readable(task))
 	end
 
-	local ev = wait.waitable2(register, probe_step, run_step)
+	-- Ensure the read gate is released on completion; choice abort releases via on_abort.
+	local function read_wrap(v1, ...)
+		local ret_buf, cnt, err = thunk_wrap(v1, ...)
+		release_lock()
+		return ret_buf, cnt, err
+	end
+
+	local ev = wait.waitable2(register, probe_step, run_step, read_wrap)
+	ev = ev:on_abort(function ()
+		release_lock()
+	end)
 
 	return ev:wrap(function (ret_buf, cnt, err)
-		-- If caller requires at least one byte and none were read, report as nil.
 		if cnt == 0 and not eof_ok then
 			return nil, 0, err
 		end
@@ -431,17 +481,13 @@ function Stream:read_string_op(opts)
 	local ev  = self:read_into_op(buf, opts)
 
 	return ev:wrap(function (ret_buf, cnt, err)
-		if not ret_buf then
-			return nil, 0, err
-		end
+		if not ret_buf then return nil, 0, err end
 
 		local s = ret_buf:tostring()
-
-		-- EOF before any bytes: nil (Lua style)
 		if cnt == 0 and s == '' then
+			-- EOF before any bytes: nil (Lua style)
 			return nil, 0, err
 		end
-
 		return s, cnt, err
 	end)
 end
@@ -483,10 +529,6 @@ function Stream:read_line_op(opts)
 	local term      = opts.terminator or '\n'
 	local keep_term = not not opts.keep_terminator
 
-	if opts.max ~= nil then
-		error('read_line_op: max is not supported; line reads are newline-or-EOF', 2)
-	end
-
 	-- Newline-or-EOF: clamp on terminator when present; otherwise read until EOF.
 	local ev = self:read_string_op {
 		min        = math.huge,
@@ -496,16 +538,9 @@ function Stream:read_line_op(opts)
 	}
 
 	return ev:wrap(function (s, cnt, err)
-		if err ~= nil then
-			return nil, err
-		end
+		if err ~= nil then return nil, err end
+		if not s or cnt == 0 then return nil, nil end
 
-		-- EOF before any bytes.
-		if not s or cnt == 0 then
-			return nil, nil
-		end
-
-		-- Strip terminator unless requested to keep it.
 		if not keep_term and #term > 0 and s:sub(- #term) == term then
 			s = s:sub(1, - #term - 1)
 		end
@@ -518,12 +553,11 @@ end
 function Stream:read_all_op()
 	assert(self.rx, 'stream is not readable')
 
-	local ev = self:read_string_op { min = math.huge, max = math.huge, eof_ok = true }
-
-	return ev:wrap(function (s, _, err)
-		if not s then return '', err end
-		return s, err
-	end)
+	return self:read_string_op { min = math.huge, max = math.huge, eof_ok = true }
+		:wrap(function (s, _, err)
+			if not s then return '', err end
+			return s, err
+		end)
 end
 
 ----------------------------------------------------------------------
@@ -537,69 +571,70 @@ function Stream:_kick_pump()
 	sched():schedule(self._pump_task)
 end
 
+local function next_write_chunk(self)
+	if self._big then
+		if self._big_off >= #self._big then
+			self._big = nil
+			self._big_off = 0
+			notify_all(self, K_SPACE)
+			return nil
+		end
+		local remaining = #self._big - self._big_off
+		local take = remaining
+		if take > BIG_WRITE_CHUNK then take = BIG_WRITE_CHUNK end
+		return self._big:sub(self._big_off + 1, self._big_off + take), 'big'
+	end
+
+	if self.tx and self.tx:read_avail() > 0 then
+		local avail = self.tx:read_avail()
+		if avail > BIG_WRITE_CHUNK then avail = BIG_WRITE_CHUNK end
+		return self.tx:peek(avail), 'ring'
+	end
+
+	return nil
+end
+
+local function advance_after_write(self, mode, n)
+	if mode == 'big' then
+		self._big_off = self._big_off + n
+		if self._big_off >= #self._big then
+			self._big = nil
+			self._big_off = 0
+			notify_all(self, K_SPACE)
+		end
+		return
+	end
+
+	self.tx:advance_read(n)
+	notify_all(self, K_SPACE)
+end
+
 function Stream:_pump()
 	self._pump_scheduled = false
 
 	local io = self.io
-	if self._closed or not io then
-		return
-	end
-	if self._sticky_werr then
-		return
-	end
-	if not (self.tx or self._big) then
-		return
-	end
+	if self._closed or not io then return end
+	if self._sticky_werr then return end
+	if not (self.tx or self._big) then return end
 
-	-- Cancel any prior wait; we are running now.
 	self:_unlink_pump_wait()
 
 	local progressed = false
 
 	while true do
-		if self._sticky_werr or self._closed or not self.io then
-			break
-		end
+		if self._sticky_werr or self._closed or not self.io then break end
 
-		local chunk
-		if self._big then
-			if self._big_off >= #self._big then
-				self._big = nil
-				self._big_off = 0
-				notify_all(self, K_SPACE)
-			else
-				local remaining = #self._big - self._big_off
-				local take = remaining
-				if take > BIG_WRITE_CHUNK then
-					take = BIG_WRITE_CHUNK
-				end
-				chunk = self._big:sub(self._big_off + 1, self._big_off + take)
-			end
-		elseif self.tx and self.tx:read_avail() > 0 then
-			local avail = self.tx:read_avail()
-			if avail > BIG_WRITE_CHUNK then
-				avail = BIG_WRITE_CHUNK
-			end
-			chunk = self.tx:peek(avail)
-		else
-			break
-		end
-
-		if not chunk or #chunk == 0 then
-			break
-		end
+		local chunk, mode = next_write_chunk(self)
+		if not chunk or #chunk == 0 then break end
 
 		local n, err, want = io:write_string(chunk)
 		if err then
 			self._sticky_werr = err
-			notify_all(self, K_SPACE)
-			notify_all(self, K_DRAIN)
-			notify_all(self, K_TERM)
+			broadcast(self) -- wakes space/drain/term/wr_gate
 			break
 		end
 
 		if n == nil then
-			-- Would block: arm pump on readiness.
 			if want == 'rd' and io.on_readable then
 				self._pump_token = io:on_readable(self._pump_task)
 			else
@@ -609,33 +644,19 @@ function Stream:_pump()
 		end
 
 		if n == 0 then
-			-- No progress; avoid a busy loop.
 			self._pump_token = io:on_writable(self._pump_task)
 			break
 		end
 
 		progressed = true
-
-		if self._big then
-			self._big_off = self._big_off + n
-			if self._big_off >= #self._big then
-				self._big = nil
-				self._big_off = 0
-				notify_all(self, K_SPACE)
-			end
-		elseif self.tx then
-			self.tx:advance_read(n)
-			notify_all(self, K_SPACE)
-		end
+		advance_after_write(self, mode, n)
 	end
 
-	-- Drain notification.
 	if (not self._big) and self.tx and self.tx:read_avail() == 0 then
 		notify_all(self, K_DRAIN)
 	end
-
 	if progressed then
-		notify_all(self, K_TERM) -- ensures blocked ops re-check promptly on progress
+		notify_all(self, K_TERM)
 	end
 end
 
@@ -649,22 +670,20 @@ function Stream:write_string_op(str)
 	assert(self.tx, 'stream is not writable')
 	assert(type(str) == 'string', 'write_string_op expects a string')
 
-	local owner = {} -- identity for this op instance
+	local owner = {}
 	local have_lock = false
 	local len = #str
 
 	local function can_commit()
 		if self._sticky_werr then return false, self._sticky_werr end
-		if self._closed or not self.io then return false, 'closed' end
+		if self._closed or self._closing or not self.io then return false, 'closed' end
 		if self._big then return false, K_SPACE end
 
 		local cap = self.tx:capacity()
-
 		if len <= self.tx:write_avail() then
 			return true, 'ring'
 		end
 
-		-- Oversize allowed only when queue is empty.
 		if self.tx:read_avail() == 0 and len > cap then
 			return true, 'big'
 		end
@@ -674,12 +693,8 @@ function Stream:write_string_op(str)
 
 	local function acquire_lock()
 		if have_lock then return true end
-		if self._wr_owner == nil then
+		if self._wr_owner == nil or self._wr_owner == owner then
 			self._wr_owner = owner
-			have_lock = true
-			return true
-		end
-		if self._wr_owner == owner then
 			have_lock = true
 			return true
 		end
@@ -699,25 +714,19 @@ function Stream:write_string_op(str)
 			if mode == 'ring' then
 				self.tx:put(str)
 			else
-				-- big write: only when tx empty by can_commit policy
 				self._big = str
 				self._big_off = 0
 			end
 
-			-- Start or continue flushing in the background.
 			self:_kick_pump()
-
-			-- Release writer serialisation gate.
 			release_lock()
-
 			return len, nil
 		end
 	end
 
-	local function probe_step()
-		-- Avoid taking the lock unless we can complete immediately.
+	local function step(is_probe)
 		if self._sticky_werr then return true, nil, self._sticky_werr end
-		if self._closed or not self.io then return true, nil, 'closed' end
+		if self._closed or self._closing or not self.io then return true, nil, 'closed' end
 
 		if self._wr_owner ~= nil and self._wr_owner ~= owner then
 			return false, K_WRGATE
@@ -725,61 +734,45 @@ function Stream:write_string_op(str)
 
 		local ok, mode_or = can_commit()
 		if not ok then
-			return false, mode_or
-		end
-
-		-- Ready: take lock (serialise) and complete.
-		if not acquire_lock() then
-			return false, K_WRGATE
-		end
-
-		return true, make_commit(mode_or)
-	end
-
-	local function run_step()
-		if self._sticky_werr then return true, nil, self._sticky_werr end
-		if self._closed or not self.io then return true, nil, 'closed' end
-
-		if not acquire_lock() then
-			return false, K_WRGATE
-		end
-
-		local ok, mode_or = can_commit()
-		if not ok then
-			if mode_or == K_SPACE then
+			if not is_probe and mode_or == K_SPACE then
 				self:_kick_pump()
 			end
 			return false, mode_or
 		end
 
+		-- Probe: only take the gate if we can complete immediately.
+		if not acquire_lock() then
+			return false, K_WRGATE
+		end
+
+		-- Run: we already ensured commit is possible; probe uses same path.
 		return true, make_commit(mode_or)
 	end
+
+	local function probe_step() return step(true) end
+	local function run_step() return step(false) end
 
 	local function register(task, _, _, want)
 		if want == K_WRGATE then
 			return with_term_internal(self, task, K_WRGATE)
 		end
-
 		if want == K_SPACE or want == K_DRAIN then
 			self:_kick_pump()
 			return with_term_internal(self, task, want)
 		end
-
 		return with_term_internal(self, task, want or K_SPACE)
 	end
 
 	local function wrap(commit_or_nil, err)
 		if not commit_or_nil then
+			release_lock()
 			return nil, err
 		end
 		return commit_or_nil()
 	end
 
 	local ev = wait.waitable2(register, probe_step, run_step, wrap)
-
-	return ev:on_abort(function ()
-		release_lock()
-	end)
+	return ev:on_abort(function () release_lock() end)
 end
 
 ---@param ... any
@@ -788,9 +781,7 @@ function Stream:write_op(...)
 	assert(self.tx, 'stream is not writable')
 
 	local n = select('#', ...)
-	if n == 0 then
-		return op.always(0, nil)
-	end
+	if n == 0 then return op.always(0, nil) end
 
 	local parts = {}
 	for i = 1, n do
@@ -808,7 +799,6 @@ end
 
 ---@return Op  -- when performed: ok:boolean|nil, err:any|nil
 function Stream:flush_op()
-	-- Read-only streams have nothing to flush.
 	if not self.tx then
 		return op.always(true, nil)
 	end
@@ -823,9 +813,7 @@ function Stream:flush_op()
 			if drained() then return true, true, nil end
 			return true, nil, 'closed'
 		end
-		if drained() then
-			return true, true, nil
-		end
+		if drained() then return true, true, nil end
 		return false, K_DRAIN
 	end
 
@@ -836,25 +824,19 @@ function Stream:flush_op()
 			return true, nil, 'closed'
 		end
 		self:_kick_pump()
-		if drained() then
-			return true, true, nil
-		end
+		if drained() then return true, true, nil end
 		return false, K_DRAIN
 	end
 
 	local function register(task, _, _, want)
-		if want == K_DRAIN then
-			self:_kick_pump()
-		end
+		if want == K_DRAIN then self:_kick_pump() end
 		return with_term_internal(self, task, want or K_DRAIN)
 	end
 
-	local function wrap(ok, err)
+	return wait.waitable2(register, probe_step, run_step, function (ok, err)
 		if ok then return true, nil end
 		return nil, err
-	end
-
-	return wait.waitable2(register, probe_step, run_step, wrap)
+	end)
 end
 
 ----------------------------------------------------------------------
@@ -893,16 +875,20 @@ end
 ----------------------------------------------------------------------
 
 function Stream:read_line(opts) return perform(self:read_line_op(opts)) end
+
 function Stream:read_exactly(n) return perform(self:read_exactly_op(n)) end
+
 function Stream:read_some(max) return perform(self:read_some_op(max)) end
+
 function Stream:read_all() return perform(self:read_all_op()) end
 
 function Stream:write(...) return perform(self:write_op(...)) end
+
 function Stream:write_all(s) return perform(self:write_all_op(s)) end
 
 function Stream:flush() return perform(self:flush_op()) end
-function Stream:close() return perform(self:close_op()) end
 
+function Stream:close() return perform(self:close_op()) end
 
 ----------------------------------------------------------------------
 -- Lua io-like compatibility (legacy return shapes)
@@ -913,29 +899,20 @@ function Stream:close() return perform(self:close_op()) end
 function Stream:read_op(fmt)
 	assert(self.rx, 'stream is not readable')
 
-	local t = type(fmt)
-
-	-- Default / "*l": line without terminator
 	if fmt == nil or fmt == '*l' then return self:read_line_op() end
-
-	-- "*L": line with terminator
 	if fmt == '*L' then return self:read_line_op { keep_terminator = true } end
-
-	-- "*a": read all
 	if fmt == '*a' then return self:read_all_op() end
 
-	-- numeric: read up to n bytes; allow EOF
-	if t == 'number' then
-		local n = fmt
-		assert(n >= 0, 'read_op: n must be non-negative')
-		if n == 0 then return op.always('', nil) end
+	if type(fmt) == 'number' then
+		assert(fmt >= 0, 'read_op: n must be non-negative')
+		if fmt == 0 then return op.always('', nil) end
 
-		local ev = self:read_string_op { min = 1, max = n, eof_ok = true }
-		return ev:wrap(function (s, cnt, err)
-			if err then return nil, err end
-			if not s or cnt == 0 then return nil, nil end
-			return s, nil
-		end)
+		return self:read_string_op { min = 1, max = fmt, eof_ok = true }
+			:wrap(function (s, cnt, err)
+				if err then return nil, err end
+				if not s or cnt == 0 then return nil, nil end
+				return s, nil
+			end)
 	end
 
 	error('read_op: invalid format ' .. tostring(fmt))
