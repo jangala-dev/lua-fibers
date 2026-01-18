@@ -1,4 +1,3 @@
--- fibers/io/stream.lua
 ---@module 'fibers.io.stream'
 
 local wait    = require 'fibers.wait'
@@ -41,6 +40,7 @@ local Stream = {}
 Stream.__index = Stream
 
 local DEFAULT_BUFFER_SIZE = 2 ^ 12
+local BIG_WRITE_CHUNK     = 64 * 1024
 
 -- Internal wait keys (not exposed).
 local K_TERM   = 'term'
@@ -68,18 +68,13 @@ end
 local NO_TOKEN = { unlink = function () end }
 
 local function notify_all(self, key) self._ws:notify_all(key, sched()) end
-
 local function notify_one(self, key) self._ws:notify_one(key, sched()) end
 
 local function reg_term(self, task) return self._ws:add(K_TERM, task) end
-
 local function reg_internal(self, key, task) return self._ws:add(key, task) end
 
 local function with_term(self, task, tok) return token2(tok or NO_TOKEN, reg_term(self, task)) end
-
-local function with_term_internal(self, task, key)
-	return token2(reg_internal(self, key, task), reg_term(self, task))
-end
+local function with_term_internal(self, task, key) return token2(reg_internal(self, key, task), reg_term(self, task)) end
 
 local function broadcast(self)
 	notify_all(self, K_TERM)
@@ -199,10 +194,6 @@ function Stream:close_op()
 	end)
 end
 
-function Stream:close()
-	return perform(self:close_op())
-end
-
 ----------------------------------------------------------------------
 -- Read path
 ----------------------------------------------------------------------
@@ -218,11 +209,9 @@ local function make_read_steps(stream, buf, min, max, terminator)
 	local tally = 0
 
 	-- When we clamp to a terminator, we record the exact target length.
-	-- “complete” will only be true when we return exactly at this boundary.
 	local term_target = nil
 
 	-- Hint remembered from the last backend “would block” return.
-	-- Used by probe_step so it can return an informative want without doing IO.
 	local want_hint = nil
 
 	local function is_terminator_enabled()
@@ -239,8 +228,6 @@ local function make_read_steps(stream, buf, min, max, terminator)
 		local loc = stream.rx:find(terminator)
 		if loc then
 			local final = tally + loc + #terminator
-			-- Only clamp if it fits within max; otherwise this is not a “complete line”
-			-- under the requested limit.
 			if final <= max then
 				term_target = final
 				min, max = final, final
@@ -248,20 +235,15 @@ local function make_read_steps(stream, buf, min, max, terminator)
 		end
 	end
 
-	local function completion_flag(err)
-		-- Complete only when:
-		--   * we clamped to a terminator target, and
-		--   * we are returning exactly at that target, and
-		--   * there is no error.
-		return (err == nil) and (term_target ~= nil) and (tally == term_target)
-	end
-
 	local function done(err)
 		want_hint = nil
-		return true, buf, tally, err, completion_flag(err)
+		return true, buf, tally, err
 	end
 
 	local function drain_from_rx()
+		if not stream.rx then
+			return
+		end
 		local avail = stream.rx:read_avail()
 		if avail <= 0 or tally >= max then
 			return
@@ -277,11 +259,27 @@ local function make_read_steps(stream, buf, min, max, terminator)
 		end
 	end
 
+	-- Drain repeatedly until no progress or max reached.
+	local function drain_all_from_rx()
+		if not stream.rx then
+			return
+		end
+		while tally < max do
+			local before = tally
+			drain_from_rx()
+			if tally == before then
+				break
+			end
+		end
+	end
+
 	-- Probe step:
 	--   * must not call io:read_string(...)
 	--   * may commit (consume) only when it can complete immediately
 	local function probe_step()
 		if stream._sticky_rerr then
+			maybe_clamp_to_terminator()
+			drain_all_from_rx()
 			return done(stream._sticky_rerr)
 		end
 
@@ -305,7 +303,6 @@ local function make_read_steps(stream, buf, min, max, terminator)
 		if avail > 0 and tally < max then
 			local possible = tally + math.min(avail, max - tally)
 			if possible >= min then
-				-- Drain and complete.
 				drain_from_rx()
 				if tally >= min then
 					return done(nil)
@@ -323,6 +320,8 @@ local function make_read_steps(stream, buf, min, max, terminator)
 	local function run_step()
 		while true do
 			if stream._sticky_rerr then
+				maybe_clamp_to_terminator()
+				drain_all_from_rx()
 				return done(stream._sticky_rerr)
 			end
 
@@ -349,7 +348,6 @@ local function make_read_steps(stream, buf, min, max, terminator)
 
 			local room = stream.rx:write_avail()
 			if room <= 0 then
-				-- Preserve old behaviour: hard error when we cannot make progress.
 				return done('buffer capacity exhausted')
 			end
 
@@ -377,6 +375,9 @@ local function make_read_steps(stream, buf, min, max, terminator)
 	return probe_step, run_step
 end
 
+---@param buf LinearBuf
+---@param opts? { min?: integer, max?: integer, terminator?: string, eof_ok?: boolean }
+---@return Op
 function Stream:read_into_op(buf, opts)
 	assert(self.rx, 'stream is not readable')
 
@@ -388,9 +389,8 @@ function Stream:read_into_op(buf, opts)
 
 	local probe_step, run_step = make_read_steps(self, buf, min, max, terminator)
 
-	-- Ensure we run the task at least once on first block when want is unknown,
-	-- so run_step can discover a correct want via backend IO (if needed),
-	-- without defaulting to 'any' (which can cause EPOLLOUT churn).
+	-- Prime once: ensure we run the task at least once on first block when want is unknown,
+	-- so run_step can discover a correct want via backend IO (if needed).
 	local primed = false
 
 	local function register(task, suspension, _, want)
@@ -403,7 +403,6 @@ function Stream:read_into_op(buf, opts)
 
 		if want == nil and not primed then
 			primed = true
-			-- Run once promptly to learn want / fill buffers.
 			suspension.sched:schedule(task)
 			return with_term(self, task, NO_TOKEN)
 		end
@@ -416,106 +415,112 @@ function Stream:read_into_op(buf, opts)
 
 	local ev = wait.waitable2(register, probe_step, run_step)
 
-	return ev:wrap(function (ret_buf, cnt, err, complete)
+	return ev:wrap(function (ret_buf, cnt, err)
+		-- If caller requires at least one byte and none were read, report as nil.
 		if cnt == 0 and not eof_ok then
-			if err == nil then
-				return nil, 0, 'eof', false
-			end
-			return nil, 0, err, false
+			return nil, 0, err
 		end
-		return ret_buf, cnt, err, not not complete
+		return ret_buf, cnt, err
 	end)
 end
 
+---@param opts? { min?: integer, max?: integer, terminator?: string, eof_ok?: boolean }
+---@return Op  -- when performed: s:string|nil, cnt:integer, err:any|nil
 function Stream:read_string_op(opts)
 	local buf = LinearBuf.new()
 	local ev  = self:read_into_op(buf, opts)
 
-	return ev:wrap(function (ret_buf, cnt, err, complete)
+	return ev:wrap(function (ret_buf, cnt, err)
 		if not ret_buf then
-			return nil, err, false
+			return nil, 0, err
 		end
 
 		local s = ret_buf:tostring()
 
+		-- EOF before any bytes: nil (Lua style)
 		if cnt == 0 and s == '' then
-			if err == nil then
-				return nil, 'eof', false
-			end
-			return nil, err, false
+			return nil, 0, err
 		end
 
-		return s, err, not not complete
+		return s, cnt, err
 	end)
 end
 
+---@param max integer
+---@return Op  -- when performed: s:string|nil, err:any|nil
 function Stream:read_some_op(max)
 	assert(type(max) == 'number' and max >= 0, 'read_some_op: max must be non-negative')
 	if max == 0 then return op.always('', nil) end
 
 	return self:read_string_op { min = 1, max = max, eof_ok = true }
-		:wrap(function (s, err)
-			if err == 'eof' and not s then
-				return nil, 'eof'
-			end
-			return s, err
+		:wrap(function (s, cnt, err)
+			if err ~= nil then return nil, err end
+			if not s or cnt == 0 then return nil, nil end
+			return s, nil
 		end)
 end
 
+---@param n integer
+---@return Op  -- when performed: s:string|nil, err:any|nil
 function Stream:read_exactly_op(n)
 	assert(type(n) == 'number' and n >= 0, 'read_exactly_op: n must be non-negative')
 	if n == 0 then return op.always('', nil) end
 
 	return self:read_string_op { min = n, max = n, eof_ok = false }
-		:wrap(function (s, err)
+		:wrap(function (s, cnt, err)
 			if err ~= nil then return nil, err end
-			if not s or #s ~= n then return nil, 'short read' end
+			if not s or cnt ~= n then return nil, 'short read' end
 			return s, nil
 		end)
 end
 
+---@param opts? { terminator?: string, keep_terminator?: boolean }
+---@return Op  -- when performed: line:string|nil, err:any|nil
 function Stream:read_line_op(opts)
 	assert(self.rx, 'stream is not readable')
 
 	opts            = opts or {}
 	local term      = opts.terminator or '\n'
 	local keep_term = not not opts.keep_terminator
-	local max_bytes = opts.max or math.huge
 
+	if opts.max ~= nil then
+		error('read_line_op: max is not supported; line reads are newline-or-EOF', 2)
+	end
+
+	-- Newline-or-EOF: clamp on terminator when present; otherwise read until EOF.
 	local ev = self:read_string_op {
-		min        = max_bytes,
-		max        = max_bytes,
+		min        = math.huge,
+		max        = math.huge,
 		terminator = term,
 		eof_ok     = true,
 	}
 
-	return ev:wrap(function (s, err, complete)
-		if err == 'closed' then
-			return nil, 'closed', false
-		end
-		if not s then
-			return nil, err, false
+	return ev:wrap(function (s, cnt, err)
+		if err ~= nil then
+			return nil, err
 		end
 
-		local is_complete = not not complete
+		-- EOF before any bytes.
+		if not s or cnt == 0 then
+			return nil, nil
+		end
 
+		-- Strip terminator unless requested to keep it.
 		if not keep_term and #term > 0 and s:sub(- #term) == term then
 			s = s:sub(1, - #term - 1)
 		end
 
-		return s, (err == 'eof') and nil or err, is_complete
+		return s, nil
 	end)
 end
 
+---@return Op  -- when performed: data:string, err:any|nil
 function Stream:read_all_op()
 	assert(self.rx, 'stream is not readable')
 
 	local ev = self:read_string_op { min = math.huge, max = math.huge, eof_ok = true }
 
-	return ev:wrap(function (s, err)
-		-- Normalise EOF to success for read_all: EOF is the expected terminator.
-		if err == 'eof' then err = nil end
-		-- If no data at all, normalise to empty string.
+	return ev:wrap(function (s, _, err)
 		if not s then return '', err end
 		return s, err
 	end)
@@ -563,10 +568,18 @@ function Stream:_pump()
 				self._big_off = 0
 				notify_all(self, K_SPACE)
 			else
-				chunk = self._big:sub(self._big_off + 1)
+				local remaining = #self._big - self._big_off
+				local take = remaining
+				if take > BIG_WRITE_CHUNK then
+					take = BIG_WRITE_CHUNK
+				end
+				chunk = self._big:sub(self._big_off + 1, self._big_off + take)
 			end
 		elseif self.tx and self.tx:read_avail() > 0 then
 			local avail = self.tx:read_avail()
+			if avail > BIG_WRITE_CHUNK then
+				avail = BIG_WRITE_CHUNK
+			end
 			chunk = self.tx:peek(avail)
 		else
 			break
@@ -630,6 +643,8 @@ end
 -- Buffered write ops
 ----------------------------------------------------------------------
 
+---@param str string
+---@return Op  -- when performed: bytes_written:integer|nil, err:any|nil
 function Stream:write_string_op(str)
 	assert(self.tx, 'stream is not writable')
 	assert(type(str) == 'string', 'write_string_op expects a string')
@@ -767,6 +782,8 @@ function Stream:write_string_op(str)
 	end)
 end
 
+---@param ... any
+---@return Op  -- when performed: bytes_written:integer|nil, err:any|nil
 function Stream:write_op(...)
 	assert(self.tx, 'stream is not writable')
 
@@ -783,11 +800,13 @@ function Stream:write_op(...)
 	return self:write_string_op(table.concat(parts))
 end
 
+---@param s string
+---@return Op
 function Stream:write_all_op(s)
 	return self:write_string_op(s)
 end
 
----@return Op
+---@return Op  -- when performed: ok:boolean|nil, err:any|nil
 function Stream:flush_op()
 	-- Read-only streams have nothing to flush.
 	if not self.tx then
@@ -843,6 +862,7 @@ end
 ----------------------------------------------------------------------
 
 function Stream:seek(whence, offset)
+	self:flush()
 	if not (self.io and self.io.seek) then
 		return nil, 'stream is not seekable'
 	end
@@ -873,18 +893,57 @@ end
 ----------------------------------------------------------------------
 
 function Stream:read_line(opts) return perform(self:read_line_op(opts)) end
-
 function Stream:read_exactly(n) return perform(self:read_exactly_op(n)) end
-
 function Stream:read_some(max) return perform(self:read_some_op(max)) end
-
 function Stream:read_all() return perform(self:read_all_op()) end
 
 function Stream:write(...) return perform(self:write_op(...)) end
-
 function Stream:write_all(s) return perform(self:write_all_op(s)) end
 
 function Stream:flush() return perform(self:flush_op()) end
+function Stream:close() return perform(self:close_op()) end
+
+
+----------------------------------------------------------------------
+-- Lua io-like compatibility (legacy return shapes)
+----------------------------------------------------------------------
+
+---@param fmt? string|integer
+---@return Op  -- when performed: value|nil, err:any|nil
+function Stream:read_op(fmt)
+	assert(self.rx, 'stream is not readable')
+
+	local t = type(fmt)
+
+	-- Default / "*l": line without terminator
+	if fmt == nil or fmt == '*l' then return self:read_line_op() end
+
+	-- "*L": line with terminator
+	if fmt == '*L' then return self:read_line_op { keep_terminator = true } end
+
+	-- "*a": read all
+	if fmt == '*a' then return self:read_all_op() end
+
+	-- numeric: read up to n bytes; allow EOF
+	if t == 'number' then
+		local n = fmt
+		assert(n >= 0, 'read_op: n must be non-negative')
+		if n == 0 then return op.always('', nil) end
+
+		local ev = self:read_string_op { min = 1, max = n, eof_ok = true }
+		return ev:wrap(function (s, cnt, err)
+			if err then return nil, err end
+			if not s or cnt == 0 then return nil, nil end
+			return s, nil
+		end)
+	end
+
+	error('read_op: invalid format ' .. tostring(fmt))
+end
+
+function Stream:read(fmt)
+	return perform(self:read_op(fmt))
+end
 
 return {
 	open      = open,
