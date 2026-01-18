@@ -91,6 +91,88 @@ local function with_term_internal(self, task, key)
 	return token2(reg_internal(self, key, task), reg_term(self, task))
 end
 
+-- Shared waitable2 register helper.
+--
+-- Supports two modes:
+--   * backend mode: wait on io:on_readable/on_writable (plus optional prime-once)
+--   * internal-only mode: wait on internal waitset keys only (with default key)
+--
+-- opts:
+--   internal          : set-like table of wants to treat as internal keys (e.g. {[K_RDGATE]=true})
+--   internal_only     : boolean (if true, all wants are treated as internal keys)
+--   default_internal  : key used when want is nil in internal_only mode
+--   prime_once        : boolean (backend mode only): on first want==nil, schedule immediately
+--   on_internal(key)  : optional callback invoked before registering internal key
+local function make_waitable_register(self, opts)
+	opts = opts or {}
+	local internal = opts.internal or {}
+	local primed = false
+
+	return function (task, suspension, _, want)
+		-- Internal-key path (explicit or forced internal-only).
+		if opts.internal_only or internal[want] then
+			local key = want
+			if opts.internal_only and key == nil then
+				key = opts.default_internal
+			end
+			if opts.on_internal then opts.on_internal(key) end
+			return with_term_internal(self, task, key)
+		end
+
+		-- Backend path.
+		local io = self.io
+		if not io then
+			suspension.sched:schedule(task)
+			return with_term(self, task, NO_TOKEN)
+		end
+
+		if opts.prime_once and want == nil and not primed then
+			primed = true
+			suspension.sched:schedule(task)
+			return with_term(self, task, NO_TOKEN)
+		end
+
+		if want == 'wr' and io.on_writable then
+			return with_term(self, task, io:on_writable(task))
+		end
+		return with_term(self, task, io:on_readable(task))
+	end
+end
+
+-- Generic gate helper (used for read/write serialisation).
+-- field: stream field holding current owner token (e.g. '_rd_owner', '_wr_owner')
+-- key: waitset key to notify on release (e.g. K_RDGATE, K_WRGATE)
+local function make_gate(stream, field, key)
+	local owner = {}
+	local have  = false
+
+	local function acquire()
+		if have then return true end
+		local cur = stream[field]
+		if cur == nil or cur == owner then
+			stream[field] = owner
+			have = true
+			return true
+		end
+		return false
+	end
+
+	local function release()
+		if have and stream[field] == owner then
+			stream[field] = nil
+			have = false
+			notify_one(stream, key)
+		end
+	end
+
+	local function held_by_other()
+		local cur = stream[field]
+		return cur ~= nil and cur ~= owner
+	end
+
+	return { acquire = acquire, release = release, held_by_other = held_by_other }
+end
+
 local function broadcast(self)
 	notify_all(self, K_TERM)
 	notify_all(self, K_SPACE)
@@ -395,31 +477,12 @@ function Stream:read_into_op(buf, opts)
 	local probe_step, run_step = make_read_steps(self, buf, min, max, terminator)
 
 	-- Read gate: allow only one in-flight read op at a time.
-	local owner     = {}
-	local have_lock = false
-
-	local function acquire_lock()
-		if have_lock then return true end
-		if self._rd_owner == nil or self._rd_owner == owner then
-			self._rd_owner = owner
-			have_lock      = true
-			return true
-		end
-		return false
-	end
-
-	local function release_lock()
-		if have_lock and self._rd_owner == owner then
-			self._rd_owner = nil
-			have_lock      = false
-			notify_one(self, K_RDGATE)
-		end
-	end
+	local gate = make_gate(self, '_rd_owner', K_RDGATE)
 
 	local function gate_step(step_fn)
 		return function (...)
 			-- If another read op owns the gate, wait on K_RDGATE.
-			if not acquire_lock() then
+			if not gate.acquire() then
 				return false, K_RDGATE
 			end
 			return step_fn(...)
@@ -429,41 +492,18 @@ function Stream:read_into_op(buf, opts)
 	probe_step = gate_step(probe_step)
 	run_step   = gate_step(run_step)
 
-	local primed = false
-
-	local function register(task, suspension, _, want)
-		if want == K_RDGATE then
-			return with_term_internal(self, task, K_RDGATE)
-		end
-
-		local io = self.io
-		if not io then
-			suspension.sched:schedule(task)
-			return with_term(self, task, NO_TOKEN)
-		end
-
-		if want == nil and not primed then
-			primed = true
-			suspension.sched:schedule(task)
-			return with_term(self, task, NO_TOKEN)
-		end
-
-		if want == 'wr' and io.on_writable then
-			return with_term(self, task, io:on_writable(task))
-		end
-		return with_term(self, task, io:on_readable(task))
-	end
+	local register = make_waitable_register(self, { internal = { [K_RDGATE] = true }, prime_once = true })
 
 	-- Ensure the read gate is released on completion; choice abort releases via on_abort.
 	local function read_wrap(v1, ...)
 		local ret_buf, cnt, err = thunk_wrap(v1, ...)
-		release_lock()
+		gate.release()
 		return ret_buf, cnt, err
 	end
 
 	local ev = wait.waitable2(register, probe_step, run_step, read_wrap)
 	ev = ev:on_abort(function ()
-		release_lock()
+		gate.release()
 	end)
 
 	return ev:wrap(function (ret_buf, cnt, err)
@@ -670,8 +710,7 @@ function Stream:write_string_op(str)
 	assert(self.tx, 'stream is not writable')
 	assert(type(str) == 'string', 'write_string_op expects a string')
 
-	local owner = {}
-	local have_lock = false
+	local gate = make_gate(self, '_wr_owner', K_WRGATE)
 	local len = #str
 
 	local function can_commit()
@@ -691,24 +730,6 @@ function Stream:write_string_op(str)
 		return false, K_SPACE
 	end
 
-	local function acquire_lock()
-		if have_lock then return true end
-		if self._wr_owner == nil or self._wr_owner == owner then
-			self._wr_owner = owner
-			have_lock = true
-			return true
-		end
-		return false
-	end
-
-	local function release_lock()
-		if have_lock and self._wr_owner == owner then
-			self._wr_owner = nil
-			have_lock = false
-			notify_one(self, K_WRGATE)
-		end
-	end
-
 	local function make_commit(mode)
 		return function ()
 			if mode == 'ring' then
@@ -719,7 +740,7 @@ function Stream:write_string_op(str)
 			end
 
 			self:_kick_pump()
-			release_lock()
+			gate.release()
 			return len, nil
 		end
 	end
@@ -728,7 +749,7 @@ function Stream:write_string_op(str)
 		if self._sticky_werr then return true, nil, self._sticky_werr end
 		if self._closed or self._closing or not self.io then return true, nil, 'closed' end
 
-		if self._wr_owner ~= nil and self._wr_owner ~= owner then
+		if gate.held_by_other() then
 			return false, K_WRGATE
 		end
 
@@ -741,7 +762,7 @@ function Stream:write_string_op(str)
 		end
 
 		-- Probe: only take the gate if we can complete immediately.
-		if not acquire_lock() then
+		if not gate.acquire() then
 			return false, K_WRGATE
 		end
 
@@ -752,27 +773,21 @@ function Stream:write_string_op(str)
 	local function probe_step() return step(true) end
 	local function run_step() return step(false) end
 
-	local function register(task, _, _, want)
-		if want == K_WRGATE then
-			return with_term_internal(self, task, K_WRGATE)
-		end
-		if want == K_SPACE or want == K_DRAIN then
-			self:_kick_pump()
-			return with_term_internal(self, task, want)
-		end
-		return with_term_internal(self, task, want or K_SPACE)
-	end
+	local register = make_waitable_register(self, {
+		internal_only = true, default_internal = K_SPACE,
+		on_internal = function (key) if key == K_SPACE or key == K_DRAIN then self:_kick_pump() end end,
+	})
 
 	local function wrap(commit_or_nil, err)
 		if not commit_or_nil then
-			release_lock()
+			gate.release()
 			return nil, err
 		end
 		return commit_or_nil()
 	end
 
 	local ev = wait.waitable2(register, probe_step, run_step, wrap)
-	return ev:on_abort(function () release_lock() end)
+	return ev:on_abort(function () gate.release() end)
 end
 
 ---@param ... any
@@ -803,39 +818,50 @@ function Stream:flush_op()
 		return op.always(true, nil)
 	end
 
+	-- Write gate: serialise flush with concurrent writers.
+	local gate = make_gate(self, '_wr_owner', K_WRGATE)
+
 	local function drained()
 		return (not self._big) and (self.tx:read_avail() == 0)
 	end
 
-	local function probe_step()
+	local function step(is_probe)
 		if self._sticky_werr then return true, nil, self._sticky_werr end
 		if self._closed or not self.io then
 			if drained() then return true, true, nil end
 			return true, nil, 'closed'
 		end
-		if drained() then return true, true, nil end
-		return false, K_DRAIN
-	end
 
-	local function run_step()
-		if self._sticky_werr then return true, nil, self._sticky_werr end
-		if self._closed or not self.io then
-			if drained() then return true, true, nil end
-			return true, nil, 'closed'
+		-- If another writer/flush owns the gate, wait for it.
+		if not gate.acquire() then
+			return false, K_WRGATE
 		end
-		self:_kick_pump()
+
 		if drained() then return true, true, nil end
+		if not is_probe then
+			self:_kick_pump()
+		end
+
 		return false, K_DRAIN
 	end
 
-	local function register(task, _, _, want)
-		if want == K_DRAIN then self:_kick_pump() end
-		return with_term_internal(self, task, want or K_DRAIN)
-	end
+	local function probe_step() return step(true) end
+	local function run_step() return step(false) end
 
-	return wait.waitable2(register, probe_step, run_step, function (ok, err)
+	local register = make_waitable_register(self, {
+		internal_only = true, default_internal = K_DRAIN,
+		on_internal = function (key) if key == K_DRAIN then self:_kick_pump() end end,
+	})
+
+	local function wrap(ok, err)
+		gate.release()
 		if ok then return true, nil end
 		return nil, err
+	end
+
+	local ev = wait.waitable2(register, probe_step, run_step, wrap)
+	return ev:on_abort(function ()
+		gate.release()
 	end)
 end
 
