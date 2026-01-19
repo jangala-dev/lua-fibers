@@ -176,6 +176,26 @@ function RingBuf_mt:put(str)
 	self:write(str, n)
 end
 
+-- Opaque mark of the current write position (for tail rollback).
+-- We only need enough state to drop newly appended chunks and restore len.
+function RingBuf_mt:mark_write()
+	return { n = #self.chunks, len = self.len }
+end
+
+-- Rewind the write position to a previously obtained mark.
+-- Caller must ensure no consumer progress happened since the mark.
+function RingBuf_mt:rewind_write(mark)
+	assert(type(mark) == 'table', 'RingBuf:rewind_write expects mark table')
+	local n = mark.n or 0
+	local len = mark.len or 0
+
+	for i = #self.chunks, n + 1, -1 do
+		self.chunks[i] = nil
+	end
+
+	self.len = len
+end
+
 function RingBuf_mt:take(n)
 	assert(type(n) == 'number' and n >= 0, 'RingBuf:take expects non-negative count')
 	if self.len == 0 or n == 0 then

@@ -36,6 +36,9 @@ local LinearBuf = bytes.LinearBuf
 ---@field _pump_task Task
 ---@field _pump_token WaitToken|nil
 ---@field _pump_scheduled boolean
+---@field _close_done boolean
+---@field _close_ok boolean|nil
+---@field _close_err any|nil
 ---@field _rd_owner any|nil
 ---@field _wr_owner any|nil
 local Stream = {}
@@ -45,11 +48,13 @@ local DEFAULT_BUFFER_SIZE = 2 ^ 12
 local BIG_WRITE_CHUNK     = 64 * 1024
 
 -- Internal wait keys (not exposed).
-local K_TERM   = 'term'
-local K_SPACE  = 'space'
-local K_DRAIN  = 'drain'
-local K_RDGATE = 'rd_gate'
-local K_WRGATE = 'wr_gate'
+local K_TERM      = 'term'
+local K_SPACE     = 'space'
+local K_DRAIN     = 'drain'
+local K_RDGATE    = 'rd_gate'
+local K_WRGATE    = 'wr_gate'
+local K_CLOSEDONE = 'close_done'
+
 
 ----------------------------------------------------------------------
 -- Small helpers
@@ -101,7 +106,7 @@ end
 --   internal          : set-like table of wants to treat as internal keys (e.g. {[K_RDGATE]=true})
 --   internal_only     : boolean (if true, all wants are treated as internal keys)
 --   default_internal  : key used when want is nil in internal_only mode
---   prime_once        : boolean (backend mode only): on first want==nil, schedule immediately
+--   prime_once        : boolean: schedule the task immediately on first registration
 --   on_internal(key)  : optional callback invoked before registering internal key
 local function make_waitable_register(self, opts)
 	opts = opts or {}
@@ -114,6 +119,10 @@ local function make_waitable_register(self, opts)
 			local key = want
 			if opts.internal_only and key == nil then
 				key = opts.default_internal
+			end
+			if opts.prime_once and not primed then
+				primed = true
+				suspension.sched:schedule(task)
 			end
 			if opts.on_internal then opts.on_internal(key) end
 			return with_term_internal(self, task, key)
@@ -162,6 +171,10 @@ local function make_gate(stream, field, key)
 			stream[field] = nil
 			have = false
 			notify_one(stream, key)
+			-- If a close is in progress, releasing a lane may allow it to complete.
+			if stream._closing and not stream._close_done and stream._finish_close_if_ready then
+				stream:_finish_close_if_ready()
+			end
 		end
 	end
 
@@ -179,6 +192,7 @@ local function broadcast(self)
 	notify_all(self, K_DRAIN)
 	notify_all(self, K_RDGATE)
 	notify_all(self, K_WRGATE)
+	notify_all(self, K_CLOSEDONE)
 end
 
 ----------------------------------------------------------------------
@@ -226,10 +240,50 @@ end
 -- This does not tear down buffers or the backend; terminate() still does that.
 function Stream:_begin_close(_)
 	if self._closed then
-		return broadcast(self)
+		broadcast(self)
+		return self:_finish_close_if_ready()
 	end
 	if not self._closing then self._closing = true end
-	return broadcast(self)
+	broadcast(self)
+	return self:_finish_close_if_ready()
+end
+
+function Stream:_latch_close(ok, err)
+	if self._close_done then return end
+	self._close_done = true
+	self._close_ok   = ok
+	self._close_err  = err
+	notify_all(self, K_CLOSEDONE)
+end
+
+local function drained_tx(self)
+	return (not self._big) and self.tx and (self.tx:read_avail() == 0)
+end
+
+function Stream:_finish_close_if_ready()
+	if self._close_done or self._closed then return end
+	if not self._closing then return end
+
+	-- If writable, wait for drain or a sticky write error.
+	if self.tx then
+		if self._sticky_werr ~= nil then
+			-- Close fails, but still terminate best-effort.
+			self:_latch_close(nil, self._sticky_werr)
+			self:terminate('closed')
+			return
+		end
+		if not drained_tx(self) then
+			return
+		end
+	end
+
+	-- Avoid tearing down state while a read/write op still owns a lane.
+	if self._rd_owner ~= nil or self._wr_owner ~= nil then
+		return
+	end
+
+	self:_latch_close(true, nil)
+	self:terminate('closed')
 end
 
 ----------------------------------------------------------------------
@@ -245,7 +299,16 @@ end
 function Stream:terminate(_)
 	-- Idempotent: always wake waiters.
 	if self._closed then
-		return broadcast(self)
+		broadcast(self)
+		-- Ensure close waiters never hang.
+		if not self._close_done then
+			if self._sticky_werr ~= nil then
+				self:_latch_close(nil, self._sticky_werr)
+			else
+				self:_latch_close(true, nil)
+			end
+		end
+		return
 	end
 
 	self._closed = true
@@ -264,34 +327,58 @@ function Stream:terminate(_)
 		pcall(function () io:close() end)
 	end
 
+	-- Latch close outcome if not already latched.
+	if not self._close_done then
+		if self._sticky_werr ~= nil then
+			self:_latch_close(nil, self._sticky_werr)
+		else
+			self:_latch_close(true, nil)
+		end
+	end
+
 	return broadcast(self)
 end
 
 ---@return Op
 function Stream:close_op()
-	-- Mark closing immediately so blocked ops wake and observe closure promptly.
-	-- Still attempt a graceful flush on writable streams.
-	self:_begin_close('closing')
-
-	-- Idempotence: if already terminated, close succeeds.
-	if self._closed then
-		return op.always(true, nil)
+	local function probe_step()
+		if self._close_done then
+			return true, self._close_ok, self._close_err
+		end
+		return false, K_CLOSEDONE
 	end
 
-	-- Close is graceful on writable streams (flush then terminate),
-	-- and immediate on read-only streams.
-	if not self.tx then
-		return op.always(true, nil):wrap(function (ok, err)
-			self:terminate('closed')
-			return ok, err
+	local function run_step()
+		-- Initiate close only once we are actually running in the blocking path.
+		if not self._closing and not self._closed then
+			self:_begin_close('closing')
+		end
+
+		-- Ensure any pending output makes progress towards drained.
+		if self.tx then
+			self:_kick_pump()
+		end
+
+		-- In case we are already drained and lanes are idle, finish now.
+		self:_finish_close_if_ready()
+
+		if self._close_done then
+			return true, self._close_ok, self._close_err
+		end
+		return false, K_CLOSEDONE
+	end
+
+	local register = make_waitable_register(self, {
+		internal_only    = true,
+		default_internal = K_CLOSEDONE,
+		prime_once       = true,
+	})
+
+	return wait.waitable2(register, probe_step, run_step)
+		:wrap(function (ok, err)
+			if ok then return true, nil end
+			return nil, err
 		end)
-	end
-
-	return self:flush_op():wrap(function (ok, err)
-		self:terminate('closed')
-		if ok == nil then return nil, err end
-		return true, nil
-	end)
 end
 
 ----------------------------------------------------------------------
@@ -653,9 +740,9 @@ function Stream:_pump()
 	self._pump_scheduled = false
 
 	local io = self.io
-	if self._closed or not io then return end
-	if self._sticky_werr then return end
-	if not (self.tx or self._big) then return end
+	if self._closed or not io then return false end
+	if self._sticky_werr then return false end
+	if not (self.tx or self._big) then return false end
 
 	self:_unlink_pump_wait()
 
@@ -698,6 +785,9 @@ function Stream:_pump()
 	if progressed then
 		notify_all(self, K_TERM)
 	end
+	-- If closing, draining progress may allow close completion.
+	self:_finish_close_if_ready()
+	return progressed
 end
 
 ----------------------------------------------------------------------
@@ -716,30 +806,81 @@ function Stream:write_string_op(str)
 	local function can_commit()
 		if self._sticky_werr then return false, self._sticky_werr end
 		if self._closed or self._closing or not self.io then return false, 'closed' end
+
+		local mode = self._bufmode or 'full'
+
+		-- "no" mode: do not allow queuing; require fully drained output.
+		if mode == 'no' then
+			if self._big then return false, K_SPACE end
+			if self.tx and self.tx:read_avail() ~= 0 then return false, K_DRAIN end
+			return true, 'big'
+		end
+
+		-- Existing buffered behaviour.
 		if self._big then return false, K_SPACE end
 
 		local cap = self.tx:capacity()
 		if len <= self.tx:write_avail() then
 			return true, 'ring'
 		end
-
 		if self.tx:read_avail() == 0 and len > cap then
 			return true, 'big'
 		end
-
 		return false, K_SPACE
 	end
 
-	local function make_commit(mode)
+	local function make_commit(mode, was_idle)
 		return function ()
-			if mode == 'ring' then
-				self.tx:put(str)
+			if was_idle then
+				local mark
+				if mode == 'ring' then
+					mark = self.tx:mark_write()
+					self.tx:put(str)
+				else
+					self._big = str
+					self._big_off = 0
+				end
+
+				-- One synchronous pump pass: surfaces peer-close promptly for mem_backend.
+				local progressed = self:_pump()
+
+				-- Only fail the write immediately for 'closed' with zero progress.
+				if self._sticky_werr == 'closed' and not progressed then
+					if mode == 'ring' then
+						self.tx:rewind_write(mark)
+					else
+						self._big = nil
+						self._big_off = 0
+					end
+					notify_all(self, K_SPACE)
+					gate.release()
+					return nil, 'closed'
+				end
 			else
-				self._big = str
-				self._big_off = 0
+				-- Normal buffered publish.
+				if mode == 'ring' then
+					self.tx:put(str)
+				else
+					self._big = str
+					self._big_off = 0
+				end
 			end
 
-			self:_kick_pump()
+			-- Ensure ongoing progress if anything remains pending, but do not churn
+			-- pump registrations if _pump() already armed a token.
+			if (self._big or (self.tx and self.tx:read_avail() > 0)) and not self._pump_token then
+				self:_kick_pump()
+			end
+
+			local modeflag = self._bufmode or 'full'
+			local has_nl = (modeflag == 'line') and (str:find('\n', 1, true) ~= nil)
+
+			-- After publish:
+			if has_nl then
+				-- Best-effort: attempt immediate progress once, then ensure ongoing pump.
+				self:_pump()
+			end
+
 			gate.release()
 			return len, nil
 		end
@@ -766,15 +907,20 @@ function Stream:write_string_op(str)
 			return false, K_WRGATE
 		end
 
+		-- Capture whether the output queue is idle before we publish bytes.
+		-- (Gate ownership ensures this snapshot remains meaningful for this op.)
+		local was_idle = (not self._big) and (self.tx:read_avail() == 0)
+
 		-- Run: we already ensured commit is possible; probe uses same path.
-		return true, make_commit(mode_or)
+		return true, make_commit(mode_or, was_idle)
 	end
 
 	local function probe_step() return step(true) end
 	local function run_step() return step(false) end
 
 	local register = make_waitable_register(self, {
-		internal_only = true, default_internal = K_SPACE,
+		internal_only = true,
+		default_internal = K_SPACE,
 		on_internal = function (key) if key == K_SPACE or key == K_DRAIN then self:_kick_pump() end end,
 	})
 
@@ -849,7 +995,8 @@ function Stream:flush_op()
 	local function run_step() return step(false) end
 
 	local register = make_waitable_register(self, {
-		internal_only = true, default_internal = K_DRAIN,
+		internal_only = true,
+		default_internal = K_DRAIN,
 		on_internal = function (key) if key == K_DRAIN then self:_kick_pump() end end,
 	})
 
@@ -879,16 +1026,37 @@ function Stream:seek(whence, offset)
 	return self.io:seek(whence, offset)
 end
 
-function Stream:setvbuf(mode, _)
-	if mode == 'no' then
-		self.line_buffering = false
-	elseif mode == 'line' then
-		self.line_buffering = true
-	elseif mode == 'full' then
-		self.line_buffering = false
-	else
+local function next_pow2(n)
+	if n <= 1 then return 1 end
+	local p = 1
+	while p < n do p = p * 2 end
+	return p
+end
+
+function Stream:setvbuf(mode, size)
+	if mode ~= 'no' and mode ~= 'line' and mode ~= 'full' then
 		error('bad mode: ' .. tostring(mode))
 	end
+
+	self._bufmode = mode
+	self.line_buffering = (mode == 'line')
+
+	if size ~= nil then
+		assert(type(size) == 'number' and size > 0, 'setvbuf: size must be positive')
+		size = next_pow2(math.floor(size))
+		self._bufsize = size
+
+		-- Minimal, safe resizing: only when buffers are empty.
+		if self.rx and self.rx:read_avail() == 0 and self.rx:write_avail() + self.rx:read_avail() == self.rx:capacity() then
+			-- If your RingBuf has no direct "empty" predicate, the read_avail()==0 check is usually enough.
+			self.rx = RingBuf.new(size)
+		end
+		if self.tx and (not self._big) and self.tx:read_avail() == 0 then
+			self.tx = RingBuf.new(size)
+			notify_all(self, K_SPACE)
+		end
+	end
+
 	return self
 end
 

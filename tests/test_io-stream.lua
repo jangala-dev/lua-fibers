@@ -5,13 +5,14 @@ print('testing: fibers.io.stream')
 
 package.path = '../src/?.lua;' .. package.path
 
-local fibers  = require 'fibers'
-local stream  = require 'fibers.io.stream'
-local wait    = require 'fibers.wait'
-local runtime = require 'fibers.runtime'
-local sleep   = require 'fibers.sleep'
-local op      = require 'fibers.op'
-local perform = require 'fibers.performer'.perform
+local fibers    = require 'fibers'
+local stream    = require 'fibers.io.stream'
+local wait      = require 'fibers.wait'
+local runtime   = require 'fibers.runtime'
+local sleep     = require 'fibers.sleep'
+local op        = require 'fibers.op'
+local waitgroup = require 'fibers.waitgroup'
+local perform   = require 'fibers.performer'.perform
 
 local function with_timeout(ev, timeout_s)
 	-- op.boolean_choice returns: (won:boolean, ...results...)
@@ -31,6 +32,16 @@ end
 local function assert_ok_or_zero(v, msg)
 	if v ~= true and v ~= 0 then
 		error((msg or 'expected true or 0') .. (': got ' .. tostring(v)), 2)
+	end
+end
+
+local function assert_internal_ws_empty(s, msg)
+	local ws = s and s._ws
+	if not ws or not ws.buckets then return end
+	if next(ws.buckets) ~= nil then
+		local keys = {}
+		for k in pairs(ws.buckets) do keys[#keys + 1] = tostring(k) end
+		error((msg or 'internal waitset leaked entries') .. ': keys=' .. table.concat(keys, ','), 2)
 	end
 end
 
@@ -102,10 +113,15 @@ local function make_stream_pair()
 	end
 
 	function rd_io:seek() return nil, 'not seekable' end
+
 	function wr_io:seek() return nil, 'not seekable' end
+
 	function rd_io:nonblock() end
+
 	function rd_io:block() end
+
 	function wr_io:nonblock() end
+
 	function wr_io:block() end
 
 	local rd = stream.open(rd_io, true, false)
@@ -119,11 +135,11 @@ end
 
 local function make_stream_pair_want_wr()
 	local shared = {
-		buf      = '',
-		closed   = false,
-		waitset  = wait.new_waitset(), -- use key "wr" only for wakeups
-		rd_regs  = 0,
-		wr_regs  = 0,
+		buf     = '',
+		closed  = false,
+		waitset = wait.new_waitset(), -- use key "wr" only for wakeups
+		rd_regs = 0,
+		wr_regs = 0,
 	}
 
 	local rd_io = { shared = shared }
@@ -187,10 +203,15 @@ local function make_stream_pair_want_wr()
 	end
 
 	function rd_io:seek() return nil, 'not seekable' end
+
 	function wr_io:seek() return nil, 'not seekable' end
+
 	function rd_io:nonblock() end
+
 	function rd_io:block() end
+
 	function wr_io:nonblock() end
+
 	function wr_io:block() end
 
 	local rd = stream.open(rd_io, true, false)
@@ -264,10 +285,15 @@ local function make_stream_pair_full()
 	end
 
 	function rd_io:seek() return nil, 'not seekable' end
+
 	function wr_io:seek() return nil, 'not seekable' end
+
 	function rd_io:nonblock() end
+
 	function rd_io:block() end
+
 	function wr_io:nonblock() end
+
 	function wr_io:block() end
 
 	local rd = stream.open(rd_io, true, false)
@@ -347,10 +373,105 @@ local function make_stream_pair_full_backpressure(cap)
 	end
 
 	function rd_io:seek() return nil, 'not seekable' end
+
 	function wr_io:seek() return nil, 'not seekable' end
+
 	function rd_io:nonblock() end
+
 	function rd_io:block() end
+
 	function wr_io:nonblock() end
+
+	function wr_io:block() end
+
+	local rd = stream.open(rd_io, true, false)
+	local wr = stream.open(wr_io, false, true)
+	return rd, wr, shared
+end
+
+----------------------------------------------------------------------
+-- Backend 4: write error injection (sticky write error propagation)
+----------------------------------------------------------------------
+
+local function make_stream_pair_write_error(opts)
+	opts = opts or {}
+	local fail_after = opts.fail_after or 4
+
+	local shared = {
+		wire       = '',
+		closed     = false,
+		waitset    = wait.new_waitset(), -- key 'rd'
+		writes     = 0,
+		fail_after = fail_after,
+	}
+
+	local rd_io = { shared = shared }
+	local wr_io = { shared = shared }
+
+	function rd_io:read_string(max)
+		if #self.shared.wire == 0 then
+			if self.shared.closed then
+				return '', nil -- EOF
+			end
+			return nil, nil -- would block
+		end
+		max = max or 1
+		local n = math.min(1, max, #self.shared.wire)
+		local s = self.shared.wire:sub(1, n)
+		self.shared.wire = self.shared.wire:sub(n + 1)
+		return s, nil
+	end
+
+	function wr_io:write_string(str)
+		if self.shared.closed then
+			return nil, 'closed'
+		end
+		if #str == 0 then
+			return 0, nil
+		end
+
+		self.shared.writes = self.shared.writes + 1
+		if self.shared.writes >= self.shared.fail_after then
+			return nil, 'boom' -- injected hard error
+		end
+
+		local ch = str:sub(1, 1)
+		self.shared.wire = self.shared.wire .. ch
+		self.shared.waitset:notify_all('rd', runtime.current_scheduler)
+		return 1, nil
+	end
+
+	function rd_io:on_readable(task)
+		return self.shared.waitset:add('rd', task)
+	end
+
+	function wr_io:on_writable(task)
+		runtime.current_scheduler:schedule(task)
+		return { unlink = function () end }
+	end
+
+	function rd_io:close()
+		self.shared.closed = true
+		self.shared.waitset:notify_all('rd', runtime.current_scheduler)
+		return true
+	end
+
+	function wr_io:close()
+		self.shared.closed = true
+		self.shared.waitset:notify_all('rd', runtime.current_scheduler)
+		return true
+	end
+
+	function rd_io:seek() return nil, 'not seekable' end
+
+	function wr_io:seek() return nil, 'not seekable' end
+
+	function rd_io:nonblock() end
+
+	function rd_io:block() end
+
+	function wr_io:nonblock() end
+
 	function wr_io:block() end
 
 	local rd = stream.open(rd_io, true, false)
@@ -655,6 +776,144 @@ local function test_close_is_idempotent_and_unblocks_waiters()
 end
 
 ----------------------------------------------------------------------
+-- New close semantics tests (for latched close + prompt begin on block)
+----------------------------------------------------------------------
+
+local function test_close_is_side_effect_free_when_it_loses_in_choice()
+	local rd, wr, shared = make_stream_pair_full()
+
+	-- First arm is immediately ready; close_op should lose without starting close.
+	local won, v = perform(op.boolean_choice(op.always('win'), wr:close_op()))
+	assert_eq(won, true)
+	assert_eq(v, 'win')
+
+	assert_truthy(not wr._closing, 'close should not begin during speculative probe')
+	assert_truthy(not wr._closed, 'stream should not be closed after losing close arm')
+
+	-- Stream remains usable.
+	local msg = 'ok\n'
+	local n, werr = perform(wr:write_op(msg))
+	assert_eq(werr, nil)
+	assert_eq(n, #msg)
+	local okf, ferr = perform(wr:flush_op())
+	assert_ok_or_zero(okf); assert_eq(ferr, nil)
+
+	perform(wr:close_op())
+	local got, rerr = perform(rd:read_all_op())
+	assert_eq(rerr, nil)
+	assert_eq(got, msg)
+	perform(rd:close_op())
+
+	assert_eq(shared.waitset:size('rd'), 0)
+	assert_eq(shared.waitset:size('wr'), 0)
+	assert_internal_ws_empty(wr, 'wr internal waitset leak after choice-losing close')
+	assert_internal_ws_empty(rd, 'rd internal waitset leak after choice-losing close')
+end
+
+local function test_close_blocks_until_flush_completes_and_starts_promptly()
+	local rd, wr, shared = make_stream_pair_full_backpressure(4)
+
+	local msg = ('m'):rep(128)
+	local n, err = perform(wr:write_op(msg))
+	assert_eq(err, nil)
+	assert_eq(n, #msg)
+
+	local box = { done = false, ok = nil, err = nil }
+	local wg = waitgroup.new()
+	wg:add(1)
+
+	fibers.spawn(function ()
+		local ok, cerr = perform(wr:close_op())
+		box.ok = ok
+		box.err = cerr
+		box.done = true
+		wg:done()
+	end)
+
+	-- Give the close a chance to enter blocking path and begin closing.
+	sleep.sleep(0.01)
+	assert_truthy(wr._closing or wr._closed, 'close did not begin promptly once blocked')
+	assert_eq(box.done, false, 'close_op returned before flush drained')
+
+	-- Drain the wire; this should allow the writer pump to make progress.
+	local got, rerr = perform(rd:read_exactly_op(#msg))
+	assert_eq(rerr, nil)
+	assert_eq(#got, #msg)
+
+	wg:wait()
+	assert_eq(box.ok, true, 'close_op should succeed once drained')
+	assert_eq(box.err, nil)
+
+	perform(rd:close_op())
+
+	assert_eq(shared.waitset:size('rd'), 0)
+	assert_eq(shared.waitset:size('wr'), 0)
+	assert_internal_ws_empty(wr, 'wr internal waitset leak after blocking close')
+	assert_internal_ws_empty(rd, 'rd internal waitset leak after blocking close')
+end
+
+local function test_close_aborted_in_choice_still_completes()
+	local rd, wr, shared = make_stream_pair_full_backpressure(4)
+
+	local msg = ('q'):rep(128)
+	local n, err = perform(wr:write_op(msg))
+	assert_eq(err, nil)
+	assert_eq(n, #msg)
+
+	-- Start a close, but race it against a short timeout so the close arm loses.
+	local won = with_timeout(wr:close_op(), 0.01)
+	assert_eq(won, false, 'expected timeout branch to win; close should still be pending')
+
+	-- Allow any scheduled close/pump work to run.
+	sleep.sleep(0.01)
+
+	-- Drain, which should allow close to finish in the background.
+	local got, rerr = perform(rd:read_exactly_op(#msg))
+	assert_eq(rerr, nil)
+	assert_eq(#got, #msg)
+
+	-- A subsequent close should now complete (idempotent).
+	local won2, ok2, err2 = with_timeout(wr:close_op(), 0.5)
+	assert_eq(won2, true, 'close did not complete after drain')
+	assert_eq(ok2, true)
+	assert_eq(err2, nil)
+
+	perform(rd:close_op())
+
+	assert_eq(shared.waitset:size('rd'), 0)
+	assert_eq(shared.waitset:size('wr'), 0)
+	assert_internal_ws_empty(wr, 'wr internal waitset leak after aborted close')
+	assert_internal_ws_empty(rd, 'rd internal waitset leak after aborted close')
+end
+
+local function test_close_reports_sticky_write_error_and_terminates()
+	local rd, wr, shared = make_stream_pair_write_error { fail_after = 3 }
+
+	-- Enqueue more than fail_after bytes so the pump hits the injected error.
+	local msg = ('x'):rep(32)
+	local n, werr = perform(wr:write_op(msg))
+	assert_eq(werr, nil)
+	assert_eq(n, #msg)
+
+	-- Allow the pump to run and observe the backend error.
+	sleep.sleep(0.02)
+
+	local ok, cerr = perform(wr:close_op())
+	assert_eq(ok, nil, 'close should fail when a sticky write error is present')
+	assert_eq(cerr, 'boom', 'unexpected close error')
+
+	-- Writer should be terminated best-effort.
+	assert_truthy(wr._closed, 'writer stream not terminated after close error')
+
+	-- Reader should be closable and should not strand waiters.
+	perform(rd:close_op())
+
+	assert_eq(shared.waitset:size('rd'), 0)
+	assert_internal_ws_empty(wr, 'wr internal waitset leak after close error')
+	assert_internal_ws_empty(rd, 'rd internal waitset leak after close error')
+end
+
+----------------------------------------------------------------------
 -- Main
 ----------------------------------------------------------------------
 
@@ -671,6 +930,12 @@ local function main()
 	test_abort_unlinks_write_waiters_and_does_not_deadlock()
 	test_seek_and_setvbuf_surface()
 	test_close_is_idempotent_and_unblocks_waiters()
+
+	test_close_is_side_effect_free_when_it_loses_in_choice()
+	test_close_blocks_until_flush_completes_and_starts_promptly()
+	test_close_aborted_in_choice_still_completes()
+	test_close_reports_sticky_write_error_and_terminates()
+
 end
 
 fibers.run(main)

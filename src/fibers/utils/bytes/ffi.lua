@@ -125,6 +125,19 @@ function ring_mt:put(str)
 	copy_in(self, tmp, n)
 end
 
+-- Opaque mark of the current write position (for tail rollback).
+-- Intended for "publish then possibly roll back" patterns in higher layers.
+function ring_mt:mark_write()
+	return self.write_idx
+end
+
+-- Rewind the write position to a previously obtained mark.
+-- Caller must ensure no consumer progress happened since the mark.
+function ring_mt:rewind_write(mark)
+	-- mark is expected to be the cdata returned by mark_write()
+	self.write_idx = mark
+end
+
 function ring_mt:take(n)
 	assert(type(n) == 'number' and n >= 0, 'RingBuf:take expects non-negative count')
 	local avail = self:read_avail()
