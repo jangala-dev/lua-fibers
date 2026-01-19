@@ -14,6 +14,8 @@ local op        = require 'fibers.op'
 local waitgroup = require 'fibers.waitgroup'
 local perform   = require 'fibers.performer'.perform
 
+require 'fibers.scope'.set_debug(true)
+
 local function with_timeout(ev, timeout_s)
 	-- op.boolean_choice returns: (won:boolean, ...results...)
 	return perform(op.boolean_choice(ev, sleep.sleep_op(timeout_s)))
@@ -935,7 +937,6 @@ local function main()
 	test_close_blocks_until_flush_completes_and_starts_promptly()
 	test_close_aborted_in_choice_still_completes()
 	test_close_reports_sticky_write_error_and_terminates()
-
 end
 
 fibers.run(main)
