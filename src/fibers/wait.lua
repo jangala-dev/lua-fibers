@@ -277,6 +277,8 @@ local function waitable2(register, probe_step, run_step, wrap_fn)
 				unlink = function ()
 					if t1 and t1.unlink then t1:unlink() end
 					if t2 and t2.unlink then t2:unlink() end
+					-- Standardise on boolean return for unlink().
+					return false
 				end,
 			}
 		end

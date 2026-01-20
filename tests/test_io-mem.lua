@@ -49,14 +49,14 @@ local function test_simple_read_write()
 
 	-- Writer: write once from A to B
 	fibers.spawn(function ()
-		local ev = a:write_string_op(payload)
+		local ev = a:write_op(payload)
 		local n, err = fibers.perform(ev)
 		assert_nil(err, 'simple write: unexpected error')
 		assert_eq(n, #payload, 'simple write: wrong byte count')
 	end)
 
 	-- Reader: read exactly len(payload) bytes
-	local ev = b:read_string_op {
+	local ev = b:core_read_op {
 		min    = #payload,
 		max    = #payload,
 		eof_ok = true,
@@ -93,7 +93,7 @@ local function test_backpressure_and_partial()
 
 		while total < #payload do
 			-- Read at least 1 byte, at most 3 each time.
-			local ev = b:read_string_op {
+			local ev = b:core_read_op {
 				min    = 1,
 				max    = 3,
 				eof_ok = true,
@@ -117,7 +117,7 @@ local function test_backpressure_and_partial()
 	end)
 
 	-- Writer: write the full payload as one op
-	local ev = a:write_string_op(payload)
+	local ev = a:write_op(payload)
 	local n, err = fibers.perform(ev)
 
 	assert_nil(err, 'backpressure write: unexpected error')
@@ -141,7 +141,7 @@ local function test_eof_behaviour()
 
 	-- Write then close A's half.
 	fibers.spawn(function ()
-		local ev = a:write_string_op(payload)
+		local ev = a:write_op(payload)
 		local n, err = fibers.perform(ev)
 		assert_nil(err, 'EOF write: unexpected error')
 		assert_eq(n, #payload, 'EOF write: wrong byte count')
@@ -149,7 +149,7 @@ local function test_eof_behaviour()
 	end)
 
 	-- First read should get the payload.
-	local ev1 = b:read_string_op {
+	local ev1 = b:core_read_op {
 		min    = #payload,
 		max    = #payload,
 		eof_ok = true,
@@ -162,7 +162,7 @@ local function test_eof_behaviour()
 
 	-- Second read should see EOF. For read_string_op:
 	--   EOF with no data → (nil, 0, err|nil)
-	local ev2 = b:read_string_op {
+	local ev2 = b:core_read_op {
 		min    = 1,
 		max    = 16,
 		eof_ok = true,
@@ -190,7 +190,7 @@ local function test_line_terminator()
 	local data = 'line1\nline2\n'
 
 	fibers.spawn(function ()
-		local ev = a:write_string_op(data)
+		local ev = a:write_op(data)
 		local n, err = fibers.perform(ev)
 		assert_nil(err, 'line write: unexpected error')
 		assert_eq(n, #data, 'line write: wrong byte count')
@@ -198,7 +198,7 @@ local function test_line_terminator()
 	end)
 
 	-- Read up to and including first "\n"
-	local ev1 = b:read_string_op {
+	local ev1 = b:core_read_op {
 		min        = 1,
 		max        = #data,
 		terminator = '\n',
@@ -211,7 +211,7 @@ local function test_line_terminator()
 	assert_eq(cnt1, #s1, 'line read(1): wrong count')
 
 	-- Read up to and including second "\n"
-	local ev2 = b:read_string_op {
+	local ev2 = b:core_read_op {
 		min        = 1,
 		max        = #data,
 		terminator = '\n',
@@ -224,7 +224,7 @@ local function test_line_terminator()
 	assert_eq(cnt2, #s2, 'line read(2): wrong count')
 
 	-- Third read should see EOF
-	local ev3 = b:read_string_op {
+	local ev3 = b:core_read_op {
 		min        = 1,
 		max        = 16,
 		terminator = '\n',
@@ -253,7 +253,7 @@ local function test_write_after_peer_close()
 	b:close()
 
 	-- Writing from A should report "closed" from the backend.
-	local ev = a:write_string_op('x')
+	local ev = a:core_write_op('x')
 	local _, err = fibers.perform(ev)
 
 	-- Depending on exact semantics, n may be 0 or nil; err should be "closed".

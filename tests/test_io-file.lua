@@ -43,7 +43,7 @@ local function test_tmpfile_roundtrip()
 	assert(f, 'tmpfile() failed: ' .. tostring(err))
 
 	local msg = 'hello, tmpfile'
-	local n, werr = perform(f:write_string_op(msg))
+	local n, werr = perform(f:write_op(msg))
 	assert(n == #msg, 'write_string_op wrote ' .. tostring(n) .. ' bytes, expected ' .. #msg)
 	assert(werr == nil, 'write_string_op returned error: ' .. tostring(werr))
 
@@ -51,7 +51,7 @@ local function test_tmpfile_roundtrip()
 	local pos, serr = f:seek('set', 0)
 	assert(pos ~= nil, 'seek failed: ' .. tostring(serr))
 
-	local s, cnt, rerr = perform(f:read_string_op {
+	local s, cnt, rerr = perform(f:core_read_op {
 		min    = #msg,
 		max    = #msg,
 		eof_ok = true,
@@ -74,11 +74,11 @@ local function test_pipe_roundtrip_and_eof()
 	assert(r and w, 'pipe() did not return read and write streams')
 
 	local msg = 'pipe-test'
-	local n, werr = perform(w:write_string_op(msg))
+	local n, werr = perform(w:write_op(msg))
 	assert(n == #msg, 'pipe write_string_op wrote ' .. tostring(n) .. ' bytes, expected ' .. #msg)
 	assert(werr == nil, 'pipe write_string_op returned error: ' .. tostring(werr))
 
-	local s, cnt, rerr = perform(r:read_string_op {
+	local s, cnt, rerr = perform(r:core_read_op {
 		min    = #msg,
 		max    = #msg,
 		eof_ok = true,
@@ -92,7 +92,7 @@ local function test_pipe_roundtrip_and_eof()
 	local okw, errw = w:close()
 	assert(okw, 'pipe write stream close failed: ' .. tostring(errw))
 
-	local s2, cnt2, rerr2 = perform(r:read_string_op {
+	local s2, cnt2, rerr2 = perform(r:core_read_op {
 		min    = 1,
 		eof_ok = true,
 	})
@@ -120,7 +120,7 @@ local function test_closed_stream_errors()
 
 	-- Writing via an already-closed Stream should raise "stream is not writable".
 	local ok, err = pcall(function ()
-		return perform(w1:write_string_op('abc'))
+		return perform(w1:write_op('abc'))
 	end)
 	assert(not ok, 'expected write after close to fail with an assertion')
 	assert(tostring(err):match('stream is not writable'),
@@ -135,7 +135,7 @@ local function test_closed_stream_errors()
 
 	-- Reading via an already-closed Stream should raise "stream is not readable".
 	ok, err = pcall(function ()
-		return perform(r2:read_string_op {
+		return perform(r2:core_read_op {
 			min    = 1,
 			eof_ok = false,
 		})
@@ -168,7 +168,7 @@ local function test_cancellation_cancels_blocked_read()
 		end)
 
 		-- Perform a read that will block (nothing is written).
-		local v1, v2, v3 = perform(r:read_string_op {
+		local v1, v2, v3 = perform(r:core_read_op {
 			min    = 1,
 			eof_ok = true,
 		})
