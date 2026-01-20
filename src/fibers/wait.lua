@@ -235,15 +235,20 @@ end
 --     * Must be non-blocking and must not yield.
 --     * May perform stateful progress (e.g. fill buffers, advance state machines).
 --
---   register(task, suspension, leaf_wrap, want) -> token
+--   register(task, waker, want) -> token
 --     * Must arrange for task:run() when progress may be possible.
 --     * want is passed through (except 'any', see below).
 --     * token:unlink() (if present) is called on abort to cancel registration.
 --
+--   waker capability:
+--     * waker:wakeup(task)
+--     * waker:at_time(t, task)
+--     * waker:after(dt, task)
+--
 -- Special want:
 --   * want == 'any' registers both ('rd' and 'wr') and unlinks both on abort.
 --
----@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn, want: any): WaitToken
+---@param register fun(task: Task, waker: table, want: any): WaitToken
 ---@param probe_step fun(): boolean, ...
 ---@param run_step fun(): boolean, ...
 ---@param wrap_fn? WrapFn
@@ -256,7 +261,7 @@ local function waitable2(register, probe_step, run_step, wrap_fn)
 	wrap_fn = wrap_fn or id_wrap
 
 	return op.guard(function ()
-		local token, last_want, cleanup_added
+		local token, last_want, cleanup_added, waker
 
 		local function unlink()
 			local t = token
@@ -270,14 +275,13 @@ local function waitable2(register, probe_step, run_step, wrap_fn)
 			return r
 		end
 
-		local function register_any(task, suspension, leaf_wrap)
-			local t1 = register(task, suspension, leaf_wrap, 'rd')
-			local t2 = register(task, suspension, leaf_wrap, 'wr')
+		local function register_any(task, waker_)
+			local t1 = register(task, waker_, 'rd')
+			local t2 = register(task, waker_, 'wr')
 			return {
 				unlink = function ()
 					if t1 and t1.unlink then t1:unlink() end
 					if t2 and t2.unlink then t2:unlink() end
-					-- Standardise on boolean return for unlink().
 					return false
 				end,
 			}
@@ -292,9 +296,9 @@ local function waitable2(register, probe_step, run_step, wrap_fn)
 			unlink()
 
 			if want == 'any' then
-				token = register_any(task, suspension, leaf_wrap)
+				token = register_any(task, waker) -- see note below
 			else
-				token = register(task, suspension, leaf_wrap, want)
+				token = register(task, waker, want)
 			end
 		end
 
@@ -304,6 +308,12 @@ local function waitable2(register, probe_step, run_step, wrap_fn)
 		end
 
 		local function block(suspension, leaf_wrap)
+			waker = {
+				wakeup = function (_, task_) suspension:wakeup(task_) end,
+				at_time = function (_, t, task_) suspension:at_time(t, task_) end,
+				after = function (_, dt, task_) suspension:after(dt, task_) end,
+			}
+
 			local task
 			task = {
 				run = function ()
@@ -329,7 +339,7 @@ end
 
 
 --- Backwards-compatible wrapper: a single step is used for both probe and run.
----@param register fun(task: Task, suspension: Suspension, leaf_wrap: WrapFn, want: any): WaitToken
+---@param register fun(task: Task, waker: table, want: any): WaitToken
 ---@param step fun(): boolean, ...
 ---@param wrap_fn? WrapFn
 ---@return Op
@@ -340,5 +350,5 @@ end
 return {
 	new_waitset = new_waitset,
 	waitable    = waitable,
-	waitable2    = waitable2,
+	waitable2   = waitable2,
 }

@@ -147,13 +147,13 @@ local function make_register(self, opts)
 	opts = opts or {}
 	local primed = false
 
-	return function (task, suspension, _, want)
+	return function (task, waker, want)
 		-- Always register internal state, so close/pump changes wake everyone.
 		local t_state = self._ws:add(K_STATE, task)
 
 		if opts.prime_once and not primed then
 			primed = true
-			suspension.sched:schedule(task)
+			waker:wakeup(task)
 		end
 
 		-- Internal waits (or unspecified wants) just wait on state changes.
@@ -164,7 +164,7 @@ local function make_register(self, opts)
 		local io = self.io
 		if not io then
 			-- Ensure the task runs again and the step observes closure.
-			suspension.sched:schedule(task)
+			waker:wakeup(task)
 			return token2(t_state, NO_TOKEN)
 		end
 
