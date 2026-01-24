@@ -35,14 +35,34 @@ function Fifo:peek()
 	return self.items[self.first]
 end
 
---- Remove and return the first item.
--- @return The first item
+function Fifo:compact()
+  if self.first <= 1 then return end
+
+  local items = self.items
+  local out = {}
+  local j = 1
+  for i = self.first, self.count do
+    out[j] = items[i]
+    j = j + 1
+  end
+
+  self.items = out
+  self.count = j - 1
+  self.first = 1
+end
+
 function Fifo:pop()
-	assert(not self:empty(), 'queue is empty')
-	local val = self.items[self.first]
-	self.items[self.first] = nil -- allow GC
-	self.first = self.first + 1
-	return val
+  assert(not self:empty(), 'queue is empty')
+  local val = self.items[self.first]
+  self.items[self.first] = nil
+  self.first = self.first + 1
+
+  -- Best-effort compaction.
+  if self.first > 32 and self.first > (self.count / 2) then
+    self:compact()
+  end
+
+  return val
 end
 
 --- Return the length of the queue.

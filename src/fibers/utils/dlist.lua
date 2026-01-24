@@ -40,6 +40,47 @@ function DList:push_tail(value)
   return node
 end
 
+function DList:empty()
+  return self.head == nil
+end
+
+function DList:push_head(value)
+  local node = setmetatable({ list = self, prev = nil, next = self.head, value = value }, DListNode)
+  if self.head then
+    self.head.prev = node
+  else
+    self.tail = node
+  end
+  self.head = node
+  return node
+end
+
+function DList:pop_head()
+  local h = self.head
+  if not h then return nil end
+  local v = h.value
+  h:remove()
+  return v
+end
+
+function DList:pop_tail()
+  local t = self.tail
+  if not t then return nil end
+  local v = t.value
+  t:remove()
+  return v
+end
+
+function DList:peek_head()
+  local h = self.head
+  return h and h.value or nil
+end
+
+function DList:peek_tail()
+  local t = self.tail
+  return t and t.value or nil
+end
+
 ---@return DList
 local function new()
   return setmetatable({ head = nil, tail = nil }, DList)
