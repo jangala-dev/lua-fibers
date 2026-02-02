@@ -1,4 +1,4 @@
--- tests/test_stream_mem.lua
+-- tests/test_io_file.lua
 --
 -- Integration tests for:
 --   - fibers.io.file
@@ -444,6 +444,93 @@ local function test_stream_properties_and_rename()
 end
 
 ----------------------------------------------------------------------
+-- 10. mkdir / rename / unlink (file_mod-level functions)
+----------------------------------------------------------------------
+
+local function tmp_base()
+	return os.getenv('TMPDIR') or '/tmp'
+end
+
+local function tmp_path(prefix)
+	prefix = prefix or 'fibers-test'
+	return ('%s/%s-%d-%d'):format(tmp_base(), prefix, os.time(), math.random(1e9))
+end
+
+local function test_mkdir_and_unlink()
+	-- Create a new directory.
+	local dir = tmp_path('fibers-mkdir')
+
+	-- 0777 decimal is 511.
+	local ok, err = file_mod.mkdir(dir, 511)
+	assert(ok, 'mkdir failed: ' .. tostring(err))
+
+	-- Create a file inside the directory.
+	local p = dir .. '/x.txt'
+	local f, oerr = file_mod.open(p, 'w+', 'rw-r--r--')
+	assert(f, 'open for write in mkdir dir failed: ' .. tostring(oerr))
+
+	local msg = 'mkdir/unlink test'
+	local n, werr = f:write(msg)
+	assert(werr == nil, 'write failed in mkdir/unlink test: ' .. tostring(werr))
+	assert(n == #msg, 'write wrote ' .. tostring(n) .. ' bytes, expected ' .. #msg)
+
+	local c_ok, c_err = f:close()
+	assert(c_ok, 'close failed in mkdir/unlink test: ' .. tostring(c_err))
+
+	-- Unlink the file via the exposed API.
+	local uok, uerr = file_mod.unlink(p)
+	assert(uok, 'unlink failed: ' .. tostring(uerr))
+
+	-- Confirm the file is gone (open should fail).
+	local f2, oerr2 = file_mod.open(p, 'r')
+	assert(f2 == nil, 'expected open on unlinked file to fail')
+	assert(oerr2 ~= nil, 'expected an error opening unlinked file')
+
+	-- Best-effort cleanup: remove the directory (not part of file_mod API).
+	os.execute(('rmdir %q'):format(dir))
+end
+
+local function test_filemod_rename()
+	-- Create a plain file (not via tmpfile:rename), then rename with file_mod.rename().
+	local oldp = tmp_path('fibers-rename-old') .. '.txt'
+	local newp = tmp_path('fibers-rename-new') .. '.txt'
+
+	local f, oerr = file_mod.open(oldp, 'w+')
+	assert(f, 'open(oldp) failed: ' .. tostring(oerr))
+
+	local msg = 'rename test content'
+	local n, werr = f:write(msg)
+	assert(werr == nil, 'write failed in rename test: ' .. tostring(werr))
+	assert(n == #msg, 'write wrote ' .. tostring(n) .. ' bytes, expected ' .. #msg)
+
+	local c_ok, c_err = f:close()
+	assert(c_ok, 'close failed in rename test: ' .. tostring(c_err))
+
+	-- Rename using the exposed function.
+	local rok, rerr = file_mod.rename(oldp, newp)
+	assert(rok, 'file_mod.rename failed: ' .. tostring(rerr))
+
+	-- Old path should not be openable; new path should contain the content.
+	local fold, eold = file_mod.open(oldp, 'r')
+	assert(fold == nil, 'expected old path to be gone after rename')
+	assert(eold ~= nil, 'expected error when opening old path after rename')
+
+	local fnew, enew = file_mod.open(newp, 'r')
+	assert(fnew, 'expected to open renamed path: ' .. tostring(enew))
+
+	local got, gerr = fnew:read_all()
+	assert(gerr == nil, 'read_all failed on renamed file: ' .. tostring(gerr))
+	assert(got == msg, ('renamed file content %q, expected %q'):format(tostring(got), tostring(msg)))
+
+	local c2_ok, c2_err = fnew:close()
+	assert(c2_ok, 'close failed on renamed file: ' .. tostring(c2_err))
+
+	-- Cleanup using exposed unlink.
+	local uok, uerr = file_mod.unlink(newp)
+	assert(uok, 'cleanup unlink failed: ' .. tostring(uerr))
+end
+
+----------------------------------------------------------------------
 -- Main
 ----------------------------------------------------------------------
 
@@ -459,6 +546,8 @@ local function main()
 	test_write_variants()
 	test_merge_lines_op()
 	test_stream_properties_and_rename()
+	test_mkdir_and_unlink()
+	test_filemod_rename()
 end
 
 fibers.run(main)

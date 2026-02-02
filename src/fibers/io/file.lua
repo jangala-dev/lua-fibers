@@ -94,6 +94,26 @@ local function fdopen(fd, flags_or_mode, filename)
 end
 
 ----------------------------------------------------------------------
+-- Directories
+----------------------------------------------------------------------
+
+--- Create a directory.
+---
+--- perms may be an integer mask or a symbolic string understood by the backend.
+---@param path string
+---@param perms? integer|string
+---@return boolean|nil ok, string|nil err
+local function mkdir(path, perms)
+	assert(type(path) == 'string' and path ~= '', 'mkdir: path must be a non-empty string')
+
+	if not fd_back.mkdir then
+		return nil, 'backend does not implement mkdir'
+	end
+
+	return fd_back.mkdir(path, perms)
+end
+
+----------------------------------------------------------------------
 -- Open by filename
 ----------------------------------------------------------------------
 
@@ -255,6 +275,9 @@ return {
 	mktemp           = mktemp,
 	tmpfile          = tmpfile,
 	init_nonblocking = init_nonblocking,
+	mkdir            = mkdir,
+	rename           = fd_back.rename,
+	unlink           = fd_back.unlink,
 
 	-- For callers that previously used file.modes / file.permissions,
 	-- re-export backend metadata if present.

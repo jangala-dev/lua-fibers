@@ -76,6 +76,7 @@ end
 --- Build a concrete fd backend module from low-level ops.
 ---
 --- Required ops:
+---   mkdir(path[, perms]) -> ok:boolean, err|nil
 ---   set_nonblock(fd) -> ok:boolean, err|nil
 ---   read(fd, max)    -> s|nil, err|nil, want?
 ---   write(fd, s, len)-> n|nil, err|nil, want?
@@ -145,6 +146,12 @@ local function build_backend(ops)
 	--------------------------------------------------------------------
 	-- File-level helpers
 	--------------------------------------------------------------------
+
+	local function mkdir(path, perms)
+		assert(type(ops.mkdir) == 'function',
+			'fd_backend backend does not implement mkdir')
+		return ops.mkdir(path, perms)
+	end
 
 	local function open_file(path, mode, perms)
 		assert(type(ops.open_file) == 'function',
@@ -265,6 +272,7 @@ local function build_backend(ops)
 		close_fd     = close_fd,
 
 		-- file-level helpers
+		mkdir          = mkdir,
 		open_file      = open_file,
 		pipe           = pipe,
 		mktemp         = mktemp,

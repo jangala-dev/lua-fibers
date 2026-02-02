@@ -117,6 +117,32 @@ local permissions = {}
 permissions['rw-r--r--'] = bit.bor(pstat.S_IRUSR, pstat.S_IWUSR, pstat.S_IRGRP, pstat.S_IROTH)
 permissions['rw-rw-rw-'] = bit.bor(permissions['rw-r--r--'], pstat.S_IWGRP, pstat.S_IWOTH)
 
+-- Directory-friendly defaults (execute bits matter for traversal).
+permissions['rwxr-xr-x'] = bit.bor(
+	pstat.S_IRUSR, pstat.S_IWUSR, pstat.S_IXUSR,
+	pstat.S_IRGRP,              pstat.S_IXGRP,
+	pstat.S_IROTH,              pstat.S_IXOTH
+)
+permissions['rwx------'] = bit.bor(pstat.S_IRUSR, pstat.S_IWUSR, pstat.S_IXUSR)
+
+local function mkdir_path(path, perms)
+	local p
+	if perms == nil then
+		p = permissions['rwxr-xr-x']
+	elseif type(perms) == 'string' then
+		p = permissions[perms] or perms
+	else
+		p = perms
+	end
+
+	-- LuaPosix: mkdir(path, mode) -> 0 | nil, errmsg, errnum
+	local ok, err, eno = pstat.mkdir(path, p)
+	if ok == nil then
+		return false, errno_msg('mkdir failed', err, eno)
+	end
+	return true, nil
+end
+
 local function open_file(path, mode, perms)
 	mode = mode or 'r'
 	local flags = modes[mode]
@@ -372,6 +398,7 @@ local ops = {
 	fsync          = fsync_fd,
 	rename         = rename_file,
 	unlink         = unlink_file,
+	mkdir          = mkdir_path,
 	decode_access  = decode_access,
 	ignore_sigpipe = ignore_sigpipe,
 

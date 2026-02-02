@@ -45,6 +45,7 @@ ffi.cdef [[
   int     fsync(int fd);
   int     rename(const char *oldpath, const char *newpath);
   int     unlink(const char *pathname);
+  int     mkdir(const char *pathname, int mode);
 
   typedef void (*sighandler_t)(int);
   sighandler_t signal(int signum, sighandler_t handler);
@@ -93,6 +94,9 @@ local S_IRGRP = 0x0020
 local S_IROTH = 0x0004
 local S_IWGRP = 0x0010
 local S_IWOTH = 0x0002
+local S_IXUSR = 0x0040
+local S_IXGRP = 0x0008
+local S_IXOTH = 0x0001
 
 -- Errno values (Linux).
 local EAGAIN      = 11
@@ -308,6 +312,34 @@ end
 local permissions = {}
 permissions['rw-r--r--'] = bit.bor(S_IRUSR, S_IWUSR, S_IRGRP, S_IROTH)
 permissions['rw-rw-rw-'] = bit.bor(permissions['rw-r--r--'], S_IWGRP, S_IWOTH)
+permissions['rwxr-xr-x'] = bit.bor(
+	S_IRUSR, S_IWUSR, S_IXUSR,
+	S_IRGRP,          S_IXGRP,
+	S_IROTH,          S_IXOTH
+)
+permissions['rwx------'] = bit.bor(S_IRUSR, S_IWUSR, S_IXUSR)
+
+local function mkdir_path(path, perms)
+	-- Normalise perms: nil -> sensible default for dirs, string -> lookup, number -> passthrough.
+	local p
+	if perms == nil then
+		p = permissions['rwxr-xr-x']
+	elseif type(perms) == 'string' then
+		p = permissions[perms] or perms
+	else
+		p = perms
+	end
+
+	local c_path = ffi.new('char[?]', #path + 1)
+	ffi.copy(c_path, path)
+
+	local rc = toint(C.mkdir(c_path, p))
+	if rc ~= 0 then
+		local e = get_errno()
+		return false, strerror(e)
+	end
+	return true, nil
+end
 
 local function open_file(path, mode, perms)
 	mode = mode or 'r'
@@ -495,6 +527,7 @@ local ops = {
 	seek         = seek_fd,
 	close        = close_fd,
 
+	mkdir          = mkdir_path,
 	open_file      = open_file,
 	pipe           = pipe_fd,
 	mktemp         = mktemp,

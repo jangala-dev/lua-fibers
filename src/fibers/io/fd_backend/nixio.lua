@@ -35,6 +35,30 @@ local function errno_msg(default, eno)
 	return s
 end
 
+-- nixio.open expects perms as a mode string (e.g. "0644" or "rw-r--r--")
+local DEFAULT_CREATE_PERMS = '0666' -- subject to umask
+
+local function norm_perms(perms)
+	if perms == nil then
+		return nil
+	end
+	local t = type(perms)
+	if t == 'string' then
+		return perms
+	end
+	if t == 'number' then
+		-- Caller may pass decimal 420 (0644) etc; convert to octal string.
+		return string.format('%04o', perms)
+	end
+	return perms
+end
+
+local function is_create_mode(mode)
+	mode = mode or 'r'
+	local c = mode:sub(1, 1)
+	return (c == 'w' or c == 'a')
+end
+
 ----------------------------------------------------------------------
 -- Core ops: set_nonblock / read / write / seek / close
 ----------------------------------------------------------------------
@@ -156,14 +180,53 @@ local function close_fd(fd)
 end
 
 ----------------------------------------------------------------------
--- File-level helpers: open_file / pipe / mktemp / fsync / rename / unlink
+-- File-level helpers: mkdir / open_file / pipe / mktemp / fsync / rename / unlink
 ----------------------------------------------------------------------
+
+-- Basic symbolic permission presets for mkdir and file creation.
+-- (Lua has no octal literal; use base-8 parsing.)
+local function oct(s)
+	return tonumber(s, 8)
+end
+
+local permissions = {
+	['rw-r--r--'] = oct('644'),
+	['rw-rw-rw-'] = oct('666'),
+
+	-- Directories (execute bits are required for traversal).
+	['rwxr-xr-x'] = oct('755'),
+	['rwx------'] = oct('700'),
+}
+
+local function mkdir_path(path, perms)
+	-- Default to 0755 for directories.
+	local mode = norm_perms(perms, permissions['rwxr-xr-x'])
+
+	local ok, msg, eno
+	if mode == nil then
+		ok, msg, eno = fs.mkdir(path)
+	else
+		ok, msg, eno = fs.mkdir(path, mode)
+	end
+
+	if ok == nil or ok == false then
+		return false, errno_msg(msg or 'mkdir failed', eno)
+	end
+	return true, nil
+end
 
 -- For this backend we rely on nixio.open’s mode strings.
 local function open_file(path, mode, perms)
 	mode = mode or 'r'
 
-	local f, eno = nixio.open(path, mode, perms)
+	local p = norm_perms(perms)
+
+	-- If this is a creating mode and perms is nil, provide a default.
+	if p == nil and is_create_mode(mode) then
+		p = DEFAULT_CREATE_PERMS
+	end
+
+	local f, eno = nixio.open(path, mode, p)
 	if not f then
 		return nil, errno_msg('open failed', eno)
 	end
@@ -179,14 +242,14 @@ local function pipe_fds()
 end
 
 local function mktemp(prefix, perms)
-	-- Very simple mktemp: we try a few names and rely on low collision
-	-- probability. This mirrors the earlier “simple” backend you tested.
 	local start = math.random(1e7)
 	local last_err
 
+	local p = norm_perms(perms) or '0644'
+
 	for i = start, start + 10 do
 		local tmpnam = prefix .. '.' .. i
-		local f, eno = nixio.open(tmpnam, 'w+', perms)
+		local f, eno = nixio.open(tmpnam, 'w+', p)
 		if f then
 			return f, tmpnam
 		end
@@ -418,6 +481,7 @@ local ops = {
 	fsync          = fsync_fd,
 	rename         = rename_file,
 	unlink         = unlink_file,
+	mkdir          = mkdir_path,
 	decode_access  = decode_access,
 	ignore_sigpipe = ignore_sigpipe,
 
@@ -429,9 +493,9 @@ local ops = {
 	connect_start  = connect_start_fd,
 	connect_finish = connect_finish_fd,
 
-	-- Metadata for callers (fibers.io.socket re-exports these)
-	modes       = {},  -- not used for nixio; kept for compatibility
-	permissions = {},
+	-- Metadata for callers
+	modes       = {},  -- nixio uses mode strings for open()
+	permissions = permissions,
 
 	AF_UNIX     = AF_UNIX,
 	SOCK_STREAM = SOCK_STREAM,
