@@ -531,6 +531,46 @@ local function test_filemod_rename()
 end
 
 ----------------------------------------------------------------------
+-- 11. mkdir_p (create nested directories)
+----------------------------------------------------------------------
+
+local function test_mkdir_p()
+	local base = tmp_path('fibers-mkdirp')
+	local nested = base .. '/a/b/c'
+
+	-- Create nested path.
+	local ok, err = file_mod.mkdir_p(nested, 511)
+	assert(ok, 'mkdir_p failed: ' .. tostring(err))
+
+	-- Idempotent: calling again should succeed.
+	local ok2, err2 = file_mod.mkdir_p(nested, 511)
+	assert(ok2, 'mkdir_p second call failed: ' .. tostring(err2))
+
+	-- Create a file inside the deepest directory to prove the path exists.
+	local p = nested .. '/probe.txt'
+	local f, oerr = file_mod.open(p, 'w+', 'rw-r--r--')
+	assert(f, 'open in mkdir_p dir failed: ' .. tostring(oerr))
+
+	local msg = 'mkdir_p test'
+	local n, werr = f:write(msg)
+	assert(werr == nil, 'write failed in mkdir_p test: ' .. tostring(werr))
+	assert(n == #msg, 'write wrote ' .. tostring(n) .. ' bytes, expected ' .. #msg)
+
+	local c_ok, c_err = f:close()
+	assert(c_ok, 'close failed in mkdir_p test: ' .. tostring(c_err))
+
+	-- Cleanup file via file_mod.unlink.
+	local uok, uerr = file_mod.unlink(p)
+	assert(uok, 'unlink failed in mkdir_p test: ' .. tostring(uerr))
+
+	-- Best-effort cleanup: remove directories from leaf to root.
+	os.execute(('rmdir %q'):format(nested))
+	os.execute(('rmdir %q'):format(base .. '/a/b'))
+	os.execute(('rmdir %q'):format(base .. '/a'))
+	os.execute(('rmdir %q'):format(base))
+end
+
+----------------------------------------------------------------------
 -- Main
 ----------------------------------------------------------------------
 
@@ -548,6 +588,7 @@ local function main()
 	test_stream_properties_and_rename()
 	test_mkdir_and_unlink()
 	test_filemod_rename()
+	test_mkdir_p()
 end
 
 fibers.run(main)

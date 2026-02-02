@@ -25,9 +25,24 @@ local SOCK_STREAM = const.SOCK_STREAM or 1
 local SOCK_DGRAM  = const.SOCK_DGRAM or 2
 
 local function errno_msg(default, eno)
-	if not eno or eno == 0 then
+	if eno == nil or eno == 0 then
 		return default
 	end
+
+	-- nixio.strerror expects a number; some nixio APIs return msg/errno in
+	-- different positions depending on build/version.
+	if type(eno) ~= 'number' then
+		local n = tonumber(eno)
+		if n then
+			eno = n
+		else
+			eno = nixio.errno()
+			if eno == nil or eno == 0 then
+				return default
+			end
+		end
+	end
+
 	local s = nixio.strerror(eno)
 	if not s or s == '' then
 		return default .. ' (errno ' .. tostring(eno) .. ')'
@@ -197,6 +212,43 @@ local permissions = {
 	['rwxr-xr-x'] = oct('755'),
 	['rwx------'] = oct('700'),
 }
+
+-- nixio.open tolerates mode strings like "0644" and sometimes symbolic modes.
+local function norm_open_perms(perms)
+	if perms == nil then return nil end
+	local t = type(perms)
+	if t == 'number' then
+		return string.format('%04o', perms)
+	end
+	if t == 'string' then
+		-- If a symbolic string matches our presets, convert to octal string.
+		local m = permissions[perms]
+		if m then
+			return string.format('%04o', m)
+		end
+		return perms
+	end
+	return perms
+end
+
+-- nixio.fs.mkdir generally expects a numeric mode.
+local function norm_mkdir_mode(perms)
+	if perms == nil then
+		return permissions['rwxr-xr-x'] or 493 -- 0755
+	end
+	local t = type(perms)
+	if t == 'number' then
+		return perms
+	end
+	if t == 'string' then
+		local m = permissions[perms]
+		if m then return m end
+		-- Accept "0755" style.
+		local n = tonumber(perms, 8) or tonumber(perms)
+		if n then return n end
+	end
+	return permissions['rwxr-xr-x'] or 493
+end
 
 local function mkdir_path(path, perms)
 	-- Default to 0755 for directories.

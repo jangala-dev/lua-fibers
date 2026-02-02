@@ -113,6 +113,90 @@ local function mkdir(path, perms)
 	return fd_back.mkdir(path, perms)
 end
 
+--- Best-effort classification of "already exists" errors across backends.
+---@param err any
+---@return boolean
+local function is_eexist(err)
+	if err == nil then return false end
+	local s = tostring(err):lower()
+	-- Common shapes: "EEXIST", "file exists", "exists"
+	return s:find('eexist', 1, true) ~= nil
+		or s:find('file exists', 1, true) ~= nil
+		or s:find('exists', 1, true) ~= nil
+end
+
+--- Create a directory path (mkdir -p).
+---
+--- Semantics:
+---   * creates parent components as required
+---   * succeeds if the directory already exists
+---   * returns nil,err on the first hard failure encountered
+---
+--- perms may be an integer mask or a symbolic string understood by the backend.
+---@param path string
+---@param perms? integer|string
+---@return boolean|nil ok, string|nil err
+local function mkdir_p(path, perms)
+	assert(type(path) == 'string' and path ~= '', 'mkdir_p: path must be a non-empty string')
+
+	if not fd_back.mkdir then
+		return nil, 'backend does not implement mkdir'
+	end
+
+	-- Root is trivially present.
+	if path == '/' then
+		return true, nil
+	end
+
+	-- Normalise repeated slashes; keep leading '/' if present.
+	local is_abs = path:sub(1, 1) == '/'
+	-- Collapse multiple slashes to single slash.
+	path = path:gsub('/+', '/')
+
+	-- Strip trailing slash (except for "/").
+	if #path > 1 and path:sub(-1) == '/' then
+		path = path:sub(1, -2)
+	end
+
+	-- Split into components.
+	local parts = {}
+	for seg in path:gmatch('[^/]+') do
+		-- Skip "." segments; do not attempt to resolve ".." here.
+		if seg ~= '.' and seg ~= '' then
+			parts[#parts + 1] = seg
+		end
+	end
+
+	-- Nothing to do (e.g. "." or "/.").
+	if #parts == 0 then
+		return true, nil
+	end
+
+	local cur = is_abs and '' or nil
+	for i = 1, #parts do
+		local seg = parts[i]
+		if cur == nil then
+			cur = seg
+		elseif cur == '' then
+			cur = '/' .. seg
+		else
+			cur = cur .. '/' .. seg
+		end
+
+		local ok, err = fd_back.mkdir(cur, perms)
+		if ok then
+			-- created
+		else
+			-- treat "already exists" as success; anything else is fatal
+			if not is_eexist(err) then
+				return nil, err
+			end
+		end
+	end
+
+	return true, nil
+end
+
 ----------------------------------------------------------------------
 -- Open by filename
 ----------------------------------------------------------------------
@@ -276,6 +360,7 @@ return {
 	tmpfile          = tmpfile,
 	init_nonblocking = init_nonblocking,
 	mkdir            = mkdir,
+	mkdir_p          = mkdir_p,
 	rename           = fd_back.rename,
 	unlink           = fd_back.unlink,
 
