@@ -321,6 +321,10 @@ end
 local function root()
 	if not root_scope then
 		root_scope = new_scope(nil)
+
+		-- Root scope installs the global error-drainer; disable raw fail-fast.
+		runtime.set_fail_fast_unhandled(false)
+
 		runtime.spawn_raw(function ()
 			while true do
 				local fib, err = runtime.wait_fiber_error()

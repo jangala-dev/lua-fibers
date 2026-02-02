@@ -6,6 +6,16 @@
 
 local sched = require 'fibers.sched'
 
+---@type boolean
+local fail_fast_unhandled = true
+
+--- Configure what happens to uncaught fibre errors when nobody is waiting.
+--- If true: stop the scheduler and re-raise the error (fail-fast).
+--- If false (default): enqueue or deliver via wait_fiber_error.
+local function set_fail_fast_unhandled(v)
+	fail_fast_unhandled = not not v
+end
+
 --- Identity helper used as the wrap function when resuming fibers.
 ---@generic T
 ---@param ... T
@@ -82,6 +92,7 @@ end
 ---@param ... any
 function Fiber:resume(wrap, ...)
 	assert(self.alive, 'dead fiber')
+	wrap = wrap or id
 	local saved_current_fiber = _current_fiber
 	_current_fiber = self
 	local ok, err = coroutine.resume(self.coroutine, wrap, ...)
@@ -101,10 +112,19 @@ function Fiber:resume(wrap, ...)
 				err       = err,
 			}, WaiterTask))
 		else
-			error_queue[#error_queue + 1] = {
-				fiber = self,
-				err   = err,
-			}
+			if fail_fast_unhandled then
+				-- stop the loop and surface the error
+				current_scheduler:stop()
+
+				-- include the creation traceback to keep diagnostics
+				local tb = self.traceback
+				if tb and tb ~= '' then
+					error(tostring(err) .. '\n' .. tb, 0)
+				end
+				error(err, 0)
+			else
+				error_queue[#error_queue + 1] = { fiber = self, err = err }
+			end
 		end
 	end
 end
@@ -197,6 +217,8 @@ return {
 	suspend           = suspend,
 	yield             = yield,
 	wait_fiber_error  = wait_fiber_error,
+
+	set_fail_fast_unhandled = set_fail_fast_unhandled,
 
 	-- fiber management
 	spawn_raw = spawn,
