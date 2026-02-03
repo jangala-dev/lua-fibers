@@ -1,27 +1,77 @@
 -- fibers/op2.lua
 --
--- Transactional ops for event-driven, canonical-state (“LED”) primitives.
+-- Transactional ops for cooperative fibres.
 --
--- Ticket protocol (fixed-arity, internal) using integer tags:
+-- Overview
+-- --------
+-- An Op is a pure expression (a small algebra of combinators) which is executed by perform(op).
+-- Execution is transactional: perform repeatedly asks the instantiated graph for a preview of
+-- readiness, then commits that same preview.
 --
---   preview(ctx) -> tag, proposal, payload_pack, pulse
---       tag = TAG_PENDING   => pulse is the pulse to watch; proposal/payload_pack nil
---       tag = TAG_PREVIEW   => proposal is opaque; payload_pack is {n=...,...}; pulse is canonical
---       tag = TAG_CANCELLED => all nil except tag
+-- Instantiation
+-- -------------
+-- perform(op) instantiates the Op once into a network of *tickets*. A ticket is the concrete
+-- runtime object for a node in the op expression. Tickets are stateful but must obey the
+-- preview/commit protocol below.
 --
---   commit(ctx)  -> tag, proposal, payload_pack, pulse
---       tag = TAG_PENDING   => pulse is the pulse to watch; proposal/payload_pack nil
---       tag = TAG_DONE      => proposal is opaque; payload_pack is {n=...,...}; pulse nil
---       tag = TAG_CANCELLED => all nil except tag
+-- Ticket protocol (strict)
+-- ------------------------
+-- preview(ctx) -> tag, proposal, payload_pack, pulse
+--   TAG_PENDING:
+--     Not preview-ready. proposal/payload_pack are nil. pulse is a progress pulse to watch.
+--   TAG_PREVIEW:
+--     Preview-ready. proposal is an opaque identity for this preview snapshot. payload_pack is a
+--     packed result table { n = ..., [1] = ..., ... }. pulse is a progress pulse (may be nil for
+--     tickets that never block).
+--   TAG_CANCELLED:
+--     Terminal failure/cancellation. All other values nil.
 --
--- perform(op) returns the payload values (unpacked from payload_pack) for a TAG_DONE result.
+-- commit(ctx, expected_proposal) -> tag, payload_pack, pulse
+--   TAG_DONE:
+--     Commit succeeded for expected_proposal. payload_pack is the committed result. pulse is nil.
+--   TAG_PENDING:
+--     Commit cannot yet reify expected_proposal (or the preview has been invalidated). pulse is a
+--     progress pulse to watch; the caller will re-preview after waking.
+--   TAG_CANCELLED:
+--     Terminal failure/cancellation.
 --
--- Performance choices:
---   * Allocation-free pulse subscription: caller-supplied intrusive nodes (no Token)
---   * Preallocated watches/tasks for composites (watch node is the scheduled task)
---   * No gate pulse; direct ctx.gate_state checks
---   * Fixed-arity ticket returns to keep perform() hot path free of pack()
-
+-- Core invariants
+-- ---------------
+-- 1) Proposal stability. A proposal returned by preview(ctx) is a claim about readiness at a
+--    particular snapshot. commit(ctx, proposal) must *only* attempt to reify that proposal and
+--    must not search for a different outcome.
+--
+-- 2) Invalidation by pulse. If a ticket has returned TAG_PREVIEW for proposal P, it is responsible
+--    for signalling its pulse when that preview may no longer hold (including when P changes, or
+--    when commit would newly return TAG_PENDING). Pulses are monotone epochs; signalling indicates
+--    “the previously previewed snapshot may be stale”.
+--
+-- 3) Progress. After signalling the pulse, the ticket should eventually make progress such that a
+--    subsequent preview/commit sequence can advance (or reach TAG_CANCELLED).
+--
+-- 4) Cancellation. cancel(ctx) is best-effort and idempotent; it must detach external interest and
+--    signal any relevant pulses so blocked fibres can wake and observe cancellation.
+--
+-- perform(op) algorithm
+-- ---------------------
+-- perform drives the root ticket as:
+--   PREVIEW:  loop calling preview until TAG_PREVIEW (blocking on pulse when TAG_PENDING).
+--   COMMIT:   call commit with the returned proposal. If TAG_PENDING, block on pulse and retry
+--             from PREVIEW; if TAG_DONE, return the unpacked payload; if TAG_CANCELLED, error.
+--
+-- Combinators
+-- -----------
+-- Composite ops (choice/all/choose_k/and_then) are built from a single select ticket with a policy.
+-- Composite tickets maintain watches on child pulses; when any watched pulse signals, the composite
+-- pulse signals, invalidating any cached plan and prompting a new preview scan.
+--
+-- Decoration
+-- ----------
+-- wrap/finally/on_abort are implemented as ticket annotations:
+--   * wraps are applied to preview payloads and cached for the matching commit;
+--   * finally runs once on success, and best-effort on cancellation/abort;
+--   * on_abort runs best-effort when an arm loses after a competing commit.
+--
 ---@module 'fibers.op2'
 
 local runtime = require 'fibers.runtime'
@@ -32,7 +82,7 @@ local pack   = rawget(table, 'pack') or function (...) return { n = select('#', 
 local Op -- forward declaration for metatable checks
 
 ----------------------------------------------------------------------
--- Tag constants (integers)
+-- Tag constants
 ----------------------------------------------------------------------
 
 local TAG_PENDING   = 'tag_pending'
@@ -45,11 +95,12 @@ local TAG_CANCELLED = 'tag_cancelled'
 ----------------------------------------------------------------------
 
 local PH_OPEN      = 'phase_open'
+local PH_ABORTED   = 'phase_aborted'
 local PH_CANCELLED = 'phase_cancelled'
 local PH_DONE      = 'phase_done'
 
 ----------------------------------------------------------------------
--- Gate state constants (integers; stored directly on ctx)
+-- Gate state constants for primitive authors (stored on ctx)
 ----------------------------------------------------------------------
 
 local GATE_OPEN       = 'gate_open'
@@ -68,15 +119,9 @@ Pulse.__index = Pulse
 
 ---@return Pulse
 local function new_pulse()
-	return setmetatable({ _epoch = 0, _subs = nil }, Pulse)
+	return setmetatable({ _epoch = 0 }, Pulse)
 end
 
----@return integer
-function Pulse:now()
-	return self._epoch
-end
-
--- Intrusive node unlink (node is caller-owned).
 local function node_unlink(node)
 	if not node or not node._linked then return end
 	node._linked = false
@@ -100,7 +145,6 @@ local function node_unlink(node)
 	node._pulse, node._prev, node._next = nil, nil, nil
 end
 
---- Signal progress. One-shot: schedule and clear current subscribers. Must not yield.
 function Pulse:signal()
 	self._epoch = self._epoch + 1
 
@@ -110,45 +154,27 @@ function Pulse:signal()
 	while sub do
 		local nxt = sub._next
 
-		-- detach from this pulse
 		sub._linked = false
 		sub._pulse  = nil
 		sub._prev   = nil
 		sub._next   = nil
 
-		-- schedule task (task/waker are node-owned, stable)
 		local task  = sub._task
 		local waker = sub._waker
-		if task and waker then
-			waker:schedule(task)
-		end
+		waker:schedule(task)
 
 		sub = nxt
 	end
 end
 
---- Subscribe node for “epoch advanced beyond seen_epoch”.
---- Allocation-free: node is supplied by caller and may be reused.
---- Invariant: node._task and node._waker are set once by the owner.
----@param seen_epoch integer
----@param node table
----@return boolean linked  # true if linked; false if scheduled immediately
 function Pulse:subscribe_node(seen_epoch, node)
-	-- ensure node is not linked elsewhere
 	node_unlink(node)
 
-	local waker = node._waker
-	local task  = node._task
-	if not waker or not task then
-		error('Pulse.subscribe_node: node missing _waker/_task', 2)
-	end
-
 	if self._epoch > seen_epoch then
-		waker:schedule(task)
+		node._waker:schedule(node._task)
 		return false
 	end
 
-	-- link at head
 	node._pulse  = self
 	node._prev   = nil
 	node._next   = self._subs
@@ -159,42 +185,51 @@ function Pulse:subscribe_node(seen_epoch, node)
 	return true
 end
 
--- Fast-path alias (avoid method lookup at call-sites).
 local pulse_subscribe = Pulse.subscribe_node
 
 ----------------------------------------------------------------------
 -- Blocking on a pulse (root-only policy)
 ----------------------------------------------------------------------
 
--- Shared block function: no per-wait closure allocation.
 local function block_subscribe_to_pulse(_, _, pulse, seen_epoch, node)
 	pulse:subscribe_node(seen_epoch, node)
 end
 
 ---@param ctx table
 ---@param pulse Pulse
-local function block_on_pulse(ctx, pulse)
-	local seen = pulse._epoch
+---@param seen_epoch? integer
+local function block_on_pulse(ctx, pulse, seen_epoch)
+	local seen = (seen_epoch ~= nil) and seen_epoch or pulse._epoch
 	runtime.suspend(block_subscribe_to_pulse, pulse, seen, ctx._wait_node)
 end
 
 ----------------------------------------------------------------------
--- Safe helpers for cancellation / abort hooks
+-- Always/Never tickets
 ----------------------------------------------------------------------
 
-local function safe_cancel(t, ctx)
-	local c = t and t.cancel
-	if type(c) == 'function' then
-		pcall(c, t, ctx)
-	end
-end
+local EMPTY = { n = 0 }
 
-local function post_abort_then_cancel(t, ctx)
-	if t and t._post_commit_abort then
-		pcall(t._post_commit_abort, t, ctx)
-	end
-	safe_cancel(t, ctx)
-end
+local AlwaysTicket = {}
+AlwaysTicket.__index = AlwaysTicket
+
+function AlwaysTicket:pulse() return nil end
+
+function AlwaysTicket:preview(_ctx) return TAG_PREVIEW, self._proposal, self._payload, nil end
+
+function AlwaysTicket:commit(_ctx, _expected_proposal) return TAG_DONE, self._payload, nil end
+
+function AlwaysTicket:cancel(_ctx) end
+
+local NeverTicket = {}
+NeverTicket.__index = NeverTicket
+
+function NeverTicket:pulse() return self._pulse end
+
+function NeverTicket:preview(_ctx) return TAG_PENDING, nil, nil, self._pulse end
+
+function NeverTicket:commit(_ctx, _expected_proposal) return TAG_PENDING, nil, self._pulse end
+
+function NeverTicket:cancel(_ctx) end
 
 ----------------------------------------------------------------------
 -- Watches: intrusive subscription nodes; the watch node is the scheduled task
@@ -222,653 +257,561 @@ end
 local function watch_new(owner, waker)
 	local w = setmetatable({
 		owner   = owner,
-		watched = nil,
-
-		_pulse  = nil,
-		_prev   = nil,
-		_next   = nil,
 		_linked = false,
-
-		_task   = nil,  -- set below
 		_waker  = waker,
 	}, Watch)
 
-	-- Invariant: a watch schedules itself.
 	w._task = w
 	return w
 end
 
 local function watch_clear(w)
-	if not w then return end
 	node_unlink(w)
 	w.watched = nil
+	w._seen_epoch = nil
 end
 
 local function watch_set(w, pulse)
+	if pulse == nil then
+		watch_clear(w)
+		return
+	end
+
 	if w.watched ~= pulse then
 		node_unlink(w)
 		w.watched = pulse
 	end
+
+	w._seen_epoch = pulse._epoch
+
 	if not w._linked then
-		pulse_subscribe(pulse, pulse._epoch, w)
+		pulse_subscribe(pulse, w._seen_epoch, w)
 	end
 end
 
 ----------------------------------------------------------------------
--- Always/Never tickets
+-- Ticket decoration: wrap / finally / on_abort as annotations (metatable-based)
+--
+-- Tickets must have metatable __index as a *table* of methods.
 ----------------------------------------------------------------------
 
--- ready ticket (constant payload)
-local AlwaysTicket = {}
-AlwaysTicket.__index = AlwaysTicket
-
-function AlwaysTicket:pulse() return self._pulse end
-
-function AlwaysTicket:preview(_ctx)
-	return TAG_PREVIEW, self._proposal, self._payload, self._pulse
+local function ann_is_empty(ann)
+	if not ann then return true end
+	return (not ann.wraps or #ann.wraps == 0)
+		and (not ann.finallys or #ann.finallys == 0)
+		and (not ann.aborts or #ann.aborts == 0)
 end
 
-function AlwaysTicket:commit(ctx)
-	if ctx.gate_state == GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-	if ctx.gate_state ~= GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-	return TAG_DONE, self._proposal, self._payload, nil
+local function ann_merge(a, b)
+	if ann_is_empty(a) then return b end
+	if ann_is_empty(b) then return a end
+
+	local out = {}
+
+	if a.wraps or b.wraps then
+		local t = {}
+		if a.wraps then for i = 1, #a.wraps do t[#t + 1] = a.wraps[i] end end
+		if b.wraps then for i = 1, #b.wraps do t[#t + 1] = b.wraps[i] end end
+		out.wraps = t
+	end
+
+	if a.finallys or b.finallys then
+		local t = {}
+		if a.finallys then for i = 1, #a.finallys do t[#t + 1] = a.finallys[i] end end
+		if b.finallys then for i = 1, #b.finallys do t[#t + 1] = b.finallys[i] end end
+		out.finallys = t
+	end
+
+	if a.aborts or b.aborts then
+		local t = {}
+		if a.aborts then for i = 1, #a.aborts do t[#t + 1] = a.aborts[i] end end
+		if b.aborts then for i = 1, #b.aborts do t[#t + 1] = b.aborts[i] end end
+		out.aborts = t
+	end
+
+	return out
 end
 
-function AlwaysTicket:cancel(_ctx) end
-
-
--- pending ticket (never becomes ready)
-local NeverTicket = {}
-NeverTicket.__index = NeverTicket
-
-function NeverTicket:pulse() return self._pulse end
-
-function NeverTicket:preview(_ctx)
-	return TAG_PENDING, nil, nil, self._pulse
+local function apply_wraps(wraps, payload)
+	local out = payload or EMPTY
+	for i = 1, #wraps do
+		out = pack(wraps[i](unpack(out, 1, out.n)))
+	end
+	return out
 end
 
-function NeverTicket:commit(ctx)
-	if ctx.gate_state == GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-	if ctx.gate_state ~= GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-	return TAG_PENDING, nil, nil, self._pulse
+local function run_finallys_once(self, aborted)
+	if rawget(self, '_ann_finally_ran') then return end
+	rawset(self, '_ann_finally_ran', true)
+
+	local ann = rawget(self, '_ann')
+	local fs = ann and ann.finallys or nil
+	if not fs then return end
+
+	for i = 1, #fs do
+		pcall(fs[i], aborted)
+	end
 end
 
-function NeverTicket:cancel(_ctx) end
+local function run_aborts_once(self)
+	if rawget(self, '_ann_abort_ran') then return end
+	rawset(self, '_ann_abort_ran', true)
+
+	local ann = rawget(self, '_ann')
+	local as = ann and ann.aborts or nil
+	if not as then return end
+
+	for i = 1, #as do
+		pcall(as[i])
+	end
+end
+
+---@param ticket table
+---@param add_ann table
+---@return table
+local function decorate_ticket(ticket, add_ann)
+	if ann_is_empty(add_ann) then
+		return ticket
+	end
+
+	local existing = rawget(ticket, '_ann')
+	if existing then
+		rawset(ticket, '_ann', ann_merge(existing, add_ann))
+		rawset(ticket, '_ann_wrap_cache_p', nil)
+		rawset(ticket, '_ann_wrap_cache_payload', nil)
+	else
+		rawset(ticket, '_ann', add_ann)
+	end
+
+	local mt = getmetatable(ticket) or {}
+	if mt.__ann_decorated then
+		return ticket
+	end
+
+	local base_index = mt.__index
+	if type(base_index) ~= 'table' then
+		error('decorate_ticket expects tickets with metatable __index table', 2)
+	end
+
+	local idx = {}
+	setmetatable(idx, { __index = base_index })
+
+	idx.preview = function (self, ctx)
+		local tag, p, payload, pulse = base_index.preview(self, ctx)
+		if tag ~= TAG_PREVIEW then
+			return tag, nil, nil, pulse
+		end
+
+		local ann = rawget(self, '_ann')
+		local wraps = ann and ann.wraps or nil
+		if not wraps or #wraps == 0 then
+			return TAG_PREVIEW, p, payload or EMPTY, pulse
+		end
+
+		local cache_p = rawget(self, '_ann_wrap_cache_p')
+		if cache_p ~= p then
+			local out = apply_wraps(wraps, payload)
+			rawset(self, '_ann_wrap_cache_p', p)
+			rawset(self, '_ann_wrap_cache_payload', out)
+		end
+
+		return TAG_PREVIEW, p, rawget(self, '_ann_wrap_cache_payload'), pulse
+	end
+
+	idx.commit = function (self, ctx, expected_proposal)
+		local tag, payload, pulse = base_index.commit(self, ctx, expected_proposal)
+		if tag == TAG_PENDING then
+			return TAG_PENDING, nil, pulse
+		elseif tag ~= TAG_DONE then
+			return TAG_CANCELLED, nil, nil
+		end
+
+		-- If preview ran for this proposal, we already have the wrapped pack cached.
+		local out = rawget(self, '_ann_wrap_cache_payload')
+		if rawget(self, '_ann_wrap_cache_p') ~= expected_proposal or not out then
+			-- Fallback: compute once if commit is called without a matching preview.
+			local ann = rawget(self, '_ann')
+			local wraps = ann and ann.wraps or nil
+			out = payload or EMPTY
+			if wraps and #wraps > 0 then
+				out = apply_wraps(wraps, out)
+				rawset(self, '_ann_wrap_cache_p', expected_proposal)
+				rawset(self, '_ann_wrap_cache_payload', out)
+			end
+		end
+
+		run_finallys_once(self, false)
+		return TAG_DONE, out, nil
+	end
+
+	idx.cancel = function (self, ctx)
+		base_index.cancel(self, ctx)
+		run_finallys_once(self, true)
+	end
+
+	idx._post_commit_abort = function (self, ctx)
+		local pa = base_index._post_commit_abort
+		if pa then pa(self, ctx) end
+		run_aborts_once(self)
+		run_finallys_once(self, true)
+	end
+
+	local new_mt = {}
+	for k, v in pairs(mt) do new_mt[k] = v end
+	new_mt.__index = idx
+	new_mt.__ann_decorated = true
+
+	setmetatable(ticket, new_mt)
+	return ticket
+end
 
 ----------------------------------------------------------------------
--- Wrapper tickets: wrap / finally / on_abort
+-- Abort/cancel plumbing (for composites)
 ----------------------------------------------------------------------
 
-local EMPTY = { n = 0 }
-
----@class WrapTicket
----@field inner table
----@field f fun(...): ...
----@field _cache_p any|nil
----@field _cache_payload table|nil   -- payload_pack
-local WrapTicket = {}
-WrapTicket.__index = WrapTicket
-
-function WrapTicket:pulse() return self.inner:pulse() end
-
-function WrapTicket:preview(ctx)
-	local tag, p, payload, pulse = self.inner:preview(ctx)
-	if tag ~= TAG_PREVIEW then
-		return tag, nil, nil, pulse
+local function post_abort_then_cancel(t, ctx)
+	local pa = t._post_commit_abort
+	if pa then
+		pa(t, ctx)
 	end
-
-	if self._cache_payload and self._cache_p == p then
-		return TAG_PREVIEW, p, self._cache_payload, pulse
-	end
-
-	local ok, out = pcall(function ()
-		return pack(self.f(unpack(payload, 1, payload.n)))
-	end)
-	if not ok then error(out, 0) end
-
-	self._cache_p = p
-	self._cache_payload = out
-	return TAG_PREVIEW, p, out, pulse
-end
-
-function WrapTicket:commit(ctx)
-	local tag, p, payload, pulse = self.inner:commit(ctx)
-
-	if tag ~= TAG_DONE then
-		return tag, nil, nil, pulse
-	end
-
-	-- Stronger invariant: commit follows a preview that produced the same proposal.
-	if self._cache_p ~= p or not self._cache_payload then
-		error('WrapTicket: commit proposal without cached preview mapping', 0)
-	end
-
-	return TAG_DONE, p, self._cache_payload, nil
-end
-
-function WrapTicket:cancel(ctx) safe_cancel(self.inner, ctx) end
-function WrapTicket:_post_commit_abort(ctx)
-	if self.inner and self.inner._post_commit_abort then
-		self.inner:_post_commit_abort(ctx)
-	end
-end
-
----@class FinallyTicket
----@field inner table
----@field cleanup fun(aborted:boolean)
----@field _ran boolean
-local FinallyTicket = {}
-FinallyTicket.__index = FinallyTicket
-
-function FinallyTicket:pulse() return self.inner:pulse() end
-
-function FinallyTicket:_run(aborted)
-	if self._ran then return end
-	self._ran = true
-	pcall(self.cleanup, aborted)
-end
-
-function FinallyTicket:preview(ctx)
-	return self.inner:preview(ctx)
-end
-
-function FinallyTicket:commit(ctx)
-	local tag, p, payload, pulse = self.inner:commit(ctx)
-	if tag == TAG_DONE then
-		self:_run(false)
-	end
-	return tag, p, payload, pulse
-end
-
-function FinallyTicket:cancel(ctx)
-	safe_cancel(self.inner, ctx)
-	self:_run(true)
-end
-
-function FinallyTicket:_post_commit_abort(ctx)
-	if self.inner and self.inner._post_commit_abort then
-		self.inner:_post_commit_abort(ctx)
-	end
-	self:_run(true)
-end
-
----@class AbortTicket
----@field inner table
----@field abort_fn fun()
----@field _ran boolean
-local AbortTicket = {}
-AbortTicket.__index = AbortTicket
-
-function AbortTicket:pulse() return self.inner:pulse() end
-function AbortTicket:preview(ctx) return self.inner:preview(ctx) end
-function AbortTicket:commit(ctx) return self.inner:commit(ctx) end
-function AbortTicket:cancel(ctx) safe_cancel(self.inner, ctx) end
-
-function AbortTicket:_post_commit_abort(ctx)
-	if self.inner and self.inner._post_commit_abort then
-		self.inner:_post_commit_abort(ctx)
-	end
-	if not self._ran then
-		self._ran = true
-		pcall(self.abort_fn)
-	end
+	t:cancel(ctx)
 end
 
 ----------------------------------------------------------------------
--- Composite: all(...)
--- Semantics preserved: returns ONE value (a table of payload packs).
+-- Select: a general composite for choice/all/choose_k/and_then
 ----------------------------------------------------------------------
 
----@class AllTicket
+---@class SelectPlan
+---@field picks integer[]
+---@field props any[]     -- tuple aligned with picks: props[j] corresponds to picks[j]
+
+---@class SelectPolicy
+---@field nslots integer|nil
+---@field build_plan fun(owner:any, ctx:table): integer[]|nil
+---@field build_payload fun(owner:any, picks:integer[]): table
+---@field cancel_losers boolean|nil
+---@field on_child_cancelled string|nil   -- 'dead'|'cancel_all'
+---@field on_pick_cancelled string|nil    -- 'retry'|'cancel_all'
+---@field on_child fun(owner:any, ctx:table, i:integer, tag:string, prop:any, payload:table|nil, pulse:any)|nil
+
+---@class SelectTicket
 ---@field _pulse Pulse
----@field kids table[]
+---@field kids table[]              -- may contain nil for uninstantiated slots
 ---@field watch Watch[]
----@field prepared_p any[]
----@field prepared_vals table[]         -- payload packs per child
----@field prepared_results table        -- reused array of payload packs
----@field prepared_payload table        -- payload pack of size 1: {n=1, [1]=prepared_results}
----@field nonce integer                 -- monotonic version (proposal identity source)
----@field prepared_nonce integer|nil    -- proposal for current ready snapshot
----@field phase integer
-local AllTicket = {}
-AllTicket.__index = AllTicket
+---@field dead boolean[]
+---@field props any[]               -- per-slot last preview proposal (nil if not preview-ready)
+---@field vals table[]              -- per-slot last payload pack (preview or committed)
+---@field phase string
+---@field policy SelectPolicy
+---@field prepared_plan SelectPlan|nil
+---@field prepared_payload table|nil
+---@field prepared_epoch integer|nil
+---@field nslots integer
+local SelectTicket = {}
+SelectTicket.__index = SelectTicket
 
-function AllTicket:pulse() return self._pulse end
+function SelectTicket:pulse() return self._pulse end
 
-function AllTicket:_clear_watches()
-	for i = 1, #self.watch do
+function SelectTicket:_clear_watches()
+	for i = 1, self.nslots do
 		watch_clear(self.watch[i])
 	end
 end
 
-function AllTicket:_invalidate_prepared()
-	-- Only needs to change if we have issued a proposal.
-	if self.prepared_nonce ~= nil then
-		self.nonce = self.nonce + 1
-		self.prepared_nonce = nil
+function SelectTicket:_withdraw_prepared()
+	self.prepared_plan    = nil
+	self.prepared_payload = nil
+	self.prepared_epoch   = nil
+end
+
+function SelectTicket:_invalidate_slot(ctx, i)
+	local kid = self.kids[i]
+	if kid then kid:cancel(ctx) end
+
+	self.kids[i]  = nil
+	self.dead[i]  = nil
+	self.props[i] = nil
+	self.vals[i]  = nil
+	watch_clear(self.watch[i])
+
+	self:_withdraw_prepared()
+end
+
+function SelectTicket:_set_slot(ctx, i, opv)
+	local t = opv:_instantiate(ctx)
+
+	self.kids[i]  = t
+	self.dead[i]  = nil
+	self.props[i] = nil
+	self.vals[i]  = nil
+	watch_clear(self.watch[i])
+
+	self:_withdraw_prepared()
+	return t
+end
+
+local function call_on_child(owner, ctx, i, tag, prop, payload, pulse)
+	local pol = owner.policy
+	local f = pol and pol.on_child or nil
+	if f then
+		f(owner, ctx, i, tag, prop, payload, pulse)
 	end
 end
 
-function AllTicket:preview(ctx)
-	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil, nil end
-	if self.phase == PH_DONE then
-		return TAG_PREVIEW, self.prepared_nonce, self.prepared_payload, self._pulse
-	end
-
-	local n = #self.kids
-	local all_ready = true
-
-	for i = 1, n do
-		local kid = self.kids[i]
-		local tag, prop, payload, wpulse = kid:preview(ctx)
+function SelectTicket:_watches_quiet()
+	for i = 1, self.nslots do
 		local w = self.watch[i]
-
-		if tag == TAG_PENDING then
-			all_ready = false
-			if self.prepared_p[i] ~= nil then
-				self.prepared_p[i] = nil
-				self.prepared_vals[i] = nil
-				self:_invalidate_prepared()
-			end
-			watch_set(w, wpulse)
-
-		elseif tag == TAG_PREVIEW then
-			if self.prepared_p[i] ~= prop then
-				self.prepared_p[i] = prop
-				self:_invalidate_prepared()
-			end
-			self.prepared_vals[i] = payload
-			watch_set(w, wpulse or kid:pulse())
-
-		elseif tag == TAG_CANCELLED then
-			self.phase = PH_CANCELLED
-			return TAG_CANCELLED, nil, nil, nil
-
-		else
-			error('all: invalid child status in preview', 0)
+		local p = w.watched
+		local seen = w._seen_epoch
+		if p and seen ~= nil and p._epoch ~= seen then
+			return false
 		end
 	end
-
-	if not all_ready then
-		return TAG_PENDING, nil, nil, self._pulse
-	end
-
-	if self.prepared_nonce == nil then
-		-- Establish a new snapshot proposal.
-		self.prepared_nonce = self.nonce
-		for i = 1, n do
-			self.prepared_results[i] = self.prepared_vals[i]
-		end
-	end
-
-	return TAG_PREVIEW, self.prepared_nonce, self.prepared_payload, self._pulse
+	return true
 end
 
-function AllTicket:commit(ctx)
-	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil, nil end
-	if ctx.gate_state == GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-	if self.phase == PH_DONE then
-		return TAG_DONE, self.prepared_nonce, self.prepared_payload, nil
-	end
-	if ctx.gate_state ~= GATE_COMMITTING then
+function SelectTicket:preview(ctx)
+	if self.phase == PH_CANCELLED or self.phase == PH_ABORTED then
 		return TAG_CANCELLED, nil, nil, nil
 	end
 
-	if self.prepared_nonce == nil then return TAG_CANCELLED, nil, nil, nil end
-	for i = 1, #self.kids do
-		if self.prepared_p[i] == nil then return TAG_CANCELLED, nil, nil, nil end
+	if self.phase == PH_DONE then
+		return TAG_PREVIEW, self.prepared_plan, self.prepared_payload, self._pulse
 	end
 
-	for i = 1, #self.kids do
+	-- Cache rule: a prepared plan remains valid until the owner pulse advances.
+	local epoch = self._pulse._epoch
+
+	if self.prepared_plan and self.prepared_epoch == epoch and self:_watches_quiet() then
+		return TAG_PREVIEW, self.prepared_plan, self.prepared_payload, self._pulse
+	end
+
+	self:_withdraw_prepared()
+
+	local any_pending   = false
+	local any_remaining = false
+
+	for i = 1, self.nslots do
+		if not self.dead[i] then
+			local kid = self.kids[i]
+
+			if not kid then
+				any_pending   = true
+				any_remaining = true
+				self.props[i] = nil
+				self.vals[i]  = nil
+				watch_clear(self.watch[i])
+
+			else
+				local tag, prop, payload, wpulse = kid:preview(ctx)
+				call_on_child(self, ctx, i, tag, prop, payload, wpulse)
+
+				-- Hook may have driven the composite to aborted.
+				if self.phase == PH_ABORTED or self.phase == PH_CANCELLED then
+					return TAG_CANCELLED, nil, nil, nil
+				end
+
+				if tag == TAG_PENDING then
+					any_pending   = true
+					any_remaining = true
+					self.props[i] = nil
+					self.vals[i]  = nil
+					watch_set(self.watch[i], wpulse)
+
+				elseif tag == TAG_PREVIEW then
+					any_remaining = true
+					self.props[i] = prop
+					self.vals[i]  = payload
+					watch_set(self.watch[i], wpulse or kid:pulse())
+
+				else -- TAG_CANCELLED
+					local mode    = self.policy.on_child_cancelled or 'dead'
+					self.dead[i]  = true
+					self.props[i] = nil
+					self.vals[i]  = nil
+					watch_clear(self.watch[i])
+					kid:cancel(ctx)
+
+					if mode == 'cancel_all' then
+						self.phase = PH_ABORTED
+						return TAG_CANCELLED, nil, nil, nil
+					end
+				end
+			end
+		end
+	end
+
+	local picks = self.policy.build_plan(self, ctx)
+	if not picks then
+		if any_pending or any_remaining then
+			return TAG_PENDING, nil, nil, self._pulse
+		end
+		self.phase = PH_ABORTED
+		return TAG_CANCELLED, nil, nil, nil
+	end
+
+	-- Proposal: tuple of child proposals aligned with picks.
+	local props_tuple = {}
+	for j = 1, #picks do
+		local i = picks[j]
+		props_tuple[j] = self.props[i]
+	end
+
+	local plan = { picks = picks, props = props_tuple }
+	local payload = self.policy.build_payload(self, picks)
+
+	self.prepared_plan    = plan
+	self.prepared_payload = payload
+	self.prepared_epoch   = epoch
+
+	return TAG_PREVIEW, plan, payload, self._pulse
+end
+
+function SelectTicket:commit(ctx, expected_plan)
+	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil end
+
+	if self.phase == PH_DONE then
+		if expected_plan ~= self.prepared_plan then
+			return TAG_PENDING, nil, self._pulse
+		end
+		return TAG_DONE, self.prepared_payload, nil
+	end
+
+	local plan = self.prepared_plan
+	if (not plan) or expected_plan ~= plan then
+		return TAG_PENDING, nil, self._pulse
+	end
+
+	local picks = plan.picks
+	local props = plan.props
+
+	for j = 1, #picks do
+		local i = picks[j]
+
+		if self.dead[i] then
+			self:_withdraw_prepared()
+			return TAG_PENDING, nil, self._pulse
+		end
+
 		local kid = self.kids[i]
-		local tag, prop, _payload, wpulse = kid:commit(ctx)
-		local w = self.watch[i]
+		if not kid then
+			self:_withdraw_prepared()
+			return TAG_PENDING, nil, self._pulse
+		end
+
+		local tag, payload, wpulse = kid:commit(ctx, props[j])
 
 		if tag == TAG_PENDING then
-			watch_set(w, wpulse)
-			return TAG_PENDING, nil, nil, self._pulse
+			watch_set(self.watch[i], wpulse)
+			return TAG_PENDING, nil, self._pulse
 
 		elseif tag == TAG_DONE then
-			if prop ~= self.prepared_p[i] then return TAG_CANCELLED, nil, nil, nil end
+			self.vals[i] = payload
 
-		elseif tag == TAG_CANCELLED then
-			return TAG_CANCELLED, nil, nil, nil
+		else -- TAG_CANCELLED
+			local mode    = self.policy.on_pick_cancelled or 'retry'
+			self.dead[i]  = true
+			self.props[i] = nil
+			self.vals[i]  = nil
+			watch_clear(self.watch[i])
+			kid:cancel(ctx)
+			self:_withdraw_prepared()
 
-		else
-			error('all: invalid child status in commit', 0)
+			if mode == 'cancel_all' then
+				self.phase = PH_ABORTED
+				return TAG_CANCELLED, nil, nil
+			end
+			return TAG_PENDING, nil, self._pulse
+		end
+	end
+
+	-- Rebuild payload from committed results (not merely preview payloads).
+	self.prepared_payload = self.policy.build_payload(self, picks)
+
+	if self.policy.cancel_losers ~= false then
+		local picked = {}
+		for j = 1, #picks do picked[picks[j]] = true end
+
+		for i = 1, self.nslots do
+			if (not picked[i]) and (not self.dead[i]) then
+				local kid = self.kids[i]
+				if kid then
+					post_abort_then_cancel(kid, ctx)
+				end
+				self.dead[i]  = true
+				self.props[i] = nil
+				self.vals[i]  = nil
+				watch_clear(self.watch[i])
+			end
 		end
 	end
 
 	self.phase = PH_DONE
+	self.prepared_epoch = nil
 	self:_clear_watches()
-	return TAG_DONE, self.prepared_nonce, self.prepared_payload, nil
+	return TAG_DONE, self.prepared_payload, nil
 end
 
-function AllTicket:cancel(ctx)
+function SelectTicket:cancel(ctx)
+	-- Idempotent, and distinguishes “aborted” from “cancelled”.
 	if self.phase == PH_CANCELLED then return end
+	if self.phase == PH_DONE then return end
+
 	self.phase = PH_CANCELLED
+	self:_withdraw_prepared()
 	self:_clear_watches()
-	for i = 1, #self.kids do
-		safe_cancel(self.kids[i], ctx)
+
+	for i = 1, self.nslots do
+		local kid = self.kids[i]
+		if kid then kid:cancel(ctx) end
 	end
 end
 
-function AllTicket:_post_commit_abort(ctx)
-	for i = 1, #self.kids do
+function SelectTicket:_post_commit_abort(ctx)
+	for i = 1, self.nslots do
 		local k = self.kids[i]
-		if k and k._post_commit_abort then k:_post_commit_abort(ctx) end
-	end
-end
-
-----------------------------------------------------------------------
--- Composite: choice(...)
-----------------------------------------------------------------------
-
----@class ChoiceTicket
----@field _pulse Pulse
----@field arms table[]
----@field watch Watch[]
----@field dead boolean[]
----@field prepared_i integer|nil
----@field prepared_p any|nil
----@field prepared_vals table|nil     -- payload pack
----@field phase integer
-local ChoiceTicket = {}
-ChoiceTicket.__index = ChoiceTicket
-
-function ChoiceTicket:pulse() return self._pulse end
-
-function ChoiceTicket:_clear_watches()
-	for i = 1, #self.watch do
-		watch_clear(self.watch[i])
-	end
-end
-
-function ChoiceTicket:_withdraw_prepared()
-	self.prepared_i    = nil
-	self.prepared_p    = nil
-	self.prepared_vals = nil
-end
-
-function ChoiceTicket:preview(ctx)
-	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil, nil end
-	if self.phase == PH_DONE then
-		return TAG_PREVIEW, self.prepared_p, self.prepared_vals, self._pulse
-	end
-
-	local n = #self.arms
-	local gate_state = ctx.gate_state
-
-	-- Validate cached winner while gate is still open.
-	if self.prepared_i and gate_state == GATE_OPEN and not self.dead[self.prepared_i] then
-		local i = self.prepared_i
-		local arm = self.arms[i]
-		local tag, prop, _payload, wpulse = arm:preview(ctx)
-
-		if tag == TAG_PREVIEW and prop == self.prepared_p then
-			watch_set(self.watch[i], wpulse or arm:pulse())
-			return TAG_PREVIEW, self.prepared_p, self.prepared_vals, self._pulse
+		if k then
+			local pa = k._post_commit_abort
+			if pa then pa(k, ctx) end
 		end
-
-		self:_withdraw_prepared()
 	end
+end
 
-	local any_pending = false
-	local any_alive = false
+---@param ctx table
+---@param ops Op[]
+---@param policy SelectPolicy
+---@return table
+local function instantiate_select(ctx, ops, policy)
+	local nslots = policy.nslots or #ops
+	local kids = {}
 
-	for i = 1, n do
-		if not self.dead[i] then
-			any_alive = true
-
-			local arm = self.arms[i]
-			local tag, prop, payload, wpulse = arm:preview(ctx)
-			local w = self.watch[i]
-
-			if tag == TAG_PENDING then
-				any_pending = true
-				watch_set(w, wpulse)
-
-			elseif tag == TAG_PREVIEW then
-				watch_set(w, wpulse or arm:pulse())
-				if not self.prepared_i then
-					self.prepared_i    = i
-					self.prepared_p    = prop
-					self.prepared_vals = payload
-				end
-
-			elseif tag == TAG_CANCELLED then
-				self.dead[i] = true
-				watch_clear(w)
-				safe_cancel(arm, ctx)
-
-			else
-				error('choice: invalid arm status in preview', 0)
-			end
+	for i = 1, nslots do
+		local opv = ops[i]
+		if opv then
+			kids[i] = opv:_instantiate(ctx)
+		else
+			kids[i] = nil
 		end
 	end
 
-	if self.prepared_i then
-		return TAG_PREVIEW, self.prepared_p, self.prepared_vals, self._pulse
+	local owner = {
+		_pulse = new_pulse(),
+		kids   = kids,
+		watch  = {},
+		dead   = {},
+		props  = {},
+		vals   = {},
+		phase  = PH_OPEN,
+		policy = policy,
+		nslots = nslots,
+	}
+
+	local waker = ctx.scheduler
+	for i = 1, nslots do
+		owner.watch[i] = watch_new(owner, waker)
 	end
 
-	if any_pending or any_alive then
-		return TAG_PENDING, nil, nil, self._pulse
-	end
-
-	self.phase = PH_CANCELLED
-	return TAG_CANCELLED, nil, nil, nil
-end
-
-function ChoiceTicket:commit(ctx)
-	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil, nil end
-	if ctx.gate_state == GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-	if self.phase == PH_DONE then
-		return TAG_DONE, self.prepared_p, self.prepared_vals, nil
-	end
-	if ctx.gate_state ~= GATE_COMMITTING then
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	local i = self.prepared_i
-	if not i or self.dead[i] then
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	local winner = self.arms[i]
-	local tag, prop, payload, wpulse = winner:commit(ctx)
-	local w = self.watch[i]
-
-	if tag == TAG_PENDING then
-		watch_set(w, wpulse)
-		return TAG_PENDING, nil, nil, self._pulse
-
-	elseif tag == TAG_DONE then
-		if prop ~= self.prepared_p then return TAG_CANCELLED, nil, nil, nil end
-		self.prepared_vals = payload
-
-		for j = 1, #self.arms do
-			if j ~= i and not self.dead[j] then
-				post_abort_then_cancel(self.arms[j], ctx)
-				self.dead[j] = true
-			end
-		end
-
-		self.phase = PH_DONE
-		self:_clear_watches()
-		return TAG_DONE, self.prepared_p, self.prepared_vals, nil
-
-	elseif tag == TAG_CANCELLED then
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	error('choice: invalid winner status in commit', 0)
-end
-
-function ChoiceTicket:cancel(ctx)
-	if self.phase == PH_CANCELLED then return end
-	self.phase = PH_CANCELLED
-	self:_clear_watches()
-	for i = 1, #self.arms do
-		safe_cancel(self.arms[i], ctx)
-	end
-end
-
-function ChoiceTicket:_post_commit_abort(ctx)
-	for i = 1, #self.arms do
-		local a = self.arms[i]
-		if a and a._post_commit_abort then a:_post_commit_abort(ctx) end
-	end
-end
-
-----------------------------------------------------------------------
--- Composite: and_then (LHS proposal identity drives RHS rebuild)
-----------------------------------------------------------------------
-
----@class AndThenTicket
----@field _pulse Pulse
----@field left table
----@field right table|nil
----@field k fun(...): any
----@field prepared_left_p any|nil
----@field prepared_right_p any|nil
----@field prepared_right_vals table|nil  -- payload pack
----@field left_watch Watch
----@field right_watch Watch
----@field phase integer
-local AndThenTicket = {}
-AndThenTicket.__index = AndThenTicket
-
-function AndThenTicket:pulse() return self._pulse end
-
-function AndThenTicket:_invalidate_right(ctx)
-	if self.right then safe_cancel(self.right, ctx) end
-	self.right = nil
-	self.prepared_right_p = nil
-	self.prepared_right_vals = nil
-	watch_clear(self.right_watch)
-end
-
-function AndThenTicket:preview(ctx)
-	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil, nil end
-	if self.phase == PH_DONE then
-		return TAG_PREVIEW, self.prepared_right_p, self.prepared_right_vals, self._pulse
-	end
-
-	local ltag, lprop, lpayload, lwpulse = self.left:preview(ctx)
-
-	if ltag == TAG_PENDING then
-		if self.prepared_left_p ~= nil then
-			self.prepared_left_p = nil
-			self:_invalidate_right(ctx)
-		end
-		watch_set(self.left_watch, lwpulse)
-		return TAG_PENDING, nil, nil, self._pulse
-
-	elseif ltag == TAG_CANCELLED then
-		self.phase = PH_CANCELLED
-		return TAG_CANCELLED, nil, nil, nil
-
-	elseif ltag ~= TAG_PREVIEW then
-		error('and_then: invalid left status in preview', 0)
-	end
-
-	if self.prepared_left_p ~= lprop then
-		self.prepared_left_p = lprop
-		self:_invalidate_right(ctx)
-
-		local ok, op_or_err = pcall(self.k, unpack(lpayload, 1, lpayload.n))
-		if not ok then error(op_or_err, 0) end
-		if type(op_or_err) ~= 'table' or getmetatable(op_or_err) ~= Op then
-			error('and_then: k must return an Op', 0)
-		end
-
-		self.right = op_or_err:_instantiate(ctx)
-	end
-
-	watch_set(self.left_watch, lwpulse or self.left:pulse())
-
-	if not self.right then
-		return TAG_PENDING, nil, nil, self._pulse
-	end
-
-	local rtag, rprop, rpayload, rwpulse = self.right:preview(ctx)
-
-	if rtag == TAG_PENDING then
-		self.prepared_right_p = nil
-		self.prepared_right_vals = nil
-		watch_set(self.right_watch, rwpulse)
-		return TAG_PENDING, nil, nil, self._pulse
-
-	elseif rtag == TAG_PREVIEW then
-		self.prepared_right_p = rprop
-		self.prepared_right_vals = rpayload
-		watch_set(self.right_watch, rwpulse or self.right:pulse())
-		return TAG_PREVIEW, self.prepared_right_p, self.prepared_right_vals, self._pulse
-
-	elseif rtag == TAG_CANCELLED then
-		self.phase = PH_CANCELLED
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	error('and_then: invalid right status in preview', 0)
-end
-
-function AndThenTicket:commit(ctx)
-	if self.phase == PH_CANCELLED then return TAG_CANCELLED, nil, nil, nil end
-	if ctx.gate_state == GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-	if self.phase == PH_DONE then
-		return TAG_DONE, self.prepared_right_p, self.prepared_right_vals, nil
-	end
-	if ctx.gate_state ~= GATE_COMMITTING then
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	if not self.prepared_left_p or not self.right or not self.prepared_right_p then
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	local ltag, lprop, _lpayload, lwpulse = self.left:commit(ctx)
-	if ltag == TAG_PENDING then
-		watch_set(self.left_watch, lwpulse)
-		return TAG_PENDING, nil, nil, self._pulse
-	elseif ltag == TAG_DONE then
-		if lprop ~= self.prepared_left_p then return TAG_CANCELLED, nil, nil, nil end
-	elseif ltag == TAG_CANCELLED then
-		return TAG_CANCELLED, nil, nil, nil
-	else
-		error('and_then: invalid left status in commit', 0)
-	end
-
-	local rtag, rprop, rpayload, rwpulse = self.right:commit(ctx)
-	if rtag == TAG_PENDING then
-		watch_set(self.right_watch, rwpulse)
-		return TAG_PENDING, nil, nil, self._pulse
-	elseif rtag == TAG_DONE then
-		if rprop ~= self.prepared_right_p then return TAG_CANCELLED, nil, nil, nil end
-		self.prepared_right_vals = rpayload
-		self.phase = PH_DONE
-		watch_clear(self.left_watch)
-		watch_clear(self.right_watch)
-		return TAG_DONE, self.prepared_right_p, self.prepared_right_vals, nil
-	elseif rtag == TAG_CANCELLED then
-		return TAG_CANCELLED, nil, nil, nil
-	end
-
-	error('and_then: invalid right status in commit', 0)
-end
-
-function AndThenTicket:cancel(ctx)
-	if self.phase == PH_CANCELLED then return end
-	self.phase = PH_CANCELLED
-	watch_clear(self.left_watch)
-	watch_clear(self.right_watch)
-	if self.right then safe_cancel(self.right, ctx) end
-	safe_cancel(self.left, ctx)
-end
-
-function AndThenTicket:_post_commit_abort(ctx)
-	if self.right and self.right._post_commit_abort then self.right:_post_commit_abort(ctx) end
-	if self.left and self.left._post_commit_abort then self.left:_post_commit_abort(ctx) end
+	return setmetatable(owner, SelectTicket)
 end
 
 ----------------------------------------------------------------------
@@ -878,11 +821,6 @@ end
 Op = {}
 Op.__index = Op
 
-local function is_op(x) return type(x) == 'table' and getmetatable(x) == Op end
-local function assert_op(x, where)
-	if not is_op(x) then error(where .. ' expects an Op', 3) end
-end
-
 function Op:_instantiate(ctx)
 	local k = self.kind
 
@@ -890,105 +828,45 @@ function Op:_instantiate(ctx)
 		return self.start_fn(ctx)
 
 	elseif k == 'guard' then
-		local opv = self.thunk()
-		if not is_op(opv) then error('guard: thunk must return an Op', 0) end
-		return opv:_instantiate(ctx)
+		return self.thunk():_instantiate(ctx)
 
-	elseif k == 'wrap' then
-		return setmetatable({ inner = self.inner:_instantiate(ctx), f = self.f }, WrapTicket)
+	elseif k == 'decor' then
+		local inner_ticket = self.inner:_instantiate(ctx)
+		return decorate_ticket(inner_ticket, self.ann)
 
-	elseif k == 'finally' then
-		return setmetatable({ inner = self.inner:_instantiate(ctx), cleanup = self.f, _ran = false }, FinallyTicket)
-
-	elseif k == 'abort' then
-		return setmetatable({ inner = self.inner:_instantiate(ctx), abort_fn = self.f, _ran = false }, AbortTicket)
-
-	elseif k == 'all' then
-		local kids = {}
-		for i = 1, #self.ops do kids[i] = self.ops[i]:_instantiate(ctx) end
-
-		local owner = {
-			_pulse = new_pulse(),
-			kids   = kids,
-
-			watch  = {},
-
-			prepared_p    = {},
-			prepared_vals = {},
-
-			-- reused containers
-			prepared_results = {},
-			prepared_payload  = { n = 1, nil },
-
-			nonce          = 0,
-			prepared_nonce = nil,
-
-			phase = PH_OPEN,
-		}
-
-		owner.prepared_payload[1] = owner.prepared_results
-
-		-- preallocate watches (watch node is its own scheduled task)
-		local waker = ctx.scheduler
-		for i = 1, #kids do
-			owner.watch[i] = watch_new(owner, waker)
-		end
-
-		return setmetatable(owner, AllTicket)
-
-	elseif k == 'choice' then
-		local arms = {}
-		for i = 1, #self.ops do arms[i] = self.ops[i]:_instantiate(ctx) end
-
-		local owner = {
-			_pulse = new_pulse(),
-			arms   = arms,
-
-			watch  = {},
-			dead   = {},
-
-			prepared_i    = nil,
-			prepared_p    = nil,
-			prepared_vals = nil,
-
-			phase = PH_OPEN,
-		}
-
-		-- preallocate watches
-		local waker = ctx.scheduler
-		for i = 1, #arms do
-			owner.watch[i] = watch_new(owner, waker)
-		end
-
-		return setmetatable(owner, ChoiceTicket)
-
-	elseif k == 'and_then' then
-		local owner = {
-			_pulse = new_pulse(),
-			left   = self.inner:_instantiate(ctx),
-			right  = nil,
-			k      = self.k,
-
-			prepared_left_p     = nil,
-			prepared_right_p    = nil,
-			prepared_right_vals = nil,
-
-			left_watch  = nil,
-			right_watch = nil,
-
-			phase = PH_OPEN,
-		}
-
-		-- preallocate watches
-		local waker = ctx.scheduler
-		owner.left_watch  = watch_new(owner, waker)
-		owner.right_watch = watch_new(owner, waker)
-
-		return setmetatable(owner, AndThenTicket)
-
-	else
-		error('unknown op kind: ' .. tostring(k), 0)
+	elseif k == 'select' then
+		return instantiate_select(ctx, self.ops, self.policy)
 	end
+
+	return nil
+end
+
+----------------------------------------------------------------------
+-- Helpers: input validation and decoration merging
+----------------------------------------------------------------------
+
+local function assert_op(x, depth)
+	if type(x) ~= 'table' or getmetatable(x) ~= Op then
+		error('expected Op', depth or 2)
+	end
+	return x
+end
+
+local function normalise_ops(varargs, depth)
+	local ops = { unpack(varargs) }
+	for i = 1, #ops do assert_op(ops[i], (depth or 2) + 1) end
+	return ops
+end
+
+local function decorate_op(inner, add_ann)
+	if inner.kind == 'decor' then
+		return setmetatable({
+			kind  = 'decor',
+			inner = inner.inner,
+			ann   = ann_merge(inner.ann, add_ann),
+		}, Op)
+	end
+	return setmetatable({ kind = 'decor', inner = inner, ann = add_ann }, Op)
 end
 
 ----------------------------------------------------------------------
@@ -998,28 +876,8 @@ end
 ---@param start_fn fun(ctx: table): table
 ---@return Op
 local function new_primitive(start_fn)
-	if type(start_fn) ~= 'function' then error('new_primitive: start_fn must be a function', 2) end
+	if type(start_fn) ~= 'function' then error('new_primitive expects a function', 2) end
 	return setmetatable({ kind = 'prim', start_fn = start_fn }, Op)
-end
-
----@param ... Op
----@return Op
-local function choice(...)
-	local ops = { ... }
-	if #ops == 0 then error('choice expects at least one op', 2) end
-	for i = 1, #ops do assert_op(ops[i], 'choice') end
-	if #ops == 1 then return ops[1] end
-	return setmetatable({ kind = 'choice', ops = ops }, Op)
-end
-
----@param ... Op
----@return Op
-local function all(...)
-	local ops = { ... }
-	if #ops == 0 then error('all expects at least one op', 2) end
-	for i = 1, #ops do assert_op(ops[i], 'all') end
-	if #ops == 1 then return ops[1] end
-	return setmetatable({ kind = 'all', ops = ops }, Op)
 end
 
 ---@param thunk fun(): Op
@@ -1035,8 +893,7 @@ local function always(...)
 	local payload = pack(...)
 	return new_primitive(function (_ctx)
 		return setmetatable({
-			_pulse    = new_pulse(),
-			_proposal = 1,        -- any stable identity is fine here
+			_proposal = 1,
 			_payload  = payload,
 		}, AlwaysTicket)
 	end)
@@ -1045,10 +902,182 @@ end
 ---@return Op
 local function never()
 	return new_primitive(function (_ctx)
-		return setmetatable({
-			_pulse = new_pulse(),
-		}, NeverTicket)
+		return setmetatable({ _pulse = new_pulse() }, NeverTicket)
 	end)
+end
+
+-- Policies -----------------------------------------------------------
+
+-- choice: first preview-ready arm wins; payload is the winner's payload pack.
+local function plan_choice(owner, _ctx)
+	for i = 1, owner.nslots do
+		if (not owner.dead[i]) and owner.props[i] ~= nil then
+			return { i }
+		end
+	end
+	return nil
+end
+
+local function payload_choice(owner, picks)
+	return owner.vals[picks[1]]
+end
+
+-- all: requires all preview-ready; returns ONE value: a table of payload packs.
+local function plan_all(owner, _ctx)
+	for i = 1, owner.nslots do
+		if owner.dead[i] or owner.props[i] == nil then
+			return nil
+		end
+	end
+	local picks = {}
+	for i = 1, owner.nslots do picks[i] = i end
+	return picks
+end
+
+local function payload_table_of_packs(owner, picks)
+	local t = {}
+	for j = 1, #picks do
+		t[j] = owner.vals[picks[j]]
+	end
+	return { n = 1, t }
+end
+
+local function make_plan_choose_k(k)
+	return function (owner, _ctx)
+		local picks = {}
+		for i = 1, owner.nslots do
+			if (not owner.dead[i]) and owner.props[i] ~= nil then
+				picks[#picks + 1] = i
+				if #picks == k then return picks end
+			end
+		end
+		return nil
+	end
+end
+
+-- and_then: two slots, RHS depends on LHS preview payload.
+local function make_policy_and_then(k)
+	if type(k) ~= 'function' then error('and_then expects a function', 3) end
+
+	return {
+		nslots             = 2,
+		cancel_losers      = false,
+		on_child_cancelled = 'cancel_all',
+		on_pick_cancelled  = 'cancel_all',
+
+		build_plan = function (owner, _ctx)
+			if owner.dead[1] or owner.dead[2] then return nil end
+			if owner.props[1] ~= nil and owner.props[2] ~= nil then
+				return { 1, 2 }
+			end
+			return nil
+		end,
+
+		build_payload = function (owner, _picks)
+			return owner.vals[2] -- RHS payload pack
+		end,
+
+		on_child = function (owner, ctx, i, tag, prop, payload, _pulse)
+			if i ~= 1 then return end
+
+			local function invalidate_rhs()
+				owner:_invalidate_slot(ctx, 2)
+			end
+
+			if tag == TAG_PENDING then
+				if owner._and_then_left_p ~= nil then
+					owner._and_then_left_p = nil
+					invalidate_rhs()
+				end
+				return
+			end
+
+			if tag ~= TAG_PREVIEW then
+				return
+			end
+
+			if owner._and_then_left_p ~= prop then
+				owner._and_then_left_p = prop
+				invalidate_rhs()
+
+				local opv = k(unpack(payload, 1, payload.n))
+				if type(opv) ~= 'table' or getmetatable(opv) ~= Op then
+					error('and_then: function must return an Op', 0)
+				end
+				owner:_set_slot(ctx, 2, opv)
+			end
+		end,
+	}
+end
+
+
+---@param ... Op
+---@return Op
+local function choice(...)
+	local ops = normalise_ops({ ... }, 2)
+	if #ops == 0 then error('choice expects at least one op', 2) end
+	if #ops == 1 then return ops[1] end
+
+	return setmetatable({
+		kind   = 'select',
+		ops    = ops,
+		policy = {
+			build_plan         = plan_choice,
+			build_payload      = payload_choice,
+			cancel_losers      = true,
+			on_child_cancelled = 'dead',
+			on_pick_cancelled  = 'retry',
+		},
+	}, Op)
+end
+
+---@param ... Op
+---@return Op
+local function all(...)
+	local ops = normalise_ops({ ... }, 2)
+	if #ops == 0 then error('all expects at least one op', 2) end
+	if #ops == 1 then return ops[1] end
+
+	return setmetatable({
+		kind   = 'select',
+		ops    = ops,
+		policy = {
+			build_plan         = plan_all,
+			build_payload      = payload_table_of_packs,
+			cancel_losers      = false,
+			on_child_cancelled = 'cancel_all',
+			on_pick_cancelled  = 'cancel_all',
+		},
+	}, Op)
+end
+
+---@param k integer
+---@param ... Op
+---@return Op
+local function choose_k(k, ...)
+	if type(k) ~= 'number' or k % 1 ~= 0 or k < 1 then
+		error('choose_k expects a positive integer k', 2)
+	end
+	local ops = normalise_ops({ ... }, 2)
+	if #ops < k then error('choose_k expects at least k ops', 2) end
+
+	return setmetatable({
+		kind   = 'select',
+		ops    = ops,
+		policy = {
+			build_plan         = make_plan_choose_k(k),
+			build_payload      = payload_table_of_packs,
+			cancel_losers      = true,
+			on_child_cancelled = 'dead',
+			on_pick_cancelled  = 'retry',
+		},
+	}, Op)
+end
+
+---@param ... Op
+---@return Op
+local function choose2(...)
+	return choose_k(2, ...)
 end
 
 ---@param acquire fun(): any
@@ -1062,9 +1091,7 @@ local function bracket(acquire, release, use)
 
 	return guard(function ()
 		local res = acquire()
-		local opv = use(res)
-		if not is_op(opv) then error('bracket: use must return an Op', 0) end
-		return opv:finally(function (aborted)
+		return use(res):finally(function (aborted)
 			pcall(release, res, aborted)
 		end)
 	end)
@@ -1072,122 +1099,109 @@ end
 
 function Op:wrap(f)
 	if type(f) ~= 'function' then error('wrap expects a function', 2) end
-	return setmetatable({ kind = 'wrap', inner = self, f = f }, Op)
-end
-
-function Op:and_then(k)
-	if type(k) ~= 'function' then error('and_then expects a function', 2) end
-	return setmetatable({ kind = 'and_then', inner = self, k = k }, Op)
+	return decorate_op(self, { wraps = { f } })
 end
 
 function Op:on_abort(f)
 	if type(f) ~= 'function' then error('on_abort expects a function', 2) end
-	return setmetatable({ kind = 'abort', inner = self, f = f }, Op)
+	return decorate_op(self, { aborts = { f } })
 end
 
 function Op:finally(cleanup)
 	if type(cleanup) ~= 'function' then error('finally expects a function', 2) end
-	return setmetatable({ kind = 'finally', inner = self, f = cleanup }, Op)
+	return decorate_op(self, { finallys = { cleanup } })
+end
+
+function Op:and_then(k)
+	-- Expressed as a 2-slot select: slot1=lhs, slot2 instantiated from lhs preview payload.
+	return setmetatable({
+		kind   = 'select',
+		ops    = { self }, -- only slot 1 is pre-instantiated; slot 2 starts nil
+		policy = make_policy_and_then(k),
+	}, Op)
 end
 
 ----------------------------------------------------------------------
--- perform(op): attempt loop (no pack() in the hot path)
+-- perform(op): attempt loop
 ----------------------------------------------------------------------
 
+-- Per-fibre ctx cache (weak keys)
+local ctx_by_fiber = setmetatable({}, { __mode = 'k' })
+
 local function perform(opv)
-	if not runtime.current_fiber() then
-		error('perform must be called from within a fibre', 2)
-	end
-	assert_op(opv, 'perform')
-
 	local scheduler = runtime.current_scheduler
-	local fib = runtime.current_fiber()
+	local fib = assert(runtime.current_fiber())
 
-	-- Root context. One wait node reused for all root pulse blocks in this perform().
-	local ctx = {
-		gate_state = GATE_OPEN,
-		scheduler  = scheduler,
+	local ctx = ctx_by_fiber[fib] or {
+			gate_state = GATE_OPEN,
+			scheduler  = scheduler,
+			_wait_node = {
+				_linked = false,
+				_task   = fib,
+				_waker  = scheduler,
+			},
+		}
+	ctx_by_fiber[fib] = ctx
 
-		_wait_node = {
-			_linked = false,
-			_task   = fib,       -- schedule the fibre directly
-			_waker  = scheduler, -- stable for this runtime
-		},
-	}
+	local root = opv:_instantiate(ctx)
+
+	local root_preview = root.preview
+	local root_commit  = root.commit
+	local root_cancel  = root.cancel
 
 	while true do
 		ctx.gate_state = GATE_OPEN
 
-		local root = opv:_instantiate(ctx)
-
-		-- Preview until proposal or cancellation.
-		local cancelled = false
+		local proposal
 		while true do
-			local tag, _p, _payload, pulse = root:preview(ctx)
+			local tag, p, _payload, pulse = root_preview(root, ctx)
 			if tag == TAG_PREVIEW then
+				proposal = p
 				break
 			elseif tag == TAG_PENDING then
 				block_on_pulse(ctx, pulse)
-			elseif tag == TAG_CANCELLED then
-				cancelled = true
-				break
 			else
-				error('perform: invalid root status in preview', 0)
+				ctx.gate_state = GATE_ABORTED
+				root_cancel(root, ctx)
+				error('perform: cancelled', 0)
 			end
 		end
 
-		if cancelled then
-			ctx.gate_state = GATE_ABORTED
-			safe_cancel(root, ctx)
+		ctx.gate_state = GATE_COMMITTING
+
+		local tag, payload, pulse = root_commit(root, ctx, proposal)
+
+		if tag == TAG_DONE then
+			if not payload or payload.n == 0 then return end
+			return unpack(payload, 1, payload.n)
+		elseif tag == TAG_PENDING then
+			block_on_pulse(ctx, pulse)
 		else
-			ctx.gate_state = GATE_COMMITTING
-
-			-- Commit until done or cancellation; yield once on first pending.
-			local yielded_once = false
-			while true do
-				local tag, _p, payload, pulse = root:commit(ctx)
-
-				if tag == TAG_DONE then
-					if not payload or payload.n == 0 then return end
-					return unpack(payload, 1, payload.n)
-
-				elseif tag == TAG_PENDING then
-					if not yielded_once then
-						yielded_once = true
-						runtime.yield()
-					else
-						block_on_pulse(ctx, pulse)
-					end
-
-				elseif tag == TAG_CANCELLED then
-					ctx.gate_state = GATE_ABORTED
-					safe_cancel(root, ctx)
-					break -- retry attempt
-
-				else
-					error('perform: invalid root status in commit', 0)
-				end
-			end
+			ctx.gate_state = GATE_ABORTED
+			root_cancel(root, ctx)
+			error('perform: cancelled during commit', 0)
 		end
 	end
 end
 
 return {
-	perform       = perform,
+	perform = perform,
 
 	new_primitive = new_primitive,
 	choice        = choice,
 	all           = all,
+	choose2       = choose2,
+	choose_k      = choose_k,
 	guard         = guard,
 	always        = always,
 	never         = never,
 	bracket       = bracket,
 
-	Op            = Op,
+	Op = Op,
 
 	-- for primitive authors / tests
-	Pulse         = Pulse,
-	new_pulse     = new_pulse,
+	Pulse     = Pulse,
+	new_pulse = new_pulse,
 
 	-- tags
 	TAG_PENDING   = TAG_PENDING,
@@ -1201,6 +1215,6 @@ return {
 	GATE_ABORTED    = GATE_ABORTED,
 
 	-- pack helper for varargs payloads
-	pack           = pack,
-	EMPTY          = EMPTY,
+	pack  = pack,
+	EMPTY = EMPTY,
 }

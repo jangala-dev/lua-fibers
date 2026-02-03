@@ -1,4 +1,4 @@
--- fibers/channel2_teach.lua
+-- fibers/channel2.lua
 local op = require 'fibers.op2'
 local rv = require 'fibers.rendezvous'
 

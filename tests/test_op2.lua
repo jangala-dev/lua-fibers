@@ -1,12 +1,8 @@
 -- tests/test_op2.lua
 --
--- Synthetic tests for fibers/op2.lua (fixed-arity internal protocol).
+-- Synthetic tests for fibers/op2.lua (transactional preview/commit protocol).
 --
--- Assumptions:
---   * fibers.runtime provides a global scheduler and cooperative fibres.
---   * fibers.op2 is the module under test.
---
--- How to run (example):
+-- How to run:
 --   lua tests/test_op2.lua
 
 package.path = '../src/?.lua;' .. package.path
@@ -66,13 +62,12 @@ local function schedule(fn)
 	runtime.current_scheduler:schedule(mk_task(fn))
 end
 
--- Cooperative “tick”: allow other scheduled tasks to run.
 local function tick()
 	runtime.yield()
 end
 
 ----------------------------------------------------------------------
--- Tags (integers)
+-- Tags
 ----------------------------------------------------------------------
 
 local TAG_PENDING   = op2.TAG_PENDING
@@ -81,124 +76,126 @@ local TAG_DONE      = op2.TAG_DONE
 local TAG_CANCELLED = op2.TAG_CANCELLED
 
 ----------------------------------------------------------------------
--- Synthetic tickets and primitives (fixed-arity internal protocol)
+-- Ticket helpers (metatable-style)
 ----------------------------------------------------------------------
 
--- Manual, event-driven ticket you can mutate from scheduled tasks.
---
--- preview(ctx) -> tag, proposal, payload_pack, pulse
---   pending   -> TAG_PENDING, nil, nil, pulse
---   preview   -> TAG_PREVIEW, proposal, payload_pack, pulse
---   cancelled -> TAG_CANCELLED, nil, nil, nil
---
--- commit(ctx) -> tag, proposal, payload_pack, pulse
---   aborted        -> TAG_CANCELLED
---   not committing -> TAG_CANCELLED
---   committing     -> if not preview => TAG_CANCELLED
---                    else if commit_latched and not allowed => TAG_PENDING, pulse
---                    else => TAG_DONE, proposal_or_override, payload_pack
+local function ticket_class(proto)
+	proto.__index = proto
+	return proto
+end
+
+local function ticket_new(proto, fields)
+	return setmetatable(fields, proto)
+end
+
+----------------------------------------------------------------------
+-- Synthetic tickets and primitives
+----------------------------------------------------------------------
+
+local ManualTicket = ticket_class({})
+
+function ManualTicket:pulse()
+	return self._pulse
+end
+
+function ManualTicket:preview(_ctx)
+	local state = self._state
+	if state == 'cancelled' then
+		return TAG_CANCELLED, nil, nil, nil
+	elseif state == 'pending' then
+		return TAG_PENDING, nil, nil, self._pulse
+	elseif state == 'preview' then
+		return TAG_PREVIEW, self._proposal, self._values, self._pulse
+	end
+	error('manual_ticket: invalid state ' .. tostring(state), 0)
+end
+
+function ManualTicket:commit(ctx, expected_proposal)
+	if ctx.gate_state == op2.GATE_ABORTED then
+		return TAG_CANCELLED, nil, nil
+	end
+	if ctx.gate_state ~= op2.GATE_COMMITTING then
+		return TAG_CANCELLED, nil, nil
+	end
+
+	if self._state ~= 'preview' then
+		return TAG_PENDING, nil, self._pulse
+	end
+	if expected_proposal ~= self._proposal then
+		return TAG_PENDING, nil, self._pulse
+	end
+	if self._commit_latched and not self._commit_allowed then
+		return TAG_PENDING, nil, self._pulse
+	end
+
+	return TAG_DONE, self._values, nil
+end
+
+function ManualTicket:cancel(_ctx)
+	self._cancels = self._cancels + 1
+	self._state = 'cancelled'
+	self._pulse:signal()
+end
+
+function ManualTicket:_post_commit_abort(_ctx)
+	self._post_abort = self._post_abort + 1
+end
+
 local function make_manual_ticket(opts)
 	opts = opts or {}
 
-	local p = op2.new_pulse()
-	local state = opts.initial or 'pending'
-
+	local pulse = op2.new_pulse()
 	local proposal = opts.proposal or {}
-	local values   = opts.values and pack(unpack(opts.values, 1, opts.values.n or #opts.values)) or pack()
-
-	local cancels = 0
-	local post_abort = 0
+	local values = opts.values and pack(unpack(opts.values, 1, opts.values.n or #opts.values)) or pack()
 
 	local commit_latched = not not opts.commit_latched
 	local commit_allowed = not commit_latched
 
-	local commit_proposal_override = opts.commit_proposal_override -- function(ctx, current_proposal) -> proposal
-
-	local ticket = {}
-
-	function ticket:pulse()
-		return p
-	end
-
-	function ticket:preview(_ctx)
-		if state == 'cancelled' then
-			return TAG_CANCELLED, nil, nil, nil
-		elseif state == 'pending' then
-			return TAG_PENDING, nil, nil, p
-		elseif state == 'preview' then
-			return TAG_PREVIEW, proposal, values, p
-		else
-			error('manual_ticket: invalid state ' .. tostring(state), 0)
-		end
-	end
-
-	function ticket:commit(ctx)
-		if ctx.gate_state == op2.GATE_ABORTED then
-			return TAG_CANCELLED, nil, nil, nil
-		end
-		if ctx.gate_state ~= op2.GATE_COMMITTING then
-			return TAG_CANCELLED, nil, nil, nil
-		end
-
-		if state ~= 'preview' then
-			return TAG_CANCELLED, nil, nil, nil
-		end
-
-		if commit_latched and not commit_allowed then
-			return TAG_PENDING, nil, nil, p
-		end
-
-		local cp = proposal
-		if commit_proposal_override then
-			cp = commit_proposal_override(ctx, proposal)
-		end
-
-		return TAG_DONE, cp, values, nil
-	end
-
-	function ticket:cancel(_ctx)
-		cancels = cancels + 1
-		state = 'cancelled'
-		p:signal()
-	end
-
-	function ticket:_post_commit_abort(_ctx)
-		post_abort = post_abort + 1
-	end
+	local inst = ticket_new(ManualTicket, {
+		_pulse          = pulse,
+		_state          = opts.initial or 'pending',
+		_proposal       = proposal,
+		_values         = values,
+		_commit_latched = commit_latched,
+		_commit_allowed = commit_allowed,
+		_cancels        = 0,
+		_post_abort     = 0,
+	})
 
 	local ctl = {}
 
 	function ctl:set_pending()
-		state = 'pending'
-		p:signal()
+		inst._state = 'pending'
+		pulse:signal()
 	end
 
 	function ctl:set_preview(new_proposal, ...)
-		state = 'preview'
-		proposal = new_proposal or {}
-		values = pack(...)
-		p:signal()
+		inst._state = 'preview'
+		inst._proposal = new_proposal or {}
+		inst._values = pack(...)
+		pulse:signal()
 	end
 
 	function ctl:set_cancelled()
-		state = 'cancelled'
-		p:signal()
+		inst._state = 'cancelled'
+		pulse:signal()
 	end
 
 	function ctl:allow_commit()
-		commit_allowed = true
+		inst._commit_allowed = true
+		pulse:signal()
 	end
 
 	function ctl:signal()
-		p:signal()
+		pulse:signal()
 	end
 
-	function ctl:cancels() return cancels end
-	function ctl:post_abort_calls() return post_abort end
-	function ctl:pulse() return p end
-	function ctl:proposal() return proposal end
+	function ctl:cancels() return inst._cancels end
+	function ctl:post_abort_calls() return inst._post_abort end
+	function ctl:pulse() return pulse end
+	function ctl:proposal() return inst._proposal end
 
-	return ticket, ctl
+	return inst, ctl
 end
 
 local function prim_from_ticket(ticket)
@@ -207,41 +204,38 @@ local function prim_from_ticket(ticket)
 	end)
 end
 
--- A primitive op that is preview-ready immediately, but commit stays pending
--- until a flag is set. Crucially: it does NOT signal its pulse when the flag flips.
--- This validates the “yield once” path in perform().
-local function make_yield_latch_primitive(value)
+local CommitLatchTicket = ticket_class({})
+
+function CommitLatchTicket:pulse() return self._pulse end
+function CommitLatchTicket:preview(_ctx) return TAG_PREVIEW, self._proposal, self._payload, self._pulse end
+
+function CommitLatchTicket:commit(ctx, expected_proposal)
+	if ctx.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil end
+	if ctx.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil end
+	if expected_proposal ~= self._proposal then return TAG_PENDING, nil, self._pulse end
+	if not self._can_commit then return TAG_PENDING, nil, self._pulse end
+	return TAG_DONE, self._payload, nil
+end
+
+function CommitLatchTicket:cancel(_ctx) end
+
+local function make_commit_latch_primitive(value)
 	local pulse = op2.new_pulse()
 	local proposal = {}
-	local can_commit = false
+	local inst = ticket_new(CommitLatchTicket, {
+		_pulse = pulse,
+		_proposal = proposal,
+		_can_commit = false,
+		_payload = pack(value),
+	})
 
-	local payload = pack(value)
-
-	local ticket = {}
-
-	function ticket:pulse() return pulse end
-
-	function ticket:preview(_ctx)
-		return TAG_PREVIEW, proposal, payload, pulse
-	end
-
-	function ticket:commit(ctx)
-		if ctx.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-		if ctx.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-		if not can_commit then
-			return TAG_PENDING, nil, nil, pulse
-		end
-		return TAG_DONE, proposal, payload, nil
-	end
-
-	function ticket:cancel(_ctx)
-		-- no-op
-	end
-
-	local op = prim_from_ticket(ticket)
+	local op = prim_from_ticket(inst)
 
 	local ctl = {}
-	function ctl:allow_commit() can_commit = true end
+	function ctl:allow_commit()
+		inst._can_commit = true
+		pulse:signal()
+	end
 
 	return op, ctl
 end
@@ -269,28 +263,23 @@ test('pulse subscribe_node schedules task once epoch advances', function ()
 		ran = ran + 1
 	end
 
-	-- Intrusive node supplied by the caller; task/waker are stable and set once.
 	local node = {
 		_pulse  = nil, _prev = nil, _next = nil, _linked = false,
 		_task   = task,
 		_waker  = runtime.current_scheduler,
 	}
 
-	-- Subscribe at current epoch; task should not run until we signal.
-	local linked = pulse:subscribe_node(pulse:now(), node)
+	local linked = pulse:subscribe_node(pulse._epoch, node)
 	assert_true(linked, 'expected node to be linked')
 
-	-- Signal and yield so scheduled task runs.
 	pulse:signal()
 	tick()
 	assert_eq(ran, 1, 'expected task to run after signal')
 
-	-- Node should have been detached by the pulse one-shot.
 	assert_false(node._linked, 'expected node to be unlinked after signal')
 	assert_eq(node._pulse, nil, 'expected node pulse cleared')
 
-	-- If subscribing with a stale epoch, it should schedule immediately (no link).
-	local linked2 = pulse:subscribe_node(pulse:now() - 1, node)
+	local linked2 = pulse:subscribe_node(pulse._epoch - 1, node)
 	assert_false(linked2, 'expected immediate scheduling when epoch already advanced')
 	tick()
 	assert_eq(ran, 2, 'expected task to run after immediate schedule')
@@ -310,11 +299,11 @@ test('wrap applied once per attempt; preview/commit caching prevents double-appl
 
 	local v = op2.perform(op2.always(21):wrap(f))
 	assert_eq(v, 42)
-	assert_eq(calls, 1, 'wrap should run once (cached across commit)')
+	assert_eq(calls, 1)
 
 	local v2 = op2.perform(op2.always(5):wrap(f))
 	assert_eq(v2, 10)
-	assert_eq(calls, 2, 'wrap should run once per perform() call')
+	assert_eq(calls, 2)
 end)
 
 test('wrap propagates errors from f()', function ()
@@ -326,8 +315,8 @@ test('wrap propagates errors from f()', function ()
 		op2.perform(op2.always('x'):wrap(boom))
 	end)
 
-	assert_false(ok, 'expected wrapped perform to error')
-	assert_true(tostring(err):match('boom') ~= nil, 'expected boom in error message')
+	assert_false(ok)
+	assert_true(tostring(err):match('boom') ~= nil)
 end)
 
 test('finally runs cleanup(false) on success', function ()
@@ -356,15 +345,13 @@ test('choice losers receive post-commit abort; finally(true) and on_abort() run 
 	local v = op2.perform(op2.choice(winner, loser))
 	assert_eq(v, 'winner')
 
-	assert_eq(fin_aborted, true, 'loser finally should run with aborted=true after winner commits')
-	assert_eq(abort_calls, 1, 'loser abort handler should run once')
+	assert_eq(fin_aborted, true)
+	assert_eq(abort_calls, 1)
 end)
 
-test('perform yields once on first commit pending (enables progress without pulse signalling)', function ()
-	local op, ctl = make_yield_latch_primitive('ok')
+test('perform progresses when commit is pending and a pulse is signalled', function ()
+	local op, ctl = make_commit_latch_primitive('ok')
 
-	-- Allow commit via a scheduled task, but do not signal the op’s pulse.
-	-- If perform did not yield once, this would deadlock (pending pulse never signals).
 	schedule(function ()
 		ctl:allow_commit()
 	end)
@@ -373,149 +360,169 @@ test('perform yields once on first commit pending (enables progress without puls
 	assert_eq(v, 'ok')
 end)
 
-test('choice retries when winner proposal changes between preview and commit', function ()
-	local attempts = 0
+test('choice retries when commit cannot reify the previewed proposal (pending + pulse)', function ()
+	local commit_calls = 0
+	local phase = 0
+
+	local FlakyTicket = ticket_class({})
+
+	function FlakyTicket:pulse() return self._pulse end
+	function FlakyTicket:preview(_ctx2) return TAG_PREVIEW, self._current, self._payload, self._pulse end
+
+	function FlakyTicket:commit(ctx2, expected_proposal)
+		if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil end
+		if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil end
+
+		commit_calls = commit_calls + 1
+
+		if phase == 0 and expected_proposal == self._p1 then
+			phase = 1
+			self._current = self._p2
+			self._pulse:signal()
+			return TAG_PENDING, nil, self._pulse
+		end
+
+		if expected_proposal ~= self._current then
+			return TAG_PENDING, nil, self._pulse
+		end
+
+		return TAG_DONE, self._payload, nil
+	end
+
+	function FlakyTicket:cancel(_ctx2) end
 
 	local flaky = op2.new_primitive(function (_ctx)
-		attempts = attempts + 1
 		local pulse = op2.new_pulse()
-
-		local p_preview = {}
-		local p_commit  = (attempts == 1) and {} or p_preview
-
-		local payload = pack('value')
-
-		local ticket = {}
-
-		function ticket:pulse() return pulse end
-		function ticket:preview(_ctx2)
-			return TAG_PREVIEW, p_preview, payload, pulse
-		end
-		function ticket:commit(ctx2)
-			if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-			if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-			return TAG_DONE, p_commit, payload, nil
-		end
-		function ticket:cancel(_ctx2) end
-
-		return ticket
+		local p1 = {}
+		local p2 = {}
+		return ticket_new(FlakyTicket, {
+			_pulse = pulse,
+			_p1 = p1,
+			_p2 = p2,
+			_current = p1,
+			_payload = pack('value'),
+		})
 	end)
 
 	local v = op2.perform(op2.choice(flaky, op2.never()))
 	assert_eq(v, 'value')
-	assert_eq(attempts, 2, 'expected one retry due to proposal mismatch')
+	assert_eq(commit_calls, 2)
 end)
 
 test('all(...) returns table of packed child values on success', function ()
 	local res = op2.perform(op2.all(op2.always(1), op2.always(2)))
-	assert_tbl(res, 'expected all() to return a results table')
+	assert_tbl(res)
 
-	assert_tbl(res[1], 'expected packed entry for child 1')
-	assert_tbl(res[2], 'expected packed entry for child 2')
+	assert_tbl(res[1])
+	assert_tbl(res[2])
 
 	assert_pack_eq(res[1], { 1 })
 	assert_pack_eq(res[2], { 2 })
 end)
 
-test('all retries when a child commit proposal does not match prepared proposal', function ()
-	local attempts = 0
+test('all retries when a child commit cannot reify prepared proposal (pending + pulse)', function ()
+	local commit_calls = 0
+	local phase = 0
+
+	local ChildTicket = ticket_class({})
+
+	function ChildTicket:pulse() return self._pulse end
+	function ChildTicket:preview(_ctx2) return TAG_PREVIEW, self._current, self._payload, self._pulse end
+
+	function ChildTicket:commit(ctx2, expected_proposal)
+		if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil end
+		if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil end
+
+		commit_calls = commit_calls + 1
+
+		if phase == 0 and expected_proposal == self._p1 then
+			phase = 1
+			self._current = self._p2
+			self._pulse:signal()
+			return TAG_PENDING, nil, self._pulse
+		end
+
+		if expected_proposal ~= self._current then
+			return TAG_PENDING, nil, self._pulse
+		end
+
+		return TAG_DONE, self._payload, nil
+	end
+
+	function ChildTicket:cancel(_ctx2) end
 
 	local child = op2.new_primitive(function (_ctx)
-		attempts = attempts + 1
 		local pulse = op2.new_pulse()
-		local p_preview = {}
-		local p_commit  = (attempts == 1) and {} or p_preview
-
-		local payload = pack('x')
-
-		local ticket = {}
-
-		function ticket:pulse() return pulse end
-		function ticket:preview(_ctx2)
-			return TAG_PREVIEW, p_preview, payload, pulse
-		end
-		function ticket:commit(ctx2)
-			if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-			if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-			return TAG_DONE, p_commit, payload, nil
-		end
-		function ticket:cancel(_ctx2) end
-
-		return ticket
+		local p1 = {}
+		local p2 = {}
+		return ticket_new(ChildTicket, {
+			_pulse = pulse,
+			_p1 = p1,
+			_p2 = p2,
+			_current = p1,
+			_payload = pack('x'),
+		})
 	end)
 
 	local res = op2.perform(op2.all(child, op2.always('y')))
-	assert_eq(attempts, 2, 'expected retry due to proposal mismatch in all()')
+	assert_eq(commit_calls, 2)
 	assert_pack_eq(res[1], { 'x' })
 	assert_pack_eq(res[2], { 'y' })
 end)
 
 test('and_then rebuilds RHS when LHS proposal changes (ticket-level)', function ()
-	-- LHS is a manual ticket controlled by the test.
 	local left_ticket, left_ctl = make_manual_ticket({ initial = 'pending' })
 	local left_op = prim_from_ticket(left_ticket)
 
-	-- RHS: build a fresh primitive per LHS value; track cancellations of prior RHS instances.
 	local rhs_cancelled = 0
 
 	local function rhs_for(x)
+		local RHSTicket = ticket_class({})
+		function RHSTicket:pulse() return self._pulse end
+		function RHSTicket:preview(_ctx2) return TAG_PREVIEW, self._prop, self._payload, self._pulse end
+		function RHSTicket:commit(ctx2, expected_proposal)
+			if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil end
+			if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil end
+			if expected_proposal ~= self._prop then return TAG_PENDING, nil, self._pulse end
+			return TAG_DONE, self._payload, nil
+		end
+		function RHSTicket:cancel(_ctx2) rhs_cancelled = rhs_cancelled + 1 end
+
 		return op2.new_primitive(function (_ctx)
-			local pulse = op2.new_pulse()
-			local prop  = {}
-			local payload = pack(x * 10)
-
-			local ticket = {}
-
-			function ticket:pulse() return pulse end
-			function ticket:preview(_ctx2) return TAG_PREVIEW, prop, payload, pulse end
-			function ticket:commit(ctx2)
-				if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-				if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-				return TAG_DONE, prop, payload, nil
-			end
-			function ticket:cancel(_ctx2) rhs_cancelled = rhs_cancelled + 1 end
-
-			return ticket
+			return ticket_new(RHSTicket, {
+				_pulse = op2.new_pulse(),
+				_prop  = {},
+				_payload = pack(x * 10),
+			})
 		end)
 	end
 
-	local op = left_op:and_then(function (x)
-		return rhs_for(x)
-	end)
+	local op = left_op:and_then(function (x) return rhs_for(x) end)
 
-	-- Instantiate ticket graph so we can call preview repeatedly with gate open.
 	local scheduler = runtime.current_scheduler
 	local ctx = {
 		gate_state = op2.GATE_OPEN,
 		scheduler  = scheduler,
-
-		-- not used by this test (no blocking), but harmless to provide.
 		_wait_node = { _linked = false, _task = runtime.current_fiber(), _waker = scheduler },
 	}
 	local root = op:_instantiate(ctx)
 
-	-- First: drive LHS to preview(1).
 	left_ctl:set_preview({}, 1)
-
 	local tag, _prop, payload = root:preview(ctx)
 	assert_eq(tag, TAG_PREVIEW)
-	assert_tbl(payload, 'expected payload pack')
 	assert_eq(payload[1], 10)
 
-	-- Change LHS proposal/value; RHS should be invalidated and rebuilt.
 	left_ctl:set_preview({}, 2)
-
 	local tag2, _prop2, payload2 = root:preview(ctx)
 	assert_eq(tag2, TAG_PREVIEW)
-	assert_tbl(payload2, 'expected payload pack')
 	assert_eq(payload2[1], 20)
 
-	assert_true(rhs_cancelled >= 1, 'expected old RHS instance to be cancelled on LHS proposal change')
+	assert_true(rhs_cancelled >= 1)
 end)
 
-test('bracket releases on cancelled attempt (aborted=true) and on success (aborted=false)', function ()
+test('bracket releases on success (aborted=false)', function ()
 	local acquired = 0
-	local releases = {} -- { { aborted = bool, res = any }, ... }
+	local releases = {}
 
 	local function acquire()
 		acquired = acquired + 1
@@ -526,48 +533,300 @@ test('bracket releases on cancelled attempt (aborted=true) and on success (abort
 		releases[#releases + 1] = { res = res, aborted = aborted }
 	end
 
-	-- Inner op: first attempt cancels in preview, second attempt succeeds.
-	local attempts = 0
-	local inner = op2.new_primitive(function (_ctx)
-		attempts = attempts + 1
-		local pulse = op2.new_pulse()
-		local prop  = {}
-		local payload = pack('ok')
-
-		local ticket = {}
-
-		function ticket:pulse() return pulse end
-
-		function ticket:preview(_ctx2)
-			if attempts == 1 then return TAG_CANCELLED, nil, nil, nil end
-			return TAG_PREVIEW, prop, payload, pulse
-		end
-
-		function ticket:commit(ctx2)
-			if ctx2.gate_state == op2.GATE_ABORTED then return TAG_CANCELLED, nil, nil, nil end
-			if ctx2.gate_state ~= op2.GATE_COMMITTING then return TAG_CANCELLED, nil, nil, nil end
-			return TAG_DONE, prop, payload, nil
-		end
-
-		function ticket:cancel(_ctx2) end
-
-		return ticket
-	end)
-
 	local op = op2.bracket(acquire, release, function (_res)
-		return inner
+		return op2.always('ok')
 	end)
 
 	local v = op2.perform(op)
 	assert_eq(v, 'ok')
 
-	assert_eq(attempts, 2, 'expected retry after preview cancellation')
-	assert_eq(acquired, 2, 'expected acquire per attempt')
+	assert_eq(acquired, 1)
+	assert_eq(#releases, 1)
+	assert_eq(releases[1].aborted, false)
+end)
 
-	-- We expect two releases: first aborted=true (cancelled attempt), then aborted=false (success).
-	assert_eq(#releases, 2, 'expected one release per attempt')
+test('bracket releases on abort via losing in choice (aborted=true)', function ()
+	local acquired = 0
+	local releases = {}
+
+	local function acquire()
+		acquired = acquired + 1
+		return { id = acquired }
+	end
+
+	local function release(res, aborted)
+		releases[#releases + 1] = { res = res, aborted = aborted }
+	end
+
+	local loser = op2.bracket(acquire, release, function (_res)
+		return op2.never()
+	end)
+
+	local v = op2.perform(op2.choice(op2.always('winner'), loser))
+	assert_eq(v, 'winner')
+
+	assert_eq(acquired, 1)
+	assert_eq(#releases, 1)
 	assert_eq(releases[1].aborted, true)
-	assert_eq(releases[2].aborted, false)
+end)
+
+test('wrap composition order: op:wrap(f1):wrap(f2) == f2(f1(x))', function ()
+	local trace = {}
+
+	local function f1(x) trace[#trace + 1] = 'f1'; return x + 1 end
+	local function f2(x) trace[#trace + 1] = 'f2'; return x * 10 end
+
+	local v = op2.perform(op2.always(2):wrap(f1):wrap(f2))
+	assert_eq(v, 30)
+	assert_eq(trace[1], 'f1')
+	assert_eq(trace[2], 'f2')
+end)
+
+test('wrap caching across repeated preview calls (no double-application)', function ()
+	local calls = 0
+	local function f(x) calls = calls + 1; return x + 1 end
+
+	local p1 = {}
+	local ticket, ctl = make_manual_ticket({ initial = 'preview', proposal = p1, values = pack(1) })
+	local op = prim_from_ticket(ticket):wrap(f)
+
+	local scheduler = runtime.current_scheduler
+	local ctx = {
+		gate_state = op2.GATE_OPEN,
+		scheduler  = scheduler,
+		_wait_node = { _linked = false, _task = runtime.current_fiber(), _waker = scheduler },
+	}
+
+	local root = op:_instantiate(ctx)
+
+	local tag, prop, payload = root:preview(ctx)
+	assert_eq(tag, TAG_PREVIEW)
+	assert_eq(prop, p1)
+	assert_eq(payload[1], 2)
+	assert_eq(calls, 1)
+
+	local tag2, prop2, payload2 = root:preview(ctx)
+	assert_eq(tag2, TAG_PREVIEW)
+	assert_eq(prop2, p1)
+	assert_eq(payload2[1], 2)
+	assert_eq(calls, 1)
+
+	local p2 = {}
+	ctl:set_preview(p2, 10)
+	local tag3, prop3, payload3 = root:preview(ctx)
+	assert_eq(tag3, TAG_PREVIEW)
+	assert_eq(prop3, p2)
+	assert_eq(payload3[1], 11)
+	assert_eq(calls, 2)
+end)
+
+test('finally runs once even if cancel/abort is invoked after commit', function ()
+	local ran = 0
+	local aborted_seen = {}
+
+	local p = {}
+	local ticket, _ctl = make_manual_ticket({ initial = 'preview', proposal = p, values = pack('ok') })
+	local op = prim_from_ticket(ticket):finally(function (aborted)
+		ran = ran + 1
+		aborted_seen[#aborted_seen + 1] = aborted
+	end)
+
+	local scheduler = runtime.current_scheduler
+	local ctx = {
+		gate_state = op2.GATE_OPEN,
+		scheduler  = scheduler,
+		_wait_node = { _linked = false, _task = runtime.current_fiber(), _waker = scheduler },
+	}
+	local root = op:_instantiate(ctx)
+
+	local tag, prop = root:preview(ctx)
+	assert_eq(tag, TAG_PREVIEW)
+	assert_eq(prop, p)
+
+	ctx.gate_state = op2.GATE_COMMITTING
+	local ctag, payload = root:commit(ctx, p)
+	assert_eq(ctag, TAG_DONE)
+	assert_eq(payload[1], 'ok')
+	assert_eq(ran, 1)
+	assert_eq(aborted_seen[1], false)
+
+	ctx.gate_state = op2.GATE_OPEN
+	if root._post_commit_abort then root:_post_commit_abort(ctx) end
+	root:cancel(ctx)
+
+	assert_eq(ran, 1)
+	assert_eq(#aborted_seen, 1)
+end)
+
+test('finally and on_abort swallow handler errors (best-effort)', function ()
+	local fin_ran = 0
+	local abort_ran = 0
+
+	local loser =
+		op2.never()
+			:finally(function (_aborted) fin_ran = fin_ran + 1; error('finally-boom', 0) end)
+			:on_abort(function () abort_ran = abort_ran + 1; error('abort-boom', 0) end)
+
+	local v = op2.perform(op2.choice(op2.always('winner'), loser))
+	assert_eq(v, 'winner')
+	assert_eq(fin_ran, 1)
+	assert_eq(abort_ran, 1)
+end)
+
+test('choice skips cancelled arms and can still succeed', function ()
+	local t1, ctl1 = make_manual_ticket({ initial = 'cancelled' })
+	local cancelled = prim_from_ticket(t1)
+
+	local v = op2.perform(op2.choice(cancelled, op2.always('ok')))
+	assert_eq(v, 'ok')
+	assert_true(ctl1:cancels() >= 1)
+end)
+
+test('choice cancels when all arms are cancelled', function ()
+	local t1 = make_manual_ticket({ initial = 'cancelled' })
+	local t2 = make_manual_ticket({ initial = 'cancelled' })
+	local cancelled1 = prim_from_ticket((t1))
+	local cancelled2 = prim_from_ticket((t2))
+
+	local ok = pcall(function ()
+		op2.perform(op2.choice(cancelled1, cancelled2))
+	end)
+	assert_false(ok)
+end)
+
+test('all cancels if any arm is cancelled during preview (cancel_all contract)', function ()
+	local t_bad, ctl_bad = make_manual_ticket({ initial = 'cancelled' })
+	local t_other, ctl_other = make_manual_ticket({ initial = 'preview', proposal = {}, values = pack(1) })
+
+	local bad   = prim_from_ticket(t_bad)
+	local other = prim_from_ticket(t_other)
+
+	local ok = pcall(function ()
+		op2.perform(op2.all(other, bad))
+	end)
+	assert_false(ok)
+
+	assert_true(ctl_other:cancels() >= 1)
+	assert_true(ctl_bad:cancels() >= 1)
+end)
+
+test('choose2 returns table-of-packs and aborts/cancels the unchosen arms', function ()
+	local fin_aborted = nil
+	local abort_calls = 0
+
+	local t3, ctl3 = make_manual_ticket({ initial = 'preview', proposal = {}, values = pack(99) })
+	local third =
+		prim_from_ticket(t3)
+			:finally(function (aborted) fin_aborted = aborted end)
+			:on_abort(function () abort_calls = abort_calls + 1 end)
+
+	local res = op2.perform(op2.choose2(op2.always(1), op2.always(2), third))
+	assert_tbl(res)
+	assert_pack_eq(res[1], { 1 })
+	assert_pack_eq(res[2], { 2 })
+
+	assert_eq(fin_aborted, true)
+	assert_eq(abort_calls, 1)
+	assert_true(ctl3:cancels() >= 1)
+end)
+
+test('choose_k skips cancelled arms and still selects k ready results', function ()
+	local t_bad, ctl_bad = make_manual_ticket({ initial = 'cancelled' })
+	local bad = prim_from_ticket(t_bad)
+
+	local res = op2.perform(op2.choose_k(2, bad, op2.always('a'), op2.always('b')))
+	assert_tbl(res)
+	assert_pack_eq(res[1], { 'a' })
+	assert_pack_eq(res[2], { 'b' })
+
+	assert_true(ctl_bad:cancels() >= 1)
+end)
+
+test('choice does not abort loser before winner commit completes', function ()
+	local abort_calls = 0
+	local loser =
+		op2.always('loser')
+			:on_abort(function () abort_calls = abort_calls + 1 end)
+
+	local winner, ctl = make_commit_latch_primitive('winner')
+
+	local mid_abort = nil
+	schedule(function ()
+		mid_abort = abort_calls
+		ctl:allow_commit()
+	end)
+
+	local v = op2.perform(op2.choice(winner, loser))
+	assert_eq(v, 'winner')
+
+	assert_eq(mid_abort, 0)
+	assert_eq(abort_calls, 1)
+end)
+
+test('guard thunk runs once per perform, even if commit retries', function ()
+	local calls = 0
+	local inner, ctl = make_commit_latch_primitive('ok')
+
+	local guarded = op2.guard(function ()
+		calls = calls + 1
+		return inner
+	end)
+
+	schedule(function ()
+		ctl:allow_commit()
+	end)
+
+	local v = op2.perform(guarded)
+	assert_eq(v, 'ok')
+	assert_eq(calls, 1)
+end)
+
+test('and_then runs LHS finally(false) on success and returns RHS result', function ()
+	local seen = {}
+
+	local v = op2.perform(
+		op2.always(2)
+			:finally(function (aborted) seen[#seen + 1] = aborted end)
+			:and_then(function (x) return op2.always(x * 10) end)
+	)
+
+	assert_eq(v, 20)
+	assert_eq(#seen, 1)
+	assert_eq(seen[1], false)
+end)
+
+test('and_then cancels old RHS instance when LHS proposal changes; RHS finally(true) runs', function ()
+	local left_ticket, left_ctl = make_manual_ticket({ initial = 'pending' })
+	local left_op = prim_from_ticket(left_ticket)
+
+	local rhs_aborts = 0
+	local function rhs_for(x)
+		return op2.always(x * 10):finally(function (aborted)
+			if aborted then rhs_aborts = rhs_aborts + 1 end
+		end)
+	end
+
+	local op = left_op:and_then(function (x) return rhs_for(x) end)
+
+	local scheduler = runtime.current_scheduler
+	local ctx = {
+		gate_state = op2.GATE_OPEN,
+		scheduler  = scheduler,
+		_wait_node = { _linked = false, _task = runtime.current_fiber(), _waker = scheduler },
+	}
+	local root = op:_instantiate(ctx)
+
+	left_ctl:set_preview({}, 1)
+	local tag1, _p1, payload1 = root:preview(ctx)
+	assert_eq(tag1, TAG_PREVIEW)
+	assert_eq(payload1[1], 10)
+
+	left_ctl:set_preview({}, 2)
+	local tag2, _p2, payload2 = root:preview(ctx)
+	assert_eq(tag2, TAG_PREVIEW)
+	assert_eq(payload2[1], 20)
+
+	assert_true(rhs_aborts >= 1)
 end)
 
 ----------------------------------------------------------------------
@@ -588,13 +847,10 @@ local function run_all()
 			io.write('not ok - ' .. t.name .. '\n')
 			io.write('  ' .. tostring(err) .. '\n')
 		end
-
-		-- Give the scheduler a chance to run any straggler tasks between tests.
 		tick()
 	end
 
 	io.write(('\nSummary: %d passed, %d failed\n'):format(passed, failed))
-
 	if failed > 0 then
 		error(('test run failed (%d failed)'):format(failed), 0)
 	end
