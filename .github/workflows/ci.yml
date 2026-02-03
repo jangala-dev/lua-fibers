@@ -4,7 +4,7 @@ on: [pull_request]
 
 jobs:
   validate-pr:
-    runs-on: ubuntu-22.04
+    runs-on: ghcr.io/jangala-dev/mini-lua-image:bookworm
 
     steps:
     - name: Check out repository
