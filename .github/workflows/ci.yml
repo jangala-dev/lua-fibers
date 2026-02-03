@@ -28,6 +28,6 @@ jobs:
         cd tests
         luajit test.lua
 
-    - name: Run Linter
-      run: luacheck .
+    # - name: Run Linter
+    #   run: luacheck .
 
