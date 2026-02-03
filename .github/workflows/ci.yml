@@ -7,10 +7,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/jangala-dev/mini-lua-image:bookworm
+      options: --user 0:0
 
     steps:
     - name: Check out repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Run custom install script
       run: |
