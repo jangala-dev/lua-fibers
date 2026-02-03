@@ -69,7 +69,7 @@ end
 ---@return Stream
 local function fdopen(fd, flags_or_mode, filename)
 	-- assert(type(fd) == "number", "fdopen: fd must be a number")
-	assert(type(fd) ~= nil, 'fdopen: fd must be non-nil')
+	assert(fd ~= nil, 'fdopen: fd must be non-nil')
 
 	local readable, writable
 
@@ -286,12 +286,8 @@ local function tmpfile(perms, tmpdir)
 	---@param newname string
 	---@return boolean|nil ok, string|nil err
 	function f:rename(newname)
-		-- Flush buffered data first (various stream flavours).
-		if self.flush_output then
-			self:flush_output()
-		elseif self.flush then
-			self:flush()
-		end
+		-- Flush buffered data first.
+		self:flush()
 
 		local real_fd = io.fileno and io:fileno() or fd
 		if real_fd then

@@ -24,11 +24,12 @@ local C            = ffi_c.C
 local ffi_tonumber = ffi_c.tonumber
 local get_errno    = ffi_c.errno
 
+local EPERM  = 1
 local EINTR  = 4
 local ENOENT = 2
 local EBADF  = 9
 
-local jit = rawget(_G, "jit")
+local jit = rawget(_G, 'jit')
 local ARCH = ffi.arch or ((jit and jit.arch) or 'x64')
 
 ----------------------------------------------------------------------
@@ -82,31 +83,15 @@ local EPOLL_CTL_MOD = 3
 local get_event, set_event, get_data, set_data
 
 if ARCH == 'x64' or ARCH == 'x86' then
-	get_event = function (ev)
-		return ffi.cast('uint32_t*', ev.raw)[0]
-	end
-	set_event = function (ev, value)
-		ffi.cast('uint32_t*', ev.raw)[0] = value
-	end
-	get_data = function (ev)
-		return ffi.cast('uint64_t*', ev.raw + 4)[0]
-	end
-	set_data = function (ev, value)
-		ffi.cast('uint64_t*', ev.raw + 4)[0] = value
-	end
+	get_event = function (ev) return ffi.cast('uint32_t*', ev.raw)[0] end
+	set_event = function (ev, value) ffi.cast('uint32_t*', ev.raw)[0] = value end
+	get_data  = function (ev) return ffi.cast('uint64_t*', ev.raw + 4)[0] end
+	set_data  = function (ev, value) ffi.cast('uint64_t*', ev.raw + 4)[0] = value end
 else
-	get_event = function (ev)
-		return ev.events
-	end
-	set_event = function (ev, value)
-		ev.events = value
-	end
-	get_data = function (ev)
-		return ev.data
-	end
-	set_data = function (ev, value)
-		ev.data = value
-	end
+	get_event = function (ev) return ev.events end
+	set_event = function (ev, value) ev.events = value end
+	get_data  = function (ev) return ev.data end
+	set_data  = function (ev, value) ev.data = value end
 end
 
 local function wrap_error(ret)
@@ -150,7 +135,6 @@ local function epoll_wait(epfd, timeout_ms, max_events)
 	if n == -1 then
 		local errno = get_errno()
 		if errno == EINTR then
-			-- Benign interruption: report “no events”.
 			return {}, nil, errno
 		end
 		local err = ffi.string(C.strerror(errno))
@@ -163,7 +147,6 @@ local function epoll_wait(epfd, timeout_ms, max_events)
 		local event = assert(ffi_tonumber(get_event(events[i])))
 		res[fd]     = event
 	end
-
 	return res, nil, nil
 end
 
@@ -178,6 +161,7 @@ end
 ---@class EpollState
 ---@field epfd integer
 ---@field active_events table<integer, integer>
+---@field unpollable table<integer, boolean>   -- fds that return EPERM to epoll_ctl
 ---@field maxevents integer
 local Epoll = {}
 Epoll.__index = Epoll
@@ -188,6 +172,7 @@ local function new_epoll()
 	local ret = {
 		epfd          = epoll_create(),
 		active_events = {},
+		unpollable    = {},
 		maxevents     = INITIAL_MAXEVENTS,
 	}
 	return setmetatable(ret, Epoll)
@@ -197,51 +182,92 @@ local RD  = EPOLLIN + EPOLLRDHUP
 local WR  = EPOLLOUT
 local ERR = EPOLLERR + EPOLLHUP
 
+local function die_ctl(opname, fd, err, errno)
+	error((opname .. ' failed for fd ' .. tostring(fd) .. ' (' .. tostring(err) .. ', errno ' .. tostring(errno) .. ')'))
+end
+
 function Epoll:add(fd, events)
+	-- Once an fd is known to be unpollable, do not try to epoll_ctl it again.
+	if self.unpollable[fd] then
+		return
+	end
+
 	local active    = self.active_events[fd] or 0
 	local eventmask = bit.bor(events, active, EPOLLONESHOT)
-	local ok        = epoll_ctl_mod(self.epfd, fd, eventmask)
-	if not ok then
-		assert(epoll_ctl_add(self.epfd, fd, eventmask))
+
+	-- Try MOD first (common case).
+	local ok, err, eno = epoll_ctl_mod(self.epfd, fd, eventmask)
+	if ok then
+		self.active_events[fd] = eventmask
+		return
 	end
-	self.active_events[fd] = eventmask
+
+	-- EPERM: fd type not supported by epoll (e.g. regular file). Treat as unpollable.
+	if eno == EPERM then
+		self.active_events[fd] = nil
+		self.unpollable[fd]    = true
+		return
+	end
+
+	-- Not currently registered (or MOD failed): try ADD.
+	local ok2, err2, eno2 = epoll_ctl_add(self.epfd, fd, eventmask)
+	if ok2 then
+		self.active_events[fd] = eventmask
+		return
+	end
+
+	if eno2 == EPERM then
+		self.active_events[fd] = nil
+		self.unpollable[fd]    = true
+		return
+	end
+
+	die_ctl('epoll_ctl(ADD)', fd, err2 or err, eno2 or eno)
 end
 
 function Epoll:poll(timeout_ms)
-	local events, err, errno = epoll_wait(self.epfd, timeout_ms or 0, self.maxevents)
-	if not events then
+	local evmap, err, errno = epoll_wait(self.epfd, timeout_ms or 0, self.maxevents)
+	if not evmap then
 		error(err or ('epoll_wait failed (errno ' .. tostring(errno) .. ')'))
 	end
 
 	local count = 0
-	for fd, _ in pairs(events) do
+	for fd, _ in pairs(evmap) do
 		count = count + 1
 		self.active_events[fd] = nil
 	end
-
 	if count == self.maxevents then
 		self.maxevents = self.maxevents * 2
 	end
 
-	return events
+	return evmap
 end
 
 function Epoll:del(fd)
+	-- If this fd was unpollable, there is no kernel state to delete.
+	if self.unpollable[fd] then
+		self.unpollable[fd] = nil
+		self.active_events[fd] = nil
+		return
+	end
+
 	local ok, err, errno = epoll_ctl_del(self.epfd, fd)
 	if not ok then
-		-- ENOENT/EBADF: fd already closed or never registered; just clear.
 		if errno == ENOENT or errno == EBADF then
 			self.active_events[fd] = nil
 			return
 		end
-		error(err or ('epoll_ctl(DEL) failed (errno ' .. tostring(errno) .. ')'))
+		die_ctl('epoll_ctl(DEL)', fd, err, errno)
 	end
+
 	self.active_events[fd] = nil
 end
 
 function Epoll:close()
 	epoll_close(self.epfd)
 	self.epfd = nil
+	self.active_events = {}
+	self.unpollable = {}
 end
 
 ----------------------------------------------------------------------
@@ -264,18 +290,42 @@ local function on_wait_change(ep, fd, want_rd, want_wr)
 	end
 end
 
-local function poll_backend(ep, timeout_ms, _, _)
-	-- ep:poll already returns fd -> epoll event bits.
-	local evmap = ep:poll(timeout_ms)
+local function poll_backend(ep, timeout_ms, rd_waitset, wr_waitset)
 	local events = {}
 
+	-- Synthesize readiness for fds that epoll cannot watch (EPERM).
+	-- This keeps Poller:wait and backend registration exception-free.
+	local had_synthetic = false
+	if ep.unpollable then
+		for fd, _ in pairs(ep.unpollable) do
+			local rd = rd_waitset and (not rd_waitset:is_empty(fd)) or false
+			local wr = wr_waitset and (not wr_waitset:is_empty(fd)) or false
+			if rd or wr then
+				had_synthetic = true
+				events[fd] = { rd = rd, wr = wr, err = false }
+			end
+		end
+	end
+
+	-- If we have synthetic events to deliver, do not block in epoll_wait.
+	local real_timeout = had_synthetic and 0 or timeout_ms
+
+	local evmap = ep:poll(real_timeout)
 	for fd, ev in pairs(evmap) do
 		local flags = {
 			rd  = bit.band(ev, RD + ERR) ~= 0,
 			wr  = bit.band(ev, WR + ERR) ~= 0,
 			err = bit.band(ev, ERR) ~= 0,
 		}
-		events[fd] = flags
+		local cur = events[fd]
+		if cur then
+			-- Merge with any synthetic readiness.
+			cur.rd  = cur.rd or flags.rd
+			cur.wr  = cur.wr or flags.wr
+			cur.err = cur.err or flags.err
+		else
+			events[fd] = flags
+		end
 	end
 
 	return events

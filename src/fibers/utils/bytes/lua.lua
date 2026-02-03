@@ -176,6 +176,26 @@ function RingBuf_mt:put(str)
 	self:write(str, n)
 end
 
+-- Opaque mark of the current write position (for tail rollback).
+-- We only need enough state to drop newly appended chunks and restore len.
+function RingBuf_mt:mark_write()
+	return { n = #self.chunks, len = self.len }
+end
+
+-- Rewind the write position to a previously obtained mark.
+-- Caller must ensure no consumer progress happened since the mark.
+function RingBuf_mt:rewind_write(mark)
+	assert(type(mark) == 'table', 'RingBuf:rewind_write expects mark table')
+	local n = mark.n or 0
+	local len = mark.len or 0
+
+	for i = #self.chunks, n + 1, -1 do
+		self.chunks[i] = nil
+	end
+
+	self.len = len
+end
+
 function RingBuf_mt:take(n)
 	assert(type(n) == 'number' and n >= 0, 'RingBuf:take expects non-negative count')
 	if self.len == 0 or n == 0 then
@@ -200,6 +220,43 @@ function RingBuf_mt:find(pattern)
 	local s = self:tostring()
 	local i = s:find(pattern, 1, true)
 	return i and (i - 1) or nil
+end
+
+function RingBuf_mt:capacity()
+	return self.size
+end
+
+function RingBuf_mt:peek(n)
+	assert(type(n) == 'number' and n >= 0, 'RingBuf:peek expects non-negative count')
+	if n == 0 or self.len == 0 then
+		return ''
+	end
+	if n > self.len then
+		n = self.len
+	end
+
+	-- Same as read(nil, n) but without advancing.
+	local out  = {}
+	local need = n
+	local i    = self.head_idx
+	local off  = self.head_off
+	local last = #self.chunks
+
+	while need > 0 and i <= last do
+		local chunk = self.chunks[i]
+		local rem   = #chunk - off
+		local take  = math.min(need, rem)
+		out[#out + 1] = chunk:sub(off + 1, off + take)
+		need = need - take
+		if take == rem then
+			i = i + 1
+			off = 0
+		else
+			off = off + take
+		end
+	end
+
+	return table.concat(out)
 end
 
 ----------------------------------------------------------------------

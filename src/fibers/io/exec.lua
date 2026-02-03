@@ -571,7 +571,7 @@ function Command:_on_scope_exit()
 	for _, name in ipairs { 'stdin', 'stdout', 'stderr' } do
 		local cfg = self['_' .. name]
 		if cfg.stream and cfg.owned then
-			local ok, err = cfg.stream:close()
+			local ok, err = op.perform_raw(cfg.stream:close_op())
 			if not ok then
 				error(err or ('failed to close ' .. name .. ' stream'))
 			end

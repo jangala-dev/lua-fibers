@@ -105,14 +105,14 @@ local function read_fd(fd, max)
 	-- nixio.File:read / Socket:read both follow the same style:
 	--   data                      (success/EOF)
 	--   nil, msg, errno           (error)
-	local data, msg, eno = fd:read(max)
+	local data, eno, msg = fd:read(max)
 
-	if data ~= nil then
+	if type(data) == 'string' then
 		-- data may be "" at EOF; that is acceptable to callers.
 		return data, nil
 	end
 
-	eno = eno or nixio.errno()
+	-- eno = eno or nixio.errno()
 
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		-- Would block, signal “not ready yet”.
@@ -139,13 +139,13 @@ local function write_fd(fd, str, len)
 
 	-- For files: File.write(buf, offset, length)
 	-- For sockets: Socket.send / write(buf, offset, length) – same shape.
-	local n, msg, eno = fd:write(str, 0, len)
+	local n, eno, msg = fd:write(str, 0, len)
 
-	if n ~= nil then
+	if type(n) == 'number' then
 		return n, nil
 	end
 
-	eno = eno or nixio.errno()
+	-- eno = eno or nixio.errno()
 
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		-- Would block.

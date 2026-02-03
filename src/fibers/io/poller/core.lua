@@ -64,7 +64,7 @@ end
 ---@return WaitToken
 function Poller:wait(fd, dir, task)
 	-- assert(type(fd) == "number", "fd must be number")
-	assert(type(fd) ~= nil, 'fd must be non-nil')
+	assert(fd ~= nil, 'fd must be non-nil')
 	assert(dir == 'rd' or dir == 'wr', "dir must be 'rd' or 'wr'")
 
 	local ws    = (dir == 'rd') and self.rd or self.wr

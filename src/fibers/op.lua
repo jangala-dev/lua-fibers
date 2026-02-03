@@ -71,6 +71,29 @@ function Suspension:_run_cleanups()
 		cs[i] = nil
 	end
 end
+
+-- Waker capability (scheduler is an implementation detail)
+
+--- Wake a task to run “soon”.
+---@param task Task
+function Suspension:wakeup(task)
+	self.sched:schedule(task)
+end
+
+--- Wake a task at an absolute time on the scheduler clock.
+---@param t number
+---@param task Task
+function Suspension:at_time(t, task)
+	self.sched:schedule_at_time(t, task)
+end
+
+--- Wake a task after a delay from the scheduler’s current time.
+---@param dt number
+---@param task Task
+function Suspension:after(dt, task)
+	self.sched:schedule_after_sleep(dt, task)
+end
+
 --- Mark a suspension as complete and enqueue it on the scheduler.
 ---@param wrap WrapFn
 ---@param ... any

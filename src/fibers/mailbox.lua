@@ -39,6 +39,7 @@ local perform = require 'fibers.performer'.perform
 ---@field buf any|nil      -- FIFO buffer when cap>0; nil for rendezvous
 ---@field getq any         -- FIFO of waiting receivers
 ---@field putq any         -- FIFO of waiting senders
+---@field taskq any        -- FIFO of task waiters for recv readiness
 ---@field closed boolean
 ---@field reason any|nil
 ---@field senders integer  -- counted sender handles still open
@@ -72,6 +73,29 @@ local function pop_active(q)
 			return e
 		end
 	end
+end
+
+---@param st MailboxState
+local function notify_task_waiters(st)
+	local q = st.taskq
+	if not q then return end
+
+	while not q:empty() do
+		local e = q:pop()
+		if e and e.active then
+			e.active = false
+			e.waker:wakeup(e.task)
+		end
+	end
+end
+
+---@param st MailboxState
+---@return boolean
+local function recv_may_succeed(st)
+	if st.closed then return true end
+	if st.buf and st.buf:length() > 0 then return true end
+	if st.putq and not st.putq:empty() then return true end
+	return false
 end
 
 ---@param st MailboxState
@@ -114,6 +138,8 @@ local function close_state(st, reason)
 		if not snd then break end
 		snd.suspension:complete(snd.wrap, nil)
 	end
+
+	notify_task_waiters(st)
 end
 
 ----------------------------------------------------------------------
@@ -149,6 +175,7 @@ local function new(capacity, opts)
 		buf     = (capacity > 0) and fifo.new() or nil,
 		getq    = fifo.new(),
 		putq    = fifo.new(),
+		taskq   = fifo.new(),
 		closed  = false,
 		reason  = nil,
 		senders = 1,
@@ -250,6 +277,7 @@ function Tx:send_op(v)
 			-- (For cap==0, drop_oldest is normalised away to reject_newest.)
 			buf:pop()
 			buf:push(v)
+			notify_task_waiters(st)
 			return true, true
 		end
 
@@ -267,12 +295,14 @@ function Tx:send_op(v)
 		local recv = pop_active(getq)
 		if recv then
 			recv.suspension:complete(recv.wrap, v)
+			notify_task_waiters(st)
 			return true, true
 		end
 
 		-- Buffered enqueue when there is space.
 		if buf and buf:length() < cap then
 			buf:push(v)
+			notify_task_waiters(st)
 			return true, true
 		end
 
@@ -290,6 +320,35 @@ function Tx:send_op(v)
 	end
 
 	return op.new_primitive(nil, try, block)
+end
+
+--- Register a task to be woken when recv may succeed (message arrives or close).
+--- This does not expose the scheduler; callers provide a waker capability.
+---@param task Task
+---@param waker table
+---@return WaitToken
+function Rx:on_message(task, waker)
+	local st = self._st
+	assert(task and type(task) == 'table' and type(task.run) == 'function',
+		'on_message: task must have :run()')
+	assert(waker and type(waker.wakeup) == 'function',
+		'on_message: waker must support :wakeup(task)')
+
+	if recv_may_succeed(st) then
+		waker:wakeup(task)
+		return { unlink = function () return false end }
+	end
+
+	local entry = { task = task, waker = waker, active = true }
+	st.taskq:push(entry)
+
+	return {
+		unlink = function ()
+			if not entry.active then return false end
+			entry.active = false
+			return false
+		end,
+	}
 end
 
 --- Synchronously send a message.

@@ -35,7 +35,7 @@ local function test_unix_socket_roundtrip(scope)
 		local s, aerr = server:accept()
 		assert(s, 'server accept failed: ' .. tostring(aerr))
 
-		local msg, cnt, rerr = perform(s:read_string_op {
+		local msg, cnt, rerr = perform(s:core_read_op {
 			min    = 5,
 			max    = 5,
 			eof_ok = true,
@@ -45,7 +45,7 @@ local function test_unix_socket_roundtrip(scope)
 		assert(cnt == 5, 'server read_string_op read ' .. tostring(cnt) .. ' bytes, expected 5')
 		assert(msg == 'hello', ('server received %q, expected %q'):format(tostring(msg), 'hello'))
 
-		local n, werr = perform(s:write_string_op('world'))
+		local n, werr = perform(s:write_op('world'))
 		assert(werr == nil, 'server write_string_op error: ' .. tostring(werr))
 		assert(n == 5, 'server write_string_op wrote ' .. tostring(n) .. ' bytes, expected 5')
 
@@ -60,11 +60,11 @@ local function test_unix_socket_roundtrip(scope)
 	local client, cerr = socket_mod.connect_unix(path)
 	assert(client, 'connect_unix failed: ' .. tostring(cerr))
 
-	local n, werr = perform(client:write_string_op('hello'))
+	local n, werr = perform(client:write_op('hello'))
 	assert(werr == nil, 'client write_string_op error: ' .. tostring(werr))
 	assert(n == 5, 'client write_string_op wrote ' .. tostring(n) .. ' bytes, expected 5')
 
-	local resp, cnt, rerr = perform(client:read_string_op {
+	local resp, cnt, rerr = perform(client:core_read_op {
 		min    = 5,
 		max    = 5,
 		eof_ok = true,
