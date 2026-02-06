@@ -37,7 +37,6 @@ do
 
 	assert_eq(runtime.step(), 'ran')
 	assert_eq(f._waiting_waitable, p, 'fibre should be waiting on pulse')
-	assert_true(f._waiting_token ~= nil, 'fibre should have a waiting token')
 	assert_true(f._waiting_epoch ~= nil, 'fibre should have a waiting epoch')
 
 	p:signal()
@@ -114,11 +113,10 @@ do
 	local f = runtime.spawn(function () runtime.await(p) end, 'broken')
 
 	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_token ~= nil, 'should be waiting')
+	assert_true(f._waiting_epoch ~= nil, 'should be waiting')
 
 	-- Break the invariant deliberately.
 	f._waiting_waitable = nil
-	f._waiting_token    = nil
 	f._waiting_epoch    = nil
 
 	local ok, err = pcall(runtime.step)

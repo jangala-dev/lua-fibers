@@ -264,7 +264,7 @@ do
 
 	local a_abort, b_abort = 0, 0
 	local a_commit, b_commit = 0, 0
-	local a_res, b_res = false, false
+	local a_res = false
 	local b_ready = false
 
 	local pB = pulse.new(runtime.scheduler())
@@ -947,6 +947,100 @@ do
 
 	assert_eq(out, 'R-B')
 	assert_true(rhs_aborts >= 1, 'old rhs plans should be aborted when invalidated')
+end
+
+----------------------------------------------------------------------
+-- and_then offer churn:
+-- If RHS is pending for the current LHS offer, and LHS later changes (signals its watchable),
+-- and_then must wake, re-preview LHS, re-run k(...) for the new LHS payload, and complete.
+-- This specifically checks that and_then waits on Any(rhs_waitable, lhs_watchable).
+----------------------------------------------------------------------
+
+do
+	local runtime, pulse, op2 = reload()
+
+	local sched = runtime.scheduler()
+	local pL = pulse.new(sched) -- lhs watchable / invalidation pulse
+	local pR = pulse.new(sched) -- rhs pending pulse (we will *not* signal this)
+
+	local lhs_abort = 0
+	local rhs_abort = 0
+	local k_calls   = 0
+
+	local lhs_val = 'A'
+
+	local lhs = setmetatable({
+		preview = function(self)
+			-- Always “ready”; offer is the current value.
+			return nil, lhs_val, { n = 1, lhs_val }
+		end,
+		commit = function(self, offer)
+			-- Stale protection: if value changed since preview, force retry via watchable.
+			if offer ~= lhs_val then
+				return pL, nil
+			end
+			return nil, { n = 1, lhs_val }
+		end,
+		abort = function(self, _offer)
+			lhs_abort = lhs_abort + 1
+		end,
+		watch = function(self, offer)
+			-- Any external change to lhs_val will signal pL.
+			assert_eq(offer, lhs_val)
+			return pL
+		end,
+	}, op2.Op)
+
+	local function mk_rhs_for(x)
+		return setmetatable({
+			preview = function(self)
+				if x == 'A' then
+					-- RHS cannot become ready until we derive it from a different LHS value.
+					return pR, nil, nil
+				end
+				-- Ready for x ~= 'A'
+				return nil, 1, { n = 1, 'OK_' .. x }
+			end,
+			commit = function(self, offer)
+				assert_eq(offer, 1)
+				return nil, { n = 1, 'OK_' .. x }
+			end,
+			abort = function(self, _offer)
+				rhs_abort = rhs_abort + 1
+			end,
+		}, op2.Op)
+	end
+
+	local function k(x)
+		k_calls = k_calls + 1
+		return mk_rhs_for(x)
+	end
+
+	local f
+	local out
+	f = runtime.spawn(function()
+		out = op2.perform(lhs:and_then(k))
+	end, 'and_then_offer_churn')
+
+	-- First step: LHS ready with 'A', RHS pending => should await Any(pR, pL)
+	assert_eq(runtime.step(), 'ran')
+	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
+	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'and_then should wait on a derived Any view')
+	assert_true(pL:has_waiters(), 'lhs watch pulse should have waiters')
+	assert_true(pR:has_waiters(), 'rhs wait pulse should have waiters')
+	assert_eq(k_calls, 1, 'k should have been called once for initial LHS payload')
+	assert_true(lhs_abort > 0, 'lhs should have been aborted when rhs was pending (no reservation held)')
+
+	-- Change LHS *only* and signal its watchable; do not signal pR.
+	lhs_val = 'B'
+	pL:signal()
+	runtime.main()
+
+	assert_eq(out, 'OK_B', 'and_then should re-derive RHS from updated LHS payload')
+	assert_true(k_calls >= 2, 'k should be re-run when LHS payload changes')
+	assert_true(rhs_abort > 0, 'pending RHS for previous LHS payload should have been aborted')
+	assert_true(not pL:has_waiters(), 'subscriptions should be cancelled on wake')
+	assert_true(not pR:has_waiters(), 'rhs subscription should have been cancelled on wake')
 end
 
 io.write('ok: op2\n')

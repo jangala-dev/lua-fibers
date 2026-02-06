@@ -203,6 +203,34 @@ local function choice(...)
 	}, ChoiceOp)
 end
 
+function ChoiceOp:_wait_union(w)
+	-- Union of: commit waitable w, winner watchable, and last preview pending set.
+	local pend = self._pend
+	local n = self._pend_n
+
+	local function add(x)
+		if not x then return end
+		for i = 1, n do
+			if pend[i] == x then return end
+		end
+		n = n + 1
+		pend[n] = x
+	end
+
+	add(w)
+	add(self._rwatch)
+
+	if n == 0 then
+		error('choice: pending but no waitable available', 0)
+	end
+
+	-- Clear trailing scratch.
+	for i = n + 1, #pend do pend[i] = nil end
+	self._pend_n = n
+
+	return pend_any(self._any, pend, n)
+end
+
 function ChoiceOp:preview()
 	if self.done then
 		self._pend_n = 0
@@ -236,6 +264,9 @@ function ChoiceOp:preview()
 			self.winner_i     = i
 			self.winner_offer = off
 			self.winner_pay   = pay or EMPTY
+
+			local watch = self.ops[i].watch
+			self._rwatch = watch and watch(self.ops[i], off) or nil
 
 			-- commit offer changes only when the winning signature changes
 			if self.sig_i ~= i or self.sig_offer ~= off then
@@ -276,20 +307,13 @@ function ChoiceOp:commit(expected_offer)
 
 	local w, committed = self.ops[wi]:commit(woff)
 	if w then
-		-- Winner not commit-eligible; discard cached winner and wait on last pending set.
+		-- Winner not commit-eligible; discard cached winner and wait on a union.
 		self.winner_i, self.winner_offer = nil, nil
 		self.winner_pay = EMPTY
 
-		if self._pend_n ~= 0 then
-			return pend_any(self._any, self._pend, self._pend_n), nil
-		end
-		if not w then
-			error('choice.commit: winner returned pending with nil waitable', 0)
-		end
-		return w, nil
+		return self:_wait_union(w), nil
 	end
 
-	-- Abort losers.
 	for i = 1, self.n do
 		if i ~= wi then self.ops[i]:abort() end
 	end
@@ -297,6 +321,7 @@ function ChoiceOp:commit(expected_offer)
 	self.done     = true
 	self.done_pay = committed or self.winner_pay or EMPTY
 	self._pend_n  = 0
+	self._rwatch  = nil
 	return nil, self.done_pay
 end
 

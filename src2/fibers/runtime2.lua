@@ -47,75 +47,6 @@ local _current_fiber = nil
 runtime._live = {}
 
 ----------------------------------------------------------------------
--- Wait token (one per fibre)
-----------------------------------------------------------------------
-
-local WaitToken = {}
-WaitToken.__index = WaitToken
-
-function WaitToken.new(fib)
-	return setmetatable({
-		fib   = fib,
-		epoch = 0,
-
-		-- triples: [pulse, idx, epoch]
-		hs = {},
-		nh = 0,
-	}, WaitToken)
-end
-
-function WaitToken:_begin_wait()
-	self.epoch = self.epoch + 1
-	self.nh = 0
-	return self.epoch
-end
-
-function WaitToken:_add_handle(pulse, idx, epoch)
-	local n = self.nh + 1
-	self.nh = n
-	local hs = self.hs
-	local j = (n - 1) * 3 + 1
-	hs[j]     = pulse
-	hs[j + 1] = idx
-	hs[j + 2] = epoch
-end
-
-function WaitToken:_cancel_all()
-	local hs = self.hs
-	for i = 1, self.nh do
-		local j = (i - 1) * 3 + 1
-		local p     = hs[j]
-		local idx   = hs[j + 1]
-		local epoch = hs[j + 2]
-
-		if p then
-			p:_unsubscribe_at(idx, self, epoch)
-		end
-
-		hs[j], hs[j + 1], hs[j + 2] = nil, nil, nil
-	end
-	self.nh = 0
-end
-
-function WaitToken:_woken_by(_pulse, sched, epoch)
-	local fib = self.fib
-
-	-- Validate: this wake corresponds to the fibre's current wait.
-	if fib._waiting_token ~= self or fib._waiting_epoch ~= epoch then
-		return
-	end
-
-	-- Cancel remaining subscriptions from this wait epoch.
-	self:_cancel_all()
-
-	fib._waiting_token = nil
-	fib._waiting_epoch = nil
-	fib._waiting_waitable = nil
-
-	sched:schedule(fib)
-end
-
-----------------------------------------------------------------------
 -- Runtime API
 ----------------------------------------------------------------------
 
@@ -130,18 +61,16 @@ end
 function runtime.await(waitable)
 	local fib = _current_fiber
 	if not fib then error('await must be called from inside a fibre', 2) end
-	if fib._waiting_token ~= nil then
+	if fib._waiting_epoch ~= nil then
 		error('await called while already waiting', 2)
 	end
 
-	local tok   = fib._wait_token
-	local epoch = tok:_begin_wait()
+	local epoch = fib:_begin_wait()
 
 	fib._waiting_waitable = waitable
-	fib._waiting_token    = tok
 	fib._waiting_epoch    = epoch
 
-	waitable:subscribe(tok, epoch)
+	waitable:subscribe(fib, epoch)
 	return coroutine.yield(WAIT)
 end
 
@@ -152,19 +81,70 @@ end
 local Fiber = {}
 Fiber.__index = Fiber
 
+-- Pulse subscriber surface:
+--   pulse:subscribe(fibre, epoch) will call fibre:_add_handle(...)
+--   pulse:signal() will call fibre:_woken_by(...)
+function Fiber:_begin_wait()
+	self._wait_epoch = self._wait_epoch + 1
+	self._wait_nh = 0
+	return self._wait_epoch
+end
+
+function Fiber:_add_handle(pulse, idx, epoch)
+	local n       = self._wait_nh + 1
+	self._wait_nh = n
+	local hs      = self._wait_hs
+	local j       = (n - 1) * 3 + 1
+	hs[j]         = pulse
+	hs[j + 1]     = idx
+	hs[j + 2]     = epoch
+end
+
+function Fiber:_cancel_all_wait_handles()
+	local hs = self._wait_hs
+	for i = 1, self._wait_nh do
+		local j     = (i - 1) * 3 + 1
+		local p     = hs[j]
+		local idx   = hs[j + 1]
+		local epoch = hs[j + 2]
+
+		if p then
+			p:_unsubscribe_at(idx, self, epoch)
+		end
+
+		hs[j], hs[j + 1], hs[j + 2] = nil, nil, nil
+	end
+	self._wait_nh = 0
+end
+
+function Fiber:_woken_by(_, sched, epoch)
+	-- Validate: this wake corresponds to the fibre's current wait.
+	if self._waiting_epoch ~= epoch then
+		return
+	end
+
+	-- Cancel remaining subscriptions from this wait epoch.
+	self:_cancel_all_wait_handles()
+
+	self._waiting_epoch = nil
+	self._waiting_waitable = nil
+
+	sched:schedule(self)
+end
+
 function Fiber.new(fn, name)
 	local f = setmetatable({
-		co     = coroutine.create(fn),
-		name   = name or '<fiber>',
+		co      = coroutine.create(fn),
+		name    = name or '<fiber>',
 		_queued = false,
 
 		_waiting_waitable = nil,
-		_waiting_token    = nil,
 		_waiting_epoch    = nil,
 
-		_wait_token = nil,
+		_wait_epoch = 0,
+		_wait_hs    = {}, -- triples: [pulse, idx, epoch]
+		_wait_nh    = 0,
 	}, Fiber)
-	f._wait_token = WaitToken.new(f)
 	return f
 end
 
@@ -211,7 +191,7 @@ function runtime.step()
 	end
 
 	for fib in pairs(runtime._live) do
-		if fib._waiting_token == nil then
+		if fib._waiting_epoch == nil then
 			error('deadlock: no runnable tasks (live fibre not runnable and not waiting)', 0)
 		end
 	end

@@ -34,10 +34,12 @@ Pulse.__index = Pulse
 
 function Pulse.new(sched)
 	return setmetatable({
-		sched = sched,
-		ws    = {},  -- pairs: ws[2*i-1]=token, ws[2*i]=epoch
-		n     = 0,   -- number of slots (pair indices)
-		live  = 0,   -- live (non-tombstoned) entries
+		sched  = sched,
+		ws     = {}, -- pairs
+		n      = 0,
+		live   = 0,
+		free   = {}, -- stack of reusable slot indices
+		free_n = 0,
 	}, Pulse)
 end
 
@@ -51,17 +53,27 @@ function Pulse:signal_if_waiting()
 end
 
 function Pulse:subscribe(token, epoch)
-	local i = self.n + 1
-	self.n = i
+	local idx
+
+	-- Reuse a tombstoned slot if available.
+	local fn = self.free_n
+	if fn ~= 0 then
+		idx = self.free[fn]
+		self.free[fn] = nil
+		self.free_n = fn - 1
+	else
+		idx = self.n + 1
+		self.n = idx
+	end
+
 	self.live = self.live + 1
 
-	local ws = self.ws
-	local j  = (i - 1) * 2 + 1
+	local ws  = self.ws
+	local j   = (idx - 1) * 2 + 1
 	ws[j]     = token
 	ws[j + 1] = epoch
 
-	-- token tracks (pulse, idx, epoch) so it can cancel on wake.
-	token:_add_handle(self, i, epoch)
+	token:_add_handle(self, idx, epoch)
 end
 
 function Pulse:_unsubscribe_at(idx, token, epoch)
@@ -77,6 +89,12 @@ function Pulse:_unsubscribe_at(idx, token, epoch)
 	ws[j]     = false
 	ws[j + 1] = 0
 	self.live = self.live - 1
+
+	-- Make the slot reusable.
+	local fn = self.free_n + 1
+	self.free_n = fn
+	self.free[fn] = idx
+
 	return true
 end
 
@@ -87,14 +105,16 @@ function Pulse:signal()
 	local ws    = self.ws
 	local sched = self.sched
 
-	-- Drain the set in one pass.
+	-- Reset counters and clear free list (old indices are meaningless after reset).
 	self.n = 0
 	self.live = 0
+	for i = 1, self.free_n do self.free[i] = nil end
+	self.free_n = 0
 
 	for i = 1, n do
-		local j = (i - 1) * 2 + 1
-		local tok = ws[j]
-		local ep  = ws[j + 1]
+		local j          = (i - 1) * 2 + 1
+		local tok        = ws[j]
+		local ep         = ws[j + 1]
 		ws[j], ws[j + 1] = nil, nil
 
 		if tok and tok ~= false then
@@ -128,8 +148,8 @@ function Any:subscribe(token, epoch)
 end
 
 return {
-	Pulse = Pulse,
-	new   = Pulse.new,
-	Any   = Any,
+	Pulse    = Pulse,
+	new      = Pulse.new,
+	Any      = Any,
 	any_view = Any.new, -- convenience
 }

@@ -190,7 +190,7 @@ function Channel:put_op(val)
 	}, PutOp)
 end
 
-function PutOp:watch(_offer)
+function PutOp:watch(_)
 	-- Conservative but correct: any channel state change may invalidate readiness.
 	if self.done then return nil end
 	return self.ch.pulse
@@ -260,7 +260,7 @@ function PutOp:commit(offer)
 	return nil, EMPTY
 end
 
-function PutOp:abort(_offer)
+function PutOp:abort(_)
 	if self.done then return end
 
 	local ch = self.ch
@@ -303,7 +303,7 @@ function GetOp:_attach_select(sel)
 	self._sel = sel
 end
 
-function GetOp:watch(_offer)
+function GetOp:watch(_)
 	if self.done then return nil end
 	return self.ch.pulse
 end
@@ -404,7 +404,7 @@ function GetOp:commit(offer)
 	return nil, payload_set(self, self.result)
 end
 
-function GetOp:abort(_offer)
+function GetOp:abort(_)
 	if self.done then return end
 
 	local ch  = self.ch
