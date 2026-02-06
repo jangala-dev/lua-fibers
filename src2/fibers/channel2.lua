@@ -1,36 +1,3 @@
--- fibers/channel2.lua
---
--- Unbuffered rendezvous channel expressed as preview/commit ops with precise wakeups.
---
--- Purpose
---   Implements synchronous (unbuffered) put/get using the op2 protocol:
---   prepare is non-consuming (reservation only), and commit performs the rendezvous.
---
--- Semantics
---   * Channel:put_op(val) and Channel:get_op() return op objects implementing:
---       - preview(): establish or observe a match reservation without transferring data
---       - commit(offer): performs the rendezvous and transfers the value (must not yield)
---       - abort(offer?): rolls back reservations and leaves the op retryable
---   * The channel is unbuffered: put and get rendezvous directly.
---
--- Data structures
---   * Two intrusive FIFO queues: put list and get list.
---   * Each op object is also its own queue node (prev/next/inq), avoiding per-wait allocation.
---   * Matching is recorded via peer pointers (put.peer <-> get.peer) until committed/aborted.
---
--- Waiting and wake-ups (precise)
---   * The channel owns a single source Pulse (ch.pulse).
---   * Any state change that might enable progress signals ch.pulse (signal_if_waiting).
---   * Pending preview/commit return ch.pulse; no global coalescing pulse is used.
---
--- Choice integration
---   * get ops support optional _attach_select(sel) arbitration.
---   * Eligibility scanning respects sel.winner when present.
---
--- Optional stability hook
---   * put/get implement watch(offer) conservatively as ch.pulse, allowing derived ops to
---     await invalidation even when not holding reservations.
-
 local runtime   = require 'fibers.runtime2'
 local pulse_mod = require 'fibers.pulse2'
 local op        = require 'fibers.op2'
@@ -130,10 +97,6 @@ local function pending_preview(ch)
 	return ch.pulse, nil, nil
 end
 
-local function pending_commit(ch)
-	return ch.pulse, nil
-end
-
 ----------------------------------------------------------------------
 -- Reservation/commit helpers
 ----------------------------------------------------------------------
@@ -191,7 +154,6 @@ function Channel:put_op(val)
 end
 
 function PutOp:watch(_)
-	-- Conservative but correct: any channel state change may invalidate readiness.
 	if self.done then return nil end
 	return self.ch.pulse
 end
@@ -219,12 +181,11 @@ function PutOp:preview()
 		bump(self)
 		bump(r)
 
-		-- Reservation can unblock waiters.
 		signal(ch)
 
 		local sel = r._sel
 		if sel and sel.winner == nil then
-			-- Sender cannot be ready until receiver claims arbitration.
+			-- Sender not ready until receiver claims arbitration.
 			return pending_preview(ch)
 		end
 
@@ -236,28 +197,29 @@ function PutOp:preview()
 	return pending_preview(ch)
 end
 
+-- Contract: commit must not pend. If this is called without a matching ready preview, it is an error.
 function PutOp:commit(offer)
 	local ch = self.ch
 
 	if offer ~= self.offer then
-		return pending_commit(ch)
+		error('channel.put.commit: stale offer (commit without valid ready preview)', 0)
 	end
 	if self.done then
-		return nil, EMPTY
+		return EMPTY
 	end
 
 	local g = self.peer
 	if not g then
-		return pending_commit(ch)
+		error('channel.put.commit: no peer (commit without ready preview)', 0)
 	end
 
 	local sel = g._sel
 	if sel and sel.winner ~= g then
-		return pending_commit(ch)
+		error('channel.put.commit: lost arbitration (commit without ready preview)', 0)
 	end
 
 	commit_pair(ch, self, g)
-	return nil, EMPTY
+	return EMPTY
 end
 
 function PutOp:abort(_)
@@ -334,7 +296,6 @@ function GetOp:preview()
 
 	local p = self.peer
 	if p then
-		-- Claim winner on first readiness.
 		if sel and sel.winner == nil then
 			sel.winner = self
 			signal(ch)
@@ -355,7 +316,6 @@ function GetOp:preview()
 		bump(self)
 		bump(s)
 
-		-- Claim winner if participating.
 		if sel and sel.winner == nil then
 			sel.winner = self
 		end
@@ -369,7 +329,6 @@ function GetOp:preview()
 		return nil, self.offer, payload_set(self, s.val)
 	end
 
-	-- Not ready: enqueue and wait. If we previously claimed winner, release it.
 	push_get(ch, self)
 
 	if sel and sel.winner == self then
@@ -384,24 +343,24 @@ function GetOp:commit(offer)
 	local ch = self.ch
 
 	if offer ~= self.offer then
-		return pending_commit(ch)
+		error('channel.get.commit: stale offer (commit without valid ready preview)', 0)
 	end
 	if self.done then
-		return nil, payload_set(self, self.result)
+		return payload_set(self, self.result)
 	end
 
 	local p = self.peer
 	if not p then
-		return pending_commit(ch)
+		error('channel.get.commit: no peer (commit without ready preview)', 0)
 	end
 
 	local sel = self._sel
 	if sel and sel.winner ~= self then
-		return pending_commit(ch)
+		error('channel.get.commit: lost arbitration (commit without ready preview)', 0)
 	end
 
 	commit_pair(ch, p, self)
-	return nil, payload_set(self, self.result)
+	return payload_set(self, self.result)
 end
 
 function GetOp:abort(_)
@@ -410,10 +369,8 @@ function GetOp:abort(_)
 	local ch  = self.ch
 	local sel = self._sel
 
-	-- If we were the current winner, release arbitration.
 	if sel and sel.winner == self then
 		sel.winner = nil
-		-- Release can unblock other gets in the same choice.
 		signal(ch)
 	end
 

@@ -1,44 +1,21 @@
 -- fibers/op2.lua
 --
--- Transactional ops: a two-phase preview/commit protocol with targeted waiting.
---
--- Purpose
---   Provides a small algebra of composable, one-shot operations ("ops") that are the only
---   language of waiting. Fibres block only inside perform(op), by awaiting waitables returned
---   from preview/commit.
---
--- Op protocol
---   * op:preview() -> waitable|nil, offer|nil, payload|nil
---       - If waitable ~= nil: operation is pending; caller should await it.
---       - Else: operation is ready under 'offer', with a packed payload (table {n=..., ...}).
---       - preview is non-consuming: it may establish a reservation but must not commit effects.
---   * op:commit(offer) -> waitable|nil, payload|nil
---       - If waitable ~= nil: offer is stale or not commit-eligible; caller should await and retry.
---       - Else: commits irreversibly and returns packed payload; must not block.
---   * op:abort(offer?) -> nil
+-- Transactional ops: preview/commit protocol with targeted waiting on Pulses and pulse unions.
+-- Contract (strengthened):
+--   * preview() -> Pulse|PulseUnion|nil, offer|nil, payload|nil
+--       - If first result is non-nil: op is pending; caller should await it.
+--       - Else: op is ready for 'offer' with packed payload.
+--   * commit(offer) -> payload|nil
+--       - Must not block and must not return a waitable.
+--       - If called without a matching ready preview, this is an error.
+--   * abort(offer?) -> nil
 --       - Rolls back any uncommitted reservation; idempotent.
---
--- Targeted waiting
---   * Pending states return concrete waitables (typically pulses owned by primitives).
---   * choice/all build an Any view over the set of pending waitables from their last preview pass.
---
--- Composition
---   * wrap(f): maps a ready payload through f at preview-time (cached per offer), reusing on commit.
---   * choice(...): selects the first ready arm (round-robin), aborting losers on commit.
---   * all(...): requires all arms ready; aborts observed reservations if any arm is pending.
---   * and_then(k): transactional bind (dynamic derivation):
---       - Preview LHS; when LHS is ready, call k(...) with LHS preview values to obtain an RHS op.
---       - If RHS is pending, abort RHS and abort the LHS reservation (do not hold it); then wait on
---         RHS's pending waitable, optionally combined with LHS:watch(offer) if provided.
---       - If RHS is ready, commit LHS first, then commit RHS; return RHS payload only.
---       - This supports “derive RHS as LHS changes” while ensuring LHS reservations are not held
---         across waits when RHS cannot immediately commit.
 
 local runtime   = require 'fibers.runtime2'
 local pulse_mod = require 'fibers.pulse2'
+local Pulse     = pulse_mod.Pulse
 
-local await   = runtime.await
-local AnyView = pulse_mod.Any -- view type; use AnyView.new()
+local await = runtime.await
 
 local unpack = rawget(table, 'unpack') or _G.unpack
 local pack   = rawget(table, 'pack') or function (...) return { n = select('#', ...), ... } end
@@ -56,10 +33,76 @@ local function extend(type_table)
 	return setmetatable(type_table, { __index = Op })
 end
 
--- Optional stability/invalidation waitable for a ready offer.
--- Default is "no watchable".
+-- Optional stability/invalidation pulse for a ready offer.
 function Op:watch(_offer)
 	return nil
+end
+
+local function is_pulse(x)
+	return type(x) == 'table' and getmetatable(x) == Pulse
+end
+
+----------------------------------------------------------------------
+-- Pulse unions
+----------------------------------------------------------------------
+
+-- A waitable is either:
+--   * a Pulse, or
+--   * a pulse union table: { n = k, [1] = p1, [2] = p2, ... }
+--
+-- Helper: add a pulse with dedupe.
+local function add_pulse_dedupe(arr, n, p)
+	if not p then return n end
+	if not is_pulse(p) then
+		error('pending waitable contains non-pulse', 0)
+	end
+	for i = 1, n do
+		if arr[i] == p then
+			return n
+		end
+	end
+	n = n + 1
+	arr[n] = p
+	return n
+end
+
+-- Helper: add a waitable (Pulse or union) into arr, flattening and deduping.
+local function add_waitable_dedupe(arr, n, w)
+	if not w then return n end
+	if is_pulse(w) then
+		return add_pulse_dedupe(arr, n, w)
+	end
+
+	if type(w) ~= 'table' then
+		error('pending waitable must be a Pulse or pulse union table', 0)
+	end
+
+	local m = w.n or #w
+	if m <= 0 then
+		error('pending waitable union is empty', 0)
+	end
+
+	for i = 1, m do
+		n = add_pulse_dedupe(arr, n, w[i])
+	end
+	return n
+end
+
+-- Return a canonical wait value from (arr, n):
+--   * n == 1 -> return the single Pulse
+--   * n > 1  -> return the union table (with .n set)
+local function wait_from_list(arr, n)
+	if n <= 0 then
+		error('op pending but no pulse was returned', 0)
+	elseif n == 1 then
+		local p = arr[1]
+		arr[1] = nil
+		arr.n  = nil
+		return p
+	else
+		arr.n = n
+		return arr
+	end
 end
 
 ----------------------------------------------------------------------
@@ -88,7 +131,7 @@ function WrapOp:preview()
 
 	payload = payload or EMPTY
 
-	-- cache wrapped payload per offer
+	-- Cache wrapped payload per offer.
 	if self._co ~= offer then
 		self._co = offer
 		local out = pack(self.f(unpack(payload, 1, payload.n)))
@@ -99,17 +142,16 @@ function WrapOp:preview()
 end
 
 function WrapOp:commit(offer)
-	local w, payload = self.inner:commit(offer)
-	if w then
-		return w, nil
-	end
+	-- Under the strengthened contract, commit must not pend.
+	local payload = self.inner:commit(offer) or EMPTY
 
-	-- if cached for that offer, reuse
+	-- If cached for that offer, reuse.
 	if self._co == offer and self._cp then
-		return nil, self._cp
+		return self._cp
 	end
 
-	return nil, payload or EMPTY
+	local out = pack(self.f(unpack(payload, 1, payload.n)))
+	return (out.n == 0) and EMPTY or out
 end
 
 function WrapOp:abort(offer)
@@ -125,7 +167,7 @@ function WrapOp:watch(offer)
 end
 
 ----------------------------------------------------------------------
--- perform(op)
+-- perform(op): preview until ready; then commit (must not pend)
 ----------------------------------------------------------------------
 
 local function perform(opv)
@@ -134,27 +176,11 @@ local function perform(opv)
 		if w then
 			await(w)
 		else
-			local cw, out = opv:commit(offer)
-			if cw then
-				await(cw)
-			else
-				out = out or payload or EMPTY
-				if out.n == 0 then return end
-				return unpack(out, 1, out.n)
-			end
+			local out = opv:commit(offer) or payload or EMPTY
+			if out.n == 0 then return end
+			return unpack(out, 1, out.n)
 		end
 	end
-end
-
-----------------------------------------------------------------------
--- Helper: pending waitable from (arr, n) using reusable AnyView
-----------------------------------------------------------------------
-
-local function pend_any(any_view, arr, n)
-	if n == 0 then
-		error('op pending but no waitable was returned', 0)
-	end
-	return any_view:set(arr, n)
 end
 
 ----------------------------------------------------------------------
@@ -170,7 +196,7 @@ local function choice(...)
 	if #ops == 0 then error('choice expects at least one op', 2) end
 	if #ops == 1 then return ops[1] end
 
-	-- Optional arbitration object.
+	-- Optional arbitration object for primitives that support it.
 	local sel = { winner = nil }
 	for i = 1, #ops do
 		local o = ops[i]
@@ -196,44 +222,12 @@ local function choice(...)
 
 		_sel = sel,
 
-		-- pending dependency set from last preview()
-		_pend   = {},
-		_pend_n = 0,
-		_any    = AnyView.new(), -- reusable view object
+		_pend = {}, -- scratch pulse list/union table
 	}, ChoiceOp)
-end
-
-function ChoiceOp:_wait_union(w)
-	-- Union of: commit waitable w, winner watchable, and last preview pending set.
-	local pend = self._pend
-	local n = self._pend_n
-
-	local function add(x)
-		if not x then return end
-		for i = 1, n do
-			if pend[i] == x then return end
-		end
-		n = n + 1
-		pend[n] = x
-	end
-
-	add(w)
-	add(self._rwatch)
-
-	if n == 0 then
-		error('choice: pending but no waitable available', 0)
-	end
-
-	-- Clear trailing scratch.
-	for i = n + 1, #pend do pend[i] = nil end
-	self._pend_n = n
-
-	return pend_any(self._any, pend, n)
 end
 
 function ChoiceOp:preview()
 	if self.done then
-		self._pend_n = 0
 		return nil, self.offer, self.done_pay or EMPTY
 	end
 
@@ -243,7 +237,6 @@ function ChoiceOp:preview()
 		local w, off, pay = self.ops[wi]:preview()
 		if (not w) and off == self.winner_offer then
 			self.winner_pay = pay or EMPTY
-			self._pend_n = 0
 			return nil, self.offer, self.winner_pay
 		end
 		self.winner_i, self.winner_offer = nil, nil
@@ -260,59 +253,48 @@ function ChoiceOp:preview()
 	for k = 0, n - 1 do
 		local i = ((start + k - 1) % n) + 1
 		local w, off, pay = self.ops[i]:preview()
+
 		if not w then
 			self.winner_i     = i
 			self.winner_offer = off
 			self.winner_pay   = pay or EMPTY
 
-			local watch = self.ops[i].watch
-			self._rwatch = watch and watch(self.ops[i], off) or nil
-
-			-- commit offer changes only when the winning signature changes
 			if self.sig_i ~= i or self.sig_offer ~= off then
 				self.offer     = self.offer + 1
 				self.sig_i     = i
 				self.sig_offer = off
 			end
 
-			self._pend_n = 0
+			-- Clear scratch list.
+			for j = 1, npend do pend[j] = nil end
+			pend.n = nil
+
 			return nil, self.offer, self.winner_pay
 		end
 
-		npend = npend + 1
-		pend[npend] = w
+		-- Pending: flatten and dedupe any unions.
+		npend = add_waitable_dedupe(pend, npend, w)
 	end
 
-	-- clear trailing scratch
-	for i = npend + 1, #pend do pend[i] = nil end
-	self._pend_n = npend
+	-- Trim trailing entries if any (defensive).
+	for j = npend + 1, #pend do pend[j] = nil end
 
-	return pend_any(self._any, pend, npend), nil, nil
+	return wait_from_list(pend, npend), nil, nil
 end
 
 function ChoiceOp:commit(expected_offer)
 	if self.done then
-		return nil, self.done_pay or EMPTY
+		return self.done_pay or EMPTY
 	end
 
 	if expected_offer ~= self.offer or not self.winner_i then
-		if self._pend_n ~= 0 then
-			return pend_any(self._any, self._pend, self._pend_n), nil
-		end
-		error('choice.commit: stale offer with no pending waitable (commit without valid preview?)', 0)
+		error('choice.commit: stale offer (commit without valid ready preview)', 0)
 	end
 
 	local wi   = self.winner_i
 	local woff = self.winner_offer
 
-	local w, committed = self.ops[wi]:commit(woff)
-	if w then
-		-- Winner not commit-eligible; discard cached winner and wait on a union.
-		self.winner_i, self.winner_offer = nil, nil
-		self.winner_pay = EMPTY
-
-		return self:_wait_union(w), nil
-	end
+	local committed = self.ops[wi]:commit(woff)
 
 	for i = 1, self.n do
 		if i ~= wi then self.ops[i]:abort() end
@@ -320,9 +302,10 @@ function ChoiceOp:commit(expected_offer)
 
 	self.done     = true
 	self.done_pay = committed or self.winner_pay or EMPTY
-	self._pend_n  = 0
-	self._rwatch  = nil
-	return nil, self.done_pay
+	self.winner_i, self.winner_offer = nil, nil
+	self.winner_pay = EMPTY
+
+	return self.done_pay
 end
 
 function ChoiceOp:abort(_offer)
@@ -332,7 +315,8 @@ function ChoiceOp:abort(_offer)
 	end
 	self.done = true
 	self.done_pay = nil
-	self._pend_n = 0
+	self.winner_i, self.winner_offer = nil, nil
+	self.winner_pay = EMPTY
 end
 
 ----------------------------------------------------------------------
@@ -356,19 +340,16 @@ local function all(...)
 		prepared = false,
 
 		arm_offer = {},
-		out_pay   = { n = #ops }, -- packed payload per arm
+		out_pay   = { n = #ops },
 
 		done = false,
 
-		_pend   = {},
-		_pend_n = 0,
-		_any    = AnyView.new(),
+		_pend = {}, -- scratch pulse list/union table
 	}, AllOp)
 end
 
 function AllOp:preview()
 	if self.done then
-		self._pend_n = 0
 		return nil, self.offer, self.out_pay
 	end
 
@@ -378,8 +359,7 @@ function AllOp:preview()
 	for i = 1, self.n do
 		local w, off, pay = self.ops[i]:preview()
 		if w then
-			npend = npend + 1
-			pend[npend] = w
+			npend = add_waitable_dedupe(pend, npend, w)
 		else
 			self.arm_offer[i] = off
 			self.out_pay[i]   = pay or EMPTY
@@ -398,14 +378,13 @@ function AllOp:preview()
 		end
 		self.prepared = false
 
-		for i = npend + 1, #pend do pend[i] = nil end
-		self._pend_n = npend
-
-		return pend_any(self._any, pend, npend), nil, nil
+		for j = npend + 1, #pend do pend[j] = nil end
+		return wait_from_list(pend, npend), nil, nil
 	end
 
-	for i = 1, #pend do pend[i] = nil end
-	self._pend_n = 0
+	-- Ready as a set.
+	for j = 1, #pend do pend[j] = nil end
+	pend.n = nil
 
 	self.offer = self.offer + 1
 	self.prepared = true
@@ -415,35 +394,15 @@ end
 
 function AllOp:commit(expected_offer)
 	if self.done then
-		return nil, self.out_pay
+		return self.out_pay
 	end
 
 	if (not self.prepared) or expected_offer ~= self.offer then
-		if self._pend_n ~= 0 then
-			return pend_any(self._any, self._pend, self._pend_n), nil
-		end
-		error('all.commit: stale offer with no pending waitable (commit without valid preview?)', 0)
+		error('all.commit: stale offer (commit without valid ready preview)', 0)
 	end
 
 	for i = 1, self.n do
-		local w, pay = self.ops[i]:commit(self.arm_offer[i])
-		if w then
-			-- Abort as a set and retry later.
-			for j = 1, self.n do
-				local off = self.arm_offer[j]
-				if off ~= nil then
-					self.ops[j]:abort(off)
-					self.arm_offer[j] = nil
-					self.out_pay[j]   = nil
-				end
-			end
-			self.prepared = false
-
-			if not w then
-				error('all.commit: arm returned pending with nil waitable', 0)
-			end
-			return w, nil
-		end
+		local pay = self.ops[i]:commit(self.arm_offer[i])
 		self.out_pay[i] = pay or self.out_pay[i] or EMPTY
 	end
 
@@ -453,8 +412,7 @@ function AllOp:commit(expected_offer)
 
 	self.prepared = false
 	self.done = true
-	self._pend_n = 0
-	return nil, self.out_pay
+	return self.out_pay
 end
 
 function AllOp:abort(_offer)
@@ -471,17 +429,10 @@ function AllOp:abort(_offer)
 	end
 	self.prepared = false
 	self.done = true
-	self._pend_n = 0
 end
 
 ----------------------------------------------------------------------
--- and_then(k)
---
--- Transactional bind:
---   * Preview LHS, derive RHS from its preview payload.
---   * If RHS is pending, abort LHS (do not hold its reservation) and abort RHS; wait on:
---         RHS waitable OR LHS watchable (if provided)
---   * If ready, commit LHS then RHS; return RHS payload only.
+-- and_then(k): transactional bind
 ----------------------------------------------------------------------
 
 local AndThenOp = {}
@@ -501,13 +452,12 @@ function Op:and_then(k)
 		lhs = self,
 		k   = k,
 
-		offer = 0,
+		offer  = 0,
 		sig_lo = nil,
 		sig_ro = nil,
 
-		-- cached plan
 		lo   = nil,
-		lw   = nil, -- lhs watchable for lo (may be nil)
+		lw   = nil, -- lhs watch pulse/union for lo (may be nil)
 		rhs  = nil,
 		ro   = nil,
 		rpay = EMPTY,
@@ -515,12 +465,7 @@ function Op:and_then(k)
 		done     = false,
 		done_pay = nil,
 
-		-- last pending waitable (for stale commit paths)
-		_last_w = nil,
-
-		-- scratch for combining [rhs_wait, lhs_watch]
-		_w_arr = {},
-		_any   = AnyView.new(),
+		_w_arr = {}, -- scratch union
 	}, AndThenOp)
 end
 
@@ -541,37 +486,30 @@ function AndThenOp:_clear_plan()
 	self.rhs = nil
 end
 
-function AndThenOp:_wait2(rw, lw)
-	if not lw then
-		return rw
-	end
+function AndThenOp:_wait_union2(w1, w2)
 	local a = self._w_arr
-	a[1] = rw
-	a[2] = lw
-	return self._any:set(a, 2)
+	local n = 0
+	n = add_waitable_dedupe(a, n, w1)
+	n = add_waitable_dedupe(a, n, w2)
+	for i = n + 1, #a do a[i] = nil end
+	return wait_from_list(a, n)
 end
 
 function AndThenOp:preview()
 	if self.done then
-		self._last_w = nil
 		return nil, self.offer, self.done_pay or EMPTY
 	end
 
-	-- Step 1: preview LHS.
 	local lhs = self.lhs
 	local w, lo, lpay = lhs:preview()
 	if w then
-		-- LHS pending; discard any cached RHS plan.
 		if self.rhs then abort_offer(self.rhs, self.ro) end
 		self:_clear_plan()
-
-		self._last_w = w
 		return w, nil, nil
 	end
 
 	lpay = lpay or EMPTY
 
-	-- Step 2: (re)derive RHS if LHS offer changed.
 	if self.lo ~= lo then
 		if self.rhs then abort_offer(self.rhs, self.ro) end
 		self.rhs  = nil
@@ -589,30 +527,20 @@ function AndThenOp:preview()
 		self.rhs = rhs
 	end
 
-	-- Step 3: preview RHS.
 	local rhs = self.rhs
 	local rw, ro, rpay = rhs:preview()
 	if rw then
-		-- RHS not immediately ready: abort RHS and LHS reservation and wait.
-		-- Capture lw before clearing plan.
+		-- Do not hold reservations across the wait.
 		local lw = self.lw
-
 		rhs:abort()
 		lhs:abort(lo)
-
 		self:_clear_plan()
-
-		local ww = self:_wait2(rw, lw)
-		self._last_w = ww
-		return ww, nil, nil
+		return self:_wait_union2(rw, lw), nil, nil
 	end
 
-	-- RHS ready.
-	self.ro      = ro
-	self.rpay    = rpay or EMPTY
-	self._last_w = nil
+	self.ro   = ro
+	self.rpay = rpay or EMPTY
 
-	-- Outer offer changes when (lo, ro) signature changes.
 	if self.sig_lo ~= lo or self.sig_ro ~= ro then
 		self.offer  = self.offer + 1
 		self.sig_lo = lo
@@ -624,15 +552,11 @@ end
 
 function AndThenOp:commit(expected_offer)
 	if self.done then
-		return nil, self.done_pay or EMPTY
+		return self.done_pay or EMPTY
 	end
 
-	-- Must match the last preview signature.
 	if expected_offer ~= self.offer or not self.rhs or self.lo == nil or self.ro == nil then
-		if self._last_w then
-			return self._last_w, nil
-		end
-		error('and_then.commit: stale offer with no waitable (commit without valid preview?)', 0)
+		error('and_then.commit: stale offer (commit without valid ready preview)', 0)
 	end
 
 	local lhs = self.lhs
@@ -640,31 +564,14 @@ function AndThenOp:commit(expected_offer)
 	local rhs = self.rhs
 	local ro  = self.ro
 
-	-- Commit LHS first (consumes/commits the proposal).
-	local lw = lhs:commit(lo)
-	if lw then
-		-- Not commit-eligible; rollback RHS and LHS and wait.
-		abort_offer(rhs, ro)
-		lhs:abort(lo)
+	lhs:commit(lo)
+	local out = rhs:commit(ro) or self.rpay or EMPTY
 
-		self:_clear_plan()
-		self._last_w = lw
-		return lw, nil
-	end
-
-	-- Commit RHS.
-	local rw, out = rhs:commit(ro)
-	if rw then
-		-- This should not happen without an intervening yield; treat as a bug.
-		error('and_then: rhs became pending during commit (after lhs committed)', 0)
-	end
-
-	out           = out or self.rpay or EMPTY
 	self.done     = true
 	self.done_pay = out
-	self._last_w  = nil
+	self:_clear_plan()
 
-	return nil, out
+	return out
 end
 
 function AndThenOp:abort(_offer)
@@ -681,7 +588,6 @@ function AndThenOp:abort(_offer)
 
 	self.done = true
 	self.done_pay = nil
-	self._last_w = nil
 	self:_clear_plan()
 end
 

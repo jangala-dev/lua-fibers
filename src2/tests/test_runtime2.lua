@@ -23,7 +23,7 @@ local function assert_true(x, msg)
 end
 
 ----------------------------------------------------------------------
--- 1) Basic wait/wake: await(p) subscribes token, yield WAIT, p.signal schedules
+-- 1) Basic wait/wake: await(p) yields WAIT, p.signal schedules, fibre completes
 ----------------------------------------------------------------------
 
 do
@@ -36,7 +36,6 @@ do
 	end, 'waiter')
 
 	assert_eq(runtime.step(), 'ran')
-	assert_eq(f._waiting_waitable, p, 'fibre should be waiting on pulse')
 	assert_true(f._waiting_epoch ~= nil, 'fibre should have a waiting epoch')
 
 	p:signal()
@@ -47,7 +46,7 @@ do
 end
 
 ----------------------------------------------------------------------
--- 2) await(any-view over {p1,p2}) wakes on either; cancels the other subscription
+-- 2) await({p1,p2}) wakes on either; cancels the other subscription
 ----------------------------------------------------------------------
 
 do
@@ -57,23 +56,27 @@ do
 	local p1 = pulse.new(sched)
 	local p2 = pulse.new(sched)
 
-	local arr = { p1, p2 }
-	local w = pulse.any_view():set(arr, 2)
+	-- Pulse union: wait on either p1 or p2.
+	local w = { n = 2, p1, p2 }
 
 	local resumed = false
 	local f = runtime.spawn(function ()
 		runtime.await(w)
 		resumed = true
-	end, 'any_waiter')
+	end, 'union_waiter')
 
 	assert_eq(runtime.step(), 'ran')
-	assert_eq(f._waiting_waitable, w, 'fibre should be waiting on any view')
+	assert_true(f._waiting_epoch ~= nil, 'fibre should be waiting')
+
+	-- Both pulses should now have one live waiter.
+	assert_eq(p1.live, 1, 'p1 should have one live waiter')
+	assert_eq(p2.live, 1, 'p2 should have one live waiter')
 
 	-- Signal only p2; should wake and cancel p1 subscription.
 	p2:signal()
 	runtime.main()
 
-	assert_eq(resumed, true, 'fibre should have resumed from any view')
+	assert_eq(resumed, true, 'fibre should have resumed from pulse union')
 
 	-- p2 drains fully; p1 should be cancelled (tombstoned), so live must be 0.
 	assert_eq(p2.live, 0, 'p2 should have no live waiters after signal')
@@ -103,7 +106,7 @@ end
 
 ----------------------------------------------------------------------
 -- 4) Internal bookkeeping error path: live fibre neither runnable nor waiting
---    (Force it by clearing waiting fields after it blocks.)
+--    (Force it by clearing waiting_epoch after it blocks.)
 ----------------------------------------------------------------------
 
 do
@@ -116,8 +119,7 @@ do
 	assert_true(f._waiting_epoch ~= nil, 'should be waiting')
 
 	-- Break the invariant deliberately.
-	f._waiting_waitable = nil
-	f._waiting_epoch    = nil
+	f._waiting_epoch = nil
 
 	local ok, err = pcall(runtime.step)
 	assert_eq(ok, false, 'expected bookkeeping error')

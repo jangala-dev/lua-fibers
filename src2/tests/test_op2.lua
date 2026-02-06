@@ -35,8 +35,12 @@ local function assert_err(f, pat, msg)
 	end
 end
 
+local function assert_waiting(fib, msg)
+	assert_true(fib._waiting_epoch ~= nil, msg or 'fiber should be waiting')
+end
+
 ----------------------------------------------------------------------
--- perform: blocks on preview waitable until preview returns offer+payload; commit returns payload.
+-- perform: blocks on preview pulse until preview returns offer+payload; commit returns payload.
 ----------------------------------------------------------------------
 
 do
@@ -58,13 +62,13 @@ do
 		commit = function(self, offer)
 			assert_eq(offer, self, 'commit offer mismatch')
 			committed = true
-			return nil, { n = 2, 1, 2 }
+			return { n = 2, 1, 2 }
 		end,
 		abort = function() end,
 	}, op2.Op)
 
 	local a, b
-	runtime.spawn(function()
+	local f = runtime.spawn(function()
 		a, b = op2.perform(prim)
 	end, 'perform')
 
@@ -72,6 +76,7 @@ do
 	assert_eq(runtime.step(), 'ran')
 	assert_eq(committed, false)
 	assert_eq(preview_calls, 1)
+	assert_waiting(f)
 
 	ready = true
 	p:signal()
@@ -80,56 +85,6 @@ do
 	assert_eq(committed, true)
 	assert_eq(a, 1)
 	assert_eq(b, 2)
-end
-
-----------------------------------------------------------------------
--- perform: commit may return a waitable; perform must await it and retry.
-----------------------------------------------------------------------
-
-do
-	local runtime, pulse, op2 = reload()
-
-	local p_commit = pulse.new(runtime.scheduler())
-	local ready = true
-	local commit_ready = false
-	local preview_calls, commit_calls = 0, 0
-
-	local prim = setmetatable({
-		preview = function(self)
-			preview_calls = preview_calls + 1
-			if not ready then
-				error('unexpected: preview pending in this test')
-			end
-			return nil, self, { n = 1, 'X' }
-		end,
-		commit = function(self, offer)
-			commit_calls = commit_calls + 1
-			assert_eq(offer, self)
-			if not commit_ready then
-				return p_commit, nil
-			end
-			return nil, { n = 1, 'X' }
-		end,
-		abort = function() end,
-	}, op2.Op)
-
-	local out
-	local f = runtime.spawn(function()
-		out = op2.perform(prim)
-	end, 'perform_commit_wait')
-
-	-- Drive one run: should block on commit waitable.
-	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
-	assert_true(p_commit:has_waiters(), 'commit pulse should have a waiter')
-
-	commit_ready = true
-	p_commit:signal()
-	runtime.main()
-
-	assert_eq(out, 'X')
-	assert_true(commit_calls >= 2, 'commit should have been retried after waiting')
-	assert_true(preview_calls >= 2, 'perform retries from preview after awaiting commit waitable')
 end
 
 ----------------------------------------------------------------------
@@ -168,7 +123,7 @@ do
 		commit = function(self, offer)
 			assert_eq(offer, self, 'b.commit offer mismatch')
 			b_commits = b_commits + 1
-			return nil, { n = 1, 'ok' }
+			return { n = 1, 'ok' }
 		end,
 		abort = function(self)
 			self.aborted = self.aborted + 1
@@ -190,9 +145,8 @@ do
 end
 
 ----------------------------------------------------------------------
--- choice pending waitable: if all arms are pending with distinct pulses,
--- choice should await a derived "any" waitable; waking either pulse should resume,
--- and the wait token should cancel remaining subscriptions on wake.
+-- choice pending: if all arms are pending with distinct pulses, waiting subscribes to both;
+-- waking either pulse should resume, and the wake should cancel other subscriptions.
 ----------------------------------------------------------------------
 
 do
@@ -211,7 +165,7 @@ do
 		end,
 		commit = function(self, offer)
 			assert_eq(offer, self)
-			return nil, { n = 1, 'A' }
+			return { n = 1, 'A' }
 		end,
 		abort = function() end,
 	}, op2.Op)
@@ -223,7 +177,7 @@ do
 		end,
 		commit = function(self, offer)
 			assert_eq(offer, self)
-			return nil, { n = 1, 'B' }
+			return { n = 1, 'B' }
 		end,
 		abort = function() end,
 	}, op2.Op)
@@ -232,13 +186,11 @@ do
 	local out
 	f = runtime.spawn(function()
 		out = op2.perform(op2.choice(a, b))
-	end, 'choice_any_wait')
+	end, 'choice_union_wait')
 
-	-- Run once: should block on an Any waitable view.
+	-- Run once: should block and subscribe to both pulses.
 	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
-	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'should be waiting on an Any waitable view')
-
+	assert_waiting(f)
 	assert_true(p1:has_waiters(), 'p1 should have waiters')
 	assert_true(p2:has_waiters(), 'p2 should have waiters')
 
@@ -265,6 +217,7 @@ do
 	local a_abort, b_abort = 0, 0
 	local a_commit, b_commit = 0, 0
 	local a_res = false
+	local b_res = false
 	local b_ready = false
 
 	local pB = pulse.new(runtime.scheduler())
@@ -277,7 +230,7 @@ do
 		commit = function(self, offer)
 			assert_eq(offer, self)
 			a_commit = a_commit + 1
-			return nil, { n = 1, 'A' }
+			return { n = 1, 'A' }
 		end,
 		abort = function(self, offer)
 			if offer ~= nil then assert_eq(offer, self) end
@@ -297,7 +250,7 @@ do
 		commit = function(self, offer)
 			assert_eq(offer, self)
 			b_commit = b_commit + 1
-			return nil, { n = 1, 'B' }
+			return { n = 1, 'B' }
 		end,
 		abort = function(self, offer)
 			if offer ~= nil then assert_eq(offer, self) end
@@ -307,11 +260,12 @@ do
 	}, op2.Op)
 
 	local ra, rb
-	runtime.spawn(function()
+	local f = runtime.spawn(function()
 		ra, rb = op2.perform(op2.all(a, b))
 	end, 'all')
 
 	assert_eq(runtime.step(), 'ran')
+	assert_waiting(f)
 	assert_true(a_abort > 0, 'prepared arm must be aborted when another arm is pending')
 	assert_eq(a_res, false, 'arm A reservation should have been rolled back')
 	assert_eq(ra, nil)
@@ -326,6 +280,7 @@ do
 	assert_eq(a_commit, 1)
 	assert_eq(b_commit, 1)
 	assert_eq(b_abort, 0, 'arm B should not be aborted in the successful run')
+	assert_eq(b_res, true)
 end
 
 ----------------------------------------------------------------------
@@ -344,7 +299,7 @@ do
 		commit = function(self, offer)
 			assert_eq(offer, self)
 			committed = committed + 1
-			return nil, { n = 1, 10 }
+			return { n = 1, 10 }
 		end,
 		abort = function() end,
 	}, op2.Op)
@@ -384,7 +339,7 @@ do
 			assert_eq(offer, self.offer, 'lhs.commit offer mismatch')
 			lhs_commit = lhs_commit + 1
 			log[#log + 1] = 'lhs'
-			return nil, op2.EMPTY
+			return op2.EMPTY
 		end,
 		abort = function() end,
 	}, op2.Op)
@@ -402,7 +357,7 @@ do
 				assert_eq(offer, self.offer, 'rhs.commit offer mismatch')
 				rhs_commit = rhs_commit + 1
 				log[#log + 1] = 'rhs'
-				return nil, { n = 1, 'R' }
+				return { n = 1, 'R' }
 			end,
 			abort = function() end,
 		}, op2.Op)
@@ -427,8 +382,8 @@ end
 
 ----------------------------------------------------------------------
 -- and_then pending RHS:
--- If RHS is pending, it must abort RHS and abort LHS (do not hold LHS reservation),
--- then await Any{ rhs_waitable, lhs:watch(offer) } when watchable is provided.
+-- If RHS is pending, it must abort RHS and abort LHS (do not hold reservation),
+-- then await (rhs_wait OR lhs:watch(offer)) when watch is provided.
 ----------------------------------------------------------------------
 
 do
@@ -455,7 +410,7 @@ do
 		commit = function(self, offer)
 			assert_eq(offer, self.offer)
 			lhs_reserved = false
-			return nil, op2.EMPTY
+			return op2.EMPTY
 		end,
 		abort = function(self, offer)
 			if offer ~= nil then assert_eq(offer, self.offer) end
@@ -476,7 +431,7 @@ do
 			end,
 			commit = function(self, offer)
 				assert_eq(offer, self.offer)
-				return nil, { n = 1, 'OK' }
+				return { n = 1, 'OK' }
 			end,
 			abort = function()
 				rhs_abort = rhs_abort + 1
@@ -488,15 +443,12 @@ do
 	local out
 	f = runtime.spawn(function()
 		out = op2.perform(lhs:and_then(k))
-	end, 'and_then_pending_any')
+	end, 'and_then_pending_union')
 
-	-- First step: should block.
+	-- First step: should block and subscribe to both pulses.
 	assert_eq(runtime.step(), 'ran')
+	assert_waiting(f)
 
-	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
-	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'and_then should wait on a derived Any view')
-
-	-- Both dependencies must be subscribed.
 	assert_true(p_rhs:has_waiters(), 'rhs pulse should have waiters')
 	assert_true(p_watch:has_waiters(), 'lhs watch pulse should have waiters')
 
@@ -510,84 +462,7 @@ do
 	runtime.main()
 
 	assert_eq(out, 'OK')
-
-	-- On wake, remaining subscriptions should have been cancelled.
 	assert_true(not p_watch:has_waiters(), 'lhs watch subscription should have been cancelled on wake')
-end
-
-----------------------------------------------------------------------
--- and_then retry when LHS is not commit-eligible:
--- If LHS commit returns a waitable, and_then must abort RHS and LHS, wait, and re-derive RHS.
-----------------------------------------------------------------------
-
-do
-	local runtime, pulse, op2 = reload()
-
-	local sched = runtime.scheduler()
-	local p_stable = pulse.new(sched)
-
-	local value = 'A'
-	local offer = 1
-	local gate_commit = true
-
-	local k_seen = {}
-	local rhs_abort = 0
-
-	local lhs = setmetatable({
-		preview = function()
-			return nil, offer, { n = 1, value }
-		end,
-		watch = function()
-			return p_stable
-		end,
-		commit = function(_self, expected_offer)
-			assert_eq(expected_offer, offer)
-			if gate_commit then
-				return p_stable, nil
-			end
-			return nil, op2.EMPTY
-		end,
-		abort = function() end,
-	}, op2.Op)
-
-	local function k(v)
-		k_seen[#k_seen + 1] = v
-		local my = v
-		return setmetatable({
-			preview = function(self)
-				return nil, self, { n = 1, 'R' .. my }
-			end,
-			commit = function(self, off)
-				assert_eq(off, self)
-				return nil, { n = 1, 'R' .. my }
-			end,
-			abort = function()
-				rhs_abort = rhs_abort + 1
-			end,
-		}, op2.Op)
-	end
-
-	local out
-	runtime.spawn(function()
-		out = op2.perform(lhs:and_then(k))
-	end, 'and_then_commit_retry')
-
-	-- Drive one step: should hit commit gate and block on p_stable.
-	assert_eq(runtime.step(), 'ran')
-	assert_true(p_stable:has_waiters(), 'stability pulse should have waiters')
-
-	-- Update LHS and release commit gate, then signal.
-	value = 'B'
-	offer = 2
-	gate_commit = false
-	p_stable:signal()
-
-	runtime.main()
-
-	assert_eq(out, 'RB')
-	assert_eq(k_seen[1], 'A')
-	assert_eq(k_seen[2], 'B')
-	assert_true(rhs_abort >= 1, 'first derived RHS should have been aborted on retry')
 end
 
 ----------------------------------------------------------------------
@@ -642,7 +517,7 @@ do
 		commit  = function(self, offer)
 			assert_eq(offer, self)
 			ready_commits = ready_commits + 1
-			return nil, { n = 1, 'WIN' }
+			return { n = 1, 'WIN' }
 		end,
 		abort = function() end,
 	}, op2.Op)
@@ -661,7 +536,7 @@ do
 end
 
 ----------------------------------------------------------------------
--- nested choice pending: outer choice should wait on an Any view, and subscriptions should reach source pulses.
+-- nested choice pending: outer choice should subscribe to source pulses via pulse unions.
 ----------------------------------------------------------------------
 
 do
@@ -687,7 +562,7 @@ do
 		end,
 		commit = function(self, offer)
 			assert_eq(offer, self)
-			return nil, { n = 1, 'B' }
+			return { n = 1, 'B' }
 		end,
 		abort = function() end,
 	}, op2.Op)
@@ -705,13 +580,12 @@ do
 	local out
 	f = runtime.spawn(function()
 		out = op2.perform(outer)
-	end, 'nested_choice_any')
+	end, 'nested_choice_union')
 
-	-- First step should block on an Any view.
+	-- First step should block and subscribe to p1, p2, p3.
 	assert_eq(runtime.step(), 'ran')
-	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'outer choice should wait on Any')
+	assert_waiting(f)
 
-	-- Subscriptions should reach p1, p2, p3.
 	assert_true(p1:has_waiters(), 'p1 should have waiters')
 	assert_true(p2:has_waiters(), 'p2 should have waiters')
 	assert_true(p3:has_waiters(), 'p3 should have waiters')
@@ -739,7 +613,7 @@ do
 	local p = pulse.new(runtime.scheduler())
 	local prim = setmetatable({
 		preview = function(self) return nil, self, { n = 1, 1 } end,
-		commit = function(self, offer) assert_eq(offer, self); return nil, { n = 1, 1 } end,
+		commit = function(self, offer) assert_eq(offer, self); return { n = 1, 1 } end,
 		abort = function() end,
 		watch = function(self, offer) assert_eq(offer, self); return p end,
 	}, op2.Op)
@@ -749,211 +623,9 @@ do
 end
 
 ----------------------------------------------------------------------
--- and_then: passes multi-returns from LHS payload into k(...); returns RHS only.
-----------------------------------------------------------------------
-
-do
-	local runtime, _pulse, op2 = reload()
-
-	local lhs_commits, rhs_commits = 0, 0
-	local k_calls = 0
-
-	local lhs = setmetatable({
-		preview = function(self)
-			return nil, 123, { n = 3, 'x', 'y', 'z' }
-		end,
-		commit = function(self, offer)
-			assert_eq(offer, 123)
-			lhs_commits = lhs_commits + 1
-			return nil, { n = 3, 'x', 'y', 'z' }
-		end,
-		abort = function() end,
-	}, op2.Op)
-
-	local function k(x, y, z)
-		k_calls = k_calls + 1
-		assert_eq(x, 'x'); assert_eq(y, 'y'); assert_eq(z, 'z')
-		return setmetatable({
-			preview = function(self) return nil, 456, { n = 2, 'R1', 'R2' } end,
-			commit  = function(self, offer) assert_eq(offer, 456); rhs_commits = rhs_commits + 1; return nil, { n = 2, 'R1', 'R2' } end,
-			abort   = function() end,
-		}, op2.Op)
-	end
-
-	local r1, r2
-	runtime.spawn(function()
-		r1, r2 = op2.perform(lhs:and_then(k))
-	end, 'and_then_ready')
-
-	runtime.main()
-
-	assert_eq(r1, 'R1')
-	assert_eq(r2, 'R2')
-	assert_eq(k_calls, 1)
-	assert_eq(lhs_commits, 1)
-	assert_eq(rhs_commits, 1)
-end
-
-----------------------------------------------------------------------
--- and_then: if RHS is pending, it must abort LHS (do not hold reservation) and wait on:
---   RHS waitable OR LHS watchable (if provided).
---
--- This test is deliberately structural: it asserts the fibre is waiting on an Any view and that
--- both underlying pulses have waiters.
-----------------------------------------------------------------------
-
-do
-	local runtime, pulse, op2 = reload()
-
-	local sched = runtime.scheduler()
-	local p_rhs = pulse.new(sched)
-	local p_lhs_watch = pulse.new(sched)
-
-	local rhs_ready = false
-
-	local lhs_aborts = 0
-	local lhs = setmetatable({
-		preview = function(self)
-			-- Always ready, with a stable offer.
-			return nil, 1, { n = 1, 'L' }
-		end,
-		commit = function(self, offer)
-			assert_eq(offer, 1)
-			return nil, { n = 1, 'L' }
-		end,
-		abort = function(self, offer)
-			if offer ~= nil then assert_eq(offer, 1) end
-			lhs_aborts = lhs_aborts + 1
-		end,
-		watch = function(self, offer)
-			assert_eq(offer, 1)
-			return p_lhs_watch
-		end,
-	}, op2.Op)
-
-	local rhs_aborts = 0
-	local rhs_commits = 0
-
-	local function k(_v)
-		return setmetatable({
-			preview = function(self)
-				if not rhs_ready then return p_rhs, nil, nil end
-				return nil, 2, { n = 1, 'R' }
-			end,
-			commit = function(self, offer)
-				assert_eq(offer, 2)
-				rhs_commits = rhs_commits + 1
-				return nil, { n = 1, 'R' }
-			end,
-			abort = function(self)
-				rhs_aborts = rhs_aborts + 1
-			end,
-		}, op2.Op)
-	end
-
-	local out
-	local f = runtime.spawn(function()
-		out = op2.perform(lhs:and_then(k))
-	end, 'and_then_pending')
-
-	-- One step: should block. LHS must have been aborted at least once.
-	assert_eq(runtime.step(), 'ran')
-	assert_true(lhs_aborts >= 1, 'lhs reservation should be rolled back when rhs is pending')
-
-	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
-	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'and_then should wait on a derived Any view')
-	assert_true(p_rhs:has_waiters(), 'rhs pulse should have waiters')
-	assert_true(p_lhs_watch:has_waiters(), 'lhs watch pulse should have waiters')
-
-	-- Make RHS ready; wake via RHS pulse.
-	rhs_ready = true
-	p_rhs:signal()
-	runtime.main()
-
-	assert_eq(out, 'R')
-	assert_true(rhs_commits == 1, 'rhs should commit once')
-end
-
-----------------------------------------------------------------------
--- and_then: re-derives RHS when LHS offer changes; aborts old RHS plan.
-----------------------------------------------------------------------
-
-do
-	local runtime, pulse, op2 = reload()
-
-	local sched = runtime.scheduler()
-	local p_watch = pulse.new(sched)
-	local p_rhs = pulse.new(sched)
-
-	local lhs_offer = 1
-	local lhs_val   = 'A'
-	local rhs_ready = false
-
-	local k_calls = 0
-	local rhs_aborts = 0
-
-	local lhs = setmetatable({
-		preview = function(self)
-			return nil, lhs_offer, { n = 1, lhs_val }
-		end,
-		commit = function(self, offer)
-			assert_eq(offer, lhs_offer)
-			return nil, { n = 1, lhs_val }
-		end,
-		abort = function() end,
-		watch = function(self, offer)
-			assert_eq(offer, lhs_offer)
-			return p_watch
-		end,
-	}, op2.Op)
-
-	local function k(v)
-		k_calls = k_calls + 1
-		local expect = v
-		return setmetatable({
-			preview = function(self)
-				if not rhs_ready then return p_rhs, nil, nil end
-				return nil, expect, { n = 1, 'R-' .. expect }
-			end,
-			commit = function(self, offer)
-				assert_eq(offer, expect)
-				return nil, { n = 1, 'R-' .. expect }
-			end,
-			abort = function(self) rhs_aborts = rhs_aborts + 1 end,
-		}, op2.Op)
-	end
-
-	local out
-	local f = runtime.spawn(function()
-		out = op2.perform(lhs:and_then(k))
-	end, 'and_then_rederive')
-
-	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_waitable ~= nil, 'should be waiting (rhs pending)')
-
-	-- Change LHS while waiting; wake via watch.
-	lhs_offer = 2
-	lhs_val   = 'B'
-	p_watch:signal()
-
-	-- Still pending until RHS becomes ready.
-	while runtime.scheduler():step() do end
-
-	assert_true(k_calls >= 2, 'rhs should be re-derived after lhs offer changes')
-
-	rhs_ready = true
-	p_rhs:signal()
-	runtime.main()
-
-	assert_eq(out, 'R-B')
-	assert_true(rhs_aborts >= 1, 'old rhs plans should be aborted when invalidated')
-end
-
-----------------------------------------------------------------------
 -- and_then offer churn:
 -- If RHS is pending for the current LHS offer, and LHS later changes (signals its watchable),
 -- and_then must wake, re-preview LHS, re-run k(...) for the new LHS payload, and complete.
--- This specifically checks that and_then waits on Any(rhs_waitable, lhs_watchable).
 ----------------------------------------------------------------------
 
 do
@@ -961,7 +633,7 @@ do
 
 	local sched = runtime.scheduler()
 	local pL = pulse.new(sched) -- lhs watchable / invalidation pulse
-	local pR = pulse.new(sched) -- rhs pending pulse (we will *not* signal this)
+	local pR = pulse.new(sched) -- rhs pending pulse (we will not signal this)
 
 	local lhs_abort = 0
 	local rhs_abort = 0
@@ -971,21 +643,16 @@ do
 
 	local lhs = setmetatable({
 		preview = function(self)
-			-- Always “ready”; offer is the current value.
 			return nil, lhs_val, { n = 1, lhs_val }
 		end,
 		commit = function(self, offer)
-			-- Stale protection: if value changed since preview, force retry via watchable.
-			if offer ~= lhs_val then
-				return pL, nil
-			end
-			return nil, { n = 1, lhs_val }
+			assert_eq(offer, lhs_val)
+			return op2.EMPTY
 		end,
 		abort = function(self, _offer)
 			lhs_abort = lhs_abort + 1
 		end,
 		watch = function(self, offer)
-			-- Any external change to lhs_val will signal pL.
 			assert_eq(offer, lhs_val)
 			return pL
 		end,
@@ -995,15 +662,13 @@ do
 		return setmetatable({
 			preview = function(self)
 				if x == 'A' then
-					-- RHS cannot become ready until we derive it from a different LHS value.
 					return pR, nil, nil
 				end
-				-- Ready for x ~= 'A'
 				return nil, 1, { n = 1, 'OK_' .. x }
 			end,
 			commit = function(self, offer)
 				assert_eq(offer, 1)
-				return nil, { n = 1, 'OK_' .. x }
+				return { n = 1, 'OK_' .. x }
 			end,
 			abort = function(self, _offer)
 				rhs_abort = rhs_abort + 1
@@ -1022,16 +687,16 @@ do
 		out = op2.perform(lhs:and_then(k))
 	end, 'and_then_offer_churn')
 
-	-- First step: LHS ready with 'A', RHS pending => should await Any(pR, pL)
+	-- First step: LHS ready with 'A', RHS pending => should await (pR OR pL)
 	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
-	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'and_then should wait on a derived Any view')
+	assert_waiting(f)
+
 	assert_true(pL:has_waiters(), 'lhs watch pulse should have waiters')
 	assert_true(pR:has_waiters(), 'rhs wait pulse should have waiters')
 	assert_eq(k_calls, 1, 'k should have been called once for initial LHS payload')
 	assert_true(lhs_abort > 0, 'lhs should have been aborted when rhs was pending (no reservation held)')
 
-	-- Change LHS *only* and signal its watchable; do not signal pR.
+	-- Change LHS only and signal its watchable; do not signal pR.
 	lhs_val = 'B'
 	pL:signal()
 	runtime.main()

@@ -13,6 +13,14 @@ local function assert_eq(a, b, msg)
 	if a ~= b then error((msg or 'assert_eq failed') .. (': got ' .. tostring(a) .. ', want ' .. tostring(b)), 2) end
 end
 
+local function assert_true(x, msg)
+	if not x then error(msg or 'assert_true failed', 2) end
+end
+
+local function assert_waiting(fib, msg)
+	assert_true(fib._waiting_epoch ~= nil, msg or 'fiber should be waiting')
+end
+
 -- Basic rendezvous: one put and one get complete and transfer a value.
 do
 	reload_all()
@@ -40,7 +48,7 @@ do
 end
 
 -- Atomicity under all(get1, get2):
--- If only one sender exists, it must not complete “early”; once the second sender appears,
+-- If only one sender exists, it must not complete early; once the second sender appears,
 -- the transaction commits and both senders complete.
 do
 	reload_all()
@@ -92,13 +100,9 @@ do
 	assert_eq(next(runtime._live), nil, 'no live fibres should remain')
 end
 
-local function assert_true(x, msg)
-	if not x then error(msg or 'assert_true failed', 2) end
-end
-
 -- and_then (channel): if LHS get previews ready but RHS is pending, it must:
 --   * abort LHS reservation (do not hold it)
---   * wait on Any(rhs_waitable, lhs_watchable)
+--   * wait on (rhs_pulse OR lhs_watch_pulse)
 do
 	reload_all()
 	local runtime = require 'fibers.runtime2'
@@ -128,7 +132,7 @@ do
 				end,
 				commit = function(self, offer)
 					assert_eq(offer, self)
-					return nil, { n = 1, v .. '!' }
+					return { n = 1, v .. '!' }
 				end,
 				abort = function() end,
 			}, op2.Op)
@@ -138,12 +142,11 @@ do
 	-- Step 1: run sender, so put enqueues and yields on ch.pulse.
 	assert_eq(runtime.step(), 'ran')
 
-	-- Step 2: run receiver; LHS is now preview-ready; RHS pending => wait on Any(pR, ch.pulse).
+	-- Step 2: run receiver; LHS preview-ready; RHS pending => wait on (pR OR ch.pulse).
 	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_waitable ~= nil, 'fiber should be waiting')
-	assert_true(getmetatable(f._waiting_waitable) == pulse.Any, 'and_then should wait on a derived Any view')
+	assert_waiting(f)
 
-	-- Any should have subscribed to both.
+	-- Subscriptions must reach both pulses.
 	assert_true(ch.pulse:has_waiters(), 'lhs watch pulse (channel pulse) should have waiters')
 	assert_true(pR:has_waiters(), 'rhs pulse should have waiters')
 
