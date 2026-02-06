@@ -1,7 +1,35 @@
 -- fibers/channel2.lua
 --
--- Unbuffered rendezvous channel implemented as preview/commit ops.
--- Targeted waiting: pending states return only ch.pulse; channel signals only ch.pulse.
+-- Unbuffered rendezvous channel expressed as preview/commit ops with precise wakeups.
+--
+-- Purpose
+--   Implements synchronous (unbuffered) put/get using the op2 protocol:
+--   prepare is non-consuming (reservation only), and commit performs the rendezvous.
+--
+-- Semantics
+--   * Channel:put_op(val) and Channel:get_op() return op objects implementing:
+--       - preview(): establish or observe a match reservation without transferring data
+--       - commit(offer): performs the rendezvous and transfers the value (must not yield)
+--       - abort(offer?): rolls back reservations and leaves the op retryable
+--   * The channel is unbuffered: put and get rendezvous directly.
+--
+-- Data structures
+--   * Two intrusive FIFO queues: put list and get list.
+--   * Each op object is also its own queue node (prev/next/inq), avoiding per-wait allocation.
+--   * Matching is recorded via peer pointers (put.peer <-> get.peer) until committed/aborted.
+--
+-- Waiting and wake-ups (precise)
+--   * The channel owns a single source Pulse (ch.pulse).
+--   * Any state change that might enable progress signals ch.pulse (signal_if_waiting).
+--   * Pending preview/commit return ch.pulse; no global coalescing pulse is used.
+--
+-- Choice integration
+--   * get ops support optional _attach_select(sel) arbitration.
+--   * Eligibility scanning respects sel.winner when present.
+--
+-- Optional stability hook
+--   * put/get implement watch(offer) conservatively as ch.pulse, allowing derived ops to
+--     await invalidation even when not holding reservations.
 
 local runtime   = require 'fibers.runtime2'
 local pulse_mod = require 'fibers.pulse2'
@@ -162,6 +190,12 @@ function Channel:put_op(val)
 	}, PutOp)
 end
 
+function PutOp:watch(_offer)
+	-- Conservative but correct: any channel state change may invalidate readiness.
+	if self.done then return nil end
+	return self.ch.pulse
+end
+
 function PutOp:preview()
 	local ch = self.ch
 	if self.done then
@@ -260,12 +294,18 @@ function Channel:get_op()
 		next = nil,
 		inq  = false,
 
+		-- payload-as-self (avoids alloc)
 		n = 0,
 	}, GetOp)
 end
 
 function GetOp:_attach_select(sel)
 	self._sel = sel
+end
+
+function GetOp:watch(_offer)
+	if self.done then return nil end
+	return self.ch.pulse
 end
 
 local function payload_set(self, v)

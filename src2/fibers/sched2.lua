@@ -1,17 +1,27 @@
 -- fibers/sched2.lua
 --
--- Scheduler invariants (blessed contract)
--- --------------------------------------
--- * Cooperative: tasks run until they return; the scheduler never pre-empts.
--- * A Task is any table with method: task:run(sched).
--- * Scheduling is idempotent per task: if task._queued is true, schedule() is a no-op.
--- * step() runs at most one task. If no task is runnable, it returns false.
--- * The scheduler makes no assumptions about tasks other than :run().
--- * The scheduler does not perform blocking waits; it only executes runnable tasks.
+-- Minimal cooperative scheduler.
 --
--- Consequence:
--- * All blocking / waiting is expressed outside the scheduler, via the runtime's fibre protocol
---   (fibres yield a Pulse, pulses schedule fibres).
+-- Purpose
+--   Provides a run-queue for Tasks in a single-threaded, non-preemptive runtime.
+--   The scheduler does not understand blocking. It only executes runnable work.
+--
+-- Task contract
+--   * A Task is any table with: task:run(sched).
+--   * Scheduling is idempotent: schedule(task) is a no-op if task._queued is true.
+--   * step() runs at most one queued task and returns true if it ran something.
+--   * If no task is runnable, step() returns false.
+--
+-- Invariants
+--   * The scheduler never pre-empts: a task runs until it returns from :run().
+--   * The scheduler makes no assumptions about tasks other than :run().
+--   * Blocking/waiting must be expressed outside the scheduler (via pulses + fibres).
+--
+-- API
+--   * Scheduler.new() -> scheduler
+--   * scheduler:schedule(task)
+--   * scheduler:step() -> boolean
+--   * scheduler:run()
 
 local Scheduler = {}
 Scheduler.__index = Scheduler

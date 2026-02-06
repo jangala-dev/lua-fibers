@@ -36,19 +36,19 @@ do
 	end, 'waiter')
 
 	assert_eq(runtime.step(), 'ran')
-	assert_eq(f._waiting_waitable, p, 'fiber should be waiting on pulse')
-	assert_true(f._waiting_token ~= nil, 'fiber should have a waiting token')
-	assert_true(f._waiting_epoch ~= nil, 'fiber should have a waiting epoch')
+	assert_eq(f._waiting_waitable, p, 'fibre should be waiting on pulse')
+	assert_true(f._waiting_token ~= nil, 'fibre should have a waiting token')
+	assert_true(f._waiting_epoch ~= nil, 'fibre should have a waiting epoch')
 
 	p:signal()
 	runtime.main()
 
-	assert_eq(resumed, true, 'fiber should have resumed and completed')
+	assert_eq(resumed, true, 'fibre should have resumed and completed')
 	assert_eq(next(runtime._live), nil, 'no live fibres should remain')
 end
 
 ----------------------------------------------------------------------
--- 2) await(Pulse.any(p1,p2)) wakes on either; cancels the other subscription
+-- 2) await(any-view over {p1,p2}) wakes on either; cancels the other subscription
 ----------------------------------------------------------------------
 
 do
@@ -57,7 +57,9 @@ do
 	local sched = runtime.scheduler()
 	local p1 = pulse.new(sched)
 	local p2 = pulse.new(sched)
-	local w  = pulse.any(p1, p2)
+
+	local arr = { p1, p2 }
+	local w = pulse.any_view():set(arr, 2)
 
 	local resumed = false
 	local f = runtime.spawn(function ()
@@ -66,18 +68,18 @@ do
 	end, 'any_waiter')
 
 	assert_eq(runtime.step(), 'ran')
-	assert_eq(f._waiting_waitable, w, 'fiber should be waiting on derived any waitable')
+	assert_eq(f._waiting_waitable, w, 'fibre should be waiting on any view')
 
 	-- Signal only p2; should wake and cancel p1 subscription.
 	p2:signal()
 	runtime.main()
 
-	assert_eq(resumed, true, 'fiber should have resumed from any waitable')
+	assert_eq(resumed, true, 'fibre should have resumed from any view')
 
-	-- Best-effort check that both source pulses have no waiters.
-	-- (The token cancels remaining subscriptions on wake.)
-	assert_eq(p1.nwait, 0, 'p1 should have no waiters after wake/cancel')
-	assert_eq(p2.nwait, 0, 'p2 should have no waiters after signal drains')
+	-- p2 drains fully; p1 should be cancelled (tombstoned), so live must be 0.
+	assert_eq(p2.live, 0, 'p2 should have no live waiters after signal')
+	assert_eq(p1.live, 0, 'p1 should have no live waiters after wake/cancel')
+
 	assert_eq(next(runtime._live), nil, 'no live fibres should remain')
 end
 
@@ -102,7 +104,7 @@ end
 
 ----------------------------------------------------------------------
 -- 4) Internal bookkeeping error path: live fibre neither runnable nor waiting
---    (We force it by clearing waiting fields after it blocks.)
+--    (Force it by clearing waiting fields after it blocks.)
 ----------------------------------------------------------------------
 
 do
@@ -112,7 +114,7 @@ do
 	local f = runtime.spawn(function () runtime.await(p) end, 'broken')
 
 	assert_eq(runtime.step(), 'ran')
-	assert_true(f._waiting_waitable ~= nil, 'should be waiting')
+	assert_true(f._waiting_token ~= nil, 'should be waiting')
 
 	-- Break the invariant deliberately.
 	f._waiting_waitable = nil

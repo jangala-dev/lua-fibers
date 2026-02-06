@@ -1,9 +1,33 @@
--- transactional_and_then.lua
--- Minimal correct implementation of transactional and_then
+-- and_then_simple.lua
+-- A simpler approach that actually works
+
+local unpack = unpack or table.unpack
 
 ----------------------------------------------------------------------
--- Simple but correct scheduler
+-- Simple Scheduler with Pulse
 ----------------------------------------------------------------------
+
+local Pulse = {}
+Pulse.__index = Pulse
+
+function Pulse.new()
+    return setmetatable({
+        waiters = {}
+    }, Pulse)
+end
+
+function Pulse:wait(fiber)
+    table.insert(self.waiters, fiber)
+    return coroutine.yield()
+end
+
+function Pulse:signal()
+    local waiters = self.waiters
+    self.waiters = {}
+    for _, fiber in ipairs(waiters) do
+        fiber.scheduler:schedule(fiber)
+    end
+end
 
 local Scheduler = {}
 Scheduler.__index = Scheduler
@@ -11,36 +35,19 @@ Scheduler.__index = Scheduler
 function Scheduler.new()
     return setmetatable({
         ready = {},
-        waiting = {},
         running = false,
-        stats = { runs = 0 }
+        pulse = Pulse.new()
     }, Scheduler)
 end
 
-function Scheduler:enqueue(fiber)
+function Scheduler:schedule(fiber)
+    if fiber._scheduled then return end
+    fiber._scheduled = true
     table.insert(self.ready, fiber)
+
     if not self.running then
         self:run()
     end
-end
-
-function Scheduler:wait(fiber, pulse)
-    fiber.waiting_on = pulse
-    if not self.waiting[pulse] then
-        self.waiting[pulse] = {}
-    end
-    table.insert(self.waiting[pulse], fiber)
-end
-
-function Scheduler:wake(pulse)
-    local fibers = self.waiting[pulse]
-    if not fibers then return end
-
-    for _, fiber in ipairs(fibers) do
-        fiber.waiting_on = nil
-        table.insert(self.ready, fiber)
-    end
-    self.waiting[pulse] = nil
 end
 
 function Scheduler:run()
@@ -49,390 +56,460 @@ function Scheduler:run()
 
     while #self.ready > 0 do
         local fiber = table.remove(self.ready, 1)
+        fiber._scheduled = false
+
         local ok, pulse = coroutine.resume(fiber.co)
 
         if not ok then
             error(("Fiber crashed: %s"):format(tostring(pulse)))
         elseif pulse then
-            -- Fiber wants to wait
-            self:wait(fiber, pulse)
+            -- Fiber yielded, will be woken by pulse:signal()
+            pulse:wait(fiber)
         end
-
-        self.stats.runs = self.stats.runs + 1
     end
 
     self.running = false
 end
 
 ----------------------------------------------------------------------
--- Basic Pulse for waiting
-----------------------------------------------------------------------
-
-local Pulse = {}
-Pulse.__index = Pulse
-
-function Pulse.new()
-    return setmetatable({}, Pulse)
-end
-
-----------------------------------------------------------------------
--- Transactional Operation Protocol
+-- Operation Protocol
 ----------------------------------------------------------------------
 
 local Operation = {}
 Operation.__index = Operation
 
-function Operation.new(prepare_fn, commit_fn)
-    local self = setmetatable({}, Operation)
-    self.prepare_fn = prepare_fn
-    self.commit_fn = commit_fn
-    self.state = "pending"
-    self.pulse = Pulse.new()
-    return self
+function Operation.new()
+    return setmetatable({}, Operation)
 end
 
 function Operation:prepare()
-    if self.state == "prepared" or self.state == "committed" then
-        return true
-    end
-
-    local success, result = self.prepare_fn()
-    if success then
-        self.state = "prepared"
-        self.preview = result
-        return true
-    else
-        return false, self.pulse
-    end
+    error("abstract method")
 end
 
-function Operation:commit()
-    if self.state == "committed" then
-        return true, self.result
-    end
-
-    if self.state ~= "prepared" then
-        return false, "not prepared"
-    end
-
-    local success, result = self.commit_fn(self.preview)
-    if success then
-        self.state = "committed"
-        self.result = result
-        return true, result
-    else
-        return false, result
-    end
+function Operation:finish()
+    error("abstract method")
 end
 
 function Operation:abort()
-    self.state = "pending"
-    self.preview = nil
+    -- default: do nothing
 end
 
-----------------------------------------------------------------------
--- Perform with retry
-----------------------------------------------------------------------
-
-local function perform(op, scheduler)
+local function perform(op)
     while true do
-        local ready, pulse = op:prepare()
-        if ready then
-            local success, result = op:commit()
-            if success then
-                return result
-            end
-            -- Commit failed, retry
-            op:abort()
+        local ok, pulse = op:prepare()
+        if ok then
+            return op:finish()
         end
-
-        -- Wait on pulse
-        local co = coroutine.running()
-        local fiber = { co = co }
-        scheduler:wait(fiber, pulse)
-        coroutine.yield()
+        pulse:wait({ scheduler = scheduler, co = coroutine.running() })
     end
 end
 
 ----------------------------------------------------------------------
--- and_then combinator
+-- and_then implementation
 ----------------------------------------------------------------------
 
-local function and_then(op, k)
-    -- k is a function that receives preview values and returns a new op
-    return Operation.new(
-        -- prepare function
-        function()
-            -- First, prepare the initial operation
-            local ready, pulse = op:prepare()
-            if not ready then
-                return false, pulse
-            end
+local AndThenOp = {}
+AndThenOp.__index = AndThenOp
 
-            -- Now we have preview values from the first op
-            -- Use them to generate the continuation operation
-            local next_op = k(op.preview)
+function and_then(first, k)
+    -- k is a function that takes the result of first and returns a new op
+    local op = setmetatable({
+        first = first,
+        k = k,
+        state = "first", -- "first", "second", "done"
+        result = nil
+    }, AndThenOp)
 
-            -- Prepare the continuation
-            local next_ready, next_pulse = next_op:prepare()
-            if not next_ready then
-                op:abort()  -- Clean up first op
-                return false, next_pulse
-            end
+    return op
+end
 
-            -- Both operations are prepared
-            -- Store the continuation for commit phase
-            self = {}  -- In Lua 5.1, we need to handle self differently
-            local container = {
-                first = op,
-                second = next_op,
-                preview = next_op.preview
-            }
+function AndThenOp:prepare()
+    if self.state == "done" then
+        return true
+    end
 
-            return true, container
-        end,
-
-        -- commit function
-        function(container)
-            -- Commit both operations
-            local first_success, first_result = container.first:commit()
-            if not first_success then
-                container.second:abort()
-                return false, "first operation failed to commit"
-            end
-
-            local second_success, second_result = container.second:commit()
-            if not second_success then
-                container.first:abort()  -- Note: this is tricky - first op already committed
-                return false, "second operation failed to commit"
-            end
-
-            return true, second_result
+    if self.state == "first" then
+        local ready, pulse = self.first:prepare()
+        if not ready then
+            return false, pulse
         end
-    )
+
+        -- Store the preview from first op
+        self.first_preview = self.first._preview
+        self.state = "second"
+
+        -- Generate second op using the preview
+        self.second = self.k(self.first_preview)
+
+        -- Try to prepare second op
+        local second_ready, second_pulse = self.second:prepare()
+        if not second_ready then
+            self.state = "first"  -- Reset so we retry from first
+            return false, second_pulse
+        end
+
+        return true
+    end
+
+    return false, scheduler.pulse
+end
+
+function AndThenOp:finish()
+    if self.state == "done" then
+        return self.result
+    end
+
+    -- Finish first op
+    local first_result = self.first:finish()
+
+    -- Finish second op
+    local second_result = self.second:finish()
+
+    self.state = "done"
+    self.result = second_result
+    return second_result
+end
+
+function AndThenOp:abort()
+    if self.state == "second" then
+        self.first:abort()
+        self.second:abort()
+        self.state = "first"
+        self.second = nil
+        self.first_preview = nil
+    end
 end
 
 ----------------------------------------------------------------------
--- Simple unbuffered channel using the operation protocol
+-- Simple Channel (working version)
 ----------------------------------------------------------------------
 
 local Channel = {}
 Channel.__index = Channel
 
-function Channel.new(name, scheduler)
+function Channel.new(name)
     return setmetatable({
         name = name,
-        scheduler = scheduler,
+        puts = {},
+        gets = {},
         pulse = Pulse.new(),
-        waiting_puts = {},
-        waiting_gets = {},
         matches = 0
     }, Channel)
 end
 
+-- Put operation
 function Channel:put_op(value)
-    return Operation.new(
-        -- prepare
-        function()
-            -- Check if there's a waiting get
-            if #self.waiting_gets > 0 then
-                local get_op = table.remove(self.waiting_gets, 1)
-                return true, { peer = get_op, value = value }
+    local op = Operation.new()
+    op.value = value
+    op.channel = self
+
+    function op:prepare()
+        if self.done then return true end
+
+        local channel = self.channel
+
+        -- Look for matching get
+        for i, get_op in ipairs(channel.gets) do
+            if not get_op.done and not get_op.matched then
+                -- Match found!
+                self.matched_with = get_op
+                get_op.matched_with = self
+                self._preview = true  -- Preview for put is just "ready"
+                get_op._preview = self.value  -- Get gets the value as preview
+                return true
             end
-
-            -- No waiting get, add to waiting list
-            local op = { value = value }
-            table.insert(self.waiting_puts, op)
-            return false, self.pulse
-        end,
-
-        -- commit
-        function(preview)
-            local peer = preview.peer
-            peer.result = preview.value
-            peer.committed = true
-
-            -- Wake the scheduler
-            self.scheduler:wake(peer.pulse)
-
-            self.matches = self.matches + 1
-            return true, true
         end
-    )
+
+        -- No match, wait
+        table.insert(channel.puts, self)
+        return false, channel.pulse
+    end
+
+    function op:finish()
+        if self.done then return true end
+
+        local channel = self.channel
+        local get_op = self.matched_with
+
+        if not get_op then
+            error("Put operation finished without match")
+        end
+
+        -- Complete the transfer
+        get_op.result = self.value
+        get_op.done = true
+        self.done = true
+
+        -- Remove from waiting lists
+        for i, v in ipairs(channel.puts) do
+            if v == self then table.remove(channel.puts, i) break end
+        end
+        for i, v in ipairs(channel.gets) do
+            if v == get_op then table.remove(channel.gets, i) break end
+        end
+
+        channel.matches = channel.matches + 1
+        channel.pulse:signal()
+
+        return true
+    end
+
+    function op:abort()
+        if self.matched_with then
+            self.matched_with.matched_with = nil
+            self.matched_with = nil
+        end
+
+        local channel = self.channel
+        for i, v in ipairs(channel.puts) do
+            if v == self then
+                table.remove(channel.puts, i)
+                break
+            end
+        end
+    end
+
+    return op
 end
 
+-- Get operation
 function Channel:get_op()
-    return Operation.new(
-        -- prepare
-        function()
-            -- Check if there's a waiting put
-            if #self.waiting_puts > 0 then
-                local put_op = table.remove(self.waiting_puts, 1)
-                return true, { peer = put_op }
+    local op = Operation.new()
+    op.channel = self
+    op.result = nil
+
+    function op:prepare()
+        if self.done then return true end
+
+        local channel = self.channel
+
+        -- Look for matching put
+        for i, put_op in ipairs(channel.puts) do
+            if not put_op.done and not put_op.matched then
+                -- Match found!
+                self.matched_with = put_op
+                put_op.matched_with = self
+                self._preview = put_op.value  -- Preview is the value we'll get
+                put_op._preview = true
+                return true
             end
-
-            -- No waiting put, add to waiting list
-            local op = { pulse = Pulse.new() }
-            table.insert(self.waiting_gets, op)
-            return false, op.pulse
-        end,
-
-        -- commit
-        function(preview)
-            local peer = preview.peer
-            local value = peer.value
-
-            -- Wake the scheduler if put is waiting
-            if peer.pulse then
-                self.scheduler:wake(peer.pulse)
-            end
-
-            self.matches = self.matches + 1
-            return true, value
         end
-    )
+
+        -- No match, wait
+        table.insert(channel.gets, self)
+        return false, channel.pulse
+    end
+
+    function op:finish()
+        if self.done then return self.result end
+
+        local channel = self.channel
+        local put_op = self.matched_with
+
+        if not put_op then
+            error("Get operation finished without match")
+        end
+
+        self.result = put_op.value
+        self.done = true
+
+        -- The put op will handle removal in its finish
+        put_op:finish()
+
+        return self.result
+    end
+
+    function op:abort()
+        if self.matched_with then
+            self.matched_with.matched_with = nil
+            self.matched_with = nil
+        end
+
+        local channel = self.channel
+        for i, v in ipairs(channel.gets) do
+            if v == self then
+                table.remove(channel.gets, i)
+                break
+            end
+        end
+    end
+
+    return op
 end
 
 -- Convenience methods
 function Channel:put(value)
-    return perform(self:put_op(value), self.scheduler)
+    return perform(self:put_op(value))
 end
 
 function Channel:get()
-    return perform(self:get_op(), self.scheduler)
+    return perform(self:get_op())
 end
 
 ----------------------------------------------------------------------
 -- Demo
 ----------------------------------------------------------------------
 
-local function create_fiber(scheduler, fn)
-    local co = coroutine.create(fn)
-    local fiber = { co = co }
-    scheduler:enqueue(fiber)
-    return fiber
+-- Global scheduler for the demo
+local scheduler = Scheduler.new()
+
+-- Override perform to use our scheduler
+local original_perform = perform
+perform = function(op)
+    while true do
+        local ok, pulse = op:prepare()
+        if ok then
+            return op:finish()
+        end
+        pulse:wait({ scheduler = scheduler, co = coroutine.running() })
+    end
 end
 
-local function demo_simple()
+local function run_demo()
     print("=== Simple Demo ===")
 
-    local scheduler = Scheduler.new()
-    local chan = Channel.new("test", scheduler)
+    local chan = Channel.new("test")
 
-    create_fiber(scheduler, function()
+    -- Create fibers
+    local prod = coroutine.create(function()
         print("[Producer] Putting 42")
         chan:put(42)
         print("[Producer] Done")
     end)
 
-    create_fiber(scheduler, function()
+    local cons = coroutine.create(function()
         print("[Consumer] Getting...")
         local val = chan:get()
         print("[Consumer] Got: " .. tostring(val))
     end)
 
-    -- Scheduler will run automatically via enqueue
+    scheduler:schedule({co = prod, _scheduled = false})
+    scheduler:schedule({co = cons, _scheduled = false})
+
+    scheduler:run()
+
     print("Matches: " .. chan.matches)
     print()
-end
 
-local function demo_and_then()
     print("=== and_then Demo ===")
 
-    local scheduler = Scheduler.new()
-    local chan1 = Channel.new("chan1", scheduler)
-    local chan2 = Channel.new("chan2", scheduler)
+    local chan1 = Channel.new("chan1")
+    local chan2 = Channel.new("chan2")
 
-    -- Setup: put values into channels
-    create_fiber(scheduler, function()
-        print("[Setup] Putting 'hello' into chan1")
-        chan1:put("hello")
-        print("[Setup] Putting 'world' into chan2")
-        chan2:put("world")
-    end)
+    -- Setup producers in separate fibers
+    scheduler:schedule({
+        co = coroutine.create(function()
+            print("[P1] Putting 'hello' into chan1")
+            chan1:put("hello")
+            print("[P1] Done")
+        end),
+        _scheduled = false
+    })
 
-    -- Transaction with and_then
-    create_fiber(scheduler, function()
-        print("[Transaction] Starting and_then sequence")
+    scheduler:schedule({
+        co = coroutine.create(function()
+            print("[P2] Putting 'world' into chan2")
+            chan2:put("world")
+            print("[P2] Done")
+        end),
+        _scheduled = false
+    })
 
-        -- Create the composite operation: get from chan1, then based on result, get from chan2
+    -- Run producers first
+    scheduler:run()
+
+    -- Now do the and_then transaction
+    local txn_fiber = coroutine.create(function()
+        print("[Txn] Starting and_then sequence")
+
+        -- Create the composite operation
         local op = and_then(chan1:get_op(), function(val1)
-            print("[Transaction] First op preview: " .. tostring(val1))
+            print("[Txn] First preview: " .. tostring(val1))
             if val1 == "hello" then
-                print("[Transaction] Getting from chan2")
+                print("[Txn] Getting from chan2")
                 return chan2:get_op()
             else
-                print("[Transaction] Unexpected value, aborting")
-                -- Return a failing operation
-                return Operation.new(
-                    function() return false, Pulse.new() end,
-                    function() return false, "aborted" end
-                )
+                print("[Txn] Unexpected value")
+                -- Return a failing op
+                local fail = Operation.new()
+                function fail:prepare()
+                    return false, Pulse.new()  -- Never ready
+                end
+                function fail:finish()
+                    error("Should not reach here")
+                end
+                return fail
             end
         end)
 
-        -- Perform the composite operation
-        local result = perform(op, scheduler)
-        print("[Transaction] Result: " .. tostring(result))
+        local result = perform(op)
+        print("[Txn] Result: " .. tostring(result))
 
-        -- Now put combined result
+        -- Put combined result
         local combined = "hello " .. result .. "!"
-        print("[Transaction] Putting combined: " .. combined)
+        print("[Txn] Putting combined: " .. combined)
         chan1:put(combined)
     end)
 
+    scheduler:schedule({co = txn_fiber, _scheduled = false})
+
     -- Final receiver
-    create_fiber(scheduler, function()
-        print("[Final] Waiting for final result...")
+    local final_fiber = coroutine.create(function()
+        print("[Final] Waiting for result...")
         local val = chan1:get()
         print("[Final] Got: " .. tostring(val))
     end)
 
+    scheduler:schedule({co = final_fiber, _scheduled = false})
+
+    scheduler:run()
+
     print("chan1 matches: " .. chan1.matches)
     print("chan2 matches: " .. chan2.matches)
     print()
-end
 
-local function demo_performance()
-    print("=== Performance Demo ===")
+    print("=== Performance Test ===")
 
-    local scheduler = Scheduler.new()
-    local chan = Channel.new("perf", scheduler)
-    local iterations = 1000
-
+    local chan3 = Channel.new("perf")
+    local iterations = 1000000
     local start = os.clock()
 
     -- Producer
-    create_fiber(scheduler, function()
+    local prod_fiber = coroutine.create(function()
         for i = 1, iterations do
-            chan:put(i)
+            chan3:put(i)
         end
+        print("[Perf] Producer done")
     end)
 
     -- Consumer
-    create_fiber(scheduler, function()
+    local cons_fiber = coroutine.create(function()
         local total = 0
         for i = 1, iterations do
-            total = total + chan:get()
+            total = total + chan3:get()
         end
-        print("Total: " .. total)
+        print("[Perf] Consumer done, total: " .. total)
         local expected = iterations * (iterations + 1) / 2
-        print("Expected: " .. expected)
-        print("Match: " .. (total == expected and "YES" or "NO"))
+        print("[Perf] Expected: " .. expected .. ", Match: " .. (total == expected and "YES" or "NO"))
     end)
+
+    scheduler:schedule({co = prod_fiber, _scheduled = false})
+    scheduler:schedule({co = cons_fiber, _scheduled = false})
+
+    scheduler:run()
 
     local elapsed = os.clock() - start
     print(string.format("Time: %.3f seconds", elapsed))
     if elapsed > 0 then
         print(string.format("Rate: %.0f ops/sec", (iterations * 2) / elapsed))
     end
-    print("Matches: " .. chan.matches)
-    print()
+    print("Matches: " .. chan3.matches)
 end
 
--- Run demos
-demo_simple()
-demo_and_then()
-demo_performance()
-
-print("=== Done ===")
+-- Run the demo
+if pcall(run_demo) then
+    print("\n=== Demo completed ===")
+else
+    print("\n!!! Demo failed !!!")
+    print(debug.traceback())
+end
