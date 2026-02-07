@@ -126,15 +126,26 @@ do
 	local f = runtime.spawn(function()
 		out = op2.perform(ch:get_op():and_then(function(v)
 			return setmetatable({
+				_prepared = false,
+
 				preview = function(self)
-					if not rhs_ready then return pR, nil, nil end
+					if not rhs_ready then
+						self._prepared = false
+						return pR, nil, nil
+					end
+					self._prepared = true
 					return nil, self, { n = 1, v .. '!' }
 				end,
-				commit = function(self, offer)
-					assert_eq(offer, self)
+
+				commit = function(self)
+					assert_true(self._prepared, 'rhs.commit without ready preview')
+					self._prepared = false
 					return { n = 1, v .. '!' }
 				end,
-				abort = function() end,
+
+				abort = function(self)
+					self._prepared = false
+				end,
 			}, op2.Op)
 		end))
 	end, 'and_then')

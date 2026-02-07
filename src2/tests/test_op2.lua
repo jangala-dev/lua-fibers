@@ -40,7 +40,7 @@ local function assert_waiting(fib, msg)
 end
 
 ----------------------------------------------------------------------
--- perform: blocks on preview pulse until preview returns offer+payload; commit returns payload.
+-- perform: blocks on preview pulse until preview returns key+payload; commit returns payload.
 ----------------------------------------------------------------------
 
 do
@@ -52,19 +52,28 @@ do
 	local preview_calls = 0
 
 	local prim = setmetatable({
+		_prepared = false,
+
 		preview = function(self)
 			preview_calls = preview_calls + 1
 			if not ready then
+				self._prepared = false
 				return p, nil, nil
 			end
-			return nil, self, { n = 2, 1, 2 }
+			self._prepared = true
+			return nil, self, { n = 2, 1, 2 } -- key is self (opaque)
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self, 'commit offer mismatch')
+
+		commit = function(self)
+			assert_true(self._prepared, 'commit without ready preview')
 			committed = true
+			self._prepared = false
 			return { n = 2, 1, 2 }
 		end,
-		abort = function() end,
+
+		abort = function(self)
+			self._prepared = false
+		end,
 	}, op2.Op)
 
 	local a, b
@@ -118,14 +127,17 @@ do
 		_attach_select = function(self, sel) self.sel = sel end,
 		aborted = 0,
 		preview = function(self)
+			self._prepared = true
 			return nil, self, { n = 1, 'ok' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self, 'b.commit offer mismatch')
+		commit = function(self)
+			assert_true(self._prepared, 'b.commit without ready preview')
+			self._prepared = false
 			b_commits = b_commits + 1
 			return { n = 1, 'ok' }
 		end,
 		abort = function(self)
+			self._prepared = false
 			self.aborted = self.aborted + 1
 		end,
 	}, op2.Op)
@@ -159,27 +171,39 @@ do
 	local r1, r2 = false, false
 
 	local a = setmetatable({
+		_prepared = false,
 		preview = function(self)
-			if not r1 then return p1, nil, nil end
+			if not r1 then
+				self._prepared = false
+				return p1, nil, nil
+			end
+			self._prepared = true
 			return nil, self, { n = 1, 'A' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self)
+		commit = function(self)
+			assert_true(self._prepared, 'a.commit without ready preview')
+			self._prepared = false
 			return { n = 1, 'A' }
 		end,
-		abort = function() end,
+		abort = function(self) self._prepared = false end,
 	}, op2.Op)
 
 	local b = setmetatable({
+		_prepared = false,
 		preview = function(self)
-			if not r2 then return p2, nil, nil end
+			if not r2 then
+				self._prepared = false
+				return p2, nil, nil
+			end
+			self._prepared = true
 			return nil, self, { n = 1, 'B' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self)
+		commit = function(self)
+			assert_true(self._prepared, 'b.commit without ready preview')
+			self._prepared = false
 			return { n = 1, 'B' }
 		end,
-		abort = function() end,
+		abort = function(self) self._prepared = false end,
 	}, op2.Op)
 
 	local f
@@ -223,39 +247,46 @@ do
 	local pB = pulse.new(runtime.scheduler())
 
 	local a = setmetatable({
+		_prepared = false,
 		preview = function(self)
 			a_res = true
+			self._prepared = true
 			return nil, self, { n = 1, 'A' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self)
+		commit = function(self)
+			assert_true(self._prepared, 'a.commit without ready preview')
+			self._prepared = false
 			a_commit = a_commit + 1
 			return { n = 1, 'A' }
 		end,
-		abort = function(self, offer)
-			if offer ~= nil then assert_eq(offer, self) end
+		abort = function(self)
 			a_abort = a_abort + 1
 			a_res = false
+			self._prepared = false
 		end,
 	}, op2.Op)
 
 	local b = setmetatable({
+		_prepared = false,
 		preview = function(self)
 			if not b_ready then
+				self._prepared = false
 				return pB, nil, nil
 			end
 			b_res = true
+			self._prepared = true
 			return nil, self, { n = 1, 'B' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self)
+		commit = function(self)
+			assert_true(self._prepared, 'b.commit without ready preview')
+			self._prepared = false
 			b_commit = b_commit + 1
 			return { n = 1, 'B' }
 		end,
-		abort = function(self, offer)
-			if offer ~= nil then assert_eq(offer, self) end
+		abort = function(self)
 			b_abort = b_abort + 1
 			b_res = false
+			self._prepared = false
 		end,
 	}, op2.Op)
 
@@ -293,15 +324,18 @@ do
 	local committed = 0
 
 	local prim = setmetatable({
+		_prepared = false,
 		preview = function(self)
+			self._prepared = true
 			return nil, self, { n = 1, 10 }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self)
+		commit = function(self)
+			assert_true(self._prepared, 'commit without ready preview')
+			self._prepared = false
 			committed = committed + 1
 			return { n = 1, 10 }
 		end,
-		abort = function() end,
+		abort = function(self) self._prepared = false end,
 	}, op2.Op)
 
 	local out
@@ -331,17 +365,19 @@ do
 	local k_calls = 0
 
 	local lhs = setmetatable({
-		offer = 1,
+		_prepared = false,
 		preview = function(self)
-			return nil, self.offer, { n = 3, 'x', 'y', 'z' }
+			self._prepared = true
+			return nil, 1, { n = 3, 'x', 'y', 'z' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self.offer, 'lhs.commit offer mismatch')
+		commit = function(self)
+			assert_true(self._prepared, 'lhs.commit without ready preview')
+			self._prepared = false
 			lhs_commit = lhs_commit + 1
 			log[#log + 1] = 'lhs'
 			return op2.EMPTY
 		end,
-		abort = function() end,
+		abort = function(self) self._prepared = false end,
 	}, op2.Op)
 
 	local function k(a, b, c)
@@ -349,17 +385,19 @@ do
 		assert_eq(a, 'x'); assert_eq(b, 'y'); assert_eq(c, 'z')
 
 		local rhs = setmetatable({
-			offer = 7,
+			_prepared = false,
 			preview = function(self)
-				return nil, self.offer, { n = 1, 'R' }
+				self._prepared = true
+				return nil, 7, { n = 1, 'R' }
 			end,
-			commit = function(self, offer)
-				assert_eq(offer, self.offer, 'rhs.commit offer mismatch')
+			commit = function(self)
+				assert_true(self._prepared, 'rhs.commit without ready preview')
+				self._prepared = false
 				rhs_commit = rhs_commit + 1
 				log[#log + 1] = 'rhs'
 				return { n = 1, 'R' }
 			end,
-			abort = function() end,
+			abort = function(self) self._prepared = false end,
 		}, op2.Op)
 
 		return rhs
@@ -383,7 +421,7 @@ end
 ----------------------------------------------------------------------
 -- and_then pending RHS:
 -- If RHS is pending, it must abort RHS and abort LHS (do not hold reservation),
--- then await (rhs_wait OR lhs:watch(offer)) when watch is provided.
+-- then await (rhs_wait OR lhs:watch()) when watch is provided.
 ----------------------------------------------------------------------
 
 do
@@ -399,21 +437,23 @@ do
 	local lhs_abort = 0
 
 	local lhs = setmetatable({
-		offer = 1,
+		_prepared = false,
 		preview = function(self)
 			lhs_reserved = true
-			return nil, self.offer, { n = 1, 'L' }
+			self._prepared = true
+			return nil, 1, { n = 1, 'L' }
 		end,
-		watch = function(_self, _offer)
+		watch = function()
 			return p_watch
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self.offer)
+		commit = function(self)
+			assert_true(self._prepared, 'lhs.commit without ready preview')
+			self._prepared = false
 			lhs_reserved = false
 			return op2.EMPTY
 		end,
-		abort = function(self, offer)
-			if offer ~= nil then assert_eq(offer, self.offer) end
+		abort = function(self)
+			self._prepared = false
 			lhs_reserved = false
 			lhs_abort = lhs_abort + 1
 		end,
@@ -422,15 +462,18 @@ do
 	local rhs_abort = 0
 	local function k(_lval)
 		return setmetatable({
-			offer = 2,
+			_prepared = false,
 			preview = function(self)
 				if not rhs_ready then
+					self._prepared = false
 					return p_rhs, nil, nil
 				end
-				return nil, self.offer, { n = 1, 'OK' }
+				self._prepared = true
+				return nil, 2, { n = 1, 'OK' }
 			end,
-			commit = function(self, offer)
-				assert_eq(offer, self.offer)
+			commit = function(self)
+				assert_true(self._prepared, 'rhs.commit without ready preview')
+				self._prepared = false
 				return { n = 1, 'OK' }
 			end,
 			abort = function()
@@ -480,10 +523,9 @@ do
 	local lhs_reserved = false
 
 	local lhs = setmetatable({
-		offer = 1,
 		preview = function(self)
 			lhs_reserved = true
-			return nil, self.offer, { n = 1, 'L' }
+			return nil, 1, { n = 1, 'L' }
 		end,
 		watch = function()
 			return p_watch
@@ -514,8 +556,7 @@ do
 	local ready_commits = 0
 	local ready_arm = setmetatable({
 		preview = function(self) return nil, self, { n = 1, 'WIN' } end,
-		commit  = function(self, offer)
-			assert_eq(offer, self)
+		commit  = function(self)
 			ready_commits = ready_commits + 1
 			return { n = 1, 'WIN' }
 		end,
@@ -556,15 +597,21 @@ do
 	}, op2.Op)
 
 	local b = setmetatable({
+		_prepared = false,
 		preview = function(self)
-			if not r2 then return p2, nil, nil end
+			if not r2 then
+				self._prepared = false
+				return p2, nil, nil
+			end
+			self._prepared = true
 			return nil, self, { n = 1, 'B' }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, self)
+		commit = function(self)
+			assert_true(self._prepared, 'b.commit without ready preview')
+			self._prepared = false
 			return { n = 1, 'B' }
 		end,
-		abort = function() end,
+		abort = function(self) self._prepared = false end,
 	}, op2.Op)
 
 	local c = setmetatable({
@@ -613,18 +660,18 @@ do
 	local p = pulse.new(runtime.scheduler())
 	local prim = setmetatable({
 		preview = function(self) return nil, self, { n = 1, 1 } end,
-		commit = function(self, offer) assert_eq(offer, self); return { n = 1, 1 } end,
+		commit = function(self) return { n = 1, 1 } end,
 		abort = function() end,
-		watch = function(self, offer) assert_eq(offer, self); return p end,
+		watch = function() return p end,
 	}, op2.Op)
 
-	assert_eq(prim:watch(prim), p)
-	assert_eq(prim:wrap(function(x) return x end):watch(prim), p)
+	assert_eq(prim:watch(), p)
+	assert_eq(prim:wrap(function(x) return x end):watch(), p)
 end
 
 ----------------------------------------------------------------------
--- and_then offer churn:
--- If RHS is pending for the current LHS offer, and LHS later changes (signals its watchable),
+-- and_then key churn:
+-- If RHS is pending for the current LHS key, and LHS later changes (signals its watchable),
 -- and_then must wake, re-preview LHS, re-run k(...) for the new LHS payload, and complete.
 ----------------------------------------------------------------------
 
@@ -645,15 +692,13 @@ do
 		preview = function(self)
 			return nil, lhs_val, { n = 1, lhs_val }
 		end,
-		commit = function(self, offer)
-			assert_eq(offer, lhs_val)
+		commit = function(self)
 			return op2.EMPTY
 		end,
-		abort = function(self, _offer)
+		abort = function(self)
 			lhs_abort = lhs_abort + 1
 		end,
-		watch = function(self, offer)
-			assert_eq(offer, lhs_val)
+		watch = function()
 			return pL
 		end,
 	}, op2.Op)
@@ -666,11 +711,10 @@ do
 				end
 				return nil, 1, { n = 1, 'OK_' .. x }
 			end,
-			commit = function(self, offer)
-				assert_eq(offer, 1)
+			commit = function(self)
 				return { n = 1, 'OK_' .. x }
 			end,
-			abort = function(self, _offer)
+			abort = function(self)
 				rhs_abort = rhs_abort + 1
 			end,
 		}, op2.Op)
@@ -685,7 +729,7 @@ do
 	local out
 	f = runtime.spawn(function()
 		out = op2.perform(lhs:and_then(k))
-	end, 'and_then_offer_churn')
+	end, 'and_then_key_churn')
 
 	-- First step: LHS ready with 'A', RHS pending => should await (pR OR pL)
 	assert_eq(runtime.step(), 'ran')
