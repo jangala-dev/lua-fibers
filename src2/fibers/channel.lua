@@ -151,7 +151,6 @@ function Put:poll(ctx, out)
       return nil
     end
     if sel and sel.winner ~= g then
-      detach_uncommitted(ch, self, g)
       return nil
     end
     if out then out.n = 0 end
@@ -218,19 +217,6 @@ function Channel:get_op()
   }, Get)
 end
 
-local function get_loses_selection(self)
-  local ch = self.ch
-  local p = self.peer
-  if p and (not p.done) then
-    detach_uncommitted(ch, p, self)
-  end
-  self.peer      = nil
-  self.prepared  = false
-  self.prep_val  = nil
-  self.prep_peer = nil
-  unlink_get(ch, self)
-end
-
 function Get:poll(ctx, out)
   local ch = self.ch
   if self.done then
@@ -249,7 +235,6 @@ function Get:poll(ctx, out)
 
   local sel = self.sel
   if sel and sel.winner and sel.winner ~= self then
-    get_loses_selection(self)
     return nil
   end
 

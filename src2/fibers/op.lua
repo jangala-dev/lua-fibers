@@ -40,6 +40,14 @@ end
 local RB_ABORT   = 'rb_abort'
 local RB_INVALID = 'rb_invalid'
 
+local function rollback_ops(ctx, ops, why, skip_i)
+  for i = 1, #ops do
+    if i ~= skip_i then
+      ops[i]:rollback(ctx, why)
+    end
+  end
+end
+
 ----------------------------------------------------------------------
 -- Prepared out-buffers (reusable tables)
 ----------------------------------------------------------------------
@@ -140,15 +148,15 @@ end
 function OpBase:finally(cleanup)
   if type(cleanup) ~= 'function' then error('finally expects a function', 2) end
   return bracket(
-    function() return nil end,
-    function(_, aborted) cleanup(aborted) end,
-    function() return self end
+    function () return nil end,
+    function (_, aborted) cleanup(aborted) end,
+    function () return self end
   )
 end
 
 function OpBase:on_abort(f)
   if type(f) ~= 'function' then error('on_abort expects a function', 2) end
-  return self:finally(function(aborted)
+  return self:finally(function (aborted)
     if aborted then f() end
   end)
 end
@@ -165,7 +173,9 @@ Primitive.__index = Primitive
 mixin_base(Primitive)
 
 function Primitive:poll(ctx, out) return self._poll(self, ctx, out) end
+
 function Primitive:commit(ctx) return self._commit(self, ctx) end
+
 function Primitive:rollback(ctx, why) return self._rollback(self, ctx, why) end
 
 local function new_primitive(poll_fn, commit_fn, rollback_fn, state)
@@ -367,23 +377,22 @@ function NackWait:poll(ctx, out)
   return nil
 end
 
-function NackWait:commit(ctx)
+function NackWait:_unlink(ctx)
   local w = ctx.waker
   local node = self.nodes[w]
   if node then
     cond_unlink(self.cond, node)
     self.nodes[w] = nil
   end
+end
+
+function NackWait:commit(ctx)
+  self:_unlink(ctx)
   return true
 end
 
 function NackWait:rollback(ctx, _)
-  local w = ctx.waker
-  local node = self.nodes[w]
-  if node then
-    cond_unlink(self.cond, node)
-    self.nodes[w] = nil
-  end
+  self:_unlink(ctx)
 end
 
 ----------------------------------------------------------------------
@@ -448,14 +457,23 @@ function bracket(acquire, release, use)
     res   = nil,
     inner = nil,
     cap   = nil,
+    acquired = false,
     done  = false,
   }, Bracket)
 end
 
 function Bracket:_ensure()
-  if self.res ~= nil then return end
+  if self.acquired then return end
   self.res   = self.acquire()
   self.inner = self.use(self.res)
+  self.acquired = true
+end
+
+function Bracket:_release(aborted)
+  if not self.acquired then return end
+  local res = self.res
+  self.res, self.inner, self.acquired = nil, nil, false
+  pcall(self.release, res, aborted)
 end
 
 function Bracket:poll(ctx, out)
@@ -463,8 +481,7 @@ function Bracket:poll(ctx, out)
   self:_ensure()
 
   if self.cap then
-    if self.cap:poll(ctx, nil) then
-      if out then self.cap:poll(ctx, out) end
+    if self.cap:poll(ctx, out) then
       return self
     end
     self.cap:rollback(ctx, RB_INVALID)
@@ -482,14 +499,12 @@ function Bracket:commit(ctx)
   self.done = true
 
   local cap = assert(self.cap, 'bracket.commit: missing cap')
-  local res = self.res
 
   self.cap = nil
+  self.acquired = true
 
-  local ok, r = pcall(function() return pack(cap:commit(ctx)) end)
-  local ok2, relerr = pcall(self.release, res, false)
-
-  self.res, self.inner = nil, nil
+  local ok, r = pcall(function () return pack(cap:commit(ctx)) end)
+  local ok2, relerr = pcall(function() self:_release(false) end)
 
   if not ok then error(r, 0) end
   if not ok2 then error(relerr, 0) end
@@ -508,9 +523,8 @@ function Bracket:rollback(ctx, why)
     self.inner:rollback(ctx, why)
   end
 
-  if why == RB_ABORT and self.res ~= nil then
-    pcall(self.release, self.res, true)
-    self.res, self.inner = nil, nil
+  if why == RB_ABORT then
+    self:_release(true)
   end
 end
 
@@ -615,8 +629,8 @@ function Choice:poll(ctx, out)
   end
 
   if winner_i then
-    self.winner_i = winner_i
-    self.cap      = winner_cap
+    self.winner_i  = winner_i
+    self.cap       = winner_cap
     ctx.select_top = prev_sel
     return self
   end
@@ -632,11 +646,7 @@ function Choice:commit(ctx)
   local wi  = assert(self.winner_i, 'choice.commit: no winner')
   local cap = assert(self.cap, 'choice.commit: missing cap')
 
-  for i = 1, self.n do
-    if i ~= wi then
-      self.ops[i]:rollback(ctx, RB_ABORT)
-    end
-  end
+  rollback_ops(ctx, self.ops, RB_ABORT, wi)
 
   choice_reset(self)
   return cap:commit(ctx)
@@ -651,9 +661,7 @@ function Choice:rollback(ctx, why)
   end
   choice_reset(self)
 
-  for i = 1, self.n do
-    self.ops[i]:rollback(ctx, why)
-  end
+  rollback_ops(ctx, self.ops, why)
 end
 
 ----------------------------------------------------------------------
@@ -759,9 +767,7 @@ function All:rollback(ctx, why)
   end
   all_clear(self)
 
-  for i = 1, self.n do
-    self.ops[i]:rollback(ctx, why)
-  end
+  rollback_ops(ctx, self.ops, why)
 end
 
 ----------------------------------------------------------------------
@@ -874,21 +880,21 @@ return {
   perform = perform,
 
   new_primitive = new_primitive,
-  always = always,
-  never  = never,
+  always        = always,
+  never         = never,
 
-  choice = choice,
-  all    = all,
-  guard  = guard,
+  choice    = choice,
+  all       = all,
+  guard     = guard,
   with_nack = with_nack,
   bracket   = bracket,
 
   -- internal sharing (for other modules in this runtime)
-  _mixin_base = mixin_base,
-  _RB_ABORT   = RB_ABORT,
-  _RB_INVALID = RB_INVALID,
-  _out_clear  = out_clear,
-  _out_copy   = out_copy,
-  _out_set1   = out_set1,
+  _mixin_base  = mixin_base,
+  _RB_ABORT    = RB_ABORT,
+  _RB_INVALID  = RB_INVALID,
+  _out_clear   = out_clear,
+  _out_copy    = out_copy,
+  _out_set1    = out_set1,
   _out_capture = out_capture,
 }
