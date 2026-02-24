@@ -294,6 +294,7 @@ local function build_backend(ops)
 		modes       = ops.modes or {},
 		permissions = ops.permissions or {},
 		AF_UNIX     = ops.AF_UNIX,
+		AF_INET     = ops.AF_INET,
 		SOCK_STREAM = ops.SOCK_STREAM,
 	}
 end

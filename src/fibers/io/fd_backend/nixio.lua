@@ -17,10 +17,10 @@ local EINPROGRESS = const.EINPROGRESS or 115
 local EALREADY    = const.EALREADY or 114
 
 -- Where available, reuse nixio’s numeric constants so callers see
--- sensible AF_* / SOCK_* values. Fall back to standard-ish defaults.
+-- sensible AF_* / SOCK_* values. Fall back to standard Linux values.
 local AF_UNIX     = const.AF_UNIX or 1
-local AF_INET     = const.AF_INET
-local AF_INET6    = const.AF_INET6
+local AF_INET     = const.AF_INET or 2
+local AF_INET6    = const.AF_INET6 or 10
 local SOCK_STREAM = const.SOCK_STREAM or 1
 local SOCK_DGRAM  = const.SOCK_DGRAM or 2
 
@@ -29,8 +29,6 @@ local function errno_msg(default, eno)
 		return default
 	end
 
-	-- nixio.strerror expects a number; some nixio APIs return msg/errno in
-	-- different positions depending on build/version.
 	if type(eno) ~= 'number' then
 		local n = tonumber(eno)
 		if n then
@@ -48,6 +46,41 @@ local function errno_msg(default, eno)
 		return default .. ' (errno ' .. tostring(eno) .. ')'
 	end
 	return s
+end
+
+-- nixio APIs vary by build/version in whether they return:
+--   nil, msg, errno
+-- or
+--   nil, errno, msg
+-- This helper normalises the trailing two values.
+local function norm_msg_eno(a, b)
+	local ta, tb = type(a), type(b)
+
+	if ta == 'number' and tb == 'string' then
+		return b, a
+	end
+	if ta == 'string' and tb == 'number' then
+		return a, b
+	end
+	if ta == 'number' and b == nil then
+		return nil, a
+	end
+	if ta == 'string' and b == nil then
+		return a, nil
+	end
+	if ta == 'number' then
+		return nil, a
+	end
+	if tb == 'number' then
+		return nil, b
+	end
+	if ta == 'string' then
+		return a, nil
+	end
+	if tb == 'string' then
+		return b, nil
+	end
+	return nil, nil
 end
 
 -- nixio.open expects perms as a mode string (e.g. "0644" or "rw-r--r--")
@@ -81,12 +114,13 @@ end
 -- fd here is a nixio.File or nixio.Socket
 local function set_nonblock(fd)
 	if fd and fd.setblocking then
-		local ok, eno = fd:setblocking(false)
+		local ok, a, b = fd:setblocking(false)
 		if ok ~= nil and ok ~= false then
-			return true, nil, eno
+			return true, nil, nil
 		end
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
-		return false, errno_msg('setblocking(false) failed', eno), eno
+		return false, errno_msg(msg or 'setblocking(false) failed', eno), eno
 	end
 	-- If there is no setblocking, treat as already non-blocking.
 	return true, nil, nil
@@ -102,17 +136,18 @@ local function read_fd(fd, max)
 		return '', nil
 	end
 
-	-- nixio.File:read / Socket:read both follow the same style:
-	--   data                      (success/EOF)
-	--   nil, msg, errno           (error)
-	local data, eno, msg = fd:read(max)
+	-- nixio.File:read / Socket:read both generally return:
+	--   data
+	--   nil, msg, errno   OR   nil, errno, msg
+	local data, a, b = fd:read(max)
 
 	if type(data) == 'string' then
 		-- data may be "" at EOF; that is acceptable to callers.
 		return data, nil
 	end
 
-	-- eno = eno or nixio.errno()
+	local msg, eno = norm_msg_eno(a, b)
+	eno = eno or nixio.errno()
 
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		-- Would block, signal “not ready yet”.
@@ -139,13 +174,14 @@ local function write_fd(fd, str, len)
 
 	-- For files: File.write(buf, offset, length)
 	-- For sockets: Socket.send / write(buf, offset, length) – same shape.
-	local n, eno, msg = fd:write(str, 0, len)
+	local n, a, b = fd:write(str, 0, len)
 
 	if type(n) == 'number' then
 		return n, nil
 	end
 
-	-- eno = eno or nixio.errno()
+	local msg, eno = norm_msg_eno(a, b)
+	eno = eno or nixio.errno()
 
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		-- Would block.
@@ -173,8 +209,9 @@ local function seek_fd(fd, whence, off)
 		return nil, 'seek not supported on this descriptor'
 	end
 
-	local pos, msg, eno = fd:seek(off, whence)
+	local pos, a, b = fd:seek(off, whence)
 	if pos == nil then
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
 		return nil, errno_msg(msg or 'seek failed', eno)
 	end
@@ -186,8 +223,9 @@ local function close_fd(fd)
 		return true, nil
 	end
 
-	local ok, msg, eno = fd:close()
+	local ok, a, b = fd:close()
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
 		return false, errno_msg(msg or 'close failed', eno)
 	end
@@ -199,7 +237,6 @@ end
 ----------------------------------------------------------------------
 
 -- Basic symbolic permission presets for mkdir and file creation.
--- (Lua has no octal literal; use base-8 parsing.)
 local function oct(s)
 	return tonumber(s, 8)
 end
@@ -231,64 +268,68 @@ local function norm_open_perms(perms)
 	return perms
 end
 
--- nixio.fs.mkdir generally expects a numeric mode.
+-- nixio.fs.mkdir expects a mode string on some builds ("0755"), not a raw number.
 local function norm_mkdir_mode(perms)
 	if perms == nil then
-		return permissions['rwxr-xr-x'] or 493 -- 0755
+		return '0755'
 	end
+
 	local t = type(perms)
+
 	if t == 'number' then
-		return perms
+		-- Decimal 511 -> "0777"
+		return string.format('%04o', perms)
 	end
+
 	if t == 'string' then
 		local m = permissions[perms]
-		if m then return m end
-		-- Accept "0755" style.
-		local n = tonumber(perms, 8) or tonumber(perms)
-		if n then return n end
+		if m then
+			return string.format('%04o', m)
+		end
+
+		-- Accept already-octal strings like "0755"
+		-- (and leave other strings untouched for nixio to interpret)
+		return perms
 	end
-	return permissions['rwxr-xr-x'] or 493
+
+	return '0755'
 end
 
 local function mkdir_path(path, perms)
-	-- Default to 0755 for directories.
-	local mode = norm_perms(perms, permissions['rwxr-xr-x'])
+	local mode = norm_mkdir_mode(perms)
 
-	local ok, msg, eno
-	if mode == nil then
-		ok, msg, eno = fs.mkdir(path)
-	else
-		ok, msg, eno = fs.mkdir(path, mode)
-	end
-
+	local ok, a, b = fs.mkdir(path, mode)
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		return false, errno_msg(msg or 'mkdir failed', eno)
 	end
+
 	return true, nil
 end
 
--- For this backend we rely on nixio.open’s mode strings.
 local function open_file(path, mode, perms)
 	mode = mode or 'r'
 
-	local p = norm_perms(perms)
+	local p = norm_open_perms(perms)
 
 	-- If this is a creating mode and perms is nil, provide a default.
 	if p == nil and is_create_mode(mode) then
 		p = DEFAULT_CREATE_PERMS
 	end
 
-	local f, eno = nixio.open(path, mode, p)
+	local f, a, b = nixio.open(path, mode, p)
 	if not f then
-		return nil, errno_msg('open failed', eno)
+		local msg, eno = norm_msg_eno(a, b)
+		return nil, errno_msg(msg or 'open failed', eno)
 	end
 	return f, nil
 end
 
 local function pipe_fds()
-	local r, w, eno = nixio.pipe()
+	local r, w, a, b = nixio.pipe()
 	if not r then
-		return nil, nil, errno_msg('pipe failed', eno)
+		local msg, eno = norm_msg_eno(a, b)
+		return nil, nil, errno_msg(msg or 'pipe failed', eno)
 	end
 	return r, w, nil
 end
@@ -297,15 +338,16 @@ local function mktemp(prefix, perms)
 	local start = math.random(1e7)
 	local last_err
 
-	local p = norm_perms(perms) or '0644'
+	local p = norm_open_perms(perms) or '0644'
 
 	for i = start, start + 10 do
 		local tmpnam = prefix .. '.' .. i
-		local f, eno = nixio.open(tmpnam, 'w+', p)
+		local f, a, b = nixio.open(tmpnam, 'w+', p)
 		if f then
 			return f, tmpnam
 		end
-		last_err = errno_msg('mktemp open failed', eno)
+		local msg, eno = norm_msg_eno(a, b)
+		last_err = errno_msg(msg or 'mktemp open failed', eno)
 	end
 
 	return nil, last_err or 'mktemp: failed to create temporary file'
@@ -315,8 +357,9 @@ local function fsync_fd(fd)
 	if not fd or not fd.sync then
 		return true, nil
 	end
-	local ok, msg, eno = fd:sync(false)
+	local ok, a, b = fd:sync(false)
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
 		return false, errno_msg(msg or 'fsync failed', eno)
 	end
@@ -324,16 +367,18 @@ local function fsync_fd(fd)
 end
 
 local function rename_file(oldpath, newpath)
-	local ok, msg, eno = fs.rename(oldpath, newpath)
+	local ok, a, b = fs.rename(oldpath, newpath)
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		return false, errno_msg(msg or 'rename failed', eno)
 	end
 	return true, nil
 end
 
 local function unlink_file(path)
-	local ok, msg, eno = fs.unlink(path)
+	local ok, a, b = fs.unlink(path)
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		return false, errno_msg(msg or 'unlink failed', eno)
 	end
 	return true, nil
@@ -348,9 +393,10 @@ end
 local function ignore_sigpipe()
 	-- Best-effort ignore of SIGPIPE.
 	if nixio.signal and nixio.SIGPIPE then
-		local ok, eno = nixio.signal(nixio.SIGPIPE, 'ign')
+		local ok, a, b = nixio.signal(nixio.SIGPIPE, 'ign')
 		if ok == nil or ok == false then
-			return false, errno_msg('signal(SIGPIPE) failed', eno)
+			local msg, eno = norm_msg_eno(a, b)
+			return false, errno_msg(msg or 'signal(SIGPIPE) failed', eno)
 		end
 	end
 	return true, nil
@@ -383,35 +429,91 @@ local function stype_to_str(stype)
 	error('fd_backend.nixio: unsupported socket type: ' .. tostring(stype))
 end
 
+-- Normalise sockaddr tokens used by fibers.io.socket:
+--   UNIX:
+--     "/tmp/sock"
+--     { family = "unix", path = "/tmp/sock" }
+--   INET:
+--     { family = "inet",  host = "127.0.0.1", port = 1234 }
+--   INET6:
+--     { family = "inet6", host = "::1",       port = 1234 }
+local function norm_sockaddr(sa)
+	if type(sa) == 'string' then
+		return 'unix', sa, 0
+	end
+
+	if type(sa) ~= 'table' then
+		return nil, nil, nil, 'unsupported sockaddr representation'
+	end
+
+	local fam = sa.family or sa.af
+	if fam == AF_UNIX then fam = 'unix' end
+	if fam == AF_INET then fam = 'inet' end
+	if fam == AF_INET6 then fam = 'inet6' end
+
+	if fam == nil then
+		-- Reasonable fallback: table with port implies inet.
+		if sa.port ~= nil then
+			fam = 'inet'
+		elseif sa.path then
+			fam = 'unix'
+		end
+	end
+
+	if fam == 'unix' then
+		local path = sa.path or sa.host
+		if type(path) ~= 'string' or path == '' then
+			return nil, nil, nil, 'invalid unix sockaddr'
+		end
+		return 'unix', path, 0
+	end
+
+	if fam == 'inet' or fam == 'inet6' then
+		local host = sa.host
+		local port = sa.port
+		if host ~= nil and type(host) ~= 'string' then
+			return nil, nil, nil, 'invalid ' .. fam .. ' host'
+		end
+		port = tonumber(port)
+		if port == nil then
+			return nil, nil, nil, 'invalid ' .. fam .. ' port'
+		end
+		return fam, host, port
+	end
+
+	return nil, nil, nil, 'unsupported sockaddr family'
+end
+
 --- socket(domain, stype, protocol) -> fd|nil, err|nil, eno|nil
 local function socket_fd(domain, stype, _)
 	local d = domain_to_str(domain)
 	local t = stype_to_str(stype)
 
-	local s, eno = nixio.socket(d, t)
+	local s, a, b = nixio.socket(d, t)
 	if not s then
-		return nil, errno_msg('socket failed', eno), eno
+		local msg, eno = norm_msg_eno(a, b)
+		return nil, errno_msg(msg or 'socket failed', eno), eno
 	end
 	-- Returned “fd” is a nixio.Socket object.
 	return s, nil, nil
 end
 
---- bind(fd, sa) where fd is nixio.Socket; sa is e.g. UNIX path string.
+--- bind(fd, sa) where fd is nixio.Socket
 local function bind_fd(fd, sa)
 	if not fd then
 		return false, 'closed socket', nil
 	end
 
-	local ok, msg, eno
-
-	if type(sa) == 'string' then
-		-- For AF_UNIX, host is path, port is ignored. We pass 0 as a dummy.
-		ok, msg, eno = fd:bind(sa, 0)
-	else
-		return false, 'unsupported sockaddr representation', nil
+	local fam, host, port, nerr = norm_sockaddr(sa)
+	if not fam then
+		return false, nerr, nil
 	end
 
+	local ok, a, b
+	ok, a, b = fd:bind(host, port)
+
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
 		return false, errno_msg(msg or 'bind failed', eno), eno
 	end
@@ -425,8 +527,9 @@ local function listen_fd(fd)
 	end
 
 	local backlog = const.SOMAXCONN or 128
-	local ok, msg, eno = fd:listen(backlog)
+	local ok, a, b = fd:listen(backlog)
 	if ok == nil or ok == false then
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
 		return false, errno_msg(msg or 'listen failed', eno), eno
 	end
@@ -440,11 +543,13 @@ local function accept_fd(fd)
 	end
 
 	-- nixio.Socket.accept() -> newsock, host, port | nil, msg, errno
-	local newsock, _, _, msg, eno = fd:accept()
+	-- Some builds may swap msg/errno on error; normalise.
+	local newsock, x, y = fd:accept()
 	if newsock then
 		return newsock, nil, false
 	end
 
+	local msg, eno = norm_msg_eno(x, y)
 	eno = eno or nixio.errno()
 	if eno == EAGAIN or eno == EWOULDBLOCK then
 		return nil, nil, true
@@ -459,19 +564,17 @@ local function connect_start_fd(fd, sa)
 		return nil, 'closed socket', false
 	end
 
-	local ok, msg, eno
-
-	if type(sa) == 'string' then
-		-- For AF_UNIX, host is path, port is ignored.
-		ok, msg, eno = fd:connect(sa, 0)
-	else
-		return nil, 'unsupported sockaddr representation', false
+	local fam, host, port, nerr = norm_sockaddr(sa)
+	if not fam then
+		return nil, nerr, false
 	end
 
+	local ok, a, b = fd:connect(host, port)
 	if ok then
 		return true, nil, false
 	end
 
+	local msg, eno = norm_msg_eno(a, b)
 	eno = eno or nixio.errno()
 	if eno == EINPROGRESS or eno == EALREADY or eno == EAGAIN then
 		-- Non-blocking connect in progress.
@@ -492,12 +595,14 @@ local function connect_finish_fd(fd)
 		return true, nil
 	end
 
-	local soerr, msg, eno = fd:getopt('socket', 'error')
+	local soerr, a, b = fd:getopt('socket', 'error')
 	if soerr == nil then
+		local msg, eno = norm_msg_eno(a, b)
 		eno = eno or nixio.errno()
 		return false, errno_msg(msg or 'getsockopt(SO_ERROR) failed', eno)
 	end
 
+	soerr = tonumber(soerr) or 0
 	if soerr == 0 then
 		return true, nil
 	end
@@ -550,7 +655,10 @@ local ops = {
 	permissions = permissions,
 
 	AF_UNIX     = AF_UNIX,
+	AF_INET     = AF_INET,
+	AF_INET6    = AF_INET6,
 	SOCK_STREAM = SOCK_STREAM,
+	SOCK_DGRAM  = SOCK_DGRAM,
 
 	is_supported = is_supported,
 }

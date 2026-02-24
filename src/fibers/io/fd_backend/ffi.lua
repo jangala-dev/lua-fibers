@@ -70,6 +70,23 @@ ffi.cdef [[
   int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
   int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
   int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+
+  typedef unsigned short in_port_t;
+  typedef unsigned int   in_addr_t;
+
+  struct in_addr {
+    in_addr_t s_addr;
+  };
+
+  struct sockaddr_in {
+    sa_family_t    sin_family;
+    in_port_t      sin_port;
+    struct in_addr sin_addr;
+    unsigned char  sin_zero[8];
+  };
+
+  unsigned short htons(unsigned short hostshort);
+  int inet_pton(int af, const char *src, void *dst);
 ]]
 
 -- POSIX fcntl command numbers on Linux.
@@ -105,6 +122,7 @@ local EINPROGRESS = 115
 
 -- Socket constants (Linux ABI).
 local AF_UNIX     = 1
+local AF_INET     = 2
 local SOCK_STREAM = 1
 local SOL_SOCKET  = 1
 local SO_ERROR    = 4
@@ -314,8 +332,8 @@ permissions['rw-r--r--'] = bit.bor(S_IRUSR, S_IWUSR, S_IRGRP, S_IROTH)
 permissions['rw-rw-rw-'] = bit.bor(permissions['rw-r--r--'], S_IWGRP, S_IWOTH)
 permissions['rwxr-xr-x'] = bit.bor(
 	S_IRUSR, S_IWUSR, S_IXUSR,
-	S_IRGRP,          S_IXGRP,
-	S_IROTH,          S_IXOTH
+	S_IRGRP, S_IXGRP,
+	S_IROTH, S_IXOTH
 )
 permissions['rwx------'] = bit.bor(S_IRUSR, S_IWUSR, S_IXUSR)
 
@@ -417,21 +435,54 @@ end
 ----------------------------------------------------------------------
 
 local function make_sockaddr_un(path)
-    local sa = ffi.new('struct sockaddr_un')
-    ---@cast sa sockaddr_un_cdata
-    sa.sun_family = AF_UNIX
+	local sa = ffi.new('struct sockaddr_un')
+	---@cast sa sockaddr_un_cdata
+	sa.sun_family = AF_UNIX
 
-    local maxlen = 108 - 1
-    local p = path
-    if #p > maxlen then
-        p = p:sub(1, maxlen)
-    end
-    ffi.fill(sa.sun_path, 108)
-    ffi.copy(sa.sun_path, p)
+	local maxlen = 108 - 1
+	local p = path
+	if #p > maxlen then
+		p = p:sub(1, maxlen)
+	end
+	ffi.fill(sa.sun_path, 108)
+	ffi.copy(sa.sun_path, p)
 
-    -- Full struct size is fine for bind/connect.
-    local len = ffi.sizeof('struct sockaddr_un')
-    return sa, len
+	-- Full struct size is fine for bind/connect.
+	local len = ffi.sizeof('struct sockaddr_un')
+	return sa, len
+end
+
+local function make_sockaddr_in(host, port)
+	if type(host) ~= 'string' or host == '' then
+		return nil, nil, 'host must be a non-empty string'
+	end
+
+	port = tonumber(port)
+	if not port or port < 0 or port > 65535 then
+		return nil, nil, 'port must be 0..65535'
+	end
+
+	local sa      = ffi.new('struct sockaddr_in')
+	sa.sin_family = AF_INET
+	sa.sin_port   = C.htons(tonumber(port))
+
+	local c_host = ffi.new('char[?]', #host + 1)
+	ffi.copy(c_host, host)
+
+	local addr = ffi.new('struct in_addr[1]')
+	local rc = toint(C.inet_pton(AF_INET, c_host, addr))
+	if rc ~= 1 then
+		if rc == 0 then
+			return nil, nil, 'invalid IPv4 address: ' .. tostring(host)
+		end
+		local e = get_errno()
+		return nil, nil, strerror(e)
+	end
+
+	sa.sin_addr = addr[0]
+	ffi.fill(sa.sin_zero, 8)
+
+	return sa, ffi.sizeof('struct sockaddr_in'), nil
 end
 
 local function socket_fd(domain, stype, protocol)
@@ -444,11 +495,21 @@ local function socket_fd(domain, stype, protocol)
 end
 
 local function bind_fd(fd, sa)
-	-- For now, sa is expected to be a UNIX-domain path string.
-	if type(sa) ~= 'string' then
+	local c_sa, len, serr
+
+	if type(sa) == 'string' then
+		-- AF_UNIX path
+		c_sa, len = make_sockaddr_un(sa)
+	elseif type(sa) == 'table' and sa.family == 'inet' then
+		-- AF_INET token: { family = 'inet', host = '1.2.3.4', port = 1234 }
+		c_sa, len, serr = make_sockaddr_in(sa.host, sa.port)
+		if not c_sa then
+			return false, serr, nil
+		end
+	else
 		return false, 'unsupported sockaddr representation', nil
 	end
-	local c_sa, len = make_sockaddr_un(sa)
+
 	local rc = toint(C.bind(fd, ffi.cast('struct sockaddr *', c_sa), len))
 	if rc ~= 0 then
 		local e = get_errno()
@@ -481,14 +542,26 @@ end
 
 --- connect_start(fd, sa) -> ok|nil, err|nil, inprogress:boolean
 local function connect_start_fd(fd, sa)
-	if type(sa) ~= 'string' then
+	local c_sa, len, serr
+
+	if type(sa) == 'string' then
+		-- AF_UNIX path
+		c_sa, len = make_sockaddr_un(sa)
+	elseif type(sa) == 'table' and sa.family == 'inet' then
+		-- AF_INET token
+		c_sa, len, serr = make_sockaddr_in(sa.host, sa.port)
+		if not c_sa then
+			return nil, serr, false
+		end
+	else
 		return nil, 'unsupported sockaddr representation', false
 	end
-	local c_sa, len = make_sockaddr_un(sa)
+
 	local rc = toint(C.connect(fd, ffi.cast('struct sockaddr *', c_sa), len))
 	if rc == 0 then
 		return true, nil, false
 	end
+
 	local e = get_errno()
 	if e == EINPROGRESS then
 		return nil, nil, true
@@ -549,6 +622,7 @@ local ops = {
 	permissions = permissions,
 
 	AF_UNIX     = AF_UNIX,
+	AF_INET     = AF_INET,
 	SOCK_STREAM = SOCK_STREAM,
 
 	is_supported = is_supported,
