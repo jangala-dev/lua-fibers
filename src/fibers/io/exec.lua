@@ -7,6 +7,7 @@ local op         = require 'fibers.op'
 local sleep      = require 'fibers.sleep'
 local proc_mod   = require 'fibers.io.exec_backend'
 local stream_mod = require 'fibers.io.stream'
+local safe       = require 'coxpcall'
 
 local unpack = rawget(table, 'unpack') or _G.unpack
 local pack   = rawget(table, 'pack') or function (...)
@@ -64,6 +65,8 @@ local DEFAULT_SHUTDOWN_GRACE = 1.0
 ---@field _code integer|nil
 ---@field _signal integer|nil
 ---@field _err string|nil
+---@field _finaliser_detach (fun())|nil
+---@field _cleaned boolean
 local Command = {}
 Command.__index = Command
 
@@ -482,7 +485,10 @@ function Command:output_op()
 
 		return stream:read_all_op():wrap(function (out, io_err)
 			local status, code, signal, perr = perform_with_scope_or_raw(self:run_op())
-			local err_final = io_err or perr
+
+			local _, cerr = self:close()
+			local err_final = io_err or perr or cerr
+
 			return out or '', status, code, signal, err_final
 		end)
 	end)
@@ -563,6 +569,8 @@ end
 ----------------------------------------------------------------------
 
 function Command:_on_scope_exit()
+	if self._cleaned then return end
+	self._cleaned = true
 	if self._started and not self._done then
 		-- Non-interruptible best-effort shutdown.
 		self:_shutdown_uninterruptible(self._shutdown_grace)
@@ -586,6 +594,21 @@ function Command:_on_scope_exit()
 		end
 		self._proc.backend = nil
 	end
+end
+
+function Command:close()
+	self._finaliser_detach()
+
+	self:_on_scope_exit()
+
+	local ok, err = safe.pcall(function ()
+		self:_on_scope_exit()
+	end)
+
+	if not ok then
+		return false, tostring(err)
+	end
+	return true, nil
 end
 
 ----------------------------------------------------------------------
@@ -626,9 +649,11 @@ local function command_from_spec(spec)
 		_err            = nil,
 	}, Command)
 
-	scope:finally(function ()
+	local detach = scope:finally(function ()
 		cmd:_on_scope_exit()
 	end)
+
+	cmd._finaliser_detach = detach
 
 	return cmd
 end
