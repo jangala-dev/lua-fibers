@@ -6,15 +6,22 @@
 --   socket(domain, stype, protocol?) -> Socket
 --   listen_unix(path, opts?)         -> Socket (listening AF_UNIX)
 --   connect_unix(path, stype?, proto?) -> Stream
+--   listen_inet(host, port, opts?)   -> Socket (listening AF_INET)
+--   connect_inet(host, port, opts?)  -> Stream
 --
--- Socket (AF_UNIX focus) supports:
+-- Socket supports:
+--   :bind(sa)
+--   :listen()
 --   :listen_unix(path)
---   :accept_op()          -> Op (resolves to Stream|nil, err)
---   :accept()             -> Stream|nil, err
---   :connect_op(sa)       -> Op (sa currently a UNIX path string)
+--   :listen_inet(host, port)
+--   :accept_op()
+--   :accept()
+--   :connect_op(sa)
 --   :connect(sa)
 --   :connect_unix_op(path)
 --   :connect_unix(path)
+--   :connect_inet_op(host, port)
+--   :connect_inet(host, port)
 --   :close()
 --
 ---@module 'fibers.io.socket'
@@ -40,7 +47,6 @@ Socket.__index = Socket
 ---@return Stream
 local function fd_to_stream(fd, filename)
 	local io = fd_backend.new(fd, { filename = filename })
-	-- For sockets we assume readable + writable.
 	return stream_mod.open(io, true, true)
 end
 
@@ -48,7 +54,6 @@ end
 ---@param fd integer
 ---@return Socket
 local function new_socket(fd)
-	-- Ensure non-blocking behaviour.
 	local ok, err = fd_backend.set_nonblock(fd)
 	if not ok then
 		fd_backend.close_fd(fd)
@@ -65,6 +70,27 @@ function Socket:_fd()
 	return fd
 end
 
+--- Build an AF_INET sockaddr token understood by fd_backend.
+---@param host string
+---@param port number|string
+---@return table|nil sa, any err
+local function inet_sa(host, port)
+	if type(host) ~= 'string' or host == '' then
+		return nil, 'host must be a non-empty string'
+	end
+
+	port = tonumber(port)
+	if not port or port < 0 or port > 65535 then
+		return nil, 'port must be 0..65535'
+	end
+
+	return {
+		family = 'inet',
+		host   = host,
+		port   = math.floor(port),
+	}
+end
+
 ----------------------------------------------------------------------
 -- Constructors
 ----------------------------------------------------------------------
@@ -79,35 +105,80 @@ local function socket(domain, stype, protocol)
 	if not fd then
 		return nil, err
 	end
+
 	local ok, nerr = fd_backend.set_nonblock(fd)
 	if not ok then
 		fd_backend.close_fd(fd)
 		return nil, nerr
 	end
+
 	return new_socket(fd)
 end
 
 ----------------------------------------------------------------------
--- Listening and address helpers (UNIX domain)
+-- Generic bind/listen helpers
+----------------------------------------------------------------------
+
+--- Bind this socket to an address token (UNIX path string or inet table).
+---@param sa any
+---@return boolean|nil ok, any err
+function Socket:bind(sa)
+	local fd = self:_fd()
+	local ok, err = fd_backend.bind(fd, sa)
+	if not ok then
+		return nil, ('bind failed: %s'):format(tostring(err))
+	end
+	return true
+end
+
+--- Mark this socket as listening.
+---@return boolean|nil ok, any err
+function Socket:listen()
+	local fd = self:_fd()
+	local ok, err = fd_backend.listen(fd)
+	if not ok then
+		return nil, ('listen failed: %s'):format(tostring(err))
+	end
+	return true
+end
+
+----------------------------------------------------------------------
+-- Listening and address helpers (UNIX / INET)
 ----------------------------------------------------------------------
 
 --- Listen on a UNIX-domain path using this Socket.
 ---@param path string
 ---@return boolean|nil ok, any err
 function Socket:listen_unix(path)
-	local fd = self:_fd()
-
-	local ok, err = fd_backend.bind(fd, path)
+	local ok, err = self:bind(path)
 	if not ok then
-		return nil, ('bind failed: %s'):format(tostring(err))
+		return nil, err
 	end
+	return self:listen()
+end
 
-	ok, err = fd_backend.listen(fd)
+--- Bind this socket to an IPv4 address/port.
+---@param host string
+---@param port number|string
+---@return boolean|nil ok, any err
+function Socket:bind_inet(host, port)
+	local sa, err = inet_sa(host, port)
+	if not sa then
+		return nil, err
+	end
+	return self:bind(sa)
+end
+
+--- Listen on an IPv4 address/port using this Socket.
+---@param host string
+---@param port number|string
+---@return boolean|nil ok, any err
+function Socket:listen_inet(host, port)
+	local ok, err = self:bind_inet(host, port)
 	if not ok then
-		return nil, ('listen failed: %s'):format(tostring(err))
+		return nil, err
 	end
-
-	return true
+	return self:listen()
 end
 
 ----------------------------------------------------------------------
@@ -126,15 +197,12 @@ function Socket:accept_op()
 			return true, new_fd, nil
 		end
 		if again then
-			-- Would block: wait for readability.
 			return false
 		end
-		-- Hard error.
 		return true, nil, err
 	end
 
 	local function register(task)
-		-- poller wait on listening fd for read readiness.
 		return P:wait(fd, 'rd', task)
 	end
 
@@ -142,7 +210,6 @@ function Socket:accept_op()
 		if not new_fd then
 			return nil, err
 		end
-		-- fd_to_stream will mark it non-blocking via fd_backend.new().
 		return fd_to_stream(new_fd)
 	end
 
@@ -156,11 +223,13 @@ function Socket:accept()
 end
 
 ----------------------------------------------------------------------
--- connect() as an Op (AF_UNIX path as opaque "sa")
+-- connect() as an Op (generic sockaddr token)
 ----------------------------------------------------------------------
 
 --- Build an Op that connects this Socket to an address token.
---- Currently sa is expected to be a UNIX-domain path string.
+--- sa may be:
+---   * UNIX path string
+---   * { family = 'inet', host = '1.2.3.4', port = 1234 }
 ---@param sa any
 ---@return Op
 function Socket:connect_op(sa)
@@ -191,7 +260,6 @@ function Socket:connect_op(sa)
 	end
 
 	local function register(task)
-		-- Non-blocking connect completion is signalled via writability.
 		return P:wait(fd, 'wr', task)
 	end
 
@@ -200,8 +268,7 @@ function Socket:connect_op(sa)
 			return nil, err
 		end
 		local new_fd = fd
-		-- Hand ownership of the fd to the Stream; prevent double-close in Socket:close().
-		self.fd = nil
+		self.fd = nil -- hand ownership to Stream
 		return fd_to_stream(new_fd)
 	end
 
@@ -300,6 +367,89 @@ local function connect_unix(path, stype, protocol)
 end
 
 ----------------------------------------------------------------------
+-- AF_INET convenience
+----------------------------------------------------------------------
+
+--- Build an Op that connects this socket to an IPv4 host/port.
+---@param host string
+---@param port number|string
+---@return Op
+function Socket:connect_inet_op(host, port)
+	local sa, err = inet_sa(host, port)
+	if not sa then
+		error(err, 2)
+	end
+	return self:connect_op(sa)
+end
+
+--- Connect synchronously to an IPv4 host/port.
+---@param host string
+---@param port number|string
+---@return Stream|nil stream, any err
+function Socket:connect_inet(host, port)
+	return perform(self:connect_inet_op(host, port))
+end
+
+--- Listen on an IPv4 address/port and return a listening Socket.
+---@param host string
+---@param port number|string
+---@param opts? { stype?: integer, protocol?: integer }
+---@return Socket|nil s, any err
+local function listen_inet(host, port, opts)
+	opts = opts or {}
+
+	local stype    = opts.stype or fd_backend.SOCK_STREAM
+	local protocol = opts.protocol or 0
+
+	local s, err = socket(fd_backend.AF_INET, stype, protocol)
+	if not s then
+		return nil, err
+	end
+
+	local ok, lerr = s:listen_inet(host, port)
+	if not ok then
+		s:close()
+		return nil, lerr
+	end
+
+	return s
+end
+
+--- Connect to an IPv4 host/port and return a Stream.
+--- opts.bind_host / opts.bind_port can be used to bind a source address/port first.
+---@param host string
+---@param port number|string
+---@param opts? { stype?: integer, protocol?: integer, bind_host?: string, bind_port?: number|string }
+---@return Stream|nil stream, any err
+local function connect_inet(host, port, opts)
+	opts = opts or {}
+
+	local stype    = opts.stype or fd_backend.SOCK_STREAM
+	local protocol = opts.protocol or 0
+
+	local s, err = socket(fd_backend.AF_INET, stype, protocol)
+	if not s then
+		return nil, err
+	end
+
+	if opts.bind_host ~= nil or opts.bind_port ~= nil then
+		local ok, berr = s:bind_inet(opts.bind_host or '0.0.0.0', opts.bind_port or 0)
+		if not ok then
+			s:close()
+			return nil, berr
+		end
+	end
+
+	local stream, cerr = s:connect_inet(host, port)
+	if not stream then
+		s:close()
+		return nil, cerr
+	end
+
+	return stream
+end
+
+----------------------------------------------------------------------
 -- Lifecycle
 ----------------------------------------------------------------------
 
@@ -320,11 +470,17 @@ end
 
 return {
 	socket       = socket,
+
 	listen_unix  = listen_unix,
 	connect_unix = connect_unix,
+
+	listen_inet  = listen_inet,
+	connect_inet = connect_inet,
+
 	Socket       = Socket,
 
 	-- re-export useful constants for callers
 	AF_UNIX     = fd_backend.AF_UNIX,
+	AF_INET     = fd_backend.AF_INET,
 	SOCK_STREAM = fd_backend.SOCK_STREAM,
 }

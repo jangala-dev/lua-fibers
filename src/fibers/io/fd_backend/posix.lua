@@ -92,8 +92,6 @@ end
 -- File-level helpers
 ----------------------------------------------------------------------
 
--- Mode and permission tables as before, but using POSIX constants.
-
 local modes = {
 	r      = fcntl.O_RDONLY,
 	w      = bit.bor(fcntl.O_WRONLY, fcntl.O_CREAT, fcntl.O_TRUNC),
@@ -117,7 +115,6 @@ local permissions = {}
 permissions['rw-r--r--'] = bit.bor(pstat.S_IRUSR, pstat.S_IWUSR, pstat.S_IRGRP, pstat.S_IROTH)
 permissions['rw-rw-rw-'] = bit.bor(permissions['rw-r--r--'], pstat.S_IWGRP, pstat.S_IWOTH)
 
--- Directory-friendly defaults (execute bits matter for traversal).
 permissions['rwxr-xr-x'] = bit.bor(
 	pstat.S_IRUSR, pstat.S_IWUSR, pstat.S_IXUSR,
 	pstat.S_IRGRP,              pstat.S_IXGRP,
@@ -135,7 +132,6 @@ local function mkdir_path(path, perms)
 		p = perms
 	end
 
-	-- LuaPosix: mkdir(path, mode) -> 0 | nil, errmsg, errnum
 	local ok, err, eno = pstat.mkdir(path, p)
 	if ok == nil then
 		return false, errno_msg('mkdir failed', err, eno)
@@ -175,7 +171,6 @@ local function pipe_fds()
 end
 
 local function mktemp(prefix, perms)
-	-- Normalise perms: nil -> default, string -> lookup in permissions table.
 	if perms == nil then
 		perms = permissions['rw-r--r--']
 	elseif type(perms) == 'string' then
@@ -264,6 +259,84 @@ end
 -- Socket helpers on top of posix.sys.socket
 ----------------------------------------------------------------------
 
+local AF_UNIX     = socket_mod.AF_UNIX
+local AF_INET     = socket_mod.AF_INET
+local AF_INET6    = socket_mod.AF_INET6
+local SOCK_STREAM = socket_mod.SOCK_STREAM
+local SOCK_DGRAM  = socket_mod.SOCK_DGRAM
+
+-- Normalise sockaddr tokens used by higher layers into luaposix sockaddr tables.
+-- Accepted inputs:
+--   UNIX:
+--     "/tmp/sock"
+--     { family = "unix", path = "/tmp/sock" }
+--   INET:
+--     { family = "inet",  host = "127.0.0.1", port = 1234 }
+--     { family = "inet",  addr = "127.0.0.1", port = 1234 }
+--   INET6:
+--     { family = "inet6", host = "::1",       port = 1234 }
+--   Raw luaposix sockaddr table:
+--     { family = socket_mod.AF_INET, addr = "...", port = ... }
+local function norm_sockaddr(sa)
+	if type(sa) == 'string' then
+		-- Convenience form: UNIX path
+		return { family = AF_UNIX, path = sa }
+	end
+
+	if type(sa) ~= 'table' then
+		return nil, 'unsupported sockaddr representation'
+	end
+
+	-- If this already looks like a luaposix sockaddr table, accept it.
+	if type(sa.family) == 'number' then
+		return sa
+	end
+
+	local fam = sa.family or sa.af
+	if fam == 'unix' then
+		if not AF_UNIX then
+			return nil, 'AF_UNIX not supported'
+		end
+		local path = sa.path or sa.host
+		if type(path) ~= 'string' or path == '' then
+			return nil, 'invalid unix sockaddr path'
+		end
+		return { family = AF_UNIX, path = path }
+	end
+
+	if fam == 'inet' then
+		if not AF_INET then
+			return nil, 'AF_INET not supported'
+		end
+		local addr = sa.addr or sa.host
+		local port = tonumber(sa.port)
+		if addr ~= nil and type(addr) ~= 'string' then
+			return nil, 'invalid inet sockaddr addr'
+		end
+		if port == nil then
+			return nil, 'invalid inet sockaddr port'
+		end
+		return { family = AF_INET, addr = addr, port = port }
+	end
+
+	if fam == 'inet6' then
+		if not AF_INET6 then
+			return nil, 'AF_INET6 not supported'
+		end
+		local addr = sa.addr or sa.host
+		local port = tonumber(sa.port)
+		if addr ~= nil and type(addr) ~= 'string' then
+			return nil, 'invalid inet6 sockaddr addr'
+		end
+		if port == nil then
+			return nil, 'invalid inet6 sockaddr port'
+		end
+		return { family = AF_INET6, addr = addr, port = port }
+	end
+
+	return nil, 'unsupported sockaddr family'
+end
+
 --- Create a socket fd.
 ---@param domain integer
 ---@param stype integer
@@ -278,23 +351,16 @@ local function socket_fd(domain, stype, protocol)
 end
 
 --- Bind a socket to an address token.
----
---- For AF_UNIX, we treat sa as a path string.
 ---@param fd integer
 ---@param sa any
 ---@return boolean ok, string|nil err, integer|nil eno
 local function bind_fd(fd, sa)
-	local addr
-	if type(sa) == 'string' then
-		addr = { family = socket_mod.AF_UNIX, path = sa }
-	elseif type(sa) == 'table' then
-		addr = sa
-	else
-		return false, 'unsupported sockaddr representation', nil
+	local addr, aerr = norm_sockaddr(sa)
+	if not addr then
+		return false, aerr, nil
 	end
 
 	local ok, err, eno = socket_mod.bind(fd, addr)
-	-- LuaPosix returns 0 on success, nil on error.
 	if ok == nil then
 		return false, errno_msg('bind failed', err, eno), eno
 	end
@@ -317,7 +383,6 @@ end
 ---@param fd integer
 ---@return integer|nil newfd, string|nil err, boolean again
 local function accept_fd(fd)
-	-- LuaPosix: accept(fd) -> connfd, addr | nil, errmsg, errnum
 	local newfd, addr_or_err, errnum = socket_mod.accept(fd)
 	if newfd ~= nil then
 		return newfd, nil, false
@@ -337,23 +402,17 @@ end
 ---@param sa any
 ---@return boolean|nil ok, string|nil err, boolean inprogress
 local function connect_start_fd(fd, sa)
-	local addr
-	if type(sa) == 'string' then
-		addr = { family = socket_mod.AF_UNIX, path = sa }
-	elseif type(sa) == 'table' then
-		addr = sa
-	else
-		return nil, 'unsupported sockaddr representation', false
+	local addr, aerr = norm_sockaddr(sa)
+	if not addr then
+		return nil, aerr, false
 	end
 
-	-- LuaPosix: connect(fd, addr) -> 0 | nil, errmsg, errnum
 	local ok, err, eno = socket_mod.connect(fd, addr)
 	if ok ~= nil then
-		-- Successful connect (may still be non-blocking socket, but connect has completed).
 		return true, nil, false
 	end
 
-	if eno == errno.EINPROGRESS then
+	if eno == errno.EINPROGRESS or eno == errno.EALREADY or eno == errno.EAGAIN then
 		return nil, nil, true
 	end
 
@@ -370,14 +429,16 @@ local function connect_finish_fd(fd)
 	if soerr == nil then
 		return false, errno_msg('getsockopt(SO_ERROR) failed', err, eno)
 	end
+
+	soerr = tonumber(soerr) or 0
 	if soerr == 0 then
 		return true, nil
 	end
+
 	return false, 'connect error errno ' .. tostring(soerr)
 end
 
 local function is_supported()
-	-- If we reached here, luaposix is present; assume support.
 	return true
 end
 
@@ -412,8 +473,11 @@ local ops = {
 	modes       = modes,
 	permissions = permissions,
 
-	AF_UNIX     = socket_mod.AF_UNIX,
-	SOCK_STREAM = socket_mod.SOCK_STREAM,
+	AF_UNIX     = AF_UNIX,
+	AF_INET     = AF_INET,
+	AF_INET6    = AF_INET6,
+	SOCK_STREAM = SOCK_STREAM,
+	SOCK_DGRAM  = SOCK_DGRAM,
 
 	is_supported = is_supported,
 }
