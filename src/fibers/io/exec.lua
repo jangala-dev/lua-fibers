@@ -597,11 +597,11 @@ function Command:_on_scope_exit()
 end
 
 function Command:close()
-	self._finaliser_detach()
+	if self._finaliser_detach then
+		self._finaliser_detach()
+	end
 
-	self:_on_scope_exit()
-
-	local ok, err = safe.pcall(function ()
+	local ok, err = safe.pcall(function()
 		self:_on_scope_exit()
 	end)
 
