@@ -472,7 +472,7 @@ end
 -- Finalisers
 ----------------------------------------------------------------------
 
----@param f fun(aborted:boolean, status:string, primary:any|nil)
+---@param f fun(aborted:boolean, status:'ok'|'failed'|'cancelled', primary:any|nil)
 ---@return fun() detach
 function Scope:finally(f)
 	if type(f) ~= 'function' then error('scope:finally expects a function', 2) end
@@ -563,7 +563,7 @@ function Scope:_finalise_join_body()
 
 		if f then
 			local ok, err = safe.xpcall(function ()
-				return f(aborted, st, (st == 'failed') and primary or nil)
+				return f(aborted, st, primary)
 			end, finaliser_handler)
 
 			if not ok then
