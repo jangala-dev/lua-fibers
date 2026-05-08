@@ -17,6 +17,10 @@
 --     failed, records a primary error, and cancels the scope to stop siblings.
 --   * Join/finalisation is non-interruptible: join runs in a join worker and uses
 --     op.perform_raw, so it is not interrupted by scope cancellation.
+--   * Finalisers may perform only Ops that are ready now.  During finalisation,
+--     scope-aware perform attempts the Op immediately and raises if it would
+--     suspend.  This permits explicit try-now helpers built with or_else(),
+--     while preventing hidden waits in cleanup paths.
 --   * Scope-aware ops:
 --       - try(ev)     -> 'ok'|'failed'|'cancelled', ...
 --       - perform(ev) -> returns results on ok; raises on failed/cancelled
@@ -99,6 +103,8 @@ local function join_tb_handler(e, tb)
 end
 
 local finaliser_handler = tb_handler
+
+local FINALISER_WAIT_ERR = 'attempted to perform a non-ready Op during scope finalisation'
 
 ----------------------------------------------------------------------
 -- Types / state
@@ -630,10 +636,34 @@ end
 
 ---@param ev Op
 ---@return Op
+local function finalising_try_op(ev)
+	-- Finalisers run after the scope is already failed, cancelled or joining.  They
+	-- still need to be able to use explicit immediate attempts such as:
+	--
+	--   tx:send_op(value):or_else(function () return nil, 'not_ready' end)
+	--
+	-- but finalisation must not hide a suspension.  or_else performs only the
+	-- Op's readiness probe and chooses the fallback if it would block.  For
+	-- composite Ops this also triggers losing-arm nacks/abort handlers, which is
+	-- the right cleanup behaviour for an attempted synchronisation that did not
+	-- commit.
+	return ev:wrap(function (...)
+		return 'ok', ...
+	end):or_else(function ()
+		return 'failed', FINALISER_WAIT_ERR
+	end)
+end
+
+---@param ev Op
+---@return Op
 function Scope:try_op(ev)
 	assert_op_value(ev)
 
 	return op.guard(function ()
+		if self._finalising then
+			return finalising_try_op(ev)
+		end
+
 		if self._failed_primary ~= nil then return op.always('failed', self._failed_primary) end
 		if self._cancel_reason ~= nil then return op.always('cancelled', self._cancel_reason) end
 

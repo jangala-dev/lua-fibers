@@ -11,7 +11,9 @@ local safe    = require 'coxpcall'
 local oneshot = require 'fibers.oneshot'
 
 local unpack = rawget(table, 'unpack') or _G.unpack
-local pack   = rawget(table, 'pack') or function (...) return { n = select('#', ...), ... } end
+local pack   = rawget(table, 'pack') or function (...)
+	return { n = select('#', ...), ... }
+end
 
 local function id_wrap(...) return ... end
 
@@ -21,40 +23,41 @@ local function id_wrap(...) return ... end
 
 --- A suspension of a fiber waiting on an op.
 ---@class Suspension : Task
----@field state "waiting"|"synchronized"   # whether the suspension is still pending
----@field sched Scheduler                  # scheduler used to reschedule the fiber
----@field fiber Fiber                      # fiber object to resume
----@field wrap WrapFn|nil                  # wrap function to apply on resume
----@field val table|nil                    # packed resume values
+---@field state "waiting"|"synchronized"
+---@field sched Scheduler
+---@field fiber Fiber
+---@field wrap WrapFn|nil
+---@field val table|nil
 local Suspension = {}
 Suspension.__index = Suspension
 
 ---@class CompleteTask : Task
----@field suspension Suspension               # suspension to complete
----@field wrap WrapFn                         # wrap function applied on completion
----@field val table                           # packed completion values
+---@field suspension Suspension
+---@field wrap WrapFn
+---@field val table
 local CompleteTask = {}
 CompleteTask.__index = CompleteTask
 
---- Check whether the suspension is still waiting.
----@return boolean
 function Suspension:waiting()
 	return self.state == 'waiting'
 end
 
 function Suspension:add_cleanup(f)
-    if type(f) ~= 'function' then error('cleanup must be a function', 2) end
+	if type(f) ~= 'function' then
+		error('cleanup must be a function', 2)
+	end
 
 	if self.cleaned then
-		-- already completed; run immediately (best-effort)
 		safe.pcall(f)
 		return
 	end
+
 	local cs = self.cleanups
 	if not cs then
 		cs = {}
 		self.cleanups = cs
 	end
+
 	cs[#cs + 1] = f
 end
 
@@ -72,31 +75,18 @@ function Suspension:_run_cleanups()
 	end
 end
 
--- Waker capability (scheduler is an implementation detail)
-
---- Wake a task to run “soon”.
----@param task Task
 function Suspension:wakeup(task)
 	self.sched:schedule(task)
 end
 
---- Wake a task at an absolute time on the scheduler clock.
----@param t number
----@param task Task
 function Suspension:at_time(t, task)
 	self.sched:schedule_at_time(t, task)
 end
 
---- Wake a task after a delay from the scheduler’s current time.
----@param dt number
----@param task Task
 function Suspension:after(dt, task)
 	self.sched:schedule_after_sleep(dt, task)
 end
 
---- Mark a suspension as complete and enqueue it on the scheduler.
----@param wrap WrapFn
----@param ... any
 function Suspension:complete(wrap, ...)
 	assert(self:waiting())
 	self.state = 'synchronized'
@@ -106,10 +96,6 @@ function Suspension:complete(wrap, ...)
 	self.sched:schedule(self)
 end
 
---- Complete a suspension and resume the fiber immediately.
----@param wrap WrapFn
----@param ... any
----@return any
 function Suspension:complete_and_run(wrap, ...)
 	assert(self:waiting())
 	self.state = 'synchronized'
@@ -117,23 +103,19 @@ function Suspension:complete_and_run(wrap, ...)
 	return self.fiber:resume(wrap, ...)
 end
 
---- Create a task that will complete this suspension when run.
----@param wrap WrapFn
----@param ... any
----@return CompleteTask
 function Suspension:complete_task(wrap, ...)
-	return setmetatable({ suspension = self, wrap = wrap, val = pack(...) }, CompleteTask)
+	return setmetatable({
+		suspension = self,
+		wrap       = wrap,
+		val        = pack(...),
+	}, CompleteTask)
 end
 
---- Run the suspension completion task as a scheduled task.
 function Suspension:run()
 	assert(not self:waiting())
 	return self.fiber:resume(self.wrap, unpack(self.val, 1, self.val.n))
 end
 
----@param sched Scheduler
----@param fib any
----@return Suspension
 local function new_suspension(sched, fib)
 	return setmetatable({
 		state    = 'waiting',
@@ -144,47 +126,45 @@ local function new_suspension(sched, fib)
 	}, Suspension)
 end
 
---- A CompleteTask completes a suspension (if still waiting) when run.
 function CompleteTask:run()
 	if self.suspension:waiting() then
-		self.suspension:complete_and_run(self.wrap, unpack(self.val, 1, self.val.n))
+		self.suspension:complete_and_run(
+			self.wrap,
+			unpack(self.val, 1, self.val.n)
+		)
 	end
 end
 
---- Cancel a CompleteTask, completing the suspension with a tagged result.
----@param reason? string
 function CompleteTask:cancel(reason)
 	if self.suspension:waiting() then
 		local msg = reason or 'cancelled'
+
 		local function cancelled_wrap()
-			-- Convention: (ok:boolean, value_or_reason:any)
 			return false, msg
 		end
+
 		self.suspension:complete(cancelled_wrap)
 	end
 end
 
 ----------------------------------------------------------------------
--- Op type (unifies primitive and composite ops)
+-- Op type
 ----------------------------------------------------------------------
 
 ---@alias WrapFn fun(...: any): ...
 ---@alias TryFn fun(): boolean, ...
 ---@alias BlockFn fun(suspension: Suspension, wrap_fn: WrapFn)
 
---- Negative acknowledgement condition used by with_nack/abort.
 ---@class NackCond
----@field wait_op fun(): Op   # op that becomes ready when the condition fires (if present)
----@field signal fun()        # trigger the condition (idempotent)
+---@field wait_op fun(): Op
+---@field signal fun()
 
---- Compiled primitive leaf of an op tree.
 ---@class CompiledLeaf
 ---@field try_fn TryFn
 ---@field block_fn BlockFn
 ---@field wrap WrapFn
 ---@field nacks NackCond[]
 
---- General op representation (primitive or composite).
 ---@class Op
 ---@field kind "prim"|"choice"|"guard"|"with_nack"|"wrap"|"abort"
 ---@field ops Op[]|nil
@@ -197,70 +177,64 @@ end
 local Op = {}
 Op.__index = Op
 
--- Forward declaration so compile_op can refer to perform.
 local perform
 
+local function is_op(v)
+	return type(v) == 'table' and getmetatable(v) == Op
+end
+
 --- Construct a primitive op.
----   try_fn() -> success:boolean, ...
----   block_fn(suspension, wrap_fn) must arrange asynchronous completion
----   by calling suspension:complete(...), typically from an event handler;
----   it must not resume the fiber synchronously via complete_and_run().
 ---@param wrap_fn? WrapFn
 ---@param try_fn TryFn
 ---@param block_fn BlockFn
 ---@return Op
 local function new_primitive(wrap_fn, try_fn, block_fn)
-    if type(try_fn) ~= 'function' then error('new_primitive: try_fn must be a function', 2) end
-	if type(block_fn) ~= 'function' then error('new_primitive: block_fn must be a function', 2) end
-	if wrap_fn ~= nil and type(wrap_fn) ~= 'function' then error('new_primitive: wrap_fn must be a function or nil', 2) end
-
-	return setmetatable(
-		{
-			kind     = 'prim',
-			wrap_fn  = wrap_fn or id_wrap,
-			try_fn   = try_fn,
-			block_fn = block_fn,
-		},
-		Op
-	)
-end
-
---- Choice op over a non-empty list of sub-ops.
---- Nested choices are flattened.
----@param ... Op
----@return Op
-local function choice(...)
-	local ops = {}
-	for _, op in ipairs({ ... }) do
-		if type(op) ~= 'table' or getmetatable(op) ~= Op then error('choice expects Op values', 2) end
-		if op.kind == 'choice' then
-			for _, sub in ipairs(op.ops) do
-				ops[#ops + 1] = sub
-			end
-		else
-			ops[#ops + 1] = op
-		end
+	if type(try_fn) ~= 'function' then
+		error('new_primitive: try_fn must be a function', 2)
 	end
-	if #ops == 0 then error('choice expects at least one op', 2) end
-	if #ops == 1 then return ops[1] end
-	return setmetatable({ kind = 'choice', ops = ops }, Op)
+
+	if type(block_fn) ~= 'function' then
+		error('new_primitive: block_fn must be a function', 2)
+	end
+
+	if wrap_fn ~= nil and type(wrap_fn) ~= 'function' then
+		error('new_primitive: wrap_fn must be a function or nil', 2)
+	end
+
+	return setmetatable({
+		kind     = 'prim',
+		wrap_fn  = wrap_fn or id_wrap,
+		try_fn   = try_fn,
+		block_fn = block_fn,
+	}, Op)
 end
 
 --- Delayed op builder; executed once per synchronisation.
 ---@param g fun(): Op
 ---@return Op
 local function guard(g)
-	if type(g) ~= 'function' then error('guard expects a function', 2) end
-	return setmetatable({ kind = 'guard', builder = g }, Op)
+	if type(g) ~= 'function' then
+		error('guard expects a function', 2)
+	end
+
+	return setmetatable({
+		kind    = 'guard',
+		builder = g,
+	}, Op)
 end
 
 --- CML-style with_nack.
---- The builder is passed a nack op that becomes ready if this arm loses in a choice.
 ---@param g fun(nack_op: Op): Op
 ---@return Op
 local function with_nack(g)
-	if type(g) ~= 'function' then error('with_nack expects a function', 2) end
-	return setmetatable({ kind = 'with_nack', builder = g }, Op)
+	if type(g) ~= 'function' then
+		error('with_nack expects a function', 2)
+	end
+
+	return setmetatable({
+		kind    = 'with_nack',
+		builder = g,
+	}, Op)
 end
 
 --- Op that is immediately ready with the given results.
@@ -268,11 +242,16 @@ end
 ---@return Op
 local function always(...)
 	local results = pack(...)
-	local function try()
-		return true, unpack(results, 1, results.n)
-	end
-	local function block() error('always: block_fn should never run') end
-	return new_primitive(nil, try, block)
+
+	return new_primitive(
+		nil,
+		function ()
+			return true, unpack(results, 1, results.n)
+		end,
+		function ()
+			error('always: block_fn should never run')
+		end
+	)
 end
 
 --- Op that never becomes ready.
@@ -280,46 +259,113 @@ end
 local function never()
 	return new_primitive(
 		nil,
-		function () return false end,
-		function () end
+		function ()
+			return false
+		end,
+		function ()
+			-- Intentionally never completes the suspension.
+		end
 	)
 end
 
---- Wrap this op with a post-processing function f (commit phase).
---- Wraps compose in declaration order.
----@param f WrapFn
+local function append_choice_arg(out, v, level)
+	level = level or 2
+
+	if is_op(v) then
+		if v.kind == 'choice' then
+			for i = 1, #(v.ops or {}) do
+				out[#out + 1] = v.ops[i]
+			end
+		else
+			out[#out + 1] = v
+		end
+
+		return
+	end
+
+	if type(v) == 'table' then
+		local n = #v
+
+		for k in pairs(v) do
+			if type(k) ~= 'number'
+				or k < 1
+				or k % 1 ~= 0
+				or k > n
+			then
+				error('choice expects Op values or dense arrays of Op values', level)
+			end
+		end
+
+		for i = 1, n do
+			append_choice_arg(out, v[i], level + 1)
+		end
+
+		return
+	end
+
+	error('choice expects Op values or dense arrays of Op values', level)
+end
+
+--- Choice op over zero or more sub-ops.
+---
+--- Empty choice is valid and never becomes ready.
+--- Nested choices are flattened.
+---
+--- Accepted forms:
+---   choice(op_a, op_b)
+---   choice({ op_a, op_b })
+---   choice(op_a, { op_b, op_c })
+---   choice()
+---   choice({})
+---@param ... Op|Op[]
 ---@return Op
+local function choice(...)
+	local ops = {}
+
+	for i = 1, select('#', ...) do
+		append_choice_arg(ops, select(i, ...), 2)
+	end
+
+	if #ops == 0 then return never() end
+	if #ops == 1 then return ops[1] end
+
+	return setmetatable({
+		kind = 'choice',
+		ops  = ops,
+	}, Op)
+end
+
 function Op:wrap(f)
-	if type(f) ~= 'function' then error('wrap expects a function', 2) end
-	return setmetatable(
-		{ kind = 'wrap', inner = self, wrap_fn = f },
-		Op
-	)
+	if type(f) ~= 'function' then
+		error('wrap expects a function', 2)
+	end
+
+	return setmetatable({
+		kind    = 'wrap',
+		inner   = self,
+		wrap_fn = f,
+	}, Op)
 end
 
---- Attach an abort handler to this op.
---- f() is run if this op participates in a choice and does not win.
----@param f fun()
----@return Op
 function Op:on_abort(f)
-	if type(f) ~= 'function' then error('on_abort expects a function', 2) end
-	return setmetatable(
-		{ kind = 'abort', inner = self, abort_fn = f },
-		Op
-	)
+	if type(f) ~= 'function' then
+		error('on_abort expects a function', 2)
+	end
+
+	return setmetatable({
+		kind     = 'abort',
+		inner    = self,
+		abort_fn = f,
+	}, Op)
 end
 
 ----------------------------------------------------------------------
--- Simple one-shot condition primitive (used for with_nack)
+-- Nack conditions
 ----------------------------------------------------------------------
 
---- Create a nack condition optionally carrying an abort handler.
----@param opts? { abort_fn: fun() }
----@return NackCond
 local function new_cond(opts)
 	local abort_fn = opts and opts.abort_fn or nil
 
-	-- Oneshot runs abort_fn (if any) after all waiters have been invoked.
 	local os = oneshot.new(function ()
 		if abort_fn then
 			safe.pcall(abort_fn)
@@ -329,92 +375,89 @@ local function new_cond(opts)
 	local function wait_op()
 		assert(not abort_fn, 'abort-only cond has no wait_op')
 
-		local function try()
-			return os:is_triggered()
-		end
+		return new_primitive(
+			nil,
 
-		local function block(suspension, wrap_fn)
-			-- If already triggered, add_waiter will run the thunk immediately.
-			local cancel = os:add_waiter(function ()
-				if suspension:waiting() then
-					suspension:complete(wrap_fn)
-				end
-			end)
-			-- ensure we drop the waiter closure if this suspension completes via another arm
-			suspension:add_cleanup(cancel)
-		end
+			function ()
+				return os:is_triggered()
+			end,
 
-		return new_primitive(nil, try, block)
-	end
+			function (suspension, wrap_fn)
+				local cancel = os:add_waiter(function ()
+					if suspension:waiting() then
+						suspension:complete(wrap_fn)
+					end
+				end)
 
-	local function signal()
-		os:signal()
+				suspension:add_cleanup(cancel)
+			end
+		)
 	end
 
 	return {
 		wait_op = wait_op,
-		signal  = signal,
+
+		signal = function ()
+			os:signal()
+		end,
 	}
 end
 
 ----------------------------------------------------------------------
--- Compile an op tree into primitive leaves
+-- Compile op tree
 ----------------------------------------------------------------------
 
----@param op Op
+---@param ev Op
 ---@param outer_wrap? WrapFn
 ---@param out? CompiledLeaf[]
 ---@param nacks? NackCond[]
 ---@return CompiledLeaf[]
-local function compile_op(op, outer_wrap, out, nacks)
+local function compile_op(ev, outer_wrap, out, nacks)
 	out        = out or {}
 	outer_wrap = outer_wrap or id_wrap
 	nacks      = nacks or {}
 
-	local kind = op.kind
-
-	if kind == 'choice' then
-		for _, sub in ipairs(op.ops) do
+	if ev.kind == 'choice' then
+		for _, sub in ipairs(ev.ops or {}) do
 			compile_op(sub, outer_wrap, out, nacks)
 		end
 
-	elseif kind == 'guard' then
-		local inner = op.builder()
+	elseif ev.kind == 'guard' then
+		local inner = ev.builder()
 		compile_op(inner, outer_wrap, out, nacks)
 
-	elseif kind == 'with_nack' then
-		local cond        = new_cond()
-		local nack_op     = cond.wait_op()
-		local inner       = op.builder(nack_op)
+	elseif ev.kind == 'with_nack' then
+		local cond = new_cond()
+		local inner = ev.builder(cond.wait_op())
 		local child_nacks = { unpack(nacks) }
 
 		child_nacks[#child_nacks + 1] = cond
 		compile_op(inner, outer_wrap, out, child_nacks)
 
-	elseif kind == 'wrap' then
-		-- Wraps compose in declaration order: op:wrap(f1):wrap(f2) → f2(f1(...)).
-		local f         = assert(op.wrap_fn)
+	elseif ev.kind == 'wrap' then
+		local f = assert(ev.wrap_fn)
+
 		local new_outer = function (...)
 			return outer_wrap(f(...))
 		end
-		compile_op(op.inner, new_outer, out, nacks)
 
-	elseif kind == 'abort' then
-		local cond        = new_cond { abort_fn = op.abort_fn }
+		compile_op(ev.inner, new_outer, out, nacks)
+
+	elseif ev.kind == 'abort' then
+		local cond = new_cond({ abort_fn = ev.abort_fn })
 		local child_nacks = { unpack(nacks) }
 
 		child_nacks[#child_nacks + 1] = cond
-		compile_op(op.inner, outer_wrap, out, child_nacks)
+		compile_op(ev.inner, outer_wrap, out, child_nacks)
 
-	else -- 'prim'
+	else
 		local function wrapped(...)
-			-- Any Lua error here is treated as a bug and propagates normally.
-			return outer_wrap(op.wrap_fn(...))
+			return outer_wrap(ev.wrap_fn(...))
 		end
 
 		out[#out + 1] = {
-			try_fn   = op.try_fn,
-			block_fn = op.block_fn,
+			try_fn   = ev.try_fn,
+			block_fn = ev.block_fn,
 			wrap     = wrapped,
 			nacks    = nacks,
 		}
@@ -424,101 +467,92 @@ local function compile_op(op, outer_wrap, out, nacks)
 end
 
 ----------------------------------------------------------------------
--- Nack triggering and non-blocking attempt
+-- Nacks and readiness
 ----------------------------------------------------------------------
 
---- Signal all nack conditions belonging exclusively to losing arms.
----@param ops CompiledLeaf[]
----@param winner_index? integer
-local function trigger_nacks(ops, winner_index)
+local function trigger_nacks(leaves, winner_index)
 	local winner_set
+
 	if winner_index then
 		winner_set = {}
-		local wnacks = ops[winner_index].nacks
-		if wnacks then
-			for i = 1, #wnacks do
-				winner_set[wnacks[i]] = true
-			end
+
+		for _, cond in ipairs(leaves[winner_index].nacks or {}) do
+			winner_set[cond] = true
 		end
 	end
 
-	local function is_winner_cond(cond)
-		return winner_set and winner_set[cond] or false
-	end
-
 	local signalled = {}
-	for i = 1, #ops do
+
+	for i = 1, #leaves do
 		if not winner_index or i ~= winner_index then
-			local nacks = ops[i].nacks
-			if nacks then
-				for j = #nacks, 1, -1 do
-					local cond = nacks[j]
-					if cond and not is_winner_cond(cond) and not signalled[cond] then
-						signalled[cond] = true
-						cond.signal()
-					end
+			for j = #(leaves[i].nacks or {}), 1, -1 do
+				local cond = leaves[i].nacks[j]
+
+				if cond
+					and not (winner_set and winner_set[cond])
+					and not signalled[cond]
+				then
+					signalled[cond] = true
+					cond.signal()
 				end
 			end
 		end
 	end
 end
 
---- Try once to find a ready leaf in ops (random probe order).
---- Returns winner_index and packed results, or nil if none are ready.
----@param ops CompiledLeaf[]
----@return integer|nil, table|nil
-local function try_ready(ops)
-	local n = #ops
+local function try_ready(leaves)
+	local n = #leaves
 	if n == 0 then return nil end
+
 	local start = math.random(n)
+
 	for k = 0, n - 1 do
-		local idx    = ((start + k - 1) % n) + 1
-		local op     = ops[idx]
-		local retval = pack(op.try_fn())
+		local idx = ((start + k - 1) % n) + 1
+		local leaf = leaves[idx]
+		local retval = pack(leaf.try_fn())
+
 		if retval[1] then
 			return idx, retval
 		end
 	end
+
 	return nil
 end
 
---- Apply a leaf's wrap to its packed results.
----@param wrap WrapFn
----@param retval table|nil
----@return any ...
 local function apply_wrap(wrap, retval)
 	assert(retval ~= nil, 'apply_wrap: retval must not be nil')
 	return wrap(unpack(retval, 2, retval.n))
 end
 
 ----------------------------------------------------------------------
--- or_else: biased, non-blocking choice
+-- or_else
 ----------------------------------------------------------------------
 
 --- Non-blocking choice: try this op, otherwise run fallback_thunk.
 ---@param fallback_thunk fun(): any
 ---@return Op
 function Op:or_else(fallback_thunk)
-    if type(fallback_thunk) ~= 'function' then error('or_else expects a function', 2) end
+	if type(fallback_thunk) ~= 'function' then
+		error('or_else expects a function', 2)
+	end
 
-	-- Fast path: primitive non-blocking attempt (no compile, no nacks).
 	if self.kind == 'prim' then
-		-- Cache fields into locals to avoid repeated table lookups in hot loops.
 		local try_fn  = assert(self.try_fn)
 		local wrap_fn = assert(self.wrap_fn)
 
-		-- This op is itself primitive and always non-blocking.
 		return new_primitive(
-			nil, -- identity wrap at this level
+			nil,
+
 			function ()
 				local r = pack(try_fn())
+
 				if r[1] then
-					-- Apply the primitive’s wrap_fn on success.
 					return true, wrap_fn(unpack(r, 2, r.n))
 				end
-				-- Fallback is executed when not ready.
+
 				return true, fallback_thunk()
 			end,
+
 			function ()
 				error('or_else(prim): block_fn should never run')
 			end
@@ -527,10 +561,11 @@ function Op:or_else(fallback_thunk)
 
 	return guard(function ()
 		local leaves = compile_op(self)
-
 		local idx, retval = try_ready(leaves)
+
 		if idx then
 			trigger_nacks(leaves, idx)
+
 			local results = pack(apply_wrap(leaves[idx].wrap, retval))
 			return always(unpack(results, 1, results.n))
 		end
@@ -543,72 +578,61 @@ function Op:or_else(fallback_thunk)
 end
 
 ----------------------------------------------------------------------
--- Blocking choice path
+-- Blocking path
 ----------------------------------------------------------------------
 
---- Block the current fiber until one of the compiled leaves completes.
----@param sched Scheduler
----@param fib any
----@param ops CompiledLeaf[]
-local function block_choice_op(sched, fib, ops)
+local function block_choice_op(sched, fib, leaves)
 	local suspension = new_suspension(sched, fib)
-	for _, op in ipairs(ops) do
-		op.block_fn(suspension, op.wrap)
+
+	for _, leaf in ipairs(leaves) do
+		leaf.block_fn(suspension, leaf.wrap)
 	end
 end
 
 local function block_prim_op(sched, fib, prim)
 	local suspension = new_suspension(sched, fib)
-	-- For a top-level primitive, the leaf wrap is just prim.wrap_fn.
 	prim.block_fn(suspension, prim.wrap_fn)
 end
 
 ----------------------------------------------------------------------
--- Op methods: perform
+-- Perform
 ----------------------------------------------------------------------
 
---- Perform this op (primitive or composite), blocking if necessary.
---- Must be called from within a fiber; errors propagate as normal Lua errors.
----@param op Op
----@return any ...
-perform = function (op)
+perform = function (ev)
 	if not runtime.current_fiber() then
 		error('perform_raw must be called from inside a fiber (use fibers.run as an entry point)', 2)
 	end
 
-	-- Fast path: top-level guard.
-	if op.kind == 'guard' then
-		-- Builder is executed once per synchronisation, as today.
-		return perform(op.builder())
+	if ev.kind == 'guard' then
+		return perform(ev.builder())
 	end
 
-	-- Fast path: single primitive op (no compile, no nacks, no winner scan).
-	if op.kind == 'prim' then
-		local r = pack(op.try_fn())
+	if ev.kind == 'prim' then
+		local r = pack(ev.try_fn())
+
 		if r[1] then
-			return op.wrap_fn(unpack(r, 2, r.n))
+			return ev.wrap_fn(unpack(r, 2, r.n))
 		end
 
-		-- Suspend; resume returns (wrap, ...values...). Apply wrap to values.
-		local suspended = pack(runtime.suspend(block_prim_op, op))
+		local suspended = pack(runtime.suspend(block_prim_op, ev))
 		local wrap = suspended[1]
+
 		return wrap(unpack(suspended, 2, suspended.n))
 	end
 
-	local leaves = compile_op(op)
+	local leaves = compile_op(ev)
 
-	-- Fast path: non-blocking attempt.
 	local idx, retval = try_ready(leaves)
 	if idx then
 		trigger_nacks(leaves, idx)
 		return apply_wrap(leaves[idx].wrap, retval)
 	end
 
-	-- Slow path: block all leaves.
 	local suspended = pack(runtime.suspend(block_choice_op, leaves))
-	local wrap      = suspended[1]
+	local wrap = suspended[1]
 
 	local winner_index
+
 	for i, leaf in ipairs(leaves) do
 		if leaf.wrap == wrap then
 			winner_index = i
@@ -617,30 +641,32 @@ perform = function (op)
 	end
 
 	trigger_nacks(leaves, winner_index)
+
 	return wrap(unpack(suspended, 2, suspended.n))
 end
 
 ----------------------------------------------------------------------
--- bracket : (acquire, release, use) -> 'a op
+-- bracket / finally
 ----------------------------------------------------------------------
 
---- Resource-safe wrapper for an op.
---- acquire() obtains a resource, release(resource, aborted) cleans it up,
---- and use(resource) returns the op that uses it.
----@param acquire fun(): any
----@param release fun(resource: any, aborted: boolean)
----@param use fun(resource: any): Op
----@return Op
 local function bracket(acquire, release, use)
-	if type(acquire) ~= 'function' then error('bracket: acquire must be a function', 2) end
-	if type(release) ~= 'function' then error('bracket: release must be a function', 2) end
-	if type(use) ~= 'function' then error('bracket: use must be a function', 2) end
+	if type(acquire) ~= 'function' then
+		error('bracket: acquire must be a function', 2)
+	end
+
+	if type(release) ~= 'function' then
+		error('bracket: release must be a function', 2)
+	end
+
+	if type(use) ~= 'function' then
+		error('bracket: use must be a function', 2)
+	end
 
 	return guard(function ()
 		local res = acquire()
-		local op  = use(res)
+		local used = use(res)
 
-		local wrapped = op:wrap(function (...)
+		local wrapped = used:wrap(function (...)
 			release(res, false)
 			return ...
 		end)
@@ -651,16 +677,11 @@ local function bracket(acquire, release, use)
 	end)
 end
 
-----------------------------------------------------------------------
--- finally : (op, cleanup) -> op'
-----------------------------------------------------------------------
-
---- Attach cleanup(aborted) to an op.
---- cleanup is called with aborted=true if the op loses in a choice.
----@param cleanup fun(aborted: boolean)
----@return Op
 function Op:finally(cleanup)
-	if type(cleanup) ~= 'function' then error('finally expects a function', 2) end
+	if type(cleanup) ~= 'function' then
+		error('finally expects a function', 2)
+	end
+
 	return bracket(
 		function () return nil end,
 		function (_, aborted) cleanup(aborted) end,
@@ -672,56 +693,68 @@ end
 -- Higher-level choice helpers
 ----------------------------------------------------------------------
 
---- Race a list of ops, applying on_win(index, ...) to the winner's result.
----@param ops Op[]
----@param on_win fun(index: integer, ...: any): ...
----@return Op
 local function race(ops, on_win)
-    if type(on_win) ~= 'function' then error('race expects on_win callback', 2) end
+	if type(on_win) ~= 'function' then
+		error('race expects on_win callback', 2)
+	end
+
+	if type(ops) ~= 'table' then
+		error('race expects a dense array of Op values', 2)
+	end
+
 	local wrapped = {}
-	for i, op in ipairs(ops) do
-		wrapped[i] = op:wrap(function (...)
+
+	for i, ev in ipairs(ops) do
+		if not is_op(ev) then
+			error('race expects a dense array of Op values', 2)
+		end
+
+		wrapped[i] = ev:wrap(function (...)
 			return on_win(i, ...)
 		end)
 	end
-	return choice(unpack(wrapped))
+
+	return choice(wrapped)
 end
 
---- Race ops and return (index, ...results...) of the winner.
----@param ops Op[]
----@return Op
 local function first_ready(ops)
 	return race(ops, function (i, ...)
 		return i, ...
 	end)
 end
 
---- Choice over a table of namedå ops, returning (name, ...results...).
----@param arms table<string, Op>
----@return Op
 local function named_choice(arms)
-	local ops, names = {}, {}
-	for name, op in pairs(arms) do
-		names[#names + 1] = name
-		ops[#ops + 1]     = op
+	if type(arms) ~= 'table' then
+		error('named_choice expects a table of Op values', 2)
 	end
+
+	local ops, names = {}, {}
+
+	for name, ev in pairs(arms) do
+		if not is_op(ev) then
+			error('named_choice expects a table of Op values', 2)
+		end
+
+		names[#names + 1] = name
+		ops[#ops + 1] = ev
+	end
+
 	return race(ops, function (i, ...)
 		return names[i], ...
 	end)
 end
 
---- Choice between two ops, returning (boolean, ...results...).
---- Returns true for the first op, false for the second.
----@param op_true Op
----@param op_false Op
----@return Op
 local function boolean_choice(op_true, op_false)
+	if not is_op(op_true) or not is_op(op_false) then
+		error('boolean_choice expects two Op values', 2)
+	end
+
 	return race({ op_true, op_false }, function (i, ...)
 		if i == 1 then
 			return true, ...
-		else
-			return false, ...
 		end
+
+		return false, ...
 	end)
 end
 

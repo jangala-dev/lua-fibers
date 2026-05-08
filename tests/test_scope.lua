@@ -641,6 +641,57 @@ local function test_uncaught_raw_fiber_is_unscoped_by_default()
 	assert_contains(tostring(unscoped.last), 'raw-fiber-boom', 'unscoped error should include raw-fiber-boom')
 end
 
+local function test_finaliser_receives_cancellation_reason()
+	local seen_aborted, seen_status, seen_primary
+
+	local st, rep, primary = scope_mod.run(function (s)
+		s:finally(function (aborted, status, final_primary)
+			seen_aborted = aborted
+			seen_status = status
+			seen_primary = final_primary
+		end)
+
+		s:cancel('catalogue_changed')
+	end)
+
+	assert(st == 'cancelled', 'scope should end cancelled')
+	assert(primary == 'catalogue_changed', 'scope boundary should return cancellation reason')
+	assert_is_report(rep, 'cancelled scope should return report')
+
+	assert(seen_aborted == true, 'finaliser should see aborted=true')
+	assert(seen_status == 'cancelled', 'finaliser should see status=cancelled')
+	assert(seen_primary == 'catalogue_changed',
+		'finaliser should receive the cancellation reason as primary')
+end
+
+local function test_child_finaliser_receives_parent_cancellation_reason()
+	local seen_status, seen_primary
+
+	local st, rep, primary = scope_mod.run(function (s)
+		local ch = assert(s:child())
+
+		ch:spawn(function (cs)
+			cs:finally(function (_, status, final_primary)
+				seen_status = status
+				seen_primary = final_primary
+			end)
+
+			cs:perform(op.never())
+		end)
+
+		runtime.yield()
+		s:cancel('catalogue_changed')
+	end)
+
+	assert(st == 'cancelled', 'parent should end cancelled')
+	assert(primary == 'catalogue_changed', 'parent should preserve cancellation reason')
+	assert_is_report(rep, 'cancelled parent should return report')
+
+	assert(seen_status == 'cancelled', 'child finaliser should see cancelled')
+	assert(seen_primary == 'catalogue_changed',
+		'child finaliser should receive propagated cancellation reason')
+end
+
 -------------------------------------------------------------------------------
 -- Suite entry
 -------------------------------------------------------------------------------
@@ -672,6 +723,9 @@ local function run_all_tests()
 	test_run_op_parent_closed_before_start_is_cancelled()
 
 	test_uncaught_raw_fiber_is_unscoped_by_default()
+
+	test_finaliser_receives_cancellation_reason()
+	test_child_finaliser_receives_parent_cancellation_reason()
 end
 
 -------------------------------------------------------------------------------
