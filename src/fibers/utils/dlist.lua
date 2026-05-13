@@ -11,6 +11,7 @@ DListNode.__index = DListNode
 ---@class DList
 ---@field head DListNode|nil
 ---@field tail DListNode|nil
+---@field len integer
 local DList = {}
 DList.__index = DList
 
@@ -23,6 +24,8 @@ function DListNode:remove()
   local p, n = self.prev, self.next
   if p then p.next = n else list.head = n end
   if n then n.prev = p else list.tail = p end
+
+  list.len = list.len - 1
 
   self.list, self.prev, self.next = nil, nil, nil
   self.value = nil
@@ -37,12 +40,34 @@ function DList:push_tail(value)
     self.head = node
   end
   self.tail = node
+  self.len = self.len + 1
   return node
+end
+
+function DList:pop_head()
+  local node = self.head
+  if not node then return nil end
+  local value = node.value
+  node:remove()
+  return value
+end
+
+function DList:peek_head()
+  local node = self.head
+  return node and node.value or nil
+end
+
+function DList:empty()
+  return self.len == 0
+end
+
+function DList:length()
+  return self.len
 end
 
 ---@return DList
 local function new()
-  return setmetatable({ head = nil, tail = nil }, DList)
+  return setmetatable({ head = nil, tail = nil, len = 0 }, DList)
 end
 
 return {

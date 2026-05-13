@@ -5,6 +5,7 @@ local sep = '-'
 
 local modules = {
 	{ 'utils',    'bytes' },
+	{ 'utils',    'dlist' },
 	{ 'utils',    'bytes_stress' },
 	{ 'io',       'file' },
 	{ 'io',       'mem' },

@@ -30,6 +30,7 @@
 
 local op      = require 'fibers.op'
 local fifo    = require 'fibers.utils.fifo'
+local dlist   = require 'fibers.utils.dlist'
 local perform = require 'fibers.performer'.perform
 
 ---@alias MailboxWant nil  -- reserved for future extensions
@@ -37,9 +38,9 @@ local perform = require 'fibers.performer'.perform
 ---@class MailboxState
 ---@field cap integer
 ---@field buf any|nil      -- FIFO buffer when cap>0; nil for rendezvous
----@field getq any         -- FIFO of waiting receivers
----@field putq any         -- FIFO of waiting senders
----@field taskq any        -- FIFO of task waiters for recv readiness
+---@field getq any         -- cancellable wait-list of waiting receivers
+---@field putq any         -- cancellable wait-list of waiting senders
+---@field taskq any        -- cancellable wait-list of task waiters for recv readiness
 ---@field closed boolean
 ---@field reason any|nil
 ---@field senders integer  -- counted sender handles still open
@@ -67,12 +68,28 @@ Rx.__index = Rx
 ---@return table|nil
 local function pop_active(q)
 	while not q:empty() do
-		local e = q:pop()
+		local e = q:pop_head()
 		local s = e.suspension
 		if not s or s:waiting() then
 			return e
 		end
 	end
+end
+
+local function cleanup_recv_waiter(entry)
+	entry.suspension = nil
+	entry.wrap = nil
+end
+
+local function cleanup_send_waiter(entry)
+	entry.val = nil
+	entry.suspension = nil
+	entry.wrap = nil
+end
+
+local function cleanup_task_waiter(entry)
+	entry.task = nil
+	entry.waker = nil
 end
 
 ---@param st MailboxState
@@ -81,10 +98,11 @@ local function notify_task_waiters(st)
 	if not q then return end
 
 	while not q:empty() do
-		local e = q:pop()
-		if e and e.active then
-			e.active = false
-			e.waker:wakeup(e.task)
+		local e = q:pop_head()
+		if e and e.task and e.waker then
+			local task, waker = e.task, e.waker
+			waker:wakeup(task)
+			cleanup_task_waiter(e)
 		end
 	end
 end
@@ -130,6 +148,7 @@ local function close_state(st, reason)
 			v = st.buf:pop()
 		end
 		recv.suspension:complete(recv.wrap, v)
+		cleanup_recv_waiter(recv)
 	end
 
 	-- Reject senders (nil result means "closed").
@@ -137,6 +156,7 @@ local function close_state(st, reason)
 		local snd = pop_active(st.putq)
 		if not snd then break end
 		snd.suspension:complete(snd.wrap, nil)
+		cleanup_send_waiter(snd)
 	end
 
 	notify_task_waiters(st)
@@ -173,9 +193,9 @@ local function new(capacity, opts)
 	local st = {
 		cap     = capacity,
 		buf     = (capacity > 0) and fifo.new() or nil,
-		getq    = fifo.new(),
-		putq    = fifo.new(),
-		taskq   = fifo.new(),
+		getq    = dlist.new(),
+		putq    = dlist.new(),
+		taskq   = dlist.new(),
 		closed  = false,
 		reason  = nil,
 		senders = 1,
@@ -295,6 +315,7 @@ function Tx:send_op(v)
 		local recv = pop_active(getq)
 		if recv then
 			recv.suspension:complete(recv.wrap, v)
+			cleanup_recv_waiter(recv)
 			notify_task_waiters(st)
 			return true, true
 		end
@@ -316,7 +337,13 @@ function Tx:send_op(v)
 			return suspension:complete(wrap_fn, nil)
 		end
 		-- Only used for "block" policy.
-		putq:push { val = v, suspension = suspension, wrap = wrap_fn }
+		local entry = { val = v, suspension = suspension, wrap = wrap_fn }
+		local node = putq:push_tail(entry)
+		suspension:add_cleanup(function ()
+			if node:remove() then
+				cleanup_send_waiter(entry)
+			end
+		end)
 	end
 
 	return op.new_primitive(nil, try, block)
@@ -339,13 +366,15 @@ function Rx:on_message(task, waker)
 		return { unlink = function () return false end }
 	end
 
-	local entry = { task = task, waker = waker, active = true }
-	st.taskq:push(entry)
+	local entry = { task = task, waker = waker }
+	local node = st.taskq:push_tail(entry)
 
 	return {
 		unlink = function ()
-			if not entry.active then return false end
-			entry.active = false
+			if node:remove() then
+				cleanup_task_waiter(entry)
+				return true
+			end
 			return false
 		end,
 	}
@@ -394,12 +423,17 @@ function Rx:recv_op()
 		if buf and buf:length() > 0 then
 			local v = buf:pop()
 			-- If there was a sender waiting, refill the buffer with its value.
-			if snd then buf:push(snd.val) end
+			if snd then
+				buf:push(snd.val)
+				cleanup_send_waiter(snd)
+			end
 			return true, v
 		end
 
 		if snd then
-			return true, snd.val
+			local v = snd.val
+			cleanup_send_waiter(snd)
+			return true, v
 		end
 
 		if st.closed then
@@ -415,7 +449,13 @@ function Rx:recv_op()
 		if st.closed then
 			return suspension:complete(wrap_fn, nil)
 		end
-		getq:push { suspension = suspension, wrap = wrap_fn }
+		local entry = { suspension = suspension, wrap = wrap_fn }
+		local node = getq:push_tail(entry)
+		suspension:add_cleanup(function ()
+			if node:remove() then
+				cleanup_recv_waiter(entry)
+			end
+		end)
 	end
 
 	return op.new_primitive(nil, try, block)

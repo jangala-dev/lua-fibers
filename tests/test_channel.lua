@@ -4,6 +4,8 @@ package.path = '../src/?.lua;' .. package.path
 
 local fibers = require 'fibers'
 local channel = require 'fibers.channel'
+local op = require 'fibers.op'
+local sleep = require 'fibers.sleep'
 
 local function test_unbuffered()
 	local chan = channel.new()
@@ -88,11 +90,44 @@ local function test_concurrent()
 	print('Concurrent passed')
 end
 
+
+local function test_losing_choice_send_waiter_is_unlinked()
+	local chan = channel.new()
+
+	local tag = fibers.perform(op.choice(
+		chan:put_op('lost'):wrap(function () return 'sent' end),
+		sleep.sleep_op(0.01):wrap(function () return 'timeout' end)
+	))
+	assert(tag == 'timeout', 'expected timeout arm to win')
+	assert(chan.putq:length() == 0, 'losing send waiter should be unlinked')
+
+	fibers.spawn(function () chan:put('ok') end)
+	assert(chan:get() == 'ok', 'channel should still work after losing send cleanup')
+	print('Losing choice send waiter cleanup passed')
+end
+
+local function test_losing_choice_recv_waiter_is_unlinked()
+	local chan = channel.new()
+
+	local tag = fibers.perform(op.choice(
+		chan:get_op():wrap(function () return 'got' end),
+		sleep.sleep_op(0.01):wrap(function () return 'timeout' end)
+	))
+	assert(tag == 'timeout', 'expected timeout arm to win')
+	assert(chan.getq:length() == 0, 'losing receive waiter should be unlinked')
+
+	fibers.spawn(function () chan:put('ok') end)
+	assert(chan:get() == 'ok', 'channel should still work after losing receive cleanup')
+	print('Losing choice receive waiter cleanup passed')
+end
+
 local function main()
 	test_unbuffered()
 	test_buffered()
 	test_unbounded()
 	test_concurrent()
+	test_losing_choice_send_waiter_is_unlinked()
+	test_losing_choice_recv_waiter_is_unlinked()
 	print('All channel tests passed!')
 end
 

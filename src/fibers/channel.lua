@@ -4,14 +4,15 @@
 
 local op      = require 'fibers.op'
 local fifo    = require 'fibers.utils.fifo'
+local dlist   = require 'fibers.utils.dlist'
 local perform = require 'fibers.performer'.perform
 
 --- Bidirectional communication channel between fibers.
 ---@class Channel
 ---@field buffer table|nil     # optional FIFO buffer (nil for unbuffered)
 ---@field buffer_size integer
----@field getq table           # queue of waiting receivers
----@field putq table           # queue of waiting senders
+---@field getq table           # cancellable wait-list of waiting receivers
+---@field putq table           # cancellable wait-list of waiting senders
 local Channel = {}
 Channel.__index = Channel
 
@@ -29,13 +30,13 @@ local function new(buffer_size)
 	return setmetatable({
 		buffer      = buffer,
 		buffer_size = buffer_size,
-		getq        = fifo.new(), -- waiting receivers
-		putq        = fifo.new(), -- waiting senders
+		getq        = dlist.new(), -- waiting receivers
+		putq        = dlist.new(), -- waiting senders
 	}, Channel)
 end
 
 ----------------------------------------------------------------------
--- Helpers: pop active entries based on suspension state
+-- Helpers: cancellable wait-list entries
 ----------------------------------------------------------------------
 
 --- Pop the next entry whose suspension is still waiting, if any.
@@ -43,12 +44,25 @@ end
 ---@return table|nil
 local function pop_active(q)
 	while not q:empty() do
-		local entry = q:pop()
+		local entry = q:pop_head()
 		if not entry.suspension or entry.suspension:waiting() then
 			return entry
 		end
 	end
 	return nil
+end
+
+---@param entry table
+local function cleanup_get_entry(entry)
+	entry.suspension = nil
+	entry.wrap = nil
+end
+
+---@param entry table
+local function cleanup_put_entry(entry)
+	entry.val = nil
+	entry.suspension = nil
+	entry.wrap = nil
 end
 
 --- Op that sends val on the channel.
@@ -60,21 +74,12 @@ function Channel:put_op(val)
 	local getq, putq = self.getq, self.putq
 	local buffer, buffer_size = self.buffer, self.buffer_size
 
-	---@class ChannelPutEntry
-	---@field val any
-	---@field suspension Suspension|nil
-	---@field wrap WrapFn|nil
-	local entry = {
-		val        = val,
-		suspension = nil,
-		wrap       = nil,
-	}
-
 	local function try()
 		-- Case 1: rendezvous with a waiting receiver.
 		local recv = pop_active(getq)
 		if recv then
 			recv.suspension:complete(recv.wrap, val)
+			cleanup_get_entry(recv)
 			return true
 		end
 		-- Case 2: buffered channel with available space.
@@ -90,9 +95,21 @@ function Channel:put_op(val)
 	---@param suspension Suspension
 	---@param wrap_fn WrapFn
 	local function block(suspension, wrap_fn)
-		entry.suspension = suspension
-		entry.wrap       = wrap_fn
-		putq:push(entry)
+		---@class ChannelPutEntry
+		---@field val any
+		---@field suspension Suspension|nil
+		---@field wrap WrapFn|nil
+		local entry = {
+			val        = val,
+			suspension = suspension,
+			wrap       = wrap_fn,
+		}
+		local node = putq:push_tail(entry)
+		suspension:add_cleanup(function ()
+			if node:remove() then
+				cleanup_put_entry(entry)
+			end
+		end)
 	end
 
 	return op.new_primitive(nil, try, block)
@@ -104,14 +121,6 @@ end
 function Channel:get_op()
 	local getq, putq = self.getq, self.putq
 	local buffer     = self.buffer
-
-	---@class ChannelGetEntry
-	---@field suspension Suspension|nil
-	---@field wrap WrapFn|nil
-	local entry = {
-		suspension = nil,
-		wrap       = nil,
-	}
 
 	local function pop_sender()
 		local sender = pop_active(putq)
@@ -131,12 +140,15 @@ function Channel:get_op()
 			-- If there was a sender waiting, refill the buffer with its value.
 			if remote then
 				buffer:push(remote.val)
+				cleanup_put_entry(remote)
 			end
 			return true, v
 		end
 		-- Case 2: no buffered value; take directly from a sender.
 		if remote then
-			return true, remote.val
+			local v = remote.val
+			cleanup_put_entry(remote)
+			return true, v
 		end
 		-- Case 3: nothing available.
 		return false
@@ -146,9 +158,19 @@ function Channel:get_op()
 	---@param suspension Suspension
 	---@param wrap_fn WrapFn
 	local function block(suspension, wrap_fn)
-		entry.suspension = suspension
-		entry.wrap       = wrap_fn
-		getq:push(entry)
+		---@class ChannelGetEntry
+		---@field suspension Suspension|nil
+		---@field wrap WrapFn|nil
+		local entry = {
+			suspension = suspension,
+			wrap       = wrap_fn,
+		}
+		local node = getq:push_tail(entry)
+		suspension:add_cleanup(function ()
+			if node:remove() then
+				cleanup_get_entry(entry)
+			end
+		end)
 	end
 
 	return op.new_primitive(nil, try, block)

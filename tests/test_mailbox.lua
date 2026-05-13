@@ -454,6 +454,50 @@ local function test_full_policy_drop_does_not_drop_when_receiver_waiting()
 	assert_eq(rx:why(), 'done')
 end
 
+
+local function test_losing_choice_send_waiter_is_unlinked()
+	local tx, rx = mailbox.new(0)
+
+	local tag = fibers.perform(op.choice(
+		tx:send_op('lost'):wrap(function () return 'sent' end),
+		sleep.sleep_op(0.01):wrap(function () return 'timeout' end)
+	))
+	assert_eq(tag, 'timeout')
+	assert_eq(tx._st.putq:length(), 0, 'losing send waiter should be unlinked')
+
+	fibers.spawn(function () tx:send('ok') end)
+	assert_eq(rx:recv(), 'ok')
+	tx:close('done')
+	assert_eq(rx:recv(), nil)
+end
+
+local function test_losing_choice_recv_waiter_is_unlinked()
+	local tx, rx = mailbox.new(0)
+
+	local tag = fibers.perform(op.choice(
+		rx:recv_op():wrap(function () return 'got' end),
+		sleep.sleep_op(0.01):wrap(function () return 'timeout' end)
+	))
+	assert_eq(tag, 'timeout')
+	assert_eq(rx._st.getq:length(), 0, 'losing receive waiter should be unlinked')
+
+	fibers.spawn(function () tx:send('ok') end)
+	assert_eq(rx:recv(), 'ok')
+	tx:close('done')
+	assert_eq(rx:recv(), nil)
+end
+
+local function test_on_message_unlink_removes_task_waiter()
+	local _, rx = mailbox.new(0)
+	local task = { run = function () end }
+	local waker = { wakeup = function () end }
+	local token = rx:on_message(task, waker)
+	assert_eq(rx._st.taskq:length(), 1)
+	assert_eq(token:unlink(), true)
+	assert_eq(rx._st.taskq:length(), 0)
+	assert_eq(token:unlink(), false)
+end
+
 ----------------------------------------------------------------------
 -- main
 ----------------------------------------------------------------------
@@ -475,6 +519,9 @@ local function main()
 	test_full_policy_reject_newest_rendezvous_drops_without_receiver()
 	test_full_policy_drop_oldest_rendezvous_behaves_like_reject_newest()
 	test_full_policy_drop_does_not_drop_when_receiver_waiting()
+	test_losing_choice_send_waiter_is_unlinked()
+	test_losing_choice_recv_waiter_is_unlinked()
+	test_on_message_unlink_removes_task_waiter()
 
 	print('All mailbox tests passed!')
 end
