@@ -21,7 +21,8 @@ local function deadline_op(t)
 	---@param suspension Suspension
 	---@param wrap_fn WrapFn
 	local function block(suspension, wrap_fn)
-		suspension:at_time(t, suspension:complete_task(wrap_fn))
+		local cancel_timer = suspension:at_time(t, suspension:complete_task(wrap_fn))
+		suspension:add_cleanup(cancel_timer)
 	end
 
 	return op.new_primitive(nil, try, block)

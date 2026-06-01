@@ -22,6 +22,7 @@ local modules = {
 	{ 'pulse' },
 	{ 'cond' },
 	{ 'sleep' },
+	{ 'sleep', 'timer_cancel' },
 	{ 'waitgroup' },
 	{ 'scope' },
 }

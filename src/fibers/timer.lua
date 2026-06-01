@@ -4,8 +4,11 @@
 ---@module 'fibers.timer'
 
 ---@class TimerNode
----@field time number  # absolute due time (monotonic seconds)
----@field obj any     # scheduled payload
+---@field time number       # absolute due time (monotonic seconds)
+---@field obj any           # scheduled payload
+---@field index integer|nil # current heap index, nil when not queued
+
+---@alias TimerCancel fun(): boolean
 
 local floor, huge = math.floor, math.huge
 
@@ -21,10 +24,20 @@ local function new_heap()
 	return setmetatable({ heap = {}, size = 0 }, Heap)
 end
 
+---@param i integer
+---@param j integer
+function Heap:swap(i, j)
+	local heap = self.heap
+	heap[i], heap[j] = heap[j], heap[i]
+	heap[i].index = i
+	heap[j].index = j
+end
+
 ---@param node TimerNode
 function Heap:push(node)
 	local size = self.size + 1
 	self.size = size
+	node.index = size
 	self.heap[size] = node
 	self:heapify_up(size)
 end
@@ -38,6 +51,7 @@ function Heap:pop()
 
 	local heap = self.heap
 	local root = heap[1]
+	root.index = nil
 
 	if size == 1 then
 		heap[1] = nil
@@ -45,12 +59,52 @@ function Heap:pop()
 		return root
 	end
 
-	heap[1] = heap[size]
+	local last = heap[size]
 	heap[size] = nil
 	self.size = size - 1
+	heap[1] = last
+	last.index = 1
 	self:heapify_down(1)
 
 	return root
+end
+
+---@param node TimerNode
+---@return boolean
+function Heap:remove(node)
+	local idx = node.index
+	if type(idx) ~= 'number' or idx < 1 or idx > self.size then
+		return false
+	end
+
+	local heap = self.heap
+	if heap[idx] ~= node then
+		return false
+	end
+
+	local size = self.size
+	node.index = nil
+
+	if idx == size then
+		heap[size] = nil
+		self.size = size - 1
+		return true
+	end
+
+	local last = heap[size]
+	heap[size] = nil
+	self.size = size - 1
+	heap[idx] = last
+	last.index = idx
+
+	local parent = floor(idx / 2)
+	if idx > 1 and heap[idx].time < heap[parent].time then
+		self:heapify_up(idx)
+	else
+		self:heapify_down(idx)
+	end
+
+	return true
 end
 
 ---@param idx integer
@@ -61,7 +115,7 @@ function Heap:heapify_up(idx)
 		if heap[parent].time <= heap[idx].time then
 			break
 		end
-		heap[parent], heap[idx] = heap[idx], heap[parent]
+		self:swap(parent, idx)
 		idx = parent
 	end
 end
@@ -87,7 +141,7 @@ function Heap:heapify_down(idx)
 			break
 		end
 
-		heap[idx], heap[smallest] = heap[smallest], heap[idx]
+		self:swap(idx, smallest)
 		idx = smallest
 	end
 end
@@ -108,15 +162,30 @@ end
 --- Schedule an object at absolute time t.
 ---@param t number   # absolute due time
 ---@param obj any    # payload to pass to the scheduler
+---@return TimerCancel cancel # idempotent cancellation handle
 function Timer:add_absolute(t, obj)
-	self.heap:push { time = t, obj = obj }
+	local node = { time = t, obj = obj, index = nil }
+	self.heap:push(node)
+
+	local cancelled = false
+	return function ()
+		if cancelled then
+			return false
+		end
+
+		cancelled = true
+		local removed = self.heap:remove(node)
+		node.obj = nil
+		return removed
+	end
 end
 
 --- Schedule an object after a delay from the current timer time.
 ---@param dt number  # delay in seconds from self.now
 ---@param obj any    # payload to pass to the scheduler
+---@return TimerCancel cancel # idempotent cancellation handle
 function Timer:add_delta(dt, obj)
-	self:add_absolute(self.now + dt, obj)
+	return self:add_absolute(self.now + dt, obj)
 end
 
 --- Get the time of the next scheduled entry, or math.huge if none exist.
@@ -140,8 +209,10 @@ function Timer:advance(t, sched)
 
 	while heap.size > 0 and t >= heap.heap[1].time do
 		local node = assert(heap:pop()) -- non-nil since size>0
+		local obj = node.obj
+		node.obj = nil
 		self.now = node.time
-		sched:schedule(node.obj)
+		sched:schedule(obj)
 	end
 
 	self.now = t
