@@ -102,14 +102,14 @@ end
 ---@param t number # absolute time on the scheduler clock
 ---@param task Task
 function Scheduler:schedule_at_time(t, task)
-	self.wheel:add_absolute(t, task)
+	return self.wheel:add_absolute(t, task)
 end
 
 --- Schedule a task after a delay from the wheel's current time.
 ---@param dt number # delay in seconds
 ---@param task Task
 function Scheduler:schedule_after_sleep(dt, task)
-	self.wheel:add_delta(dt, task)
+	return self.wheel:add_delta(dt, task)
 end
 
 --- Ask all registered sources to enqueue any ready tasks.

@@ -80,11 +80,11 @@ function Suspension:wakeup(task)
 end
 
 function Suspension:at_time(t, task)
-	self.sched:schedule_at_time(t, task)
+	return self.sched:schedule_at_time(t, task)
 end
 
 function Suspension:after(dt, task)
-	self.sched:schedule_after_sleep(dt, task)
+	return self.sched:schedule_after_sleep(dt, task)
 end
 
 function Suspension:complete(wrap, ...)
