@@ -3,7 +3,7 @@ package.path = './?.lua;../?.lua;./?/init.lua;../?/init.lua;' .. package.path
 local core = require('etfcore')
 local Op = core.Op
 local Runtime = core.Runtime
-local Channel = require('channel')
+local Channel = require('resources.channel')
 
 -- --------------------------------------------------------------------------
 -- Demo 1: Triple swap
@@ -16,14 +16,14 @@ end
 local function triple_swap_op(ch, x)
   local reply = Channel.new('reply-' .. tostring(x))
 
-  local client = ch:put({ x = x, reply = reply }):and_then(function()
-    return reply:get()
+  local client = ch:put_op({ x = x, reply = reply }):and_then(function()
+    return reply:get_op()
   end)
 
-  local leader = ch:get():and_then(function(m2)
-    return ch:get():and_then(function(m3)
-      return m2.reply:put(pair(m3.x, x)):and_then(function()
-        return m3.reply:put(pair(x, m2.x)):and_then(function()
+  local leader = ch:get_op():and_then(function(m2)
+    return ch:get_op():and_then(function(m3)
+      return m2.reply:put_op(pair(m3.x, x)):and_then(function()
+        return m3.reply:put_op(pair(x, m2.x)):and_then(function()
           return Op.always(pair(m2.x, m3.x))
         end)
       end)

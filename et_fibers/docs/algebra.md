@@ -8,6 +8,32 @@ The notation below uses `a`, `b`, and `c` for operations; `k` for callbacks
 that return operations; `f` and `g` for raw-value functions; `p` for
 post-commit callbacks; `r` for resources; and `q` for resource requests.
 
+## Resource prelude naming law
+
+Public resource and protocol methods that return performable operations use the
+`_op` suffix.  The suffix is part of the phase discipline:
+
+```text
+thing()
+  ordinary Lua action or ordinary value
+
+thing_op()
+  constructs a transaction operation; nothing has happened yet
+```
+
+The current primitive resources are:
+
+```text
+resources.channel  put_op / get_op       rendezvous
+resources.cell     get_op / set_op / update_op
+resources.queue    put_op / get_op / peek_op
+resources.log      append_op / read_from_op / next_offset_op
+resources.signal   wait_op / wake_op
+```
+
+`Op.*` constructors are exempt because the namespace already marks them as
+transaction algebra constructors.
+
 ## 1. Global phase laws
 
 The algebra has distinct phases.
@@ -715,8 +741,8 @@ with_nack/nack inside a lane preserve the all box and lane identity.
 Operational distinction:
 
 ```lua
-Op.tensor({ ch:put('x'), ch:get() }) -- may close internally
-Op.all({ ch:put('x'), ch:get() })    -- must not close by self-rendezvous
+Op.tensor({ ch:put_op('x'), ch:get_op() }) -- may close internally
+Op.all({ ch:put_op('x'), ch:get_op() })    -- must not close by self-rendezvous
 ```
 
 ## 18. `Op.perform(op)`

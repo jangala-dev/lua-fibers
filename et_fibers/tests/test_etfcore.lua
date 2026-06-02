@@ -6,7 +6,7 @@ local Runtime = core.Runtime
 local JudgementContext = core.JudgementContext
 local ProofSearch = core.ProofSearch
 local PostProgram = core.PostProgram
-local Channel = require('channel')
+local Channel = require('resources.channel')
 local Ledger = require('ledger')
 
 local EvidenceDelta = core._test.EvidenceDelta
@@ -31,7 +31,7 @@ end
 
 local function test_derivation_addresses_are_stable()
   local ch = Channel.new('addr-stable')
-  local operation = Op.tensor({ ch:put('x'), ch:get() })
+  local operation = Op.tensor({ ch:put_op('x'), ch:get_op() })
 
   local frames1 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('addr-root'))
   local frames2 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('addr-root'))
@@ -161,7 +161,7 @@ local function test_map_callback_cannot_perform()
 
   rt:spawn(function()
     Op.perform(Op.always('x'):map(function()
-      return Op.perform(ch:get())
+      return Op.perform(ch:get_op())
     end))
   end, 'bad-map-perform-root')
 
@@ -250,7 +250,7 @@ local function test_guard_callback_cannot_perform_or_spawn()
 
   rt:spawn(function()
     Op.perform(Op.guard(function()
-      return Op.perform(ch:get())
+      return Op.perform(ch:get_op())
     end))
   end, 'bad-guard-perform-root')
 
@@ -404,7 +404,7 @@ local function test_with_nack_published_alternative_loses_and_nack_closes_later(
     got = Op.perform(Op.choice(
       Op.with_nack(function(nack)
         saved_nack = nack
-        return ch:get()
+        return ch:get_op()
       end),
       Op.always('fallback')
     ))
@@ -452,17 +452,17 @@ local function test_with_nack_unrelated_commit_does_not_fire_pending_nack()
   rt:spawn(function()
     Op.perform(Op.with_nack(function(nack)
       saved_nack = nack
-      return ch_pending:get()
+      return ch_pending:get_op()
     end))
   end, 'pending-with-nack-root')
 
   rt:spawn(function()
-    Op.perform(ch_other:put('x'))
+    Op.perform(ch_other:put_op('x'))
   end, 'other-sender')
 
   local other_got
   rt:spawn(function()
-    other_got = Op.perform(ch_other:get())
+    other_got = Op.perform(ch_other:get_op())
   end, 'other-receiver')
 
   drain_runnable(rt)
@@ -511,7 +511,7 @@ local function test_with_nack_withdrawal_enables_nack()
   local task = rt:spawn(function()
     Op.perform(Op.with_nack(function(nack)
       saved_nack = nack
-      return ch:get()
+      return ch:get_op()
     end))
   end, 'withdrawn-with-nack-root')
 
@@ -545,7 +545,7 @@ local function test_with_nack_nested_parent_child_settlement()
         outer_nack = n1
         return Op.with_nack(function(n2)
           inner_nack = n2
-          return ch:get()
+          return ch:get_op()
         end)
       end),
       Op.always('fallback')
@@ -587,7 +587,7 @@ local function test_nack_op_closes_inside_tensor_and_all()
     Op.perform(Op.choice(
       Op.with_nack(function(nack)
         saved_nack = nack
-        return ch:get()
+        return ch:get_op()
       end),
       Op.always('fallback')
     ))
@@ -686,7 +686,7 @@ local function test_proof_search_is_tri_valued_and_budgeted()
   local ch = Channel.new('proof-search-budget')
 
   local receiver = rt:spawn(function()
-    Op.perform(ch:get())
+    Op.perform(ch:get_op())
   end, 'budget-receiver')
   drain_runnable(rt)
 
@@ -704,7 +704,7 @@ local function test_absence_is_generation_stable_not_timeless()
   local ch = Channel.new('proof-search-generation')
 
   local receiver = rt:spawn(function()
-    Op.perform(ch:get())
+    Op.perform(ch:get_op())
   end, 'generation-receiver')
   drain_runnable(rt)
 
@@ -713,7 +713,7 @@ local function test_absence_is_generation_stable_not_timeless()
   local absent_generation = absent.generation
 
   rt:spawn(function()
-    Op.perform(ch:put('x'))
+    Op.perform(ch:put_op('x'))
   end, 'generation-sender')
   drain_runnable(rt)
 
@@ -730,7 +730,7 @@ local function test_tensor_self_rendezvous_succeeds()
   local got
 
   rt:spawn(function()
-    got = Op.perform(Op.tensor({ ch:put('x'), ch:get() }))
+    got = Op.perform(Op.tensor({ ch:put_op('x'), ch:get_op() }))
   end, 'tensor-root')
 
   rt:run()
@@ -746,7 +746,7 @@ local function test_all_self_rendezvous_fails()
   local ch = Channel.new('all-self')
 
   rt:spawn(function()
-    Op.perform(Op.all({ ch:put('x'), ch:get() }))
+    Op.perform(Op.all({ ch:put_op('x'), ch:get_op() }))
   end, 'all-root')
 
   local ok, err = pcall(function() rt:run() end)
@@ -763,15 +763,15 @@ local function test_tensor_join_feeds_transactional_continuation()
 
   rt:spawn(function()
     local ok = Op.perform(
-      Op.tensor({ internal:put('x'), internal:get() }):and_then(function(results)
-        return out:put(results[2][1])
+      Op.tensor({ internal:put_op('x'), internal:get_op() }):and_then(function(results)
+        return out:put_op(results[2][1])
       end)
     )
     assert(ok == true, 'tensor continuation put should return true')
   end, 'tensor-join-root')
 
   rt:spawn(function()
-    received = Op.perform(out:get())
+    received = Op.perform(out:get_op())
   end, 'tensor-join-receiver')
 
   rt:run()
@@ -787,16 +787,16 @@ local function test_all_join_feeds_transactional_continuation_after_external_cut
 
   rt:spawn(function()
     local ok = Op.perform(
-      Op.all({ a:get(), b:get() }):and_then(function(results)
-        return out:put(results[1][1] .. results[2][1])
+      Op.all({ a:get_op(), b:get_op() }):and_then(function(results)
+        return out:put_op(results[1][1] .. results[2][1])
       end)
     )
     assert(ok == true, 'all continuation put should return true')
   end, 'all-join-root')
 
-  rt:spawn(function() Op.perform(a:put('A')) end, 'all-sender-a')
-  rt:spawn(function() Op.perform(b:put('B')) end, 'all-sender-b')
-  rt:spawn(function() received = Op.perform(out:get()) end, 'all-join-receiver')
+  rt:spawn(function() Op.perform(a:put_op('A')) end, 'all-sender-a')
+  rt:spawn(function() Op.perform(b:put_op('B')) end, 'all-sender-b')
+  rt:spawn(function() received = Op.perform(out:get_op()) end, 'all-join-receiver')
 
   rt:run()
   assert_eq(received, 'AB', 'all join should feed continuation after external cuts')
@@ -810,14 +810,14 @@ local function test_wrap_boundary_transforms_after_commit()
   local ran = false
 
   rt:spawn(function()
-    got = Op.perform(ch:get():wrap(function(x)
+    got = Op.perform(ch:get_op():wrap(function(x)
       ran = true
       return x .. '!'
     end))
   end, 'wrap-receiver')
 
   rt:spawn(function()
-    Op.perform(ch:put('x'))
+    Op.perform(ch:put_op('x'))
   end, 'wrap-sender')
 
   rt:run()
@@ -828,7 +828,7 @@ end
 local function test_wrap_boundary_rejects_transactional_continuation()
   local ch = Channel.new('wrap-reject')
   local ok, err = pcall(function()
-    return ch:get():wrap(function(x) return x end):and_then(function(x)
+    return ch:get_op():wrap(function(x) return x end):and_then(function(x)
       return Op.always(x)
     end)
   end)
@@ -836,7 +836,7 @@ local function test_wrap_boundary_rejects_transactional_continuation()
   assert(tostring(err):match('wrap boundary'), 'expected wrap boundary error, got ' .. tostring(err))
 
   ok, err = pcall(function()
-    return ch:get():wrap(function(x) return x end):map(function(x) return x end)
+    return ch:get_op():wrap(function(x) return x end):map(function(x) return x end)
   end)
   assert(ok == false, 'wrap:map should be rejected')
   assert(tostring(err):match('wrap boundary'), 'expected wrap boundary error, got ' .. tostring(err))
@@ -851,7 +851,7 @@ local function test_wrap_boundary_is_branch_local()
   rt:spawn(function()
     got = Op.perform(Op.choice(
       Op.always('plain'),
-      ch:get():wrap(function(x)
+      ch:get_op():wrap(function(x)
         ran = true
         return x .. '!'
       end)
@@ -871,19 +871,19 @@ local function test_wrap_boundary_can_perform_after_commit()
   local observed
 
   rt:spawn(function()
-    got = Op.perform(ch:get():wrap(function(x)
-      local ok = Op.perform(out:put(x .. '!'))
+    got = Op.perform(ch:get_op():wrap(function(x)
+      local ok = Op.perform(out:put_op(x .. '!'))
       assert(ok == true, 'post-commit wrapper put should complete')
       return x .. '?'
     end))
   end, 'wrap-performing-root')
 
   rt:spawn(function()
-    Op.perform(ch:put('x'))
+    Op.perform(ch:put_op('x'))
   end, 'wrap-performing-sender')
 
   rt:spawn(function()
-    observed = Op.perform(out:get())
+    observed = Op.perform(out:get_op())
   end, 'wrap-performing-observer')
 
   rt:run()
@@ -909,7 +909,7 @@ local function test_wrap_boundary_after_commit_event_order()
 
   rt:spawn(function()
     local got = Op.perform(
-      ch:get():and_then(function(x)
+      ch:get_op():and_then(function(x)
         return Op.emit({ tag = 'order.event' }):and_then(function()
           return Op.always(x)
         end)
@@ -921,7 +921,7 @@ local function test_wrap_boundary_after_commit_event_order()
     assert_eq(got, 'x', 'order wrap value')
   end, 'wrap-order-receiver')
 
-  rt:spawn(function() Op.perform(ch:put('x')) end, 'wrap-order-sender')
+  rt:spawn(function() Op.perform(ch:put_op('x')) end, 'wrap-order-sender')
   rt:run()
   core.print_event = old_print_event
 
@@ -937,7 +937,7 @@ local function test_search_phase_forbids_perform_and_spawn()
 
   rt:spawn(function()
     Op.perform(Op.always('x'):and_then(function()
-      return Op.perform(ch:get())
+      return Op.perform(ch:get_op())
     end))
   end, 'bad-perform-during-search')
 
@@ -969,9 +969,9 @@ local function test_post_commit_phase_is_explicit_in_wrapper()
   local saw_post_commit_after = false
 
   rt:spawn(function()
-    local got = Op.perform(ch:get():wrap(function(x)
+    local got = Op.perform(ch:get_op():wrap(function(x)
       saw_post_commit_before = core._test.current_task() and core._test.current_task().phase == 'post_commit'
-      local ok = Op.perform(out:put(x .. '!'))
+      local ok = Op.perform(out:put_op(x .. '!'))
       assert(ok == true, 'post-commit phase nested put should complete')
       saw_post_commit_after = core._test.current_task() and core._test.current_task().phase == 'post_commit'
       return x .. '?'
@@ -979,8 +979,8 @@ local function test_post_commit_phase_is_explicit_in_wrapper()
     assert_eq(got, 'x?', 'post-commit phase wrapper value')
   end, 'post-commit-phase-root')
 
-  rt:spawn(function() Op.perform(ch:put('x')) end, 'post-commit-phase-sender')
-  rt:spawn(function() observed = Op.perform(out:get()) end, 'post-commit-phase-observer')
+  rt:spawn(function() Op.perform(ch:put_op('x')) end, 'post-commit-phase-sender')
+  rt:spawn(function() observed = Op.perform(out:get_op()) end, 'post-commit-phase-observer')
   rt:run()
 
   assert_eq(observed, 'x!', 'nested post-commit perform observed')
@@ -1007,7 +1007,7 @@ local function test_or_else_fallback_commits_after_absence_proof()
   local got
 
   rt:spawn(function()
-    got = Op.perform(ch:get():or_else(Op.always('fallback')))
+    got = Op.perform(ch:get_op():or_else(Op.always('fallback')))
   end, 'prefer-fallback-root')
 
   rt:run()
@@ -1020,11 +1020,11 @@ local function test_or_else_primary_rendezvous_beats_fallback()
   local got
 
   rt:spawn(function()
-    got = Op.perform(ch:get():or_else(Op.always('fallback')))
+    got = Op.perform(ch:get_op():or_else(Op.always('fallback')))
   end, 'prefer-receiver')
 
   rt:spawn(function()
-    Op.perform(ch:put('primary-value'))
+    Op.perform(ch:put_op('primary-value'))
   end, 'prefer-sender')
 
   rt:run()
@@ -1036,7 +1036,7 @@ local function test_or_else_fallback_absence_can_report_budget()
   local ch = Channel.new('prefer-budget')
 
   local receiver = rt:spawn(function()
-    Op.perform(ch:get():or_else(Op.always('fallback')))
+    Op.perform(ch:get_op():or_else(Op.always('fallback')))
   end, 'prefer-budget-root')
   drain_runnable(rt)
 
@@ -1050,7 +1050,7 @@ end
 
 local function test_or_else_site_address_is_replay_stable()
   local ch = Channel.new('prefer-address')
-  local operation = ch:get():or_else(Op.always('fallback'))
+  local operation = ch:get_op():or_else(Op.always('fallback'))
   local frames1 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('prefer-address-root'))
   local frames2 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('prefer-address-root'))
   local site1, site2
@@ -1066,8 +1066,8 @@ end
 
 
 local function nested_or_else_op(outer, inner)
-  return outer:get():or_else(
-    inner:get():or_else(Op.always('fallback'))
+  return outer:get_op():or_else(
+    inner:get_op():or_else(Op.always('fallback'))
   )
 end
 
@@ -1137,7 +1137,7 @@ local function test_nested_or_else_inner_primary_under_outer_fallback()
   end, 'nested-inner-receiver')
 
   rt:spawn(function()
-    Op.perform(inner:put('inner-primary'))
+    Op.perform(inner:put_op('inner-primary'))
   end, 'nested-inner-sender')
 
   rt:run()
@@ -1155,7 +1155,7 @@ local function test_nested_or_else_outer_primary_dominates_inner_fallback()
   end, 'nested-outer-receiver')
 
   rt:spawn(function()
-    Op.perform(outer:put('outer-primary'))
+    Op.perform(outer:put_op('outer-primary'))
   end, 'nested-outer-sender')
 
   rt:run()
@@ -1167,7 +1167,7 @@ local function test_product_base_evidence_not_duplicated()
   local rt = Runtime.new()
   local ch = Channel.new('product-base-no-dup')
 
-  local operation = ch:get():or_else(Op.always('fallback')):and_then(function()
+  local operation = ch:get_op():or_else(Op.always('fallback')):and_then(function()
     return Op.tensor({ Op.always('a'), Op.always('b') })
   end)
 
@@ -1189,8 +1189,8 @@ local function test_product_lane_obligations_are_lane_local()
   local b = Channel.new('lane-b')
 
   local operation = Op.tensor({
-    a:get():or_else(Op.always('fa')),
-    b:get():or_else(Op.always('fb')),
+    a:get_op():or_else(Op.always('fa')),
+    b:get_op():or_else(Op.always('fb')),
   })
 
   local receiver = rt:spawn(function()
@@ -1398,16 +1398,16 @@ local function test_product_lane_wrap_transforms_after_commit()
 
   rt:spawn(function()
     got = Op.perform(Op.tensor({
-      a:get():wrap(function(x)
+      a:get_op():wrap(function(x)
         ran = true
         return x .. '!'
       end),
-      b:get(),
+      b:get_op(),
     }))
   end, 'lane-wrap-root')
 
-  rt:spawn(function() Op.perform(a:put('A')) end, 'lane-wrap-sender-a')
-  rt:spawn(function() Op.perform(b:put('B')) end, 'lane-wrap-sender-b')
+  rt:spawn(function() Op.perform(a:put_op('A')) end, 'lane-wrap-sender-a')
+  rt:spawn(function() Op.perform(b:put_op('B')) end, 'lane-wrap-sender-b')
   rt:run()
 
   assert(ran == true, 'lane-local wrapper should run after product commit')
@@ -1424,17 +1424,17 @@ local function test_product_lane_wrap_can_perform_after_commit()
 
   rt:spawn(function()
     got = Op.perform(Op.tensor({
-      a:get():wrap(function(x)
-        local y = Op.perform(c:get())
+      a:get_op():wrap(function(x)
+        local y = Op.perform(c:get_op())
         return x .. y
       end),
-      b:get(),
+      b:get_op(),
     }))
   end, 'lane-wrap-performing-root')
 
-  rt:spawn(function() Op.perform(a:put('A')) end, 'lane-wrap-performing-sender-a')
-  rt:spawn(function() Op.perform(b:put('B')) end, 'lane-wrap-performing-sender-b')
-  rt:spawn(function() Op.perform(c:put('C')) end, 'lane-wrap-performing-sender-c')
+  rt:spawn(function() Op.perform(a:put_op('A')) end, 'lane-wrap-performing-sender-a')
+  rt:spawn(function() Op.perform(b:put_op('B')) end, 'lane-wrap-performing-sender-b')
+  rt:spawn(function() Op.perform(c:put_op('C')) end, 'lane-wrap-performing-sender-c')
   rt:run()
 
   assert_eq(got[1][1], 'AC', 'lane-local wrapper may perform a fresh transaction before outer perform returns')

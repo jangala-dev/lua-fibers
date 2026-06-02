@@ -3,7 +3,7 @@ package.path = './?.lua;../?.lua;./?/init.lua;../?/init.lua;' .. package.path
 local core = require('etfcore')
 local Op = core.Op
 local Runtime = core.Runtime
-local Channel = require('channel')
+local Channel = require('resources.channel')
 local Ledger = require('ledger')
 
 local test_api = core._test
@@ -300,13 +300,13 @@ add('request_rendezvous_and_local_access_commit_as_one_world', function()
 
   local ok, err, events = run_capture_events(function()
     rt:spawn(function()
-      Op.perform(ch:put('msg'):and_then(function()
+      Op.perform(ch:put_op('msg'):and_then(function()
         return probe:ok(3)
       end))
     end, 'algebra-sender-access')
 
     rt:spawn(function()
-      receiver_got = Op.perform(ch:get())
+      receiver_got = Op.perform(ch:get_op())
     end, 'algebra-receiver')
 
     rt:run()
@@ -325,7 +325,7 @@ add('tensor_all_topology_is_enforced_adversarially', function()
   local tensor_got
 
   rt:spawn(function()
-    tensor_got = Op.perform(Op.tensor({ tensor_ch:put('x'), tensor_ch:get() }))
+    tensor_got = Op.perform(Op.tensor({ tensor_ch:put_op('x'), tensor_ch:get_op() }))
   end, 'algebra-tensor-self-root')
 
   rt:run()
@@ -338,7 +338,7 @@ add('tensor_all_topology_is_enforced_adversarially', function()
   local all_ch = Channel.new('algebra-all-self')
   local all_done = false
   rt:spawn(function()
-    Op.perform(Op.all({ all_ch:put('x'), all_ch:get() }))
+    Op.perform(Op.all({ all_ch:put_op('x'), all_ch:get_op() }))
     all_done = true
   end, 'algebra-all-self-root')
 
@@ -353,7 +353,7 @@ add('post_commit_failure_cannot_rollback_committed_resources_or_descriptors', fu
 
   local ok, err, events = run_capture_events(function()
     rt:spawn(function()
-      Op.perform(ledger:move('r', 'A', 'B'):wrap(function()
+      Op.perform(ledger:move_op('r', 'A', 'B'):wrap(function()
         error('post-commit failure')
       end))
     end, 'algebra-wrap-failure-root')
@@ -363,7 +363,7 @@ add('post_commit_failure_cannot_rollback_committed_resources_or_descriptors', fu
   assert(ok == false, 'wrap failure should escape as ordinary post-commit failure')
   assert_match(err, 'post%-commit failure', 'expected post-commit error')
   assert_eq(ledger.owners.r, 'B', 'committed resource state must not roll back after wrap failure')
-  assert_eq(event_tags(events), 'ledger.move', 'commit descriptor should have been emitted before wrap failure')
+  assert(event_tags(events):match('ledger%.move'), 'ledger.move descriptor should have been emitted before wrap failure')
 end)
 
 add('with_nack_lost_is_resolved_attempt_nonselection_not_global_nonselection', function()
@@ -377,16 +377,16 @@ add('with_nack_lost_is_resolved_attempt_nonselection_not_global_nonselection', f
   rt:spawn(function()
     Op.perform(Op.with_nack(function(nack)
       saved_nack = nack
-      return pending_ch:get()
+      return pending_ch:get_op()
     end))
   end, 'algebra-pending-nack-root')
 
   rt:spawn(function()
-    Op.perform(other_ch:put('other'))
+    Op.perform(other_ch:put_op('other'))
   end, 'algebra-other-put')
 
   rt:spawn(function()
-    other_got = Op.perform(other_ch:get())
+    other_got = Op.perform(other_ch:get_op())
   end, 'algebra-other-get')
 
   drain_runnable(rt)
@@ -426,7 +426,7 @@ add('with_nack_same_world_circularity_and_later_loss_are_distinct', function()
     got = Op.perform(Op.choice(
       Op.with_nack(function(nack)
         saved_nack = nack
-        return ch:get()
+        return ch:get_op()
       end),
       Op.always('fallback')
     ))
@@ -489,7 +489,7 @@ add('proof_construction_callbacks_cannot_perform_or_spawn', function()
 
   expect_proof_error(function(_, ch)
     return Op.guard(function()
-      return Op.perform(ch:get())
+      return Op.perform(ch:get_op())
     end)
   end, 'guard-perform')
 
@@ -502,13 +502,13 @@ add('proof_construction_callbacks_cannot_perform_or_spawn', function()
 
   expect_proof_error(function(_, ch)
     return Op.always('x'):and_then(function()
-      return Op.perform(ch:get())
+      return Op.perform(ch:get_op())
     end)
   end, 'bind-perform')
 
   expect_proof_error(function(_, ch)
     return Op.always('x'):map(function()
-      return Op.perform(ch:get())
+      return Op.perform(ch:get_op())
     end)
   end, 'map-perform')
 end)
@@ -520,7 +520,7 @@ add('emit_is_commit_level_not_search_level', function()
 
   local ok, err = run_capture_events(function(events)
     rt:spawn(function()
-      Op.perform(ch:get():and_then(function()
+      Op.perform(ch:get_op():and_then(function()
         return Op.emit({ tag = 'should-not-emit-before-cut' })
       end))
     end, 'algebra-open-emit-root')
@@ -640,7 +640,7 @@ add('nack_after_prior_loss_closes_inside_all_and_tensor_without_new_settlement',
     Op.perform(Op.choice(
       Op.with_nack(function(nack)
         saved_nack = nack
-        return ch:get()
+        return ch:get_op()
       end),
       Op.always('fallback')
     ))
@@ -681,7 +681,7 @@ add('with_nack_inside_product_losing_branch_loses_only_when_root_attempt_resolve
       Op.tensor({
         Op.with_nack(function(nack)
           saved_nack = nack
-          return ch:get()
+          return ch:get_op()
         end),
         Op.always('lane'),
       }),
@@ -733,8 +733,8 @@ add('guarded_all_and_tensor_topology_do_not_converge', function()
 
   rt:spawn(function()
     tensor_got = Op.perform(Op.tensor({
-      Op.guard(function() return tensor_ch:put('x') end),
-      Op.guard(function() return tensor_ch:get() end),
+      Op.guard(function() return tensor_ch:put_op('x') end),
+      Op.guard(function() return tensor_ch:get_op() end),
     }))
   end, 'algebra-guarded-tensor-self-root')
 
@@ -750,8 +750,8 @@ add('guarded_all_and_tensor_topology_do_not_converge', function()
 
   rt:spawn(function()
     Op.perform(Op.all({
-      Op.guard(function() return all_ch:put('x') end),
-      Op.guard(function() return all_ch:get() end),
+      Op.guard(function() return all_ch:put_op('x') end),
+      Op.guard(function() return all_ch:get_op() end),
     }))
     all_done = true
   end, 'algebra-guarded-all-self-root')

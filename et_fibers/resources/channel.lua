@@ -12,11 +12,11 @@ function Channel.new(name)
   return setmetatable({ name = name or 'channel' }, Channel)
 end
 
-function Channel:put(value)
+function Channel:put_op(value)
   return Op.request(self, { tag = 'put', value = value })
 end
 
-function Channel:get()
+function Channel:get_op()
   return Op.request(self, { tag = 'get' })
 end
 

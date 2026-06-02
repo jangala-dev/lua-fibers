@@ -2,20 +2,32 @@
 
 `et_fibers` is an executable proof-net specimen for **Eventful Transactions**: a small concurrency model where a fibre proposes a whole committed world, not just a single event and not just an isolated memory transaction.
 
-The repository is now intentionally split into a small core, two resource modules, tests, and demos:
+The repository is now intentionally split into a small core, orthogonal resource modules, tests, and demos:
 
 ```text
 et_fibers/
   etfcore.lua
-  channel.lua
-  ledger.lua
+  resources/
+    channel.lua      -- rendezvous
+    cell.lua         -- scalar transactional state
+    queue.lua        -- ordered transactional state
+    log.lua          -- append-only transactional record
+    signal.lua       -- wake/wait pulse
+  ledger.lua         -- derived ownership protocol built from primitive resources
   tests/
     test_etfcore.lua
+    test_algebra.lua
+    test_resources.lua
     run.lua
   demos/
     demo_triple_swap.lua
     demo_ledger.lua
 ```
+
+Public resource and protocol functions that construct performable transaction
+operations use the `_op` suffix.  For example, `ch:put_op(v)` and
+`cell:get_op()` construct operations; they do not communicate or read state at
+ordinary Lua call time.
 
 Run from the bundle root:
 
@@ -35,7 +47,7 @@ The surface idea is deliberately close to CML-style events: build operations, co
 local core = require('etfcore')
 local Op = core.Op
 local Runtime = core.Runtime
-local Channel = require('channel')
+local Channel = require('resources.channel')
 
 local rt = Runtime.new()
 local ch = Channel.new('triple')
@@ -48,15 +60,15 @@ local function triple_swap_op(ch, x)
   local reply = Channel.new('reply-' .. tostring(x))
 
   -- Either offer our value and wait for a reply...
-  local client = ch:put({ x = x, reply = reply }):and_then(function()
-    return reply:get()
+  local client = ch:put_op({ x = x, reply = reply }):and_then(function()
+    return reply:get_op()
   end)
 
   -- ...or become the leader that joins two other offers.
-  local leader = ch:get():and_then(function(m2)
-    return ch:get():and_then(function(m3)
-      return m2.reply:put(pair(m3.x, x)):and_then(function()
-        return m3.reply:put(pair(x, m2.x)):and_then(function()
+  local leader = ch:get_op():and_then(function(m2)
+    return ch:get_op():and_then(function(m3)
+      return m2.reply:put_op(pair(m3.x, x)):and_then(function()
+        return m3.reply:put_op(pair(x, m2.x)):and_then(function()
           return Op.always(pair(m2.x, m3.x))
         end)
       end)
@@ -83,12 +95,12 @@ The remarkable thing is not that the example communicates. The remarkable thing 
 ```lua
 local result = Op.perform(
   Op.tensor({
-    inbox:get():wrap(function(message)
+    inbox:get_op():wrap(function(message)
       -- This runs after the tensor transaction has committed.
       -- It may even perform a fresh transaction.
       return decorate(message)
     end),
-    clock:get(),
+    clock:get_op(),
   })
 )
 ```
@@ -112,7 +124,7 @@ A guard contributes no evidence of its own. The operation it returns contributes
 ```lua
 local protected = Op.with_nack(function(nack)
   return Op.choice(
-    server:get(),
+    server:get_op(),
     nack:wrap(function()
       return 'the protected occurrence was lost or withdrawn'
     end)
@@ -121,6 +133,46 @@ end)
 ```
 
 The callback is evaluated during proof expansion, not Lua construction. The protected operation contributes selected-settlement evidence to worlds that pass through it. The runtime publishes only protected occurrences retained in a parked root frontier. If that same root attempt resolves through another published alternative, the protected occurrence is settled `lost`; if the attempt is withdrawn, it is settled `withdrawn`; if the protected world commits, it is settled `selected`. A nack operation closes only after a prior `lost` or `withdrawn` settlement. It cannot observe loss being created by the same commit plan.
+
+
+## Resource primitives
+
+The current resource prelude is deliberately small and orthogonal:
+
+```lua
+local Channel = require('resources.channel')
+local Cell    = require('resources.cell')
+local Queue   = require('resources.queue')
+local Log     = require('resources.log')
+local Signal  = require('resources.signal')
+```
+
+Operation constructors are suffixed by `_op`:
+
+```lua
+ch:put_op(v)        -- synchronous rendezvous put
+ch:get_op()         -- synchronous rendezvous get
+
+cell:get_op()       -- transactional scalar read
+cell:set_op(v)      -- transactional scalar write
+cell:update_op(f)   -- transactional read/write composition
+
+queue:put_op(v)     -- ordered transactional enqueue
+queue:get_op()      -- ordered transactional dequeue
+queue:peek_op()     -- ordered transactional peek
+
+log:append_op(v)    -- append-only transactional record
+log:read_from_op(i) -- transactional read of committed + tentative records
+log:next_offset_op()
+
+signal:wait_op(cursor)
+signal:wake_op()
+```
+
+`Channel` is a rendezvous resource.  `Cell`, `Queue`, `Log`, and the commit
+side of `Signal` are local transactional resources.  `Signal:wake_op()` can
+commit without a waiter, or rendezvous with a current `wait_op`; in both cases
+the wake is a transaction operation and is discarded if its branch loses.
 
 
 ## The ET idea
@@ -216,8 +268,8 @@ For example:
 
 ```lua
 Op.tensor({
-  a:get():wrap(f),
-  b:get():wrap(g),
+  a:get_op():wrap(f),
+  b:get_op():wrap(g),
 }):wrap(h)
 ```
 
@@ -250,8 +302,8 @@ all
 This makes the distinction executable:
 
 ```lua
-Op.tensor({ ch:put('x'), ch:get() }) -- can close internally
-Op.all({ ch:put('x'), ch:get() })    -- cannot close by self-rendezvous
+Op.tensor({ ch:put_op('x'), ch:get_op() }) -- can close internally
+Op.all({ ch:put_op('x'), ch:get_op() })    -- cannot close by self-rendezvous
 ```
 
 Products also obey a context law:
@@ -364,7 +416,7 @@ This distinction matters because a single committed world may resume multiple ro
 Feature placement is now deliberately boring:
 
 ```text
-channel / ledger
+channel / derived ledger
   EvidenceDelta.resources.fragments -> WorldEvidence.resources.fragments
 
 or_else
@@ -456,9 +508,15 @@ No post-commit callback can affect the world that already committed.
 This is an executable sketch, not yet a polished package. It currently includes:
 
 - `etfcore.lua`: core Op algebra, proof frames/links, proof search, worlds, runtime, judgement context.
-- `channel.lua`: synchronous channel resource.
-- `ledger.lua`: ledger fragment resource used by the demos/tests.
+- `resources/channel.lua`: synchronous rendezvous resource.
+- `resources/cell.lua`: scalar transactional state.
+- `resources/queue.lua`: ordered transactional state.
+- `resources/log.lua`: append-only transactional record.
+- `resources/signal.lua`: wake/wait pulse resource.
+- `ledger.lua`: derived ownership protocol built from `Cell`, `Log`, and `Signal`; used by the demos/tests.
 - `tests/test_etfcore.lua`: semantic regression tests for the core specimen.
+- `tests/test_algebra.lua`: adversarial tests for the algebraic laws.
+- `tests/test_resources.lua`: regression tests for the resource prelude.
 - `tests/run.lua`: test runner.
 - `demos/demo_triple_swap.lua`: triple rendezvous demo.
 - `demos/demo_ledger.lua`: ledger transfer/close demo.

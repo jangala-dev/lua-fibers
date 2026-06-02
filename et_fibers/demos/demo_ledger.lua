@@ -16,8 +16,8 @@ local function demo_ledger()
 
   rt:spawn(function()
     local ok = Op.perform(
-      ledger:move('ticket', 'extent:A', 'extent:B'):and_then(function()
-        return ledger:close('extent:A', 'moved-out'):and_then(function()
+      ledger:move_op('ticket', 'extent:A', 'extent:B'):and_then(function()
+        return ledger:close_op('extent:A', 'moved-out'):and_then(function()
           return Op.emit({ tag = 'user.note', message = 'ledger tx body complete' }):and_then(function()
             return Op.always('transaction-result')
           end)
