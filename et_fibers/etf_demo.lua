@@ -9,9 +9,10 @@
 --   * parked roots expand into proof frontiers
 --   * PartialProof / Port / Cut are explicit runtime objects
 --   * wait frames are open ports
+--   * bind/map frames carry explicit continuation links, reduced only by proof search
 --   * channel rendezvous is a cut between dual ports
 --   * tensor/all are boxes with internal cut policy
---   * tensor/all joins and wrap boundaries are explicit links
+--   * transactional bind/map continuations, tensor/all joins, and wrap boundaries are explicit links/frames
 --   * resources contribute mergeable fragments
 --   * a closed candidate becomes a World
 --   * World commit validates fragments, checks committability, emits commit events, installs state,
@@ -464,14 +465,39 @@ end
 local JoinLink = {}
 JoinLink.__index = JoinLink
 
-function JoinLink.new(kind, cont, wrappers, ctx)
+function JoinLink.new(kind, wrappers, ctx)
   return setmetatable({
     id = fresh_id('join'),
     addr = ctx and ctx:key() or nil,
     kind = kind,
-    cont = cont,
     wrappers = list_copy(wrappers),
   }, JoinLink)
+end
+
+local BindLink = {}
+BindLink.__index = BindLink
+
+function BindLink.new(k, ctx)
+  return setmetatable({
+    kind = 'bind',
+    id = fresh_id('bind'),
+    addr = ctx and ctx:key() or nil,
+    k = k,
+    ctx = ctx,
+  }, BindLink)
+end
+
+local MapLink = {}
+MapLink.__index = MapLink
+
+function MapLink.new(f, ctx)
+  return setmetatable({
+    kind = 'map',
+    id = fresh_id('map'),
+    addr = ctx and ctx:key() or nil,
+    f = f,
+    ctx = ctx,
+  }, MapLink)
 end
 
 local PreferLink = {}
@@ -587,9 +613,7 @@ function OpMethods:and_then(k)
 end
 
 function OpMethods:map(f)
-  return self:and_then(function(...)
-    return Op.always(f(...))
-  end)
+  return new_op('map', { op = self, f = f })
 end
 
 function OpMethods:choice(other)
@@ -633,40 +657,123 @@ end
 -- --------------------------------------------------------------------------
 -- Proof expansion frames: the tiny proof frontier.
 --
--- done frame: a closed proof for one participant/lane.
+-- done frame: a closed raw proof fragment.
 -- wait frame: an open resource port; must be cut with a compatible port.
+-- group frame: a product box.
+-- bind/map frames: explicit transactional continuation frames that wrap a
+--                  source frame and reduce only when that source is raw-done.
 -- --------------------------------------------------------------------------
 
-local function frame_done(values, env)
-  return { kind = 'done', values = values or pack(), env = env }
+local function frame_done(values, env, after_post_program)
+  return {
+    kind = 'done',
+    values = values or pack(),
+    env = env,
+    after_post_program = after_post_program or PostProgram.identity(),
+  }
 end
 
-local function frame_wait(resource, request, env, cont, ctx)
+local function frame_wait(resource, request, env, ctx, after_post_program)
   return {
     kind = 'wait',
     resource = resource,
     request = request,
     port = Port.new(resource, request, ctx),
     env = env,
-    cont = cont,
-    cont_ctx = ctx and ctx:child('cont') or nil,
+    after_post_program = after_post_program or PostProgram.identity(),
     addr = ctx and ctx:key() or nil,
   }
 end
 
-local function frame_post_program(frame)
+local function is_continuation_frame(frame)
+  return frame and (frame.kind == 'bind' or frame.kind == 'map')
+end
+
+local function frame_bind(source, link, after_post_program)
+  return {
+    kind = 'bind',
+    source = source,
+    link = link,
+    after_post_program = after_post_program or PostProgram.identity(),
+  }
+end
+
+local function frame_map(source, link, after_post_program)
+  return {
+    kind = 'map',
+    source = source,
+    link = link,
+    after_post_program = after_post_program or PostProgram.identity(),
+  }
+end
+
+local function frame_with_source(frame, source)
+  if frame.kind == 'bind' then
+    return frame_bind(source, frame.link, frame.after_post_program)
+  elseif frame.kind == 'map' then
+    return frame_map(source, frame.link, frame.after_post_program)
+  else
+    error('frame_with_source expected continuation frame, got ' .. tostring(frame and frame.kind), 2)
+  end
+end
+
+local function frame_current_post_program(frame)
   if not frame then return PostProgram.identity() end
   if frame.kind == 'group' then return frame.post_program or PostProgram.identity() end
+  if is_continuation_frame(frame) then return frame_current_post_program(frame.source) end
   return (frame.env and frame.env.post_program) or PostProgram.identity()
+end
+
+local function frame_after_post_program(frame)
+  return (frame and frame.after_post_program) or PostProgram.identity()
+end
+
+local function frame_post_program(frame)
+  return PostProgram.compose(frame_current_post_program(frame), frame_after_post_program(frame))
 end
 
 local function frame_boundary_tainted(frame)
   return not PostProgram.is_identity(frame_post_program(frame))
 end
 
-local function frame_product(kind, lanes, cont, wrappers, ctx, box, base_env)
+local function frame_pre_link_boundary_tainted(frame)
+  return not PostProgram.is_identity(frame_current_post_program(frame))
+end
+
+local function frame_compose_after_post(frame, program)
+  program = program or PostProgram.identity()
+  if PostProgram.is_identity(program) then return frame end
+  frame.after_post_program = PostProgram.compose(frame_after_post_program(frame), program)
+  return frame
+end
+
+local function frame_attach_continuation(frame, link)
+  if frame_boundary_tainted(frame) then
+    if frame and frame.kind == 'group' then
+      error('cannot attach transactional continuation after product containing boundary lane', 2)
+    end
+    error('cannot attach transactional continuation after boundary-tainted value', 2)
+  end
+  if link.kind == 'bind' then
+    return frame_bind(frame, link)
+  elseif link.kind == 'map' then
+    return frame_map(frame, link)
+  else
+    error('unknown continuation link kind: ' .. tostring(link and link.kind), 2)
+  end
+end
+
+local function attach_continuation_to_frames(frames, link)
+  local out = {}
+  for i = 1, #frames do
+    out[#out + 1] = frame_attach_continuation(frames[i], link)
+  end
+  return out
+end
+
+local function frame_product(kind, lanes, wrappers, ctx, box, base_env)
   box = box or ((kind == 'tensor') and Box.tensor(ctx) or Box.all(ctx))
-  local join = JoinLink.new(kind, cont, wrappers, ctx and ctx:child('join'))
+  local join = JoinLink.new(kind, wrappers, ctx and ctx:child('join'))
 
   local lane_programs = {}
   local tainted = false
@@ -691,14 +798,66 @@ local function frame_product(kind, lanes, cont, wrappers, ctx, box, base_env)
     -- product box as a whole, not to each lane.  Lane frames carry only local
     -- deltas, while this base_env is merged once when the box is joined/worlded.
     base_env = materialize_env(base_env or empty_env()),
-    cont = join.cont,
-    cont_ctx = ctx and ctx:child('join', 'cont') or nil,
     wrappers = join.wrappers,
     post_program = post_program,
+    after_post_program = PostProgram.identity(),
     boundary_tainted = tainted,
     addr = ctx and ctx:key() or nil,
     ctx = ctx,
   }
+end
+
+local function peel_continuation_chain_to_group(frame)
+  if frame and frame.kind == 'group' then return frame, {} end
+  if is_continuation_frame(frame) then
+    local group, chain = peel_continuation_chain_to_group(frame.source)
+    if group then
+      chain[#chain + 1] = {
+        kind = frame.kind,
+        link = frame.link,
+        after_post_program = frame_after_post_program(frame),
+      }
+      return group, chain
+    end
+  end
+  return nil, nil
+end
+
+local function rebuild_continuation_chain(source, chain)
+  local frame = source
+  for i = 1, #(chain or {}) do
+    local c = chain[i]
+    if c.kind == 'bind' then
+      frame = frame_bind(frame, c.link, c.after_post_program)
+    elseif c.kind == 'map' then
+      frame = frame_map(frame, c.link, c.after_post_program)
+    else
+      error('unknown continuation chain kind: ' .. tostring(c.kind), 2)
+    end
+  end
+  return frame
+end
+
+local function frame_open_wait(frame)
+  if not frame then return nil end
+  if frame.kind == 'wait' then return frame end
+  if is_continuation_frame(frame) then return frame_open_wait(frame.source) end
+  return nil
+end
+
+local function frame_after_cut(frame, response)
+  if frame.kind == 'wait' then
+    local env = clone_env(frame.env)
+    local ok_env, reason = merge_response(env, response)
+    if not ok_env then return nil, reason end
+    return frame_done(response_values(response), env, frame_after_post_program(frame))
+  elseif is_continuation_frame(frame) then
+    local source, reason = frame_after_cut(frame.source, response)
+    if not source then return nil, reason end
+    return frame_with_source(frame, source)
+  else
+    return nil, 'frame has no open wait frontier'
+  end
 end
 
 local expand_expr
@@ -721,21 +880,26 @@ local function cartesian_frontiers(children, base_env, ctx, box, i, acc, out)
 end
 
 local function expand_after_cut(frame, response)
-  local env = clone_env(frame.env)
-  local ok_env, reason = merge_response(env, response)
-  if not ok_env then return {} end
-  local next_op = frame.cont(response_values(response))
-  return expand_expr(next_op, env, frame.cont_ctx)
+  local next_frame, reason = frame_after_cut(frame, response)
+  if not next_frame then return {} end
+  return { next_frame }
 end
 
 local function attach_boundary(frames, boundary)
   local program = PostProgram.apply(boundary.wrappers)
   for _, r in ipairs(frames) do
-    if r.kind == 'group' then
+    if is_continuation_frame(r) then
+      -- This is a boundary around a transactional continuation such as
+      -- op:and_then(k):wrap(f).  The wrapper belongs after the explicit
+      -- BindFrame/MapFrame has reduced, not before its source value.
+      frame_compose_after_post(r, program)
+
+    elseif r.kind == 'group' then
       r.wrappers = r.wrappers or {}
       for i = 1, #boundary.wrappers do r.wrappers[#r.wrappers + 1] = boundary.wrappers[i] end
       r.post_program = PostProgram.compose(r.post_program, program)
       r.boundary_tainted = true
+
     else
       local env = clone_env(r.env)
       append_wrappers_to_env(env, boundary.wrappers)
@@ -840,35 +1004,14 @@ expand_expr = function(op, env, ctx)
     return expand_prefer(op.primary, op.fallback, clone_env(env), ctx)
 
   elseif op.tag == 'bind' then
-    local out = {}
-    local frames = expand_expr(op.op, clone_env(env), ctx:child('bind', 'left'))
-    for i = 1, #frames do
-      local r = frames[i]
-      if r.kind == 'done' then
-        local next_op = op.k(unpack_pack(r.values))
-        list_append(out, expand_expr(next_op, r.env, ctx:child('bind', 'cont')))
-      elseif r.kind == 'wait' then
-        local old = r
-        out[#out + 1] = frame_wait(old.resource, old.request, old.env, function(values)
-          return old.cont(values):and_then(op.k)
-        end, ctx:child('bind', 'cont'))
-      elseif r.kind == 'group' then
-        if r.boundary_tainted then
-          error('cannot attach transactional continuation after product containing boundary lane', 2)
-        end
-        local old = r
-        out[#out + 1] = frame_product(old.group_kind, old.lanes, function(results)
-          local base
-          if old.cont then
-            base = old.cont(results)
-          else
-            base = Op.always(results)
-          end
-          return base:and_then(op.k)
-        end, old.wrappers, old.cont_ctx or ctx:child('bind', 'cont'), old.box, old.base_env)
-      end
-    end
-    return out
+    local link = BindLink.new(op.k, ctx:child('bind'))
+    local frames = expand_expr(op.op, clone_env(env), ctx:child('bind', 'source'))
+    return attach_continuation_to_frames(frames, link)
+
+  elseif op.tag == 'map' then
+    local link = MapLink.new(op.f, ctx:child('map'))
+    local frames = expand_expr(op.op, clone_env(env), ctx:child('map', 'source'))
+    return attach_continuation_to_frames(frames, link)
 
   elseif op.tag == 'product' then
     if #op.children == 0 then return { frame_done(pack({}), clone_env(env)) } end
@@ -879,15 +1022,13 @@ expand_expr = function(op, env, ctx)
     cartesian_frontiers(op.children, base_env, product_ctx, box, 1, {}, combos)
     local out = {}
     for i = 1, #combos do
-      out[#out + 1] = frame_product(op.kind, combos[i], nil, nil, product_ctx, box, base_env)
+      out[#out + 1] = frame_product(op.kind, combos[i], nil, product_ctx, box, base_env)
     end
     return out
 
   elseif op.tag == 'request' then
     return {
-      frame_wait(op.resource, op.request, clone_env(env), function(values)
-        return Op.always(unpack_pack(values))
-      end, ctx:child('request'))
+      frame_wait(op.resource, op.request, clone_env(env), ctx:child('request'))
     }
 
   elseif op.tag == 'access' then
@@ -1227,6 +1368,10 @@ local function post_program_for_env(env)
   return (env and env.post_program) or PostProgram.identity()
 end
 
+local function post_program_for_frame(frame)
+  return frame_post_program(frame)
+end
+
 function World:commit(runtime)
   if not self:is_committable() then error('world is valid but not committable', 2) end
   local commit = Commit.new()
@@ -1266,7 +1411,7 @@ function World:commit(runtime)
       g.values[entry.lane] = entry.frame.values
     elseif not resumed[entry.task] then
       runtime:unpark(entry.task)
-      entry.task.values = pack(PostCommitFrame.new(entry.frame.values, post_program_for_env(entry.frame.env)))
+      entry.task.values = pack(PostCommitFrame.new(entry.frame.values, post_program_for_frame(entry.frame)))
       runtime.runnable[#runtime.runnable + 1] = entry.task
       resumed[entry.task] = true
     end
@@ -1379,22 +1524,23 @@ local function copy_cuts(cuts)
 end
 
 local function expand_top_frame(task, frame)
-  if frame.kind == 'group' then
+  local group_frame, continuation_chain = peel_continuation_chain_to_group(frame)
+  if group_frame then
     local entries = {}
     local group = {
       task = task,
-      box = frame.box,
-      kind = frame.group_kind,
-      lane_count = #frame.lanes,
-      cont = frame.cont,
-      cont_ctx = frame.cont_ctx,
-      wrappers = list_copy(frame.wrappers),
-      post_program = frame.post_program or PostProgram.identity(),
-      boundary_tainted = frame.boundary_tainted == true,
-      base_env = materialize_env(frame.base_env or empty_env()),
+      box = group_frame.box,
+      kind = group_frame.group_kind,
+      lane_count = #group_frame.lanes,
+      continuation_chain = continuation_chain or {},
+      wrappers = list_copy(group_frame.wrappers),
+      post_program = frame_post_program(group_frame),
+      after_post_program = PostProgram.identity(),
+      boundary_tainted = frame_boundary_tainted(group_frame),
+      base_env = materialize_env(group_frame.base_env or empty_env()),
     }
-    for i = 1, #frame.lanes do
-      entries[i] = { task = task, frame = frame.lanes[i], group = group, lane = i }
+    for i = 1, #group_frame.lanes do
+      entries[i] = { task = task, frame = group_frame.lanes[i], group = group, lane = i }
     end
     return entries
   end
@@ -1429,11 +1575,15 @@ function PartialProof:with_entries_and_cuts(entries, cuts)
   return self:fork({ entries = entries, cuts = cuts })
 end
 
+local function group_has_continuation(group)
+  return group and group.continuation_chain and #group.continuation_chain > 0
+end
+
 function PartialProof:is_closed()
   for i = 1, #self.entries do
     local e = self.entries[i]
     if e.frame.kind ~= 'done' then return false end
-    if e.group and e.group.cont then return false end
+    if e.group and group_has_continuation(e.group) then return false end
   end
   return true
 end
@@ -1443,12 +1593,96 @@ function PartialProof:world()
   return World.from_proof(self)
 end
 
+local function callback_returned_op(where, value)
+  if (type(value) == 'table' and (getmetatable(value) == OpMethods or getmetatable(value) == BoundaryMethods)) then
+    return value
+  end
+  error(where .. ' callback must return an Op', 2)
+end
+
+local function frame_has_ready_continuation(frame)
+  if not is_continuation_frame(frame) then return false end
+  if frame.source.kind == 'done' then return true end
+  return frame_has_ready_continuation(frame.source)
+end
+
+local function reduce_continuation_frame(frame)
+  if not is_continuation_frame(frame) then return nil end
+
+  if frame.source.kind == 'done' then
+    if frame_pre_link_boundary_tainted(frame.source) then
+      error('cannot reduce transactional continuation after boundary-tainted value', 2)
+    end
+
+    local source = frame.source
+    local link = frame.link
+    local replacement_frames = {}
+
+    if frame.kind == 'bind' then
+      local next_op = callback_returned_op('bind', link.k(unpack_pack(source.values)))
+      local next_frames = expand_expr(next_op, source.env, link.ctx or ExpansionContext.root('bind-cont'))
+      for i = 1, #next_frames do
+        local nf = next_frames[i]
+        frame_compose_after_post(nf, frame_after_post_program(frame))
+        replacement_frames[#replacement_frames + 1] = nf
+      end
+
+    elseif frame.kind == 'map' then
+      replacement_frames[1] = frame_done(pack(link.f(unpack_pack(source.values))), source.env, frame_after_post_program(frame))
+
+    else
+      error('unknown continuation frame kind: ' .. tostring(frame.kind), 2)
+    end
+
+    return replacement_frames
+  end
+
+  local reduced_sources = reduce_continuation_frame(frame.source)
+  if not reduced_sources then return nil end
+
+  local out = {}
+  for i = 1, #reduced_sources do
+    out[i] = frame_with_source(frame, reduced_sources[i])
+  end
+  return out
+end
+
+function PartialProof:find_ready_continuation_entry()
+  for i = 1, #self.entries do
+    local e = self.entries[i]
+    if frame_has_ready_continuation(e.frame) then
+      return i, e
+    end
+  end
+  return nil
+end
+
+function PartialProof:reduce_ready_continuation_entry()
+  local index, entry = self:find_ready_continuation_entry()
+  if not entry then return nil end
+
+  local replacement_frames = reduce_continuation_frame(entry.frame)
+  if not replacement_frames then return nil end
+
+  local out = {}
+  for _, next_top in ipairs(replacement_frames) do
+    local next_entries = {}
+    for i, e in ipairs(self.entries) do
+      if i ~= index then next_entries[#next_entries + 1] = e end
+    end
+    local expanded = expand_top_frame(entry.task, next_top)
+    for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
+    local p2 = self:with_entries(next_entries)
+    if p2:fragments_compatible() then out[#out + 1] = p2 end
+  end
+  return out
+end
 
 function PartialProof:find_complete_join_group()
   local seen = {}
   for _, entry in ipairs(self.entries) do
     local group = entry.group
-    if group and group.cont and not seen[group] then
+    if group_has_continuation(group) and not seen[group] then
       seen[group] = true
       local lane_entries = {}
       local count = 0
@@ -1489,29 +1723,23 @@ function PartialProof:reduce_complete_join_group()
   local env, reason = merge_entry_envs(merge_inputs)
   if not env then return nil, reason end
 
-  local next_op = group.cont(results)
-  local next_frames = expand_expr(next_op, env, group.cont_ctx or ExpansionContext.root('join-cont'))
+  local joined = frame_done(pack(results), env, group.after_post_program)
+  local next_top = rebuild_continuation_chain(joined, group.continuation_chain)
   local out = {}
-
-  for _, next_top in ipairs(next_frames) do
-    local next_entries = {}
-    for _, e in ipairs(self.entries) do
-      if e.group ~= group then
-        next_entries[#next_entries + 1] = e
-      end
-    end
-
-    local expanded = expand_top_frame(group.task, next_top)
-    for _, e in ipairs(expanded) do
+  local next_entries = {}
+  for _, e in ipairs(self.entries) do
+    if e.group ~= group then
       next_entries[#next_entries + 1] = e
-    end
-
-    local p2 = self:with_entries(next_entries)
-    if p2:fragments_compatible() then
-      out[#out + 1] = p2
     end
   end
 
+  local expanded = expand_top_frame(group.task, next_top)
+  for _, e in ipairs(expanded) do
+    next_entries[#next_entries + 1] = e
+  end
+
+  local p2 = self:with_entries(next_entries)
+  if p2:fragments_compatible() then out[#out + 1] = p2 end
   return out
 end
 
@@ -1534,11 +1762,13 @@ function PartialProof:fragments_compatible(entries)
 end
 
 function PartialProof:try_cut(entry_a, entry_b)
-  if entry_a.frame.kind ~= 'wait' or entry_b.frame.kind ~= 'wait' then return nil end
-  if entry_a.frame.resource ~= entry_b.frame.resource then return nil end
+  local wait_a = frame_open_wait(entry_a.frame)
+  local wait_b = frame_open_wait(entry_b.frame)
+  if not wait_a or not wait_b then return nil end
+  if wait_a.resource ~= wait_b.resource then return nil end
   if not self:cut_allowed(entry_a, entry_b) then return nil, 'cut forbidden by box policy' end
 
-  local ok, resp_a, resp_b = entry_a.frame.resource:try_match(entry_a.frame.request, entry_b.frame.request)
+  local ok, resp_a, resp_b = wait_a.resource:try_match(wait_a.request, wait_b.request)
   if not ok then return nil end
 
   return Cut.new(entry_a, entry_b, resp_a, resp_b), resp_a, resp_b
@@ -1705,9 +1935,21 @@ end
 function ProofSearch:search_proof(proof)
   if not self:consume() then return nil, 'budget' end
 
-  -- First reduce any completed tensor/all join link.  The join produces a
-  -- normal continuation frame, so product results can feed later transactional
-  -- requests before the world commits.
+  -- First reduce any explicit transactional continuation link whose source has
+  -- produced a raw value.  User bind/map callbacks are invoked only here, never
+  -- by ordinary expression expansion.
+  local link_reductions = proof:reduce_ready_continuation_entry()
+  if link_reductions then
+    for _, p2 in ipairs(link_reductions) do
+      local world, status = self:search_proof(p2)
+      if world then return world, 'found' end
+      if status == 'budget' then return nil, 'budget' end
+    end
+    return nil, 'absent'
+  end
+
+  -- Then reduce any completed tensor/all join link.  The join produces a raw
+  -- product value that may feed explicit BindLink/MapLink reductions.
   local reductions = proof:reduce_complete_join_group()
   if reductions then
     for _, p2 in ipairs(reductions) do
@@ -1750,7 +1992,7 @@ function ProofSearch:search_proof(proof)
     local waiting_entry = proof.entries[wi]
     local waiting_frame = waiting_entry.frame
 
-    if waiting_frame.kind == 'wait' then
+    if frame_open_wait(waiting_frame) then
       -- First try cuts with ports already inside this partial proof.
       for j = 1, #proof.entries do
         if j ~= wi then
@@ -2159,6 +2401,135 @@ local function first_proof_for(task)
   return PartialProof.new(expand_top_frame(task, frame), used, {})
 end
 
+
+local function test_bind_link_is_explicit_and_reduced_by_search()
+  local called = false
+  local op = Op.always('x'):and_then(function(x)
+    called = true
+    return Op.always(x .. '!')
+  end)
+
+  local frames = expand_expr(op, empty_env(), ExpansionContext.root('explicit-bind-link'))
+  assert_eq(called, false, 'bind callback should not run during ordinary expansion')
+  assert_eq(frames[1].kind, 'bind', 'bind should produce an explicit BindFrame')
+  assert_eq(frames[1].source.kind, 'done', 'BindFrame source should be a done frame')
+  assert(frames[1].link, 'BindFrame should carry an explicit BindLink')
+  assert_eq(frames[1].link.kind, 'bind', 'expected explicit BindLink')
+
+  local rt = Runtime.new()
+  local got
+  rt:spawn(function()
+    got = Op.perform(op)
+  end, 'explicit-bind-link-root')
+
+  drain_runnable(rt)
+  assert_eq(called, false, 'bind callback should not run while parking the root')
+  rt:run()
+  assert_eq(called, true, 'bind callback should run during proof-search link reduction')
+  assert_eq(got, 'x!', 'BindLink should feed returned Op into the same transaction')
+end
+
+local function test_map_link_is_explicit_and_reduced_by_search()
+  local called = false
+  local op = Op.always('x'):map(function(x)
+    called = true
+    return x .. '?'
+  end)
+
+  local frames = expand_expr(op, empty_env(), ExpansionContext.root('explicit-map-link'))
+  assert_eq(called, false, 'map callback should not run during ordinary expansion')
+  assert_eq(frames[1].kind, 'map', 'map should produce an explicit MapFrame')
+  assert_eq(frames[1].source.kind, 'done', 'MapFrame source should be a done frame')
+  assert(frames[1].link, 'MapFrame should carry an explicit MapLink')
+  assert_eq(frames[1].link.kind, 'map', 'expected explicit MapLink')
+
+  local rt = Runtime.new()
+  local got
+  rt:spawn(function()
+    got = Op.perform(op)
+  end, 'explicit-map-link-root')
+
+  drain_runnable(rt)
+  assert_eq(called, false, 'map callback should not run while parking the root')
+  rt:run()
+  assert_eq(called, true, 'map callback should run during proof-search link reduction')
+  assert_eq(got, 'x?', 'MapLink should transform the raw value before commit')
+end
+
+local function test_map_is_transactional_before_commit_and_wrap_after_commit()
+  local rt = Runtime.new()
+  local order = {}
+  local got
+
+  local old_print_event = print_event
+  print_event = function(event)
+    if event.tag == 'map-order.event' then
+      order[#order + 1] = 'commit'
+    else
+      old_print_event(event)
+    end
+  end
+
+  rt:spawn(function()
+    got = Op.perform(
+      Op.always('x')
+        :map(function(x)
+          order[#order + 1] = 'map'
+          return x .. 'm'
+        end)
+        :and_then(function(x)
+          return Op.emit({ tag = 'map-order.event' }):and_then(function()
+            return Op.always(x)
+          end)
+        end)
+        :wrap(function(x)
+          order[#order + 1] = 'wrap'
+          return x .. 'w'
+        end)
+    )
+  end, 'map-order-root')
+
+  rt:run()
+  print_event = old_print_event
+
+  assert_eq(got, 'xmw', 'map should affect raw value and wrap should affect returned value')
+  assert_eq(order[1], 'map', 'map should run during proof search before commit events')
+  assert_eq(order[2], 'commit', 'commit event should run after map')
+  assert_eq(order[3], 'wrap', 'wrap should run after commit')
+end
+
+local function test_map_callback_cannot_perform()
+  local rt = Runtime.new()
+  local ch = Channel.new('bad-map-perform')
+  rt.quiet_deadlock = true
+
+  rt:spawn(function()
+    Op.perform(Op.always('x'):map(function()
+      return Op.perform(ch:get())
+    end))
+  end, 'bad-map-perform-root')
+
+  drain_runnable(rt)
+  local ok, err = pcall(function() rt:try_commit_one() end)
+  assert(ok == false, 'perform during MapLink reduction should fail')
+  assert(tostring(err):match('proof search'), 'expected proof search error, got ' .. tostring(err))
+end
+
+local function test_bind_callback_must_return_op()
+  local rt = Runtime.new()
+
+  rt:spawn(function()
+    Op.perform(Op.always('x'):and_then(function()
+      return 'not-an-op'
+    end))
+  end, 'bad-bind-return-root')
+
+  drain_runnable(rt)
+  local ok, err = pcall(function() rt:try_commit_one() end)
+  assert(ok == false, 'bind callback returning non-Op should fail')
+  assert(tostring(err):match('callback must return an Op'), 'expected callback return error, got ' .. tostring(err))
+end
+
 local function test_proof_search_is_tri_valued_and_budgeted()
   local rt = Runtime.new()
   local ch = Channel.new('proof-search-budget')
@@ -2419,7 +2790,8 @@ local function test_search_phase_forbids_perform_and_spawn()
     end))
   end, 'bad-perform-during-search')
 
-  local ok, err = pcall(function() drain_runnable(rt) end)
+  drain_runnable(rt)
+  local ok, err = pcall(function() rt:try_commit_one() end)
   assert(ok == false, 'perform during proof search expansion should fail')
   assert(tostring(err):match('proof search'), 'expected proof search error, got ' .. tostring(err))
 
@@ -2431,7 +2803,8 @@ local function test_search_phase_forbids_perform_and_spawn()
     end))
   end, 'bad-spawn-during-search')
 
-  ok, err = pcall(function() drain_runnable(rt) end)
+  drain_runnable(rt)
+  ok, err = pcall(function() rt:try_commit_one() end)
   assert(ok == false, 'spawn during proof search expansion should fail')
   assert(tostring(err):match('proof search'), 'expected proof search error, got ' .. tostring(err))
 end
@@ -2954,6 +3327,11 @@ end
 
 local function run_tests()
   test_derivation_addresses_are_stable()
+  test_bind_link_is_explicit_and_reduced_by_search()
+  test_map_link_is_explicit_and_reduced_by_search()
+  test_map_is_transactional_before_commit_and_wrap_after_commit()
+  test_map_callback_cannot_perform()
+  test_bind_callback_must_return_op()
   test_proof_search_is_tri_valued_and_budgeted()
   test_absence_is_generation_stable_not_timeless()
   test_search_phase_forbids_perform_and_spawn()
@@ -2988,7 +3366,7 @@ local function run_tests()
   test_product_lane_wrap_can_perform_after_commit()
   test_product_lane_wrap_rejects_transactional_continuation()
   test_product_lane_and_product_wrap_compose_post_commit()
-  print('tests: addresses, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product envs, commit search, committable preference judgements, fragment views, and product boundary programs passed')
+  print('tests: addresses, explicit bind/map frames, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product envs, commit search, committable preference judgements, fragment views, and product boundary programs passed')
   print()
 end
 

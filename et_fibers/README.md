@@ -92,6 +92,7 @@ An operation is not “an event that might happen”. It is a description of a p
 ```text
 fibres contribute open ports
 resources contribute tentative fragments
+proof search reduces explicit BindFrame/MapFrame continuations
 proof search closes ports with cuts
 closed proofs become worlds
 valid, committable worlds commit atomically
@@ -119,16 +120,33 @@ or_else(a, b)   preferential choice: try a unless its absence is proved
 tensor(xs)      product whose lanes may internally synchronize
 all(xs)         product whose lanes may not internally synchronize
 and_then(a, k)  transactional continuation
+map(a, f)       pure transactional raw-value transformation
 wrap(a, f)      post-commit value continuation
 perform(a)      search, commit, then return post-commit values
 ```
 
-The distinction between `and_then` and `wrap` is fundamental:
+The distinction between `and_then`, `map`, and `wrap` is fundamental:
 
 ```text
 and_then composes worlds before commit.
+map transforms raw transactional values before commit.
 wrap composes values after commit.
 ```
+
+The implementation represents these as different links/frames rather than one vague callback mechanism:
+
+```text
+BindLink / BindFrame
+  callback returns an Op and extends the transactional proof
+
+MapLink / MapFrame
+  callback returns raw values and must be pure/non-performing
+
+BoundaryLink / PostProgram
+  callback runs after commit and may perform a fresh transaction
+```
+
+User bind/map callbacks are not invoked by ordinary expression expansion. They run only when proof search reduces an explicit `BindFrame` or `MapFrame`; post-commit wrappers run only when the resumed fibre interprets its `PostCommitFrame`.
 
 So this is rejected:
 
@@ -300,6 +318,8 @@ roots       parked fibre attempts
 ports       open communication/resource endpoints
 cuts        rendezvous between compatible ports
 boxes       tensor/all/product structure
+bind links  transactional proof continuations
+map links   pure transactional raw-value transformations
 join links  product completion
 prefer links preferential choice sites
 boundary links post-commit value boundaries
@@ -331,6 +351,7 @@ This is an executable sketch, not yet a polished package. It currently includes:
 - resource fragments
 - tensor/all product boxes
 - explicit ports and cuts
+- bind and map links
 - join links
 - boundary links and structured post-commit programs
 - preferential `or_else` with absence obligations
