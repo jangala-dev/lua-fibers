@@ -186,6 +186,114 @@ local function test_bind_callback_must_return_op()
   assert(tostring(err):match('callback must return an Op'), 'expected callback return error, got ' .. tostring(err))
 end
 
+
+local function test_guard_does_not_run_at_construction_and_runs_at_expansion()
+  local called = 0
+  local op = Op.guard(function()
+    called = called + 1
+    return Op.always('guarded')
+  end)
+
+  assert_eq(called, 0, 'guard callback should not run at construction')
+
+  local frames = expand_expr(op, EvidenceDelta.empty(), ExpansionContext.root('guard-expansion'))
+  assert_eq(called, 1, 'guard callback should run during proof expansion')
+  assert_eq(#frames, 1, 'guard returning always should produce one frame')
+  assert_eq(frames[1].kind, 'done', 'guarded always should close')
+  assert_eq(frames[1].values[1], 'guarded', 'guard result value should come from returned Op')
+end
+
+local function test_guard_is_memoized_per_attempt_occurrence()
+  local called = 0
+  local op = Op.guard(function()
+    called = called + 1
+    return Op.always('value-' .. tostring(called))
+  end)
+
+  local task = { id = 101, parked = true }
+  local attempt = RootAttempt.new(task, op, 1, 1)
+  task.attempt = attempt
+  task.attempt_id = attempt.id
+
+  local ctx = ExpansionContext.root('guard-memo-root', task, nil, attempt)
+  local frames1 = expand_expr(op, EvidenceDelta.empty(), ctx)
+  local frames2 = expand_expr(op, EvidenceDelta.empty(), ctx)
+
+  assert_eq(called, 1, 'guard should be memoized for the same attempt occurrence')
+  assert_eq(frames1[1].values[1], 'value-1', 'first expansion should use first guarded Op')
+  assert_eq(frames2[1].values[1], 'value-1', 'replay should reuse memoized guarded Op')
+
+  local attempt2 = RootAttempt.new(task, op, 2, 2)
+  task.attempt = attempt2
+  task.attempt_id = attempt2.id
+  local frames3 = expand_expr(op, EvidenceDelta.empty(), ExpansionContext.root('guard-memo-root', task, nil, attempt2))
+
+  assert_eq(called, 2, 'guard should run again for a new attempt')
+  assert_eq(frames3[1].values[1], 'value-2', 'new attempt should receive new guarded Op')
+end
+
+local function test_guard_callback_must_return_op()
+  local ok, err = pcall(function()
+    expand_expr(Op.guard(function()
+      return 'not-an-op'
+    end), EvidenceDelta.empty(), ExpansionContext.root('bad-guard-return'))
+  end)
+
+  assert(ok == false, 'guard callback returning non-Op should fail')
+  assert(tostring(err):match('callback must return an Op'), 'expected guard callback return error, got ' .. tostring(err))
+end
+
+local function test_guard_callback_cannot_perform_or_spawn()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local ch = Channel.new('bad-guard-perform')
+
+  rt:spawn(function()
+    Op.perform(Op.guard(function()
+      return Op.perform(ch:get())
+    end))
+  end, 'bad-guard-perform-root')
+
+  local ok, err = pcall(function() drain_runnable(rt) end)
+  assert(ok == false, 'perform during guard expansion should fail')
+  assert(tostring(err):match('proof search'), 'expected proof search error, got ' .. tostring(err))
+
+  rt = Runtime.new()
+  rt:spawn(function()
+    Op.perform(Op.guard(function()
+      rt:spawn(function() end, 'bad-spawned-during-guard')
+      return Op.always('ok')
+    end))
+  end, 'bad-guard-spawn-root')
+
+  ok, err = pcall(function() drain_runnable(rt) end)
+  assert(ok == false, 'spawn during guard expansion should fail')
+  assert(tostring(err):match('proof search'), 'expected proof search error, got ' .. tostring(err))
+end
+
+local function test_or_else_function_fallback_is_guarded_and_memoized()
+  local called = 0
+  local op = Op.never():or_else(function()
+    called = called + 1
+    return Op.always('fallback-' .. tostring(called))
+  end)
+
+  local task = { id = 102, parked = true }
+  local attempt = RootAttempt.new(task, op, 1, 1)
+  task.attempt = attempt
+  task.attempt_id = attempt.id
+  local ctx = ExpansionContext.root('guarded-fallback-root', task, nil, attempt)
+
+  local frames1 = expand_expr(op, EvidenceDelta.empty(), ctx)
+  local frames2 = expand_expr(op, EvidenceDelta.empty(), ctx)
+
+  assert_eq(called, 1, 'function fallback should be memoized through Op.guard')
+  assert_eq(#frames1, 1, 'fallback should produce one frame')
+  assert_eq(#frames2, 1, 'replayed fallback should produce one frame')
+  assert_eq(frames1[1].values[1], 'fallback-1', 'fallback should use first guarded value')
+  assert_eq(frames2[1].values[1], 'fallback-1', 'fallback replay should reuse guarded value')
+end
+
 local function test_proof_search_is_tri_valued_and_budgeted()
   local rt = Runtime.new()
   local ch = Channel.new('proof-search-budget')
@@ -1226,6 +1334,11 @@ local function run_tests()
   test_map_is_transactional_before_commit_and_wrap_after_commit()
   test_map_callback_cannot_perform()
   test_bind_callback_must_return_op()
+  test_guard_does_not_run_at_construction_and_runs_at_expansion()
+  test_guard_is_memoized_per_attempt_occurrence()
+  test_guard_callback_must_return_op()
+  test_guard_callback_cannot_perform_or_spawn()
+  test_or_else_function_fallback_is_guarded_and_memoized()
   test_proof_search_is_tri_valued_and_budgeted()
   test_absence_is_generation_stable_not_timeless()
   test_search_phase_forbids_perform_and_spawn()
@@ -1267,7 +1380,7 @@ local function run_tests()
   test_root_attempt_world_evidence_resumption_and_commit_plan()
   test_commit_plan_revalidates_root_attempt_ownership()
   test_commit_plan_prepares_settlement_updates_before_apply()
-  print('tests: addresses, explicit bind/map frames, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product evidence, commit search, committable preference judgements, fragment views, evidence certificates, descriptor responses, settlement algebra, clean architecture objects, root attempt hardening, prepared settlement updates, and product boundary programs passed')
+  print('tests: addresses, explicit bind/map frames, proof search/phase guards, guarded expansion, tensor/all joins, post-commit frames, PreferLink, nested or_else, product evidence, commit search, committable preference judgements, fragment views, evidence certificates, descriptor responses, settlement algebra, clean architecture objects, root attempt hardening, prepared settlement updates, and product boundary programs passed')
   print()
 end
 

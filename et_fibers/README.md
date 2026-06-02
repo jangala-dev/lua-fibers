@@ -95,6 +95,18 @@ local result = Op.perform(
 
 The tensor proof sees the raw values. Resources commit. Commit events fire. Then the resumed fibre runs the structured post-commit value program, and only then does `Op.perform` return. A post-commit callback may delay the return value, but it cannot delay, affect, or roll back the world that already committed.
 
+`guard` is a delayed operation constructor. It is evaluated when a root attempt is expanded, not when the Lua value is built:
+
+```lua
+local delayed = Op.guard(function()
+  -- Read attempt-time context and construct the operation to offer.
+  -- Do not perform, spawn, or mutate resources here.
+  return deadline_op(now() + 10)
+end)
+```
+
+A guard contributes no evidence of its own. The operation it returns contributes ordinary ports, fragments, descriptors, and post programs. Guard expansion is memoized on the current `RootAttempt`, proof address, and decision prefix, so proof-search replay reuses the same returned operation. Function fallbacks passed to `or_else` are normalized through `Op.guard`, giving them the same replay-stable semantics.
+
 ## The ET idea
 
 `et_fibers` takes inspiration from three traditions:
@@ -301,7 +313,7 @@ A closed proof carries evidence, but the core now distinguishes local proof evid
 
 ```text
 RootAttempt
-  attempt identity, liveness, published settlements, future guard memo
+  attempt identity, liveness, published settlements, guard expansion memo
 
 EvidenceDelta
   local proof-carried facts on frames/products
@@ -350,8 +362,8 @@ future with_nack
   EvidenceDelta.commit.selected_settlements -> WorldEvidence.commit.selected_settlements
   RootAttempt.published_settlements + Runtime SettlementCells
 
-future guard
-  GuardFrame/GuardLink with memoization on RootAttempt.guard_memo
+guard
+  attempt-local delayed Op construction, memoized on RootAttempt.guard_memo
 ```
 
 The emerging settlement algebra is present internally but no public `with_nack` operator has been added yet. A proof may carry selected settlement references as commit evidence; runtime settlement cells are interpreted only by commit. Settlement publication is owned by the current `RootAttempt`; publishing without an attempt is rejected. This preserves the intended law: search may discover evidence, but search does not publish, lose, select, or settle anything live.
@@ -433,4 +445,4 @@ This is an executable sketch, not yet a polished package. It currently includes:
 - `demos/demo_triple_swap.lua`: triple rendezvous demo.
 - `demos/demo_ledger.lua`: ledger transfer/close demo.
 
-The split is mechanical, but the core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to finish the public settlement/`with_nack` surface, add CML-style `guard`, harden the resource protocol, and improve diagnostics before tackling richer supervision/cancellation semantics.
+The split is mechanical, but the core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to finish the public settlement/`with_nack` surface, harden the resource protocol, and improve diagnostics before tackling richer supervision/cancellation semantics.

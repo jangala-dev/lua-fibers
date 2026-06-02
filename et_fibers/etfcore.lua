@@ -782,6 +782,13 @@ function Op.never()
   return new_op('never')
 end
 
+function Op.guard(thunk)
+  if type(thunk) ~= 'function' then
+    error('Op.guard expects a function', 2)
+  end
+  return new_op('guard', { thunk = thunk })
+end
+
 function Op.choice(...)
   local n = select('#', ...)
   if n == 0 then return Op.never() end
@@ -813,8 +820,12 @@ end
 local CURRENT_TASK = nil
 local PHASE = 'idle'
 
-local function in_search_phase()
+local function in_proof_construction_phase()
   return PHASE == 'search'
+end
+
+local function in_search_phase()
+  return in_proof_construction_phase()
 end
 
 local function run_in_phase(phase, fn, ...)
@@ -1090,6 +1101,7 @@ local function frame_after_cut(frame, response)
 end
 
 local expand_expr
+local callback_returned_op
 
 local function cartesian_frontiers(children, base_evidence, ctx, box, i, acc, out)
   if i > #children then
@@ -1138,7 +1150,7 @@ end
 
 
 local function fallback_op(fallback)
-  if type(fallback) == 'function' then return fallback() end
+  if type(fallback) == 'function' then return Op.guard(fallback) end
   return fallback
 end
 
@@ -1173,6 +1185,45 @@ local function evidence_with_decision(evidence, site, branch, ctx, creates_oblig
     }
   end
   return e
+end
+
+local function guard_memo_key(ctx, evidence)
+  local prefix = evidence and evidence:decision_path_view() or {}
+  return table.concat({
+    'guard',
+    tostring(ctx and ctx.root or 'anonymous'),
+    tostring(ctx and ctx:key() or 'guard'),
+    decision_path_key(prefix),
+  }, '|')
+end
+
+local function expand_guard(op, evidence, ctx)
+  local guard_ctx = ctx and ctx:child('guard') or ExpansionContext.root('guard')
+  local attempt = guard_ctx.attempt
+  local key = guard_memo_key(guard_ctx, evidence)
+  local guarded_op
+
+  if attempt and attempt.guard_memo then
+    local memo = attempt.guard_memo[key]
+    if memo then
+      guarded_op = memo.op
+    else
+      guarded_op = run_in_phase('search', function()
+        return callback_returned_op('guard', op.thunk())
+      end)
+      attempt.guard_memo[key] = { op = guarded_op }
+    end
+  else
+    guarded_op = run_in_phase('search', function()
+      return callback_returned_op('guard', op.thunk())
+    end)
+  end
+
+  return expand_expr(
+    guarded_op,
+    evidence:clone_local(),
+    guard_ctx:child('body')
+  )
 end
 
 local function expand_prefer(primary, fallback, evidence, ctx)
@@ -1223,6 +1274,9 @@ expand_expr = function(op, evidence, ctx)
 
   elseif op.tag == 'never' then
     return {}
+
+  elseif op.tag == 'guard' then
+    return expand_guard(op, evidence:clone_local(), ctx)
 
   elseif op.tag == 'choice' then
     local out = expand_expr(op.left, evidence:clone_local(), ctx:child('choice', 'left'))
@@ -1771,7 +1825,7 @@ function PartialProof:world()
   return World.from_proof(self)
 end
 
-local function callback_returned_op(where, value)
+callback_returned_op = function(where, value)
   if (type(value) == 'table' and (getmetatable(value) == OpMethods or getmetatable(value) == BoundaryMethods)) then
     return value
   end
