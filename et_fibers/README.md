@@ -1,24 +1,42 @@
 # Eventful Transaction Fibers
 
-`ETF` is an experiment in **Eventful Transactions**: a small concurrency model where a fibre does not merely wait for an event, and does not merely run an isolated memory transaction, but proposes a whole little world that may commit atomically.
+`et_fibers` is an executable proof-net specimen for **Eventful Transactions**: a small concurrency model where a fibre proposes a whole committed world, not just a single event and not just an isolated memory transaction.
 
-The current repository starts with a single Lua file. That file is both a runnable model and a design specimen: it contains the operation algebra, proof search, resource fragments, channels, a ledger resource, tests, and demos. The plan is to grow it into a normal library layout without losing the algebraic shape.
+Repository structure:
 
-```sh
-lua etf_demo.lua
-# or
-luajit etf_demo.lua
-# or
-texlua etf_demo.lua
+```text
+et_fibers/
+  etfcore.lua
+  channel.lua
+  ledger.lua
+  tests/
+    test_etfcore.lua
+    run.lua
+  demos/
+    demo_triple_swap.lua
+    demo_ledger.lua
 ```
 
-You should see the tests pass, followed by a triple-swap demo and a ledger-transfer demo.
+Run from the bundle root:
+
+```sh
+lua tests/run.lua
+lua demos/demo_triple_swap.lua
+lua demos/demo_ledger.lua
+```
+
+`luajit` or `texlua` should also work where available.
 
 ## A first taste
 
 The surface idea is deliberately close to CML-style events: build operations, compose them, and `perform` one when the surrounding fibre is ready to commit.
 
 ```lua
+local core = require('etfcore')
+local Op = core.Op
+local Runtime = core.Runtime
+local Channel = require('channel')
+
 local rt = Runtime.new()
 local ch = Channel.new('triple')
 
@@ -103,10 +121,6 @@ That framing lets channels, resource updates, preference, product structure, and
 
 ## The algebra
 
-This section is intentionally formal enough to constrain implementation choices, but not dressed up as a finished calculus.
-
-### Operations
-
 The core operations are:
 
 ```text
@@ -146,7 +160,7 @@ BoundaryLink / PostProgram
   callback runs after commit and may perform a fresh transaction
 ```
 
-User bind/map callbacks are not invoked by ordinary expression expansion. They run only when proof search reduces an explicit `BindFrame` or `MapFrame`; post-commit wrappers run only when the resumed fibre interprets its `PostCommitFrame`.
+Bind/map callbacks are not invoked by ordinary expression expansion. They run only when proof search reduces an explicit `BindFrame` or `MapFrame`; post-commit wrappers run only when the resumed fibre interprets its `PostCommitFrame`.
 
 So this is rejected:
 
@@ -156,7 +170,7 @@ op:wrap(f):and_then(k)
 
 because `k` is transactional, while `f` only runs after the transaction has already committed.
 
-### Raw values and post-commit values
+## Raw values and post-commit values
 
 Every operation has two layers:
 
@@ -191,7 +205,7 @@ h({ f(a_value), g(b_value) })
 
 Lane-local wrappers are product-shaped; they are not flattened into an undifferentiated list.
 
-### Products
+## Products
 
 `tensor` and `all` both build product boxes. Their difference is topological:
 
@@ -220,7 +234,7 @@ world contribution         = product base once + each lane delta once
 
 That law matters for resource fragments, preference obligations, decisions, commit events, and post-commit programs.
 
-### Resources
+## Resources
 
 A resource supplies a fragment theory. In the current model, a resource supports operations shaped like:
 
@@ -244,7 +258,7 @@ base fragment + local lane fragment
 
 but the lane writes back only its local delta.
 
-### Preferential choice
+## Preferential choice
 
 `or_else(primary, fallback)` is not “try primary quickly, then give up”. It creates a preference obligation.
 
@@ -262,7 +276,7 @@ budget  search was not sufficient; absence has not been proved
 
 Committability checks share a generation-stable judgement context and fuel budget. A preference obligation does not ask merely “can the primary branch close as a valid proof?”; it asks “can the primary branch produce a committable world?”. A valid but dominated primary candidate is skipped while the search continues; cyclic judgement dependencies are treated as `budget`, never as absence.
 
-The committability API deliberately requires an explicit `JudgementContext`; there is no compatibility path where a raw number is silently interpreted as a local budget for a nested committability check. This keeps all nested obligations inside the same generation/fuel/memo/recursion context.
+The committability API requires an explicit `JudgementContext`; there is no alternate raw-number call path for nested committability checks. This keeps all nested obligations inside the same generation/fuel/memo/recursion context.
 
 Nested `or_else` records decision paths precisely:
 
@@ -281,7 +295,7 @@ then test inner = primary
 
 not “search the whole program again and hope we meant the same branch”.
 
-### Worlds
+## Worlds
 
 A closed proof is not automatically a commit.
 
@@ -340,24 +354,16 @@ No post-boundary transactional continuation.
 No post-commit wrapper can affect the world that already committed.
 ```
 
-That is why the current single file looks a little unusual. It is not optimized around queues and callbacks first. It is optimized around making the proof object visible.
-
 ## Current status
 
 This is an executable sketch, not yet a polished package. It currently includes:
 
-- synchronous channels
-- a small ledger resource
-- resource fragments
-- tensor/all product boxes
-- explicit ports and cuts
-- bind and map links
-- join links
-- boundary links and structured post-commit programs
-- preferential `or_else` with absence obligations
-- generation-stable, tri-valued proof search
-- tests and demos in one file
+- `etfcore.lua`: core Op algebra, proof frames/links, proof search, worlds, runtime, judgement context.
+- `channel.lua`: synchronous channel resource.
+- `ledger.lua`: ledger fragment resource used by the demos/tests.
+- `tests/test_etfcore.lua`: semantic regression tests for the core specimen.
+- `tests/run.lua`: test runner.
+- `demos/demo_triple_swap.lua`: triple rendezvous demo.
+- `demos/demo_ledger.lua`: ledger transfer/close demo.
 
-The next steps are to split the single file into modules, harden the resource protocol, improve diagnostics, and eventually add richer supervision/cancellation semantics.
-
-For now, the single file is the spec that runs.
+The next steps are to harden the resource protocol, improve diagnostics, add live-offer/speculative-port modality, and eventually add richer supervision/cancellation semantics.
