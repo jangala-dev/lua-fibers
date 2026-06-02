@@ -29,6 +29,7 @@ resources.cell     get_op / set_op / update_op
 resources.queue    put_op / get_op / peek_op
 resources.log      append_op / read_from_op / next_offset_op
 resources.signal   wait_op / wake_op
+resources.clock    sleep_until_op / sleep_op
 ```
 
 `Op.*` constructors are exempt because the namespace already marks them as
@@ -593,7 +594,59 @@ request ports in sibling tensor lanes may cut with each other.
 request ports in sibling all lanes may not cut with each other.
 ```
 
-## 14. `Op.access(resource, request)`
+## 14. `Op.await(resource, request)`
+
+`await` exposes an external-readiness wait.
+
+It is neither rendezvous nor local journaled state.  It is for facts made true
+by the outside world, such as a clock deadline or poller readiness.
+
+Laws:
+
+```text
+await contributes an external wait frame.
+The frame closes only when resource:ready(request, runtime) succeeds.
+ready observes prior external readiness only; it must not mutate resources or
+register host interests.
+```
+
+Publication law:
+
+```text
+Proof search may construct await frames.
+Only await frames retained in a parked root frontier are published to the
+external resource.
+Speculative candidate-only await frames are not published.
+```
+
+External resource protocol:
+
+```text
+ready(request, runtime) -> ok, response
+publish_wait(runtime, attempt, frame) -> token        optional
+unpublish_wait(runtime, token)                       optional
+next_deadline(runtime) -> deadline_or_nil            optional
+poll(runtime) -> changed_bool                        optional
+wait(runtime, timeout, deadline) -> changed_bool     optional blocker
+```
+
+Runtime law:
+
+```text
+When no proof can currently commit, but retained external waits exist, the
+runtime may wait on external sources up to the nearest reported deadline, then
+retry proof search after source readiness changes.
+```
+
+Clock laws:
+
+```text
+sleep_until_op(t) is await(clock, deadline=t).
+sleep_op(dt) is guard + sleep_until_op(now + dt), so the relative deadline is
+fixed when an attempt reaches the operation and is memoised across proof replay.
+```
+
+## 15. `Op.access(resource, request)`
 
 `access` performs a local transactional resource step.
 
@@ -632,7 +685,7 @@ Fragments from losing branches, failed products, or aborted worlds are
 discarded.
 ```
 
-## 15. `Op.emit(event)`
+## 16. `Op.emit(event)`
 
 `emit` records a commit descriptor.
 
@@ -662,7 +715,7 @@ transaction selection.
 
 In the prototype this is a contract rather than a full type-system guarantee.
 
-## 16. `Op.tensor({ ... })`
+## 17. `Op.tensor({ ... })`
 
 `tensor` is product composition whose sibling lanes may internally synchronise.
 
@@ -709,7 +762,7 @@ with_nack inside a tensor lane selects or waits within that lane. Nack
 reduction must preserve the tensor box and lane identity.
 ```
 
-## 17. `Op.all({ ... })`
+## 18. `Op.all({ ... })`
 
 `all` is product composition whose sibling lanes are independent for
 rendezvous purposes.
@@ -745,7 +798,7 @@ Op.tensor({ ch:put_op('x'), ch:get_op() }) -- may close internally
 Op.all({ ch:put_op('x'), ch:get_op() })    -- must not close by self-rendezvous
 ```
 
-## 18. `Op.perform(op)`
+## 19. `Op.perform(op)`
 
 `perform` is the runtime boundary. It parks the current fibre with a root
 attempt, asks the runtime to find a committable world, commits that world, and
@@ -787,7 +840,7 @@ Memoised guard and with_nack callback results are per RootAttempt. A later
 perform attempt may re-run them and allocate fresh attempt-local identities.
 ```
 
-## 19. Resource laws
+## 20. Resource laws
 
 Resources used with `request` or `access` must obey the transaction contract.
 
@@ -819,7 +872,7 @@ descriptors are interpreted after resource commit and settlement application.
 Descriptors must not affect which world is selected.
 ```
 
-## 20. Adversarial testing checklist
+## 21. Adversarial testing checklist
 
 Adversarial tests should try to falsify these boundaries.
 
@@ -856,7 +909,7 @@ resources
   prepare/apply split is observationally silent before apply.
 ```
 
-## 21. Short normative summary
+## 22. Short normative summary
 
 The algebra is lawful when these three principles remain intact:
 

@@ -458,6 +458,7 @@ function RootAttempt.new(task, op, generation, ordinal)
     published_settlements = {},
     settlement_memo = {},
     guard_memo = {},
+    external_waits = {},
   }, RootAttempt)
 end
 
@@ -844,6 +845,10 @@ function Op.access(resource, request)
   return new_op('access', { resource = resource, request = request })
 end
 
+function Op.await(resource, request)
+  return new_op('await', { resource = resource, request = request })
+end
+
 function Op.emit(event)
   return new_op('emit', { event = event })
 end
@@ -967,6 +972,17 @@ local function frame_nack(ref, evidence, ctx, after_post_program)
   return {
     kind = 'nack',
     settlement = ref,
+    evidence = evidence,
+    after_post_program = after_post_program or PostProgram.identity(),
+    addr = ctx and ctx:key() or nil,
+  }
+end
+
+local function frame_await(resource, request, evidence, ctx, after_post_program)
+  return {
+    kind = 'await',
+    resource = resource,
+    request = request,
     evidence = evidence,
     after_post_program = after_post_program or PostProgram.identity(),
     addr = ctx and ctx:key() or nil,
@@ -1173,6 +1189,32 @@ local function frame_collect_publishable_settlements(frame, out, seen)
     collect_selected_from_evidence(frame.base_evidence, out, seen)
     for i = 1, #(frame.lanes or {}) do
       frame_collect_publishable_settlements(frame.lanes[i], out, seen)
+    end
+    return
+  end
+end
+
+
+local function frame_collect_external_waits(frame, out, seen)
+  if not frame then return end
+
+  if frame.kind == 'await' then
+    local key = tostring(frame.resource) .. '|' .. tostring(frame.addr or frame)
+    if not seen[key] then
+      seen[key] = true
+      out[#out + 1] = frame
+    end
+    return
+  end
+
+  if is_continuation_frame(frame) then
+    frame_collect_external_waits(frame.source, out, seen)
+    return
+  end
+
+  if frame.kind == 'group' then
+    for i = 1, #(frame.lanes or {}) do
+      frame_collect_external_waits(frame.lanes[i], out, seen)
     end
     return
   end
@@ -1455,6 +1497,11 @@ expand_expr = function(op, evidence, ctx)
       frame_wait(op.resource, op.request, evidence:clone_local(), ctx:child('request'))
     }
 
+  elseif op.tag == 'await' then
+    return {
+      frame_await(op.resource, op.request, evidence:clone_local(), ctx:child('await'))
+    }
+
   elseif op.tag == 'access' then
     local evidence2 = evidence:clone_local()
 
@@ -1727,6 +1774,9 @@ function Runtime.new()
     next_task_id = 0,
     generation = 0,
     settlements = {},
+    external_sources = {},
+    external_source_set = {},
+    blocking_source = nil,
   }, Runtime)
 end
 
@@ -1734,6 +1784,23 @@ function Runtime:bump_generation(_reason)
   self.generation = (self.generation or 0) + 1
   return self.generation
 end
+
+function Runtime:register_external_source(source)
+  if not source then return end
+  if not self.external_source_set[source] then
+    self.external_source_set[source] = true
+    self.external_sources[#self.external_sources + 1] = source
+  end
+  if not self.blocking_source and source.wait then
+    self.blocking_source = source
+  end
+end
+
+function Runtime:set_blocking_source(source)
+  self.blocking_source = source
+  self:register_external_source(source)
+end
+
 
 function Runtime:settlement_cell(ref)
   local key = ref and ref.key or tostring(ref)
@@ -1770,6 +1837,102 @@ function Runtime:publish_frontier_settlements(attempt, frontier)
     end
   end
 end
+
+function Runtime:publish_frontier_external_waits(attempt, frontier)
+  local waits, seen = {}, {}
+  for _, frame in ipairs(frontier or {}) do
+    frame_collect_external_waits(frame, waits, seen)
+  end
+
+  for _, frame in ipairs(waits) do
+    local resource = frame.resource
+    if resource and resource.publish_wait then
+      self:register_external_source(resource)
+      local token = resource:publish_wait(self, attempt, frame)
+      if token then
+        attempt.external_waits[#attempt.external_waits + 1] = {
+          resource = resource,
+          token = token,
+        }
+      end
+    end
+  end
+end
+
+function Runtime:unpublish_attempt_external_waits(attempt)
+  if not attempt then return end
+  for _, wait in ipairs(attempt.external_waits or {}) do
+    if wait.resource and wait.resource.unpublish_wait then
+      wait.resource:unpublish_wait(self, wait.token)
+    end
+  end
+  attempt.external_waits = {}
+end
+
+function Runtime:has_external_waits()
+  for _, task in ipairs(self.waiting or {}) do
+    local attempt = task.attempt
+    if attempt and attempt.external_waits and #attempt.external_waits > 0 then
+      return true
+    end
+  end
+  return false
+end
+
+function Runtime:wait_external()
+  local sources = self.external_sources or {}
+  local now = nil
+  local deadline = nil
+
+  for _, source in ipairs(sources) do
+    if source.next_deadline then
+      local d = source:next_deadline(self)
+      if d and (not deadline or d < deadline) then deadline = d end
+    end
+  end
+
+  if deadline then
+    if self.now then now = self:now() end
+    -- If the runtime has no own clock, ask the blocking source or the first
+    -- source with now().  A nil now means timeout remains nil unless the
+    -- blocking source can interpret the absolute deadline itself.
+    if now == nil then
+      local bs = self.blocking_source
+      if bs and bs.now then now = bs:now() end
+    end
+  end
+
+  local timeout = nil
+  if deadline and now then
+    timeout = deadline - now
+    if timeout < 0 then timeout = 0 end
+  end
+
+  local old_generation = self.generation
+  local changed = false
+
+  if self.blocking_source and self.blocking_source.wait then
+    changed = self.blocking_source:wait(self, timeout, deadline) or changed
+  elseif timeout ~= nil then
+    -- No host sleep is assumed in the core.  Still poll below; fake clocks can
+    -- advance in poll/wait, and already-expired deadlines use timeout 0.
+  else
+    return false
+  end
+
+  for _, source in ipairs(sources) do
+    if source.poll then
+      changed = source:poll(self) or changed
+    end
+  end
+
+  if changed and self.generation == old_generation then
+    self:bump_generation('external')
+  end
+
+  return changed or self.generation ~= old_generation
+end
+
 
 function Runtime:can_settle_cell(cell, state)
   if cell.state == state then return true end
@@ -1950,10 +2113,12 @@ function Runtime:park(task, op)
     self.waiting_set[task] = true
   end
   self:publish_frontier_settlements(attempt, task.frontier)
+  self:publish_frontier_external_waits(attempt, task.frontier)
 end
 
 function Runtime:unpark(task, reason)
   if not self.waiting_set[task] then return end
+  self:unpublish_attempt_external_waits(task.attempt)
   self:bump_generation('unpark')
   self.waiting_set[task] = nil
   task.parked = false
@@ -2217,6 +2382,93 @@ function PartialProof:reduce_ready_nack_entry(runtime)
       -- A nack reduced inside an all/tensor lane remains that lane.
       -- Expanding it as a fresh top frame would turn it into a direct root
       -- result and corrupt the product resumption certificate.
+      next_entries[#next_entries + 1] = {
+        task = entry.task,
+        frame = next_top,
+        group = entry.group,
+        lane = entry.lane,
+      }
+    else
+      local expanded = expand_top_frame(entry.task, next_top)
+      for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
+    end
+
+    local p2 = self:with_entries(next_entries)
+    if p2:fragments_compatible() then out[#out + 1] = p2 end
+  end
+  return out
+end
+
+
+local function frame_has_ready_await(frame, runtime)
+  if not frame then return false end
+
+  if frame.kind == 'await' then
+    if not frame.resource or not frame.resource.ready then return false end
+    local ok = frame.resource:ready(frame.request, runtime)
+    return ok and true or false
+  end
+
+  if is_continuation_frame(frame) then
+    return frame_has_ready_await(frame.source, runtime)
+  end
+
+  return false
+end
+
+local function reduce_await_frame(frame, runtime)
+  if frame.kind == 'await' then
+    if not frame.resource or not frame.resource.ready then return nil end
+    local ok, response = frame.resource:ready(frame.request, runtime)
+    if not ok then return nil end
+
+    local evidence = frame.evidence:clone_local()
+    if response then
+      local ok_evidence = evidence:merge_response(response)
+      if not ok_evidence then return nil end
+    end
+    return { frame_done(response_values(response or { value = true }), evidence, frame_after_post_program(frame)) }
+  end
+
+  if is_continuation_frame(frame) then
+    local reduced_sources = reduce_await_frame(frame.source, runtime)
+    if not reduced_sources then return nil end
+
+    local out = {}
+    for i = 1, #reduced_sources do
+      out[i] = frame_with_source(frame, reduced_sources[i])
+    end
+    return out
+  end
+
+  return nil
+end
+
+function PartialProof:find_ready_await_entry(runtime)
+  for i = 1, #self.entries do
+    local e = self.entries[i]
+    if frame_has_ready_await(e.frame, runtime) then
+      return i, e
+    end
+  end
+  return nil
+end
+
+function PartialProof:reduce_ready_await_entry(runtime)
+  local index, entry = self:find_ready_await_entry(runtime)
+  if not entry then return nil end
+
+  local replacement_frames = reduce_await_frame(entry.frame, runtime)
+  if not replacement_frames then return nil end
+
+  local out = {}
+  for _, next_top in ipairs(replacement_frames) do
+    local next_entries = {}
+    for i, e in ipairs(self.entries) do
+      if i ~= index then next_entries[#next_entries + 1] = e end
+    end
+
+    if entry.group then
       next_entries[#next_entries + 1] = {
         task = entry.task,
         frame = next_top,
@@ -2522,6 +2774,20 @@ function ProofSearch:search_proof(proof)
   local nack_reductions = proof:reduce_ready_nack_entry(self.runtime)
   if nack_reductions then
     for _, p2 in ipairs(nack_reductions) do
+      local world, status = self:search_proof(p2)
+      if world then return world, 'found' end
+      if status == 'budget' then return nil, 'budget' end
+    end
+    return nil, 'absent'
+  end
+
+
+  -- Then reduce any external await whose resource is already ready.  Await
+  -- frames observe prior external readiness only; retained waits are published
+  -- by Runtime:park, not by proof search.
+  local await_reductions = proof:reduce_ready_await_entry(self.runtime)
+  if await_reductions then
+    for _, p2 in ipairs(await_reductions) do
       local world, status = self:search_proof(p2)
       if world then return world, 'found' end
       if status == 'budget' then return nil, 'budget' end
@@ -2842,13 +3108,23 @@ function Runtime:run()
     if status == 'budget' then
       error('budget: proof search incomplete')
     elseif status ~= 'committed' then
-      if not self.quiet_deadlock then
-        io.stderr:write('deadlock: no closed proof can be constructed\n')
-        for _, task in ipairs(self.waiting) do
-          io.stderr:write('  waiting: ' .. tostring(task.name) .. '\n')
+      if self:has_external_waits() then
+        local changed = self:wait_external()
+        if not changed then
+          if not self.quiet_deadlock then
+            io.stderr:write('deadlock: external waits made no progress\n')
+          end
+          error('deadlock')
         end
+      else
+        if not self.quiet_deadlock then
+          io.stderr:write('deadlock: no closed proof can be constructed\n')
+          for _, task in ipairs(self.waiting) do
+            io.stderr:write('  waiting: ' .. tostring(task.name) .. '\n')
+          end
+        end
+        error('deadlock')
       end
-      error('deadlock')
     end
   end
 end

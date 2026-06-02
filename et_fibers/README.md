@@ -13,6 +13,7 @@ et_fibers/
     queue.lua        -- ordered transactional state
     log.lua          -- append-only transactional record
     signal.lua       -- wake/wait pulse
+    clock.lua        -- external deadline readiness
   ledger.lua         -- derived ownership protocol built from primitive resources
   tests/
     test_etfcore.lua
@@ -206,7 +207,9 @@ The core operations are:
 ```text
 always(v)       immediately contributes raw value v
 never           contributes no proof
-request(r, q)   exposes a resource request, such as channel put/get
+request(r, q)   exposes a rendezvous resource request, such as channel put/get
+access(r, q)    performs a journaled local transactional resource step
+await(r, q)     waits for external readiness, such as a clock deadline
 access(r, q)    contributes a resource-local fragment step
 emit(e)         records a commit event descriptor
 choice(a, b)    nondeterministic choice
@@ -513,6 +516,7 @@ This is an executable sketch, not yet a polished package. It currently includes:
 - `resources/queue.lua`: ordered transactional state.
 - `resources/log.lua`: append-only transactional record.
 - `resources/signal.lua`: wake/wait pulse resource.
+- `resources/clock.lua`: external deadline readiness resource with `sleep_until_op` and guard-based `sleep_op`.
 - `ledger.lua`: derived ownership protocol built from `Cell`, `Log`, and `Signal`; used by the demos/tests.
 - `tests/test_etfcore.lua`: semantic regression tests for the core specimen.
 - `tests/test_algebra.lua`: adversarial tests for the algebraic laws.

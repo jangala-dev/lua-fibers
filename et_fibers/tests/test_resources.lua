@@ -7,6 +7,7 @@ local Cell = require('resources.cell')
 local Queue = require('resources.queue')
 local Log = require('resources.log')
 local Signal = require('resources.signal')
+local Clock = require('resources.clock')
 local Ledger = require('ledger')
 
 local test_cases = {}
@@ -187,6 +188,185 @@ end)
 
 
 
+test('clock sleep_until_op waits for external deadline and then commits', function()
+  local rt = Runtime.new()
+  local now = 0
+  local clock = Clock.new(rt, {
+    now_fn = function() return now end,
+    sleep_fn = function(dt) now = now + dt end,
+  })
+  local done_at
+
+  rt:spawn(function()
+    Op.perform(clock:sleep_until_op(5))
+    done_at = now
+  end, 'clock-sleeper')
+  rt:run()
+
+  assert_eq(done_at, 5, 'runtime should wait until deadline')
+end)
+
+test('clock sleep_op fixes relative deadline at attempt time', function()
+  local rt = Runtime.new()
+  local now = 10
+  local clock = Clock.new(rt, {
+    now_fn = function() return now end,
+    sleep_fn = function(dt) now = now + dt end,
+  })
+  local constructed = clock:sleep_op(7)
+  local done_at
+
+  now = 20
+  rt:spawn(function()
+    Op.perform(constructed)
+    done_at = now
+  end, 'relative-clock-sleeper')
+  rt:run()
+
+  assert_eq(done_at, 27, 'relative sleep should be measured from perform attempt')
+end)
+
+test('clock sleep_op guard memoises deadline across proof replay', function()
+  local rt = Runtime.new()
+  local now = 100
+  local clock = Clock.new(rt, {
+    now_fn = function() return now end,
+    sleep_fn = function(dt) now = now + dt end,
+  })
+  local calls = 0
+  local done_at
+
+  local op = Op.guard(function()
+    calls = calls + 1
+    return clock:sleep_until_op(clock:now() + 3)
+  end)
+
+  rt:spawn(function()
+    Op.perform(op)
+    done_at = now
+  end, 'memo-clock-sleeper')
+
+  local task = table.remove(rt.runnable, 1)
+  rt:resume_task(task)
+  local first = rt:search_task(task)
+  assert_eq(first.status, 'absent', 'sleep should not be ready before deadline')
+  local second = rt:search_task(task)
+  assert_eq(second.status, 'absent', 'replayed search should still be absent')
+  assert_eq(calls, 1, 'guard should run once for the parked attempt')
+
+  now = 103
+  rt:run()
+  assert_eq(done_at, 103, 'sleep should finish at memoised deadline')
+end)
+
+test('external await publishes only retained frontier waits', function()
+  local published = 0
+  local unpublished = 0
+  local ready = false
+
+  local Resource = {}
+  function Resource:ready(_request, _runtime)
+    if ready then return true, { value = true } end
+    return false
+  end
+  function Resource:publish_wait(_runtime, _attempt, _frame)
+    published = published + 1
+    return { id = published }
+  end
+  function Resource:unpublish_wait(_runtime, _token)
+    unpublished = unpublished + 1
+  end
+
+  local rt = Runtime.new()
+  local op = Op.choice(
+    Op.await(Resource, { tag = 'external' }):and_then(function() return Op.never() end),
+    Op.always('fallback')
+  )
+  local result
+
+  rt:spawn(function()
+    result = Op.perform(op)
+  end, 'external-publication')
+  rt:run()
+
+  assert_eq(result, 'fallback', 'fallback should commit')
+  assert_eq(published, 1, 'retained await frame should be published once')
+  assert_eq(unpublished, 1, 'published external wait should be unpublished on commit')
+end)
+
+
+test('external await reached only by candidate bind is not published', function()
+  local published = 0
+  local Resource = {}
+  function Resource:ready(_request, _runtime) return false end
+  function Resource:publish_wait(_runtime, _attempt, _frame)
+    published = published + 1
+    return { id = published }
+  end
+
+  local rt = Runtime.new()
+  local op = Op.choice(
+    Op.always('candidate'):and_then(function()
+      return Op.await(Resource, { tag = 'candidate-only' })
+    end),
+    Op.always('fallback')
+  )
+  local result
+
+  rt:spawn(function()
+    result = Op.perform(op)
+  end, 'external-candidate-only')
+  rt:run()
+
+  assert_eq(result, 'fallback', 'fallback should commit')
+  assert_eq(published, 0, 'candidate-only await should not publish')
+end)
+
+test('clock withdrawal unpublishes retained timer wait', function()
+  local rt = Runtime.new()
+  local now = 0
+  local clock = Clock.new(rt, { now_fn = function() return now end })
+
+  rt:spawn(function()
+    Op.perform(clock:sleep_until_op(10))
+  end, 'withdrawn-clock-sleeper')
+
+  local task = table.remove(rt.runnable, 1)
+  rt:resume_task(task)
+  assert_eq(#clock.waits, 1, 'sleep should publish one timer')
+
+  local ok, reason = rt:withdraw_attempt(task.attempt, 'test-withdraw')
+  if not ok then error(reason or 'withdraw failed') end
+  clock:next_deadline(rt) -- prune cancelled token
+  assert_eq(#clock.waits, 0, 'withdraw should unpublish timer')
+end)
+
+test('clock external await works inside tensor and all lanes', function()
+  local rt = Runtime.new()
+  local now = 0
+  local clock = Clock.new(rt, {
+    now_fn = function() return now end,
+    sleep_fn = function(dt) now = now + dt end,
+  })
+  local tensor_done, all_done
+
+  rt:spawn(function()
+    Op.perform(Op.tensor({ clock:sleep_until_op(2), Op.always(true) }))
+    tensor_done = now
+  end, 'clock-tensor')
+  rt:run()
+  assert_eq(tensor_done, 2, 'tensor lane sleep should close after deadline')
+
+  now = 10
+  rt:spawn(function()
+    Op.perform(Op.all({ clock:sleep_until_op(15), Op.always(true) }))
+    all_done = now
+  end, 'clock-all')
+  rt:run()
+  assert_eq(all_done, 15, 'all lane sleep should close after deadline')
+end)
+
+
 test('ledger is derived from primitive resources and preserves transactional state', function()
   silence_commit_events(function()
     local rt = Runtime.new()
@@ -249,7 +429,7 @@ function M.run_tests()
   for _, case in ipairs(test_cases) do
     case.fn()
   end
-  print('resource primitive tests: channel, cell, queue, log, signal, and derived ledger passed')
+  print('resource primitive tests: channel, cell, queue, log, signal, clock, and derived ledger passed')
 end
 
 return M
