@@ -1595,17 +1595,77 @@ function PartialProof:with_external_cut(i, external_entries, external_index, nex
 end
 
 
+local Fuel = {}
+Fuel.__index = Fuel
+
+function Fuel.new(limit)
+  return setmetatable({ limit = limit, used = 0 }, Fuel)
+end
+
+function Fuel:consume()
+  if self.limit ~= nil and self.used >= self.limit then
+    return false, 'search budget exhausted'
+  end
+  self.used = self.used + 1
+  return true
+end
+
+local JudgementContext = {}
+JudgementContext.__index = JudgementContext
+
+function JudgementContext.new(runtime, budget_or_fuel)
+  local fuel = budget_or_fuel
+  if not (type(fuel) == 'table' and fuel.__is_fuel) then
+    fuel = Fuel.new(budget_or_fuel)
+  end
+  fuel.__is_fuel = true
+  return setmetatable({
+    __is_judgement = true,
+    runtime = runtime,
+    generation = runtime.generation,
+    fuel = fuel,
+    stack = {},
+    memo = {},
+  }, JudgementContext)
+end
+
+local function ensure_judgement(runtime, value)
+  if type(value) == 'table' and value.__is_judgement then return value end
+  return JudgementContext.new(runtime, value)
+end
+
+local function require_judgement(method_name, judgement)
+  if not (type(judgement) == 'table' and judgement.__is_judgement) then
+    error(method_name .. ' requires an explicit JudgementContext', 2)
+  end
+  return judgement
+end
+
+local function forced_key(forced)
+  if not forced then return '' end
+  local parts = {}
+  for site, branch in pairs(forced) do
+    parts[#parts + 1] = tostring(site) .. '=' .. tostring(branch)
+  end
+  table.sort(parts)
+  return table.concat(parts, ';')
+end
+
+local function committable_search_key(task, forced, generation)
+  return tostring(task and task.id or '?') .. '|' .. tostring(generation) .. '|' .. forced_key(forced)
+end
+
 local ProofSearch = {}
 ProofSearch.__index = ProofSearch
 
-function ProofSearch.new(runtime, initial_proof, budget, accept_world)
+function ProofSearch.new(runtime, initial_proof, budget_or_judgement, accept_world)
+  local judgement = ensure_judgement(runtime, budget_or_judgement)
   return setmetatable({
     runtime = runtime,
     initial_proof = initial_proof,
-    budget = budget,
+    judgement = judgement,
     accept_world = accept_world,
-    used = 0,
-    generation = runtime.generation,
+    generation = judgement.generation,
     status = 'open',
     world = nil,
   }, ProofSearch)
@@ -1617,13 +1677,11 @@ function ProofSearch:consume()
     self.reason = 'generation changed'
     return false
   end
-  if self.budget ~= nil then
-    if self.used >= self.budget then
-      self.status = 'budget'
-      self.reason = 'search budget exhausted'
-      return false
-    end
-    self.used = self.used + 1
+  local ok, reason = self.judgement.fuel:consume()
+  if not ok then
+    self.status = 'budget'
+    self.reason = reason or 'search budget exhausted'
+    return false
   end
   return true
 end
@@ -1635,7 +1693,7 @@ function ProofSearch:result(status, world)
     status = status,
     world = world,
     generation = self.generation,
-    used = self.used,
+    used = self.judgement.fuel.used,
     reason = self.reason,
   }
 end
@@ -1814,45 +1872,78 @@ local function forced_decisions_for_obligation(obligation)
   return forced
 end
 
-function Runtime:prove_obligation(obligation, budget)
+function Runtime:prove_obligation(obligation, judgement)
+  judgement = require_judgement('Runtime:prove_obligation', judgement)
+
   if not obligation.task then
-    return { status = 'absent', reason = 'no task for obligation', generation = self.generation }
+    return { status = 'discharged', reason = 'no task for obligation', generation = judgement.generation }
   end
 
   local forced, reason = forced_decisions_for_obligation(obligation)
   if not forced then
-    return { status = 'absent', reason = reason, generation = self.generation }
+    return { status = 'discharged', reason = reason, generation = judgement.generation }
   end
 
-  return self:search_task(obligation.task, forced, budget)
+  local result = self:search_committable_task(obligation.task, forced, judgement)
+  if result.status == 'found' then
+    return {
+      status = 'dominated',
+      world = result.world,
+      obligation = obligation,
+      generation = judgement.generation,
+    }
+  elseif result.status == 'budget' then
+    return {
+      status = 'budget',
+      obligation = obligation,
+      reason = result.reason,
+      generation = judgement.generation,
+    }
+  elseif result.status == 'absent' then
+    return {
+      status = 'discharged',
+      obligation = obligation,
+      reason = result.reason,
+      generation = judgement.generation,
+    }
+  end
+
+  return {
+    status = result.status or 'unknown',
+    obligation = obligation,
+    reason = result.reason,
+    generation = judgement.generation,
+  }
 end
 
-function Runtime:prove_committable(world, budget)
+function Runtime:prove_committable(world, judgement)
+  judgement = require_judgement('Runtime:prove_committable', judgement)
+
   local obligations = world:preference_obligations()
   for i = 1, #obligations do
-    local result = self:prove_obligation(obligations[i], budget)
-    if result.status == 'found' then
+    local result = self:prove_obligation(obligations[i], judgement)
+    if result.status == 'dominated' then
       return { status = 'dominated', world = result.world, obligation = obligations[i] }
     elseif result.status == 'budget' then
       return { status = 'budget', obligation = obligations[i], reason = result.reason }
-    elseif result.status ~= 'absent' then
-      return { status = result.status or 'unknown', obligation = obligations[i] }
+    elseif result.status ~= 'discharged' then
+      return { status = result.status or 'unknown', obligation = obligations[i], reason = result.reason }
     end
   end
   world.preference_obligations_discharged = true
   return { status = 'committable', world = world }
 end
 
-function Runtime:search_committable_task(task, budget)
+function Runtime:_search_committable_task_uncached(task, forced_decisions, judgement)
   local saw_dominated = false
 
   local function accept_world(world)
-    local proof = self:prove_committable(world, budget)
+    local proof = self:prove_committable(world, judgement)
     if proof.status == 'committable' then
       return { status = 'accept', world = world }
     elseif proof.status == 'dominated' then
       saw_dominated = true
-      return { status = 'reject', reason = 'dominated by preferred proof', dominated_by = proof.world }
+      return { status = 'reject', reason = 'dominated by preferred committable world', dominated_by = proof.world }
     elseif proof.status == 'budget' then
       return { status = 'budget', reason = proof.reason or 'preference obligation proof budget' }
     else
@@ -1860,24 +1951,61 @@ function Runtime:search_committable_task(task, budget)
     end
   end
 
-  local proofs = self:initial_proofs_for_task(task)
+  local proofs = self:initial_proofs_for_task(task, forced_decisions)
   for _, proof in ipairs(proofs) do
-    local result = ProofSearch.new(self, proof, budget, accept_world):run()
+    local result = ProofSearch.new(self, proof, judgement, accept_world):run()
     if result.status == 'found' then return result end
     if result.status == 'budget' then return result end
   end
 
   return {
     status = 'absent',
-    generation = self.generation,
+    generation = judgement.generation,
+    used = judgement.fuel.used,
     reason = saw_dominated and 'all candidates absent or dominated' or 'absent',
   }
 end
 
+function Runtime:search_committable_task(task, forced_decisions, judgement)
+  judgement = require_judgement('Runtime:search_committable_task', judgement)
+  if forced_decisions ~= nil and type(forced_decisions) ~= 'table' then
+    error('Runtime:search_committable_task forced_decisions must be a table or nil', 2)
+  end
+
+  if self.generation ~= judgement.generation then
+    return {
+      status = 'budget',
+      generation = judgement.generation,
+      used = judgement.fuel.used,
+      reason = 'generation changed',
+    }
+  end
+
+  local key = committable_search_key(task, forced_decisions, judgement.generation)
+  if judgement.stack[key] then
+    return {
+      status = 'budget',
+      generation = judgement.generation,
+      used = judgement.fuel.used,
+      reason = 'cyclic committability judgement',
+    }
+  end
+
+  if judgement.memo[key] then return judgement.memo[key] end
+
+  judgement.stack[key] = true
+  local result = self:_search_committable_task_uncached(task, forced_decisions, judgement)
+  judgement.stack[key] = nil
+
+  judgement.memo[key] = result
+  return result
+end
+
 function Runtime:try_commit_one()
+  local judgement = JudgementContext.new(self)
   for _, task in ipairs(self.waiting) do
     if task.parked then
-      local result = self:search_committable_task(task)
+      local result = self:search_committable_task(task, nil, judgement)
       if result.status == 'found' then
         result.world:commit(self)
         return 'committed'
@@ -2392,7 +2520,7 @@ local function test_or_else_fallback_absence_can_report_budget()
   assert_eq(result.status, 'found', 'fallback world should be valid before committability proof')
   assert(#result.world:preference_obligations() > 0, 'fallback world should carry preference obligation')
 
-  local proof = rt:prove_committable(result.world, 0)
+  local proof = rt:prove_committable(result.world, JudgementContext.new(rt, 0))
   assert_eq(proof.status, 'budget', 'zero-budget absence proof should report budget')
 end
 
@@ -2564,12 +2692,12 @@ local function test_search_committable_task_skips_rejected_candidate()
   drain_runnable(rt)
 
   local old_prove = rt.prove_committable
-  rt.prove_committable = function(self, world, budget)
+  rt.prove_committable = function(self, world, judgement)
     local value = world.entries[1].frame.values[1]
     if value == 'first' then
       return { status = 'dominated', world = world, reason = 'test rejection' }
     end
-    return old_prove(self, world, budget)
+    return old_prove(self, world, judgement)
   end
 
   local status = rt:try_commit_one()
@@ -2581,6 +2709,96 @@ local function test_search_committable_task_skips_rejected_candidate()
     rt:resume_task(task)
   end
   assert_eq(got, 'second', 'the later committable candidate should be committed')
+end
+
+
+local function fake_task(id, op, label)
+  return {
+    id = id,
+    name = label or ('fake-task-' .. tostring(id)),
+    op = op,
+    root_label = label or ('fake-task-' .. tostring(id)),
+    attempt_id = 1,
+    parked = true,
+  }
+end
+
+local function fake_obligation(task)
+  return {
+    kind = 'prefer_absence',
+    task = task,
+    site = 'test/nonexistent/prefer-site',
+    prefix = {},
+    force = 'primary',
+  }
+end
+
+local function test_preference_obligation_looks_for_committable_not_merely_valid()
+  local rt = Runtime.new()
+  local task = fake_task(9001, Op.always('valid-but-not-committable'), 'preferred-valid-only')
+  local obligation = fake_obligation(task)
+
+  local old_prove = rt.prove_committable
+  rt.prove_committable = function(self, world, judgement)
+    local value = world.entries[1].frame.values[1]
+    if value == 'valid-but-not-committable' then
+      return { status = 'dominated', world = world, reason = 'test valid leaf is not committable' }
+    end
+    return old_prove(self, world, judgement)
+  end
+
+  local result = rt:prove_obligation(obligation, JudgementContext.new(rt))
+  rt.prove_committable = old_prove
+
+  assert_eq(result.status, 'discharged', 'a merely valid preferred proof must not dominate fallback')
+end
+
+local function test_preference_obligation_continues_to_later_committable_preferred_world()
+  local rt = Runtime.new()
+  local task = fake_task(9002,
+    Op.choice(Op.always('valid-but-not-committable'), Op.always('preferred-committable')),
+    'preferred-continues-to-committable')
+  local obligation = fake_obligation(task)
+
+  local old_prove = rt.prove_committable
+  rt.prove_committable = function(self, world, judgement)
+    local value = world.entries[1].frame.values[1]
+    if value == 'valid-but-not-committable' then
+      return { status = 'dominated', world = world, reason = 'test valid leaf is not committable' }
+    end
+    return old_prove(self, world, judgement)
+  end
+
+  local result = rt:prove_obligation(obligation, JudgementContext.new(rt))
+  rt.prove_committable = old_prove
+
+  assert_eq(result.status, 'dominated', 'a later committable preferred world should dominate fallback')
+  assert_eq(result.world.entries[1].frame.values[1], 'preferred-committable', 'obligation should return the committable preferred world, not the first valid leaf')
+end
+
+local function test_judgement_context_shares_fuel_across_committability_searches()
+  local rt = Runtime.new()
+  local judgement = JudgementContext.new(rt, 1)
+  local first = fake_task(9003, Op.always('first'), 'shared-fuel-first')
+  local second = fake_task(9004, Op.always('second'), 'shared-fuel-second')
+
+  local first_result = rt:search_committable_task(first, {}, judgement)
+  assert_eq(first_result.status, 'found', 'first committability search should consume the single fuel unit')
+
+  local second_result = rt:search_committable_task(second, {}, judgement)
+  assert_eq(second_result.status, 'budget', 'second committability search should see the same exhausted judgement fuel')
+end
+
+local function test_cyclic_committability_judgement_reports_budget()
+  local rt = Runtime.new()
+  local judgement = JudgementContext.new(rt)
+  local task = fake_task(9005, Op.always('cycle'), 'cyclic-judgement')
+  local key = committable_search_key(task, nil, judgement.generation)
+  judgement.stack[key] = true
+
+  local result = rt:search_committable_task(task, nil, judgement)
+  assert_eq(result.status, 'budget', 'recursive committability judgement should be unknown, not absent')
+  assert(tostring(result.reason):match('cyclic'), 'expected cyclic judgement reason')
 end
 
 
@@ -2761,12 +2979,16 @@ local function run_tests()
   test_product_base_env_not_duplicated()
   test_product_lane_obligations_are_lane_local()
   test_search_committable_task_skips_rejected_candidate()
+  test_preference_obligation_looks_for_committable_not_merely_valid()
+  test_preference_obligation_continues_to_later_committable_preferred_world()
+  test_judgement_context_shares_fuel_across_committability_searches()
+  test_cyclic_committability_judgement_reports_budget()
   test_product_lane_access_reads_base_but_writes_delta()
   test_product_lane_wrap_transforms_after_commit()
   test_product_lane_wrap_can_perform_after_commit()
   test_product_lane_wrap_rejects_transactional_continuation()
   test_product_lane_and_product_wrap_compose_post_commit()
-  print('tests: addresses, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product envs, commit search, fragment views, and product boundary programs passed')
+  print('tests: addresses, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product envs, commit search, committable preference judgements, fragment views, and product boundary programs passed')
   print()
 end
 

@@ -230,17 +230,21 @@ but the lane writes back only its local delta.
 
 `or_else(primary, fallback)` is not “try primary quickly, then give up”. It creates a preference obligation.
 
-A fallback world is valid only as a proof candidate. It becomes committable only when the runtime has proved absence of a better primary world under the same decision prefix and generation.
+A fallback world is valid only as a proof candidate. It becomes committable only when the runtime has proved absence of a better **committable** primary world under the same decision prefix and generation.
 
 The proof-search result is tri-valued:
 
 ```text
-found   a proof/world exists
-absent  the searched neighbourhood is closed and no proof exists
+found   a committable world exists
+absent  the searched neighbourhood is closed and no committable world exists
 budget  search was not sufficient; absence has not been proved
 ```
 
 `budget` is never treated as `absent`.
+
+Committability checks share a generation-stable judgement context and fuel budget. A preference obligation does not ask merely “can the primary branch close as a valid proof?”; it asks “can the primary branch produce a committable world?”. A valid but dominated primary candidate is skipped while the search continues; cyclic judgement dependencies are treated as `budget`, never as absence.
+
+The committability API deliberately requires an explicit `JudgementContext`; there is no compatibility path where a raw number is silently interpreted as a local budget for a nested committability check. This keeps all nested obligations inside the same generation/fuel/memo/recursion context.
 
 Nested `or_else` records decision paths precisely:
 
