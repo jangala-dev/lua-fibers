@@ -5,16 +5,24 @@ local Op = core.Op
 local Runtime = core.Runtime
 local JudgementContext = core.JudgementContext
 local ProofSearch = core.ProofSearch
+local PostProgram = core.PostProgram
 local Channel = require('channel')
 local Ledger = require('ledger')
 
-local empty_env = core._test.empty_env
+local EvidenceDelta = core._test.EvidenceDelta
+local OccurrenceRef = core._test.OccurrenceRef
+local SettlementRef = core._test.SettlementRef
+local pack = core._test.pack
 local expand_expr = core._test.expand_expr
 local expand_top_frame = core._test.expand_top_frame
 local ExpansionContext = core._test.ExpansionContext
 local PartialProof = core._test.PartialProof
 local forced_decisions_for_obligation = core._test.forced_decisions_for_obligation
 local committable_search_key = core._test.committable_search_key
+local WorldEvidence = core._test.WorldEvidence
+local ResumptionEvidence = core._test.ResumptionEvidence
+local RootAttempt = core._test.RootAttempt
+local CommitPlan = core._test.CommitPlan
 
 local function assert_eq(a, b, message)
   if a ~= b then error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
@@ -25,8 +33,8 @@ local function test_derivation_addresses_are_stable()
   local ch = Channel.new('addr-stable')
   local operation = Op.tensor({ ch:put('x'), ch:get() })
 
-  local frames1 = expand_expr(operation, empty_env(), ExpansionContext.root('addr-root'))
-  local frames2 = expand_expr(operation, empty_env(), ExpansionContext.root('addr-root'))
+  local frames1 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('addr-root'))
+  local frames2 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('addr-root'))
 
   assert_eq(frames1[1].lanes[1].addr, frames2[1].lanes[1].addr, 'lane 1 address should be replay-stable')
   assert_eq(frames1[1].lanes[2].addr, frames2[1].lanes[2].addr, 'lane 2 address should be replay-stable')
@@ -57,7 +65,7 @@ local function test_bind_link_is_explicit_and_reduced_by_search()
     return Op.always(x .. '!')
   end)
 
-  local frames = expand_expr(op, empty_env(), ExpansionContext.root('explicit-bind-link'))
+  local frames = expand_expr(op, EvidenceDelta.empty(), ExpansionContext.root('explicit-bind-link'))
   assert_eq(called, false, 'bind callback should not run during ordinary expansion')
   assert_eq(frames[1].kind, 'bind', 'bind should produce an explicit BindFrame')
   assert_eq(frames[1].source.kind, 'done', 'BindFrame source should be a done frame')
@@ -84,7 +92,7 @@ local function test_map_link_is_explicit_and_reduced_by_search()
     return x .. '?'
   end)
 
-  local frames = expand_expr(op, empty_env(), ExpansionContext.root('explicit-map-link'))
+  local frames = expand_expr(op, EvidenceDelta.empty(), ExpansionContext.root('explicit-map-link'))
   assert_eq(called, false, 'map callback should not run during ordinary expansion')
   assert_eq(frames[1].kind, 'map', 'map should produce an explicit MapFrame')
   assert_eq(frames[1].source.kind, 'done', 'MapFrame source should be a done frame')
@@ -548,14 +556,14 @@ end
 local function test_or_else_site_address_is_replay_stable()
   local ch = Channel.new('prefer-address')
   local operation = ch:get():or_else(Op.always('fallback'))
-  local frames1 = expand_expr(operation, empty_env(), ExpansionContext.root('prefer-address-root'))
-  local frames2 = expand_expr(operation, empty_env(), ExpansionContext.root('prefer-address-root'))
+  local frames1 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('prefer-address-root'))
+  local frames2 = expand_expr(operation, EvidenceDelta.empty(), ExpansionContext.root('prefer-address-root'))
   local site1, site2
   for _, f in ipairs(frames1) do
-    if f.env and f.env.obligations and f.env.obligations[1] then site1 = f.env.obligations[1].site end
+    if f.evidence and f.evidence.pre_commit.obligations and f.evidence.pre_commit.obligations[1] then site1 = f.evidence.pre_commit.obligations[1].site end
   end
   for _, f in ipairs(frames2) do
-    if f.env and f.env.obligations and f.env.obligations[1] then site2 = f.env.obligations[1].site end
+    if f.evidence and f.evidence.pre_commit.obligations and f.evidence.pre_commit.obligations[1] then site2 = f.evidence.pre_commit.obligations[1].site end
   end
   assert(site1 and site2, 'fallback branch should expose preference obligation site')
   assert_eq(site1, site2, 'PreferLink site address should be replay-stable')
@@ -660,7 +668,7 @@ local function test_nested_or_else_outer_primary_dominates_inner_fallback()
 end
 
 
-local function test_product_base_env_not_duplicated()
+local function test_product_base_evidence_not_duplicated()
   local rt = Runtime.new()
   local ch = Channel.new('product-base-no-dup')
 
@@ -881,7 +889,7 @@ local function test_product_lane_access_reads_base_but_writes_delta()
 
   rt:run()
 
-  assert_eq(observed[1][1], 1, 'product lane access should read base_env + local delta')
+  assert_eq(observed[1][1], 1, 'product lane access should read base_evidence + local delta')
   assert_eq(counter.committed, 2, 'product lane access should commit base once plus one lane delta')
 end
 
@@ -973,6 +981,244 @@ local function test_product_lane_and_product_wrap_compose_post_commit()
   assert_eq(got, 'a1b', 'lane-local post program should run before product-level wrapper')
 end
 
+
+local function test_world_owns_phase_shaped_evidence_and_resumptions()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local task = rt:spawn(function()
+    Op.perform(Op.emit({ tag = 'evidence.descriptor' }))
+  end, 'evidence-world')
+
+  drain_runnable(rt)
+  local result = rt:search_committable_task(task, nil, JudgementContext.new(rt))
+  assert_eq(result.status, 'found', 'simple emit should produce a committable world')
+  local world = result.world
+
+  assert(world.evidence ~= nil, 'world should carry one evidence certificate')
+  assert(world.evidence.resources ~= nil, 'evidence should have resource phase')
+  assert(world.evidence.pre_commit ~= nil, 'evidence should have pre-commit phase')
+  assert(world.evidence.commit ~= nil, 'evidence should have commit phase')
+  assert_eq(#world.evidence.commit.descriptors, 1, 'emit should become a commit descriptor')
+  assert_eq(world.evidence.commit.descriptors[1].tag, 'evidence.descriptor')
+  assert_eq(#world.resumptions, 1, 'world should carry one per-root resumption certificate')
+  assert_eq(world.resumptions[1].task, task)
+
+  local rt2 = Runtime.new()
+  rt2.quiet_deadlock = true
+  local wrapped_task = rt2:spawn(function()
+    Op.perform(Op.always('x'):wrap(function(x) return x .. '!' end))
+  end, 'wrapped-resumption-world')
+
+  drain_runnable(rt2)
+  local wrapped_result = rt2:search_committable_task(wrapped_task, nil, JudgementContext.new(rt2))
+  assert_eq(wrapped_result.status, 'found', 'wrapped always should produce a committable world')
+  local wrapped_world = wrapped_result.world
+  assert(wrapped_world.evidence.post == nil,
+    'global WorldEvidence must not carry post programs')
+  assert_eq(#wrapped_world.resumptions, 1, 'wrapped world should still have a per-root resumption')
+  assert(not PostProgram.is_identity(wrapped_world.resumptions[1].post_program),
+    'per-root resumption should carry the post program')
+end
+
+local DescriptorResource = {}
+DescriptorResource.__index = DescriptorResource
+
+function DescriptorResource.new()
+  return setmetatable({}, DescriptorResource)
+end
+
+function DescriptorResource:empty_fragment() return {} end
+function DescriptorResource:merge_fragments(_, fragment) return true, fragment end
+function DescriptorResource:validate_fragment(_) return true end
+function DescriptorResource:commit_fragment(_) end
+
+function DescriptorResource:step_fragment(fragment, _)
+  return true, {
+    value = 'ok',
+    descriptors = { { tag = 'resource.descriptor' } },
+  }, fragment
+end
+
+local function test_resource_responses_use_descriptors()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local resource = DescriptorResource.new()
+  local task = rt:spawn(function()
+    Op.perform(Op.access(resource, {}))
+  end, 'descriptor-response-world')
+
+  drain_runnable(rt)
+  local result = rt:search_committable_task(task, nil, JudgementContext.new(rt))
+  assert_eq(result.status, 'found', 'descriptor resource should produce a world')
+  local descriptors = result.world.evidence.commit.descriptors
+  assert_eq(#descriptors, 1, 'resource response descriptors should become commit descriptors')
+  assert_eq(descriptors[1].tag, 'resource.descriptor')
+end
+
+local function test_occurrence_refs_are_stable_and_prefix_sensitive()
+  local task = { id = 7001, attempt_id = 3 }
+  local ctx = ExpansionContext.root('occurrence-root', task):child('site')
+  local e1 = EvidenceDelta.empty()
+  local e2 = EvidenceDelta.empty()
+
+  local a = OccurrenceRef.new('test', ctx, e1)
+  local b = OccurrenceRef.new('test', ctx, e2)
+  assert_eq(a.key, b.key, 'same root/site/prefix should produce stable occurrence key')
+
+  local decided = e1:clone_local()
+  decided.decisions['branch/site'] = 'fallback'
+  decided.decision_path[#decided.decision_path + 1] = {
+    site = 'branch/site',
+    branch = 'fallback',
+    prefix = {},
+  }
+  local c = OccurrenceRef.new('test', ctx, decided)
+  assert(a.key ~= c.key, 'decision prefix should distinguish occurrence identity')
+end
+
+local function test_settlement_selected_and_published_lost_are_commit_interpretation()
+  local rt = Runtime.new()
+  local selected_task = {
+    id = 8001,
+    name = 'selected-settlement-task',
+    parked = true,
+    values = pack(),
+  }
+  local selected_attempt = RootAttempt.new(selected_task, Op.always('ok'), rt.generation, 1)
+  selected_task.attempt = selected_attempt
+  selected_task.attempt_id = selected_attempt.id
+  rt.waiting = { selected_task }
+  rt.waiting_set[selected_task] = true
+
+  local selected_ctx = ExpansionContext.root('selected-settlement-root', selected_task, nil, selected_attempt)
+  local selected_evidence = EvidenceDelta.empty()
+  local selected_ref = SettlementRef.new('settlement', selected_ctx, selected_evidence)
+  selected_evidence:add_selected_settlement(selected_ref)
+
+  local selected_world = core.World.from_entries({
+    { task = selected_task, frame = { kind = 'done', values = pack('ok'), evidence = selected_evidence, after_post_program = core.PostProgram.identity() } }
+  }, {})
+  assert(selected_world, 'selected settlement world should build')
+  selected_world:commit(rt)
+  assert_eq(rt:settlement_cell(selected_ref).state, 'selected', 'selected settlement evidence should settle selected at commit')
+
+  local rt2 = Runtime.new()
+  local lost_task = {
+    id = 8002,
+    name = 'lost-settlement-task',
+    parked = true,
+    values = pack(),
+  }
+  local lost_attempt = RootAttempt.new(lost_task, Op.always('plain'), rt2.generation, 1)
+  lost_task.attempt = lost_attempt
+  lost_task.attempt_id = lost_attempt.id
+  rt2.waiting = { lost_task }
+  rt2.waiting_set[lost_task] = true
+
+  local lost_ctx = ExpansionContext.root('lost-settlement-root', lost_task, nil, lost_attempt)
+  local lost_ref = SettlementRef.new('settlement', lost_ctx, EvidenceDelta.empty())
+  rt2:publish_settlement(lost_ref)
+
+  local plain_evidence = EvidenceDelta.empty()
+  local plain_world = core.World.from_entries({
+    { task = lost_task, frame = { kind = 'done', values = pack('plain'), evidence = plain_evidence, after_post_program = core.PostProgram.identity() } }
+  }, {})
+  assert(plain_world, 'plain world should build')
+  plain_world:commit(rt2)
+  assert_eq(rt2:settlement_cell(lost_ref).state, 'lost', 'published unselected settlement should settle lost at commit')
+end
+
+local function test_root_attempt_world_evidence_resumption_and_commit_plan()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local task = rt:spawn(function()
+    local value = Op.perform(Op.always('x'):wrap(function(x) return x .. '!' end))
+    assert_eq(value, 'x!', 'post program should still run after CommitPlan resumes task')
+  end, 'architecture-root-attempt')
+
+  drain_runnable(rt)
+  assert(task.attempt ~= nil, 'parking should create a RootAttempt')
+  assert(getmetatable(task.attempt) == RootAttempt, 'task.attempt should be a RootAttempt')
+  assert_eq(task.attempt.state, 'parked', 'RootAttempt should be parked before commit')
+
+  local result = rt:search_committable_task(task, nil, JudgementContext.new(rt))
+  assert_eq(result.status, 'found', 'wrapped always should produce a committable world')
+  local world = result.world
+  assert(getmetatable(world.evidence) == WorldEvidence, 'world.evidence should be WorldEvidence')
+  assert(world.evidence.post == nil, 'WorldEvidence should not carry post evidence')
+  assert_eq(#world.resumptions, 1, 'world should have one ResumptionEvidence')
+  assert(getmetatable(world.resumptions[1]) == ResumptionEvidence, 'resumption should be ResumptionEvidence')
+  assert_eq(world.resumptions[1].attempt, task.attempt, 'resumption should point at the RootAttempt')
+
+  local plan, reason = CommitPlan.prepare(world, rt)
+  assert(plan, reason or 'CommitPlan should prepare')
+  assert(getmetatable(plan) == CommitPlan, 'CommitPlan.prepare should return a CommitPlan')
+  plan:apply(rt)
+  assert_eq(task.attempt.state, 'committed', 'CommitPlan.apply should mark RootAttempt committed')
+  drain_runnable(rt)
+end
+
+local function test_commit_plan_revalidates_root_attempt_ownership()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local task = rt:spawn(function()
+    Op.perform(Op.always('x'))
+  end, 'stale-attempt-root')
+
+  drain_runnable(rt)
+  local old_attempt = task.attempt
+  local result = rt:search_committable_task(task, nil, JudgementContext.new(rt))
+  assert_eq(result.status, 'found', 'old attempt should produce a world before staleness')
+
+  local plan, reason = CommitPlan.prepare(result.world, rt)
+  assert(plan, reason or 'initial CommitPlan should prepare')
+
+  local newer_attempt = RootAttempt.new(task, Op.always('newer'), rt.generation, 999)
+  task.attempt = newer_attempt
+  task.attempt_id = newer_attempt.id
+  task.parked = true
+
+  local stale_plan, stale_reason = CommitPlan.prepare(result.world, rt)
+  assert(stale_plan == nil, 'CommitPlan.prepare should reject stale attempt ownership')
+  assert(tostring(stale_reason):match('stale'), 'expected stale attempt reason, got ' .. tostring(stale_reason))
+
+  local ok, err = pcall(function() plan:apply(rt) end)
+  assert(ok == false, 'CommitPlan.apply should revalidate stale attempt ownership before mutating')
+  assert(tostring(err):match('stale'), 'expected stale attempt apply error, got ' .. tostring(err))
+  assert_eq(old_attempt.state, 'parked', 'stale apply should not mutate old attempt state')
+end
+
+local function test_commit_plan_prepares_settlement_updates_before_apply()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local task = rt:spawn(function()
+    Op.perform(Op.always('settled'))
+  end, 'settlement-plan-root')
+
+  drain_runnable(rt)
+  local ctx = ExpansionContext.root('settlement-plan-root', task, nil, task.attempt)
+  local evidence = EvidenceDelta.empty()
+  local selected_ref = SettlementRef.new('settlement', ctx, evidence)
+  evidence:add_selected_settlement(selected_ref)
+
+  local world = core.World.from_entries({
+    { task = task, frame = { kind = 'done', values = pack('settled'), evidence = evidence, after_post_program = core.PostProgram.identity() } }
+  }, {})
+  assert(world, 'selected settlement plan world should build')
+
+  local cell = rt:settlement_cell(selected_ref)
+  assert_eq(cell.state, 'pending', 'settlement should be pending before plan apply')
+
+  local plan, reason = CommitPlan.prepare(world, rt)
+  assert(plan, reason or 'CommitPlan should prepare selected settlement update')
+  assert_eq(#plan.settlement_updates, 1, 'CommitPlan.prepare should compute selected settlement update')
+  assert_eq(plan.settlement_updates[1].state, 'selected', 'prepared settlement update should be selected')
+  assert_eq(cell.state, 'pending', 'CommitPlan.prepare must not settle the cell')
+
+  plan:apply(rt)
+  assert_eq(cell.state, 'selected', 'CommitPlan.apply should interpret prepared settlement update')
+end
+
 local function run_tests()
   test_derivation_addresses_are_stable()
   test_bind_link_is_explicit_and_reduced_by_search()
@@ -1002,7 +1248,7 @@ local function run_tests()
   test_forced_decisions_for_nested_obligation()
   test_nested_or_else_inner_primary_under_outer_fallback()
   test_nested_or_else_outer_primary_dominates_inner_fallback()
-  test_product_base_env_not_duplicated()
+  test_product_base_evidence_not_duplicated()
   test_product_lane_obligations_are_lane_local()
   test_search_committable_task_skips_rejected_candidate()
   test_preference_obligation_looks_for_committable_not_merely_valid()
@@ -1014,7 +1260,14 @@ local function run_tests()
   test_product_lane_wrap_can_perform_after_commit()
   test_product_lane_wrap_rejects_transactional_continuation()
   test_product_lane_and_product_wrap_compose_post_commit()
-  print('tests: addresses, explicit bind/map frames, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product envs, commit search, committable preference judgements, fragment views, and product boundary programs passed')
+  test_world_owns_phase_shaped_evidence_and_resumptions()
+  test_resource_responses_use_descriptors()
+  test_occurrence_refs_are_stable_and_prefix_sensitive()
+  test_settlement_selected_and_published_lost_are_commit_interpretation()
+  test_root_attempt_world_evidence_resumption_and_commit_plan()
+  test_commit_plan_revalidates_root_attempt_ownership()
+  test_commit_plan_prepares_settlement_updates_before_apply()
+  print('tests: addresses, explicit bind/map frames, proof search/phase guards, tensor/all joins, post-commit frames, PreferLink, nested or_else, product evidence, commit search, committable preference judgements, fragment views, evidence certificates, descriptor responses, settlement algebra, clean architecture objects, root attempt hardening, prepared settlement updates, and product boundary programs passed')
   print()
 end
 

@@ -6,7 +6,7 @@
 --
 --   * an Op algebra
 --   * parked roots expand into proof frontiers
---   * PartialProof / Port / Cut are explicit runtime objects
+--   * PartialProof / SpecPort / Cut are explicit runtime objects
 --   * wait frames are open ports
 --   * bind/map frames carry explicit continuation links, reduced only by proof search
 --   * channel rendezvous is a cut between dual ports
@@ -125,77 +125,106 @@ function PostProgram.run(program, values)
   error('unknown post-commit program tag: ' .. tostring(program.tag), 2)
 end
 
-local function empty_env()
-  return {
+-- Phase-indexed world evidence.  Frames carry local EvidenceDelta values while proof
+-- search is speculative.  Closed worlds merge those values into a commit
+-- certificate; commit interprets that certificate exactly once.
+local EvidenceDelta = {}
+EvidenceDelta.__index = EvidenceDelta
+
+function EvidenceDelta.empty()
+  return setmetatable({
     base = nil,
-    fragments = {}, fragment_order = {}, consequences = {}, wrappers = {},
-    post_program = PostProgram.identity(),
-    decisions = {}, decision_path = {}, obligations = {}
-  }
-end
 
-local function clone_env(env)
-  local e = {
-    -- Product lanes may carry a base environment.  Cloning preserves the base
-    -- pointer and copies only local lane effects.
-    base = env and env.base or nil,
-    fragments = {},
-    fragment_order = list_copy(env and env.fragment_order),
-    consequences = list_copy(env and env.consequences),
-    wrappers = list_copy(env and env.wrappers),
-    post_program = (env and env.post_program) or PostProgram.identity(),
+    resources = {
+      fragments = {},
+      fragment_order = {},
+    },
+
+    pre_commit = {
+      obligations = {},
+    },
+
+    commit = {
+      descriptors = {},
+      selected_settlements = {},
+      selected_settlement_order = {},
+    },
+
+    post = {
+      program = PostProgram.identity(),
+    },
+
     decisions = {},
-    decision_path = list_copy(env and env.decision_path),
-    obligations = list_copy(env and env.obligations),
-  }
-  if env and env.fragments then
-    for k, v in pairs(env.fragments) do e.fragments[k] = v end
-  end
-  if env and env.decisions then
-    for k, v in pairs(env.decisions) do e.decisions[k] = v end
-  end
-  return e
+    decision_path = {},
+  }, EvidenceDelta)
 end
 
-local function delta_env(base)
-  local e = empty_env()
+function EvidenceDelta.delta(base)
+  local e = EvidenceDelta.empty()
   e.base = base
   return e
 end
 
-local function set_fragment(env, resource, fragment)
-  if env.fragments[resource] == nil then
-    env.fragment_order[#env.fragment_order + 1] = resource
+function EvidenceDelta:clone_local()
+  local e = EvidenceDelta.empty()
+  e.base = self and self.base or nil
+
+  if self then
+    for _, resource in ipairs(self.resources.fragment_order or {}) do
+      e.resources.fragment_order[#e.resources.fragment_order + 1] = resource
+      e.resources.fragments[resource] = self.resources.fragments[resource]
+    end
+
+    list_append(e.pre_commit.obligations, self.pre_commit.obligations)
+    list_append(e.commit.descriptors, self.commit.descriptors)
+    list_append(e.commit.selected_settlement_order, self.commit.selected_settlement_order)
+    for k, v in pairs(self.commit.selected_settlements or {}) do
+      e.commit.selected_settlements[k] = v
+    end
+
+    e.post.program = self.post.program or PostProgram.identity()
+
+    for k, v in pairs(self.decisions or {}) do e.decisions[k] = v end
+    list_append(e.decision_path, self.decision_path)
   end
-  env.fragments[resource] = fragment
+
+  return e
 end
 
-local function merge_fragment_into_env(env, resource, fragment)
-  local current = env.fragments[resource]
+function EvidenceDelta:add_fragment(resource, fragment)
+  if self.resources.fragments[resource] == nil then
+    self.resources.fragment_order[#self.resources.fragment_order + 1] = resource
+  end
+  self.resources.fragments[resource] = fragment
+  return self
+end
+
+function EvidenceDelta:merge_fragment(resource, fragment)
+  local current = self.resources.fragments[resource]
   if current == nil then
-    set_fragment(env, resource, fragment)
+    self:add_fragment(resource, fragment)
     return true
   end
   local ok, merged_or_reason = resource:merge_fragments(current, fragment)
   if not ok then return false, merged_or_reason end
-  env.fragments[resource] = merged_or_reason
+  self.resources.fragments[resource] = merged_or_reason
   return true
 end
 
-local function env_local_fragment(env, resource)
-  if env and env.fragments and env.fragments[resource] ~= nil then
-    return env.fragments[resource]
+function EvidenceDelta:local_fragment(resource)
+  if self and self.resources and self.resources.fragments[resource] ~= nil then
+    return self.resources.fragments[resource]
   end
   return resource:empty_fragment()
 end
 
-local function env_base_fragment_view(env, resource)
+function EvidenceDelta:_base_fragment_view(resource)
   local base_view
-  if env and env.base then
-    base_view = env_base_fragment_view(env.base, resource)
+  if self and self.base then
+    base_view = self.base:_base_fragment_view(resource)
   end
 
-  local local_fragment = env and env.fragments and env.fragments[resource] or nil
+  local local_fragment = self and self.resources and self.resources.fragments[resource] or nil
   if base_view ~= nil and local_fragment ~= nil then
     local ok, merged_or_reason = resource:merge_fragments(base_view, local_fragment)
     if not ok then return nil, merged_or_reason end
@@ -209,75 +238,165 @@ local function env_base_fragment_view(env, resource)
   end
 end
 
-local function env_fragment_view(env, resource)
-  local view, reason = env_base_fragment_view(env, resource)
+function EvidenceDelta:fragment_view(resource)
+  local view, reason = self:_base_fragment_view(resource)
   if view == nil and reason ~= nil then return nil, reason end
   if view == nil then return resource:empty_fragment() end
   return view
 end
 
-local merge_env_effects_into
-
-local function materialize_env(env)
-  local out = empty_env()
-  local ok, reason = merge_env_effects_into(out, env, true)
-  if not ok then error(reason or 'could not materialize environment', 2) end
+function EvidenceDelta:materialize()
+  local out = EvidenceDelta.empty()
+  local ok, reason = out:merge_local_from(self, true)
+  if not ok then error(reason or 'could not materialize evidence', 2) end
   return out
 end
 
-local function env_decision_path(env)
+function EvidenceDelta:decision_path_view()
   local out = {}
-  if env and env.base then list_append(out, env_decision_path(env.base)) end
-  list_append(out, env and env.decision_path)
+  if self and self.base then list_append(out, self.base:decision_path_view()) end
+  list_append(out, self and self.decision_path)
   return out
 end
 
-local function merge_response(env, response)
+function EvidenceDelta:add_pre_commit_obligation(obligation)
+  self.pre_commit.obligations[#self.pre_commit.obligations + 1] = obligation
+  return self
+end
+
+function EvidenceDelta:add_commit_descriptor(descriptor)
+  self.commit.descriptors[#self.commit.descriptors + 1] = descriptor
+  return self
+end
+
+function EvidenceDelta:add_selected_settlement(ref)
+  local key = ref and ref.key or tostring(ref)
+  if self.commit.selected_settlements[key] == nil then
+    self.commit.selected_settlement_order[#self.commit.selected_settlement_order + 1] = key
+  end
+  self.commit.selected_settlements[key] = ref
+  return self
+end
+
+function EvidenceDelta:compose_post_program(program)
+  self.post.program = PostProgram.compose(self.post.program, program or PostProgram.identity())
+  return self
+end
+
+function EvidenceDelta:merge_response(response)
   response = response or {}
 
   if response.fragments then
     for resource, fragment in pairs(response.fragments) do
-      local ok, reason = merge_fragment_into_env(env, resource, fragment)
+      local ok, reason = self:merge_fragment(resource, fragment)
       if not ok then return nil, reason end
     end
   end
 
-  if response.consequences then
-    list_append(env.consequences, response.consequences)
+  if response.descriptors then
+    for i = 1, #response.descriptors do
+      self:add_commit_descriptor(response.descriptors[i])
+    end
   end
 
-  return env
+  return self
 end
 
+function EvidenceDelta:_merge_from(other, include_base, include_post)
+  if not other then return true end
 
-merge_env_effects_into = function(dst, env, include_base)
-  if not env then return true end
-
-  if include_base and env.base then
-    local ok, reason = merge_env_effects_into(dst, env.base, true)
+  if include_base and other.base then
+    local ok, reason = self:_merge_from(other.base, true, include_post)
     if not ok then return false, reason end
   end
 
-  for _, resource in ipairs(env.fragment_order or {}) do
-    local ok, reason = merge_fragment_into_env(dst, resource, env.fragments[resource])
+  for _, resource in ipairs(other.resources.fragment_order or {}) do
+    local ok, reason = self:merge_fragment(resource, other.resources.fragments[resource])
     if not ok then return false, reason end
   end
 
-  list_append(dst.consequences, env.consequences)
-  list_append(dst.wrappers, env.wrappers)
-  list_append(dst.obligations, env.obligations)
-  list_append(dst.decision_path, env.decision_path)
+  list_append(self.pre_commit.obligations, other.pre_commit.obligations)
+  list_append(self.commit.descriptors, other.commit.descriptors)
 
-  for k, v in pairs(env.decisions or {}) do
-    local old = dst.decisions[k]
+  for _, key in ipairs(other.commit.selected_settlement_order or {}) do
+    self:add_selected_settlement(other.commit.selected_settlements[key])
+  end
+
+  if include_post then
+    self.post.program = PostProgram.compose(self.post.program, other.post.program or PostProgram.identity())
+  end
+
+  list_append(self.decision_path, other.decision_path)
+
+  for k, v in pairs(other.decisions or {}) do
+    local old = self.decisions[k]
     if old ~= nil and old ~= v then
       return false, 'conflicting decision for ' .. tostring(k)
     end
-    dst.decisions[k] = v
+    self.decisions[k] = v
   end
 
   return true
 end
+
+-- Local/frame evidence merge includes post programs.  This is used for
+-- materializing product bases and other local proof evidence.
+function EvidenceDelta:merge_local_from(other, include_base)
+  return self:_merge_from(other, include_base, true)
+end
+
+-- World certificate merge excludes post programs.  Post-commit value programs
+-- are per-root resumptions, not a scalar property of the global world.
+function EvidenceDelta:merge_certificate_from(other, include_base)
+  return self:_merge_from(other, include_base, false)
+end
+
+function EvidenceDelta:validate_resources()
+  for _, resource in ipairs(self.resources.fragment_order) do
+    local ok, validate_reason = resource:validate_fragment(self.resources.fragments[resource])
+    if not ok then return nil, validate_reason end
+  end
+  return true
+end
+
+local WorldEvidence = {}
+WorldEvidence.__index = WorldEvidence
+
+function WorldEvidence.from_delta(delta)
+  return setmetatable({
+    resources = delta.resources,
+    pre_commit = delta.pre_commit,
+    commit = delta.commit,
+    decisions = delta.decisions,
+    decision_path = delta.decision_path,
+  }, WorldEvidence)
+end
+
+function WorldEvidence:validate_resources()
+  for _, resource in ipairs(self.resources.fragment_order) do
+    local ok, validate_reason = resource:validate_fragment(self.resources.fragments[resource])
+    if not ok then return nil, validate_reason end
+  end
+  return true
+end
+
+local ResumptionEvidence = {}
+ResumptionEvidence.__index = ResumptionEvidence
+
+function ResumptionEvidence.new(attempt, task, values, post_program)
+  return setmetatable({
+    attempt = attempt or (task and task.attempt) or nil,
+    task = task,
+    values = values or pack(),
+    post_program = post_program or PostProgram.identity(),
+  }, ResumptionEvidence)
+end
+
+-- Test-facing constructor kept as the clean way to make empty proof evidence.
+local function empty_evidence()
+  return EvidenceDelta.empty()
+end
+
 
 local function response_values(response)
   response = response or {}
@@ -286,18 +405,9 @@ local function response_values(response)
   return pack()
 end
 
-local function append_wrappers_to_env(env, wrappers)
-  if not wrappers or #wrappers == 0 then return end
-  env.wrappers = env.wrappers or {}
-  for i = 1, #wrappers do
-    env.wrappers[#env.wrappers + 1] = wrappers[i]
-  end
-  env.post_program = PostProgram.compose(env.post_program, PostProgram.apply(wrappers))
-end
-
 -- Explicit post-commit continuation frame.  World.commit sends this frame back
 -- through the suspended Op.perform.  The frame is interpreted inside the
--- resumed fibre coroutine, so wrappers may perform fresh transactions.
+-- resumed fibre coroutine, so post-commit callbacks may perform fresh transactions.
 local PostCommitFrame = {}
 PostCommitFrame.__index = PostCommitFrame
 
@@ -318,10 +428,10 @@ function PostCommitFrame:run()
 end
 
 -- --------------------------------------------------------------------------
--- Proof-net physical objects: Box / Port / Cut.
+-- Proof-net physical objects: Box / SpecPort / Cut.
 --
 -- A Box is a topological region.  Tensor boxes allow sibling cuts; All boxes
--- forbid them.  A Port is an open resource obligation.  A Cut records a
+-- forbid them.  A SpecPort is an open speculative resource obligation.  A Cut records a
 -- successful closure between two ports.
 -- --------------------------------------------------------------------------
 
@@ -329,6 +439,50 @@ local next_proof_id = 0
 local function fresh_id(prefix)
   next_proof_id = next_proof_id + 1
   return (prefix or 'id') .. '-' .. tostring(next_proof_id)
+end
+
+local RootAttempt = {}
+RootAttempt.__index = RootAttempt
+
+function RootAttempt.new(task, op, generation, ordinal)
+  local id = fresh_id('attempt')
+  local label = 'task-' .. tostring(task and task.id or '?') .. '/attempt-' .. tostring(ordinal or id)
+  return setmetatable({
+    id = id,
+    ordinal = ordinal,
+    label = label,
+    task = task,
+    op = op,
+    generation = generation,
+    state = 'parked',
+    published_settlements = {},
+    guard_memo = {},
+  }, RootAttempt)
+end
+
+function RootAttempt:validate_live(runtime)
+  if self.state ~= 'parked' then
+    return nil, 'attempt is not parked: ' .. tostring(self.id)
+  end
+  if not self.task then
+    return nil, 'attempt has no owning task: ' .. tostring(self.id)
+  end
+  if self.task.attempt ~= self then
+    return nil, 'attempt is stale for task: ' .. tostring(self.id)
+  end
+  if self.task.attempt_id ~= self.id then
+    return nil, 'attempt id is stale for task: ' .. tostring(self.id)
+  end
+  if self.task.parked ~= true then
+    return nil, 'attempt task is not parked: ' .. tostring(self.id)
+  end
+  if runtime and runtime.waiting_set and not runtime.waiting_set[self.task] then
+    return nil, 'attempt task is not waiting: ' .. tostring(self.id)
+  end
+  if runtime and self.generation and self.generation > runtime.generation then
+    return nil, 'attempt generation is from the future: ' .. tostring(self.id)
+  end
+  return true
 end
 
 -- --------------------------------------------------------------------------
@@ -360,10 +514,12 @@ end
 local ExpansionContext = {}
 ExpansionContext.__index = ExpansionContext
 
-function ExpansionContext.root(root_label, task, forced_decisions)
+function ExpansionContext.root(root_label, task, forced_decisions, attempt)
+  attempt = attempt or (task and task.attempt) or nil
   return setmetatable({
     root = root_label,
     task = task,
+    attempt = attempt,
     addr = Address.root(root_label),
     box = nil,
     lane = nil,
@@ -375,6 +531,7 @@ function ExpansionContext:child(...)
   return setmetatable({
     root = self.root,
     task = self.task,
+    attempt = self.attempt,
     addr = self.addr:child(...),
     box = self.box,
     lane = self.lane,
@@ -386,6 +543,7 @@ function ExpansionContext:in_box(box, lane)
   return setmetatable({
     root = self.root,
     task = self.task,
+    attempt = self.attempt,
     addr = self.addr,
     box = box,
     lane = lane,
@@ -395,6 +553,87 @@ end
 
 function ExpansionContext:key()
   return self.addr:key()
+end
+
+local function decision_path_key(prefix)
+  local parts = {}
+  for i = 1, #(prefix or {}) do
+    local d = prefix[i]
+    parts[#parts + 1] = tostring(d.site) .. '=' .. tostring(d.branch)
+  end
+  return table.concat(parts, ',')
+end
+
+local OccurrenceRef = {}
+OccurrenceRef.__index = OccurrenceRef
+
+function OccurrenceRef.new(kind, ctx, evidence, parent)
+  local prefix = evidence and evidence:decision_path_view() or {}
+  local task = ctx and ctx.task or nil
+  local attempt = ctx and ctx.attempt or (task and task.attempt) or nil
+  local site = ctx and ctx:key() or tostring(kind or 'occurrence')
+  local parent_key = parent and parent.key or nil
+  local attempt_id = attempt and attempt.id or (task and task.attempt_id) or nil
+  local root = ctx and ctx.root or (attempt and attempt.label) or nil
+  local key = table.concat({
+    tostring(kind or 'occurrence'),
+    tostring(root),
+    tostring(attempt_id),
+    tostring(site),
+    decision_path_key(prefix),
+    tostring(parent_key),
+  }, '|')
+  return setmetatable({
+    kind = kind or 'occurrence',
+    root = root,
+    task = task,
+    attempt = attempt,
+    attempt_id = attempt_id,
+    site = site,
+    prefix = prefix,
+    parent_key = parent_key,
+    key = key,
+  }, OccurrenceRef)
+end
+
+local SettlementRef = {}
+SettlementRef.__index = SettlementRef
+
+function SettlementRef.new(kind, ctx, evidence, parent)
+  local occurrence = OccurrenceRef.new(kind or 'settlement', ctx, evidence, parent)
+  return setmetatable({
+    occurrence = occurrence,
+    key = occurrence.key,
+    root = occurrence.root,
+    task = occurrence.task,
+    attempt = occurrence.attempt,
+    attempt_id = occurrence.attempt_id,
+    site = occurrence.site,
+    prefix = occurrence.prefix,
+    parent_key = occurrence.parent_key,
+  }, SettlementRef)
+end
+
+local SettlementCell = {}
+SettlementCell.__index = SettlementCell
+
+function SettlementCell.new(ref)
+  return setmetatable({
+    ref = ref,
+    key = ref.key,
+    state = 'pending',
+    published = false,
+    waiters = {},
+  }, SettlementCell)
+end
+
+function SettlementCell:settle(state)
+  if self.state == state then return true end
+  if self.state ~= 'pending' then
+    return nil, 'settlement ' .. tostring(self.key) .. ' already settled as ' .. tostring(self.state)
+  end
+  self.state = state
+  return true
 end
 
 local Box = {}
@@ -417,10 +656,10 @@ function Box.all(ctx)
   return Box.new('all', 'forbid_internal', ctx)
 end
 
-local Port = {}
-Port.__index = Port
+local SpecPort = {}
+SpecPort.__index = SpecPort
 
-function Port.new(resource, request, ctx)
+function SpecPort.new(resource, request, ctx)
   return setmetatable({
     id = fresh_id('port'),
     resource = resource,
@@ -429,7 +668,7 @@ function Port.new(resource, request, ctx)
     root = ctx and ctx.root or nil,
     box = ctx and ctx.box or nil,
     lane = ctx and ctx.lane or nil,
-  }, Port)
+  }, SpecPort)
 end
 
 local Cut = {}
@@ -452,23 +691,22 @@ end
 local BoundaryLink = {}
 BoundaryLink.__index = BoundaryLink
 
-function BoundaryLink.new(wrappers, ctx)
+function BoundaryLink.new(post_program, ctx)
   return setmetatable({
     id = fresh_id('boundary'),
     addr = ctx and ctx:key() or nil,
-    wrappers = list_copy(wrappers or {}),
+    post_program = post_program or PostProgram.identity(),
   }, BoundaryLink)
 end
 
 local JoinLink = {}
 JoinLink.__index = JoinLink
 
-function JoinLink.new(kind, wrappers, ctx)
+function JoinLink.new(kind, ctx)
   return setmetatable({
     id = fresh_id('join'),
     addr = ctx and ctx:key() or nil,
     kind = kind,
-    wrappers = list_copy(wrappers),
   }, JoinLink)
 end
 
@@ -629,7 +867,7 @@ function OpMethods:or_else(fallback)
 end
 
 function OpMethods:wrap(f)
-  return new_boundary('wrap', { inner = self, wrappers = { f } })
+  return new_boundary('wrap', { inner = self, post_program = PostProgram.apply({ f }) })
 end
 
 function BoundaryMethods:choice(other)
@@ -641,7 +879,7 @@ function BoundaryMethods:or_else(fallback)
 end
 
 function BoundaryMethods:wrap(f)
-  return new_boundary('wrap', { inner = self, wrappers = { f } })
+  return new_boundary('wrap', { inner = self, post_program = PostProgram.apply({ f }) })
 end
 
 function BoundaryMethods:and_then(_)
@@ -662,22 +900,22 @@ end
 --                  source frame and reduce only when that source is raw-done.
 -- --------------------------------------------------------------------------
 
-local function frame_done(values, env, after_post_program)
+local function frame_done(values, evidence, after_post_program)
   return {
     kind = 'done',
     values = values or pack(),
-    env = env,
+    evidence = evidence,
     after_post_program = after_post_program or PostProgram.identity(),
   }
 end
 
-local function frame_wait(resource, request, env, ctx, after_post_program)
+local function frame_wait(resource, request, evidence, ctx, after_post_program)
   return {
     kind = 'wait',
     resource = resource,
     request = request,
-    port = Port.new(resource, request, ctx),
-    env = env,
+    port = SpecPort.new(resource, request, ctx),
+    evidence = evidence,
     after_post_program = after_post_program or PostProgram.identity(),
     addr = ctx and ctx:key() or nil,
   }
@@ -719,7 +957,7 @@ local function frame_current_post_program(frame)
   if not frame then return PostProgram.identity() end
   if frame.kind == 'group' then return frame.post_program or PostProgram.identity() end
   if is_continuation_frame(frame) then return frame_current_post_program(frame.source) end
-  return (frame.env and frame.env.post_program) or PostProgram.identity()
+  return (frame.evidence and frame.evidence.post.program) or PostProgram.identity()
 end
 
 local function frame_after_post_program(frame)
@@ -769,9 +1007,9 @@ local function attach_continuation_to_frames(frames, link)
   return out
 end
 
-local function frame_product(kind, lanes, wrappers, ctx, box, base_env)
+local function frame_product(kind, lanes, ctx, box, base_evidence)
   box = box or ((kind == 'tensor') and Box.tensor(ctx) or Box.all(ctx))
-  local join = JoinLink.new(kind, wrappers, ctx and ctx:child('join'))
+  local join = JoinLink.new(kind, ctx and ctx:child('join'))
 
   local lane_programs = {}
   local tainted = false
@@ -780,24 +1018,17 @@ local function frame_product(kind, lanes, wrappers, ctx, box, base_env)
     if not PostProgram.is_identity(lane_programs[i]) then tainted = true end
   end
 
-  local post_program = PostProgram.product(lane_programs)
-  if wrappers and #wrappers > 0 then
-    post_program = PostProgram.compose(post_program, PostProgram.apply(wrappers))
-    tainted = true
-  end
-
   return {
     kind = 'group',
     group_kind = kind,
     box = box,
     join = join,
     lanes = lanes,
-    -- The environment inherited before entering the product belongs to the
+    -- The evidence inherited before entering the product belongs to the
     -- product box as a whole, not to each lane.  Lane frames carry only local
-    -- deltas, while this base_env is merged once when the box is joined/worlded.
-    base_env = materialize_env(base_env or empty_env()),
-    wrappers = join.wrappers,
-    post_program = post_program,
+    -- deltas, while this base_evidence is merged once when the box is joined/worlded.
+    base_evidence = (base_evidence or empty_evidence()):materialize(),
+    post_program = PostProgram.product(lane_programs),
     after_post_program = PostProgram.identity(),
     boundary_tainted = tainted,
     addr = ctx and ctx:key() or nil,
@@ -845,10 +1076,10 @@ end
 
 local function frame_after_cut(frame, response)
   if frame.kind == 'wait' then
-    local env = clone_env(frame.env)
-    local ok_env, reason = merge_response(env, response)
-    if not ok_env then return nil, reason end
-    return frame_done(response_values(response), env, frame_after_post_program(frame))
+    local evidence = frame.evidence:clone_local()
+    local ok_evidence, reason = evidence:merge_response(response)
+    if not ok_evidence then return nil, reason end
+    return frame_done(response_values(response), evidence, frame_after_post_program(frame))
   elseif is_continuation_frame(frame) then
     local source, reason = frame_after_cut(frame.source, response)
     if not source then return nil, reason end
@@ -860,7 +1091,7 @@ end
 
 local expand_expr
 
-local function cartesian_frontiers(children, base_env, ctx, box, i, acc, out)
+local function cartesian_frontiers(children, base_evidence, ctx, box, i, acc, out)
   if i > #children then
     local lanes = {}
     for j = 1, #acc do lanes[j] = acc[j] end
@@ -869,10 +1100,10 @@ local function cartesian_frontiers(children, base_env, ctx, box, i, acc, out)
   end
 
   local child_ctx = ctx and ctx:child('lane', i):in_box(box, i) or nil
-  local frames = expand_expr(children[i], delta_env(base_env), child_ctx)
+  local frames = expand_expr(children[i], EvidenceDelta.delta(base_evidence), child_ctx)
   for r = 1, #frames do
     acc[i] = frames[r]
-    cartesian_frontiers(children, base_env, ctx, box, i + 1, acc, out)
+    cartesian_frontiers(children, base_evidence, ctx, box, i + 1, acc, out)
     acc[i] = nil
   end
 end
@@ -884,7 +1115,7 @@ local function expand_after_cut(frame, response)
 end
 
 local function attach_boundary(frames, boundary)
-  local program = PostProgram.apply(boundary.wrappers)
+  local program = boundary.post_program or PostProgram.identity()
   for _, r in ipairs(frames) do
     if is_continuation_frame(r) then
       -- This is a boundary around a transactional continuation such as
@@ -893,15 +1124,13 @@ local function attach_boundary(frames, boundary)
       frame_compose_after_post(r, program)
 
     elseif r.kind == 'group' then
-      r.wrappers = r.wrappers or {}
-      for i = 1, #boundary.wrappers do r.wrappers[#r.wrappers + 1] = boundary.wrappers[i] end
       r.post_program = PostProgram.compose(r.post_program, program)
       r.boundary_tainted = true
 
     else
-      local env = clone_env(r.env)
-      append_wrappers_to_env(env, boundary.wrappers)
-      r.env = env
+      local evidence = r.evidence:clone_local()
+      evidence:compose_post_program(program)
+      r.evidence = evidence
     end
   end
   return frames
@@ -913,14 +1142,15 @@ local function fallback_op(fallback)
   return fallback
 end
 
-local function env_with_decision(env, site, branch, ctx, creates_obligation)
+local function evidence_with_decision(evidence, site, branch, ctx, creates_obligation)
   -- A decision path entry records both the prefix that led to this site and the
   -- branch chosen at this site.  Fallback absence proofs must replay the prefix
   -- exactly, then flip this site to primary; therefore the obligation prefix is
   -- the path *before* appending the fallback decision.
-  local prefix_before_site = env_decision_path(env)
+  local prefix_before_site = evidence:decision_path_view()
+  local occurrence = OccurrenceRef.new('prefer', ctx, evidence)
 
-  local e = clone_env(env)
+  local e = evidence:clone_local()
   e.decisions[site] = branch
 
   local decision_entry = {
@@ -931,7 +1161,7 @@ local function env_with_decision(env, site, branch, ctx, creates_obligation)
   e.decision_path[#e.decision_path + 1] = decision_entry
 
   if creates_obligation then
-    e.obligations[#e.obligations + 1] = {
+    e:add_pre_commit_obligation {
       kind = 'prefer_absence',
       root = ctx and ctx.root or nil,
       task = ctx and ctx.task or nil,
@@ -939,106 +1169,107 @@ local function env_with_decision(env, site, branch, ctx, creates_obligation)
       prefix = prefix_before_site,
       force = 'primary',
       fallback_entry = decision_entry,
+      occurrence = occurrence,
     }
   end
   return e
 end
 
-local function expand_prefer(primary, fallback, env, ctx)
+local function expand_prefer(primary, fallback, evidence, ctx)
   local prefer_ctx = ctx and ctx:child('prefer') or ExpansionContext.root('prefer')
   local link = PreferLink.new(prefer_ctx)
   local site = link.addr
   local forced = prefer_ctx.forced_decisions and prefer_ctx.forced_decisions[site]
 
   if forced == 'primary' then
-    local e = env_with_decision(env, site, 'primary', prefer_ctx, false)
+    local e = evidence_with_decision(evidence, site, 'primary', prefer_ctx, false)
     return expand_expr(primary, e, prefer_ctx:child('primary'))
   elseif forced == 'fallback' then
-    local e = env_with_decision(env, site, 'fallback', prefer_ctx, false)
+    local e = evidence_with_decision(evidence, site, 'fallback', prefer_ctx, false)
     return expand_expr(fallback_op(fallback), e, prefer_ctx:child('fallback'))
   end
 
-  local out = expand_expr(primary, env_with_decision(env, site, 'primary', prefer_ctx, false), prefer_ctx:child('primary'))
-  list_append(out, expand_expr(fallback_op(fallback), env_with_decision(env, site, 'fallback', prefer_ctx, true), prefer_ctx:child('fallback')))
+  local out = expand_expr(primary, evidence_with_decision(evidence, site, 'primary', prefer_ctx, false), prefer_ctx:child('primary'))
+  list_append(out, expand_expr(fallback_op(fallback), evidence_with_decision(evidence, site, 'fallback', prefer_ctx, true), prefer_ctx:child('fallback')))
   return out
 end
 
-local function expand_boundary(boundary, env, ctx)
+local function expand_boundary(boundary, evidence, ctx)
   if boundary.tag == 'wrap' then
-    local link = BoundaryLink.new(boundary.wrappers, ctx and ctx:child('boundary'))
-    local frames = expand_expr(boundary.inner, clone_env(env), ctx and ctx:child('boundary', 'inner'))
+    local link = BoundaryLink.new(boundary.post_program or PostProgram.identity(), ctx and ctx:child('boundary'))
+    local frames = expand_expr(boundary.inner, evidence:clone_local(), ctx and ctx:child('boundary', 'inner'))
     return attach_boundary(frames, link)
   elseif boundary.tag == 'choice' then
-    local out = expand_expr(boundary.left, clone_env(env), ctx and ctx:child('choice', 'left'))
-    list_append(out, expand_expr(boundary.right, clone_env(env), ctx and ctx:child('choice', 'right')))
+    local out = expand_expr(boundary.left, evidence:clone_local(), ctx and ctx:child('choice', 'left'))
+    list_append(out, expand_expr(boundary.right, evidence:clone_local(), ctx and ctx:child('choice', 'right')))
     return out
   elseif boundary.tag == 'prefer' then
-    return expand_prefer(boundary.primary, boundary.fallback, clone_env(env), ctx)
+    return expand_prefer(boundary.primary, boundary.fallback, evidence:clone_local(), ctx)
   else
     error('unknown boundary tag: ' .. tostring(boundary.tag))
   end
 end
 
-expand_expr = function(op, env, ctx)
-  env = env or empty_env()
+expand_expr = function(op, evidence, ctx)
+  evidence = evidence or empty_evidence()
   ctx = ctx or ExpansionContext.root('anonymous')
 
   if is_boundary(op) then
-    return expand_boundary(op, env, ctx)
+    return expand_boundary(op, evidence, ctx)
   end
 
   if op.tag == 'always' then
-    return { frame_done(op.values, clone_env(env)) }
+    return { frame_done(op.values, evidence:clone_local()) }
 
   elseif op.tag == 'never' then
     return {}
 
   elseif op.tag == 'choice' then
-    local out = expand_expr(op.left, clone_env(env), ctx:child('choice', 'left'))
-    list_append(out, expand_expr(op.right, clone_env(env), ctx:child('choice', 'right')))
+    local out = expand_expr(op.left, evidence:clone_local(), ctx:child('choice', 'left'))
+    list_append(out, expand_expr(op.right, evidence:clone_local(), ctx:child('choice', 'right')))
     return out
 
   elseif op.tag == 'prefer' then
-    return expand_prefer(op.primary, op.fallback, clone_env(env), ctx)
+    return expand_prefer(op.primary, op.fallback, evidence:clone_local(), ctx)
 
   elseif op.tag == 'bind' then
     local link = BindLink.new(op.k, ctx:child('bind'))
-    local frames = expand_expr(op.op, clone_env(env), ctx:child('bind', 'source'))
+    local frames = expand_expr(op.op, evidence:clone_local(), ctx:child('bind', 'source'))
     return attach_continuation_to_frames(frames, link)
 
   elseif op.tag == 'map' then
     local link = MapLink.new(op.f, ctx:child('map'))
-    local frames = expand_expr(op.op, clone_env(env), ctx:child('map', 'source'))
+    local frames = expand_expr(op.op, evidence:clone_local(), ctx:child('map', 'source'))
     return attach_continuation_to_frames(frames, link)
 
   elseif op.tag == 'product' then
-    if #op.children == 0 then return { frame_done(pack({}), clone_env(env)) } end
+    if #op.children == 0 then return { frame_done(pack({}), evidence:clone_local()) } end
     local product_ctx = ctx:child(op.kind)
     local box = (op.kind == 'tensor') and Box.tensor(product_ctx) or Box.all(product_ctx)
-    local base_env = materialize_env(env)
+    local base_evidence = evidence:materialize()
     local combos = {}
-    cartesian_frontiers(op.children, base_env, product_ctx, box, 1, {}, combos)
+    cartesian_frontiers(op.children, base_evidence, product_ctx, box, 1, {}, combos)
     local out = {}
     for i = 1, #combos do
-      out[#out + 1] = frame_product(op.kind, combos[i], nil, product_ctx, box, base_env)
+      out[#out + 1] = frame_product(op.kind, combos[i], product_ctx, box, base_evidence)
     end
     return out
 
   elseif op.tag == 'request' then
     return {
-      frame_wait(op.resource, op.request, clone_env(env), ctx:child('request'))
+      frame_wait(op.resource, op.request, evidence:clone_local(), ctx:child('request'))
     }
 
   elseif op.tag == 'access' then
-    local env2 = clone_env(env)
+    local evidence2 = evidence:clone_local()
 
     -- Reads observe the inherited proof context plus this lane's local delta.
     -- Writes remain local: resources that need the inherited view to answer a
     -- request may provide step_fragment_with_view(base_plus_delta, local_delta,
     -- request), returning the next local delta.  Without a base-aware method,
     -- ordinary resources keep the old local-fragment discipline.
-    local local_fragment = env_local_fragment(env2, op.resource)
-    local view, view_reason = env_fragment_view(env2, op.resource)
+    local local_fragment = evidence2:local_fragment(op.resource)
+    local view, view_reason = evidence2:fragment_view(op.resource)
     if view == nil then return {} end
 
     local ok, response, next_local_fragment
@@ -1049,16 +1280,16 @@ expand_expr = function(op, env, ctx)
     end
     if not ok then return {} end
 
-    set_fragment(env2, op.resource, next_local_fragment)
-    local ok_env = merge_response(env2, response)
-    if not ok_env then return {} end
+    evidence2:add_fragment(op.resource, next_local_fragment)
+    local ok_evidence = evidence2:merge_response(response)
+    if not ok_evidence then return {} end
 
-    return { frame_done(response_values(response), env2) }
+    return { frame_done(response_values(response), evidence2) }
 
   elseif op.tag == 'emit' then
-    local env2 = clone_env(env)
-    env2.consequences[#env2.consequences + 1] = op.event
-    return { frame_done(pack(), env2) }
+    local evidence2 = evidence:clone_local()
+    evidence2:add_commit_descriptor(op.event)
+    return { frame_done(pack(), evidence2) }
 
   else
     error('unknown op tag: ' .. tostring(op.tag))
@@ -1072,41 +1303,74 @@ end
 local World = {}
 World.__index = World
 
-local function merge_entry_envs(entries)
-  local env = empty_env()
+local function merge_entry_evidence(entries)
+  local evidence = EvidenceDelta.empty()
   local seen_groups = {}
 
   for _, entry in ipairs(entries or {}) do
     if entry.group then
       if not seen_groups[entry.group] then
-        local ok, reason = merge_env_effects_into(env, entry.group.base_env, true)
+        local ok, reason = evidence:merge_certificate_from(entry.group.base_evidence, true)
         if not ok then return nil, reason end
         seen_groups[entry.group] = true
       end
 
-      -- Product lane frames carry local deltas.  Do not include env.base here;
+      -- Product lane frames carry local deltas.  Do not include evidence.base here;
       -- the product box base has already been merged exactly once above.
-      local ok, reason = merge_env_effects_into(env, entry.frame.env, false)
+      local ok, reason = evidence:merge_certificate_from(entry.frame.evidence, false)
       if not ok then return nil, reason end
     else
-      local ok, reason = merge_env_effects_into(env, entry.frame.env, true)
+      local ok, reason = evidence:merge_certificate_from(entry.frame.evidence, true)
       if not ok then return nil, reason end
     end
   end
 
-  return env
+  return evidence
 end
 
-local function merge_world_fragments(entries)
-  local env, reason = merge_entry_envs(entries)
-  if not env then return nil, reason end
+local function build_resumption_certificate(entries)
+  local task_order = {}
+  local seen_task = {}
+  local grouped = {}
+  local direct = {}
 
-  for _, resource in ipairs(env.fragment_order) do
-    local ok, validate_reason = resource:validate_fragment(env.fragments[resource])
-    if not ok then return nil, validate_reason end
+  local function note_task(task)
+    if not seen_task[task] then
+      task_order[#task_order + 1] = task
+      seen_task[task] = true
+    end
   end
 
-  return env.fragments, env.fragment_order, env.consequences, env.obligations, env.decisions, env.decision_path
+  for _, entry in ipairs(entries or {}) do
+    note_task(entry.task)
+    if entry.group then
+      local g = grouped[entry.task]
+      if not g then
+        g = {
+          lane_count = entry.group.lane_count,
+          values = {},
+          post_program = entry.group.post_program or PostProgram.identity(),
+        }
+        grouped[entry.task] = g
+      end
+      g.values[entry.lane] = entry.frame.values
+    elseif not direct[entry.task] then
+      direct[entry.task] = ResumptionEvidence.new(entry.task and entry.task.attempt, entry.task, entry.frame.values, frame_post_program(entry.frame))
+    end
+  end
+
+  local resumptions = {}
+  for _, task in ipairs(task_order) do
+    if direct[task] then
+      resumptions[#resumptions + 1] = direct[task]
+    elseif grouped[task] then
+      local g = grouped[task]
+      local results = {}
+      for i = 1, g.lane_count do results[i] = g.values[i] end
+      resumptions[#resumptions + 1] = ResumptionEvidence.new(task and task.attempt, task, pack(results), g.post_program)
+    end
+  end
+  return resumptions
 end
 
 function World.from_entries(entries, cuts)
@@ -1114,23 +1378,26 @@ function World.from_entries(entries, cuts)
     if entry.frame.kind ~= 'done' then return nil, 'world is not closed' end
   end
 
-  local fragments, fragment_order, consequences_or_reason, obligations, decisions, decision_path = merge_world_fragments(entries)
-  if not fragments then return nil, consequences_or_reason end
+  local evidence_delta, reason = merge_entry_evidence(entries)
+  if not evidence_delta then return nil, reason end
+  local evidence = WorldEvidence.from_delta(evidence_delta)
+  local ok, validate_reason = evidence:validate_resources()
+  if not ok then return nil, validate_reason end
 
   return setmetatable({
     entries = entries,
     cuts = cuts or {},
-    fragments = fragments,
-    fragment_order = fragment_order,
-    consequences = consequences_or_reason,
-    obligations = obligations or {},
-    decisions = decisions or {},
-    decision_path = decision_path or {},
+    evidence = evidence,
+    resumptions = build_resumption_certificate(entries),
   }, World)
 end
 
 function World:preference_obligations()
-  return self.obligations or {}
+  return self.evidence.pre_commit.obligations or {}
+end
+
+function World:commit_descriptors()
+  return self.evidence.commit.descriptors or {}
 end
 
 function World:is_committable()
@@ -1164,69 +1431,90 @@ end
 
 M.print_event = default_print_event
 
-local function post_program_for_env(env)
-  return (env and env.post_program) or PostProgram.identity()
-end
+local CommitPlan = {}
+CommitPlan.__index = CommitPlan
 
-local function post_program_for_frame(frame)
-  return frame_post_program(frame)
-end
+function CommitPlan.prepare(world, runtime)
+  if not world:is_committable() then error('world is valid but not committable', 2) end
 
-function World:commit(runtime)
-  if not self:is_committable() then error('world is valid but not committable', 2) end
+  local attempts = {}
+  local seen_attempt = {}
+  for _, resumption in ipairs(world.resumptions or {}) do
+    local attempt = resumption.attempt
+    if not attempt then
+      return nil, 'resumption has no RootAttempt for task: ' .. tostring(resumption.task and resumption.task.name or resumption.task)
+    end
+    local ok_attempt, attempt_reason = attempt:validate_live(runtime)
+    if not ok_attempt then return nil, attempt_reason end
+    if not seen_attempt[attempt] then
+      attempts[#attempts + 1] = attempt
+      seen_attempt[attempt] = true
+    end
+  end
+
   local commit = Commit.new()
+  local resources = world.evidence.resources
 
-  -- First collect commit events without installing state.
-  for _, resource in ipairs(self.fragment_order) do
+  -- Validate/prepare commit descriptors without installing state.
+  for _, resource in ipairs(resources.fragment_order) do
     if resource.prepare_commit_fragment then
-      resource:prepare_commit_fragment(self.fragments[resource], commit)
+      resource:prepare_commit_fragment(resources.fragments[resource], commit)
     end
   end
-  list_append(commit.events, self.consequences)
+  list_append(commit.events, world:commit_descriptors())
 
-  -- Then install state.
-  for _, resource in ipairs(self.fragment_order) do
+  local settlement_updates, settlement_reason = runtime:prepare_world_settlement_updates(world)
+  if not settlement_updates then return nil, settlement_reason end
+
+  return setmetatable({
+    world = world,
+    attempts = attempts,
+    resources = resources,
+    settlement_updates = settlement_updates,
+    events = commit.events,
+    resumptions = world.resumptions or {},
+  }, CommitPlan)
+end
+
+function CommitPlan:apply(runtime)
+  -- Revalidate live attempts before mutating runtime state.  Prepare is a dry
+  -- run; apply is the single interpreter pass for the prepared plan.
+  for _, attempt in ipairs(self.attempts or {}) do
+    local ok_attempt, attempt_reason = attempt:validate_live(runtime)
+    if not ok_attempt then error(attempt_reason or 'stale RootAttempt in commit plan', 2) end
+  end
+
+  -- Install resource fragments.
+  for _, resource in ipairs(self.resources.fragment_order) do
     if resource.commit_fragment then
-      resource:commit_fragment(self.fragments[resource])
+      resource:commit_fragment(self.resources.fragments[resource])
     end
   end
+
+  -- Interpret settlement updates computed by CommitPlan.prepare.
+  local ok_settlement, settlement_reason = runtime:apply_settlement_updates(self.settlement_updates)
+  if not ok_settlement then error(settlement_reason or 'settlement commit failed', 2) end
 
   runtime:bump_generation('commit')
 
-  -- Then interpret commit events.
-  for _, event in ipairs(commit.events) do M.print_event(event) end
+  -- Interpret commit descriptors.
+  for _, event in ipairs(self.events) do M.print_event(event) end
 
-  -- Finally resume each participating root once.  Tensor/all lane entries
-  -- belong to one task; their lane results are assembled into a table of packs.
-  local resumed = {}
-  local grouped = {}
-
-  for _, entry in ipairs(self.entries) do
-    if entry.group then
-      local g = grouped[entry.task]
-      if not g then
-        g = { lane_count = entry.group.lane_count, values = {}, post_program = entry.group.post_program or PostProgram.identity() }
-        grouped[entry.task] = g
-      end
-      g.values[entry.lane] = entry.frame.values
-    elseif not resumed[entry.task] then
-      runtime:unpark(entry.task)
-      entry.task.values = pack(PostCommitFrame.new(entry.frame.values, post_program_for_frame(entry.frame)))
-      runtime.runnable[#runtime.runnable + 1] = entry.task
-      resumed[entry.task] = true
+  -- Resume each participating root through its own post-commit value program.
+  for _, resumption in ipairs(self.resumptions or {}) do
+    if resumption.attempt and resumption.attempt.state == 'parked' then
+      resumption.attempt.state = 'committed'
     end
+    runtime:unpark(resumption.task, 'commit')
+    resumption.task.values = pack(PostCommitFrame.new(resumption.values, resumption.post_program))
+    runtime.runnable[#runtime.runnable + 1] = resumption.task
   end
+end
 
-  for task, g in pairs(grouped) do
-    if not resumed[task] then
-      local results = {}
-      for i = 1, g.lane_count do results[i] = g.values[i] end
-      runtime:unpark(task)
-      task.values = pack(PostCommitFrame.new(pack(results), g.post_program))
-      runtime.runnable[#runtime.runnable + 1] = task
-      resumed[task] = true
-    end
-  end
+function World:commit(runtime)
+  local plan, reason = CommitPlan.prepare(self, runtime)
+  if not plan then error(reason or 'could not prepare commit', 2) end
+  return plan:apply(runtime)
 end
 
 -- --------------------------------------------------------------------------
@@ -1243,12 +1531,94 @@ function Runtime.new()
     waiting_set = {},
     next_task_id = 0,
     generation = 0,
+    settlements = {},
   }, Runtime)
 end
 
 function Runtime:bump_generation(_reason)
   self.generation = (self.generation or 0) + 1
   return self.generation
+end
+
+function Runtime:settlement_cell(ref)
+  local key = ref and ref.key or tostring(ref)
+  local cell = self.settlements[key]
+  if not cell then
+    cell = SettlementCell.new(ref)
+    self.settlements[key] = cell
+  end
+  return cell
+end
+
+function Runtime:publish_settlement(ref)
+  local task = ref and ref.task or nil
+  local attempt = ref and ref.attempt or (task and task.attempt) or nil
+  if not attempt then
+    error('cannot publish settlement without RootAttempt: ' .. tostring(ref and ref.key or ref), 2)
+  end
+  local cell = self:settlement_cell(ref)
+  cell.published = true
+  attempt.published_settlements[ref.key] = ref
+  return cell
+end
+
+function Runtime:can_settle_cell(cell, state)
+  if cell.state == state then return true end
+  if cell.state ~= 'pending' then
+    return nil, 'settlement ' .. tostring(cell.key) .. ' already settled as ' .. tostring(cell.state)
+  end
+  return true
+end
+
+function Runtime:prepare_world_settlement_updates(world)
+  local updates = {}
+  local selected = {}
+  local commit = world.evidence.commit
+
+  for _, key in ipairs(commit.selected_settlement_order or {}) do
+    local ref = commit.selected_settlements[key]
+    selected[key] = true
+    local cell = self:settlement_cell(ref)
+    local ok, reason = self:can_settle_cell(cell, 'selected')
+    if not ok then return nil, reason end
+    updates[#updates + 1] = { cell = cell, ref = ref, state = 'selected' }
+  end
+
+  for _, resumption in ipairs(world.resumptions or {}) do
+    local attempt = resumption.attempt
+    local published = attempt and attempt.published_settlements or {}
+    for key, ref in pairs(published) do
+      if not selected[key] then
+        local cell = self:settlement_cell(ref)
+        if cell.published and cell.state == 'pending' then
+          local ok, reason = self:can_settle_cell(cell, 'lost')
+          if not ok then return nil, reason end
+          updates[#updates + 1] = { cell = cell, ref = ref, state = 'lost' }
+        end
+      end
+    end
+  end
+
+  return updates
+end
+
+function Runtime:apply_settlement_updates(updates)
+  for _, update in ipairs(updates or {}) do
+    local ok, reason = update.cell:settle(update.state)
+    if not ok then return nil, reason end
+  end
+  return true
+end
+
+function Runtime:settle_selected_settlement(ref)
+  local cell = self:settlement_cell(ref)
+  return cell:settle('selected')
+end
+
+function Runtime:settle_world_settlements(world)
+  local updates, reason = self:prepare_world_settlement_updates(world)
+  if not updates then return nil, reason end
+  return self:apply_settlement_updates(updates)
 end
 
 function Runtime:spawn(fn, name)
@@ -1262,19 +1632,24 @@ function Runtime:spawn(fn, name)
     frontier = nil,
     parked = false,
     attempt_id = 0,
+    next_attempt_ordinal = 0,
+    attempt = nil,
   }
   self.runnable[#self.runnable + 1] = task
   return task
 end
 
 function Runtime:park(task, op)
-  task.attempt_id = (task.attempt_id or 0) + 1
+  task.next_attempt_ordinal = (task.next_attempt_ordinal or 0) + 1
   self:bump_generation('park')
-  local root_label = 'task-' .. tostring(task.id) .. '/attempt-' .. tostring(task.attempt_id)
+  local attempt = RootAttempt.new(task, op, self.generation, task.next_attempt_ordinal)
+  task.attempt = attempt
+  task.attempt_id = attempt.id
+  local root_label = attempt.label
   task.op = op
   task.root_label = root_label
   task.frontier = run_in_phase('search', function()
-    return expand_expr(op, empty_env(), ExpansionContext.root(root_label, task))
+    return expand_expr(op, empty_evidence(), ExpansionContext.root(root_label, task, nil, attempt))
   end)
   task.parked = true
   if not self.waiting_set[task] then
@@ -1283,12 +1658,15 @@ function Runtime:park(task, op)
   end
 end
 
-function Runtime:unpark(task)
+function Runtime:unpark(task, reason)
   if not self.waiting_set[task] then return end
   self:bump_generation('unpark')
   self.waiting_set[task] = nil
   task.parked = false
   task.frontier = nil
+  if task.attempt and task.attempt.state == 'parked' then
+    task.attempt.state = (reason == 'commit') and 'committed' or 'withdrawn'
+  end
   for i = #self.waiting, 1, -1 do
     if self.waiting[i] == task then table.remove(self.waiting, i); return end
   end
@@ -1329,15 +1707,15 @@ local function expand_top_frame(task, frame)
     local entries = {}
     local group = {
       task = task,
+      attempt = task and task.attempt or nil,
       box = group_frame.box,
       kind = group_frame.group_kind,
       lane_count = #group_frame.lanes,
       continuation_chain = continuation_chain or {},
-      wrappers = list_copy(group_frame.wrappers),
       post_program = frame_post_program(group_frame),
       after_post_program = PostProgram.identity(),
       boundary_tainted = frame_boundary_tainted(group_frame),
-      base_env = materialize_env(group_frame.base_env or empty_env()),
+      base_evidence = (group_frame.base_evidence or empty_evidence()):materialize(),
     }
     for i = 1, #group_frame.lanes do
       entries[i] = { task = task, frame = group_frame.lanes[i], group = group, lane = i }
@@ -1420,7 +1798,7 @@ local function reduce_continuation_frame(frame)
 
     if frame.kind == 'bind' then
       local next_op = callback_returned_op('bind', link.k(unpack_pack(source.values)))
-      local next_frames = expand_expr(next_op, source.env, link.ctx or ExpansionContext.root('bind-cont'))
+      local next_frames = expand_expr(next_op, source.evidence, link.ctx or ExpansionContext.root('bind-cont'))
       for i = 1, #next_frames do
         local nf = next_frames[i]
         frame_compose_after_post(nf, frame_after_post_program(frame))
@@ -1428,7 +1806,7 @@ local function reduce_continuation_frame(frame)
       end
 
     elseif frame.kind == 'map' then
-      replacement_frames[1] = frame_done(pack(link.f(unpack_pack(source.values))), source.env, frame_after_post_program(frame))
+      replacement_frames[1] = frame_done(pack(link.f(unpack_pack(source.values))), source.evidence, frame_after_post_program(frame))
 
     else
       error('unknown continuation frame kind: ' .. tostring(frame.kind), 2)
@@ -1520,10 +1898,10 @@ function PartialProof:reduce_complete_join_group()
     results[lane] = entry.frame.values
   end
 
-  local env, reason = merge_entry_envs(merge_inputs)
-  if not env then return nil, reason end
+  local evidence, reason = merge_entry_evidence(merge_inputs)
+  if not evidence then return nil, reason end
 
-  local joined = frame_done(pack(results), env, group.after_post_program)
+  local joined = frame_done(pack(results), evidence, group.after_post_program)
   local next_top = rebuild_continuation_chain(joined, group.continuation_chain)
   local out = {}
   local next_entries = {}
@@ -1556,8 +1934,8 @@ function PartialProof:cut_allowed(entry_a, entry_b)
 end
 
 function PartialProof:fragments_compatible(entries)
-  local env, reason = merge_entry_envs(entries or self.entries)
-  if not env then return false, reason end
+  local evidence, reason = merge_entry_evidence(entries or self.entries)
+  if not evidence then return false, reason end
   return true
 end
 
@@ -1867,7 +2245,7 @@ function Runtime:initial_proofs_for_task(task, forced_decisions)
   local root_label = task.root_label or ('task-' .. tostring(task.id) .. '/attempt-' .. tostring(task.attempt_id or 0))
   local frames
   if forced_decisions then
-    frames = expand_expr(task.op, empty_env(), ExpansionContext.root(root_label, task, forced_decisions))
+    frames = expand_expr(task.op, empty_evidence(), ExpansionContext.root(root_label, task, forced_decisions))
   else
     frames = task.frontier or {}
   end
@@ -2096,12 +2474,27 @@ M.Fuel = Fuel
 M.ProofSearch = ProofSearch
 M.PostProgram = PostProgram
 M.PostCommitFrame = PostCommitFrame
+M.OccurrenceRef = OccurrenceRef
+M.SettlementRef = SettlementRef
+M.RootAttempt = RootAttempt
+M.EvidenceDelta = EvidenceDelta
+M.WorldEvidence = WorldEvidence
+M.ResumptionEvidence = ResumptionEvidence
+M.CommitPlan = CommitPlan
 
 -- Deliberately exposed test/introspection surface for this proof-net specimen.
 M._test = {
   pack = pack,
   unpack_pack = unpack_pack,
-  empty_env = empty_env,
+  EvidenceDelta = EvidenceDelta,
+  OccurrenceRef = OccurrenceRef,
+  SettlementRef = SettlementRef,
+  SettlementCell = SettlementCell,
+  WorldEvidence = WorldEvidence,
+  ResumptionEvidence = ResumptionEvidence,
+  RootAttempt = RootAttempt,
+  CommitPlan = CommitPlan,
+  empty_evidence = empty_evidence,
   expand_expr = function(...) return expand_expr(...) end,
   expand_top_frame = expand_top_frame,
   ExpansionContext = ExpansionContext,

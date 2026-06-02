@@ -2,7 +2,7 @@
 
 `et_fibers` is an executable proof-net specimen for **Eventful Transactions**: a small concurrency model where a fibre proposes a whole committed world, not just a single event and not just an isolated memory transaction.
 
-Repository structure:
+The repository is now intentionally split into a small core, two resource modules, tests, and demos:
 
 ```text
 et_fibers/
@@ -93,7 +93,7 @@ local result = Op.perform(
 )
 ```
 
-The tensor proof sees the raw values. Resources commit. Commit events fire. Then the resumed fibre runs the structured post-commit value program, and only then does `Op.perform` return. A wrapper may delay the return value, but it cannot delay, affect, or roll back the world that already committed.
+The tensor proof sees the raw values. Resources commit. Commit events fire. Then the resumed fibre runs the structured post-commit value program, and only then does `Op.perform` return. A post-commit callback may delay the return value, but it cannot delay, affect, or roll back the world that already committed.
 
 ## The ET idea
 
@@ -160,7 +160,7 @@ BoundaryLink / PostProgram
   callback runs after commit and may perform a fresh transaction
 ```
 
-Bind/map callbacks are not invoked by ordinary expression expansion. They run only when proof search reduces an explicit `BindFrame` or `MapFrame`; post-commit wrappers run only when the resumed fibre interprets its `PostCommitFrame`.
+Bind/map callbacks are not invoked by ordinary expression expansion. They run only when proof search reduces an explicit `BindFrame` or `MapFrame`; post-commit value programs run only when the resumed fibre interprets its `PostCommitFrame`.
 
 So this is rejected:
 
@@ -203,7 +203,7 @@ and post-commit return value:
 h({ f(a_value), g(b_value) })
 ```
 
-Lane-local wrappers are product-shaped; they are not flattened into an undifferentiated list.
+Lane-local post programs are product-shaped; they are not flattened into an undifferentiated list.
 
 ## Products
 
@@ -295,6 +295,69 @@ then test inner = primary
 
 not “search the whole program again and hope we meant the same branch”.
 
+## Evidence certificates and commit plans
+
+A closed proof carries evidence, but the core now distinguishes local proof evidence from the materialized commit certificate. Evidence is inert during search: proof search constructs local `EvidenceDelta` values, judgement checks the resulting `WorldEvidence`, and `CommitPlan` interprets it exactly once.
+
+```text
+RootAttempt
+  attempt identity, liveness, published settlements, future guard memo
+
+EvidenceDelta
+  local proof-carried facts on frames/products
+  may have a base and a local post program
+
+WorldEvidence
+  materialized global commit certificate
+  resource fragments, pre-commit obligations, commit descriptors, selected settlements
+  no base and no post program
+
+ResumptionEvidence
+  per-root raw returned values plus PostProgram
+
+CommitPlan
+  prepared interpretation of WorldEvidence + RootAttempts + ResumptionEvidence
+```
+
+A `World` owns one global `WorldEvidence` certificate for commit-time facts, plus a separate per-root `resumptions` certificate:
+
+```text
+World {
+  closed proof entries/cuts
+  evidence    -- WorldEvidence, the global commit certificate
+  resumptions -- ResumptionEvidence values, one per participating root
+}
+```
+
+This distinction matters because a single committed world may resume multiple roots, each with its own returned value and post-commit program. There is no single world-level post program.
+
+Feature placement is now deliberately boring:
+
+```text
+channel / ledger
+  EvidenceDelta.resources.fragments -> WorldEvidence.resources.fragments
+
+or_else
+  EvidenceDelta.pre_commit.obligations -> WorldEvidence.pre_commit.obligations
+
+emit
+  EvidenceDelta.commit.descriptors -> WorldEvidence.commit.descriptors
+
+wrap
+  EvidenceDelta.post.program locally -> ResumptionEvidence.post_program
+
+future with_nack
+  EvidenceDelta.commit.selected_settlements -> WorldEvidence.commit.selected_settlements
+  RootAttempt.published_settlements + Runtime SettlementCells
+
+future guard
+  GuardFrame/GuardLink with memoization on RootAttempt.guard_memo
+```
+
+The emerging settlement algebra is present internally but no public `with_nack` operator has been added yet. A proof may carry selected settlement references as commit evidence; runtime settlement cells are interpreted only by commit. Settlement publication is owned by the current `RootAttempt`; publishing without an attempt is rejected. This preserves the intended law: search may discover evidence, but search does not publish, lose, select, or settle anything live.
+
+`CommitPlan.prepare` is a dry-run phase: it validates that each resumption still points at the task's current parked `RootAttempt`, prepares resource descriptors, and computes settlement updates. `CommitPlan.apply` revalidates those attempts before mutation, then installs resources, applies the prepared settlement updates, bumps the generation, emits descriptors, and resumes participants.
+
 ## Worlds
 
 A closed proof is not automatically a commit.
@@ -315,9 +378,11 @@ Only a committable world may commit.
 Commit order is:
 
 ```text
-validate fragments
-prepare commit fragments
+validate evidence/resources
+prepare a CommitPlan
 install resource state
+interpret settlement evidence
+bump generation
 emit commit descriptors
 resume participating fibres with post-commit frames
 run post-commit value programs inside those fibres
@@ -329,7 +394,7 @@ The implementation uses proof-net vocabulary because the runtime object we are c
 
 ```text
 roots       parked fibre attempts
-ports       open communication/resource endpoints
+spec ports  speculative communication/resource endpoints
 cuts        rendezvous between compatible ports
 boxes       tensor/all/product structure
 bind links  transactional proof continuations
@@ -338,7 +403,9 @@ join links  product completion
 prefer links preferential choice sites
 boundary links post-commit value boundaries
 fragments   resource-local proof objects
-worlds      closed, valid, committable proof candidates
+evidence    local deltas and world commit certificates
+worlds      closed proof candidates with WorldEvidence + ResumptionEvidence
+commit plans checked interpretation of committed worlds
 ```
 
 A scheduler that merely resumes coroutines is the wrong centre of gravity. The scheduler’s real job is to search for a closed proof, validate its resource fragments, discharge its obligations, and interpret the committed world.
@@ -351,7 +418,7 @@ No fragment merge, no world.
 No absence proof, no fallback.
 No budget-as-absence.
 No post-boundary transactional continuation.
-No post-commit wrapper can affect the world that already committed.
+No post-commit callback can affect the world that already committed.
 ```
 
 ## Current status
@@ -366,4 +433,4 @@ This is an executable sketch, not yet a polished package. It currently includes:
 - `demos/demo_triple_swap.lua`: triple rendezvous demo.
 - `demos/demo_ledger.lua`: ledger transfer/close demo.
 
-The next steps are to harden the resource protocol, improve diagnostics, add live-offer/speculative-port modality, and eventually add richer supervision/cancellation semantics.
+The split is mechanical, but the core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to finish the public settlement/`with_nack` surface, add CML-style `guard`, harden the resource protocol, and improve diagnostics before tackling richer supervision/cancellation semantics.
