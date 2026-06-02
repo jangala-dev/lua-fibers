@@ -456,6 +456,7 @@ function RootAttempt.new(task, op, generation, ordinal)
     generation = generation,
     state = 'parked',
     published_settlements = {},
+    settlement_memo = {},
     guard_memo = {},
   }, RootAttempt)
 end
@@ -514,7 +515,7 @@ end
 local ExpansionContext = {}
 ExpansionContext.__index = ExpansionContext
 
-function ExpansionContext.root(root_label, task, forced_decisions, attempt)
+function ExpansionContext.root(root_label, task, forced_decisions, attempt, settlement_parent)
   attempt = attempt or (task and task.attempt) or nil
   return setmetatable({
     root = root_label,
@@ -524,6 +525,7 @@ function ExpansionContext.root(root_label, task, forced_decisions, attempt)
     box = nil,
     lane = nil,
     forced_decisions = forced_decisions or {},
+    settlement_parent = settlement_parent,
   }, ExpansionContext)
 end
 
@@ -536,6 +538,7 @@ function ExpansionContext:child(...)
     box = self.box,
     lane = self.lane,
     forced_decisions = self.forced_decisions,
+    settlement_parent = self.settlement_parent,
   }, ExpansionContext)
 end
 
@@ -548,6 +551,20 @@ function ExpansionContext:in_box(box, lane)
     box = box,
     lane = lane,
     forced_decisions = self.forced_decisions,
+    settlement_parent = self.settlement_parent,
+  }, ExpansionContext)
+end
+
+function ExpansionContext:with_settlement_parent(parent)
+  return setmetatable({
+    root = self.root,
+    task = self.task,
+    attempt = self.attempt,
+    addr = self.addr,
+    box = self.box,
+    lane = self.lane,
+    forced_decisions = self.forced_decisions,
+    settlement_parent = parent,
   }, ExpansionContext)
 end
 
@@ -631,6 +648,9 @@ function SettlementCell:settle(state)
   if self.state == state then return true end
   if self.state ~= 'pending' then
     return nil, 'settlement ' .. tostring(self.key) .. ' already settled as ' .. tostring(self.state)
+  end
+  if state ~= 'selected' and state ~= 'lost' and state ~= 'withdrawn' then
+    return nil, 'invalid settlement state: ' .. tostring(state)
   end
   self.state = state
   return true
@@ -789,6 +809,17 @@ function Op.guard(thunk)
   return new_op('guard', { thunk = thunk })
 end
 
+function Op.with_nack(thunk)
+  if type(thunk) ~= 'function' then
+    error('Op.with_nack expects a function', 2)
+  end
+  return new_op('with_nack', { thunk = thunk })
+end
+
+local function nack_op(ref)
+  return new_op('nack', { settlement = ref })
+end
+
 function Op.choice(...)
   local n = select('#', ...)
   if n == 0 then return Op.never() end
@@ -926,6 +957,16 @@ local function frame_wait(resource, request, evidence, ctx, after_post_program)
     resource = resource,
     request = request,
     port = SpecPort.new(resource, request, ctx),
+    evidence = evidence,
+    after_post_program = after_post_program or PostProgram.identity(),
+    addr = ctx and ctx:key() or nil,
+  }
+end
+
+local function frame_nack(ref, evidence, ctx, after_post_program)
+  return {
+    kind = 'nack',
+    settlement = ref,
     evidence = evidence,
     after_post_program = after_post_program or PostProgram.identity(),
     addr = ctx and ctx:key() or nil,
@@ -1078,6 +1119,65 @@ local function rebuild_continuation_chain(source, chain)
   return frame
 end
 
+
+local function frame_add_selected_settlement(frame, ref)
+  if frame.kind == 'done' or frame.kind == 'wait' or frame.kind == 'nack' then
+    local evidence = (frame.evidence or empty_evidence()):clone_local()
+    evidence:add_selected_settlement(ref)
+    frame.evidence = evidence
+    return frame
+  end
+
+  if is_continuation_frame(frame) then
+    frame.source = frame_add_selected_settlement(frame.source, ref)
+    return frame
+  end
+
+  if frame.kind == 'group' then
+    local base = EvidenceDelta.delta(frame.base_evidence or empty_evidence())
+    base:add_selected_settlement(ref)
+    frame.base_evidence = base:materialize()
+    return frame
+  end
+
+  error('cannot attach selected settlement to frame kind: ' .. tostring(frame and frame.kind), 2)
+end
+
+local function collect_selected_from_evidence(evidence, out, seen)
+  if not evidence then return end
+  if evidence.base then collect_selected_from_evidence(evidence.base, out, seen) end
+
+  local commit = evidence.commit or {}
+  for _, key in ipairs(commit.selected_settlement_order or {}) do
+    if not seen[key] then
+      seen[key] = true
+      out[#out + 1] = commit.selected_settlements[key]
+    end
+  end
+end
+
+local function frame_collect_publishable_settlements(frame, out, seen)
+  if not frame then return end
+
+  if frame.kind == 'done' or frame.kind == 'wait' or frame.kind == 'nack' then
+    collect_selected_from_evidence(frame.evidence, out, seen)
+    return
+  end
+
+  if is_continuation_frame(frame) then
+    frame_collect_publishable_settlements(frame.source, out, seen)
+    return
+  end
+
+  if frame.kind == 'group' then
+    collect_selected_from_evidence(frame.base_evidence, out, seen)
+    for i = 1, #(frame.lanes or {}) do
+      frame_collect_publishable_settlements(frame.lanes[i], out, seen)
+    end
+    return
+  end
+end
+
 local function frame_open_wait(frame)
   if not frame then return nil end
   if frame.kind == 'wait' then return frame end
@@ -1226,6 +1326,39 @@ local function expand_guard(op, evidence, ctx)
   )
 end
 
+
+local function expand_with_nack(op, evidence, ctx)
+  local wn_ctx = ctx and ctx:child('with_nack') or ExpansionContext.root('with_nack')
+  local attempt = wn_ctx.attempt
+  local parent = wn_ctx.settlement_parent
+  local ref0 = SettlementRef.new('with_nack', wn_ctx, evidence, parent)
+  local memo
+
+  if attempt and attempt.settlement_memo then
+    memo = attempt.settlement_memo[ref0.key]
+  end
+
+  if not memo then
+    local ref = ref0
+    local nack = nack_op(ref)
+    local protected = run_in_phase('search', function()
+      return callback_returned_op('with_nack', op.thunk(nack))
+    end)
+
+    memo = { ref = ref, nack = nack, protected = protected }
+    if attempt and attempt.settlement_memo then
+      attempt.settlement_memo[ref.key] = memo
+    end
+  end
+
+  local body_ctx = wn_ctx:with_settlement_parent(memo.ref):child('body')
+  local frames = expand_expr(memo.protected, evidence:clone_local(), body_ctx)
+  for i = 1, #frames do
+    frames[i] = frame_add_selected_settlement(frames[i], memo.ref)
+  end
+  return frames
+end
+
 local function expand_prefer(primary, fallback, evidence, ctx)
   local prefer_ctx = ctx and ctx:child('prefer') or ExpansionContext.root('prefer')
   local link = PreferLink.new(prefer_ctx)
@@ -1277,6 +1410,14 @@ expand_expr = function(op, evidence, ctx)
 
   elseif op.tag == 'guard' then
     return expand_guard(op, evidence:clone_local(), ctx)
+
+  elseif op.tag == 'with_nack' then
+    return expand_with_nack(op, evidence:clone_local(), ctx)
+
+  elseif op.tag == 'nack' then
+    return {
+      frame_nack(op.settlement, evidence:clone_local(), ctx:child('nack'))
+    }
 
   elseif op.tag == 'choice' then
     local out = expand_expr(op.left, evidence:clone_local(), ctx:child('choice', 'left'))
@@ -1616,38 +1757,104 @@ function Runtime:publish_settlement(ref)
   return cell
 end
 
+function Runtime:publish_frontier_settlements(attempt, frontier)
+  local refs, seen = {}, {}
+  for _, frame in ipairs(frontier or {}) do
+    frame_collect_publishable_settlements(frame, refs, seen)
+  end
+
+  for _, ref in ipairs(refs) do
+    -- Only refs belonging to this retained attempt are live disappointment candidates.
+    if ref and ref.attempt == attempt then
+      self:publish_settlement(ref)
+    end
+  end
+end
+
 function Runtime:can_settle_cell(cell, state)
   if cell.state == state then return true end
   if cell.state ~= 'pending' then
     return nil, 'settlement ' .. tostring(cell.key) .. ' already settled as ' .. tostring(cell.state)
   end
+  if state ~= 'selected' and state ~= 'lost' and state ~= 'withdrawn' then
+    return nil, 'invalid settlement state: ' .. tostring(state)
+  end
+  return true
+end
+
+local function plan_settlement_update(updates, planned, cell, ref, state)
+  local old = planned[cell.key]
+  if old then
+    if old.state ~= state then
+      return nil, 'conflicting settlement update for ' .. tostring(cell.key)
+    end
+    return true
+  end
+  local update = { cell = cell, ref = ref, state = state }
+  planned[cell.key] = update
+  updates[#updates + 1] = update
   return true
 end
 
 function Runtime:prepare_world_settlement_updates(world)
   local updates = {}
+  local planned = {}
   local selected = {}
+  local selected_refs = {}
   local commit = world.evidence.commit
 
   for _, key in ipairs(commit.selected_settlement_order or {}) do
     local ref = commit.selected_settlements[key]
     selected[key] = true
+    selected_refs[#selected_refs + 1] = ref
+  end
+
+  for _, ref in ipairs(selected_refs) do
+    if ref.parent_key and not selected[ref.parent_key] then
+      local parent_cell = self.settlements[ref.parent_key]
+      if not (parent_cell and parent_cell.state == 'selected') then
+        return nil, 'selected settlement has unselected parent: ' .. tostring(ref.key)
+      end
+    end
+
+    local attempt = ref.attempt or (ref.task and ref.task.attempt)
+    if attempt then
+      local ok_attempt, attempt_reason = attempt:validate_live(self)
+      if not ok_attempt then return nil, attempt_reason end
+      if ref.task and ref.task.attempt ~= attempt then
+        return nil, 'selected settlement belongs to stale task attempt'
+      end
+      if ref.attempt_id and attempt.id ~= ref.attempt_id then
+        return nil, 'selected settlement attempt id mismatch'
+      end
+    end
+  end
+
+  for _, ref in ipairs(selected_refs) do
     local cell = self:settlement_cell(ref)
     local ok, reason = self:can_settle_cell(cell, 'selected')
     if not ok then return nil, reason end
-    updates[#updates + 1] = { cell = cell, ref = ref, state = 'selected' }
+    local ok_plan, plan_reason = plan_settlement_update(updates, planned, cell, ref, 'selected')
+    if not ok_plan then return nil, plan_reason end
   end
 
   for _, resumption in ipairs(world.resumptions or {}) do
     local attempt = resumption.attempt
     local published = attempt and attempt.published_settlements or {}
+
     for key, ref in pairs(published) do
       if not selected[key] then
         local cell = self:settlement_cell(ref)
         if cell.published and cell.state == 'pending' then
-          local ok, reason = self:can_settle_cell(cell, 'lost')
+          local state = 'lost'
+          if ref.parent_key and not selected[ref.parent_key] then
+            state = 'withdrawn'
+          end
+
+          local ok, reason = self:can_settle_cell(cell, state)
           if not ok then return nil, reason end
-          updates[#updates + 1] = { cell = cell, ref = ref, state = 'lost' }
+          local ok_plan, plan_reason = plan_settlement_update(updates, planned, cell, ref, state)
+          if not ok_plan then return nil, plan_reason end
         end
       end
     end
@@ -1673,6 +1880,38 @@ function Runtime:settle_world_settlements(world)
   local updates, reason = self:prepare_world_settlement_updates(world)
   if not updates then return nil, reason end
   return self:apply_settlement_updates(updates)
+end
+
+function Runtime:prepare_withdrawal_settlement_updates(attempt)
+  local updates = {}
+  local planned = {}
+  local ok_attempt, reason = attempt:validate_live(self)
+  if not ok_attempt then return nil, reason end
+
+  for _, ref in pairs(attempt.published_settlements or {}) do
+    local cell = self:settlement_cell(ref)
+    if cell.published and cell.state == 'pending' then
+      local ok, settle_reason = self:can_settle_cell(cell, 'withdrawn')
+      if not ok then return nil, settle_reason end
+      local ok_plan, plan_reason = plan_settlement_update(updates, planned, cell, ref, 'withdrawn')
+      if not ok_plan then return nil, plan_reason end
+    end
+  end
+
+  return updates
+end
+
+function Runtime:withdraw_attempt(attempt, reason)
+  local updates, update_reason = self:prepare_withdrawal_settlement_updates(attempt)
+  if not updates then return nil, update_reason end
+
+  local ok, settlement_reason = self:apply_settlement_updates(updates)
+  if not ok then return nil, settlement_reason end
+
+  if attempt.state == 'parked' then attempt.state = 'withdrawn' end
+  self:unpark(attempt.task, reason or 'withdrawn')
+  self:bump_generation('withdraw')
+  return true
 end
 
 function Runtime:spawn(fn, name)
@@ -1710,6 +1949,7 @@ function Runtime:park(task, op)
     self.waiting[#self.waiting + 1] = task
     self.waiting_set[task] = true
   end
+  self:publish_frontier_settlements(attempt, task.frontier)
 end
 
 function Runtime:unpark(task, reason)
@@ -1904,6 +2144,90 @@ function PartialProof:reduce_ready_continuation_entry()
     end
     local expanded = expand_top_frame(entry.task, next_top)
     for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
+    local p2 = self:with_entries(next_entries)
+    if p2:fragments_compatible() then out[#out + 1] = p2 end
+  end
+  return out
+end
+
+
+local function frame_has_ready_nack(frame, runtime)
+  if not frame then return false end
+
+  if frame.kind == 'nack' then
+    local cell = runtime:settlement_cell(frame.settlement)
+    return cell.state == 'lost' or cell.state == 'withdrawn'
+  end
+
+  if is_continuation_frame(frame) then
+    return frame_has_ready_nack(frame.source, runtime)
+  end
+
+  return false
+end
+
+local function reduce_nack_frame(frame, runtime)
+  if frame.kind == 'nack' then
+    local cell = runtime:settlement_cell(frame.settlement)
+    if cell.state == 'lost' or cell.state == 'withdrawn' then
+      return { frame_done(pack(), frame.evidence, frame_after_post_program(frame)) }
+    end
+    return nil
+  end
+
+  if is_continuation_frame(frame) then
+    local reduced_sources = reduce_nack_frame(frame.source, runtime)
+    if not reduced_sources then return nil end
+
+    local out = {}
+    for i = 1, #reduced_sources do
+      out[i] = frame_with_source(frame, reduced_sources[i])
+    end
+    return out
+  end
+
+  return nil
+end
+
+function PartialProof:find_ready_nack_entry(runtime)
+  for i = 1, #self.entries do
+    local e = self.entries[i]
+    if frame_has_ready_nack(e.frame, runtime) then
+      return i, e
+    end
+  end
+  return nil
+end
+
+function PartialProof:reduce_ready_nack_entry(runtime)
+  local index, entry = self:find_ready_nack_entry(runtime)
+  if not entry then return nil end
+
+  local replacement_frames = reduce_nack_frame(entry.frame, runtime)
+  if not replacement_frames then return nil end
+
+  local out = {}
+  for _, next_top in ipairs(replacement_frames) do
+    local next_entries = {}
+    for i, e in ipairs(self.entries) do
+      if i ~= index then next_entries[#next_entries + 1] = e end
+    end
+
+    if entry.group then
+      -- A nack reduced inside an all/tensor lane remains that lane.
+      -- Expanding it as a fresh top frame would turn it into a direct root
+      -- result and corrupt the product resumption certificate.
+      next_entries[#next_entries + 1] = {
+        task = entry.task,
+        frame = next_top,
+        group = entry.group,
+        lane = entry.lane,
+      }
+    else
+      local expanded = expand_top_frame(entry.task, next_top)
+      for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
+    end
+
     local p2 = self:with_entries(next_entries)
     if p2:fragments_compatible() then out[#out + 1] = p2 end
   end
@@ -2185,6 +2509,19 @@ function ProofSearch:search_proof(proof)
   local reductions = proof:reduce_complete_join_group()
   if reductions then
     for _, p2 in ipairs(reductions) do
+      local world, status = self:search_proof(p2)
+      if world then return world, 'found' end
+      if status == 'budget' then return nil, 'budget' end
+    end
+    return nil, 'absent'
+  end
+
+  -- Then reduce any enabled negative acknowledgement.  Nack frames observe
+  -- only prior terminal settlement states, never updates produced by the same
+  -- candidate CommitPlan.
+  local nack_reductions = proof:reduce_ready_nack_entry(self.runtime)
+  if nack_reductions then
+    for _, p2 in ipairs(nack_reductions) do
       local world, status = self:search_proof(p2)
       if world then return world, 'found' end
       if status == 'budget' then return nil, 'budget' end

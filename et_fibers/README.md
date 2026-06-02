@@ -107,6 +107,22 @@ end)
 
 A guard contributes no evidence of its own. The operation it returns contributes ordinary ports, fragments, descriptors, and post programs. Guard expansion is memoized on the current `RootAttempt`, proof address, and decision prefix, so proof-search replay reuses the same returned operation. Function fallbacks passed to `or_else` are normalized through `Op.guard`, giving them the same replay-stable semantics.
 
+`with_nack` protects an occurrence and passes an ordinary nack operation to the callback:
+
+```lua
+local protected = Op.with_nack(function(nack)
+  return Op.choice(
+    server:get(),
+    nack:wrap(function()
+      return 'the protected occurrence was lost or withdrawn'
+    end)
+  )
+end)
+```
+
+The callback is evaluated during proof expansion, not Lua construction. The protected operation contributes selected-settlement evidence to worlds that pass through it. The runtime publishes only protected occurrences retained in a parked root frontier. If that same root attempt resolves through another published alternative, the protected occurrence is settled `lost`; if the attempt is withdrawn, it is settled `withdrawn`; if the protected world commits, it is settled `selected`. A nack operation closes only after a prior `lost` or `withdrawn` settlement. It cannot observe loss being created by the same commit plan.
+
+
 ## The ET idea
 
 `et_fibers` takes inspiration from three traditions:
@@ -148,6 +164,8 @@ all(xs)         product whose lanes may not internally synchronize
 and_then(a, k)  transactional continuation
 map(a, f)       pure transactional raw-value transformation
 wrap(a, f)      post-commit value continuation
+guard(f)        delayed attempt-local operation construction
+with_nack(f)    protected occurrence plus ordinary nack operation
 perform(a)      search, commit, then return post-commit values
 ```
 
@@ -313,7 +331,7 @@ A closed proof carries evidence, but the core now distinguishes local proof evid
 
 ```text
 RootAttempt
-  attempt identity, liveness, published settlements, guard expansion memo
+  attempt identity, liveness, published settlements, settlement memo, guard expansion memo
 
 EvidenceDelta
   local proof-carried facts on frames/products
@@ -445,4 +463,4 @@ This is an executable sketch, not yet a polished package. It currently includes:
 - `demos/demo_triple_swap.lua`: triple rendezvous demo.
 - `demos/demo_ledger.lua`: ledger transfer/close demo.
 
-The split is mechanical, but the core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to finish the public settlement/`with_nack` surface, harden the resource protocol, and improve diagnostics before tackling richer supervision/cancellation semantics.
+The split is mechanical, but the core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to harden the resource protocol, improve diagnostics, and build richer supervision/cancellation semantics on top of the settlement-aware withdrawal path.

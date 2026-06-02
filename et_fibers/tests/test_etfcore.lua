@@ -294,6 +294,393 @@ local function test_or_else_function_fallback_is_guarded_and_memoized()
   assert_eq(frames2[1].values[1], 'fallback-1', 'fallback replay should reuse guarded value')
 end
 
+
+local function first_settlement_cell(rt)
+  for _, cell in pairs(rt.settlements or {}) do
+    return cell
+  end
+  return nil
+end
+
+local function count_settlements(rt)
+  local n = 0
+  for _ in pairs(rt.settlements or {}) do n = n + 1 end
+  return n
+end
+
+local function test_with_nack_callback_timing_and_return_contract()
+  local called = 0
+  local op = Op.with_nack(function(nack)
+    called = called + 1
+    assert_eq(nack.tag, 'nack', 'callback should receive a nack Op')
+    return Op.always('protected')
+  end)
+
+  assert_eq(called, 0, 'with_nack callback should not run at construction')
+  local frames = expand_expr(op, EvidenceDelta.empty(), ExpansionContext.root('with-nack-expansion'))
+  assert_eq(called, 1, 'with_nack callback should run during proof expansion')
+  assert_eq(#frames, 1, 'protected always should produce one frame')
+  assert_eq(frames[1].kind, 'done', 'protected always should close')
+
+  local ok, err = pcall(function()
+    expand_expr(Op.with_nack(function()
+      return 'not-an-op'
+    end), EvidenceDelta.empty(), ExpansionContext.root('bad-with-nack-return'))
+  end)
+  assert(ok == false, 'with_nack callback returning non-Op should fail')
+  assert(tostring(err):match('callback must return an Op'), 'expected callback return error, got ' .. tostring(err))
+end
+
+local function test_with_nack_is_memoized_per_attempt_occurrence()
+  local called = 0
+  local saved_ref
+  local op = Op.with_nack(function(nack)
+    called = called + 1
+    saved_ref = nack.settlement
+    return Op.always('value-' .. tostring(called))
+  end)
+
+  local task = { id = 301, parked = true }
+  local attempt = RootAttempt.new(task, op, 1, 1)
+  task.attempt = attempt
+  task.attempt_id = attempt.id
+
+  local ctx = ExpansionContext.root('with-nack-memo-root', task, nil, attempt)
+  local frames1 = expand_expr(op, EvidenceDelta.empty(), ctx)
+  local ref1 = saved_ref
+  local frames2 = expand_expr(op, EvidenceDelta.empty(), ctx)
+  local ref2 = saved_ref
+
+  assert_eq(called, 1, 'with_nack should memoize callback for the same attempt occurrence')
+  assert_eq(ref1, ref2, 'with_nack replay should reuse the same SettlementRef')
+  assert_eq(frames1[1].values[1], 'value-1', 'first protected op should use first value')
+  assert_eq(frames2[1].values[1], 'value-1', 'replay should reuse protected op')
+
+  local attempt2 = RootAttempt.new(task, op, 2, 2)
+  task.attempt = attempt2
+  task.attempt_id = attempt2.id
+  local frames3 = expand_expr(op, EvidenceDelta.empty(), ExpansionContext.root('with-nack-memo-root', task, nil, attempt2))
+  assert_eq(called, 2, 'with_nack should run again for a new attempt')
+  assert_eq(frames3[1].values[1], 'value-2', 'new attempt should receive new protected op')
+end
+
+local function test_with_nack_selected_and_nack_never_closes()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local saved_nack
+  local got
+
+  rt:spawn(function()
+    got = Op.perform(Op.with_nack(function(nack)
+      saved_nack = nack
+      return Op.always('ok')
+    end))
+  end, 'with-nack-selected-root')
+
+  rt:run()
+  assert_eq(got, 'ok', 'protected occurrence should commit')
+  local cell = assert(first_settlement_cell(rt), 'selected with_nack should create a settlement cell')
+  assert_eq(cell.state, 'selected', 'committed protected occurrence should settle selected')
+  assert_eq(cell.published, true, 'retained live frontier occurrence should be published')
+
+  local nack_done = false
+  rt:spawn(function()
+    Op.perform(saved_nack)
+    nack_done = true
+  end, 'selected-nack-root')
+  local ok = pcall(function() rt:run() end)
+  assert(ok == false, 'nack should not close after selected settlement')
+  assert_eq(nack_done, false, 'selected nack should not resume')
+end
+
+local function test_with_nack_published_alternative_loses_and_nack_closes_later()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local ch = Channel.new('with-nack-lost')
+  local saved_nack
+  local got
+
+  rt:spawn(function()
+    got = Op.perform(Op.choice(
+      Op.with_nack(function(nack)
+        saved_nack = nack
+        return ch:get()
+      end),
+      Op.always('fallback')
+    ))
+  end, 'with-nack-lost-root')
+
+  rt:run()
+  assert_eq(got, 'fallback', 'fallback should commit while protected wait is excluded')
+  local cell = assert(rt:settlement_cell(saved_nack.settlement), 'lost with_nack should have a settlement cell')
+  assert_eq(cell.published, true, 'protected wait in retained frontier should be published')
+  assert_eq(cell.state, 'lost', 'published protected occurrence excluded by same resolved root should settle lost')
+
+  local nack_done = false
+  rt:spawn(function()
+    Op.perform(saved_nack)
+    nack_done = true
+  end, 'lost-nack-root')
+  rt:run()
+  assert_eq(nack_done, true, 'nack should close after prior lost settlement')
+end
+
+local function test_with_nack_same_world_circularity_does_not_close()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local committed = false
+
+  rt:spawn(function()
+    Op.perform(Op.with_nack(function(nack)
+      return Op.never():or_else(nack)
+    end))
+    committed = true
+  end, 'with-nack-circular-root')
+
+  local ok = pcall(function() rt:run() end)
+  assert(ok == false, 'nack must not observe loss from the same CommitPlan')
+  assert_eq(committed, false, 'circular nack branch should not commit')
+end
+
+local function test_with_nack_unrelated_commit_does_not_fire_pending_nack()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local ch_pending = Channel.new('with-nack-pending')
+  local ch_other = Channel.new('with-nack-other')
+  local saved_nack
+
+  rt:spawn(function()
+    Op.perform(Op.with_nack(function(nack)
+      saved_nack = nack
+      return ch_pending:get()
+    end))
+  end, 'pending-with-nack-root')
+
+  rt:spawn(function()
+    Op.perform(ch_other:put('x'))
+  end, 'other-sender')
+
+  local other_got
+  rt:spawn(function()
+    other_got = Op.perform(ch_other:get())
+  end, 'other-receiver')
+
+  drain_runnable(rt)
+  assert(saved_nack, 'pending with_nack should have been expanded while parking')
+  local status = rt:try_commit_one()
+  assert_eq(status, 'committed', 'unrelated rendezvous should commit')
+  assert_eq(other_got, nil, 'receiver resumes after runnable drain')
+  drain_runnable(rt)
+  assert_eq(other_got, 'x', 'unrelated receiver should receive value')
+
+  local cell = rt:settlement_cell(saved_nack.settlement)
+  assert_eq(cell.state, 'pending', 'unrelated commit must not settle pending with_nack')
+  assert_eq(cell.published, true, 'pending protected occurrence should remain published')
+end
+
+local function test_with_nack_bind_created_occurrence_selects_without_publication()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local saved_nack
+  local got
+
+  rt:spawn(function()
+    got = Op.perform(Op.always('x'):and_then(function(x)
+      return Op.with_nack(function(nack)
+        saved_nack = nack
+        return Op.always(x .. '-inner')
+      end)
+    end))
+  end, 'with-nack-bind-root')
+
+  drain_runnable(rt)
+  assert_eq(saved_nack, nil, 'bind-created with_nack should not be reached while parking')
+  rt:run()
+  assert_eq(got, 'x-inner', 'bind-created protected occurrence should commit')
+  local cell = rt:settlement_cell(saved_nack.settlement)
+  assert_eq(cell.state, 'selected', 'bind-created selected occurrence should settle selected')
+  assert_eq(cell.published, false, 'bind-created selected occurrence need not be published first')
+end
+
+local function test_with_nack_withdrawal_enables_nack()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local ch = Channel.new('with-nack-withdraw')
+  local saved_nack
+
+  local task = rt:spawn(function()
+    Op.perform(Op.with_nack(function(nack)
+      saved_nack = nack
+      return ch:get()
+    end))
+  end, 'withdrawn-with-nack-root')
+
+  drain_runnable(rt)
+  assert(saved_nack, 'withdrawn with_nack should be expanded while parking')
+  local ok, reason = rt:withdraw_attempt(task.attempt, 'test-withdraw')
+  assert(ok, reason or 'withdraw should succeed')
+  local cell = rt:settlement_cell(saved_nack.settlement)
+  assert_eq(cell.state, 'withdrawn', 'withdraw should settle published pending refs as withdrawn')
+
+  local nack_done = false
+  rt:spawn(function()
+    Op.perform(saved_nack)
+    nack_done = true
+  end, 'withdrawn-nack-root')
+  rt:run()
+  assert_eq(nack_done, true, 'nack should close after prior withdrawn settlement')
+end
+
+
+local function test_with_nack_nested_parent_child_settlement()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local ch = Channel.new('with-nack-nested')
+  local outer_nack, inner_nack
+  local got
+
+  rt:spawn(function()
+    got = Op.perform(Op.choice(
+      Op.with_nack(function(n1)
+        outer_nack = n1
+        return Op.with_nack(function(n2)
+          inner_nack = n2
+          return ch:get()
+        end)
+      end),
+      Op.always('fallback')
+    ))
+  end, 'with-nack-nested-root')
+
+  rt:run()
+  assert_eq(got, 'fallback', 'nested fallback should commit')
+  assert_eq(rt:settlement_cell(outer_nack.settlement).state, 'lost', 'outer published occurrence should be lost')
+  assert_eq(rt:settlement_cell(inner_nack.settlement).state, 'withdrawn', 'child under lost parent should be withdrawn')
+
+  local rt2 = Runtime.new()
+  rt2.quiet_deadlock = true
+  local selected_outer, selected_inner
+  local selected_got
+  rt2:spawn(function()
+    selected_got = Op.perform(Op.with_nack(function(n1)
+      selected_outer = n1
+      return Op.with_nack(function(n2)
+        selected_inner = n2
+        return Op.always('selected')
+      end)
+    end))
+  end, 'with-nack-nested-selected-root')
+  rt2:run()
+  assert_eq(selected_got, 'selected', 'nested protected body should commit')
+  assert_eq(rt2:settlement_cell(selected_outer.settlement).state, 'selected', 'outer nested occurrence should be selected')
+  assert_eq(rt2:settlement_cell(selected_inner.settlement).state, 'selected', 'inner nested occurrence should be selected')
+end
+
+
+local function test_nack_op_closes_inside_tensor_and_all()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local ch = Channel.new('nack-product-lost')
+  local saved_nack
+
+  rt:spawn(function()
+    Op.perform(Op.choice(
+      Op.with_nack(function(nack)
+        saved_nack = nack
+        return ch:get()
+      end),
+      Op.always('fallback')
+    ))
+  end, 'nack-product-source')
+
+  rt:run()
+  assert(saved_nack, 'source with_nack should expose a nack')
+  assert_eq(rt:settlement_cell(saved_nack.settlement).state, 'lost', 'source protected occurrence should be lost')
+
+  local tensor_got
+  rt:spawn(function()
+    tensor_got = Op.perform(Op.tensor({ saved_nack, Op.always('tensor-side') }))
+  end, 'nack-inside-tensor')
+  rt:run()
+
+  assert(type(tensor_got) == 'table', 'tensor with nack lane should commit')
+  assert_eq(tensor_got[1].n, 0, 'nack tensor lane should return no values')
+  assert_eq(tensor_got[2][1], 'tensor-side', 'tensor side lane should return normally')
+
+  local all_got
+  rt:spawn(function()
+    all_got = Op.perform(Op.all({ saved_nack, Op.always('all-side') }))
+  end, 'nack-inside-all')
+  rt:run()
+
+  assert(type(all_got) == 'table', 'all with nack lane should commit')
+  assert_eq(all_got[1].n, 0, 'nack all lane should return no values')
+  assert_eq(all_got[2][1], 'all-side', 'all side lane should return normally')
+end
+
+local function test_with_nack_protected_occurrence_selects_inside_tensor_and_all()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local tensor_nack, all_nack
+  local tensor_got, all_got
+
+  rt:spawn(function()
+    tensor_got = Op.perform(Op.tensor({
+      Op.with_nack(function(nack)
+        tensor_nack = nack
+        return Op.always('tensor-protected')
+      end),
+      Op.always('tensor-side')
+    }))
+  end, 'with-nack-inside-tensor')
+
+  rt:spawn(function()
+    all_got = Op.perform(Op.all({
+      Op.with_nack(function(nack)
+        all_nack = nack
+        return Op.always('all-protected')
+      end),
+      Op.always('all-side')
+    }))
+  end, 'with-nack-inside-all')
+
+  rt:run()
+
+  assert_eq(tensor_got[1][1], 'tensor-protected', 'protected tensor lane should return normally')
+  assert_eq(tensor_got[2][1], 'tensor-side', 'tensor side lane should return normally')
+  assert_eq(rt:settlement_cell(tensor_nack.settlement).state, 'selected', 'with_nack inside tensor should settle selected')
+
+  assert_eq(all_got[1][1], 'all-protected', 'protected all lane should return normally')
+  assert_eq(all_got[2][1], 'all-side', 'all side lane should return normally')
+  assert_eq(rt:settlement_cell(all_nack.settlement).state, 'selected', 'with_nack inside all should settle selected')
+end
+
+local function test_with_nack_and_guard_interactions()
+  local rt = Runtime.new()
+  rt.quiet_deadlock = true
+  local got1, got2
+
+  rt:spawn(function()
+    got1 = Op.perform(Op.guard(function()
+      return Op.with_nack(function()
+        return Op.always('guard-outer')
+      end)
+    end))
+  end, 'guard-contains-with-nack')
+
+  rt:spawn(function()
+    got2 = Op.perform(Op.with_nack(function()
+      return Op.guard(function()
+        return Op.always('guard-inner')
+      end)
+    end))
+  end, 'with-nack-contains-guard')
+
+  rt:run()
+  assert_eq(got1, 'guard-outer', 'with_nack inside guard should behave as returned op')
+  assert_eq(got2, 'guard-inner', 'guard inside with_nack should remain proof-only')
+end
+
 local function test_proof_search_is_tri_valued_and_budgeted()
   local rt = Runtime.new()
   local ch = Channel.new('proof-search-budget')
@@ -1327,60 +1714,78 @@ local function test_commit_plan_prepares_settlement_updates_before_apply()
   assert_eq(cell.state, 'selected', 'CommitPlan.apply should interpret prepared settlement update')
 end
 
+local test_cases = {
+  { name = 'test_derivation_addresses_are_stable', fn = test_derivation_addresses_are_stable },
+  { name = 'test_bind_link_is_explicit_and_reduced_by_search', fn = test_bind_link_is_explicit_and_reduced_by_search },
+  { name = 'test_map_link_is_explicit_and_reduced_by_search', fn = test_map_link_is_explicit_and_reduced_by_search },
+  { name = 'test_map_is_transactional_before_commit_and_wrap_after_commit', fn = test_map_is_transactional_before_commit_and_wrap_after_commit },
+  { name = 'test_map_callback_cannot_perform', fn = test_map_callback_cannot_perform },
+  { name = 'test_bind_callback_must_return_op', fn = test_bind_callback_must_return_op },
+  { name = 'test_guard_does_not_run_at_construction_and_runs_at_expansion', fn = test_guard_does_not_run_at_construction_and_runs_at_expansion },
+  { name = 'test_guard_is_memoized_per_attempt_occurrence', fn = test_guard_is_memoized_per_attempt_occurrence },
+  { name = 'test_guard_callback_must_return_op', fn = test_guard_callback_must_return_op },
+  { name = 'test_guard_callback_cannot_perform_or_spawn', fn = test_guard_callback_cannot_perform_or_spawn },
+  { name = 'test_or_else_function_fallback_is_guarded_and_memoized', fn = test_or_else_function_fallback_is_guarded_and_memoized },
+  { name = 'test_with_nack_callback_timing_and_return_contract', fn = test_with_nack_callback_timing_and_return_contract },
+  { name = 'test_with_nack_is_memoized_per_attempt_occurrence', fn = test_with_nack_is_memoized_per_attempt_occurrence },
+  { name = 'test_with_nack_selected_and_nack_never_closes', fn = test_with_nack_selected_and_nack_never_closes },
+  { name = 'test_with_nack_published_alternative_loses_and_nack_closes_later', fn = test_with_nack_published_alternative_loses_and_nack_closes_later },
+  { name = 'test_with_nack_same_world_circularity_does_not_close', fn = test_with_nack_same_world_circularity_does_not_close },
+  { name = 'test_with_nack_unrelated_commit_does_not_fire_pending_nack', fn = test_with_nack_unrelated_commit_does_not_fire_pending_nack },
+  { name = 'test_with_nack_bind_created_occurrence_selects_without_publication', fn = test_with_nack_bind_created_occurrence_selects_without_publication },
+  { name = 'test_with_nack_withdrawal_enables_nack', fn = test_with_nack_withdrawal_enables_nack },
+  { name = 'test_with_nack_nested_parent_child_settlement', fn = test_with_nack_nested_parent_child_settlement },
+  { name = 'test_with_nack_and_guard_interactions', fn = test_with_nack_and_guard_interactions },
+  { name = 'test_nack_op_closes_inside_tensor_and_all', fn = test_nack_op_closes_inside_tensor_and_all },
+  { name = 'test_with_nack_protected_occurrence_selects_inside_tensor_and_all', fn = test_with_nack_protected_occurrence_selects_inside_tensor_and_all },
+  { name = 'test_proof_search_is_tri_valued_and_budgeted', fn = test_proof_search_is_tri_valued_and_budgeted },
+  { name = 'test_absence_is_generation_stable_not_timeless', fn = test_absence_is_generation_stable_not_timeless },
+  { name = 'test_search_phase_forbids_perform_and_spawn', fn = test_search_phase_forbids_perform_and_spawn },
+  { name = 'test_tensor_self_rendezvous_succeeds', fn = test_tensor_self_rendezvous_succeeds },
+  { name = 'test_all_self_rendezvous_fails', fn = test_all_self_rendezvous_fails },
+  { name = 'test_tensor_join_feeds_transactional_continuation', fn = test_tensor_join_feeds_transactional_continuation },
+  { name = 'test_all_join_feeds_transactional_continuation_after_external_cuts', fn = test_all_join_feeds_transactional_continuation_after_external_cuts },
+  { name = 'test_wrap_boundary_transforms_after_commit', fn = test_wrap_boundary_transforms_after_commit },
+  { name = 'test_wrap_boundary_rejects_transactional_continuation', fn = test_wrap_boundary_rejects_transactional_continuation },
+  { name = 'test_wrap_boundary_is_branch_local', fn = test_wrap_boundary_is_branch_local },
+  { name = 'test_wrap_boundary_can_perform_after_commit', fn = test_wrap_boundary_can_perform_after_commit },
+  { name = 'test_wrap_boundary_after_commit_event_order', fn = test_wrap_boundary_after_commit_event_order },
+  { name = 'test_post_commit_phase_is_explicit_in_wrapper', fn = test_post_commit_phase_is_explicit_in_wrapper },
+  { name = 'test_or_else_primary_done_wins', fn = test_or_else_primary_done_wins },
+  { name = 'test_or_else_fallback_commits_after_absence_proof', fn = test_or_else_fallback_commits_after_absence_proof },
+  { name = 'test_or_else_primary_rendezvous_beats_fallback', fn = test_or_else_primary_rendezvous_beats_fallback },
+  { name = 'test_or_else_fallback_absence_can_report_budget', fn = test_or_else_fallback_absence_can_report_budget },
+  { name = 'test_or_else_site_address_is_replay_stable', fn = test_or_else_site_address_is_replay_stable },
+  { name = 'test_nested_or_else_obligation_prefixes', fn = test_nested_or_else_obligation_prefixes },
+  { name = 'test_forced_decisions_for_nested_obligation', fn = test_forced_decisions_for_nested_obligation },
+  { name = 'test_nested_or_else_inner_primary_under_outer_fallback', fn = test_nested_or_else_inner_primary_under_outer_fallback },
+  { name = 'test_nested_or_else_outer_primary_dominates_inner_fallback', fn = test_nested_or_else_outer_primary_dominates_inner_fallback },
+  { name = 'test_product_base_evidence_not_duplicated', fn = test_product_base_evidence_not_duplicated },
+  { name = 'test_product_lane_obligations_are_lane_local', fn = test_product_lane_obligations_are_lane_local },
+  { name = 'test_search_committable_task_skips_rejected_candidate', fn = test_search_committable_task_skips_rejected_candidate },
+  { name = 'test_preference_obligation_looks_for_committable_not_merely_valid', fn = test_preference_obligation_looks_for_committable_not_merely_valid },
+  { name = 'test_preference_obligation_continues_to_later_committable_preferred_world', fn = test_preference_obligation_continues_to_later_committable_preferred_world },
+  { name = 'test_judgement_context_shares_fuel_across_committability_searches', fn = test_judgement_context_shares_fuel_across_committability_searches },
+  { name = 'test_cyclic_committability_judgement_reports_budget', fn = test_cyclic_committability_judgement_reports_budget },
+  { name = 'test_product_lane_access_reads_base_but_writes_delta', fn = test_product_lane_access_reads_base_but_writes_delta },
+  { name = 'test_product_lane_wrap_transforms_after_commit', fn = test_product_lane_wrap_transforms_after_commit },
+  { name = 'test_product_lane_wrap_can_perform_after_commit', fn = test_product_lane_wrap_can_perform_after_commit },
+  { name = 'test_product_lane_wrap_rejects_transactional_continuation', fn = test_product_lane_wrap_rejects_transactional_continuation },
+  { name = 'test_product_lane_and_product_wrap_compose_post_commit', fn = test_product_lane_and_product_wrap_compose_post_commit },
+  { name = 'test_world_owns_phase_shaped_evidence_and_resumptions', fn = test_world_owns_phase_shaped_evidence_and_resumptions },
+  { name = 'test_resource_responses_use_descriptors', fn = test_resource_responses_use_descriptors },
+  { name = 'test_occurrence_refs_are_stable_and_prefix_sensitive', fn = test_occurrence_refs_are_stable_and_prefix_sensitive },
+  { name = 'test_settlement_selected_and_published_lost_are_commit_interpretation', fn = test_settlement_selected_and_published_lost_are_commit_interpretation },
+  { name = 'test_root_attempt_world_evidence_resumption_and_commit_plan', fn = test_root_attempt_world_evidence_resumption_and_commit_plan },
+  { name = 'test_commit_plan_revalidates_root_attempt_ownership', fn = test_commit_plan_revalidates_root_attempt_ownership },
+  { name = 'test_commit_plan_prepares_settlement_updates_before_apply', fn = test_commit_plan_prepares_settlement_updates_before_apply },
+}
+
 local function run_tests()
-  test_derivation_addresses_are_stable()
-  test_bind_link_is_explicit_and_reduced_by_search()
-  test_map_link_is_explicit_and_reduced_by_search()
-  test_map_is_transactional_before_commit_and_wrap_after_commit()
-  test_map_callback_cannot_perform()
-  test_bind_callback_must_return_op()
-  test_guard_does_not_run_at_construction_and_runs_at_expansion()
-  test_guard_is_memoized_per_attempt_occurrence()
-  test_guard_callback_must_return_op()
-  test_guard_callback_cannot_perform_or_spawn()
-  test_or_else_function_fallback_is_guarded_and_memoized()
-  test_proof_search_is_tri_valued_and_budgeted()
-  test_absence_is_generation_stable_not_timeless()
-  test_search_phase_forbids_perform_and_spawn()
-  test_tensor_self_rendezvous_succeeds()
-  test_all_self_rendezvous_fails()
-  test_tensor_join_feeds_transactional_continuation()
-  test_all_join_feeds_transactional_continuation_after_external_cuts()
-  test_wrap_boundary_transforms_after_commit()
-  test_wrap_boundary_rejects_transactional_continuation()
-  test_wrap_boundary_is_branch_local()
-  test_wrap_boundary_can_perform_after_commit()
-  test_wrap_boundary_after_commit_event_order()
-  test_post_commit_phase_is_explicit_in_wrapper()
-  test_or_else_primary_done_wins()
-  test_or_else_fallback_commits_after_absence_proof()
-  test_or_else_primary_rendezvous_beats_fallback()
-  test_or_else_fallback_absence_can_report_budget()
-  test_or_else_site_address_is_replay_stable()
-  test_nested_or_else_obligation_prefixes()
-  test_forced_decisions_for_nested_obligation()
-  test_nested_or_else_inner_primary_under_outer_fallback()
-  test_nested_or_else_outer_primary_dominates_inner_fallback()
-  test_product_base_evidence_not_duplicated()
-  test_product_lane_obligations_are_lane_local()
-  test_search_committable_task_skips_rejected_candidate()
-  test_preference_obligation_looks_for_committable_not_merely_valid()
-  test_preference_obligation_continues_to_later_committable_preferred_world()
-  test_judgement_context_shares_fuel_across_committability_searches()
-  test_cyclic_committability_judgement_reports_budget()
-  test_product_lane_access_reads_base_but_writes_delta()
-  test_product_lane_wrap_transforms_after_commit()
-  test_product_lane_wrap_can_perform_after_commit()
-  test_product_lane_wrap_rejects_transactional_continuation()
-  test_product_lane_and_product_wrap_compose_post_commit()
-  test_world_owns_phase_shaped_evidence_and_resumptions()
-  test_resource_responses_use_descriptors()
-  test_occurrence_refs_are_stable_and_prefix_sensitive()
-  test_settlement_selected_and_published_lost_are_commit_interpretation()
-  test_root_attempt_world_evidence_resumption_and_commit_plan()
-  test_commit_plan_revalidates_root_attempt_ownership()
-  test_commit_plan_prepares_settlement_updates_before_apply()
-  print('tests: addresses, explicit bind/map frames, proof search/phase guards, guarded expansion, tensor/all joins, post-commit frames, PreferLink, nested or_else, product evidence, commit search, committable preference judgements, fragment views, evidence certificates, descriptor responses, settlement algebra, clean architecture objects, root attempt hardening, prepared settlement updates, and product boundary programs passed')
+  for _, test in ipairs(test_cases) do
+    test.fn()
+  end
+  print('tests: addresses, explicit bind/map frames, proof search/phase guards, guarded expansion, with_nack settlement, tensor/all joins, post-commit frames, PreferLink, nested or_else, product evidence, commit search, committable preference judgements, fragment views, evidence certificates, descriptor responses, settlement algebra, clean architecture objects, root attempt hardening, prepared settlement updates, and product boundary programs passed')
   print()
 end
 
