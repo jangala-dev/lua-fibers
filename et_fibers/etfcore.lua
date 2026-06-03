@@ -165,30 +165,105 @@ function EvidenceDelta.delta(base)
   return e
 end
 
-function EvidenceDelta:clone_local()
-  local e = EvidenceDelta.empty()
-  e.base = self and self.base or nil
 
-  if self then
-    for _, resource in ipairs(self.resources.fragment_order or {}) do
-      e.resources.fragment_order[#e.resources.fragment_order + 1] = resource
-      e.resources.fragments[resource] = self.resources.fragments[resource]
+-- Evidence is an effect row: each phase-indexed field has a small clone and
+-- merge action.  The data layout stays explicit for tests/introspection, but
+-- clone/merge behaviour is centralised here so adding a new evidence component
+-- means adding one row operation rather than editing every merge site.
+local EvidenceRow = {}
+
+function EvidenceRow.clone_fragments(src, dst)
+  for _, resource in ipairs(src.resources.fragment_order or {}) do
+    dst.resources.fragment_order[#dst.resources.fragment_order + 1] = resource
+    dst.resources.fragments[resource] = src.resources.fragments[resource]
+  end
+end
+
+function EvidenceRow.merge_fragments(dst, src)
+  for _, resource in ipairs(src.resources.fragment_order or {}) do
+    local ok, reason = dst:merge_fragment(resource, src.resources.fragments[resource])
+    if not ok then return false, reason end
+  end
+  return true
+end
+
+function EvidenceRow.clone_map(src_map, dst_map)
+  for k, v in pairs(src_map or {}) do dst_map[k] = v end
+end
+
+function EvidenceRow.clone_ordered_map(src_order, src_map, dst_order, dst_map)
+  list_append(dst_order, src_order)
+  for k, v in pairs(src_map or {}) do dst_map[k] = v end
+end
+
+function EvidenceRow.merge_ordered_settlements(dst, src)
+  for _, key in ipairs(src.commit.selected_settlement_order or {}) do
+    dst:add_selected_settlement(src.commit.selected_settlements[key])
+  end
+  return true
+end
+
+function EvidenceRow.merge_decisions(dst, src)
+  for k, v in pairs(src.decisions or {}) do
+    local old = dst.decisions[k]
+    if old ~= nil and old ~= v then
+      return false, 'conflicting decision for ' .. tostring(k)
     end
+    dst.decisions[k] = v
+  end
+  return true
+end
 
-    list_append(e.pre_commit.obligations, self.pre_commit.obligations)
-    list_append(e.commit.descriptors, self.commit.descriptors)
-    list_append(e.commit.selected_settlement_order, self.commit.selected_settlement_order)
-    for k, v in pairs(self.commit.selected_settlements or {}) do
-      e.commit.selected_settlements[k] = v
-    end
+function EvidenceRow.clone_into(src, dst)
+  if not src then return dst end
+  dst.base = src.base
+  EvidenceRow.clone_fragments(src, dst)
+  list_append(dst.pre_commit.obligations, src.pre_commit.obligations)
+  list_append(dst.commit.descriptors, src.commit.descriptors)
+  EvidenceRow.clone_ordered_map(
+    src.commit.selected_settlement_order,
+    src.commit.selected_settlements,
+    dst.commit.selected_settlement_order,
+    dst.commit.selected_settlements
+  )
+  dst.post.program = src.post.program or PostProgram.identity()
+  EvidenceRow.clone_map(src.decisions, dst.decisions)
+  list_append(dst.decision_path, src.decision_path)
+  return dst
+end
 
-    e.post.program = self.post.program or PostProgram.identity()
+function EvidenceRow.merge_into(dst, src, opts)
+  if not src then return true end
+  opts = opts or {}
 
-    for k, v in pairs(self.decisions or {}) do e.decisions[k] = v end
-    list_append(e.decision_path, self.decision_path)
+  if opts.include_base and src.base then
+    local ok, reason = EvidenceRow.merge_into(dst, src.base, opts)
+    if not ok then return false, reason end
   end
 
-  return e
+  local ok, reason = EvidenceRow.merge_fragments(dst, src)
+  if not ok then return false, reason end
+
+  list_append(dst.pre_commit.obligations, src.pre_commit.obligations)
+  list_append(dst.commit.descriptors, src.commit.descriptors)
+
+  ok, reason = EvidenceRow.merge_ordered_settlements(dst, src)
+  if not ok then return false, reason end
+
+  if opts.include_post then
+    dst.post.program = PostProgram.compose(dst.post.program, src.post.program or PostProgram.identity())
+  end
+
+  list_append(dst.decision_path, src.decision_path)
+
+  ok, reason = EvidenceRow.merge_decisions(dst, src)
+  if not ok then return false, reason end
+
+  return true
+end
+
+function EvidenceDelta:clone_local()
+  return EvidenceRow.clone_into(self, EvidenceDelta.empty())
 end
 
 function EvidenceDelta:add_fragment(resource, fragment)
@@ -1031,6 +1106,39 @@ local function frame_with_source(frame, source)
   end
 end
 
+
+-- Frame traversal/rewrite helpers.  The proof frontier is a small tree: unary
+-- continuation frames wrap a source, and product group frames own lanes.  These
+-- helpers centralise that shape so collectors/reducers do not each encode a
+-- different traversal by hand.
+local Frame = {}
+
+function Frame.walk(frame, visit)
+  if not frame then return end
+  local descend = visit(frame)
+  if descend == false then return end
+
+  if is_continuation_frame(frame) then
+    Frame.walk(frame.source, visit)
+  elseif frame.kind == 'group' then
+    for i = 1, #(frame.lanes or {}) do
+      Frame.walk(frame.lanes[i], visit)
+    end
+  end
+end
+
+function Frame.map_continuation_source(frame, reducer)
+  if not is_continuation_frame(frame) then return nil end
+  local reduced_sources = reducer(frame.source)
+  if not reduced_sources then return nil end
+
+  local out = {}
+  for i = 1, #reduced_sources do
+    out[i] = frame_with_source(frame, reduced_sources[i])
+  end
+  return out
+end
+
 local function frame_current_post_program(frame)
   if not frame then return PostProgram.identity() end
   if frame.kind == 'group' then return frame.post_program or PostProgram.identity() end
@@ -1147,7 +1255,7 @@ end
 
 
 local function frame_add_selected_settlement(frame, ref)
-  if frame.kind == 'done' or frame.kind == 'wait' or frame.kind == 'nack' then
+  if frame.kind == 'done' or frame.kind == 'wait' or frame.kind == 'nack' or frame.kind == 'await' then
     local evidence = (frame.evidence or empty_evidence()):clone_local()
     evidence:add_selected_settlement(ref)
     frame.evidence = evidence
@@ -1183,51 +1291,33 @@ local function collect_selected_from_evidence(evidence, out, seen)
 end
 
 local function frame_collect_publishable_settlements(frame, out, seen)
-  if not frame then return end
-
-  if frame.kind == 'done' or frame.kind == 'wait' or frame.kind == 'nack' then
-    collect_selected_from_evidence(frame.evidence, out, seen)
-    return
-  end
-
-  if is_continuation_frame(frame) then
-    frame_collect_publishable_settlements(frame.source, out, seen)
-    return
-  end
-
-  if frame.kind == 'group' then
-    collect_selected_from_evidence(frame.base_evidence, out, seen)
-    for i = 1, #(frame.lanes or {}) do
-      frame_collect_publishable_settlements(frame.lanes[i], out, seen)
+  Frame.walk(frame, function(f)
+    if f.kind == 'group' then
+      collect_selected_from_evidence(f.base_evidence, out, seen)
+      return true
     end
-    return
-  end
+
+    if f.kind == 'done' or f.kind == 'wait' or f.kind == 'nack' or f.kind == 'await' then
+      collect_selected_from_evidence(f.evidence, out, seen)
+      return false
+    end
+
+    return true
+  end)
 end
 
 
 local function frame_collect_external_waits(frame, out, seen)
-  if not frame then return end
+  Frame.walk(frame, function(f)
+    if f.kind ~= 'await' then return true end
 
-  if frame.kind == 'await' then
-    local key = tostring(frame.resource) .. '|' .. tostring(frame.addr or frame)
+    local key = tostring(f.resource) .. '|' .. tostring(f.addr or f)
     if not seen[key] then
       seen[key] = true
-      out[#out + 1] = frame
+      out[#out + 1] = f
     end
-    return
-  end
-
-  if is_continuation_frame(frame) then
-    frame_collect_external_waits(frame.source, out, seen)
-    return
-  end
-
-  if frame.kind == 'group' then
-    for i = 1, #(frame.lanes or {}) do
-      frame_collect_external_waits(frame.lanes[i], out, seen)
-    end
-    return
-  end
+    return false
+  end)
 end
 
 local function frame_open_wait(frame)
@@ -1681,7 +1771,6 @@ local function default_print_event(event)
   end
 end
 
-M.print_event = default_print_event
 
 local CommitPlan = {}
 CommitPlan.__index = CommitPlan
@@ -1754,7 +1843,7 @@ function CommitPlan:apply(runtime)
     if runtime and runtime.emit_descriptor then
       runtime:emit_descriptor(event)
     else
-      M.print_event(event)
+      default_print_event(event)
     end
   end
 
@@ -1846,6 +1935,39 @@ function PartialProof:with_entries_and_cuts(entries, cuts)
   return self:fork({ entries = entries, cuts = cuts })
 end
 
+
+function PartialProof:replace_entry(index, replacement_frames)
+  local entry = self.entries[index]
+  if not entry then return nil end
+
+  local out = {}
+  for _, next_top in ipairs(replacement_frames or {}) do
+    local next_entries = {}
+    for i, e in ipairs(self.entries) do
+      if i ~= index then next_entries[#next_entries + 1] = e end
+    end
+
+    if entry.group then
+      -- Reductions inside product lanes must preserve lane identity.  Re-expanding
+      -- the replacement as a top frame would corrupt the product certificate.
+      next_entries[#next_entries + 1] = {
+        task = entry.task,
+        frame = next_top,
+        group = entry.group,
+        lane = entry.lane,
+      }
+    else
+      local expanded = expand_top_frame(entry.task, next_top)
+      for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
+    end
+
+    local p2 = self:with_entries(next_entries)
+    if p2:fragments_compatible() then out[#out + 1] = p2 end
+  end
+
+  return out
+end
+
 local function group_has_continuation(group)
   return group and group.continuation_chain and #group.continuation_chain > 0
 end
@@ -1908,14 +2030,7 @@ local function reduce_continuation_frame(frame)
     return replacement_frames
   end
 
-  local reduced_sources = reduce_continuation_frame(frame.source)
-  if not reduced_sources then return nil end
-
-  local out = {}
-  for i = 1, #reduced_sources do
-    out[i] = frame_with_source(frame, reduced_sources[i])
-  end
-  return out
+  return Frame.map_continuation_source(frame, reduce_continuation_frame)
 end
 
 function PartialProof:find_ready_continuation_entry()
@@ -1935,125 +2050,49 @@ function PartialProof:reduce_ready_continuation_entry()
   local replacement_frames = reduce_continuation_frame(entry.frame)
   if not replacement_frames then return nil end
 
-  local out = {}
-  for _, next_top in ipairs(replacement_frames) do
-    local next_entries = {}
-    for i, e in ipairs(self.entries) do
-      if i ~= index then next_entries[#next_entries + 1] = e end
-    end
-    local expanded = expand_top_frame(entry.task, next_top)
-    for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
-    local p2 = self:with_entries(next_entries)
-    if p2:fragments_compatible() then out[#out + 1] = p2 end
-  end
-  return out
+  return self:replace_entry(index, replacement_frames)
 end
 
 
-local function frame_has_ready_nack(frame, runtime)
+local GateReducers = {
+  nack = {
+    ready = function(frame, runtime)
+      local cell = runtime:settlement_cell(frame.settlement)
+      if cell.state == 'lost' or cell.state == 'withdrawn' then
+        return true, nil
+      end
+      return false
+    end,
+  },
+
+  await = {
+    ready = function(frame, runtime)
+      if not frame.resource or not frame.resource.ready then return false end
+      return frame.resource:ready(frame.request, runtime)
+    end,
+  },
+}
+
+local function frame_has_ready_gate(frame, runtime)
   if not frame then return false end
 
-  if frame.kind == 'nack' then
-    local cell = runtime:settlement_cell(frame.settlement)
-    return cell.state == 'lost' or cell.state == 'withdrawn'
-  end
-
-  if is_continuation_frame(frame) then
-    return frame_has_ready_nack(frame.source, runtime)
-  end
-
-  return false
-end
-
-local function reduce_nack_frame(frame, runtime)
-  if frame.kind == 'nack' then
-    local cell = runtime:settlement_cell(frame.settlement)
-    if cell.state == 'lost' or cell.state == 'withdrawn' then
-      return { frame_done(pack(), frame.evidence, frame_after_post_program(frame)) }
-    end
-    return nil
-  end
-
-  if is_continuation_frame(frame) then
-    local reduced_sources = reduce_nack_frame(frame.source, runtime)
-    if not reduced_sources then return nil end
-
-    local out = {}
-    for i = 1, #reduced_sources do
-      out[i] = frame_with_source(frame, reduced_sources[i])
-    end
-    return out
-  end
-
-  return nil
-end
-
-function PartialProof:find_ready_nack_entry(runtime)
-  for i = 1, #self.entries do
-    local e = self.entries[i]
-    if frame_has_ready_nack(e.frame, runtime) then
-      return i, e
-    end
-  end
-  return nil
-end
-
-function PartialProof:reduce_ready_nack_entry(runtime)
-  local index, entry = self:find_ready_nack_entry(runtime)
-  if not entry then return nil end
-
-  local replacement_frames = reduce_nack_frame(entry.frame, runtime)
-  if not replacement_frames then return nil end
-
-  local out = {}
-  for _, next_top in ipairs(replacement_frames) do
-    local next_entries = {}
-    for i, e in ipairs(self.entries) do
-      if i ~= index then next_entries[#next_entries + 1] = e end
-    end
-
-    if entry.group then
-      -- A nack reduced inside an all/tensor lane remains that lane.
-      -- Expanding it as a fresh top frame would turn it into a direct root
-      -- result and corrupt the product resumption certificate.
-      next_entries[#next_entries + 1] = {
-        task = entry.task,
-        frame = next_top,
-        group = entry.group,
-        lane = entry.lane,
-      }
-    else
-      local expanded = expand_top_frame(entry.task, next_top)
-      for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
-    end
-
-    local p2 = self:with_entries(next_entries)
-    if p2:fragments_compatible() then out[#out + 1] = p2 end
-  end
-  return out
-end
-
-
-local function frame_has_ready_await(frame, runtime)
-  if not frame then return false end
-
-  if frame.kind == 'await' then
-    if not frame.resource or not frame.resource.ready then return false end
-    local ok = frame.resource:ready(frame.request, runtime)
+  local reducer = GateReducers[frame.kind]
+  if reducer then
+    local ok = reducer.ready(frame, runtime)
     return ok and true or false
   end
 
   if is_continuation_frame(frame) then
-    return frame_has_ready_await(frame.source, runtime)
+    return frame_has_ready_gate(frame.source, runtime)
   end
 
   return false
 end
 
-local function reduce_await_frame(frame, runtime)
-  if frame.kind == 'await' then
-    if not frame.resource or not frame.resource.ready then return nil end
-    local ok, response = frame.resource:ready(frame.request, runtime)
+local function reduce_gate_frame(frame, runtime)
+  local reducer = GateReducers[frame.kind]
+  if reducer then
+    local ok, response = reducer.ready(frame, runtime)
     if not ok then return nil end
 
     local evidence = frame.evidence:clone_local()
@@ -2061,63 +2100,57 @@ local function reduce_await_frame(frame, runtime)
       local ok_evidence = evidence:merge_response(response)
       if not ok_evidence then return nil end
     end
-    return { frame_done(response_values(response or { value = true }), evidence, frame_after_post_program(frame)) }
+
+    return {
+      frame_done(response_values(response), evidence, frame_after_post_program(frame))
+    }
   end
 
   if is_continuation_frame(frame) then
-    local reduced_sources = reduce_await_frame(frame.source, runtime)
-    if not reduced_sources then return nil end
-
-    local out = {}
-    for i = 1, #reduced_sources do
-      out[i] = frame_with_source(frame, reduced_sources[i])
-    end
-    return out
+    return Frame.map_continuation_source(frame, function(source)
+      return reduce_gate_frame(source, runtime)
+    end)
   end
 
   return nil
 end
 
-function PartialProof:find_ready_await_entry(runtime)
+function PartialProof:find_ready_gate_entry(runtime)
   for i = 1, #self.entries do
     local e = self.entries[i]
-    if frame_has_ready_await(e.frame, runtime) then
+    if frame_has_ready_gate(e.frame, runtime) then
       return i, e
     end
   end
   return nil
 end
 
-function PartialProof:reduce_ready_await_entry(runtime)
-  local index, entry = self:find_ready_await_entry(runtime)
+function PartialProof:reduce_ready_gate_entry(runtime)
+  local index, entry = self:find_ready_gate_entry(runtime)
   if not entry then return nil end
 
-  local replacement_frames = reduce_await_frame(entry.frame, runtime)
+  local replacement_frames = reduce_gate_frame(entry.frame, runtime)
   if not replacement_frames then return nil end
 
-  local out = {}
-  for _, next_top in ipairs(replacement_frames) do
-    local next_entries = {}
-    for i, e in ipairs(self.entries) do
-      if i ~= index then next_entries[#next_entries + 1] = e end
-    end
+  return self:replace_entry(index, replacement_frames)
+end
 
-    if entry.group then
-      next_entries[#next_entries + 1] = {
-        task = entry.task,
-        frame = next_top,
-        group = entry.group,
-        lane = entry.lane,
-      }
-    else
-      local expanded = expand_top_frame(entry.task, next_top)
-      for _, e in ipairs(expanded) do next_entries[#next_entries + 1] = e end
-    end
+-- Compatibility names for internal tests and for callers that have not yet
+-- switched to the generic gate vocabulary.
+function PartialProof:find_ready_nack_entry(runtime)
+  return self:find_ready_gate_entry(runtime)
+end
 
-    local p2 = self:with_entries(next_entries)
-    if p2:fragments_compatible() then out[#out + 1] = p2 end
-  end
-  return out
+function PartialProof:reduce_ready_nack_entry(runtime)
+  return self:reduce_ready_gate_entry(runtime)
+end
+
+function PartialProof:find_ready_await_entry(runtime)
+  return self:find_ready_gate_entry(runtime)
+end
+
+function PartialProof:reduce_ready_await_entry(runtime)
+  return self:reduce_ready_gate_entry(runtime)
 end
 
 function PartialProof:find_complete_join_group()
@@ -2374,86 +2407,77 @@ function ProofSearch:is_generation_current()
   return self.runtime.generation == self.generation
 end
 
-function ProofSearch:search_proof(proof)
-  if not self:consume() then return nil, 'budget' end
+function ProofSearch:search_reductions(reductions)
+  for _, p2 in ipairs(reductions or {}) do
+    local world, status = self:search_proof(p2)
+    if world then return world, 'found' end
+    if status == 'budget' then return nil, 'budget' end
+  end
+  return nil, 'absent'
+end
 
-  -- First reduce any explicit transactional continuation link whose source has
-  -- produced a raw value.  User bind/map callbacks are invoked only here, never
-  -- by ordinary expression expansion.
-  local link_reductions = proof:reduce_ready_continuation_entry()
-  if link_reductions then
-    for _, p2 in ipairs(link_reductions) do
-      local world, status = self:search_proof(p2)
-      if world then return world, 'found' end
-      if status == 'budget' then return nil, 'budget' end
+local LocalReducers = {
+  {
+    name = 'continuation',
+    reduce = function(search, proof)
+      -- User bind/map callbacks are invoked only by this reducer, never by
+      -- ordinary expression expansion.
+      return proof:reduce_ready_continuation_entry()
+    end,
+  },
+
+  {
+    name = 'join',
+    reduce = function(search, proof)
+      -- A completed tensor/all box produces one raw product value which may
+      -- then feed ordinary continuation reduction.
+      return proof:reduce_complete_join_group()
+    end,
+  },
+
+  {
+    name = 'gate',
+    reduce = function(search, proof)
+      -- Unary gates reduce when prior runtime state makes them ready:
+      -- nack observes terminal settlement, await observes external readiness.
+      -- Neither observes updates produced by the same candidate CommitPlan.
+      return proof:reduce_ready_gate_entry(search.runtime)
+    end,
+  },
+}
+
+function ProofSearch:search_local_reductions(proof)
+  for _, reducer in ipairs(LocalReducers) do
+    local reductions = reducer.reduce(self, proof)
+    if reductions then
+      return self:search_reductions(reductions)
     end
-    return nil, 'absent'
+  end
+  return nil, nil
+end
+
+function ProofSearch:accept_closed_world(world)
+  if self.accept_world then
+    local verdict = self.accept_world(world) or { status = 'reject', reason = 'world rejected' }
+    if verdict.status == 'accept' then
+      return verdict.world or world, 'found'
+    elseif verdict.status == 'budget' then
+      self.reason = verdict.reason or 'world acceptance budget'
+      return nil, 'budget'
+    elseif verdict.status == 'reject' then
+      -- Valid but unacceptable for this search, for example a fallback world
+      -- dominated by a preferred primary proof.  Reject this leaf and let the
+      -- surrounding DFS continue looking for another closed candidate.
+      return nil, 'absent'
+    else
+      error('unknown world acceptance status: ' .. tostring(verdict.status))
+    end
   end
 
-  -- Then reduce any completed tensor/all join link.  The join produces a raw
-  -- product value that may feed explicit BindLink/MapLink reductions.
-  local reductions = proof:reduce_complete_join_group()
-  if reductions then
-    for _, p2 in ipairs(reductions) do
-      local world, status = self:search_proof(p2)
-      if world then return world, 'found' end
-      if status == 'budget' then return nil, 'budget' end
-    end
-    return nil, 'absent'
-  end
+  return world, 'found'
+end
 
-  -- Then reduce any enabled negative acknowledgement.  Nack frames observe
-  -- only prior terminal settlement states, never updates produced by the same
-  -- candidate CommitPlan.
-  local nack_reductions = proof:reduce_ready_nack_entry(self.runtime)
-  if nack_reductions then
-    for _, p2 in ipairs(nack_reductions) do
-      local world, status = self:search_proof(p2)
-      if world then return world, 'found' end
-      if status == 'budget' then return nil, 'budget' end
-    end
-    return nil, 'absent'
-  end
-
-
-  -- Then reduce any external await whose resource is already ready.  Await
-  -- frames observe prior external readiness only; retained waits are published
-  -- by Runtime:park, not by proof search.
-  local await_reductions = proof:reduce_ready_await_entry(self.runtime)
-  if await_reductions then
-    for _, p2 in ipairs(await_reductions) do
-      local world, status = self:search_proof(p2)
-      if world then return world, 'found' end
-      if status == 'budget' then return nil, 'budget' end
-    end
-    return nil, 'absent'
-  end
-
-  -- Closed proof: all ports are cut and every participant/lane is done.
-  if proof:is_closed() then
-    local world = proof:world()
-    if not world then return nil, 'absent' end
-
-    if self.accept_world then
-      local verdict = self.accept_world(world) or { status = 'reject', reason = 'world rejected' }
-      if verdict.status == 'accept' then
-        return verdict.world or world, 'found'
-      elseif verdict.status == 'budget' then
-        self.reason = verdict.reason or 'world acceptance budget'
-        return nil, 'budget'
-      elseif verdict.status == 'reject' then
-        -- Valid but unacceptable for this search, for example a fallback world
-        -- dominated by a preferred primary proof.  Reject this leaf and let the
-        -- surrounding DFS continue looking for another closed candidate.
-        return nil, 'absent'
-      else
-        error('unknown world acceptance status: ' .. tostring(verdict.status))
-      end
-    end
-
-    return world, 'found'
-  end
-
+function ProofSearch:search_cuts(proof)
   -- Try every open port, not just the first.  This matters for TE-style
   -- multi-step protocols such as triple swap: one participant may need a
   -- different participant to progress before its own reply port can close.
@@ -2516,6 +2540,21 @@ function ProofSearch:search_proof(proof)
   return nil, 'absent'
 end
 
+function ProofSearch:search_proof(proof)
+  if not self:consume() then return nil, 'budget' end
+
+  local world, status = self:search_local_reductions(proof)
+  if status then return world, status end
+
+  if proof:is_closed() then
+    local closed_world = proof:world()
+    if not closed_world then return nil, 'absent' end
+    return self:accept_closed_world(closed_world)
+  end
+
+  return self:search_cuts(proof)
+end
+
 function ProofSearch:run()
   local world, status = run_in_phase('search', function()
     return self:search_proof(self.initial_proof)
@@ -2552,28 +2591,11 @@ end
 -- --------------------------------------------------------------------------
 
 M.Op = Op
--- Runtime lives in runtime.lua.  This lazy proxy preserves the old
--- core.Runtime.new() convenience without making etfcore require runtime.lua.
-M.Runtime = setmetatable({}, {
-  __index = function(_, key)
-    return require('runtime').Runtime[key]
-  end,
-})
-M.World = World
-M.JudgementContext = JudgementContext
-M.Fuel = Fuel
-M.ProofSearch = ProofSearch
-M.PostProgram = PostProgram
-M.PostCommitFrame = PostCommitFrame
-M.OccurrenceRef = OccurrenceRef
-M.SettlementRef = SettlementRef
-M.RootAttempt = RootAttempt
-M.EvidenceDelta = EvidenceDelta
-M.WorldEvidence = WorldEvidence
-M.ResumptionEvidence = ResumptionEvidence
-M.CommitPlan = CommitPlan
 
-M.Engine = {
+-- Private-by-convention bridge for runtime.lua.  User code should depend on
+-- Op, resource *_op constructors, and runtime.lua rather than these engine
+-- internals.
+M._engine = {
   pack = pack,
   unpack_pack = unpack_pack,
   empty_evidence = empty_evidence,
@@ -2598,6 +2620,8 @@ M.Engine = {
 }
 
 -- Deliberately exposed test/introspection surface for this proof-net specimen.
+-- Ordinary users should not depend on this table; public code should use Op and
+-- runtime.lua.
 M._test = {
   pack = pack,
   unpack_pack = unpack_pack,
@@ -2605,9 +2629,13 @@ M._test = {
   OccurrenceRef = OccurrenceRef,
   SettlementRef = SettlementRef,
   SettlementCell = SettlementCell,
+  World = World,
   WorldEvidence = WorldEvidence,
   ResumptionEvidence = ResumptionEvidence,
   RootAttempt = RootAttempt,
+  JudgementContext = JudgementContext,
+  ProofSearch = ProofSearch,
+  PostProgram = PostProgram,
   CommitPlan = CommitPlan,
   empty_evidence = empty_evidence,
   expand_expr = function(...) return expand_expr(...) end,
@@ -2618,8 +2646,6 @@ M._test = {
   committable_search_key = committable_search_key,
   current_task = function() return CURRENT_TASK end,
   phase = function() return PHASE end,
-  set_print_event = function(fn) M.print_event = fn end,
-  reset_print_event = function() M.print_event = default_print_event end,
 }
 
 return M

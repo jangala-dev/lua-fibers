@@ -3,9 +3,6 @@ package.path = './?.lua;../?.lua;./?/init.lua;../?/init.lua;' .. package.path
 local core = require('etfcore')
 local Op = core.Op
 local Runtime = require('runtime').Runtime
-local JudgementContext = core.JudgementContext
-local ProofSearch = core.ProofSearch
-local PostProgram = core.PostProgram
 local Channel = require('resources.channel')
 local Ledger = require('ledger')
 
@@ -23,6 +20,10 @@ local WorldEvidence = core._test.WorldEvidence
 local ResumptionEvidence = core._test.ResumptionEvidence
 local RootAttempt = core._test.RootAttempt
 local CommitPlan = core._test.CommitPlan
+local JudgementContext = core._test.JudgementContext
+local ProofSearch = core._test.ProofSearch
+local PostProgram = core._test.PostProgram
+local World = core._test.World
 
 local function assert_eq(a, b, message)
   if a ~= b then error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
@@ -113,18 +114,15 @@ local function test_map_link_is_explicit_and_reduced_by_search()
 end
 
 local function test_map_is_transactional_before_commit_and_wrap_after_commit()
-  local rt = Runtime.new()
   local order = {}
+  local rt = Runtime.new({
+    on_descriptor = function(event)
+      if event.tag == 'map-order.event' then
+        order[#order + 1] = 'commit'
+      end
+    end,
+  })
   local got
-
-  local old_print_event = core.print_event
-  core.print_event = function(event)
-    if event.tag == 'map-order.event' then
-      order[#order + 1] = 'commit'
-    else
-      old_print_event(event)
-    end
-  end
 
   rt:spawn(function()
     got = Op.perform(
@@ -146,7 +144,6 @@ local function test_map_is_transactional_before_commit_and_wrap_after_commit()
   end, 'map-order-root')
 
   rt:run()
-  core.print_event = old_print_event
 
   assert_eq(got, 'xmw', 'map should affect raw value and wrap should affect returned value')
   assert_eq(order[1], 'map', 'map should run during proof search before commit events')
@@ -893,19 +890,16 @@ end
 
 
 local function test_wrap_boundary_after_commit_event_order()
-  local rt = Runtime.new()
+  local order = {}
+  local rt = Runtime.new({
+    on_descriptor = function(event)
+      if event.tag == 'order.event' then
+        order[#order + 1] = 'commit'
+      end
+    end,
+  })
   rt.quiet_deadlock = true
   local ch = Channel.new('wrap-order-ch')
-  local order = {}
-
-  local old_print_event = core.print_event
-  core.print_event = function(event)
-    if event.tag == 'order.event' then
-      order[#order + 1] = 'commit'
-    else
-      old_print_event(event)
-    end
-  end
 
   rt:spawn(function()
     local got = Op.perform(
@@ -923,7 +917,6 @@ local function test_wrap_boundary_after_commit_event_order()
 
   rt:spawn(function() Op.perform(ch:put_op('x')) end, 'wrap-order-sender')
   rt:run()
-  core.print_event = old_print_event
 
   assert_eq(order[1], 'commit', 'commit event should run before wrapper')
   assert_eq(order[2], 'wrap', 'wrapper should run after commit event')
@@ -1590,8 +1583,8 @@ local function test_settlement_selected_and_published_lost_are_commit_interpreta
   local selected_ref = SettlementRef.new('settlement', selected_ctx, selected_evidence)
   selected_evidence:add_selected_settlement(selected_ref)
 
-  local selected_world = core.World.from_entries({
-    { task = selected_task, frame = { kind = 'done', values = pack('ok'), evidence = selected_evidence, after_post_program = core.PostProgram.identity() } }
+  local selected_world = World.from_entries({
+    { task = selected_task, frame = { kind = 'done', values = pack('ok'), evidence = selected_evidence, after_post_program = PostProgram.identity() } }
   }, {})
   assert(selected_world, 'selected settlement world should build')
   selected_world:commit(rt)
@@ -1615,8 +1608,8 @@ local function test_settlement_selected_and_published_lost_are_commit_interpreta
   rt2:publish_settlement(lost_ref)
 
   local plain_evidence = EvidenceDelta.empty()
-  local plain_world = core.World.from_entries({
-    { task = lost_task, frame = { kind = 'done', values = pack('plain'), evidence = plain_evidence, after_post_program = core.PostProgram.identity() } }
+  local plain_world = World.from_entries({
+    { task = lost_task, frame = { kind = 'done', values = pack('plain'), evidence = plain_evidence, after_post_program = PostProgram.identity() } }
   }, {})
   assert(plain_world, 'plain world should build')
   plain_world:commit(rt2)
@@ -1696,8 +1689,8 @@ local function test_commit_plan_prepares_settlement_updates_before_apply()
   local selected_ref = SettlementRef.new('settlement', ctx, evidence)
   evidence:add_selected_settlement(selected_ref)
 
-  local world = core.World.from_entries({
-    { task = task, frame = { kind = 'done', values = pack('settled'), evidence = evidence, after_post_program = core.PostProgram.identity() } }
+  local world = World.from_entries({
+    { task = task, frame = { kind = 'done', values = pack('settled'), evidence = evidence, after_post_program = PostProgram.identity() } }
   }, {})
   assert(world, 'selected settlement plan world should build')
 

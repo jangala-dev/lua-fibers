@@ -7,7 +7,7 @@
 -- running policy.
 
 local core = require('etfcore')
-local Engine = core.Engine
+local Engine = core._engine
 
 local pack = Engine.pack
 local unpack_pack = Engine.unpack_pack
@@ -35,6 +35,16 @@ local function require_judgement(method_name, judgement)
     error(method_name .. ' requires an explicit JudgementContext', 2)
   end
   return judgement
+end
+
+local function default_descriptor_handler(event)
+  if event.tag == 'ledger.move' then
+    print(string.format('[commit event] move %s: %s -> %s', tostring(event.item), tostring(event.from), tostring(event.to)))
+  elseif event.tag == 'ledger.close' then
+    print(string.format('[commit event] close %s reason=%s', tostring(event.owner), tostring(event.reason)))
+  else
+    print('[commit event] ' .. tostring(event.tag))
+  end
 end
 
 local Runtime = {}
@@ -66,7 +76,7 @@ function Runtime:emit_descriptor(event)
   if self.on_descriptor then
     return self.on_descriptor(event)
   end
-  return core.print_event(event)
+  return default_descriptor_handler(event)
 end
 
 function Runtime:register_external_source(source)

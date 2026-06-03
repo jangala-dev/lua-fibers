@@ -23,10 +23,16 @@ local function assert_eq(actual, expected, message)
 end
 
 local function silence_commit_events(fn)
-  local old = core.print_event
-  core.print_event = function(_) end
+  local old_new = Runtime.new
+  Runtime.new = function(opts)
+    opts = opts or {}
+    if opts.on_descriptor == nil then
+      opts.on_descriptor = function(_) end
+    end
+    return old_new(opts)
+  end
   local ok, err = pcall(fn)
-  core.print_event = old
+  Runtime.new = old_new
   if not ok then error(err, 0) end
 end
 

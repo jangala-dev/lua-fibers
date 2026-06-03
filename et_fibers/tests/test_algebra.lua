@@ -33,11 +33,7 @@ end
 
 local function run_capture_events(fn)
   local events = {}
-  test_api.set_print_event(function(event)
-    events[#events + 1] = event
-  end)
   local result = { pcall(fn, events) }
-  test_api.reset_print_event()
   return result[1], result[2], events
 end
 
@@ -152,7 +148,8 @@ add('always_map_bind_left_identity_and_wrap_boundary_order', function()
   local order = {}
   local got
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(
         Op.always('x')
@@ -200,7 +197,8 @@ add('choice_discards_losing_world_descriptors_and_wraps', function()
     end)
   end)
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(Op.choice(winner, loser))
     end, 'algebra-choice')
@@ -222,7 +220,8 @@ add('or_else_suppresses_fallback_effects_when_primary_committable', function()
     return Op.always('primary')
   end)
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(primary:or_else(function()
         fallback_built = fallback_built + 1
@@ -245,7 +244,8 @@ add('or_else_rejects_valid_but_uncommittable_primary_without_partial_commit', fu
   local probe = ProbeResource.new(10)
   local got
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(
         probe:bad(5):and_then(function()
@@ -298,7 +298,8 @@ add('request_rendezvous_and_local_access_commit_as_one_world', function()
   local probe = ProbeResource.new(0)
   local receiver_got
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       Op.perform(ch:put_op('msg'):and_then(function()
         return probe:ok(3)
@@ -351,7 +352,8 @@ add('post_commit_failure_cannot_rollback_committed_resources_or_descriptors', fu
   local rt = Runtime.new()
   local ledger = Ledger.new({ r = 'A' })
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       Op.perform(ledger:move_op('r', 'A', 'B'):wrap(function()
         error('post-commit failure')
@@ -519,6 +521,7 @@ add('emit_is_commit_level_not_search_level', function()
   local ch = Channel.new('algebra-emit-open')
 
   local ok, err = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       Op.perform(ch:get_op():and_then(function()
         return Op.emit({ tag = 'should-not-emit-before-cut' })
@@ -586,7 +589,8 @@ add('losing_choice_branch_must_not_leak_resource_descriptor_or_wrap_but_publishe
     end)
   end)
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(Op.choice(winner, loser))
     end, 'algebra-losing-branch-no-leak')
@@ -610,7 +614,8 @@ add('validation_failure_of_any_resource_prevents_prepare_commit_and_descriptors_
   local bad = ProbeResource.new(0)
   local got
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(
         Op.all({ good:ok(3), bad:bad(5) })
@@ -712,7 +717,8 @@ add('guard_speculation_may_run_but_must_not_emit_or_commit_losing_worlds', funct
     end)
   end)
 
-  local ok, err, events = run_capture_events(function()
+  local ok, err, events = run_capture_events(function(events)
+    rt.on_descriptor = function(event) events[#events + 1] = event end
     rt:spawn(function()
       got = Op.perform(Op.choice(Op.always('winner'), guarded_loser))
     end, 'algebra-guard-losing-world')
