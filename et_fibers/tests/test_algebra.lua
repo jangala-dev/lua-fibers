@@ -2,7 +2,7 @@ package.path = './?.lua;../?.lua;./?/init.lua;../?/init.lua;' .. package.path
 
 local core = require('etfcore')
 local Op = core.Op
-local Runtime = core.Runtime
+local Runtime = require('runtime').Runtime
 local Channel = require('resources.channel')
 local Ledger = require('ledger')
 

@@ -1,6 +1,6 @@
 local core = require('etfcore')
 local Op = core.Op
-local Runtime = core.Runtime
+local Runtime = require('runtime').Runtime
 
 local Channel = require('resources.channel')
 local Cell = require('resources.cell')
@@ -421,6 +421,53 @@ test('ledger losing branch does not leak primitive log, signal, or state changes
     assert_eq(#ledger.events, 0, 'losing ledger log append should be discarded')
     assert_eq(ledger:change_cursor(), cursor, 'losing ledger signal wake should be discarded')
   end)
+end)
+
+
+test('runtime exposes bounded step API for embedded hosts', function()
+  local rt = Runtime.new({ quiet_deadlock = true })
+  local ch = Channel.new('step-api')
+  local got
+
+  rt:spawn(function()
+    got = Op.perform(ch:get_op())
+  end, 'step-receiver')
+
+  local s1 = rt:step({ resume_budget = 1 })
+  assert_eq(s1.status, 'resumed', 'first step should resume one runnable fibre')
+  assert_eq(#rt.waiting, 1, 'receiver should be parked after bounded resume')
+
+  local s2 = rt:step()
+  assert_eq(s2.status, 'deadlock', 'parked receiver with no sender should report deadlock without blocking')
+
+  rt:spawn(function()
+    Op.perform(ch:put_op('value'))
+  end, 'step-sender')
+
+  local s3 = rt:step({ resume_budget = 1 })
+  assert_eq(s3.status, 'resumed', 'sender step should park sender')
+
+  local s4 = rt:step({ commit_budget = 1 })
+  assert_eq(s4.status, 'committed', 'step should be able to commit one world')
+
+  local s5 = rt:step({ resume_budget = 2 })
+  assert_eq(s5.status, 'resumed', 'resumed committed tasks should run in bounded step')
+  assert_eq(got, 'value', 'step API should preserve committed result')
+end)
+
+test('runtime descriptor handler is per-runtime', function()
+  local events1, events2 = {}, {}
+  local rt1 = Runtime.new({ on_descriptor = function(ev) events1[#events1 + 1] = ev.tag end })
+  local rt2 = Runtime.new({ on_descriptor = function(ev) events2[#events2 + 1] = ev.tag end })
+
+  rt1:spawn(function() Op.perform(Op.emit({ tag = 'rt1.event' })) end, 'descriptor-1')
+  rt2:spawn(function() Op.perform(Op.emit({ tag = 'rt2.event' })) end, 'descriptor-2')
+
+  rt1:run()
+  rt2:run()
+
+  assert_eq(events1[1], 'rt1.event', 'first runtime should receive its own descriptor')
+  assert_eq(events2[1], 'rt2.event', 'second runtime should receive its own descriptor')
 end)
 
 local M = {}

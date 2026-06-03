@@ -47,7 +47,7 @@ The surface idea is deliberately close to CML-style events: build operations, co
 ```lua
 local core = require('etfcore')
 local Op = core.Op
-local Runtime = core.Runtime
+local Runtime = require('runtime').Runtime
 local Channel = require('resources.channel')
 
 local rt = Runtime.new()
@@ -146,6 +146,7 @@ local Cell    = require('resources.cell')
 local Queue   = require('resources.queue')
 local Log     = require('resources.log')
 local Signal  = require('resources.signal')
+local Clock   = require('resources.clock')
 ```
 
 Operation constructors are suffixed by `_op`:
@@ -168,6 +169,9 @@ log:next_offset_op()
 
 signal:wait_op(cursor)
 signal:wake_op()
+
+clock:sleep_until_op(t)
+clock:sleep_op(dt)      -- guard-based relative sleep
 ```
 
 `Channel` is a rendezvous resource.  `Cell`, `Queue`, `Log`, and the commit
@@ -508,9 +512,41 @@ No post-commit callback can affect the world that already committed.
 
 ## Current status
 
-This is an executable sketch, not yet a polished package. It currently includes:
+This is an executable sketch, not yet a polished package. The core is now split on the main embedding boundary:
 
-- `etfcore.lua`: core Op algebra, proof frames/links, proof search, worlds, runtime, judgement context.
+- `etfcore.lua`: Op algebra, post programs, evidence, proof frames/links, expansion, proof search, worlds, commit plans, and the `Engine` facade used by the runtime.
+- `runtime.lua`: coroutine tasks, `RootAttempt` parking, settlement cells, retained external wait publication, commit application, bounded `step`, and standalone `run`.
+
+For standalone use:
+
+```lua
+local core = require('etfcore')
+local Op = core.Op
+local Runtime = require('runtime').Runtime
+
+local rt = Runtime.new()
+rt:spawn(function()
+  Op.perform(Op.always('ok'))
+end)
+rt:run()
+```
+
+For embedded hosts, drive the runtime with bounded steps:
+
+```lua
+local result = rt:step({
+  resume_budget = 10,
+  commit_budget = 1,
+  search_budget = 1000,
+})
+
+if result.status == 'waiting_external' then
+  -- let the host event loop sleep/poll, then call rt:step again
+end
+```
+
+The repository currently includes:
+
 - `resources/channel.lua`: synchronous rendezvous resource.
 - `resources/cell.lua`: scalar transactional state.
 - `resources/queue.lua`: ordered transactional state.
@@ -525,4 +561,4 @@ This is an executable sketch, not yet a polished package. It currently includes:
 - `demos/demo_triple_swap.lua`: triple rendezvous demo.
 - `demos/demo_ledger.lua`: ledger transfer/close demo.
 
-The split is mechanical, but the core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to harden the resource protocol, improve diagnostics, and build richer supervision/cancellation semantics on top of the settlement-aware withdrawal path.
+The split is deliberately conservative: the proof-net engine remains together, while the coroutine/host policy is in `runtime.lua`. The core now has a first-class clean architecture around RootAttempt, EvidenceDelta, WorldEvidence, ResumptionEvidence, and CommitPlan. The next steps are to harden the resource protocol, improve diagnostics, and build richer supervision/cancellation semantics on top of the settlement-aware withdrawal path.
