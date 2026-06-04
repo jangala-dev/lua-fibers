@@ -826,8 +826,11 @@ do
 end
 
 -- from machine/evidence.lua
+-- Evidence is a row: resource fragments and dependencies are the indexed part;
+-- all remaining components are row fields with copy / append / tail laws.
 do
   Evidence = {}
+  local Row = {}
 
   local function new_resources()
     return { order = {}, by_resource = {} }
@@ -841,6 +844,14 @@ do
       out.by_resource[resource] = resources.by_resource[resource]
     end
     return out
+  end
+
+  local function put_resource(resources, resource, fragment)
+    if fragment == nil then return end
+    if resources.by_resource[resource] == nil then
+      resources.order[#resources.order + 1] = resource
+    end
+    resources.by_resource[resource] = fragment
   end
 
   local function copy_occurrence(o)
@@ -858,71 +869,175 @@ do
     return out
   end
 
-  function Evidence.empty()
-    return {
+  local function copy_list(xs) return Util.copy_list(xs or {}) end
+  local function empty_list() return {} end
+  local function append_list(dst, src)
+    Util.append_list(dst, src or {})
+    return dst
+  end
+  local function append_occurrences(dst, src)
+    for i = 1, #(src or {}) do dst[#dst + 1] = copy_occurrence(src[i]) end
+    return dst
+  end
+  local function tail_list(base, full, copy_one)
+    local out = {}
+    for i = #((base) or {}) + 1, #(full or {}) do
+      out[#out + 1] = copy_one and copy_one(full[i]) or full[i]
+    end
+    return out
+  end
+
+  local ROW_FIELDS = {
+    consequences = {
+      empty = Consequence.empty,
+      copy = Consequence.copy,
+      append = Consequence.append,
+      tail = Consequence.subtract,
+    },
+    post_programs = {
+      empty = empty_list,
+      copy = copy_list,
+      append = append_list,
+      tail = function(full, base) return tail_list(base, full) end,
+    },
+    absence_obligations = {
+      empty = empty_list,
+      copy = copy_list,
+      append = append_list,
+      tail = function(full, base) return tail_list(base, full) end,
+    },
+    absence_certificates = {
+      empty = empty_list,
+      copy = copy_list,
+      append = append_list,
+      tail = function(full, base) return tail_list(base, full) end,
+    },
+    obligation_publications = {
+      empty = empty_list,
+      copy = copy_list,
+      append = append_list,
+      tail = function(full, base) return tail_list(base, full) end,
+    },
+    selected_obligations = {
+      empty = empty_list,
+      copy = copy_list,
+      append = append_list,
+      tail = function(full, base) return tail_list(base, full) end,
+    },
+    selected_occurrences = {
+      empty = empty_list,
+      copy = copy_occurrences,
+      append = append_occurrences,
+      tail = function(full, base) return tail_list(base, full, copy_occurrence) end,
+    },
+  }
+
+  local ROW_ORDER = {
+    'consequences',
+    'post_programs',
+    'absence_obligations',
+    'absence_certificates',
+    'obligation_publications',
+    'selected_obligations',
+    'selected_occurrences',
+  }
+
+  function Row.empty()
+    local out = {
       resources = new_resources(),
       dependencies = Dependency.new(),
-      consequences = Consequence.empty(),
-      post_programs = {},
-      absence_obligations = {},
-      absence_certificates = {},
-      obligation_publications = {},
-      selected_obligations = {},
-      selected_occurrences = {},
     }
-  end
-
-  function Evidence.copy(e)
-    return {
-      resources = copy_resources(e and e.resources or nil),
-      dependencies = e and e.dependencies and e.dependencies:copy() or Dependency.new(),
-      consequences = Consequence.copy(e and e.consequences or nil),
-      post_programs = Util.copy_list(e and e.post_programs or {}),
-      absence_obligations = Util.copy_list(e and e.absence_obligations or {}),
-      absence_certificates = Util.copy_list(e and e.absence_certificates or {}),
-      obligation_publications = Util.copy_list(e and e.obligation_publications or {}),
-      selected_obligations = Util.copy_list(e and e.selected_obligations or {}),
-      selected_occurrences = copy_occurrences(e and e.selected_occurrences or {}),
-    }
-  end
-
-  local function put_resource(resources, resource, fragment)
-    if fragment == nil then return end
-    if resources.by_resource[resource] == nil then
-      resources.order[#resources.order + 1] = resource
+    for i = 1, #ROW_ORDER do
+      local name = ROW_ORDER[i]
+      out[name] = ROW_FIELDS[name].empty()
     end
-    resources.by_resource[resource] = fragment
+    return out
   end
+
+  function Row.copy(row)
+    local out = {
+      resources = copy_resources(row and row.resources or nil),
+      dependencies = row and row.dependencies and row.dependencies:copy() or Dependency.new(),
+    }
+    for i = 1, #ROW_ORDER do
+      local name = ROW_ORDER[i]
+      out[name] = ROW_FIELDS[name].copy(row and row[name] or nil)
+    end
+    return out
+  end
+
+  function Row.append_into(out, row)
+    for i = 1, #ROW_ORDER do
+      local name = ROW_ORDER[i]
+      out[name] = ROW_FIELDS[name].append(out[name], row and row[name] or nil)
+    end
+    return out
+  end
+
+  function Row.tail(base, full)
+    local out = Row.empty()
+    for i = 1, #ROW_ORDER do
+      local name = ROW_ORDER[i]
+      out[name] = ROW_FIELDS[name].tail(full and full[name] or nil, base and base[name] or nil)
+    end
+    return out
+  end
+
+  function Row.append_one(row, name, value)
+    local out = Row.copy(row)
+    if name == 'consequences' then
+      out.consequences = Consequence.append_transaction(out.consequences, value)
+      return out
+    end
+    if name == 'selected_occurrences' then value = copy_occurrence(value) end
+    out[name][#out[name] + 1] = value
+    return out
+  end
+
+  local function merge_dependencies(out, incoming)
+    local ok, resource = out.dependencies:merge(incoming and incoming.dependencies)
+    if not ok then return Status.stale({ resource }, 'evidence dependencies disagree') end
+    return Status.found(out)
+  end
+
+  local function merge_resources(out, incoming, view, token, kind)
+    for i = 1, #(incoming.resources and incoming.resources.order or {}) do
+      local resource = incoming.resources.order[i]
+      local existing = out.resources.by_resource[resource]
+      local fragment = incoming.resources.by_resource[resource]
+      if existing == nil then
+        put_resource(out.resources, resource, fragment)
+      elseif existing ~= fragment then
+        if view == nil then
+          return Status.conflict('evidence ' .. tostring(kind) .. ' requires view/token for resource fragment algebra', resource)
+        end
+        local spec
+        if kind == 'extend' then
+          spec = { kind = 'extend', base = existing, fragments = { fragment } }
+        else
+          spec = { kind = 'coexist', fragments = { existing, fragment } }
+        end
+        local merged = Link.merge(view, resource, spec, token)
+        if not Status.is_found(merged) then return merged end
+        put_resource(out.resources, resource, merged.value.fragment)
+      end
+    end
+    return Status.found(out)
+  end
+
+  function Evidence.empty() return Row.empty() end
+  function Evidence.copy(e) return Row.copy(e) end
 
   Evidence.put_resource = put_resource
 
   function Evidence.coexist(a, b, view, token)
     if view ~= nil then Phase.require(token, 'search') end
     local out = Evidence.copy(a)
-    for i = 1, #(b.resources and b.resources.order or {}) do
-      local resource = b.resources.order[i]
-      local existing = out.resources.by_resource[resource]
-      local incoming = b.resources.by_resource[resource]
-      if existing == nil then
-        put_resource(out.resources, resource, incoming)
-      elseif existing ~= incoming then
-        if view == nil then
-          return Status.conflict('evidence coexist requires view/token for resource fragment algebra', resource)
-        end
-        local combined = Link.merge(view, resource, { kind = 'coexist', fragments = { existing, incoming } }, token)
-        if not Status.is_found(combined) then return combined end
-        put_resource(out.resources, resource, combined.value.fragment)
-      end
-    end
-    local ok, resource = out.dependencies:merge(b.dependencies)
-    if not ok then return Status.stale({ resource }, 'evidence dependencies disagree') end
-    out.consequences = Consequence.append(out.consequences, b.consequences)
-    Util.append_list(out.post_programs, b.post_programs)
-    Util.append_list(out.absence_obligations, b.absence_obligations)
-    Util.append_list(out.absence_certificates, b.absence_certificates)
-    Util.append_list(out.obligation_publications, b.obligation_publications)
-    Util.append_list(out.selected_obligations, b.selected_obligations)
-    Util.append_list(out.selected_occurrences, b.selected_occurrences)
+    local merged = merge_resources(out, b or Evidence.empty(), view, token, 'coexist')
+    if not Status.is_found(merged) then return merged end
+    local deps = merge_dependencies(out, b or Evidence.empty())
+    if not Status.is_found(deps) then return deps end
+    Row.append_into(out, b or Evidence.empty())
     return Status.found(out)
   end
 
@@ -931,33 +1046,17 @@ do
   function Evidence.extend(prefix, delta, view, token)
     Phase.require(token, 'search')
     local out = Evidence.copy(prefix)
-    for i = 1, #(delta.resources and delta.resources.order or {}) do
-      local resource = delta.resources.order[i]
-      local existing = out.resources.by_resource[resource]
-      local incoming = delta.resources.by_resource[resource]
-      if existing == nil then
-        put_resource(out.resources, resource, incoming)
-      elseif incoming ~= nil then
-        local extended = Link.merge(view, resource, { kind = 'extend', base = existing, fragments = { incoming } }, token)
-        if not Status.is_found(extended) then return extended end
-        put_resource(out.resources, resource, extended.value.fragment)
-      end
-    end
-    local ok, resource = out.dependencies:merge(delta.dependencies)
-    if not ok then return Status.stale({ resource }, 'evidence dependencies disagree') end
-    out.consequences = Consequence.append(out.consequences, delta.consequences)
-    Util.append_list(out.post_programs, delta.post_programs)
-    Util.append_list(out.absence_obligations, delta.absence_obligations)
-    Util.append_list(out.absence_certificates, delta.absence_certificates)
-    Util.append_list(out.obligation_publications, delta.obligation_publications)
-    Util.append_list(out.selected_obligations, delta.selected_obligations)
-    Util.append_list(out.selected_occurrences, delta.selected_occurrences)
+    local merged = merge_resources(out, delta or Evidence.empty(), view, token, 'extend')
+    if not Status.is_found(merged) then return merged end
+    local deps = merge_dependencies(out, delta or Evidence.empty())
+    if not Status.is_found(deps) then return deps end
+    Row.append_into(out, delta or Evidence.empty())
     return Status.found(out)
   end
 
   function Evidence.project(base, full, view, token)
     Phase.require(token, 'search')
-    local out = Evidence.empty()
+    local out = Row.tail(base or Evidence.empty(), full or Evidence.empty())
     for i = 1, #(full.resources and full.resources.order or {}) do
       local resource = full.resources.order[i]
       local base_fragment = base.resources and base.resources.by_resource[resource]
@@ -973,54 +1072,31 @@ do
     -- Dependencies are certificates for the snapshot.  A lane delta retains the
     -- full dependency set used to construct it; merge is idempotent by version.
     out.dependencies = full.dependencies:copy()
-
-    -- Consequences/post programs/obligations/selected occurrences in a product
-    -- lane are lane-local: the inherited base is not duplicated.
-    out.consequences = Consequence.subtract(full.consequences, base.consequences)
-    for i = #((base.post_programs) or {}) + 1, #(full.post_programs or {}) do out.post_programs[#out.post_programs + 1] = full.post_programs[i] end
-    for i = #((base.absence_obligations) or {}) + 1, #(full.absence_obligations or {}) do out.absence_obligations[#out.absence_obligations + 1] = full.absence_obligations[i] end
-    for i = #((base.absence_certificates) or {}) + 1, #(full.absence_certificates or {}) do out.absence_certificates[#out.absence_certificates + 1] = full.absence_certificates[i] end
-    for i = #((base.obligation_publications) or {}) + 1, #(full.obligation_publications or {}) do out.obligation_publications[#out.obligation_publications + 1] = full.obligation_publications[i] end
-    for i = #((base.selected_obligations) or {}) + 1, #(full.selected_obligations or {}) do out.selected_obligations[#out.selected_obligations + 1] = full.selected_obligations[i] end
-    for i = #((base.selected_occurrences) or {}) + 1, #(full.selected_occurrences or {}) do out.selected_occurrences[#out.selected_occurrences + 1] = copy_occurrence(full.selected_occurrences[i]) end
     return Status.found(out)
   end
 
   function Evidence.with_transaction_consequence(e, c)
-    local out = Evidence.copy(e)
-    out.consequences = Consequence.append_transaction(out.consequences, c)
-    return out
+    return Row.append_one(e, 'consequences', c)
   end
 
   function Evidence.with_post_program(e, k)
-    local out = Evidence.copy(e)
-    out.post_programs[#out.post_programs + 1] = k
-    return out
+    return Row.append_one(e, 'post_programs', k)
   end
 
   function Evidence.with_absence_obligation(e, obligation)
-    local out = Evidence.copy(e)
-    out.absence_obligations[#out.absence_obligations + 1] = obligation
-    return out
+    return Row.append_one(e, 'absence_obligations', obligation)
   end
 
   function Evidence.with_absence_certificate(e, certificate)
-    local out = Evidence.copy(e)
-    out.absence_certificates[#out.absence_certificates + 1] = certificate
-    return out
+    return Row.append_one(e, 'absence_certificates', certificate)
   end
 
-
   function Evidence.with_obligation_publication(e, ref)
-    local out = Evidence.copy(e)
-    out.obligation_publications[#out.obligation_publications + 1] = ref
-    return out
+    return Row.append_one(e, 'obligation_publications', ref)
   end
 
   function Evidence.with_selected_obligation(e, ref)
-    local out = Evidence.copy(e)
-    out.selected_obligations[#out.selected_obligations + 1] = ref
-    return out
+    return Row.append_one(e, 'selected_obligations', ref)
   end
 
   function Evidence.has_nack_observation(e, ref)
@@ -1034,11 +1110,10 @@ do
   end
 
   function Evidence.with_selected_occurrence(e, occurrence)
-    local out = Evidence.copy(e)
-    out.selected_occurrences[#out.selected_occurrences + 1] = copy_occurrence(occurrence)
-    return out
+    return Row.append_one(e, 'selected_occurrences', occurrence)
   end
 
+  Evidence.Row = Row
   Evidence.copy_resources = copy_resources
   Evidence.new_resources = new_resources
   Evidence.copy_occurrence = copy_occurrence
