@@ -64,6 +64,8 @@ local DEFAULT_SHUTDOWN_GRACE = 1.0
 ---@field _code integer|nil
 ---@field _signal integer|nil
 ---@field _err string|nil
+---@field _finalizer_detach fun():boolean|nil
+---@field _cleaned boolean
 local Command = {}
 Command.__index = Command
 
@@ -160,6 +162,49 @@ function Command:_record_exit(code, signal, err)
 	self._code, self._signal = code, signal
 end
 
+--- Detach the scope finaliser once command-owned resources have been retired.
+---
+--- Long-lived service scopes may create many short-lived Command objects.
+--- The finaliser closure captures the Command, so leaving it installed until
+--- scope shutdown retains every completed command. Terminal commands therefore
+--- detach their finaliser once their status has been recorded.
+function Command:_detach_finalizer()
+	local detach = self._finalizer_detach
+	if detach then
+		self._finalizer_detach = nil
+		pcall(detach)
+	end
+end
+
+--- Release command-owned resources after the backend has reached a terminal
+--- state. This path is deliberately immediate and non-yielding so it is safe
+--- from Op wrap callbacks and from scope finalisers.
+---
+--- The terminal status/code/signal/error fields are left intact. run_op() and
+--- shutdown_op() check _done before touching the backend, so repeated waits
+--- remain idempotent after cleanup.
+function Command:_cleanup_terminal()
+	if self._cleaned then return end
+	if not self._done then return end
+
+	self:_detach_finalizer()
+
+	for _, name in ipairs { 'stdin', 'stdout', 'stderr' } do
+		local cfg = self['_' .. name]
+		if cfg and cfg.stream and cfg.owned then
+			pcall(function () cfg.stream:terminate('exec_terminal') end)
+			cfg.stream = nil
+		end
+	end
+
+	if self._proc and self._proc.backend then
+		pcall(function () self._proc.backend:close() end)
+		self._proc.backend = nil
+	end
+	self._proc = nil
+	self._cleaned = true
+end
+
 --- Ensure the process has been started and a ProcHandle exists.
 ---@return boolean ok
 ---@return ProcHandle|nil proc
@@ -194,6 +239,7 @@ function Command:_ensure_started()
 		self._status = 'failed'
 		self._done   = true
 		self._err    = start_err
+		self:_cleanup_terminal()
 		return false, nil, start_err
 	end
 
@@ -389,29 +435,37 @@ end
 
 function Command:run_op()
 	return op.guard(function ()
-		local ok, proc, err = self:_ensure_started()
-		if not ok or not proc then
-			return op.always('failed', nil, nil, err)
-		end
+		-- Repeated waits must remain idempotent even after terminal cleanup has
+		-- detached the finaliser and released the backend handle.
 		if self._done then
 			return op.always(self._status, self._code, self._signal, self._err)
 		end
 
+		local ok, proc, err = self:_ensure_started()
+		if not ok or not proc then
+			return op.always('failed', nil, nil, err)
+		end
+
 		return proc.backend:wait_op():wrap(function (...)
 			self:_record_exit(...)
-			return self._status, self._code, self._signal, self._err
+			local status, code, signal, wait_err = self._status, self._code, self._signal, self._err
+			self:_cleanup_terminal()
+			return status, code, signal, wait_err
 		end)
 	end)
 end
 
 function Command:shutdown_op(grace)
 	return op.guard(function ()
+		-- Repeated shutdown/wait calls after terminal cleanup should report the
+		-- cached terminal status without requiring a backend handle.
+		if self._done then
+			return op.always(self._status, self._code, self._signal, self._err)
+		end
+
 		local ok, proc, err = self:_ensure_started()
 		if not (ok and proc) then
 			return op.always('failed', nil, nil, err)
-		end
-		if self._done then
-			return op.always(self._status, self._code, self._signal, self._err)
 		end
 
 		local g = grace or self._shutdown_grace or DEFAULT_SHUTDOWN_GRACE
@@ -457,8 +511,10 @@ function Command:shutdown_op(grace)
 			-- otherwise falling back to raw waiting.
 			local code2, signal2, err2 = perform_with_scope_or_raw(proc.backend:wait_op())
 			self:_record_exit(code2, signal2, err2)
+			local status, code, signal = self._status, self._code, self._signal
 			local err_final = kill_err or err2
-			return self._status, self._code, self._signal, err_final
+			self:_cleanup_terminal()
+			return status, code, signal, err_final
 		end)
 	end)
 end
@@ -547,6 +603,7 @@ function Command:_shutdown_uninterruptible(grace)
 		-- Ensure the process is waited for (uninterruptible).
 		local code2, signal2, err2 = op.perform_raw(proc.backend:wait_op())
 		self:_record_exit(code2, signal2, err2)
+		self:_cleanup_terminal()
 
 		-- Preserve any earlier status data if present.
 		-- (status/code/signal/e are unused here by design.)
@@ -563,6 +620,8 @@ end
 ----------------------------------------------------------------------
 
 function Command:_on_scope_exit()
+	if self._cleaned then return end
+
 	if self._started and not self._done then
 		-- Non-interruptible best-effort shutdown.
 		self:_shutdown_uninterruptible(self._shutdown_grace)
@@ -586,6 +645,8 @@ function Command:_on_scope_exit()
 		end
 		self._proc.backend = nil
 	end
+	self._proc = nil
+	self._cleaned = true
 end
 
 ----------------------------------------------------------------------
@@ -624,9 +685,11 @@ local function command_from_spec(spec)
 		_code           = nil,
 		_signal         = nil,
 		_err            = nil,
+		_finalizer_detach = nil,
+		_cleaned        = false,
 	}, Command)
 
-	scope:finally(function ()
+	cmd._finalizer_detach = scope:finally(function ()
 		cmd:_on_scope_exit()
 	end)
 
