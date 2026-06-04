@@ -286,16 +286,28 @@ do
     return Status.found(prepared)
   end
 
+  local function commit_success_or_fatal(where, r)
+    if r == nil then return Status.found(true) end
+    if type(r) == 'table' and type(r.tag) == 'string' then
+      if Status.is_found(r) and (r.value == nil or r.value == true) then return Status.found(true) end
+      if Status.is_found(r) then return Status.fatal(where .. ' returned found(false/non-true)', r) end
+      return Status.fatal(where .. ' returned non-success status', r)
+    end
+    if r == true then return Status.found(true) end
+    return Status.fatal(where .. ' returned invalid non-success value', r)
+  end
+
   function Link.commit(prepared, token)
     Phase.require(token, 'commit')
     if type(prepared) ~= 'table' then return link_error('commit', 'prepared commit must be table') end
     if type(prepared.apply) == 'function' then
       local r = prepared.apply(token)
-      return r or Status.found(true)
+      return commit_success_or_fatal('Protocol.Link.commit: prepared apply', r)
     end
     local resource = prepared.resource
     if type(resource) == 'table' and type(resource.commit) == 'function' then
-      return call(resource, 'commit', prepared, token)
+      local r = call(resource, 'commit', prepared, token)
+      return commit_success_or_fatal('Protocol.Link.commit: resource commit', r)
     end
     return link_error('commit', 'prepared commit missing apply(commit_token)')
   end

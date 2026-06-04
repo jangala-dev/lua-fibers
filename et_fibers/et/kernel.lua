@@ -4,7 +4,7 @@
 -- Keep this file as bottom vocabulary only. Attempts, proof nets, selected worlds,
 -- certificates, resources, and scheduling live in higher layers.
 
-local Status, Util, Phase
+local Status, Util, Phase, Origin, Dependency
 
 -- from machine/status.lua
 do

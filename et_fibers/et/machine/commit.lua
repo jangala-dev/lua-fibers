@@ -1,6 +1,6 @@
 -- Machine commit layer: certification, resource preparation, consequences, and commit application.
 
-local Kernel = require('et.machine.kernel')
+local Kernel = require('et.kernel')
 local Protocol = require('et.protocol')
 local FrontierLayer = require('et.machine.frontier')
 local World = require('et.machine.world')

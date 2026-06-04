@@ -3,7 +3,7 @@
 -- evidence rows, frames, and frontier freshness.
 
 local Op = require('et.op')
-local Kernel = require('et.machine.kernel')
+local Kernel = require('et.kernel')
 local Protocol = require('et.protocol')
 
 local Status = Kernel.Status

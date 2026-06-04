@@ -1,6 +1,6 @@
 -- Machine proof-net layer: search for closed, cut-compatible proofs.
 
-local Kernel = require('et.machine.kernel')
+local Kernel = require('et.kernel')
 local Protocol = require('et.protocol')
 local FrontierLayer = require('et.machine.frontier')
 

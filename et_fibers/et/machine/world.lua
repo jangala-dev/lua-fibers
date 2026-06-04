@@ -3,7 +3,7 @@
 -- A CandidateWorld gives a closed proof-net selection semantic shape: selected
 -- roots, matches, selected evidence, and event-structure-style configuration.
 
-local Kernel = require('et.machine.kernel')
+local Kernel = require('et.kernel')
 local Protocol = require('et.protocol')
 local FrontierLayer = require('et.machine.frontier')
 

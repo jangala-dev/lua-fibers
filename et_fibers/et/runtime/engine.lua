@@ -1,6 +1,6 @@
 local Machine = require('et.machine')
 
-local Kernel = Machine.Kernel
+local Kernel = require('et.kernel')
 local FrontierLayer = Machine.Frontier
 
 local Status = Kernel.Status

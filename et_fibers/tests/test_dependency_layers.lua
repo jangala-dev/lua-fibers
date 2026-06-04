@@ -43,9 +43,7 @@ return function()
 
   local Machine = require('et.machine')
   local expected_machine_exports = {
-    Kernel = true,
     Frontier = true,
-    Attempt = true,
     ProofNet = true,
     World = true,
     Commit = true,
@@ -58,9 +56,8 @@ return function()
   end
   assert(Machine.Result == nil, 'Machine.Result must not be a top-level machine export')
   assert(Machine.Protocol == nil, 'Machine.Protocol must not be exported')
-  assert(Machine.Kernel.Origin == nil, 'Origin must live in Frontier, not Kernel')
-  assert(Machine.Kernel.Dependency == nil, 'Dependency must live in Frontier, not Kernel')
-  assert(Machine.Kernel.Consequence == nil, 'Consequence must live in Frontier/Commit, not Kernel')
+  assert(Machine.Kernel == nil, 'Kernel must be imported as et.kernel, not via machine facade')
+  assert(Machine.Attempt == nil, 'Attempt compatibility alias must not be exported; use Frontier')
   assert(Machine.Frontier.Origin ~= nil and Machine.Frontier.Dependency ~= nil, 'Frontier must own origins and dependencies')
   assert(Machine.Frontier.Consequence ~= nil, 'Frontier must own selected consequence evidence')
 
@@ -80,23 +77,17 @@ return function()
   end
 
   local machine_files = {
-    ['et/machine/kernel.lua'] = {
-      may_require = { ['et.kernel'] = true },
-    },
     ['et/machine/frontier.lua'] = {
-      may_require = { ['et.op'] = true, ['et.machine.kernel'] = true, ['et.protocol'] = true },
+      may_require = { ['et.kernel'] = true, ['et.op'] = true, ['et.protocol'] = true },
     },
     ['et/machine/proofnet.lua'] = {
-      may_require = { ['et.machine.kernel'] = true, ['et.protocol'] = true, ['et.machine.frontier'] = true },
+      may_require = { ['et.kernel'] = true, ['et.protocol'] = true, ['et.machine.frontier'] = true },
     },
     ['et/machine/world.lua'] = {
-      may_require = { ['et.machine.kernel'] = true, ['et.protocol'] = true, ['et.machine.frontier'] = true },
+      may_require = { ['et.kernel'] = true, ['et.protocol'] = true, ['et.machine.frontier'] = true },
     },
     ['et/machine/commit.lua'] = {
-      may_require = { ['et.machine.kernel'] = true, ['et.protocol'] = true, ['et.machine.frontier'] = true, ['et.machine.world'] = true, ['et.machine.proofnet'] = true },
-    },
-    ['et/machine/attempt.lua'] = {
-      may_require = { ['et.machine.frontier'] = true },
+      may_require = { ['et.kernel'] = true, ['et.protocol'] = true, ['et.machine.frontier'] = true, ['et.machine.world'] = true, ['et.machine.proofnet'] = true },
     },
   }
 
@@ -109,20 +100,16 @@ return function()
   end
 
   for path in pairs(machine_files) do
-    if path ~= 'et/machine/kernel.lua' and path ~= 'et/machine/attempt.lua' then
-      local src = read_file(path)
-      assert(src:find('Protocol%.Link') or src:find('local Link = Protocol%.Link') or src:find('Protocol = require'), path .. ' should speak through Protocol when it talks to resources')
-    end
+    local src = read_file(path)
+    assert(src:find('Protocol%.Link') or src:find('local Link = Protocol%.Link') or src:find('Protocol = require'), path .. ' should speak through Protocol when it talks to resources')
   end
 
   -- The machine package has a small number of model-bearing organs.
   local expected_organs = {
-    ['kernel.lua'] = true,
     ['frontier.lua'] = true,
     ['proofnet.lua'] = true,
     ['world.lua'] = true,
     ['commit.lua'] = true,
-    ['attempt.lua'] = true, -- compatibility alias
   }
   local p = io.popen('find et/machine -maxdepth 1 -type f -name "*.lua"')
   for line in p:lines() do
@@ -138,7 +125,6 @@ return function()
   -- The top-level machine facade is the production entry to machine organs.
   local facade_src = read_file('et/machine.lua')
   local allowed_facade = {
-    ['et.machine.kernel'] = true,
     ['et.machine.frontier'] = true,
     ['et.machine.proofnet'] = true,
     ['et.machine.world'] = true,
@@ -211,35 +197,48 @@ return function()
     end
   end
 
-  -- Tests are allowed, and expected, to reach into machine internals directly.
+  -- Tests should now use source/model naming rather than historical milestone naming.
   local test_files = {
-    'tests/test_algebra_principled.lua',
-    'tests/test_expansion_memo.lua',
-    'tests/test_frontier.lua',
-    'tests/test_ms4.lua',
-    'tests/test_ms5.lua',
-    'tests/test_ms6.lua',
-    'tests/test_ms65_clean.lua',
-    'tests/test_ms7.lua',
-    'tests/test_ms8.lua',
-    'tests/test_ms9.lua',
-    'tests/test_regression_algebra.lua',
-    'tests/test_link_custom_resources.lua',
+    'tests/test_kernel.lua',
+    'tests/test_op.lua',
+    'tests/test_protocol.lua',
+    'tests/test_protocol_values.lua',
+    'tests/test_protocol_effect.lua',
     'tests/test_protocol_link.lua',
+    'tests/test_machine.lua',
+    'tests/test_machine_frontier.lua',
+    'tests/test_machine_proofnet.lua',
+    'tests/test_machine_world.lua',
+    'tests/test_machine_commit.lua',
+    'tests/test_runtime.lua',
+    'tests/test_runtime_engine.lua',
+    'tests/test_resources_cell.lua',
+    'tests/test_resources_channel.lua',
+    'tests/test_resources_queue.lua',
+    'tests/test_algebra_canonical_fiendish.lua',
+    'tests/test_dependency_layers.lua',
   }
 
-  local saw_internal_test_import = false
+  local saw_public_machine_surface = false
+  local saw_internal_machine_model = false
   for _, file in ipairs(test_files) do
     assert(exists(file), 'missing test source file: ' .. file)
+    assert(not file:match('test_release_step'), 'test file names must not be historical milestone based: ' .. file)
     local src = read_file(file)
+    if file ~= 'tests/test_dependency_layers.lua' then
+      assert(not src:find('milestone'), file .. ' must not contain historical release-labelled output')
+      assert(not src:find('ms%d'), file .. ' must not contain historical release labels')
+    end
     for _, dep in ipairs(requires(src)) do
-      assert(dep ~= 'et.machine', file .. ' should import machine organs directly, not et.machine facade')
-      assert(dep ~= 'et.machine.result', file .. ' should use et.protocol for result language')
+      assert(dep ~= 'et.protocol_internal', file .. ' must not import protocol_internal')
+      assert(dep ~= 'et.machine.result', file .. ' should use et.kernel for result language')
       assert(dep ~= 'et.machine.protocol', file .. ' should use et.protocol for participant contracts')
-      if dep:match('^et%.machine%.') then saw_internal_test_import = true end
+      if dep == 'et.machine' then saw_public_machine_surface = true end
+      if dep:match('^et%.machine%.') then saw_internal_machine_model = true end
     end
   end
-  assert(saw_internal_test_import, 'tests should exercise machine internals directly')
+  assert(saw_public_machine_surface, 'tests should use the public machine facade')
+  assert(saw_internal_machine_model, 'model tests may also exercise source files directly')
 
   -- Op and Protocol must stay independent of machine/runtime.
   local Op = require('et.op')
@@ -259,6 +258,8 @@ return function()
     'et/resource.lua','et/consequence.lua','et/view.lua','et/evidence.lua','et/frontier.lua',
     'et/frame.lua','et/proofsearch.lua','et/certificate.lua','et/obligation.lua',
 
+    'et/protocol_internal.lua',
+    'et/machine/kernel.lua','et/machine/attempt.lua',
     'et/machine/result.lua','et/machine/protocol.lua',
     'et/machine/status.lua','et/machine/util.lua','et/machine/phase.lua','et/machine/origin.lua',
     'et/machine/dependency.lua','et/machine/consequence.lua','et/machine/resource.lua',
