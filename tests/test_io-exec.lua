@@ -13,6 +13,7 @@ local fibers = require 'fibers'
 local exec   = require 'fibers.io.exec'
 local op     = require 'fibers.op'
 local sleep  = require 'fibers.sleep'
+local scope  = require 'fibers.scope'
 local poller = require 'fibers.io.poller'
 
 ----------------------------------------------------------------------
@@ -257,6 +258,91 @@ local function wait_op_with_timeout_pattern()
 	assert(werr2 == nil, 'unexpected error on second wait: ' .. tostring(werr2))
 end
 
+-- Regression: completed commands must detach their scope finalisers.
+--
+-- Historically exec.command registered a scope finaliser that captured the
+-- Command object, but successful completion left that finaliser attached until
+-- the surrounding scope exited.  Long-lived service scopes therefore retained
+-- every completed command.  The test wraps one child scope's finally method so
+-- it can count finalisers registered by exec.command without adding any test
+-- hooks to the library.
+local function completed_commands_detach_scope_finalizers()
+	print('running: completed_commands_detach_scope_finalizers')
+
+	local N = 20
+	local attached = 0
+	local detached = 0
+	local finalisers_ran = 0
+
+	local st, _, primary = scope.run(function (s)
+		local original_finally = s.finally
+
+		s.finally = function (self, f)
+			attached = attached + 1
+			local detach = original_finally(self, function (...)
+				finalisers_ran = finalisers_ran + 1
+				return f(...)
+			end)
+
+			local detached_once = false
+			return function ()
+				if not detached_once then
+					detached_once = true
+					detached = detached + 1
+				end
+				return detach()
+			end
+		end
+
+		for i = 1, N do
+			local expected = i % 13
+			local proc = exec.command {
+				'sh', '-c', ('exit %d'):format(expected),
+				stdin  = 'null',
+				stdout = 'null',
+				stderr = 'null',
+			}
+			assert(proc, ('command creation failed at iteration %d'):format(i))
+
+			local status, code, sig, err = fibers.perform(proc:run_op())
+			assert(err == nil,
+				('wait error at iteration %d: %s'):format(i, tostring(err)))
+			assert(status == 'exited',
+				("status not 'exited' at iteration %d: %s"):format(i, tostring(status)))
+			assert(code == expected,
+				('exit code mismatch at iteration %d: got %s, expected %d')
+				:format(i, tostring(code), expected))
+			assert(sig == nil,
+				('signal not nil at iteration %d: %s'):format(i, tostring(sig)))
+
+			-- The terminal result must remain cached after cleanup.  This also
+			-- guards against regressions where cleanup releases the backend and a
+			-- later wait reports a synthetic failure.
+			local status2, code2, sig2, err2 = fibers.perform(proc:run_op())
+			assert(status2 == status,
+				('status changed between waits at iteration %d'):format(i))
+			assert(code2 == code,
+				('code changed between waits at iteration %d'):format(i))
+			assert(sig2 == sig,
+				('signal changed between waits at iteration %d'):format(i))
+			assert(err2 == nil,
+				('unexpected error on second wait at iteration %d: %s')
+				:format(i, tostring(err2)))
+		end
+	end)
+
+	assert(st == 'ok', 'scope.run failed: ' .. tostring(primary))
+	assert(attached == N,
+		('expected %d command finalisers to be attached, got %d')
+		:format(N, attached))
+	assert(detached == N,
+		('completed commands retained scope finalisers: attached=%d detached=%d')
+		:format(attached, detached))
+	assert(finalisers_ran == 0,
+		('completed command finalisers ran at scope exit instead of being detached: %d')
+		:format(finalisers_ran))
+end
+
 -- 6. shutdown: terminate a long-running process (TERM then KILL if needed).
 local function shutdown_long_running_process()
 	print('running: shutdown_long_running_process')
@@ -416,6 +502,7 @@ local function main()
 	stderr_pipe_vs_stderr_is_stdout()
 	output_op_normal_completion()
 	wait_op_with_timeout_pattern()
+	completed_commands_detach_scope_finalizers()
 	shutdown_long_running_process()
 	spawn_op_basic_usage()
 	many_short_lived_processes_stress()
