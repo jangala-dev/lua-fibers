@@ -14,7 +14,9 @@ prepare(resource, fragment)
 commit(resource, prepared)
 ```
 
-A claim is data:
+A claim is data. `Op.claim(resource, kind, request)` is the single primitive
+operation form; `Op.access`, `Op.await`, and `Op.open_claim` are aliases.
+At the Link boundary the machine sends:
 
 ```lua
 { kind = 'access',     request = { tag = 'pop' } }

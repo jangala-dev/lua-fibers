@@ -16,6 +16,17 @@ commit
 
 ## Claims
 
+The single primitive operation form is a claim:
+
+```lua
+Op.claim(resource, 'access',     { tag = 'set', value = 1 })
+Op.claim(resource, 'await',      { tag = 'nonempty' })
+Op.claim(resource, 'open_claim', { tag = 'send', values = Values.pack('x') })
+```
+
+`Op.access`, `Op.await`, and `Op.open_claim` are aliases that construct the same
+claim syntax. At the `Protocol.Link` boundary, claims are data:
+
 ```lua
 { kind = 'access',     request = { tag = 'set', value = 1 } }
 { kind = 'await',      request = { tag = 'nonempty' } }
@@ -59,3 +70,19 @@ Machine judges worlds through Link.
 Runtime schedules and watches external readiness through the host.
 Resources own their fragment algebra.
 ```
+
+
+## Linear obligations
+
+`with_nack` is not a separate machine model. It is an instance of the general
+linear obligation combinator:
+
+```lua
+Op.with_obligation(kind, payload, function(ref)
+  return protected_tx
+end)
+```
+
+The commit certificate accounts for every published obligation exactly once as
+selected, lost, withdrawn, or discharged. `Op.with_nack(f)` constructs a
+`settlement` obligation and passes `f` an `Op.nack(ref)` observation operation.

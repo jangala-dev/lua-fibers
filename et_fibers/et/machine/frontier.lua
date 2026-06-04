@@ -1383,84 +1383,74 @@ do
     return frames_status({})
   end
 
-  local function expand_access(op, view, evidence, token, origin)
-    local e = Evidence.copy(evidence)
-    local current_fragment = e.resources.by_resource[op.resource]
-    local value_status = Link.claim(view, op.resource, current_fragment, { kind = 'access', request = op.request, origin = origin }, token)
-    if not Status.is_found(value_status) then return value_status end
-    local claim_result = value_status.value
-    if claim_result.fragment ~= nil then
-      Evidence.put_resource(e.resources, op.resource, claim_result.fragment)
+  local function merge_claim_dependencies(evidence, dependencies, label)
+    if dependencies then
+      local ok, resource = evidence.dependencies:merge(dependencies)
+      if not ok then return nil, Status.stale({ resource }, label .. ' dependencies disagree') end
     end
-    if claim_result.dependencies then
-      local ok, resource = e.dependencies:merge(claim_result.dependencies)
-      if not ok then return Status.stale({ resource }, 'access dependencies disagree') end
-    end
-    e = Evidence.with_selected_occurrence(e, {
-      kind = 'access',
-      origin = origin,
-      origin_id = Origin.key(origin),
-      resource = op.resource,
-      request = op.request,
-      lane_path = origin.lane_path,
-      decision_prefix = origin.decision_prefix,
-    })
-    return frames_status({ Frame.done(claim_result.values, e, origin) })
+    return evidence
   end
 
-  local function expand_open_claim(op, view, evidence, token, origin)
-    local open_claim_status = Link.claim(view, op.resource, nil, { kind = 'open_claim', request = op.request, origin = origin }, token)
-    if not Status.is_found(open_claim_status) then return open_claim_status end
-    local open_claim_result = open_claim_status.value
-    local open_claim = open_claim_result.open_claim
-    local e = Evidence.copy(evidence)
-    if open_claim.dependencies then
-      local ok, resource = e.dependencies:merge(open_claim.dependencies)
-      if not ok then return Status.stale({ resource }, 'open claim dependencies disagree') end
-    end
-    e = Evidence.with_selected_occurrence(e, {
-      kind = 'open_claim',
-      origin = origin,
-      origin_id = Origin.key(origin),
-      resource = op.resource,
-      request = op.request,
-      role = open_claim.role,
-      open_claim_id = open_claim.id,
-      lane_path = origin.lane_path,
-      decision_prefix = origin.decision_prefix,
-    })
-    return frames_status({ Frame.open_claim(open_claim, e, origin) })
+  local function claim_kind(op)
+    return op.claim_kind or op.kind or op.tag
   end
 
-  local function expand_await(op, view, evidence, token, origin)
-    local awaited = Link.claim(view, op.resource, nil, { kind = 'await', request = op.request, origin = origin }, token)
+  local function expand_claim(op, view, evidence, token, origin)
+    local kind = claim_kind(op)
+    if kind ~= 'access' and kind ~= 'open_claim' and kind ~= 'await' then
+      return Status.fatal('unsupported claim kind: ' .. tostring(kind))
+    end
+
     local e = Evidence.copy(evidence)
-    if Status.is_found(awaited) then
-      local result = awaited.value
-      if result.dependencies then
-        local ok, resource = e.dependencies:merge(result.dependencies)
-        if not ok then return Status.stale({ resource }, 'external await dependencies disagree') end
+    local current_fragment = nil
+    if kind == 'access' then current_fragment = e.resources.by_resource[op.resource] end
+
+    local claim_status = Link.claim(view, op.resource, current_fragment, { kind = kind, request = op.request, origin = origin }, token)
+    if Status.is_found(claim_status) then
+      local result = claim_status.value
+      local dependencies = result.dependencies or (result.open_claim and result.open_claim.dependencies)
+      local merged, stale = merge_claim_dependencies(e, dependencies, kind)
+      if not merged then return stale end
+      e = merged
+
+      if kind == 'access' then
+        if result.fragment ~= nil then Evidence.put_resource(e.resources, op.resource, result.fragment) end
+        e = Evidence.with_selected_occurrence(e, {
+          kind = 'access', origin = origin, origin_id = Origin.key(origin),
+          resource = op.resource, request = op.request,
+          lane_path = origin.lane_path, decision_prefix = origin.decision_prefix,
+        })
+        return frames_status({ Frame.done(result.values, e, origin) })
+      elseif kind == 'open_claim' then
+        local open_claim = result.open_claim
+        e = Evidence.with_selected_occurrence(e, {
+          kind = 'open_claim', origin = origin, origin_id = Origin.key(origin),
+          resource = op.resource, request = op.request, role = open_claim.role,
+          open_claim_id = open_claim.id,
+          lane_path = origin.lane_path, decision_prefix = origin.decision_prefix,
+        })
+        return frames_status({ Frame.open_claim(open_claim, e, origin) })
+      else -- await, ready now
+        e = Evidence.with_selected_occurrence(e, {
+          kind = 'await', origin = origin, origin_id = Origin.key(origin),
+          resource = op.resource, request = op.request,
+          lane_path = origin.lane_path, decision_prefix = origin.decision_prefix,
+        })
+        return frames_status({ Frame.done(result.values or Util.pack(result.value), e, origin) })
       end
-      e = Evidence.with_selected_occurrence(e, {
-        kind = 'await', origin = origin, origin_id = Origin.key(origin),
-        resource = op.resource, request = op.request,
-        lane_path = origin.lane_path, decision_prefix = origin.decision_prefix,
-      })
-      return frames_status({ Frame.done(result.values or Util.pack(result.value), e, origin) })
-    elseif awaited.tag == 'pending' then
-      local wait = awaited.detail or {}
-      if wait.dependencies then
-        local ok, resource = e.dependencies:merge(wait.dependencies)
-        if not ok then return Status.stale({ resource }, 'external wait dependencies disagree') end
-      end
-      e = Evidence.with_selected_occurrence(e, {
+    elseif kind == 'await' and claim_status.tag == 'pending' then
+      local wait = claim_status.detail or {}
+      local merged, stale = merge_claim_dependencies(e, wait.dependencies, 'external wait')
+      if not merged then return stale end
+      e = Evidence.with_selected_occurrence(merged, {
         kind = 'await_pending', origin = origin, origin_id = Origin.key(origin),
         resource = op.resource, request = op.request,
         lane_path = origin.lane_path, decision_prefix = origin.decision_prefix,
       })
       return frames_status({ Frame.pending(wait, e, origin) })
     end
-    return awaited
+
+    return claim_status
   end
 
   local function expand_emit(op, _view, evidence, _token, origin)
@@ -1645,9 +1635,11 @@ do
   end
 
 
-  local function expand_nack(op, _view, evidence, _token, origin, attempt)
+  local function expand_obligation_observe(op, _view, evidence, _token, origin, attempt)
     local ref = op.obligation
-    if not Obligation.is(ref) then return Status.fatal('nack has invalid obligation ref') end
+    local mode = op.mode or 'nack'
+    if not Obligation.is(ref) then return Status.fatal(mode .. ' has invalid obligation ref') end
+    if mode ~= 'nack' then return Status.fatal('unsupported obligation observation mode: ' .. tostring(mode)) end
     local store = ref.store or (attempt and attempt.obligation_store) or Obligation.default_store()
     if not store:nack_enabled(ref) then return frames_status({}) end
     local e = Evidence.with_selected_occurrence(evidence, {
@@ -1674,21 +1666,24 @@ do
     return expand_op(forced.value, view, evidence, token, Origin.child(origin, 'guard:body'), attempt)
   end
 
-  local function expand_with_nack(op, view, evidence, token, origin, attempt)
-    if type(attempt) ~= 'table' then return Status.fatal('with_nack expansion requires RootAttempt') end
-    local ref_origin = Origin.child(origin, 'with_nack')
-    local forced = ExpansionMemo.force(attempt, 'with_nack', ref_origin, function()
+  local function expand_with_obligation(op, view, evidence, token, origin, attempt)
+    if type(attempt) ~= 'table' then return Status.fatal('with_obligation expansion requires RootAttempt') end
+    local label = op.origin_label or ('with_obligation:' .. tostring(op.kind or 'generic'))
+    local memo_label = op.memo_label or label
+    local body_label = op.body_label or (label .. ':body')
+    local callback_error = op.callback_error or 'with_obligation callback did not return Op'
+    local ref_origin = Origin.child(origin, label)
+    local forced = ExpansionMemo.force(attempt, memo_label, ref_origin, function()
       local store = attempt.obligation_store or Obligation.default_store()
-      local ref = store:ref(ref_origin, 'settlement')
-      local nack = Op._nack(ref)
-      local protected_op = op.f(nack)
-      if not Op.is(protected_op) then error('with_nack callback did not return Op', 2) end
-      return { ref = ref, nack = nack, protected_op = protected_op }
+      local ref = store:ref(ref_origin, op.kind or 'generic', op.payload)
+      local protected_op = op.f(ref)
+      if not Op.is(protected_op) then error(callback_error, 2) end
+      return { ref = ref, protected_op = protected_op }
     end)
     if not Status.is_found(forced) then return forced end
     local entry = forced.value
     local ref = entry.ref
-    local body_origin = Origin.with_parent_obligation(Origin.child(origin, 'with_nack:body'), ref.id)
+    local body_origin = Origin.with_parent_obligation(Origin.child(origin, body_label), ref.id)
     local body = expand_op(entry.protected_op, view, evidence, token, body_origin, attempt)
     if not Status.is_found(body) then return body end
     local out = {}
@@ -1736,9 +1731,7 @@ do
     origin = Origin.coerce(origin or 'op')
     if op.tag == 'always' then return expand_done(op, view, evidence, token, origin)
     elseif op.tag == 'never' then return expand_never(op, view, evidence, token)
-    elseif op.tag == 'access' then return expand_access(op, view, evidence, token, origin)
-    elseif op.tag == 'open_claim' then return expand_open_claim(op, view, evidence, token, origin)
-    elseif op.tag == 'await' then return expand_await(op, view, evidence, token, origin)
+    elseif op.tag == 'claim' then return expand_claim(op, view, evidence, token, origin)
     elseif op.tag == 'emit' then return expand_emit(op, view, evidence, token, origin)
     elseif op.tag == 'map' then return expand_map(op, view, evidence, token, origin, attempt)
     elseif op.tag == 'bind' then return expand_bind(op, view, evidence, token, origin, attempt)
@@ -1747,8 +1740,8 @@ do
     elseif op.tag == 'all' then return expand_product(op, view, evidence, token, false, origin, attempt)
     elseif op.tag == 'wrap' then return expand_wrap(op, view, evidence, token, origin, attempt)
     elseif op.tag == 'guard' then return expand_guard(op, view, evidence, token, origin, attempt)
-    elseif op.tag == 'with_nack' then return expand_with_nack(op, view, evidence, token, origin, attempt)
-    elseif op.tag == 'nack' then return expand_nack(op, view, evidence, token, origin, attempt)
+    elseif op.tag == 'with_obligation' then return expand_with_obligation(op, view, evidence, token, origin, attempt)
+    elseif op.tag == 'obligation_observe' then return expand_obligation_observe(op, view, evidence, token, origin, attempt)
     elseif op.tag == 'or_else' then return expand_or_else(op, view, evidence, token, origin, attempt)
     else return Status.fatal('unsupported Op tag: ' .. tostring(op.tag)) end
   end

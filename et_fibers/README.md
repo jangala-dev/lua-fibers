@@ -44,13 +44,32 @@ Protocol.Link.resource { ... }
 
 ## Operations
 
-Application code builds inert operations:
+Application code builds inert operations. The primitive form is `Op.claim`:
+
+```lua
+Op.claim(resource, 'access', request)
+Op.claim(resource, 'open_claim', request)
+Op.claim(resource, 'await', request)
+```
+
+The older ergonomic constructors are aliases over the same claim syntax:
 
 ```lua
 Op.access(resource, request)
 Op.open_claim(resource, request)
 Op.await(resource, request)
 ```
+
+Linear obligations use the general obligation form:
+
+```lua
+Op.with_obligation('admission', payload, function(ref)
+  return ...
+end)
+```
+
+`Op.with_nack(function(nack) ... end)` is now a settlement-obligation instance;
+`nack` is `Op.nack(ref)`, an obligation observation operation.
 
 Bundled resources expose ergonomic constructors:
 

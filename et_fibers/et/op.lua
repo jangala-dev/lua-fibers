@@ -97,19 +97,27 @@ function Op.map(op, f)
   return new_op('map', { op = op, f = f })
 end
 
+function Op.claim(resource, kind, request)
+  if type(resource) ~= 'table' then error('claim: expected resource', 2) end
+  if type(kind) == 'table' and request == nil then
+    local claim = kind
+    kind = claim.kind
+    request = claim.request
+  end
+  if type(kind) ~= 'string' then error('claim: expected claim kind', 2) end
+  return new_op('claim', { resource = resource, claim_kind = kind, request = request })
+end
+
 function Op.access(resource, request)
-  if type(resource) ~= 'table' then error('access: expected resource', 2) end
-  return new_op('access', { resource = resource, request = request })
+  return Op.claim(resource, 'access', request)
 end
 
 function Op.open_claim(resource, request)
-  if type(resource) ~= 'table' then error('open_claim: expected claim-completing resource', 2) end
-  return new_op('open_claim', { resource = resource, request = request })
+  return Op.claim(resource, 'open_claim', request)
 end
 
 function Op.await(resource, request)
-  if type(resource) ~= 'table' then error('await: expected external resource', 2) end
-  return new_op('await', { resource = resource, request = request })
+  return Op.claim(resource, 'await', request)
 end
 
 function Op.choice(left, right)
@@ -149,13 +157,43 @@ function Op.guard(f)
   return new_op('guard', { f = f })
 end
 
+function Op.with_obligation(kind, payload, f)
+  if type(kind) == 'function' then
+    f = kind
+    kind = 'generic'
+    payload = nil
+  elseif type(payload) == 'function' and f == nil then
+    f = payload
+    payload = nil
+  end
+  if type(kind) ~= 'string' then error('with_obligation: expected obligation kind', 2) end
+  if type(f) ~= 'function' then error('with_obligation: expected function', 2) end
+  return new_op('with_obligation', { kind = kind, payload = copy_descriptor(payload), f = f })
+end
+
+function Op.observe_obligation(ref, mode)
+  return new_op('obligation_observe', { obligation = ref, mode = mode or 'nack' })
+end
+
+function Op.nack(ref)
+  return Op.observe_obligation(ref, 'nack')
+end
+
 function Op.with_nack(f)
   if type(f) ~= 'function' then error('with_nack: expected function', 2) end
-  return new_op('with_nack', { f = f })
+  return new_op('with_obligation', {
+    kind = 'settlement',
+    payload = nil,
+    origin_label = 'with_nack',
+    memo_label = 'with_nack',
+    body_label = 'with_nack:body',
+    callback_error = 'with_nack callback did not return Op',
+    f = function(ref) return f(Op.nack(ref)) end,
+  })
 end
 
 function Op._nack(ref)
-  return new_op('nack', { obligation = ref })
+  return Op.nack(ref)
 end
 
 function Op.wrap(op, k)

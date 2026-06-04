@@ -688,6 +688,25 @@ return function()
       }
       function BadResource:op() return Op.access(self, { tag = 'bad' }) end
       
+
+      local function test_generic_with_obligation_selects_linear_obligation()
+        reset()
+        local rt = Runtime.new()
+        local ref_holder
+        local got
+        rt:spawn(function()
+          got = rt:perform(Op.with_obligation('admission', { task = 't1' }, function(ref)
+            ref_holder = ref
+            return Op.always('admitted', ref.kind)
+          end))
+        end, 'generic-obligation')
+        assert_status(rt:run(), 'found')
+        assert_eq(got, 'admitted')
+        assert(ref_holder, 'generic obligation callback receives ref')
+        assert_eq(ref_holder.kind, 'admission', 'generic obligation kind is preserved')
+        assert_eq(Obligation.state(ref_holder), 'selected', 'selected generic obligation becomes terminal')
+      end
+      
       local function test_with_nack_does_not_run_callback_at_construction()
         reset()
         local ran = 0
@@ -870,6 +889,7 @@ return function()
       end
       
       return function()
+        test_generic_with_obligation_selects_linear_obligation()
         test_with_nack_does_not_run_callback_at_construction()
         test_selected_with_nack_commits_selected_obligation_before_publish_resume()
         test_published_unselected_with_nack_becomes_lost_when_attempt_resolves_elsewhere()
