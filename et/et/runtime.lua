@@ -218,17 +218,7 @@ function Runtime:perform(opnode)
   local result = coroutine.yield({ op = opnode, attempt = attempt })
   if type(result) ~= 'table' then return nil end
 
-  local vals, post
-  if result._token == PERFORM_RESULT then
-    vals = result.vals
-    post = result.post
-  else
-    -- Backward-compatible fallback for tests or callers that directly resume a
-    -- suspended runtime fibre with a packed value table.
-    vals = result
-  end
-
-  vals = vals or Op._pack()
+  local vals, post = result.vals or Op._pack(), result.post
   if post then vals = post(vals) end
   return unpack_(vals, 1, vals.n or #vals)
 end
@@ -438,7 +428,7 @@ function Runtime:_run(opts)
   if opts.max_work then
     local committed = false
     while true do
-      local st = self:step(opts)
+      local st = self:_step(opts)
       if st.tag == 'found' then
         committed = true
       elseif st.tag == 'pending' then
