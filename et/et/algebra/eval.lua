@@ -322,7 +322,7 @@ function eval_op(node, ctx)
     return Result.add_residual(pr, { id = id, order = ctx.residual_order or 0 })
   elseif k == 'guard' then
     local a = ctx.attempt
-    if not a.guard_cache[node] then a.guard_cache[node] = node.fn() end
+    if not a.guard_cache[node] then a.guard_cache[node] = node.fn(ctx) end
     return eval_op(a.guard_cache[node], child_ctx(ctx, 'guard'))
   elseif k == 'with_nack' then
     local a = ctx.attempt

@@ -71,11 +71,11 @@ Calls `fn` to produce an operation for the current attempt, then evaluates that
 operation.  The result is cached only within the current perform attempt.  Guards
 are therefore not permanent memo tables; a later attempt may re-run the guard.
 
-`fn` should return an operation.
+`fn` should return an operation.  The runtime passes the current evaluation context to the callback; existing zero-argument guards may ignore it.  The context exposes the runtime as `ctx.rt`, so guarded construction can depend on attempt-time host state such as `ctx.rt:now()` without storing that state in the operation value.
 
 ```lua
-Op.guard(function()
-  if ready then return Op.always("ready") end
+Op.guard(function(ctx)
+  if ready_at <= ctx.rt:now() then return Op.always("ready") end
   return Op.never()
 end)
 ```
@@ -283,6 +283,50 @@ ch:get_op(Op)
 ch:put_op(Op, "message")
 ```
 
+
+## Host interface, time and runtime phase
+
+`Runtime.new` accepts an optional host table:
+
+```lua
+local rt = Runtime.new({
+  host = {
+    now = function() return monotonic_time end,
+    trace = function(event) end,
+    on_error = function(err) end,
+  },
+})
+```
+
+The core runtime does not choose a wall-clock, print traces, block, or install a
+process-wide scheduler.  Hosts and standalone drivers provide those behaviours
+outside the transaction kernel.
+
+`rt:now()` returns the host's monotonic runtime time.  If no host clock is
+provided, it returns `0`.  Relative-time operations should be built with
+`guard`, so the deadline is fixed for the current perform attempt rather than
+when the operation value was constructed.
+
+The runtime maintains a small phase discipline:
+
+- `external` — user or driver code outside the runtime;
+- `fibre` — ordinary resumed fibre code, including post-commit `wrap` code;
+- `search` — algebra and resource evaluation;
+- `prepare` — commit-plan validation;
+- `commit` — resource mutation;
+- `consequence` — transaction consequence publication.
+
+`perform` is legal only during `fibre`.  `step` and `run` are legal only during
+`external`.  `spawn` is legal during `external` or `fibre`.  In particular,
+`perform` is rejected inside `guard`, `map`, `and_then`, resource callbacks and
+consequence handlers, but it is allowed inside `wrap` because `wrap` runs in the
+resumed fibre after the selected transaction has committed.
+
+Phase violations and runtime failures are reported as structured error objects
+with fields such as `kind`, `phase`, `action`, `fibre` and `message`.  The
+default policy still raises the error.  If the host provides `on_error` or
+`report_error`, the runtime reports the structured error before raising it.
+
 ## Runtime outcomes
 
 `rt:run()` drives until it commits at least one transaction, becomes pending on a
@@ -312,7 +356,7 @@ Lua functions:
 - `tensor` composes lanes and permits internal rendezvous.
 - resource effects are atomic and all-or-nothing.
 - consequences are published only by the committed world.
-- post-commit transformations from losing worlds are discarded.
-- selected wraps run in value-structure order in the resumed fibre after
-  consequence publication and before `perform` returns.
+- wraps from losing worlds are discarded.
+- selected wraps run in the resumed fibre after consequence publication and before
+  `perform` returns.
 - choice loss may nack; residual absence does not.
