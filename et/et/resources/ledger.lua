@@ -21,6 +21,12 @@ local function merge_read(dst, src)
   if src.read ~= nil and dst.read == nil then dst.read = src.read end
 end
 
+local function merge_set_field(dst, src, field)
+  if not src[field] then return end
+  dst[field] = dst[field] or {}
+  for owner, val in pairs(src[field]) do dst[field][owner] = val end
+end
+
 local function read_record(c, ledger)
   local rec = Resource.ensure(c, ledger, LedgerKind)
   rec.read = rec.read or (ledger.version or 0)
@@ -67,14 +73,8 @@ function LedgerKind.merge_seq(dst, src)
     dst.has_owner = true
     dst.owner = src.owner
   end
-  if src.closed then
-    dst.closed = dst.closed or {}
-    for owner, val in pairs(src.closed) do dst.closed[owner] = val end
-  end
-  if src.closes then
-    dst.closes = dst.closes or {}
-    for owner, val in pairs(src.closes) do dst.closes[owner] = val end
-  end
+  merge_set_field(dst, src, 'closed')
+  merge_set_field(dst, src, 'closes')
   return true
 end
 
@@ -85,14 +85,8 @@ function LedgerKind.merge_par(dst, src)
     dst.has_owner = true
     dst.owner = src.owner
   end
-  if src.closed then
-    dst.closed = dst.closed or {}
-    for owner, val in pairs(src.closed) do dst.closed[owner] = val end
-  end
-  if src.closes then
-    dst.closes = dst.closes or {}
-    for owner, val in pairs(src.closes) do dst.closes[owner] = val end
-  end
+  merge_set_field(dst, src, 'closed')
+  merge_set_field(dst, src, 'closes')
   return true
 end
 

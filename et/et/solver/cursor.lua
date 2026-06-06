@@ -11,7 +11,6 @@ local assign_candidate_order = Search.assign_candidate_order
 local sort_candidates = Search.sort_candidates
 local combo_better = Search.combo_better
 local combo_order_sum = Search.combo_order_sum
-local resource_compatible_so_far = function(sel) return State.resource_ok(sel, false) end
 local status_from_waits = Search.status_from_waits
 local process_one_deferred = Eval.process_one_deferred
 local normalise_result = Eval.normalise_result
@@ -247,7 +246,7 @@ end
 function Cursor:advance_enter(frame)
   if not self:tick(1) then return { tag = 'pending', reason = 'work budget exhausted', phase = 'search', work = self.work } end
   self.stats.frames = self.stats.frames + 1
-  if not resource_compatible_so_far(frame.sel) then
+  if not State.resource_ok(frame.sel, false) then
     self.stack[#self.stack] = nil
     return nil
   end

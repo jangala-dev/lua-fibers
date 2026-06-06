@@ -66,7 +66,7 @@ local function merge_record(dst, src, method)
   return f(dst, src)
 end
 
-function Resource.merge_seq_into(dst, src)
+local function merge_into(dst, src, method)
   local list = src and src.res_list
   if not list then return true end
 
@@ -76,28 +76,19 @@ function Resource.merge_seq_into(dst, src)
     local drec, why = ensure(dst, r, srec.kind)
     if not drec then return false, why end
 
-    local ok, reason = merge_record(drec, srec, 'merge_seq')
+    local ok, reason = merge_record(drec, srec, method)
     if not ok then return false, reason end
   end
 
   return true
 end
 
+function Resource.merge_seq_into(dst, src)
+  return merge_into(dst, src, 'merge_seq')
+end
+
 function Resource.merge_parallel_into(dst, src)
-  local list = src and src.res_list
-  if not list then return true end
-
-  for i = 1, #list do
-    local r = list[i]
-    local srec = src.res[r]
-    local drec, why = ensure(dst, r, srec.kind)
-    if not drec then return false, why end
-
-    local ok, reason = merge_record(drec, srec, 'merge_par')
-    if not ok then return false, reason end
-  end
-
-  return true
+  return merge_into(dst, src, 'merge_par')
 end
 
 function Resource.project(ctx, resource, query)

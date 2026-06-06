@@ -3,6 +3,7 @@ local Resource = require('et.resources.protocol')
 
 local Candidate = {}
 local pack_ = Op._pack
+local overlay_from = Resource.overlay_from
 local next_ph = 0
 
 local function list_append(dst, src)
@@ -158,10 +159,6 @@ local function clone(c)
   d.order = c.order
   d.fiber = c.fiber
   return d
-end
-
-local function overlay_from(c, parent)
-  return Resource.overlay_from(c, parent)
 end
 
 local function ctx_with_overlay(ctx, c)

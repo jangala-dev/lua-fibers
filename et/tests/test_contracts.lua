@@ -30,7 +30,7 @@ end
 -- Phase helper preserves arbitrary arity, including nils, without result packing.
 do
   local rt = Runtime.new()
-  local a, b, c, d, e, f = rt:_enter_phase('contract-test-phase', function(x)
+  local a, b, c, d, e, f = rt:_call_in_phase('contract-test-phase', 'callback_error', function(x)
     assert_eq(rt._phase, 'contract-test-phase', 'phase visible inside helper')
     return x, nil, 'c', 'd', false, 'f'
   end, 'a')

@@ -18,10 +18,6 @@ local function pack_perform_result(vals, post)
   return { _token = PERFORM_RESULT, vals = vals, post = post }
 end
 
-local function apply_post(vals, post)
-  if post then return post(vals) end
-  return vals
-end
 
 local function score_is_zero(score)
   if not score then return true end
@@ -35,7 +31,6 @@ function Runtime.new(opts)
   return setmetatable({
     opts = opts,
     host = host,
-    _trace_enabled = host.trace or opts.trace or false,
     fibres = {},
     published_consequences = {},
     stats = { refreshes = 0, steps = 0, algebra_pending = 0 },
@@ -59,14 +54,13 @@ function Runtime:_invalidate_cursor()
 end
 
 function Runtime:now()
-  local host = self.host or {}
-  local now = host.now or self.opts.now
+  local now = self.host.now or self.opts.now
   if now then return now(self) end
   return 0
 end
 
 function Runtime:_trace(kind, fields)
-  local trace = self.host and self.host.trace or self.opts.trace
+  local trace = self.host.trace or self.opts.trace
   if not trace then return end
   fields = fields or {}
   fields.kind = kind
@@ -90,15 +84,19 @@ function Runtime:_make_error(kind, err, fields)
   }, RuntimeError)
 end
 
-function Runtime:_fail(kind, err, fields)
-  local e = self:_make_error(kind, err, fields)
+function Runtime:_throw_error(e, level)
   local errors = self.errors
   if not errors then errors = {}; self.errors = errors end
   errors[#errors + 1] = e
   local handler = self.host and (self.host.on_error or self.host.report_error) or self.opts.on_error
   if handler then handler(e) end
   if not self:_is_current_fibre() then self._driver_depth = 0 end
-  error(e, fields and fields.level or 2)
+  error(e, level)
+end
+
+function Runtime:_fail(kind, err, fields)
+  local e = self:_make_error(kind, err, fields)
+  return self:_throw_error(e, fields and fields.level or 2)
 end
 
 function Runtime:_check_not_failed(level)
@@ -110,13 +108,7 @@ function Runtime:_fatal(kind, err, fields)
   local e = self:_make_error(kind, err, fields)
   e.fatal = true
   self._failed = e
-  local errors = self.errors
-  if not errors then errors = {}; self.errors = errors end
-  errors[#errors + 1] = e
-  local handler = self.host and (self.host.on_error or self.host.report_error) or self.opts.on_error
-  if handler then handler(e) end
-  if not self:_is_current_fibre() then self._driver_depth = 0 end
-  error(e, fields.level or 2)
+  return self:_throw_error(e, fields.level or 2)
 end
 
 function Runtime:failed()
@@ -159,12 +151,13 @@ function Runtime:_require_perform_allowed(level)
   })
 end
 
-local function finish_phase_call(self, old_phase, phase_name, kind, ok, ...)
+local function finish_phase_call(self, old_phase, phase_name, kind, fatal, committed, ok, ...)
   self._phase = old_phase
   if ok then return ... end
 
   local err = ...
-  if type(err) == 'table' and err._et_error then error(err, 0) end
+  if type(err) == 'table' and err._et_error and not fatal then error(err, 0) end
+  if fatal then return self:_fatal(kind, err, { phase = phase_name, committed = committed, level = 0 }) end
   return self:_fail(kind or 'callback_error', err, { phase = phase_name, level = 0 })
 end
 
@@ -180,36 +173,12 @@ end
 
 function Runtime:_call_in_phase(name, kind, fn, ...)
   local old = self:_set_phase(name)
-  return finish_phase_call(self, old, name, kind, pcall(fn, ...))
-end
-
-local function finish_fatal_phase_call(self, old_phase, phase_name, kind, committed, ok, ...)
-  self._phase = old_phase
-  if ok then return ... end
-
-  local err = ...
-  return self:_fatal(kind, err, { phase = phase_name, committed = committed, level = 0 })
+  return finish_phase_call(self, old, name, kind, false, nil, pcall(fn, ...))
 end
 
 function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
   local old = self:_set_phase(name)
-  return finish_fatal_phase_call(self, old, name, kind, committed, pcall(fn, ...))
-end
-
-function Runtime:_enter_phase(name, fn, ...)
-  return self:_call_in_phase(name, 'callback_error', fn, ...)
-end
-
-function Runtime:_search_solve(waiting, opts)
-  return Search.solve(self, waiting, opts)
-end
-
-function Runtime:_cursor_resume(cursor, max_work)
-  return cursor:resume(max_work)
-end
-
-function Runtime:_prepare_plan(world, cursor)
-  return CommitPlan.try_from_world(self, world, cursor)
+  return finish_phase_call(self, old, name, kind, true, committed, pcall(fn, ...))
 end
 
 function Runtime:_resume(f, values)
@@ -239,7 +208,7 @@ function Runtime:spawn(fn, name)
   self:_invalidate_cursor()
   local co = coroutine.create(fn)
   self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false }
-  if self._trace_enabled then self:_trace('fibre.spawn', { fibre = name }) end
+  self:_trace('fibre.spawn', { fibre = name })
 end
 
 function Runtime:perform(opnode)
@@ -259,7 +228,8 @@ function Runtime:perform(opnode)
     vals = result
   end
 
-  vals = apply_post(vals or Op._pack(), post)
+  vals = vals or Op._pack()
+  if post then vals = post(vals) end
   return unpack_(vals, 1, vals.n or #vals)
 end
 
@@ -328,10 +298,7 @@ function Runtime:_pump_one()
 end
 
 function Runtime:_pump()
-  local progressed = true
-  while progressed do
-    progressed = self:_pump_one()
-  end
+  while self:_pump_one() do end
 end
 
 function Runtime:_waiting()
@@ -399,7 +366,7 @@ function Runtime:_step(opts)
       cursor = Cursor.new(self, waiting, opts)
       self._cursor = cursor
     end
-    st = self:_cursor_resume(cursor, opts.max_work)
+    st = cursor:resume(opts.max_work)
     if st.tag == 'pending' then
       self.stats.algebra_pending = (self.stats.algebra_pending or 0) + 1
       if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
@@ -416,7 +383,7 @@ function Runtime:_step(opts)
     end
   else
     self._cursor = nil
-    world, score, st = self:_search_solve(waiting, opts)
+    world, score, st = Search.solve(self, waiting, opts)
     if st and st.tag == 'pending' then
       self.stats.algebra_pending = (self.stats.algebra_pending or 0) + 1
       if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
@@ -432,7 +399,7 @@ function Runtime:_step(opts)
   if world and (score_is_zero(score) or not self:_has_unstarted()) then
     local cert_cursor = self._cursor
     if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
-    local plan, reason = self:_prepare_plan(world, cert_cursor)
+    local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
     if not plan then self:_invalidate_cursor(); return { tag = 'pending', reason = reason or 'stale world' } end
     self._cursor = nil
     self:_apply_commit_plan(plan)
@@ -447,7 +414,7 @@ function Runtime:_step(opts)
   if world then
     local cert_cursor = self._cursor
     if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
-    local plan, reason = self:_prepare_plan(world, cert_cursor)
+    local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
     if not plan then self:_invalidate_cursor(); return { tag = 'pending', reason = reason or 'stale world' } end
     self:_apply_commit_plan(plan)
     return { tag = 'found', value = true, kind = 'commit' }
@@ -497,20 +464,20 @@ function Runtime:_run(opts)
       committed = true
       self:_apply_commit_plan(CommitPlan.always(waiting[1]))
     elseif #waiting > 0 then
-      world, score, st = self:_search_solve(waiting, nil)
+      world, score, st = Search.solve(self, waiting, nil)
     end
 
     if world and (score_is_zero(score) or not self:_has_unstarted()) then
       committed = true
       if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
-      local plan, _reason = self:_prepare_plan(world, nil)
+      local plan, _reason = CommitPlan.try_from_world(self, world, nil)
       if plan then self:_apply_commit_plan(plan) else self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
     elseif self:_pump_one() then
       -- More public participants may make a preferred world available.
     elseif world then
       committed = true
       if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
-      local plan, _reason = self:_prepare_plan(world, nil)
+      local plan, _reason = CommitPlan.try_from_world(self, world, nil)
       if plan then self:_apply_commit_plan(plan) else self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
     elseif st and st.tag == 'pending' then
       self.pending_wakeups = st.waits

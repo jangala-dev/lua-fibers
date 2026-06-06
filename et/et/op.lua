@@ -21,7 +21,6 @@ end
 
 local function contains_wrap(x)
   if not x then return false end
-  if x._wrapped_boundary then return true end
   if x._contains_wrap ~= nil then return x._contains_wrap end
 
   local found = false
@@ -103,9 +102,7 @@ function Op:or_else(q)
 end
 
 function Op:wrap(fn)
-  local w = op('wrap', { p = self, fn = fn, _contains_wrap = true })
-  w._wrapped_boundary = true
-  return w
+  return op('wrap', { p = self, fn = fn, _contains_wrap = true })
 end
 
 -- Primitive constructor used by resources.
