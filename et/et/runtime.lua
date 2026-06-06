@@ -44,6 +44,8 @@ function Runtime.new(opts)
     _cursor = nil,
     _phase = 'external',
     _current_fibre = nil,
+    _driver_depth = 0,
+    _failed = nil,
   }, Runtime)
 end
 
@@ -95,25 +97,64 @@ function Runtime:_fail(kind, err, fields)
   errors[#errors + 1] = e
   local handler = self.host and (self.host.on_error or self.host.report_error) or self.opts.on_error
   if handler then handler(e) end
+  if not self:_is_current_fibre() then self._driver_depth = 0 end
   error(e, fields and fields.level or 2)
 end
 
-function Runtime:_require_phase(action, allowed, level)
-  if self._phase == allowed then return true end
-  return self:_fail('phase_error', action .. ' may not be called during phase ' .. tostring(self._phase), {
+function Runtime:_check_not_failed(level)
+  if self._failed then error(self._failed, level or 2) end
+end
+
+function Runtime:_fatal(kind, err, fields)
+  fields = fields or {}
+  local e = self:_make_error(kind, err, fields)
+  e.fatal = true
+  self._failed = e
+  local errors = self.errors
+  if not errors then errors = {}; self.errors = errors end
+  errors[#errors + 1] = e
+  local handler = self.host and (self.host.on_error or self.host.report_error) or self.opts.on_error
+  if handler then handler(e) end
+  if not self:_is_current_fibre() then self._driver_depth = 0 end
+  error(e, fields.level or 2)
+end
+
+function Runtime:failed()
+  return self._failed
+end
+
+function Runtime:_is_current_fibre()
+  local f = self._current_fibre
+  if not f then return false end
+  return coroutine.running() == f.co
+end
+
+function Runtime:_require_driver_call(action, level)
+  if not self:_is_current_fibre() then return true end
+  return self:_fail('phase_error', action .. ' may not be called from a resumed fibre', {
     action = action,
     phase = self._phase,
-    message = action .. ' may not be called during phase ' .. tostring(self._phase) .. '; expected ' .. allowed,
+    message = action .. ' may not be called from a resumed fibre; expected external driver code',
     level = level or 3,
   })
 end
 
-function Runtime:_require_external_or_fibre(action, level)
-  local phase = self._phase
-  if phase == 'external' or phase == 'fibre' then return true end
-  return self:_fail('phase_error', action .. ' may not be called during phase ' .. tostring(phase), {
-    action = action, phase = phase,
-    message = action .. ' may not be called during phase ' .. tostring(phase) .. '; expected external or fibre',
+function Runtime:_require_spawn_allowed(level)
+  if self:_is_current_fibre() or (self._driver_depth or 0) == 0 then return true end
+  return self:_fail('phase_error', 'spawn may not be called from runtime internals', {
+    action = 'spawn',
+    phase = self._phase,
+    message = 'spawn may only be called from external driver code or from a resumed fibre',
+    level = level or 3,
+  })
+end
+
+function Runtime:_require_perform_allowed(level)
+  if self:_is_current_fibre() then return true end
+  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fibre', {
+    action = 'perform',
+    phase = self._phase,
+    message = 'perform may only be called by the currently resumed runtime fibre',
     level = level or 3,
   })
 end
@@ -142,29 +183,33 @@ function Runtime:_call_in_phase(name, kind, fn, ...)
   return finish_phase_call(self, old, name, kind, pcall(fn, ...))
 end
 
+local function finish_fatal_phase_call(self, old_phase, phase_name, kind, committed, ok, ...)
+  self._phase = old_phase
+  if ok then return ... end
+
+  local err = ...
+  return self:_fatal(kind, err, { phase = phase_name, committed = committed, level = 0 })
+end
+
+function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
+  local old = self:_set_phase(name)
+  return finish_fatal_phase_call(self, old, name, kind, committed, pcall(fn, ...))
+end
+
 function Runtime:_enter_phase(name, fn, ...)
   return self:_call_in_phase(name, 'callback_error', fn, ...)
 end
 
 function Runtime:_search_solve(waiting, opts)
-  local old = self:_set_phase('search')
-  local world, score, st = Search.solve(self, waiting, opts)
-  self:_restore_phase(old)
-  return world, score, st
+  return Search.solve(self, waiting, opts)
 end
 
 function Runtime:_cursor_resume(cursor, max_work)
-  local old = self:_set_phase('search')
-  local st = cursor:resume(max_work)
-  self:_restore_phase(old)
-  return st
+  return cursor:resume(max_work)
 end
 
 function Runtime:_prepare_plan(world, cursor)
-  local old = self:_set_phase('prepare')
-  local plan, reason = CommitPlan.try_from_world(self, world, cursor)
-  self:_restore_phase(old)
-  return plan, reason
+  return CommitPlan.try_from_world(self, world, cursor)
 end
 
 function Runtime:_resume(f, values)
@@ -189,7 +234,8 @@ function Runtime:_resume(f, values)
 end
 
 function Runtime:spawn(fn, name)
-  self:_require_external_or_fibre('spawn', 2)
+  self:_check_not_failed(2)
+  self:_require_spawn_allowed(2)
   self:_invalidate_cursor()
   local co = coroutine.create(fn)
   self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false }
@@ -197,15 +243,8 @@ function Runtime:spawn(fn, name)
 end
 
 function Runtime:perform(opnode)
-  self:_require_phase('perform', 'fibre', 2)
-  if not self._current_fibre then
-    return self:_fail('phase_error', 'perform requires the current runtime fibre', {
-      action = 'perform',
-      phase = self._phase,
-      message = 'perform may only be called by the currently resumed runtime fibre',
-      level = 2,
-    })
-  end
+  self:_check_not_failed(2)
+  self:_require_perform_allowed(2)
   local attempt = { guard_cache = {}, nack_cache = {} }
   local result = coroutine.yield({ op = opnode, attempt = attempt })
   if type(result) ~= 'table' then return nil end
@@ -254,7 +293,7 @@ function Runtime:_apply_commit_plan(plan)
   if log and (#log.transaction > 0 or #log.obligation > 0) then
     self.published_consequences[#self.published_consequences + 1] = log
     if self.on_consequence then
-      self:_call_in_phase('consequence', 'consequence_error', self.on_consequence, log)
+      self:_call_fatal_in_phase('consequence', 'consequence_error', true, self.on_consequence, log)
     end
   end
 
@@ -337,8 +376,7 @@ end
 -- Bounded work is conservative.  If opts.max_work is reached inside the algebra
 -- solver, no resource state is mutated and no fibre is resumed; the caller can
 -- call step again later with a fresh budget.
-function Runtime:step(opts)
-  self:_require_phase('step', 'external', 2)
+function Runtime:_step(opts)
   opts = opts or {}
   self.stats.steps = (self.stats.steps or 0) + 1
 
@@ -418,8 +456,17 @@ function Runtime:step(opts)
   return { tag = 'absent', reason = 'no compatible transaction' }
 end
 
-function Runtime:run(opts)
-  self:_require_phase('run', 'external', 2)
+
+function Runtime:step(opts)
+  self:_check_not_failed(2)
+  self:_require_driver_call('step', 2)
+  self._driver_depth = (self._driver_depth or 0) + 1
+  local st = self:_step(opts)
+  self._driver_depth = self._driver_depth - 1
+  return st
+end
+
+function Runtime:_run(opts)
   opts = opts or {}
   if opts.max_work then
     local committed = false
@@ -474,6 +521,16 @@ function Runtime:run(opts)
       return { tag = 'absent', reason = 'no compatible transaction' }
     end
   end
+end
+
+
+function Runtime:run(opts)
+  self:_check_not_failed(2)
+  self:_require_driver_call('run', 2)
+  self._driver_depth = (self._driver_depth or 0) + 1
+  local st = self:_run(opts)
+  self._driver_depth = self._driver_depth - 1
+  return st
 end
 
 return Runtime

@@ -307,25 +307,31 @@ provided, it returns `0`.  Relative-time operations should be built with
 `guard`, so the deadline is fixed for the current perform attempt rather than
 when the operation value was constructed.
 
-The runtime maintains a small phase discipline:
+The runtime maintains a small phase discipline without putting the hot search path
+behind a protected phase wrapper.  The public authority checks are simpler:
 
-- `external` — user or driver code outside the runtime;
-- `fibre` — ordinary resumed fibre code, including post-commit `wrap` code;
-- `search` — algebra and resource evaluation;
-- `prepare` — commit-plan validation;
-- `commit` — resource mutation;
-- `consequence` — transaction consequence publication.
+- `perform` is legal only when called by the currently resumed runtime fibre;
+- `step` and `run` are external driver calls and are rejected from a resumed
+  fibre;
+- `spawn` is legal from external code before or between driver calls, and from a
+  resumed fibre; it is rejected from runtime-internal work such as guarded
+  construction, resource evaluation, commit, or consequence publication;
+- `commit` and `consequence` remain named phases for diagnostics around resource
+  mutation and consequence handlers.
 
-`perform` is legal only during `fibre`.  `step` and `run` are legal only during
-`external`.  `spawn` is legal during `external` or `fibre`.  In particular,
-`perform` is rejected inside `guard`, `map`, `and_then`, resource callbacks and
-consequence handlers, but it is allowed inside `wrap` because `wrap` runs in the
-resumed fibre after the selected transaction has committed.
+The solver and prepare path do not set a global `search` or `prepare` phase.
+Search-specific information belongs in the evaluation context.  This keeps
+`perform` and `spawn` protection independent of hot-path phase restoration.
+`perform` is still rejected inside `guard`, `map`, `and_then`, resource callbacks
+and consequence handlers, but it is allowed inside `wrap` because `wrap` runs in
+the resumed fibre after the selected transaction has committed.
 
 Phase violations and runtime failures are reported as structured error objects
-with fields such as `kind`, `phase`, `action`, `fibre` and `message`.  The
-default policy still raises the error.  If the host provides `on_error` or
-`report_error`, the runtime reports the structured error before raising it.
+with fields such as `kind`, `phase`, `action`, `fibre`, `committed`, `fatal` and
+`message`.  The default policy still raises the error.  If the host provides
+`on_error` or `report_error`, the runtime reports the structured error before
+raising it.  Fatal errors are also stored on the runtime; subsequent public
+entry points raise the stored fatal error rather than trying to continue.
 
 ## Runtime outcomes
 
@@ -360,3 +366,30 @@ Lua functions:
 - selected wraps run in the resumed fibre after consequence publication and before
   `perform` returns.
 - choice loss may nack; residual absence does not.
+
+
+### Callback errors and driver state
+
+Transaction-construction callbacks such as `guard`, `map`, `and_then`, and
+`with_nack` are non-yielding speculative callbacks.  The runtime calls them
+through a protected callback boundary so that a programmer error is reported as
+a structured callback error and cannot leave the external driver state marked as
+inside runtime internals.  This protection is deliberately at the callback
+boundary, not around the solver or driver hot path.
+
+`wrap` is different: it runs later in the resumed fibre, may yield via
+`perform`, and is not called through this non-yielding callback boundary.
+
+### Trusted resource protocol and fatal consequences
+
+Resource kind implementations are trusted runtime protocol code.  Methods such
+as `eval`, `project`, `merge_seq`, `merge_par`, `prepare`, `apply`, `summary` and
+`clone` must be total for valid inputs, must not yield, and must not call
+`perform`, `spawn`, `step` or `run`.  The runtime does not recover from errors
+raised by resource kind methods.  Such an error is a bug in the resource kind or
+in the runtime, and the runtime object must be considered invalid.
+
+Mandatory consequence interpretation happens after commit.  If a consequence
+handler raises, the transaction remains committed, but the runtime records a
+fatal `consequence_error`, reports it to the host if configured, and rejects
+later public entry points with the stored fatal error.

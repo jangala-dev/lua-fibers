@@ -47,6 +47,13 @@ local function residual_is_open(ctx, id)
   return open and open[id]
 end
 
+local function call_callback(ctx, phase, kind, fn, ...)
+  local rt = ctx and ctx.rt
+  if rt and rt._call_in_phase then
+    return rt:_call_in_phase(phase, kind or 'callback_error', fn, ...)
+  end
+  return fn(...)
+end
 
 
 local function compose_post(old_post, fn)
@@ -86,12 +93,12 @@ local function process_one_deferred(c, ctx)
   local dctx = d.ctx or ctx
   if d.kind == 'map' then
     if c.post then error('map cannot consume a post-commit wrapped value', 2) end
-    c.vals = pack_(d.fn(unpack_(vals, 1, vals.n)))
+    c.vals = pack_(call_callback(dctx, 'map', 'callback_error', d.fn, unpack_(vals, 1, vals.n)))
     c.deferred = tail
     return Result.cands({ c })
   elseif d.kind == 'bind' then
     if c.post then error('and_then cannot consume a post-commit wrapped value', 2) end
-    local op2 = d.fn(unpack_(vals, 1, vals.n))
+    local op2 = call_callback(dctx, 'bind', 'callback_error', d.fn, unpack_(vals, 1, vals.n))
     local r = eval_op(op2, ctx_with_overlay(dctx, c))
     local out = {}
     for i = 1, #r.cands do
@@ -243,7 +250,7 @@ function eval_op(node, ctx)
       if r.cands[i].post then error('map cannot be applied after wrap', 2) end
       if raw_resolved(r.cands[i].vals, r.cands[i].subst) then
         local vals = resolve_pack(r.cands[i].vals, r.cands[i].subst)
-        r.cands[i].vals = pack_(node.fn(unpack_(vals, 1, vals.n)))
+        r.cands[i].vals = pack_(call_callback(subctx, 'map', 'callback_error', node.fn, unpack_(vals, 1, vals.n)))
       else
         r.cands[i].deferred[#r.cands[i].deferred + 1] = { kind = 'map', fn = node.fn }
       end
@@ -258,7 +265,7 @@ function eval_op(node, ctx)
       if c.post then error('and_then cannot be applied after wrap', 2) end
       if raw_resolved(c.vals, c.subst) then
         local vals = resolve_pack(c.vals, c.subst)
-        local p2 = node.fn(unpack_(vals, 1, vals.n))
+        local p2 = call_callback(left_ctx, 'bind', 'callback_error', node.fn, unpack_(vals, 1, vals.n))
         local subctx = ctx_with_overlay(child_ctx(ctx, 'bind:q'), c)
         local rr = normalise_result(eval_op(p2, subctx), subctx)
         for j = 1, #rr.cands do out[#out + 1] = combine_seq(c, rr.cands[j]) end
@@ -322,7 +329,7 @@ function eval_op(node, ctx)
     return Result.add_residual(pr, { id = id, order = ctx.residual_order or 0 })
   elseif k == 'guard' then
     local a = ctx.attempt
-    if not a.guard_cache[node] then a.guard_cache[node] = node.fn(ctx) end
+    if not a.guard_cache[node] then a.guard_cache[node] = call_callback(ctx, 'guard', 'callback_error', node.fn, ctx) end
     return eval_op(a.guard_cache[node], child_ctx(ctx, 'guard'))
   elseif k == 'with_nack' then
     local a = ctx.attempt
@@ -330,7 +337,7 @@ function eval_op(node, ctx)
     if not entry then
       next_nack = next_nack + 1
       local ref = { _nack_ref = true, id = next_nack, state = 'pending' }
-      local built = node.fn({ obligation = ref })
+      local built = call_callback(ctx, 'with_nack', 'callback_error', node.fn, { obligation = ref })
       entry = { ref = ref, op = built }
       a.nack_cache[node] = entry
     end
