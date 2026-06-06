@@ -368,26 +368,52 @@ Lua functions:
 - choice loss may nack; residual absence does not.
 
 
-### Callback errors and driver state
+### Recoverable algebra callbacks
 
 Transaction-construction callbacks such as `guard`, `map`, `and_then`, and
-`with_nack` are non-yielding speculative callbacks.  The runtime calls them
-through a protected callback boundary so that a programmer error is reported as
-a structured callback error and cannot leave the external driver state marked as
-inside runtime internals.  This protection is deliberately at the callback
-boundary, not around the solver or driver hot path.
+`with_nack` are recoverable algebra callbacks.  They are non-yielding,
+speculative callback bodies supplied by ordinary user code.  The runtime calls
+them through a protected callback boundary so that a programmer error is
+reported as a structured `callback_error` instead of corrupting the runtime.
 
-`wrap` is different: it runs later in the resumed fibre, may yield via
-`perform`, and is not called through this non-yielding callback boundary.
+A recoverable algebra callback may construct or choose operation values, but it
+must not call `perform`, `spawn`, `step` or `run`.  Such authority violations are
+reported as structured phase errors.
 
-### Trusted resource protocol and fatal consequences
+`wrap` is deliberately outside this category.  A wrap runs later in the resumed
+fibre after the selected transaction has committed.  It may yield by calling
+`perform`, and failure there is ordinary resumed-fibre failure rather than
+failure of the transaction that has already committed.
 
-Resource kind implementations are trusted runtime protocol code.  Methods such
+### Trusted transactional machinery
+
+The solver, resource protocol, prepare/apply path, commit machinery and
+mandatory consequence publication are trusted transactional machinery.  They are
+not individually protected by recovery wrappers.  An error here is treated as an
+implementation or resource-integrity failure, not as a transactional abort and
+not as a losing candidate world.
+
+Resource kind implementations are part of this trusted machinery.  Methods such
 as `eval`, `project`, `merge_seq`, `merge_par`, `prepare`, `apply`, `summary` and
 `clone` must be total for valid inputs, must not yield, and must not call
-`perform`, `spawn`, `step` or `run`.  The runtime does not recover from errors
-raised by resource kind methods.  Such an error is a bug in the resource kind or
-in the runtime, and the runtime object must be considered invalid.
+`perform`, `spawn`, `step` or `run`.  Functions executed inside resource
+operations, such as a cell update function, inherit this contract when the
+resource kind evaluates them during transactional resource interpretation.
+
+If a raw error escapes from trusted transactional machinery through a public
+driver call, the public driver boundary restores driver state, records a fatal
+structured `runtime_error`, and re-raises that fatal error.  The transaction
+runtime object should then be considered failed and unusable.
+
+Structured ET errors are re-raised as themselves.  They do not become fatal
+unless they were already fatal.
+
+### Public driver boundary
+
+Public `run` and `step` calls have a narrow driver exit boundary.  Its job is to
+restore public driver state on every exit and then re-raise the appropriate
+error.  It does not make solver, resource, prepare, commit or consequence code
+recoverable.
 
 Mandatory consequence interpretation happens after commit.  If a consequence
 handler raises, the transaction remains committed, but the runtime records a

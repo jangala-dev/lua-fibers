@@ -14,7 +14,7 @@ Public modules:
 Additional public-facing documentation:
 
 - `docs/algebra.md` — compact public operation algebra semantics.
-- `docs/resourcs.md` — resource kind implementation process.
+- `docs/resources.md` — resource kind implementation process and trusted transactional machinery contract.
 
 Run the test suite from the repository root:
 
@@ -46,6 +46,28 @@ local st = rt:step({ max_work = 100 })
 ```
 
 The current core keeps observable mutation in the runtime.  The algebra constructs candidate worlds and commit plans; the runtime applies resource state changes, publishes consequences, resolves nacks, runs wraps, and resumes fibres.
+
+The implementation uses three deliberately different error boundaries:
+
+```text
+recoverable algebra callbacks
+  guard, map, and_then and with_nack callback bodies
+  called through the protected callback boundary
+  raw callback failures become structured callback_error values
+
+trusted transactional machinery
+  solver, resource protocol, prepare/apply, commit and consequence machinery
+  not protected internally
+  raw failures that escape a public driver call fail the runtime
+
+public driver boundary
+  run and step restore driver state on every exit
+  structured ET errors are re-raised as themselves
+  raw machinery failures are wrapped as fatal runtime_error values
+```
+
+After a fatal runtime error the runtime object is no longer usable; later public
+entry points raise the stored fatal error.
 
 
 ## Waitable resources

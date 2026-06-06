@@ -414,13 +414,27 @@ function Runtime:_step(opts)
 end
 
 
+
+local function finish_driver_call(self, old_depth, old_phase, ok, ...)
+  self._driver_depth = old_depth
+  self._phase = old_phase
+  if ok then return ... end
+
+  local err = ...
+  if type(err) == 'table' and err._et_error then error(err, 0) end
+
+  local e = self:_make_error('runtime_error', err, { phase = old_phase, level = 0 })
+  e.fatal = true
+  self._failed = e
+  return self:_throw_error(e, 0)
+end
+
 function Runtime:step(opts)
   self:_check_not_failed(2)
   self:_require_driver_call('step', 2)
-  self._driver_depth = (self._driver_depth or 0) + 1
-  local st = self:_step(opts)
-  self._driver_depth = self._driver_depth - 1
-  return st
+  local old_depth, old_phase = self._driver_depth or 0, self._phase
+  self._driver_depth = old_depth + 1
+  return finish_driver_call(self, old_depth, old_phase, pcall(self._step, self, opts))
 end
 
 function Runtime:_run(opts)
@@ -484,10 +498,9 @@ end
 function Runtime:run(opts)
   self:_check_not_failed(2)
   self:_require_driver_call('run', 2)
-  self._driver_depth = (self._driver_depth or 0) + 1
-  local st = self:_run(opts)
-  self._driver_depth = self._driver_depth - 1
-  return st
+  local old_depth, old_phase = self._driver_depth or 0, self._phase
+  self._driver_depth = old_depth + 1
+  return finish_driver_call(self, old_depth, old_phase, pcall(self._run, self, opts))
 end
 
 return Runtime

@@ -232,4 +232,40 @@ do
   assert_error_kind(ok_run, run_err, 'consequence_error', 'failed runtime rejects later run')
 end
 
+
+-- An uncaught phase error from a fibre must not leave later external calls
+-- misclassified as runtime-internal calls.
+do
+  local rt = Runtime.new()
+  rt:spawn(function()
+    rt:run()
+  end, 'fibre-calls-run')
+  local ok, err = pcall(function() rt:run() end)
+  assert_error_kind(ok, err, 'phase_error', 'run inside fibre escapes as phase error')
+  assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after fibre phase error')
+  assert_eq(rt._phase, 'external', 'phase restored after fibre phase error')
+  local ok_spawn = pcall(function() rt:spawn(function() end, 'external-after-fibre-phase-error') end)
+  assert_eq(ok_spawn, true, 'external spawn after fibre phase error is allowed')
+end
+
+-- A raw error from trusted transactional machinery is fatal, but the public
+-- driver boundary still restores driver state before rethrowing the fatal error.
+do
+  local cell = Cell.new(0, 'raw-update-error-cell')
+  local rt = Runtime.new()
+  rt:spawn(function()
+    rt:perform(cell:update_op(Op, function()
+      error('cell update exploded')
+    end))
+  end, 'raw-update-error')
+  local ok, err = pcall(function() rt:run() end)
+  assert_error_kind(ok, err, 'runtime_error', 'raw trusted-machinery error is fatal runtime error')
+  assert_eq(err.fatal, true, 'raw trusted-machinery error is fatal')
+  assert_eq(rt:failed(), err, 'runtime stores raw fatal error')
+  assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after raw trusted-machinery error')
+  assert_eq(rt._phase, 'external', 'phase restored after raw trusted-machinery error')
+  local ok_spawn, spawn_err = pcall(function() rt:spawn(function() end, 'after-raw-fatal') end)
+  assert_error_kind(ok_spawn, spawn_err, 'runtime_error', 'failed runtime rejects later spawn with fatal error')
+end
+
 print('tests/test_contracts.lua: ok')

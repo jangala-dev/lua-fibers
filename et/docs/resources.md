@@ -23,6 +23,51 @@ public method
 The runtime applies prepared commits mechanically.  It should not inspect the
 concrete resource's record shape.
 
+## Trusted transactional machinery contract
+
+Resource kind code is trusted transactional machinery.  It runs inside the
+transactional interpretation, search, preparation or commit path, not as an
+ordinary recoverable algebra callback.
+
+This contract applies to kind-table methods such as:
+
+```text
+eval
+project
+merge_seq
+merge_par
+prepare
+apply
+summary
+clone
+```
+
+It also applies to functions that a resource kind deliberately evaluates as part
+of its own protocol.  For example, a cell update function executed by
+`CellKind.eval` is participating in transactional resource interpretation.  It
+must compute the proposed transition and return normally.  It should not use an
+ordinary Lua error to express application-level rejection.
+
+Trusted transactional machinery must:
+
+- be total for valid committed state, payloads and records;
+- avoid yielding;
+- avoid calling `perform`, `spawn`, `step` or `run`;
+- avoid mutating committed resource state before `apply`;
+- use `prepare` for validation against committed state;
+- use `apply` for the actual committed mutation.
+
+If trusted transactional machinery raises a raw error and that error escapes
+through a public `run` or `step` call, the public driver boundary restores driver
+state, marks the runtime failed with a fatal `runtime_error`, and re-raises the
+fatal error.  The runtime object is then unusable.  This is intentional: the
+runtime cannot know which speculative structures, resource records or commit
+steps were left partially evaluated.
+
+Application-level validation should usually be expressed in recoverable algebra
+callbacks, for example with `guard`, `map` or `and_then`, before constructing the
+trusted resource operation.
+
 ## Minimal public wrapper
 
 A resource value usually stores committed state plus `_et_kind`:
