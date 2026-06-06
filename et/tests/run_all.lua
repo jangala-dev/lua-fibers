@@ -1,0 +1,18 @@
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
+
+local tests = {
+  'tests/test_op.lua',
+  'tests/test_resources.lua',
+  'tests/test_runtime.lua',
+  'tests/test_open_resources.lua',
+  'tests/test_candidate.lua',
+  'tests/test_solver_state.lua',
+  'tests/test_residual_or_else.lua',
+}
+
+for i = 1, #tests do
+  local ok, err = pcall(dofile, tests[i])
+  if not ok then error(tests[i] .. ' failed: ' .. tostring(err), 0) end
+end
+
+print('tests/run_all.lua: ok')
