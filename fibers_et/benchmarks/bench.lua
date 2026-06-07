@@ -33,8 +33,8 @@ package.path = table.concat({
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Channel = require('fibers.resources.channel')
-local Cell = require('fibers.resources.cell')
+local Channel = require('fibers.channel')
+local Cell = require('fibers.cell')
 local Ledger = require('fibers.resources.ledger')
 
 local pack_ = table.pack or function(...)

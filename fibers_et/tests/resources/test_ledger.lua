@@ -4,7 +4,7 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Channel = require('fibers.resources.channel')
+local Channel = require('fibers.channel')
 local Ledger = require('fibers.resources.ledger')
 local H = require('tests.resources.test_helpers')
 

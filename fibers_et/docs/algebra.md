@@ -269,16 +269,17 @@ part of `p`'s committed world.
 Resource modules expose operations by returning `Op._resource(...)` nodes.  The
 current public resources are:
 
-- `fibers.resources.cell` — transactional value cell;
-- `fibers.resources.channel` — rendezvous get/put channel;
-- `fibers.resources.ledger` — ownership transfer and settlement example;
-- `fibers.resources.event` — manual waitable event.
+- `fibers.cell` — transactional Cell;
+- `fibers.channel` — rendezvous Channel;
+- `fibers.source` — host/time/readiness Source;
+- `fibers.region` and `fibers.task` — lifetime and running work;
+- `fibers.resources.ledger` — ownership transfer and settlement example resource.
 
 Examples:
 
 ```lua
-local Cell = require('fibers.resources.cell')
-local Channel = require('fibers.resources.channel')
+local Cell = require('fibers.cell')
+local Channel = require('fibers.channel')
 
 local c = Cell.new(0)
 local ch = Channel.new()

@@ -10,6 +10,8 @@ local tests = {
   'tests/test_candidate.lua',
   'tests/test_solver_state.lua',
   'tests/test_residual_or_else.lua',
+  'tests/test_base_kit.lua',
+  'tests/test_source.lua',
 }
 
 for i = 1, #tests do

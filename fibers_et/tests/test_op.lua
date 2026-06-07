@@ -6,8 +6,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Channel = require('fibers.resources.channel')
-local Cell = require('fibers.resources.cell')
+local Channel = require('fibers.channel')
+local Cell = require('fibers.cell')
 local TC = require('tests.consequence_helpers')
 
 local pack_ = table.pack or function(...)
@@ -1005,16 +1005,16 @@ print('tests/test_op.lua: core algebra contract ok')
 -- Expected public modules:
 --   fibers.op
 --   fibers.runtime
---   fibers.resources.channel
---   fibers.resources.cell
+--   fibers.channel
+--   fibers.cell
 --   fibers.resources.ledger
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Channel = require('fibers.resources.channel')
-local Cell = require('fibers.resources.cell')
+local Channel = require('fibers.channel')
+local Cell = require('fibers.cell')
 local TC = require('tests.consequence_helpers')
 local Ledger = require('fibers.resources.ledger')
 

@@ -3,8 +3,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Channel = require('fibers.resources.channel')
-local Event = require('fibers.resources.event')
+local Channel = require('fibers.channel')
+local Source = require('fibers.source')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -60,16 +60,16 @@ end
 
 -- Future waitability of primary does not suppress fallback, and primary wait is discarded.
 do
-  local ev = Event.new('residual-unready')
-  local st, values = one_perform(ev:wait_op(Op):or_else(Op.always('fallback')))
+  local ev = Source.manual('residual-unready')
+  local st, values = one_perform(ev:next_op(Op):or_else(Op.always('fallback')))
   assert_status(st, 'found')
   assert_eq(values[1], 'fallback')
 end
 
 -- If fallback also has no current world, primary waits do not survive residual fallback.
 do
-  local ev = Event.new('residual-unready-never')
-  local st = one_perform(ev:wait_op(Op):or_else(Op.never()), { quiet_deadlock = true })
+  local ev = Source.manual('residual-unready-never')
+  local st = one_perform(ev:next_op(Op):or_else(Op.never()), { quiet_deadlock = true })
   assert_status(st, 'absent', 'left wait was discarded when fallback was absent')
 end
 

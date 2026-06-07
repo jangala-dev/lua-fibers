@@ -4,24 +4,24 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Event = require('fibers.resources.event')
-local Channel = require('fibers.resources.channel')
+local Source = require('fibers.source')
+local Channel = require('fibers.channel')
 local H = require('tests.resources.test_helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()
-  local ev = Event.new('unset')
+  local ev = Source.manual('unset')
   local rt = Runtime.new()
   local got
-  rt:spawn(function() got = rt:perform(ev:wait_op(Op):or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
+  rt:spawn(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
   H.assert_status(rt:run(), 'found')
   H.assert_eq(got, 'fallback')
 end
 
 local function test_not_ready_without_fallback_reports_pending_wake_interest()
-  local ev = Event.new('pending')
+  local ev = Source.manual('pending')
   local rt = Runtime.new()
   local got
-  rt:spawn(function() got = rt:perform(ev:wait_op(Op)) end, 'pending-no-fallback')
+  rt:spawn(function() got = rt:perform(ev:next_op(Op)) end, 'pending-no-fallback')
   local st = rt:run()
   H.assert_status(st, 'pending')
   H.assert_eq(got, nil)
@@ -29,24 +29,24 @@ local function test_not_ready_without_fallback_reports_pending_wake_interest()
 end
 
 local function test_ready_now_beats_fallback()
-  local ev = Event.new('ready')
-  ev:set('payload')
+  local ev = Source.manual('ready')
+  ev:emit('payload')
   local rt = Runtime.new()
   local got
-  rt:spawn(function() got = rt:perform(ev:wait_op(Op):or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
+  rt:spawn(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
   H.assert_status(rt:run(), 'found')
   H.assert_eq(got, 'payload')
 end
 
 local function test_ready_external_value_still_participates_in_global_rendezvous_search()
-  local ev = Event.new('ready-with-rendezvous')
-  ev:set('payload')
+  local ev = Source.manual('ready-with-rendezvous')
+  ev:emit('payload')
   local ch = Channel.new('external-plus-rendezvous')
   local rt = Runtime.new()
   local receiver, sender
   rt:spawn(function()
     receiver = rt:perform(
-      ev:wait_op(Op):and_then(function(v)
+      ev:next_op(Op):and_then(function(v)
         return ch:get_op(Op):map(function(x) return v .. ':' .. x end)
       end):or_else(Op.always('fallback')))
   end, 'receiver')

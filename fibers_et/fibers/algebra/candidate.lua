@@ -33,6 +33,10 @@ end
 
 local function is_ph(x) return type(x) == 'table' and x._ph end
 
+local function is_opaque_value(x)
+  return type(x) == 'table' and (getmetatable(x) ~= nil or x._fibers_id ~= nil or x._fibers_kind ~= nil or x._fibers_value == true)
+end
+
 local NIL = {}
 
 local function subst_lookup(subst, ph)
@@ -74,6 +78,7 @@ local function raw_resolved(x, subst, seen)
     if ok then return raw_resolved(v, subst, seen) end
     return false
   elseif type(x) == 'table' then
+    if is_opaque_value(x) then return true end
     if x._nack_ref then return true end
     if seen and seen[x] then return true end
     seen = seen or {}; seen[x] = true
@@ -91,6 +96,7 @@ local function resolve(x, subst, seen)
     if ok then return resolve(v, subst, seen) end
     return x
   elseif type(x) == 'table' then
+    if is_opaque_value(x) then return x end
     if x._nack_ref then return x end
     if seen and seen[x] then return x end
     seen = seen or {}; seen[x] = true
@@ -242,6 +248,7 @@ Candidate.list_copy = list_copy
 Candidate.unique_append = unique_append
 Candidate.new_ph = new_ph
 Candidate.is_ph = is_ph
+Candidate.is_opaque_value = is_opaque_value
 Candidate.subst_bind = subst_bind
 Candidate.subst_copy = subst_copy
 Candidate.subst_merge = subst_merge

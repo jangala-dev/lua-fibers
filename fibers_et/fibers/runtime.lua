@@ -3,8 +3,15 @@ local Search = require('fibers.solver.search')
 local CommitPlan = require('fibers.commit.plan')
 local Resource = require('fibers.resources.protocol')
 local Op = require('fibers.op')
+local Wait = require('fibers.wait')
 local Runtime = {}
 Runtime.__index = Runtime
+
+local current_runtime = nil
+
+function Runtime.current()
+  return current_runtime
+end
 
 local unpack_ = table.unpack or unpack
 
@@ -193,8 +200,11 @@ end
 function Runtime:_resume(f, values)
   local old_phase = self:_set_phase('fibre')
   local old_fibre = self._current_fibre
+  local old_current_runtime = current_runtime
   self._current_fibre = f
+  current_runtime = self
   local ok, req_or_err = coroutine.resume(f.co, values)
+  current_runtime = old_current_runtime
   self:_restore_phase(old_phase)
   self._current_fibre = old_fibre
   if not ok then
@@ -218,6 +228,23 @@ function Runtime:spawn(fn, name)
   local co = coroutine.create(fn)
   self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false }
   self:_trace('fibre.spawn', { fibre = name })
+end
+
+function Runtime:_spawn_committed(fn, name)
+  self:_check_not_failed(2)
+  self:_invalidate_cursor()
+  local co = coroutine.create(fn)
+  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false }
+  self:_trace('fibre.spawn_committed', { fibre = name })
+end
+
+function Runtime:_note_wake(wake, _log)
+  self.published_wakes = self.published_wakes or {}
+  self.published_wakes[#self.published_wakes + 1] = wake
+end
+
+function Runtime:pending_wait_summary()
+  return Wait.summarise(self.pending_waits or self.pending_wakeups or {})
 end
 
 function Runtime:perform(opnode)
@@ -385,7 +412,8 @@ function Runtime:_step(opts)
     if st.tag == 'pending' then
       self.stats.algebra_pending = (self.stats.algebra_pending or 0) + 1
       if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      self.pending_wakeups = st.waits
+      self.pending_wakeups = Wait.merge(st.waits)
+      self.pending_waits = self.pending_wakeups
       return st
     elseif st.tag == 'committable' then
       world, score = st.world, st.score
@@ -402,7 +430,8 @@ function Runtime:_step(opts)
     if st and st.tag == 'pending' then
       self.stats.algebra_pending = (self.stats.algebra_pending or 0) + 1
       if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      self.pending_wakeups = st.waits
+      self.pending_wakeups = Wait.merge(st.waits)
+      self.pending_waits = self.pending_wakeups
       return st
     end
   end
@@ -509,9 +538,17 @@ function Runtime:_run(opts)
       local plan, _reason = CommitPlan.try_from_world(self, world, nil)
       if plan then self:_apply_commit_plan(plan) elseif plan_retriable(_reason) then self.stats.refreshes = (self.stats.refreshes or 0) + 1 else return plan_failure_status(_reason) end
     elseif st and st.tag == 'pending' then
-      self.pending_wakeups = st.waits
-      if committed then return { tag = 'found', value = true } end
-      return st
+      self.pending_wakeups = Wait.merge(st.waits)
+      self.pending_waits = self.pending_wakeups
+      if committed and self:_pump_one() then
+        -- A committed consequence may have spawned fresh work that can satisfy
+        -- the current waits.  Continue before reporting quiescence to the
+        -- standalone runner.
+      elseif committed then
+        return { tag = 'found', value = true }
+      else
+        return st
+      end
     else
       if committed then return { tag = 'found', value = true } end
       return { tag = 'absent', reason = 'no compatible transaction' }
