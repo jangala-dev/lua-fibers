@@ -1,6 +1,6 @@
-local Op = require('et.op')
-local Resource = require('et.resources.protocol')
-local ConsequenceSet = require('et.consequence.set')
+local Op = require('fibers.op')
+local Resource = require('fibers.resources.protocol')
+local ConsequenceSet = require('fibers.consequence.set')
 
 local Candidate = {}
 local pack_ = Op._pack

@@ -2,10 +2,10 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Channel = require('et.resources.channel')
-local Ledger = require('et.resources.ledger')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Channel = require('fibers.resources.channel')
+local Ledger = require('fibers.resources.ledger')
 local H = require('tests.resources.test_helpers')
 
 local function test_ownership_transfer_commits_atomically_with_rendezvous()

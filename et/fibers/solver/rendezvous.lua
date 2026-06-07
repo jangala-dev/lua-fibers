@@ -1,5 +1,5 @@
-local Topology = require('et.solver.topology')
-local Candidate = require('et.algebra.candidate')
+local Topology = require('fibers.solver.topology')
+local Candidate = require('fibers.algebra.candidate')
 
 local Rendezvous = {}
 

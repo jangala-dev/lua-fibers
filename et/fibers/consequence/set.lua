@@ -1,13 +1,13 @@
 -- Mergeable consequence sets for candidate worlds.
 
-local Kind = require('et.consequence.kind')
+local Kind = require('fibers.consequence.kind')
 
 local ConsequenceSet = {}
 ConsequenceSet.__index = ConsequenceSet
 
 local function key_string(kind, payload)
   local k = kind.key(payload)
-  return tostring(kind._et_kind_id or kind.name) .. '\0' .. tostring(k)
+  return tostring(kind._fibers_kind_id or kind.name) .. '\0' .. tostring(k)
 end
 
 function ConsequenceSet.empty()
@@ -51,7 +51,7 @@ function ConsequenceSet:add(consequence)
   if not merged_payload then return nil, err or { kind = 'consequence_conflict', message = kind.name .. ' merge conflict' } end
 
   self.entries[k] = {
-    _et_consequence = true,
+    _fibers_consequence = true,
     kind = kind,
     payload = merged_payload,
   }

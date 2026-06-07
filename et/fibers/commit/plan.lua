@@ -1,7 +1,7 @@
-local Resource = require('et.resources.protocol')
-local Candidate = require('et.algebra.candidate')
-local ConsequenceSet = require('et.consequence.set')
-local World = require('et.solver.world')
+local Resource = require('fibers.resources.protocol')
+local Candidate = require('fibers.algebra.candidate')
+local ConsequenceSet = require('fibers.consequence.set')
+local World = require('fibers.solver.world')
 
 local Plan = {}
 local PLAN_TOKEN = {}

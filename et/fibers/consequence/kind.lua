@@ -24,8 +24,8 @@ function ConsequenceKind.new(spec)
 
   next_kind_id = next_kind_id + 1
   local kind = {
-    _et_consequence_kind = true,
-    _et_kind_id = next_kind_id,
+    _fibers_consequence_kind = true,
+    _fibers_kind_id = next_kind_id,
     name = spec.name,
     key = spec.key,
     merge = spec.merge,
@@ -53,18 +53,18 @@ function ConsequenceKind:of(payload)
   end
 
   return {
-    _et_consequence = true,
+    _fibers_consequence = true,
     kind = self,
     payload = payload,
   }
 end
 
 function ConsequenceKind.is_kind(x)
-  return type(x) == 'table' and x._et_consequence_kind == true
+  return type(x) == 'table' and x._fibers_consequence_kind == true
 end
 
 function ConsequenceKind.is_consequence(x)
-  return type(x) == 'table' and x._et_consequence == true and ConsequenceKind.is_kind(x.kind)
+  return type(x) == 'table' and x._fibers_consequence == true and ConsequenceKind.is_kind(x.kind)
 end
 
 return ConsequenceKind

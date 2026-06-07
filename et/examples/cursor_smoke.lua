@@ -1,8 +1,8 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Channel = require('et.resources.channel')
-local Cell = require('et.resources.cell')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Channel = require('fibers.resources.channel')
+local Cell = require('fibers.resources.cell')
 
 local function assert_eq(a,b,msg) if a ~= b then error((msg or '') .. ' expected '..tostring(b)..' got '..tostring(a),2) end end
 local function assert_truthy(v,msg) if not v then error(msg or 'expected truthy',2) end end

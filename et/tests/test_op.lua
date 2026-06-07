@@ -1,13 +1,13 @@
 -- Combined public operation algebra contract tests.
--- External ET algebra behaviour tests.
+-- External fibers algebra behaviour tests.
 --
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Channel = require('et.resources.channel')
-local Cell = require('et.resources.cell')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Channel = require('fibers.resources.channel')
+local Cell = require('fibers.resources.cell')
 local TC = require('tests.consequence_helpers')
 
 local pack_ = table.pack or function(...)
@@ -996,27 +996,27 @@ print('tests/test_op.lua: core algebra contract ok')
 
 
 -- Additional subtle algebra contract tests.
--- Fiendish external ET algebra conformance tests.
+-- Fiendish external fibers algebra conformance tests.
 --
 -- These tests deliberately use only the public-facing algebra/runtime/resources.
 -- They are intended to catch local, greedy, non-backtracking, stale-frontier,
 -- or non-reusable-expression implementations.
 --
 -- Expected public modules:
---   et.op
---   et.runtime
---   et.resources.channel
---   et.resources.cell
---   et.resources.ledger
+--   fibers.op
+--   fibers.runtime
+--   fibers.resources.channel
+--   fibers.resources.cell
+--   fibers.resources.ledger
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Channel = require('et.resources.channel')
-local Cell = require('et.resources.cell')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Channel = require('fibers.resources.channel')
+local Cell = require('fibers.resources.cell')
 local TC = require('tests.consequence_helpers')
-local Ledger = require('et.resources.ledger')
+local Ledger = require('fibers.resources.ledger')
 
 local pack_ = table.pack or function(...)
   return { n = select('#', ...), ... }
@@ -1553,7 +1553,7 @@ for i = 1, #tests do
 end
 
 if #failures > 0 then
-  error('external ET subtle algebra tests failed: ' .. tostring(#failures) .. ' failure(s)', 0)
+  error('external fibers subtle algebra tests failed: ' .. tostring(#failures) .. ' failure(s)', 0)
 end
 
 print('tests/test_op.lua: subtle algebra contract ok')

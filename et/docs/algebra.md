@@ -1,12 +1,12 @@
 # Public operation algebra
 
-The public operation algebra lives in `et.op`.  An operation is an immutable
+The public operation algebra lives in `fibers.op`.  An operation is an immutable
 syntax value describing a transaction.  A `Runtime` executes operations only when
 a fibre calls `rt:perform(op)`.
 
 ```lua
-local Op = require('et.op')
-local Runtime = require('et.runtime')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
 
 local rt = Runtime.new()
 rt:spawn(function()
@@ -269,16 +269,16 @@ part of `p`'s committed world.
 Resource modules expose operations by returning `Op._resource(...)` nodes.  The
 current public resources are:
 
-- `et.resources.cell` — transactional value cell;
-- `et.resources.channel` — rendezvous get/put channel;
-- `et.resources.ledger` — ownership transfer and settlement example;
-- `et.resources.event` — manual waitable event.
+- `fibers.resources.cell` — transactional value cell;
+- `fibers.resources.channel` — rendezvous get/put channel;
+- `fibers.resources.ledger` — ownership transfer and settlement example;
+- `fibers.resources.event` — manual waitable event.
 
 Examples:
 
 ```lua
-local Cell = require('et.resources.cell')
-local Channel = require('et.resources.channel')
+local Cell = require('fibers.resources.cell')
+local Channel = require('fibers.resources.channel')
 
 local c = Cell.new(0)
 local ch = Channel.new()
@@ -416,7 +416,7 @@ driver call, the public driver boundary restores driver state, records a fatal
 structured `runtime_error`, and re-raises that fatal error.  The transaction
 runtime object should then be considered failed and unusable.
 
-Structured ET errors are re-raised as themselves.  They do not become fatal
+Structured fibers errors are re-raised as themselves.  They do not become fatal
 unless they were already fatal.
 
 ### Public driver boundary

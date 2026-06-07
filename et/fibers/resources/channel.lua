@@ -1,6 +1,6 @@
-local Candidate = require('et.algebra.candidate')
-local Result = require('et.algebra.result')
-local OpPack = require('et.op')._pack
+local Candidate = require('fibers.algebra.candidate')
+local Result = require('fibers.algebra.result')
+local OpPack = require('fibers.op')._pack
 
 local Channel = {}
 Channel.__index = Channel
@@ -44,7 +44,7 @@ end
 
 function Channel.new(name)
   next_id = next_id + 1
-  return setmetatable({ name = name or ('channel-' .. tostring(next_id)), _et_id = next_id, _et_kind = ChannelKind }, Channel)
+  return setmetatable({ name = name or ('channel-' .. tostring(next_id)), _fibers_id = next_id, _fibers_kind = ChannelKind }, Channel)
 end
 
 function Channel:get_op(Op)

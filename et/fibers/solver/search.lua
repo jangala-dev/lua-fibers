@@ -1,4 +1,4 @@
-local Engine = require('et.solver.engine')
+local Engine = require('fibers.solver.engine')
 
 local Search = {}
 

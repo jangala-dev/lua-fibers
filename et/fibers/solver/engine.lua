@@ -1,10 +1,10 @@
-local Result = require('et.algebra.result')
-local Candidate = require('et.algebra.candidate')
-local Eval = require('et.algebra.eval')
-local Rendezvous = require('et.solver.rendezvous')
-local State = require('et.solver.state')
-local World = require('et.solver.world')
-local CommitPlan = require('et.commit.plan')
+local Result = require('fibers.algebra.result')
+local Candidate = require('fibers.algebra.candidate')
+local Eval = require('fibers.algebra.eval')
+local Rendezvous = require('fibers.solver.rendezvous')
+local State = require('fibers.solver.state')
+local World = require('fibers.solver.world')
+local CommitPlan = require('fibers.commit.plan')
 
 local clone_candidate = Candidate.clone
 local process_one_deferred = Eval.process_one_deferred

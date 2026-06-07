@@ -1,7 +1,7 @@
-local Resource = require('et.resources.protocol')
-local Candidate = require('et.algebra.candidate')
-local Result = require('et.algebra.result')
-local OpPack = require('et.op')._pack
+local Resource = require('fibers.resources.protocol')
+local Candidate = require('fibers.algebra.candidate')
+local Result = require('fibers.algebra.result')
+local OpPack = require('fibers.op')._pack
 
 local Cell = {}
 Cell.__index = Cell
@@ -113,7 +113,7 @@ end
 
 function Cell.new(value, name)
   next_id = next_id + 1
-  return setmetatable({ value = value, version = 0, name = name or ('cell-' .. tostring(next_id)), _et_id = next_id, _et_kind = CellKind }, Cell)
+  return setmetatable({ value = value, version = 0, name = name or ('cell-' .. tostring(next_id)), _fibers_id = next_id, _fibers_kind = CellKind }, Cell)
 end
 
 function Cell:get_op(Op)

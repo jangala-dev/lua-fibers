@@ -1,7 +1,7 @@
-local Resource = require('et.resources.protocol')
-local Candidate = require('et.algebra.candidate')
-local Rendezvous = require('et.solver.rendezvous')
-local World = require('et.solver.world')
+local Resource = require('fibers.resources.protocol')
+local Candidate = require('fibers.algebra.candidate')
+local Rendezvous = require('fibers.solver.rendezvous')
+local World = require('fibers.solver.world')
 
 local State = {}
 

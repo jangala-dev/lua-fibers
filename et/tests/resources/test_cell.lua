@@ -2,9 +2,9 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Cell = require('et.resources.cell')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Cell = require('fibers.resources.cell')
 local H = require('tests.resources.test_helpers')
 local TC = require('tests.consequence_helpers')
 

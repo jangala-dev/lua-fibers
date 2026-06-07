@@ -1,7 +1,7 @@
 -- Compact external transaction algebra for texlua.
 -- Operations are immutable syntax nodes; Runtime supplies the solver.
 
-local ConsequenceKind = require('et.consequence.kind')
+local ConsequenceKind = require('fibers.consequence.kind')
 
 local Op = {}
 Op.__index = Op

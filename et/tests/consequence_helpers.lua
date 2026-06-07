@@ -1,4 +1,4 @@
-local ConsequenceKind = require('et.consequence.kind')
+local ConsequenceKind = require('fibers.consequence.kind')
 
 local M = {}
 

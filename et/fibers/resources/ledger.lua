@@ -1,9 +1,9 @@
-local DefaultOp = require('et.op')
-local Resource = require('et.resources.protocol')
-local Candidate = require('et.algebra.candidate')
-local Result = require('et.algebra.result')
-local ConsequenceKind = require('et.consequence.kind')
-local ConsequenceSet = require('et.consequence.set')
+local DefaultOp = require('fibers.op')
+local Resource = require('fibers.resources.protocol')
+local Candidate = require('fibers.algebra.candidate')
+local Result = require('fibers.algebra.result')
+local ConsequenceKind = require('fibers.consequence.kind')
+local ConsequenceSet = require('fibers.consequence.set')
 local OpPack = DefaultOp._pack
 
 local Ledger = {}
@@ -144,7 +144,7 @@ function LedgerKind.prepare(ledger, rec, _resolve)
     local consequence_set
     if emit_settlement then
       consequence_set = ConsequenceSet.empty()
-      local c, err = SettlementKind:of({ ledger = ledger, ledger_id = ledger._et_id, owner = final_owner })
+      local c, err = SettlementKind:of({ ledger = ledger, ledger_id = ledger._fibers_id, owner = final_owner })
       if not c then return nil, err end
       local ok, add_err = consequence_set:add(c)
       if not ok then return nil, add_err end
@@ -220,8 +220,8 @@ function Ledger.new(name, owner)
     version = 0,
     closed = {},
     settled_owner = nil,
-    _et_id = next_id,
-    _et_kind = LedgerKind,
+    _fibers_id = next_id,
+    _fibers_kind = LedgerKind,
   }, Ledger)
 end
 

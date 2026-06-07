@@ -2,8 +2,8 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Candidate = require('et.algebra.candidate')
+local Op = require('fibers.op')
+local Candidate = require('fibers.algebra.candidate')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(actual, expected, msg)

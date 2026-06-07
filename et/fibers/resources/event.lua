@@ -1,7 +1,7 @@
 -- Manual waitable event resource for exercising wakeup semantics.
-local DefaultOp = require('et.op')
-local Candidate = require('et.algebra.candidate')
-local Result = require('et.algebra.result')
+local DefaultOp = require('fibers.op')
+local Candidate = require('fibers.algebra.candidate')
+local Result = require('fibers.algebra.result')
 
 local Event = {}
 Event.__index = Event
@@ -29,8 +29,8 @@ function Event.new(name)
   next_id = next_id + 1
   return setmetatable({
     name = name or ('event-' .. tostring(next_id)),
-    _et_id = 'event-' .. tostring(next_id),
-    _et_kind = EventKind,
+    _fibers_id = 'event-' .. tostring(next_id),
+    _fibers_kind = EventKind,
     ready = false,
     vals = nil,
   }, Event)

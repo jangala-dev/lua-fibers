@@ -70,7 +70,7 @@ trusted resource operation.
 
 ## Minimal public wrapper
 
-A resource value usually stores committed state plus `_et_kind`:
+A resource value usually stores committed state plus `_fibers_kind`:
 
 ```lua
 local Box = {}
@@ -82,7 +82,7 @@ function Box.new(value)
   return setmetatable({
     value = value,
     version = 0,
-    _et_kind = BoxKind,
+    _fibers_kind = BoxKind,
   }, Box)
 end
 
@@ -126,15 +126,15 @@ resources may not need `clone`, `merge_*`, `project`, `prepare` or `apply`.
 ## Evaluation
 
 `Kind.eval(resource, payload, ctx)` evaluates the resource operation in the
-current instant.  It returns an `et.algebra.result` value.
+current instant.  It returns an `fibers.algebra.result` value.
 
 Useful helpers:
 
 ```lua
-local Candidate = require('et.algebra.candidate')
-local Result = require('et.algebra.result')
-local Resource = require('et.resources.protocol')
-local pack = require('et.op')._pack
+local Candidate = require('fibers.algebra.candidate')
+local Result = require('fibers.algebra.result')
+local Resource = require('fibers.resources.protocol')
+local pack = require('fibers.op')._pack
 ```
 
 Return current candidates with:
@@ -414,7 +414,7 @@ return Result.cands({ c })
 
 The endpoint protocol is intentionally smaller than the local resource protocol:
 custom get/put rendezvous is supported by shape, but new rendezvous matching
-relations may require extending `et.solver.rendezvous`.
+relations may require extending `fibers.solver.rendezvous`.
 
 ## Waitable resources
 
@@ -435,7 +435,7 @@ transaction commits and no residual fallback replaces the waiting branch.
 
 ## Checklist for a new resource kind
 
-1. Define a resource object and store `_et_kind = Kind`.
+1. Define a resource object and store `_fibers_kind = Kind`.
 2. Expose public methods that return `Op._resource(self, Kind, payload)`.
 3. Implement `Kind.eval`.
 4. If the resource has transactional state, implement records with

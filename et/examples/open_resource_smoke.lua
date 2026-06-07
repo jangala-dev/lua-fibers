@@ -1,10 +1,10 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Resource = require('et.resources.protocol')
-local Candidate = require('et.algebra.candidate')
-local Result = require('et.algebra.result')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Resource = require('fibers.resources.protocol')
+local Candidate = require('fibers.algebra.candidate')
+local Result = require('fibers.algebra.result')
 
 local pack_ = Op._pack
 
@@ -68,7 +68,7 @@ end
 
 local Box = {}
 Box.__index = Box
-function Box.new(v) return setmetatable({ value = v, version = 0, _et_id = {}, _et_kind = BoxKind }, Box) end
+function Box.new(v) return setmetatable({ value = v, version = 0, _fibers_id = {}, _fibers_kind = BoxKind }, Box) end
 function Box:get_op(Op_) return Op_._resource(self, BoxKind, { op = 'get' }) end
 function Box:set_op(Op_, v) return Op_._resource(self, BoxKind, { op = 'set', value = v }) end
 

@@ -2,10 +2,10 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Event = require('et.resources.event')
-local Channel = require('et.resources.channel')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Event = require('fibers.resources.event')
+local Channel = require('fibers.resources.channel')
 local H = require('tests.resources.test_helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()

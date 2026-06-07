@@ -1,8 +1,8 @@
-local Op = require('et.op')
-local Summary = require('et.algebra.summary')
-local Result = require('et.algebra.result')
-local Candidate = require('et.algebra.candidate')
-local Rendezvous = require('et.solver.rendezvous')
+local Op = require('fibers.op')
+local Summary = require('fibers.algebra.summary')
+local Result = require('fibers.algebra.result')
+local Candidate = require('fibers.algebra.candidate')
+local Rendezvous = require('fibers.solver.rendezvous')
 
 local Eval = {}
 local unpack_ = table.unpack or unpack

@@ -1,10 +1,10 @@
--- Small external benchmark suite for the ET LuaTeX runtime.
+-- Small external benchmark suite for the fibers.
 --
 -- Run from the repository root with:
 --   texlua benchmarks/bench.lua
 --
 -- Optional scale factor:
---   ET_BENCH_SCALE=5 texlua benchmarks/bench.lua
+--   FIBERS_BENCH_SCALE=5 texlua benchmarks/bench.lua
 --
 -- These are microbenchmarks intended for relative comparison while refining the
 -- implementation.  Each case validates its result before contributing a timing.
@@ -31,11 +31,11 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Op = require('et.op')
-local Runtime = require('et.runtime')
-local Channel = require('et.resources.channel')
-local Cell = require('et.resources.cell')
-local Ledger = require('et.resources.ledger')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Channel = require('fibers.resources.channel')
+local Cell = require('fibers.resources.cell')
+local Ledger = require('fibers.resources.ledger')
 
 local pack_ = table.pack or function(...)
   return { n = select('#', ...), ... }
@@ -85,7 +85,7 @@ local function env_number(name, default)
   return value
 end
 
-local scale = env_number('ET_BENCH_SCALE', 1)
+local scale = env_number('FIBERS_BENCH_SCALE', 1)
 
 local cases = {}
 
@@ -247,7 +247,7 @@ add('hard: ledger transfer and settlement', 120, function()
   assert_eq((rt.published_consequences[1].obligation[1].payload or rt.published_consequences[1].obligation[1]).owner, 'B')
 end)
 
-io.write('ET texlua benchmark\n')
+io.write('fibers texlua benchmark\n')
 io.write('scale: ', tostring(scale), '\n')
 io.write(string.format('%-42s %10s %10s %12s\n', 'case', 'reps', 'seconds', 'runs/sec'))
 io.write(string.rep('-', 78), '\n')

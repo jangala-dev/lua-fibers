@@ -1,4 +1,4 @@
--- Lazy static effect summaries for ET operation syntax.
+-- Lazy static effect summaries for fibers operation syntax.
 -- These summaries are conservative: they are used only for pruning branches
 -- that cannot affect the externally observable transaction algebra.
 

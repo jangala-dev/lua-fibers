@@ -8,7 +8,7 @@
 -- cell, ledger, semaphore, queue, or future resource.  The record kind owns
 -- clone, merge, projection, preparation and application.
 
-local ConsequenceSet = require('et.consequence.set')
+local ConsequenceSet = require('fibers.consequence.set')
 
 local Resource = {}
 
@@ -101,7 +101,7 @@ function Resource.project(ctx, resource, query)
     if ok then return v end
   end
 
-  local kind = resource and resource._et_kind
+  local kind = resource and resource._fibers_kind
   if kind and kind.project then
     local v, ok = kind.project(resource, nil, query)
     if ok then return v end

@@ -1,8 +1,8 @@
-local Cursor = require('et.solver.cursor')
-local Search = require('et.solver.search')
-local CommitPlan = require('et.commit.plan')
-local Resource = require('et.resources.protocol')
-local Op = require('et.op')
+local Cursor = require('fibers.solver.cursor')
+local Search = require('fibers.solver.search')
+local CommitPlan = require('fibers.commit.plan')
+local Resource = require('fibers.resources.protocol')
+local Op = require('fibers.op')
 local Runtime = {}
 Runtime.__index = Runtime
 
@@ -82,7 +82,7 @@ function Runtime:_make_error(kind, err, fields)
   fields = fields or {}
   local message = fields.message or tostring(err)
   return setmetatable({
-    _et_error = true,
+    _fibers_error = true,
     kind = kind,
     phase = fields.phase or self._phase,
     fibre = fields.fibre,
@@ -165,7 +165,7 @@ local function finish_phase_call(self, old_phase, phase_name, kind, fatal, commi
   if ok then return ... end
 
   local err = ...
-  if type(err) == 'table' and err._et_error and not fatal then error(err, 0) end
+  if type(err) == 'table' and err._fibers_error and not fatal then error(err, 0) end
   if fatal then return self:_fatal(kind, err, { phase = phase_name, committed = committed, level = 0 }) end
   return self:_fail(kind or 'callback_error', err, { phase = phase_name, level = 0 })
 end
@@ -200,7 +200,7 @@ function Runtime:_resume(f, values)
   if not ok then
     f.done = true
     f.waiting = nil
-    if type(req_or_err) == 'table' and req_or_err._et_error then error(req_or_err, 0) end
+    if type(req_or_err) == 'table' and req_or_err._fibers_error then error(req_or_err, 0) end
     self:_fail('fibre_error', req_or_err, { fibre = f.name, level = 0 })
   end
   if coroutine.status(f.co) == 'dead' then
@@ -446,7 +446,7 @@ local function finish_driver_call(self, old_depth, old_phase, ok, ...)
   if ok then return ... end
 
   local err = ...
-  if type(err) == 'table' and err._et_error then error(err, 0) end
+  if type(err) == 'table' and err._fibers_error then error(err, 0) end
 
   local e = self:_make_error('runtime_error', err, { phase = old_phase, level = 0 })
   e.fatal = true
