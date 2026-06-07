@@ -8,6 +8,7 @@ local Op = require('et.op')
 local Runtime = require('et.runtime')
 local Channel = require('et.resources.channel')
 local Cell = require('et.resources.cell')
+local TC = require('tests.consequence_helpers')
 
 local pack_ = table.pack or function(...)
   return { n = select('#', ...), ... }
@@ -48,6 +49,12 @@ local function transaction_tags(rt)
     for j = 1, #(log.transaction or {}) do
       local c = log.transaction[j]
       out[#out + 1] = c.tag or c.kind or tostring(c[1])
+    end
+    for j = 1, #(log.obligation or {}) do
+      local c = log.obligation[j]
+      local payload = c.payload or {}
+      local tag = payload.tag or payload.kind or c.tag
+      if tag then out[#out + 1] = tag end
     end
   end
   return table.concat(out, ',')
@@ -127,14 +134,14 @@ local function test_choice_selects_one_world_and_discards_loser()
   local wraps = {}
   local got
 
-  local winner = Op.emit({ tag = 'choice.winner' }):and_then(function()
+  local winner = Op.emit(TC.tag('choice.winner')):and_then(function()
     return Op.always('winner'):wrap(function(v)
       wraps[#wraps + 1] = 'winner-wrap'
       return v
     end)
   end)
 
-  local loser = Op.emit({ tag = 'choice.loser' }):and_then(function()
+  local loser = Op.emit(TC.tag('choice.loser')):and_then(function()
     return Op.always('loser'):wrap(function(v)
       wraps[#wraps + 1] = 'loser-wrap'
       return v
@@ -156,8 +163,8 @@ local function test_or_else_preference_and_fallback()
   do
     local rt = Runtime.new()
     local got
-    local primary = Op.emit({ tag = 'or_else.primary' }):and_then(function() return Op.always('primary') end)
-    local fallback = Op.emit({ tag = 'or_else.fallback' }):and_then(function() return Op.always('fallback') end)
+    local primary = Op.emit(TC.tag('or_else.primary')):and_then(function() return Op.always('primary') end)
+    local fallback = Op.emit(TC.tag('or_else.fallback')):and_then(function() return Op.always('fallback') end)
     rt:spawn(function() got = rt:perform(primary:or_else(fallback)) end, 'or-else-primary')
     assert_status(rt:run(), 'found')
     assert_eq(got, 'primary')
@@ -165,7 +172,7 @@ local function test_or_else_preference_and_fallback()
   end
 
   do
-    local status, values, rt = one_perform(Op.never():or_else(Op.emit({ tag = 'or_else.fallback' }):and_then(function()
+    local status, values, rt = one_perform(Op.never():or_else(Op.emit(TC.tag('or_else.fallback')):and_then(function()
       return Op.always('fallback')
     end)))
     assert_status(status, 'found', 'or_else commits fallback when primary is absent')
@@ -185,7 +192,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       receiver = rt:perform(
         ch:get_op(Op)
           :map(function(v) return 'primary:' .. v end)
-          :or_else(Op.emit({ tag = 'or_else.cross.no_partner.fallback' }):and_then(function()
+          :or_else(Op.emit(TC.tag('or_else.cross.no_partner.fallback')):and_then(function()
             return Op.always('fallback')
           end))
       )
@@ -207,7 +214,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
         return rows[1][1] .. '+' .. rows[2][1]
       end)
 
-    local fallback = Op.emit({ tag = 'or_else.cross.partial_absent.fallback' }):and_then(function()
+    local fallback = Op.emit(TC.tag('or_else.cross.partial_absent.fallback')):and_then(function()
       return Op.always('fallback')
     end)
 
@@ -231,7 +238,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       receiver = rt:perform(
         ch:get_op(Op)
           :map(function(v) return 'primary:' .. v end)
-          :or_else(Op.emit({ tag = 'or_else.cross.fallback' }):and_then(function()
+          :or_else(Op.emit(TC.tag('or_else.cross.fallback')):and_then(function()
             return Op.always('fallback')
           end))
       )
@@ -258,7 +265,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
         return rows[1][1] .. '+' .. rows[2][1]
       end)
 
-    local fallback = Op.emit({ tag = 'or_else.cross.all.fallback' }):and_then(function()
+    local fallback = Op.emit(TC.tag('or_else.cross.all.fallback')):and_then(function()
       return Op.always('fallback')
     end)
 
@@ -321,18 +328,22 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
   local cell = Cell.new(0, 'wrap-phase-cell')
   local timeline = {}
   local got
+  local published = {}
   local rt = Runtime.new({
-    on_consequence = function(log)
-      timeline[#timeline + 1] = 'publish'
-      assert_eq(cell.value, 9, 'resource state is committed before consequences are observed')
-      assert_eq((log.transaction[1] or {}).tag, 'wrap.before')
-      assert_eq((log.transaction[2] or {}).tag, 'wrap.after')
-    end,
+    services = {
+      test_tag = function(tag)
+        if #published == 0 then
+          timeline[#timeline + 1] = 'publish'
+          assert_eq(cell.value, 9, 'resource state is committed before consequences are observed')
+        end
+        published[#published + 1] = tag
+      end,
+    },
   })
 
-  local op = Op.emit({ tag = 'wrap.before' }):and_then(function()
+  local op = Op.emit(TC.tag('wrap.before')):and_then(function()
     return cell:set_op(Op, 9):and_then(function()
-      return Op.emit({ tag = 'wrap.after' }):and_then(function()
+      return Op.emit(TC.tag('wrap.after')):and_then(function()
         return Op.always('value'):wrap(function(v)
           timeline[#timeline + 1] = 'wrap'
           assert_eq(cell.value, 9, 'wrap runs after commit')
@@ -350,6 +361,7 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
   assert_status(rt:run(), 'found')
   assert_eq(got, 'value:wrapped')
   assert_eq(transaction_tags(rt), 'wrap.before,wrap.after', 'explicit transaction consequences preserve syntax order across resource access')
+  assert_eq(table.concat(published, ','), 'wrap.before,wrap.after', 'explicit transaction consequences preserve syntax order across resource access')
   assert_eq(table.concat(timeline, ','), 'publish,wrap,resume', 'publish happens before wrap, wrap before participant continuation resumes')
 
   local boundary = Op.always('x'):wrap(function(v) return v end)
@@ -424,7 +436,7 @@ local function test_with_nack_external_behaviour()
         Op.always('winner'),
         Op.with_nack(function(nack)
           ref = nack.obligation
-          return Op.emit({ tag = 'nack.loser.effect' }):and_then(function() return Op.always('loser') end)
+          return Op.emit(TC.tag('nack.loser.effect')):and_then(function() return Op.always('loser') end)
         end)
       ))
     end, 'with-nack-loser')
@@ -756,21 +768,19 @@ local function test_nack_does_not_fire_while_protected_attempt_is_still_pending(
 end
 
 local function test_multiple_wraps_run_in_order_after_publication()
-  local rt = Runtime.new({
-    on_consequence = function(_log)
-      -- The publication marker should be first in the observable timeline.
-    end,
-  })
   local timeline = {}
+  local rt = Runtime.new({
+    services = {
+      test_tag = function()
+        timeline[#timeline + 1] = 'publish'
+      end,
+    },
+  })
   local got
-
-  rt.on_consequence = function()
-    timeline[#timeline + 1] = 'publish'
-  end
 
   rt:spawn(function()
     got = rt:perform(
-      Op.emit({ tag = 'multi-wrap' }):and_then(function()
+      Op.emit(TC.tag('multi-wrap')):and_then(function()
         return Op.always('x')
       end)
         :wrap(function(v)
@@ -796,21 +806,19 @@ local function test_wrap_may_perform_new_transaction_after_commit()
   local timeline = {}
   local got
   local rt = Runtime.new({
-    on_consequence = function(log)
-      local tags = {}
-      for i = 1, #(log.transaction or {}) do
-        tags[#tags + 1] = log.transaction[i].tag
-      end
-      if #tags > 0 then timeline[#timeline + 1] = 'publish:' .. table.concat(tags, '+') end
-    end,
+    services = {
+      test_tag = function(tag)
+        timeline[#timeline + 1] = 'publish:' .. tag
+      end,
+    },
   })
 
-  local outer = Op.emit({ tag = 'outer' }):and_then(function()
+  local outer = Op.emit(TC.tag('outer')):and_then(function()
     return cell:set_op(Op, 1):and_then(function()
       return Op.always('a'):wrap(function(v)
         timeline[#timeline + 1] = 'wrap-start'
         assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
-        local y = rt:perform(Op.emit({ tag = 'inner' }):and_then(function()
+        local y = rt:perform(Op.emit(TC.tag('inner')):and_then(function()
           return Op.always('b')
         end))
         timeline[#timeline + 1] = 'wrap-end'
@@ -852,11 +860,11 @@ end
 local function test_product_lane_wraps_apply_inside_out_after_commit()
   local timeline = {}
   local rt = Runtime.new({
-    on_consequence = function(log)
-      local tags = {}
-      for i = 1, #(log.transaction or {}) do tags[#tags + 1] = log.transaction[i].tag end
-      if #tags > 0 then timeline[#timeline + 1] = 'publish:' .. table.concat(tags, '+') end
-    end,
+    services = {
+      test_tag = function(tag)
+        timeline[#timeline + 1] = 'publish:' .. tag
+      end,
+    },
   })
   local ch_a = Channel.new('wrap-product-a')
   local ch_b = Channel.new('wrap-product-b')
@@ -864,18 +872,18 @@ local function test_product_lane_wraps_apply_inside_out_after_commit()
 
   rt:spawn(function()
     got = rt:perform(
-      Op.emit({ tag = 'outer' }):and_then(function()
+      Op.emit(TC.tag('outer')):and_then(function()
         return Op.all({
           ch_a:get_op(Op):wrap(function(v)
             timeline[#timeline + 1] = 'wrap-a'
-            local suffix = rt:perform(Op.emit({ tag = 'inner-a' }):and_then(function()
+            local suffix = rt:perform(Op.emit(TC.tag('inner-a')):and_then(function()
               return Op.always('!')
             end))
             return v .. suffix
           end),
           ch_b:get_op(Op):wrap(function(v)
             timeline[#timeline + 1] = 'wrap-b'
-            local suffix = rt:perform(Op.emit({ tag = 'inner-b' }):and_then(function()
+            local suffix = rt:perform(Op.emit(TC.tag('inner-b')):and_then(function()
               return Op.always('?')
             end))
             return v .. suffix
@@ -1007,6 +1015,7 @@ local Op = require('et.op')
 local Runtime = require('et.runtime')
 local Channel = require('et.resources.channel')
 local Cell = require('et.resources.cell')
+local TC = require('tests.consequence_helpers')
 local Ledger = require('et.resources.ledger')
 
 local pack_ = table.pack or function(...)
@@ -1068,6 +1077,12 @@ local function transaction_tags(rt)
       local c = log.transaction[j]
       out[#out + 1] = c.tag or c.kind or tostring(c[1])
     end
+    for j = 1, #(log.obligation or {}) do
+      local c = log.obligation[j]
+      local payload = c.payload or {}
+      local tag = payload.tag or payload.kind or c.tag
+      if tag then out[#out + 1] = tag end
+    end
   end
   return table.concat(out, ',')
 end
@@ -1078,7 +1093,7 @@ local function obligation_entries(rt, kind)
     local log = rt.published_consequences[i]
     for j = 1, #(log.obligation or {}) do
       local c = log.obligation[j]
-      if kind == nil or c.kind == kind or c.tag == kind then out[#out + 1] = c end
+      if kind == nil or c.kind == kind or c.tag == kind then out[#out + 1] = c.payload or c end
     end
   end
   return out
@@ -1182,7 +1197,7 @@ local function test_or_else_primary_second_candidate_beats_fallback()
     end)
   end)
   local primary = Op.choice(bad_primary, good_primary)
-  local fallback = Op.emit({ tag = 'bad.fallback' }):and_then(function()
+  local fallback = Op.emit(TC.tag('bad.fallback')):and_then(function()
     return cell:set_op(Op, 'fallback'):and_then(function() return Op.always('fallback') end)
   end)
 
@@ -1212,7 +1227,7 @@ local function test_or_else_primary_needs_partner_backtracking()
     receiver = rt:perform(
       wanted:get_op(Op)
         :map(function(v) return 'primary:' .. tostring(v) end)
-        :or_else(Op.emit({ tag = 'partner.backtrack.fallback' }):and_then(function()
+        :or_else(Op.emit(TC.tag('partner.backtrack.fallback')):and_then(function()
           return Op.always('fallback')
         end))
     )
@@ -1240,7 +1255,7 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
       return Op.always('primary:' .. tostring(v))
     end)
   end)
-  local fallback = Op.emit({ tag = 'resource.conflict.fallback' }):and_then(function()
+  local fallback = Op.emit(TC.tag('resource.conflict.fallback')):and_then(function()
     return Op.always('fallback')
   end)
 
@@ -1287,7 +1302,7 @@ local function test_losing_branch_emit_wrap_and_nack_do_not_cross_contaminate()
 
   local loser = Op.with_nack(function(nack)
     ref = nack.obligation
-    return Op.emit({ tag = 'loser.emit' }):and_then(function()
+    return Op.emit(TC.tag('loser.emit')):and_then(function()
       return Op.always('loser'):wrap(function(v)
         wraps = wraps + 1
         return v
@@ -1457,7 +1472,7 @@ local function test_transfer_close_or_else_settles_under_correct_owner()
         return ledger:owner_op()
       end)
     end)
-    local fallback = Op.emit({ tag = 'bad.close-A-fallback' }):and_then(function()
+    local fallback = Op.emit(TC.tag('bad.close-A-fallback')):and_then(function()
       return ledger:close_op('A'):and_then(function() return Op.always('fallback') end)
     end)
     rt:spawn(function() result = rt:perform(primary:or_else(fallback)) end, 'transfer-close')

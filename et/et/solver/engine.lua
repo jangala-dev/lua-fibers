@@ -4,6 +4,7 @@ local Eval = require('et.algebra.eval')
 local Rendezvous = require('et.solver.rendezvous')
 local State = require('et.solver.state')
 local World = require('et.solver.world')
+local CommitPlan = require('et.commit.plan')
 
 local clone_candidate = Candidate.clone
 local process_one_deferred = Eval.process_one_deferred
@@ -230,6 +231,15 @@ end
 function Engine:record_solution(combo)
   local w = closed_world(combo)
   if not w then return nil end
+
+  -- Commit preparation is side-effect-free trusted machinery.  Running it here
+  -- lets structured resource/consequence refusals reject this candidate world
+  -- and allows search to continue to other worlds rather than returning a
+  -- non-committable plan to the public driver.
+  local plan, _reason = CommitPlan.try_from_world(self.rt, w, nil)
+  if not plan then return nil end
+  w.prepared_plan = plan
+
   self.stats.solutions = self.stats.solutions + 1
   if combo_better(w.combo, w.pref, self.best and self.best.combo, self.best_pref, self.best_order) then
     self.best, self.best_pref, self.best_order = w, w.pref, w.order

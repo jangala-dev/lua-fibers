@@ -231,7 +231,8 @@ function eval_op(node, ctx)
     return Result.none()
   elseif k == 'emit' then
     local c = candidate(pack_(true))
-    c.trans[#c.trans + 1] = node.item
+    local ok, err = Candidate.add_consequence(c, node.consequence)
+    if not ok then return Result.none() end
     return Result.cands({ c })
   elseif k == 'prim' then
     local p = node.prim

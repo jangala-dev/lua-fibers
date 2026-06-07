@@ -45,7 +45,7 @@ rt:run()
 local st = rt:step({ max_work = 100 })
 ```
 
-The current core keeps observable mutation in the runtime.  The algebra constructs candidate worlds and commit plans; the runtime applies resource state changes, publishes consequences, resolves nacks, runs wraps, and resumes fibres.
+The current core keeps observable mutation in the runtime.  The algebra constructs candidate worlds and commit plans; the runtime applies resource state changes, publishes typed consequence obligations, resolves nacks, runs wraps, and resumes fibres.
 
 The implementation uses three deliberately different error boundaries:
 
@@ -70,6 +70,16 @@ After a fatal runtime error the runtime object is no longer usable; later public
 entry points raise the stored fatal error.
 
 
+
+## Typed consequence obligations
+
+`Op.emit` accepts only typed consequence objects.  A consequence is a runtime-owned
+obligation carried by a candidate world, not an arbitrary log item or after-commit
+callback.  Consequence kinds define keying, merge, preparation and publication.
+Resources may derive consequences from final committed state; the ledger resource
+uses this to publish settlement obligations after ownership and close journals
+have committed.
+
 ## Waitable resources
 
 The algebra distinguishes current candidates from future wake interests:
@@ -82,7 +92,7 @@ EvalResult = { cands = current transactional candidates, waits = future interest
 searched first against the whole current transaction system.  The right branch is
 not evaluated unless no current committed world can be found through the left
 branch at that occurrence.  When fallback opens, the left branch's waits,
-consequences, wraps, protected nacks and speculative structure are abandoned.
+typed consequence obligations, wraps, protected nacks and speculative structure are abandoned.
 
 A ready waitable source can therefore participate in the left-hand transaction
 and suppress fallback.  A not-ready source does not suppress fallback; its wait

@@ -244,7 +244,7 @@ add('hard: ledger transfer and settlement', 120, function()
   assert_eq(ledger.settled_owner, 'B')
   assert_eq(#rt.published_consequences, 1)
   assert_eq(#rt.published_consequences[1].obligation, 1)
-  assert_eq(rt.published_consequences[1].obligation[1].owner, 'B')
+  assert_eq((rt.published_consequences[1].obligation[1].payload or rt.published_consequences[1].obligation[1]).owner, 'B')
 end)
 
 io.write('ET texlua benchmark\n')

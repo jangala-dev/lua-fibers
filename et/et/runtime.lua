@@ -19,6 +19,15 @@ local function pack_perform_result(vals, post)
 end
 
 
+local function plan_retriable(reason)
+  return reason == 'stale' or reason == 'stale-cursor' or reason == 'resource-not-fresh'
+end
+
+local function plan_failure_status(reason)
+  if plan_retriable(reason) then return { tag = 'pending', reason = reason or 'stale world' } end
+  return { tag = 'reject_candidate', reason = reason or 'candidate rejected during commit preparation' }
+end
+
 local function score_is_zero(score)
   if not score then return true end
   for i = 1, #score do if (score[i] or 0) ~= 0 then return false end end
@@ -34,7 +43,7 @@ function Runtime.new(opts)
     fibres = {},
     published_consequences = {},
     stats = { refreshes = 0, steps = 0, algebra_pending = 0 },
-    on_consequence = opts.on_consequence or host.on_consequence or nil,
+    services = opts.services or host.services or {},
     _epoch = 0,
     _cursor = nil,
     _phase = 'external',
@@ -226,6 +235,39 @@ end
 function Runtime:_apply_commit_plan(plan)
   assert(CommitPlan.is_plan(plan), 'expected certified commit plan')
 
+  local prepared = plan.prepared_resources
+  local prepared_consequences = plan.prepared_consequences
+  local log
+
+  if prepared or prepared_consequences then
+    log = { obligation = {} }
+  end
+
+  if prepared then
+    local old = self:_set_phase('commit')
+    for i = 1, #prepared do Resource.apply_prepared(prepared[i], log) end
+    self:_restore_phase(old)
+  end
+
+  if log and (#log.obligation > 0 or (prepared_consequences and #prepared_consequences > 0)) then
+    self.published_consequences[#self.published_consequences + 1] = log
+  end
+
+  if prepared_consequences then
+    for i = 1, #prepared_consequences do
+      local pc = prepared_consequences[i]
+      local entry = {
+        kind = pc.kind_name or (pc.kind and pc.kind.name) or tostring(pc.kind),
+        key = pc.key,
+        payload = pc.payload,
+      }
+      log.obligation[#log.obligation + 1] = entry
+      self:_call_fatal_in_phase('consequence', 'consequence_error', true, function()
+        return pc.publish(self, entry, log)
+      end)
+    end
+  end
+
   local selected, lost = plan.selected_nacks, plan.lost_nacks
   if selected then
     for i = 1, #selected do
@@ -240,24 +282,7 @@ function Runtime:_apply_commit_plan(plan)
     end
   end
 
-  local prepared = plan.prepared_resources
-  local log
-  if plan.transaction or prepared then
-    log = { transaction = plan.transaction or {}, obligation = {} }
-  end
-  if prepared then
-    local old = self:_set_phase('commit')
-    for i = 1, #prepared do Resource.apply_prepared(prepared[i], log) end
-    self:_restore_phase(old)
-  end
-  if log and (#log.transaction > 0 or #log.obligation > 0) then
-    self.published_consequences[#self.published_consequences + 1] = log
-    if self.on_consequence then
-      self:_call_fatal_in_phase('consequence', 'consequence_error', true, self.on_consequence, log)
-    end
-  end
-
-  -- Resource state and transaction consequences are already committed before any
+  -- Resource state and transaction obligations are already committed before any
   -- selected fibre is resumed.  Invalidate cached search state before post-commit
   -- wrap code can run, yield, or fail.
   self:_bump_epoch()
@@ -390,7 +415,7 @@ function Runtime:_step(opts)
     local cert_cursor = self._cursor
     if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
     local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
-    if not plan then self:_invalidate_cursor(); return { tag = 'pending', reason = reason or 'stale world' } end
+    if not plan then self:_invalidate_cursor(); return plan_failure_status(reason) end
     self._cursor = nil
     self:_apply_commit_plan(plan)
     return { tag = 'found', value = true, kind = 'commit' }
@@ -405,7 +430,7 @@ function Runtime:_step(opts)
     local cert_cursor = self._cursor
     if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
     local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
-    if not plan then self:_invalidate_cursor(); return { tag = 'pending', reason = reason or 'stale world' } end
+    if not plan then self:_invalidate_cursor(); return plan_failure_status(reason) end
     self:_apply_commit_plan(plan)
     return { tag = 'found', value = true, kind = 'commit' }
   end
@@ -475,14 +500,14 @@ function Runtime:_run(opts)
       committed = true
       if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
       local plan, _reason = CommitPlan.try_from_world(self, world, nil)
-      if plan then self:_apply_commit_plan(plan) else self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
+      if plan then self:_apply_commit_plan(plan) elseif plan_retriable(_reason) then self.stats.refreshes = (self.stats.refreshes or 0) + 1 else return plan_failure_status(_reason) end
     elseif self:_pump_one() then
       -- More public participants may make a preferred world available.
     elseif world then
       committed = true
       if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
       local plan, _reason = CommitPlan.try_from_world(self, world, nil)
-      if plan then self:_apply_commit_plan(plan) else self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
+      if plan then self:_apply_commit_plan(plan) elseif plan_retriable(_reason) then self.stats.refreshes = (self.stats.refreshes or 0) + 1 else return plan_failure_status(_reason) end
     elseif st and st.tag == 'pending' then
       self.pending_wakeups = st.waits
       if committed then return { tag = 'found', value = true } end

@@ -38,6 +38,11 @@ function M.transaction_tags(rt)
       local c = log.transaction[j]
       out[#out + 1] = c.tag or c.kind or tostring(c[1])
     end
+    for j = 1, #(log.obligation or {}) do
+      local c = log.obligation[j]
+      local p = c.payload or {}
+      out[#out + 1] = p.tag or p.kind or c.tag or c.kind or tostring(c[1])
+    end
   end
   return table.concat(out, ',')
 end
@@ -48,7 +53,7 @@ function M.obligation_entries(rt, kind)
     local log = rt.published_consequences[i]
     for j = 1, #(log.obligation or {}) do
       local c = log.obligation[j]
-      if kind == nil or c.kind == kind or c.tag == kind then out[#out + 1] = c end
+      if kind == nil or c.kind == kind or c.tag == kind then out[#out + 1] = c.payload or c end
     end
   end
   return out

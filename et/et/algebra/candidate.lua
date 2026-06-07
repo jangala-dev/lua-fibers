@@ -1,5 +1,6 @@
 local Op = require('et.op')
 local Resource = require('et.resources.protocol')
+local ConsequenceSet = require('et.consequence.set')
 
 local Candidate = {}
 local pack_ = Op._pack
@@ -115,7 +116,7 @@ local function new(vals, role)
     vals = vals or pack_(),
     deferred = {},
     endpoints = {},
-    trans = {},
+    consequences = nil,
     post = nil,
     res = nil,
     res_list = nil,
@@ -150,7 +151,7 @@ local function clone(c)
       value = e.value,
     }
   end
-  d.trans = list_copy(c.trans)
+  d.consequences = c.consequences and c.consequences:copy() or nil
   d.post = c.post
   Resource.copy_from(d, c)
   d.selected_nacks = list_copy(c.selected_nacks)
@@ -161,6 +162,34 @@ local function clone(c)
   return d
 end
 
+
+local function add_consequence(c, consequence)
+  local set = c.consequences
+  if not set then
+    set = ConsequenceSet.empty()
+    c.consequences = set
+  end
+  return set:add(consequence)
+end
+
+local function merge_consequence_combo(combo)
+  local set = nil
+  for i = 1, #combo do
+    local cs = combo[i].consequences
+    if cs then
+      set = set or ConsequenceSet.empty()
+      local ok, err = set:merge(cs)
+      if not ok then return nil, err or 'consequence-conflict' end
+    end
+  end
+  return set
+end
+
+local function consequences_compatible(combo)
+  local _set, err = merge_consequence_combo(combo)
+  return err == nil, err
+end
+
 local function ctx_with_overlay(ctx, c)
   local n = {}
   for k, v in pairs(ctx) do n[k] = v end
@@ -169,7 +198,12 @@ local function ctx_with_overlay(ctx, c)
 end
 
 local function merge_common(a, b, out)
-  out.trans = list_copy(a.trans); list_append(out.trans, b.trans)
+  if a.consequences or b.consequences then
+    local set = a.consequences and a.consequences:copy() or ConsequenceSet.empty()
+    local ok, err = set:merge(b.consequences)
+    if not ok then return false, err or 'consequence-conflict' end
+    if not set:is_empty() then out.consequences = set end
+  end
   out.endpoints = list_copy(a.endpoints); list_append(out.endpoints, b.endpoints)
   out.selected_nacks = list_copy(a.selected_nacks); unique_append(out.selected_nacks, b.selected_nacks)
   out.lost_nacks = list_copy(a.lost_nacks); unique_append(out.lost_nacks, b.lost_nacks)
@@ -217,6 +251,9 @@ Candidate.resolve_pack = resolve_pack
 Candidate.new = new
 Candidate.empty = empty
 Candidate.clone = clone
+Candidate.add_consequence = add_consequence
+Candidate.merge_consequence_combo = merge_consequence_combo
+Candidate.consequences_compatible = consequences_compatible
 Candidate.overlay_from = overlay_from
 Candidate.ctx_with_overlay = ctx_with_overlay
 Candidate.combine_seq = combine_seq

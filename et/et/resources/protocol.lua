@@ -8,6 +8,8 @@
 -- cell, ledger, semaphore, queue, or future resource.  The record kind owns
 -- clone, merge, projection, preparation and application.
 
+local ConsequenceSet = require('et.consequence.set')
+
 local Resource = {}
 
 local function kind_name(kind)
@@ -167,6 +169,7 @@ function Resource.prepare_combo(combo, raw_resolved, resolve)
   end
 
   local prepared = nil
+  local derived = nil
   for i = 1, #list do
     local resource = list[i]
     local rec = map[resource]
@@ -178,10 +181,22 @@ function Resource.prepare_combo(combo, raw_resolved, resolve)
     if p and not noop then
       prepared = prepared or {}
       prepared[#prepared + 1] = p
+
+      if p.consequence_set then
+        derived = derived or ConsequenceSet.empty()
+        local ok, err = derived:merge(p.consequence_set)
+        if not ok then return nil, err end
+      elseif p.consequences then
+        derived = derived or ConsequenceSet.empty()
+        for j = 1, #p.consequences do
+          local ok, err = derived:add(p.consequences[j])
+          if not ok then return nil, err end
+        end
+      end
     end
   end
 
-  return prepared
+  return prepared, nil, derived
 end
 
 function Resource.apply_prepared(prepared, log)

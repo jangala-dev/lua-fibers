@@ -2,6 +2,8 @@ local DefaultOp = require('et.op')
 local Resource = require('et.resources.protocol')
 local Candidate = require('et.algebra.candidate')
 local Result = require('et.algebra.result')
+local ConsequenceKind = require('et.consequence.kind')
+local ConsequenceSet = require('et.consequence.set')
 local OpPack = DefaultOp._pack
 
 local Ledger = {}
@@ -9,6 +11,31 @@ Ledger.__index = Ledger
 
 local LedgerKind = { name = 'ledger' }
 local next_id = 0
+
+local SettlementKind
+SettlementKind = ConsequenceKind.new {
+  name = 'settlement',
+  order = 200,
+  key = function(payload) return payload.ledger_id or payload.ledger end,
+  merge = function(a, b)
+    if a.owner ~= b.owner then
+      return nil, { kind = 'consequence_conflict', message = 'settlement owner conflict' }
+    end
+    return a
+  end,
+  prepare = function(_rt, payload)
+    return {
+      kind = SettlementKind,
+      key = payload.ledger_id or payload.ledger,
+      payload = payload,
+      publish = function(rt, _entry, _log)
+        if rt.services and rt.services.settle then
+          return rt.services.settle(payload.ledger, payload.owner)
+        end
+      end,
+    }
+  end,
+}
 
 local function copy_set(src)
   if not src then return nil end
@@ -114,6 +141,15 @@ function LedgerKind.prepare(ledger, rec, _resolve)
   local emit_settlement = rec.closes and rec.closes[final_owner] and ledger.settled_owner == nil or false
 
   if rec.has_owner or rec.closed or emit_settlement then
+    local consequence_set
+    if emit_settlement then
+      consequence_set = ConsequenceSet.empty()
+      local c, err = SettlementKind:of({ ledger = ledger, ledger_id = ledger._et_id, owner = final_owner })
+      if not c then return nil, err end
+      local ok, add_err = consequence_set:add(c)
+      if not ok then return nil, add_err end
+    end
+
     return {
       kind = LedgerKind,
       resource = ledger,
@@ -122,6 +158,7 @@ function LedgerKind.prepare(ledger, rec, _resolve)
       closed = copy_set(rec.closed),
       emit_settlement = emit_settlement,
       settlement_owner = final_owner,
+      consequence_set = consequence_set,
     }
   end
 
@@ -145,7 +182,6 @@ function LedgerKind.apply(prepared, log)
 
   if prepared.emit_settlement then
     ledger.settled_owner = prepared.settlement_owner
-    log.obligation[#log.obligation + 1] = { kind = 'settlement', owner = prepared.settlement_owner, ledger = ledger }
   end
 end
 
@@ -205,5 +241,6 @@ function Ledger:close_op(owner, Op)
 end
 
 Ledger.Kind = LedgerKind
+Ledger.SettlementKind = SettlementKind
 
 return Ledger

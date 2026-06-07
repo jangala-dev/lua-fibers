@@ -4,6 +4,7 @@ local tests = {
   'tests/test_op.lua',
   'tests/test_resources.lua',
   'tests/test_runtime.lua',
+  'tests/test_consequences.lua',
   'tests/test_contracts.lua',
   'tests/test_open_resources.lua',
   'tests/test_candidate.lua',

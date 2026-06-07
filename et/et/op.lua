@@ -1,6 +1,8 @@
 -- Compact external transaction algebra for texlua.
 -- Operations are immutable syntax nodes; Runtime supplies the solver.
 
+local ConsequenceKind = require('et.consequence.kind')
+
 local Op = {}
 Op.__index = Op
 
@@ -58,8 +60,11 @@ function Op.never()
   return op('never')
 end
 
-function Op.emit(item)
-  return op('emit', { item = item })
+function Op.emit(consequence)
+  if not ConsequenceKind.is_consequence(consequence) then
+    error('emit expects a typed consequence obligation', 2)
+  end
+  return op('emit', { consequence = consequence })
 end
 
 function Op.guard(fn)

@@ -326,17 +326,24 @@ function BoxKind.apply(p, _log)
 end
 ```
 
-`log` has:
+Prepared resource application should mutate only committed resource state.
+Resources should not append arbitrary consequence records to the runtime log.
+If a final resource state entails runtime work, return typed consequences from
+`prepare` as `consequence_set` or `consequences`; the commit plan will merge,
+prepare and publish them after resource application.
 
 ```lua
-{
-  transaction = {},
-  obligation = {},
+return {
+  kind = BoxKind,
+  resource = box,
+  write = value,
+  consequence_set = derived_obligations,
 }
 ```
 
-Append public consequences or obligations there if the resource needs them.  The
-runtime publishes the log after prepared resources are applied.
+The runtime maintains `published_consequences` as an observation aid.  Log entries
+are envelopes of the form `{ kind = name, key = key, payload = payload }`; the
+semantic object is the typed obligation, not the log row.
 
 ## Static summary
 

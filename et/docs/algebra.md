@@ -17,7 +17,7 @@ rt:run()
 
 `perform` suspends the current fibre.  The solver searches the currently waiting
 fibres for a closed committed world.  If a world commits, resource mutation,
-transaction consequence publication and nack settlement happen before any
+typed consequence publication and nack settlement happen before any
 selected fibre is resumed.  The selected fibre is then resumed inside `perform`
 with the raw values and the selected post-commit value transformer.  That
 transformer is applied in the resumed fibre before `perform` returns.
@@ -30,7 +30,7 @@ Operations evaluate to current transaction candidates.  A candidate may contain:
 - rendezvous endpoints;
 - tentative resource records;
 - deferred continuations waiting for unresolved rendezvous values;
-- consequences from `emit`;
+- typed consequence obligations from `emit`;
 - post-commit value transformers from `wrap`;
 - selected or lost nack obligations.
 
@@ -59,11 +59,19 @@ Op.always("a", "b")
 Has no current candidates and no wake interests.  It represents absence, not a
 failed exception.
 
-### `Op.emit(item)`
+### `Op.emit(consequence)`
 
-Succeeds with `true` and appends `item` to the transaction consequence log if the
-candidate commits.  Emits from losing, absent or abandoned branches are not
-published.
+Succeeds with `true` and contributes a typed runtime obligation to the current
+candidate world.  `consequence` must be a consequence object constructed by a
+consequence kind; arbitrary Lua values and callbacks are rejected at construction
+time.
+
+When candidate worlds combine, their consequence sets are keyed and merged by
+kind.  Duplicate obligations may collapse, and conflicting obligations reject the
+candidate world.  If the selected world commits, prepared obligations are
+published by trusted runtime machinery after resource journals are applied and
+before any selected fibre resumes.  Emits from losing, absent or abandoned
+branches are discarded.
 
 ### `Op.guard(fn)`
 
@@ -347,6 +355,9 @@ Common return tags:
 - `{ tag = 'pending', kind = 'wakeup', waits = ... }` — no current transaction
   committed, but future wake interests remain;
 - `{ tag = 'absent' }` — no compatible transaction exists now;
+- `{ tag = 'reject_candidate' }` — the candidate selected by search could not be
+  prepared, for example because a consequence kind returned a structured
+  refusal;
 - `{ tag = 'idle' }` — no fibres are live.
 
 ## Laws and useful intuitions
@@ -361,7 +372,7 @@ Lua functions:
 - `all` composes independent lanes.
 - `tensor` composes lanes and permits internal rendezvous.
 - resource effects are atomic and all-or-nothing.
-- consequences are published only by the committed world.
+- typed consequence obligations are published only by the committed world.
 - wraps from losing worlds are discarded.
 - selected wraps run in the resumed fibre after consequence publication and before
   `perform` returns.
@@ -388,7 +399,7 @@ failure of the transaction that has already committed.
 ### Trusted transactional machinery
 
 The solver, resource protocol, prepare/apply path, commit machinery and
-mandatory consequence publication are trusted transactional machinery.  They are
+mandatory consequence preparation/publication are trusted transactional machinery.  They are
 not individually protected by recovery wrappers.  An error here is treated as an
 implementation or resource-integrity failure, not as a transactional abort and
 not as a losing candidate world.
@@ -415,7 +426,12 @@ restore public driver state on every exit and then re-raise the appropriate
 error.  It does not make solver, resource, prepare, commit or consequence code
 recoverable.
 
-Mandatory consequence interpretation happens after commit.  If a consequence
-handler raises, the transaction remains committed, but the runtime records a
-fatal `consequence_error`, reports it to the host if configured, and rejects
-later public entry points with the stored fatal error.
+Mandatory consequence publication happens after resource commit.  If a prepared
+consequence publisher raises, the transaction remains committed, but the runtime
+records a fatal `consequence_error`, reports it to the host if configured, and
+rejects later public entry points with the stored fatal error.
+
+Consequence kinds may also return a structured refusal during merge or prepare.
+That is a candidate-world rejection, not a fatal runtime failure.  A raw Lua
+error escaping from consequence kind machinery remains a trusted-machinery
+failure.

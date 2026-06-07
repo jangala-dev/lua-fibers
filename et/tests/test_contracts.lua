@@ -4,6 +4,7 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local Op = require('et.op')
 local Runtime = require('et.runtime')
 local Cell = require('et.resources.cell')
+local TC = require('tests.consequence_helpers')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg)
@@ -121,11 +122,13 @@ end
 do
   local rt
   rt = Runtime.new({
-    on_consequence = function()
-      rt:perform(Op.always('bad'))
-    end,
+    services = {
+      test_tag = function()
+        rt:perform(Op.always('bad'))
+      end,
+    },
   })
-  rt:spawn(function() rt:perform(Op.emit({ kind = 'contract-test' })) end, 'consequence-performer')
+  rt:spawn(function() rt:perform(Op.emit(TC.kind('contract-test'))) end, 'consequence-performer')
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'consequence_error', 'perform inside consequence handler is fatal consequence failure')
   assert_eq(err.committed, true, 'consequence failure records that commit already happened')
@@ -213,13 +216,9 @@ end
 -- A raw consequence handler error is also fatal and prevents later driver use.
 do
   local cell = Cell.new(0, 'fatal-consequence-cell')
-  local rt = Runtime.new({
-    on_consequence = function()
-      error('consequence exploded')
-    end,
-  })
+  local rt = Runtime.new()
   rt:spawn(function()
-    rt:perform(Op.emit({ kind = 'fatal-consequence' }):and_then(function()
+    rt:perform(Op.emit(TC.publish_fatal()):and_then(function()
       return cell:set_op(Op, 1)
     end))
   end, 'raw-consequence-error')
