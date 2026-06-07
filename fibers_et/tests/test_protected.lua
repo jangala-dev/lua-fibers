@@ -1,0 +1,98 @@
+-- Tests for yieldable protected calls.
+--
+-- The suite forces the coroutine-backed path so the behaviour is exercised even
+-- on hosts whose native pcall/xpcall already allow yielding.
+
+_G.__FIBERS_PROTECTED_FORCE_FALLBACK = true
+package.loaded['fibers.protected'] = nil
+package.loaded['fibers.runtime'] = nil
+package.loaded['fibers.task'] = nil
+package.loaded['fibers'] = nil
+
+local function fail(msg) error(msg, 2) end
+local function eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
+local function ok(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function test(_name, fn) fn() end
+
+local fibers = require('fibers')
+local Protected = require('fibers.protected')
+
+test('fallback path is active when forced', function()
+  eq(Protected.using_native(), false)
+end)
+
+test('fibers.pcall permits perform to suspend and resume', function()
+  local protected_ok, got
+  local st = fibers.run(function()
+    local ch = fibers.Channel.new('protected-channel')
+    fibers.spawn(function()
+      fibers.perform(ch:send_op('hello'))
+    end, 'sender')
+
+    protected_ok, got = fibers.pcall(function()
+      return fibers.perform(ch:recv_op())
+    end)
+  end)
+
+  eq(st.tag, 'found')
+  eq(protected_ok, true)
+  eq(got, 'hello')
+end)
+
+test('fibers.pcall catches ordinary fibre errors', function()
+  local protected_ok, err
+  local st = fibers.run(function()
+    protected_ok, err = fibers.pcall(function()
+      error('protected boom', 0)
+    end)
+  end)
+
+  eq(st.tag, 'absent')
+  eq(protected_ok, false)
+  ok(tostring(err):match('protected boom'), 'expected protected error, got: ' .. tostring(err))
+end)
+
+test('fibers.xpcall permits perform and handles errors', function()
+  local sync_ok, got, err_ok, handled
+  local st = fibers.run(function()
+    local ch = fibers.Channel.new('protected-xchannel')
+    fibers.spawn(function()
+      fibers.perform(ch:send_op('x'))
+    end, 'sender')
+
+    sync_ok, got = fibers.xpcall(function()
+      return fibers.perform(ch:recv_op())
+    end, function(err)
+      return 'handled:' .. tostring(err)
+    end)
+
+    err_ok, handled = fibers.xpcall(function()
+      error('xboom', 0)
+    end, function(err)
+      return 'handled:' .. tostring(err)
+    end)
+  end)
+
+  eq(st.tag, 'found')
+  eq(sync_ok, true)
+  eq(got, 'x')
+  eq(err_ok, false)
+  ok(tostring(handled):match('handled:.*xboom'), 'expected handled xboom, got: ' .. tostring(handled))
+end)
+
+test('task bodies may perform while protected for result reporting', function()
+  local status, value
+  local st = fibers.run(function()
+    local region = fibers.Region.new('protected-region')
+    local task = fibers.perform(region:spawn_op(function()
+      return fibers.perform(fibers.Op.always('task-ok'))
+    end, 'protected-task'))
+    status, value = fibers.perform(task:join_op())
+  end)
+
+  eq(st.tag, 'found')
+  eq(status, 'ok')
+  eq(value, 'task-ok')
+end)
+
+print('tests/test_protected.lua: ok')

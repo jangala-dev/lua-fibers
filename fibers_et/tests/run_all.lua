@@ -1,6 +1,7 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local tests = {
+  'tests/test_protected.lua',
   'tests/test_op.lua',
   'tests/test_resources.lua',
   'tests/test_runtime.lua',

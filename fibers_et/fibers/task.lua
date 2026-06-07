@@ -10,6 +10,7 @@ local Runtime = require('fibers.runtime')
 local Cell = require('fibers.cell')
 local Effect = require('fibers.effect')
 local Ownership = require('fibers.internal.ownership')
+local Protected = require('fibers.protected')
 
 local unpack_ = table.unpack or unpack
 
@@ -53,7 +54,7 @@ function Task:_spawn_body()
   return function()
     local rt = Runtime.current()
     if not rt then error('task started without a current runtime', 2) end
-    local results = { pcall(task.fn, task) }
+    local results = { Protected.pcall(task.fn, task) }
     local ok = table.remove(results, 1)
     local report
     if ok then

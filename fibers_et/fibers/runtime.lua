@@ -4,6 +4,7 @@ local CommitPlan = require('fibers.commit.plan')
 local Resource = require('fibers.resources.protocol')
 local Op = require('fibers.op')
 local Wait = require('fibers.wait')
+local Protected = require('fibers.protected')
 local Runtime = {}
 Runtime.__index = Runtime
 
@@ -134,7 +135,7 @@ end
 function Runtime:_is_current_fibre()
   local f = self._current_fibre
   if not f then return false end
-  return coroutine.running() == f.co
+  return Protected.running() == f.co
 end
 
 function Runtime:_require_driver_call(action, level)
@@ -245,6 +246,17 @@ end
 
 function Runtime:pending_wait_summary()
   return Wait.summarise(self.pending_waits or self.pending_wakeups or {})
+end
+
+
+function Runtime:pcall(fn, ...)
+  self:_check_not_failed(2)
+  return Protected.pcall(fn, ...)
+end
+
+function Runtime:xpcall(fn, handler, ...)
+  self:_check_not_failed(2)
+  return Protected.xpcall(fn, handler, ...)
 end
 
 function Runtime:perform(opnode)

@@ -169,17 +169,23 @@ local src = fibers.Source.manual('signal')
 local region = fibers.Region.new('main')
 ```
 
+## Protected calls
+
+Use `fibers.pcall` or `fibers.xpcall` inside fibres when protected code may perform operations. On Lua 5.1, native `pcall`/`xpcall` cannot reliably protect code that suspends and resumes, so `fibers` provides yieldable protected calls for fibre code without replacing the host globals.
+
+This is deliberately proportionate: transaction search and commit internals remain non-suspending, and `perform` is only permitted from the currently resumed runtime fibre.
+
 ## Examples
 
 The `examples/` directory contains small usage guides, not regression tests.
 They are intended to be read and run individually:
 
 ```sh
-texlua examples/01_channel.lua
-texlua examples/02_cell.lua
-texlua examples/03_source.lua
-texlua examples/04_region_task.lua
-texlua examples/05_effect.lua
+lua examples/01_channel.lua
+lua examples/02_cell.lua
+lua examples/03_source.lua
+lua examples/04_region_task.lua
+lua examples/05_effect.lua
 ```
 
 Assertion-heavy semantic checks live in `tests/`.

@@ -118,3 +118,11 @@ fibers.Runtime.new({
 The current guarantee remains in-process.  If a host needs crash recovery or
 external exactly-once delivery, the effect should install a durable obligation
 or idempotency key, and delivery should be retried outside the transaction.
+
+## Protected calls
+
+Embedded hosts should not need global `pcall`/`xpcall` monkey-patching.  Code running inside a fibre can use `fibers.pcall` and `fibers.xpcall` when the protected function may perform an operation and therefore suspend.
+
+On Lua 5.1-style hosts these functions use a coroutine-backed implementation.  On hosts whose native protected calls already support yielding, the native path is used unless fallback mode is forced for testing.
+
+Runtime transaction phases are still non-suspending.  The runtime recognises protected-call child coroutines as belonging to the currently resumed fibre, but `perform` remains forbidden from driver, search, resource and commit phases.

@@ -6,7 +6,7 @@ successfully, but assertion-heavy regression cases belong in `tests/`.
 Run an example from the repository root with:
 
 ```sh
-texlua examples/01_channel.lua
+lua examples/01_channel.lua
 ```
 
 The examples build up the public base kit:

@@ -10,6 +10,7 @@ local M = {}
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Effect = require('fibers.effect')
+local Protected = require('fibers.protected')
 
 M.Op = Op
 M.Runtime = Runtime
@@ -29,6 +30,15 @@ M.all = Op.all
 M.tensor = Op.tensor
 M.after_commit = Effect.after_commit
 M.emit = Effect.after_commit
+
+
+function M.pcall(fn, ...)
+  return Protected.pcall(fn, ...)
+end
+
+function M.xpcall(fn, handler, ...)
+  return Protected.xpcall(fn, handler, ...)
+end
 
 function M.current_runtime()
   return Runtime.current()
