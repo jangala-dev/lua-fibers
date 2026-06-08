@@ -12,7 +12,7 @@ local counter = fibers.Cell.new(0, 'counter')
 local observed
 
 fibers.run(function()
-  fibers.spawn(function()
+  fibers.spawn_raw(function()
     fibers.perform(counter:update_op(function(n) return n + 1 end))
     fibers.perform(counter:update_op(function(n) return n + 1 end))
   end, 'incrementer')

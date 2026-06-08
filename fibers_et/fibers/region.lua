@@ -1,4 +1,8 @@
--- Region: public lifetime and ownership boundary.
+-- Region: public transactional ownership and admission boundary.
+--
+-- A Region is deliberately generic.  It does not mean "task scope" and it does
+-- not own a supervision policy.  It admits owned handles, transfers ownership,
+-- seals future admission, and settles handles whose own kind says they are ready.
 
 local DefaultOp = require('fibers.op')
 local Resource = require('fibers.resources.protocol')
@@ -46,13 +50,29 @@ local function set_owner(c, item, owner)
   return rec
 end
 
+local function is_sealed(ctx, region)
+  return Resource.project(ctx, region, 'sealed') or false
+end
+
+local function can_settle(item, ctx, owner)
+  local f = item and item._fibers_can_settle
+  if f then return f(item, ctx, owner) end
+  return true
+end
+
 function RegionKind.clone(rec)
-  return { kind = RegionKind, read = rec.read, close = rec.close, add = copy_map(rec.add), remove = copy_map(rec.remove) }
+  return {
+    kind = RegionKind,
+    read = rec.read,
+    seal = rec.seal,
+    add = copy_map(rec.add),
+    remove = copy_map(rec.remove),
+  }
 end
 
 function RegionKind.merge_seq(dst, src)
   if src.read ~= nil and dst.read == nil then dst.read = src.read end
-  if src.close then dst.close = true end
+  if src.seal then dst.seal = true end
   for item, v in pairs(src.add or {}) do dst.add = dst.add or {}; dst.add[item] = v; if dst.remove then dst.remove[item] = nil end end
   for item, v in pairs(src.remove or {}) do dst.remove = dst.remove or {}; dst.remove[item] = v; if dst.add then dst.add[item] = nil end end
   return true
@@ -60,7 +80,7 @@ end
 
 function RegionKind.merge_par(dst, src)
   if src.read ~= nil and dst.read == nil then dst.read = src.read end
-  if src.close then dst.close = true end
+  if src.seal then dst.seal = true end
   for item, v in pairs(src.add or {}) do
     if dst.remove and dst.remove[item] then return false, 'region-add-remove-conflict' end
     dst.add = dst.add or {}; dst.add[item] = v
@@ -73,29 +93,52 @@ function RegionKind.merge_par(dst, src)
 end
 
 function RegionKind.project(region, rec, query)
-  if query == 'closed' then return region.closed or (rec and rec.close) or false, true end
+  if query == 'sealed' then return region.sealed or (rec and rec.seal) or false, true end
+  if query == 'open' then return not (region.sealed or (rec and rec.seal) or false), true end
+  if query == 'status' then
+    local sealed = region.sealed or (rec and rec.seal) or false
+    return { sealed = sealed, open = not sealed, owned_count = region.owned_count or 0, _fibers_value = true }, true
+  end
   return nil, false
 end
 
 function RegionKind.prepare(region, rec, _resolve)
   if rec.read ~= nil and (region.version or 0) ~= rec.read then return nil, 'stale' end
-  if not rec.close and not next(rec.add or {}) and not next(rec.remove or {}) then return nil, nil, true end
+  if not rec.seal and not next(rec.add or {}) and not next(rec.remove or {}) then return nil, nil, true end
   local consequence_set = ConsequenceSet.empty()
-  local ok, err = consequence_set:add(Effect.wake('region', region._fibers_id, { region = region, close = rec.close }))
+  local ok, err = consequence_set:add(Effect.wake('region', region._fibers_id, { region = region, sealed = rec.seal }))
   if not ok then return nil, err end
-  return { kind = RegionKind, resource = region, close = rec.close, add = copy_map(rec.add), remove = copy_map(rec.remove), consequence_set = consequence_set }
+  return { kind = RegionKind, resource = region, seal = rec.seal, add = copy_map(rec.add), remove = copy_map(rec.remove), consequence_set = consequence_set }
 end
 
 function RegionKind.apply(prepared, _log)
   local region = prepared.resource
-  for item in pairs(prepared.remove or {}) do region.owned[item] = nil end
-  for item in pairs(prepared.add or {}) do region.owned[item] = true end
-  if prepared.close then region.closed = true end
+  for item in pairs(prepared.remove or {}) do
+    if region.owned[item] then
+      region.owned[item] = nil
+      region.owned_count = math.max(0, (region.owned_count or 1) - 1)
+    end
+  end
+  for item in pairs(prepared.add or {}) do
+    if not region.owned[item] then
+      region.owned[item] = true
+      region.owned_count = (region.owned_count or 0) + 1
+    end
+  end
+  if prepared.seal then
+    region.sealed = true
+  end
   region.version = (region.version or 0) + 1
 end
 
+local function read_only_candidate(region, value)
+  local c = Candidate.new(OpPack(value))
+  read_region(c, region)
+  return c
+end
+
 local function admit_candidate(region, item, expected_owner, ctx)
-  if Resource.project(ctx, region, 'closed') then return nil end
+  if is_sealed(ctx, region) then return nil end
   local current_owner = Resource.project(ctx, item, 'owner')
   if current_owner ~= nil and current_owner ~= expected_owner then return nil end
   local c = Candidate.new(OpPack(item))
@@ -105,13 +148,30 @@ local function admit_candidate(region, item, expected_owner, ctx)
   return c
 end
 
-local function release_candidate(region, item, ctx)
+local function settle_candidate(region, item, ctx)
   local current_owner = Resource.project(ctx, item, 'owner')
   if current_owner ~= region then return nil end
+  if not can_settle(item, ctx, region) then return nil end
   local c = Candidate.new(OpPack(item))
   local rrec = read_region(c, region)
   rrec.remove[item] = true
   set_owner(c, item, nil)
+  return c
+end
+
+local function transfer_candidate(region, item, to_region, ctx)
+  if not to_region or to_region._fibers_kind ~= RegionKind then return nil end
+  local current_owner = Resource.project(ctx, item, 'owner')
+  if current_owner ~= region then return nil end
+  if to_region == region then return read_only_candidate(region, item) end
+  if is_sealed(ctx, to_region) then return nil end
+
+  local c = Candidate.new(OpPack(item))
+  local from_rec = read_region(c, region)
+  from_rec.remove[item] = true
+  local to_rec = read_region(c, to_region)
+  to_rec.add[item] = true
+  set_owner(c, item, to_region)
   return c
 end
 
@@ -121,18 +181,31 @@ function RegionKind.eval(region, payload, ctx)
     local c = admit_candidate(region, payload.item, payload.from_owner, ctx)
     if not c then return Result.none() end
     return Result.cands({ c })
-  elseif op == 'release' then
-    local c = release_candidate(region, payload.item, ctx)
+  elseif op == 'settle' then
+    local c = settle_candidate(region, payload.item, ctx)
     if not c then return Result.none() end
     return Result.cands({ c })
-  elseif op == 'close' then
-    if Resource.project(ctx, region, 'closed') then return Result.none() end
+  elseif op == 'transfer' then
+    local c = transfer_candidate(region, payload.item, payload.to_region, ctx)
+    if not c then return Result.none() end
+    return Result.cands({ c })
+  elseif op == 'seal' then
+    if is_sealed(ctx, region) then return Result.none() end
     local c = Candidate.new(OpPack(true))
     local rec = read_region(c, region)
-    rec.close = true
+    rec.seal = true
     return Result.cands({ c })
   elseif op == 'is_open' then
-    local c = Candidate.new(OpPack(not Resource.project(ctx, region, 'closed')))
+    local c = Candidate.new(OpPack(not is_sealed(ctx, region)))
+    read_region(c, region)
+    return Result.cands({ c })
+  elseif op == 'owns' then
+    local c = Candidate.new(OpPack(Resource.project(ctx, payload.item, 'owner') == region))
+    read_region(c, region)
+    read_owned(c, payload.item)
+    return Result.cands({ c })
+  elseif op == 'status' then
+    local c = Candidate.new(OpPack(Resource.project(ctx, region, 'status')))
     read_region(c, region)
     return Result.cands({ c })
   end
@@ -145,10 +218,24 @@ function RegionKind.summary(_payload, out)
   out.closed = false
 end
 
+
+function Region.handle(name, fields)
+  return Ownership.handle(name, fields)
+end
+
 function Region.new(name)
   next_id = next_id + 1
   local id = 'region-' .. tostring(next_id)
-  return setmetatable({ name = name or id, owned = {}, closed = false, version = 0, _fibers_id = id, _fibers_kind = RegionKind, _fibers_value = true }, Region)
+  return setmetatable({
+    name = name or id,
+    owned = {},
+    owned_count = 0,
+    sealed = false,
+    version = 0,
+    _fibers_id = id,
+    _fibers_kind = RegionKind,
+    _fibers_value = true,
+  }, Region)
 end
 
 function Region:admit_op(a, b, c)
@@ -157,39 +244,45 @@ function Region:admit_op(a, b, c)
   return Op._resource(self, RegionKind, { op = 'admit', item = item, from_owner = from_owner })
 end
 
-function Region:release_op(a, b)
+function Region:settle_op(a, b)
   local Op, item
   if is_op_module(a) then Op, item = a, b else Op, item = DefaultOp, a end
-  return Op._resource(self, RegionKind, { op = 'release', item = item })
+  return Op._resource(self, RegionKind, { op = 'settle', item = item })
 end
-
 function Region:transfer_op(a, b, c)
   local Op, item, to_region
   if is_op_module(a) then Op, item, to_region = a, b, c else Op, item, to_region = DefaultOp, a, b end
-  return self:release_op(Op, item):and_then(function()
-    return to_region:admit_op(Op, item, self)
-  end)
+  return Op._resource(self, RegionKind, { op = 'transfer', item = item, to_region = to_region })
 end
 
-function Region:close_op(Op)
+function Region:seal_op(Op)
   Op = is_op_module(Op) and Op or DefaultOp
-  return Op._resource(self, RegionKind, { op = 'close' })
+  return Op._resource(self, RegionKind, { op = 'seal' })
 end
-
 function Region:is_open_op(Op)
   Op = is_op_module(Op) and Op or DefaultOp
   return Op._resource(self, RegionKind, { op = 'is_open' })
 end
 
-function Region:spawn_op(a, b, c)
-  local Op, fn, name
-  if is_op_module(a) then Op, fn, name = a, b, c else Op, fn, name = DefaultOp, a, b end
-  local Task = require('fibers.task')
-  local task = Task.new(fn, name)
-  return self:admit_op(Op, task):and_then(function()
-    return Op.emit(task:_spawn_effect()):map(function() return task end)
+function Region:owns_op(a, b)
+  local Op, item
+  if is_op_module(a) then Op, item = a, b else Op, item = DefaultOp, a end
+  return Op._resource(self, RegionKind, { op = 'owns', item = item })
+end
+
+function Region:cancel_op(a, b, c)
+  local Op, item, reason
+  if is_op_module(a) then Op, item, reason = a, b, c else Op, item, reason = DefaultOp, a, b end
+  if not item or type(item.cancel_op) ~= 'function' then return Op.never() end
+  return self:owns_op(Op, item):and_then(function(owns)
+    if not owns then return Op.never() end
+    return item:cancel_op(Op, reason)
   end)
 end
 
+function Region:status_op(Op)
+  Op = is_op_module(Op) and Op or DefaultOp
+  return Op._resource(self, RegionKind, { op = 'status' })
+end
 Region.Kind = RegionKind
 return Region

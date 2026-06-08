@@ -12,7 +12,7 @@ do
   local ch = fibers.Channel.new('inbox')
   local got
   local st = fibers.run(function()
-    fibers.spawn(function()
+    fibers.spawn_raw(function()
       fibers.perform(ch:send_op('hello'))
     end, 'sender')
     got = fibers.perform(ch:recv_op())
@@ -27,7 +27,7 @@ do
   local cell = fibers.Cell.new(false, 'flag')
   local seen
   local st = fibers.run(function()
-    fibers.spawn(function()
+    fibers.spawn_raw(function()
       seen = fibers.perform(cell:wait_op(function(v) return v == true end))
     end, 'waiter')
     fibers.perform(cell:set_op(true))
@@ -57,7 +57,7 @@ do
   local src = fibers.Source.manual('signal')
   local rt = fibers.Runtime.new()
   local got
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(src:next_op())
   end, 'source-waiter')
   local st = rt:run()
@@ -76,7 +76,7 @@ do
   local clock = fibers.Source.clock('test-clock')
   local rt = fibers.Runtime.new({ host = { now = function() return now end } })
   local ok, observed
-  rt:spawn(function()
+  rt:spawn_raw(function()
     ok, observed = rt:perform(clock:after_op(5))
   end, 'sleeper')
   local st = rt:run()
@@ -119,7 +119,7 @@ do
   local region = fibers.Region.new('root-region')
   local status, value, task
   local st = fibers.run(function()
-    task = fibers.perform(region:spawn_op(function()
+    task = fibers.perform(fibers.Task.spawn_op(region, function()
       return 7
     end, 'child'))
     status, value = fibers.perform(task:join_op())
@@ -140,12 +140,12 @@ do
   local received, joined
 
   local st = fibers.run(function()
-    fibers.spawn(function()
+    fibers.spawn_raw(function()
       fibers.perform(inbox:send_op('hello'))
       fibers.perform(flag:set_op(true))
     end, 'sender')
 
-    local task = fibers.perform(region:spawn_op(function()
+    local task = fibers.perform(fibers.Task.spawn_op(region, function()
       local value = fibers.perform(flag:wait_op(function(v) return v == true end))
       return value and 42 or 0
     end, 'worker'))

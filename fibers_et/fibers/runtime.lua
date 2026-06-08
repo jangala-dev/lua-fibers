@@ -9,14 +9,37 @@ local Runtime = {}
 Runtime.__index = Runtime
 
 local current_runtime = nil
+local current_frame = nil
 
 function Runtime.current()
   return current_runtime
 end
 
+function Runtime._current_frame()
+  return current_frame
+end
+
 local unpack_ = table.unpack or unpack
 
 local PERFORM_RESULT = {}
+
+local Cancellation = {}
+Cancellation.__index = Cancellation
+Cancellation.__tostring = function(e) return e.message or 'fiber cancelled' end
+
+function Runtime.cancelled(reason, token)
+  return setmetatable({
+    _fibers_cancelled = true,
+    kind = 'cancelled',
+    reason = reason,
+    token = token,
+    message = reason and tostring(reason) or 'fiber cancelled',
+  }, Cancellation)
+end
+
+function Runtime.is_cancelled(e)
+  return type(e) == 'table' and e._fibers_cancelled == true
+end
 
 local RuntimeError = {}
 RuntimeError.__index = RuntimeError
@@ -202,10 +225,13 @@ function Runtime:_resume(f, values)
   local old_phase = self:_set_phase('fibre')
   local old_fibre = self._current_fibre
   local old_current_runtime = current_runtime
+  local old_current_frame = current_frame
   self._current_fibre = f
   current_runtime = self
+  current_frame = f.frame
   local ok, req_or_err = coroutine.resume(f.co, values)
   current_runtime = old_current_runtime
+  current_frame = old_current_frame
   self:_restore_phase(old_phase)
   self._current_fibre = old_fibre
   if not ok then
@@ -222,26 +248,32 @@ function Runtime:_resume(f, values)
   end
 end
 
-function Runtime:spawn(fn, name)
+function Runtime:spawn_raw(fn, name, frame)
   self:_check_not_failed(2)
   self:_require_spawn_allowed(2)
   self:_invalidate_cursor()
   local co = coroutine.create(fn)
-  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false }
-  self:_trace('fibre.spawn', { fibre = name })
+  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false, frame = frame }
+  self:_trace('fibre.spawn_raw', { fibre = name })
 end
 
-function Runtime:_spawn_committed(fn, name)
+function Runtime:_spawn_committed(fn, name, frame)
   self:_check_not_failed(2)
   self:_invalidate_cursor()
   local co = coroutine.create(fn)
-  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false }
+  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false, frame = frame }
   self:_trace('fibre.spawn_committed', { fibre = name })
 end
 
 function Runtime:_note_wake(wake, _log)
   self.published_wakes = self.published_wakes or {}
   self.published_wakes[#self.published_wakes + 1] = wake
+end
+
+function Runtime:_publish_interrupt(token, reason)
+  token:raise(reason)
+  self:_invalidate_cursor()
+  return true
 end
 
 function Runtime:pending_wait_summary()
@@ -259,11 +291,17 @@ function Runtime:xpcall(fn, handler, ...)
   return Protected.xpcall(fn, handler, ...)
 end
 
-function Runtime:perform(opnode)
+function Runtime:perform(opnode, opts)
   self:_check_not_failed(2)
   self:_require_perform_allowed(2)
+  opts = opts or {}
+  local interrupt = not opts.masked and opts.interrupt or nil
+  if interrupt and interrupt.is_raised and interrupt:is_raised() then
+    error(Runtime.cancelled(interrupt.reason, interrupt), 0)
+  end
   local attempt = { guard_cache = {}, nack_cache = {} }
-  local result = coroutine.yield({ op = opnode, attempt = attempt })
+  local result = coroutine.yield({ op = opnode, attempt = attempt, interrupt = interrupt })
+  if Runtime.is_cancelled(result) then error(result, 0) end
   if type(result) ~= 'table' then return nil end
 
   local vals, post = result.vals or Op._pack(), result.post
@@ -339,6 +377,24 @@ function Runtime:_apply_commit_plan(plan)
 
 end
 
+
+function Runtime:_deliver_interrupts(waiting)
+  local delivered = false
+  waiting = waiting or self:_waiting()
+  for i = 1, #waiting do
+    local f = waiting[i]
+    local w = f.waiting
+    local token = w and w.interrupt
+    if token and token.is_raised and token:is_raised() then
+      f.waiting = nil
+      self:_resume(f, Runtime.cancelled(token.reason, token))
+      delivered = true
+    end
+  end
+  if delivered then self:_bump_epoch() end
+  return delivered
+end
+
 function Runtime:_pump_one()
   for i = 1, #self.fibres do
     local f = self.fibres[i]
@@ -402,6 +458,7 @@ function Runtime:_step(opts)
   self.stats.steps = (self.stats.steps or 0) + 1
 
   local waiting = self:_waiting()
+  if self:_deliver_interrupts(waiting) then return { tag = 'pending', kind = 'interrupt' } end
 
   if #waiting == 0 then
     if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
@@ -529,6 +586,10 @@ function Runtime:_run(opts)
   local committed = false
   while true do
     local waiting = self:_waiting()
+    if self:_deliver_interrupts(waiting) then
+      committed = true
+      waiting = self:_waiting()
+    end
     local world, score, st = nil, nil, nil
     if #waiting == 1 and waiting[1].waiting and waiting[1].waiting.op and waiting[1].waiting.op.kind == 'always' then
       committed = true

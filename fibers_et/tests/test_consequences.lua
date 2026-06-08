@@ -33,7 +33,7 @@ end
 local function one_perform(op, opts)
   local rt = Runtime.new(opts or {})
   local vals = { n = 0 }
-  rt:spawn(function() vals = pack_(rt:perform(op)) end, 'one-perform')
+  rt:spawn_raw(function() vals = pack_(rt:perform(op)) end, 'one-perform')
   return rt:run(), vals, rt
 end
 
@@ -51,7 +51,7 @@ local function test_duplicate_obligations_merge_to_one_publication()
     },
   })
   local got
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.all({
       Op.emit(TC.tag('dup')),
       Op.emit(TC.tag('dup')),
@@ -85,7 +85,7 @@ local function test_prepare_refusal_is_candidate_rejection_not_runtime_failure()
   assert_eq(rt:failed(), nil, 'structured refusal does not fail the runtime')
 
   local ok = pcall(function()
-    rt:spawn(function() rt:perform(Op.always('still-usable')) end, 'after-prepare-refusal')
+    rt:spawn_raw(function() rt:perform(Op.always('still-usable')) end, 'after-prepare-refusal')
   end)
   assert_eq(ok, true, 'runtime remains externally usable after structured refusal')
 end
@@ -118,7 +118,7 @@ end
 local function test_publish_failure_is_fatal_after_resource_commit()
   local cell = Cell.new(0, 'publish-fatal-cell')
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(cell:set_op(Op, 1):and_then(function()
       return Op.emit(TC.publish_fatal())
     end))
@@ -144,7 +144,7 @@ local function test_resource_derived_settlement_uses_final_committed_state()
   })
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       ledger:transfer_op('A', 'B'):and_then(function()
         return ledger:close_op('B'):and_then(function()

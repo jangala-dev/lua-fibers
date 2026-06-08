@@ -14,7 +14,7 @@ local function test_ownership_transfer_commits_atomically_with_rendezvous()
   local ch = Channel.new('ownership-transfer-sync')
   local receiver, sender
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     receiver = rt:perform(
       ledger:transfer_op('A', 'B'):and_then(function()
         return ch:get_op(Op)
@@ -22,7 +22,7 @@ local function test_ownership_transfer_commits_atomically_with_rendezvous()
     )
   end, 'ownership-transfer-receiver')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     sender = rt:perform(ch:put_op(Op, 'accepted'))
   end, 'ownership-transfer-sender')
 
@@ -38,7 +38,7 @@ local function test_ownership_transfer_aborts_with_blocked_transaction()
   local ch = Channel.new('ownership-transfer-blocked')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       ledger:transfer_op('A', 'B'):and_then(function()
         return ch:get_op(Op)
@@ -58,7 +58,7 @@ local function test_ownership_transfer_losing_choice_branch_is_discarded()
   local ledger = Ledger.new('asset-choice', 'A')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.choice(
       Op.always('winner'),
       ledger:transfer_op('A', 'B'):and_then(function()
@@ -81,7 +81,7 @@ local function test_settlement_follows_final_committed_owner()
   local ledger = Ledger.new('asset-settle-new-owner', 'A')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       ledger:transfer_op('A', 'B'):and_then(function()
         return ledger:close_op('B'):and_then(function()
@@ -108,7 +108,7 @@ local function test_settlement_exactly_once_after_owner_already_closed()
   do
     local rt = Runtime.new()
     local closed
-    rt:spawn(function() closed = rt:perform(ledger:close_op('A')) end, 'settlement-once-close-a')
+    rt:spawn_raw(function() closed = rt:perform(ledger:close_op('A')) end, 'settlement-once-close-a')
     H.assert_status(rt:run(), 'found')
     H.assert_eq(closed, true)
     H.assert_eq(ledger.settled_owner, 'A')
@@ -120,7 +120,7 @@ local function test_settlement_exactly_once_after_owner_already_closed()
   do
     local rt = Runtime.new()
     local closed_again
-    rt:spawn(function() closed_again = rt:perform(ledger:close_op('A')) end, 'settlement-once-close-a-again')
+    rt:spawn_raw(function() closed_again = rt:perform(ledger:close_op('A')) end, 'settlement-once-close-a-again')
     H.assert_status(rt:run(), 'found')
     H.assert_eq(closed_again, true)
     H.assert_eq(ledger.settled_owner, 'A')
@@ -134,7 +134,7 @@ local function test_settled_ledger_cannot_be_transferred_after_close()
   do
     local rt = Runtime.new()
     local closed
-    rt:spawn(function() closed = rt:perform(ledger:close_op('A')) end, 'close-before-transfer')
+    rt:spawn_raw(function() closed = rt:perform(ledger:close_op('A')) end, 'close-before-transfer')
     H.assert_status(rt:run(), 'found')
     H.assert_eq(closed, true)
     H.assert_eq(ledger.owner, 'A')
@@ -144,7 +144,7 @@ local function test_settled_ledger_cannot_be_transferred_after_close()
   do
     local rt = Runtime.new({ quiet_deadlock = true })
     local moved
-    rt:spawn(function() moved = rt:perform(ledger:transfer_op('A', 'B')) end, 'transfer-after-settlement')
+    rt:spawn_raw(function() moved = rt:perform(ledger:transfer_op('A', 'B')) end, 'transfer-after-settlement')
     H.assert_uncommitted_status(rt:run(), 'settled ledger must not be resurrected by transfer')
     H.assert_eq(moved, nil)
     H.assert_eq(ledger.owner, 'A')
@@ -158,7 +158,7 @@ local function test_close_then_transfer_in_one_transaction_is_absent()
   local ledger = Ledger.new('asset-close-then-transfer-same-tx', 'A')
   local moved
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     moved = rt:perform(
       ledger:close_op('A'):and_then(function()
         return ledger:transfer_op('A', 'B')

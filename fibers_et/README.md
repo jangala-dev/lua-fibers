@@ -25,7 +25,8 @@ Op       possible transaction
 Cell     transactional fact
 Channel  synchronous rendezvous
 Source   external, host or time occurrence made transactional
-Region   lifetime and ownership boundary
+Region   transactional ownership ledger
+Lifetime compound transactional lifetime facility
 Task     owned running computation
 Effect   after-commit runtime obligation
 ```
@@ -44,7 +45,7 @@ this milestone has been exercised with `texlua`.
 Facts go in Cells.
 Meetings go through Channels.
 External occurrences arrive through Sources.
-Lifetimes live in Regions.
+Ownership is recorded in Regions. Most lifetime-facing code uses Lifetime, a compound facility built over Region, Task, Source and Effect.
 Running work is a Task.
 Committed obligations are Effects.
 Everything composes as an Op.
@@ -58,7 +59,7 @@ local fibers = require('fibers')
 local ch = fibers.Channel.new('inbox')
 local message
 
-fibers.run(function()
+fibers.launch(fibers.policy.nursery(), function()
   fibers.spawn(function()
     fibers.perform(ch:send_op('hello'))
   end, 'sender')
@@ -68,6 +69,10 @@ end)
 
 print(message)
 ```
+
+`fibers.launch` installs an explicit lifetime policy.  Inside the nursery
+policy, the friendly `fibers.spawn` creates a structured `Task`; raw unstructured
+fibres remain available as `spawn_raw` for embedders and low-level tests.
 
 The send and receive are not two independent actions.  The runtime finds one
 compatible transaction and resumes both fibres after the rendezvous has
@@ -105,26 +110,25 @@ end)
 Cell predicates and update functions are speculative: they may run more than
 once during search and must be pure.  Use `Effect` for committed external work.
 
-## Regions and tasks
+## Lifetimes, regions and tasks
 
-A region is a lifetime and ownership boundary.  A task is an owned computation
-admitted to a region and started after the admitting transaction commits.
+A region is a generic ownership and admission boundary.  A task is the standard owned computation: it is admitted to a region and started after the admitting transaction commits.
 
 ```lua
-local region = fibers.Region.new('main')
+local life = fibers.Lifetime.new('main')
 
 fibers.run(function()
-  local task = fibers.perform(region:spawn_op(function()
+  local task = fibers.perform(life:spawn_op(function()
     return 7
-  end, 'child'))
+  end, { name = 'child' }))
 
   local status, value = fibers.perform(task:join_op())
   assert(status == 'ok' and value == 7)
+  fibers.perform(life:release_op(task))
 end)
 ```
 
-`Region` is mechanism.  Nurseries, supervisors and compatibility scopes should
-be policy built over regions.
+`Region` is the ledger primitive: admit, transfer, seal and settle. `Lifetime` is the compound facility most code should use for spawning, cancellation, transfer, observation and release. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
 
 ## Effects
 
@@ -150,7 +154,8 @@ fibers.runtime            fibre scheduler and transaction driver
 fibers.cell               transactional Cell
 fibers.channel            rendezvous Channel
 fibers.source             Source abstraction
-fibers.region             Region lifetime/ownership boundary
+fibers.region             Region ownership ledger
+fibers.lifetime           compound lifetime facility
 fibers.task               Task owned computation handle
 fibers.effect             typed Effect wrapper
 fibers.resources.ledger   ownership ledger example resource
@@ -166,7 +171,7 @@ local fibers = require('fibers')
 local cell = fibers.Cell.new(false)
 local ch = fibers.Channel.new()
 local src = fibers.Source.manual('signal')
-local region = fibers.Region.new('main')
+local life = fibers.Lifetime.new('main')
 ```
 
 ## Protected calls
@@ -184,8 +189,10 @@ They are intended to be read and run individually:
 lua examples/01_channel.lua
 lua examples/02_cell.lua
 lua examples/03_source.lua
-lua examples/04_region_task.lua
+lua examples/04_lifetime_task.lua
 lua examples/05_effect.lua
+lua examples/06_policy_nursery.lua
+lua examples/07_lifetime_handoff.lua
 ```
 
 Assertion-heavy semantic checks live in `tests/`.

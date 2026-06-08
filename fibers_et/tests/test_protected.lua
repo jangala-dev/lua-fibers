@@ -25,7 +25,7 @@ test('fibers.pcall permits perform to suspend and resume', function()
   local protected_ok, got
   local st = fibers.run(function()
     local ch = fibers.Channel.new('protected-channel')
-    fibers.spawn(function()
+    fibers.spawn_raw(function()
       fibers.perform(ch:send_op('hello'))
     end, 'sender')
 
@@ -56,7 +56,7 @@ test('fibers.xpcall permits perform and handles errors', function()
   local sync_ok, got, err_ok, handled
   local st = fibers.run(function()
     local ch = fibers.Channel.new('protected-xchannel')
-    fibers.spawn(function()
+    fibers.spawn_raw(function()
       fibers.perform(ch:send_op('x'))
     end, 'sender')
 
@@ -84,7 +84,7 @@ test('task bodies may perform while protected for result reporting', function()
   local status, value
   local st = fibers.run(function()
     local region = fibers.Region.new('protected-region')
-    local task = fibers.perform(region:spawn_op(function()
+    local task = fibers.perform(fibers.Task.spawn_op(region, function()
       return fibers.perform(fibers.Op.always('task-ok'))
     end, 'protected-task'))
     status, value = fibers.perform(task:join_op())

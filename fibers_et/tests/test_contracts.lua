@@ -54,7 +54,7 @@ end
 -- perform inside guard is rejected because guard runs during search.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.guard(function()
       return rt:perform(Op.always('bad'))
     end))
@@ -66,7 +66,7 @@ end
 -- perform inside map is rejected because map runs during candidate evaluation.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.always('x'):map(function(v)
       return v .. rt:perform(Op.always('bad'))
     end))
@@ -78,7 +78,7 @@ end
 -- perform inside and_then is rejected because and_then extends the same candidate world.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.always('x'):and_then(function(v)
       rt:perform(Op.always('bad'))
       return Op.always(v)
@@ -93,8 +93,8 @@ end
 do
   local rt = Runtime.new()
   local child_ran = false
-  rt:spawn(function()
-    rt:spawn(function() child_ran = true end, 'spawned-from-fibre-child')
+  rt:spawn_raw(function()
+    rt:spawn_raw(function() child_ran = true end, 'spawned-from-fibre-child')
   end, 'spawned-from-fibre-parent')
   rt:run()
   assert_eq(child_ran, true, 'spawn from resumed fibre is allowed')
@@ -103,16 +103,16 @@ end
 -- spawn inside guard is rejected because guard is runtime search work, not external code.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.guard(function()
-      rt:spawn(function() end, 'bad-spawn')
+      rt:spawn_raw(function() end, 'bad-spawn')
       return Op.always('x')
     end))
   end, 'guard-spawner')
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'phase_error', 'spawn inside guard')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after caught phase error')
-  local ok_spawn = pcall(function() rt:spawn(function() end, 'external-spawn-after-guard-error') end)
+  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-spawn-after-guard-error') end)
   assert_eq(ok_spawn, true, 'external spawn is not blocked after caught phase error')
 end
 
@@ -128,14 +128,14 @@ do
       end,
     },
   })
-  rt:spawn(function() rt:perform(Op.emit(TC.kind('contract-test'))) end, 'consequence-performer')
+  rt:spawn_raw(function() rt:perform(Op.emit(TC.kind('contract-test'))) end, 'consequence-performer')
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'consequence_error', 'perform inside consequence handler is fatal consequence failure')
   assert_eq(err.committed, true, 'consequence failure records that commit already happened')
   assert_eq(err.fatal, true, 'consequence failure is fatal')
   assert_eq(rt:failed(), err, 'runtime stores fatal consequence error')
   assert_eq(rt._phase, 'external', 'consequence phase restored after handler error')
-  local ok_spawn, spawn_err = pcall(function() rt:spawn(function() end, 'after-fatal') end)
+  local ok_spawn, spawn_err = pcall(function() rt:spawn_raw(function() end, 'after-fatal') end)
   assert_error_kind(ok_spawn, spawn_err, 'consequence_error', 'failed runtime rejects later spawn with fatal error')
 end
 
@@ -143,7 +143,7 @@ end
 do
   local rt = Runtime.new()
   local got
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.always('x'):wrap(function(v)
       return v .. rt:perform(Op.always('y'))
     end))
@@ -157,7 +157,7 @@ end
 do
   local rt = Runtime.new()
   local step_ok, step_err, run_ok, run_err
-  rt:spawn(function()
+  rt:spawn_raw(function()
     step_ok, step_err = pcall(function() return rt:step() end)
     run_ok, run_err = pcall(function() return rt:run() end)
   end, 'driver-guard')
@@ -170,7 +170,7 @@ end
 do
   local cell = Cell.new(0, 'wrap-error-cell')
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(cell:set_op(Op, 1):wrap(function()
       error('wrap exploded')
     end))
@@ -185,7 +185,7 @@ end
 -- external caller is still inside driver internals.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.guard(function()
       error('boom')
     end))
@@ -193,7 +193,7 @@ do
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'callback_error', 'raw guard error is structured')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after raw guard error')
-  local ok_spawn = pcall(function() rt:spawn(function() end, 'external-after-raw-guard-error') end)
+  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-after-raw-guard-error') end)
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw guard error')
 end
 
@@ -201,7 +201,7 @@ end
 -- poisoning later external calls.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.always('x'):map(function()
       error('map boom')
     end))
@@ -209,7 +209,7 @@ do
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'callback_error', 'raw map error is structured')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after raw map error')
-  local ok_spawn = pcall(function() rt:spawn(function() end, 'external-after-raw-map-error') end)
+  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-after-raw-map-error') end)
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw map error')
 end
 
@@ -217,7 +217,7 @@ end
 do
   local cell = Cell.new(0, 'fatal-consequence-cell')
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(Op.emit(TC.publish_fatal()):and_then(function()
       return cell:set_op(Op, 1)
     end))
@@ -236,14 +236,14 @@ end
 -- misclassified as runtime-internal calls.
 do
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:run()
   end, 'fibre-calls-run')
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'phase_error', 'run inside fibre escapes as phase error')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after fibre phase error')
   assert_eq(rt._phase, 'external', 'phase restored after fibre phase error')
-  local ok_spawn = pcall(function() rt:spawn(function() end, 'external-after-fibre-phase-error') end)
+  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-after-fibre-phase-error') end)
   assert_eq(ok_spawn, true, 'external spawn after fibre phase error is allowed')
 end
 
@@ -252,7 +252,7 @@ end
 do
   local cell = Cell.new(0, 'raw-update-error-cell')
   local rt = Runtime.new()
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(cell:update_op(Op, function()
       error('cell update exploded')
     end))
@@ -263,7 +263,7 @@ do
   assert_eq(rt:failed(), err, 'runtime stores raw fatal error')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after raw trusted-machinery error')
   assert_eq(rt._phase, 'external', 'phase restored after raw trusted-machinery error')
-  local ok_spawn, spawn_err = pcall(function() rt:spawn(function() end, 'after-raw-fatal') end)
+  local ok_spawn, spawn_err = pcall(function() rt:spawn_raw(function() end, 'after-raw-fatal') end)
   assert_error_kind(ok_spawn, spawn_err, 'runtime_error', 'failed runtime rejects later spawn with fatal error')
 end
 

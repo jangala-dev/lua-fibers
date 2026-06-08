@@ -76,7 +76,7 @@ function Box:set_op(Op_, v) return Op_._resource(self, BoxKind, { op = 'set', va
 local box = Box.new(0)
 local rt = Runtime.new()
 local got
-rt:spawn(function()
+rt:spawn_raw(function()
   got = rt:perform(box:set_op(Op, 7):and_then(function() return box:get_op(Op) end))
 end, 'open-box')
 

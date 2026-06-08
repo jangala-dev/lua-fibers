@@ -9,7 +9,7 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 
 local rt = Runtime.new()
-rt:spawn(function()
+rt:spawn_raw(function()
   local x, y = rt:perform(Op.always(1, 2))
 end)
 rt:run()

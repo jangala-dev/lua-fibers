@@ -15,6 +15,6 @@ The examples build up the public base kit:
 01_channel.lua          Channel rendezvous and ordinary fibres
 02_cell.lua             Cell as transactional state
 03_source.lua           Source as host/time/external occurrence
-04_region_task.lua      Region-owned Task and join
+04_lifetime_task.lua    Lifetime-owned Task and join
 05_effect.lua           Effect as an after-commit obligation
 ```

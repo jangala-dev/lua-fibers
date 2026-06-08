@@ -9,7 +9,7 @@ Op       possible transaction
 Cell     transactional fact
 Channel  synchronous rendezvous
 Source   external, host or time occurrence made transactional
-Region   lifetime and ownership boundary
+Region   lifetime ownership ledger
 Task     owned running computation
 Effect   after-commit runtime obligation
 ```
@@ -20,7 +20,7 @@ The rule of thumb is:
 Facts go in Cells.
 Meetings go through Channels.
 External occurrences arrive through Sources.
-Lifetimes live in Regions.
+Regions record ownership. Compound lifetime facilities build on Regions.
 Running work is a Task.
 Committed obligations are Effects.
 Everything composes as an Op.
@@ -81,24 +81,21 @@ readiness:readable_op()
 A source is the dual of an effect: sources bring outside facts in; effects send
 committed obligations out.
 
-## Region and Task
+## Region, Lifetime and Task
 
-A `Region` is a lifetime and ownership boundary.  A `Task` is an owned running
-computation admitted to a region and started after the admitting transaction
-commits.
+A `Region` is the generic ownership ledger. `Lifetime` is a compound facility built over Region, Task, Source and Effect for practical lifetime management. A `Task` is the standard owned running computation admitted to a lifetime's region and started after the admitting transaction commits.
 
 ```lua
-local region = fibers.Region.new('main')
+local life = fibers.Lifetime.new('main')
 
-local task = fibers.perform(region:spawn_op(function()
+local task = fibers.perform(life:spawn_op(function()
   return 7
 end))
 
 local status, value = fibers.perform(task:join_op())
 ```
 
-`Region` is mechanism.  Nurseries, supervisors and compatibility scopes should
-be policy built over regions.
+`Region` remains the sparse ledger primitive: admit, transfer, seal and settle. `Lifetime` is the more ergonomic compound facility. Nursery and supervisor-style APIs are policies over lifetimes, not special cases inside the operation algebra.
 
 ## Effect
 

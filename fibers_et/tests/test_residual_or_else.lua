@@ -15,7 +15,7 @@ local pack_ = table.pack or function(...) return { n = select('#', ...), ... } e
 local function one_perform(op, opts)
   local rt = Runtime.new(opts or {})
   local values = { n = 0 }
-  rt:spawn(function() values = pack_(rt:perform(op)) end, 'one')
+  rt:spawn_raw(function() values = pack_(rt:perform(op)) end, 'one')
   local st = rt:run()
   return st, values, rt
 end
@@ -78,7 +78,7 @@ do
   local ref
   local rt = Runtime.new()
   local got
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.choice(
       Op.always('outer'),
       Op.never():or_else(Op.with_nack(function(nack)
@@ -100,8 +100,8 @@ do
   local ch = Channel.new('residual-primary')
   local rt = Runtime.new()
   local got, sent
-  rt:spawn(function() got = rt:perform(ch:get_op(Op):or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(ch:get_op(Op):or_else(Op.always('fallback'))) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'payload')
   assert_eq(sent, true)
@@ -113,10 +113,10 @@ do
   local dead = Channel.new('residual-dead')
   local rt = Runtime.new()
   local receiver, partner
-  rt:spawn(function()
+  rt:spawn_raw(function()
     receiver = rt:perform(wanted:get_op(Op):map(function(v) return 'primary:' .. v end):or_else(Op.always('fallback')))
   end, 'receiver')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     partner = rt:perform(Op.choice(dead:put_op(Op, 'dead'), wanted:put_op(Op, 'ok')))
   end, 'partner')
   assert_status(rt:run(), 'found')
@@ -129,7 +129,7 @@ end
 do
   local rt = Runtime.new()
   local got
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Channel.new('cursor-residual-no-sender'):get_op(Op):or_else(Op.always('fallback')))
   end, 'cursor-residual')
   local st
@@ -147,8 +147,8 @@ do
   local ch = Channel.new('cursor-residual-with-sender')
   local rt = Runtime.new()
   local got, sent
-  rt:spawn(function() got = rt:perform(ch:get_op(Op):or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(ch:get_op(Op):or_else(Op.always('fallback'))) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
   local st
   for _ = 1, 120 do
     st = rt:step({ max_work = 1 })

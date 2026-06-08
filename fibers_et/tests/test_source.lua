@@ -15,7 +15,7 @@ do
   local ev = Source.manual('unset')
   local rt = Runtime.new()
   local got
-  rt:spawn(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
+  rt:spawn_raw(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
 end
@@ -25,7 +25,7 @@ do
   local ev = Source.manual('pending')
   local rt = Runtime.new()
   local got
-  rt:spawn(function() got = rt:perform(ev:next_op(Op)) end, 'pending-no-fallback')
+  rt:spawn_raw(function() got = rt:perform(ev:next_op(Op)) end, 'pending-no-fallback')
   local st = rt:run()
   assert_status(st, 'pending')
   assert_eq(got, nil)
@@ -38,7 +38,7 @@ do
   ev:emit('payload')
   local rt = Runtime.new()
   local got
-  rt:spawn(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
+  rt:spawn_raw(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'payload')
 end
@@ -50,13 +50,13 @@ do
   local ch = Channel.new('external-plus-rendezvous')
   local rt = Runtime.new()
   local receiver, sender
-  rt:spawn(function()
+  rt:spawn_raw(function()
     receiver = rt:perform(
       ev:next_op(Op):and_then(function(v)
         return ch:get_op(Op):map(function(x) return v .. ':' .. x end)
       end):or_else(Op.always('fallback')))
   end, 'receiver')
-  rt:spawn(function() sender = rt:perform(ch:put_op(Op, 'rv')) end, 'sender')
+  rt:spawn_raw(function() sender = rt:perform(ch:put_op(Op, 'rv')) end, 'sender')
   assert_status(rt:run(), 'found')
   assert_eq(receiver, 'payload:rv')
   assert_eq(sender, true)
@@ -68,7 +68,7 @@ do
   local clock = Source.clock('source-clock-test')
   local rt = Runtime.new({ host = { now = function() return now end } })
   local ok, observed
-  rt:spawn(function() ok, observed = rt:perform(clock:after_op(5)) end, 'clock-waiter')
+  rt:spawn_raw(function() ok, observed = rt:perform(clock:after_op(5)) end, 'clock-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
   assert(st.waits and #st.waits == 1, 'expected one time wait')

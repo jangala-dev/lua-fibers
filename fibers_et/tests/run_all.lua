@@ -13,6 +13,9 @@ local tests = {
   'tests/test_residual_or_else.lua',
   'tests/test_base_kit.lua',
   'tests/test_source.lua',
+  'tests/test_region_general.lua',
+  'tests/test_policy.lua',
+  'tests/test_lifetime.lua',
 }
 
 for i = 1, #tests do

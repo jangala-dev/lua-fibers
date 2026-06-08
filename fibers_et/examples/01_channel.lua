@@ -11,7 +11,7 @@ local inbox = fibers.Channel.new('inbox')
 local received
 
 fibers.run(function()
-  fibers.spawn(function()
+  fibers.spawn_raw(function()
     fibers.perform(inbox:send_op('hello from another fibre'))
   end, 'sender')
 

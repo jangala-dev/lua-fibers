@@ -13,11 +13,11 @@ local function test_resource_freshness_retries_independent_cell_updates()
   local cell = Cell.new(0, 'freshness-cell')
   local a, b
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     a = rt:perform(cell:update_op(Op, function(v) return v + 1 end))
   end, 'freshness-updater-a')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     b = rt:perform(cell:update_op(Op, function(v) return v + 1 end))
   end, 'freshness-updater-b')
 
@@ -33,11 +33,11 @@ local function test_resource_freshness_retries_primary_before_or_else_fallback()
   local cell = Cell.new(0, 'freshness-or-else-cell')
   local first, second
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     first = rt:perform(cell:update_op(Op, function(v) return v + 1 end))
   end, 'freshness-or-else-first')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     second = rt:perform(
       cell:update_op(Op, function(v) return v + 1 end)
         :map(function(v) return 'primary:' .. tostring(v) end)

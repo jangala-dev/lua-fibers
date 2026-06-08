@@ -66,7 +66,7 @@ local now = 0
 local rt = fibers.Runtime.new({ host = { now = function() return now end } })
 local clock = fibers.Source.clock('clock')
 
-rt:spawn(function()
+rt:spawn_raw(function()
   rt:perform(clock:at_op(10))
 end)
 ```

@@ -65,7 +65,7 @@ end
 local function one_perform(op, opts)
   local rt = Runtime.new(opts or {})
   local values = { n = 0 }
-  rt:spawn(function()
+  rt:spawn_raw(function()
     values = pack_(rt:perform(op))
   end, 'bench-one-perform')
   local status = rt:run()
@@ -120,8 +120,8 @@ add('simple: external rendezvous', 300, function()
   local rt = Runtime.new()
   local ch = Channel.new('bench-simple-rendezvous')
   local got, sent
-  rt:spawn(function() got = rt:perform(ch:get_op(Op)) end, 'receiver')
-  rt:spawn(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(ch:get_op(Op)) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'payload')
   assert_eq(sent, true)
@@ -139,7 +139,7 @@ add('hard: choice backtracks around conflict', 120, function()
   local rt = Runtime.new()
   local cell = Cell.new(0, 'bench-choice-conflict-cell')
   local rows
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       cell:set_op(Op, 1):map(function() return 'write-1' end):choice(Op.always('no-write')),
       cell:set_op(Op, 2),
@@ -156,13 +156,13 @@ add('hard: or_else waits for partner backtracking', 100, function()
   local wanted = Channel.new('bench-or-else-wanted')
   local dead = Channel.new('bench-or-else-dead')
   local receiver, partner
-  rt:spawn(function()
+  rt:spawn_raw(function()
     receiver = rt:perform(
       wanted:get_op(Op)
         :map(function(v) return 'primary:' .. tostring(v) end)
         :or_else(Op.always('fallback')))
   end, 'receiver')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     partner = rt:perform(Op.choice(dead:put_op(Op, 'dead'), wanted:put_op(Op, 'ok')))
   end, 'partner')
   assert_status(rt:run(), 'found')
@@ -177,16 +177,16 @@ add('hard: triple swap with decoy', 80, function()
   local ca = Channel.new('bench-triple-ca')
   local a, b, c, decoy
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     a = rt:perform(Op.all({ ab:put_op(Op, 'A'), ca:get_op(Op) }):map(function(rows) return rows[2][1] end))
   end, 'A')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     b = rt:perform(Op.all({ bc:put_op(Op, 'B'), ab:get_op(Op) }):map(function(rows) return rows[2][1] end))
   end, 'B')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     c = rt:perform(Op.all({ ca:put_op(Op, 'C'), bc:get_op(Op) }):map(function(rows) return rows[2][1] end))
   end, 'C')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     decoy = rt:perform(ab:get_op(Op))
   end, 'decoy')
 
@@ -211,7 +211,7 @@ add('hard: dependent cell updates', 60, function()
   end
 
   for i = 1, 4 do
-    rt:spawn(function()
+    rt:spawn_raw(function()
       returns[#returns + 1] = rt:perform(op())
     end, 'dependent-updater-' .. tostring(i))
   end
@@ -229,7 +229,7 @@ add('hard: ledger transfer and settlement', 120, function()
   local ledger = Ledger.new('bench-ledger', 'A')
   local rt = Runtime.new()
   local result
-  rt:spawn(function()
+  rt:spawn_raw(function()
     result = rt:perform(
       ledger:transfer_op('A', 'B'):and_then(function()
         return ledger:close_op('B'):and_then(function()

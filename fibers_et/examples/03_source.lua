@@ -14,7 +14,7 @@ local clock = fibers.Source.clock('clock')
 local signal = fibers.Source.manual('reload-signal')
 local result
 
-rt:spawn(function()
+rt:spawn_raw(function()
   result = rt:perform(fibers.choice(
     signal:next_op():map(function(value)
       return 'signal: ' .. tostring(value)

@@ -9,6 +9,7 @@ local DefaultOp = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Cell = require('fibers.cell')
 local Effect = require('fibers.effect')
+local Interrupt = require('fibers.interrupt')
 local Ownership = require('fibers.internal.ownership')
 local Protected = require('fibers.protected')
 
@@ -32,7 +33,7 @@ local function status_done(v)
   return type(v) == 'table' and v.status ~= 'pending'
 end
 
-function Task.new(fn, name)
+function Task.new(fn, name, frame)
   if type(fn) ~= 'function' then error('Task.new expects a function', 2) end
   next_id = next_id + 1
   local id = 'task-' .. tostring(next_id)
@@ -41,8 +42,11 @@ function Task.new(fn, name)
     name = name or id,
     completion = Cell.new({ status = 'pending', _fibers_value = true }, (name or id) .. '-completion'),
     cancellation = Cell.new({ cancelled = false, _fibers_value = true }, (name or id) .. '-cancellation'),
+    interrupt = Interrupt.new((name or id) .. '-interrupt'),
+    frame = frame,
     owner = nil,
     owner_version = 0,
+    _fibers_obligation_kind = 'task',
     _fibers_id = id,
     _fibers_kind = Ownership.Kind,
     _fibers_value = true,
@@ -60,17 +64,36 @@ function Task:_spawn_body()
     if ok then
       report = { status = 'ok', value = pack_return(results), _fibers_value = true }
     else
-      report = { status = 'failed', error = results[1], _fibers_value = true }
+      local err = results[1]
+      if Runtime.is_cancelled and Runtime.is_cancelled(err) then
+        report = { status = 'cancelled', reason = err.reason, _fibers_value = true }
+      else
+        report = { status = 'failed', error = err, _fibers_value = true }
+      end
     end
     rt:perform(task.completion:modify_when_op(
       function(v) return type(v) == 'table' and v.status == 'pending' end,
       function() return report end
-    ))
+    ), { masked = true })
   end
 end
 
 function Task:_spawn_effect()
-  return Effect.spawn(self:_spawn_body(), self.name, self._fibers_id)
+  return Effect.spawn(self:_spawn_body(), self.name, self._fibers_id, self.frame)
+end
+
+
+function Task.spawn_op(a, b, c, d)
+  local OpModule, region, fn, name
+  if is_op_module(a) then OpModule, region, fn, name = a, b, c, d else OpModule, region, fn, name = DefaultOp, a, b, c end
+  local opts = type(name) == 'table' and name or nil
+  if opts then name = opts.name end
+  if not region or type(region.admit_op) ~= 'function' then error('Task.spawn_op expects a Region', 2) end
+  local task = Task.new(fn, name)
+  if opts and type(opts.frame) == 'function' then task.frame = opts.frame(task) elseif opts then task.frame = opts.frame end
+  return region:admit_op(OpModule, task):and_then(function()
+    return OpModule.emit(task:_spawn_effect()):map(function() return task end)
+  end)
 end
 
 function Task:join_op(OpModule)
@@ -87,10 +110,26 @@ function Task:peek_op(OpModule)
   end)
 end
 
-function Task:cancel_op(a, b)
-  local OpModule, reason
-  if is_op_module(a) then OpModule, reason = a, b else OpModule, reason = DefaultOp, a end
-  return self.cancellation:set_op(OpModule, { cancelled = true, reason = reason, _fibers_value = true })
+function Task:cancel_op(a, b, c)
+  local OpModule, region, reason
+  if is_op_module(a) then
+    OpModule = a
+    if type(b) == 'table' and type(b.owns_op) == 'function' then region, reason = b, c else reason = b end
+  else
+    OpModule = DefaultOp
+    if type(a) == 'table' and type(a.owns_op) == 'function' then region, reason = a, b else reason = a end
+  end
+
+  local set_cancel = function()
+    return self.cancellation:set_op(OpModule, { cancelled = true, reason = reason, _fibers_value = true })
+      :and_then(function() return OpModule.emit(Effect.interrupt(self.interrupt, reason)) end)
+  end
+
+  if not region then return set_cancel() end
+  return region:owns_op(OpModule, self):and_then(function(owns)
+    if not owns then return OpModule.never() end
+    return set_cancel()
+  end)
 end
 
 function Task:cancelled_op(OpModule)
@@ -109,6 +148,11 @@ end
 
 function Task:is_done()
   return status_done(self.completion.value)
+end
+
+
+function Task:_fibers_can_settle(_ctx, _owner)
+  return self:is_done()
 end
 
 return Task

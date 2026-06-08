@@ -63,7 +63,7 @@ end
 local function one_perform(op, opts)
   local rt = Runtime.new(opts or {})
   local values = { n = 0 }
-  rt:spawn(function()
+  rt:spawn_raw(function()
     values = pack_(rt:perform(op))
   end, 'one-perform')
   local status = rt:run()
@@ -92,7 +92,7 @@ local function test_map_and_and_then_are_transactional()
   local cell = Cell.new(0, 'and-then-cell')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       Op.always(2)
         :map(function(v) return v + 3 end)
@@ -115,7 +115,7 @@ local function test_and_then_is_all_or_nothing()
   local ch = Channel.new('and-then-abort-channel')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       cell:set_op(Op, 7):and_then(function()
         return ch:get_op(Op)
@@ -148,7 +148,7 @@ local function test_choice_selects_one_world_and_discards_loser()
     end)
   end)
 
-  rt:spawn(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-winner')
+  rt:spawn_raw(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-winner')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner')
   assert_eq(transaction_tags(rt), 'choice.winner', 'losing branch consequence is discarded')
@@ -165,7 +165,7 @@ local function test_or_else_preference_and_fallback()
     local got
     local primary = Op.emit(TC.tag('or_else.primary')):and_then(function() return Op.always('primary') end)
     local fallback = Op.emit(TC.tag('or_else.fallback')):and_then(function() return Op.always('fallback') end)
-    rt:spawn(function() got = rt:perform(primary:or_else(fallback)) end, 'or-else-primary')
+    rt:spawn_raw(function() got = rt:perform(primary:or_else(fallback)) end, 'or-else-primary')
     assert_status(rt:run(), 'found')
     assert_eq(got, 'primary')
     assert_eq(transaction_tags(rt), 'or_else.primary', 'fallback effects are discarded when primary can commit')
@@ -188,7 +188,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
     local ch = Channel.new('or-else-cross-absent-no-partner')
     local receiver
 
-    rt:spawn(function()
+    rt:spawn_raw(function()
       receiver = rt:perform(
         ch:get_op(Op)
           :map(function(v) return 'primary:' .. v end)
@@ -218,10 +218,10 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       return Op.always('fallback')
     end)
 
-    rt:spawn(function()
+    rt:spawn_raw(function()
       receiver = rt:perform(primary:or_else(fallback))
     end, 'or-else-cross-partial-absent-receiver')
-    rt:spawn(function() sender1 = rt:perform(ch1:put_op(Op, 'a')) end, 'or-else-cross-partial-absent-sender-1')
+    rt:spawn_raw(function() sender1 = rt:perform(ch1:put_op(Op, 'a')) end, 'or-else-cross-partial-absent-sender-1')
 
     assert_status(rt:run(), 'found', 'or_else fallback commits when the whole primary cannot be satisfied')
     assert_eq(receiver, 'fallback', 'a partially satisfiable primary is still absent as a whole')
@@ -234,7 +234,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
     local ch = Channel.new('or-else-cross-participant')
     local receiver, sender
 
-    rt:spawn(function()
+    rt:spawn_raw(function()
       receiver = rt:perform(
         ch:get_op(Op)
           :map(function(v) return 'primary:' .. v end)
@@ -244,7 +244,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       )
     end, 'or-else-cross-receiver')
 
-    rt:spawn(function()
+    rt:spawn_raw(function()
       sender = rt:perform(ch:put_op(Op, 'payload'))
     end, 'or-else-cross-sender')
 
@@ -269,11 +269,11 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       return Op.always('fallback')
     end)
 
-    rt:spawn(function()
+    rt:spawn_raw(function()
       receiver = rt:perform(primary:or_else(fallback))
     end, 'or-else-cross-all-receiver')
-    rt:spawn(function() sender1 = rt:perform(ch1:put_op(Op, 'a')) end, 'or-else-cross-all-sender-1')
-    rt:spawn(function() sender2 = rt:perform(ch2:put_op(Op, 'b')) end, 'or-else-cross-all-sender-2')
+    rt:spawn_raw(function() sender1 = rt:perform(ch1:put_op(Op, 'a')) end, 'or-else-cross-all-sender-1')
+    rt:spawn_raw(function() sender2 = rt:perform(ch2:put_op(Op, 'b')) end, 'or-else-cross-all-sender-2')
 
     assert_status(rt:run(), 'found', 'or_else primary absence considers all required external participants')
     assert_eq(receiver, 'a+b', 'multi-requirement primary beats fallback when partners exist')
@@ -288,11 +288,11 @@ local function test_or_else_retries_stale_primary_instead_of_committing_fallback
   local cell = Cell.new(0, 'or-else-stale-primary-cell')
   local a, b
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     a = rt:perform(cell:update_op(Op, function(v) return v + 1 end))
   end, 'stale-primary-first-updater')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     b = rt:perform(
       cell:update_op(Op, function(v) return v + 1 end)
         :map(function() return 'primary' end)
@@ -318,7 +318,7 @@ local function test_guard_is_delayed_and_participates_in_search()
   end)
 
   assert_eq(constructed, 0, 'guard callback is not run when the expression is constructed')
-  rt:spawn(function() got = rt:perform(guarded) end, 'guarded')
+  rt:spawn_raw(function() got = rt:perform(guarded) end, 'guarded')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'guarded')
   assert_truthy(constructed >= 1, 'guard callback runs when the operation is attempted')
@@ -353,7 +353,7 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
     end)
   end)
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(op)
     timeline[#timeline + 1] = 'resume'
   end, 'wrap-phase')
@@ -391,9 +391,9 @@ local function test_tensor_all_and_internal_rendezvous_topology()
     local ch1 = Channel.new('all-external-1')
     local ch2 = Channel.new('all-external-2')
     local rows
-    rt:spawn(function() rows = rt:perform(Op.all({ ch1:get_op(Op), ch2:get_op(Op) })) end, 'all-receiver')
-    rt:spawn(function() rt:perform(ch1:put_op(Op, 'a')) end, 'all-sender-a')
-    rt:spawn(function() rt:perform(ch2:put_op(Op, 'b')) end, 'all-sender-b')
+    rt:spawn_raw(function() rows = rt:perform(Op.all({ ch1:get_op(Op), ch2:get_op(Op) })) end, 'all-receiver')
+    rt:spawn_raw(function() rt:perform(ch1:put_op(Op, 'a')) end, 'all-sender-a')
+    rt:spawn_raw(function() rt:perform(ch2:put_op(Op, 'b')) end, 'all-sender-b')
     assert_status(rt:run(), 'found', 'all can combine multiple external requirements')
     assert_eq(rows[1][1], 'a')
     assert_eq(rows[2][1], 'b')
@@ -412,7 +412,7 @@ local function test_with_nack_external_behaviour()
     local ref
     local rt = Runtime.new()
     local got
-    rt:spawn(function()
+    rt:spawn_raw(function()
       got = rt:perform(Op.with_nack(function(nack)
         ref = nack.obligation
         return Op.always('selected')
@@ -431,7 +431,7 @@ local function test_with_nack_external_behaviour()
     local ref
     local rt = Runtime.new()
     local got
-    rt:spawn(function()
+    rt:spawn_raw(function()
       got = rt:perform(Op.choice(
         Op.always('winner'),
         Op.with_nack(function(nack)
@@ -456,8 +456,8 @@ local function test_contending_cell_updates_retry()
   local cell = Cell.new(0, 'contended-cell')
   local a, b
 
-  rt:spawn(function() a = rt:perform(cell:update_op(Op, function(v) return v + 1 end)) end, 'cell-update-a')
-  rt:spawn(function() b = rt:perform(cell:update_op(Op, function(v) return v + 1 end)) end, 'cell-update-b')
+  rt:spawn_raw(function() a = rt:perform(cell:update_op(Op, function(v) return v + 1 end)) end, 'cell-update-a')
+  rt:spawn_raw(function() b = rt:perform(cell:update_op(Op, function(v) return v + 1 end)) end, 'cell-update-b')
 
   assert_status(rt:run(), 'found')
   assert_eq(cell.value, 2, 'both contending updates eventually commit')
@@ -471,7 +471,7 @@ local function test_conflicting_parallel_cell_writes_do_not_commit_partially()
   local cell = Cell.new(0, 'conflicting-parallel-cell')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.tensor({ cell:set_op(Op, 1), cell:set_op(Op, 2) }))
   end, 'parallel-conflict')
 
@@ -488,17 +488,17 @@ local function test_canonical_te_triple_swap()
   local ca = Channel.new('triple-ca')
   local a_got, b_got, c_got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     local rows = rt:perform(Op.tensor({ ab:put_op(Op, 'A'), ca:get_op(Op) }))
     a_got = rows[2][1]
   end, 'triple-A')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     local rows = rt:perform(Op.tensor({ ab:get_op(Op), bc:put_op(Op, 'B') }))
     b_got = rows[1][1]
   end, 'triple-B')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     local rows = rt:perform(Op.tensor({ bc:get_op(Op), ca:put_op(Op, 'C') }))
     c_got = rows[1][1]
   end, 'triple-C')
@@ -516,12 +516,12 @@ local function test_triple_swap_does_not_partially_commit_when_a_party_is_missin
   local ca = Channel.new('partial-triple-ca')
   local a_got, b_got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     local rows = rt:perform(Op.tensor({ ab:put_op(Op, 'A'), ca:get_op(Op) }))
     a_got = rows[2][1]
   end, 'partial-triple-A')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     local rows = rt:perform(Op.tensor({ ab:get_op(Op), bc:put_op(Op, 'B') }))
     b_got = rows[1][1]
   end, 'partial-triple-B')
@@ -559,10 +559,10 @@ local function test_deferred_map_and_bind_after_rendezvous()
     local rt = Runtime.new()
     local ch = Channel.new('deferred-map-channel')
     local got
-    rt:spawn(function()
+    rt:spawn_raw(function()
       got = rt:perform(ch:get_op(Op):map(function(v) return v .. '!' end))
     end, 'deferred-map-receiver')
-    rt:spawn(function() rt:perform(ch:put_op(Op, 'payload')) end, 'deferred-map-sender')
+    rt:spawn_raw(function() rt:perform(ch:put_op(Op, 'payload')) end, 'deferred-map-sender')
     assert_status(rt:run(), 'found')
     assert_eq(got, 'payload!', 'map is applied after deferred rendezvous values are known')
   end
@@ -572,14 +572,14 @@ local function test_deferred_map_and_bind_after_rendezvous()
     local ch = Channel.new('deferred-bind-channel')
     local cell = Cell.new('unset', 'deferred-bind-cell')
     local got
-    rt:spawn(function()
+    rt:spawn_raw(function()
       got = rt:perform(ch:get_op(Op):and_then(function(v)
         return cell:set_op(Op, v):and_then(function()
           return cell:get_op(Op):map(function(current) return current .. ':done' end)
         end)
       end))
     end, 'deferred-bind-receiver')
-    rt:spawn(function() rt:perform(ch:put_op(Op, 'message')) end, 'deferred-bind-sender')
+    rt:spawn_raw(function() rt:perform(ch:put_op(Op, 'message')) end, 'deferred-bind-sender')
     assert_status(rt:run(), 'found')
     assert_eq(cell.value, 'message')
     assert_eq(got, 'message:done', 'bind after rendezvous participates in the same transaction')
@@ -594,7 +594,7 @@ local function test_choice_discards_loser_resource_state_even_when_loser_is_loca
   local winner = Op.always('winner')
   local loser = cell:set_op(Op, 99):map(function() return 'loser' end)
 
-  rt:spawn(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-loser-resource')
+  rt:spawn_raw(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-loser-resource')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner', 'left choice branch is selected when both branches are locally possible')
   assert_eq(cell.value, 0, 'unselected choice branch does not commit its resource effects')
@@ -611,7 +611,7 @@ local function test_choice_blocked_branch_does_not_partially_commit_before_right
   end)
   local right = cell:set_op(Op, 2):map(function() return 'right' end)
 
-  rt:spawn(function() got = rt:perform(Op.choice(blocked_left, right)) end, 'choice-blocked-left')
+  rt:spawn_raw(function() got = rt:perform(Op.choice(blocked_left, right)) end, 'choice-blocked-left')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'right')
   assert_eq(cell.value, 2, 'blocked losing branch does not leak earlier transactional writes')
@@ -622,7 +622,7 @@ local function test_tensor_is_parallel_not_sequential_for_cell_views()
   local cell = Cell.new(0, 'tensor-view-cell')
   local rows
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       cell:set_op(Op, 1),
       cell:get_op(Op),
@@ -654,10 +654,10 @@ local function test_or_else_primary_rendezvous_beats_fallback_when_partner_exist
   local cell = Cell.new(0, 'or-else-external-primary-cell')
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(ch:get_op(Op):or_else(cell:set_op(Op, 99):map(function() return 'fallback' end)))
   end, 'or-else-external-receiver')
-  rt:spawn(function() rt:perform(ch:put_op(Op, 'from-sender')) end, 'or-else-external-sender')
+  rt:spawn_raw(function() rt:perform(ch:put_op(Op, 'from-sender')) end, 'or-else-external-sender')
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'from-sender')
@@ -675,7 +675,7 @@ local function test_or_else_blocked_primary_discards_partial_state_before_fallba
   end)
   local fallback = cell:set_op(Op, 2):map(function() return 'fallback' end)
 
-  rt:spawn(function() got = rt:perform(primary:or_else(fallback)) end, 'or-else-blocked-primary')
+  rt:spawn_raw(function() got = rt:perform(primary:or_else(fallback)) end, 'or-else-blocked-primary')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
   assert_eq(cell.value, 2, 'fallback commits without leaking the blocked primary write')
@@ -686,7 +686,7 @@ local function test_choice_backtracks_around_product_conflict()
   local cell = Cell.new(0, 'choice-product-conflict-cell')
   local rows
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       cell:set_op(Op, 1):map(function() return 'write-1' end):choice(Op.always('no-write')),
       cell:set_op(Op, 2),
@@ -705,11 +705,11 @@ local function test_guard_memo_survives_refresh_of_stale_frontier()
   local guard_calls = 0
   local a, b
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     a = rt:perform(cell:update_op(Op, function(v) return v + 1 end))
   end, 'guard-refresh-first-updater')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     b = rt:perform(Op.guard(function()
       guard_calls = guard_calls + 1
       return cell:update_op(Op, function(v) return v + 1 end)
@@ -729,7 +729,7 @@ local function test_losing_or_else_fallback_settles_with_nack_as_lost()
   local rt = Runtime.new()
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.always('primary'):or_else(Op.with_nack(function(nack)
       ref = nack.obligation
       return Op.always('fallback')
@@ -747,14 +747,14 @@ local function test_nack_does_not_fire_while_protected_attempt_is_still_pending(
   local ref
   local protected_got, nack_got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     protected_got = rt:perform(Op.with_nack(function(nack)
       ref = nack.obligation
       return ch:get_op(Op)
     end))
   end, 'pending-protected')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     nack_got = rt:perform(Op.guard(function()
       return Op._nack(ref)
     end))
@@ -778,7 +778,7 @@ local function test_multiple_wraps_run_in_order_after_publication()
   })
   local got
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       Op.emit(TC.tag('multi-wrap')):and_then(function()
         return Op.always('x')
@@ -827,7 +827,7 @@ local function test_wrap_may_perform_new_transaction_after_commit()
     end)
   end)
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(outer)
     timeline[#timeline + 1] = 'resume'
   end, 'wrap-nested-perform')
@@ -842,7 +842,7 @@ local function test_wrap_failure_does_not_rollback_committed_resources()
   local cell = Cell.new(0, 'wrap-failure-cell')
   local rt = Runtime.new()
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     rt:perform(cell:set_op(Op, 5):and_then(function()
       return Op.always('x'):wrap(function()
         error('wrap boom')
@@ -870,7 +870,7 @@ local function test_product_lane_wraps_apply_inside_out_after_commit()
   local ch_b = Channel.new('wrap-product-b')
   local got, put_a, put_b
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(
       Op.emit(TC.tag('outer')):and_then(function()
         return Op.all({
@@ -898,8 +898,8 @@ local function test_product_lane_wraps_apply_inside_out_after_commit()
     timeline[#timeline + 1] = 'resume'
   end, 'wrapped-product-receiver')
 
-  rt:spawn(function() put_a = rt:perform(ch_a:put_op(Op, 'a')) end, 'wrapped-product-sender-a')
-  rt:spawn(function() put_b = rt:perform(ch_b:put_op(Op, 'b')) end, 'wrapped-product-sender-b')
+  rt:spawn_raw(function() put_a = rt:perform(ch_a:put_op(Op, 'a')) end, 'wrapped-product-sender-a')
+  rt:spawn_raw(function() put_b = rt:perform(ch_b:put_op(Op, 'b')) end, 'wrapped-product-sender-b')
 
   assert_status(rt:run(), 'found')
   assert_eq(put_a, true)
@@ -1062,7 +1062,7 @@ end
 local function one_perform(op, opts)
   local rt = Runtime.new(opts or {})
   local values = { n = 0 }
-  rt:spawn(function()
+  rt:spawn_raw(function()
     values = pack_(rt:perform(op))
   end, 'one-perform')
   local status = rt:run()
@@ -1201,11 +1201,11 @@ local function test_or_else_primary_second_candidate_beats_fallback()
     return cell:set_op(Op, 'fallback'):and_then(function() return Op.always('fallback') end)
   end)
 
-  rt:spawn(function() got = rt:perform(primary:or_else(fallback)) end, 'receiver')
-  rt:spawn(function()
+  rt:spawn_raw(function() got = rt:perform(primary:or_else(fallback)) end, 'receiver')
+  rt:spawn_raw(function()
     bad_sender = rt:perform(Op.all({ bad:put_op(Op, 'payload'), cell:set_op(Op, 'conflict') }))
   end, 'bad-conflicting-sender')
-  rt:spawn(function() good_sender = rt:perform(good:put_op(Op, 'payload')) end, 'good-sender')
+  rt:spawn_raw(function() good_sender = rt:perform(good:put_op(Op, 'payload')) end, 'good-sender')
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'good:payload', 'second primary candidate commits before fallback')
@@ -1223,7 +1223,7 @@ local function test_or_else_primary_needs_partner_backtracking()
   local dead = Channel.new('partner-backtrack-dead')
   local receiver, partner
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     receiver = rt:perform(
       wanted:get_op(Op)
         :map(function(v) return 'primary:' .. tostring(v) end)
@@ -1233,7 +1233,7 @@ local function test_or_else_primary_needs_partner_backtracking()
     )
   end, 'receiver')
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     partner = rt:perform(Op.choice(dead:put_op(Op, 'dead'), wanted:put_op(Op, 'ok')))
   end, 'partner')
 
@@ -1259,8 +1259,8 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
     return Op.always('fallback')
   end)
 
-  rt:spawn(function() receiver = rt:perform(primary:or_else(fallback)) end, 'receiver')
-  rt:spawn(function()
+  rt:spawn_raw(function() receiver = rt:perform(primary:or_else(fallback)) end, 'receiver')
+  rt:spawn_raw(function()
     partner = rt:perform(Op.choice(
       Op.all({ ch:put_op(Op, 'bad'), cell:set_op(Op, 2) }),
       Op.all({ ch:put_op(Op, 'good'), cell:set_op(Op, 1) })
@@ -1287,7 +1287,7 @@ local function test_or_else_absent_primary_discards_tentative_writes()
     return Op.always('fallback')
   end)
 
-  rt:spawn(function() got = rt:perform(primary:or_else(fallback)) end, 'receiver')
+  rt:spawn_raw(function() got = rt:perform(primary:or_else(fallback)) end, 'receiver')
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
@@ -1310,7 +1310,7 @@ local function test_losing_branch_emit_wrap_and_nack_do_not_cross_contaminate()
     end)
   end)
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     got = rt:perform(Op.choice(Op.always('winner'), loser))
   end, 'choice')
 
@@ -1333,8 +1333,8 @@ local function test_nested_or_else_uses_nearest_available_world()
     local op = ch:get_op(Op):map(function(v) return 'primary:' .. v end)
       :or_else(Op.always('inner'))
       :or_else(Op.always('outer'))
-    rt:spawn(function() got = rt:perform(op) end, 'receiver')
-    rt:spawn(function() sender = rt:perform(ch:put_op(Op, 'ok')) end, 'sender')
+    rt:spawn_raw(function() got = rt:perform(op) end, 'receiver')
+    rt:spawn_raw(function() sender = rt:perform(ch:put_op(Op, 'ok')) end, 'sender')
     assert_status(rt:run(), 'found')
     assert_eq(got, 'primary:ok')
     assert_eq(sender, true)
@@ -1371,8 +1371,8 @@ local function test_tensor_internal_and_external_rendezvous_must_all_close()
     return tostring(rows[2][1]) .. '+' .. tostring(rows[3][1])
   end)
 
-  rt:spawn(function() a = rt:perform(op) end, 'tensor-root')
-  rt:spawn(function() b = rt:perform(external:put_op(Op, 'outside')) end, 'external-partner')
+  rt:spawn_raw(function() a = rt:perform(op) end, 'tensor-root')
+  rt:spawn_raw(function() b = rt:perform(external:put_op(Op, 'outside')) end, 'external-partner')
 
   assert_status(rt:run(), 'found')
   assert_eq(a, 'inside+outside', 'tensor root commits only after internal and external rendezvous close')
@@ -1396,16 +1396,16 @@ local function test_triple_swap_with_decoy_does_not_greedily_partially_commit()
   local ca = Channel.new('triple-decoy-ca')
   local a, b, c, decoy
 
-  rt:spawn(function()
+  rt:spawn_raw(function()
     a = rt:perform(Op.all({ ab:put_op(Op, 'A'), ca:get_op(Op) }):map(function(rows) return rows[2][1] end))
   end, 'A')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     b = rt:perform(Op.all({ bc:put_op(Op, 'B'), ab:get_op(Op) }):map(function(rows) return rows[2][1] end))
   end, 'B')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     c = rt:perform(Op.all({ ca:put_op(Op, 'C'), bc:get_op(Op) }):map(function(rows) return rows[2][1] end))
   end, 'C')
-  rt:spawn(function()
+  rt:spawn_raw(function()
     decoy = rt:perform(ab:get_op(Op))
   end, 'decoy')
 
@@ -1430,7 +1430,7 @@ local function test_dependent_cell_updates_are_serialisable_under_freshness()
   end
 
   for i = 1, 3 do
-    rt:spawn(function()
+    rt:spawn_raw(function()
       returns[#returns + 1] = rt:perform(op())
     end, 'dependent-updater-' .. tostring(i))
   end
@@ -1445,8 +1445,8 @@ local function test_competing_ownership_transfers_have_one_winner()
   local rt = Runtime.new()
   local to_b, to_c
 
-  rt:spawn(function() to_b = rt:perform(ledger:transfer_op('A', 'B')) end, 'transfer-B')
-  rt:spawn(function() to_c = rt:perform(ledger:transfer_op('A', 'C')) end, 'transfer-C')
+  rt:spawn_raw(function() to_b = rt:perform(ledger:transfer_op('A', 'B')) end, 'transfer-B')
+  rt:spawn_raw(function() to_c = rt:perform(ledger:transfer_op('A', 'C')) end, 'transfer-C')
 
   assert_status(rt:run(), 'found')
   assert_truthy(ledger.owner == 'B' or ledger.owner == 'C', 'ownership has exactly one final owner')
@@ -1454,7 +1454,7 @@ local function test_competing_ownership_transfers_have_one_winner()
 
   local rt2 = Runtime.new()
   local closed_owner
-  rt2:spawn(function() closed_owner = rt2:perform(close_current_owner(ledger)) end, 'close-final-owner')
+  rt2:spawn_raw(function() closed_owner = rt2:perform(close_current_owner(ledger)) end, 'close-final-owner')
   assert_status(rt2:run(), 'found')
   assert_eq(closed_owner, ledger.owner)
   local settlements = obligation_entries(rt2, 'settlement')
@@ -1475,7 +1475,7 @@ local function test_transfer_close_or_else_settles_under_correct_owner()
     local fallback = Op.emit(TC.tag('bad.close-A-fallback')):and_then(function()
       return ledger:close_op('A'):and_then(function() return Op.always('fallback') end)
     end)
-    rt:spawn(function() result = rt:perform(primary:or_else(fallback)) end, 'transfer-close')
+    rt:spawn_raw(function() result = rt:perform(primary:or_else(fallback)) end, 'transfer-close')
     assert_status(rt:run(), 'found')
     assert_eq(result, 'B')
     assert_eq(ledger.owner, 'B')
@@ -1494,7 +1494,7 @@ local function test_transfer_close_or_else_settles_under_correct_owner()
       return ledger:close_op('B'):and_then(function() return Op.always('primary') end)
     end)
     local fallback = ledger:close_op('A'):and_then(function() return Op.always('fallback') end)
-    rt:spawn(function() result = rt:perform(primary:or_else(fallback)) end, 'transfer-close-fallback')
+    rt:spawn_raw(function() result = rt:perform(primary:or_else(fallback)) end, 'transfer-close-fallback')
     assert_status(rt:run(), 'found')
     assert_eq(result, 'fallback')
     assert_eq(ledger.owner, 'A')
@@ -1510,8 +1510,8 @@ local function test_settlement_exactly_once_under_competing_close_retry()
   local rt = Runtime.new()
   local a, b
 
-  rt:spawn(function() a = rt:perform(ledger:close_op('A')) end, 'close-a-1')
-  rt:spawn(function() b = rt:perform(ledger:close_op('A')) end, 'close-a-2')
+  rt:spawn_raw(function() a = rt:perform(ledger:close_op('A')) end, 'close-a-1')
+  rt:spawn_raw(function() b = rt:perform(ledger:close_op('A')) end, 'close-a-2')
 
   assert_status(rt:run(), 'found')
   assert_eq(a, true)
