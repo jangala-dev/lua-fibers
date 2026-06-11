@@ -1,11 +1,11 @@
 -- Internal ownership record used by Region and owned handles such as Task.
 --
--- Ownership is the small ledger beneath Regions.  A Region validates admission,
+-- Ownership is the small transactional owner record beneath Regions.  A Region validates admission,
 -- sealing and membership; the ownership record is where item owner transitions
 -- become concrete and where standard lifetime effects are derived.
 
-local ConsequenceSet = require('fibers.consequence.set')
-local Effect = require('fibers.effect')
+local ConsequenceSet = require('fibers.kernel.consequence.set')
+local Effect = require('fibers.base.effect')
 
 local Ownership = {}
 
@@ -22,8 +22,8 @@ end
 local function transition_type(old_owner, new_owner)
   if old_owner == new_owner then return nil end
   if old_owner == nil and new_owner ~= nil then return 'admitted' end
-  if old_owner ~= nil and new_owner == nil then return 'settled' end
-  if old_owner ~= nil and new_owner ~= nil then return 'transferred' end
+  if old_owner ~= nil and new_owner == nil then return 'released' end
+  if old_owner ~= nil and new_owner ~= nil then return 'reassigned' end
   return nil
 end
 
@@ -97,7 +97,6 @@ function Ownership.handle(name, fields)
   h.owner_version = h.owner_version or 0
   h._fibers_id = h._fibers_id or id
   h._fibers_kind = Kind
-  h._fibers_value = true
   h._fibers_obligation_kind = h._fibers_obligation_kind or h.kind
   return h
 end

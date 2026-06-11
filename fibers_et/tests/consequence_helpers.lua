@@ -1,4 +1,4 @@
-local ConsequenceKind = require('fibers.consequence.kind')
+local ConsequenceKind = require('fibers.kernel.consequence.kind')
 
 local M = {}
 
@@ -22,8 +22,9 @@ M.TagKind = ConsequenceKind.new {
       key = payload.tag or payload.kind,
       payload = payload,
       publish = function(rt, _entry, _log)
-        if rt.services and rt.services.test_tag then
-          return rt.services.test_tag(payload.tag or payload.kind, payload)
+        local host = rt.host or {}
+        if host.test_tag then
+          return host.test_tag(payload.tag or payload.kind, payload)
         end
       end,
     }

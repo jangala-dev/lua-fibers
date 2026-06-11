@@ -1,10 +1,10 @@
 -- Focused residual or_else tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Channel = require('fibers.channel')
-local Source = require('fibers.source')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Channel = require('fibers.base.channel')
+local Source = require('fibers.base.source')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -60,16 +60,16 @@ end
 
 -- Future waitability of primary does not suppress fallback, and primary wait is discarded.
 do
-  local ev = Source.manual('residual-unready')
-  local st, values = one_perform(ev:next_op(Op):or_else(Op.always('fallback')))
+  local ev = Source.signal('residual-unready')
+  local st, values = one_perform(ev:wait_op():or_else(Op.always('fallback')))
   assert_status(st, 'found')
   assert_eq(values[1], 'fallback')
 end
 
 -- If fallback also has no current world, primary waits do not survive residual fallback.
 do
-  local ev = Source.manual('residual-unready-never')
-  local st = one_perform(ev:next_op(Op):or_else(Op.never()), { quiet_deadlock = true })
+  local ev = Source.signal('residual-unready-never')
+  local st = one_perform(ev:wait_op():or_else(Op.never()), { quiet_deadlock = true })
   assert_status(st, 'absent', 'left wait was discarded when fallback was absent')
 end
 
@@ -100,8 +100,8 @@ do
   local ch = Channel.new('residual-primary')
   local rt = Runtime.new()
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(ch:get_op(Op):or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(ch:get_op():or_else(Op.always('fallback'))) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op('payload')) end, 'sender')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'payload')
   assert_eq(sent, true)
@@ -114,10 +114,10 @@ do
   local rt = Runtime.new()
   local receiver, partner
   rt:spawn_raw(function()
-    receiver = rt:perform(wanted:get_op(Op):map(function(v) return 'primary:' .. v end):or_else(Op.always('fallback')))
+    receiver = rt:perform(wanted:get_op():map(function(v) return 'primary:' .. v end):or_else(Op.always('fallback')))
   end, 'receiver')
   rt:spawn_raw(function()
-    partner = rt:perform(Op.choice(dead:put_op(Op, 'dead'), wanted:put_op(Op, 'ok')))
+    partner = rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok')))
   end, 'partner')
   assert_status(rt:run(), 'found')
   assert_eq(receiver, 'primary:ok')
@@ -130,7 +130,7 @@ do
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
-    got = rt:perform(Channel.new('cursor-residual-no-sender'):get_op(Op):or_else(Op.always('fallback')))
+    got = rt:perform(Channel.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
   end, 'cursor-residual')
   local st
   for _ = 1, 80 do
@@ -147,8 +147,8 @@ do
   local ch = Channel.new('cursor-residual-with-sender')
   local rt = Runtime.new()
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(ch:get_op(Op):or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(ch:get_op():or_else(Op.always('fallback'))) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op('payload')) end, 'sender')
   local st
   for _ = 1, 120 do
     st = rt:step({ max_work = 1 })

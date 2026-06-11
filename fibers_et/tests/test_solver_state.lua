@@ -2,9 +2,9 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Candidate = require('fibers.algebra.candidate')
-local State = require('fibers.solver.state')
+local Op = require('fibers.base.op')
+local Candidate = require('fibers.kernel.algebra.candidate')
+local State = require('fibers.kernel.solver.state')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(actual, expected, msg)

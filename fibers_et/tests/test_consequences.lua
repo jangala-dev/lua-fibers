@@ -2,10 +2,9 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Cell = require('fibers.cell')
-local Ledger = require('fibers.resources.ledger')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Cell = require('fibers.base.cell')
 local TC = require('tests.consequence_helpers')
 
 local pack_ = table.pack or function(...)
@@ -46,7 +45,7 @@ end
 local function test_duplicate_obligations_merge_to_one_publication()
   local calls = {}
   local rt = Runtime.new({
-    services = {
+    host = {
       test_tag = function(tag) calls[#calls + 1] = tag end,
     },
   })
@@ -119,7 +118,7 @@ local function test_publish_failure_is_fatal_after_resource_commit()
   local cell = Cell.new(0, 'publish-fatal-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:set_op(Op, 1):and_then(function()
+    rt:perform(cell:write_op(1):and_then(function()
       return Op.emit(TC.publish_fatal())
     end))
   end, 'publish-fatal')
@@ -132,43 +131,6 @@ local function test_publish_failure_is_fatal_after_resource_commit()
   assert_eq(rt:failed(), err, 'runtime stores fatal publish failure')
 end
 
-local function test_resource_derived_settlement_uses_final_committed_state()
-  local timeline = {}
-  local ledger = Ledger.new('derived-settlement', 'A')
-  local rt = Runtime.new({
-    services = {
-      settle = function(_ledger, owner)
-        timeline[#timeline + 1] = 'settle:' .. owner .. ':' .. tostring(ledger.settled_owner)
-      end,
-    },
-  })
-  local got
-
-  rt:spawn_raw(function()
-    got = rt:perform(
-      ledger:transfer_op('A', 'B'):and_then(function()
-        return ledger:close_op('B'):and_then(function()
-          return ledger:owner_op():wrap(function(owner)
-            timeline[#timeline + 1] = 'wrap:' .. owner
-            return owner
-          end)
-        end)
-      end)
-    )
-    timeline[#timeline + 1] = 'resume:' .. got
-  end, 'derived-settlement')
-
-  local st = rt:run()
-  assert_eq(st.tag, 'found')
-  assert_eq(got, 'B')
-  assert_eq(ledger.owner, 'B')
-  assert_eq(ledger.settled_owner, 'B')
-  assert_eq(table.concat(timeline, ','), 'settle:B:B,wrap:B,resume:B', 'derived obligation publishes before wrap and sees committed state')
-  assert_eq(#rt.published_consequences, 1)
-  assert_eq(#rt.published_consequences[1].obligation, 1)
-  assert_eq(rt.published_consequences[1].obligation[1].kind, 'settlement')
-end
-
 local tests = {
   test_emit_accepts_only_typed_consequences,
   test_duplicate_obligations_merge_to_one_publication,
@@ -176,7 +138,6 @@ local tests = {
   test_prepare_refusal_is_candidate_rejection_not_runtime_failure,
   test_prepare_refusal_backtracks_to_other_worlds,
   test_publish_failure_is_fatal_after_resource_commit,
-  test_resource_derived_settlement_uses_final_committed_state,
 }
 
 for i = 1, #tests do tests[i]() end

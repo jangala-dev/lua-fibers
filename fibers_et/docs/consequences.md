@@ -20,7 +20,7 @@ wrap
   post-commit value transformation applied inside the resumed fibre
 ```
 
-For example, an ownership ledger may journal:
+For example, an ownership resource may journal:
 
 ```text
 owner(resource) := B
@@ -61,10 +61,10 @@ domain logic into arbitrary code.
 
 ## Public shape
 
-Define a consequence kind with `fibers.consequence.kind`:
+Define a consequence kind with `fibers.kernel.consequence.kind`:
 
 ```lua
-local ConsequenceKind = require('fibers.consequence.kind')
+local ConsequenceKind = require('fibers.kernel.consequence.kind')
 
 local KickKind = ConsequenceKind.new {
   name = 'example.kick',
@@ -84,8 +84,8 @@ local KickKind = ConsequenceKind.new {
       key = payload.worker_id,
       payload = payload,
       publish = function(rt, entry, log)
-        if rt.services and rt.services.kick_worker then
-          rt.services.kick_worker(entry.key, entry.payload)
+        if rt.host and rt.host.kick_worker then
+          rt.host.kick_worker(entry.key, entry.payload)
         end
       end,
     }
@@ -102,7 +102,7 @@ end
 Use it in an operation with `Op.emit`:
 
 ```lua
-local Op = require('fibers.op')
+local Op = require('fibers.base.op')
 
 local op = Op.emit(kick('delivery-worker'))
 ```
@@ -224,9 +224,9 @@ duplicates must be merged or rejected by domain-specific rules
 ## Relation to resources
 
 A resource may derive consequences during preparation from the final committed
-record.  The ledger resource does this for settlement: ownership transfer and
+record.  An ownership resource can do this for settlement: ownership handoff and
 close state are resource journal entries; settlement is a consequence derived
-from the final committed ledger state.
+from the final committed ownership state.
 
 Resources can also expose public operations that simply emit consequences.  The
 right choice depends on whether the obligation is directly requested by user code

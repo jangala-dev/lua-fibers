@@ -2,8 +2,8 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Candidate = require('fibers.algebra.candidate')
+local Op = require('fibers.base.op')
+local Candidate = require('fibers.kernel.algebra.candidate')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(actual, expected, msg)
@@ -12,14 +12,14 @@ end
 local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
 local function assert_falsy(v, msg) if v then fail((msg or 'expected falsy') .. ': got ' .. tostring(v)) end end
 
-local function test_clone_shares_values_but_not_substitution()
+local function test_clone_copies_structural_values_but_not_opaque_user_values()
   local ph = Candidate.new_ph()
-  local nested = { 'prefix', ph, n = 2 }
+  local nested = { 'prefix', ph, n = 2, _fibers_rows = true }
   local c = Candidate.new(Op._pack(nested))
   local d = Candidate.clone(c)
 
-  assert_eq(d.vals, c.vals, 'clone shares persistent value pack')
-  assert_eq(d.vals[1], nested, 'clone shares nested persistent values')
+  if d.vals == c.vals then fail('clone should copy structural value pack for branch-local result updates') end
+  if d.vals[1] == nested then fail('clone should copy nested structural rows for branch-local result updates') end
   assert_falsy(Candidate.raw_resolved(c.vals, c.subst), 'original starts unresolved')
   assert_falsy(Candidate.raw_resolved(d.vals, d.subst), 'clone starts unresolved')
 
@@ -31,6 +31,11 @@ local function test_clone_shares_values_but_not_substitution()
   assert_eq(resolved[1][1], 'prefix')
   assert_eq(resolved[1][2], 'resolved')
   assert_eq(nested[2], ph, 'persistent source value is not mutated by resolve')
+
+  local user = { x = 1 }
+  local u = Candidate.new(Op._pack(user))
+  local u2 = Candidate.clone(u)
+  assert_eq(u2.vals[1], user, 'opaque user tables remain shared values')
 end
 
 local function test_nil_substitution_is_a_real_resolution()
@@ -76,7 +81,7 @@ local function test_conflicting_substitution_rejects_candidate_product()
 end
 
 local tests = {
-  test_clone_shares_values_but_not_substitution,
+  test_clone_copies_structural_values_but_not_opaque_user_values,
   test_nil_substitution_is_a_real_resolution,
   test_substitution_merges_across_candidate_products,
   test_conflicting_substitution_rejects_candidate_product,

@@ -2,26 +2,26 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Source = require('fibers.source')
-local Channel = require('fibers.channel')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Source = require('fibers.base.source')
+local Channel = require('fibers.base.channel')
 local H = require('tests.resources.test_helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()
-  local ev = Source.manual('unset')
+  local ev = Source.signal('unset')
   local rt = Runtime.new()
   local got
-  rt:spawn_raw(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
+  rt:spawn_raw(function() got = rt:perform(ev:wait_op():or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
   H.assert_status(rt:run(), 'found')
   H.assert_eq(got, 'fallback')
 end
 
 local function test_not_ready_without_fallback_reports_pending_wake_interest()
-  local ev = Source.manual('pending')
+  local ev = Source.signal('pending')
   local rt = Runtime.new()
   local got
-  rt:spawn_raw(function() got = rt:perform(ev:next_op(Op)) end, 'pending-no-fallback')
+  rt:spawn_raw(function() got = rt:perform(ev:wait_op()) end, 'pending-no-fallback')
   local st = rt:run()
   H.assert_status(st, 'pending')
   H.assert_eq(got, nil)
@@ -29,28 +29,28 @@ local function test_not_ready_without_fallback_reports_pending_wake_interest()
 end
 
 local function test_ready_now_beats_fallback()
-  local ev = Source.manual('ready')
-  ev:emit('payload')
+  local ev = Source.signal('ready')
   local rt = Runtime.new()
+  rt:arrive(ev, 'payload')
   local got
-  rt:spawn_raw(function() got = rt:perform(ev:next_op(Op):or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
+  rt:spawn_raw(function() got = rt:perform(ev:wait_op():or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
   H.assert_status(rt:run(), 'found')
   H.assert_eq(got, 'payload')
 end
 
 local function test_ready_external_value_still_participates_in_global_rendezvous_search()
-  local ev = Source.manual('ready-with-rendezvous')
-  ev:emit('payload')
+  local ev = Source.signal('ready-with-rendezvous')
   local ch = Channel.new('external-plus-rendezvous')
   local rt = Runtime.new()
+  rt:arrive(ev, 'payload')
   local receiver, sender
   rt:spawn_raw(function()
     receiver = rt:perform(
-      ev:next_op(Op):and_then(function(v)
-        return ch:get_op(Op):map(function(x) return v .. ':' .. x end)
+      ev:wait_op():and_then(function(v)
+        return ch:get_op():map(function(x) return v .. ':' .. x end)
       end):or_else(Op.always('fallback')))
   end, 'receiver')
-  rt:spawn_raw(function() sender = rt:perform(ch:put_op(Op, 'rv')) end, 'sender')
+  rt:spawn_raw(function() sender = rt:perform(ch:put_op('rv')) end, 'sender')
   H.assert_status(rt:run(), 'found')
   H.assert_eq(receiver, 'payload:rv')
   H.assert_eq(sender, true)

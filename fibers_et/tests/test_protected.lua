@@ -4,9 +4,9 @@
 -- on hosts whose native pcall/xpcall already allow yielding.
 
 _G.__FIBERS_PROTECTED_FORCE_FALLBACK = true
-package.loaded['fibers.protected'] = nil
-package.loaded['fibers.runtime'] = nil
-package.loaded['fibers.task'] = nil
+package.loaded['fibers.kernel.protected'] = nil
+package.loaded['fibers.kernel.runtime'] = nil
+package.loaded['fibers.base.task'] = nil
 package.loaded['fibers'] = nil
 
 local function fail(msg) error(msg, 2) end
@@ -15,7 +15,7 @@ local function ok(v, msg) if not v then fail(msg or 'expected truthy') end end
 local function test(_name, fn) fn() end
 
 local fibers = require('fibers')
-local Protected = require('fibers.protected')
+local Protected = require('fibers.kernel.protected')
 
 test('fallback path is active when forced', function()
   eq(Protected.using_native(), false)
@@ -26,11 +26,11 @@ test('fibers.pcall permits perform to suspend and resume', function()
   local st = fibers.run(function()
     local ch = fibers.Channel.new('protected-channel')
     fibers.spawn_raw(function()
-      fibers.perform(ch:send_op('hello'))
+      fibers.perform(ch:put_op('hello'))
     end, 'sender')
 
     protected_ok, got = fibers.pcall(function()
-      return fibers.perform(ch:recv_op())
+      return fibers.perform(ch:get_op())
     end)
   end)
 
@@ -57,11 +57,11 @@ test('fibers.xpcall permits perform and handles errors', function()
   local st = fibers.run(function()
     local ch = fibers.Channel.new('protected-xchannel')
     fibers.spawn_raw(function()
-      fibers.perform(ch:send_op('x'))
+      fibers.perform(ch:put_op('x'))
     end, 'sender')
 
     sync_ok, got = fibers.xpcall(function()
-      return fibers.perform(ch:recv_op())
+      return fibers.perform(ch:get_op())
     end, function(err)
       return 'handled:' .. tostring(err)
     end)
@@ -87,11 +87,10 @@ test('task bodies may perform while protected for result reporting', function()
     local task = fibers.perform(fibers.Task.spawn_op(region, function()
       return fibers.perform(fibers.Op.always('task-ok'))
     end, 'protected-task'))
-    status, value = fibers.perform(task:join_op())
+    value = fibers.perform(task:await_op())
   end)
 
   eq(st.tag, 'found')
-  eq(status, 'ok')
   eq(value, 'task-ok')
 end)
 

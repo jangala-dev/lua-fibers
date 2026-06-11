@@ -25,11 +25,13 @@ Op       possible transaction
 Cell     transactional fact
 Channel  synchronous rendezvous
 Source   external, host or time occurrence made transactional
-Region   transactional ownership ledger
-Lifetime compound transactional lifetime facility
+Region   transactional ownership boundary
 Task     owned running computation
 Effect   after-commit runtime obligation
 ```
+
+`Lifetime` and launch policies are compound facilities built from that kit, not
+additional base nouns.
 
 The algebra underneath is the distinctive part.  A commit is not just one event
 synchronising with another event.  A commit selects a world containing
@@ -45,7 +47,8 @@ this milestone has been exercised with `texlua`.
 Facts go in Cells.
 Meetings go through Channels.
 External occurrences arrive through Sources.
-Ownership is recorded in Regions. Most lifetime-facing code uses Lifetime, a compound facility built over Region, Task, Source and Effect.
+Ownership is recorded in Regions.
+Practical lifetime management normally uses Lifetime, a compound facility built over Region, Task, Source and Effect.
 Running work is a Task.
 Committed obligations are Effects.
 Everything composes as an Op.
@@ -59,12 +62,12 @@ local fibers = require('fibers')
 local ch = fibers.Channel.new('inbox')
 local message
 
-fibers.launch(fibers.policy.nursery(), function()
+fibers.launch(fibers.facility.policy.nursery(), function()
   fibers.spawn(function()
-    fibers.perform(ch:send_op('hello'))
+    fibers.perform(ch:put_op('hello'))
   end, 'sender')
 
-  message = fibers.perform(ch:recv_op())
+  message = fibers.perform(ch:get_op())
 end)
 
 print(message)
@@ -85,15 +88,15 @@ algebra.  `fibers.clock` is a clock source backed by the runtime's host clock.
 
 ```lua
 local op = fibers.choice(
-  ch:recv_op(),
+  ch:get_op(),
   fibers.clock:after_op(1.0):map(function()
     return nil, 'timeout'
   end)
 )
 ```
 
-The same `Source` idea is used for manual events, host callbacks and readiness
-sources.  Polling is one source kind, not the whole host model.
+The same `Source` idea is used for signals, queued host callbacks and readiness
+sources. Readiness is one source kind, not the whole host model.
 
 ## Transactional state
 
@@ -102,13 +105,14 @@ Cells participate in the same transaction machinery as channels.
 ```lua
 local counter = fibers.Cell.new(0, 'counter')
 
-local increment = counter:update_op(function(old)
-  return old + 1
+local increment = counter:read_op():and_then(function(old)
+  return counter:write_op(old + 1):map(function() return old + 1 end)
 end)
 ```
 
-Cell predicates and update functions are speculative: they may run more than
-once during search and must be pure.  Use `Effect` for committed external work.
+Cell operations do not run user update callbacks.  Interpret cell values with
+ordinary `Op` composition such as `and_then`, and use `Effect` for committed
+external work.
 
 ## Lifetimes, regions and tasks
 
@@ -122,13 +126,13 @@ fibers.run(function()
     return 7
   end, { name = 'child' }))
 
-  local status, value = fibers.perform(task:join_op())
-  assert(status == 'ok' and value == 7)
-  fibers.perform(life:release_op(task))
+  local value = fibers.perform(task:await_op())
+  assert(value == 7)
+  fibers.perform(life:retire_op(task))
 end)
 ```
 
-`Region` is the ledger primitive: admit, transfer, seal and settle. `Lifetime` is the compound facility most code should use for spawning, cancellation, transfer, observation and release. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
+`Region` is the ownership primitive: admit, reassign, seal and release. `Lifetime` is the compound facility most code should use for spawning, cancellation, matched handoff, observation, retirement and terminal settlement. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
 
 ## Effects
 
@@ -147,30 +151,28 @@ not yet a crash-durable distributed outbox.
 
 ## Public modules
 
+The tree is deliberately layered so that the repository does not turn into a
+flat catalogue of modules:
+
 ```text
 fibers                    convenience entry point
-fibers.op                 operation constructors and combinators
-fibers.runtime            fibre scheduler and transaction driver
-fibers.cell               transactional Cell
-fibers.channel            rendezvous Channel
-fibers.source             Source abstraction
-fibers.region             Region ownership ledger
-fibers.lifetime           compound lifetime facility
-fibers.task               Task owned computation handle
-fibers.effect             typed Effect wrapper
-fibers.resources.ledger   ownership ledger example resource
-fibers.consequence.*      typed effect machinery for implementers
+fibers.base               aggregate for the public base kit
+fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
+fibers.facility           aggregate for compound facilities
+fibers.facility.*         Lifetime and policy facilities
+fibers.kernel             aggregate for advanced runtime/embedding use
+fibers.kernel.*           solver, resources, commit and consequence machinery
+fibers.internal.*         private implementation detail
 ```
 
-The direct modules are public.  The top-level module is the preferred starting
-point:
+The top-level module is the preferred starting point:
 
 ```lua
 local fibers = require('fibers')
 
 local cell = fibers.Cell.new(false)
 local ch = fibers.Channel.new()
-local src = fibers.Source.manual('signal')
+local src = fibers.Source.signal('signal')
 local life = fibers.Lifetime.new('main')
 ```
 
@@ -212,21 +214,30 @@ texlua tests/run_all.lua
 Run the benchmark suite:
 
 ```sh
-export FIBERS_BENCH_SCALE=20
-lua benchmarks/bench.lua
-# or
-luajit benchmarks/bench.lua
-# or
 texlua benchmarks/bench.lua
 ```
+
+The benchmark harness validates each case before reporting timings. It can be
+scaled, filtered, or emitted as CSV/JSON:
+
+```sh
+FIBERS_BENCH_SCALE=5 texlua benchmarks/bench.lua
+FIBERS_BENCH_CASE=product texlua benchmarks/bench.lua
+FIBERS_BENCH_FORMAT=csv texlua benchmarks/bench.lua
+```
+
+See `benchmarks/README.md` for the current case groups.
 
 ## Documentation
 
 ```text
 docs/base-kit.md       the public base kit
+docs/structure.md      repository layers and placement rules
 docs/algebra.md        operation algebra and semantic distinctions
-docs/resources.md      open resource protocol
+docs/kernel/resources.md      open resource protocol
+docs/kernel/resource-laws.md  open resource and consequence laws
+docs/kernel/observation-journal.md  bounded-search observation discipline
 docs/consequences.md   typed transaction consequences / effects
-docs/lifetimes.md      regions, tasks and ownership
-docs/embedding.md      bounded stepping and host integration
+docs/facilities/lifetimes.md  regions, tasks and ownership
+docs/kernel/embedding.md      bounded stepping and host integration
 ```

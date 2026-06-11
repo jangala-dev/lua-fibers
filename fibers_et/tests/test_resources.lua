@@ -4,7 +4,6 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local tests = {
   'tests/resources/test_cell.lua',
-  'tests/resources/test_ledger.lua',
   'tests/resources/test_event.lua',
 }
 

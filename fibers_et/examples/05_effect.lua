@@ -34,7 +34,7 @@ end
 
 fibers.run(function()
   fibers.perform(fibers.tensor({
-    counter:set_op(1),
+    counter:write_op(1),
     fibers.after_commit(log_effect('counter-updated', 'counter was committed')),
   }))
 end)

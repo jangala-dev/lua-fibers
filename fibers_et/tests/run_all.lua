@@ -16,6 +16,7 @@ local tests = {
   'tests/test_region_general.lua',
   'tests/test_policy.lua',
   'tests/test_lifetime.lua',
+  'tests/test_invariants.lua',
 }
 
 for i = 1, #tests do

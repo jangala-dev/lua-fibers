@@ -1,9 +1,9 @@
 -- Runtime stepping/cursor tests.
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Channel = require('fibers.channel')
-local Cell = require('fibers.cell')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Channel = require('fibers.base.channel')
+local Cell = require('fibers.base.cell')
 
 local function assert_eq(a,b,msg) if a ~= b then error((msg or '') .. ' expected '..tostring(b)..' got '..tostring(a),2) end end
 
@@ -11,8 +11,8 @@ local function assert_eq(a,b,msg) if a ~= b then error((msg or '') .. ' expected
 local rt = Runtime.new()
 local ch = Channel.new('step-ch')
 local got, sent
-rt:spawn_raw(function() got = rt:perform(ch:get_op(Op)) end, 'r')
-rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'x')) end, 's')
+rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'r')
+rt:spawn_raw(function() sent = rt:perform(ch:put_op('x')) end, 's')
 local seen_found = false
 for i=1,10 do
   local st = rt:step()
@@ -28,8 +28,8 @@ local cell = Cell.new(0, 'budget-cell')
 local rt2 = Runtime.new()
 for i=1,4 do
   rt2:spawn_raw(function()
-    rt2:perform(cell:get_op(Op):and_then(function(v)
-      return cell:set_op(Op, v + 1)
+    rt2:perform(cell:read_op():and_then(function(v)
+      return cell:write_op(v + 1)
     end))
   end, 'u'..i)
 end
@@ -49,10 +49,10 @@ print('tests/test_runtime.lua: step ok')
 
 
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Channel = require('fibers.channel')
-local Cell = require('fibers.cell')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Channel = require('fibers.base.channel')
+local Cell = require('fibers.base.cell')
 
 local function assert_eq(a,b,msg) if a ~= b then error((msg or '') .. ' expected '..tostring(b)..' got '..tostring(a),2) end end
 local function assert_truthy(v,msg) if not v then error(msg or 'expected truthy',2) end end
@@ -62,8 +62,8 @@ local function assert_truthy(v,msg) if not v then error(msg or 'expected truthy'
 local rt = Runtime.new()
 local ch = Channel.new('cursor-rendezvous')
 local got, sent
-rt:spawn_raw(function() got = rt:perform(ch:get_op(Op)) end, 'r')
-rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'x')) end, 's')
+rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'r')
+rt:spawn_raw(function() sent = rt:perform(ch:put_op('x')) end, 's')
 
 local saw_cursor = false
 local found = false
@@ -83,8 +83,8 @@ local cell = Cell.new(0, 'cursor-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
-    rt2:perform(cell:get_op(Op):and_then(function(v)
-      return cell:set_op(Op, v + 1)
+    rt2:perform(cell:read_op():and_then(function(v)
+      return cell:write_op(v + 1)
     end))
   end, 'u'..i)
 end
@@ -104,9 +104,9 @@ print('tests/test_runtime.lua: cursor ok')
 
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Channel = require('fibers.channel')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Channel = require('fibers.base.channel')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -120,13 +120,13 @@ do
   local ch = Channel.new('deferred-context-search')
   local got, sent
   rt:spawn_raw(function()
-    got = rt:perform(ch:get_op(Op):and_then(function(v)
+    got = rt:perform(ch:get_op():and_then(function(v)
       return Op.guard(function()
         return Op.never():or_else(Op.always('fallback:' .. v))
       end)
     end))
   end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'x')) end, 'sender')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op('x')) end, 'sender')
   local st = rt:run()
   assert_status(st, 'found')
   assert_eq(got, 'fallback:x')
@@ -139,13 +139,13 @@ do
   local ch = Channel.new('deferred-context-cursor')
   local got, sent, st
   rt:spawn_raw(function()
-    got = rt:perform(ch:get_op(Op):and_then(function(v)
+    got = rt:perform(ch:get_op():and_then(function(v)
       return Op.guard(function()
         return Op.never():or_else(Op.always('cursor-fallback:' .. v))
       end)
     end))
   end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(ch:put_op(Op, 'y')) end, 'sender')
+  rt:spawn_raw(function() sent = rt:perform(ch:put_op('y')) end, 'sender')
   for _ = 1, 160 do
     st = rt:step({ max_work = 1 })
     if st.tag == 'found' then break end

@@ -2,7 +2,7 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 -- Source: outside facts entering the operation algebra.
 --
--- This example uses manual and clock sources with an explicit Runtime so the
+-- This example uses signal and clock sources with an explicit Runtime so the
 -- host remains in control of time and stepping.
 
 local fibers = require('fibers')
@@ -11,12 +11,12 @@ local now = 0
 local rt = fibers.Runtime.new({ host = { now = function() return now end } })
 
 local clock = fibers.Source.clock('clock')
-local signal = fibers.Source.manual('reload-signal')
+local signal, signal_feed = rt:signal('reload-signal')
 local result
 
 rt:spawn_raw(function()
   result = rt:perform(fibers.choice(
-    signal:next_op():map(function(value)
+    signal:wait_op():map(function(value)
       return 'signal: ' .. tostring(value)
     end),
     clock:after_op(10):map(function()
@@ -28,7 +28,7 @@ end, 'waiter')
 local st = rt:run()
 print('initial status:', st.tag)
 
-signal:emit('reload requested')
+signal_feed:set('reload requested')
 st = rt:step()
 print('after host event:', st.tag, result)
 

@@ -12,10 +12,10 @@ local received
 
 fibers.run(function()
   fibers.spawn_raw(function()
-    fibers.perform(inbox:send_op('hello from another fibre'))
+    fibers.perform(inbox:put_op('hello from another fibre'))
   end, 'sender')
 
-  received = fibers.perform(inbox:recv_op())
+  received = fibers.perform(inbox:get_op())
 end)
 
 print('received:', received)

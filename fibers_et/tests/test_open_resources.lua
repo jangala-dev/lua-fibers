@@ -1,11 +1,11 @@
 -- Open-world resource participation tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Resource = require('fibers.resources.protocol')
-local Candidate = require('fibers.algebra.candidate')
-local Result = require('fibers.algebra.result')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Resource = require('fibers.kernel.resources.protocol')
+local Candidate = require('fibers.kernel.algebra.candidate')
+local Result = require('fibers.kernel.algebra.result')
 
 local pack_ = Op._pack
 
@@ -70,14 +70,14 @@ end
 local Box = {}
 Box.__index = Box
 function Box.new(v) return setmetatable({ value = v, version = 0, _fibers_id = {}, _fibers_kind = BoxKind }, Box) end
-function Box:get_op(Op_) return Op_._resource(self, BoxKind, { op = 'get' }) end
-function Box:set_op(Op_, v) return Op_._resource(self, BoxKind, { op = 'set', value = v }) end
+function Box:get_op() return Op._resource(self, BoxKind, { op = 'get' }) end
+function Box:set_op(v) return Op._resource(self, BoxKind, { op = 'set', value = v }) end
 
 local box = Box.new(0)
 local rt = Runtime.new()
 local got
 rt:spawn_raw(function()
-  got = rt:perform(box:set_op(Op, 7):and_then(function() return box:get_op(Op) end))
+  got = rt:perform(box:set_op(7):and_then(function() return box:get_op() end))
 end, 'open-box')
 
 local st = rt:run()

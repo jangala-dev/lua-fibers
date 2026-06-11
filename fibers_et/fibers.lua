@@ -7,21 +7,28 @@
 
 local M = {}
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Effect = require('fibers.effect')
-local Protected = require('fibers.protected')
-local Policy = require('fibers.policy')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Effect = require('fibers.base.effect')
+local Protected = require('fibers.kernel.protected')
+local Policy = require('fibers.facility.policy')
+local Base = require('fibers.base')
+local Facility = require('fibers.facility')
+local Kernel = require('fibers.kernel')
 
 M.Op = Op
 M.Runtime = Runtime
-M.Cell = require('fibers.cell')
-M.Channel = require('fibers.channel')
-M.Source = require('fibers.source')
-M.Region = require('fibers.region')
-M.Lifetime = require('fibers.lifetime')
-M.Task = require('fibers.task')
+M.Cell = require('fibers.base.cell')
+M.Channel = require('fibers.base.channel')
+M.Source = require('fibers.base.source')
+M.Region = require('fibers.base.region')
+M.Lifetime = require('fibers.facility.lifetime')
+M.Task = require('fibers.base.task')
+M.Exit = require('fibers.kernel.exit')
 M.Effect = Effect
+M.base = Base
+M.facility = Facility
+M.kernel = Kernel
 M.policy = Policy
 
 M.clock = M.Source.clock('clock')
@@ -32,7 +39,6 @@ M.choice = Op.choice
 M.all = Op.all
 M.tensor = Op.tensor
 M.after_commit = Effect.after_commit
-M.emit = Effect.after_commit
 
 
 function M.pcall(fn, ...)
@@ -112,7 +118,5 @@ function M.run(fn, opts)
   return st, rt
 end
 
--- Existing specialised resources remain available by direct module import.
-M.Ledger = require('fibers.resources.ledger')
 
 return M

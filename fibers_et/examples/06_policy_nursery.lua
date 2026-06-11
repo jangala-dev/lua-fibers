@@ -5,17 +5,17 @@ local fibers = require('fibers')
 local message
 local child
 
-local st = fibers.launch(fibers.policy.nursery(), function(nursery)
+local st = fibers.launch(fibers.facility.policy.nursery(), function(nursery)
   local ch = fibers.Channel.new('nursery-example')
 
   child = fibers.spawn(function()
-    fibers.perform(ch:send_op('hello from a structured task'))
+    fibers.perform(ch:put_op('hello from a structured task'))
   end, 'sender')
 
-  message = fibers.perform(ch:recv_op())
+  message = fibers.perform(ch:get_op())
 
   -- The nursery policy admits tasks to its Region.  On exit it seals the
-  -- Region, waits for owned tasks, and settles those that have completed.
+  -- Region, waits for owned tasks, and retires those that have completed.
   assert(nursery.region)
 end)
 

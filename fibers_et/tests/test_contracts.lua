@@ -1,10 +1,17 @@
 -- Runtime host, phase and error contract tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local Cell = require('fibers.cell')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
+local Cell = require('fibers.base.cell')
 local TC = require('tests.consequence_helpers')
+
+local function update_cell(cell, fn)
+  return cell:read_op():and_then(function(old)
+    local new = fn(old)
+    return cell:write_op(new):map(function() return new, old end)
+  end)
+end
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg)
@@ -122,7 +129,7 @@ end
 do
   local rt
   rt = Runtime.new({
-    services = {
+    host = {
       test_tag = function()
         rt:perform(Op.always('bad'))
       end,
@@ -171,7 +178,7 @@ do
   local cell = Cell.new(0, 'wrap-error-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:set_op(Op, 1):wrap(function()
+    rt:perform(cell:write_op(1):wrap(function()
       error('wrap exploded')
     end))
   end, 'wrap-error')
@@ -219,7 +226,7 @@ do
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(Op.emit(TC.publish_fatal()):and_then(function()
-      return cell:set_op(Op, 1)
+      return cell:write_op(1)
     end))
   end, 'raw-consequence-error')
   local ok, err = pcall(function() rt:run() end)
@@ -247,24 +254,20 @@ do
   assert_eq(ok_spawn, true, 'external spawn after fibre phase error is allowed')
 end
 
--- A raw error from trusted transactional machinery is fatal, but the public
--- driver boundary still restores driver state before rethrowing the fatal error.
+-- Cell updates expressed as algebra protect user callback errors
+-- callback errors rather than trusted resource-protocol failures.
 do
-  local cell = Cell.new(0, 'raw-update-error-cell')
+  local cell = Cell.new(0, 'derived-update-error-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:update_op(Op, function()
+    rt:perform(update_cell(cell, function()
       error('cell update exploded')
     end))
-  end, 'raw-update-error')
+  end, 'derived-update-error')
   local ok, err = pcall(function() rt:run() end)
-  assert_error_kind(ok, err, 'runtime_error', 'raw trusted-machinery error is fatal runtime error')
-  assert_eq(err.fatal, true, 'raw trusted-machinery error is fatal')
-  assert_eq(rt:failed(), err, 'runtime stores raw fatal error')
-  assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after raw trusted-machinery error')
-  assert_eq(rt._phase, 'external', 'phase restored after raw trusted-machinery error')
-  local ok_spawn, spawn_err = pcall(function() rt:spawn_raw(function() end, 'after-raw-fatal') end)
-  assert_error_kind(ok_spawn, spawn_err, 'runtime_error', 'failed runtime rejects later spawn with fatal error')
+  assert_error_kind(ok, err, 'callback_error', 'derived update error is a protected callback error')
+  assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after derived callback error')
+  assert_eq(rt._phase, 'external', 'phase restored after derived callback error')
 end
 
 print('tests/test_contracts.lua: ok')

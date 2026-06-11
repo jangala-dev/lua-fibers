@@ -1,12 +1,12 @@
 # Public operation algebra
 
-The public operation algebra lives in `fibers.op`.  An operation is an immutable
+The public operation algebra lives in `fibers.base.op`.  An operation is an immutable
 syntax value describing a transaction.  A `Runtime` executes operations only when
 a fibre calls `rt:perform(op)`.
 
 ```lua
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
+local Op = require('fibers.base.op')
+local Runtime = require('fibers.kernel.runtime')
 
 local rt = Runtime.new()
 rt:spawn_raw(function()
@@ -176,7 +176,7 @@ packed lane results.  Lane-local wraps run after internal rendezvous closure,
 left-to-right by lane order, before an outer product wrap.
 
 ```lua
-Op.tensor({ ch:get_op(Op), ch:put_op(Op, "x") })
+Op.tensor({ ch:get_op(), ch:put_op("x") })
 ```
 
 Use `tensor` when the lanes form a local transactional network.
@@ -190,7 +190,7 @@ If `p`'s values contain unresolved rendezvous placeholders, the map is deferred
 until the placeholders are resolved.
 
 ```lua
-cell:get_op(Op):map(function(x) return x + 1 end)
+cell:read_op():map(function(x) return x + 1 end)
 ```
 
 ### `p:and_then(fn)`
@@ -200,8 +200,8 @@ Sequentially composes transactions.  `fn` is called with the resolved values of
 tentative resource overlay created by the left-hand candidate.
 
 ```lua
-cell:set_op(Op, 7):and_then(function()
-  return cell:get_op(Op) -- sees 7 transactionally
+cell:write_op(7):and_then(function()
+  return cell:read_op() -- sees 7 transactionally
 end)
 ```
 
@@ -240,8 +240,8 @@ Wraps may also be attached to product lanes:
 
 ```lua
 Op.all({
-  ch_a:get_op(Op):wrap(f),
-  ch_b:get_op(Op):wrap(g),
+  ch_a:get_op():wrap(f),
+  ch_b:get_op():wrap(g),
 }):wrap(h)
 ```
 
@@ -269,27 +269,28 @@ part of `p`'s committed world.
 Resource modules expose operations by returning `Op._resource(...)` nodes.  The
 current public resources are:
 
-- `fibers.cell` — transactional Cell;
-- `fibers.channel` — rendezvous Channel;
-- `fibers.source` — host/time/readiness Source;
-- `fibers.region` and `fibers.task` — lifetime and running work;
-- `fibers.resources.ledger` — ownership transfer and settlement example resource.
-
+- `fibers.base.cell` — transactional Cell;
+- `fibers.base.channel` — rendezvous Channel;
+- `fibers.base.source` — host/time/readiness Source;
+- `fibers.base.region` and `fibers.base.task` — lifetime and running work;
+- 
 Examples:
 
 ```lua
-local Cell = require('fibers.cell')
-local Channel = require('fibers.channel')
+local Cell = require('fibers.base.cell')
+local Channel = require('fibers.base.channel')
 
 local c = Cell.new(0)
 local ch = Channel.new()
 
-c:get_op(Op)
-c:set_op(Op, 10)
-c:update_op(Op, function(x) return x + 1 end)
+c:read_op()
+c:write_op(10)
+c:read_op():and_then(function(x)
+  return c:write_op(x + 1):map(function() return x + 1 end)
+end)
 
-ch:get_op(Op)
-ch:put_op(Op, "message")
+ch:get_op()
+ch:put_op("message")
 ```
 
 

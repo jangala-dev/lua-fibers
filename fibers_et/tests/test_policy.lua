@@ -21,52 +21,52 @@ end
 -- inside the boundary.
 do
   local got, child
-  local st = fibers.launch(fibers.policy.nursery(), function()
+  local st = fibers.launch(fibers.facility.policy.nursery(), function()
     local ch = fibers.Channel.new('policy-channel')
     child = fibers.spawn(function()
-      fibers.perform(ch:send_op('hello'))
+      fibers.perform(ch:put_op('hello'))
     end, 'sender')
-    got = fibers.perform(ch:recv_op())
+    got = fibers.perform(ch:get_op())
   end)
   assert_status(st, 'found')
   assert_eq(got, 'hello')
   assert_truthy(child and child._fibers_obligation_kind == 'task')
-  assert_eq(child.owner, nil, 'nursery should settle completed owned children on exit')
+  assert_eq(child.owner, nil, 'nursery should retire completed owned children on exit')
 end
 
--- Region cancellation is authority-oriented and interrupts a task perform at the
+-- Lifetime cancellation is authority-oriented and interrupts a task perform at the
 -- boundary; the user operation is not rewritten as a choice.
 do
   local task
-  local st = fibers.launch(fibers.policy.nursery(), function(n)
-    local src = fibers.Source.manual('policy-cancel-source')
+  local st = fibers.launch(fibers.facility.policy.nursery(), function(n)
+    local src = fibers.Source.signal('policy-cancel-source')
     task = fibers.spawn(function()
-      fibers.perform(src:next_op())
+      fibers.perform(src:wait_op())
     end, 'waiter')
-    fibers.perform(n.region:cancel_op(task, 'stop'))
-    local status, reason = fibers.perform(task:join_op())
-    assert_eq(status, 'cancelled')
-    assert_eq(reason, 'stop')
+    fibers.perform(n.lifetime:request_cancel_op(task, 'stop'))
+    local exit = fibers.perform(task:exit_op())
+    assert_eq(exit.tag, 'cancelled')
+    assert_eq(exit.reason, 'stop')
   end)
   assert_status(st, 'found')
-  assert_eq(task.completion.value.status, 'cancelled')
+  assert_eq(task.completion.value.tag, 'cancelled')
 end
 
 -- Body failure cancels owned children before the nursery reports the body error.
 do
   local child
   local ok, err = pcall(function()
-    fibers.launch(fibers.policy.nursery(), function()
-      local src = fibers.Source.manual('policy-body-failure-source')
+    fibers.launch(fibers.facility.policy.nursery(), function()
+      local src = fibers.Source.signal('policy-body-failure-source')
       child = fibers.spawn(function()
-        fibers.perform(src:next_op())
+        fibers.perform(src:wait_op())
       end, 'owned-waiter')
       error('body failed')
     end)
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):match('body failed'))
-  assert_eq(child.completion.value.status, 'cancelled')
+  assert_eq(child.completion.value.tag, 'cancelled')
 end
 
 print('tests/test_policy.lua: ok')
