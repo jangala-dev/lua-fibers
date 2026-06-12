@@ -19,7 +19,7 @@ rt:spawn_raw(function()
     signal:wait_op():map(function(value)
       return 'signal: ' .. tostring(value)
     end),
-    clock:after_op(10):map(function()
+    clock:at_op(10):map(function()
       return 'timeout'
     end)
   ))

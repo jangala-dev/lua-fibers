@@ -20,6 +20,47 @@ local status = rt:step({ max_work = 100 })
 A `pending` status means no transaction has committed yet and the runtime is
 waiting for more work, more budget, or a host condition.
 
+
+## Standalone runner and host adapters
+
+Embedding code may call `rt:step(...)` directly.  A standalone application can
+instead use the runner layer:
+
+```lua
+local fibers = require('fibers')
+
+fibers.run(function()
+  fibers.perform(fibers.sleep_op(1))
+end)
+```
+
+The runner uses `Runtime:run`, not a tight loop over `Runtime:step`.  This keeps
+the efficient internal driver path for standalone applications while preserving
+`step` for bounded embedding.
+
+A host adapter has a deliberately narrow contract:
+
+```text
+host.now(rt) -> number
+host:block(rt, wait_summary, status, opts) -> progressed, reason
+```
+
+`now` supplies runtime time.  `block` decides whether and how the process should
+wait for the reported waits to become productive.  If it cannot support the
+waits, it returns `nil, reason`, and the runner returns the pending status to the
+caller.
+
+The built-in pure Lua host is intentionally limited:
+
+```lua
+local host = require('fibers.host.pure').new()
+```
+
+It supports time waits using `os.time` and `os.execute("sleep N")`.  It does not
+support polling or arbitrary external events.  Linux hosts based on LuaJIT FFI,
+nixio, epoll, select or another mechanism should implement the same small host
+contract.
+
 ## Typed wait interests
 
 Wait interests are not partial commits.  They are typed descriptions of future

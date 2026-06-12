@@ -83,20 +83,21 @@ committed.
 
 ## Choice with time
 
-A `Source` brings an external, host or time occurrence into the transaction
-algebra.  `fibers.clock` is a clock source backed by the runtime's host clock.
+The sleep facility is ordinary operation syntax built over a clock `Source`.
+Relative sleep fixes its absolute deadline once for the perform attempt.
 
 ```lua
 local op = fibers.choice(
   ch:get_op(),
-  fibers.clock:after_op(1.0):map(function()
+  fibers.sleep_op(1.0):map(function()
     return nil, 'timeout'
   end)
 )
 ```
 
-The same `Source` idea is used for signals, queued host callbacks and readiness
-sources. Readiness is one source kind, not the whole host model.
+The same `Source` idea is used for signals, queued host callbacks, clock
+deadlines and readiness sources. Readiness is one source kind, not the whole
+host model.
 
 ## Transactional state
 
@@ -159,7 +160,10 @@ fibers                    convenience entry point
 fibers.base               aggregate for the public base kit
 fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
 fibers.facility           aggregate for compound facilities
-fibers.facility.*         Lifetime and policy facilities
+fibers.facility.*         Sleep, Lifetime and policy facilities
+fibers.host               host adapter helpers
+fibers.host.*             standalone host adapters such as pure Lua
+fibers.runner             standalone Runtime runner over a host
 fibers.kernel             aggregate for advanced runtime/embedding use
 fibers.kernel.*           solver, resources, commit and consequence machinery
 fibers.internal.*         private implementation detail
@@ -195,6 +199,7 @@ lua examples/04_lifetime_task.lua
 lua examples/05_effect.lua
 lua examples/06_policy_nursery.lua
 lua examples/07_lifetime_handoff.lua
+lua examples/08_sleep.lua
 ```
 
 Assertion-heavy semantic checks live in `tests/`.
@@ -238,6 +243,7 @@ docs/kernel/resources.md      open resource protocol
 docs/kernel/resource-laws.md  open resource and consequence laws
 docs/kernel/observation-journal.md  bounded-search observation discipline
 docs/consequences.md   typed transaction consequences / effects
+docs/facilities/sleep.md      sleep as a facility over clock sources
 docs/facilities/lifetimes.md  regions, tasks and ownership
 docs/kernel/embedding.md      bounded stepping and host integration
 ```

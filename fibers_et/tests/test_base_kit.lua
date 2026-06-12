@@ -45,6 +45,7 @@ do
   assert_eq(base.Task, fibers.Task, 'base aggregate exports Task')
   assert_eq(base.Effect, fibers.Effect, 'base aggregate exports Effect')
   assert_eq(facility.Lifetime, fibers.Lifetime, 'facility aggregate exports Lifetime')
+  assert_eq(facility.sleep.sleep_op, fibers.sleep_op, 'facility aggregate exports sleep')
   assert_eq(facility.policy, fibers.policy, 'facility aggregate exports policy')
   assert_eq(kernel.Runtime, fibers.Runtime, 'kernel aggregate exports Runtime')
 end
@@ -114,11 +115,10 @@ end
 -- Clock sources are ordinary Sources backed by host time.
 do
   local now = 0
-  local clock = fibers.Source.clock('test-clock')
   local rt = fibers.Runtime.new({ host = { now = function() return now end } })
   local ok, observed
   rt:spawn_raw(function()
-    ok, observed = rt:perform(clock:after_op(5))
+    ok, observed = rt:perform(fibers.sleep_op(5))
   end, 'sleeper')
   local st = rt:run()
   assert_status(st, 'pending')
@@ -192,7 +192,7 @@ do
 
     received = fibers.perform(fibers.choice(
       inbox:get_op(),
-      fibers.clock:after_op(1):map(function() return 'timeout' end)
+      fibers.sleep_op(1):map(function() return 'timeout' end)
     ))
 
     local value = fibers.perform(task:await_op())

@@ -234,14 +234,6 @@ function Source:at_op(deadline)
   return DefaultOp._resource(self, SourceKind, { op = 'until', deadline = deadline })
 end
 
-function Source:after_op(delay)
-  if self.kind ~= 'clock' then error('after_op is only supported by clock sources', 2) end
-  return DefaultOp.guard(function(ctx)
-    local now = (ctx and ctx.now) and ctx:now() or runtime_now(ctx)
-    return self:at_op(now + delay)
-  end)
-end
-
 function Source:readable_op()
   if self.kind ~= 'readiness' then error('readable_op is only supported by readiness sources', 2) end
   return DefaultOp._resource(self, SourceKind, { op = 'wait', key = self.key, mode = 'read' })

@@ -301,7 +301,7 @@ ch:put_op("message")
 ```lua
 local rt = Runtime.new({
   host = {
-    now = function() return monotonic_time end,
+    now = function(_rt) return monotonic_time end,
     trace = function(event) end,
     on_error = function(err) end,
   },
@@ -309,8 +309,10 @@ local rt = Runtime.new({
 ```
 
 The core runtime does not choose a wall-clock, print traces, block, or install a
-process-wide scheduler.  Hosts and standalone drivers provide those behaviours
-outside the transaction kernel.
+process-wide scheduler.  Hosts and standalone runners provide those behaviours
+outside the transaction kernel.  The built-in runner uses `Runtime:run` as its
+efficient internal driver and asks a host adapter to block only when the runtime
+reports pending waits.
 
 `rt:now()` returns the host's monotonic runtime time.  If no host clock is
 provided, it returns `0`.  Relative-time operations should be built with

@@ -68,7 +68,7 @@ do
   local clock = Source.clock('source-clock-test')
   local rt = Runtime.new({ host = { now = function() return now end } })
   local ok, observed
-  rt:spawn_raw(function() ok, observed = rt:perform(clock:after_op(5)) end, 'clock-waiter')
+  rt:spawn_raw(function() ok, observed = rt:perform(clock:at_op(5)) end, 'clock-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
   assert(st.waits and #st.waits == 1, 'expected one time wait')
@@ -140,7 +140,7 @@ do
   local clock = Source.clock('bounded-clock-observation')
   local rt = Runtime.new({ host = { now = function() return now end } })
   local ok, observed
-  rt:spawn_raw(function() ok, observed = rt:perform(clock:after_op(5)) end, 'bounded-clock-waiter')
+  rt:spawn_raw(function() ok, observed = rt:perform(clock:at_op(5)) end, 'bounded-clock-waiter')
   for _ = 1, 5 do rt:step({ max_work = 1 }) end
   assert_eq(ok, nil, 'sleep should still be pending before deadline')
   now = 5

@@ -13,7 +13,14 @@ fibers/base/
 
 fibers/facility.lua
 fibers/facility/
-  compound facilities built from the base kit, such as Lifetime and policies
+  compound facilities built from the base kit, such as Sleep, Lifetime and policies
+
+fibers/host.lua
+fibers/host/
+  host adapter helpers and optional standalone host implementations
+
+fibers/runner.lua
+  standalone runner that drives Runtime:run with a host adapter
 
 fibers/kernel.lua
 fibers/kernel/
@@ -29,6 +36,8 @@ The placement rule is:
 ```text
 base       if it is one of the few nouns that explains the library
 facility   if it is useful user-facing machinery built from the base
+host       if it bridges Runtime waits to process-level blocking or polling
+runner     if it drives a Runtime as a standalone application
 kernel     if it is eventful-transaction engine machinery
 internal   if direct use should not be relied on
 ```
@@ -43,8 +52,10 @@ Library authors may import a layer explicitly:
 
 ```lua
 local Cell = require('fibers.base.cell')
+local Sleep = require('fibers.facility.sleep')
 local Lifetime = require('fibers.facility.lifetime')
 local Runtime = require('fibers.kernel.runtime')
+local PureHost = require('fibers.host.pure')
 ```
 
 New modules should be placed by role rather than convenience.  In particular,

@@ -32,7 +32,7 @@ chosen between, sequenced, combined and performed by a fibre.
 ```lua
 local op = fibers.choice(
   inbox:get_op(),
-  fibers.clock:after_op(1.0):map(function() return nil, 'timeout' end)
+  fibers.sleep_op(1.0):map(function() return nil, 'timeout' end)
 )
 ```
 
@@ -86,7 +86,8 @@ local clock = fibers.Source.clock('clock')
 local readiness, readiness_feed = rt:readiness_source(fd, 'read')
 
 signal:wait_op()
-clock:after_op(0.25)
+fibers.sleep_op(0.25)      -- facility over a clock Source
+clock:at_op(deadline)      -- low-level absolute clock-source wait
 readiness:readable_op()
 feed:set('changed')
 readiness_feed:set_ready(true)
