@@ -38,8 +38,9 @@ synchronising with another event.  A commit selects a world containing
 rendezvous requirements, resource journals, fallback structure, wake interests,
 typed runtime effects, nacks, and post-commit value transformations.
 
-This repository is WIP.  The implementation is intended to be portable Lua;
-this milestone has been exercised with `texlua`.
+This repository is WIP.  The implementation is intended to be portable Lua.
+The test suite is exercised with plain Lua, LuaJIT and texlua; optional host
+backends skip cleanly when their dependencies are unavailable.
 
 ## Base kit rule of thumb
 
@@ -121,6 +122,7 @@ A region is a generic ownership and admission boundary.  A task is the standard 
 
 ```lua
 local life = fibers.Lifetime.new('main')
+local a, b = fibers.Stream.memory_pair()
 
 fibers.run(function()
   local task = fibers.perform(life:spawn_op(function()
@@ -134,6 +136,22 @@ end)
 ```
 
 `Region` is the ownership primitive: admit, reassign, seal and release. `Lifetime` is the compound facility most code should use for spawning, cancellation, matched handoff, observation, retirement and terminal settlement. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
+
+## Transactional streams
+
+The stream facility currently provides in-memory stream pairs:
+
+```lua
+local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
+```
+
+Stream `_op` methods are single-commit operations.  Losing read branches
+consume no bytes; losing write branches append no bytes; EOF and half-close are
+committed state; and backpressure is transactional capacity.  Friendly methods
+such as `stream:write(bytes)` may loop and therefore may commit several
+transactions.
+
+See `docs/facilities/streams.md` and `examples/09_memory_stream.lua`.
 
 ## Effects
 
@@ -160,9 +178,9 @@ fibers                    convenience entry point
 fibers.base               aggregate for the public base kit
 fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
 fibers.facility           aggregate for compound facilities
-fibers.facility.*         Sleep, Lifetime and policy facilities
+fibers.facility.*         Sleep, Lifetime, Stream and policy facilities
 fibers.host               host adapter helpers
-fibers.host.*             standalone host adapters such as pure Lua
+fibers.host.*             standalone host adapters: pure Lua, nixio/Linux, luaposix, LuaJIT/Linux, cffi/Linux
 fibers.runner             standalone Runtime runner over a host
 fibers.kernel             aggregate for advanced runtime/embedding use
 fibers.kernel.*           solver, resources, commit and consequence machinery
@@ -178,6 +196,7 @@ local cell = fibers.Cell.new(false)
 local ch = fibers.Channel.new()
 local src = fibers.Source.signal('signal')
 local life = fibers.Lifetime.new('main')
+local a, b = fibers.Stream.memory_pair()
 ```
 
 ## Protected calls
@@ -200,6 +219,8 @@ lua examples/05_effect.lua
 lua examples/06_policy_nursery.lua
 lua examples/07_lifetime_handoff.lua
 lua examples/08_sleep.lua
+lua examples/09_memory_stream.lua
+lua examples/10_stream_protocol_handoff.lua
 ```
 
 Assertion-heavy semantic checks live in `tests/`.
@@ -216,9 +237,55 @@ luajit tests/run_all.lua
 texlua tests/run_all.lua
 ```
 
-Run the benchmark suite:
+The test runner prints a uniform per-file result and summary.  It also supports
+listing, filtering, verbose inner output and fail-fast mode:
 
 ```sh
+lua tests/run_all.lua --list
+lua tests/run_all.lua --filter source
+lua tests/run_all.lua -k host
+lua tests/run_all.lua --verbose
+lua tests/run_all.lua --fail-fast
+```
+
+The same options are available through environment variables:
+
+```sh
+FIBERS_TEST_FILTER=host lua tests/run_all.lua
+FIBERS_TEST_VERBOSE=1 lua tests/run_all.lua
+```
+
+Host tests can be run together or per backend.  Backend-specific tests skip
+cleanly when their optional dependency is not available; in an environment with
+nixio, luaposix, LuaJIT FFI and cffi available, the same commands exercise the real backends.
+
+```text
+pure          portable fallback; time waits only
+nixio_linux   nixio poll backend
+luaposix      luaposix poll backend
+luajit_linux  LuaJIT FFI epoll backend
+cffi_linux    cffi epoll backend for plain Lua
+```
+
+The nixio, luaposix and FFI backend tests include smoke coverage for real pipe read
+readiness, write readiness, readiness racing a timeout, and timeout racing an
+unready descriptor:
+
+```sh
+lua tests/hosts/test_all.lua
+lua tests/hosts/test_all.lua --filter nixio
+lua tests/hosts/test_pure.lua
+lua tests/hosts/test_nixio_linux.lua
+lua tests/hosts/test_luaposix.lua
+lua tests/hosts/test_cffi_linux.lua
+luajit tests/hosts/test_luajit_linux.lua
+```
+
+Run the benchmark suite with any supported Lua host:
+
+```sh
+lua benchmarks/bench.lua
+luajit benchmarks/bench.lua
 texlua benchmarks/bench.lua
 ```
 
@@ -226,9 +293,9 @@ The benchmark harness validates each case before reporting timings. It can be
 scaled, filtered, or emitted as CSV/JSON:
 
 ```sh
-FIBERS_BENCH_SCALE=5 texlua benchmarks/bench.lua
-FIBERS_BENCH_CASE=product texlua benchmarks/bench.lua
-FIBERS_BENCH_FORMAT=csv texlua benchmarks/bench.lua
+FIBERS_BENCH_SCALE=5 lua benchmarks/bench.lua
+FIBERS_BENCH_CASE=product lua benchmarks/bench.lua
+FIBERS_BENCH_FORMAT=csv lua benchmarks/bench.lua
 ```
 
 See `benchmarks/README.md` for the current case groups.

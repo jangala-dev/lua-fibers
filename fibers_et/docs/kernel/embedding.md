@@ -57,9 +57,57 @@ local host = require('fibers.host.pure').new()
 ```
 
 It supports time waits using `os.time` and `os.execute("sleep N")`.  It does not
-support polling or arbitrary external events.  Linux hosts based on LuaJIT FFI,
-nixio, epoll, select or another mechanism should implement the same small host
-contract.
+support polling or arbitrary external events.
+
+Optional Linux hosts implement the same contract:
+
+```lua
+local host = require('fibers.host.luajit_linux').new() -- LuaJIT FFI, nanosleep, epoll
+local host = require('fibers.host.cffi_linux').new()   -- cffi, nanosleep, epoll
+local host = require('fibers.host.nixio_linux').new()  -- nixio, nanosleep, poll
+local host = require('fibers.host.luaposix').new()     -- luaposix, nanosleep, poll
+```
+
+The built-in host matrix is:
+
+```text
+pure          portable fallback; time waits only
+nixio_linux   nixio poll backend
+luaposix      luaposix poll backend
+luajit_linux  LuaJIT FFI epoll backend
+cffi_linux    cffi epoll backend for plain Lua
+```
+
+These modules are optional.  They are require-able on unsupported interpreters,
+but `is_supported()` returns false and `new()` raises a clear error if the
+backend is unavailable.
+
+Host integration tests are split by backend and can also be run through the
+combined host runner:
+
+```sh
+lua tests/hosts/test_all.lua
+lua tests/hosts/test_all.lua --filter nixio
+lua tests/hosts/test_pure.lua
+lua tests/hosts/test_nixio_linux.lua
+lua tests/hosts/test_luaposix.lua
+lua tests/hosts/test_cffi_linux.lua
+luajit tests/hosts/test_luajit_linux.lua
+```
+
+The backend tests use skip-on-unavailable probes.  `test_all.lua` is therefore
+safe in small environments, while still exercising nixio, luaposix and FFI when they are
+installed.  Where the backend is available, the smoke tests use real pipes to
+cover read readiness, write readiness, readiness winning over a later timeout,
+and timeout winning when a descriptor remains unready.  The general runner
+supports the same small harness options:
+
+```sh
+lua tests/run_all.lua --list
+lua tests/run_all.lua --filter host
+lua tests/run_all.lua --verbose
+lua tests/run_all.lua --fail-fast
+```
 
 ## Typed wait interests
 
@@ -82,7 +130,10 @@ local waits = rt:pending_wait_summary()
 ```
 
 The summary is intended for host adapters.  It avoids forcing the transaction
-runtime to own timers, fd polling, GUI events or game-engine callbacks.
+runtime to own timers, fd polling, GUI events or game-engine callbacks.  For
+readiness waits the summary carries the consumer `source` and the original
+`readiness_key`, so a host can later call `rt:arrive(source, mode, true)` when
+the host object becomes ready.
 
 ## Sources
 
@@ -139,6 +190,13 @@ readable_feed:clear_ready('read')
 
 There is deliberately no dynamic `host.ready` or `source_ready` probe.  A host
 that observes readiness must feed that fact into the runtime explicitly.
+
+The LuaJIT/Linux FFI host preserves the old `fibers` policy for descriptors that
+`epoll` rejects with `EPERM`: they are marked unpollable and treated as
+requested readiness while a wait remains registered.  This models descriptors
+such as regular files as level-ready.  Synthetic unpollable readiness is not
+reported as an error readiness; the subsequent read or write operation remains
+responsible for EOF, `EAGAIN`, or real errors.
 
 ## Effects and host callbacks
 

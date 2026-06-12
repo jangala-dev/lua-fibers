@@ -1,0 +1,59 @@
+package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+
+local fibers = require('fibers')
+local Host = require('fibers.host')
+local PureHost = require('fibers.host.pure')
+local Common = require('tests.hosts.common')
+
+-- The pure host drives time waits without busy-waiting in user code.  The test
+-- supplies a fake sleep function so the suite does not actually pause.
+do
+  local now = 10
+  local slept
+  local host = PureHost.new({
+    now = function() return now end,
+    sleep = function(seconds)
+      slept = seconds
+      now = now + seconds
+      return true
+    end,
+  })
+
+  local done = false
+  local st = fibers.run(function()
+    fibers.perform(fibers.sleep_op(4))
+    done = true
+  end, { host = host })
+
+  Common.assert_status(st, 'found')
+  Common.assert_truthy(done, 'sleeping fibre should resume')
+  Common.assert_eq(slept, 4, 'pure host should sleep until the reported deadline')
+  Common.assert_eq(now, 14, 'fake clock should have advanced')
+end
+
+-- The pure host is deliberately limited.  It does not pretend to support source
+-- waits or polling; unsupported waits are returned to the caller as pending.
+do
+  local source
+  local st = fibers.run(function()
+    source = fibers.Source.signal('unsupported-host-source')
+    fibers.perform(source:wait_op())
+  end, { host = PureHost.new({ now = function() return 0 end, sleep = function() error('should not sleep') end }) })
+
+  Common.assert_status(st, 'pending')
+  Common.assert_eq(st.host_reason, 'unsupported-waits')
+  Common.assert_truthy(st.waits and st.waits[1] and st.waits[1].kind == 'source', 'pending status should report source wait')
+end
+
+-- Host helper extracts the earliest time wait and ignores non-time waits.
+do
+  local deadline = Host.earliest_deadline({
+    { kind = 'source', key = 'x' },
+    { kind = 'time', deadline = 7 },
+    { kind = 'time', deadline = 3 },
+  })
+  Common.assert_eq(deadline, 3)
+  Common.assert_truthy(Host.has_non_time_waits({ { kind = 'time', deadline = 1 }, { kind = 'source' } }))
+end
+
+print('tests/hosts/test_pure.lua: ok')

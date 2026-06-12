@@ -20,4 +20,6 @@ The examples build up the public base kit:
 06_policy_nursery.lua   Policy-aware structured spawn
 07_lifetime_handoff.lua Lifetime ownership handoff
 08_sleep.lua            Sleep facility over the host clock, using the pure Lua host
+09_memory_stream.lua    Transactional in-memory stream read/write/EOF
+10_stream_protocol_handoff.lua Transactional protocol negotiation and ownership handoff
 ```

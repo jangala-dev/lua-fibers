@@ -16,20 +16,22 @@ Nursery policy spawning
 Negotiated lifetime handoff
 ```
 
-Run from the repository root:
+Run from the repository root with any supported Lua host:
 
 ```sh
+lua benchmarks/bench.lua
+luajit benchmarks/bench.lua
 texlua benchmarks/bench.lua
 ```
 
 Useful controls:
 
 ```sh
-FIBERS_BENCH_SCALE=5 texlua benchmarks/bench.lua
-FIBERS_BENCH_REPEATS=5 texlua benchmarks/bench.lua
-FIBERS_BENCH_CASE=product texlua benchmarks/bench.lua
-FIBERS_BENCH_FORMAT=csv texlua benchmarks/bench.lua
-FIBERS_BENCH_FORMAT=json texlua benchmarks/bench.lua
+FIBERS_BENCH_SCALE=5 lua benchmarks/bench.lua
+FIBERS_BENCH_REPEATS=5 lua benchmarks/bench.lua
+FIBERS_BENCH_CASE=product lua benchmarks/bench.lua
+FIBERS_BENCH_FORMAT=csv lua benchmarks/bench.lua
+FIBERS_BENCH_FORMAT=json lua benchmarks/bench.lua
 ```
 
 The reported `us/op` value uses each case's logical operation count. Some cases

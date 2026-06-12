@@ -1,5 +1,7 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
+local Harness = require('tests.harness')
+
 local tests = {
   'tests/test_protected.lua',
   'tests/test_op.lua',
@@ -15,15 +17,17 @@ local tests = {
   'tests/test_source.lua',
   'tests/test_sleep.lua',
   'tests/test_host.lua',
+  'tests/test_host_linux.lua',
+  'tests/hosts/test_all.lua',
   'tests/test_region_general.lua',
   'tests/test_policy.lua',
   'tests/test_lifetime.lua',
+  'tests/test_stream_memory.lua',
   'tests/test_invariants.lua',
 }
 
-for i = 1, #tests do
-  local ok, err = pcall(dofile, tests[i])
-  if not ok then error(tests[i] .. ' failed: ' .. tostring(err), 0) end
-end
+local opts = Harness.parse_args(arg, 'FIBERS_TEST')
+opts.label = 'tests/run_all.lua'
+opts.command = 'lua tests/run_all.lua'
 
-print('tests/run_all.lua: ok')
+return Harness.run(tests, opts)

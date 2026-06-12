@@ -43,6 +43,8 @@ function Wait.source(source, interest, detail)
   local sid = stable_source_id(source)
   local key = tostring(sid) .. ':' .. tostring(interest or 'ready')
   detail = detail or {}
+  -- Preserve any resource-level key before make() installs the stable wait key.
+  if detail.readiness_key == nil and detail.key ~= nil then detail.readiness_key = detail.key end
   detail.source = source
   detail.interest = interest or 'ready'
   detail.primitive = 'source'
@@ -84,6 +86,10 @@ function Wait.summarise(list)
         deadline = w.deadline,
         mode = w.mode,
         interest = w.interest,
+        primitive = w.primitive,
+        source = w.source,
+        readiness_key = w.readiness_key,
+        source_kind = w.kind == 'source' and w.source and w.source.kind or nil,
       }
     else
       out[#out + 1] = w

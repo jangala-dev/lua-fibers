@@ -56,6 +56,8 @@ local Sleep = require('fibers.facility.sleep')
 local Lifetime = require('fibers.facility.lifetime')
 local Runtime = require('fibers.kernel.runtime')
 local PureHost = require('fibers.host.pure')
+local LuaJITHost = require('fibers.host.luajit_linux')
+local NixioHost = require('fibers.host.nixio_linux')
 ```
 
 New modules should be placed by role rather than convenience.  In particular,
