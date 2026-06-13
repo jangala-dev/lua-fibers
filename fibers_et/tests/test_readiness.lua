@@ -78,9 +78,9 @@ do
   local stream, read_val, read_err, n, write_err
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'readiness-authority-stream' }))
-    read_val, read_err = rt:perform(stream:read_some_op(1))
-    rt:perform(stream:write_op('x'))
-    n, write_err = rt:perform(stream:flush_op())
+    read_val, read_err = rt:perform(stream:reader():read_some_op(1))
+    rt:perform(stream:writer():write_op('x'))
+    n, write_err = rt:perform(stream:writer():flush_op())
   end, 'authority-root')
   assert_status(rt:run(), 'found')
   backend:feed_read_error('read_reset')
@@ -112,7 +112,7 @@ do
   local stream, got, err
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'stale-readiness-stream' }))
-    got, err = rt:perform(stream:read_some_op(1))
+    got, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
   assert_status(rt:run(), 'found')
   backend:mark_readable()
@@ -132,11 +132,11 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'readiness-write-stream' }))
-    rt:perform(stream:write_op('abc'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('abc'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 20 do if stream and stream.outgoing.inflight then break end; rt:run() end
-  assert_truthy(stream and stream.outgoing.inflight, 'write pump should have claimed bytes')
+  for _ = 1, 20 do if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end; rt:run() end
+  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'write pump should have claimed bytes')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
   drive_until(rt, function() return flushed == true end, 'write readiness should flush claimed bytes')
@@ -151,14 +151,14 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'bounded-ready-pump-stream' }))
-    rt:perform(stream:write_op('xy'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('xy'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   for _ = 1, 80 do
-    if stream and stream.outgoing.inflight then break end
+    if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end
     rt:step({ max_work = 1 })
   end
-  assert_truthy(stream and stream.outgoing.inflight, 'bounded pump should reach in-flight claim')
+  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'bounded pump should reach in-flight claim')
   backend:unblock_writes()
   drive_until(rt, function() return flushed == true end, 'bounded readiness should flush', true)
   assert_eq(backend:written(), 'xy')

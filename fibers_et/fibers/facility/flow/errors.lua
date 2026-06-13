@@ -1,0 +1,26 @@
+-- Error names for Flow and Stream facilities.
+
+return {
+  CLOSED = 'closed',
+  BROKEN_PIPE = 'broken_pipe',
+  EOF = 'eof',
+  TOO_LARGE = 'too_large',
+  LINE_TOO_LONG = 'line_too_long',
+  UNDERFLOW = 'underflow',
+  CAPACITY = 'capacity',
+  CAPACITY_OVER_RELEASE = 'capacity-over-release',
+  CLOSED_AND_DRAINED = 'closed_and_drained',
+  READ_ERROR = 'read_error',
+  WRITE_ERROR = 'write_error',
+  READ_CAPACITY_ERROR = 'read_capacity_error',
+  CLAIM_ALREADY_IN_FLIGHT = 'claim_already_in_flight',
+  NO_INFLIGHT_CLAIM = 'no_inflight_claim',
+  STALE_CLAIM = 'stale_claim',
+  CLAIM_ACK_TOO_LARGE = 'claim_ack_too_large',
+  CLAIM_CONFLICT = 'flow-claim-conflict',
+  BUFFER_PARALLEL_CONFLICT = 'flow-buffer-parallel-conflict',
+  BUFFER_UNKNOWN_OP = 'unknown-flow-buffer-op',
+  HALF_OPEN_CONFLICT = 'flow-half-open-conflict',
+  HALF_ERROR_CONFLICT = 'flow-half-error-conflict',
+  FLOW_ERROR = 'flow_error',
+}

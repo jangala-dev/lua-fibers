@@ -16,9 +16,9 @@ local stream, line, flushed
 
 rt:spawn_raw(function()
   stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'readiness-example-stream' }))
-  rt:perform(stream:write_op('ping\n'))
-  flushed = rt:perform(stream:flush_op())
-  line = rt:perform(stream:read_line_op())
+  rt:perform(stream:writer():write_op('ping\n'))
+  flushed = rt:perform(stream:writer():flush_op())
+  line = rt:perform(stream:reader():read_line_op())
 end, 'root')
 
 -- Opening commits stream ownership and pump tasks, but write readiness has not

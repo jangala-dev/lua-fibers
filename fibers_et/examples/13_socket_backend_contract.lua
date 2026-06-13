@@ -57,9 +57,9 @@ local stream, got, flushed
 
 rt:spawn_raw(function()
   stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'example-socket-stream' }))
-  got = rt:perform(stream:read_exactly_op(4))
-  rt:perform(stream:write_op('pong'))
-  flushed = rt:perform(stream:flush_op())
+  got = rt:perform(stream:reader():read_exactly_op(4))
+  rt:perform(stream:writer():write_op('pong'))
+  flushed = rt:perform(stream:writer():flush_op())
 end, 'root')
 
 -- Opening the stream starts the pumps; the read then waits for host readiness.

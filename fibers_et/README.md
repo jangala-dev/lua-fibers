@@ -139,21 +139,26 @@ end)
 
 ## Transactional streams
 
-The stream facility provides in-memory stream pairs, host-pumped streams, readiness-backed streams, and a socket-shaped backend contract over host-provided non-blocking I/O:
+The stream facility is built from unidirectional Flows.  An Inlet commits bytes into a Flow, an Outlet commits bytes out of a Flow, and ordinary bidirectional streams are compounds made from two Flows:
 
 ```lua
 local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
 
+local line = fibers.perform(b:reader():read_line_op())
+fibers.perform(a:writer():write_op('reply\n'))
+
 local stream = fibers.perform(
   fibers.Stream.open_backend_op(region, backend, { name = 'host-stream' })
 )
+
+local r = stream:reader()
+local w = stream:writer()
 ```
 
-Stream `_op` methods are single-commit operations.  Losing read branches
+Inlet and Outlet `_op` methods are single-commit operations.  Losing read branches
 consume no bytes; losing write branches append no bytes; EOF and half-close are
-committed state; and backpressure is transactional capacity.  Friendly methods
-such as `stream:write(bytes)` may loop and therefore may commit several
-transactions.
+committed state; and backpressure is transactional capacity.  Stream compounds
+do not expose byte operations directly; use `stream:reader()` and `stream:writer()`.
 
 See `docs/facilities/streams.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, and `examples/13_socket_backend_contract.lua`.
 
@@ -182,7 +187,7 @@ fibers                    convenience entry point
 fibers.base               aggregate for the public base kit
 fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
 fibers.facility           aggregate for compound facilities
-fibers.facility.*         Sleep, Lifetime, Stream and policy facilities
+fibers.facility.*         Sleep, Lifetime, Stream/Flow and policy facilities
 fibers.host               host adapter helpers
 fibers.host.*             standalone/test host adapters: pure Lua, manual, nixio/Linux, luaposix, LuaJIT/Linux, cffi/Linux
 fibers.runner             standalone Runtime runner over a host
@@ -201,6 +206,8 @@ local ch = fibers.Channel.new()
 local src = fibers.Source.signal('signal')
 local life = fibers.Lifetime.new('main')
 local a, b = fibers.Stream.memory_pair()
+local r = b:reader()
+local w = a:writer()
 ```
 
 ## Protected calls

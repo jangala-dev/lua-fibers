@@ -10,6 +10,7 @@ local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq faile
 local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
 local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function assert_not_eq(a, b, msg) if a == b then fail((msg or 'assert_not_eq failed') .. ': both were ' .. tostring(a)) end end
 
 local function drive_until(rt, pred, label)
   for _ = 1, 100 do
@@ -35,9 +36,69 @@ do
   assert_status(st, 'found')
   assert_eq(got, 'winner')
   assert_nil(backend.runtime, 'losing open should not start or bind pump tasks')
+  assert_nil(backend.stream, 'losing open should not attach backend to an uncommitted stream')
 end
 
--- Host input enters the stream only through the read pump committing bytes into the incoming ByteQueue.
+-- Host backend streams are compound owned objects over two directional flows.
+do
+  local rt = fibers.Runtime.new()
+  local region = fibers.Region.new('compound-region')
+  local backend = Fake.new({ name = 'compound-backend' })
+  local stream
+  rt:spawn_raw(function()
+    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'compound-stream' }))
+  end, 'root')
+  assert_status(rt:run(), 'found')
+  assert_truthy(stream._fibers_host_stream, 'open_backend_op should return a host-stream compound')
+  assert_truthy(stream.read_flow and stream.write_flow, 'compound should own two flows')
+  assert_truthy(stream:reader() and stream:writer(), 'compound should expose reader and writer handles')
+  assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
+  assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
+  assert_eq(stream.owner, region, 'region should own the compound object')
+  assert_eq(stream:reader().owner, region, 'region should own the reader handle')
+  assert_eq(stream:writer().owner, region, 'region should own the writer handle')
+  assert_truthy(region.owned[stream], 'region should list the compound object')
+  assert_truthy(region.owned[stream:reader()], 'region should list the reader handle')
+  assert_truthy(region.owned[stream:writer()], 'region should list the writer handle')
+  assert_truthy(stream.read_task and stream.write_task, 'split strategy should install read/write pump tasks')
+  assert_nil(stream.read_line_op, 'compound should not delegate read operations')
+  assert_nil(stream.write_op, 'compound should not delegate write operations')
+end
+
+-- Flow surfaces are capability-specific; looping friendly methods and duplex byte ops are absent.
+do
+  local a, _b = Stream.memory_pair({ name = 'no-friendly-stream' })
+  assert_nil(a.read, 'stream should not expose friendly read')
+  assert_nil(a.write, 'stream should not expose friendly write')
+  assert_nil(a.close, 'stream should not expose friendly close')
+  assert_nil(a.read_line_op, 'duplex should not expose reader operations directly')
+  assert_nil(a.write_op, 'duplex should not expose writer operations directly')
+end
+
+-- Pump strategy is a replaceable host-stream detail.
+do
+  local rt = fibers.Runtime.new()
+  local region = fibers.Region.new('custom-strategy-region')
+  local backend = Fake.new({ name = 'custom-strategy-backend' })
+  local seen_stream, seen_region, stream
+  local strategy = function(s, r, _opts)
+    seen_stream = s
+    seen_region = r
+    s.pump_task = 'custom-pump-placeholder'
+    return Op.always(s)
+  end
+  rt:spawn_raw(function()
+    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'custom-strategy-stream', pump_strategy = strategy }))
+  end, 'root')
+  assert_status(rt:run(), 'found')
+  assert_eq(seen_stream, stream, 'custom strategy should receive compound stream')
+  assert_eq(seen_region, region, 'custom strategy should receive owning region')
+  assert_eq(stream.pump_task, 'custom-pump-placeholder')
+  assert_nil(stream.read_task, 'custom strategy should not force split read task')
+  assert_nil(stream.write_task, 'custom strategy should not force split write task')
+end
+
+-- Host input enters the stream only through the read pump committing bytes into the incoming Flow buffer.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('read-region')
@@ -45,7 +106,7 @@ do
   local stream, got
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'read-stream' }))
-    got = rt:perform(stream:read_exactly_op(3))
+    got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_nil(got)
@@ -54,7 +115,7 @@ do
   assert_eq(got, 'abc')
 end
 
--- The read pump honours input ByteQueue capacity.
+-- The read pump honours input Flow buffer capacity.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('capacity-read-region')
@@ -62,8 +123,8 @@ do
   local stream, first, second
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'capacity-read-stream', read_capacity = 2, read_chunk_size = 4 }))
-    first = rt:perform(stream:read_exactly_op(2))
-    second = rt:perform(stream:read_exactly_op(2))
+    first = rt:perform(stream:reader():read_exactly_op(2))
+    second = rt:perform(stream:reader():read_exactly_op(2))
   end, 'root')
   assert_status(rt:run(), 'found')
   backend:feed_read('abcd')
@@ -81,8 +142,8 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'write-stream' }))
-    rt:perform(stream:write_op('abc'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('abc'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   drive_until(rt, function() return flushed == true end, 'write should flush')
   assert_eq(backend:written(), 'abc')
@@ -98,7 +159,7 @@ do
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'losing-write-stream' }))
     got = rt:perform(Op.choice(
       Op.always('winner'),
-      stream:write_op('abc'):map(function() return 'loser' end)
+      stream:writer():write_op('abc'):map(function() return 'loser' end)
     ))
   end, 'root')
   drive_until(rt, function() return got == 'winner' end, 'losing write choice')
@@ -113,8 +174,8 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'partial-write-stream', write_chunk_size = 6 }))
-    rt:perform(stream:write_op('abcdef'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('abcdef'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   drive_until(rt, function() return flushed == true end, 'partial writes should eventually flush')
   assert_eq(backend:written(), 'abcdef')
@@ -128,12 +189,12 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'would-block-stream' }))
-    rt:perform(stream:write_op('abc'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('abc'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   -- Let the write commit and the pump claim the bytes, then stop at writability.
-  for _ = 1, 10 do if stream and stream.outgoing.inflight then break end; rt:run() end
-  assert_truthy(stream and stream.outgoing.inflight, 'write pump should hold an in-flight claim while blocked')
+  for _ = 1, 10 do if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end; rt:run() end
+  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'write pump should hold an in-flight claim while blocked')
   assert_nil(flushed, 'flush should wait while bytes are in flight')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
@@ -149,8 +210,8 @@ do
   local stream, first, second, err
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'eof-stream' }))
-    first = rt:perform(stream:read_exactly_op(3))
-    second, err = rt:perform(stream:read_some_op(1))
+    first = rt:perform(stream:reader():read_exactly_op(3))
+    second, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
   assert_status(rt:run(), 'found')
   backend:feed_read('abc')
@@ -169,11 +230,11 @@ do
   local stream, done
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'shutdown-write-stream' }))
-    rt:perform(stream:write_op('abc'))
-    rt:perform(stream:shutdown_write_op())
-    done = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('abc'))
+    rt:perform(stream:writer():shutdown_op())
+    done = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 10 do if stream and stream.outgoing.inflight then break end; rt:run() end
+  for _ = 1, 10 do if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end; rt:run() end
   assert_nil(backend.shutdown_write_reason, 'backend write should not shut down before draining')
   backend:unblock_writes()
   drive_until(rt, function() return done == true and backend.shutdown_write_reason ~= nil end, 'shutdown should happen after drain')
@@ -189,15 +250,42 @@ do
   local stream, flushed, flush_err, n, err
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'write-error-stream' }))
-    rt:perform(stream:write_op('abc'))
-    flushed, flush_err = rt:perform(stream:flush_op())
-    n, err = rt:perform(stream:write_op('d'))
+    rt:perform(stream:writer():write_op('abc'))
+    flushed, flush_err = rt:perform(stream:writer():flush_op())
+    n, err = rt:perform(stream:writer():write_op('d'))
   end, 'root')
   drive_until(rt, function() return err == 'connection_reset' end, 'write error should commit')
   assert_nil(flushed)
   assert_eq(flush_err, 'connection_reset')
   assert_nil(n)
   assert_eq(err, 'connection_reset')
+end
+
+
+-- A pump claim keeps byte capacity reserved until the host acknowledges it.
+do
+  local rt = fibers.Runtime.new()
+  local region = fibers.Region.new('claim-capacity-region')
+  local backend = Fake.new({ name = 'claim-capacity-backend', write_blocked = true })
+  local stream, second_done, flushed
+  rt:spawn_raw(function()
+    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'claim-capacity-stream', write_capacity = 3 }))
+    rt:perform(stream:writer():write_op('abc'))
+    flushed = rt:perform(stream:writer():flush_op())
+  end, 'writer1')
+  for _ = 1, 10 do
+    if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= '' then break end
+    rt:run()
+  end
+  assert_eq(stream:writer().flow.pump_claim.bytes, 'abc', 'pump should have claimed the first write')
+  assert_eq(stream:writer().flow.capacity.available, 0, 'claimed bytes should still reserve capacity')
+  rt:spawn_raw(function() second_done = rt:perform(stream:writer():write_op('d')) end, 'writer2')
+  assert_status(rt:run(), 'pending')
+  assert_nil(second_done, 'second write should wait while claimed bytes hold capacity')
+  assert_nil(flushed, 'flush should wait while claim is blocked')
+  backend:unblock_writes()
+  drive_until(rt, function() return second_done == 1 and flushed == true end, 'acknowledged claim should release capacity')
+  assert_eq(backend:written(), 'abcd')
 end
 
 print('tests/test_stream_pumped.lua: ok')

@@ -4,5 +4,6 @@ return {
   Lifetime = require('fibers.facility.lifetime'),
   sleep = require('fibers.facility.sleep'),
   policy = require('fibers.facility.policy'),
+  Flow = require('fibers.facility.flow'),
   Stream = require('fibers.facility.stream'),
 }

@@ -1,52 +1,127 @@
--- Transactional streams.
+-- Bidirectional streams built from unidirectional byte flows.
 --
--- A stream endpoint is an owned transactional byte boundary.  Reads consume
--- committed bytes; writes publish committed bytes; half-close and backpressure
--- are committed resource state.  Memory streams connect two ByteQueues directly.
--- Host-pumped streams add read/write pump Tasks around the same ByteQueue state.
+-- Flow is the primitive byte abstraction. A Stream/Duplex is a compound over
+-- two Flows. Host streams add a backend and pump obligations around those two
+-- Flows.
 
 local Op = require('fibers.base.op')
 local Region = require('fibers.base.region')
-local Runtime = require('fibers.kernel.runtime')
 local Pump = require('fibers.facility.stream.pump')
+local Claim = require('fibers.facility.stream.pump.claim')
 local Ownership = require('fibers.internal.ownership')
-local Task = require('fibers.base.task')
-local ByteQueue = require('fibers.facility.stream.byte_queue')
+local FlowFacility = require('fibers.facility.flow')
+local Flow = FlowFacility.Flow
 
 local Stream = {}
-local Endpoint = {}
-Endpoint.__index = Endpoint
+local Duplex = {}
+Duplex.__index = Duplex
+local HostStream = {}
+HostStream.__index = HostStream
 
-local next_endpoint = 0
+local next_duplex = 0
+local next_host_stream = 0
 
-local function endpoint(opts)
+local function region_of(x)
+  return x and x._fibers_lifetime and x:raw_region() or x
+end
+
+local function expect_region(x, label)
+  if not x or x._fibers_kind ~= Region.Kind then error(label .. ' expects a Region or Lifetime', 3) end
+  return x
+end
+
+local function transfer_item_op(item, from, to, label)
+  local from_region = expect_region(region_of(from), label)
+  local to_region = expect_region(region_of(to), label)
+  return from_region:reassign_op(item, to_region)
+end
+
+local function duplex(opts)
   opts = opts or {}
-  next_endpoint = next_endpoint + 1
-  local name = opts.name or ('stream-' .. tostring(next_endpoint))
-  local h = Ownership.handle(name, {
-    kind = 'stream',
+  next_duplex = next_duplex + 1
+  local name = opts.name or ('duplex-' .. tostring(next_duplex))
+  local d = Ownership.handle(name, {
+    kind = opts.kind or 'duplex_stream',
     mode = opts.mode or 'memory',
-    incoming = opts.incoming,
-    outgoing = opts.outgoing,
+    read_flow = opts.read_flow,
+    write_flow = opts.write_flow,
     backend = opts.backend,
-    read_chunk_size = opts.read_chunk_size or 4096,
-    write_chunk_size = opts.write_chunk_size or 4096,
-    read_task = opts.read_task,
-    write_task = opts.write_task,
+    pump_strategy = opts.pump_strategy,
+    read_task = nil,
+    write_task = nil,
+    pump_task = nil,
     _fibers_stream = true,
-    _fibers_kind_name = 'stream',
-    _fibers_obligation_kind = 'stream',
+    _fibers_duplex_stream = true,
+    _fibers_kind_name = opts.kind or 'duplex_stream',
+    _fibers_obligation_kind = opts.kind or 'duplex_stream',
   })
-  return setmetatable(h, Endpoint)
+  setmetatable(d, opts.metatable or Duplex)
+  return d
+end
+
+function Duplex:reader() return self.read_flow:outlet() end
+function Duplex:writer() return self.write_flow:inlet() end
+function Duplex:read_flow_handle() return self.read_flow end
+function Duplex:write_flow_handle() return self.write_flow end
+
+function Duplex:state_op()
+  return Op.all({ self.read_flow:state_op(), self.write_flow:state_op() }):map(function(rows)
+    return { stream = self, read = rows[1][1], write = rows[2][1], mode = self.mode }
+  end)
+end
+
+function Duplex:shutdown_op(reason)
+  return Op.all({ self:reader():shutdown_op(reason), self:writer():shutdown_op(reason) }):map(function() return true end)
+end
+
+function Duplex:closed_op()
+  local function loop()
+    return self:state_op():and_then(function(st)
+      if st.read.reader_open == false and st.write.writer_open == false and st.write.drained then return Op.always(true) end
+      return Op.choice(
+        self.read_flow:changed_op(st.read),
+        self.write_flow:changed_op(st.write)
+      ):and_then(function() return loop() end)
+    end)
+  end
+  return loop()
+end
+
+function Duplex:exit_op() return self:closed_op() end
+function Duplex:transfer_op(from, to) return transfer_item_op(self, from, to, 'stream:transfer_op') end
+function Duplex:transfer_reader_op(from, to) return self:reader():transfer_op(from, to) end
+function Duplex:transfer_writer_op(from, to) return self:writer():transfer_op(from, to) end
+
+local function host_stream(opts)
+  opts = opts or {}
+  next_host_stream = next_host_stream + 1
+  local name = opts.name or ('host-stream-' .. tostring(next_host_stream))
+  local rx = Flow.new { name = name .. ':rx', capacity = opts.read_capacity or opts.capacity, read_chunk_size = opts.read_chunk_size, write_chunk_size = opts.read_chunk_size }
+  local tx = Flow.new { name = name .. ':tx', capacity = opts.write_capacity or opts.capacity, read_chunk_size = opts.write_chunk_size, write_chunk_size = opts.write_chunk_size, pump_claim = Claim.new(name .. ':tx:claim') }
+  local h = duplex {
+    name = name,
+    kind = 'host_stream',
+    mode = 'host',
+    read_flow = rx,
+    write_flow = tx,
+    backend = opts.backend,
+    pump_strategy = opts.pump_strategy,
+    metatable = HostStream,
+  }
+  h.read_chunk_size = opts.read_chunk_size or opts.chunk_size or 4096
+  h.write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096
+  h._fibers_host_stream = true
+  return h
 end
 
 function Stream.memory_pair(opts)
   opts = opts or {}
-  local name = opts.name or 'memory-stream'
-  local q_ab = ByteQueue.new { name = name .. ':a->b', capacity = opts.capacity }
-  local q_ba = ByteQueue.new { name = name .. ':b->a', capacity = opts.capacity }
-  return endpoint { name = name .. ':a', incoming = q_ba, outgoing = q_ab },
-         endpoint { name = name .. ':b', incoming = q_ab, outgoing = q_ba }
+  local name = opts.name or 'memory-flow'
+  local flow_ab = Flow.new { name = name .. ':a->b', capacity = opts.capacity }
+  local flow_ba = Flow.new { name = name .. ':b->a', capacity = opts.capacity }
+  local a = duplex { name = name .. ':a', read_flow = flow_ba, write_flow = flow_ab, mode = 'memory' }
+  local b = duplex { name = name .. ':b', read_flow = flow_ab, write_flow = flow_ba, mode = 'memory' }
+  return a, b
 end
 
 function Stream.open_backend_op(region, backend, opts)
@@ -54,127 +129,37 @@ function Stream.open_backend_op(region, backend, opts)
   if not region or type(region.admit_op) ~= 'function' then error('Stream.open_backend_op expects a Region', 2) end
   if type(backend) ~= 'table' then error('Stream.open_backend_op expects a backend table', 2) end
   local name = opts.name or backend.name or 'host-stream'
-  local ep = endpoint {
+  local hs = host_stream {
     name = name,
-    mode = 'host',
     backend = backend,
-    incoming = ByteQueue.new { name = name .. ':in', capacity = opts.read_capacity or opts.capacity },
-    outgoing = ByteQueue.new { name = name .. ':out', capacity = opts.write_capacity or opts.capacity },
+    read_capacity = opts.read_capacity or opts.capacity,
+    write_capacity = opts.write_capacity or opts.capacity,
     read_chunk_size = opts.read_chunk_size or opts.chunk_size or 4096,
     write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096,
+    pump_strategy = opts.pump_strategy or opts.strategy or 'split',
   }
-  local read_task = Task.new(function() return Pump.read(ep) end, name .. ':read-pump', opts.frame)
-  local write_task = Task.new(function() return Pump.write(ep) end, name .. ':write-pump', opts.frame)
-  ep.read_task = read_task
-  ep.write_task = write_task
-  if type(backend.attach_stream) == 'function' then backend:attach_stream(ep) end
   return Op.all({
-    region:admit_op(ep),
-    read_task:start_op(region),
-    write_task:start_op(region),
-  }):map(function() return ep end)
+    region:admit_op(hs),
+    region:admit_op(hs:reader()),
+    region:admit_op(hs:writer()),
+    Pump.start_op(hs, region, opts),
+  }):map(function() return hs end)
 end
 
-function Endpoint:read_some_op(max)
-  return self.incoming:consume_some_op(max or 4096)
-end
+HostStream.reader = Duplex.reader
+HostStream.writer = Duplex.writer
+HostStream.read_flow_handle = Duplex.read_flow_handle
+HostStream.write_flow_handle = Duplex.write_flow_handle
+HostStream.state_op = Duplex.state_op
+HostStream.shutdown_op = Duplex.shutdown_op
+HostStream.closed_op = Duplex.closed_op
+HostStream.exit_op = Duplex.exit_op
+HostStream.transfer_op = Duplex.transfer_op
+HostStream.transfer_reader_op = Duplex.transfer_reader_op
+HostStream.transfer_writer_op = Duplex.transfer_writer_op
 
-function Endpoint:read_exactly_op(n)
-  return self.incoming:consume_exactly_op(n or 0)
-end
-
-function Endpoint:read_line_op(opts)
-  return self.incoming:consume_line_op(opts or {})
-end
-
-function Endpoint:write_op(bytes)
-  return self.outgoing:append_op(bytes or '')
-end
-
-function Endpoint:write_some_op(bytes)
-  return self.outgoing:append_some_op(bytes or '')
-end
-
-function Endpoint:flush_op()
-  if self.mode == 'host' then return self.outgoing:drained_op() end
-  return Op.always(true)
-end
-
-function Endpoint:shutdown_write_op(reason)
-  return self.outgoing:close_writer_op(reason)
-end
-
-function Endpoint:shutdown_read_op(reason)
-  return self.incoming:close_reader_op(reason)
-end
-
-function Endpoint:close_op(reason)
-  return Op.all({ self:shutdown_read_op(reason), self:shutdown_write_op(reason) }):map(function() return true end)
-end
-
-function Endpoint:state_op()
-  return Op.all({ self.incoming:state_op(), self.outgoing:state_op() }):map(function(rows)
-    return { stream = self, incoming = rows[1][1], outgoing = rows[2][1], mode = self.mode }
-  end)
-end
-
-function Endpoint:closed_op()
-  local function loop()
-    return self:state_op():and_then(function(st)
-      if st.incoming.reader_open == false and st.outgoing.writer_open == false and st.outgoing.drained then return Op.always(true) end
-      return Op.choice(
-        self.incoming:changed_op(st.incoming.version),
-        self.outgoing:changed_op(st.outgoing.version)
-      ):and_then(function() return loop() end)
-    end)
-  end
-  return loop()
-end
-
-function Endpoint:exit_op()
-  return self:closed_op()
-end
-
-function Endpoint:handoff_op(from, to)
-  local from_region = from and from._fibers_lifetime and from:raw_region() or from
-  local to_region = to and to._fibers_lifetime and to:raw_region() or to
-  if not from_region or type(from_region.reassign_op) ~= 'function' then error('stream:handoff_op expects a source Lifetime or Region', 2) end
-  if not to_region or to_region._fibers_kind ~= Region.Kind then error('stream:handoff_op expects a target Lifetime or Region', 2) end
-  return from_region:reassign_op(self, to_region)
-end
-
--- Friendly methods.  These deliberately sit above the Op layer and may perform
--- more than one transaction.
-local function perform(op)
-  local rt = Runtime.current()
-  if not rt then error('stream convenience methods must run inside a fiber', 3) end
-  local frame = Runtime._current_frame and Runtime._current_frame() or nil
-  if frame and type(frame.perform) == 'function' then return frame:perform(op) end
-  return rt:perform(op)
-end
-
-function Endpoint:read_some(max) return perform(self:read_some_op(max)) end
-function Endpoint:read_exactly(n) return perform(self:read_exactly_op(n)) end
-function Endpoint:read_line(opts) return perform(self:read_line_op(opts)) end
-function Endpoint:flush() return perform(self:flush_op()) end
-function Endpoint:close(reason) return perform(self:close_op(reason)) end
-
-function Endpoint:write(bytes)
-  bytes = bytes or ''
-  local i = 1
-  if #bytes == 0 then return true end
-  while i <= #bytes do
-    local n, err = perform(self:write_some_op(string.sub(bytes, i)))
-    if not n then return nil, err end
-    if n <= 0 then return nil, 'write_zero' end
-    i = i + n
-  end
-  return true
-end
-
-Stream.endpoint = endpoint
-Stream.Endpoint = Endpoint
-Stream.ByteQueue = ByteQueue
+Stream.Duplex = Duplex
+Stream.HostStream = HostStream
 Stream.backend = {
   Fake = require('fibers.facility.stream.backend.fake'),
   Readiness = require('fibers.facility.stream.backend.readiness'),

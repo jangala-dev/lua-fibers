@@ -8,12 +8,12 @@ local line, eof, eof_err
 
 local st = fibers.run(function()
   fibers.spawn_raw(function()
-    fibers.perform(a:write_op('hello stream\n'))
-    fibers.perform(a:shutdown_write_op())
+    fibers.perform(a:writer():write_op('hello stream\n'))
+    fibers.perform(a:writer():shutdown_op())
   end, 'writer')
 
-  line = fibers.perform(b:read_line_op())
-  eof, eof_err = fibers.perform(b:read_some_op(1024))
+  line = fibers.perform(b:reader():read_line_op())
+  eof, eof_err = fibers.perform(b:reader():read_some_op(1024))
 end)
 
 assert(st.tag == 'found')

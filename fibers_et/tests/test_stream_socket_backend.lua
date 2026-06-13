@@ -164,7 +164,7 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-read-stream' }))
-    got = rt:perform(stream:read_exactly_op(3))
+    got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'socket-reader')
 
   local st = run(rt, host, 80)
@@ -187,13 +187,13 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-write-stream' }))
-    rt:perform(stream:write_op('hello'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('hello'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-writer')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(stream and stream.outgoing.inflight, 'write pump should claim committed bytes')
+  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'write pump should claim committed bytes')
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)
@@ -215,8 +215,8 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-partial-stream' }))
-    rt:perform(stream:write_op('abcdef'))
-    flushed = rt:perform(stream:flush_op())
+    rt:perform(stream:writer():write_op('abcdef'))
+    flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-partial-writer')
 
   drive_until(rt, host, function() return flushed == true end, 'partial socket write should flush', 40)
@@ -235,8 +235,8 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-eof-stream' }))
-    first = rt:perform(stream:read_some_op(8))
-    second, err = rt:perform(stream:read_some_op(8))
+    first = rt:perform(stream:reader():read_some_op(8))
+    second, err = rt:perform(stream:reader():read_some_op(8))
   end, 'socket-eof-reader')
 
   assert_status(run(rt, host, 80), 'pending')

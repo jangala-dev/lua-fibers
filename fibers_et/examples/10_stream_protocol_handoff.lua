@@ -11,17 +11,17 @@ local protocol = fibers.Cell.new('unknown', 'protocol-state')
 local reply
 
 local function negotiate_op(stream)
-  return stream:read_line_op():and_then(function(line)
+  return stream:reader():read_line_op():and_then(function(line)
     if line == 'PING' then
       return protocol:write_op('ping'):and_then(function()
         return negotiator:handoff_op(stream, responder)
       end):and_then(function()
-        return stream:write_op('PONG\n')
+        return stream:writer():write_op('PONG\n')
       end):map(function()
         return 'ping'
       end)
     end
-    return stream:write_op('BAD\n'):and_then(function()
+    return stream:writer():write_op('BAD\n'):and_then(function()
       return stream:close_op('bad protocol')
     end):map(function()
       return nil, 'bad_protocol'
@@ -31,9 +31,9 @@ end
 
 local st = fibers.run(function()
   fibers.perform(negotiator:raw_region():admit_op(server))
-  fibers.perform(client:write_op('PING\n'))
+  fibers.perform(client:writer():write_op('PING\n'))
   fibers.perform(negotiate_op(server))
-  reply = fibers.perform(client:read_line_op())
+  reply = fibers.perform(client:reader():read_line_op())
 end)
 
 assert(st.tag == 'found')

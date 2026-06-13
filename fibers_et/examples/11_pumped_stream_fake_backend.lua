@@ -16,10 +16,10 @@ rt:spawn_raw(function()
     write_capacity = 16,
   }))
 
-  line = rt:perform(stream:read_line_op())
-  rt:perform(stream:write_op('echo:' .. line .. '\n'))
-  flushed = rt:perform(stream:flush_op())
-  rt:perform(stream:shutdown_write_op())
+  line = rt:perform(stream:reader():read_line_op())
+  rt:perform(stream:writer():write_op('echo:' .. line .. '\n'))
+  flushed = rt:perform(stream:writer():flush_op())
+  rt:perform(stream:writer():shutdown_op())
 end, 'root')
 
 -- Start the root and pump tasks.  The reader is now waiting for host input.

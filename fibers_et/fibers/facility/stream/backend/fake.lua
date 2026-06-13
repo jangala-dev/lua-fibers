@@ -10,6 +10,8 @@
 local ReadinessBackend = require('fibers.facility.stream.backend.readiness')
 local SourceState = require('fibers.internal.source_state')
 
+local Errors = require('fibers.facility.flow.errors')
+
 local Fake = {}
 Fake.__index = Fake
 
@@ -138,7 +140,7 @@ function Fake:feed_eof()
 end
 
 function Fake:feed_read_error(err)
-  self.read_error = err or 'read_error'
+  self.read_error = err or Errors.READ_ERROR
   update_read_ready(self)
 end
 
@@ -166,7 +168,7 @@ function Fake:read(max)
     self.eof = false
     update_read_ready(self)
     maybe_clear_manual(self, 'read')
-    return nil, 'eof'
+    return nil, Errors.EOF
   end
   update_read_ready(self)
   maybe_clear_manual(self, 'read')
@@ -198,7 +200,7 @@ function Fake:set_write_chunk_size(n)
 end
 
 function Fake:fail_writes(err)
-  self.write_error = err or 'write_error'
+  self.write_error = err or Errors.WRITE_ERROR
   update_write_ready(self)
 end
 
