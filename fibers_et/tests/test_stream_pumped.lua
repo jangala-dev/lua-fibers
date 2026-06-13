@@ -98,7 +98,7 @@ do
   assert_nil(stream.write_task, 'custom strategy should not force split write task')
 end
 
--- Host input enters the stream only through the read pump committing bytes into the incoming Flow buffer.
+-- Host input enters the stream only through the read pump committing bytes into the incoming Flow reservoir.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('read-region')
@@ -115,7 +115,7 @@ do
   assert_eq(got, 'abc')
 end
 
--- The read pump honours input Flow buffer capacity.
+-- The read pump honours input Flow reservoir capacity.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('capacity-read-region')
@@ -181,7 +181,7 @@ do
   assert_eq(backend:written(), 'abcdef')
 end
 
--- Would-block preserves an in-flight claim; flush waits until the claim is acknowledged.
+-- Would-block preserves an in-flight lease; flush waits until the lease is acknowledged.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('would-block-region')
@@ -192,9 +192,9 @@ do
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
-  -- Let the write commit and the pump claim the bytes, then stop at writability.
-  for _ = 1, 10 do if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end; rt:run() end
-  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'write pump should hold an in-flight claim while blocked')
+  -- Let the write commit and the pump lease the bytes, then stop at writability.
+  for _ = 1, 10 do if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end; rt:run() end
+  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'write pump should hold an in-flight lease while blocked')
   assert_nil(flushed, 'flush should wait while bytes are in flight')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
@@ -234,7 +234,7 @@ do
     rt:perform(stream:writer():shutdown_op())
     done = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 10 do if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end; rt:run() end
+  for _ = 1, 10 do if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end; rt:run() end
   assert_nil(backend.shutdown_write_reason, 'backend write should not shut down before draining')
   backend:unblock_writes()
   drive_until(rt, function() return done == true and backend.shutdown_write_reason ~= nil end, 'shutdown should happen after drain')
@@ -262,29 +262,29 @@ do
 end
 
 
--- A pump claim keeps byte capacity reserved until the host acknowledges it.
+-- A pump lease keeps byte capacity reserved until the host acknowledges it.
 do
   local rt = fibers.Runtime.new()
-  local region = fibers.Region.new('claim-capacity-region')
-  local backend = Fake.new({ name = 'claim-capacity-backend', write_blocked = true })
+  local region = fibers.Region.new('lease-capacity-region')
+  local backend = Fake.new({ name = 'lease-capacity-backend', write_blocked = true })
   local stream, second_done, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'claim-capacity-stream', write_capacity = 3 }))
+    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'lease-capacity-stream', write_capacity = 3 }))
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'writer1')
   for _ = 1, 10 do
-    if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= '' then break end
+    if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= '' then break end
     rt:run()
   end
-  assert_eq(stream:writer().flow.pump_claim.bytes, 'abc', 'pump should have claimed the first write')
-  assert_eq(stream:writer().flow.capacity.available, 0, 'claimed bytes should still reserve capacity')
+  assert_eq(stream:writer().flow.reservoir:debug_first_lease_bytes(), 'abc', 'pump should have leased the first write')
+  assert_eq((stream:writer().flow.reservoir.limit - (#(stream:writer().flow.reservoir.data or '') + stream:writer().flow.reservoir:debug_leased_bytes())), 0, 'leased bytes should still reserve capacity')
   rt:spawn_raw(function() second_done = rt:perform(stream:writer():write_op('d')) end, 'writer2')
   assert_status(rt:run(), 'pending')
-  assert_nil(second_done, 'second write should wait while claimed bytes hold capacity')
-  assert_nil(flushed, 'flush should wait while claim is blocked')
+  assert_nil(second_done, 'second write should wait while leased bytes hold capacity')
+  assert_nil(flushed, 'flush should wait while lease is blocked')
   backend:unblock_writes()
-  drive_until(rt, function() return second_done == 1 and flushed == true end, 'acknowledged claim should release capacity')
+  drive_until(rt, function() return second_done == 1 and flushed == true end, 'acknowledged lease should release capacity')
   assert_eq(backend:written(), 'abcd')
 end
 

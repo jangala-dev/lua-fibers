@@ -23,6 +23,8 @@ local tests = {
   'tests/test_region_general.lua',
   'tests/test_policy.lua',
   'tests/test_lifetime.lua',
+  'tests/test_flow_reservoir.lua',
+  'tests/test_flow_settlement.lua',
   'tests/test_stream_memory.lua',
   'tests/test_stream_pumped.lua',
   'tests/test_stream_socket_backend.lua',

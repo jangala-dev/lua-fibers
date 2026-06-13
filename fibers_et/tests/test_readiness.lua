@@ -135,11 +135,11 @@ do
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 20 do if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end; rt:run() end
-  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'write pump should have claimed bytes')
+  for _ = 1, 20 do if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end; rt:run() end
+  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'write pump should have leased bytes')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
-  drive_until(rt, function() return flushed == true end, 'write readiness should flush claimed bytes')
+  drive_until(rt, function() return flushed == true end, 'write readiness should flush leased bytes')
   assert_eq(backend:written(), 'abc')
 end
 
@@ -155,10 +155,10 @@ do
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   for _ = 1, 80 do
-    if stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "" then break end
+    if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end
     rt:step({ max_work = 1 })
   end
-  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'bounded pump should reach in-flight claim')
+  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'bounded pump should reach in-flight lease')
   backend:unblock_writes()
   drive_until(rt, function() return flushed == true end, 'bounded readiness should flush', true)
   assert_eq(backend:written(), 'xy')

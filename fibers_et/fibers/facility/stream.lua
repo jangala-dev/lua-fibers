@@ -7,7 +7,6 @@
 local Op = require('fibers.base.op')
 local Region = require('fibers.base.region')
 local Pump = require('fibers.facility.stream.pump')
-local Claim = require('fibers.facility.stream.pump.claim')
 local Ownership = require('fibers.internal.ownership')
 local FlowFacility = require('fibers.facility.flow')
 local Flow = FlowFacility.Flow
@@ -73,6 +72,8 @@ function Duplex:inspect_op()
   end)
 end
 
+function Duplex:close_op(reason) return self:shutdown_op(reason) end
+
 function Duplex:shutdown_op(reason)
   return Op.named_all({
     { 'reader', self:reader():shutdown_op(reason) },
@@ -97,7 +98,7 @@ local function host_stream(opts)
   next_host_stream = next_host_stream + 1
   local name = opts.name or ('host-stream-' .. tostring(next_host_stream))
   local rx = Flow.new { name = name .. ':rx', capacity = opts.read_capacity or opts.capacity, read_chunk_size = opts.read_chunk_size, write_chunk_size = opts.read_chunk_size }
-  local tx = Flow.new { name = name .. ':tx', capacity = opts.write_capacity or opts.capacity, read_chunk_size = opts.write_chunk_size, write_chunk_size = opts.write_chunk_size, pump_claim = Claim.new(name .. ':tx:claim') }
+  local tx = Flow.new { name = name .. ':tx', capacity = opts.write_capacity or opts.capacity, read_chunk_size = opts.write_chunk_size, write_chunk_size = opts.write_chunk_size }
   local h = duplex {
     name = name,
     kind = 'host_stream',
@@ -151,6 +152,7 @@ HostStream.writer = Duplex.writer
 HostStream.read_flow_handle = Duplex.read_flow_handle
 HostStream.write_flow_handle = Duplex.write_flow_handle
 HostStream.inspect_op = Duplex.inspect_op
+HostStream.close_op = Duplex.close_op
 HostStream.shutdown_op = Duplex.shutdown_op
 HostStream.closed_op = Duplex.closed_op
 HostStream.exit_op = Duplex.exit_op

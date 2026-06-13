@@ -156,8 +156,12 @@ local w = stream:writer()
 ```
 
 Inlet and Outlet `_op` methods are single-commit operations.  Losing read branches
-consume no bytes; losing write branches append no bytes; EOF and half-close are
-committed state; and backpressure is transactional capacity.  Stream compounds
+consume no bytes; losing write branches append no bytes; EOF and endpoint closure are
+committed state; and backpressure is retained-byte capacity.  Producer shutdown
+drains, consumer shutdown discards retained bytes, transport failure fails retained
+bytes, and flush waits for the fate of prior bytes rather than for an impossible
+acknowledgement.  The reservoir is rope-backed and currently permits one active
+lease at a time.  Stream compounds
 do not expose byte operations directly; use `stream:reader()` and `stream:writer()`.
 
 See `docs/facilities/streams.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, and `examples/13_socket_backend_contract.lua`.

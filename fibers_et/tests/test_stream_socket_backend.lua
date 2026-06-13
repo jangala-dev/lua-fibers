@@ -193,7 +193,7 @@ do
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(stream and stream:writer().flow.pump_claim and stream:writer().flow.pump_claim.bytes ~= "", 'write pump should claim committed bytes')
+  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'write pump should lease committed bytes')
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)
@@ -202,7 +202,7 @@ do
   assert_eq(handle:written(), 'hello')
 end
 
--- Partial host writes preserve the byte stream through committed in-flight claims.
+-- Partial host writes preserve the byte stream through committed in-flight leases.
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })

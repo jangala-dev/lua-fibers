@@ -58,7 +58,7 @@ do
   end)
   assert_status(st, 'found')
   assert_eq(got, 'winner')
-  assert_eq(b:reader().flow.buffer:debug_data(), '', 'losing stream write must not append bytes')
+  assert_eq(b:reader().flow.reservoir:debug_data(), '', 'losing stream write must not append bytes')
 end
 
 -- Losing read branches consume nothing.
@@ -102,14 +102,14 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'writer-ab')
   assert_status(rt:run(), 'found')
   assert_nil(got, 'exact read must still be waiting after partial data')
-  assert_eq(b:reader().flow.buffer:debug_data(), 'ab', 'partial exact read must not consume while waiting')
+  assert_eq(b:reader().flow.reservoir:debug_data(), 'ab', 'partial exact read must not consume while waiting')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('cd')) end, 'writer-cd')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'abcd')
-  assert_eq(b:reader().flow.buffer:debug_data(), '')
+  assert_eq(b:reader().flow.reservoir:debug_data(), '')
 end
 
--- EOF follows buffered bytes after shutdown_write.
+-- EOF follows queued bytes after shutdown_write.
 do
   local a, b = Stream.memory_pair({ name = 'eof' })
   local one, two, err
@@ -152,7 +152,7 @@ do
   assert_status(rt:run(), 'found')
   assert_eq(read, 'a')
   assert_eq(second_done, 1)
-  assert_eq(b:reader().flow.buffer:debug_data(), 'bcd')
+  assert_eq(b:reader().flow.reservoir:debug_data(), 'bcd')
 end
 
 -- Transactional request/response: consume request, update state, append response.
@@ -223,7 +223,7 @@ do
   assert_nil(exact)
   assert_eq(exact_err, 'eof')
   assert_eq(partial, 'ab')
-  assert_eq(f:reader().flow.buffer:debug_data(), '', 'exact EOF consumes the returned final partial')
+  assert_eq(f:reader().flow.reservoir:debug_data(), '', 'exact EOF consumes the returned final partial')
 end
 
 -- Region/Lifetime ownership handoff works for stream compounds.
@@ -250,7 +250,7 @@ do
   local st = fibers.run(function()
     fibers.perform(a:writer():write_op(big_a))
     fibers.perform(a:writer():write_op(big_b))
-    st_snapshot = fibers.perform(b:reader().flow.buffer:inspect_op())
+    st_snapshot = fibers.perform(b:reader().flow.reservoir:inspect_op())
     first = fibers.perform(b:reader():read_exactly_op(8999))
     cross = fibers.perform(b:reader():read_exactly_op(2))
     rest = fibers.perform(b:reader():read_exactly_op(8999))
@@ -261,7 +261,7 @@ do
   assert_eq(cross, 'ab', 'reads should cross chunk boundaries in order')
   assert_eq(rest, string.rep('b', 8999))
   assert_truthy(st_snapshot.chunk_count >= 2, 'large writes should remain as multiple chunks')
-  assert_eq(b:reader().flow.buffer:debug_data(), '')
+  assert_eq(b:reader().flow.reservoir:debug_data(), '')
 end
 
 -- Sequential writes within one transaction preserve byte order.
@@ -279,7 +279,7 @@ do
 end
 
 
--- Parallel writes to the same flow buffer are deliberately conservative: they
+-- Parallel writes to the same flow reservoir are deliberately conservative: they
 -- conflict rather than silently inventing an ordering.
 do
   local a, b = Stream.memory_pair({ name = 'parallel-write-conflict' })
@@ -291,12 +291,12 @@ do
   local st = rt:run()
   assert_uncommitted_status(st, 'parallel writes to the same stream queue should not commit')
   assert_nil(got, 'participant should not resume from conflicting parallel writes')
-  assert_eq(b:reader().flow.buffer:debug_data(), '', 'conflicting parallel stream writes leave the queue unchanged')
+  assert_eq(b:reader().flow.reservoir:debug_data(), '', 'conflicting parallel stream writes leave the queue unchanged')
 end
 
 
 -- Long reads are observational until commit: abandoned read_line/read_all
--- attempts leave already buffered bytes in the queue.
+-- attempts leave already queued bytes in the queue.
 do
   local a, b = Stream.memory_pair({ name = 'long-read-abandon' })
   local line_choice, all_choice, after_line, after_all
@@ -317,12 +317,12 @@ do
   end)
   assert_status(st, 'found')
   assert_eq(line_choice, 'timeout')
-  assert_eq(after_line, 'partial', 'abandoned read_line_op must not consume buffered bytes')
+  assert_eq(after_line, 'partial', 'abandoned read_line_op must not consume queued bytes')
   assert_eq(all_choice, 'timeout')
-  assert_eq(after_all, 'body', 'abandoned read_all_op must not consume buffered bytes')
+  assert_eq(after_all, 'body', 'abandoned read_all_op must not consume queued bytes')
 end
 
--- read_line_op can wait while the committed flow buffer grows, then consume the
+-- read_line_op can wait while the committed flow reservoir grows, then consume the
 -- whole line only when the separator arrives.
 do
   local a, b = Stream.memory_pair({ name = 'line-grows' })
@@ -333,11 +333,11 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('abc')) end, 'write-prefix')
   assert_status(rt:run(), 'found')
   assert_nil(line, 'read_line_op should still be waiting before separator')
-  assert_eq(b:reader().flow.buffer:debug_data(), 'abc', 'waiting read_line_op must not consume prefix')
+  assert_eq(b:reader().flow.reservoir:debug_data(), 'abc', 'waiting read_line_op must not consume prefix')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('\nrest')) end, 'write-sep')
   assert_status(rt:run(), 'found')
   assert_eq(line, 'abc')
-  assert_eq(b:reader().flow.buffer:debug_data(), 'rest')
+  assert_eq(b:reader().flow.reservoir:debug_data(), 'rest')
 end
 
 -- read_all_op is a single-commit operation: it waits for EOF and consumes only
@@ -351,14 +351,14 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'write-ab')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should wait before EOF')
-  assert_eq(b:reader().flow.buffer:debug_data(), 'ab', 'waiting read_all_op must not consume')
+  assert_eq(b:reader().flow.reservoir:debug_data(), 'ab', 'waiting read_all_op must not consume')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('cd')) end, 'write-cd')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should still wait before EOF')
   rt:spawn_raw(function() rt:perform(a:writer():shutdown_op()) end, 'eof')
   assert_status(rt:run(), 'found')
   assert_eq(all, 'abcd')
-  assert_eq(b:reader().flow.buffer:debug_data(), '')
+  assert_eq(b:reader().flow.reservoir:debug_data(), '')
 end
 
 -- read_all_op enforces an explicit bound unless unlimited=true is requested;
@@ -419,19 +419,20 @@ end
 
 -- Flow internals expose byte-storage facts rather than Flow read-spec interpreters.
 do
-  local flow = Flow.new({ name = 'buffer-read-facts', capacity = 32 })
+  local flow = Flow.new({ name = 'reservoir-read-facts', capacity = 32 })
   local line_fact, line_bytes, short
   local st = fibers.run(function()
     fibers.perform(flow:inlet():write_op('abc\ndef'))
-    line_fact = fibers.perform(flow.buffer:find_line_op({ sep = '\n', include_sep = false, limit = 16 }))
-    line_bytes = fibers.perform(flow.buffer:consume_op(line_fact.consume_n))
-    short = fibers.perform(flow.buffer:consume_short_op(10))
+    line_fact = fibers.perform(flow.reservoir:find_line_op({ sep = '\n', include_sep = false, limit = 16 }))
+    line_bytes = fibers.perform(flow.reservoir:consume_op(line_fact.consume_n))
+    short = fibers.perform(flow.reservoir:consume_short_op(10))
   end)
   assert_status(st, 'found')
   assert_eq(line_fact.consume_n, 4)
   assert_eq(line_fact.value_n, 3)
   assert_eq(string.sub(line_bytes, 1, line_fact.value_n), 'abc')
   assert_eq(short, 'def')
+  assert_truthy(Flow.Lease, 'Lease should be the public name for retained byte ownership')
   assert_nil(Flow.Claim, 'pump Claim should not be part of the public Flow facility')
 end
 

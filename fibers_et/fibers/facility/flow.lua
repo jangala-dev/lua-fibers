@@ -1,26 +1,20 @@
 -- Transactional unidirectional byte flows.
 --
--- A Flow is the primitive byte facility:
+-- A Flow is a directional byte medium:
 --
 --   Inlet  ->  Flow  ->  Outlet
 --
--- Flow itself is protocol composition.  The facts live in smaller resources:
---
---   Buffer          committed bytes
---   Producer Half   whether more bytes may be written
---   Consumer Half   whether bytes may still be read/drained
---   Capacity        byte admission credit
---   Claim           optional pump-only in-flight host write state
---
--- The central rule is: Buffer stores bytes; Flow decides what bytes mean at
--- protocol boundaries such as EOF, broken pipe, flush, and host-pump claims.
+-- Its algebraic core is a reservoir of byte segments.  Segments may be queued
+-- or leased; capacity is an invariant over retained segments.  Input and output
+-- endpoint states govern whether bytes may enter or leave.
 
 local Op = require('fibers.base.op')
 local Region = require('fibers.base.region')
 local Ownership = require('fibers.internal.ownership')
-local Buffer = require('fibers.facility.flow.buffer')
-local Half = require('fibers.facility.flow.half')
-local Capacity = require('fibers.facility.flow.capacity')
+local Reservoir = require('fibers.facility.flow.reservoir')
+local Endpoint = require('fibers.facility.flow.endpoint')
+local Segment = require('fibers.facility.flow.segment')
+local Lease = require('fibers.facility.flow.lease')
 local Errors = require('fibers.facility.flow.errors')
 
 local FlowFacility = {}
@@ -34,6 +28,7 @@ local DEFAULT_LINE_LIMIT = 64 * 1024
 -- Validation and ownership --------------------------------------------------
 
 local function as_bytes(bytes)
+  if Segment.is(bytes) then return Segment.bytes(bytes) end
   if type(bytes) ~= 'string' then error('Flow bytes must be a string', 3) end
   return bytes
 end
@@ -43,6 +38,12 @@ local function as_count(n, default, label)
   if type(n) ~= 'number' or n ~= n or n < 0 or n ~= math.floor(n) then
     error((label or 'Flow count') .. ' must be a non-negative integer', 3)
   end
+  return n
+end
+
+local function as_pos_count(n, default, label)
+  n = as_count(n, default, label)
+  if n <= 0 then error((label or 'Flow count') .. ' must be positive', 3) end
   return n
 end
 
@@ -106,11 +107,9 @@ function Flow.new(opts)
   next_flow = next_flow + 1
   local name = opts.name or ('flow-' .. tostring(next_flow))
   local f = handle(Flow, name, 'flow', {
-    buffer = opts.buffer or Buffer.new { name = name .. ':buffer' },
-    producer = opts.producer or Half.new('producer', name .. ':producer'),
-    consumer = opts.consumer or Half.new('consumer', name .. ':consumer'),
-    capacity = opts.capacity_resource or Capacity.new(opts.capacity, name .. ':capacity'),
-    pump_claim = opts.pump_claim,
+    reservoir = opts.reservoir or Reservoir.new { name = name .. ':reservoir', capacity = opts.capacity },
+    input = opts.input or Endpoint.new('input', name .. ':input'),
+    output = opts.output or Endpoint.new('output', name .. ':output'),
     read_chunk_size = opts.read_chunk_size or opts.chunk_size or 4096,
     write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096,
     _fibers_flow = true,
@@ -123,79 +122,79 @@ end
 function Flow:inlet() return self.inlet_handle end
 function Flow:outlet() return self.outlet_handle end
 
-local function inspect_parts(flow, include_claim)
-  local items = {
-    { 'buffer', flow.buffer:inspect_op() },
-    { 'producer', flow.producer:inspect_op() },
-    { 'consumer', flow.consumer:inspect_op() },
-    { 'capacity', flow.capacity:inspect_op() },
-  }
-  if include_claim and flow.pump_claim then items[#items + 1] = { 'claim', flow.pump_claim:inspect_op() } end
-  return items
-end
-
 local function inspect_from_parts(flow, p)
-  local buf, prod, cons, cap, claim = p.buffer, p.producer, p.consumer, p.capacity, p.claim
-  local claim_bytes = claim and (claim.bytes or '') or ''
+  local res, input, output = p.reservoir, p.input, p.output
   return {
     flow = flow,
-    buffer = buf,
-    producer = prod,
-    consumer = cons,
-    capacity_state = cap,
-    length = buf.length or 0,
-    pending_length = buf.length or 0,
-    data = buf.data or '',
-    chunk_count = buf.chunk_count or 0,
-    capacity = cap.limit,
-    free = cap.free,
-    writer_open = prod.open,
-    reader_open = cons.open,
-    read_error = prod.error,
-    write_error = cons.error,
-    inflight = claim and claim.id and { id = claim.id, bytes = claim.bytes or '' } or nil,
-    inflight_length = #claim_bytes,
-    drained = (buf.length or 0) == 0 and claim_bytes == '',
-    buffer_version = buf.version,
-    producer_version = prod.version,
-    consumer_version = cons.version,
-    capacity_version = cap.version,
-    claim_version = claim and claim.version or nil,
-    version = tostring(buf.version) .. ':' .. tostring(prod.version) .. ':' .. tostring(cons.version) .. ':' .. tostring(cap.version) .. ':' .. tostring(claim and claim.version or '-'),
+    reservoir = res,
+    input = input,
+    output = output,
+    length = res.queued_length or res.length or 0,
+    queued_length = res.queued_length or res.length or 0,
+    pending_length = res.queued_length or res.length or 0,
+    leased_length = res.leased_length or 0,
+    retained_length = res.retained_length or ((res.queued_length or res.length or 0) + (res.leased_length or 0)),
+    data = res.data or '',
+    segment_count = res.segment_count or res.chunk_count or 0,
+    chunk_count = res.chunk_count or res.segment_count or 0,
+    capacity = res.capacity or res.limit,
+    free = res.free,
+    writer_open = input.open,
+    reader_open = output.open,
+    read_error = input.error,
+    write_error = output.error,
+    leases = res.leases,
+    lease_count = res.lease_count or 0,
+    inflight = res.lease_count and res.lease_count > 0 and res.leases or nil,
+    inflight_length = res.leased_length or 0,
+    drained = (res.queued_length or res.length or 0) == 0 and (res.leased_length or 0) == 0,
+    reservoir_version = res.version,
+    input_version = input.version,
+    output_version = output.version,
+    version = tostring(res.version) .. ':' .. tostring(input.version) .. ':' .. tostring(output.version),
   }
 end
 
 function Flow:inspect_op()
-  return Op.named_all(inspect_parts(self, false)):map(function(parts) return inspect_from_parts(self, parts) end)
-end
-
-function Flow:pump_inspect_op()
-  return Op.named_all(inspect_parts(self, true)):map(function(parts) return inspect_from_parts(self, parts) end)
-end
-
-local function empty_storage_op(flow)
-  if not flow.pump_claim then return flow.buffer:empty_op():map(function() return true end) end
   return Op.named_all({
-    { 'buffer', flow.buffer:empty_op() },
-    { 'claim', flow.pump_claim:empty_op() },
-  }):map(function() return true end)
+    { 'reservoir', self.reservoir:inspect_op() },
+    { 'input', self.input:inspect_op() },
+    { 'output', self.output:inspect_op() },
+  }):map(function(parts) return inspect_from_parts(self, parts) end)
 end
+
+function Flow:pump_inspect_op() return self:inspect_op() end
+
+local function empty_storage_op(flow) return flow.reservoir:empty_op():map(function() return true end) end
 
 function Flow:closed_op()
   return Op.named_all({
-    { 'producer', self.producer:closed_op() },
-    { 'consumer', self.consumer:closed_op() },
+    { 'input', self.input:closed_op() },
+    { 'output', self.output:closed_op() },
     { 'empty', empty_storage_op(self) },
   }):map(function() return true end)
 end
 
 function Flow:drained_op()
+  -- Flush/drain waits until the fate of retained output bytes is known.  The
+  -- happy path is empty retained storage.  If the output endpoint reaches a
+  -- terminal state first, delivery has become impossible and callers observe
+  -- that terminal error instead of waiting for an acknowledgement that can no
+  -- longer arrive.
   return Op.choice(
-    empty_storage_op(self):map(function() return true end),
-    self.consumer:error_op():map(function(err) return nil, err end)
+    self.output:terminal_op(Errors.BROKEN_PIPE),
+    empty_storage_op(self):map(function() return true end)
   )
 end
 
+function Flow:close_op(reason) return self:shutdown_op(reason) end
+function Flow:shutdown_op(reason)
+  return Op.named_all({
+    { 'input', self.input:shutdown_op(reason) },
+    { 'output', self.output:shutdown_op(reason) },
+    { 'settle', self.reservoir:settle_op(reason or Errors.BROKEN_PIPE) },
+  }):map(function() return true end)
+end
 function Flow:exit_op() return self:closed_op() end
 function Flow:transfer_op(from, to) return transfer_item_op(self, from, to, 'flow:transfer_op') end
 function Flow:transfer_inlet_op(from, to) return transfer_item_op(self:inlet(), from, to, 'flow:transfer_inlet_op') end
@@ -229,15 +228,14 @@ end
 -- Writes -------------------------------------------------------------------
 
 local function write_gate(flow)
-  return flow.producer:open_op(Errors.CLOSED):and_then(function(ok, err)
+  return flow.input:open_op(Errors.CLOSED):and_then(function(ok, err)
     if not ok then return Op.always(false, err) end
-    return flow.consumer:open_op(Errors.BROKEN_PIPE)
+    return flow.output:open_op(Errors.BROKEN_PIPE)
   end)
 end
 
-local function reserve_for(flow, bytes, mode)
-  local n = #bytes
-  return mode == 'some' and flow.capacity:reserve_some_op(n) or flow.capacity:reserve_op(n)
+local function append_for(flow, bytes, mode)
+  return mode == 'some' and flow.reservoir:append_some_op(bytes) or flow.reservoir:append_op(bytes)
 end
 
 local function write_core_op(inlet, bytes, mode)
@@ -249,10 +247,9 @@ local function write_core_op(inlet, bytes, mode)
   local flow = inlet.flow
   return write_gate(flow):and_then(function(ok, err)
     if not ok then return Op.always(Write.error(err)) end
-    return reserve_for(flow, bytes, mode):and_then(function(n, reserve_err)
-      if not n then return Op.always(Write.error(reserve_err)) end
-      local prefix = mode == 'some' and string.sub(bytes, 1, n) or bytes
-      return flow.buffer:append_op(prefix):map(function() return Write.ok(#prefix) end)
+    return append_for(flow, bytes, mode):map(function(n, append_err)
+      if not n then return Write.error(append_err) end
+      return Write.ok(n)
     end)
   end)
 end
@@ -260,7 +257,10 @@ end
 function Inlet:write_op(bytes) return write_core_op(self, bytes, 'all'):map(public_write) end
 function Inlet:write_some_op(bytes) return write_core_op(self, bytes, 'some'):map(public_write) end
 function Inlet:flush_op() return self.flow:drained_op() end
-function Inlet:shutdown_op(reason) return self.flow.producer:shutdown_op(reason) end
+function Inlet:drained_op() return self.flow:drained_op() end
+function Inlet:close_op(reason) return self.flow.input:close_op(reason) end
+function Inlet:shutdown_op(reason) return self.flow.input:shutdown_op(reason) end
+function Inlet:fail_op(err) return self.flow.input:fail_op(err) end
 function Inlet:inspect_op() return self.flow:inspect_op() end
 function Inlet:exit_op() return self.flow:closed_op() end
 function Inlet:transfer_op(from, to) return transfer_item_op(self, from, to, 'inlet:transfer_op') end
@@ -276,84 +276,69 @@ function ReadSpec.line(opts)
   return { mode = 'line', sep = as_sep(opts.sep), include_sep = opts.include_sep == true, limit = line_limit(opts) }
 end
 
-local function release_as(flow, bytes, make_result)
-  return flow.capacity:release_op(#bytes):map(function() return make_result(bytes) end)
-end
-
 local function consume_as(flow, op, make_result)
-  return op:and_then(function(bytes, err)
-    if not bytes then return Op.always(Read.error(err)) end
-    return release_as(flow, bytes, make_result or Read.data)
+  return op:map(function(bytes, err)
+    if not bytes then return Read.error(err) end
+    return (make_result or Read.data)(bytes)
   end)
 end
 
 local function line_value(bytes, fact) return string.sub(bytes, 1, fact.value_n) end
 
 local function line_hit_op(flow, spec)
-  return flow.buffer:find_line_op(spec):and_then(function(fact, err)
+  return flow.reservoir:find_line_op(spec):and_then(function(fact, err)
     if not fact then return Op.always(Read.error(err)) end
-    return consume_as(flow, flow.buffer:consume_op(fact.consume_n), function(bytes)
+    return consume_as(flow, flow.reservoir:consume_op(fact.consume_n), function(bytes)
       return Read.data(line_value(bytes, fact))
     end)
   end)
 end
 
 local BUFFERED = {}
-
 function BUFFERED.some(flow, spec)
   if spec.max == 0 then return Op.always(Read.data('')) end
-  return consume_as(flow, flow.buffer:consume_some_op(spec.max))
+  return consume_as(flow, flow.reservoir:consume_some_op(spec.max))
 end
-
 function BUFFERED.exactly(flow, spec)
   if spec.n == 0 then return Op.always(Read.data('')) end
-  return consume_as(flow, flow.buffer:consume_exactly_op(spec.n))
+  return consume_as(flow, flow.reservoir:consume_exactly_op(spec.n))
 end
-
 function BUFFERED.line(flow, spec) return line_hit_op(flow, spec) end
-
 function BUFFERED.all(flow, spec)
   if spec.max == nil then return Op.never() end
-  return flow.buffer:too_large_op(spec.max):map(function() return Read.error(Errors.TOO_LARGE) end)
+  return flow.reservoir:too_large_op(spec.max):map(function() return Read.error(Errors.TOO_LARGE) end)
 end
 
 local TERMINAL = {}
-
 function TERMINAL.some(flow, spec, term_err)
   return Op.choice(
     BUFFERED.some(flow, spec),
-    flow.buffer:empty_op():map(function() return Read.error(term_err) end)
+    flow.reservoir:queued_empty_op():map(function() return Read.error(term_err) end)
   )
 end
-
 function TERMINAL.exactly(flow, spec, term_err)
   if spec.n == 0 then return Op.always(Read.data('')) end
   return Op.choice(
     BUFFERED.exactly(flow, spec),
-    flow.buffer:consume_short_op(spec.n):and_then(function(partial)
-      return release_as(flow, partial, function(bytes) return Read.error(term_err, bytes) end)
-    end)
+    flow.reservoir:consume_short_op(spec.n):map(function(partial) return Read.error(term_err, partial) end)
   )
 end
-
 function TERMINAL.line(flow, spec, term_err)
   return Op.choice(
     line_hit_op(flow, spec),
-    flow.buffer:consume_unmatched_line_op(spec):and_then(function(partial)
-      if partial ~= '' then return release_as(flow, partial, Read.data) end
-      return Op.always(Read.error(term_err))
+    flow.reservoir:consume_unmatched_line_op(spec):map(function(partial)
+      if partial ~= '' then return Read.data(partial) end
+      return Read.error(term_err)
     end)
   )
 end
-
 function TERMINAL.all(flow, spec, term_err)
   return Op.choice(
-    spec.max ~= nil and flow.buffer:too_large_op(spec.max):map(function() return Read.error(Errors.TOO_LARGE) end) or Op.never(),
-    flow.buffer:consume_available_within_op(spec.max):and_then(function(bytes)
-      if term_err and term_err ~= Errors.EOF then
-        return release_as(flow, bytes, function(partial) return Read.error(term_err, partial) end)
-      end
-      return release_as(flow, bytes, Read.data)
+    spec.max ~= nil and flow.reservoir:too_large_op(spec.max):map(function() return Read.error(Errors.TOO_LARGE) end) or Op.never(),
+    flow.reservoir:consume_available_within_op(spec.max):map(function(bytes, err)
+      if not bytes then return Read.error(err) end
+      if term_err and term_err ~= Errors.EOF then return Read.error(term_err, bytes) end
+      return Read.data(bytes)
     end)
   )
 end
@@ -372,89 +357,80 @@ end
 
 local function read_core_op(outlet, spec)
   local flow = outlet.flow
-  return flow.consumer:open_op(Errors.CLOSED):and_then(function(ok, err)
+  return flow.output:open_op(Errors.CLOSED):and_then(function(ok, err)
     if not ok then return Op.always(Read.error(err)) end
     return Op.choice(
       read_buffered_op(flow, spec),
-      flow.producer:terminal_op(Errors.EOF):and_then(function(_, term_err)
+      flow.input:terminal_op(Errors.EOF):and_then(function(_, term_err)
         return read_terminal_op(flow, spec, term_err)
       end)
     )
   end)
 end
 
-function Outlet:read_some_op(max)
-  return read_core_op(self, ReadSpec.some(as_count(max, 4096, 'Flow read size'))):map(public_read)
-end
-
-function Outlet:read_exactly_op(n)
-  return read_core_op(self, ReadSpec.exactly(as_count(n, 0, 'Flow exact read size'))):map(public_read_with_partial)
-end
-
+function Outlet:read_some_op(max) return read_core_op(self, ReadSpec.some(as_count(max, 4096, 'Flow read size'))):map(public_read) end
+function Outlet:read_op(max) return self:read_some_op(max) end
+function Outlet:read_exactly_op(n) return read_core_op(self, ReadSpec.exactly(as_count(n, 0, 'Flow exact read size'))):map(public_read_with_partial) end
 function Outlet:read_line_op(opts) return read_core_op(self, ReadSpec.line(opts or {})):map(public_read) end
 function Outlet:read_all_op(opts) return read_core_op(self, ReadSpec.all(opts or {})):map(public_read_with_partial) end
-function Outlet:shutdown_op(reason) return self.flow.consumer:shutdown_op(reason) end
+function Outlet:close_op(reason) return self:shutdown_op(reason) end
+function Outlet:shutdown_op(reason)
+  local flow = self.flow
+  return Op.named_all({
+    { 'output', flow.output:shutdown_op(reason) },
+    { 'settle', flow.reservoir:settle_op(reason or Errors.BROKEN_PIPE) },
+  }):map(function() return true end)
+end
+function Outlet:fail_op(err)
+  local flow = self.flow
+  local e = err or Errors.FLOW_ERROR
+  return Op.named_all({
+    { 'output', flow.output:fail_op(e) },
+    { 'settle', flow.reservoir:settle_op(e) },
+  }):map(function() return true end)
+end
 function Outlet:inspect_op() return self.flow:inspect_op() end
 function Outlet:exit_op() return self.flow:closed_op() end
 function Outlet:transfer_op(from, to) return transfer_item_op(self, from, to, 'outlet:transfer_op') end
 
--- Pump-facing operations ----------------------------------------------------
+-- Lease-facing operations ---------------------------------------------------
 
-local function claim_id(flow, claim_state)
-  -- Claim ids must not be based on byte length: future asynchronous backends may
-  -- acknowledge old claims after another same-length claim has been created.
-  -- The claim resource version is already the pump's sequencing fact.
-  return tostring(flow._fibers_id) .. ':claim:' .. tostring((claim_state.version or 0) + 1)
-end
-
-function Outlet:claim_for_pump_op(max)
-  max = as_count(max, 4096, 'Flow pump claim size')
+function Outlet:lease_some_op(max, owner)
+  max = as_pos_count(max, 4096, 'Flow lease size')
   local flow = self.flow
-  if not flow.pump_claim then error('claim_for_pump_op requires a pump claim on this Flow', 2) end
-
-  local closed_and_drained = flow.producer:closed_op():and_then(function()
-    return Op.named_all({
-      { 'buffer', flow.buffer:empty_op() },
-      { 'claim', flow.pump_claim:empty_op() },
-    }):map(function() return nil, Errors.CLOSED_AND_DRAINED end)
-  end)
-
-  local claim_next_chunk = flow.buffer:consume_some_op(max):and_then(function(bytes)
-    return flow.pump_claim:empty_op():and_then(function()
-      return flow.pump_claim:inspect_op():and_then(function(st)
-        local id = claim_id(flow, st)
-        return flow.pump_claim:set_op(id, bytes):map(function() return id, bytes end)
-      end)
-    end)
+  local lease_owner = owner or self
+  local closed_and_drained = flow.input:closed_op():and_then(function()
+    return flow.reservoir:empty_op():map(function() return nil, Errors.CLOSED_AND_DRAINED end)
   end)
 
   return Op.choice(
-    flow.pump_claim:inflight_op(),
-    flow.consumer:error_op():map(function(err) return nil, err end),
-    claim_next_chunk,
+    flow.reservoir:lease_some_op(lease_owner, max),
+    flow.output:error_op():map(function(err) return nil, err end),
     closed_and_drained
   )
 end
 
-function Outlet:ack_claim_op(id, n)
-  local flow = self.flow
-  if not flow.pump_claim then error('ack_claim_op requires a pump claim on this Flow', 2) end
-  return flow.pump_claim:ack_op(id, n):and_then(function(ok, accepted_or_err)
-    if not ok then return Op.always(nil, accepted_or_err) end
-    return flow.capacity:release_op(accepted_or_err or n or 0):map(function() return true end)
+function Outlet:leased_op(owner) return self.flow.reservoir:lease_existing_op(owner or self) end
+function Outlet:lease_empty_op() return self.flow.reservoir:leases_empty_op() end
+function Outlet:ack_lease_op(lease, n)
+  return self.flow.reservoir:ack_lease_op(lease, n):map(function(ok, err_or_n, remaining)
+    if not ok then return nil, err_or_n end
+    return true, err_or_n, remaining
   end)
 end
-
-function Outlet:fail_write_op(err) return self.flow.consumer:fail_op(err or Errors.WRITE_ERROR) end
-function Outlet:fail_read_op(err) return self.flow.producer:fail_op(err or Errors.READ_ERROR) end
+function Outlet:return_lease_op(lease) return self.flow.reservoir:return_lease_op(lease) end
+function Outlet:fail_lease_op(lease, err) return self.flow.reservoir:fail_lease_op(lease, err) end
+function Outlet:fail_write_op(err) return self:fail_op(err or Errors.WRITE_ERROR) end
+function Outlet:fail_read_op(err) return self.flow.input:fail_op(err or Errors.READ_ERROR) end
 
 FlowFacility.new = Flow.new
 FlowFacility.Flow = Flow
 FlowFacility.Inlet = Inlet
 FlowFacility.Outlet = Outlet
-FlowFacility.Buffer = Buffer
-FlowFacility.Half = Half
-FlowFacility.Capacity = Capacity
+FlowFacility.Reservoir = Reservoir
+FlowFacility.Endpoint = Endpoint
+FlowFacility.Segment = Segment
+FlowFacility.Lease = Lease
 FlowFacility.Errors = Errors
 
 return FlowFacility

@@ -1,13 +1,22 @@
 # Transactional flows and streams
 
-The byte-stream facility is built from a smaller primitive:
+The byte facility is built from a directional primitive:
 
 ```text
 Inlet  ->  Flow  ->  Outlet
 ```
 
-An `Inlet` commits bytes into a `Flow`.  An `Outlet` commits bytes out of a
-`Flow`.  A bidirectional stream is a compound object built from two flows.
+A `Flow` is a directional byte medium.  Its core resource is a reservoir of
+byte segments.  Segments may be queued or leased.  Capacity is an invariant over
+all retained segments.  Input and output endpoint state governs whether bytes may
+enter or leave.  The current reservoir is backed by a pure Lua rope of immutable
+string chunks rather than by one repeatedly concatenated string.
+
+A bidirectional stream is not primitive:
+
+```text
+Stream(A, B) = Flow(A -> B) tensor Flow(B -> A) + lifetime policy
+```
 
 This is deliberately smaller than making a bidirectional stream the primitive.
 It supports ordinary streams, one-way pipes, memory pairs, host-pumped sockets,
@@ -100,27 +109,53 @@ The compound itself does not expose byte operations.  Use `stream:reader()` and
 
 ## Flow internals
 
-A `Flow` is not a queue.  It is a small compound over simpler transactional
-resources:
+A `Flow` is a small compound over two kinds of fact:
 
 ```text
-ByteBuffer
-  chunked byte storage only: append, consume, consume_some, consume_exactly, line finding, bounded availability, and empty facts
+Reservoir
+  queued byte segments
+  leased byte segments
+  capacity invariant over retained bytes
 
-Producer half-state
-  open / shutdown / failed for the byte-producing side
+Input endpoint
+  open / closed / failed for bytes entering the flow
 
-Consumer half-state
-  open / shutdown / failed for the byte-consuming side
-
-Capacity
-  byte credit; ordinary writes reserve it, reads release it, and pumps wait on free_some facts
-
-Pump claim
-  optional stream-pump internal state, with inflight and empty facts
+Output endpoint
+  open / closed / failed for bytes leaving the flow
 ```
 
-The public `Inlet` and `Outlet` operations compose these pieces through precise transactional facts.  Broad inspection operations exist for diagnostics, but behavioural code should ask for facts such as buffer consume_some, consume_exactly, line finding, capacity free, half closed, claim inflight, or buffer empty.  Losing alternatives append no bytes, consume no bytes, reserve no capacity, and leave no pump claims behind.
+The important invariant is:
+
+```text
+retained = queued + leased
+free     = capacity - retained
+```
+
+So there is no separate capacity resource and no separate pump-claim resource.
+
+Terminal byte-fate rules are:
+
+```text
+producer/input shutdown
+  graceful EOF after retained bytes drain
+
+consumer/output shutdown
+  retained bytes are discarded and writers/flushers observe broken_pipe
+
+output/backend failure
+  retained bytes are failed/settled and writers/flushers observe the failure
+```
+
+A host write pump leases bytes from the reservoir.  Leased bytes remain retained
+and continue to occupy capacity until the lease is acknowledged, returned,
+failed, or settled.  If the consumer/output side closes, or a backend write
+fails, retained queued bytes and active leases are settled in the same committed
+transition that records that terminal fact.  This implementation deliberately permits only one active
+lease per reservoir; that conservative rule preserves stream ordering until a
+later ordered multi-lease segment model is needed.
+
+The public `Inlet` and `Outlet` operations compose these facts.  Losing
+alternatives append no bytes, consume no bytes, and create no leases.
 
 ## Algebraic laws
 
@@ -131,22 +166,19 @@ losing write branch appends nothing
 losing read branch consumes nothing
 selected read consumes once
 read_exactly waits without consuming partial data
-EOF is observed after buffered bytes
+EOF is observed after queued bytes
 outlet shutdown causes inlet writes to fail with broken_pipe
-backpressure is transactional capacity
+backpressure is retained-byte capacity
 long reads are observational until commit
+leased bytes still reserve capacity
 ```
 
-`read_some_op`, `read_exactly_op`, `read_line_op` and `read_all_op` are
-public result shapes over one internal read core.  The core is a choice over
-precise transactional facts: byte-storage facts from the buffer, producer
-terminal facts from the producing half, and consumer-open facts from the
-consuming half.  The buffer owns storage-native facts such as consume_some,
-consume_exactly, line finding, and bounded availability; flow code gives those
-facts read protocol meaning, commits the selected consume/release, and then maps
-the core data/error result to the familiar Lua return shape.
+`read_some_op`, `read_exactly_op`, `read_line_op` and `read_all_op` are public
+result shapes over one internal read core.  The core is a choice over precise
+transactional facts: reservoir byte facts, input endpoint terminal facts, and
+output endpoint open facts.
 
-`read_line_op` and `read_all_op` may wait while the committed byte buffer grows.
+`read_line_op` and `read_all_op` may wait while the committed reservoir grows.
 They inspect committed bytes but consume nothing until their selected world
 commits.  If such an operation loses a choice, is cancelled before commit, or is
 abandoned by fallback, the bytes remain in the flow.
@@ -188,23 +220,33 @@ backend:shutdown_write(reason)
 `Source`.  `read` and `write` are called only from pump task bodies after the
 readiness operation commits.  Host I/O must never run during transaction search.
 
-## In-flight write claims
+If a backend returns `would_block`, the readiness hint that led to the host call
+must be cleared or consumed before waiting again.  Readiness is a hint; the host
+operation remains authoritative.
+
+## Byte leases
 
 Host writes are irreversible once accepted, so the write pump does not simply
-consume bytes and then call the backend.  The split host write pump uses a committed pump-internal in-flight claim:
+consume queued bytes and then call the backend.  It uses reservoir leases:
 
 ```text
-claim_for_write_op
-  moves bytes from pending output into pump-owned in-flight state
+lease_some_op
+  moves queued bytes to a lease owned by the pump/stream
 
 backend:write
   accepts a prefix outside transaction search
 
-ack_claim_op
-  commits the accepted prefix, releases the corresponding capacity, and preserves any remainder
+ack_lease_op
+  commits the accepted prefix and preserves any remainder in the lease
 ```
 
-`inlet:flush_op()` waits on precise drain facts: the ordinary buffer is empty and any pump-internal in-flight claim is empty, or the write side has failed. Claimed bytes continue to reserve capacity until acknowledged or settled by close/error policy.
+`inlet:flush_op()` waits on precise fate facts: queued bytes and leased bytes
+are both empty, or the output side has become terminal.  The successful result
+means all prior retained bytes were acknowledged/drained.  A terminal result,
+such as `broken_pipe` or a backend write error, means delivery became impossible
+and retained bytes were settled.  Leased bytes continue to reserve capacity until
+acknowledged or settled.  A second lease request by another owner reports
+`lease_already_active` while any lease remains active.
 
 ## Pump strategies
 
@@ -212,10 +254,12 @@ The default host strategy starts separate read and write pump tasks:
 
 ```text
 read pump:
-  waits on capacity-free, reader-closed, and backend-ready facts; backend -> read Flow inlet
+  waits on reservoir-free, reader-closed, and backend-ready facts;
+  backend -> read Flow inlet
 
 write pump:
-  waits on claim-inflight / buffered-claim / closed-and-drained facts, then backend-ready; write Flow outlet -> backend
+  waits on existing lease / queued bytes / closed-and-drained facts,
+  then backend-ready; write Flow outlet -> backend
 ```
 
 This is a strategy, not a semantic commitment.  The same host-stream compound
@@ -228,13 +272,13 @@ Ownership attaches at several levels:
 
 ```text
 Flow
-  owns one directional byte buffer, half-states and capacity
+  directional byte medium: reservoir plus endpoints
 
 Inlet
   transferable authority to produce bytes
 
 Outlet
-  transferable authority to consume bytes
+  transferable authority to consume or lease bytes
 
 Host stream compound
   owns backend, two flows, pump obligations and settlement state

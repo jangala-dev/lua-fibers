@@ -1,9 +1,9 @@
 -- Host-pumped byte flows.
 --
 -- Pumps are ordinary Task bodies.  They perform host I/O only after readiness or
--- precise Flow facts have committed, and they commit the result of host I/O back
--- into Flow state.  The default strategy starts separate read and write pump
--- Tasks; the host stream compound keeps that as a replaceable strategy detail.
+-- precise Flow facts have committed.  Writes use Flow leases: the pump may call
+-- the backend only on bytes that have been committed into a lease, then ack,
+-- retain, or fail that lease according to the host result.
 
 local Runtime = require('fibers.kernel.runtime')
 local Op = require('fibers.base.op')
@@ -39,8 +39,8 @@ function Pump.read(stream)
   local inlet = flow:inlet()
   while true do
     local cap_or_closed, value = masked_perform(rt, Op.named_choice({
-      { 'reader_closed', flow.consumer:closed_op() },
-      { 'capacity', flow.capacity:free_some_op(stream.read_chunk_size) },
+      { 'reader_closed', flow.output:closed_op() },
+      { 'capacity', flow.reservoir:free_some_op(stream.read_chunk_size) },
     }))
     if cap_or_closed == 'reader_closed' then
       backend_call(backend, 'shutdown_read', 'reader_closed')
@@ -49,7 +49,7 @@ function Pump.read(stream)
     local max = value
 
     local ready_or_closed = masked_perform(rt, Op.named_choice({
-      { 'reader_closed', flow.consumer:closed_op() },
+      { 'reader_closed', flow.output:closed_op() },
       { 'backend_ready', backend_ready_op(backend, 'read_ready_op') },
     }))
     if ready_or_closed == 'reader_closed' then
@@ -65,7 +65,7 @@ function Pump.read(stream)
           backend_call(backend, 'shutdown_read', write_err)
           return
         end
-        masked_perform(rt, flow.producer:fail_op(write_err or Errors.READ_ERROR))
+        masked_perform(rt, flow.input:fail_op(write_err or Errors.READ_ERROR))
         return
       end
     elseif err == 'would_block' or bytes == '' then
@@ -74,7 +74,7 @@ function Pump.read(stream)
       masked_perform(rt, inlet:shutdown_op(Errors.EOF))
       return
     else
-      masked_perform(rt, flow.producer:fail_op(err or Errors.READ_ERROR))
+      masked_perform(rt, flow.input:fail_op(err or Errors.READ_ERROR))
       return
     end
   end
@@ -89,25 +89,29 @@ function Pump.write(stream)
   local flow = stream.write_flow
   local outlet = flow:outlet()
   while true do
-    local claim_id, bytes_or_err = masked_perform(rt, outlet:claim_for_pump_op(stream.write_chunk_size))
-    if not claim_id then
-      if bytes_or_err == Errors.CLOSED_AND_DRAINED then
+    local lease, lease_err = masked_perform(rt, outlet:lease_some_op(stream.write_chunk_size, stream))
+    if not lease then
+      if lease_err == Errors.CLOSED_AND_DRAINED then
         backend_call(backend, 'shutdown_write', 'stream_closed')
         return
       end
       return
     end
-    local bytes = bytes_or_err
+    local bytes = lease:bytes()
     local ready_or_failed = masked_perform(rt, Op.named_choice({
-      { 'write_failed', flow.consumer:error_op() },
+      { 'write_failed', flow.output:error_op() },
       { 'backend_ready', backend_ready_op(backend, 'write_ready_op') },
     }))
     if ready_or_failed == 'write_failed' then return end
     local n, err = backend_call(backend, 'write', bytes)
     if n and n > 0 then
-      masked_perform(rt, outlet:ack_claim_op(claim_id, n))
+      local ok, ack_err = masked_perform(rt, outlet:ack_lease_op(lease, n))
+      if not ok then
+        masked_perform(rt, outlet:fail_write_op(Errors.BACKEND_PROTOCOL_ERROR))
+        return
+      end
     elseif err == 'would_block' or n == 0 then
-      -- Keep the claim in-flight and wait for writability again.
+      -- Keep the lease in-flight and wait for writability again.
     else
       masked_perform(rt, outlet:fail_write_op(err or Errors.WRITE_ERROR))
       return
