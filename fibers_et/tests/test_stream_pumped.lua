@@ -288,4 +288,22 @@ do
   assert_eq(backend:written(), 'abcd')
 end
 
+
+-- The read pump notices reader shutdown even while backend readability never arrives.
+do
+  local rt = fibers.Runtime.new()
+  local region = fibers.Region.new('blocked-read-close-region')
+  local backend = Fake.new({ name = 'blocked-read-close-backend', read_blocked = true })
+  local stream
+  rt:spawn_raw(function()
+    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'blocked-read-close-stream' }))
+  end, 'open-blocked-read')
+  assert_status(rt:run(), 'found')
+  rt:spawn_raw(function()
+    rt:perform(stream:reader():shutdown_op('close_reader'))
+  end, 'close-reader')
+  drive_until(rt, function() return backend.shutdown_read_reason == 'reader_closed' end, 'read pump should notice reader shutdown')
+  assert_eq(backend.shutdown_read_reason, 'reader_closed')
+end
+
 print('tests/test_stream_pumped.lua: ok')

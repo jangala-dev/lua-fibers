@@ -960,7 +960,59 @@ local function test_map_and_and_then_reject_operations_containing_wraps()
   assert_eq(ok_outer_wrap, true, 'outer wrap remains valid on a product containing lane-local wraps')
 end
 
+
+local function test_choice_normalises_nested_lists_and_choice_nodes()
+  local nested = Op.choice(
+    Op.never(),
+    { Op.never(), { Op.always('that') } },
+    Op.choice(Op.never(), Op.always('your'))
+  )
+  assert_eq(nested.kind, 'choice', 'normalised multi-way choice remains a choice')
+  assert_eq(#nested.choices, 5, 'choice flattens arrays and nested choices')
+  local status, values = one_perform(nested)
+  assert_status(status, 'found')
+  assert_eq(values[1], 'that')
+end
+
+local function test_choice_rejects_sparse_or_named_tables()
+  local ok = pcall(function()
+    Op.choice({ left = Op.always('bad') })
+  end)
+  assert_eq(ok, false, 'plain choice should not accept named maps')
+end
+
+local function test_named_choice_tags_the_winning_branch()
+  local op = Op.named_choice({
+    { 'left', Op.never() },
+    { 'right', Op.always('value', 7) },
+  })
+  local status, values = one_perform(op)
+  assert_status(status, 'found')
+  assert_eq(values[1], 'right')
+  assert_eq(values[2], 'value')
+  assert_eq(values[3], 7)
+end
+
+local function test_named_all_returns_record_values_and_raw_rows()
+  local op = Op.named_all({
+    { 'a', Op.always('A') },
+    { 'b', Op.always('B', 2) },
+  })
+  local status, values = one_perform(op)
+  assert_status(status, 'found')
+  local r = values[1]
+  assert_eq(r.a, 'A')
+  assert_truthy(type(r.b) == 'table' and r.b.n == 2, 'multi-valued named_all entry should keep its row pack')
+  assert_eq(r.b[1], 'B')
+  assert_eq(r.b[2], 2)
+  assert_eq(r._rows.a[1], 'A')
+end
+
 local tests = {
+  test_choice_normalises_nested_lists_and_choice_nodes,
+  test_choice_rejects_sparse_or_named_tables,
+  test_named_choice_tags_the_winning_branch,
+  test_named_all_returns_record_values_and_raw_rows,
   test_always_and_never,
   test_multi_value_bind_map_and_wrap_preserve_arity,
   test_deferred_map_and_bind_after_rendezvous,

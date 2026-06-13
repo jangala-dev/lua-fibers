@@ -57,7 +57,7 @@ function CapacityKind.merge_par(dst, src) if src.read ~= nil and dst.read == nil
 
 function CapacityKind.project(cap, rec, query)
   if query == 'available' or query == 'free' then return available(cap, rec), true end
-  if query == 'state' or query == 'snapshot' then return state_table(cap, rec), true end
+  if query == 'inspect' or query == 'snapshot' then return state_table(cap, rec), true end
   return nil, false
 end
 
@@ -112,7 +112,12 @@ function CapacityKind.eval(cap, payload, ctx)
     local c = Candidate.new(OpPack(true))
     local r = ensure_record(c, cap, version); r.delta = (r.delta or 0) + n
     return Result.cands({ c })
-  elseif op == 'state' then
+  elseif op == 'free_some' then
+    local max = as_nonneg_int(payload.max, 1, 'Flow free_some size')
+    if max == 0 then return Result.cands({ read_only(cap, version, 0) }) end
+    if free > 0 then return Result.cands({ read_only(cap, version, cap.limit == nil and max or math.min(max, free)) }) end
+    return Result.wait(Wait.resource('flow:capacity:changed', cap._fibers_id, cap, { op = 'free_some', max = max }))
+  elseif op == 'inspect' then
     return Result.cands({ read_only(cap, version, state_table(cap, rec)) })
   elseif op == 'changed' then
     if version ~= payload.version then return Result.cands({ read_only(cap, version, state_table(cap, rec)) }) end
@@ -133,7 +138,8 @@ end
 function Capacity:reserve_op(n) return Op._resource(self, CapacityKind, { op = 'reserve', n = as_nonneg_int(n, 0, 'Flow reserve size') }) end
 function Capacity:reserve_some_op(max) return Op._resource(self, CapacityKind, { op = 'reserve_some', max = as_nonneg_int(max, 1, 'Flow reserve_some size') }) end
 function Capacity:release_op(n) return Op._resource(self, CapacityKind, { op = 'release', n = as_nonneg_int(n, 0, 'Flow release size') }) end
-function Capacity:state_op() return Op._resource(self, CapacityKind, { op = 'state' }) end
+function Capacity:inspect_op() return Op._resource(self, CapacityKind, { op = 'inspect' }) end
+function Capacity:free_some_op(max) return Op._resource(self, CapacityKind, { op = 'free_some', max = as_nonneg_int(max, 1, 'Flow free_some size') }) end
 function Capacity:changed_op(version) return Op._resource(self, CapacityKind, { op = 'changed', version = version }) end
 
 Capacity.Kind = CapacityKind

@@ -64,27 +64,27 @@ function Duplex:writer() return self.write_flow:inlet() end
 function Duplex:read_flow_handle() return self.read_flow end
 function Duplex:write_flow_handle() return self.write_flow end
 
-function Duplex:state_op()
-  return Op.all({ self.read_flow:state_op(), self.write_flow:state_op() }):map(function(rows)
-    return { stream = self, read = rows[1][1], write = rows[2][1], mode = self.mode }
+function Duplex:inspect_op()
+  return Op.named_all({
+    { 'read', self.read_flow:inspect_op() },
+    { 'write', self.write_flow:inspect_op() },
+  }):map(function(parts)
+    return { stream = self, read = parts.read, write = parts.write, mode = self.mode }
   end)
 end
 
 function Duplex:shutdown_op(reason)
-  return Op.all({ self:reader():shutdown_op(reason), self:writer():shutdown_op(reason) }):map(function() return true end)
+  return Op.named_all({
+    { 'reader', self:reader():shutdown_op(reason) },
+    { 'writer', self:writer():shutdown_op(reason) },
+  }):map(function() return true end)
 end
 
 function Duplex:closed_op()
-  local function loop()
-    return self:state_op():and_then(function(st)
-      if st.read.reader_open == false and st.write.writer_open == false and st.write.drained then return Op.always(true) end
-      return Op.choice(
-        self.read_flow:changed_op(st.read),
-        self.write_flow:changed_op(st.write)
-      ):and_then(function() return loop() end)
-    end)
-  end
-  return loop()
+  return Op.named_all({
+    { 'read', self.read_flow:closed_op() },
+    { 'write', self.write_flow:closed_op() },
+  }):map(function() return true end)
 end
 
 function Duplex:exit_op() return self:closed_op() end
@@ -138,11 +138,11 @@ function Stream.open_backend_op(region, backend, opts)
     write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096,
     pump_strategy = opts.pump_strategy or opts.strategy or 'split',
   }
-  return Op.all({
-    region:admit_op(hs),
-    region:admit_op(hs:reader()),
-    region:admit_op(hs:writer()),
-    Pump.start_op(hs, region, opts),
+  return Op.named_all({
+    { 'stream', region:admit_op(hs) },
+    { 'reader', region:admit_op(hs:reader()) },
+    { 'writer', region:admit_op(hs:writer()) },
+    { 'pumps', Pump.start_op(hs, region, opts) },
   }):map(function() return hs end)
 end
 
@@ -150,7 +150,7 @@ HostStream.reader = Duplex.reader
 HostStream.writer = Duplex.writer
 HostStream.read_flow_handle = Duplex.read_flow_handle
 HostStream.write_flow_handle = Duplex.write_flow_handle
-HostStream.state_op = Duplex.state_op
+HostStream.inspect_op = Duplex.inspect_op
 HostStream.shutdown_op = Duplex.shutdown_op
 HostStream.closed_op = Duplex.closed_op
 HostStream.exit_op = Duplex.exit_op

@@ -105,7 +105,7 @@ resources:
 
 ```text
 ByteBuffer
-  chunked byte storage only: append, length, peek, scan, consume
+  chunked byte storage only: append, consume, consume_some, consume_exactly, line finding, bounded availability, and empty facts
 
 Producer half-state
   open / shutdown / failed for the byte-producing side
@@ -114,15 +114,13 @@ Consumer half-state
   open / shutdown / failed for the byte-consuming side
 
 Capacity
-  byte credit; ordinary writes reserve it and reads release it
+  byte credit; ordinary writes reserve it, reads release it, and pumps wait on free_some facts
 
 Pump claim
-  optional stream-pump internal state, not part of the public Flow surface
+  optional stream-pump internal state, with inflight and empty facts
 ```
 
-The public `Inlet` and `Outlet` operations compose these pieces.  Losing
-alternatives append no bytes, consume no bytes, reserve no capacity, and leave no
-pump claims behind.
+The public `Inlet` and `Outlet` operations compose these pieces through precise transactional facts.  Broad inspection operations exist for diagnostics, but behavioural code should ask for facts such as buffer consume_some, consume_exactly, line finding, capacity free, half closed, claim inflight, or buffer empty.  Losing alternatives append no bytes, consume no bytes, reserve no capacity, and leave no pump claims behind.
 
 ## Algebraic laws
 
@@ -138,6 +136,15 @@ outlet shutdown causes inlet writes to fail with broken_pipe
 backpressure is transactional capacity
 long reads are observational until commit
 ```
+
+`read_some_op`, `read_exactly_op`, `read_line_op` and `read_all_op` are
+public result shapes over one internal read core.  The core is a choice over
+precise transactional facts: byte-storage facts from the buffer, producer
+terminal facts from the producing half, and consumer-open facts from the
+consuming half.  The buffer owns storage-native facts such as consume_some,
+consume_exactly, line finding, and bounded availability; flow code gives those
+facts read protocol meaning, commits the selected consume/release, and then maps
+the core data/error result to the familiar Lua return shape.
 
 `read_line_op` and `read_all_op` may wait while the committed byte buffer grows.
 They inspect committed bytes but consume nothing until their selected world
@@ -197,8 +204,7 @@ ack_claim_op
   commits the accepted prefix, releases the corresponding capacity, and preserves any remainder
 ```
 
-`inlet:flush_op()` waits until both pending output and pump-internal in-flight output are
-empty. Claimed bytes continue to reserve capacity until acknowledged or settled by close/error policy.
+`inlet:flush_op()` waits on precise drain facts: the ordinary buffer is empty and any pump-internal in-flight claim is empty, or the write side has failed. Claimed bytes continue to reserve capacity until acknowledged or settled by close/error policy.
 
 ## Pump strategies
 
@@ -206,10 +212,10 @@ The default host strategy starts separate read and write pump tasks:
 
 ```text
 read pump:
-  backend -> read Flow inlet
+  waits on capacity-free, reader-closed, and backend-ready facts; backend -> read Flow inlet
 
 write pump:
-  write Flow outlet -> backend
+  waits on claim-inflight / buffered-claim / closed-and-drained facts, then backend-ready; write Flow outlet -> backend
 ```
 
 This is a strategy, not a semantic commitment.  The same host-stream compound

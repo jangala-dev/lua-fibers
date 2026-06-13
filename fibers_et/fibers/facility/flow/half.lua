@@ -25,12 +25,16 @@ local function ensure_record(c, h, version)
 end
 
 local function state_from(h, rec)
+  local open, err, reason = h.open, h.error, h.reason
+  if rec and rec.has_open then open = rec.open end
+  if rec and rec.has_error then err = rec.error end
+  if rec and rec.has_reason then reason = rec.reason end
   return {
     half = h,
     role = h.role,
-    open = rec and rec.has_open and rec.open or h.open,
-    error = rec and rec.has_error and rec.error or h.error,
-    reason = rec and rec.has_reason and rec.reason or h.reason,
+    open = open,
+    error = err,
+    reason = reason,
     version = h.version or 0,
   }
 end
@@ -73,7 +77,7 @@ end
 
 function HalfKind.project(half, rec, query)
   local st = state_from(half, rec)
-  if query == 'state' or query == 'snapshot' then return st, true end
+  if query == 'inspect' or query == 'snapshot' then return st, true end
   if query == 'open' then return st.open, true end
   if query == 'error' then return st.error, true end
   return nil, false
@@ -100,11 +104,21 @@ function HalfKind.eval(half, payload, ctx)
   local version = Versioned.observe(ctx, half)
   local rec = Versioned.overlay_rec(ctx, half)
   local st = state_from(half, rec)
-  if op == 'state' then return Result.cands({ read_only(half, version, st) })
-  elseif op == 'require_open' then
+  if op == 'inspect' then return Result.cands({ read_only(half, version, st) })
+  elseif op == 'open' then
     if st.error then return Result.cands({ read_only(half, version, nil, st.error) }) end
     if not st.open then return Result.cands({ read_only(half, version, nil, payload.closed_error or Errors.CLOSED) }) end
     return Result.cands({ read_only(half, version, true) })
+  elseif op == 'closed' then
+    if not st.open then return Result.cands({ read_only(half, version, st.reason or true) }) end
+    return Result.wait(Wait.resource('flow:half:closed', half._fibers_id, half, { op = 'closed' }))
+  elseif op == 'terminal' then
+    if st.error then return Result.cands({ read_only(half, version, nil, st.error) }) end
+    if not st.open then return Result.cands({ read_only(half, version, nil, payload.default_error or st.reason or Errors.CLOSED) }) end
+    return Result.wait(Wait.resource('flow:half:terminal', half._fibers_id, half, { op = 'terminal' }))
+  elseif op == 'error' then
+    if st.error then return Result.cands({ read_only(half, version, st.error) }) end
+    return Result.wait(Wait.resource('flow:half:error', half._fibers_id, half, { op = 'error' }))
   elseif op == 'shutdown' then
     if not st.open then return Result.cands({ read_only(half, version, true) }) end
     local c = Candidate.new(OpPack(true))
@@ -132,8 +146,11 @@ function Half.new(role, name)
   return setmetatable({ role = role or 'half', open = true, error = nil, reason = nil, version = 0, name = name or id, _fibers_id = id, _fibers_kind = HalfKind }, Half)
 end
 
-function Half:state_op() return Op._resource(self, HalfKind, { op = 'state' }) end
-function Half:require_open_op(closed_error) return Op._resource(self, HalfKind, { op = 'require_open', closed_error = closed_error }) end
+function Half:inspect_op() return Op._resource(self, HalfKind, { op = 'inspect' }) end
+function Half:open_op(closed_error) return Op._resource(self, HalfKind, { op = 'open', closed_error = closed_error }) end
+function Half:closed_op() return Op._resource(self, HalfKind, { op = 'closed' }) end
+function Half:terminal_op(default_error) return Op._resource(self, HalfKind, { op = 'terminal', default_error = default_error }) end
+function Half:error_op() return Op._resource(self, HalfKind, { op = 'error' }) end
 function Half:shutdown_op(reason) return Op._resource(self, HalfKind, { op = 'shutdown', reason = reason }) end
 function Half:fail_op(err) return Op._resource(self, HalfKind, { op = 'fail', error = err or Errors.FLOW_ERROR }) end
 function Half:changed_op(version) return Op._resource(self, HalfKind, { op = 'changed', version = version }) end

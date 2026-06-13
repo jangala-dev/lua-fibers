@@ -70,7 +70,7 @@ end
 
 function ClaimKind.project(claim, rec, query)
   local st = state_from(claim, rec)
-  if query == 'state' or query == 'snapshot' then return st, true end
+  if query == 'inspect' or query == 'snapshot' then return st, true end
   if query == 'bytes' then return st.bytes, true end
   if query == 'empty' then return (st.bytes or '') == '', true end
   return nil, false
@@ -96,8 +96,11 @@ function ClaimKind.eval(claim, payload, ctx)
   local version = Versioned.observe(ctx, claim)
   local rec = Versioned.overlay_rec(ctx, claim)
   local st = state_from(claim, rec)
-  if op == 'state' then
+  if op == 'inspect' then
     return Result.cands({ read_only(claim, version, st) })
+  elseif op == 'inflight' then
+    if (st.bytes or '') ~= '' then return Result.cands({ read_only(claim, version, st.id, st.bytes) }) end
+    return Result.wait(Wait.resource('flow:claim:changed', claim._fibers_id, claim, { op = 'inflight', version = version }))
   elseif op == 'set' then
     if (st.bytes or '') ~= '' then return Result.cands({ read_only(claim, version, nil, Errors.CLAIM_ALREADY_IN_FLIGHT) }) end
     local c = Candidate.new(OpPack(true))
@@ -138,7 +141,8 @@ function Claim.new(name)
   return setmetatable({ id = nil, bytes = '', version = 0, name = name or id, _fibers_id = id, _fibers_kind = ClaimKind }, Claim)
 end
 
-function Claim:state_op() return Op._resource(self, ClaimKind, { op = 'state' }) end
+function Claim:inspect_op() return Op._resource(self, ClaimKind, { op = 'inspect' }) end
+function Claim:inflight_op() return Op._resource(self, ClaimKind, { op = 'inflight' }) end
 function Claim:set_op(id, bytes) if type(id) ~= 'string' then error('Flow claim set expects an id', 2) end; return Op._resource(self, ClaimKind, { op = 'set', id = id, bytes = bytes or '' }) end
 function Claim:ack_op(id, n) if type(id) ~= 'string' then error('Flow claim acknowledgement expects a claim id', 2) end; return Op._resource(self, ClaimKind, { op = 'ack', id = id, n = as_nonneg_int(n, 0, 'Flow claim acknowledgement') }) end
 function Claim:clear_op() return Op._resource(self, ClaimKind, { op = 'clear' }) end

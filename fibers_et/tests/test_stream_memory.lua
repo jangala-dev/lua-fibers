@@ -250,7 +250,7 @@ do
   local st = fibers.run(function()
     fibers.perform(a:writer():write_op(big_a))
     fibers.perform(a:writer():write_op(big_b))
-    st_snapshot = fibers.perform(b:reader().flow.buffer:state_op())
+    st_snapshot = fibers.perform(b:reader().flow.buffer:inspect_op())
     first = fibers.perform(b:reader():read_exactly_op(8999))
     cross = fibers.perform(b:reader():read_exactly_op(2))
     rest = fibers.perform(b:reader():read_exactly_op(8999))
@@ -417,26 +417,23 @@ do
 end
 
 
--- Flow internals expose targeted buffer observations without requiring a full Flow state snapshot.
+-- Flow internals expose byte-storage facts rather than Flow read-spec interpreters.
 do
-  local flow = Flow.new({ name = 'buffer-observe', capacity = 32 })
-  local len, len_version, peek, scan
+  local flow = Flow.new({ name = 'buffer-read-facts', capacity = 32 })
+  local line_fact, line_bytes, short
   local st = fibers.run(function()
     fibers.perform(flow:inlet():write_op('abc\ndef'))
-    local l = fibers.perform(flow.buffer:length_op())
-    len, len_version = l.length, l.version
-    peek = fibers.perform(flow.buffer:peek_op(3))
-    scan = fibers.perform(flow.buffer:scan_op({ sep = '\n', limit = 16 }))
+    line_fact = fibers.perform(flow.buffer:find_line_op({ sep = '\n', include_sep = false, limit = 16 }))
+    line_bytes = fibers.perform(flow.buffer:consume_op(line_fact.consume_n))
+    short = fibers.perform(flow.buffer:consume_short_op(10))
   end)
   assert_status(st, 'found')
-  assert_eq(len, 7)
-  assert_truthy(type(len_version) == 'number', 'length_op should return a versioned observation')
-  assert_eq(peek.data, 'abc')
-  assert_eq(peek.length, 7)
-  assert_eq(scan.found, true)
-  assert_eq(scan.pos, 4)
-  assert_eq(scan.data, 'abc\ndef')
+  assert_eq(line_fact.consume_n, 4)
+  assert_eq(line_fact.value_n, 3)
+  assert_eq(string.sub(line_bytes, 1, line_fact.value_n), 'abc')
+  assert_eq(short, 'def')
   assert_nil(Flow.Claim, 'pump Claim should not be part of the public Flow facility')
 end
+
 
 print('tests/test_stream_memory.lua: ok')

@@ -1,9 +1,9 @@
 -- Host-pumped byte flows.
 --
 -- Pumps are ordinary Task bodies.  They perform host I/O only after readiness or
--- Flow state has committed, and they commit the result of host I/O back into
--- Flow state.  The default strategy starts separate read and write pump Tasks;
--- the host stream compound keeps that as a replaceable strategy detail.
+-- precise Flow facts have committed, and they commit the result of host I/O back
+-- into Flow state.  The default strategy starts separate read and write pump
+-- Tasks; the host stream compound keeps that as a replaceable strategy detail.
 
 local Runtime = require('fibers.kernel.runtime')
 local Op = require('fibers.base.op')
@@ -35,36 +35,47 @@ function Pump.read(stream)
   local backend = stream.backend
   if backend and type(backend.attach_stream) == 'function' then backend:attach_stream(stream) end
   if backend and type(backend.bind_runtime) == 'function' then backend:bind_runtime(rt) end
-  local inlet = stream.read_flow:inlet()
+  local flow = stream.read_flow
+  local inlet = flow:inlet()
   while true do
-    local st = masked_perform(rt, stream.read_flow:state_op())
-    if st.reader_open == false then
+    local cap_or_closed, value = masked_perform(rt, Op.named_choice({
+      { 'reader_closed', flow.consumer:closed_op() },
+      { 'capacity', flow.capacity:free_some_op(stream.read_chunk_size) },
+    }))
+    if cap_or_closed == 'reader_closed' then
       backend_call(backend, 'shutdown_read', 'reader_closed')
       return
     end
-    local st_cap = masked_perform(rt, stream.read_flow.capacity:state_op())
-    local max, cap_err = st_cap and math.min(st_cap.free == math.huge and stream.read_chunk_size or st_cap.free, stream.read_chunk_size), nil
-    if max == 0 then
-      masked_perform(rt, stream.read_flow.capacity:changed_op(st_cap.version))
+    local max = value
+
+    local ready_or_closed = masked_perform(rt, Op.named_choice({
+      { 'reader_closed', flow.consumer:closed_op() },
+      { 'backend_ready', backend_ready_op(backend, 'read_ready_op') },
+    }))
+    if ready_or_closed == 'reader_closed' then
+      backend_call(backend, 'shutdown_read', 'reader_closed')
+      return
+    end
+
+    local bytes, err = backend_call(backend, 'read', max)
+    if bytes and #bytes > 0 then
+      local n, write_err = masked_perform(rt, inlet:write_op(bytes))
+      if not n then
+        if write_err == Errors.BROKEN_PIPE or write_err == Errors.CLOSED then
+          backend_call(backend, 'shutdown_read', write_err)
+          return
+        end
+        masked_perform(rt, flow.producer:fail_op(write_err or Errors.READ_ERROR))
+        return
+      end
+    elseif err == 'would_block' or bytes == '' then
+      -- Readiness is only a hint. Loop back to the readiness operation.
+    elseif err == Errors.EOF then
+      masked_perform(rt, inlet:shutdown_op(Errors.EOF))
+      return
     else
-      if not max then
-        if cap_err == 'reader_closed' then backend_call(backend, 'shutdown_read', cap_err); return end
-        masked_perform(rt, stream.read_flow.producer:fail_op(cap_err or Errors.READ_CAPACITY_ERROR))
-        return
-      end
-      masked_perform(rt, backend_ready_op(backend, 'read_ready_op'))
-      local bytes, err = backend_call(backend, 'read', max)
-      if bytes and #bytes > 0 then
-        masked_perform(rt, inlet:write_op(bytes))
-      elseif err == 'would_block' or bytes == '' then
-        -- Readiness is only a hint. Loop back to the readiness operation.
-      elseif err == Errors.EOF then
-        masked_perform(rt, inlet:shutdown_op(Errors.EOF))
-        return
-      else
-        masked_perform(rt, stream.read_flow.producer:fail_op(err or Errors.READ_ERROR))
-        return
-      end
+      masked_perform(rt, flow.producer:fail_op(err or Errors.READ_ERROR))
+      return
     end
   end
 end
@@ -75,7 +86,8 @@ function Pump.write(stream)
   local backend = stream.backend
   if backend and type(backend.attach_stream) == 'function' then backend:attach_stream(stream) end
   if backend and type(backend.bind_runtime) == 'function' then backend:bind_runtime(rt) end
-  local outlet = stream.write_flow:outlet()
+  local flow = stream.write_flow
+  local outlet = flow:outlet()
   while true do
     local claim_id, bytes_or_err = masked_perform(rt, outlet:claim_for_pump_op(stream.write_chunk_size))
     if not claim_id then
@@ -86,7 +98,11 @@ function Pump.write(stream)
       return
     end
     local bytes = bytes_or_err
-    masked_perform(rt, backend_ready_op(backend, 'write_ready_op'))
+    local ready_or_failed = masked_perform(rt, Op.named_choice({
+      { 'write_failed', flow.consumer:error_op() },
+      { 'backend_ready', backend_ready_op(backend, 'write_ready_op') },
+    }))
+    if ready_or_failed == 'write_failed' then return end
     local n, err = backend_call(backend, 'write', bytes)
     if n and n > 0 then
       masked_perform(rt, outlet:ack_claim_op(claim_id, n))
@@ -106,9 +122,9 @@ function Pump.Strategy.split(stream, region, opts)
   local write_task = Task.new(function() return Pump.write(stream) end, name .. ':write-pump', opts.frame)
   stream.read_task = read_task
   stream.write_task = write_task
-  return Op.all({
-    read_task:start_op(region),
-    write_task:start_op(region),
+  return Op.named_all({
+    { 'read_task', read_task:start_op(region) },
+    { 'write_task', write_task:start_op(region) },
   }):map(function() return stream end)
 end
 

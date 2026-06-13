@@ -96,6 +96,21 @@ were entered and lost may produce nacks.
 
 ```lua
 Op.choice(p, q, r)
+Op.choice({ p, q, r })
+Op.choice(p, { q, r }, Op.choice(s, t))
+```
+
+`choice` accepts operation values and dense arrays of operation values.  It
+flattens nested arrays and bare nested `choice` nodes at construction time.
+Named maps are intentionally rejected here; use `Op.named_choice` when branch
+labels should be part of the result.
+
+```lua
+Op.named_choice({
+  { "input", input_op },
+  { "timeout", timeout_op },
+})
+-- returns: name, ...
 ```
 
 If more than one world is available, the implementation chooses deterministically
@@ -162,6 +177,17 @@ commit, before any outer product wrap is applied.
 
 ```lua
 Op.all({ p, q })
+```
+
+For products whose lanes are naturally named, `named_all` returns a record.
+Single-valued lanes are exposed directly; multi-valued lanes keep their packed
+row.  Raw rows are also available as `record._rows[name]`.
+
+```lua
+Op.named_all({
+  { "left", left:state_op() },
+  { "right", right:state_op() },
+})
 ```
 
 Use `all` when lanes are independent participants that should not communicate
