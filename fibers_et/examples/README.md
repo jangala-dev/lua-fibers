@@ -22,4 +22,7 @@ The examples build up the public base kit:
 08_sleep.lua            Sleep facility over the host clock, using the pure Lua host
 09_memory_stream.lua    Transactional in-memory stream read/write/EOF
 10_stream_protocol_handoff.lua Transactional protocol negotiation and ownership handoff
+11_pumped_stream_fake_backend.lua Host-pumped stream using the fake backend
+12_readiness_stream.lua Readiness-backed fake host stream
+13_socket_backend_contract.lua Socket-shaped backend over a manual host adapter
 ```

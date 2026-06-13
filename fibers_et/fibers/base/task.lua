@@ -84,15 +84,21 @@ function Task:_spawn_effect()
   return Effect.spawn(self:_spawn_body(), self.name, self._fibers_id, self.frame)
 end
 
+function Task:start_op(region)
+  if not region or type(region.admit_op) ~= 'function' then error('Task:start_op expects a Region', 2) end
+  local task = self
+  return region:admit_op(task):and_then(function()
+    return Op.emit(task:_spawn_effect()):map(function() return task end)
+  end)
+end
+
 function Task.spawn_op(region, fn, name)
   local opts = type(name) == 'table' and name or nil
   if opts then name = opts.name end
   if not region or type(region.admit_op) ~= 'function' then error('Task.spawn_op expects a Region', 2) end
   local task = Task.new(fn, name)
   if opts and type(opts.frame) == 'function' then task.frame = opts.frame(task) elseif opts then task.frame = opts.frame end
-  return region:admit_op(task):and_then(function()
-    return Op.emit(task:_spawn_effect()):map(function() return task end)
-  end)
+  return task:start_op(region)
 end
 
 function Task:exit_op()

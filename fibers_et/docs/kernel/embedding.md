@@ -143,11 +143,11 @@ clock, a host signal, a queue source, or a readiness source.
 ```lua
 local clock = fibers.Source.clock('clock')
 local signal, feed = rt:signal('signal')
-local fd_read, fd_feed = rt:readiness_source(fd, 'read')
+local fd_read, fd_feed = rt:readiness(fd)
 ```
 
 Source consumers do not mutate. Host-side changes use runtime-bound producers,
-for example `feed:set(value)` or `fd_feed:set_ready(true)`, so bounded search
+for example `feed:set(value)` or `fd_feed:readable()`, so bounded search
 state is invalidated by construction. `rt:arrive(source, ...)` is the lower-level
 host boundary used by those producers.
 
@@ -179,13 +179,13 @@ bounded stepping correct by construction: the same call that changes readiness
 also invalidates any in-progress search cursor.
 
 ```lua
-local readable, readable_feed = rt:readiness_source(fd, 'read')
+local readable, readable_feed = rt:readiness(fd)
 
 -- From host driver code, when the handle becomes readable:
-readable_feed:set_ready(true)
+readable_feed:readable()
 
 -- From host driver code, when the readiness condition is consumed or reset:
-readable_feed:clear_ready('read')
+readable_feed:clear('read')
 ```
 
 There is deliberately no dynamic `host.ready` or `source_ready` probe.  A host
@@ -195,7 +195,7 @@ The LuaJIT/Linux FFI host preserves the old `fibers` policy for descriptors that
 `epoll` rejects with `EPERM`: they are marked unpollable and treated as
 requested readiness while a wait remains registered.  This models descriptors
 such as regular files as level-ready.  Synthetic unpollable readiness is not
-reported as an error readiness; the subsequent read or write operation remains
+reported through a separate error readiness mode; the subsequent read or write operation remains
 responsible for EOF, `EAGAIN`, or real errors.
 
 ## Effects and host callbacks

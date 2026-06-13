@@ -6,11 +6,12 @@
 --
 -- Source consumers do not mutate.  External mutation goes through Runtime-bound
 -- producer capabilities returned by Runtime:signal(), Runtime:queue_source(), or
--- Runtime:readiness_source(), or through Runtime:arrive(source, ...).
+-- Runtime:readiness(), or through Runtime:arrive(source, ...).
 --
 -- Source has two ordinary disciplines:
 --   signal : a latched current fact, observed by wait_op()
 --   queue  : a stream of occurrences, consumed transactionally by next_op()
+--   readiness : level-like host readiness hints, observed by mode-specific ops
 
 local DefaultOp = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
@@ -43,10 +44,17 @@ local function runtime_now(ctx)
   return 0
 end
 
-local function local_ready(source, mode)
-  if source.ready == true then return true end
-  if type(source.ready) == 'table' then return not not source.ready[mode or source.mode or 'read'] end
-  return false
+local function normalise_readiness_mode(mode)
+  mode = mode or 'read'
+  if mode == 'wr' then mode = 'write' end
+  if mode ~= 'read' and mode ~= 'write' then error('readiness mode must be read or write', 3) end
+  return mode
+end
+
+local function readiness_is_set(source, mode)
+  mode = normalise_readiness_mode(mode or source.mode or 'read')
+  if type(source.ready) == 'table' then return source.ready[mode] == true end
+  return source.ready == true and mode == normalise_readiness_mode(source.mode or 'read')
 end
 
 local function queue_head_index(source)
@@ -182,12 +190,10 @@ function SourceKind.eval(source, payload, ctx)
     return Result.wait(Wait.time(deadline, source))
   elseif source.kind == 'readiness' then
     if op ~= 'wait' then error('readiness sources support wait_op/readable_op/writable_op', 2) end
-    local mode = payload.mode or source.mode or 'read'
+    local mode = normalise_readiness_mode(payload.mode or source.mode or 'read')
     local key = payload.key or source.key
     observe_version(ctx, source)
-    if local_ready(source, mode) then
-      return Result.cands({ Candidate.new(OpPack(true, key, mode)) })
-    end
+    if readiness_is_set(source, mode) then return Result.cands({ Candidate.new(OpPack(true, key, mode)) }) end
     return Result.wait(Wait.source(source, tostring(mode) .. ':' .. tostring(key), { kind = 'readiness', key = key, mode = mode }))
   end
 
@@ -212,12 +218,14 @@ function Source.clock(name)
 end
 
 function Source.readiness(key, mode, name)
-  return new_source('readiness', { key = key, mode = mode or 'read', name = name, ready = {} })
+  return new_source('readiness', { key = key, mode = normalise_readiness_mode(mode or 'read'), name = name, ready = {} })
 end
 
 function Source:wait_op()
-  if self.kind == 'signal' or self.kind == 'readiness' then
-    return DefaultOp._resource(self, SourceKind, { op = 'wait', interest = 'ready', key = self.key, mode = self.mode })
+  if self.kind == 'signal' then
+    return DefaultOp._resource(self, SourceKind, { op = 'wait', interest = 'ready' })
+  elseif self.kind == 'readiness' then
+    return self:readiness_op(self.mode or 'read')
   end
   error('wait_op is not supported by ' .. tostring(self.kind) .. ' source', 2)
 end
@@ -234,15 +242,19 @@ function Source:at_op(deadline)
   return DefaultOp._resource(self, SourceKind, { op = 'until', deadline = deadline })
 end
 
+function Source:readiness_op(mode)
+  if self.kind ~= 'readiness' then error('readiness_op is only supported by readiness sources', 2) end
+  return DefaultOp._resource(self, SourceKind, { op = 'wait', key = self.key, mode = normalise_readiness_mode(mode or self.mode or 'read') })
+end
+
 function Source:readable_op()
-  if self.kind ~= 'readiness' then error('readable_op is only supported by readiness sources', 2) end
-  return DefaultOp._resource(self, SourceKind, { op = 'wait', key = self.key, mode = 'read' })
+  return self:readiness_op('read')
 end
 
 function Source:writable_op()
-  if self.kind ~= 'readiness' then error('writable_op is only supported by readiness sources', 2) end
-  return DefaultOp._resource(self, SourceKind, { op = 'wait', key = self.key, mode = 'write' })
+  return self:readiness_op('write')
 end
+
 
 
 Source.Kind = SourceKind

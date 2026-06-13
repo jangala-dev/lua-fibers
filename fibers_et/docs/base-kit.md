@@ -83,14 +83,14 @@ algebra.
 local rt = fibers.Runtime.current()
 local signal, feed = rt:signal('signal')
 local clock = fibers.Source.clock('clock')
-local readiness, readiness_feed = rt:readiness_source(fd, 'read')
+local readiness, readiness_feed = rt:readiness(fd)
 
 signal:wait_op()
 fibers.sleep_op(0.25)      -- facility over a clock Source
 clock:at_op(deadline)      -- low-level absolute clock-source wait
 readiness:readable_op()
 feed:set('changed')
-readiness_feed:set_ready(true)
+readiness_feed:readable()
 ```
 
 Source consumers do not mutate. External facts enter through runtime-bound

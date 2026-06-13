@@ -47,6 +47,36 @@ function Host.has_readiness_waits(waits)
   return #Host.readiness_waits(waits) > 0
 end
 
+
+function Host.normalise_readiness_mode(mode)
+  mode = mode or 'read'
+  if mode == 'wr' then mode = 'write' end
+  if mode ~= 'read' and mode ~= 'write' then error('readiness mode must be read or write', 2) end
+  return mode
+end
+
+function Host.deliver_readiness(rt, wait)
+  if not (wait and wait.kind == 'source' and wait.source_kind == 'readiness' and wait.source) then return false end
+  rt:arrive(wait.source, Host.normalise_readiness_mode(wait.mode), true)
+  return true
+end
+
+function Host.deliver_ready(rt, waits, is_ready)
+  local n = 0
+  for i = 1, #(waits or {}) do
+    local w = waits[i]
+    if w and w.kind == 'source' and w.source_kind == 'readiness' and w.source then
+      local mode = Host.normalise_readiness_mode(w.mode)
+      local key = w.readiness_key
+      if is_ready == nil or is_ready(key, mode, w) then
+        rt:arrive(w.source, mode, true)
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
 function Host.delay_until(rt, deadline)
   if deadline == nil then return nil end
   local delay = deadline - rt:now()
@@ -71,6 +101,10 @@ end
 
 function Host.pure(opts)
   return require('fibers.host.pure').new(opts)
+end
+
+function Host.manual(opts)
+  return require('fibers.host.manual').new(opts)
 end
 
 function Host.luajit_linux(opts)

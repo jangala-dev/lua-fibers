@@ -17,12 +17,15 @@ local tests = {
   'tests/test_source.lua',
   'tests/test_sleep.lua',
   'tests/test_host.lua',
+  'tests/test_readiness.lua',
   'tests/test_host_linux.lua',
   'tests/hosts/test_all.lua',
   'tests/test_region_general.lua',
   'tests/test_policy.lua',
   'tests/test_lifetime.lua',
   'tests/test_stream_memory.lua',
+  'tests/test_stream_pumped.lua',
+  'tests/test_stream_socket_backend.lua',
   'tests/test_invariants.lua',
 }
 

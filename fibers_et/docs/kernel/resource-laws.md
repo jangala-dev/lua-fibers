@@ -122,7 +122,7 @@ publication record.  Publication happens only after resource commit.
 
 External facts enter through runtime-bound producer capabilities, such as the
 feed returned by `Runtime:signal`, `Runtime:queue_source`, or
-`Runtime:readiness_source`.  These feeds update the source and invalidate bounded
+`Runtime:readiness`.  These feeds update the source and invalidate bounded
 search state as one operation.
 
 Host/source arrival is an external driver boundary.  It is not valid from a

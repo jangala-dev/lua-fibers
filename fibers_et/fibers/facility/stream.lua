@@ -1,13 +1,16 @@
--- Transactional in-memory streams.
+-- Transactional streams.
 --
 -- A stream endpoint is an owned transactional byte boundary.  Reads consume
 -- committed bytes; writes publish committed bytes; half-close and backpressure
--- are committed resource state.  In-memory streams use no host pump.
+-- are committed resource state.  Memory streams connect two ByteQueues directly.
+-- Host-pumped streams add read/write pump Tasks around the same ByteQueue state.
 
 local Op = require('fibers.base.op')
 local Region = require('fibers.base.region')
 local Runtime = require('fibers.kernel.runtime')
+local Pump = require('fibers.facility.stream.pump')
 local Ownership = require('fibers.internal.ownership')
+local Task = require('fibers.base.task')
 local ByteQueue = require('fibers.facility.stream.byte_queue')
 
 local Stream = {}
@@ -22,8 +25,14 @@ local function endpoint(opts)
   local name = opts.name or ('stream-' .. tostring(next_endpoint))
   local h = Ownership.handle(name, {
     kind = 'stream',
+    mode = opts.mode or 'memory',
     incoming = opts.incoming,
     outgoing = opts.outgoing,
+    backend = opts.backend,
+    read_chunk_size = opts.read_chunk_size or 4096,
+    write_chunk_size = opts.write_chunk_size or 4096,
+    read_task = opts.read_task,
+    write_task = opts.write_task,
     _fibers_stream = true,
     _fibers_kind_name = 'stream',
     _fibers_obligation_kind = 'stream',
@@ -38,6 +47,32 @@ function Stream.memory_pair(opts)
   local q_ba = ByteQueue.new { name = name .. ':b->a', capacity = opts.capacity }
   return endpoint { name = name .. ':a', incoming = q_ba, outgoing = q_ab },
          endpoint { name = name .. ':b', incoming = q_ab, outgoing = q_ba }
+end
+
+function Stream.open_backend_op(region, backend, opts)
+  opts = opts or {}
+  if not region or type(region.admit_op) ~= 'function' then error('Stream.open_backend_op expects a Region', 2) end
+  if type(backend) ~= 'table' then error('Stream.open_backend_op expects a backend table', 2) end
+  local name = opts.name or backend.name or 'host-stream'
+  local ep = endpoint {
+    name = name,
+    mode = 'host',
+    backend = backend,
+    incoming = ByteQueue.new { name = name .. ':in', capacity = opts.read_capacity or opts.capacity },
+    outgoing = ByteQueue.new { name = name .. ':out', capacity = opts.write_capacity or opts.capacity },
+    read_chunk_size = opts.read_chunk_size or opts.chunk_size or 4096,
+    write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096,
+  }
+  local read_task = Task.new(function() return Pump.read(ep) end, name .. ':read-pump', opts.frame)
+  local write_task = Task.new(function() return Pump.write(ep) end, name .. ':write-pump', opts.frame)
+  ep.read_task = read_task
+  ep.write_task = write_task
+  if type(backend.attach_stream) == 'function' then backend:attach_stream(ep) end
+  return Op.all({
+    region:admit_op(ep),
+    read_task:start_op(region),
+    write_task:start_op(region),
+  }):map(function() return ep end)
 end
 
 function Endpoint:read_some_op(max)
@@ -61,8 +96,7 @@ function Endpoint:write_some_op(bytes)
 end
 
 function Endpoint:flush_op()
-  -- In-memory writes commit directly into the peer's incoming queue.  The op is
-  -- still present so host-backed streams can later refine the same API.
+  if self.mode == 'host' then return self.outgoing:drained_op() end
   return Op.always(true)
 end
 
@@ -80,14 +114,14 @@ end
 
 function Endpoint:state_op()
   return Op.all({ self.incoming:state_op(), self.outgoing:state_op() }):map(function(rows)
-    return { stream = self, incoming = rows[1][1], outgoing = rows[2][1] }
+    return { stream = self, incoming = rows[1][1], outgoing = rows[2][1], mode = self.mode }
   end)
 end
 
 function Endpoint:closed_op()
   local function loop()
     return self:state_op():and_then(function(st)
-      if st.incoming.reader_open == false and st.outgoing.writer_open == false then return Op.always(true) end
+      if st.incoming.reader_open == false and st.outgoing.writer_open == false and st.outgoing.drained then return Op.always(true) end
       return Op.choice(
         self.incoming:changed_op(st.incoming.version),
         self.outgoing:changed_op(st.outgoing.version)
@@ -141,4 +175,9 @@ end
 Stream.endpoint = endpoint
 Stream.Endpoint = Endpoint
 Stream.ByteQueue = ByteQueue
+Stream.backend = {
+  Fake = require('fibers.facility.stream.backend.fake'),
+  Readiness = require('fibers.facility.stream.backend.readiness'),
+  Socket = require('fibers.facility.stream.backend.socket'),
+}
 return Stream

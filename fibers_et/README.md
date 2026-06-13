@@ -139,10 +139,14 @@ end)
 
 ## Transactional streams
 
-The stream facility currently provides in-memory stream pairs:
+The stream facility provides in-memory stream pairs, host-pumped streams, readiness-backed streams, and a socket-shaped backend contract over host-provided non-blocking I/O:
 
 ```lua
 local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
+
+local stream = fibers.perform(
+  fibers.Stream.open_backend_op(region, backend, { name = 'host-stream' })
+)
 ```
 
 Stream `_op` methods are single-commit operations.  Losing read branches
@@ -151,7 +155,7 @@ committed state; and backpressure is transactional capacity.  Friendly methods
 such as `stream:write(bytes)` may loop and therefore may commit several
 transactions.
 
-See `docs/facilities/streams.md` and `examples/09_memory_stream.lua`.
+See `docs/facilities/streams.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, and `examples/13_socket_backend_contract.lua`.
 
 ## Effects
 
@@ -180,7 +184,7 @@ fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
 fibers.facility           aggregate for compound facilities
 fibers.facility.*         Sleep, Lifetime, Stream and policy facilities
 fibers.host               host adapter helpers
-fibers.host.*             standalone host adapters: pure Lua, nixio/Linux, luaposix, LuaJIT/Linux, cffi/Linux
+fibers.host.*             standalone/test host adapters: pure Lua, manual, nixio/Linux, luaposix, LuaJIT/Linux, cffi/Linux
 fibers.runner             standalone Runtime runner over a host
 fibers.kernel             aggregate for advanced runtime/embedding use
 fibers.kernel.*           solver, resources, commit and consequence machinery
@@ -221,6 +225,7 @@ lua examples/07_lifetime_handoff.lua
 lua examples/08_sleep.lua
 lua examples/09_memory_stream.lua
 lua examples/10_stream_protocol_handoff.lua
+lua examples/11_pumped_stream_fake_backend.lua
 ```
 
 Assertion-heavy semantic checks live in `tests/`.

@@ -62,7 +62,7 @@ with_host_pipe('luajit_linux:timeout-beats-unready', Common.timeout_beats_unread
 
 -- Regular files are not epollable.  The backend should preserve the old fibers
 -- policy: treat EPERM/unpollable descriptors as requested readiness, not as an
--- error readiness.  The subsequent file operation is responsible for EOF/error.
+-- separate error readiness mode.  The subsequent file operation is responsible for EOF/error.
 do
   local host = LinuxHost.new()
   local file = make_regular_file()

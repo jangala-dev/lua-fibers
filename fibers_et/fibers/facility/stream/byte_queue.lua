@@ -4,9 +4,9 @@
 -- Operations are journalled in candidate worlds. Losing branches consume no
 -- bytes, append no bytes, close no halves, and publish no wake effects.
 --
--- The committed storage is chunked.  This keeps the stream substrate suitable
--- for real streams later, while preserving a simple transactional view model:
--- speculative views copy chunk references, not the whole committed byte string.
+-- The committed storage is chunked.  Host-backed streams additionally use a
+-- committed in-flight write claim: the write pump owns bytes before calling the
+-- irreversible host write, then acknowledges accepted prefixes afterwards.
 
 local Op = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
@@ -27,6 +27,11 @@ local next_id = 0
 local INF = math.huge
 local COALESCE_LIMIT = 8192
 local COMPACT_AFTER = 32
+
+local function clone_inflight(inflight)
+  if not inflight then return nil end
+  return { id = inflight.id, bytes = inflight.bytes or '' }
+end
 
 local function clone_ops(ops)
   local out = {}
@@ -104,6 +109,7 @@ local function view_from_queue(q)
     reader_open = q.reader_open ~= false,
     read_error = q.read_error,
     write_error = q.write_error,
+    inflight = clone_inflight(q.inflight),
     version = q.version or 0,
   }
 end
@@ -202,6 +208,14 @@ local function free_capacity(view)
   return n < 0 and 0 or n
 end
 
+local function inflight_len(view)
+  return view.inflight and #(view.inflight.bytes or '') or 0
+end
+
+local function claim_id_for(q, version)
+  return tostring(q._fibers_id) .. ':claim:' .. tostring(version or q.version or 0)
+end
+
 local function apply_view_op(view, op)
   local k = op.kind
   if k == 'append' then
@@ -216,6 +230,18 @@ local function apply_view_op(view, op)
     view.read_error = op.err
   elseif k == 'write_error' then
     view.write_error = op.err
+  elseif k == 'claim' then
+    local n = op.n or #(op.bytes or '')
+    local bytes = op.bytes or peek_bytes(view, n)
+    consume_bytes(view, n)
+    view.inflight = { id = op.id, bytes = bytes }
+  elseif k == 'ack_claim' then
+    local n = op.n or 0
+    local inf = view.inflight
+    if inf then
+      local remaining = string.sub(inf.bytes or '', n + 1)
+      view.inflight = remaining ~= '' and { id = inf.id, bytes = remaining } or nil
+    end
   end
 end
 
@@ -237,6 +263,7 @@ local function state_table(q, view)
   return {
     queue = q,
     length = view.length or 0,
+    pending_length = view.length or 0,
     capacity = view.capacity,
     free = free_capacity(view),
     chunk_count = #(view.chunks or {}),
@@ -244,6 +271,9 @@ local function state_table(q, view)
     reader_open = view.reader_open,
     read_error = view.read_error,
     write_error = view.write_error,
+    inflight = clone_inflight(view.inflight),
+    inflight_length = inflight_len(view),
+    drained = (view.length or 0) == 0 and not view.inflight,
     version = view.version,
   }
 end
@@ -315,6 +345,7 @@ function ByteQueueKind.project(q, rec, query)
   if query == 'writer_open' then return v.writer_open, true end
   if query == 'reader_open' then return v.reader_open, true end
   if query == 'closed' then return (not v.writer_open) and (not v.reader_open), true end
+  if query == 'drained' then return (v.length or 0) == 0 and not v.inflight, true end
   return nil, false
 end
 
@@ -345,6 +376,24 @@ local function validate_and_apply_to_view(v, op)
   elseif k == 'write_error' then
     v.write_error = op.err
     return true
+  elseif k == 'claim' then
+    if v.write_error then return false, v.write_error end
+    if v.inflight then return false, 'claim-already-in-flight' end
+    local n = op.n or #(op.bytes or '')
+    if n > (v.length or 0) then return false, 'underflow' end
+    local bytes = op.bytes or peek_bytes(v, n)
+    consume_bytes(v, n)
+    v.inflight = { id = op.id, bytes = bytes }
+    return true
+  elseif k == 'ack_claim' then
+    local inf = v.inflight
+    if not inf then return false, 'no-inflight-claim' end
+    if inf.id ~= op.id then return false, 'stale-claim' end
+    local n = op.n or 0
+    if n > #(inf.bytes or '') then return false, 'claim-ack-too-large' end
+    local remaining = string.sub(inf.bytes or '', n + 1)
+    v.inflight = remaining ~= '' and { id = inf.id, bytes = remaining } or nil
+    return true
   end
   return false, 'unknown-byte-queue-op'
 end
@@ -363,6 +412,7 @@ function ByteQueueKind.prepare(q, rec, resolve)
     if op.bytes ~= nil then op.bytes = resolve(op.bytes) end
     prepared_ops[#prepared_ops + 1] = op
     local before_len = v.length or 0
+    local before_inflight = v.inflight ~= nil
     local before_writer = v.writer_open
     local before_reader = v.reader_open
     local ok, why = validate_and_apply_to_view(v, op)
@@ -370,7 +420,10 @@ function ByteQueueKind.prepare(q, rec, resolve)
     changed = true
     if op.kind == 'append' and #op.bytes > 0 then readable = true end
     if op.kind == 'consume' and (op.n or 0) > 0 then writable = true end
+    if op.kind == 'claim' and (op.n or 0) > 0 then writable = true end
+    if op.kind == 'ack_claim' then drained = drained or ((v.length or 0) == 0 and not v.inflight); writable = true end
     if before_len > 0 and (v.length or 0) == 0 then drained = true end
+    if before_inflight and not v.inflight and (v.length or 0) == 0 then drained = true end
     if op.kind == 'close_writer' and before_writer then readable = true end
     if op.kind == 'close_reader' and before_reader then writable = true end
     if op.kind == 'read_error' then readable = true end
@@ -389,6 +442,7 @@ function ByteQueueKind.apply(prepared, _log)
     head_chunk = q.head_chunk or 1,
     head_offset = q.head_offset or 1,
     length = q.length or 0,
+    inflight = clone_inflight(q.inflight),
   }
   for i = 1, #(prepared.ops or {}) do
     local op = prepared.ops[i]
@@ -404,12 +458,24 @@ function ByteQueueKind.apply(prepared, _log)
       q.read_error = op.err
     elseif op.kind == 'write_error' then
       q.write_error = op.err
+    elseif op.kind == 'claim' then
+      local n = op.n or #(op.bytes or '')
+      local bytes = op.bytes or peek_bytes(qbuf, n)
+      consume_bytes(qbuf, n)
+      qbuf.inflight = { id = op.id, bytes = bytes }
+    elseif op.kind == 'ack_claim' then
+      local inf = qbuf.inflight
+      if inf then
+        local remaining = string.sub(inf.bytes or '', (op.n or 0) + 1)
+        qbuf.inflight = remaining ~= '' and { id = inf.id, bytes = remaining } or nil
+      end
     end
   end
   q.chunks = qbuf.chunks
   q.head_chunk = qbuf.head_chunk
   q.head_offset = qbuf.head_offset
   q.length = qbuf.length
+  q.inflight = qbuf.inflight
   q.version = (q.version or 0) + 1
 end
 
@@ -518,9 +584,62 @@ end
 local function eval_empty(q, _payload, ctx)
   local v = ctx_view(ctx, q)
   local version = observe_version(ctx, q)
-  if (v.length or 0) == 0 then return Result.cands({ read_only(q, version, true) }) end
+  if (v.length or 0) == 0 and not v.inflight then return Result.cands({ read_only(q, version, true) }) end
   if v.write_error then return Result.cands({ read_only(q, version, nil, v.write_error) }) end
   return wait('stream:drained', q, { op = 'empty' })
+end
+
+local function eval_free_capacity(q, payload, ctx)
+  local max = as_nonneg_int(payload.max, 4096, 'stream capacity request')
+  local v = ctx_view(ctx, q)
+  local version = observe_version(ctx, q)
+  if v.read_error then return Result.cands({ read_only(q, version, nil, v.read_error) }) end
+  if not v.reader_open then return Result.cands({ read_only(q, version, nil, 'reader_closed') }) end
+  local free = free_capacity(v)
+  if free == INF then return Result.cands({ read_only(q, version, max) }) end
+  if free > 0 then return Result.cands({ read_only(q, version, math.min(free, max)) }) end
+  return wait('stream:writable', q, { op = 'free_capacity', need = 'capacity' })
+end
+
+local function eval_claim(q, payload, ctx)
+  local max = as_nonneg_int(payload.max, 4096, 'stream claim size')
+  local v = ctx_view(ctx, q)
+  local version = observe_version(ctx, q)
+  if v.write_error then return Result.cands({ read_only(q, version, nil, v.write_error) }) end
+  if v.inflight then return Result.cands({ read_only(q, version, v.inflight.id, v.inflight.bytes) }) end
+  if (v.length or 0) > 0 then
+    local n = math.min(v.length or 0, max)
+    local bytes = peek_bytes(v, n)
+    local id = claim_id_for(q, version)
+    local c = Candidate.new(OpPack(id, bytes))
+    add_op(c, q, { kind = 'claim', id = id, n = n, bytes = bytes }, version)
+    return Result.cands({ c })
+  end
+  if not v.writer_open then return Result.cands({ read_only(q, version, nil, 'closed_and_drained') }) end
+  return wait('stream:pump-output', q, { op = 'claim_for_write' })
+end
+
+local function eval_ack_claim(q, payload, ctx)
+  local n = as_nonneg_int(payload.n, 0, 'stream claim acknowledgement')
+  local v = ctx_view(ctx, q)
+  local version = observe_version(ctx, q)
+  if not v.inflight then return Result.cands({ read_only(q, version, nil, 'no_inflight_claim') }) end
+  if v.inflight.id ~= payload.id then return Result.cands({ read_only(q, version, nil, 'stale_claim') }) end
+  if n > #(v.inflight.bytes or '') then return Result.cands({ read_only(q, version, nil, 'claim_ack_too_large') }) end
+  local c = Candidate.new(OpPack(true))
+  add_op(c, q, { kind = 'ack_claim', id = payload.id, n = n }, version)
+  return Result.cands({ c })
+end
+
+local function eval_fail(q, kind, payload, ctx)
+  local v = ctx_view(ctx, q)
+  local version = observe_version(ctx, q)
+  local err = payload.err or (kind == 'read_error' and 'read_error' or 'write_error')
+  if kind == 'read_error' and v.read_error then return Result.cands({ read_only(q, version, true) }) end
+  if kind == 'write_error' and v.write_error then return Result.cands({ read_only(q, version, true) }) end
+  local c = Candidate.new(OpPack(true))
+  add_op(c, q, { kind = kind, err = err }, version)
+  return Result.cands({ c })
 end
 
 function ByteQueueKind.eval(q, payload, ctx)
@@ -532,6 +651,11 @@ function ByteQueueKind.eval(q, payload, ctx)
   elseif op == 'close_writer' then return eval_close(q, 'writer', payload, ctx)
   elseif op == 'close_reader' then return eval_close(q, 'reader', payload, ctx)
   elseif op == 'empty' then return eval_empty(q, payload, ctx)
+  elseif op == 'free_capacity' then return eval_free_capacity(q, payload, ctx)
+  elseif op == 'claim_for_write' then return eval_claim(q, payload, ctx)
+  elseif op == 'ack_claim' then return eval_ack_claim(q, payload, ctx)
+  elseif op == 'fail_read' then return eval_fail(q, 'read_error', payload, ctx)
+  elseif op == 'fail_write' then return eval_fail(q, 'write_error', payload, ctx)
   elseif op == 'state' then
     local version = observe_version(ctx, q)
     local v = ctx_view(ctx, q)
@@ -553,7 +677,7 @@ function ByteQueueKind.summary(payload, out)
   out.closed = false
   local op = payload and payload.op
   if op and string.sub(op, 1, 7) == 'consume' then out.reads = true end
-  if op == 'append' then out.writes = true end
+  if op == 'append' or op == 'claim_for_write' or op == 'ack_claim' then out.writes = true end
 end
 
 function ByteQueue.new(opts)
@@ -572,6 +696,7 @@ function ByteQueue.new(opts)
     reader_open = opts.reader_open ~= false,
     read_error = opts.read_error,
     write_error = opts.write_error,
+    inflight = nil,
     version = 0,
     name = opts.name or id,
     _fibers_id = id,
@@ -621,12 +746,41 @@ function ByteQueue:empty_op()
   return Op._resource(self, ByteQueueKind, { op = 'empty' })
 end
 
+function ByteQueue:drained_op()
+  return self:empty_op()
+end
+
+function ByteQueue:free_capacity_op(max)
+  return Op._resource(self, ByteQueueKind, { op = 'free_capacity', max = as_nonneg_int(max, 4096, 'stream capacity request') })
+end
+
+function ByteQueue:claim_for_write_op(max)
+  return Op._resource(self, ByteQueueKind, { op = 'claim_for_write', max = as_nonneg_int(max, 4096, 'stream claim size') })
+end
+
+function ByteQueue:ack_claim_op(id, n)
+  if type(id) ~= 'string' then error('stream claim acknowledgement expects a claim id', 2) end
+  return Op._resource(self, ByteQueueKind, { op = 'ack_claim', id = id, n = as_nonneg_int(n, 0, 'stream claim acknowledgement') })
+end
+
+function ByteQueue:fail_read_op(err)
+  return Op._resource(self, ByteQueueKind, { op = 'fail_read', err = err or 'read_error' })
+end
+
+function ByteQueue:fail_write_op(err)
+  return Op._resource(self, ByteQueueKind, { op = 'fail_write', err = err or 'write_error' })
+end
+
 function ByteQueue:state_op()
   return Op._resource(self, ByteQueueKind, { op = 'state' })
 end
 
 function ByteQueue:debug_data()
   return buffer_to_string(view_from_queue(self))
+end
+
+function ByteQueue:debug_inflight()
+  return self.inflight and self.inflight.bytes or nil
 end
 
 function ByteQueue:changed_op(version)

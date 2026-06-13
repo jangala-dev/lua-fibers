@@ -139,12 +139,24 @@ function Runtime:queue_source(name)
   }
 end
 
-function Runtime:readiness_source(key, mode, name)
-  local source = Source.readiness(key, mode, name)
-  return source, {
-    set_ready = function(_feed, a, b) return self:arrive(source, a, b) end,
-    clear_ready = function(_feed, m) return self:_clear_source(source, m) end,
-  }
+function Runtime:readiness(key, name)
+  local source = Source.readiness(key, nil, name)
+  local feed = {}
+  function feed:ready(mode, value)
+    if mode == nil then mode = source.mode or 'read' end
+    return self._rt:arrive(source, mode, value == nil and true or value)
+  end
+  function feed:readable(value)
+    return self._rt:arrive(source, 'read', value == nil and true or value)
+  end
+  function feed:writable(value)
+    return self._rt:arrive(source, 'write', value == nil and true or value)
+  end
+  function feed:clear(mode)
+    return self._rt:_clear_source(source, mode)
+  end
+  feed._rt = self
+  return source, feed
 end
 
 function Runtime:_trace(kind, fields)
