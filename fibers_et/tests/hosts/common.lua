@@ -136,4 +136,30 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
   Common.assert_eq(winner, 'timeout', name .. ' should choose timeout when pipe is unready')
 end
 
+
+function Common.handle_stream_pipe_smoke(name, host, Fd)
+  local fibers = require('fibers')
+  local Handle = require('fibers.host.handle')
+  local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
+  Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
+  local handle = Handle.duplex(r, w, { host = host, name = name .. ':duplex' })
+  local rt = fibers.Runtime.new({ host = host })
+  local region = fibers.Region.new(name .. ':region')
+  local got, flushed, stream
+
+  rt:spawn_raw(function()
+    stream = rt:perform(fibers.Stream.open_handle_op(region, handle, { name = name .. ':stream', capacity = 64, chunk_size = 16 }))
+    rt:perform(stream:writer():write_op('hello'))
+    flushed = rt:perform(stream:writer():flush_op())
+    got = rt:perform(stream:reader():read_exactly_op(5))
+    rt:perform(stream:shutdown_op('test complete'))
+  end, name .. ':flow')
+
+  local st = Runner.run(rt, { host = host, max_iterations = 200 })
+  Common.assert_status(st, 'found', name .. ' stream pipe runner')
+  Common.assert_eq(flushed, true, name .. ' stream flush should succeed')
+  Common.assert_eq(got, 'hello', name .. ' stream should loop bytes through pipe')
+  handle:close('test')
+end
+
 return Common

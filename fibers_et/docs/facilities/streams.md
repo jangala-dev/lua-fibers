@@ -7,10 +7,12 @@ Inlet  ->  Flow  ->  Outlet
 ```
 
 A `Flow` is a directional byte medium.  Its core resource is a reservoir of
-byte segments.  Segments may be queued or leased.  Capacity is an invariant over
-all retained segments.  Input and output endpoint state governs whether bytes may
+retained bytes.  Bytes may be queued or leased.  Capacity is an invariant over
+all retained bytes.  Input and output endpoint state governs whether bytes may
 enter or leave.  The current reservoir is backed by a pure Lua rope of immutable
-string chunks rather than by one repeatedly concatenated string.
+string chunks rather than by one repeatedly concatenated string.  Text and
+protocol awareness, such as line endings and delimiters, lives above the
+reservoir in algebraically derived Outlet operations.
 
 A bidirectional stream is not primitive:
 
@@ -33,15 +35,24 @@ local flow = Flow.new({ capacity = 4096 })
 local inlet = flow:inlet()
 local outlet = flow:outlet()
 
-inlet:write_op(bytes)
+inlet:write_op(bytes)          -- familiar stream name
 inlet:write_some_op(bytes)
-inlet:flush_op()
+inlet:append_op(bytes)         -- algebraic Flow alias
+inlet:append_some_op(bytes)
+inlet:flush_op()               -- familiar alias
+inlet:drain_op()               -- preferred byte-fate name
 inlet:shutdown_op(reason)
 
 outlet:read_some_op(max)
 outlet:read_exactly_op(n)
+outlet:peek_op(n)
+outlet:peek_some_op(max)
+outlet:drop_op(n)
+outlet:read_until_op(term, opts)
+outlet:read_including_op(term, opts)
 outlet:read_line_op(opts)
 outlet:read_all_op({ max = n })
+outlet:splice_to(inlet, max)
 outlet:shutdown_op(reason)
 ```
 
@@ -107,14 +118,30 @@ attached.
 The compound itself does not expose byte operations.  Use `stream:reader()` and
 `stream:writer()`.
 
+A host-backed stream can be opened directly from any object satisfying the
+`HostHandle` contract:
+
+```lua
+local handle = fibers.host.Handle.fake({ host = host, key = 'demo' })
+local stream = fibers.perform(Stream.open_handle_op(region, handle, {
+  name = 'handle-stream',
+}))
+```
+
+`fibers.facility.stream.backend.handle` adapts a HostHandle into the backend
+contract below.  Real fd handles are obtained from the selected host family, for
+example `fibers.host.luajit_linux().fd`, `fibers.host.luaposix().fd`, or
+`fibers.host.nixio().fd`.
+
+
 ## Flow internals
 
 A `Flow` is a small compound over two kinds of fact:
 
 ```text
 Reservoir
-  queued byte segments
-  leased byte segments
+  queued bytes
+  leased bytes
   capacity invariant over retained bytes
 
 Input endpoint
@@ -152,7 +179,7 @@ failed, or settled.  If the consumer/output side closes, or a backend write
 fails, retained queued bytes and active leases are settled in the same committed
 transition that records that terminal fact.  This implementation deliberately permits only one active
 lease per reservoir; that conservative rule preserves stream ordering until a
-later ordered multi-lease segment model is needed.
+later ordered multi-lease model is needed.
 
 The public `Inlet` and `Outlet` operations compose these facts.  Losing
 alternatives append no bytes, consume no bytes, and create no leases.
@@ -173,15 +200,38 @@ long reads are observational until commit
 leased bytes still reserve capacity
 ```
 
-`read_some_op`, `read_exactly_op`, `read_line_op` and `read_all_op` are public
-result shapes over one internal read core.  The core is a choice over precise
-transactional facts: reservoir byte facts, input endpoint terminal facts, and
-output endpoint open facts.
+`read_some_op`, `read_exactly_op`, `read_all_op`, `peek_op`, `drop_op`,
+`read_until_op`, `read_including_op` and `splice_to` are public result shapes
+over the byte reservoir and endpoint facts.
 
-`read_line_op` and `read_all_op` may wait while the committed reservoir grows.
-They inspect committed bytes but consume nothing until their selected world
-commits.  If such an operation loses a choice, is cancelled before commit, or is
-abandoned by fallback, the bytes remain in the flow.
+Delimiter helpers are intentionally above the reservoir.  `read_until_op(term)`
+consumes through `term` and returns the prefix before `term`;
+`read_including_op(term)` consumes through `term` and returns the bytes including
+`term`.  `read_line_op` is a small consumer of those helpers, normally using
+`\n` and returning a final unterminated line on EOF.  The default delimiter partial
+policy reports `nil, eof, partial` and consumes the terminal partial; callers may
+choose `partial = 'return'` or `partial = 'discard'`.  `read_all_op` is the sibling
+operation bounded by terminal state rather than by a byte terminator.
+
+`peek_op` and `peek_some_op` observe committed bytes without consuming them, even
+when the selected world commits.  Internally, the Flow layer builds a speculative
+read view: observed bytes or terminal error, plus the reservoir prefix length to
+free if a consuming operation is selected.  Reads are deliberately derived from
+that view followed by committed reservoir prefix freeing.  `drop_op` is the same
+idea with the observed bytes discarded.  `splice_to` is algebraically derived as
+view destination-write source-free: destination write failure leaves the source
+untouched, while a successful splice frees the source prefix and appends it to
+the destination Inlet in one committed world.
+
+Long reads and delimiter reads may wait while the committed reservoir grows.
+They inspect committed bytes but free no reservoir prefix until their selected
+world commits.  If such an operation loses a choice, is cancelled before commit,
+or is abandoned by fallback, the bytes remain in the flow.
+
+The reservoir itself intentionally has no read policy.  It stores retained bytes,
+exposes prefixes, frees exact prefixes, leases exact prefixes to pumps, and
+records fate.  Operations such as exact reads, delimiter reads, drops and splices
+are Flow-level compositions over those smaller reservoir facts.
 
 ## Write-side semantics
 
@@ -278,7 +328,7 @@ Inlet
   transferable authority to produce bytes
 
 Outlet
-  transferable authority to consume or lease bytes
+  transferable authority to read, free or lease bytes
 
 Host stream compound
   owns backend, two flows, pump obligations and settlement state

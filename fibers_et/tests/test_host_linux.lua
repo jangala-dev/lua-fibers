@@ -15,7 +15,7 @@ do
   assert_truthy(type(ffi_host.is_supported) == 'function', 'luajit host should expose is_supported')
   assert_truthy(type(ffi_host.new) == 'function', 'luajit host should expose new')
 
-  local ok2, nixio_host = pcall(require, 'fibers.host.nixio_linux')
+  local ok2, nixio_host = pcall(require, 'fibers.host.nixio')
   assert_truthy(ok2, 'nixio linux host module should be require-able')
   assert_truthy(type(nixio_host.is_supported) == 'function', 'nixio host should expose is_supported')
   assert_truthy(type(nixio_host.new) == 'function', 'nixio host should expose new')
@@ -54,7 +54,7 @@ end
 -- backend is not available; is_supported on the module is the probe.
 do
   assert_truthy(type(Host.luajit_linux) == 'function', 'Host.luajit_linux helper should exist')
-  assert_truthy(type(Host.nixio_linux) == 'function', 'Host.nixio_linux helper should exist')
+  assert_truthy(type(Host.nixio) == 'function', 'Host.nixio helper should exist')
   assert_truthy(type(Host.luaposix) == 'function', 'Host.luaposix helper should exist')
   assert_truthy(type(Host.cffi_linux) == 'function', 'Host.cffi_linux helper should exist')
 end

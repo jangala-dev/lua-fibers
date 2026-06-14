@@ -10,7 +10,7 @@ local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
   return {
     is_supported = function() return false end,
-    new = function() error('fibers.host.nixio_linux requires nixio', 2) end,
+    new = function() error('fibers.host.nixio requires nixio', 2) end,
   }
 end
 
@@ -70,10 +70,11 @@ local function collect_readiness(waits)
     if key == nil then
       unsupported = true
     else
-      local rec = by_key[key]
+      local poll_key = (type(key) == 'table' and (key.handle or key.nixio)) or key
+      local rec = by_key[poll_key]
       if not rec then
-        rec = { key = key, events = nil, waits = {} }
-        by_key[key] = rec
+        rec = { key = poll_key, events = nil, waits = {} }
+        by_key[poll_key] = rec
         fds[#fds + 1] = rec
       end
       local mode = w.mode or 'read'
@@ -93,14 +94,18 @@ end
 
 function Nixio.new(opts)
   opts = opts or {}
-  if not Nixio.is_supported() then error('fibers.host.nixio_linux: required nixio functions are unavailable', 2) end
+  if not Nixio.is_supported() then error('fibers.host.nixio: required nixio functions are unavailable', 2) end
   local self = setmetatable({
-    kind = 'nixio_linux',
+    kind = 'nixio',
+    name = 'nixio',
+    family = 'nixio',
     on_wait = opts.on_wait,
     on_wake = opts.on_wake,
     on_unsupported = opts.on_unsupported,
   }, Nixio)
   self.now = function(_rt) return monotonic() end
+  self.fd = require('fibers.host.fd_nixio')
+  self.capabilities = { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
   return self
 end
 

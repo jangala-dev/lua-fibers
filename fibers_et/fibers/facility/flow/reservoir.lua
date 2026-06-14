@@ -22,7 +22,6 @@ local Wait = require('fibers.kernel.wait')
 local Versioned = require('fibers.kernel.resources.versioned')
 local Errors = require('fibers.facility.flow.errors')
 local Rope = require('fibers.facility.flow.rope')
-local Segment = require('fibers.facility.flow.segment')
 local Lease = require('fibers.facility.flow.lease')
 
 local OpPack = Op._pack
@@ -35,7 +34,6 @@ local INF = 1/0
 -- Validation ----------------------------------------------------------------
 
 local function as_bytes(bytes)
-  if Segment.is(bytes) then return Segment.bytes(bytes) end
   if type(bytes) ~= 'string' then error('Flow bytes must be a string', 3) end
   return bytes
 end
@@ -52,12 +50,6 @@ local function as_pos_int(n, default, label)
   n = as_nonneg_int(n, default, label)
   if n <= 0 then error((label or 'Flow byte count') .. ' must be positive', 3) end
   return n
-end
-
-local function as_sep(sep)
-  sep = sep or '\n'
-  if type(sep) ~= 'string' or sep == '' then error('Flow line separator must be a non-empty string', 3) end
-  return sep
 end
 
 local function as_limit(n, label)
@@ -139,7 +131,7 @@ end
 local function apply_op(st, op)
   if op.kind == 'append' then
     st.rope:append(op.bytes or '')
-  elseif op.kind == 'consume' then
+  elseif op.kind == 'free' then
     st.rope:take(math.min(op.n or 0, st.rope:length()))
   elseif op.kind == 'lease' then
     local n = math.min(op.n or 0, st.rope:length())
@@ -211,11 +203,14 @@ local function wake_set(res)
   return Versioned.wake_set('flow:reservoir:changed', res._fibers_id, { reservoir = res })
 end
 
-local function commit_consume(res, version, st, n)
-  local bytes = st.rope:peek(n)
-  local c = Candidate.new(OpPack(bytes))
-  note(c, res, version, { kind = 'consume', n = n })
+local function commit_free(res, version, n)
+  local c = Candidate.new(OpPack(true, n))
+  note(c, res, version, { kind = 'free', n = n })
   return Result.cands({ c })
+end
+
+local function commit_peek(res, version, st, n)
+  return ro(res, version, st.rope:peek(n), inspect(res, st))
 end
 
 local function commit_append(res, version, bytes)
@@ -224,16 +219,6 @@ local function commit_append(res, version, bytes)
   local c = Candidate.new(OpPack(#bytes))
   note(c, res, version, { kind = 'append', bytes = bytes })
   return Result.cands({ c })
-end
-
-local function line_fact(st, sep, limit, include_sep)
-  local data = st.rope:tostring()
-  local pos = string.find(data, sep, 1, true)
-  local prefix_len = pos and (pos - 1) or #data
-  if limit ~= nil and prefix_len > limit then return nil, Errors.LINE_TOO_LONG end
-  if not pos then return nil, nil, false end
-  local consume_n = pos + #sep - 1
-  return { consume_n = consume_n, value_n = include_sep and consume_n or pos - 1 }, nil, true
 end
 
 local function lease_handle(res, id, l)
@@ -289,7 +274,7 @@ function ReservoirKind.prepare(res, rec, _resolve)
       if lease_count(st.leases) > 0 then return nil, Errors.LEASE_ALREADY_ACTIVE end
       if queued_length(st) < (op.n or 0) then return nil, Errors.UNDERFLOW end
     end
-    if op.kind == 'consume' and queued_length(st) < (op.n or 0) then return nil, Errors.UNDERFLOW end
+    if op.kind == 'free' and queued_length(st) < (op.n or 0) then return nil, Errors.UNDERFLOW end
     if op.kind == 'ack' then
       local l = st.leases[op.id]
       if not l then return nil, Errors.NO_LEASE end
@@ -332,50 +317,29 @@ function ReservoirKind.eval(res, payload, ctx)
     local n = math.min(#bytes, free_bytes(st))
     if n <= 0 and #bytes > 0 then return wait(res, { op = 'append_some', n = #bytes }) end
     return commit_append(res, version, string.sub(bytes, 1, n))
-  elseif op == 'free_some' then
+  elseif op == 'capacity_some' then
     local n = math.min(payload.max or 1, free_bytes(st))
     if n > 0 then return ro(res, version, n) end
-    return wait(res, { op = 'free_some', max = payload.max })
-  elseif op == 'consume' then
-    local n = as_nonneg_int(payload.n, 0, 'Flow consume size')
-    if queued_length(st) < n then return wait(res, { op = 'consume', n = n }) end
-    return commit_consume(res, version, st, n)
-  elseif op == 'consume_some' then
-    local max = as_pos_int(payload.max, 4096, 'Flow consume_some size')
+    return wait(res, { op = 'capacity_some', max = payload.max })
+  elseif op == 'free' then
+    local n = as_nonneg_int(payload.n, 0, 'Flow free size')
+    if queued_length(st) < n then return wait(res, { op = 'free', n = n }) end
+    return commit_free(res, version, n)
+  elseif op == 'peek_some' then
+    local max = as_pos_int(payload.max, 4096, 'Flow peek_some size')
     local n = math.min(max, queued_length(st))
-    if n <= 0 then return wait(res, { op = 'consume_some', max = max }) end
-    return commit_consume(res, version, st, n)
-  elseif op == 'consume_exactly' then
-    local n = as_nonneg_int(payload.n, 0, 'Flow exact consume size')
-    if n == 0 then return ro(res, version, '') end
-    if queued_length(st) < n then return wait(res, { op = 'consume_exactly', n = n }) end
-    return commit_consume(res, version, st, n)
-  elseif op == 'consume_short' then
-    local n = as_nonneg_int(payload.n, 0, 'Flow short consume size')
-    local available = queued_length(st)
-    if available >= n then return wait(res, { op = 'consume_short', n = n }) end
-    return commit_consume(res, version, st, available)
-  elseif op == 'consume_available_within' then
-    local max = as_limit(payload.max, 'Flow consume_available limit')
-    local available = queued_length(st)
-    if max ~= nil and available > max then return ro(res, version, nil, Errors.TOO_LARGE) end
-    return commit_consume(res, version, st, available)
-  elseif op == 'find_line' then
-    local sep = as_sep(payload.sep)
-    local fact, err, hit = line_fact(st, sep, as_limit(payload.limit, 'Flow line limit'), payload.include_sep == true)
-    if err then return ro(res, version, nil, err) end
-    if hit then return ro(res, version, fact) end
-    return wait(res, { op = 'find_line', sep = sep, limit = payload.limit })
-  elseif op == 'consume_unmatched_line' then
-    local sep = as_sep(payload.sep)
-    local fact, err, hit = line_fact(st, sep, as_limit(payload.limit, 'Flow line limit'), payload.include_sep == true)
-    if err then return ro(res, version, nil, err) end
-    if hit then return wait(res, { op = 'consume_unmatched_line', sep = sep }) end
-    return commit_consume(res, version, st, queued_length(st))
-  elseif op == 'too_large' then
-    local max = as_limit(payload.max, 'Flow too_large limit')
-    if max ~= nil and queued_length(st) > max then return ro(res, version, true) end
-    return wait(res, { op = 'too_large', max = max })
+    if n <= 0 then return wait(res, { op = 'peek_some', max = max }) end
+    return commit_peek(res, version, st, n)
+  elseif op == 'peek_exactly' then
+    local n = as_nonneg_int(payload.n, 0, 'Flow exact peek size')
+    if n == 0 then return ro(res, version, '', inspect(res, st)) end
+    if queued_length(st) < n then return wait(res, { op = 'peek_exactly', n = n }) end
+    return commit_peek(res, version, st, n)
+  elseif op == 'peek_available' then
+    local max = as_limit(payload.max, 'Flow peek_available limit')
+    local n = queued_length(st)
+    if max ~= nil and n > max then n = max end
+    return commit_peek(res, version, st, n)
   elseif op == 'empty' then
     if queued_length(st) == 0 and leased_length(st.leases) == 0 then return ro(res, version, true) end
     return wait(res, { op = 'empty' })
@@ -464,19 +428,15 @@ end
 
 function Reservoir:append_op(bytes) return Op._resource(self, ReservoirKind, { op = 'append', bytes = as_bytes(bytes or '') }) end
 function Reservoir:append_some_op(bytes) return Op._resource(self, ReservoirKind, { op = 'append_some', bytes = as_bytes(bytes or '') }) end
-function Reservoir:consume_op(n) return Op._resource(self, ReservoirKind, { op = 'consume', n = as_nonneg_int(n, 0, 'Flow consume size') }) end
-function Reservoir:consume_some_op(max) return Op._resource(self, ReservoirKind, { op = 'consume_some', max = as_pos_int(max, 4096, 'Flow consume_some size') }) end
-function Reservoir:consume_exactly_op(n) return Op._resource(self, ReservoirKind, { op = 'consume_exactly', n = as_nonneg_int(n, 0, 'Flow exact consume size') }) end
-function Reservoir:consume_short_op(n) return Op._resource(self, ReservoirKind, { op = 'consume_short', n = as_nonneg_int(n, 0, 'Flow short consume size') }) end
-function Reservoir:consume_available_within_op(max) return Op._resource(self, ReservoirKind, { op = 'consume_available_within', max = as_limit(max, 'Flow consume_available limit') }) end
-function Reservoir:find_line_op(spec) spec = spec or {}; return Op._resource(self, ReservoirKind, { op = 'find_line', sep = spec.sep or '\n', include_sep = spec.include_sep == true, limit = spec.limit }) end
-function Reservoir:consume_unmatched_line_op(spec) spec = spec or {}; return Op._resource(self, ReservoirKind, { op = 'consume_unmatched_line', sep = spec.sep or '\n', include_sep = spec.include_sep == true, limit = spec.limit }) end
-function Reservoir:too_large_op(max) return Op._resource(self, ReservoirKind, { op = 'too_large', max = as_limit(max, 'Flow too_large limit') }) end
+function Reservoir:peek_some_op(max) return Op._resource(self, ReservoirKind, { op = 'peek_some', max = as_pos_int(max, 4096, 'Flow peek_some size') }) end
+function Reservoir:peek_exactly_op(n) return Op._resource(self, ReservoirKind, { op = 'peek_exactly', n = as_nonneg_int(n, 0, 'Flow exact peek size') }) end
+function Reservoir:peek_available_op(max) return Op._resource(self, ReservoirKind, { op = 'peek_available', max = as_limit(max, 'Flow peek_available limit') }) end
+function Reservoir:free_op(n) return Op._resource(self, ReservoirKind, { op = 'free', n = as_nonneg_int(n, 0, 'Flow free size') }) end
 function Reservoir:empty_op() return Op._resource(self, ReservoirKind, { op = 'empty' }) end
 function Reservoir:queued_empty_op() return Op._resource(self, ReservoirKind, { op = 'queued_empty' }) end
 function Reservoir:leases_empty_op() return Op._resource(self, ReservoirKind, { op = 'leases_empty' }) end
 function Reservoir:settle_op(reason) return Op._resource(self, ReservoirKind, { op = 'settle', reason = reason }) end
-function Reservoir:free_some_op(max) return Op._resource(self, ReservoirKind, { op = 'free_some', max = as_pos_int(max, 1, 'Flow free_some size') }) end
+function Reservoir:capacity_some_op(max) return Op._resource(self, ReservoirKind, { op = 'capacity_some', max = as_pos_int(max, 1, 'Flow capacity size') }) end
 function Reservoir:lease_some_op(owner, max) return Op._resource(self, ReservoirKind, { op = 'lease_some', owner = owner, max = as_pos_int(max, 4096, 'Flow lease size') }) end
 function Reservoir:lease_existing_op(owner) return Op._resource(self, ReservoirKind, { op = 'lease_existing', owner = owner }) end
 function Reservoir:ack_lease_op(lease, n)

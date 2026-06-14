@@ -417,21 +417,19 @@ do
 end
 
 
--- Flow internals expose byte-storage facts rather than Flow read-spec interpreters.
+-- Flow exposes delimiter helpers above the byte-only reservoir.
 do
-  local flow = Flow.new({ name = 'reservoir-read-facts', capacity = 32 })
-  local line_fact, line_bytes, short
+  local flow = Flow.new({ name = 'flow-derived-read-facts', capacity = 32 })
+  local line, tail
   local st = fibers.run(function()
     fibers.perform(flow:inlet():write_op('abc\ndef'))
-    line_fact = fibers.perform(flow.reservoir:find_line_op({ sep = '\n', include_sep = false, limit = 16 }))
-    line_bytes = fibers.perform(flow.reservoir:consume_op(line_fact.consume_n))
-    short = fibers.perform(flow.reservoir:consume_short_op(10))
+    line = fibers.perform(flow:outlet():read_until_op('\n'))
+    tail = fibers.perform(flow:outlet():read_exactly_op(3))
   end)
   assert_status(st, 'found')
-  assert_eq(line_fact.consume_n, 4)
-  assert_eq(line_fact.value_n, 3)
-  assert_eq(string.sub(line_bytes, 1, line_fact.value_n), 'abc')
-  assert_eq(short, 'def')
+  assert_eq(line, 'abc')
+  assert_eq(tail, 'def')
+  assert_nil(flow.reservoir.find_line_op, 'reservoir should not expose line-aware operations')
   assert_truthy(Flow.Lease, 'Lease should be the public name for retained byte ownership')
   assert_nil(Flow.Claim, 'pump Claim should not be part of the public Flow facility')
 end

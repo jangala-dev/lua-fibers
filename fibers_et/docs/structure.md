@@ -17,7 +17,7 @@ fibers/facility/
 
 fibers/host.lua
 fibers/host/
-  host adapter helpers and optional standalone host implementations
+  host adapter helpers, HostHandle contracts, optional fd handles, and standalone host implementations
 
 fibers/runner.lua
   standalone runner that drives Runtime:run with a host adapter
@@ -57,7 +57,7 @@ local Lifetime = require('fibers.facility.lifetime')
 local Runtime = require('fibers.kernel.runtime')
 local PureHost = require('fibers.host.pure')
 local LuaJITHost = require('fibers.host.luajit_linux')
-local NixioHost = require('fibers.host.nixio_linux')
+local NixioHost = require('fibers.host.nixio')
 ```
 
 New modules should be placed by role rather than convenience.  In particular,

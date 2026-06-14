@@ -60,4 +60,24 @@ do
   assert_truthy(Host.has_non_time_waits({ { kind = 'time', deadline = 1 }, { kind = 'source' } }))
 end
 
+
+
+-- Host selection returns complete families; fd selection remains low-level.
+do
+  local manual = Host.manual({ now = 0 })
+  assert_eq(manual.name, 'manual')
+  assert_eq(manual.family, 'manual')
+  assert_truthy(manual.capabilities and manual.capabilities.readiness, 'manual host should describe capabilities')
+
+  local pure = Host.select('pure', { now = function() return 0 end, sleep = function() return true end })
+  assert_eq(pure.name, 'pure')
+  assert_eq(pure.family, 'pure')
+
+  local available = Host.available()
+  assert_truthy(type(available) == 'table' and #available > 0, 'host.available should list selectable hosts')
+
+  local fd_registry = require('fibers.host.fd')
+  assert_truthy(type(fd_registry.select) == 'function', 'host.fd should be a registry/selector')
+end
+
 print('tests/test_host.lua: ok')

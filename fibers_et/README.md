@@ -156,15 +156,18 @@ local w = stream:writer()
 ```
 
 Inlet and Outlet `_op` methods are single-commit operations.  Losing read branches
-consume no bytes; losing write branches append no bytes; EOF and endpoint closure are
-committed state; and backpressure is retained-byte capacity.  Producer shutdown
+free no bytes; losing write branches append no bytes; `peek_op` observes without
+freeing; reads are derived from peek plus prefix-freeing; `read_until_op` and
+`read_including_op` provide delimiter-bounded reads; `splice_to` moves bytes between
+flows as one committed world; EOF and endpoint closure are committed state; and
+backpressure is retained-byte capacity.  Producer shutdown
 drains, consumer shutdown discards retained bytes, transport failure fails retained
 bytes, and flush waits for the fate of prior bytes rather than for an impossible
 acknowledgement.  The reservoir is rope-backed and currently permits one active
 lease at a time.  Stream compounds
 do not expose byte operations directly; use `stream:reader()` and `stream:writer()`.
 
-See `docs/facilities/streams.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, and `examples/13_socket_backend_contract.lua`.
+See `docs/facilities/streams.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, `examples/13_socket_backend_contract.lua`, and `examples/14_host_handle_stream.lua`.
 
 ## Effects
 
@@ -193,7 +196,7 @@ fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
 fibers.facility           aggregate for compound facilities
 fibers.facility.*         Sleep, Lifetime, Stream/Flow and policy facilities
 fibers.host               host adapter helpers
-fibers.host.*             standalone/test host adapters: pure Lua, manual, nixio/Linux, luaposix, LuaJIT/Linux, cffi/Linux
+fibers.host.*             host helpers, HostHandle/fd support, and standalone/test host adapters
 fibers.runner             standalone Runtime runner over a host
 fibers.kernel             aggregate for advanced runtime/embedding use
 fibers.kernel.*           solver, resources, commit and consequence machinery
@@ -277,7 +280,7 @@ nixio, luaposix, LuaJIT FFI and cffi available, the same commands exercise the r
 
 ```text
 pure          portable fallback; time waits only
-nixio_linux   nixio poll backend
+nixio   nixio poll backend
 luaposix      luaposix poll backend
 luajit_linux  LuaJIT FFI epoll backend
 cffi_linux    cffi epoll backend for plain Lua
@@ -291,7 +294,7 @@ unready descriptor:
 lua tests/hosts/test_all.lua
 lua tests/hosts/test_all.lua --filter nixio
 lua tests/hosts/test_pure.lua
-lua tests/hosts/test_nixio_linux.lua
+lua tests/hosts/test_nixio.lua
 lua tests/hosts/test_luaposix.lua
 lua tests/hosts/test_cffi_linux.lua
 luajit tests/hosts/test_luajit_linux.lua
@@ -328,5 +331,7 @@ docs/kernel/observation-journal.md  bounded-search observation discipline
 docs/consequences.md   typed transaction consequences / effects
 docs/facilities/sleep.md      sleep as a facility over clock sources
 docs/facilities/lifetimes.md  regions, tasks and ownership
+docs/facilities/streams.md    byte flows, stream compounds and host-pumped streams
+docs/facilities/host-handles.md host I/O handles for pumped streams
 docs/kernel/embedding.md      bounded stepping and host integration
 ```

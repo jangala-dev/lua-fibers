@@ -147,6 +147,12 @@ function Stream.open_backend_op(region, backend, opts)
   }):map(function() return hs end)
 end
 
+function Stream.open_handle_op(region, handle, opts)
+  opts = opts or {}
+  local Backend = require('fibers.facility.stream.backend.handle')
+  return Stream.open_backend_op(region, Backend.new(handle, opts), opts)
+end
+
 HostStream.reader = Duplex.reader
 HostStream.writer = Duplex.writer
 HostStream.read_flow_handle = Duplex.read_flow_handle
@@ -166,5 +172,6 @@ Stream.backend = {
   Fake = require('fibers.facility.stream.backend.fake'),
   Readiness = require('fibers.facility.stream.backend.readiness'),
   Socket = require('fibers.facility.stream.backend.socket'),
+  Handle = require('fibers.facility.stream.backend.handle'),
 }
 return Stream

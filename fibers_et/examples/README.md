@@ -25,4 +25,5 @@ The examples build up the public base kit:
 11_pumped_stream_fake_backend.lua Host-pumped stream using the fake backend
 12_readiness_stream.lua Readiness-backed fake host stream
 13_socket_backend_contract.lua Socket-shaped backend over a manual host adapter
+14_host_handle_stream.lua Generic HostHandle-backed stream over manual host
 ```

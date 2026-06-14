@@ -21,6 +21,8 @@ function Manual.new(opts)
   opts = opts or {}
   local self = setmetatable({
     kind = 'manual',
+    name = 'manual',
+    family = 'manual',
     ready = {},
     auto_advance_time = opts.auto_advance_time ~= false,
     on_wait = opts.on_wait,
@@ -30,6 +32,7 @@ function Manual.new(opts)
   }, Manual)
 
   self.now = function(_rt) return self._now end
+  self.capabilities = { time = true, readiness = true, fd = false, pipe = false }
   return self
 end
 

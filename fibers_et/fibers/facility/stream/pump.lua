@@ -40,7 +40,7 @@ function Pump.read(stream)
   while true do
     local cap_or_closed, value = masked_perform(rt, Op.named_choice({
       { 'reader_closed', flow.output:closed_op() },
-      { 'capacity', flow.reservoir:free_some_op(stream.read_chunk_size) },
+      { 'capacity', flow.reservoir:capacity_some_op(stream.read_chunk_size) },
     }))
     if cap_or_closed == 'reader_closed' then
       backend_call(backend, 'shutdown_read', 'reader_closed')

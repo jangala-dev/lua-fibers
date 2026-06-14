@@ -55,13 +55,25 @@ local function nanosleep(seconds)
   end
 end
 
+local function fd_of(key)
+  if type(key) == 'number' then return key end
+  if type(key) == 'string' and tonumber(key) then return tonumber(key) end
+  if type(key) == 'table' then
+    if type(key.fd) == 'number' then return key.fd end
+    if type(key.fileno) == 'function' then
+      local ok, fd = pcall(function() return key:fileno() end)
+      if ok and fd ~= nil then return tonumber(fd) end
+    end
+  end
+  return tonumber(key)
+end
+
 local function collect_readiness(waits)
   local fds, by_fd, unsupported = {}, {}, false
   local readiness = Host.readiness_waits(waits)
   for i = 1, #readiness do
     local w = readiness[i]
-    local key = w.readiness_key
-    local fd = tonumber(key)
+    local fd = fd_of(w.readiness_key)
     if not fd then
       unsupported = true
     else
@@ -91,11 +103,15 @@ function Posix.new(opts)
   if not Posix.is_supported() then error('fibers.host.luaposix: required luaposix functions are unavailable', 2) end
   local self = setmetatable({
     kind = 'luaposix',
+    name = 'luaposix',
+    family = 'numeric-fd',
     on_wait = opts.on_wait,
     on_wake = opts.on_wake,
     on_unsupported = opts.on_unsupported,
   }, Posix)
   self.now = function(_rt) return monotonic() end
+  self.fd = require('fibers.host.fd_luaposix')
+  self.capabilities = { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
   return self
 end
 

@@ -64,7 +64,7 @@ Optional Linux hosts implement the same contract:
 ```lua
 local host = require('fibers.host.luajit_linux').new() -- LuaJIT FFI, nanosleep, epoll
 local host = require('fibers.host.cffi_linux').new()   -- cffi, nanosleep, epoll
-local host = require('fibers.host.nixio_linux').new()  -- nixio, nanosleep, poll
+local host = require('fibers.host.nixio').new()  -- nixio, nanosleep, poll
 local host = require('fibers.host.luaposix').new()     -- luaposix, nanosleep, poll
 ```
 
@@ -72,7 +72,7 @@ The built-in host matrix is:
 
 ```text
 pure          portable fallback; time waits only
-nixio_linux   nixio poll backend
+nixio   nixio poll backend
 luaposix      luaposix poll backend
 luajit_linux  LuaJIT FFI epoll backend
 cffi_linux    cffi epoll backend for plain Lua
@@ -89,7 +89,7 @@ combined host runner:
 lua tests/hosts/test_all.lua
 lua tests/hosts/test_all.lua --filter nixio
 lua tests/hosts/test_pure.lua
-lua tests/hosts/test_nixio_linux.lua
+lua tests/hosts/test_nixio.lua
 lua tests/hosts/test_luaposix.lua
 lua tests/hosts/test_cffi_linux.lua
 luajit tests/hosts/test_luajit_linux.lua

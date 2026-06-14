@@ -27,6 +27,8 @@ function Pure.new(opts)
   local sleep = opts.sleep or default_sleep
   local self = setmetatable({
     kind = 'pure',
+    name = 'pure',
+    family = 'pure',
     on_wait = opts.on_wait,
     on_wake = opts.on_wake,
     on_unsupported = opts.on_unsupported,
@@ -40,6 +42,7 @@ function Pure.new(opts)
     return now()
   end
 
+  self.capabilities = { time = true, readiness = false, fd = false, pipe = false }
   return self
 end
 

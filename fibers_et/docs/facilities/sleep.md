@@ -72,7 +72,7 @@ fibre resumes
 The example uses the pure Lua host.  That host is deliberately limited: it uses
 `os.time` by default for the clock and `os.execute("sleep N")` for time waits.
 It does not support polling or arbitrary host events.  The optional Linux hosts
-`fibers.host.luajit_linux` and `fibers.host.nixio_linux` provide more precise
+`fibers.host.luajit_linux` and `fibers.host.nixio` provide more precise
 blocking and readiness support without changing `sleep_op` itself.
 
 ## Observation journal
