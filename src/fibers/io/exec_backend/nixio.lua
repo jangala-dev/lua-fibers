@@ -26,6 +26,7 @@ local poller  = require 'fibers.io.poller'
 local runtime = require 'fibers.runtime'
 local file_io = require 'fibers.io.file'
 local stdio   = require 'fibers.io.exec_backend.stdio'
+local reaper_common = require 'fibers.io.exec_backend.reaper_common'
 
 local ok, nixio = pcall(require, 'nixio')
 if not ok or not nixio then
@@ -203,7 +204,7 @@ local function child_exec(child_spec, child_only, parent_fds, sentinel_w)
 end
 
 ----------------------------------------------------------------------
--- Backend state helpers and parsing
+-- Parent-side reaper helpers
 ----------------------------------------------------------------------
 
 ---@class NixioExecState
@@ -218,55 +219,6 @@ end
 ---@field _buf string|nil
 ---@field _have_status boolean|nil
 ---@field _reaper_reaped boolean|nil
-
-local function parse_status_line_into_state(line, state)
-	line = line:gsub('\r', '')
-	local tag, rest = line:match('^(%S+)%s*(.*)$')
-	if not tag then
-		state.err          = state.err or 'invalid status line from reaper'
-		state.exited       = true
-		state._have_status = true
-		return
-	end
-
-	if tag == 'pid' then
-		local cpid = tonumber(rest)
-		if cpid then
-			state.child_pid = cpid
-			state.pid       = cpid
-		end
-		return
-	elseif tag == 'exited' then
-		local code         = tonumber(rest) or 0
-		state.code         = code
-		state.signal       = nil
-		state.err          = state.err or nil
-		state.exited       = true
-		state._have_status = true
-		return
-	elseif tag == 'signaled' or tag == 'signalled' then
-		local sig          = tonumber(rest) or 0
-		state.code         = nil
-		state.signal       = sig
-		state.err          = state.err or nil
-		state.exited       = true
-		state._have_status = true
-		return
-	elseif tag == 'failed' then
-		local msg          = rest ~= '' and rest or 'exec backend failed'
-		state.code         = nil
-		state.signal       = nil
-		state.err          = msg
-		state.exited       = true
-		state._have_status = true
-		return
-	else
-		state.err          = state.err or ("unknown status tag '" .. tostring(tag) .. "'")
-		state.exited       = true
-		state._have_status = true
-		return
-	end
-end
 
 local function reap_reaper(state, blocking)
 	if state._reaper_reaped or not state.reaper_pid then
@@ -284,6 +236,29 @@ local function reap_reaper(state, blocking)
 		state._reaper_reaped = true
 	end
 end
+
+local function read_sentinel(fd)
+	local chunk, _ = fd:read(const.buffersize or 256)
+	if not chunk then
+		local eno = nixio.errno()
+		if eno == const.EAGAIN or eno == const.EWOULDBLOCK or eno == const.EINTR then
+			return nil, 'wait', nil
+		end
+		return nil, 'error', 'reaper sentinel closed'
+	end
+	if #chunk == 0 then
+		return nil, 'eof', nil
+	end
+	return chunk, 'data', nil
+end
+
+local reaper_ops = {
+	read_sentinel = read_sentinel,
+	close_fd      = close_fd,
+	reap_reaper   = reap_reaper,
+	kill_pid      = nil, -- filled after send_signal helpers are defined
+	default_term  = const.SIGTERM or 15,
+}
 
 ----------------------------------------------------------------------
 -- Reaper process path
@@ -365,89 +340,6 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 end
 
 ----------------------------------------------------------------------
--- Polling of sentinel in the parent
-----------------------------------------------------------------------
-
---- Non-blocking poll of the sentinel pipe.
----@param state NixioExecState
----@return boolean done, integer|nil code, integer|nil signal, string|nil err
-local function poll_state(state)
-	if state.exited then
-		return true, state.code, state.signal, state.err
-	end
-
-	if not state.sentinel then
-		-- Sentinel has gone away without a status line.
-		if not state._have_status then
-			state.exited = true
-			state.err    = state.err or 'reaper sentinel closed'
-		end
-		reap_reaper(state, true)
-		return true, state.code, state.signal, state.err
-	end
-
-	local bufsize = const.buffersize or 256
-
-	while true do
-		local chunk, _ = state.sentinel:read(bufsize)
-
-		if not chunk then
-			local eno = nixio.errno()
-			if eno == const.EAGAIN or eno == const.EWOULDBLOCK or eno == const.EINTR then
-				-- Nothing available right now.
-				break
-			end
-
-			-- Hard error; treat as completion if we do not yet have a status.
-			close_fd(state.sentinel)
-			state.sentinel = nil
-			if not state._have_status then
-				state.exited = true
-				state.err    = state.err or 'reaper sentinel closed'
-			end
-			reap_reaper(state, true)
-			break
-		end
-
-		if #chunk == 0 then
-			-- EOF: writer closed pipe.
-			close_fd(state.sentinel)
-			state.sentinel = nil
-			if not state._have_status then
-				state.exited = true
-				state.err    = state.err or 'reaper sentinel closed'
-			end
-			reap_reaper(state, true)
-			break
-		end
-
-		state._buf = (state._buf or '') .. chunk
-
-		while true do
-			local line, rest = state._buf:match('^(.-)\n(.*)$')
-			if not line then
-				break
-			end
-			state._buf = rest
-			parse_status_line_into_state(line, state)
-		end
-
-		if state.exited then
-			close_fd(state.sentinel)
-			state.sentinel = nil
-			reap_reaper(state, true)
-			break
-		end
-	end
-
-	if state.exited then
-		return true, state.code, state.signal, state.err
-	else
-		return false, nil, nil, nil
-	end
-end
-
-----------------------------------------------------------------------
 -- exec_backend.core ops
 ----------------------------------------------------------------------
 
@@ -496,19 +388,7 @@ local function spawn(spec)
 	stdio.close_child_only(child_only, close_fd)
 	close_fd(sentinel_w)
 
-	local state = {
-		reaper_pid     = reaper_pid,
-		pid            = reaper_pid, -- will be updated once child pid is known
-		child_pid      = nil,
-		sentinel       = sentinel_r,
-		exited         = false,
-		code           = nil,
-		signal         = nil,
-		err            = nil,
-		_buf           = '',
-		_have_status   = false,
-		_reaper_reaped = false,
-	}
+	local state = reaper_common.new_state(reaper_pid, sentinel_r)
 
 	-- Handshake: read sentinel until we have seen a pid line and/or a
 	-- terminal status. This guarantees child_pid is known before any
@@ -528,16 +408,7 @@ local function spawn(spec)
 			return nil, nil, 'sentinel closed during handshake'
 		end
 
-		state._buf = (state._buf or '') .. chunk
-
-		while true do
-			local line, rest = state._buf:match('^(.-)\n(.*)$')
-			if not line then
-				break
-			end
-			state._buf = rest
-			parse_status_line_into_state(line, state)
-		end
+		reaper_common.feed_status_chunk(state, chunk)
 	end
 
 	-- Switch sentinel to non-blocking for normal event-loop use.
@@ -550,59 +421,30 @@ end
 
 --- poll(state) -> done, code, signal, err
 local function poll_backend(state)
-	return poll_state(state)
+	return reaper_common.poll_state(state, reaper_ops)
 end
 
 --- register_wait(state, task, suspension, leaf_wrap) -> WaitToken
 local function register_wait(state, task, _, _)
-	if not state.sentinel then
-		-- No fd to wait on; reschedule once so that step() can see terminal state.
-		local sched = runtime.current_scheduler
-		if sched and sched.schedule then
-			sched:schedule(task)
-		end
-		return { unlink = function () return false end }
-	end
-
-	return poller.get():wait(state.sentinel, 'rd', task)
+	return reaper_common.register_wait(state, task)
 end
 
 --- Send a signal to the real child.
----@param state NixioExecState
----@param sig integer|nil
+---@param pid integer
+---@param sig integer
 ---@return boolean ok, string|nil err
-local function send_signal(state, sig)
-	sig = sig or const.SIGTERM or 15
-
-	-- If already finished, nothing to do.
-	if state.exited then
-		return true, nil
-	end
-
-	-- Process any queued sentinel data (should not normally change
-	-- child_pid, as the handshake has already seen the pid line).
-	poll_state(state)
-
-	if state.exited then
-		return true, nil
-	end
-
-	local target = state.child_pid
-	if not target then
-		-- As a last resort, fall back to the reaper pid; this should be
-		-- unreachable in normal operation because the handshake ensures
-		-- child_pid is known.
-		target = state.reaper_pid or state.pid
-	end
-	if not target then
-		return false, 'no child or reaper pid available'
-	end
-
-	local ok1, err = nixio.kill(target, sig)
+local function kill_pid(pid, sig)
+	local ok1, err = nixio.kill(pid, sig)
 	if not ok1 then
 		return false, err or errno_msg('kill')
 	end
 	return true, nil
+end
+
+reaper_ops.kill_pid = kill_pid
+
+local function send_signal(state, sig)
+	return reaper_common.send_signal(state, sig, reaper_ops)
 end
 
 local function terminate(state)
@@ -614,13 +456,7 @@ local function kill_proc(state)
 end
 
 local function close_state(state)
-	close_fd(state.sentinel)
-	state.sentinel = nil
-	-- Terminal commands should reap the intermediate reaper synchronously
-	-- so completed commands do not accumulate as zombies.  If close() is
-	-- used on a still-running backend, keep the old non-blocking behaviour.
-	reap_reaper(state, state.exited or state._have_status)
-	return true, nil
+	return reaper_common.close_state(state, reaper_ops)
 end
 
 local function is_supported()

@@ -31,6 +31,7 @@ local poller  = require 'fibers.io.poller'
 local runtime = require 'fibers.runtime'
 local file_io = require 'fibers.io.file'
 local stdio   = require 'fibers.io.exec_backend.stdio'
+local reaper_common = require 'fibers.io.exec_backend.reaper_common'
 
 local ok_unistd, unistd = pcall(require, 'posix.unistd')
 local ok_wait, syswait  = pcall(require, 'posix.sys.wait')
@@ -281,7 +282,7 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 end
 
 ----------------------------------------------------------------------
--- Backend state helpers and parsing
+-- Parent-side reaper helpers
 ----------------------------------------------------------------------
 
 ---@class PosixReaperState
@@ -296,46 +297,6 @@ end
 ---@field _buf string|nil
 ---@field _have_status boolean|nil
 ---@field _reaper_reaped boolean|nil
-
-local function parse_status_line_into_state(line, state)
-	line = line:gsub('\r', '')
-	local tag, rest = line:match('^(%S+)%s*(.*)$')
-	if tag == 'pid' then
-		local cpid = tonumber(rest)
-		if cpid then
-			state.child_pid = cpid
-			state.pid       = cpid
-		end
-		return
-	elseif tag == 'exited' then
-		state.code         = tonumber(rest) or 0
-		state.signal       = nil
-		state.err          = state.err or nil
-		state.exited       = true
-		state._have_status = true
-		return
-	elseif tag == 'signaled' or tag == 'signalled' then
-		state.code         = nil
-		state.signal       = tonumber(rest) or 0
-		state.err          = state.err or nil
-		state.exited       = true
-		state._have_status = true
-		return
-	elseif tag == 'failed' then
-		state.code         = nil
-		state.signal       = nil
-		state.err          = rest ~= '' and rest or 'exec backend failed'
-		state.exited       = true
-		state._have_status = true
-		return
-	end
-
-	state.code         = nil
-	state.signal       = nil
-	state.err          = 'unknown status line from reaper: ' .. tostring(line)
-	state.exited       = true
-	state._have_status = true
-end
 
 local function reap_reaper(state, blocking)
 	if state._reaper_reaped or not state.reaper_pid then
@@ -369,58 +330,27 @@ local function reap_reaper(state, blocking)
 	end
 end
 
-local function drain_sentinel(state)
-	local fd = state.sentinel
-	if not fd then
-		return
+local function read_sentinel(fd)
+	local chunk, err, eno = unistd.read(fd, 4096)
+	if chunk == nil then
+		if eno == errno.EAGAIN or eno == errno.EWOULDBLOCK or eno == errno.EINTR then
+			return nil, 'wait', nil
+		end
+		return nil, 'error', errno_msg('read sentinel', err, eno)
 	end
-
-	while true do
-		local chunk, err, eno = unistd.read(fd, 4096)
-		if chunk == nil then
-			if eno == errno.EAGAIN or eno == errno.EWOULDBLOCK or eno == errno.EINTR then
-				break
-			end
-			close_fd(fd)
-			state.sentinel = nil
-			if not state._have_status then
-				state.exited = true
-				state.err    = state.err or errno_msg('read sentinel', err, eno)
-			end
-			reap_reaper(state, true)
-			break
-		end
-
-		if #chunk == 0 then
-			close_fd(fd)
-			state.sentinel = nil
-			if not state._have_status then
-				state.exited = true
-				state.err    = state.err or 'reaper sentinel closed'
-			end
-			reap_reaper(state, true)
-			break
-		end
-
-		state._buf = (state._buf or '') .. chunk
-
-		while true do
-			local line, rest = state._buf:match('^(.-)\n(.*)$')
-			if not line then
-				break
-			end
-			state._buf = rest
-			parse_status_line_into_state(line, state)
-		end
-
-		if state.exited then
-			close_fd(fd)
-			state.sentinel = nil
-			reap_reaper(state, true)
-			break
-		end
+	if #chunk == 0 then
+		return nil, 'eof', nil
 	end
+	return chunk, 'data', nil
 end
+
+local reaper_ops = {
+	read_sentinel = read_sentinel,
+	close_fd      = close_fd,
+	reap_reaper   = reap_reaper,
+	kill_pid      = nil, -- filled after send_signal helpers are defined
+	default_term  = psig.SIGTERM or 15,
+}
 
 ----------------------------------------------------------------------
 -- exec_backend.core ops
@@ -467,19 +397,7 @@ local function spawn(spec)
 	stdio.close_child_only(child_only, close_fd)
 	close_fd(sentinel_w)
 
-	local state = {
-		reaper_pid     = reaper_pid,
-		pid            = reaper_pid, -- updated to child pid by handshake
-		child_pid      = nil,
-		sentinel       = sentinel_r,
-		exited         = false,
-		code           = nil,
-		signal         = nil,
-		err            = nil,
-		_buf           = '',
-		_have_status   = false,
-		_reaper_reaped = false,
-	}
+	local state = reaper_common.new_state(reaper_pid, sentinel_r)
 
 	-- Handshake: block only at spawn time until the reaper has reported the
 	-- real child pid or a terminal failure. This guarantees send_signal()
@@ -501,15 +419,7 @@ local function spawn(spec)
 			return nil, nil, 'sentinel closed during handshake'
 		end
 
-		state._buf = (state._buf or '') .. chunk
-		while true do
-			local line, rest = state._buf:match('^(.-)\n(.*)$')
-			if not line then
-				break
-			end
-			state._buf = rest
-			parse_status_line_into_state(line, state)
-		end
+		reaper_common.feed_status_chunk(state, chunk)
 	end
 
 	local ok_nb, nb_err = set_nonblock(sentinel_r)
@@ -525,45 +435,15 @@ local function spawn(spec)
 end
 
 local function poll_backend(state)
-	if state.exited then
-		return true, state.code, state.signal, state.err
-	end
-	drain_sentinel(state)
-	if state.exited then
-		return true, state.code, state.signal, state.err
-	end
-	return false, nil, nil, nil
+	return reaper_common.poll_state(state, reaper_ops)
 end
 
 local function register_wait(state, task, _, _)
-	if not state.sentinel then
-		local sched = runtime.current_scheduler
-		if sched and sched.schedule then
-			sched:schedule(task)
-		end
-		return { unlink = function () return false end }
-	end
-	return poller.get():wait(state.sentinel, 'rd', task)
+	return reaper_common.register_wait(state, task)
 end
 
-local function send_signal(state, sig)
-	sig = sig or psig.SIGTERM or 15
-
-	if state.exited then
-		return true, nil
-	end
-
-	drain_sentinel(state)
-	if state.exited then
-		return true, nil
-	end
-
-	local target = state.child_pid or state.pid or state.reaper_pid
-	if not target then
-		return false, 'no child or reaper pid available'
-	end
-
-	local rc, err, eno = psig.kill(target, sig)
+local function kill_pid(pid, sig)
+	local rc, err, eno = psig.kill(pid, sig)
 	if rc == 0 then
 		return true, nil
 	end
@@ -571,6 +451,12 @@ local function send_signal(state, sig)
 		return true, nil
 	end
 	return false, errno_msg('kill failed', err, eno)
+end
+
+reaper_ops.kill_pid = kill_pid
+
+local function send_signal(state, sig)
+	return reaper_common.send_signal(state, sig, reaper_ops)
 end
 
 local function terminate(state)
@@ -582,13 +468,7 @@ local function kill_proc(state)
 end
 
 local function close_state(state)
-	close_fd(state.sentinel)
-	state.sentinel = nil
-	-- Terminal commands should reap the intermediate reaper synchronously so
-	-- completed commands do not accumulate as zombies.  If close() is used on a
-	-- still-running backend, keep non-blocking behaviour.
-	reap_reaper(state, state.exited or state._have_status)
-	return true, nil
+	return reaper_common.close_state(state, reaper_ops)
 end
 
 local function is_supported()
