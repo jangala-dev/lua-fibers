@@ -129,6 +129,25 @@ local function test_add_waiter_returns_canceller_and_cancel_prevents_run()
 	assert_equal(count_live_waiters(os), 0, 'no live waiters should remain after signal')
 end
 
+
+local function test_cancelled_waiters_are_unlinked()
+	-- Regression for long-lived scopes: losing choice arms cancel many one-shot
+	-- waiters.  It is not enough to clear rec.fn; the records themselves must
+	-- be unlinked so the waiter array does not grow for the lifetime of the
+	-- scope's cancellation/fault one-shots.
+	local os = oneshot.new()
+	local cancels = {}
+	for i = 1, 1000 do
+		cancels[i] = os:add_waiter(function () end)
+	end
+	assert_equal(#os.waiters, 1000, 'expected waiters to be registered')
+	for i = 1, #cancels do
+		cancels[i]()
+	end
+	assert_equal(#os.waiters, 0, 'cancelled waiters must be physically removed')
+	assert_equal(count_live_waiters(os), 0, 'cancelled waiters must not remain live')
+end
+
 local function test_add_waiter_after_signal_returns_noop_canceller()
 	local os = oneshot.new()
 	os:signal()
@@ -201,6 +220,7 @@ local function main()
 		{ 'signal idempotence',                       test_signal_is_idempotent },
 		{ 'on_after_signal ordering',                 test_on_after_signal_runs_after_waiters },
 		{ 'canceller prevents run',                   test_add_waiter_returns_canceller_and_cancel_prevents_run },
+		{ 'cancelled waiters are unlinked',          test_cancelled_waiters_are_unlinked },
 		{ 'noop canceller after signal',              test_add_waiter_after_signal_returns_noop_canceller },
 		{ 're-entrant add_waiter during signal',      test_reentrant_add_waiter_during_signal },
 		{ 'integration: choice cleans losing waiter', test_integration_choice_cleans_losing_cond_waiter },

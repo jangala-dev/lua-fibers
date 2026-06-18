@@ -35,12 +35,49 @@ function Oneshot:add_waiter(thunk)
 	end
 
 	local ws = self.waiters
-	local rec = { fn = thunk }
-	ws[#ws + 1] = rec
+	local rec = { fn = thunk, idx = #ws + 1 }
+	ws[rec.idx] = rec
 
 	return function ()
-		-- idempotent; clearing fn drops the closure reference
+		-- Idempotent.  A cancelled waiter must be physically removed, not
+		-- merely tombstoned.  Scope cancellation/fault one-shots are normally
+		-- long-lived and most waits are cancelled by losing-choice cleanup;
+		-- leaving empty records in the waiter array makes long-lived scopes
+		-- grow with every completed scoped perform.
+		if rec.fn == nil then return end
 		rec.fn = nil
+
+		-- During or after signalling, signal() owns the waiter array.  Clearing
+		-- fn above is enough and avoids mutating the array being iterated.
+		if self.triggered then return end
+
+		local i = rec.idx
+		if i and ws[i] == rec then
+			local last_i = #ws
+			local last = ws[last_i]
+			ws[last_i] = nil
+			if last ~= rec then
+				ws[i] = last
+				if last then last.idx = i end
+			end
+			rec.idx = nil
+			return
+		end
+
+		-- Fallback for defensive correctness if an index became stale.
+		for j = #ws, 1, -1 do
+			if ws[j] == rec then
+				local last_i = #ws
+				local last = ws[last_i]
+				ws[last_i] = nil
+				if last ~= rec then
+					ws[j] = last
+					if last then last.idx = j end
+				end
+				rec.idx = nil
+				return
+			end
+		end
 	end
 end
 
@@ -52,12 +89,14 @@ function Oneshot:signal()
 	self.triggered = true
 
 	local ws = self.waiters
+	self.waiters = {}
 	for i = 1, #ws do
 		local rec = ws[i]
 		ws[i] = nil
 		if rec then
 			local f = rec.fn
 			rec.fn = nil
+			rec.idx = nil
 			if f then f() end
 		end
 	end

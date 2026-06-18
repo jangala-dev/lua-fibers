@@ -156,14 +156,22 @@ local function install_self_pipe_and_handler()
 	sig_r, sig_w = r, w
 
 	local function handler()
-		unistd.write(sig_w, 'x')
+		-- LuaJIT can be unstable when a signal handler calls back into
+		-- luaposix while another luaposix C function, such as poll(), is
+		-- active.  Under LuaJIT, rely on poll() being interrupted with
+		-- EINTR; the posix poller wakes all waiters on EINTR so wait_op()
+		-- can reap with waitpid(WNOHANG).  Under PUC Lua, keep the
+		-- traditional self-pipe write.
+		if not jit then
+			unistd.write(sig_w, 'x')
+		end
 	end
 
 	if jit and jit.off then
 		jit.off(handler, true)
 	end
 
-	local flags = psignal.SA_RESTART
+	local flags = jit and nil or psignal.SA_RESTART
 	local old, serr, seno
 	if flags ~= nil then
 		old, serr, seno = psignal.signal(psignal.SIGCHLD, handler, flags)
@@ -474,8 +482,19 @@ local function close_state(state)
 end
 
 local function is_supported()
-	if rawget(_G, 'jit') then return false end -- rare LuaJit instability
+	-- LuaJIT + luaposix signal callbacks are not reliable in exec stress paths.
+	-- The selector falls through to exec_backend.posix_reaper for that runtime,
+	-- preserving evented completion via sentinel pipes without a Lua SIGCHLD
+	-- handler.  Keep this SIGCHLD self-pipe backend for ordinary Lua.
+	if rawget(_G, 'jit') then
+		return false
+	end
 	return psignal.SIGCHLD ~= nil
+		and type(unistd.fork) == 'function'
+		and type(unistd.execp) == 'function'
+		and type(unistd.pipe) == 'function'
+		and type(syswait.wait) == 'function'
+		and type(psignal.kill) == 'function'
 end
 
 local ops = {
