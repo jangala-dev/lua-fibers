@@ -115,6 +115,8 @@ local function inspect(res, st)
     leases = leases,
     lease_count = lease_count(st.leases),
     version = st.version or 0,
+    settled_error = st.settled_error,
+    settled_version = st.settled_version,
   }
 end
 
@@ -125,6 +127,8 @@ local function base_state(res)
     limit = res.limit,
     version = res.version or 0,
     next_lease = res.next_lease or 0,
+    settled_error = res.settled_error,
+    settled_version = res.settled_version,
   }
 end
 
@@ -154,6 +158,10 @@ local function apply_op(st, op)
   elseif op.kind == 'drop_lease' then
     st.leases[op.id] = nil
   elseif op.kind == 'settle' then
+    if retained_length(st) > 0 then
+      st.settled_error = op.reason or Errors.BROKEN_PIPE
+      st.settled_version = (st.version or 0) + 1
+    end
     st.rope = Rope.new('')
     st.leases = {}
   end
@@ -297,6 +305,8 @@ function ReservoirKind.apply(prepared, _log)
   res.data = nil
   res.leases = copy_leases(st.leases)
   res.next_lease = st.next_lease or res.next_lease or 0
+  res.settled_error = st.settled_error
+  res.settled_version = st.settled_version
   res.version = (res.version or 0) + 1
 end
 

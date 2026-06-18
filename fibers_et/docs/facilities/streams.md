@@ -167,10 +167,12 @@ producer/input shutdown
   graceful EOF after retained bytes drain
 
 consumer/output shutdown
-  retained bytes are discarded and writers/flushers observe broken_pipe
+  retained bytes are discarded and writers/flushers waiting on those bytes
+  observe the shutdown reason, or broken_pipe if no reason was supplied
 
 output/backend failure
-  retained bytes are failed/settled and writers/flushers observe the failure
+  retained bytes are failed/settled and writers/flushers waiting on those bytes
+  observe the failure
 ```
 
 A host write pump leases bytes from the reservoir.  Leased bytes remain retained
@@ -290,12 +292,13 @@ ack_lease_op
   commits the accepted prefix and preserves any remainder in the lease
 ```
 
-`inlet:flush_op()` waits on precise fate facts: queued bytes and leased bytes
-are both empty, or the output side has become terminal.  The successful result
-means all prior retained bytes were acknowledged/drained.  A terminal result,
-such as `broken_pipe` or a backend write error, means delivery became impossible
-and retained bytes were settled.  Leased bytes continue to reserve capacity until
-acknowledged or settled.  A second lease request by another owner reports
+`inlet:flush_op()` waits on precise fate facts for bytes retained when the
+flush attempt begins.  Success means no prior bytes are still retained.  If those
+retained bytes are discarded or failed by consumer shutdown or backend failure,
+flush returns that settlement error.  If prior bytes have already been consumed,
+flush succeeds even if the peer has since closed; a later write is the operation
+that observes future writability.  Leased bytes continue to reserve capacity
+until acknowledged or settled.  A second lease request by another owner reports
 `lease_already_active` while any lease remains active.
 
 ## Pump strategies

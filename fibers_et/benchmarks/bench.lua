@@ -502,7 +502,7 @@ add('region', 'admit owns release', 500, function(n)
   return n
 end)
 
-add('task', 'lifetime spawn await retire', 80, function(n)
+add('task', 'lifetime spawn await settle', 80, function(n)
   local rt = Runtime.new()
   local life = Lifetime.new('bench-task-life')
   local sum = 0
@@ -510,7 +510,7 @@ add('task', 'lifetime spawn await retire', 80, function(n)
     for i = 1, n do
       local task = rt:perform(life:spawn_op(function() return i end, { name = 'bench-task-' .. tostring(i) }))
       sum = sum + rt:perform(task:await_op())
-      rt:perform(life:retire_op(task))
+      rt:perform(life:settle_item_op(task))
     end
   end, 'bench-task-root')
   run_rt(rt)
@@ -557,7 +557,7 @@ add('lifetime', 'negotiated handoff', 30, function(n)
       assert_eq(rt:perform(supervisor:owns_op(task)), true)
       rt:perform(resume:put_op('ok'))
       assert_eq(rt:perform(task:await_op()), 'ok')
-      rt:perform(supervisor:retire_op(task))
+      rt:perform(supervisor:settle_item_op(task))
       rt:perform(request:close_op())
       rt:perform(supervisor:close_op())
       rt:perform(request:settle_op())

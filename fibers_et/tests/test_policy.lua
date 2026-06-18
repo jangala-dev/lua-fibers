@@ -31,7 +31,7 @@ do
   assert_status(st, 'found')
   assert_eq(got, 'hello')
   assert_truthy(child and child._fibers_obligation_kind == 'task')
-  assert_eq(child.owner, nil, 'nursery should retire completed owned children on exit')
+  assert_eq(child.owner, nil, 'nursery should settle completed owned children on exit')
 end
 
 -- Lifetime cancellation is authority-oriented and interrupts a task perform at the

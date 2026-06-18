@@ -47,13 +47,14 @@ region:members_op()
 region:snapshot_op()
 ```
 
-`seal_op` stops new admission.  It does not cancel, retire, settle, or reassign
+`seal_op` stops new admission.  It does not cancel, settle owned items, mark the Lifetime settled, or reassign
 anything by itself.  Policy layers may later provide richer shutdown operations,
 but a bare Region only seals admission.
 
-`release_op` removes ownership of an item.  It is a sparse ledger operation: it
+`release_op` removes ownership of a live root item.  It is a sparse ledger operation: it
 does not prove that a task, stream, lease, or process has completed.  Compounds such as
-`Lifetime:retire_op()` add those readiness conditions before releasing ownership.
+`Lifetime:settle_item_op()` first claim the owned subtree, run its settlement
+protocols, and then release it with the claim authority.
 
 The higher-level `Lifetime:settle_op()` is different: it is a terminal transition
 for the lifetime facility itself.  It succeeds only when the underlying Region is
@@ -157,7 +158,8 @@ reassigned
 handed_off
 handoff_received
 cancel_requested
-retired
+settled_item
+settlement_failed
 closed
 settled
 ```
@@ -167,6 +169,10 @@ Events carry ordinary fields such as `type`, `lifetime`, `lifetime_id`, `region`
 `report` when applicable. These effects are transaction consequences.  They are
 published after ownership journals commit and before selected participants
 resume. They are not returned to a participant as work to do later.
+
+`settlement_failed` is published when a settlement protocol fails after its claim
+has committed.  The item remains owned and its Region record exposes
+`phase = "settlement_failed"` until policy code decides what to do next.
 
 `Lifetime:next_event_op()` observes committed events through the Lifetime's event
 Source.
@@ -179,7 +185,7 @@ Expected policies include:
 nursery
   spawn children into a Lifetime
   on failure, request cancellation
-  on exit, close, await tasks, retire owned items, settle the Lifetime
+  on exit, close, await tasks, settle owned items, settle the Lifetime
 
 supervisor
   own tasks for longer than one lexical block
@@ -188,6 +194,8 @@ supervisor
 
 These policies should be built above Lifetime, Region, Task, Cell and Effect.  They should
 not change the operation algebra.
+
+For the exact claim and settlement laws, see `docs/facilities/settlement.md`.
 
 
 ## Launch policies

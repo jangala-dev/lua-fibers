@@ -91,7 +91,7 @@ function NurseryFrame:_join_and_settle_owned()
     if self:_owns(task) then
       local exit = with_mask(self, function() return self:perform(task:exit_op()) end)
       if Exit.is(exit) and exit.tag == 'failed' and not first_bad then first_bad = exit end
-      if self:_owns(task) then with_mask(self, function() self:perform(self.lifetime:retire_op(task)) end) end
+      if self:_owns(task) then with_mask(self, function() self:perform(self.lifetime:settle_item_op(task)) end) end
     end
   end
   return first_bad

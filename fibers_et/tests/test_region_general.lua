@@ -154,4 +154,51 @@ do
   assert_eq(owned_after[1], b)
 end
 
+
+-- A claim is a capability object, not just a visible claim id.  Public record
+-- projections may reveal diagnostic claim metadata, but must not expose the
+-- authority object, and a forged table with the same id must not settle it.
+do
+  local region = fibers.Region.new('claim-authority-region')
+  local parent = fibers.Region.handle('claim-parent')
+  local child = fibers.Region.handle('claim-child')
+  local claim, rec, subtree, forged_result, settled
+
+  local st = fibers.run(function()
+    fibers.perform(region:admit_op(fibers.Region.Owned.tree(parent, nil, {
+      fibers.Region.Owned.inert(child),
+    })))
+    claim = fibers.perform(region:claim_op(parent, { type = 'test', reason = 'capability' }))
+    rec = fibers.perform(region:record_op(parent))
+    subtree = fibers.perform(region:subtree_op(parent))
+
+    local fake = {
+      _fibers_claim = true,
+      _fibers_value = true,
+      id = claim.id,
+      region = region,
+      root = parent,
+      records = claim.records,
+      purpose = claim.purpose,
+      reason = claim.reason,
+    }
+
+    forged_result = fibers.perform(fibers.choice(
+      region:settle_claim_op(fake):map(function() return 'forged-settled' end),
+      fibers.always('blocked')
+    ))
+    settled = fibers.perform(region:settle_claim_op(claim))
+  end)
+
+  assert_status(st, 'found')
+  assert_truthy(claim and claim._fibers_claim, 'real claim should be produced')
+  assert_eq(rec.claim, nil, 'record_op must not expose claim authority')
+  assert_eq(subtree[1].claim, nil, 'subtree_op must not expose claim authority')
+  assert_eq(rec.claim_id, claim.id, 'public record may expose diagnostic claim id')
+  assert_eq(forged_result, 'blocked', 'forged claim with matching id must be rejected')
+  assert_eq(settled, parent, 'real claim should settle')
+  assert_eq(parent.owner, nil)
+  assert_eq(child.owner, nil)
+end
+
 print('tests/test_region_general.lua: ok')

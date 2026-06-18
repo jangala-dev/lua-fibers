@@ -1,0 +1,206 @@
+package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+
+local fibers = require('fibers')
+local Stream = fibers.Stream
+local Fake = Stream.backend.Fake
+
+local function fail(msg) error(msg, 2) end
+local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
+local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+
+-- Admission of arbitrary bare values is rejected at construction time.  Owned
+-- handles may still carry their default inert settlement protocol.
+do
+  local r = fibers.Region.new('typed-admission')
+  local ok = pcall(function() r:admit_op({ name = 'raw-table' }) end)
+  assert_eq(ok, false, 'raw admission should require an Owned record or handle settlement')
+  local h = fibers.Region.handle('inert')
+  local st = fibers.run(function() fibers.perform(r:admit_op(h)) end)
+  assert_status(st, 'found')
+  local rec
+  fibers.run(function() rec = fibers.perform(r:record_op(h)) end)
+  assert_truthy(rec and rec.settle_name == 'none', 'handle admission should record inert settlement protocol')
+end
+
+-- A parent with children cannot be released directly. Generic Lifetime
+-- settlement marks the whole subtree claimed, awaits settlement, then releases
+-- the subtree atomically.
+do
+  local life = fibers.Lifetime.new('tree-life')
+  local backend = Fake.new({ name = 'tree-backend' })
+  local stream, direct_release, settled_status
+  local st
+  st = fibers.run(function()
+    stream = fibers.perform(Stream.open_backend_op(life:raw_region(), backend, { name = 'tree-stream' }))
+    local rec = fibers.perform(life:raw_region():record_op(stream))
+    assert_truthy(rec and #rec.children >= 6, 'host stream should be admitted as an owned tree')
+    direct_release = fibers.perform(fibers.choice(
+      life:raw_region():release_op(stream):map(function() return 'released' end),
+      fibers.always('blocked')
+    ))
+    fibers.perform(life:settle_item_op(stream, 'done'))
+    settled_status = fibers.perform(life:state_op())
+  end)
+  assert_status(st, 'found')
+  assert_eq(direct_release, 'blocked', 'parent release should be blocked while children remain')
+  assert_eq(stream.owner, nil, 'settlement should release stream')
+  assert_eq(stream:reader().owner, nil, 'settlement should release reader')
+  assert_eq(stream:writer().owner, nil, 'settlement should release writer')
+  assert_eq(stream.read_flow.owner, nil, 'settlement should release read flow')
+  assert_eq(stream.write_flow.owner, nil, 'settlement should release write flow')
+  assert_eq(stream.read_task.owner, nil, 'settlement should release read pump')
+  assert_eq(stream.write_task.owner, nil, 'settlement should release write pump')
+  assert_eq(settled_status.owned_count, 0, 'lifetime should have no remaining owned records')
+end
+
+-- Handoff preserves the owned subtree and settlement protocols.
+do
+  local a = fibers.Lifetime.new('handoff-tree-a')
+  local b = fibers.Lifetime.new('handoff-tree-b')
+  local backend = Fake.new({ name = 'handoff-tree-backend' })
+  local stream, a_count_after, b_count_after, child_transfer
+  local st = fibers.run(function()
+    stream = fibers.perform(Stream.open_backend_op(a:raw_region(), backend, { name = 'handoff-tree-stream' }))
+    fibers.perform(a:handoff_op(stream, b))
+    a_count_after = fibers.perform(a:state_op()).owned_count
+    b_count_after = fibers.perform(b:state_op()).owned_count
+    child_transfer = fibers.perform(fibers.choice(
+      b:raw_region():reassign_op(stream.read_task, a:raw_region()):map(function() return 'moved-child' end),
+      fibers.always('blocked')
+    ))
+    fibers.perform(b:settle_item_op(stream, 'done'))
+  end)
+  assert_status(st, 'found')
+  assert_eq(a_count_after, 0, 'handoff should move whole subtree from source')
+  assert_truthy(b_count_after and b_count_after >= 7, 'handoff should move whole subtree to target')
+  assert_eq(child_transfer, 'blocked', 'contained children should not be reassigned directly')
+  assert_eq(stream.owner, nil)
+end
+
+
+-- Settlement is now driven by an explicit library-owned driver fibre.  The
+-- initiating perform awaits the driver, but the driver performs the settlement
+-- and release work.
+do
+  local life = fibers.Lifetime.new('driver-life')
+  local h = fibers.Region.handle('driver-item')
+  local spawned_driver = false
+  local st = fibers.run(function()
+    fibers.perform(life:raw_region():admit_op(h))
+    fibers.perform(life:settle_item_op(h, 'done'))
+  end, {
+    trace = function(e)
+      if e.kind == 'fibre.spawn_committed' and tostring(e.fibre or ''):match('^settle:') then
+        spawned_driver = true
+      end
+    end,
+  })
+  assert_status(st, 'found')
+  assert_eq(h.owner, nil, 'driver settlement should release item')
+  assert_truthy(spawned_driver, 'settlement should spawn an explicit driver fibre')
+end
+
+
+-- Settlement is now a tree-level state transition.  The initiating request marks
+-- the whole owned subtree as claimed before the single library-owned driver
+-- awaits settlement and releases the subtree atomically.
+do
+  local rt = fibers.Runtime.new()
+  local life = fibers.Lifetime.new('phase-life')
+  local settled, feed = rt:signal('phase-settled')
+  local function K(_ctx, _record)
+    return settled:wait_op():map(function() return true end)
+  end
+  local parent = fibers.Region.handle('phase-parent')
+  local child = fibers.Region.handle('phase-child')
+  local other = fibers.Lifetime.new('phase-other')
+  local phase_parent, phase_child, move_during_settle, release_child, settle_without_claim
+  local settle_done = false
+
+  rt:spawn_raw(function()
+    rt:perform(life:raw_region():admit_op(fibers.Region.Owned.tree(parent, K, { fibers.Region.Owned.item(child, K, { role = 'child', settle_name = 'phase-test' }) }, { role = 'parent', settle_name = 'phase-test' })))
+    rt:perform(life:settle_item_op(parent, 'done'))
+    settle_done = true
+  end, 'phase-settler')
+
+  local st
+  for _ = 1, 20 do
+    st = rt:run()
+    if st.tag == 'pending' then break end
+  end
+  assert_status(st, 'pending', 'settlement should wait for settlement signal')
+
+  rt:spawn_raw(function()
+    local prec = rt:perform(life:raw_region():record_op(parent))
+    local crec = rt:perform(life:raw_region():record_op(child))
+    phase_parent = prec and prec.phase
+    phase_child = crec and crec.phase
+    move_during_settle = rt:perform(fibers.choice(
+      life:raw_region():reassign_op(parent, other:raw_region()):map(function() return 'moved' end),
+      fibers.always('blocked')
+    ))
+    release_child = rt:perform(fibers.choice(
+      life:raw_region():release_op(child):map(function() return 'released-child' end),
+      fibers.always('blocked')
+    ))
+    settle_without_claim = rt:perform(fibers.choice(
+      life:raw_region():settle_claim_op(parent):map(function() return 'settled-tree' end),
+      fibers.always('blocked')
+    ))
+  end, 'phase-monitor')
+
+  for _ = 1, 20 do
+    st = rt:run()
+    if phase_parent ~= nil and st.tag == 'pending' then break end
+  end
+  assert_status(st, 'pending', 'monitor should run while settlement driver waits')
+  assert_eq(phase_parent, 'claimed', 'settle request should mark parent claimed')
+  assert_eq(phase_child, 'claimed', 'settle request should mark child claimed')
+  assert_eq(move_during_settle, 'blocked', 'claimed subtree should not be handed off')
+  assert_eq(release_child, 'blocked', 'contained child should not be released directly')
+  assert_eq(settle_without_claim, 'blocked', 'claim settlement requires a valid claim')
+  assert_eq(settle_done, false, 'settle perform should still await driver')
+
+  feed:set(true)
+  st = rt:run()
+  assert_status(st, 'found')
+  assert_eq(settle_done, true, 'settlement should complete after settlement')
+  assert_eq(parent.owner, nil, 'claim settlement should release parent')
+  assert_eq(child.owner, nil, 'claim settlement should release child')
+end
+
+
+-- Failed settlement is an observable committed ownership state, not silent
+-- limbo.  The claim remains real, the item is not released, and Lifetime emits
+-- a settlement_failed event for policy code.
+do
+  local rt = fibers.Runtime.new()
+  local life = fibers.Lifetime.new('failing-settlement-life')
+  local h = fibers.Region.handle('failing-settlement-item')
+  rt:spawn_raw(function()
+    rt:perform(life:raw_region():admit_op(fibers.Region.Owned.item(h, function() error('settlement boom') end, { settle_name = 'failing' })))
+    rt:perform(life:settle_item_op(h, 'retire'))
+  end, 'failing-settlement-root')
+
+  local ok, err = pcall(function() return rt:run() end)
+  assert_eq(ok, false, 'settlement protocol failure should fail the waiting task')
+  assert_truthy(tostring(err):match('settlement boom'), 'settlement error should be propagated')
+
+  local rec
+  fibers.run(function() rec = fibers.perform(life:raw_region():record_op(h)) end)
+  assert_truthy(rec, 'failed settlement record should remain visible')
+  assert_eq(rec.phase, 'settlement_failed')
+  assert_eq(rec.settlement_failed, true)
+  assert_truthy(tostring(rec.settlement_error_message or ''):match('settlement boom'), 'record should expose failure message')
+  assert_eq(h.owner, life:raw_region(), 'failed settlement should not release ownership')
+
+  local saw_event = false
+  for i = 1, #(rt.published_lifetime or {}) do
+    local e = rt.published_lifetime[i]
+    if e.type == 'settlement_failed' and e.item == h then saw_event = true end
+  end
+  assert_eq(saw_event, true, 'lifetime should publish settlement_failed event')
+end
+
+print('tests/test_settlement_structure.lua: ok')

@@ -35,8 +35,8 @@ local function event_line(ev)
     return string.format('  reassigned  %-10s from %s to %s', named(task), named(ev.lifetime), named(ev.to_lifetime or ev.to))
   elseif ev.type == 'handoff_received' then
     return string.format('  received    %-10s by %s', named(task), named(ev.lifetime))
-  elseif ev.type == 'retired' then
-    return string.format('  retired     %-10s from %s', named(task), named(ev.lifetime))
+  elseif ev.type == 'settled_item' then
+    return string.format('  settled     %-10s from %s', named(task), named(ev.lifetime))
   elseif ev.type == 'closed' then
     return string.format('  closed      %s', named(ev.lifetime))
   elseif ev.type == 'settled' then
@@ -89,7 +89,7 @@ rt:spawn_raw(function()
   rt:perform(resume:put_op('supervisor owns the session'))
   result.await = { rt:perform(session:await_op()) }
 
-  rt:perform(supervisor:retire_op(session))
+  rt:perform(supervisor:settle_item_op(session))
   result.supervisor_owns_released = rt:perform(supervisor:owns_op(session))
 
   rt:perform(request:close_op())

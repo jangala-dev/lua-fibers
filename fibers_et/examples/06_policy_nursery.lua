@@ -15,7 +15,7 @@ local st = fibers.launch(fibers.facility.policy.nursery(), function(nursery)
   message = fibers.perform(ch:get_op())
 
   -- The nursery policy admits tasks to its Region.  On exit it seals the
-  -- Region, waits for owned tasks, and retires those that have completed.
+  -- Region, waits for owned tasks, and settles those that have completed.
   assert(nursery.region)
 end)
 

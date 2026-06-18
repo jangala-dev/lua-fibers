@@ -11,6 +11,7 @@
 local Op = require('fibers.base.op')
 local Region = require('fibers.base.region')
 local Ownership = require('fibers.internal.ownership')
+local Settlement = require('fibers.internal.settlement')
 local Reservoir = require('fibers.facility.flow.reservoir')
 local Endpoint = require('fibers.facility.flow.endpoint')
 local Lease = require('fibers.facility.flow.lease')
@@ -75,6 +76,10 @@ local function handle(mt, name, kind, fields)
   fields.kind = kind
   fields._fibers_kind_name = kind
   fields._fibers_obligation_kind = kind
+  if kind == 'flow' then
+    fields.settle = fields.settle or Settlement.flow()
+    fields.settle_name = fields.settle_name or 'flow'
+  end
   return setmetatable(Ownership.handle(name, fields), mt)
 end
 
@@ -162,15 +167,31 @@ function Flow:closed_op()
 end
 
 function Flow:drained_op()
-  -- Flush/drain waits until the fate of retained output bytes is known.  The
-  -- happy path is empty retained storage.  If the output endpoint reaches a
-  -- terminal state first, delivery has become impossible and callers observe
-  -- that terminal error instead of waiting for an acknowledgement that can no
-  -- longer arrive.
-  return Op.choice(
-    self.output:terminal_op(Errors.BROKEN_PIPE),
-    empty_storage_op(self):map(function() return true end)
-  )
+  -- Flush/drain waits until the fate of retained output bytes is known.  Empty
+  -- retained storage is success.  If retained bytes are later discarded by
+  -- settlement, callers observe that settlement error.  If the output endpoint
+  -- becomes terminal while bytes are still retained, delivery is impossible.
+  local start_version
+  local function loop()
+    return Op.named_all({
+      { 'reservoir', self.reservoir:inspect_op() },
+      { 'output', self.output:inspect_op() },
+    }):and_then(function(parts)
+      local res, output = parts.reservoir, parts.output
+      start_version = start_version or res.version or 0
+      if res.settled_error ~= nil and (res.settled_version or 0) > start_version then
+        return Op.always(nil, res.settled_error)
+      end
+      if (res.retained_length or 0) == 0 then return Op.always(true) end
+      if output.error then return Op.always(nil, output.error) end
+      if not output.open then return Op.always(nil, Errors.BROKEN_PIPE) end
+      return Op.choice(
+        self.reservoir:changed_op(res.version):map(function() return 'reservoir' end),
+        self.output:changed_op(output.version):map(function() return 'output' end)
+      ):and_then(function() return loop() end)
+    end)
+  end
+  return loop()
 end
 
 function Flow:close_op(reason) return self:shutdown_op(reason) end

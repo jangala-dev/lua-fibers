@@ -11,6 +11,8 @@ local Cell = require('fibers.base.cell')
 local Effect = require('fibers.base.effect')
 local Interrupt = require('fibers.internal.interrupt')
 local Ownership = require('fibers.internal.ownership')
+local Owned = require('fibers.base.region').Owned
+local Settlement = require('fibers.internal.settlement')
 local Protected = require('fibers.kernel.protected')
 local Exit = require('fibers.kernel.exit')
 
@@ -52,6 +54,8 @@ function Task.new(fn, name, frame)
     _fibers_obligation_kind = 'task',
     _fibers_id = id,
     _fibers_kind = Ownership.Kind,
+    _fibers_settle = Settlement.task_interrupt(),
+    _fibers_settle_name = 'task_interrupt',
   }, Task)
 end
 
@@ -84,11 +88,22 @@ function Task:_spawn_effect()
   return Effect.spawn(self:_spawn_body(), self.name, self._fibers_id, self.frame)
 end
 
-function Task:start_op(region)
+function Task:owned(settle, opts)
+  opts = opts or {}
+  opts.role = opts.role or 'task'
+  opts.settle_name = opts.settle_name or self._fibers_settle_name or 'task_interrupt'
+  return Owned.item(self, settle or self._fibers_settle or Settlement.task_interrupt(), opts)
+end
+
+function Task:spawn_effect_op()
+  return Op.emit(self:_spawn_effect()):map(function() return self end)
+end
+
+function Task:start_op(region, settle, opts)
   if not region or type(region.admit_op) ~= 'function' then error('Task:start_op expects a Region', 2) end
   local task = self
-  return region:admit_op(task):and_then(function()
-    return Op.emit(task:_spawn_effect()):map(function() return task end)
+  return region:admit_op(task:owned(settle, opts)):and_then(function()
+    return task:spawn_effect_op()
   end)
 end
 

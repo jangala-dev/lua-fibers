@@ -42,6 +42,7 @@ do
   assert_eq(base.Channel, fibers.Channel, 'base aggregate exports Channel')
   assert_eq(base.Source, fibers.Source, 'base aggregate exports Source')
   assert_eq(base.Region, fibers.Region, 'base aggregate exports Region')
+  assert_eq(base.Region.Owned, fibers.Region.Owned, 'Owned is part of Region advanced API')
   assert_eq(base.Task, fibers.Task, 'base aggregate exports Task')
   assert_eq(base.Effect, fibers.Effect, 'base aggregate exports Effect')
   assert_eq(facility.Lifetime, fibers.Lifetime, 'facility aggregate exports Lifetime')

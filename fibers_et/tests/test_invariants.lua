@@ -124,4 +124,14 @@ do
   assert_eq(err.kind, 'phase_error', 'host arrival in prepare is a phase error')
 end
 
+
+-- Region exposes generic claim/settle machinery, not settlement-policy-specific tree methods.
+do
+  local r = fibers.Region.new('claim-surface')
+  assert_eq(type(r.claim_op), 'function', 'Region should expose generic claim_op')
+  assert_eq(type(r.settle_claim_op), 'function', 'Region should expose generic settle_claim_op')
+  assert_eq(type(r.retire_tree_op), 'nil', 'Region should not expose retire_tree_op')
+  assert_eq(type(r.release_tree_op), 'nil', 'Region should not expose release_tree_op')
+end
+
 print('tests/test_invariants.lua: ok')

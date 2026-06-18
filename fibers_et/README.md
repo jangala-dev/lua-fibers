@@ -31,7 +31,9 @@ Effect   after-commit runtime obligation
 ```
 
 `Lifetime` and launch policies are compound facilities built from that kit, not
-additional base nouns.
+additional base nouns.  `Region.Owned` is the advanced ownership constructor for
+resource authors and ownership facilities; ordinary users should usually meet it
+through `Lifetime`, `Task` and `Stream`.
 
 The algebra underneath is the distinctive part.  A commit is not just one event
 synchronising with another event.  A commit selects a world containing
@@ -131,11 +133,11 @@ fibers.run(function()
 
   local value = fibers.perform(task:await_op())
   assert(value == 7)
-  fibers.perform(life:retire_op(task))
+  fibers.perform(life:settle_item_op(task))
 end)
 ```
 
-`Region` is the ownership primitive: admit, reassign, seal and release. `Lifetime` is the compound facility most code should use for spawning, cancellation, matched handoff, observation, retirement and terminal settlement. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
+`Region` is the ownership primitive: admit, reassign, seal and release. `Lifetime` is the compound facility most code should use for spawning, cancellation, matched handoff, observation, owned-item settlement and terminal settlement. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
 
 ## Transactional streams
 
@@ -162,12 +164,13 @@ freeing; reads are derived from peek plus prefix-freeing; `read_until_op` and
 flows as one committed world; EOF and endpoint closure are committed state; and
 backpressure is retained-byte capacity.  Producer shutdown
 drains, consumer shutdown discards retained bytes, transport failure fails retained
-bytes, and flush waits for the fate of prior bytes rather than for an impossible
-acknowledgement.  The reservoir is rope-backed and currently permits one active
+bytes, and flush waits for the fate of prior retained bytes.  If prior bytes have
+already been consumed, flush succeeds even if the peer has since closed; later
+writes still fail.  The reservoir is rope-backed and currently permits one active
 lease at a time.  Stream compounds
 do not expose byte operations directly; use `stream:reader()` and `stream:writer()`.
 
-See `docs/facilities/streams.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, `examples/13_socket_backend_contract.lua`, and `examples/14_host_handle_stream.lua`.
+See `docs/facilities/streams.md`, `docs/facilities/settlement.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, `examples/13_socket_backend_contract.lua`, `examples/14_host_handle_stream.lua`, and `examples/15_owned_resource_settlement.lua`.
 
 ## Effects
 
@@ -229,17 +232,17 @@ The `examples/` directory contains small usage guides, not regression tests.
 They are intended to be read and run individually:
 
 ```sh
-lua examples/01_channel.lua
-lua examples/02_cell.lua
-lua examples/03_source.lua
-lua examples/04_lifetime_task.lua
-lua examples/05_effect.lua
-lua examples/06_policy_nursery.lua
-lua examples/07_lifetime_handoff.lua
-lua examples/08_sleep.lua
-lua examples/09_memory_stream.lua
-lua examples/10_stream_protocol_handoff.lua
-lua examples/11_pumped_stream_fake_backend.lua
+texlua examples/01_channel.lua
+texlua examples/02_cell.lua
+texlua examples/03_source.lua
+texlua examples/04_lifetime_task.lua
+texlua examples/05_effect.lua
+texlua examples/06_policy_nursery.lua
+texlua examples/07_lifetime_handoff.lua
+texlua examples/08_sleep.lua
+texlua examples/09_memory_stream.lua
+texlua examples/10_stream_protocol_handoff.lua
+texlua examples/11_pumped_stream_fake_backend.lua
 ```
 
 Assertion-heavy semantic checks live in `tests/`.
@@ -331,6 +334,7 @@ docs/kernel/observation-journal.md  bounded-search observation discipline
 docs/consequences.md   typed transaction consequences / effects
 docs/facilities/sleep.md      sleep as a facility over clock sources
 docs/facilities/lifetimes.md  regions, tasks and ownership
+docs/facilities/settlement.md claims, settlement protocols and failure state
 docs/facilities/streams.md    byte flows, stream compounds and host-pumped streams
 docs/facilities/host-handles.md host I/O handles for pumped streams
 docs/kernel/embedding.md      bounded stepping and host integration

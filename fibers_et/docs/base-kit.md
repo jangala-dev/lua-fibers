@@ -125,3 +125,51 @@ local op = fibers.after_commit(effect)
 
 Effects are not participant continuations.  They are prepared and published by
 the runtime after resource commit and before selected participants resume.
+
+## Ownership claims and settlement
+
+A `Region` records typed ownership. Each owned record carries an Op-valued
+settlement protocol.  Region itself does not know about shutdown, closure,
+item disposal, stream draining or task cancellation; it only knows how to admit
+owned records, move live roots, claim a live root subtree for a purpose, and
+settle a valid claim.
+
+```text
+live subtree
+  -> claim subtree for purpose
+  -> driver performs settlement protocols
+  -> atomic settle_claim
+```
+
+For ordinary handles the settlement protocol may be inert.  Tasks usually use an
+interrupt-then-join protocol.  Stream pump tasks use a join-only protocol,
+because the stream's terminal flow state is what makes the pump exit.  Host
+streams are admitted as owned compounds whose children include their flows,
+endpoints and pump tasks.
+
+Advanced users can construct ownership explicitly with `fibers.Region.Owned`.  A custom
+settlement protocol is just a function returning an `Op`:
+
+```lua
+fibers.Region.Owned.item(handle, function(ctx, record, claim)
+  return handle:shutdown_op(claim.reason):wrap(function()
+    fibers.mask(function() fibers.perform(handle:closed_op()) end)
+    return true
+  end)
+end)
+```
+
+The protocol is ordinary algebra: it may sequence, wait, emit effects and use
+post-commit wraps.  The `Region` owns the exactly-once claim and final settlement.
+Ordinary user code can request settlement through a facility such as `Lifetime`;
+the settlement driver holds the claim authority object and performs the final
+`settle_claim` operation.  Public record and subtree snapshots expose diagnostic
+claim metadata such as `claim_id`, but not the authority object itself.
+
+If a settlement protocol fails, the claim is not rolled back.  The affected
+records remain owned and become `settlement_failed`; Lifetime also publishes a
+`settlement_failed` event for policy code.  See `docs/facilities/settlement.md`.
+
+Ownership in this phase records responsibility, handoff and settlement.  It is
+not yet a comprehensive access-control check on every retained Lua handle.
+

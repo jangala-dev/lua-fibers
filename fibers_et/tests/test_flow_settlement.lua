@@ -39,11 +39,31 @@ do
   rt:spawn_raw(function()
     rt:perform(b:reader():shutdown_op('reader_closed'))
   end, 'reader-close')
-  drive_until(rt, function() return flush_err == 'broken_pipe' end, 'peer close should settle retained bytes and break flush')
+  drive_until(rt, function() return flush_err == 'reader_closed' end, 'peer close should settle retained bytes and fail flush with close reason')
   assert_nil(flushed)
-  assert_eq(flush_err, 'broken_pipe')
+  assert_eq(flush_err, 'reader_closed')
   assert_eq(b:reader().flow.reservoir:debug_data(), '', 'peer close should discard queued retained bytes')
   assert_eq(b:reader().flow.reservoir:debug_leased_bytes(), 0, 'peer close should discard leased retained bytes')
+end
+
+-- Flush succeeds after previously written bytes have already been consumed, even
+-- if the peer closes afterwards.  Flush is about retained bytes, not future
+-- writability.
+do
+  local a, b = Stream.memory_pair({ name = 'flush-after-delivery', capacity = 10 })
+  local flushed, flush_err, later_n, later_err
+  local st = fibers.run(function()
+    fibers.perform(a:writer():write_op('abc'))
+    assert_eq(fibers.perform(b:reader():read_exactly_op(3)), 'abc')
+    fibers.perform(b:reader():shutdown_op('reader_closed'))
+    flushed, flush_err = fibers.perform(a:writer():flush_op())
+    later_n, later_err = fibers.perform(a:writer():write_op('z'))
+  end)
+  assert_status(st, 'found')
+  assert_eq(flushed, true, 'flush should succeed when no prior bytes are retained')
+  assert_nil(flush_err)
+  assert_nil(later_n)
+  assert_eq(later_err, 'broken_pipe', 'future writes should still fail after peer close')
 end
 
 -- Graceful writer shutdown still drains queued bytes to EOF; it does not discard data.

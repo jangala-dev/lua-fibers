@@ -24,6 +24,7 @@ local tests = {
   'tests/test_region_general.lua',
   'tests/test_policy.lua',
   'tests/test_lifetime.lua',
+  'tests/test_settlement_structure.lua',
   'tests/test_flow_reservoir.lua',
   'tests/test_flow_helpers.lua',
   'tests/test_flow_settlement.lua',

@@ -17,7 +17,7 @@ fibers.run(function()
   end, { name = 'worker' }))
 
   value = fibers.perform(task:await_op())
-  fibers.perform(life:retire_op(task))
+  fibers.perform(life:settle_item_op(task))
 end)
 
 print('task result:', value)

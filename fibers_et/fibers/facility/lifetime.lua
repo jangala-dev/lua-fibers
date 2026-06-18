@@ -12,6 +12,7 @@ local Channel = require('fibers.base.channel')
 local Cell = require('fibers.base.cell')
 local Task = require('fibers.base.task')
 local Effect = require('fibers.base.effect')
+local Settlement = require('fibers.internal.settlement')
 
 local Lifetime = {}
 Lifetime.__index = Lifetime
@@ -123,12 +124,18 @@ function Lifetime:spawn_op(fn, opts)
 end
 
 function Lifetime:request_cancel_op(item, reason)
-  if not item or type(item.request_cancel_op) ~= 'function' then return Op.never() end
-  return self.region:owns_op(item):and_then(function(owns)
-    if not owns then return Op.never() end
-    return item:request_cancel_op(reason):and_then(function()
-      return emit_all({ self:_event('cancel_requested', { item = item, task = item, reason = reason }) }, item)
-    end)
+  return self.region:record_op(item):and_then(function(record)
+    if not record then return Op.never() end
+    if type(item.request_cancel_op) == 'function' then
+      return item:request_cancel_op(reason):and_then(function()
+        return emit_all({ self:_event('cancel_requested', { item = item, task = item, reason = reason, settle = record.settle_name }) }, item)
+      end)
+    elseif type(item.shutdown_op) == 'function' then
+      return item:shutdown_op(reason):and_then(function()
+        return emit_all({ self:_event('cancel_requested', { item = item, reason = reason, settle = record.settle_name }) }, item)
+      end)
+    end
+    return Op.never()
   end)
 end
 
@@ -166,15 +173,18 @@ function Lifetime:accept_handoff_op()
   return self.handoff:get_op()
 end
 
-function Lifetime:retire_op(item)
-  local ready = (type(item) == 'table' and type(item.exit_op) == 'function') and item:exit_op() or Op.always(true)
-  return ready:and_then(function()
-    return self.region:release_op(item)
-  end):and_then(function()
-    return emit_all({ self:_event('retired', { item = item, task = item }) }, item)
+function Lifetime:settle_item_op(item, reason)
+  return Settlement.settle_item_op(self, item, reason, function(ctx, claim)
+    return emit_all({ ctx:_event('settled_item', {
+      item = item,
+      task = item,
+      claim = claim,
+      claim_id = claim.id,
+      purpose = claim.purpose,
+      settle = claim.records[1] and claim.records[1].settle_name,
+    }) }, item)
   end)
 end
-
 function Lifetime:close_op(reason)
   return self.region:seal_op():and_then(function()
     return self.state:write_op({ phase = 'closed', sealed = true, settled = false, reason = reason })

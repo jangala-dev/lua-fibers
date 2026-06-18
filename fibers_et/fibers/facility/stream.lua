@@ -8,6 +8,8 @@ local Op = require('fibers.base.op')
 local Region = require('fibers.base.region')
 local Pump = require('fibers.facility.stream.pump')
 local Ownership = require('fibers.internal.ownership')
+local Owned = require('fibers.base.region').Owned
+local Settlement = require('fibers.internal.settlement')
 local FlowFacility = require('fibers.facility.flow')
 local Flow = FlowFacility.Flow
 
@@ -53,6 +55,8 @@ local function duplex(opts)
     _fibers_duplex_stream = true,
     _fibers_kind_name = opts.kind or 'duplex_stream',
     _fibers_obligation_kind = opts.kind or 'duplex_stream',
+    settle = opts.settle or Settlement.stream(),
+    settle_name = opts.settle_name or 'stream',
   })
   setmetatable(d, opts.metatable or Duplex)
   return d
@@ -139,12 +143,26 @@ function Stream.open_backend_op(region, backend, opts)
     write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096,
     pump_strategy = opts.pump_strategy or opts.strategy or 'split',
   }
-  return Op.named_all({
-    { 'stream', region:admit_op(hs) },
-    { 'reader', region:admit_op(hs:reader()) },
-    { 'writer', region:admit_op(hs:writer()) },
-    { 'pumps', Pump.start_op(hs, region, opts) },
-  }):map(function() return hs end)
+  local strategy = opts.pump_strategy or opts.strategy or hs.pump_strategy or 'split'
+  local owned_children = {
+    Owned.item(hs.read_flow, hs.read_flow._fibers_settle or Settlement.flow(), { role = 'read_flow', settle_name = 'flow' }),
+    Owned.item(hs.write_flow, hs.write_flow._fibers_settle or Settlement.flow(), { role = 'write_flow', settle_name = 'flow' }),
+    Owned.inert(hs:reader(), { role = 'reader' }),
+    Owned.inert(hs:writer(), { role = 'writer' }),
+  }
+  local start_op
+  if strategy == 'split' or strategy == nil then
+    local read_task, write_task = Pump.create_tasks(hs, opts)
+    owned_children[#owned_children + 1] = read_task:owned(Settlement.task_join_only(), { role = 'read_pump', settle_name = 'task_join_only' })
+    owned_children[#owned_children + 1] = write_task:owned(Settlement.task_join_only(), { role = 'write_pump', settle_name = 'task_join_only' })
+    start_op = Pump.spawn_tasks_op(hs)
+  else
+    start_op = Pump.start_op(hs, region, opts)
+  end
+  local owned = Owned.tree(hs, hs._fibers_settle or Settlement.stream(), owned_children, { role = 'stream', settle_name = 'stream' })
+  return region:admit_op(owned):and_then(function()
+    return start_op:map(function() return hs end)
+  end)
 end
 
 function Stream.open_handle_op(region, handle, opts)

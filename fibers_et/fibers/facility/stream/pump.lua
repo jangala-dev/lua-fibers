@@ -8,6 +8,7 @@
 local Runtime = require('fibers.kernel.runtime')
 local Op = require('fibers.base.op')
 local Task = require('fibers.base.task')
+local Settlement = require('fibers.internal.settlement')
 local Errors = require('fibers.facility.flow.errors')
 
 local Pump = {}
@@ -100,9 +101,10 @@ function Pump.write(stream)
     local bytes = lease:bytes()
     local ready_or_failed = masked_perform(rt, Op.named_choice({
       { 'write_failed', flow.output:error_op() },
+      { 'write_closed', flow.output:closed_op() },
       { 'backend_ready', backend_ready_op(backend, 'write_ready_op') },
     }))
-    if ready_or_failed == 'write_failed' then return end
+    if ready_or_failed == 'write_failed' or ready_or_failed == 'write_closed' then return end
     local n, err = backend_call(backend, 'write', bytes)
     if n and n > 0 then
       local ok, ack_err = masked_perform(rt, outlet:ack_lease_op(lease, n))
@@ -119,16 +121,39 @@ function Pump.write(stream)
   end
 end
 
-function Pump.Strategy.split(stream, region, opts)
+function Pump.Strategy.split_tasks(stream, opts)
   opts = opts or {}
   local name = stream.name or 'host-stream'
   local read_task = Task.new(function() return Pump.read(stream) end, name .. ':read-pump', opts.frame)
   local write_task = Task.new(function() return Pump.write(stream) end, name .. ':write-pump', opts.frame)
   stream.read_task = read_task
   stream.write_task = write_task
+  return read_task, write_task
+end
+
+function Pump.Strategy.split(stream, region, opts)
+  opts = opts or {}
+  local read_task, write_task = Pump.Strategy.split_tasks(stream, opts)
   return Op.named_all({
-    { 'read_task', read_task:start_op(region) },
-    { 'write_task', write_task:start_op(region) },
+    { 'read_task', read_task:start_op(region, Settlement.task_join_only(), { settle_name = 'task_join_only', role = 'read_pump' }) },
+    { 'write_task', write_task:start_op(region, Settlement.task_join_only(), { settle_name = 'task_join_only', role = 'write_pump' }) },
+  }):map(function() return stream end)
+end
+
+function Pump.create_tasks(stream, opts)
+  opts = opts or {}
+  local strategy = opts.pump_strategy or opts.strategy or stream.pump_strategy or 'split'
+  if strategy ~= 'split' then return nil, 'Pump.create_tasks currently supports split strategy only' end
+  stream.pump_strategy = strategy
+  return Pump.Strategy.split_tasks(stream, opts)
+end
+
+function Pump.spawn_tasks_op(stream)
+  local read_task, write_task = stream.read_task, stream.write_task
+  if not read_task or not write_task then error('Pump.spawn_tasks_op requires prepared pump tasks', 2) end
+  return Op.named_all({
+    { 'read_task', read_task:spawn_effect_op() },
+    { 'write_task', write_task:spawn_effect_op() },
   }):map(function() return stream end)
 end
 

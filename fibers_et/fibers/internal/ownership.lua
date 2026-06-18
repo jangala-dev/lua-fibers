@@ -6,6 +6,7 @@
 
 local ConsequenceSet = require('fibers.kernel.consequence.set')
 local Effect = require('fibers.base.effect')
+local Settlement = require('fibers.internal.settlement')
 
 local Ownership = {}
 
@@ -98,6 +99,8 @@ function Ownership.handle(name, fields)
   h._fibers_id = h._fibers_id or id
   h._fibers_kind = Kind
   h._fibers_obligation_kind = h._fibers_obligation_kind or h.kind
+  h._fibers_settle = h._fibers_settle or h.settle or Settlement.none()
+  h._fibers_settle_name = h._fibers_settle_name or h.settle_name or 'none'
   return h
 end
 
