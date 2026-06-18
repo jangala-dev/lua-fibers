@@ -18,6 +18,28 @@ local errno_mod = require 'posix.errno'
 
 local poll_fn = poll_mod.poll
 
+local function wake_all_waiters(rd_waitset, wr_waitset)
+	local events = {}
+
+	for fd, list in pairs(rd_waitset.buckets) do
+		if list and #list > 0 then
+			local e = events[fd] or {}
+			e.rd = true
+			events[fd] = e
+		end
+	end
+
+	for fd, list in pairs(wr_waitset.buckets) do
+		if list and #list > 0 then
+			local e = events[fd] or {}
+			e.wr = true
+			events[fd] = e
+		end
+	end
+
+	return events
+end
+
 ----------------------------------------------------------------------
 -- Backend ops for poller.core
 ----------------------------------------------------------------------
@@ -66,9 +88,13 @@ local function poll_backend(_, timeout_ms, rd_waitset, wr_waitset)
 	-- poll() with nfds == 0 is defined and just sleeps for timeout.
 	local nready, err, eno = poll_fn(fds, timeout_ms)
 	if nready == nil then
-		-- Treat EINTR as a benign interruption (e.g. SIGCHLD), same as epoll backend.
+		-- Treat EINTR as a benign interruption.  Unlike epoll, the
+		-- luaposix SIGCHLD backend may rely on poll() being interrupted
+		-- rather than on a self-pipe write under LuaJIT.  Wake current
+		-- waiters spuriously so their non-blocking step functions can
+		-- observe any completed work and then re-register if needed.
 		if eno == errno_mod.EINTR then
-			return {}
+			return wake_all_waiters(rd_waitset, wr_waitset)
 		end
 		error(('%s (errno %s)'):format(tostring(err), tostring(eno)))
 	end

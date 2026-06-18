@@ -233,7 +233,7 @@ local function parse_status_line_into_state(line, state)
 		local cpid = tonumber(rest)
 		if cpid then
 			state.child_pid = cpid
-			state.pid       = state.pid or cpid
+			state.pid       = cpid
 		end
 		return
 	elseif tag == 'exited' then
@@ -268,11 +268,18 @@ local function parse_status_line_into_state(line, state)
 	end
 end
 
-local function reap_reaper(state)
+local function reap_reaper(state, blocking)
 	if state._reaper_reaped or not state.reaper_pid then
 		return
 	end
-	local pid, _, _ = nixio.waitpid(state.reaper_pid, 'nohang')
+
+	local pid
+	if blocking then
+		pid = nixio.waitpid(state.reaper_pid)
+	else
+		pid = nixio.waitpid(state.reaper_pid, 'nohang')
+	end
+
 	if pid and pid ~= 0 then
 		state._reaper_reaped = true
 	end
@@ -375,7 +382,7 @@ local function poll_state(state)
 			state.exited = true
 			state.err    = state.err or 'reaper sentinel closed'
 		end
-		reap_reaper(state)
+		reap_reaper(state, true)
 		return true, state.code, state.signal, state.err
 	end
 
@@ -398,7 +405,7 @@ local function poll_state(state)
 				state.exited = true
 				state.err    = state.err or 'reaper sentinel closed'
 			end
-			reap_reaper(state)
+			reap_reaper(state, true)
 			break
 		end
 
@@ -410,7 +417,7 @@ local function poll_state(state)
 				state.exited = true
 				state.err    = state.err or 'reaper sentinel closed'
 			end
-			reap_reaper(state)
+			reap_reaper(state, true)
 			break
 		end
 
@@ -428,7 +435,7 @@ local function poll_state(state)
 		if state.exited then
 			close_fd(state.sentinel)
 			state.sentinel = nil
-			reap_reaper(state)
+			reap_reaper(state, true)
 			break
 		end
 	end
@@ -609,7 +616,10 @@ end
 local function close_state(state)
 	close_fd(state.sentinel)
 	state.sentinel = nil
-	reap_reaper(state)
+	-- Terminal commands should reap the intermediate reaper synchronously
+	-- so completed commands do not accumulate as zombies.  If close() is
+	-- used on a still-running backend, keep the old non-blocking behaviour.
+	reap_reaper(state, state.exited or state._have_status)
 	return true, nil
 end
 

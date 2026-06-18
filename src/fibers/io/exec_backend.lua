@@ -1,6 +1,6 @@
 --
 -- Backend selector for process management.
--- Prefers pidfd backend where available, falls back to SIGCHLD/self-pipe.
+-- Prefers pidfd where available, then pure POSIX process backends, then nixio.
 --
 ---@module 'fibers.io.exec_backend'
 
@@ -22,7 +22,8 @@
 local candidates = {
 	'fibers.io.exec_backend.pidfd', -- Linux pidfd backend
 	'fibers.io.exec_backend.sigchld', -- Portable SIGCHLD + self-pipe backend (luaposix)
-	'fibers.io.exec_backend.nixio', -- Portable SIGCHLD + self-pipe backend (nixio)
+	'fibers.io.exec_backend.posix_reaper', -- luaposix reaper/sentinel backend (LuaJIT-safe)
+	'fibers.io.exec_backend.nixio', -- nixio reaper/sentinel backend
 }
 
 ---@type ExecBackendModule|nil

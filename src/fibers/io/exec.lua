@@ -478,12 +478,11 @@ function Command:shutdown_op(grace)
 		end
 
 		local choice_ev = op.boolean_choice(
-			self:run_op():wrap(function (status, code, signal, e)
-				return true, status, code, signal, e
-			end),
-			sleep.sleep_op(g):wrap(function ()
-				return false
-			end)
+			-- boolean_choice already prefixes the winning arm with a boolean.
+			-- Do not add another boolean here, otherwise shutdown_op returns
+			-- true, <status>, <code>, <signal> when the run arm wins.
+			self:run_op(),
+			sleep.sleep_op(g)
 		)
 
 		return choice_ev:wrap(function (is_exit, status, code, signal, e)
@@ -583,12 +582,8 @@ function Command:_shutdown_uninterruptible(grace)
 	-- Race exit against grace timer without involving scope cancellation.
 	local is_exit, _, _, _, _ = op.perform_raw(
 		op.boolean_choice(
-			self:run_op():wrap(function (st, c, sig, perr)
-				return true, st, c, sig, perr
-			end),
-			sleep.sleep_op(g):wrap(function ()
-				return false
-			end)
+			self:run_op(),
+			sleep.sleep_op(g)
 		)
 	)
 
