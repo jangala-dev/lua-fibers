@@ -3,8 +3,8 @@
 -- Channel primitives pass values. They do not inspect values with user code;
 -- selection belongs in the Op algebra.
 
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Op = require('fibers.base.op')
 local OpPack = Op._pack
 
@@ -17,14 +17,14 @@ local next_id = 0
 function ChannelKind.eval(channel, payload, ctx)
   local op = payload.op
   if op == 'get' then
-    local ph = Candidate.new_ph()
-    local c = Candidate.new(OpPack(ph))
+    local ph = Proposal.new_ph()
+    local c = Proposal.new(OpPack(ph))
     c.endpoints[#c.endpoints + 1] = { kind = 'rendezvous', primitive = 'channel', role = 'get', key = channel, ph = ph, origin = ctx.origin }
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'put' then
-    local c = Candidate.new(OpPack(true))
+    local c = Proposal.new(OpPack(true))
     c.endpoints[#c.endpoints + 1] = { kind = 'rendezvous', primitive = 'channel', role = 'put', key = channel, value = payload.value, origin = ctx.origin }
-    return Result.cands({ c })
+    return Result.ready(c)
   end
   error('unknown channel operation ' .. tostring(op), 2)
 end

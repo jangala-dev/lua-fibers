@@ -8,8 +8,8 @@
 
 local DefaultOp = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local EffectSet = require('fibers.kernel.effect.set')
 local Effect = require('fibers.base.effect')
 local Ownership = require('fibers.internal.ownership')
@@ -251,7 +251,7 @@ local function any_claimed(subtree)
 end
 
 local function read_only_candidate(region, value)
-  local c = Candidate.new(OpPack(value))
+  local c = Proposal.new(OpPack(value))
   read_region(c, region)
   return c
 end
@@ -342,7 +342,7 @@ end
 local function admit_candidate(region, owned_spec, expected_owner, ctx)
   if is_sealed(ctx, region) then return nil end
   local records, root = spec_to_records(owned_spec)
-  local c = Candidate.new(OpPack(root))
+  local c = Proposal.new(OpPack(root))
   local rrec = read_region(c, region)
   for item, record in pairs(records) do
     local current_owner = Resource.project(ctx, item, 'owner')
@@ -358,7 +358,7 @@ end
 local function release_candidate(region, item, ctx)
   local current_owner = Resource.project(ctx, item, 'owner')
   if current_owner ~= region then return nil end
-  local c = Candidate.new(OpPack(item))
+  local c = Proposal.new(OpPack(item))
   local rrec = read_region(c, region)
   local record = record_for(ctx, region, item)
   if not record then return nil end
@@ -387,7 +387,7 @@ local function claim_candidate(region, item, purpose, ctx)
   if any_claimed(subtree) then return nil end
   local records = collect_subtree_list_from_map(map, item)
   local claim = Claim.new(region, item, records, purpose)
-  local c = Candidate.new(OpPack(claim))
+  local c = Proposal.new(OpPack(claim))
   local rrec = read_region(c, region)
   for child, record in pairs(subtree) do
     local updated = copy_record_internal(record)
@@ -425,7 +425,7 @@ local function settle_claim_candidate(region, claim, ctx)
     if (record.phase or 'live') ~= 'claimed' then return nil end
     if record.claim ~= claim then return nil end
   end
-  local c = Candidate.new(OpPack(item))
+  local c = Proposal.new(OpPack(item))
   local rrec = read_region(c, region)
   for child, record in pairs(subtree) do
     rrec.remove[child] = copy_record_internal(record)
@@ -452,7 +452,7 @@ local function settlement_failure_candidate(region, claim, failure, ctx)
   local subtree = collect_subtree_from_map(map, item)
   if not next(subtree) then return nil end
   local message = tostring(failure)
-  local c = Candidate.new(OpPack(item, failure))
+  local c = Proposal.new(OpPack(item, failure))
   local rrec = read_region(c, region)
   for child, record in pairs(subtree) do
     if record.claim ~= claim then return nil end
@@ -484,7 +484,7 @@ local function reassign_candidate(region, item, to_region, ctx)
   local subtree = collect_subtree_from_map(map, item)
   if any_claimed(subtree) then return nil end
 
-  local c = Candidate.new(OpPack(item))
+  local c = Proposal.new(OpPack(item))
   local from_rec = read_region(c, region)
   local to_rec = read_region(c, to_region)
   for child, record in pairs(subtree) do
@@ -500,65 +500,93 @@ function RegionKind.eval(region, payload, ctx)
   if op == 'admit' then
     local c = admit_candidate(region, payload.owned or payload.item, payload.from_owner, ctx)
     if not c then return Result.none() end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'release' then
     local c = release_candidate(region, payload.item, ctx)
     if not c then return Result.none() end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'claim' then
     local c = claim_candidate(region, payload.item, payload.purpose, ctx)
     if not c then return Result.none() end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'settle_claim' then
     local c = settle_claim_candidate(region, payload.claim, ctx)
     if not c then return Result.none() end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'settlement_failed' then
     local c = settlement_failure_candidate(region, payload.claim, payload.error, ctx)
     if not c then return Result.none() end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'reassign' then
     local c = reassign_candidate(region, payload.item, payload.to_region, ctx)
     if not c then return Result.none() end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'seal' then
     if is_sealed(ctx, region) then return Result.none() end
-    local c = Candidate.new(OpPack(true))
+    local c = Proposal.new(OpPack(true))
     local rec = read_region(c, region)
     rec.seal = true
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'is_open' then
-    local c = Candidate.new(OpPack(not is_sealed(ctx, region)))
+    local c = Proposal.new(OpPack(not is_sealed(ctx, region)))
     read_region(c, region)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'owns' then
-    local c = Candidate.new(OpPack(Resource.project(ctx, payload.item, 'owner') == region))
+    local c = Proposal.new(OpPack(Resource.project(ctx, payload.item, 'owner') == region))
     read_region(c, region); read_owned(c, payload.item)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'record' then
-    local c = Candidate.new(OpPack(Resource.project(ctx, region, { op = 'record', item = payload.item })))
+    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'record', item = payload.item })))
     read_region(c, region)
     if payload.item then read_owned(c, payload.item) end
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'children' then
-    local c = Candidate.new(OpPack(Resource.project(ctx, region, { op = 'children', item = payload.item }) or {}))
+    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'children', item = payload.item }) or {}))
     read_region(c, region)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'subtree' then
-    local c = Candidate.new(OpPack(Resource.project(ctx, region, { op = 'subtree', item = payload.item }) or {}))
+    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'subtree', item = payload.item }) or {}))
     read_region(c, region)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'snapshot' then
-    local c = Candidate.new(OpPack(Resource.project(ctx, region, 'snapshot')))
+    local c = Proposal.new(OpPack(Resource.project(ctx, region, 'snapshot')))
     read_region(c, region)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'members' then
     local owned = Resource.project(ctx, region, 'members') or {}
-    local c = Candidate.new(OpPack(owned))
+    local c = Proposal.new(OpPack(owned))
     read_region(c, region)
-    return Result.cands({ c })
+    return Result.ready(c)
   end
   error('unknown region operation ' .. tostring(op), 2)
+end
+
+
+local function observe_payload_item(ctx, item, label)
+  if item ~= nil and type(ctx.observe_version) == 'function' then ctx:observe_version(item, label) end
+end
+
+function RegionKind.absence(region, payload, ctx)
+  -- Region absence depends on both the region membership version and the
+  -- relevant owner-bearing handle version.  This guards fallbacks against
+  -- concurrent admission, release, claim settlement, and reassignment.
+  ctx:observe_version(region, 'region')
+  local op = payload and payload.op
+  if op == 'admit' then
+    local owned = payload.owned or payload.item
+    observe_payload_item(ctx, owned and owned.item or owned, 'owned-item')
+    observe_payload_item(ctx, payload.from_owner, 'from-owner')
+  elseif op == 'settle_claim' or op == 'settlement_failed' then
+    local claim = payload.claim
+    observe_payload_item(ctx, claim and claim.root, 'claim-root')
+    observe_payload_item(ctx, claim and claim.region, 'claim-region')
+  elseif op == 'reassign' then
+    observe_payload_item(ctx, payload.item, 'item')
+    observe_payload_item(ctx, payload.to_region, 'target-region')
+  else
+    observe_payload_item(ctx, payload and payload.item, 'item')
+  end
+  return true
 end
 
 function RegionKind.summary(_payload, out) out.resources = true; out.dynamic = true; out.closed = false end

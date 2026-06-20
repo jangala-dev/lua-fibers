@@ -202,7 +202,7 @@ fibers.host               host adapter helpers
 fibers.host.*             host helpers, HostHandle/fd support, and standalone/test host adapters
 fibers.runner             standalone Runtime runner over a host
 fibers.kernel             aggregate for advanced runtime/embedding use
-fibers.kernel.*           solver, resources, commit and effect machinery
+fibers.kernel.*           runtime, transaction net, resources, waits and effects
 fibers.internal.*         private implementation detail
 ```
 
@@ -330,7 +330,6 @@ docs/structure.md      repository layers and placement rules
 docs/algebra.md        operation algebra and semantic distinctions
 docs/kernel/resources.md      open resource protocol
 docs/kernel/resource-laws.md  open resource and effect laws
-docs/kernel/certificate.md  bounded-search certificate discipline
 docs/effects.md   typed transaction effects / effects
 docs/facilities/sleep.md      sleep as a facility over clock sources
 docs/facilities/lifetimes.md  regions, tasks and ownership

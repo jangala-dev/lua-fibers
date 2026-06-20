@@ -4,8 +4,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
 local Resource = require('fibers.kernel.resources.protocol')
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 
 local pack_ = Op._pack
 
@@ -55,14 +55,14 @@ end
 
 function BoxKind.eval(box, payload, ctx)
   if payload.op == 'get' then
-    local c = Candidate.new(pack_(Resource.project(ctx, box, 'value')))
+    local c = Proposal.new(pack_(Resource.project(ctx, box, 'value')))
     read_rec(c, box)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif payload.op == 'set' then
-    local c = Candidate.new(pack_(true))
+    local c = Proposal.new(pack_(true))
     local rec = read_rec(c, box)
     rec.has_write, rec.write = true, payload.value
-    return Result.cands({ c })
+    return Result.ready(c)
   end
   error('unknown box operation')
 end

@@ -4,8 +4,8 @@
 -- common mechanics used by small resources: observed version, read-only
 -- candidates, typed wakes, and changed waits.
 
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Resource = require('fibers.kernel.resources.protocol')
 local EffectSet = require('fibers.kernel.effect.set')
 local Wait = require('fibers.kernel.wait')
@@ -30,7 +30,7 @@ function Versioned.ensure(c, obj, kind, version)
 end
 
 function Versioned.read_only(obj, kind, version, pack, ...)
-  local c = Candidate.new(pack(...))
+  local c = Proposal.new(pack(...))
   Versioned.ensure(c, obj, kind, version)
   return c
 end
@@ -45,7 +45,7 @@ end
 function Versioned.changed_result(obj, kind, version, wait_kind, payload, pack, value)
   local current = obj.version or 0
   if version ~= current then
-    return Result.cands({ Versioned.read_only(obj, kind, current, pack, value) })
+    return Result.ready(Versioned.read_only(obj, kind, current, pack, value))
   end
   return Result.wait(Wait.resource(wait_kind, obj._fibers_id, obj, payload))
 end

@@ -5,8 +5,8 @@
 
 local Op = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Wait = require('fibers.kernel.wait')
 local Versioned = require('fibers.kernel.resources.versioned')
 local Errors = require('fibers.facility.flow.errors')
@@ -32,7 +32,7 @@ local function state_from(ep, rec)
 end
 
 local function read_only(ep, version, ...)
-  local c = Candidate.new(OpPack(...))
+  local c = Proposal.new(OpPack(...))
   ensure_record(c, ep, version)
   return c
 end
@@ -97,38 +97,44 @@ function EndpointKind.eval(ep, payload, ctx)
   local version = Versioned.observe(ctx, ep)
   local rec = Versioned.overlay_rec(ctx, ep)
   local st = state_from(ep, rec)
-  if op == 'inspect' then return Result.cands({ read_only(ep, version, st) })
+  if op == 'inspect' then return Result.ready(read_only(ep, version, st))
   elseif op == 'open' then
-    if st.error then return Result.cands({ read_only(ep, version, nil, st.error) }) end
-    if not st.open then return Result.cands({ read_only(ep, version, nil, payload.closed_error or Errors.CLOSED) }) end
-    return Result.cands({ read_only(ep, version, true) })
+    if st.error then return Result.ready(read_only(ep, version, nil, st.error)) end
+    if not st.open then return Result.ready(read_only(ep, version, nil, payload.closed_error or Errors.CLOSED)) end
+    return Result.ready(read_only(ep, version, true))
   elseif op == 'closed' then
-    if not st.open then return Result.cands({ read_only(ep, version, st.reason or true) }) end
+    if not st.open then return Result.ready(read_only(ep, version, st.reason or true)) end
     return Result.wait(Wait.resource('flow:endpoint:closed', ep._fibers_id, ep, { op = 'closed' }))
   elseif op == 'terminal' then
-    if st.error then return Result.cands({ read_only(ep, version, nil, st.error) }) end
-    if not st.open then return Result.cands({ read_only(ep, version, nil, payload.default_error or st.reason or Errors.CLOSED) }) end
+    if st.error then return Result.ready(read_only(ep, version, nil, st.error)) end
+    if not st.open then return Result.ready(read_only(ep, version, nil, payload.default_error or st.reason or Errors.CLOSED)) end
     return Result.wait(Wait.resource('flow:endpoint:terminal', ep._fibers_id, ep, { op = 'terminal' }))
   elseif op == 'error' then
-    if st.error then return Result.cands({ read_only(ep, version, st.error) }) end
+    if st.error then return Result.ready(read_only(ep, version, st.error)) end
     return Result.wait(Wait.resource('flow:endpoint:error', ep._fibers_id, ep, { op = 'error' }))
   elseif op == 'close' or op == 'shutdown' then
-    if not st.open then return Result.cands({ read_only(ep, version, true) }) end
-    local c = Candidate.new(OpPack(true))
+    if not st.open then return Result.ready(read_only(ep, version, true)) end
+    local c = Proposal.new(OpPack(true))
     local r = ensure_record(c, ep, version)
     r.has_open = true; r.open = false; r.has_reason = true; r.reason = payload.reason
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'fail' then
-    if st.error == payload.error then return Result.cands({ read_only(ep, version, true) }) end
-    local c = Candidate.new(OpPack(true))
+    if st.error == payload.error then return Result.ready(read_only(ep, version, true)) end
+    local c = Proposal.new(OpPack(true))
     local r = ensure_record(c, ep, version)
     r.has_error = true; r.error = payload.error or Errors.FLOW_ERROR; r.has_open = true; r.open = false
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'changed' then
-    if version ~= payload.version then return Result.cands({ read_only(ep, version, st) }) end
+    if version ~= payload.version then return Result.ready(read_only(ep, version, st)) end
     return Result.wait(Wait.resource('flow:endpoint:changed', ep._fibers_id, ep, { op = 'changed', version = payload.version }))
   end
   error('unknown Flow endpoint operation ' .. tostring(op), 2)
+end
+
+
+function EndpointKind.absence(ep, _payload, ctx)
+  ctx:observe_version(ep, 'flow-endpoint')
+  return true
 end
 
 function EndpointKind.summary(_payload, out) out.resources = true; out.dynamic = true; out.closed = false end

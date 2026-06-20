@@ -166,4 +166,24 @@ do
   assert_eq(backend:written(), 'xy')
 end
 
+
+-- Repeated bounded readiness should not reuse stale continuation frames across
+-- cursor suspension, source arrival and resume.  This covers the case where a
+-- single visible branch must still be treated as a speculative descent: if it
+-- later yields or fails, the attempt state must not retain a half-consumed
+-- continuation stack.
+do
+  for i = 1, 24 do
+    local rt = Runtime.new()
+    local src, feed = rt:readiness('handle-stress-' .. tostring(i), 'readiness-bounded-stress')
+    local ok, key, mode
+    rt:spawn_raw(function() ok, key, mode = rt:perform(src:readable_op()) end, 'stress-readiness-waiter')
+    for _ = 1, 8 do rt:step({ max_work = 1 }) end
+    feed:readable()
+    drive_until(rt, function() return ok == true end, 'bounded readiness stress should resume', true)
+    assert_eq(key, 'handle-stress-' .. tostring(i))
+    assert_eq(mode, 'read')
+  end
+end
+
 print('tests/test_readiness.lua: ok')

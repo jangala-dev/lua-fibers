@@ -48,11 +48,11 @@ example, a cell increment is written as `read_op():and_then(...)` followed by
 the cell resource protocol.
 
 
-## Certificate
+## Observation validation
 
 Resource evaluation must not make unrecorded observations of mutable runtime,
 resource, or host state.  Such observations go through the attempt context and
-are recorded in the certificate.
+are recorded on the candidate world for validation before commit.
 
 Use:
 
@@ -68,9 +68,9 @@ or, for a custom observable object:
 local view, stamp = ctx:observe(object)
 ```
 
-The certificate answers a different question from resource preparation:
-it decides whether a paused bounded search may continue.  `prepare` still
-validates that a selected resource journal can commit.
+World observation validation answers a different question from resource preparation:
+it decides whether the facts observed while constructing a candidate world still
+hold.  `prepare` still validates that a selected resource journal can commit.
 
 ## Journals
 

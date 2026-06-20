@@ -15,8 +15,9 @@
 
 local DefaultOp = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local KernelResources = require('fibers.kernel.resources')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Wait = require('fibers.kernel.wait')
 local OpPack = DefaultOp._pack
 
@@ -78,17 +79,19 @@ local function ensure_source(c, source, version)
 end
 
 function SourceKind.clone(rec)
-  return { kind = SourceKind, read = rec.read, take = rec.take or 0 }
+  return { kind = SourceKind, read = rec.read, take = rec.take or 0, head = rec.head }
 end
 
 function SourceKind.merge_seq(dst, src)
   if src.read ~= nil and dst.read == nil then dst.read = src.read end
+  if src.head ~= nil and dst.head == nil then dst.head = src.head end
   dst.take = (dst.take or 0) + (src.take or 0)
   return true
 end
 
 function SourceKind.merge_par(dst, src)
   if src.read ~= nil and dst.read == nil then dst.read = src.read end
+  if src.head ~= nil and dst.head == nil then dst.head = src.head end
   if (dst.take or 0) > 0 and (src.take or 0) > 0 then
     return false, 'source-queue-parallel-consume-conflict'
   end
@@ -109,18 +112,19 @@ function SourceKind.project(source, rec, query)
 end
 
 function SourceKind.prepare(source, rec, _resolve)
-  if rec.read ~= nil and (source.version or 0) ~= rec.read then return nil, 'stale' end
   local take = rec.take or 0
   if take <= 0 then return nil, nil, true end
   if source.kind ~= 'queue' then return nil, 'source-consume-non-queue' end
+  if rec.head ~= nil and (source.head or 1) ~= rec.head then return nil, 'stale' end
   if queue_count(source) < take then return nil, 'stale' end
-  return { kind = SourceKind, resource = source, take = take }
+  return { kind = SourceKind, resource = source, take = take, head = rec.head or (source.head or 1) }
 end
 
 function SourceKind.apply(prepared, _log)
   local source = prepared.resource
   local take = prepared.take or 0
   if take <= 0 then return end
+  local was_count = queue_count(source)
   source.head = (source.head or 1) + take
   if source.head > (source.tail or 0) then
     source.queue = {}
@@ -128,6 +132,10 @@ function SourceKind.apply(prepared, _log)
     source.tail = 0
   end
   source.version = (source.version or 0) + 1
+  KernelResources.invalidate_source(source, 'queue.head', nil, 'queue head consumed')
+  if was_count > 0 and queue_count(source) <= 0 then
+    KernelResources.invalidate_source(source, 'queue.empty', nil, 'queue became empty')
+  end
 end
 
 local function observe_version(ctx, obj)
@@ -138,10 +146,17 @@ local function observe_version(ctx, obj)
   return obj.version or 0
 end
 
-local function before(ctx, deadline)
+local function observe_source_frontier(ctx, source, kind, key)
+  if ctx and ctx.observe_frontier and (ctx.collect_frontiers or ctx.observer) then
+    return ctx:observe_frontier(KernelResources.source_frontier(source, kind, key))
+  end
+  return nil
+end
+
+local function before(ctx, source, deadline)
   if ctx then
     local f = ctx.before
-    if f then f(ctx, deadline) end
+    if f then f(ctx, source, deadline) end
   end
   return deadline
 end
@@ -155,21 +170,23 @@ local function observed_now(ctx)
 end
 
 local function signal_wait(source, payload, ctx)
-  observe_version(ctx, source)
-  if source.ready then return Result.cands({ Candidate.new(source.vals or OpPack(true)) }) end
+  observe_source_frontier(ctx, source, 'signal.state')
+  if source.ready then return Result.ready(Proposal.new(source.vals or OpPack(true))) end
   return Result.wait(Wait.source(source, payload.interest or 'ready', { kind = 'signal' }))
 end
 
 local function queue_next(source, _payload, ctx)
-  local version = observe_version(ctx, source)
   local value = Resource.project(ctx, source, 'next')
   if value == nil then
+    observe_source_frontier(ctx, source, 'queue.empty')
     return Result.wait(Wait.source(source, 'next', { kind = 'queue' }))
   end
-  local c = Candidate.new(value)
-  local rec = ensure_source(c, source, version)
+  observe_source_frontier(ctx, source, 'queue.head')
+  local c = Proposal.new(value)
+  local rec = ensure_source(c, source, nil)
+  rec.head = rec.head or (source.head or 1)
   rec.take = (rec.take or 0) + 1
-  return Result.cands({ c })
+  return Result.ready(c)
 end
 
 function SourceKind.eval(source, payload, ctx)
@@ -185,15 +202,15 @@ function SourceKind.eval(source, payload, ctx)
   elseif source.kind == 'clock' then
     local deadline = payload.deadline
     local now = observed_now(ctx)
-    if now >= deadline then return Result.cands({ Candidate.new(OpPack(true, now)) }) end
-    before(ctx, deadline)
+    if now >= deadline then return Result.ready(Proposal.new(OpPack(true, now))) end
+    before(ctx, source, deadline)
     return Result.wait(Wait.time(deadline, source))
   elseif source.kind == 'readiness' then
     if op ~= 'wait' then error('readiness sources support wait_op/readable_op/writable_op', 2) end
     local mode = normalise_readiness_mode(payload.mode or source.mode or 'read')
     local key = payload.key or source.key
-    observe_version(ctx, source)
-    if readiness_is_set(source, mode) then return Result.cands({ Candidate.new(OpPack(true, key, mode)) }) end
+    observe_source_frontier(ctx, source, 'readiness', mode)
+    if readiness_is_set(source, mode) then return Result.ready(Proposal.new(OpPack(true, key, mode))) end
     return Result.wait(Wait.source(source, tostring(mode) .. ':' .. tostring(key), { kind = 'readiness', key = key, mode = mode }))
   end
 

@@ -1,12 +1,14 @@
--- Generic algebraic resource participation protocol.
+-- Open-world resource participation protocol for the semantic transaction net.
 --
--- Candidates carry sparse resource proposal records:
---   candidate.res[resource] = record
---   record.kind             = capability table
+-- Resource proposals carry sparse records:
+--   proposal.res[resource] = record
+--   record.kind            = capability table
 --
--- The protocol is open-world: it does not know whether a record belongs to a
--- cell, semaphore, queue, or future resource.  The record kind owns
--- clone, merge, projection, preparation and application.
+-- The generic layer does not know whether a record belongs to a cell, region,
+-- flow reservoir, endpoint, queue, or future resource.  The resource kind owns
+-- clone, sequential/parallel merge, projection, preparation and application.
+-- Kinds may also expose `absence(resource, payload, ctx)`; or_else fallback
+-- worlds then validate the specific mutable facts named by the resource kind.
 
 local EffectSet = require('fibers.kernel.effect.set')
 

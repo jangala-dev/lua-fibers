@@ -16,8 +16,8 @@
 -- preserves byte order while keeping the first lease algebra simple.
 
 local Op = require('fibers.base.op')
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Wait = require('fibers.kernel.wait')
 local Versioned = require('fibers.kernel.resources.versioned')
 local Errors = require('fibers.facility.flow.errors')
@@ -200,7 +200,7 @@ local function note(c, res, version, op)
 end
 
 local function ro(res, version, ...)
-  return Result.cands({ Versioned.read_only(res, ReservoirKind, version, OpPack, ...) })
+  return Result.ready(Versioned.read_only(res, ReservoirKind, version, OpPack, ...))
 end
 
 local function wait(res, detail)
@@ -212,9 +212,9 @@ local function wake_set(res)
 end
 
 local function commit_free(res, version, n)
-  local c = Candidate.new(OpPack(true, n))
+  local c = Proposal.new(OpPack(true, n))
   note(c, res, version, { kind = 'free', n = n })
-  return Result.cands({ c })
+  return Result.ready(c)
 end
 
 local function commit_peek(res, version, st, n)
@@ -224,9 +224,9 @@ end
 local function commit_append(res, version, bytes)
   bytes = as_bytes(bytes)
   if bytes == '' then return ro(res, version, 0) end
-  local c = Candidate.new(OpPack(#bytes))
+  local c = Proposal.new(OpPack(#bytes))
   note(c, res, version, { kind = 'append', bytes = bytes })
-  return Result.cands({ c })
+  return Result.ready(c)
 end
 
 local function lease_handle(res, id, l)
@@ -361,9 +361,9 @@ function ReservoirKind.eval(res, payload, ctx)
     return wait(res, { op = 'leases_empty' })
   elseif op == 'settle' then
     if queued_length(st) == 0 and leased_length(st.leases) == 0 then return ro(res, version, true) end
-    local c = Candidate.new(OpPack(true, inspect(res, st)))
+    local c = Proposal.new(OpPack(true, inspect(res, st)))
     note(c, res, version, { kind = 'settle', reason = payload.reason })
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'lease_some' then
     local owner = payload.owner
     local existing_id, existing = first_lease_for(st, owner)
@@ -376,9 +376,9 @@ function ReservoirKind.eval(res, payload, ctx)
     local id = tostring(res._fibers_id) .. ':lease:' .. tostring(seq)
     local bytes = st.rope:peek(n)
     local lease = Lease.new(res, id, owner, bytes)
-    local c = Candidate.new(OpPack(lease))
+    local c = Proposal.new(OpPack(lease))
     note(c, res, version, { kind = 'lease', id = id, seq = seq, n = n, owner = owner })
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'lease_existing' then
     local id, l = first_lease_for(st, payload.owner)
     if l then return ro(res, version, lease_handle(res, id, l)) end
@@ -391,27 +391,33 @@ function ReservoirKind.eval(res, payload, ctx)
     local n = as_nonneg_int(payload.n, 0, 'Flow lease acknowledgement')
     if n > #(l.bytes or '') then return ro(res, version, nil, Errors.LEASE_ACK_TOO_LARGE) end
     local remaining = string.sub(l.bytes or '', n + 1)
-    local c = Candidate.new(OpPack(true, n, remaining))
+    local c = Proposal.new(OpPack(true, n, remaining))
     note(c, res, version, { kind = 'ack', id = id, n = n, owner = payload.owner })
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'return_lease' then
     local id = payload.id
     if not st.leases[id] then return ro(res, version, nil, Errors.NO_LEASE) end
-    local c = Candidate.new(OpPack(true))
+    local c = Proposal.new(OpPack(true))
     note(c, res, version, { kind = 'return', id = id })
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'fail_lease' then
     local id = payload.id
     if not st.leases[id] then return ro(res, version, nil, Errors.NO_LEASE) end
-    local c = Candidate.new(OpPack(true))
+    local c = Proposal.new(OpPack(true))
     note(c, res, version, { kind = 'drop_lease', id = id, error = payload.error })
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'changed' then
     if version ~= payload.version then return ro(res, version, inspect(res, st)) end
     return wait(res, { op = 'changed', version = payload.version })
   end
 
   error(Errors.RESERVOIR_UNKNOWN_OP .. ':' .. tostring(op), 2)
+end
+
+
+function ReservoirKind.absence(res, _payload, ctx)
+  ctx:observe_version(res, 'flow-reservoir')
+  return true
 end
 
 function ReservoirKind.summary(_payload, out) out.resources = true; out.dynamic = true; out.closed = false end

@@ -6,8 +6,9 @@
 -- algebra; fixed state transitions belong in specialised resources.
 
 local Resource = require('fibers.kernel.resources.protocol')
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local KernelResources = require('fibers.kernel.resources')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Op = require('fibers.base.op')
 local Wait = require('fibers.kernel.wait')
 local OpPack = Op._pack
@@ -88,6 +89,7 @@ function CellKind.apply(prepared, _log)
   local cell = prepared.resource
   cell.value = prepared.write
   cell.version = (cell.version or 0) + 1
+  KernelResources.invalidate_object(cell, 'cell write')
 end
 
 local function observe_version(ctx, obj)
@@ -102,26 +104,26 @@ function CellKind.eval(cell, payload, ctx)
   local op = payload.op
   if op == 'read' then
     local version = observe_version(ctx, cell)
-    local c = Candidate.new(OpPack(Resource.project(ctx, cell, 'value')))
+    local c = Proposal.new(OpPack(Resource.project(ctx, cell, 'value')))
     read_record(c, cell, version)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'snapshot' then
     local version = observe_version(ctx, cell)
-    local c = Candidate.new(OpPack(Resource.project(ctx, cell, 'snapshot')))
+    local c = Proposal.new(OpPack(Resource.project(ctx, cell, 'snapshot')))
     read_record(c, cell, version)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'write' then
     local version = observe_version(ctx, cell)
-    local c = Candidate.new(OpPack(true))
+    local c = Proposal.new(OpPack(true))
     write_record(c, cell, payload.value, version)
-    return Result.cands({ c })
+    return Result.ready(c)
   elseif op == 'changed' then
     local observed = observe_version(ctx, cell)
     local version = Resource.project(ctx, cell, 'version')
     if version ~= payload.version then
-      local c = Candidate.new(OpPack(Resource.project(ctx, cell, 'value'), version))
+      local c = Proposal.new(OpPack(Resource.project(ctx, cell, 'value'), version))
       read_record(c, cell, observed)
-      return Result.cands({ c })
+      return Result.ready(c)
     end
     return Result.wait(Wait.resource('cell', cell._fibers_id, cell, { op = 'changed', version = payload.version }))
   end

@@ -25,8 +25,8 @@ fibers/runner.lua
 
 fibers/kernel.lua
 fibers/kernel/
-  the eventful transaction engine: runtime, solver, resources, commit plans,
-  wait interests, certificates, protected calls and effect machinery
+  the eventful transaction engine: runtime, transaction net, resource frontier,
+  wait interests, protected calls and effect machinery
 
 fibers/internal/
   private implementation details and invariants

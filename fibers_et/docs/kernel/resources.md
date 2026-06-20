@@ -1,7 +1,7 @@
 # Resource implementation process
 
-The resource protocol is open-world.  The evaluator, solver and runtime do not
-know whether a resource is a cell, event, queue, semaphore or user type.
+The resource protocol is open-world.  The transaction net and runtime do not
+know whether a resource is a cell, event, queue, flow reservoir or user type.
 A resource participates by returning `Op._resource(resource, kind, payload)` and
 by providing a kind table with the relevant capabilities.
 
@@ -13,8 +13,9 @@ A resource operation follows this path:
 public method
   -> Op._resource(resource, Kind, payload)
   -> Kind.eval(resource, payload, ctx)
-  -> candidates / waits / rendezvous endpoints / resource records
-  -> generic solver search
+  -> resource candidates or waits
+  -> semantic transaction-net search
+  -> optional absence certification for or_else
   -> Kind.prepare(resource, record, resolve)
   -> prepared resource commits
   -> Kind.apply(prepared, log)
@@ -36,6 +37,7 @@ eval
 project
 merge_seq
 merge_par
+absence
 prepare
 apply
 summary
@@ -126,13 +128,13 @@ resources may not need `clone`, `merge_*`, `project`, `prepare` or `apply`.
 ## Evaluation
 
 `Kind.eval(resource, payload, ctx)` evaluates the resource operation in the
-current instant.  It returns an `fibers.kernel.algebra.result` value.
+current instant.  It returns an `fibers.kernel.resources.result` value.
 
 Useful helpers:
 
 ```lua
-local Candidate = require('fibers.kernel.algebra.candidate')
-local Result = require('fibers.kernel.algebra.result')
+local Proposal = require('fibers.kernel.resources.proposal')
+local Result = require('fibers.kernel.resources.result')
 local Resource = require('fibers.kernel.resources.protocol')
 local pack = require('fibers.base.op')._pack
 ```
@@ -140,7 +142,7 @@ local pack = require('fibers.base.op')._pack
 Return current candidates with:
 
 ```lua
-return Result.cands({ candidate })
+return Result.ready(candidate })
 ```
 
 Return absence with:
@@ -162,10 +164,10 @@ projected view:
 function BoxKind.eval(box, payload, ctx)
   if payload.op == 'get' then
     local version = ctx:observe_version(box)
-    local c = Candidate.new(pack(Resource.project(ctx, box, 'value')))
+    local c = Proposal.new(pack(Resource.project(ctx, box, 'value')))
     local rec = Resource.ensure(c, box, BoxKind)
     rec.read = rec.read or version
-    return Result.cands({ c })
+    return Result.ready(c })
   end
 end
 ```
@@ -174,7 +176,7 @@ The important points are that reads should use `Resource.project(ctx, resource,
 query)`, not the committed field directly, when they need to see tentative writes
 from earlier operations in the same transaction; and that mutable committed or
 host state should be observed through the attempt context so bounded search can
-record an certificate.
+record a world observation.
 
 ## Resource records
 
@@ -386,8 +388,8 @@ protocol matches endpoints with the same `key` and opposite `role`.
 Get endpoint:
 
 ```lua
-local ph = Candidate.new_ph()
-local c = Candidate.new(pack(ph))
+local ph = Proposal.new_ph()
+local c = Proposal.new(pack(ph))
 c.endpoints[#c.endpoints + 1] = {
   kind = 'rendezvous',
   role = 'get',
@@ -395,13 +397,13 @@ c.endpoints[#c.endpoints + 1] = {
   ph = ph,
   origin = ctx.origin,
 }
-return Result.cands({ c })
+return Result.ready(c })
 ```
 
 Put endpoint:
 
 ```lua
-local c = Candidate.new(pack(true))
+local c = Proposal.new(pack(true))
 c.endpoints[#c.endpoints + 1] = {
   kind = 'rendezvous',
   role = 'put',
@@ -409,7 +411,7 @@ c.endpoints[#c.endpoints + 1] = {
   value = payload.value,
   origin = ctx.origin,
 }
-return Result.cands({ c })
+return Result.ready(c })
 ```
 
 `tensor` may close compatible endpoints internally when topology permits it.
@@ -426,7 +428,7 @@ candidate when it is ready.
 ```lua
 function EventKind.eval(event, payload, _ctx)
   if event.ready then
-    return Result.cands({ Candidate.new(event.vals or pack(true)) })
+    return Result.ready(Proposal.new(event.vals or pack(true)) })
   end
   return Result.wait({ kind = 'wakeup', source = event, interest = 'ready' })
 end

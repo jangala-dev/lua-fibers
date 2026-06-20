@@ -1,9 +1,7 @@
-local Cursor = require('fibers.kernel.solver.cursor')
-local Search = require('fibers.kernel.solver.search')
-local CommitPlan = require('fibers.kernel.commit.plan')
-local Resource = require('fibers.kernel.resources.protocol')
+local Net = require('fibers.kernel.transaction_net')
 local Op = require('fibers.base.op')
 local Wait = require('fibers.kernel.wait')
+local Resources = require('fibers.kernel.resources')
 local Source = require('fibers.base.source')
 local SourceState = require('fibers.internal.source_state')
 local Interrupt = require('fibers.internal.interrupt')
@@ -87,6 +85,7 @@ function Runtime.new(opts)
 
     _epoch = 0,
     _cursor = nil,
+    _net_wait_cache = nil,
     _phase = 'external',
     _current_fibre = nil,
     _driver_depth = 0,
@@ -95,7 +94,12 @@ function Runtime.new(opts)
 end
 
 function Runtime:_bump_epoch()
+  if self._cursor and self._cursor.dispose then self._cursor:dispose() end
+  if self._net_wait_cache and self._net_wait_cache.observer and self._net_wait_cache.observer.dispose then
+    self._net_wait_cache.observer:dispose()
+  end
   self._cursor = nil
+  self._net_wait_cache = nil
   self._epoch = (self._epoch or 0) + 1
 end
 
@@ -116,7 +120,6 @@ function Runtime:arrive(source, ...)
   self:_require_driver_call('arrive', 2)
   if not source or source._fibers_kind ~= Source.Kind then error('Runtime:arrive expects a Source', 2) end
   SourceState.arrive(source, ...)
-  self:_invalidate_cursor()
   return source
 end
 
@@ -125,7 +128,6 @@ function Runtime:_clear_source(source, ...)
   self:_require_driver_call('clear source', 2)
   if not source or source._fibers_kind ~= Source.Kind then error('Runtime:_clear_source expects a Source', 2) end
   SourceState.clear(source, ...)
-  self:_invalidate_cursor()
   return source
 end
 
@@ -449,60 +451,112 @@ function Runtime:perform(opnode, opts)
   return unpack_(vals, 1, vals.n or #vals)
 end
 
-function Runtime:_apply_commit_plan(plan)
-  assert(CommitPlan.is_plan(plan), 'expected certified commit plan')
-
-  local prepared = plan.prepared_resources
-  local prepared_effects = plan.prepared_effects
-
-  if prepared then
-    local old = self:_set_phase('commit')
-    for i = 1, #prepared do Resource.apply_prepared(prepared[i]) end
-    self:_restore_phase(old)
+local function pending_from_waiting(waiting)
+  local pending = {}
+  for i = 1, #waiting do
+    local f = waiting[i]
+    local w = f and f.waiting
+    if w and w.op then pending[f.id or i] = { fiber = f, op = w.op, attempt = w.attempt } end
   end
+  return pending
+end
 
-  if prepared_effects then
-    for i = 1, #prepared_effects do
-      local pc = prepared_effects[i]
-      local entry = {
-        kind = pc.kind_name or (pc.kind and pc.kind.name) or tostring(pc.kind),
-        key = pc.key,
-        payload = pc.payload,
-      }
-      self:_call_fatal_in_phase('effect', 'effect_error', true, function()
-        return pc.discharge(self, entry)
-      end)
+local function pending_has_any(pending)
+  for _ in pairs(pending or {}) do return true end
+  return false
+end
+
+
+local function observer_valid(observer)
+  return observer ~= nil and observer.valid ~= false
+end
+
+local function dispose_observer(observer)
+  if observer and observer.dispose then observer:dispose() end
+end
+
+function Runtime:_find_net_outcome(waiting, opts)
+  local pending = pending_from_waiting(waiting)
+  if not pending_has_any(pending) then return { tag = 'miss', waits = {} }, pending, {} end
+
+  opts = opts or {}
+  Resources.invalidate_matured_clock_frontiers(self)
+
+  local solver, cursor, out
+  if opts.max_work then
+    local sig = Net.pending_signature and Net.pending_signature(pending) or nil
+    local cache = self._net_wait_cache
+    if cache and cache.pending_sig == sig and observer_valid(cache.observer) then
+      return cache.out, pending, cache.waits
+    elseif cache then
+      dispose_observer(cache.observer)
+      self._net_wait_cache = nil
     end
+
+    cursor = self:_valid_cursor(pending)
+    if cursor then
+      solver = cursor.solver
+    else
+      solver = Net.Solver.new(self, pending)
+      cursor = solver:new_cursor()
+    end
+    out = solver:advance(cursor, opts.max_work)
+    if out.tag == 'budget' then
+      self._cursor = out.cursor
+    else
+      self._cursor = nil
+      if out.tag ~= 'hit' then
+        self._net_wait_cache = { pending_sig = sig, out = out, waits = solver and solver.waits or {}, observer = cursor and cursor:take_observer() or nil }
+      else
+        if cursor and cursor.dispose then cursor:dispose() end
+        self._net_wait_cache = nil
+      end
+    end
+  else
+    self._cursor = nil
+    self._net_wait_cache = nil
+    solver = Net.Solver.new(self, pending)
+    out = solver:find_commit_outcome()
   end
 
-  local selected, lost = plan.selected_nacks, plan.lost_nacks
-  if selected then
-    for i = 1, #selected do
-      local ref = selected[i]
-      if ref.state == 'pending' then ref.state = 'selected' end
-    end
-  end
-  if lost then
-    for i = 1, #lost do
-      local ref = lost[i]
-      if ref.state == 'pending' then ref.state = 'lost' end
-    end
-  end
+  return out, pending, solver and solver.waits or {}
+end
 
-  -- Resource state and transaction obligations are already committed before any
-  -- selected fibre is resumed.  Invalidate cached search state before post-commit
-  -- wrap code can run, yield, or fail.
+function Runtime:_find_net_world(waiting)
+  local out, pending, waits = self:_find_net_outcome(waiting)
+  return out.tag == 'hit' and out.world or nil, pending, waits
+end
+
+function Runtime:_apply_net_world(world, pending)
+  local ok, reason = world:commit(self)
+  if not ok then return false, reason end
+
   self:_bump_epoch()
 
-  if plan.fiber then
-    self:_resume(plan.fiber, pack_perform_result(plan.vals, plan.post))
-  elseif plan.fibres then
-    for i = 1, #plan.fibres do
-      local f = plan.fibres[i]
-      self:_resume(f, pack_perform_result(plan.vals_list[i], plan.post_list[i]))
+  local single_id = world.single_root_id
+  if single_id ~= nil then
+    local entry = pending and pending[single_id]
+    local f = entry and entry.fiber
+    if f then
+      local vals, post = world:delivery_for(self, single_id)
+      self:_resume(f, pack_perform_result(vals, post))
     end
+    return true
   end
 
+  local ids = {}
+  for id, _ in pairs(world.roots or {}) do ids[#ids + 1] = id end
+  table.sort(ids)
+  for i = 1, #ids do
+    local id = ids[i]
+    local entry = pending and pending[id]
+    local f = entry and entry.fiber
+    if f then
+      local vals, post = world:delivery_for(self, id)
+      self:_resume(f, pack_perform_result(vals, post))
+    end
+  end
+  return true
 end
 
 
@@ -544,9 +598,10 @@ function Runtime:_has_unstarted()
   return self:_has_ready()
 end
 
-function Runtime:_valid_cursor(waiting)
+function Runtime:_valid_cursor(pending)
   local c = self._cursor
-  if c and c.is_valid and c:is_valid(self, waiting) then return c end
+  if c and c.is_valid and c:is_valid(self, pending) then return c end
+  if c and c.dispose then c:dispose() end
   self._cursor = nil
   return nil
 end
@@ -568,79 +623,104 @@ end
 function Runtime:_step(opts)
   opts = opts or {}
   if self:_deliver_interrupts() then return { tag = 'pending', kind = 'interrupt' } end
-  local waiting = self:_waiting()
 
+  local waiting = self:_waiting()
   if #waiting == 0 then
     if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
     if (self.live_count or 0) == 0 then return { tag = 'idle', value = true } end
     return { tag = 'pending', kind = 'no-ready-work' }
   end
 
-  local world, score, st = nil, nil, nil
-  if #waiting == 1 and waiting[1].waiting and waiting[1].waiting.op and waiting[1].waiting.op.kind == 'always' then
-    self:_apply_commit_plan(CommitPlan.always(waiting[1]))
-    return { tag = 'found', value = true, kind = 'commit' }
+  local out, pending, solver_waits = self:_find_net_outcome(waiting, opts)
+
+  if out.tag == 'budget' then
+    return { tag = 'pending', kind = 'budget', work = out.used }
   end
 
-  if opts.max_work then
-    local cursor = self:_valid_cursor(waiting)
-    if not cursor then
-      cursor = Cursor.new(self, waiting, opts)
-      self._cursor = cursor
-    end
-    st = cursor:resume(opts.max_work)
-    if st.tag == 'pending' then
-      if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      st.waits = Wait.summarise(Wait.merge(st.waits))
-      return st
-    elseif st.tag == 'committable' then
-      world, score = st.world, st.score
-    elseif st.tag == 'absent' then
-      self._cursor = nil
-      if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      return st
-    else
-      return st
-    end
-  else
-    self._cursor = nil
-    world, score, st = Search.solve(self, waiting, opts)
-    if st and st.tag == 'pending' then
-      if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      st.waits = Wait.summarise(Wait.merge(st.waits))
-      return st
-    end
+  local world = out.tag == 'hit' and out.world or nil
+  if world and (not world:has_absence() or not self:_has_unstarted()) then
+    local ok, reason = self:_apply_net_world(world, pending)
+    if ok then return { tag = 'found', value = true, kind = 'commit' } end
+    return plan_failure_status(reason)
   end
 
-  -- A positive score means an or_else fallback was selected.  Such a fallback is
-  -- not globally justified until every spawned fibre has reached its current
-  -- perform point, because a not-yet-started fibre may still satisfy a preferred
-  -- primary.
-  if world and (score_is_zero(score) or not self:_has_unstarted()) then
-    local cert_cursor = self._cursor
-    local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
-    if not plan then self:_invalidate_cursor(); return plan_failure_status(reason) end
-    self._cursor = nil
-    self:_apply_commit_plan(plan)
-    return { tag = 'found', value = true, kind = 'commit' }
-  end
-
-  self._cursor = nil
-  if self:_pump_one() then
-    return { tag = 'pending', kind = 'started' }
-  end
+  if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
 
   if world then
-    local cert_cursor = self._cursor
-    local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
-    if not plan then self:_invalidate_cursor(); return plan_failure_status(reason) end
-    self:_apply_commit_plan(plan)
-    return { tag = 'found', value = true, kind = 'commit' }
+    local ok, reason = self:_apply_net_world(world, pending)
+    if ok then return { tag = 'found', value = true, kind = 'commit' } end
+    return plan_failure_status(reason)
   end
 
+  local waits = Wait.summarise(Wait.merge((out and out.waits) or solver_waits or {}))
+  if out.tag == 'unknown' then
+    if out.reason == 'budget' then return { tag = 'pending', kind = 'budget', waits_incomplete = true } end
+    return { tag = 'pending', kind = out.reason or 'unknown', waits = waits }
+  end
+  if #waits > 0 then return { tag = 'pending', kind = 'wakeup', waits = waits } end
   return { tag = 'absent', reason = 'no compatible transaction' }
 end
 
+function Runtime:_run(opts)
+  opts = opts or {}
+  if opts.max_work then
+    -- Bounded mode performs one externally drivable transition, resuming the
+    -- private transaction-net cursor if the waiting frontier is unchanged.
+    return self:_step(opts)
+  end
+
+  self._cursor = nil
+  local committed = false
+  while true do
+    if self:_deliver_interrupts() then committed = true end
+    local waiting = self:_waiting()
+
+    if #waiting == 0 then
+      if self:_pump_one() then
+        -- newly started work may now participate in a world
+      elseif (self.live_count or 0) == 0 then
+        if committed then return { tag = 'found', value = true } end
+        return { tag = 'idle', value = true }
+      else
+        if committed then return { tag = 'found', value = true } end
+        return { tag = 'pending', kind = 'no-ready-work' }
+      end
+    else
+      local out, pending, solver_waits = self:_find_net_outcome(waiting)
+      local world = out.tag == 'hit' and out.world or nil
+      if world and (not world:has_absence() or not self:_has_unstarted()) then
+        local ok, reason = self:_apply_net_world(world, pending)
+        if ok then
+          committed = true
+        elseif not plan_retriable(reason) then
+          return plan_failure_status(reason)
+        end
+      elseif self:_pump_one() then
+        -- A not-yet-started public participant may satisfy the primary side of
+        -- an or_else; start it before accepting an absence-certified fallback.
+      elseif world then
+        local ok, reason = self:_apply_net_world(world, pending)
+        if ok then
+          committed = true
+        elseif not plan_retriable(reason) then
+          return plan_failure_status(reason)
+        end
+      else
+        local waits = Wait.summarise(Wait.merge((out and out.waits) or solver_waits or {}))
+        if out.tag == 'unknown' then
+          if committed then return { tag = 'found', value = true } end
+          return { tag = 'pending', kind = out.reason or 'unknown', waits = waits }
+        end
+        if #waits > 0 then
+          if committed then return { tag = 'found', value = true } end
+          return { tag = 'pending', kind = 'wakeup', waits = waits }
+        end
+        if committed then return { tag = 'found', value = true } end
+        return { tag = 'absent', reason = 'no compatible transaction' }
+      end
+    end
+  end
+end
 
 
 local function finish_driver_call(self, old_depth, old_phase, ok, ...)
@@ -665,69 +745,6 @@ function Runtime:step(opts)
   return finish_driver_call(self, old_depth, old_phase, pcall(self._step, self, opts))
 end
 
-function Runtime:_run(opts)
-  opts = opts or {}
-  if opts.max_work then
-    local committed = false
-    while true do
-      local st = self:_step(opts)
-      if st.tag == 'found' then
-        committed = true
-      elseif st.tag == 'pending' then
-        return st
-      elseif st.tag == 'idle' then
-        if committed then return { tag = 'found', value = true } end
-        return st
-      elseif st.tag == 'absent' then
-        if committed then return { tag = 'found', value = true } end
-        return st
-      else
-        return st
-      end
-    end
-  end
-
-  self._cursor = nil
-  local committed = false
-  while true do
-    if self:_deliver_interrupts() then committed = true end
-    local waiting = self:_waiting()
-    local world, score, st = nil, nil, nil
-    if #waiting == 1 and waiting[1].waiting and waiting[1].waiting.op and waiting[1].waiting.op.kind == 'always' then
-      committed = true
-      self:_apply_commit_plan(CommitPlan.always(waiting[1]))
-    elseif #waiting > 0 then
-      world, score, st = Search.solve(self, waiting, nil)
-    end
-
-    if world and (score_is_zero(score) or not self:_has_unstarted()) then
-      committed = true
-        local plan, _reason = CommitPlan.try_from_world(self, world, nil)
-      if plan then self:_apply_commit_plan(plan) elseif not plan_retriable(_reason) then return plan_failure_status(_reason) end
-    elseif self:_pump_one() then
-      -- More public participants may make a preferred world available.
-    elseif world then
-      committed = true
-        local plan, _reason = CommitPlan.try_from_world(self, world, nil)
-      if plan then self:_apply_commit_plan(plan) elseif not plan_retriable(_reason) then return plan_failure_status(_reason) end
-    elseif st and st.tag == 'pending' then
-      st.waits = Wait.summarise(Wait.merge(st.waits))
-      if committed and self:_pump_one() then
-        -- A committed effect may have spawned fresh work that can satisfy
-        -- the current waits.  Continue before reporting quiescence to the
-        -- standalone runner.
-      elseif committed then
-        return { tag = 'found', value = true }
-      else
-        return st
-      end
-    else
-      if committed then return { tag = 'found', value = true } end
-      if (self.live_count or 0) == 0 then return { tag = 'idle', value = true } end
-      return { tag = 'absent', reason = 'no compatible transaction' }
-    end
-  end
-end
 
 
 function Runtime:run(opts)
