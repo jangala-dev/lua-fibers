@@ -85,7 +85,7 @@ Settlement protocols run as ordinary operations after the claim commits.
 Final release requires the original claim authority object.
 
 Protocol failure does not erase the claim.  It records an observable
-settlement_failed state and publishes a settlement_failed lifetime event when the
+settlement_failed state and discharges a settlement_failed lifetime event when the
 caller is a Lifetime.
 ```
 

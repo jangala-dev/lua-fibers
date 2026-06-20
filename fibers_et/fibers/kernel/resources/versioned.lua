@@ -7,7 +7,7 @@
 local Candidate = require('fibers.kernel.algebra.candidate')
 local Result = require('fibers.kernel.algebra.result')
 local Resource = require('fibers.kernel.resources.protocol')
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 local Wait = require('fibers.kernel.wait')
 local Effect = require('fibers.base.effect')
 
@@ -36,7 +36,7 @@ function Versioned.read_only(obj, kind, version, pack, ...)
 end
 
 function Versioned.wake_set(wait_kind, key, payload)
-  local set = ConsequenceSet.empty()
+  local set = EffectSet.empty()
   local ok, err = set:add(Effect.wake(wait_kind, key, payload))
   if not ok then return nil, err end
   return set

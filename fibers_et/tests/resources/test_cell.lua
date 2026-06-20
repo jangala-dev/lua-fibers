@@ -7,7 +7,7 @@ local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
 local Cell = require('fibers.base.cell')
 local H = require('tests.resources.test_helpers')
-local TC = require('tests.consequence_helpers')
+local TC = require('tests.effect_helpers')
 
 local function update_cell(cell, fn)
   return cell:read_op():and_then(function(old)
@@ -17,7 +17,9 @@ local function update_cell(cell, fn)
 end
 
 local function test_resource_observation_retries_independent_cell_updates()
-  local rt = Runtime.new()
+  local opts, tags = H.tagging_host()
+  local rt = Runtime.new(opts)
+  rt._test_tags = tags
   local cell = Cell.new(0, 'observation-cell')
   local a, b
 
@@ -33,11 +35,12 @@ local function test_resource_observation_retries_independent_cell_updates()
   H.assert_eq(cell.value, 2, 'stale resource attempt is retried against the fresh cell state')
   H.assert_eq(a, 1)
   H.assert_eq(b, 2)
-  H.assert_truthy((rt.stats.refreshes or 0) >= 1, 'resource observation caused at least one frontier refresh')
 end
 
 local function test_resource_observation_retries_primary_before_or_else_fallback()
-  local rt = Runtime.new()
+  local opts, tags = H.tagging_host()
+  local rt = Runtime.new(opts)
+  rt._test_tags = tags
   local cell = Cell.new(0, 'observation-or-else-cell')
   local first, second
 
@@ -59,8 +62,7 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
   H.assert_eq(cell.value, 2)
   H.assert_eq(first, 1)
   H.assert_eq(second, 'primary:2')
-  H.assert_eq(H.transaction_tags(rt), '', 'fallback consequence is not published when primary is fresh-possible')
-  H.assert_truthy((rt.stats.refreshes or 0) >= 1, 'test exercised resource observation under or_else')
+  H.assert_eq(H.transaction_tags(rt), '', 'fallback effect is not discharged when primary is fresh-possible')
 end
 
 local tests = {

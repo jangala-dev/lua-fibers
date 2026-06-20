@@ -1,4 +1,5 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 local Op = fibers.Op
@@ -29,8 +30,9 @@ do
   local src, feed = rt:readiness('handle-1', 'readiness-bounded')
   local ok, key, mode
   rt:spawn_raw(function() ok, key, mode = rt:perform(src:readable_op()) end, 'readiness-waiter')
-  for _ = 1, 8 do rt:step({ max_work = 1 }) end
-  local waits = rt:pending_wait_summary()
+  local st
+  for _ = 1, 8 do st = rt:step({ max_work = 1 }) end
+  local waits = (st and st.waits or {})
   local rw = Host.readiness_waits(waits)
   assert_eq(#rw, 1, 'one readiness wait expected')
   assert_eq(rw[1].readiness_key, 'handle-1')
@@ -135,8 +137,8 @@ do
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 20 do if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end; rt:run() end
-  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'write pump should have leased bytes')
+  for _ = 1, 20 do if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "" then break end; rt:run() end
+  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'write pump should have leased bytes')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
   drive_until(rt, function() return flushed == true end, 'write readiness should flush leased bytes')
@@ -155,10 +157,10 @@ do
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   for _ = 1, 80 do
-    if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end
+    if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "" then break end
     rt:step({ max_work = 1 })
   end
-  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'bounded pump should reach in-flight lease')
+  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'bounded pump should reach in-flight lease')
   backend:unblock_writes()
   drive_until(rt, function() return flushed == true end, 'bounded readiness should flush', true)
   assert_eq(backend:written(), 'xy')

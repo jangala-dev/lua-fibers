@@ -30,7 +30,7 @@ function Runner.run(rt, opts)
       saw_found = true
       last_found = st
     elseif st and st.tag == 'pending' then
-      local waits = rt:pending_wait_summary()
+      local waits = st.waits or {}
       local progressed, reason = Host.block(host, rt, waits, st, opts.host_options)
       if progressed then
         -- Host time or readiness may now make a wait productive.  Re-enter the

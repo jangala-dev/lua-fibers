@@ -1,4 +1,5 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 local Op = fibers.Op
@@ -39,7 +40,7 @@ do
   assert_nil(backend.stream, 'losing open should not attach backend to an uncommitted stream')
 end
 
--- Host backend streams are compound owned objects over two directional flows.
+-- Host backend streams expose stable reader and writer capabilities.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('compound-region')
@@ -49,20 +50,12 @@ do
     stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'compound-stream' }))
   end, 'root')
   assert_status(rt:run(), 'found')
-  assert_truthy(stream._fibers_host_stream, 'open_backend_op should return a host-stream compound')
-  assert_truthy(stream.read_flow and stream.write_flow, 'compound should own two flows')
-  assert_truthy(stream:reader() and stream:writer(), 'compound should expose reader and writer handles')
+  assert_truthy(stream, 'open_backend_op should return a stream')
+  assert_truthy(stream:reader() and stream:writer(), 'stream should expose reader and writer handles')
   assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
   assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
-  assert_eq(stream.owner, region, 'region should own the compound object')
-  assert_eq(stream:reader().owner, region, 'region should own the reader handle')
-  assert_eq(stream:writer().owner, region, 'region should own the writer handle')
-  assert_truthy(region.owned[stream], 'region should list the compound object')
-  assert_truthy(region.owned[stream:reader()], 'region should list the reader handle')
-  assert_truthy(region.owned[stream:writer()], 'region should list the writer handle')
-  assert_truthy(stream.read_task and stream.write_task, 'split strategy should install read/write pump tasks')
-  assert_nil(stream.read_line_op, 'compound should not delegate read operations')
-  assert_nil(stream.write_op, 'compound should not delegate write operations')
+  assert_nil(stream.read_line_op, 'duplex should not expose reader operations directly')
+  assert_nil(stream.write_op, 'duplex should not expose writer operations directly')
 end
 
 -- Flow surfaces are capability-specific; looping friendly methods and duplex byte ops are absent.
@@ -94,8 +87,6 @@ do
   assert_eq(seen_stream, stream, 'custom strategy should receive compound stream')
   assert_eq(seen_region, region, 'custom strategy should receive owning region')
   assert_eq(stream.pump_task, 'custom-pump-placeholder')
-  assert_nil(stream.read_task, 'custom strategy should not force split read task')
-  assert_nil(stream.write_task, 'custom strategy should not force split write task')
 end
 
 -- Host input enters the stream only through the read pump committing bytes into the incoming Flow reservoir.
@@ -149,7 +140,7 @@ do
   assert_eq(backend:written(), 'abc')
 end
 
--- Losing writes to a host-pumped stream publish nothing to the backend.
+-- Losing writes to a host-pumped stream discharge nothing to the backend.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('losing-write-region')
@@ -193,8 +184,8 @@ do
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   -- Let the write commit and the pump lease the bytes, then stop at writability.
-  for _ = 1, 10 do if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end; rt:run() end
-  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'write pump should hold an in-flight lease while blocked')
+  for _ = 1, 10 do if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "" then break end; rt:run() end
+  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'write pump should hold an in-flight lease while blocked')
   assert_nil(flushed, 'flush should wait while bytes are in flight')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
@@ -234,7 +225,7 @@ do
     rt:perform(stream:writer():shutdown_op())
     done = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 10 do if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "" then break end; rt:run() end
+  for _ = 1, 10 do if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "" then break end; rt:run() end
   assert_nil(backend.shutdown_write_reason, 'backend write should not shut down before draining')
   backend:unblock_writes()
   drive_until(rt, function() return done == true and backend.shutdown_write_reason ~= nil end, 'shutdown should happen after drain')
@@ -274,11 +265,11 @@ do
     flushed = rt:perform(stream:writer():flush_op())
   end, 'writer1')
   for _ = 1, 10 do
-    if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= '' then break end
+    if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '' then break end
     rt:run()
   end
-  assert_eq(stream:writer().flow.reservoir:debug_first_lease_bytes(), 'abc', 'pump should have leased the first write')
-  assert_eq((stream:writer().flow.reservoir.limit - (#(stream:writer().flow.reservoir.data or '') + stream:writer().flow.reservoir:debug_leased_bytes())), 0, 'leased bytes should still reserve capacity')
+  assert_eq(Inspect.first_lease_bytes(stream:writer().flow.reservoir), 'abc', 'pump should have leased the first write')
+  assert_eq((stream:writer().flow.reservoir.limit - (#(stream:writer().flow.reservoir.data or '') + Inspect.leased_bytes(stream:writer().flow.reservoir))), 0, 'leased bytes should still reserve capacity')
   rt:spawn_raw(function() second_done = rt:perform(stream:writer():write_op('d')) end, 'writer2')
   assert_status(rt:run(), 'pending')
   assert_nil(second_done, 'second write should wait while leased bytes hold capacity')

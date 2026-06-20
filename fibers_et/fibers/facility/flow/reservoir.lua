@@ -294,7 +294,7 @@ function ReservoirKind.prepare(res, rec, _resolve)
   end
   local set, err = wake_set(res)
   if err then return nil, err end
-  return { kind = ReservoirKind, resource = res, ops = clone_ops(rec.ops), consequence_set = set }
+  return { kind = ReservoirKind, resource = res, ops = clone_ops(rec.ops), effect_set = set }
 end
 
 function ReservoirKind.apply(prepared, _log)
@@ -467,9 +467,6 @@ function Reservoir:fail_lease_op(lease, err)
 end
 function Reservoir:inspect_op() return Op._resource(self, ReservoirKind, { op = 'inspect' }) end
 function Reservoir:changed_op(version) return Op._resource(self, ReservoirKind, { op = 'changed', version = version }) end
-function Reservoir:debug_data() return self.rope and self.rope:tostring() or '' end
-function Reservoir:debug_leased_bytes() local n=0; for _,l in pairs(self.leases or {}) do n=n+#(l.bytes or '') end; return n end
-function Reservoir:debug_first_lease_bytes() for _,l in pairs(self.leases or {}) do return l.bytes or '' end; return nil end
 
 Reservoir.Kind = ReservoirKind
 return Reservoir

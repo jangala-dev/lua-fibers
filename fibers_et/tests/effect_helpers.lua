@@ -1,18 +1,18 @@
-local ConsequenceKind = require('fibers.kernel.consequence.kind')
+local EffectKind = require('fibers.kernel.effect.kind')
 
 local M = {}
 
-M.TagKind = ConsequenceKind.new {
+M.TagKind = EffectKind.new {
   name = 'test.tag',
   order = 900,
   key = function(payload) return payload.tag or payload.kind end,
   merge = function(a, b)
     local at, bt = a.tag or a.kind, b.tag or b.kind
     if at ~= bt then
-      return nil, { kind = 'consequence_conflict', message = 'tag key mismatch' }
+      return nil, { kind = 'effect_conflict', message = 'tag key mismatch' }
     end
     if a.value ~= nil and b.value ~= nil and a.value ~= b.value then
-      return nil, { kind = 'consequence_conflict', message = 'tag value conflict' }
+      return nil, { kind = 'effect_conflict', message = 'tag value conflict' }
     end
     return a
   end,
@@ -21,7 +21,7 @@ M.TagKind = ConsequenceKind.new {
       kind = M.TagKind,
       key = payload.tag or payload.kind,
       payload = payload,
-      publish = function(rt, _entry, _log)
+      discharge = function(rt, _entry, _log)
         local host = rt.host or {}
         if host.test_tag then
           return host.test_tag(payload.tag or payload.kind, payload)
@@ -31,45 +31,45 @@ M.TagKind = ConsequenceKind.new {
   end,
 }
 
-M.ConflictKind = ConsequenceKind.new {
+M.ConflictKind = EffectKind.new {
   name = 'test.conflict',
   order = 901,
   key = function(_payload) return 'same' end,
   merge = function(_a, _b)
-    return nil, { kind = 'consequence_conflict', message = 'test conflict' }
+    return nil, { kind = 'effect_conflict', message = 'test conflict' }
   end,
   prepare = function(_rt, payload)
     return {
       kind = M.ConflictKind,
       key = 'same',
       payload = payload,
-      publish = function() end,
+      discharge = function() end,
     }
   end,
 }
 
-M.PrepareRefuseKind = ConsequenceKind.new {
+M.PrepareRefuseKind = EffectKind.new {
   name = 'test.prepare_refuse',
   order = 902,
   key = function(_payload) return 'refuse' end,
   merge = function(a, _b) return a end,
   prepare = function()
-    return nil, { kind = 'consequence_prepare_refused', message = 'refused by test kind' }
+    return nil, { kind = 'effect_prepare_refused', message = 'refused by test kind' }
   end,
 }
 
-M.PublishFatalKind = ConsequenceKind.new {
-  name = 'test.publish_fatal',
+M.DischargeFatalKind = EffectKind.new {
+  name = 'test.discharge_fatal',
   order = 903,
   key = function(_payload) return 'fatal' end,
   merge = function(a, _b) return a end,
   prepare = function(_rt, payload)
     return {
-      kind = M.PublishFatalKind,
+      kind = M.DischargeFatalKind,
       key = 'fatal',
       payload = payload,
-      publish = function()
-        error('publish exploded')
+      discharge = function()
+        error('discharge exploded')
       end,
     }
   end,
@@ -99,8 +99,8 @@ function M.prepare_refuse()
   return c
 end
 
-function M.publish_fatal()
-  local c, err = M.PublishFatalKind:of({})
+function M.discharge_fatal()
+  local c, err = M.DischargeFatalKind:of({})
   if not c then error(err and err.message or tostring(err), 2) end
   return c
 end

@@ -123,17 +123,18 @@ cell      cell predicate or modify_when may become true
 region    region ownership/lifetime state may change
 ```
 
-The runtime records the latest waits:
+Pending statuses carry the current wait summary:
 
 ```lua
-local waits = rt:pending_wait_summary()
+local st = rt:run()
+local waits = st.tag == 'pending' and st.waits or {}
 ```
 
-The summary is intended for host adapters.  It avoids forcing the transaction
-runtime to own timers, fd polling, GUI events or game-engine callbacks.  For
-readiness waits the summary carries the consumer `source` and the original
-`readiness_key`, so a host can later call `rt:arrive(source, mode, true)` when
-the host object becomes ready.
+The summary is returned at the quiescent boundary rather than stored on the
+runtime.  It avoids forcing the transaction runtime to own timers, fd polling,
+GUI events or game-engine callbacks.  For readiness waits the summary carries
+the consumer `source` and the original `readiness_key`, so a host can later call
+`rt:arrive(source, mode, true)` when the host object becomes ready.
 
 ## Sources
 
@@ -207,7 +208,7 @@ wake   a committed state change may make a wait productive
 spawn  start a fibre after admission commits
 ```
 
-A host may observe wake publication with:
+A host may observe wake discharge with:
 
 ```lua
 fibers.Runtime.new({

@@ -105,7 +105,7 @@ do
   end, 'source-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
-  local waits = rt:pending_wait_summary()
+  local waits = (st.waits or {})
   assert_eq(waits[1].kind, 'source')
   feed:set('ready')
   st = rt:step()
@@ -130,9 +130,9 @@ do
   assert_eq(observed, 5)
 end
 
--- Effects are the public form of typed transaction consequences.
+-- Effects are the public form of typed transaction effects.
 do
-  local published = 0
+  local discharged = 0
   local Kind = fibers.Effect.kind {
     name = 'test-effect',
     key = function(payload) return payload.key end,
@@ -142,8 +142,8 @@ do
         kind = Kind,
         key = payload.key,
         payload = payload,
-        publish = function()
-          published = published + 1
+        discharge = function()
+          discharged = discharged + 1
         end,
       }
     end,
@@ -153,23 +153,29 @@ do
     fibers.perform(fibers.after_commit(effect))
   end)
   assert_status(st, 'found')
-  assert_eq(published, 1)
+  assert_eq(discharged, 1)
 end
 
--- Region and Task make post-commit spawn usable directly.
+-- Region and Task make post-commit spawn usable directly.  Keeping the
+-- completed task handle should not keep the start closure's captures alive.
 do
   local region = fibers.Region.new('root-region')
   local value, task
+  local marker = { retained = false }
+  local weak = setmetatable({ marker = marker }, { __mode = 'v' })
   local st = fibers.run(function()
+    local captured = marker
+    marker = nil
     task = fibers.perform(fibers.Task.spawn_op(region, function()
-      return 7
+      return captured and 7 or 0
     end, 'child'))
     value = fibers.perform(task:await_op())
   end)
   assert_status(st, 'found')
   assert_truthy(task, 'spawn should return a task handle')
-  assert_eq(task.owner, region)
   assert_eq(value, 7)
+  for _ = 1, 4 do collectgarbage('collect') end
+  assert_eq(weak.marker, nil, 'completed task handle should not retain start closure captures')
 end
 
 

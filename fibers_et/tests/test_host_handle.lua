@@ -1,4 +1,5 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 local Host = fibers.host
@@ -64,7 +65,7 @@ do
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil, 'write pump should hold a lease while host write is blocked')
+  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil, 'write pump should hold a lease while host write is blocked')
   assert_eq(handle:written(), '')
   handle:unblock_writes()
   drive_until(rt, host, function() return flushed == true end, 'handle write should flush')

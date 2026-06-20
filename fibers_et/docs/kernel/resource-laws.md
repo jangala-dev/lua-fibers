@@ -48,11 +48,11 @@ example, a cell increment is written as `read_op():and_then(...)` followed by
 the cell resource protocol.
 
 
-## Observation journal
+## Certificate
 
 Resource evaluation must not make unrecorded observations of mutable runtime,
 resource, or host state.  Such observations go through the attempt context and
-are recorded in the observation journal.
+are recorded in the certificate.
 
 Use:
 
@@ -68,7 +68,7 @@ or, for a custom observable object:
 local view, stamp = ctx:observe(object)
 ```
 
-The observation journal answers a different question from resource preparation:
+The certificate answers a different question from resource preparation:
 it decides whether a paused bounded search may continue.  `prepare` still
 validates that a selected resource journal can commit.
 
@@ -97,7 +97,7 @@ must not partially merge and recover by side effect.
 
 `prepare` is pure.  It may validate that the record is still fresh and may return
 a prepared commit description, but it must not mutate resources, call host
-arrival feeds, publish effects, spawn work, or otherwise perform irreversible
+arrival feeds, discharge effects, spawn work, or otherwise perform irreversible
 work.
 
 `apply` is the resource's state-changing commit action.  It receives only a
@@ -109,14 +109,14 @@ The intended law is:
 prepare followed by apply realises the projected committed state
 ```
 
-## Consequences
+## Effects
 
-Consequence payloads are immutable obligations.  A consequence kind's `merge`
+Effect payloads are immutable obligations.  An effect kind's `merge`
 function should be pure: it returns a fresh merged payload, or one of its inputs
 only if that input will not be mutated.
 
-Consequence `prepare` is also pure.  It may validate and produce a prepared
-publication record.  Publication happens only after resource commit.
+Effect `prepare` is also pure.  It may validate and produce a prepared
+discharge record.  Discharge happens only after resource commit.
 
 ## External arrivals
 
@@ -126,5 +126,5 @@ feed returned by `Runtime:signal`, `Runtime:queue_source`, or
 search state as one operation.
 
 Host/source arrival is an external driver boundary.  It is not valid from a
-fibre, resource protocol code, consequence preparation, or consequence
-publication.
+fibre, resource protocol code, effect preparation, or effect
+discharge.

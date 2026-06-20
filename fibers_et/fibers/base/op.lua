@@ -1,7 +1,7 @@
 -- Compact external transaction algebra for texlua.
 -- Operations are immutable syntax nodes; Runtime supplies the solver.
 
-local ConsequenceKind = require('fibers.kernel.consequence.kind')
+local EffectKind = require('fibers.kernel.effect.kind')
 
 local Op = {}
 Op.__index = Op
@@ -126,11 +126,11 @@ function Op.never()
   return op('never')
 end
 
-function Op.emit(consequence)
-  if not ConsequenceKind.is_consequence(consequence) then
-    error('emit expects a typed consequence obligation', 2)
+function Op.emit(effect)
+  if not EffectKind.is_effect(effect) then
+    error('emit expects a typed effect obligation', 2)
   end
-  return op('emit', { consequence = consequence })
+  return op('emit', { effect = effect })
 end
 
 function Op.guard(fn)

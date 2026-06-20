@@ -10,7 +10,7 @@ local DefaultOp = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
 local Candidate = require('fibers.kernel.algebra.candidate')
 local Result = require('fibers.kernel.algebra.result')
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 local Effect = require('fibers.base.effect')
 local Ownership = require('fibers.internal.ownership')
 local Settlement = require('fibers.internal.settlement')
@@ -319,10 +319,10 @@ end
 function RegionKind.prepare(region, rec, _resolve)
   if rec.read ~= nil and (region.version or 0) ~= rec.read then return nil, 'stale' end
   if not rec.seal and not next(rec.add or {}) and not next(rec.remove or {}) then return nil, nil, true end
-  local consequence_set = ConsequenceSet.empty()
-  local ok, err = consequence_set:add(Effect.wake('region', region._fibers_id, { region = region, sealed = rec.seal }))
+  local effect_set = EffectSet.empty()
+  local ok, err = effect_set:add(Effect.wake('region', region._fibers_id, { region = region, sealed = rec.seal }))
   if not ok then return nil, err end
-  return { kind = RegionKind, resource = region, seal = rec.seal, add = copy_map(rec.add), remove = copy_map(rec.remove), consequence_set = consequence_set }
+  return { kind = RegionKind, resource = region, seal = rec.seal, add = copy_map(rec.add), remove = copy_map(rec.remove), effect_set = effect_set }
 end
 
 function RegionKind.apply(prepared, _log)

@@ -1,10 +1,10 @@
-# Typed consequences
+# Typed effects
 
-A typed consequence is a runtime-owned obligation carried by a candidate world.
+A typed effect is a runtime-owned obligation carried by a candidate world.
 It is not a callback and it is not a value returned to one participant.
 
-A consequence exists because the selected world committed.  If that world loses,
-is abandoned by residual fallback, or fails preparation, the consequence leaves
+An effect exists because the selected world committed.  If that world loses,
+is abandoned by residual fallback, or fails preparation, the effect leaves
 no trace.
 
 ## The basic distinction
@@ -13,7 +13,7 @@ no trace.
 resource journal
   tentative state change installed by commit
 
-consequence
+effect
   runtime obligation entailed by the committed world
 
 wrap
@@ -27,7 +27,7 @@ owner(resource) := B
 closed(B) := true
 ```
 
-and then derive the consequence:
+and then derive the effect:
 
 ```text
 settle(resource, owner = B)
@@ -38,19 +38,19 @@ committed world.
 
 ## Why typed?
 
-A consequence kind owns the small algebra for one family of obligations:
+An effect kind owns the small algebra for one family of obligations:
 
 ```text
 name      diagnostic name
 key       extracts the obligation key
 merge     combines duplicate obligations or rejects conflicts
-prepare   validates and creates publishable work
-publish   performs or records the prepared work
-order     relative publication order
+prepare   validates and creates dischargeable work
+discharge   performs or records the prepared work
+order     relative discharge order
 failure   failure policy, currently fatal
 ```
 
-This lets different obligations have different rules.  A wakeup consequence may
+This lets different obligations have different rules.  A wakeup effect may
 merge ten requests for the same wait set into one wake.  An outbox append should
 not merge two different message identifiers.  A cache invalidation kind may
 merge row invalidations into a partition invalidation.  An audit kind may reject
@@ -61,12 +61,12 @@ domain logic into arbitrary code.
 
 ## Public shape
 
-Define a consequence kind with `fibers.kernel.consequence.kind`:
+Define a effect kind with `fibers.kernel.effect.kind`:
 
 ```lua
-local ConsequenceKind = require('fibers.kernel.consequence.kind')
+local EffectKind = require('fibers.kernel.effect.kind')
 
-local KickKind = ConsequenceKind.new {
+local KickKind = EffectKind.new {
   name = 'example.kick',
 
   key = function(payload)
@@ -83,7 +83,7 @@ local KickKind = ConsequenceKind.new {
       kind = KickKind,
       key = payload.worker_id,
       payload = payload,
-      publish = function(rt, entry, log)
+      discharge = function(rt, entry, log)
         if rt.host and rt.host.kick_worker then
           rt.host.kick_worker(entry.key, entry.payload)
         end
@@ -107,7 +107,7 @@ local Op = require('fibers.base.op')
 local op = Op.emit(kick('delivery-worker'))
 ```
 
-`Op.emit` only accepts typed consequence objects.  Plain Lua functions, strings
+`Op.emit` only accepts typed effect objects.  Plain Lua functions, strings
 and tables are rejected.
 
 ## Commit order
@@ -115,9 +115,9 @@ and tables are rejected.
 For a selected world, the runtime order is:
 
 ```text
-prepare resource commits and consequences
+prepare resource commits and effects
 apply prepared resource commits
-publish prepared consequences
+discharge prepared effects
 settle selected and lost nack obligations
 resume selected fibres with raw values and post-commit transformers
 apply wraps inside perform
@@ -132,7 +132,7 @@ already committed transaction.
 
 ## Merge and conflict
 
-Consequences are stored in sets keyed by consequence kind and the kind-specific
+Effects are stored in sets keyed by effect kind and the kind-specific
 key.
 
 If two obligations have different keys, both may survive:
@@ -161,18 +161,18 @@ Audit(event_id=7, amount=20)
 The merge function should be pure.  It may return a merged payload or reject the
 candidate with an error record.
 
-## Preparation and publication
+## Preparation and discharge
 
 `prepare` runs after a candidate world has been selected but before resource
 commits are applied.  It should validate the obligation and return a prepared
-record containing a `publish` function.
+record containing a `discharge` function.
 
 Preparation must be side-effect-free.  It may refuse the candidate.  It should
 not send messages, wake schedulers, mutate resources, write to external systems,
 yield, call `perform`, or call `run`/`step`.
 
-`publish` runs after resource commits have been applied.  In this prototype,
-publication failure is fatal.  That is deliberate: once resource journals have
+`discharge` runs after resource commits have been applied.  In this prototype,
+discharge failure is fatal.  That is deliberate: once resource journals have
 committed, the runtime cannot safely pretend that the world did not commit.
 
 ## Exactly-once scope
@@ -181,7 +181,7 @@ The current guarantee is in-process and commit-local:
 
 ```text
 if a world is selected and committed,
-each prepared consequence entry in that world is published once by that commit
+each prepared effect entry in that world is discharged once by that commit
 ```
 
 It is not a crash-durable or distributed exactly-once guarantee.
@@ -190,7 +190,7 @@ For an external system, the recommended pattern is:
 
 ```text
 resource journal installs durable state
-consequence installs or records a durable idempotent obligation
+effect installs or records a durable idempotent obligation
 external delivery retries outside the transaction
 ```
 
@@ -199,10 +199,10 @@ worker kick, cache invalidation record, audit event or metering record.
 
 ## Common uses
 
-Typed consequences are useful when committed state entails runtime work:
+Typed effects are useful when committed state entails runtime work:
 
 ```text
-transactional outbox publication
+transactional outbox discharge
 scheduler wakeups
 task admission and post-commit spawn
 cache and materialised-view invalidation
@@ -223,11 +223,11 @@ duplicates must be merged or rejected by domain-specific rules
 
 ## Relation to resources
 
-A resource may derive consequences during preparation from the final committed
+A resource may derive effects during preparation from the final committed
 record.  An ownership resource can do this for settlement: ownership handoff and
-close state are resource journal entries; settlement is a consequence derived
+close state are resource journal entries; settlement is a effect derived
 from the final committed ownership state.
 
-Resources can also expose public operations that simply emit consequences.  The
+Resources can also expose public operations that simply emit effects.  The
 right choice depends on whether the obligation is directly requested by user code
 or entailed by resource state.

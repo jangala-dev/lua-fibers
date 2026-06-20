@@ -26,7 +26,7 @@ fibers/runner.lua
 fibers/kernel.lua
 fibers/kernel/
   the eventful transaction engine: runtime, solver, resources, commit plans,
-  wait interests, observation journals, protected calls and consequence machinery
+  wait interests, certificates, protected calls and effect machinery
 
 fibers/internal/
   private implementation details and invariants
@@ -89,14 +89,14 @@ a default settlement protocol.  The inert protocol is therefore explicit
 structure, not absence of cleanup.
 
 Settlement is a multi-commit protocol, but it is not a second public algebra.
-A facility such as `Lifetime` claims the subtree, publishes a typed spawn effect
+A facility such as `Lifetime` claims the subtree, discharges a typed spawn effect
 for a settlement driver, and the driver performs ordinary `Op` protocols before
 performing one atomic `settle_claim`.  A visible `claim_id` is diagnostic only;
 settlement requires the original claim object produced by the committed claim.
 
 If a settlement protocol fails after the claim has committed, the owned subtree
 is not silently released and the claim is not rolled back.  The affected records
-become `settlement_failed`, expose a failure message, and Lifetime publishes a
+become `settlement_failed`, expose a failure message, and Lifetime discharges a
 `settlement_failed` event for policy code.
 
 Compound resources such as host streams are admitted as trees.  The stream root

@@ -2,7 +2,7 @@
 --
 -- A Lifetime is not a new kernel primitive. It is a useful composition over the
 -- base kit: Region supplies ownership, Source supplies observation, Task
--- supplies the standard owned computation, and Effects publish committed
+-- supplies the standard owned computation, and Effects discharge committed
 -- lifetime transitions.
 
 local Op = require('fibers.base.op')

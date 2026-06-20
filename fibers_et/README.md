@@ -174,17 +174,17 @@ See `docs/facilities/streams.md`, `docs/facilities/settlement.md`, `examples/09_
 
 ## Effects
 
-An effect is the public form of a typed transaction consequence: runtime-owned
-work that is published iff the selected world commits.
+An effect is the public form of a typed transaction effect: runtime-owned
+work that is discharged iff the selected world commits.
 
 ```lua
 local op = fibers.after_commit(effect)
 ```
 
-Effects are not participant continuations.  They are prepared and published by
+Effects are not participant continuations.  They are prepared and discharged by
 the runtime after resource commit and before selected participants resume.
 
-The current implementation provides in-process exactly-once publication.  It is
+The current implementation provides in-process exactly-once discharge.  It is
 not yet a crash-durable distributed outbox.
 
 ## Public modules
@@ -202,7 +202,7 @@ fibers.host               host adapter helpers
 fibers.host.*             host helpers, HostHandle/fd support, and standalone/test host adapters
 fibers.runner             standalone Runtime runner over a host
 fibers.kernel             aggregate for advanced runtime/embedding use
-fibers.kernel.*           solver, resources, commit and consequence machinery
+fibers.kernel.*           solver, resources, commit and effect machinery
 fibers.internal.*         private implementation detail
 ```
 
@@ -329,9 +329,9 @@ docs/base-kit.md       the public base kit
 docs/structure.md      repository layers and placement rules
 docs/algebra.md        operation algebra and semantic distinctions
 docs/kernel/resources.md      open resource protocol
-docs/kernel/resource-laws.md  open resource and consequence laws
-docs/kernel/observation-journal.md  bounded-search observation discipline
-docs/consequences.md   typed transaction consequences / effects
+docs/kernel/resource-laws.md  open resource and effect laws
+docs/kernel/certificate.md  bounded-search certificate discipline
+docs/effects.md   typed transaction effects / effects
 docs/facilities/sleep.md      sleep as a facility over clock sources
 docs/facilities/lifetimes.md  regions, tasks and ownership
 docs/facilities/settlement.md claims, settlement protocols and failure state

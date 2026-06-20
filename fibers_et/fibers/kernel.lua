@@ -3,7 +3,7 @@
 return {
   Runtime = require('fibers.kernel.runtime'),
   Wait = require('fibers.kernel.wait'),
-  ObservationJournal = require('fibers.kernel.observation_journal'),
+  Certificate = require('fibers.kernel.certificate'),
   Exit = require('fibers.kernel.exit'),
   Protected = require('fibers.kernel.protected'),
 }

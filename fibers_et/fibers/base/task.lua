@@ -59,12 +59,13 @@ function Task.new(fn, name, frame)
   }, Task)
 end
 
-function Task:_spawn_body()
+function Task:_spawn_body(fn)
   local task = self
   return function()
     local rt = Runtime.current()
     if not rt then error('task started without a current runtime', 2) end
-    local results = pack(Protected.pcall(task.fn, task))
+    local results = pack(Protected.pcall(fn, task))
+    fn = nil
     local ok = results[1]
     local exit
     if ok then
@@ -85,7 +86,10 @@ function Task:_spawn_body()
 end
 
 function Task:_spawn_effect()
-  return Effect.spawn(self:_spawn_body(), self.name, self._fibers_id, self.frame)
+  -- The start function and frame are consumed by the committed spawn effect.
+  -- The Task handle remains a handle to completion/cancellation state; it is
+  -- not a long-lived archive of the start closure.
+  return Effect.spawn(self:_spawn_body(self.fn), self.name, self._fibers_id, self.frame, self)
 end
 
 function Task:owned(settle, opts)

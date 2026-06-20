@@ -2,8 +2,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 -- Effect: committed runtime obligation.
 --
--- Effects are the public form of typed transaction consequences.  They are
--- published iff the selected world commits, after resource commit and before
+-- Effects are the public form of typed transaction effects.  They are
+-- discharged iff the selected world commits, after resource commit and before
 -- selected fibres resume.
 
 local fibers = require('fibers')
@@ -21,7 +21,7 @@ LogKind = fibers.Effect.kind {
       kind = LogKind,
       key = payload.id,
       payload = payload,
-      publish = function(_rt, entry)
+      discharge = function(_rt, entry)
         log[#log + 1] = entry.payload.message
       end,
     }

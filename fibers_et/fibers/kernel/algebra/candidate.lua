@@ -1,6 +1,6 @@
 local Op = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 
 local Candidate = {}
 local pack_ = Op._pack
@@ -249,7 +249,7 @@ local function new(vals, role)
     vals = vals or pack_(),
     deferred = {},
     endpoints = {},
-    consequences = nil,
+    effects = nil,
     post = nil,
     res = nil,
     res_list = nil,
@@ -277,7 +277,7 @@ local function clone(c)
     for k, v in pairs(e) do copy[k] = v end
     d.endpoints[i] = copy
   end
-  d.consequences = c.consequences and c.consequences:copy() or nil
+  d.effects = c.effects and c.effects:copy() or nil
   d.post = c.post
   Resource.copy_from(d, c)
   d.selected_nacks = list_copy(c.selected_nacks)
@@ -289,30 +289,30 @@ local function clone(c)
 end
 
 
-local function add_consequence(c, consequence)
-  local set = c.consequences
+local function add_effect(c, effect)
+  local set = c.effects
   if not set then
-    set = ConsequenceSet.empty()
-    c.consequences = set
+    set = EffectSet.empty()
+    c.effects = set
   end
-  return set:add(consequence)
+  return set:add(effect)
 end
 
-local function merge_consequence_combo(combo)
+local function merge_effect_combo(combo)
   local set = nil
   for i = 1, #combo do
-    local cs = combo[i].consequences
+    local cs = combo[i].effects
     if cs then
-      set = set or ConsequenceSet.empty()
+      set = set or EffectSet.empty()
       local ok, err = set:merge(cs)
-      if not ok then return nil, err or 'consequence-conflict' end
+      if not ok then return nil, err or 'effect-conflict' end
     end
   end
   return set
 end
 
-local function consequences_compatible(combo)
-  local _set, err = merge_consequence_combo(combo)
+local function effects_compatible(combo)
+  local _set, err = merge_effect_combo(combo)
   return err == nil, err
 end
 
@@ -324,11 +324,11 @@ local function ctx_with_overlay(ctx, c)
 end
 
 local function merge_common(a, b, out)
-  if a.consequences or b.consequences then
-    local set = a.consequences and a.consequences:copy() or ConsequenceSet.empty()
-    local ok, err = set:merge(b.consequences)
-    if not ok then return false, err or 'consequence-conflict' end
-    if not set:is_empty() then out.consequences = set end
+  if a.effects or b.effects then
+    local set = a.effects and a.effects:copy() or EffectSet.empty()
+    local ok, err = set:merge(b.effects)
+    if not ok then return false, err or 'effect-conflict' end
+    if not set:is_empty() then out.effects = set end
   end
   out.endpoints = list_copy(a.endpoints); list_append(out.endpoints, b.endpoints)
   out.selected_nacks = list_copy(a.selected_nacks); unique_append(out.selected_nacks, b.selected_nacks)
@@ -403,9 +403,9 @@ Candidate.resolve_pack = resolve_pack
 Candidate.new = new
 Candidate.empty = empty
 Candidate.clone = clone
-Candidate.add_consequence = add_consequence
-Candidate.merge_consequence_combo = merge_consequence_combo
-Candidate.consequences_compatible = consequences_compatible
+Candidate.add_effect = add_effect
+Candidate.merge_effect_combo = merge_effect_combo
+Candidate.effects_compatible = effects_compatible
 Candidate.overlay_from = overlay_from
 Candidate.ctx_with_overlay = ctx_with_overlay
 Candidate.combine_seq = combine_seq

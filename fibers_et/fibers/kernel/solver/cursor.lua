@@ -2,9 +2,9 @@ local Engine = require('fibers.kernel.solver.engine')
 
 -- Resumable algebra cursor -------------------------------------------------
 --
--- A cursor stores the proof-search engine state plus the observation information
+-- A cursor stores the proof-search engine state plus the certificate information
 -- needed to resume a bounded search safely.  It does not commit resources,
--- publish consequences, mutate nack states or resume fibres.  Commit authority
+-- discharge effects, mutate nack states or resume fibres.  Commit authority
 -- remains with Runtime/CommitPlan.
 local Cursor = {}
 Cursor.__index = Cursor
@@ -31,8 +31,8 @@ function Cursor:is_valid(rt, waiting)
     if waiting[i] ~= self.waiting[i] then return false end
     if waiting[i].waiting ~= self.requests[i] then return false end
   end
-  local observations = self.engine and self.engine.observations
-  if observations and not observations:is_current(rt) then return false end
+  local certificate = self.engine and self.engine.certificate
+  if certificate and not certificate:is_current(rt) then return false end
   return true
 end
 

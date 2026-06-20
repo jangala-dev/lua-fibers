@@ -52,8 +52,9 @@ local registry = fibers.Cell.new({ owner = 'request', task = '-' }, 'registry')
 local audit = fibers.Cell.new({ text = '' }, 'audit')
 
 local result = {}
+local lifetime_events = {}
 
-local rt = fibers.Runtime.new()
+local rt = fibers.Runtime.new({ host = { lifetime = function(e) lifetime_events[#lifetime_events + 1] = e end } })
 rt:spawn_raw(function()
   local session = rt:perform(request:spawn_op(function()
     local msg = fibers.perform(resume:get_op())
@@ -130,6 +131,6 @@ print('supervisor settled?          ' .. yn(result.supervisor_state.settled))
 print('audit:')
 print('  ' .. result.audit_after.text)
 print('lifetime facility effects:')
-for i, ev in ipairs(rt.published_lifetime or {}) do
+for i, ev in ipairs(lifetime_events) do
   if ev.lifetime then print(event_line(ev)) end
 end

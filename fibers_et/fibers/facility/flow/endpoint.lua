@@ -81,7 +81,7 @@ function EndpointKind.prepare(ep, rec, _resolve)
   if not rec.has_open and not rec.has_error and not rec.has_reason then return nil, nil, true end
   local set, err = wake_set(ep)
   if err then return nil, err end
-  return { kind = EndpointKind, resource = ep, has_open = rec.has_open, open = rec.open, has_error = rec.has_error, error = rec.error, has_reason = rec.has_reason, reason = rec.reason, consequence_set = set }
+  return { kind = EndpointKind, resource = ep, has_open = rec.has_open, open = rec.open, has_error = rec.has_error, error = rec.error, has_reason = rec.has_reason, reason = rec.reason, effect_set = set }
 end
 
 function EndpointKind.apply(prepared, _log)

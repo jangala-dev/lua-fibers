@@ -4,7 +4,7 @@
 -- sealing and membership; the ownership record is where item owner transitions
 -- become concrete and where standard lifetime effects are derived.
 
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 local Effect = require('fibers.base.effect')
 local Settlement = require('fibers.internal.settlement')
 
@@ -63,8 +63,8 @@ function Kind.prepare(item, rec, _resolve)
   local prepared = { kind = Kind, resource = item, owner = new_owner, old_owner = old_owner }
   local typ = transition_type(old_owner, new_owner)
   if typ then
-    local consequence_set = ConsequenceSet.empty()
-    local ok, err = consequence_set:add(Effect.lifetime {
+    local effect_set = EffectSet.empty()
+    local ok, err = effect_set:add(Effect.lifetime {
       type = typ,
       item = item,
       item_id = item._fibers_id,
@@ -75,7 +75,7 @@ function Kind.prepare(item, rec, _resolve)
       to_id = owner_id(new_owner),
     })
     if not ok then return nil, err end
-    prepared.consequence_set = consequence_set
+    prepared.effect_set = effect_set
   end
   return prepared
 end

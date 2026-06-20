@@ -65,6 +65,14 @@ function NurseryFrame:spawn(fn, name)
   return task
 end
 
+function NurseryFrame:_remove_child_at(i)
+  local children = self.children
+  local n = #children
+  local last = children[n]
+  children[n] = nil
+  if i ~= n then children[i] = last end
+end
+
 local function with_mask(frame, fn)
   frame.mask_depth = (frame.mask_depth or 0) + 1
   local r = pack(Protected.pcall(fn))
@@ -78,20 +86,32 @@ function NurseryFrame:_owns(task)
 end
 
 function NurseryFrame:_cancel_owned(reason)
-  for i = 1, #self.children do
+  local i = 1
+  while i <= #self.children do
     local task = self.children[i]
-    if self:_owns(task) then with_mask(self, function() self:perform(self.lifetime:request_cancel_op(task, reason)) end) end
+    if self:_owns(task) then
+      with_mask(self, function() self:perform(self.lifetime:request_cancel_op(task, reason)) end)
+      i = i + 1
+    else
+      self:_remove_child_at(i)
+    end
   end
 end
 
 function NurseryFrame:_join_and_settle_owned()
   local first_bad
-  for i = 1, #self.children do
+  local i = 1
+  while i <= #self.children do
     local task = self.children[i]
     if self:_owns(task) then
       local exit = with_mask(self, function() return self:perform(task:exit_op()) end)
       if Exit.is(exit) and exit.tag == 'failed' and not first_bad then first_bad = exit end
       if self:_owns(task) then with_mask(self, function() self:perform(self.lifetime:settle_item_op(task)) end) end
+    end
+    if not self:_owns(task) then
+      self:_remove_child_at(i)
+    else
+      i = i + 1
     end
   end
   return first_bad

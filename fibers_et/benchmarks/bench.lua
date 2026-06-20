@@ -161,7 +161,7 @@ BenchEffectKind = Effect.kind {
       kind = BenchEffectKind,
       key = payload.key,
       payload = payload,
-      publish = function(rt, entry)
+      discharge = function(rt, entry)
         rt.bench_effect_total = (rt.bench_effect_total or 0) + (entry.payload.count or 1)
       end,
     }

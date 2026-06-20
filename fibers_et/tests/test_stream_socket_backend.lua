@@ -1,4 +1,5 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 local Runner = fibers.Runner
@@ -140,7 +141,7 @@ do
   rt:spawn_raw(function() seen, key, mode = rt:perform(src:readable_op()) end, 'manual-readiness')
   local st = run(rt, host, 5)
   assert_status(st, 'pending')
-  local waits = rt:pending_wait_summary()
+  local waits = (st.waits or {})
   local rw = Host.readiness_waits(waits)
   assert_eq(#rw, 1)
   assert_eq(rw[1].readiness_key, 'manual-key')
@@ -193,7 +194,7 @@ do
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(stream and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= nil and stream:writer().flow.reservoir:debug_first_lease_bytes() ~= "", 'write pump should lease committed bytes')
+  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'write pump should lease committed bytes')
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)

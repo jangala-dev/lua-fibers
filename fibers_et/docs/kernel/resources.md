@@ -174,7 +174,7 @@ The important points are that reads should use `Resource.project(ctx, resource,
 query)`, not the committed field directly, when they need to see tentative writes
 from earlier operations in the same transaction; and that mutable committed or
 host state should be observed through the attempt context so bounded search can
-record an observation journal.
+record an certificate.
 
 ## Resource records
 
@@ -330,23 +330,23 @@ end
 ```
 
 Prepared resource application should mutate only committed resource state.
-Resources should not append arbitrary consequence records to the runtime log.
-If a final resource state entails runtime work, return typed consequences from
-`prepare` as `consequence_set` or `consequences`; the commit plan will merge,
-prepare and publish them after resource application.
+Resources should not append arbitrary effect records to the runtime log.
+If a final resource state entails runtime work, return typed effects from
+`prepare` as `effect_set` or `effects`; the commit plan will merge,
+prepare and discharge them after resource application.
 
 ```lua
 return {
   kind = BoxKind,
   resource = box,
   write = value,
-  consequence_set = derived_obligations,
+  effect_set = derived_obligations,
 }
 ```
 
-The runtime maintains `published_consequences` as an observation aid.  Log entries
-are envelopes of the form `{ kind = name, key = key, payload = payload }`; the
-semantic object is the typed obligation, not the log row.
+Prepared effects are discharged by the runtime and then dropped.  Tests or
+hosts that need to observe effects should do so through the relevant effect
+discharger, not through a runtime-owned journal.
 
 ## Static summary
 

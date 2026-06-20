@@ -75,9 +75,9 @@ It does not support polling or arbitrary host events.  The optional Linux hosts
 `fibers.host.luajit_linux` and `fibers.host.nixio` provide more precise
 blocking and readiness support without changing `sleep_op` itself.
 
-## Observation journal
+## Certificate
 
-Clock waits participate in the observation journal.  A bounded cursor that has
+Clock waits participate in the certificate.  A bounded cursor that has
 observed `now < deadline` remains current while that fact is true.  It becomes
 stale only when `now >= deadline`, at which point the sleep operation may become
 a candidate.

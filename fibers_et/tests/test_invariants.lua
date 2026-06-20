@@ -9,7 +9,7 @@ local Cell = fibers.Cell
 local Channel = fibers.Channel
 local Effect = fibers.Effect
 local Interrupt = require('fibers.internal.interrupt')
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(actual, expected, msg)
@@ -70,18 +70,18 @@ do
   assert_eq(next_result, 'event-1', 'losing queue branch did not consume occurrence')
 end
 
--- Built-in consequence merges are pure: merging does not mutate original payloads.
+-- Built-in effect merges are pure: merging does not mutate original payloads.
 do
   local token = Interrupt.new('pure-merge-token')
   local first = Effect.interrupt(token, nil)
   local second = Effect.interrupt(token, 'later')
-  local set = ConsequenceSet.empty()
-  assert_truthy(set:add(first), 'first interrupt consequence accepted')
-  assert_truthy(set:add(second), 'second interrupt consequence merged')
+  local set = EffectSet.empty()
+  assert_truthy(set:add(first), 'first interrupt effect accepted')
+  assert_truthy(set:add(second), 'second interrupt effect merged')
   assert_eq(first.payload.reason, nil, 'merge did not mutate first payload')
   assert_eq(second.payload.reason, 'later', 'merge did not mutate second payload')
   local items = set:items()
-  assert_eq(#items, 1, 'duplicate interrupt consequences merge')
+  assert_eq(#items, 1, 'duplicate interrupt effects merge')
   assert_eq(items[1].payload.reason, 'later', 'merged payload carries reason')
 end
 
@@ -99,7 +99,7 @@ do
 end
 
 -- Host/source mutation is an external driver boundary. It is rejected from
--- consequence prepare, which may run speculatively during search.
+-- effect prepare, which may run speculatively during search.
 do
   local BadKind
   BadKind = Effect.kind {
@@ -111,7 +111,7 @@ do
       return {
         kind = BadKind,
         key = 'bad',
-        publish = function() end,
+        discharge = function() end,
       }
     end,
   }

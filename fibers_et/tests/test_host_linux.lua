@@ -42,7 +42,7 @@ do
   end)
   local st = rt:run()
   assert_eq(st.tag, 'pending')
-  local waits = rt:pending_wait_summary()
+  local waits = (st.waits or {})
   local rw = Host.readiness_waits(waits)
   assert_eq(#rw, 1, 'one readiness wait expected')
   assert_eq(rw[1].source, src, 'wait should carry source object')

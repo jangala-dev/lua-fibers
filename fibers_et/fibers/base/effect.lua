@@ -1,12 +1,12 @@
 -- Public typed after-commit effects.
 --
--- Effects are the public form of transaction consequences: runtime-owned
--- obligations that are published iff the selected world commits.  The built-in
+-- Effects are the public form of transaction effects: runtime-owned
+-- obligations that are discharged iff the selected world commits.  The built-in
 -- effects are deliberately small: wake is a level-triggered nudge, and spawn
 -- starts a fibre after its admission has committed.
 
 local Op = require('fibers.base.op')
-local ConsequenceKind = require('fibers.kernel.consequence.kind')
+local EffectKind = require('fibers.kernel.effect.kind')
 local Source = require('fibers.base.source')
 local SourceState = require('fibers.internal.source_state')
 
@@ -19,14 +19,14 @@ local function shallow_copy(t)
 end
 
 function Effect.kind(spec)
-  return ConsequenceKind.new(spec)
+  return EffectKind.new(spec)
 end
 
-Effect.is_kind = ConsequenceKind.is_kind
-Effect.is_consequence = ConsequenceKind.is_consequence
+Effect.is_kind = EffectKind.is_kind
+Effect.is_effect = EffectKind.is_effect
 
 function Effect.of(kind, payload)
-  if not ConsequenceKind.is_kind(kind) then error('Effect.of expects an Effect kind', 2) end
+  if not EffectKind.is_kind(kind) then error('Effect.of expects an Effect kind', 2) end
   local e, err = kind:of(payload)
   if not e then error(err and (err.message or tostring(err)) or 'invalid effect payload', 2) end
   return e
@@ -42,7 +42,7 @@ local function wake_key(payload)
   return payload.id or payload.key or tostring(payload.kind) .. ':' .. tostring(payload.source)
 end
 
-WakeKind = ConsequenceKind.new {
+WakeKind = EffectKind.new {
   name = 'wake',
   order = 50,
   key = wake_key,
@@ -54,11 +54,10 @@ WakeKind = ConsequenceKind.new {
       kind = WakeKind,
       key = wake_key(payload),
       payload = payload,
-      publish = function(rt, entry, log)
-        if rt._note_wake then rt:_note_wake(entry.payload, log) end
+      discharge = function(rt, entry, log)
         local host = rt.host or {}
         local wake = host.wake
-        if wake then return wake(entry.payload, rt, log) end
+        if wake then return wake(entry.payload, rt) end
       end,
     }
   end,
@@ -82,7 +81,7 @@ local function interrupt_key(payload)
   return token and (token._fibers_id or token.name) or tostring(token)
 end
 
-InterruptKind = ConsequenceKind.new {
+InterruptKind = EffectKind.new {
   name = 'interrupt',
   order = 55,
   key = interrupt_key,
@@ -97,9 +96,9 @@ InterruptKind = ConsequenceKind.new {
       kind = InterruptKind,
       key = interrupt_key(payload),
       payload = payload,
-      publish = function(rt, entry, _log)
-        if not rt._publish_interrupt then error('runtime does not support committed interrupt', 2) end
-        return rt:_publish_interrupt(entry.payload.token, entry.payload.reason)
+      discharge = function(rt, entry, _log)
+        if not rt._discharge_interrupt then error('runtime does not support committed interrupt', 2) end
+        return rt:_discharge_interrupt(entry.payload.token, entry.payload.reason)
       end,
     }
   end,
@@ -121,7 +120,7 @@ local function lifetime_key(payload)
   return tostring(typ) .. ':' .. tostring(item_id) .. ':' .. tostring(from_id) .. ':' .. tostring(to_id)
 end
 
-LifetimeKind = ConsequenceKind.new {
+LifetimeKind = EffectKind.new {
   name = 'lifetime',
   order = 60,
   key = lifetime_key,
@@ -133,18 +132,16 @@ LifetimeKind = ConsequenceKind.new {
       kind = LifetimeKind,
       key = lifetime_key(payload),
       payload = payload,
-      publish = function(rt, entry, log)
-        rt.published_lifetime = rt.published_lifetime or {}
-        rt.published_lifetime[#rt.published_lifetime + 1] = entry.payload
-        local function publish_source(src)
+      discharge = function(rt, entry, _log)
+        local function discharge_source(src)
           if type(src) == 'table' and src._fibers_kind == Source.Kind then SourceState.arrive(src, entry.payload) end
         end
-        publish_source(entry.payload.source)
+        discharge_source(entry.payload.source)
         local sources = entry.payload.sources
-        if type(sources) == 'table' then for i = 1, #sources do publish_source(sources[i]) end end
+        if type(sources) == 'table' then for i = 1, #sources do discharge_source(sources[i]) end end
         local host = rt.host or {}
-        local publish = host.lifetime
-        if publish then return publish(entry.payload, rt, log) end
+        local discharge = host.lifetime
+        if discharge then return discharge(entry.payload, rt) end
       end,
     }
   end,
@@ -161,7 +158,7 @@ local function spawn_key(payload)
   return payload.id or payload.name or tostring(payload.fn)
 end
 
-SpawnKind = ConsequenceKind.new {
+SpawnKind = EffectKind.new {
   name = 'spawn',
   order = 100,
   key = spawn_key,
@@ -174,23 +171,28 @@ SpawnKind = ConsequenceKind.new {
       kind = SpawnKind,
       key = spawn_key(payload),
       payload = payload,
-      publish = function(rt, entry, _log)
+      discharge = function(rt, entry, _log)
         if not rt._spawn_committed then error('runtime does not support committed spawn', 2) end
+        local owner = entry.payload.owner
+        if owner then
+          owner.fn = nil
+          owner.frame = nil
+        end
         return rt:_spawn_committed(entry.payload.fn, entry.payload.name, entry.payload.frame)
       end,
     }
   end,
 }
 
-function Effect.spawn(fn, name, id, frame)
+function Effect.spawn(fn, name, id, frame, owner)
   next_spawn = next_spawn + 1
-  return Effect.of(SpawnKind, { fn = fn, name = name, id = id or ('spawn-' .. tostring(next_spawn)), frame = frame })
+  return Effect.of(SpawnKind, { fn = fn, name = name, id = id or ('spawn-' .. tostring(next_spawn)), frame = frame, owner = owner })
 end
 
 Effect.WakeKind = WakeKind
 Effect.InterruptKind = InterruptKind
 Effect.LifetimeKind = LifetimeKind
 Effect.SpawnKind = SpawnKind
-Effect.ConsequenceKind = ConsequenceKind
+Effect.EffectKind = EffectKind
 
 return Effect

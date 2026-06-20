@@ -1,11 +1,11 @@
--- Typed consequence obligation protocol tests.
+-- Typed effect obligation protocol tests.
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
 local Cell = require('fibers.base.cell')
-local TC = require('tests.consequence_helpers')
+local TC = require('tests.effect_helpers')
 
 local pack_ = table.pack or function(...)
   return { n = select('#', ...), ... }
@@ -36,13 +36,13 @@ local function one_perform(op, opts)
   return rt:run(), vals, rt
 end
 
-local function test_emit_accepts_only_typed_consequences()
+local function test_emit_accepts_only_typed_effects()
   local ok, err = pcall(function() return Op.emit({ tag = 'raw' }) end)
   assert_eq(ok, false, 'raw emit should fail')
-  assert_truthy(tostring(err):match('typed consequence'), 'raw emit error explains expectation')
+  assert_truthy(tostring(err):match('typed effect'), 'raw emit error explains expectation')
 end
 
-local function test_duplicate_obligations_merge_to_one_publication()
+local function test_duplicate_obligations_merge_to_one_discharge()
   local calls = {}
   local rt = Runtime.new({
     host = {
@@ -55,15 +55,13 @@ local function test_duplicate_obligations_merge_to_one_publication()
       Op.emit(TC.tag('dup')),
       Op.emit(TC.tag('dup')),
     }))
-  end, 'duplicate-consequence')
+  end, 'duplicate-effect')
 
   local st = rt:run()
   assert_eq(st.tag, 'found')
   assert_truthy(got, 'participant resumed')
-  assert_eq(#calls, 1, 'duplicate same-key obligations publish once')
+  assert_eq(#calls, 1, 'duplicate same-key obligations discharge once')
   assert_eq(calls[1], 'dup')
-  assert_eq(#rt.published_consequences, 1)
-  assert_eq(#rt.published_consequences[1].obligation, 1)
 end
 
 local function test_conflicting_obligations_reject_candidate_world()
@@ -74,7 +72,6 @@ local function test_conflicting_obligations_reject_candidate_world()
 
   assert_uncommitted(st, 'conflicting obligations must not commit')
   assert_eq(vals.n, 0, 'participant does not resume')
-  assert_eq(#rt.published_consequences, 0, 'rejected world publishes no obligations')
 end
 
 local function test_prepare_refusal_is_candidate_rejection_not_runtime_failure()
@@ -92,53 +89,55 @@ end
 
 local function test_prepare_refusal_backtracks_to_other_worlds()
   do
-    local st, vals, rt = one_perform(Op.choice(
+    local calls = {}
+    local st, vals = one_perform(Op.choice(
       Op.emit(TC.prepare_refuse()):and_then(function() return Op.always('bad') end),
       Op.emit(TC.tag('fallback-choice')):and_then(function() return Op.always('good') end)
-    ))
+    ), { host = { test_tag = function(tag) calls[#calls + 1] = tag end } })
     assert_eq(st.tag, 'found')
-    assert_eq(vals[1], 'good', 'choice backtracks around prepare-refused consequence world')
-    assert_eq(#rt.published_consequences, 1)
-    assert_eq(rt.published_consequences[1].obligation[1].payload.tag, 'fallback-choice')
+    assert_eq(vals[1], 'good', 'choice backtracks around prepare-refused effect world')
+    assert_eq(table.concat(calls, ','), 'fallback-choice')
   end
 
   do
-    local st, vals, rt = one_perform(
+    local calls = {}
+    local st, vals = one_perform(
       Op.emit(TC.prepare_refuse())
         :and_then(function() return Op.always('primary') end)
-        :or_else(Op.emit(TC.tag('fallback-or-else')):and_then(function() return Op.always('fallback') end))
+        :or_else(Op.emit(TC.tag('fallback-or-else')):and_then(function() return Op.always('fallback') end)),
+      { host = { test_tag = function(tag) calls[#calls + 1] = tag end } }
     )
     assert_eq(st.tag, 'found')
     assert_eq(vals[1], 'fallback', 'or_else opens fallback after prepare-refused primary has no committing world')
-    assert_eq(rt.published_consequences[1].obligation[1].payload.tag, 'fallback-or-else')
+    assert_eq(table.concat(calls, ','), 'fallback-or-else')
   end
 end
 
-local function test_publish_failure_is_fatal_after_resource_commit()
-  local cell = Cell.new(0, 'publish-fatal-cell')
+local function test_discharge_failure_is_fatal_after_resource_commit()
+  local cell = Cell.new(0, 'discharge-fatal-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(cell:write_op(1):and_then(function()
-      return Op.emit(TC.publish_fatal())
+      return Op.emit(TC.discharge_fatal())
     end))
-  end, 'publish-fatal')
+  end, 'discharge-fatal')
 
   local ok, err = pcall(function() rt:run() end)
-  assert_error_kind(ok, err, 'consequence_error', 'raw publish failure is fatal consequence error')
+  assert_error_kind(ok, err, 'effect_error', 'raw discharge failure is fatal effect error')
   assert_eq(err.fatal, true)
-  assert_eq(err.committed, true, 'publish failure is after resource commit')
-  assert_eq(cell.value, 1, 'resource commit is not rolled back by publish failure')
-  assert_eq(rt:failed(), err, 'runtime stores fatal publish failure')
+  assert_eq(err.committed, true, 'discharge failure is after resource commit')
+  assert_eq(cell.value, 1, 'resource commit is not rolled back by discharge failure')
+  assert_eq(rt:failed(), err, 'runtime stores fatal discharge failure')
 end
 
 local tests = {
-  test_emit_accepts_only_typed_consequences,
-  test_duplicate_obligations_merge_to_one_publication,
+  test_emit_accepts_only_typed_effects,
+  test_duplicate_obligations_merge_to_one_discharge,
   test_conflicting_obligations_reject_candidate_world,
   test_prepare_refusal_is_candidate_rejection_not_runtime_failure,
   test_prepare_refusal_backtracks_to_other_worlds,
-  test_publish_failure_is_fatal_after_resource_commit,
+  test_discharge_failure_is_fatal_after_resource_commit,
 }
 
 for i = 1, #tests do tests[i]() end
-print('tests/test_consequences.lua: ok')
+print('tests/test_effects.lua: ok')

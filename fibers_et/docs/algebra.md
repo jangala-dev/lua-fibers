@@ -17,7 +17,7 @@ rt:run()
 
 `perform` suspends the current fibre.  The solver searches the currently waiting
 fibres for a closed committed world.  If a world commits, resource mutation,
-typed consequence publication and nack settlement happen before any
+typed effect discharge and nack settlement happen before any
 selected fibre is resumed.  The selected fibre is then resumed inside `perform`
 with the raw values and the selected post-commit value transformer.  That
 transformer is applied in the resumed fibre before `perform` returns.
@@ -30,7 +30,7 @@ Operations evaluate to current transaction candidates.  A candidate may contain:
 - rendezvous endpoints;
 - tentative resource records;
 - deferred continuations waiting for unresolved rendezvous values;
-- typed consequence obligations from `emit`;
+- typed effect obligations from `emit`;
 - post-commit value transformers from `wrap`;
 - selected or lost nack obligations.
 
@@ -59,17 +59,17 @@ Op.always("a", "b")
 Has no current candidates and no wake interests.  It represents absence, not a
 failed exception.
 
-### `Op.emit(consequence)`
+### `Op.emit(effect)`
 
 Succeeds with `true` and contributes a typed runtime obligation to the current
-candidate world.  `consequence` must be a consequence object constructed by a
-consequence kind; arbitrary Lua values and callbacks are rejected at construction
+candidate world.  `effect` must be a effect object constructed by a
+effect kind; arbitrary Lua values and callbacks are rejected at construction
 time.
 
-When candidate worlds combine, their consequence sets are keyed and merged by
+When candidate worlds combine, their effect sets are keyed and merged by
 kind.  Duplicate obligations may collapse, and conflicting obligations reject the
 candidate world.  If the selected world commits, prepared obligations are
-published by trusted runtime machinery after resource journals are applied and
+discharged by trusted runtime machinery after resource journals are applied and
 before any selected fibre resumes.  Emits from losing, absent or abandoned
 branches are discarded.
 
@@ -131,10 +131,10 @@ Semantics:
 4. search `q` as the transaction at that point.
 
 The right branch is not evaluated unless fallback opens.  When fallback opens,
-the left branch's waits, consequences, post-commit transformers, protected nacks and speculative
+the left branch's waits, effects, post-commit transformers, protected nacks and speculative
 structure are discarded.
 
-Consequences:
+Effects:
 
 - a ready primary suppresses fallback;
 - a primary that can rendezvous with a current partner suppresses fallback;
@@ -239,10 +239,10 @@ resolves them.
 ### `p:wrap(fn)`
 
 Registers a post-commit participant continuation.  `fn` runs only after the
-candidate has committed and resource/consequence effects have been applied.  It
+candidate has committed and resource/effect effects have been applied.  It
 runs inside the resumed fibre, inside `perform`, before `perform` returns.
 
-`wrap` is therefore post-commit, but it is not a transaction consequence.  It may
+`wrap` is therefore post-commit, but it is not a transaction effect.  It may
 perform a fresh transaction, and failure in a wrap does not roll back the commit
 that selected it.
 
@@ -328,8 +328,6 @@ ch:put_op("message")
 local rt = Runtime.new({
   host = {
     now = function(_rt) return monotonic_time end,
-    trace = function(event) end,
-    on_error = function(err) end,
   },
 })
 ```
@@ -346,30 +344,29 @@ provided, it returns `0`.  Relative-time operations should be built with
 when the operation value was constructed.
 
 The runtime maintains a small phase discipline without putting the hot search path
-behind a protected phase wrapper.  The public authority checks are simpler:
+behind a protected phase wrapper.  The public authority checks are:
 
 - `perform` is legal only when called by the currently resumed runtime fibre;
 - `step` and `run` are external driver calls and are rejected from a resumed
   fibre;
 - `spawn` is legal from external code before or between driver calls, and from a
   resumed fibre; it is rejected from runtime-internal work such as guarded
-  construction, resource evaluation, commit, or consequence publication;
-- `commit` and `consequence` remain named phases for diagnostics around resource
-  mutation and consequence handlers.
+  construction, resource evaluation, commit, or effect discharge;
+- `commit` and `effect` remain named phases for resource mutation and
+  effect handlers.
 
 The solver and prepare path do not set a global `search` or `prepare` phase.
 Search-specific information belongs in the evaluation context.  This keeps
 `perform` and `spawn` protection independent of hot-path phase restoration.
 `perform` is still rejected inside `guard`, `map`, `and_then`, resource callbacks
-and consequence handlers, but it is allowed inside `wrap` because `wrap` runs in
+and effect handlers, but it is allowed inside `wrap` because `wrap` runs in
 the resumed fibre after the selected transaction has committed.
 
-Phase violations and runtime failures are reported as structured error objects
+Phase violations and runtime failures are raised as structured error objects
 with fields such as `kind`, `phase`, `action`, `fibre`, `committed`, `fatal` and
-`message`.  The default policy still raises the error.  If the host provides
-`on_error` or `report_error`, the runtime reports the structured error before
-raising it.  Fatal errors are also stored on the runtime; subsequent public
-entry points raise the stored fatal error rather than trying to continue.
+`message`.  Fatal errors are stored as live failure state on the runtime;
+subsequent public entry points raise the stored fatal error rather than trying
+to continue.  The kernel does not keep an error archive.
 
 ## Runtime outcomes
 
@@ -386,7 +383,7 @@ Common return tags:
   committed, but future wake interests remain;
 - `{ tag = 'absent' }` — no compatible transaction exists now;
 - `{ tag = 'reject_candidate' }` — the candidate selected by search could not be
-  prepared, for example because a consequence kind returned a structured
+  prepared, for example because a effect kind returned a structured
   refusal;
 - `{ tag = 'idle' }` — no fibres are live.
 
@@ -402,9 +399,9 @@ Lua functions:
 - `all` composes independent lanes.
 - `tensor` composes lanes and permits internal rendezvous.
 - resource effects are atomic and all-or-nothing.
-- typed consequence obligations are published only by the committed world.
+- typed effect obligations are discharged only by the committed world.
 - wraps from losing worlds are discarded.
-- selected wraps run in the resumed fibre after consequence publication and before
+- selected wraps run in the resumed fibre after effect discharge and before
   `perform` returns.
 - choice loss may nack; residual absence does not.
 
@@ -429,7 +426,7 @@ failure of the transaction that has already committed.
 ### Trusted transactional machinery
 
 The solver, resource protocol, prepare/apply path, commit machinery and
-mandatory consequence preparation/publication are trusted transactional machinery.  They are
+mandatory effect preparation/discharge are trusted transactional machinery.  They are
 not individually protected by recovery wrappers.  An error here is treated as an
 implementation or resource-integrity failure, not as a transactional abort and
 not as a losing candidate world.
@@ -453,15 +450,15 @@ unless they were already fatal.
 
 Public `run` and `step` calls have a narrow driver exit boundary.  Its job is to
 restore public driver state on every exit and then re-raise the appropriate
-error.  It does not make solver, resource, prepare, commit or consequence code
+error.  It does not make solver, resource, prepare, commit or effect code
 recoverable.
 
-Mandatory consequence publication happens after resource commit.  If a prepared
-consequence publisher raises, the transaction remains committed, but the runtime
-records a fatal `consequence_error`, reports it to the host if configured, and
-rejects later public entry points with the stored fatal error.
+Mandatory effect discharge happens after resource commit.  If a prepared
+effect discharger raises, the transaction remains committed, but the runtime
+stores a fatal `effect_error` as live failure state and rejects later
+public entry points with the stored fatal error.
 
-Consequence kinds may also return a structured refusal during merge or prepare.
+Effect kinds may also return a structured refusal during merge or prepare.
 That is a candidate-world rejection, not a fatal runtime failure.  A raw Lua
-error escaping from consequence kind machinery remains a trusted-machinery
+error escaping from effect kind machinery remains a trusted-machinery
 failure.

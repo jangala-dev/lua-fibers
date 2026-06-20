@@ -58,7 +58,7 @@ protocols, and then release it with the claim authority.
 
 The higher-level `Lifetime:settle_op()` is different: it is a terminal transition
 for the lifetime facility itself.  It succeeds only when the underlying Region is
-closed and empty, and publishes a committed `settled` lifetime event.
+closed and empty, and discharges a committed `settled` lifetime event.
 
 ## Tasks
 
@@ -140,7 +140,7 @@ from:handoff_op(handle, to)
 ```
 
 The handoff is not exposed as release followed by admission.  If it commits,
-the lifetime publishes handoff effects and the underlying ownership record moves
+the lifetime discharges handoff effects and the underlying ownership record moves
 in the same committed world.  If it loses, ownership is unchanged and no handoff
 effect is emitted.
 
@@ -150,7 +150,7 @@ regions without becoming ownerless.
 
 ## Lifetime effects
 
-Lifetime transitions publish standard typed effects with a stable event shape:
+Lifetime transitions discharge standard typed effects with a stable event shape:
 
 ```text
 admitted
@@ -166,11 +166,11 @@ settled
 
 Events carry ordinary fields such as `type`, `lifetime`, `lifetime_id`, `region`,
 `item`, `item_id`, `item_kind`, `from`, `from_id`, `to`, `to_id`, `reason` and
-`report` when applicable. These effects are transaction consequences.  They are
-published after ownership journals commit and before selected participants
+`report` when applicable. These effects are transaction effects.  They are
+discharged after ownership journals commit and before selected participants
 resume. They are not returned to a participant as work to do later.
 
-`settlement_failed` is published when a settlement protocol fails after its claim
+`settlement_failed` is discharged when a settlement protocol fails after its claim
 has committed.  The item remains owned and its Region record exposes
 `phase = "settlement_failed"` until policy code decides what to do next.
 

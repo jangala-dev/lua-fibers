@@ -74,9 +74,17 @@ function Runtime.new(opts)
   return setmetatable({
     opts = opts,
     host = host,
-    fibres = {},
-    published_consequences = {},
-    stats = { refreshes = 0, steps = 0, algebra_pending = 0 },
+
+    -- Live frontier state.  A live fibre is owned by exactly one of:
+    --   ready queue, waiting frontier, or the currently running slot.
+    -- Completed fibres are retired immediately and are not kept by the runtime.
+    ready = {},
+    ready_head = 1,
+    ready_tail = 0,
+    waiting = {},
+    live_count = 0,
+    _next_fibre_id = 0,
+
     _epoch = 0,
     _cursor = nil,
     _phase = 'external',
@@ -109,7 +117,6 @@ function Runtime:arrive(source, ...)
   if not source or source._fibers_kind ~= Source.Kind then error('Runtime:arrive expects a Source', 2) end
   SourceState.arrive(source, ...)
   self:_invalidate_cursor()
-  self:_trace('source.arrive', { source = source.name or source._fibers_id, source_id = source._fibers_id })
   return source
 end
 
@@ -119,7 +126,6 @@ function Runtime:_clear_source(source, ...)
   if not source or source._fibers_kind ~= Source.Kind then error('Runtime:_clear_source expects a Source', 2) end
   SourceState.clear(source, ...)
   self:_invalidate_cursor()
-  self:_trace('source.clear', { source = source.name or source._fibers_id, source_id = source._fibers_id })
   return source
 end
 
@@ -159,16 +165,6 @@ function Runtime:readiness(key, name)
   return source, feed
 end
 
-function Runtime:_trace(kind, fields)
-  local trace = self.host.trace or self.opts.trace
-  if not trace then return end
-  fields = fields or {}
-  fields.kind = kind
-  fields.phase = self._phase
-  fields.epoch = self._epoch
-  trace(fields)
-end
-
 function Runtime:_make_error(kind, err, fields)
   fields = fields or {}
   local message = fields.message or tostring(err)
@@ -185,11 +181,6 @@ function Runtime:_make_error(kind, err, fields)
 end
 
 function Runtime:_throw_error(e, level)
-  local errors = self.errors
-  if not errors then errors = {}; self.errors = errors end
-  errors[#errors + 1] = e
-  local handler = self.host and (self.host.on_error or self.host.report_error) or self.opts.on_error
-  if handler then handler(e) end
   if not self:_is_current_fibre() then self._driver_depth = 0 end
   error(e, level)
 end
@@ -281,7 +272,102 @@ function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
   return finish_phase_call(self, old, name, kind, true, committed, pcall(fn, ...))
 end
 
+local function new_fibre(self, fn, name, frame)
+  self._next_fibre_id = (self._next_fibre_id or 0) + 1
+  return {
+    id = self._next_fibre_id,
+    co = coroutine.create(fn),
+    name = name or ('fiber-' .. tostring(self._next_fibre_id)),
+    frame = frame,
+    waiting = nil,
+    wait_index = nil,
+    state = 'new',
+  }
+end
+
+function Runtime:_has_ready()
+  return self.ready_head <= (self.ready_tail or 0)
+end
+
+function Runtime:_push_ready(f)
+  assert(f and f.state ~= 'dead', 'cannot ready a dead fibre')
+  f.state = 'ready'
+  local tail = (self.ready_tail or 0) + 1
+  self.ready_tail = tail
+  self.ready[tail] = f
+  self:_invalidate_cursor()
+end
+
+function Runtime:_pop_ready()
+  local head = self.ready_head
+  local tail = self.ready_tail or 0
+  if head > tail then return nil end
+  local f = self.ready[head]
+  self.ready[head] = nil
+  self.ready_head = head + 1
+  if self.ready_head > 64 and self.ready_head > ((tail + 1) / 2) then
+    local old, new = self.ready, {}
+    local n = 0
+    for i = self.ready_head, tail do
+      n = n + 1
+      new[n] = old[i]
+    end
+    self.ready = new
+    self.ready_head = 1
+    self.ready_tail = n
+  end
+  return f
+end
+
+function Runtime:_add_waiting(f, req)
+  assert(f and f.state == 'running', 'waiting fibre must be running')
+  f.waiting = req
+  f.state = 'waiting'
+  local waiting = self.waiting
+  waiting[#waiting + 1] = f
+  f.wait_index = #waiting
+  self:_invalidate_cursor()
+end
+
+function Runtime:_remove_waiting(f)
+  local i = f and f.wait_index
+  if not i then return false end
+  local waiting = self.waiting
+  local last_i = #waiting
+  local last = waiting[last_i]
+  waiting[last_i] = nil
+  if i ~= last_i then
+    waiting[i] = last
+    if last then last.wait_index = i end
+  end
+  f.wait_index = nil
+  f.waiting = nil
+  self:_invalidate_cursor()
+  return true
+end
+
+function Runtime:_retire_fibre(f)
+  if not f or f.state == 'dead' then return end
+  if f.wait_index then self:_remove_waiting(f) end
+  f.state = 'dead'
+  f.waiting = nil
+  f.wait_index = nil
+  f.co = nil
+  f.frame = nil
+  self.live_count = (self.live_count or 1) - 1
+  self:_invalidate_cursor()
+end
+
 function Runtime:_resume(f, values)
+  if f.state == 'waiting' then self:_remove_waiting(f) end
+  if f.state == 'dead' then return end
+
+  local co = f.co
+  if not co then return self:_retire_fibre(f) end
+
+  f.state = 'running'
+  f.waiting = nil
+
   local old_phase = self:_set_phase('fibre')
   local old_fibre = self._current_fibre
   local old_current_runtime = current_runtime
@@ -289,56 +375,50 @@ function Runtime:_resume(f, values)
   self._current_fibre = f
   current_runtime = self
   current_frame = f.frame
-  local ok, req_or_err = coroutine.resume(f.co, values)
+  local ok, req_or_err = coroutine.resume(co, values)
   current_runtime = old_current_runtime
   current_frame = old_current_frame
   self:_restore_phase(old_phase)
   self._current_fibre = old_fibre
+
   if not ok then
-    f.done = true
-    f.waiting = nil
+    local name = f.name
+    self:_retire_fibre(f)
     if type(req_or_err) == 'table' and req_or_err._fibers_error then error(req_or_err, 0) end
-    self:_fail('fibre_error', req_or_err, { fibre = f.name, level = 0 })
+    self:_fail('fibre_error', req_or_err, { fibre = name, level = 0 })
   end
-  if coroutine.status(f.co) == 'dead' then
-    f.done = true
-    f.waiting = nil
+
+  if coroutine.status(co) == 'dead' then
+    self:_retire_fibre(f)
   else
-    f.waiting = req_or_err
+    self:_add_waiting(f, req_or_err)
   end
+end
+
+function Runtime:_spawn_fibre(fn, name, frame)
+  local f = new_fibre(self, fn, name, frame)
+  self.live_count = (self.live_count or 0) + 1
+  self:_push_ready(f)
+  return f
 end
 
 function Runtime:spawn_raw(fn, name, frame)
   self:_check_not_failed(2)
   self:_require_spawn_allowed(2)
-  self:_invalidate_cursor()
-  local co = coroutine.create(fn)
-  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false, frame = frame }
-  self:_trace('fibre.spawn_raw', { fibre = name })
+  return self:_spawn_fibre(fn, name, frame)
 end
 
 function Runtime:_spawn_committed(fn, name, frame)
   self:_check_not_failed(2)
-  self:_invalidate_cursor()
-  local co = coroutine.create(fn)
-  self.fibres[#self.fibres + 1] = { co = co, name = name or ('fiber-' .. tostring(#self.fibres + 1)), waiting = nil, done = false, frame = frame }
-  self:_trace('fibre.spawn_committed', { fibre = name })
+  return self:_spawn_fibre(fn, name, frame)
 end
 
-function Runtime:_note_wake(wake, _log)
-  self.published_wakes = self.published_wakes or {}
-  self.published_wakes[#self.published_wakes + 1] = wake
-end
-
-function Runtime:_publish_interrupt(token, reason)
+function Runtime:_discharge_interrupt(token, reason)
   Interrupt.raise(token, reason)
   self:_invalidate_cursor()
   return true
 end
 
-function Runtime:pending_wait_summary()
-  return Wait.summarise(self.pending_waits or self.pending_wakeups or {})
-end
 
 
 function Runtime:pcall(fn, ...)
@@ -373,34 +453,24 @@ function Runtime:_apply_commit_plan(plan)
   assert(CommitPlan.is_plan(plan), 'expected certified commit plan')
 
   local prepared = plan.prepared_resources
-  local prepared_consequences = plan.prepared_consequences
-  local log
-
-  if prepared or prepared_consequences then
-    log = { obligation = {} }
-  end
+  local prepared_effects = plan.prepared_effects
 
   if prepared then
     local old = self:_set_phase('commit')
-    for i = 1, #prepared do Resource.apply_prepared(prepared[i], log) end
+    for i = 1, #prepared do Resource.apply_prepared(prepared[i]) end
     self:_restore_phase(old)
   end
 
-  if log and (#log.obligation > 0 or (prepared_consequences and #prepared_consequences > 0)) then
-    self.published_consequences[#self.published_consequences + 1] = log
-  end
-
-  if prepared_consequences then
-    for i = 1, #prepared_consequences do
-      local pc = prepared_consequences[i]
+  if prepared_effects then
+    for i = 1, #prepared_effects do
+      local pc = prepared_effects[i]
       local entry = {
         kind = pc.kind_name or (pc.kind and pc.kind.name) or tostring(pc.kind),
         key = pc.key,
         payload = pc.payload,
       }
-      log.obligation[#log.obligation + 1] = entry
-      self:_call_fatal_in_phase('consequence', 'consequence_error', true, function()
-        return pc.publish(self, entry, log)
+      self:_call_fatal_in_phase('effect', 'effect_error', true, function()
+        return pc.discharge(self, entry)
       end)
     end
   end
@@ -425,10 +495,8 @@ function Runtime:_apply_commit_plan(plan)
   self:_bump_epoch()
 
   if plan.fiber then
-    plan.fiber.waiting = nil
     self:_resume(plan.fiber, pack_perform_result(plan.vals, plan.post))
   elseif plan.fibres then
-    for i = 1, #plan.fibres do plan.fibres[i].waiting = nil end
     for i = 1, #plan.fibres do
       local f = plan.fibres[i]
       self:_resume(f, pack_perform_result(plan.vals_list[i], plan.post_list[i]))
@@ -438,33 +506,30 @@ function Runtime:_apply_commit_plan(plan)
 end
 
 
-function Runtime:_deliver_interrupts(waiting)
+function Runtime:_deliver_interrupts()
   local delivered = false
-  waiting = waiting or self:_waiting()
-  for i = 1, #waiting do
-    local f = waiting[i]
-    local w = f.waiting
+  local i = 1
+  while i <= #self.waiting do
+    local f = self.waiting[i]
+    local w = f and f.waiting
     local token = w and w.interrupt
     if token and token.is_raised and token:is_raised() then
-      f.waiting = nil
       self:_resume(f, Runtime.cancelled(token.reason, token))
       delivered = true
+      -- _resume removes f from waiting by swap-with-tail, so inspect this
+      -- position again on the next loop.
+    else
+      i = i + 1
     end
   end
-  if delivered then self:_bump_epoch() end
   return delivered
 end
 
 function Runtime:_pump_one()
-  for i = 1, #self.fibres do
-    local f = self.fibres[i]
-    if not f.done and not f.waiting then
-      self:_resume(f, nil)
-      self:_bump_epoch()
-      return true
-    end
-  end
-  return false
+  local f = self:_pop_ready()
+  if not f then return false end
+  self:_resume(f, nil)
+  return true
 end
 
 function Runtime:_pump()
@@ -472,20 +537,11 @@ function Runtime:_pump()
 end
 
 function Runtime:_waiting()
-  local xs = {}
-  for i = 1, #self.fibres do
-    local f = self.fibres[i]
-    if not f.done and f.waiting then xs[#xs + 1] = f end
-  end
-  return xs
+  return self.waiting
 end
 
 function Runtime:_has_unstarted()
-  for i = 1, #self.fibres do
-    local f = self.fibres[i]
-    if not f.done and not f.waiting then return true end
-  end
-  return false
+  return self:_has_ready()
 end
 
 function Runtime:_valid_cursor(waiting)
@@ -495,11 +551,7 @@ function Runtime:_valid_cursor(waiting)
   return nil
 end
 
-function Runtime:cursor_stats()
-  local c = self._cursor
-  if c and c.stats_snapshot then return c:stats_snapshot() end
-  return nil
-end
+
 
 -- One externally-drivable scheduler transition.
 --
@@ -515,14 +567,13 @@ end
 -- call step again later with a fresh budget.
 function Runtime:_step(opts)
   opts = opts or {}
-  self.stats.steps = (self.stats.steps or 0) + 1
-
+  if self:_deliver_interrupts() then return { tag = 'pending', kind = 'interrupt' } end
   local waiting = self:_waiting()
-  if self:_deliver_interrupts(waiting) then return { tag = 'pending', kind = 'interrupt' } end
 
   if #waiting == 0 then
     if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-    return { tag = 'idle', value = true }
+    if (self.live_count or 0) == 0 then return { tag = 'idle', value = true } end
+    return { tag = 'pending', kind = 'no-ready-work' }
   end
 
   local world, score, st = nil, nil, nil
@@ -539,10 +590,8 @@ function Runtime:_step(opts)
     end
     st = cursor:resume(opts.max_work)
     if st.tag == 'pending' then
-      self.stats.algebra_pending = (self.stats.algebra_pending or 0) + 1
       if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      self.pending_wakeups = Wait.merge(st.waits)
-      self.pending_waits = self.pending_wakeups
+      st.waits = Wait.summarise(Wait.merge(st.waits))
       return st
     elseif st.tag == 'committable' then
       world, score = st.world, st.score
@@ -557,10 +606,8 @@ function Runtime:_step(opts)
     self._cursor = nil
     world, score, st = Search.solve(self, waiting, opts)
     if st and st.tag == 'pending' then
-      self.stats.algebra_pending = (self.stats.algebra_pending or 0) + 1
       if st.kind == 'wakeup' and self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-      self.pending_wakeups = Wait.merge(st.waits)
-      self.pending_waits = self.pending_wakeups
+      st.waits = Wait.summarise(Wait.merge(st.waits))
       return st
     end
   end
@@ -571,7 +618,6 @@ function Runtime:_step(opts)
   -- primary.
   if world and (score_is_zero(score) or not self:_has_unstarted()) then
     local cert_cursor = self._cursor
-    if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
     local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
     if not plan then self:_invalidate_cursor(); return plan_failure_status(reason) end
     self._cursor = nil
@@ -586,7 +632,6 @@ function Runtime:_step(opts)
 
   if world then
     local cert_cursor = self._cursor
-    if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
     local plan, reason = CommitPlan.try_from_world(self, world, cert_cursor)
     if not plan then self:_invalidate_cursor(); return plan_failure_status(reason) end
     self:_apply_commit_plan(plan)
@@ -632,7 +677,7 @@ function Runtime:_run(opts)
         return st
       elseif st.tag == 'idle' then
         if committed then return { tag = 'found', value = true } end
-        return { tag = 'absent', reason = 'no live work' }
+        return st
       elseif st.tag == 'absent' then
         if committed then return { tag = 'found', value = true } end
         return st
@@ -645,11 +690,8 @@ function Runtime:_run(opts)
   self._cursor = nil
   local committed = false
   while true do
+    if self:_deliver_interrupts() then committed = true end
     local waiting = self:_waiting()
-    if self:_deliver_interrupts(waiting) then
-      committed = true
-      waiting = self:_waiting()
-    end
     local world, score, st = nil, nil, nil
     if #waiting == 1 and waiting[1].waiting and waiting[1].waiting.op and waiting[1].waiting.op.kind == 'always' then
       committed = true
@@ -660,21 +702,18 @@ function Runtime:_run(opts)
 
     if world and (score_is_zero(score) or not self:_has_unstarted()) then
       committed = true
-      if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
-      local plan, _reason = CommitPlan.try_from_world(self, world, nil)
-      if plan then self:_apply_commit_plan(plan) elseif plan_retriable(_reason) then self.stats.refreshes = (self.stats.refreshes or 0) + 1 else return plan_failure_status(_reason) end
+        local plan, _reason = CommitPlan.try_from_world(self, world, nil)
+      if plan then self:_apply_commit_plan(plan) elseif not plan_retriable(_reason) then return plan_failure_status(_reason) end
     elseif self:_pump_one() then
       -- More public participants may make a preferred world available.
     elseif world then
       committed = true
-      if #waiting > #world.combo or self:_has_unstarted() then self.stats.refreshes = (self.stats.refreshes or 0) + 1 end
-      local plan, _reason = CommitPlan.try_from_world(self, world, nil)
-      if plan then self:_apply_commit_plan(plan) elseif plan_retriable(_reason) then self.stats.refreshes = (self.stats.refreshes or 0) + 1 else return plan_failure_status(_reason) end
+        local plan, _reason = CommitPlan.try_from_world(self, world, nil)
+      if plan then self:_apply_commit_plan(plan) elseif not plan_retriable(_reason) then return plan_failure_status(_reason) end
     elseif st and st.tag == 'pending' then
-      self.pending_wakeups = Wait.merge(st.waits)
-      self.pending_waits = self.pending_wakeups
+      st.waits = Wait.summarise(Wait.merge(st.waits))
       if committed and self:_pump_one() then
-        -- A committed consequence may have spawned fresh work that can satisfy
+        -- A committed effect may have spawned fresh work that can satisfy
         -- the current waits.  Continue before reporting quiescence to the
         -- standalone runner.
       elseif committed then
@@ -684,6 +723,7 @@ function Runtime:_run(opts)
       end
     else
       if committed then return { tag = 'found', value = true } end
+      if (self.live_count or 0) == 0 then return { tag = 'idle', value = true } end
       return { tag = 'absent', reason = 'no compatible transaction' }
     end
   end

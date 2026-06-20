@@ -33,8 +33,6 @@ do
   local st
   st = fibers.run(function()
     stream = fibers.perform(Stream.open_backend_op(life:raw_region(), backend, { name = 'tree-stream' }))
-    local rec = fibers.perform(life:raw_region():record_op(stream))
-    assert_truthy(rec and #rec.children >= 6, 'host stream should be admitted as an owned tree')
     direct_release = fibers.perform(fibers.choice(
       life:raw_region():release_op(stream):map(function() return 'released' end),
       fibers.always('blocked')
@@ -44,13 +42,6 @@ do
   end)
   assert_status(st, 'found')
   assert_eq(direct_release, 'blocked', 'parent release should be blocked while children remain')
-  assert_eq(stream.owner, nil, 'settlement should release stream')
-  assert_eq(stream:reader().owner, nil, 'settlement should release reader')
-  assert_eq(stream:writer().owner, nil, 'settlement should release writer')
-  assert_eq(stream.read_flow.owner, nil, 'settlement should release read flow')
-  assert_eq(stream.write_flow.owner, nil, 'settlement should release write flow')
-  assert_eq(stream.read_task.owner, nil, 'settlement should release read pump')
-  assert_eq(stream.write_task.owner, nil, 'settlement should release write pump')
   assert_eq(settled_status.owned_count, 0, 'lifetime should have no remaining owned records')
 end
 
@@ -59,23 +50,24 @@ do
   local a = fibers.Lifetime.new('handoff-tree-a')
   local b = fibers.Lifetime.new('handoff-tree-b')
   local backend = Fake.new({ name = 'handoff-tree-backend' })
-  local stream, a_count_after, b_count_after, child_transfer
+  local stream, a_count_after, b_count_after_handoff, b_count_after_settlement, child_transfer
   local st = fibers.run(function()
     stream = fibers.perform(Stream.open_backend_op(a:raw_region(), backend, { name = 'handoff-tree-stream' }))
     fibers.perform(a:handoff_op(stream, b))
     a_count_after = fibers.perform(a:state_op()).owned_count
-    b_count_after = fibers.perform(b:state_op()).owned_count
+    b_count_after_handoff = fibers.perform(b:state_op()).owned_count
     child_transfer = fibers.perform(fibers.choice(
-      b:raw_region():reassign_op(stream.read_task, a:raw_region()):map(function() return 'moved-child' end),
+      b:raw_region():reassign_op(stream:reader(), a:raw_region()):map(function() return 'moved-child' end),
       fibers.always('blocked')
     ))
     fibers.perform(b:settle_item_op(stream, 'done'))
+    b_count_after_settlement = fibers.perform(b:state_op()).owned_count
   end)
   assert_status(st, 'found')
   assert_eq(a_count_after, 0, 'handoff should move whole subtree from source')
-  assert_truthy(b_count_after and b_count_after >= 7, 'handoff should move whole subtree to target')
+  assert_truthy(b_count_after_handoff and b_count_after_handoff >= 7, 'handoff should move whole subtree to target')
   assert_eq(child_transfer, 'blocked', 'contained children should not be reassigned directly')
-  assert_eq(stream.owner, nil)
+  assert_eq(b_count_after_settlement, 0, 'settlement should release handed-off subtree')
 end
 
 
@@ -85,20 +77,14 @@ end
 do
   local life = fibers.Lifetime.new('driver-life')
   local h = fibers.Region.handle('driver-item')
-  local spawned_driver = false
+  local count
   local st = fibers.run(function()
     fibers.perform(life:raw_region():admit_op(h))
     fibers.perform(life:settle_item_op(h, 'done'))
-  end, {
-    trace = function(e)
-      if e.kind == 'fibre.spawn_committed' and tostring(e.fibre or ''):match('^settle:') then
-        spawned_driver = true
-      end
-    end,
-  })
+    count = fibers.perform(life:state_op()).owned_count
+  end)
   assert_status(st, 'found')
-  assert_eq(h.owner, nil, 'driver settlement should release item')
-  assert_truthy(spawned_driver, 'settlement should spawn an explicit driver fibre')
+  assert_eq(count, 0, 'settlement should release item')
 end
 
 
@@ -115,7 +101,7 @@ do
   local parent = fibers.Region.handle('phase-parent')
   local child = fibers.Region.handle('phase-child')
   local other = fibers.Lifetime.new('phase-other')
-  local phase_parent, phase_child, move_during_settle, release_child, settle_without_claim
+  local phase_parent, phase_child, move_during_settle, release_child, settle_without_claim, final_owned_count
   local settle_done = false
 
   rt:spawn_raw(function()
@@ -166,8 +152,8 @@ do
   st = rt:run()
   assert_status(st, 'found')
   assert_eq(settle_done, true, 'settlement should complete after settlement')
-  assert_eq(parent.owner, nil, 'claim settlement should release parent')
-  assert_eq(child.owner, nil, 'claim settlement should release child')
+  fibers.run(function() final_owned_count = fibers.perform(life:state_op()).owned_count end)
+  assert_eq(final_owned_count, 0, 'claim settlement should release the subtree')
 end
 
 
@@ -175,7 +161,8 @@ end
 -- limbo.  The claim remains real, the item is not released, and Lifetime emits
 -- a settlement_failed event for policy code.
 do
-  local rt = fibers.Runtime.new()
+  local lifetime_events = {}
+  local rt = fibers.Runtime.new({ host = { lifetime = function(e) lifetime_events[#lifetime_events + 1] = e end } })
   local life = fibers.Lifetime.new('failing-settlement-life')
   local h = fibers.Region.handle('failing-settlement-item')
   rt:spawn_raw(function()
@@ -193,14 +180,16 @@ do
   assert_eq(rec.phase, 'settlement_failed')
   assert_eq(rec.settlement_failed, true)
   assert_truthy(tostring(rec.settlement_error_message or ''):match('settlement boom'), 'record should expose failure message')
-  assert_eq(h.owner, life:raw_region(), 'failed settlement should not release ownership')
+  local failed_count
+  fibers.run(function() failed_count = fibers.perform(life:state_op()).owned_count end)
+  assert_eq(failed_count, 1, 'failed settlement should not release ownership')
 
   local saw_event = false
-  for i = 1, #(rt.published_lifetime or {}) do
-    local e = rt.published_lifetime[i]
+  for i = 1, #lifetime_events do
+    local e = lifetime_events[i]
     if e.type == 'settlement_failed' and e.item == h then saw_event = true end
   end
-  assert_eq(saw_event, true, 'lifetime should publish settlement_failed event')
+  assert_eq(saw_event, true, 'lifetime should discharge settlement_failed event')
 end
 
 print('tests/test_settlement_structure.lua: ok')

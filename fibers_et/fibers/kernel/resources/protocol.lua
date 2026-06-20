@@ -8,7 +8,7 @@
 -- cell, semaphore, queue, or future resource.  The record kind owns
 -- clone, merge, projection, preparation and application.
 
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 
 local Resource = {}
 
@@ -182,14 +182,14 @@ function Resource.prepare_combo(combo, raw_resolved, resolve)
       prepared = prepared or {}
       prepared[#prepared + 1] = p
 
-      if p.consequence_set then
-        derived = derived or ConsequenceSet.empty()
-        local ok, err = derived:merge(p.consequence_set)
+      if p.effect_set then
+        derived = derived or EffectSet.empty()
+        local ok, err = derived:merge(p.effect_set)
         if not ok then return nil, err end
-      elseif p.consequences then
-        derived = derived or ConsequenceSet.empty()
-        for j = 1, #p.consequences do
-          local ok, err = derived:add(p.consequences[j])
+      elseif p.effects then
+        derived = derived or EffectSet.empty()
+        for j = 1, #p.effects do
+          local ok, err = derived:add(p.effects[j])
           if not ok then return nil, err end
         end
       end

@@ -1,18 +1,18 @@
--- Observation journal for bounded proof search.
+-- Certificate for bounded proof search.
 --
--- The observation journal is the read side of transaction search.  Resource
--- journals record candidate writes; consequence logs record after-commit
--- obligations; the observation journal records mutable facts the search relied
--- on while producing candidates, waits, or absence proofs.
+-- The certificate is the read side of transaction search.  Resource
+-- certificates record candidate writes; effect obligations are prepared
+-- and discharged after commit; this certificate records mutable facts the
+-- search relied on while producing candidates, waits, or absence proofs.
 --
--- A bounded cursor may resume only while its observation journal is still
+-- A bounded cursor may resume only while its certificate is still
 -- current.  The representation is deliberately small:
 --   * object observations store a stamp and ask the object whether it is fresh;
 --     versioned objects use their `version` field by default;
 --   * time horizon observations say an observed future deadline has not arrived.
 
-local ObservationJournal = {}
-ObservationJournal.__index = ObservationJournal
+local Certificate = {}
+Certificate.__index = Certificate
 
 local ContextMethods = {}
 
@@ -21,32 +21,32 @@ local function version_of(obj)
   return obj.version or 0
 end
 
-local function context_journal(ctx, create)
-  local journal = ctx.observations
-  if journal then return journal end
-  local owner = ctx.observation_owner
+local function context_certificate(ctx, create)
+  local certificate = ctx.certificate
+  if certificate then return certificate end
+  local owner = ctx.certificate_owner
   if owner then
-    journal = owner.observations
-    if not journal and create then
-      journal = ObservationJournal.new()
-      owner.observations = journal
+    certificate = owner.certificate
+    if not certificate and create then
+      certificate = Certificate.new()
+      owner.certificate = certificate
     end
-    ctx.observations = journal
-    return journal
+    ctx.certificate = certificate
+    return certificate
   end
   if create then
-    journal = ObservationJournal.new()
-    ctx.observations = journal
-    return journal
+    certificate = Certificate.new()
+    ctx.certificate = certificate
+    return certificate
   end
   return nil
 end
 
-function ObservationJournal.new()
-  return setmetatable({ observed = nil, until_time = nil }, ObservationJournal)
+function Certificate.new()
+  return setmetatable({ observed = nil, until_time = nil }, Certificate)
 end
 
-function ObservationJournal:watch(obj, stamp)
+function Certificate:watch(obj, stamp)
   if type(obj) ~= 'table' then return self end
   if stamp == nil then stamp = version_of(obj) end
   local observed = self.observed
@@ -63,20 +63,20 @@ function ObservationJournal:watch(obj, stamp)
   return self
 end
 
-function ObservationJournal:observe_version(obj, version)
+function Certificate:observe_version(obj, version)
   version = version
   if version == nil then version = version_of(obj) end
   self:watch(obj, version)
   return version
 end
 
-function ObservationJournal:before(deadline)
+function Certificate:before(deadline)
   if type(deadline) ~= 'number' then return self end
   if self.until_time == nil or deadline < self.until_time then self.until_time = deadline end
   return self
 end
 
-function ObservationJournal:is_current(rt)
+function Certificate:is_current(rt)
   local observed = self.observed
   if observed then
     for obj, stamp in pairs(observed) do
@@ -99,7 +99,7 @@ function ObservationJournal:is_current(rt)
   return true
 end
 
-function ObservationJournal:summary()
+function Certificate:summary()
   local n = 0
   if self.observed then for _ in pairs(self.observed) do n = n + 1 end end
   return { observations = n, version_observations = n, until_time = self.until_time }
@@ -108,9 +108,9 @@ end
 function ContextMethods:observe_version(obj, version)
   if version == nil then version = version_of(obj) end
   if type(obj) ~= 'table' then return version end
-  local journal = context_journal(self, true)
-  local observed = journal.observed
-  if not observed then observed = {}; journal.observed = observed end
+  local certificate = context_certificate(self, true)
+  local observed = certificate.observed
+  if not observed then observed = {}; certificate.observed = observed end
   local old = observed[obj]
   if old == nil then observed[obj] = version end
   return version
@@ -127,8 +127,8 @@ end
 
 function ContextMethods:before(deadline)
   if type(deadline) ~= 'number' then return deadline end
-  local journal = context_journal(self, true)
-  if journal.until_time == nil or deadline < journal.until_time then journal.until_time = deadline end
+  local certificate = context_certificate(self, true)
+  if certificate.until_time == nil or deadline < certificate.until_time then certificate.until_time = deadline end
   return deadline
 end
 
@@ -138,13 +138,13 @@ function ContextMethods:now()
   return 0
 end
 
-function ObservationJournal.attach(ctx, owner_or_journal)
+function Certificate.attach(ctx, owner_or_certificate)
   ctx = ctx or {}
-  if owner_or_journal and getmetatable(owner_or_journal) == ObservationJournal then
-    ctx.observations = owner_or_journal
+  if owner_or_certificate and getmetatable(owner_or_certificate) == Certificate then
+    ctx.certificate = owner_or_certificate
   else
-    ctx.observation_owner = owner_or_journal
-    ctx.observations = owner_or_journal and owner_or_journal.observations or nil
+    ctx.certificate_owner = owner_or_certificate
+    ctx.certificate = owner_or_certificate and owner_or_certificate.certificate or nil
   end
   ctx.observe = ContextMethods.observe
   ctx.observe_version = ContextMethods.observe_version
@@ -153,4 +153,4 @@ function ObservationJournal.attach(ctx, owner_or_journal)
   return ctx
 end
 
-return ObservationJournal
+return Certificate

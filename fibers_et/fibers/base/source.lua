@@ -1,7 +1,7 @@
 -- Public transactional Source.
 --
 -- A Source brings host, time, or external facts into the Op algebra.  It is the
--- dual of Effect: Sources make outside facts waitable; Effects publish
+-- dual of Effect: Sources make outside facts waitable; Effects discharge
 -- committed obligations outwards.
 --
 -- Source consumers do not mutate.  External mutation goes through Runtime-bound

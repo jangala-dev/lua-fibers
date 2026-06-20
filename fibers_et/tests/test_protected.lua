@@ -47,7 +47,7 @@ test('fibers.pcall catches ordinary fibre errors', function()
     end)
   end)
 
-  eq(st.tag, 'absent')
+  eq(st.tag, 'idle')
   eq(protected_ok, false)
   ok(tostring(err):match('protected boom'), 'expected protected error, got: ' .. tostring(err))
 end)

@@ -9,7 +9,7 @@ Cell reads, writes, and changed waits
 Channel rendezvous and tensor-internal rendezvous
 all/tensor products, deferred lane bind, choice, or_else, and backtracking
 Source queue, external arrival, and clock readiness
-Effect merge and publication
+Effect merge and discharge
 Region ownership
 Task/Lifetime spawning and settlement
 Nursery policy spawning

@@ -1,6 +1,6 @@
 local Resource = require('fibers.kernel.resources.protocol')
 local Candidate = require('fibers.kernel.algebra.candidate')
-local ConsequenceSet = require('fibers.kernel.consequence.set')
+local EffectSet = require('fibers.kernel.effect.set')
 local World = require('fibers.kernel.solver.world')
 
 local Plan = {}
@@ -61,7 +61,7 @@ end
 
 local function merge_resource_derived(set, derived)
   if not derived then return set end
-  set = set or ConsequenceSet.empty()
+  set = set or EffectSet.empty()
   local ok, err = set:merge(derived)
   if not ok then return nil, err end
   return set
@@ -76,17 +76,17 @@ function Plan.try_from_world(rt, world, cursor)
   if not same_waiting(cursor, rt) then return nil, 'stale-cursor' end
 
   local combo = world.combo
-  local prepared_resources, reason, derived_consequences = Resource.prepare_combo(combo, Candidate.raw_resolved, Candidate.resolve)
+  local prepared_resources, reason, derived_effects = Resource.prepare_combo(combo, Candidate.raw_resolved, Candidate.resolve)
   if reason then return nil, reason or 'resource-not-fresh' end
 
-  local consequence_set, cerr = Candidate.merge_consequence_combo(combo)
+  local effect_set, cerr = Candidate.merge_effect_combo(combo)
   if cerr then return nil, cerr end
-  consequence_set, cerr = merge_resource_derived(consequence_set, derived_consequences)
+  effect_set, cerr = merge_resource_derived(effect_set, derived_effects)
   if cerr then return nil, cerr end
 
-  local prepared_consequences
-  if consequence_set and not consequence_set:is_empty() then
-    prepared_consequences, reason = consequence_set:prepare(rt)
+  local prepared_effects
+  if effect_set and not effect_set:is_empty() then
+    prepared_effects, reason = effect_set:prepare(rt)
     if reason then return nil, reason end
   end
 
@@ -94,7 +94,7 @@ function Plan.try_from_world(rt, world, cursor)
     _token = PLAN_TOKEN,
     tag = 'commit-plan',
     prepared_resources = prepared_resources,
-    prepared_consequences = prepared_consequences,
+    prepared_effects = prepared_effects,
   }, combo)
 end
 

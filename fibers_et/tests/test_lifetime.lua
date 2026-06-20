@@ -42,7 +42,8 @@ assert(life_b.region.sealed == true)
 
 local life_events = fibers.Lifetime.new('events')
 local captured
-local rt3 = fibers.Runtime.new()
+local lifetime_events = {}
+local rt3 = fibers.Runtime.new({ host = { lifetime = function(e) lifetime_events[#lifetime_events + 1] = e end } })
 rt3:spawn_raw(function()
   local t = rt3:perform(life_events:spawn_op(function() return 'evented' end))
   captured = rt3:perform(life_events:next_event_op())
@@ -54,7 +55,7 @@ assert(st3.tag == 'found' or st3.tag == 'absent')
 assert(captured.type == 'admitted')
 assert(captured.lifetime == life_events)
 assert(captured.item_kind == 'task')
-assert(rt3.published_lifetime and #rt3.published_lifetime >= 2)
+assert(#lifetime_events >= 2)
 
 local from = fibers.Lifetime.new('from')
 local to = fibers.Lifetime.new('to')

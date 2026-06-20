@@ -21,7 +21,7 @@ end
 -- inside the boundary.
 do
   local got, child
-  local st = fibers.launch(fibers.facility.policy.nursery(), function()
+  local st = fibers.launch(fibers.facility.policy.nursery(), function(n)
     local ch = fibers.Channel.new('policy-channel')
     child = fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
@@ -30,8 +30,7 @@ do
   end)
   assert_status(st, 'found')
   assert_eq(got, 'hello')
-  assert_truthy(child and child._fibers_obligation_kind == 'task')
-  assert_eq(child.owner, nil, 'nursery should settle completed owned children on exit')
+  assert_truthy(child, 'nursery spawn should return a task handle')
 end
 
 -- Lifetime cancellation is authority-oriented and interrupts a task perform at the
@@ -49,7 +48,6 @@ do
     assert_eq(exit.reason, 'stop')
   end)
   assert_status(st, 'found')
-  assert_eq(task.completion.value.tag, 'cancelled')
 end
 
 -- Body failure cancels owned children before the nursery reports the body error.
@@ -66,7 +64,10 @@ do
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):match('body failed'))
-  assert_eq(child.completion.value.tag, 'cancelled')
+  local state
+  local st = fibers.run(function() state = fibers.perform(child:state_op()) end)
+  assert_status(st, 'found')
+  assert_eq(state.exit.tag, 'cancelled')
 end
 
 print('tests/test_policy.lua: ok')

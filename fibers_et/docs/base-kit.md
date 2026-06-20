@@ -1,6 +1,6 @@
 # Base kit
 
-`fibers` is organised around a small public base kit.  These nouns are the low-level public machinery.  Compound facilities such as `Lifetime` and policies are built above them.  The kernel resource protocol, wait interests and typed consequence machinery remain implementation and extension tools rather than a second user model.
+`fibers` is organised around a small public base kit.  These nouns are the low-level public machinery.  Compound facilities such as `Lifetime` and policies are built above them.  The kernel resource protocol, wait interests and typed effect machinery remain implementation and extension tools rather than a second user model.
 
 ```text
 Op       possible transaction
@@ -116,14 +116,14 @@ local value = fibers.perform(task:await_op())
 
 ## Effect
 
-An `Effect` is a typed transaction consequence: runtime-owned work that is
-published iff the selected world commits.
+An `Effect` is a typed transaction effect: runtime-owned work that is
+discharged iff the selected world commits.
 
 ```lua
 local op = fibers.after_commit(effect)
 ```
 
-Effects are not participant continuations.  They are prepared and published by
+Effects are not participant continuations.  They are prepared and discharged by
 the runtime after resource commit and before selected participants resume.
 
 ## Ownership claims and settlement
@@ -167,7 +167,7 @@ the settlement driver holds the claim authority object and performs the final
 claim metadata such as `claim_id`, but not the authority object itself.
 
 If a settlement protocol fails, the claim is not rolled back.  The affected
-records remain owned and become `settlement_failed`; Lifetime also publishes a
+records remain owned and become `settlement_failed`; Lifetime also discharges a
 `settlement_failed` event for policy code.  See `docs/facilities/settlement.md`.
 
 Ownership in this phase records responsibility, handoff and settlement.  It is

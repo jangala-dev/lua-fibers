@@ -1,24 +1,24 @@
-# Observation journal
+# Certificate
 
-The observation journal is the read side of bounded transaction search.
+The certificate is the read side of bounded transaction search.
 
 A resource journal records what a selected candidate world would write at commit.
-A consequence log records what the runtime must publish after commit.  The
-observation journal records mutable facts the search relied on while producing
-candidates, waits, or absence proofs.
+Effects are prepared obligations discharged after commit.  The certificate
+records mutable facts the search relied on while producing candidates, waits,
+or absence proofs.
 
 ```text
 resource journal
   candidate writes
 
-observation journal
+certificate
   search observations
 
-consequence log
-  after-commit obligations
+effect obligations
+  prepared after-commit work
 ```
 
-A bounded cursor may resume only while its observation journal is current.
+A bounded cursor may resume only while its certificate is current.
 This matters most for residual fallback: `p or_else q` may open `q` only under
 observations that prove `p` has no committing world now.  If those observations
 become stale, the proof of absence is stale too.
@@ -68,12 +68,12 @@ Pure operation syntax, immutable local values, and tentative candidate overlays
 need no observation.  Mutable committed state, source readiness, queue contents,
 interrupt tokens, readiness facts, and clock-before-deadline facts do.
 
-## Observation journal versus commit validation
+## Certificate versus commit validation
 
-The observation journal does not replace resource preparation.
+The certificate does not replace resource preparation.
 
 ```text
-observation journal
+certificate
   can this paused search continue?
 
 resource prepare

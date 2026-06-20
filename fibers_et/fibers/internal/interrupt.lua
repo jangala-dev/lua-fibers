@@ -1,7 +1,7 @@
 -- Internal interrupt tokens for perform-boundary cancellation.
 --
 -- Public code obtains cancellation through Task/Lifetime operations.  Raw token
--- mutation is only used by the runtime when publishing a committed interrupt
+-- mutation is only used by the runtime when discharging a committed interrupt
 -- Effect.
 
 local Interrupt = {}

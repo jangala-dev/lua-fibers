@@ -1,4 +1,5 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 local Stream = fibers.Stream
@@ -30,11 +31,11 @@ do
     flushed, flush_err = rt:perform(a:writer():flush_op())
   end, 'writer')
   for _ = 1, 10 do
-    if b:reader().flow.reservoir:debug_data() == 'abc' and flushed == nil then break end
+    if Inspect.data(b:reader().flow.reservoir) == 'abc' and flushed == nil then break end
     rt:run()
   end
   assert_nil(flushed, 'flush should wait while bytes are retained')
-  assert_eq(b:reader().flow.reservoir:debug_data(), 'abc', 'bytes should be queued before peer close')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'abc', 'bytes should be queued before peer close')
 
   rt:spawn_raw(function()
     rt:perform(b:reader():shutdown_op('reader_closed'))
@@ -42,8 +43,8 @@ do
   drive_until(rt, function() return flush_err == 'reader_closed' end, 'peer close should settle retained bytes and fail flush with close reason')
   assert_nil(flushed)
   assert_eq(flush_err, 'reader_closed')
-  assert_eq(b:reader().flow.reservoir:debug_data(), '', 'peer close should discard queued retained bytes')
-  assert_eq(b:reader().flow.reservoir:debug_leased_bytes(), 0, 'peer close should discard leased retained bytes')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'peer close should discard queued retained bytes')
+  assert_eq(Inspect.leased_bytes(b:reader().flow.reservoir), 0, 'peer close should discard leased retained bytes')
 end
 
 -- Flush succeeds after previously written bytes have already been consumed, even
@@ -94,10 +95,10 @@ do
     flushed, flush_err = rt:perform(stream:writer():flush_op())
   end, 'writer')
   for _ = 1, 20 do
-    if stream and stream:writer().flow.reservoir:debug_first_lease_bytes() == 'abc' then break end
+    if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) == 'abc' then break end
     rt:run()
   end
-  assert_eq(stream:writer().flow.reservoir:debug_first_lease_bytes(), 'abc', 'write pump should hold an active lease')
+  assert_eq(Inspect.first_lease_bytes(stream:writer().flow.reservoir), 'abc', 'write pump should hold an active lease')
   assert_nil(flushed, 'flush should wait while lease is retained')
 
   backend:fail_writes('connection_reset')
@@ -105,8 +106,8 @@ do
   drive_until(rt, function() return flush_err == 'connection_reset' end, 'backend failure should fail retained lease')
   assert_nil(flushed)
   assert_eq(flush_err, 'connection_reset')
-  assert_nil(stream:writer().flow.reservoir:debug_first_lease_bytes(), 'backend failure should settle active lease')
-  assert_eq(stream:writer().flow.reservoir:debug_leased_bytes(), 0, 'backend failure should release leased capacity')
+  assert_nil(Inspect.first_lease_bytes(stream:writer().flow.reservoir), 'backend failure should settle active lease')
+  assert_eq(Inspect.leased_bytes(stream:writer().flow.reservoir), 0, 'backend failure should release leased capacity')
 end
 
 
@@ -128,8 +129,8 @@ do
   drive_until(rt, function() return flush_err == 'backend_protocol_error' end, 'invalid backend write count should fail output')
   assert_nil(flushed)
   assert_eq(flush_err, 'backend_protocol_error')
-  assert_nil(stream:writer().flow.reservoir:debug_first_lease_bytes(), 'protocol error should settle active lease')
-  assert_eq(stream:writer().flow.reservoir:debug_leased_bytes(), 0, 'protocol error should release leased capacity')
+  assert_nil(Inspect.first_lease_bytes(stream:writer().flow.reservoir), 'protocol error should settle active lease')
+  assert_eq(Inspect.leased_bytes(stream:writer().flow.reservoir), 0, 'protocol error should release leased capacity')
 end
 
 print('tests/test_flow_settlement.lua: ok')

@@ -5,7 +5,7 @@ local Rendezvous = require('fibers.kernel.solver.rendezvous')
 local State = require('fibers.kernel.solver.state')
 local World = require('fibers.kernel.solver.world')
 local CommitPlan = require('fibers.kernel.commit.plan')
-local ObservationJournal = require('fibers.kernel.observation_journal')
+local Certificate = require('fibers.kernel.certificate')
 
 local clone_candidate = Candidate.clone
 local process_one_deferred = Eval.process_one_deferred
@@ -101,7 +101,7 @@ function Engine.new(rt, waiting, opts)
     max_work = math.huge,
     stats = { seeds_seen = 0, frames = 0, solutions = 0 },
     order = 0,
-    observations = nil,
+    certificate = nil,
   }, Engine)
 end
 
@@ -154,7 +154,7 @@ end
 
 local function build_one(self)
   local f = self.waiting[self.build_i]
-  local ctx = ObservationJournal.attach({
+  local ctx = Certificate.attach({
     rt = self.rt,
     attempt = f.waiting.attempt,
     overlay = nil,
@@ -235,7 +235,7 @@ function Engine:record_solution(combo)
   if not w then return nil end
 
   -- Commit preparation is side-effect-free trusted machinery.  Running it here
-  -- lets structured resource/consequence refusals reject this candidate world
+  -- lets structured resource/effect refusals reject this candidate world
   -- and allows search to continue to other worlds rather than returning a
   -- non-committable plan to the public driver.
   local plan, _reason = CommitPlan.try_from_world(self.rt, w, nil)
@@ -260,7 +260,7 @@ local function advance_enter(self, frame)
   end
 
   for ci = 1, #frame.sel do
-    local branches = process_one_deferred(frame.sel[ci], ObservationJournal.attach({ rt = self.rt }, self))
+    local branches = process_one_deferred(frame.sel[ci], Certificate.attach({ rt = self.rt }, self))
     if branches then
       self.waits = Result._unique_append(self.waits, branches.waits)
       self.residuals = Result._unique_append(self.residuals, branches.residuals)
@@ -466,7 +466,7 @@ function Engine:stats_snapshot()
     solutions = self.stats.solutions,
     waits = #(self.waits or {}),
     residuals = #(self.residuals or {}),
-    observations = self.observations and self.observations:summary() or nil,
+    certificate = self.certificate and self.certificate:summary() or nil,
     residual_queue = #self.residual_queue,
     best_pref = self.best_pref,
   }

@@ -8,7 +8,7 @@ local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy'
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
 
 -- Region is a generic ownership boundary: it can admit, reassign and release a
--- non-task handle, and ownership transitions publish lifetime effects.
+-- non-task handle, and ownership transitions discharge lifetime effects.
 do
   local a = fibers.Region.new('A')
   local b = fibers.Region.new('B')
@@ -38,19 +38,17 @@ do
   local a = fibers.Region.new('A2')
   local b = fibers.Region.new('B2')
   local item = fibers.Region.handle('subscription', { kind = 'subscription' })
-  local rt
-
+  local events = {}
   local st
-  st, rt = fibers.run(function()
+  st = fibers.run(function()
     fibers.perform(a:admit_op(item))
     fibers.perform(a:reassign_op(item, b))
-  end)
+  end, { host = { lifetime = function(e) events[#events + 1] = e end } })
 
   assert_status(st, 'found')
   assert_eq(item.owner, b)
   local saw_reassign = false
   local saw_release_admit_pair = false
-  local events = rt.published_lifetime or {}
   for i = 1, #events do
     if events[i].type == 'reassigned' and events[i].item == item and events[i].from == a and events[i].to == b then
       saw_reassign = true
@@ -63,8 +61,8 @@ do
       saw_release_admit_pair = true
     end
   end
-  assert_truthy(saw_reassign, 'reassignment should publish reassigned region event')
-  assert_eq(saw_release_admit_pair, false, 'reassignment should not publish released event from source region')
+  assert_truthy(saw_reassign, 'reassignment should discharge reassigned region event')
+  assert_eq(saw_release_admit_pair, false, 'reassignment should not discharge released event from source region')
 end
 
 -- Sealing is admission policy only: it blocks new admissions and incoming

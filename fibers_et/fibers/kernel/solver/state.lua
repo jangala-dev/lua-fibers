@@ -31,7 +31,7 @@ end
 local function resource_ok(selected, require_resolved)
   local ok, reason = Resource.structural_compatible(selected, require_resolved, raw_resolved)
   if not ok then return false, reason end
-  local cok, creason = Candidate.consequences_compatible(selected)
+  local cok, creason = Candidate.effects_compatible(selected)
   if not cok then return false, creason end
   return true
 end

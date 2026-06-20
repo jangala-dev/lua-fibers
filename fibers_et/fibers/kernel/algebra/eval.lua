@@ -264,7 +264,7 @@ function eval_op(node, ctx)
     return Result.none()
   elseif k == 'emit' then
     local c = candidate(pack_(true))
-    local ok, err = Candidate.add_consequence(c, node.consequence)
+    local ok, err = Candidate.add_effect(c, node.effect)
     if not ok then return Result.none() end
     return Result.cands({ c })
   elseif k == 'prim' then

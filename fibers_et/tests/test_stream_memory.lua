@@ -1,4 +1,5 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 
@@ -58,7 +59,7 @@ do
   end)
   assert_status(st, 'found')
   assert_eq(got, 'winner')
-  assert_eq(b:reader().flow.reservoir:debug_data(), '', 'losing stream write must not append bytes')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'losing stream write must not append bytes')
 end
 
 -- Losing read branches consume nothing.
@@ -102,11 +103,11 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'writer-ab')
   assert_status(rt:run(), 'found')
   assert_nil(got, 'exact read must still be waiting after partial data')
-  assert_eq(b:reader().flow.reservoir:debug_data(), 'ab', 'partial exact read must not consume while waiting')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'ab', 'partial exact read must not consume while waiting')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('cd')) end, 'writer-cd')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'abcd')
-  assert_eq(b:reader().flow.reservoir:debug_data(), '')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '')
 end
 
 -- EOF follows queued bytes after shutdown_write.
@@ -152,7 +153,7 @@ do
   assert_status(rt:run(), 'found')
   assert_eq(read, 'a')
   assert_eq(second_done, 1)
-  assert_eq(b:reader().flow.reservoir:debug_data(), 'bcd')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'bcd')
 end
 
 -- Transactional request/response: consume request, update state, append response.
@@ -223,7 +224,7 @@ do
   assert_nil(exact)
   assert_eq(exact_err, 'eof')
   assert_eq(partial, 'ab')
-  assert_eq(f:reader().flow.reservoir:debug_data(), '', 'exact EOF consumes the returned final partial')
+  assert_eq(Inspect.data(f:reader().flow.reservoir), '', 'exact EOF consumes the returned final partial')
 end
 
 -- Region/Lifetime ownership handoff works for stream compounds.
@@ -261,7 +262,7 @@ do
   assert_eq(cross, 'ab', 'reads should cross chunk boundaries in order')
   assert_eq(rest, string.rep('b', 8999))
   assert_truthy(st_snapshot.chunk_count >= 2, 'large writes should remain as multiple chunks')
-  assert_eq(b:reader().flow.reservoir:debug_data(), '')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '')
 end
 
 -- Sequential writes within one transaction preserve byte order.
@@ -291,7 +292,7 @@ do
   local st = rt:run()
   assert_uncommitted_status(st, 'parallel writes to the same stream queue should not commit')
   assert_nil(got, 'participant should not resume from conflicting parallel writes')
-  assert_eq(b:reader().flow.reservoir:debug_data(), '', 'conflicting parallel stream writes leave the queue unchanged')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'conflicting parallel stream writes leave the queue unchanged')
 end
 
 
@@ -333,11 +334,11 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('abc')) end, 'write-prefix')
   assert_status(rt:run(), 'found')
   assert_nil(line, 'read_line_op should still be waiting before separator')
-  assert_eq(b:reader().flow.reservoir:debug_data(), 'abc', 'waiting read_line_op must not consume prefix')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'abc', 'waiting read_line_op must not consume prefix')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('\nrest')) end, 'write-sep')
   assert_status(rt:run(), 'found')
   assert_eq(line, 'abc')
-  assert_eq(b:reader().flow.reservoir:debug_data(), 'rest')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'rest')
 end
 
 -- read_all_op is a single-commit operation: it waits for EOF and consumes only
@@ -351,14 +352,14 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'write-ab')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should wait before EOF')
-  assert_eq(b:reader().flow.reservoir:debug_data(), 'ab', 'waiting read_all_op must not consume')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'ab', 'waiting read_all_op must not consume')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('cd')) end, 'write-cd')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should still wait before EOF')
   rt:spawn_raw(function() rt:perform(a:writer():shutdown_op()) end, 'eof')
   assert_status(rt:run(), 'found')
   assert_eq(all, 'abcd')
-  assert_eq(b:reader().flow.reservoir:debug_data(), '')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '')
 end
 
 -- read_all_op enforces an explicit bound unless unlimited=true is requested;

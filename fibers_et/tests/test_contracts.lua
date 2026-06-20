@@ -4,7 +4,7 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
 local Cell = require('fibers.base.cell')
-local TC = require('tests.consequence_helpers')
+local TC = require('tests.effect_helpers')
 
 local function update_cell(cell, fn)
   return cell:read_op():and_then(function(old)
@@ -123,7 +123,7 @@ do
   assert_eq(ok_spawn, true, 'external spawn is not blocked after caught phase error')
 end
 
--- Consequence handlers run after commit.  If they fail, the transaction is
+-- Effect handlers run after commit.  If they fail, the transaction is
 -- already committed, so the runtime is marked fatally failed rather than trying
 -- to recover.
 do
@@ -135,15 +135,15 @@ do
       end,
     },
   })
-  rt:spawn_raw(function() rt:perform(Op.emit(TC.kind('contract-test'))) end, 'consequence-performer')
+  rt:spawn_raw(function() rt:perform(Op.emit(TC.kind('contract-test'))) end, 'effect-performer')
   local ok, err = pcall(function() rt:run() end)
-  assert_error_kind(ok, err, 'consequence_error', 'perform inside consequence handler is fatal consequence failure')
-  assert_eq(err.committed, true, 'consequence failure records that commit already happened')
-  assert_eq(err.fatal, true, 'consequence failure is fatal')
-  assert_eq(rt:failed(), err, 'runtime stores fatal consequence error')
-  assert_eq(rt._phase, 'external', 'consequence phase restored after handler error')
+  assert_error_kind(ok, err, 'effect_error', 'perform inside effect handler is fatal effect failure')
+  assert_eq(err.committed, true, 'effect failure records that commit already happened')
+  assert_eq(err.fatal, true, 'effect failure is fatal')
+  assert_eq(rt:failed(), err, 'runtime stores fatal effect error')
+  assert_eq(rt._phase, 'external', 'effect phase restored after handler error')
   local ok_spawn, spawn_err = pcall(function() rt:spawn_raw(function() end, 'after-fatal') end)
-  assert_error_kind(ok_spawn, spawn_err, 'consequence_error', 'failed runtime rejects later spawn with fatal error')
+  assert_error_kind(ok_spawn, spawn_err, 'effect_error', 'failed runtime rejects later spawn with fatal error')
 end
 
 -- wrap runs in the resumed fibre and may perform a fresh post-commit transaction.
@@ -220,22 +220,22 @@ do
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw map error')
 end
 
--- A raw consequence handler error is also fatal and prevents later driver use.
+-- A raw effect handler error is also fatal and prevents later driver use.
 do
-  local cell = Cell.new(0, 'fatal-consequence-cell')
+  local cell = Cell.new(0, 'fatal-effect-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(Op.emit(TC.publish_fatal()):and_then(function()
+    rt:perform(Op.emit(TC.discharge_fatal()):and_then(function()
       return cell:write_op(1)
     end))
-  end, 'raw-consequence-error')
+  end, 'raw-effect-error')
   local ok, err = pcall(function() rt:run() end)
-  assert_error_kind(ok, err, 'consequence_error', 'raw consequence error is fatal')
-  assert_eq(err.committed, true, 'raw consequence error is after commit')
-  assert_eq(err.fatal, true, 'raw consequence error marks runtime fatal')
-  assert_eq(cell.value, 1, 'raw consequence error does not roll back committed resource')
+  assert_error_kind(ok, err, 'effect_error', 'raw effect error is fatal')
+  assert_eq(err.committed, true, 'raw effect error is after commit')
+  assert_eq(err.fatal, true, 'raw effect error marks runtime fatal')
+  assert_eq(cell.value, 1, 'raw effect error does not roll back committed resource')
   local ok_run, run_err = pcall(function() rt:run() end)
-  assert_error_kind(ok_run, run_err, 'consequence_error', 'failed runtime rejects later run')
+  assert_error_kind(ok_run, run_err, 'effect_error', 'failed runtime rejects later run')
 end
 
 

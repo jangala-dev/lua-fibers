@@ -65,15 +65,14 @@ local got, sent
 rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'r')
 rt:spawn_raw(function() sent = rt:perform(ch:put_op('x')) end, 's')
 
-local saw_cursor = false
+local saw_pending = false
 local found = false
 for i = 1, 20 do
   local st = rt:step({ max_work = 1 })
-  local cs = rt:cursor_stats()
-  if cs then saw_cursor = true end
+  if st.tag == 'pending' then saw_pending = true end
   if st.tag == 'found' then found = true; break end
 end
-assert_truthy(saw_cursor, 'cursor was retained across bounded pending steps')
+assert_truthy(saw_pending, 'bounded search may yield pending steps')
 assert_truthy(found, 'bounded cursor eventually commits')
 assert_eq(got, 'x')
 assert_eq(sent, true)

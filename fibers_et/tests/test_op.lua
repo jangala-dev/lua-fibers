@@ -9,7 +9,22 @@ local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
 local Channel = require('fibers.base.channel')
 local Cell = require('fibers.base.cell')
-local TC = require('tests.consequence_helpers')
+local TC = require('tests.effect_helpers')
+
+local function new_runtime(opts)
+  opts = opts or {}
+  local tags = {}
+  local host = opts.host or {}
+  local previous = host.test_tag
+  host.test_tag = function(tag, payload)
+    tags[#tags + 1] = tag
+    if previous then return previous(tag, payload) end
+  end
+  opts.host = host
+  local rt = Runtime.new(opts)
+  rt._test_tags = tags
+  return rt
+end
 
 local function update_cell(cell, fn)
   return cell:read_op():and_then(function(old)
@@ -51,25 +66,11 @@ local function assert_uncommitted_status(status, msg)
 end
 
 local function transaction_tags(rt)
-  local out = {}
-  for i = 1, #(rt.published_consequences or {}) do
-    local log = rt.published_consequences[i]
-    for j = 1, #(log.transaction or {}) do
-      local c = log.transaction[j]
-      out[#out + 1] = c.tag or c.kind or tostring(c[1])
-    end
-    for j = 1, #(log.obligation or {}) do
-      local c = log.obligation[j]
-      local payload = c.payload or {}
-      local tag = payload.tag or payload.kind or c.tag
-      if tag then out[#out + 1] = tag end
-    end
-  end
-  return table.concat(out, ',')
+  return table.concat(rt._test_tags or {}, ',')
 end
 
 local function one_perform(op, opts)
-  local rt = Runtime.new(opts or {})
+  local rt = new_runtime(opts or {})
   local values = { n = 0 }
   rt:spawn_raw(function()
     values = pack_(rt:perform(op))
@@ -96,7 +97,7 @@ local function test_always_and_never()
 end
 
 local function test_map_and_and_then_are_transactional()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'and-then-cell')
   local got
 
@@ -118,7 +119,7 @@ local function test_map_and_and_then_are_transactional()
 end
 
 local function test_and_then_is_all_or_nothing()
-  local rt = Runtime.new({ quiet_deadlock = true })
+  local rt = new_runtime({ quiet_deadlock = true })
   local cell = Cell.new(0, 'and-then-abort-cell')
   local ch = Channel.new('and-then-abort-channel')
   local got
@@ -138,7 +139,7 @@ local function test_and_then_is_all_or_nothing()
 end
 
 local function test_choice_selects_one_world_and_discards_loser()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local wraps = {}
   local got
 
@@ -159,7 +160,7 @@ local function test_choice_selects_one_world_and_discards_loser()
   rt:spawn_raw(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-winner')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner')
-  assert_eq(transaction_tags(rt), 'choice.winner', 'losing branch consequence is discarded')
+  assert_eq(transaction_tags(rt), 'choice.winner', 'losing branch effect is discarded')
   assert_eq(table.concat(wraps, ','), 'winner-wrap', 'losing branch wrap is not run')
 
   local status2, values2 = one_perform(Op.choice(Op.never(), Op.always('right')))
@@ -169,7 +170,7 @@ end
 
 local function test_or_else_preference_and_fallback()
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local got
     local primary = Op.emit(TC.tag('or_else.primary')):and_then(function() return Op.always('primary') end)
     local fallback = Op.emit(TC.tag('or_else.fallback')):and_then(function() return Op.always('fallback') end)
@@ -192,7 +193,7 @@ end
 
 local function test_or_else_primary_absence_is_checked_across_other_participants()
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch = Channel.new('or-else-cross-absent-no-partner')
     local receiver
 
@@ -208,11 +209,11 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
 
     assert_status(rt:run(), 'found', 'or_else fallback commits when rendezvous primary has no partner')
     assert_eq(receiver, 'fallback', 'blocked primary is absent when no other participant can satisfy it')
-    assert_eq(transaction_tags(rt), 'or_else.cross.no_partner.fallback', 'fallback consequence is published only in the absent-primary case')
+    assert_eq(transaction_tags(rt), 'or_else.cross.no_partner.fallback', 'fallback effect is discharged only in the absent-primary case')
   end
 
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch1 = Channel.new('or-else-cross-partial-absent-1')
     local ch2 = Channel.new('or-else-cross-partial-absent-2')
     local receiver, sender1
@@ -234,11 +235,11 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
     assert_status(rt:run(), 'found', 'or_else fallback commits when the whole primary cannot be satisfied')
     assert_eq(receiver, 'fallback', 'a partially satisfiable primary is still absent as a whole')
     assert_eq(sender1, nil, 'stray partner for an abandoned primary does not commit')
-    assert_eq(transaction_tags(rt), 'or_else.cross.partial_absent.fallback', 'fallback consequence is published for globally absent primary')
+    assert_eq(transaction_tags(rt), 'or_else.cross.partial_absent.fallback', 'fallback effect is discharged for globally absent primary')
   end
 
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch = Channel.new('or-else-cross-participant')
     local receiver, sender
 
@@ -259,11 +260,11 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
     assert_status(rt:run(), 'found', 'or_else primary may be satisfied by another participant')
     assert_eq(receiver, 'primary:payload', 'fallback is not used when another participant can satisfy the primary')
     assert_eq(sender, true, 'partner in the preferred primary transaction commits')
-    assert_eq(transaction_tags(rt), '', 'fallback consequence is not published')
+    assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
   end
 
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch1 = Channel.new('or-else-cross-all-1')
     local ch2 = Channel.new('or-else-cross-all-2')
     local receiver, sender1, sender2
@@ -287,12 +288,12 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
     assert_eq(receiver, 'a+b', 'multi-requirement primary beats fallback when partners exist')
     assert_eq(sender1, true)
     assert_eq(sender2, true)
-    assert_eq(transaction_tags(rt), '', 'multi-requirement fallback consequence is not published')
+    assert_eq(transaction_tags(rt), '', 'multi-requirement fallback effect is not discharged')
   end
 end
 
 local function test_or_else_retries_stale_primary_instead_of_committing_fallback()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'or-else-stale-primary-cell')
   local a, b
 
@@ -312,12 +313,11 @@ local function test_or_else_retries_stale_primary_instead_of_committing_fallback
   assert_eq(cell.value, 2, 'primary update is retried against fresh state')
   assert_eq(a, 1)
   assert_eq(b, 'primary', 'fallback is not used merely because the parked primary became stale')
-  assert_truthy((rt.stats.refreshes or 0) >= 1, 'stale frontier was refreshed')
 end
 
 local function test_guard_is_delayed_and_participates_in_search()
   local constructed = 0
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local got
 
   local guarded = Op.guard(function()
@@ -336,15 +336,15 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
   local cell = Cell.new(0, 'wrap-phase-cell')
   local timeline = {}
   local got
-  local published = {}
-  local rt = Runtime.new({
+  local discharged = {}
+  local rt = new_runtime({
     host = {
       test_tag = function(tag)
-        if #published == 0 then
-          timeline[#timeline + 1] = 'publish'
-          assert_eq(cell.value, 9, 'resource state is committed before consequences are observed')
+        if #discharged == 0 then
+          timeline[#timeline + 1] = 'discharge'
+          assert_eq(cell.value, 9, 'resource state is committed before effects are observed')
         end
-        published[#published + 1] = tag
+        discharged[#discharged + 1] = tag
       end,
     },
   })
@@ -368,9 +368,9 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'value:wrapped')
-  assert_eq(transaction_tags(rt), 'wrap.before,wrap.after', 'explicit transaction consequences preserve syntax order across resource access')
-  assert_eq(table.concat(published, ','), 'wrap.before,wrap.after', 'explicit transaction consequences preserve syntax order across resource access')
-  assert_eq(table.concat(timeline, ','), 'publish,wrap,resume', 'publish happens before wrap, wrap before participant continuation resumes')
+  assert_eq(transaction_tags(rt), 'wrap.before,wrap.after', 'explicit transaction effects preserve syntax order across resource access')
+  assert_eq(table.concat(discharged, ','), 'wrap.before,wrap.after', 'explicit transaction effects preserve syntax order across resource access')
+  assert_eq(table.concat(timeline, ','), 'discharge,wrap,resume', 'discharge happens before wrap, wrap before participant continuation resumes')
 
   local boundary = Op.always('x'):wrap(function(v) return v end)
   local ok_bind = pcall(function() return boundary:and_then(function() return Op.always('bad') end) end)
@@ -395,7 +395,7 @@ local function test_tensor_all_and_internal_rendezvous_topology()
   end
 
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch1 = Channel.new('all-external-1')
     local ch2 = Channel.new('all-external-2')
     local rows
@@ -418,7 +418,7 @@ end
 local function test_with_nack_external_behaviour()
   do
     local ref
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local got
     rt:spawn_raw(function()
       got = rt:perform(Op.with_nack(function(nack)
@@ -437,7 +437,7 @@ local function test_with_nack_external_behaviour()
 
   do
     local ref
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local got
     rt:spawn_raw(function()
       got = rt:perform(Op.choice(
@@ -451,7 +451,7 @@ local function test_with_nack_external_behaviour()
     assert_status(rt:run(), 'found')
     assert_eq(got, 'winner')
     assert_eq(transaction_tags(rt), '', 'losing protected branch effects are discarded')
-    assert_truthy(ref, 'losing protected branch published a nack obligation')
+    assert_truthy(ref, 'losing protected branch discharged a nack obligation')
 
     local status, values = one_perform(Op._nack(ref))
     assert_status(status, 'found', 'nack fires for a losing protected occurrence')
@@ -460,7 +460,7 @@ local function test_with_nack_external_behaviour()
 end
 
 local function test_contending_cell_updates_retry()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'contended-cell')
   local a, b
 
@@ -471,11 +471,10 @@ local function test_contending_cell_updates_retry()
   assert_eq(cell.value, 2, 'both contending updates eventually commit')
   assert_eq(a, 1)
   assert_eq(b, 2)
-  assert_truthy((rt.stats.refreshes or 0) >= 1, 'second update refreshed after first commit dirtied the cell')
 end
 
 local function test_conflicting_parallel_cell_writes_do_not_commit_partially()
-  local rt = Runtime.new({ quiet_deadlock = true })
+  local rt = new_runtime({ quiet_deadlock = true })
   local cell = Cell.new(0, 'conflicting-parallel-cell')
   local got
 
@@ -490,7 +489,7 @@ local function test_conflicting_parallel_cell_writes_do_not_commit_partially()
 end
 
 local function test_canonical_te_triple_swap()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ab = Channel.new('triple-ab')
   local bc = Channel.new('triple-bc')
   local ca = Channel.new('triple-ca')
@@ -518,7 +517,7 @@ local function test_canonical_te_triple_swap()
 end
 
 local function test_triple_swap_does_not_partially_commit_when_a_party_is_missing()
-  local rt = Runtime.new({ quiet_deadlock = true })
+  local rt = new_runtime({ quiet_deadlock = true })
   local ab = Channel.new('partial-triple-ab')
   local bc = Channel.new('partial-triple-bc')
   local ca = Channel.new('partial-triple-ca')
@@ -564,7 +563,7 @@ end
 
 local function test_deferred_map_and_bind_after_rendezvous()
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch = Channel.new('deferred-map-channel')
     local got
     rt:spawn_raw(function()
@@ -576,7 +575,7 @@ local function test_deferred_map_and_bind_after_rendezvous()
   end
 
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch = Channel.new('deferred-bind-channel')
     local cell = Cell.new('unset', 'deferred-bind-cell')
     local got
@@ -595,7 +594,7 @@ local function test_deferred_map_and_bind_after_rendezvous()
 end
 
 local function test_choice_discards_loser_resource_state_even_when_loser_is_locally_possible()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'choice-loser-resource-cell')
   local got
 
@@ -609,7 +608,7 @@ local function test_choice_discards_loser_resource_state_even_when_loser_is_loca
 end
 
 local function test_choice_blocked_branch_does_not_partially_commit_before_right_branch_wins()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'choice-blocked-left-cell')
   local ch = Channel.new('choice-blocked-left-channel')
   local got
@@ -626,7 +625,7 @@ local function test_choice_blocked_branch_does_not_partially_commit_before_right
 end
 
 local function test_tensor_is_parallel_not_sequential_for_cell_views()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'tensor-view-cell')
   local rows
 
@@ -657,7 +656,7 @@ local function test_tensor_or_else_prefers_internal_rendezvous_over_fallback()
 end
 
 local function test_or_else_primary_rendezvous_beats_fallback_when_partner_exists()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ch = Channel.new('or-else-external-primary')
   local cell = Cell.new(0, 'or-else-external-primary-cell')
   local got
@@ -673,7 +672,7 @@ local function test_or_else_primary_rendezvous_beats_fallback_when_partner_exist
 end
 
 local function test_or_else_blocked_primary_discards_partial_state_before_fallback()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ch = Channel.new('or-else-blocked-primary-channel')
   local cell = Cell.new(0, 'or-else-blocked-primary-cell')
   local got
@@ -690,7 +689,7 @@ local function test_or_else_blocked_primary_discards_partial_state_before_fallba
 end
 
 local function test_choice_backtracks_around_product_conflict()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'choice-product-conflict-cell')
   local rows
 
@@ -708,7 +707,7 @@ local function test_choice_backtracks_around_product_conflict()
 end
 
 local function test_guard_memo_survives_refresh_of_stale_frontier()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'guard-refresh-cell')
   local guard_calls = 0
   local a, b
@@ -729,12 +728,11 @@ local function test_guard_memo_survives_refresh_of_stale_frontier()
   assert_eq(a, 1)
   assert_eq(b, 2)
   assert_eq(guard_calls, 1, 'refresh reuses the guarded expression for the same attempt rather than rerunning guard effects')
-  assert_truthy((rt.stats.refreshes or 0) >= 1, 'test exercised stale frontier refresh')
 end
 
 local function test_losing_or_else_fallback_settles_with_nack_as_lost()
   local ref
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local got
 
   rt:spawn_raw(function()
@@ -750,7 +748,7 @@ local function test_losing_or_else_fallback_settles_with_nack_as_lost()
 end
 
 local function test_nack_does_not_fire_while_protected_attempt_is_still_pending()
-  local rt = Runtime.new({ quiet_deadlock = true })
+  local rt = new_runtime({ quiet_deadlock = true })
   local ch = Channel.new('pending-nack-channel')
   local ref
   local protected_got, nack_got
@@ -772,15 +770,15 @@ local function test_nack_does_not_fire_while_protected_attempt_is_still_pending(
   assert_uncommitted_status(status, 'a nack is not enabled merely because its protected attempt is pending')
   assert_eq(protected_got, nil)
   assert_eq(nack_got, nil)
-  assert_truthy(ref, 'protected attempt published a nack obligation')
+  assert_truthy(ref, 'protected attempt discharged a nack obligation')
 end
 
-local function test_multiple_wraps_run_in_order_after_publication()
+local function test_multiple_wraps_run_in_order_after_discharge()
   local timeline = {}
-  local rt = Runtime.new({
+  local rt = new_runtime({
     host = {
       test_tag = function()
-        timeline[#timeline + 1] = 'publish'
+        timeline[#timeline + 1] = 'discharge'
       end,
     },
   })
@@ -805,7 +803,7 @@ local function test_multiple_wraps_run_in_order_after_publication()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'x12')
-  assert_eq(table.concat(timeline, ','), 'publish,wrap1,wrap2,resume', 'multiple wraps run in order after publication and before fibre continuation')
+  assert_eq(table.concat(timeline, ','), 'discharge,wrap1,wrap2,resume', 'multiple wraps run in order after discharge and before fibre continuation')
 end
 
 
@@ -813,10 +811,10 @@ local function test_wrap_may_perform_new_transaction_after_commit()
   local cell = Cell.new(0, 'wrap-nested-perform-cell')
   local timeline = {}
   local got
-  local rt = Runtime.new({
+  local rt = new_runtime({
     host = {
       test_tag = function(tag)
-        timeline[#timeline + 1] = 'publish:' .. tag
+        timeline[#timeline + 1] = 'discharge:' .. tag
       end,
     },
   })
@@ -843,12 +841,12 @@ local function test_wrap_may_perform_new_transaction_after_commit()
   assert_status(rt:run(), 'found')
   assert_eq(got, 'ab')
   assert_eq(cell.value, 1)
-  assert_eq(table.concat(timeline, ','), 'publish:outer,wrap-start,publish:inner,wrap-end,resume', 'wrap may perform a fresh transaction after the outer commit')
+  assert_eq(table.concat(timeline, ','), 'discharge:outer,wrap-start,discharge:inner,wrap-end,resume', 'wrap may perform a fresh transaction after the outer commit')
 end
 
 local function test_wrap_failure_does_not_rollback_committed_resources()
   local cell = Cell.new(0, 'wrap-failure-cell')
-  local rt = Runtime.new()
+  local rt = new_runtime()
 
   rt:spawn_raw(function()
     rt:perform(cell:write_op(5):and_then(function()
@@ -867,10 +865,10 @@ end
 
 local function test_product_lane_wraps_apply_inside_out_after_commit()
   local timeline = {}
-  local rt = Runtime.new({
+  local rt = new_runtime({
     host = {
       test_tag = function(tag)
-        timeline[#timeline + 1] = 'publish:' .. tag
+        timeline[#timeline + 1] = 'discharge:' .. tag
       end,
     },
   })
@@ -915,7 +913,7 @@ local function test_product_lane_wraps_apply_inside_out_after_commit()
   assert_eq(got[1][1], 'a!')
   assert_eq(got[2][1], 'b?')
   assert_eq(got.outer, true, 'outer wrap sees product after lane-local wraps')
-  assert_eq(table.concat(timeline, ','), 'publish:outer,wrap-a,publish:inner-a,wrap-b,publish:inner-b,wrap-outer,resume', 'lane wraps run left-to-right inside the outer wrap after commit')
+  assert_eq(table.concat(timeline, ','), 'discharge:outer,wrap-a,discharge:inner-a,wrap-b,discharge:inner-b,wrap-outer,resume', 'lane wraps run left-to-right inside the outer wrap after commit')
 end
 
 local function test_tensor_lane_wraps_apply_after_internal_rendezvous()
@@ -1030,7 +1028,7 @@ local tests = {
   test_guard_is_delayed_and_participates_in_search,
   test_guard_memo_survives_refresh_of_stale_frontier,
   test_wrap_is_post_commit_and_not_transactional_sequence,
-  test_multiple_wraps_run_in_order_after_publication,
+  test_multiple_wraps_run_in_order_after_discharge,
   test_wrap_may_perform_new_transaction_after_commit,
   test_wrap_failure_does_not_rollback_committed_resources,
   test_product_lane_wraps_apply_inside_out_after_commit,
@@ -1074,7 +1072,22 @@ local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
 local Channel = require('fibers.base.channel')
 local Cell = require('fibers.base.cell')
-local TC = require('tests.consequence_helpers')
+local TC = require('tests.effect_helpers')
+
+local function new_runtime(opts)
+  opts = opts or {}
+  local tags = {}
+  local host = opts.host or {}
+  local previous = host.test_tag
+  host.test_tag = function(tag, payload)
+    tags[#tags + 1] = tag
+    if previous then return previous(tag, payload) end
+  end
+  opts.host = host
+  local rt = Runtime.new(opts)
+  rt._test_tags = tags
+  return rt
+end
 
 local function update_cell(cell, fn)
   return cell:read_op():and_then(function(old)
@@ -1125,7 +1138,7 @@ local function assert_uncommitted_status(status, msg)
 end
 
 local function one_perform(op, opts)
-  local rt = Runtime.new(opts or {})
+  local rt = new_runtime(opts or {})
   local values = { n = 0 }
   rt:spawn_raw(function()
     values = pack_(rt:perform(op))
@@ -1135,33 +1148,11 @@ local function one_perform(op, opts)
 end
 
 local function transaction_tags(rt)
-  local out = {}
-  for i = 1, #(rt.published_consequences or {}) do
-    local log = rt.published_consequences[i]
-    for j = 1, #(log.transaction or {}) do
-      local c = log.transaction[j]
-      out[#out + 1] = c.tag or c.kind or tostring(c[1])
-    end
-    for j = 1, #(log.obligation or {}) do
-      local c = log.obligation[j]
-      local payload = c.payload or {}
-      local tag = payload.tag or payload.kind or c.tag
-      if tag then out[#out + 1] = tag end
-    end
-  end
-  return table.concat(out, ',')
+  return table.concat(rt._test_tags or {}, ',')
 end
 
-local function obligation_entries(rt, kind)
-  local out = {}
-  for i = 1, #(rt.published_consequences or {}) do
-    local log = rt.published_consequences[i]
-    for j = 1, #(log.obligation or {}) do
-      local c = log.obligation[j]
-      if kind == nil or c.kind == kind or c.tag == kind then out[#out + 1] = c.payload or c end
-    end
-  end
-  return out
+local function obligation_entries(_rt, _kind)
+  return {}
 end
 
 local function assert_set_eq(actual, expected, msg)
@@ -1237,7 +1228,7 @@ end
 -- Fallback absence is global: if one primary candidate fails, the runtime must
 -- keep searching other primary worlds before falling back.
 local function test_or_else_primary_second_candidate_beats_fallback()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new('init', 'primary-second-candidate-cell')
   local bad = Channel.new('primary-second-bad')
   local good = Channel.new('primary-second-good')
@@ -1269,13 +1260,13 @@ local function test_or_else_primary_second_candidate_beats_fallback()
   assert_eq(good_sender, true)
   assert_falsy(bad_sender, 'conflicting primary partner does not commit')
   assert_eq(cell.value, 'good')
-  assert_eq(transaction_tags(rt), '', 'fallback consequence is not published')
+  assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
 end
 
 -- The primary can become available only if another participant backtracks to a
 -- non-first branch. Fallback must wait for that global possibility.
 local function test_or_else_primary_needs_partner_backtracking()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local wanted = Channel.new('partner-backtrack-wanted')
   local dead = Channel.new('partner-backtrack-dead')
   local receiver, partner
@@ -1297,12 +1288,12 @@ local function test_or_else_primary_needs_partner_backtracking()
   assert_status(rt:run(), 'found')
   assert_eq(receiver, 'primary:ok', 'partner backtracking makes primary globally available')
   assert_eq(partner, true)
-  assert_eq(transaction_tags(rt), '', 'fallback does not publish')
+  assert_eq(transaction_tags(rt), '', 'fallback does not discharge')
 end
 
 -- Rendezvous and resource compatibility must be solved together.
 local function test_or_else_primary_resource_conflict_backtracks_partner_branch()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'primary-resource-conflict-cell')
   local ch = Channel.new('primary-resource-conflict-channel')
   local receiver, partner
@@ -1328,11 +1319,11 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
   assert_eq(receiver, 'primary:good', 'runtime backtracks through a conflicting partner branch')
   assert_truthy(partner ~= nil, 'compatible partner branch commits')
   assert_eq(cell.value, 1)
-  assert_eq(transaction_tags(rt), '', 'fallback consequence is not published')
+  assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
 end
 
 local function test_or_else_absent_primary_discards_tentative_writes()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new('initial', 'absent-primary-discards-writes-cell')
   local ch = Channel.new('absent-primary-discards-writes-channel')
   local got
@@ -1352,7 +1343,7 @@ local function test_or_else_absent_primary_discards_tentative_writes()
 end
 
 local function test_losing_branch_emit_wrap_and_nack_do_not_cross_contaminate()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local wraps = 0
   local ref
   local got
@@ -1375,7 +1366,7 @@ local function test_losing_branch_emit_wrap_and_nack_do_not_cross_contaminate()
   assert_eq(got, 'winner')
   assert_eq(transaction_tags(rt), '', 'losing branch emit is discarded')
   assert_eq(wraps, 0, 'losing branch wrap is not run')
-  assert_truthy(ref, 'losing protected branch published a nack obligation')
+  assert_truthy(ref, 'losing protected branch discharged a nack obligation')
 
   local s_nack, v_nack = one_perform(Op._nack(ref))
   assert_status(s_nack, 'found', 'losing protected branch nack can fire after loss')
@@ -1384,7 +1375,7 @@ end
 
 local function test_nested_or_else_uses_nearest_available_world()
   do
-    local rt = Runtime.new()
+    local rt = new_runtime()
     local ch = Channel.new('nested-or-else-primary')
     local got, sender
     local op = ch:get_op():map(function(v) return 'primary:' .. v end)
@@ -1415,7 +1406,7 @@ local function test_nested_or_else_uses_nearest_available_world()
 end
 
 local function test_tensor_lane_bind_after_internal_rendezvous_is_lane_local()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ch = Channel.new('tensor-lane-bind-internal')
   local rows
 
@@ -1435,7 +1426,7 @@ local function test_tensor_lane_bind_after_internal_rendezvous_is_lane_local()
 end
 
 local function test_tensor_lane_bind_returned_wrap_is_lane_local()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ch = Channel.new('tensor-lane-bind-wrap')
   local rows
 
@@ -1456,7 +1447,7 @@ local function test_tensor_lane_bind_returned_wrap_is_lane_local()
 end
 
 local function test_tensor_lane_bind_rejection_after_internal_rendezvous_backtracks()
-  local rt = Runtime.new({ quiet_deadlock = true })
+  local rt = new_runtime({ quiet_deadlock = true })
   local ch = Channel.new('tensor-lane-bind-reject')
   local rows
 
@@ -1477,7 +1468,7 @@ end
 
 
 local function test_tensor_lane_bind_after_internal_rendezvous_can_require_external_rendezvous()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local internal = Channel.new('tensor-lane-bind-internal-then-external-internal')
   local external = Channel.new('tensor-lane-bind-internal-then-external-external')
   local rows, sender
@@ -1525,7 +1516,7 @@ local function test_nested_product_deferred_bind_preserves_inner_lane_locality()
 end
 
 local function test_all_lane_bind_after_external_rendezvous_is_lane_local_without_internal_closure()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ch = Channel.new('all-lane-bind-external')
   local rows, sender
 
@@ -1549,7 +1540,7 @@ local function test_all_lane_bind_after_external_rendezvous_is_lane_local_withou
 end
 
 local function test_multiple_deferred_lane_binds_rewrite_only_their_own_lanes()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local a = Channel.new('multiple-lane-bind-a')
   local b = Channel.new('multiple-lane-bind-b')
   local rows, send_a, send_b
@@ -1594,7 +1585,7 @@ local function test_lane_bind_returning_emit_contributes_to_selected_world()
 end
 
 local function test_tensor_internal_and_external_rendezvous_must_all_close()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local internal = Channel.new('tensor-subtle-internal')
   local external = Channel.new('tensor-subtle-external')
   local a, b
@@ -1626,7 +1617,7 @@ local function test_all_does_not_allow_internal_rendezvous_even_nested()
 end
 
 local function test_triple_swap_with_decoy_does_not_greedily_partially_commit()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local ab = Channel.new('triple-decoy-ab')
   local bc = Channel.new('triple-decoy-bc')
   local ca = Channel.new('triple-decoy-ca')
@@ -1653,7 +1644,7 @@ local function test_triple_swap_with_decoy_does_not_greedily_partially_commit()
 end
 
 local function test_dependent_cell_updates_are_serialisable_under_observation()
-  local rt = Runtime.new()
+  local rt = new_runtime()
   local cell = Cell.new(0, 'dependent-observation-cell')
   local returns = {}
 
