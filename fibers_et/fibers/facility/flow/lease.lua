@@ -2,7 +2,7 @@
 --
 -- A Lease is a committed temporary ownership of retained bytes.  The reservoir
 -- remains the resource of record; lease methods are convenience wrappers over
--- reservoir operations.
+-- reservoir options.
 
 local Lease = {}
 Lease.__index = Lease

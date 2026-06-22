@@ -2,7 +2,7 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 -- Sleep facility: beginner-facing standalone use with Lua's os.time.
 --
--- fibers.sleep_op(d) is an operation.  It does not block the process by itself.
+-- fibers.sleep_op(d) is an option.  It does not block the process by itself.
 -- The pure Lua host below uses os.time as the runtime clock and os.execute
 --("sleep N") as its deliberately small blocking mechanism.  The standalone
 -- runner ties the two together.

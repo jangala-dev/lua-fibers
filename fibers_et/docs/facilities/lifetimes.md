@@ -35,7 +35,7 @@ local lease = fibers.Region.handle('lease', { kind = 'lease' })
 fibers.perform(region:admit_op(lease))
 ```
 
-The core region operations are deliberately small:
+The core region options are deliberately small:
 
 ```lua
 region:admit_op(item)
@@ -48,10 +48,10 @@ region:snapshot_op()
 ```
 
 `seal_op` stops new admission.  It does not cancel, settle owned items, mark the Lifetime settled, or reassign
-anything by itself.  Policy layers may later provide richer shutdown operations,
+anything by itself.  Policy layers may later provide richer shutdown options,
 but a bare Region only seals admission.
 
-`release_op` removes ownership of a live root item.  It is a sparse ledger operation: it
+`release_op` removes ownership of a live root item.  It is a sparse ledger command: it
 does not prove that a task, stream, lease, or process has completed.  Compounds such as
 `Lifetime:settle_item_op()` first claim the owned subtree, run its settlement
 protocols, and then release it with the claim authority.
@@ -97,7 +97,7 @@ spawns.
 
 ## Completion and cancellation
 
-Completion and cancellation are represented by ordinary task operations over
+Completion and cancellation are represented by ordinary task options over
 Cells:
 
 ```lua
@@ -129,11 +129,11 @@ fibers.perform(fibers.tensor({
 }))
 ```
 
-The offer contributes both the ownership handoff and an ordinary channel rendezvous carrying an offer value. The accept operation receives the offer and uses and_then to accept only values matching its criteria, before commit. The handoff commits only if both sides participate in the same committed world.
+The offer contributes both the ownership handoff and an ordinary channel rendezvous carrying an offer value. The accept option receives the offer and uses and_then to accept only values matching its criteria, before commit. The handoff commits only if both sides participate in the same committed world.
 
 ## Ownership handoff
 
-Ownership handoff is one transaction operation:
+Ownership handoff is one transactional option:
 
 ```lua
 from:handoff_op(handle, to)
@@ -144,7 +144,7 @@ the lifetime discharges handoff effects and the underlying ownership record move
 in the same committed world.  If it loses, ownership is unchanged and no handoff
 effect is emitted.
 
-This is the operation that makes structured concurrency only one lifetime policy:
+This is the option that makes structured concurrency only one lifetime policy:
 work may be transactionally adopted, detached, promoted, or handed off between
 regions without becoming ownerless.
 
@@ -193,7 +193,7 @@ supervisor
 ```
 
 These policies should be built above Lifetime, Region, Task, Cell and Effect.  They should
-not change the operation algebra.
+not change the option algebra.
 
 For the exact claim and settlement laws, see `docs/facilities/settlement.md`.
 

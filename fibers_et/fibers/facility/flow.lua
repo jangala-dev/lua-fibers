@@ -455,7 +455,7 @@ function Outlet:inspect_op() return self.flow:inspect_op() end
 function Outlet:exit_op() return self.flow:closed_op() end
 function Outlet:transfer_op(from, to) return transfer_item_op(self, from, to, 'outlet:transfer_op') end
 
--- Lease-facing operations ---------------------------------------------------
+-- Lease-facing options ------------------------------------------------------
 
 function Outlet:lease_some_op(max, owner)
   max = as_pos_count(max, 4096, 'Flow lease size')

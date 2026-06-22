@@ -1,10 +1,9 @@
 # fibers
 
-`fibers` is a small cooperative concurrency runtime for Lua, built on
-**eventful transactions**.
+`fibers` is a small cooperative concurrency runtime for PUC Lua, LuaJIT and TeXLua implementing **eventful transactions**.
 
 A fibre does not block by directly receiving, sleeping, locking or updating
-shared state.  It performs an operation value.  Operation values can be stored,
+shared state.  It performs an option value.  Option values can be stored,
 passed around, chosen between, sequenced, combined, and then committed by the
 runtime.
 
@@ -12,7 +11,7 @@ The practical model is:
 
 ```text
 spawn fibres
-fibres perform operations
+fibres perform options
 the runtime searches for a compatible committed world
 resource changes and typed effects are committed
 selected fibres resume with their results
@@ -21,7 +20,7 @@ selected fibres resume with their results
 The public base kit is deliberately small:
 
 ```text
-Op       possible transaction
+Op       first-class option over possible committed worlds
 Cell     transactional fact
 Channel  synchronous rendezvous
 Source   external, host or time occurrence made transactional
@@ -40,6 +39,14 @@ synchronising with another event.  A commit selects a world containing
 rendezvous requirements, resource journals, fallback structure, wake interests,
 typed runtime effects, nacks, and post-commit value transformations.
 
+The resource side is governed by a managed validity algebra.  Resources declare
+managed facts such as scalars, queues, maps, claims and derived views.  Search
+records the facts it relied on, and saved cursors or prepared worlds are reused
+only while those fact stamps still validate.  This is what makes bounded search
+and absence-sensitive fallback safe in the presence of external arrivals.
+
+The names `fibers` and `op` acknowledge Andy Wingo's Snabb work, which adapted CML-style first-class synchronisation to Lua; here `Op` is read as option.
+
 This repository is WIP.  The implementation is intended to be portable Lua.
 The test suite is exercised with plain Lua, LuaJIT and texlua; optional host
 backends skip cleanly when their dependencies are unavailable.
@@ -54,7 +61,7 @@ Ownership is recorded in Regions.
 Practical lifetime management normally uses Lifetime, a compound facility built over Region, Task, Source and Effect.
 Running work is a Task.
 Committed obligations are Effects.
-Everything composes as an Op.
+Everything composes as an Op, short for option.
 ```
 
 ## A first example
@@ -86,7 +93,7 @@ committed.
 
 ## Choice with time
 
-The sleep facility is ordinary operation syntax built over a clock `Source`.
+The sleep facility is ordinary option syntax built over a clock `Source`.
 Relative sleep fixes its absolute deadline once for the perform attempt.
 
 ```lua
@@ -114,7 +121,7 @@ local increment = counter:read_op():and_then(function(old)
 end)
 ```
 
-Cell operations do not run user update callbacks.  Interpret cell values with
+Cell options do not run user update callbacks.  Interpret cell values with
 ordinary `Op` composition such as `and_then`, and use `Effect` for committed
 external work.
 
@@ -157,7 +164,7 @@ local r = stream:reader()
 local w = stream:writer()
 ```
 
-Inlet and Outlet `_op` methods are single-commit operations.  Losing read branches
+Inlet and Outlet `_op` methods are single-commit options.  Losing read branches
 free no bytes; losing write branches append no bytes; `peek_op` observes without
 freeing; reads are derived from peek plus prefix-freeing; `read_until_op` and
 `read_including_op` provide delimiter-bounded reads; `splice_to` moves bytes between
@@ -168,9 +175,12 @@ bytes, and flush waits for the fate of prior retained bytes.  If prior bytes hav
 already been consumed, flush succeeds even if the peer has since closed; later
 writes still fail.  The reservoir is rope-backed and currently permits one active
 lease at a time.  Stream compounds
-do not expose byte operations directly; use `stream:reader()` and `stream:writer()`.
+do not expose byte methods directly; use `stream:reader()` and `stream:writer()`.
 
 See `docs/facilities/streams.md`, `docs/facilities/settlement.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, `examples/13_socket_backend_contract.lua`, `examples/14_host_handle_stream.lua`, and `examples/15_owned_resource_settlement.lua`.
+
+For resource authors, see `docs/kernel/resources.md`, `docs/kernel/resource-laws.md`,
+`docs/kernel/validity-authoring.md`, and `docs/validity-algebra.md`.
 
 ## Effects
 
@@ -222,7 +232,7 @@ local w = a:writer()
 
 ## Protected calls
 
-Use `fibers.pcall` or `fibers.xpcall` inside fibres when protected code may perform operations. On Lua 5.1, native `pcall`/`xpcall` cannot reliably protect code that suspends and resumes, so `fibers` provides yieldable protected calls for fibre code without replacing the host globals.
+Use `fibers.pcall` or `fibers.xpcall` inside fibres when protected code may perform options. On Lua 5.1, native `pcall`/`xpcall` cannot reliably protect code that suspends and resumes, so `fibers` provides yieldable protected calls for fibre code without replacing the host globals.
 
 This is deliberately proportionate: transaction search and commit internals remain non-suspending, and `perform` is only permitted from the currently resumed runtime fibre.
 
@@ -234,15 +244,7 @@ They are intended to be read and run individually:
 ```sh
 texlua examples/01_channel.lua
 texlua examples/02_cell.lua
-texlua examples/03_source.lua
-texlua examples/04_lifetime_task.lua
-texlua examples/05_effect.lua
-texlua examples/06_policy_nursery.lua
-texlua examples/07_lifetime_handoff.lua
-texlua examples/08_sleep.lua
-texlua examples/09_memory_stream.lua
-texlua examples/10_stream_protocol_handoff.lua
-texlua examples/11_pumped_stream_fake_backend.lua
+# etc.
 ```
 
 Assertion-heavy semantic checks live in `tests/`.
@@ -327,9 +329,11 @@ See `benchmarks/README.md` for the current case groups.
 ```text
 docs/base-kit.md       the public base kit
 docs/structure.md      repository layers and placement rules
-docs/algebra.md        operation algebra and semantic distinctions
+docs/algebra.md        option algebra and semantic distinctions
+docs/validity-algebra.md      managed validity facts and pull validation
 docs/kernel/resources.md      open resource protocol
 docs/kernel/resource-laws.md  open resource and effect laws
+docs/kernel/validity-authoring.md managed validity resource-authoring guide
 docs/effects.md   typed transaction effects / effects
 docs/facilities/sleep.md      sleep as a facility over clock sources
 docs/facilities/lifetimes.md  regions, tasks and ownership
@@ -338,3 +342,9 @@ docs/facilities/streams.md    byte flows, stream compounds and host-pumped strea
 docs/facilities/host-handles.md host I/O handles for pumped streams
 docs/kernel/embedding.md      bounded stepping and host integration
 ```
+
+## Strict managed validity branch
+
+This experimental branch removes the fallback named-frontier path from the kernel resource boundary. Built-in resources now declare managed validity facts directly; resources without a managed validity fact fail at the protocol boundary instead of silently receiving an ad-hoc named frontier.
+
+The remaining `frontier` terminology refers to generation-stamped managed facts used for pull validation. It no longer refers to the old push-invalidation watcher mechanism.

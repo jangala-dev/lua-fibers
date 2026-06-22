@@ -58,7 +58,7 @@ do
   assert_eq(got, 'fallback')
 end
 
--- A start operation and the child fibre must be given a chance to run before
+-- A start option and the child fibre must be given a chance to run before
 -- the await fallback can commit.
 do
   local region = fibers.Region.new('absence-task-region')

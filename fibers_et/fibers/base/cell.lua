@@ -6,11 +6,11 @@
 -- algebra; fixed state transitions belong in specialised resources.
 
 local Resource = require('fibers.kernel.resources.protocol')
-local KernelResources = require('fibers.kernel.resources')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local Op = require('fibers.base.op')
 local Wait = require('fibers.kernel.wait')
+local Validity = require('fibers.kernel.validity')
 local OpPack = Op._pack
 
 local Cell = {}
@@ -87,9 +87,8 @@ end
 
 function CellKind.apply(prepared, _log)
   local cell = prepared.resource
-  cell.value = prepared.write
+  cell._validity_value:set(prepared.write, 'cell write')
   cell.version = (cell.version or 0) + 1
-  KernelResources.invalidate_object(cell, 'cell write')
 end
 
 local function observe_version(ctx, obj)
@@ -127,7 +126,22 @@ function CellKind.eval(cell, payload, ctx)
     end
     return Result.wait(Wait.resource('cell', cell._fibers_id, cell, { op = 'changed', version = payload.version }))
   end
-  error('unknown cell operation ' .. tostring(op), 2)
+  error('unknown cell command ' .. tostring(op), 2)
+end
+
+
+function CellKind.absence(cell, payload, ctx)
+  if payload and payload.op == 'changed' then
+    local version = observe_version(ctx, cell)
+    if version == payload.version then
+      if ctx and ctx.add then
+        local frontier = cell._validity_value and cell._validity_value:frontier_for() or nil
+        ctx:add({ kind = 'cell-unchanged', cell = cell, version = version, frontier = frontier, stamp = frontier and frontier.gen or nil })
+      end
+      return true
+    end
+  end
+  return false
 end
 
 function CellKind.summary(payload, out)
@@ -141,7 +155,10 @@ end
 
 function Cell.new(value, name)
   next_id = next_id + 1
-  return setmetatable({ value = value, version = 0, name = name or ('cell-' .. tostring(next_id)), _fibers_id = 'cell-' .. tostring(next_id), _fibers_kind = CellKind }, Cell)
+  local id = 'cell-' .. tostring(next_id)
+  local cell = setmetatable({ value = value, version = 0, name = name or id, _fibers_id = id, _fibers_kind = CellKind }, Cell)
+  cell._validity_value = Validity.scalar(value, (cell.name or id) .. ':value', { on_set = function(v) cell.value = v end })
+  return cell
 end
 
 function Cell:read_op()

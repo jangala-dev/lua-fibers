@@ -1,7 +1,7 @@
 -- Readiness-backed host stream backend.
 --
 -- This is the generic adapter from Source readiness hints to host-pumped
--- streams.  A readiness Source means only that the host operation is worth
+-- streams.  A readiness Source means only that the host action is worth
 -- trying; the non-blocking read/write callbacks remain authoritative and may
 -- still return would_block, eof, or errors.
 

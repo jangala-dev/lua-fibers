@@ -18,8 +18,6 @@ Fake.__index = Fake
 local next_id = 0
 
 local function note_change(self)
-  local rt = self.runtime
-  if rt and rt._invalidate_cursor then rt:_invalidate_cursor() end
 end
 
 local function remember_ready(self, mode, value)

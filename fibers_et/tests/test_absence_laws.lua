@@ -1,12 +1,12 @@
 -- Law-level checks for the algebraic absence judgement used to justify
 -- or_else fallbacks.  These are deliberately smaller than the adversarial
--- Region/Task/Flow scenarios: they assert the operation-algebra rules directly.
+-- Region/Task/Flow scenarios: they assert the option-algebra rules directly.
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Op = require('fibers.base.op')
 local Runtime = require('fibers.kernel.runtime')
-local Net = require('fibers.kernel.transaction_net')
+local Debug = require('fibers.kernel.transaction_debug')
 local Channel = require('fibers.base.channel')
 local Result = require('fibers.kernel.resources.result')
 
@@ -17,7 +17,7 @@ local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq faile
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
 
 local function absent(op)
-  local status = Net.Solver.new(Runtime.new(), {}):perform_sync(op)
+  local status = Debug.perform_sync(Runtime.new(), op)
   return status.tag == 'absent'
 end
 
@@ -28,7 +28,7 @@ do
   assert_falsy(absent(Op.choice(Op.always('live'), Op.never())), 'absence is not left-biased')
 end
 
--- nested or_else is absent only when both the preferred operation and the
+-- nested or_else is absent only when both the preferred option and the
 -- fallback have no current world.
 do
   assert_truthy(absent(Op.never():or_else(Op.never())), 'or_else with both sides absent should be absent')
@@ -36,7 +36,7 @@ do
   assert_falsy(absent(Op.always('primary'):or_else(Op.never())), 'available primary makes the whole or_else available')
 end
 
--- map and wrap preserve absence of the inner operation; a wrap from an absent
+-- map and wrap preserve absence of the inner option; a wrap from an absent
 -- primary is not run when the fallback commits.
 do
   local wrapped = false

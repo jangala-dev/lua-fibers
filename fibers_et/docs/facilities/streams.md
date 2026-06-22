@@ -12,7 +12,7 @@ all retained bytes.  Input and output endpoint state governs whether bytes may
 enter or leave.  The current reservoir is backed by a pure Lua rope of immutable
 string chunks rather than by one repeatedly concatenated string.  Text and
 protocol awareness, such as line endings and delimiters, lives above the
-reservoir in algebraically derived Outlet operations.
+reservoir in algebraically derived Outlet options.
 
 A bidirectional stream is not primitive:
 
@@ -112,10 +112,10 @@ read pump Task admitted and spawned
 write pump Task admitted and spawned
 ```
 
-If the open operation loses a choice, no pump starts and the backend is not
+If the open option loses a choice, no pump starts and the backend is not
 attached.
 
-The compound itself does not expose byte operations.  Use `stream:reader()` and
+The compound itself does not expose byte options.  Use `stream:reader()` and
 `stream:writer()`.
 
 A host-backed stream can be opened directly from any object satisfying the
@@ -183,7 +183,7 @@ transition that records that terminal fact.  This implementation deliberately pe
 lease per reservoir; that conservative rule preserves stream ordering until a
 later ordered multi-lease model is needed.
 
-The public `Inlet` and `Outlet` operations compose these facts.  Losing
+The public `Inlet` and `Outlet` options compose these facts.  Losing
 alternatives append no bytes, consume no bytes, and create no leases.
 
 ## Algebraic laws
@@ -213,12 +213,12 @@ consumes through `term` and returns the prefix before `term`;
 `\n` and returning a final unterminated line on EOF.  The default delimiter partial
 policy reports `nil, eof, partial` and consumes the terminal partial; callers may
 choose `partial = 'return'` or `partial = 'discard'`.  `read_all_op` is the sibling
-operation bounded by terminal state rather than by a byte terminator.
+option bounded by terminal state rather than by a byte terminator.
 
 `peek_op` and `peek_some_op` observe committed bytes without consuming them, even
 when the selected world commits.  Internally, the Flow layer builds a speculative
 read view: observed bytes or terminal error, plus the reservoir prefix length to
-free if a consuming operation is selected.  Reads are deliberately derived from
+free if a consuming option is selected.  Reads are deliberately derived from
 that view followed by committed reservoir prefix freeing.  `drop_op` is the same
 idea with the observed bytes discarded.  `splice_to` is algebraically derived as
 view destination-write source-free: destination write failure leaves the source
@@ -227,12 +227,12 @@ the destination Inlet in one committed world.
 
 Long reads and delimiter reads may wait while the committed reservoir grows.
 They inspect committed bytes but free no reservoir prefix until their selected
-world commits.  If such an operation loses a choice, is cancelled before commit,
+world commits.  If such an option loses a choice, is cancelled before commit,
 or is abandoned by fallback, the bytes remain in the flow.
 
 The reservoir itself intentionally has no read policy.  It stores retained bytes,
 exposes prefixes, frees exact prefixes, leases exact prefixes to pumps, and
-records fate.  Operations such as exact reads, delimiter reads, drops and splices
+records fate.  Options such as exact reads, delimiter reads, drops and splices
 are Flow-level compositions over those smaller reservoir facts.
 
 ## Write-side semantics
@@ -244,7 +244,7 @@ append all bytes in one commit, or append none
 ```
 
 For bounded flows, it waits until the whole byte string can fit.  If a byte
-string can never fit because it exceeds the capacity, the operation reports
+string can never fit because it exceeds the capacity, the option reports
 `too_large`.
 
 `inlet:write_some_op(bytes)` appends one non-empty prefix in one commit.  It is
@@ -270,11 +270,11 @@ backend:shutdown_write(reason)
 
 `read_ready_op` and `write_ready_op` are ordinary `Op`s, usually backed by
 `Source`.  `read` and `write` are called only from pump task bodies after the
-readiness operation commits.  Host I/O must never run during transaction search.
+readiness option commits.  Host I/O must never run during transaction search.
 
 If a backend returns `would_block`, the readiness hint that led to the host call
 must be cleared or consumed before waiting again.  Readiness is a hint; the host
-operation remains authoritative.
+option remains authoritative.
 
 ## Byte leases
 
@@ -296,7 +296,7 @@ ack_lease_op
 flush attempt begins.  Success means no prior bytes are still retained.  If those
 retained bytes are discarded or failed by consumer shutdown or backend failure,
 flush returns that settlement error.  If prior bytes have already been consumed,
-flush succeeds even if the peer has since closed; a later write is the operation
+flush succeeds even if the peer has since closed; a later write is the option
 that observes future writability.  Leased bytes continue to reserve capacity
 until acknowledged or settled.  A second lease request by another owner reports
 `lease_already_active` while any lease remains active.

@@ -1,7 +1,7 @@
 # Sleep facility
 
-The sleep facility is a small library layer over clock `Source` operations.  It
-provides exactly two operation constructors:
+The sleep facility is a small library layer over clock `Source` options.  It
+provides exactly two option constructors:
 
 ```lua
 fibers.sleep_until_op(t)
@@ -20,7 +20,7 @@ return Op.guard(function(ctx)
 end)
 ```
 
-This matters because operation search may be rebuilt.  A relative sleep must not
+This matters because option search may be rebuilt.  A relative sleep must not
 slide forward every time the solver restarts; `sleep_op(4)` means four seconds
 from the beginning of this perform attempt, not four seconds from each later
 search pass.
@@ -79,5 +79,5 @@ blocking and readiness support without changing `sleep_op` itself.
 
 Clock waits participate in world validation.  A transaction world that has
 observed `now < deadline` remains valid while that fact is true.  It becomes
-stale only when `now >= deadline`, at which point the sleep operation may become
+stale only when `now >= deadline`, at which point the sleep option may become
 a candidate.

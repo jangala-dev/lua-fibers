@@ -7,7 +7,7 @@ by providing a kind table with the relevant capabilities.
 
 ## Execution pipeline
 
-A resource operation follows this path:
+A resource option follows this path:
 
 ```text
 public method
@@ -68,24 +68,55 @@ steps were left partially evaluated.
 
 Application-level validation should usually be expressed in recoverable algebra
 callbacks, for example with `guard`, `map` or `and_then`, before constructing the
-trusted resource operation.
+trusted resource option.
+
+## Managed validity facts
+
+Every resource that can affect search results must declare managed validity
+facts.  The fallback named-frontier path has been removed.  A resource may use
+raw private state for diagnostics, names or caches, but committed semantic state
+that can influence `eval`, `absence`, `prepare` or external wake decisions must
+be represented by `fibers.kernel.validity` capabilities.
+
+The common choices are:
+
+```text
+scalar    one replaceable value
+level     keyed boolean readiness or mode predicates
+signal    latched non-consuming notification
+queue     ordered consuming occurrences
+clock     deadline frontiers
+map       keyed membership and value facts
+set       membership-only keyspace
+claim     ownership-specialised keyspace
+derived   computed view over other managed facts
+epoch     conservative opaque validity fact
+```
+
+Capability reads record observations automatically.  Capability writes bump the
+facts whose truth may have changed.  Resource authors should not name or bump
+frontiers directly in normal resource code.
+
+See `docs/validity-algebra.md` for the capability reference and
+`docs/kernel/validity-authoring.md` for a worked managed-resource example.
 
 ## Minimal public wrapper
 
-A resource value usually stores committed state plus `_fibers_kind`:
+A resource value usually stores managed semantic state plus `_fibers_kind`:
 
 ```lua
+local Op = require('fibers.base.op')
+local Validity = require('fibers.kernel.validity')
+
 local Box = {}
 Box.__index = Box
 
 local BoxKind = { name = 'box' }
 
-function Box.new(value)
-  return setmetatable({
-    value = value,
-    version = 0,
-    _fibers_kind = BoxKind,
-  }, Box)
+function Box.new(value, name)
+  local box = setmetatable({ name = name or 'box', _fibers_kind = BoxKind }, Box)
+  box.value = Validity.scalar(value, box.name .. ':value')
+  return box
 end
 
 function Box:get_op()
@@ -97,8 +128,9 @@ function Box:set_op(value)
 end
 ```
 
-A public method should be small: construct a payload and delegate the semantics
-to the kind table.
+The public methods are small: they construct payloads and delegate semantics to
+the kind table.  The managed scalar is the authoritative validity fact for the
+box value.
 
 ## Kind table capabilities
 
@@ -127,8 +159,8 @@ resources may not need `clone`, `merge_*`, `project`, `prepare` or `apply`.
 
 ## Evaluation
 
-`Kind.eval(resource, payload, ctx)` evaluates the resource operation in the
-current instant.  It returns an `fibers.kernel.resources.result` value.
+`Kind.eval(resource, payload, ctx)` evaluates the resource option in the
+current instant.  It returns a `fibers.kernel.resources.result` value.
 
 Useful helpers:
 
@@ -142,7 +174,7 @@ local pack = require('fibers.base.op')._pack
 Return current candidates with:
 
 ```lua
-return Result.ready(candidate })
+return Result.ready(candidate)
 ```
 
 Return absence with:
@@ -157,26 +189,28 @@ Return a future wake interest with:
 return Result.wait({ kind = 'wakeup', source = resource, interest = 'ready' })
 ```
 
-A read-only operation normally creates a candidate whose values are the current
-projected view:
+A read-only option normally observes managed state and creates a candidate whose
+values are the current projected view:
 
 ```lua
 function BoxKind.eval(box, payload, ctx)
   if payload.op == 'get' then
-    local version = ctx:observe_version(box)
-    local c = Proposal.new(pack(Resource.project(ctx, box, 'value')))
+    local value = box.value:get(ctx) -- observes box:value
+    return Result.ready(Proposal.new(pack(value)))
+  elseif payload.op == 'set' then
+    local c = Proposal.new(pack(true))
     local rec = Resource.ensure(c, box, BoxKind)
-    rec.read = rec.read or version
-    return Result.ready(c })
+    rec.has_write = true
+    rec.write = payload.value
+    return Result.ready(c)
   end
 end
 ```
 
-The important points are that reads should use `Resource.project(ctx, resource,
-query)`, not the committed field directly, when they need to see tentative writes
-from earlier operations in the same transaction; and that mutable committed or
-host state should be observed through the attempt context so bounded search can
-record a world observation.
+Reads of committed state should go through managed capabilities so bounded
+search can record the facts a world relied on.  If a later option in the same
+transaction must see an earlier tentative write, use `Resource.project(ctx,
+resource, query)` and implement `Kind.project`.
 
 ## Resource records
 
@@ -194,25 +228,23 @@ A record is a proposal, not a mutation.  It should contain enough information to
 
 - validate the selected journal later;
 - merge sequentially and in parallel;
-- project tentative state to subsequent operations;
+- project tentative state to subsequent options;
 - prepare a concrete commit.
 
-For a simple cell-like resource:
+For a simple cell-like resource, the record only needs the proposed write:
 
 ```lua
-local function read_record(c, box)
-  local rec = Resource.ensure(c, box, BoxKind)
-  rec.read = rec.read or box.version
-  return rec
-end
-
 local function write_record(c, box, value)
-  local rec = read_record(c, box)
+  local rec = Resource.ensure(c, box, BoxKind)
   rec.has_write = true
   rec.write = value
   return rec
 end
 ```
+
+A resource that validates read versions may also record the managed stamp it
+observed, but simple resources can often rely on prepared-world observer
+validation instead of carrying an additional version field.
 
 ## Cloning
 
@@ -220,12 +252,7 @@ end
 
 ```lua
 function BoxKind.clone(rec)
-  return {
-    kind = BoxKind,
-    read = rec.read,
-    has_write = rec.has_write,
-    write = rec.write,
-  }
+  return { kind = BoxKind, has_write = rec.has_write, write = rec.write }
 end
 ```
 
@@ -235,12 +262,11 @@ an explicit sharing strategy.
 ## Sequential merge
 
 `Kind.merge_seq(dst, src)` merges `src` after `dst` within one sequential
-transaction.  Later sequential operations may refine or overwrite earlier local
+transaction.  Later sequential options may refine or overwrite earlier local
 proposals.
 
 ```lua
 function BoxKind.merge_seq(dst, src)
-  dst.read = dst.read or src.read
   if src.has_write then
     dst.has_write = true
     dst.write = src.write
@@ -258,7 +284,6 @@ reject incompatible concurrent proposals.
 
 ```lua
 function BoxKind.merge_par(dst, src)
-  dst.read = dst.read or src.read
   if src.has_write then
     if dst.has_write and dst.write ~= src.write then
       return false, 'box-conflict'
@@ -281,7 +306,7 @@ do not defer obvious structural conflicts to `prepare`.
 function BoxKind.project(box, rec, query)
   if query ~= 'value' then return nil, false end
   if rec and rec.has_write then return rec.write, true end
-  return box.value, true
+  return box.value:project(), true
 end
 ```
 
@@ -296,8 +321,6 @@ the selected journal against committed state and returns an inert prepared commi
 
 ```lua
 function BoxKind.prepare(box, rec, resolve)
-  if rec.read ~= box.version then return nil, 'stale' end
-
   if rec.has_write then
     return {
       kind = BoxKind,
@@ -326,8 +349,7 @@ normal resource kind should mutate its committed state.
 
 ```lua
 function BoxKind.apply(p, _log)
-  p.resource.value = p.write
-  p.resource.version = p.resource.version + 1
+  p.resource.value:set(p.write, 'box write')
 end
 ```
 

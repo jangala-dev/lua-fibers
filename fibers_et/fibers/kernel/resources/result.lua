@@ -1,5 +1,5 @@
 -- Result of asking a resource leaf whether it can participate now.
--- Branching belongs to operation algebra; a leaf is ready with one proposal,
+-- Branching belongs to option algebra; a leaf is ready with one proposal,
 -- waits for one future interest, or is blocked in the current world.
 local Result = {}
 

@@ -54,8 +54,8 @@ do
   assert_truthy(stream:reader() and stream:writer(), 'stream should expose reader and writer handles')
   assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
   assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
-  assert_nil(stream.read_line_op, 'duplex should not expose reader operations directly')
-  assert_nil(stream.write_op, 'duplex should not expose writer operations directly')
+  assert_nil(stream.read_line_op, 'duplex should not expose reader methods directly')
+  assert_nil(stream.write_op, 'duplex should not expose writer methods directly')
 end
 
 -- Flow surfaces are capability-specific; looping friendly methods and duplex byte ops are absent.
@@ -64,8 +64,8 @@ do
   assert_nil(a.read, 'stream should not expose friendly read')
   assert_nil(a.write, 'stream should not expose friendly write')
   assert_nil(a.close, 'stream should not expose friendly close')
-  assert_nil(a.read_line_op, 'duplex should not expose reader operations directly')
-  assert_nil(a.write_op, 'duplex should not expose writer operations directly')
+  assert_nil(a.read_line_op, 'duplex should not expose reader methods directly')
+  assert_nil(a.write_op, 'duplex should not expose writer methods directly')
 end
 
 -- Pump strategy is a replaceable host-stream detail.

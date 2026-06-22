@@ -1,8 +1,11 @@
 -- Internal interrupt tokens for perform-boundary cancellation.
 --
--- Public code obtains cancellation through Task/Lifetime operations.  Raw token
+-- Public code obtains cancellation through Task/Lifetime options.  Raw token
 -- mutation is only used by the runtime when discharging a committed interrupt
 -- Effect.
+
+local KernelResources = require('fibers.kernel.resources')
+local Validity = require('fibers.kernel.validity')
 
 local Interrupt = {}
 
@@ -18,7 +21,7 @@ end
 function Interrupt.new(name)
   next_id = next_id + 1
   local id = 'interrupt-' .. tostring(next_id)
-  return setmetatable({
+  local token = setmetatable({
     name = name or id,
     version = 0,
     raised = false,
@@ -26,6 +29,8 @@ function Interrupt.new(name)
     _fibers_id = id,
     _fibers_interrupt = true,
   }, Token)
+  token._validity_opaque = Validity.epoch((token.name or id) .. ':interrupt')
+  return token
 end
 
 function Interrupt.raise(token, reason)
@@ -33,6 +38,7 @@ function Interrupt.raise(token, reason)
   token.raised = true
   token.reason = reason
   token.version = (token.version or 0) + 1
+  KernelResources.invalidate_object(token, 'interrupt raised')
   return true
 end
 

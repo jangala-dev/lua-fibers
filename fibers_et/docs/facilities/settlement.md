@@ -3,7 +3,7 @@
 Settlement is the disciplined cleanup story beneath `Lifetime`, streams and
 other owned facilities.
 
-Most users do not construct settlement protocols directly.  They use operations
+Most users do not construct settlement protocols directly.  They use options
 such as `close`, `cancel`, `join` and `retire`.  Resource authors use settlement
 when a value can be owned by a `Region` and needs resource-specific work before
 that ownership may be released.
@@ -80,7 +80,7 @@ Claiming is committed ownership state, not a callback.
 A claimed subtree cannot be transferred, released or claimed again except by the
 claim authority.
 
-Settlement protocols run as ordinary operations after the claim commits.
+Settlement protocols run as ordinary options after the claim commits.
 
 Final release requires the original claim authority object.
 
@@ -125,8 +125,8 @@ fibers.perform(region:admit_op(owned))
 ```
 
 The settlement function returns an `Op`.  It may perform transactional work,
-wait, and compose with other operations.  It must not do speculative external
-cleanup while merely constructing the operation.
+wait, and compose with other options.  It must not do speculative external
+cleanup while merely constructing the option.
 
 Use `Owned.inert(item)` only when no cleanup is required.  Inert ownership is
 explicit structure, not absence of a protocol.

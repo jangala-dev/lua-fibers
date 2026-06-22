@@ -20,6 +20,8 @@ local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local Wait = require('fibers.kernel.wait')
 local Versioned = require('fibers.kernel.resources.versioned')
+local KernelResources = require('fibers.kernel.resources')
+local Validity = require('fibers.kernel.validity')
 local Errors = require('fibers.facility.flow.errors')
 local Rope = require('fibers.facility.flow.rope')
 local Lease = require('fibers.facility.flow.lease')
@@ -308,6 +310,7 @@ function ReservoirKind.apply(prepared, _log)
   res.settled_error = st.settled_error
   res.settled_version = st.settled_version
   res.version = (res.version or 0) + 1
+  KernelResources.invalidate_object(res, 'reservoir changed')
 end
 
 function ReservoirKind.eval(res, payload, ctx)
@@ -430,7 +433,7 @@ function Reservoir.new(opts)
   if limit ~= nil then limit = as_nonneg_int(limit, nil, 'Flow capacity') end
   next_id = next_id + 1
   local id = 'flow-reservoir-' .. tostring(next_id)
-  return setmetatable({
+  local res = setmetatable({
     rope = Rope.new(opts.data or ''),
     leases = {},
     limit = limit,
@@ -440,6 +443,8 @@ function Reservoir.new(opts)
     _fibers_id = id,
     _fibers_kind = ReservoirKind,
   }, Reservoir)
+  res._validity_opaque = Validity.epoch((res.name or id) .. ':state')
+  return res
 end
 
 function Reservoir:append_op(bytes) return Op._resource(self, ReservoirKind, { op = 'append', bytes = as_bytes(bytes or '') }) end

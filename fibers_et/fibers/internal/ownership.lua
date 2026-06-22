@@ -5,6 +5,8 @@
 -- become concrete and where standard lifetime effects are derived.
 
 local EffectSet = require('fibers.kernel.effect.set')
+local KernelResources = require('fibers.kernel.resources')
+local Validity = require('fibers.kernel.validity')
 local Effect = require('fibers.base.effect')
 local Settlement = require('fibers.internal.settlement')
 
@@ -84,6 +86,7 @@ function Kind.apply(prepared, _log)
   local item = prepared.resource
   item.owner = prepared.owner
   item.owner_version = (item.owner_version or 0) + 1
+  KernelResources.invalidate_object(item, 'owner changed')
 end
 
 
@@ -101,6 +104,7 @@ function Ownership.handle(name, fields)
   h._fibers_obligation_kind = h._fibers_obligation_kind or h.kind
   h._fibers_settle = h._fibers_settle or h.settle or Settlement.none()
   h._fibers_settle_name = h._fibers_settle_name or h.settle_name or 'none'
+  h._validity_opaque = h._validity_opaque or Validity.epoch((h.name or id) .. ':owner')
   return h
 end
 

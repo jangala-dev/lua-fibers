@@ -28,7 +28,6 @@ local function clear_hint(self, mode)
   if self.readiness then SourceState.clear(self.readiness, mode) end
   local host = self.host
   if host and type(host.clear_readiness) == 'function' then host:clear_readiness(self.key, mode) end
-  if self.runtime and self.runtime._invalidate_cursor then self.runtime:_invalidate_cursor() end
 end
 
 local function mark_hint(self, mode)
@@ -36,7 +35,6 @@ local function mark_hint(self, mode)
   if self.readiness then SourceState.arrive(self.readiness, mode, true) end
   local host = self.host
   if host and type(host.set_readiness) == 'function' then host:set_readiness(self.key, mode, true) end
-  if self.runtime and self.runtime._invalidate_cursor then self.runtime:_invalidate_cursor() end
 end
 
 local function callback(self, name, ...)

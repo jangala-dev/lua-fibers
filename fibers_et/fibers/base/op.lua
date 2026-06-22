@@ -1,5 +1,5 @@
 -- Compact external transaction algebra for texlua.
--- Operations are immutable syntax nodes; Runtime supplies the solver.
+-- Options are immutable syntax nodes; Runtime supplies the solver.
 
 local EffectKind = require('fibers.kernel.effect.kind')
 
@@ -82,6 +82,10 @@ local function parse_named_entries(entries, label)
   return out
 end
 
+local function empty_rows()
+  return { _fibers_rows = true }
+end
+
 local function row_value(row)
   if type(row) == 'table' and row._fibers_pack and row.n == 1 then return row[1] end
   return row
@@ -94,11 +98,11 @@ local function contains_wrap(x)
   local found = false
   if x.kind == 'wrap' then
     found = true
-  elseif x.kind == 'map' or x.kind == 'bind' then
+  elseif x.kind == 'bind' then
     found = contains_wrap(x.p)
   elseif x.kind == 'or_else' then
     found = contains_wrap(x.p) or contains_wrap(x.q)
-  elseif x.kind == 'all' or x.kind == 'tensor' then
+  elseif x.kind == 'product' then
     for i = 1, #(x.lanes or {}) do
       if contains_wrap(x.lanes[i]) then found = true; break end
     end
@@ -123,7 +127,7 @@ function Op.always(...)
 end
 
 function Op.never()
-  return op('never')
+  return op('choice', { choices = {} })
 end
 
 function Op.emit(effect)
@@ -163,9 +167,14 @@ function Op.named_choice(entries)
   return Op.choice(branches)
 end
 
+local function product(xs, allow_internal, label)
+  if type(xs) ~= 'table' then error(label .. ' expects an array of Op values', 3) end
+  if #xs == 0 then return Op.always(empty_rows()) end
+  return op('product', { lanes = xs, allow_internal = allow_internal, product_kind = label })
+end
+
 function Op.all(xs)
-  if type(xs) ~= 'table' then error('all expects an array of Op values', 2) end
-  return op('all', { lanes = xs })
+  return product(xs, false, 'all')
 end
 
 function Op.named_all(entries)
@@ -187,13 +196,14 @@ function Op.named_all(entries)
 end
 
 function Op.tensor(xs)
-  if type(xs) ~= 'table' then error('tensor expects an array of Op values', 2) end
-  return op('tensor', { lanes = xs })
+  return product(xs, true, 'tensor')
 end
 
 function Op:map(fn)
   assert_not_wrapped(self, 'map')
-  return op('map', { p = self, fn = fn })
+  return self:and_then(function(...)
+    return Op.always(fn(...))
+  end)
 end
 
 function Op:and_then(fn)
@@ -206,6 +216,17 @@ function Op:or_else(q)
 end
 
 function Op:wrap(fn)
+  if self.kind == 'wrap' then
+    local inner = self.p
+    local first = self.fn
+    return op('wrap', {
+      p = inner,
+      fn = function(...)
+        return fn(first(...))
+      end,
+      _contains_wrap = true,
+    })
+  end
   return op('wrap', { p = self, fn = fn, _contains_wrap = true })
 end
 

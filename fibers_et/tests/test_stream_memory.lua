@@ -341,7 +341,7 @@ do
   assert_eq(Inspect.data(b:reader().flow.reservoir), 'rest')
 end
 
--- read_all_op is a single-commit operation: it waits for EOF and consumes only
+-- read_all_op is a single-commit option: it waits for EOF and consumes only
 -- when that EOF branch commits.
 do
   local a, b = Stream.memory_pair({ name = 'read-all' })
@@ -394,7 +394,7 @@ do
   assert_eq(out, 'xyz')
 end
 
--- Zero-length operations and validation are explicit.
+-- Zero-length options and validation are explicit.
 do
   local a, b = Stream.memory_pair({ name = 'edge-validation' })
   local r0, e0, w0
@@ -430,7 +430,7 @@ do
   assert_status(st, 'found')
   assert_eq(line, 'abc')
   assert_eq(tail, 'def')
-  assert_nil(flow.reservoir.find_line_op, 'reservoir should not expose line-aware operations')
+  assert_nil(flow.reservoir.find_line_op, 'reservoir should not expose line-aware byte methods')
   assert_truthy(Flow.Lease, 'Lease should be the public name for retained byte ownership')
   assert_nil(Flow.Claim, 'pump Claim should not be part of the public Flow facility')
 end

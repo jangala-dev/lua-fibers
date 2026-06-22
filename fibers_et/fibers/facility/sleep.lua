@@ -1,6 +1,6 @@
 -- Sleep facility.
 --
--- Sleep is ordinary operation syntax built over a clock Source.  Absolute sleep
+-- Sleep is ordinary option syntax built over a clock Source.  Absolute sleep
 -- is a clock-source wait.  Relative sleep is a guard that fixes its absolute
 -- deadline once for the perform attempt.
 

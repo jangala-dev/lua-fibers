@@ -1,6 +1,6 @@
 -- Typed wait interests.
 --
--- A wait interest says: this operation cannot commit now, but the host/runtime
+-- A wait interest says: this option cannot commit now, but the host/runtime
 -- may be able to make progress when the named external condition changes.  It
 -- is deliberately separate from a effect, which says: this transaction has
 -- committed and the runtime must now do some work.

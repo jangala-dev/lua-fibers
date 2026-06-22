@@ -153,7 +153,7 @@ do
   assert_eq(observed, 5)
 end
 
--- Observation also protects source observations if a producer bypasses the Runtime epoch.
+-- Observation also protects source observations if a producer bypasses the runtime-wide epoch.
 do
   local SourceState = require('fibers.internal.source_state')
   local ev = Source.signal('bounded-source-observation')

@@ -112,7 +112,7 @@ end))
 local value = fibers.perform(task:await_op())
 ```
 
-`Region` remains the sparse ownership primitive: admit, reassign, seal and release. `Lifetime` is the more ergonomic compound facility. Nursery and supervisor-style APIs are policies over lifetimes, not special cases inside the operation algebra.
+`Region` remains the sparse ownership primitive: admit, reassign, seal and release. `Lifetime` is the more ergonomic compound facility. Nursery and supervisor-style APIs are policies over lifetimes, not special cases inside the option algebra.
 
 ## Effect
 
@@ -163,7 +163,7 @@ The protocol is ordinary algebra: it may sequence, wait, emit effects and use
 post-commit wraps.  The `Region` owns the exactly-once claim and final settlement.
 Ordinary user code can request settlement through a facility such as `Lifetime`;
 the settlement driver holds the claim authority object and performs the final
-`settle_claim` operation.  Public record and subtree snapshots expose diagnostic
+`settle_claim` option.  Public record and subtree snapshots expose diagnostic
 claim metadata such as `claim_id`, but not the authority object itself.
 
 If a settlement protocol fails, the claim is not rolled back.  The affected

@@ -9,6 +9,8 @@ local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local Wait = require('fibers.kernel.wait')
 local Versioned = require('fibers.kernel.resources.versioned')
+local KernelResources = require('fibers.kernel.resources')
+local Validity = require('fibers.kernel.validity')
 local Errors = require('fibers.facility.flow.errors')
 local OpPack = Op._pack
 
@@ -90,6 +92,7 @@ function EndpointKind.apply(prepared, _log)
   if prepared.has_error then ep.error = prepared.error end
   if prepared.has_reason then ep.reason = prepared.reason end
   ep.version = (ep.version or 0) + 1
+  KernelResources.invalidate_object(ep, 'endpoint changed')
 end
 
 function EndpointKind.eval(ep, payload, ctx)
@@ -128,7 +131,7 @@ function EndpointKind.eval(ep, payload, ctx)
     if version ~= payload.version then return Result.ready(read_only(ep, version, st)) end
     return Result.wait(Wait.resource('flow:endpoint:changed', ep._fibers_id, ep, { op = 'changed', version = payload.version }))
   end
-  error('unknown Flow endpoint operation ' .. tostring(op), 2)
+  error('unknown Flow endpoint command ' .. tostring(op), 2)
 end
 
 
@@ -142,7 +145,9 @@ function EndpointKind.summary(_payload, out) out.resources = true; out.dynamic =
 function Endpoint.new(role, name)
   next_id = next_id + 1
   local id = 'flow-endpoint-' .. tostring(next_id)
-  return setmetatable({ role = role or 'endpoint', open = true, error = nil, reason = nil, version = 0, name = name or id, _fibers_id = id, _fibers_kind = EndpointKind }, Endpoint)
+  local ep = setmetatable({ role = role or 'endpoint', open = true, error = nil, reason = nil, version = 0, name = name or id, _fibers_id = id, _fibers_kind = EndpointKind }, Endpoint)
+  ep._validity_opaque = Validity.epoch((ep.name or id) .. ':state')
+  return ep
 end
 
 function Endpoint:inspect_op() return Op._resource(self, EndpointKind, { op = 'inspect' }) end

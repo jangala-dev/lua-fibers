@@ -1,5 +1,8 @@
 local Op = require('fibers.base.op')
 local Resources = require('fibers.kernel.resources')
+local Proof = require('fibers.kernel.proof')
+local AbsenceCert = Proof.AbsenceCert
+local Capture = Proof.Capture
 
 local unpack_ = Op._unpack
 local pack_ = Op._pack
@@ -15,7 +18,7 @@ local function append_all(dst, src)
 end
 
 function Outcome.hit(world) return { tag = 'hit', world = world } end
-function Outcome.miss(cert, waits) return { tag = 'miss', cert = cert or {}, waits = waits or {} } end
+function Outcome.miss(cert, waits) return { tag = 'miss', cert = cert or AbsenceCert.new(), waits = waits or {} } end
 function Outcome.unknown(waits, reason) return { tag = 'unknown', waits = waits or {}, reason = reason } end
 
 function Outcome.merge(a, b)
@@ -24,8 +27,8 @@ function Outcome.merge(a, b)
   local waits = {}
   append_all(waits, a.waits); append_all(waits, b.waits)
   if a.tag == 'unknown' or b.tag == 'unknown' then return Outcome.unknown(waits, a.reason or b.reason) end
-  local cert = {}
-  append_all(cert, a.cert); append_all(cert, b.cert)
+  local cert = AbsenceCert.new()
+  cert:extend(a.cert):extend(b.cert)
   return Outcome.miss(cert, waits)
 end
 
@@ -136,8 +139,7 @@ function Attempt.new(rt, pending, start_id, solver)
     rt = rt,
     pending = pending,
     observer = solver and solver.observer or nil,
-    collect_frontiers = solver and solver.collect_frontiers or false,
-    track_observations = solver and solver.track_observations or false,
+    capture = solver and solver.capture or Capture.none(),
     selected = { [start_id] = true },
     tasks = {},
     waits = {},
@@ -153,7 +155,7 @@ function Attempt.new(rt, pending, start_id, solver)
     trail = Trail.new(),
     solver = solver,
   }, Attempt)
-  self:push_task({ root_id = start_id, op = pending[start_id].op, stack = {}, env = Resources.new_env(nil, self.collect_frontiers, self.track_observations), attempt = pending[start_id].attempt })
+  self:push_task({ root_id = start_id, op = pending[start_id].op, stack = {}, env = Resources.new_env(nil, self.capture), attempt = pending[start_id].attempt })
   return self
 end
 
@@ -281,9 +283,9 @@ local function settle_losing_nacks(op, out)
     pcall(op.fn, { obligation = ob })
   elseif op.kind == 'choice' then
     for i = 1, #(op.choices or {}) do settle_losing_nacks(op.choices[i], out) end
-  elseif op.kind == 'tensor' or op.kind == 'all' then
+  elseif op.kind == 'product' then
     for i = 1, #(op.lanes or {}) do settle_losing_nacks(op.lanes[i], out) end
-  elseif op.kind == 'wrap' or op.kind == 'map' or op.kind == 'bind' then
+  elseif op.kind == 'wrap' or op.kind == 'bind' then
     settle_losing_nacks(op_inner(op), out)
   elseif op.kind == 'or_else' then
     settle_losing_nacks(op_primary(op), out)
@@ -346,11 +348,9 @@ complete_task = function(st, task, res)
     if not frame then
       st:add_done(task.root_id, res, task.env)
       return st
-    elseif frame.kind == 'map' then
-      res = new_result(pack_(call_callback(st, 'map', frame.fn, unpack_(res.pack, 1, res.pack.n))))
     elseif frame.kind == 'bind' then
       local next_op = call_callback(st, 'bind', frame.fn, unpack_(res.pack, 1, res.pack.n))
-      if type(next_op) ~= 'table' or not next_op.kind then error('and_then callback must return an operation') end
+      if type(next_op) ~= 'table' or not next_op.kind then error('and_then callback must return an option') end
       task.op = next_op
       st:push_task(task)
       return st
@@ -373,14 +373,6 @@ local function apply_task_step(st, idx, branch)
   local k = op.kind
   if k == 'always' then
     return complete_task(st, task, new_result(op_values(op)))
-  elseif k == 'never' then
-    st:set_miss({})
-    return st
-  elseif k == 'map' then
-    task.stack[#task.stack + 1] = { kind = 'map', fn = op.fn }
-    task.op = op_inner(op)
-    st:push_task(task)
-    return st
   elseif k == 'bind' then
     task.stack[#task.stack + 1] = { kind = 'bind', fn = op.fn }
     task.op = op_inner(op)
@@ -420,7 +412,10 @@ local function apply_task_step(st, idx, branch)
     local choice_index = branch.choice_index
     task.op = op.choices[choice_index]
     for j = 1, #(op.choices or {}) do
-      if j ~= choice_index then settle_losing_nacks(op.choices[j], task.env.lost) end
+      if j ~= choice_index then
+        task.env.lost = task.env.lost or {}
+        settle_losing_nacks(op.choices[j], task.env.lost)
+      end
     end
     st:push_task(task)
     return st
@@ -428,19 +423,19 @@ local function apply_task_step(st, idx, branch)
     if branch.or_else_side == 'primary' then
       task.op = op_primary(op)
     else
-      Resources.add_absence_observations(task.env, branch.cert or {})
+      Resources.add_absence_cert(task.env, branch.cert)
       task.op = op_fallback(op)
     end
     st:push_task(task)
     return st
-  elseif k == 'tensor' or k == 'all' then
+  elseif k == 'product' then
     st:set_field(st, 'next_group', st.next_group + 1)
     local gid = st.next_group
     local parent_stack = copy_stack(task.stack)
     local parent_env = Resources.copy_env(task.env)
     local group = {
       n = #(op.lanes or {}),
-      allow_internal = (k == 'tensor'),
+      allow_internal = op.allow_internal == true,
       root_id = task.root_id,
       parent_stack = parent_stack,
       parent_env = parent_env,
@@ -448,10 +443,6 @@ local function apply_task_step(st, idx, branch)
       results = {}, envs = {}, done = 0,
     }
     st:add_group(gid, group)
-    if #(op.lanes or {}) == 0 then
-      local rows = { _fibers_rows = true }
-      return complete_task(st, task, new_result(pack_(rows), {}))
-    end
     for i = 1, #op.lanes do
       local lt = {
         root_id = task.root_id,
@@ -482,7 +473,7 @@ local function apply_task_step(st, idx, branch)
   elseif Resources.apply(st, task, op, complete_task, new_result) then
     return st
   else
-    error('unknown operation kind: ' .. tostring(k))
+    error('unknown option kind: ' .. tostring(k))
   end
 end
 
@@ -508,10 +499,10 @@ local function has_done(done)
 end
 
 local function wait_outcome(st)
-  local cert = {}
+  local cert = AbsenceCert.new()
   for i = 1, #(st.waits or {}) do
     local w = st.waits[i]
-    cert[#cert + 1] = { kind = 'channel-absent', channel = w.channel, role = w.kind }
+    cert:add({ kind = 'channel-absent', channel = w.channel, role = w.kind })
   end
   return Outcome.miss(cert)
 end
@@ -530,7 +521,7 @@ function World.from_attempt(st)
   local ids = {}
   for id, _ in pairs(st.done) do ids[#ids + 1] = id end
   table.sort(ids)
-  local merged = Resources.new_env(nil, st.collect_frontiers, st.track_observations)
+  local merged = Resources.new_env(nil, st.capture)
   local roots = {}
   for _, id in ipairs(ids) do
     roots[id] = st.done[id].res
@@ -542,12 +533,13 @@ function World.from_attempt(st)
 end
 
 local EMPTY_PREPARED = { resources = nil, effects = nil }
+local EMPTY_ENV = {}
 
-function World.local_root(root_id, res, env, collect_frontiers, track_observations)
+function World.local_root(root_id, res, env)
   -- A zero-premise proof has no resource/environment delta to prepare.  It is
   -- still represented as an ordinary World so commit and delivery use the same
   -- semantic path as general proof-net search.
-  env = env or Resources.new_env(nil, collect_frontiers, track_observations)
+  env = env or EMPTY_ENV
   return setmetatable({ roots = { [root_id] = res }, single_root_id = root_id, direct_delivery = true, env = env, prepared = EMPTY_PREPARED, observer = nil, valid = true, consumed = false }, World)
 end
 
@@ -555,11 +547,6 @@ function World:has_absence()
   return self.env and self.env.has_absence == true
 end
 
-function World:invalidate(frontier, reason)
-  self.valid = false
-  self.invalidated_by = frontier
-  self.invalidated_reason = reason
-end
 
 function World:dispose_observer()
   if self.observer then
@@ -568,32 +555,22 @@ function World:dispose_observer()
   end
 end
 
-function World:validate_observations(rt)
-  for i = 1, #(self.env.observations or {}) do
-    if not Resources.validate_observation(rt, self.env.observations[i]) then return false end
+function World:validate_debug_observations(rt)
+  for i = 1, #(self.env.debug_observations or {}) do
+    if not Resources.validate_observation(rt, self.env.debug_observations[i]) then return false end
   end
-  for i = 1, #(self.env.absence_observations or {}) do
-    if not Resources.validate_observation(rt, self.env.absence_observations[i]) then return false end
+  for i = 1, #(self.env.debug_absence_observations or {}) do
+    if not Resources.validate_observation(rt, self.env.debug_absence_observations[i]) then return false end
   end
   return true
 end
 
-local function should_watch_world(rt)
-  return rt and rt.opts and (rt.opts.debug_revalidate or rt.opts.retain_prepared_worlds)
-end
 
 function World:probe(rt)
   if self.consumed then return nil, 'consumed-world' end
   if self.prepared and self.valid ~= false then return true end
 
-  local observer
-  if should_watch_world(rt) then
-    observer = Resources.new_observer('world', self)
-    self.observer = observer
-    Resources.register_env_frontiers(self.env, observer)
-  else
-    self.observer = nil
-  end
+  self.observer = nil
   self.valid = true
 
   local prepared, reason = Resources.prepare_env(rt, self.env)
@@ -605,19 +582,12 @@ function World:probe(rt)
 
   self.prepared = prepared
 
-  if rt and rt.opts and rt.opts.debug_revalidate then
-    if not self:validate_observations(rt) then
-      self:dispose_observer()
-      self.valid = false
-      self.prepared = nil
-      return nil, 'stale-observation'
-    end
-  end
 
   return true
 end
 
 function World:prepare(rt)
+  if self.observer and not Resources.observer_valid(self.observer) then self.valid = false end
   if self.prepared and self.valid ~= false then return self.prepared end
   local ok, reason = self:probe(rt)
   if not ok then return nil, reason end
@@ -676,6 +646,7 @@ function World:run_wraps_for(rt, id)
 end
 
 function World:commit(rt)
+  if self.observer and not Resources.observer_valid(self.observer) then self.valid = false end
   if self.valid == false then return false, 'invalidated-world' end
   local prepared, reason = self:prepare(rt)
   if not prepared then return false, reason end
@@ -751,7 +722,7 @@ local function apply_branch(st, branch)
     return apply_wait_pair(st, branch.i, branch.j)
   elseif branch.kind == 'partner' then
     st:select_root(branch.id)
-    st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = {}, env = Resources.new_env(nil, st.collect_frontiers, st.track_observations), attempt = st.pending[branch.id].attempt })
+    st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = {}, env = Resources.new_env(nil, st.capture), attempt = st.pending[branch.id].attempt })
     return st
   else
     error('unknown search branch: ' .. tostring(branch.kind))
@@ -785,8 +756,7 @@ local function search_or_else(st, depth)
   local waits = {}
   append_all(waits, fallback.waits)
   if fallback.tag == 'unknown' then return Outcome.unknown(waits, fallback.reason) end
-  local cert = {}
-  append_all(cert, primary_cert); append_all(cert, fallback.cert)
+  local cert = AbsenceCert.new():extend(primary_cert):extend(fallback.cert)
   return Outcome.miss(cert, waits)
 end
 
@@ -811,9 +781,9 @@ search_state = function(st, depth)
             return Outcome.unknown(nil, reason)
           end
         end
-        return Outcome.miss({})
+        return Outcome.miss(AbsenceCert.new())
       end
-      return Outcome.miss({})
+      return Outcome.miss(AbsenceCert.new())
     end
 
     branches = wait_branches(st)
@@ -833,30 +803,32 @@ search_state = function(st, depth)
 end
 
 function Solver.new(rt, pending)
-  local opts = rt and rt.opts or {}
-  return setmetatable({
+  local self = setmetatable({
     rt = rt,
-    pending = pending,
+    pending = pending or {},
     waits = {},
+    capture = Capture.none(),
+    observer = nil,
+    budget = nil,
+    budget_used = 0,
+    budget_exhausted = false,
     cursor = nil,
-    collect_frontiers = opts.retain_prepared_worlds == true or opts.debug_revalidate == true,
-    track_observations = opts.debug_revalidate == true,
   }, Solver)
+  return self
+end
+function Solver:charge(kind)
+  if self.cursor and self.cursor.charge then self.cursor:charge(kind) end
 end
 
 local function append_waits(dst, src)
   for i = 1, #(src or {}) do dst[#dst + 1] = src[i] end
 end
 
-function Solver:charge(kind)
-  if self.cursor and self.cursor.charge then self.cursor:charge(kind) end
-end
-
 
 local function local_nonlocal_kind(op)
   if type(op) ~= 'table' then return true end
   local k = op.kind
-  if k == 'always' or k == 'never' or k == 'map' or k == 'bind' or k == 'wrap' or k == 'guard' then return false end
+  if k == 'always' or k == 'bind' or k == 'wrap' or k == 'guard' then return false end
   return true
 end
 
@@ -867,9 +839,9 @@ local function op_summary(op)
 
   local k = op.kind
   local summary
-  if k == 'always' or k == 'never' then
+  if k == 'always' then
     summary = { may_start_local = true, static_local = true }
-  elseif k == 'map' or k == 'wrap' then
+  elseif k == 'wrap' then
     local inner = op_summary(op_inner(op))
     summary = {
       may_start_local = true,
@@ -878,7 +850,7 @@ local function op_summary(op)
   elseif k == 'bind' then
     -- A bind may stay inside local proof reduction, but only after running the
     -- callback.  The cached summary therefore authorises entering the corridor
-    -- without claiming that the whole operation is statically local.
+    -- without claiming that the whole option is statically local.
     summary = { may_start_local = true, static_local = false }
   elseif k == 'guard' then
     -- A guard is search-phase construction.  It may produce a local proof or a
@@ -893,13 +865,13 @@ local function op_summary(op)
 end
 
 local LOCAL_DONE = 'done'          -- zero-premise proof completed with a result
-local LOCAL_MISS = 'miss'          -- structural absence, currently only never
-local LOCAL_CONTINUE = 'continue'  -- a bind supplied another local operation
+local LOCAL_MISS = 'miss'          -- structural absence
+local LOCAL_CONTINUE = 'continue'  -- a bind supplied another local option
 local LOCAL_NEEDS_NET = 'needs-net' -- reduction reached a real proof-net premise
 
 -- Local proof reduction is a proof-net phase, not a runtime bypass.  It may
--- reduce only deterministic zero-premise forms: always, never, map, bind
--- while the bind result remains local, wrap, and guard construction.  It must
+-- reduce only deterministic zero-premise forms: always, bind while the bind
+-- result remains local, wrap, and guard construction.  It must
 -- not observe, prepare, or commit resources.  When it reaches a resource,
 -- channel, product, choice, or absence question, the same task is passed back
 -- to general search so callbacks already run are not repeated.
@@ -912,11 +884,9 @@ local function reduce_local_task(solver, task)
       if solver.charge then solver:charge('local-frame') end
       local frame = table.remove(task.stack)
       if not frame then return LOCAL_DONE, res end
-      if frame.kind == 'map' then
-        res = new_result(pack_(call_callback(st, 'map', frame.fn, unpack_(res.pack, 1, res.pack.n))))
-      elseif frame.kind == 'bind' then
+      if frame.kind == 'bind' then
         local next_op = call_callback(st, 'bind', frame.fn, unpack_(res.pack, 1, res.pack.n))
-        if type(next_op) ~= 'table' or not next_op.kind then error('and_then callback must return an operation') end
+        if type(next_op) ~= 'table' or not next_op.kind then error('and_then callback must return an option') end
         task.op = next_op
         res = nil
         return LOCAL_CONTINUE
@@ -939,16 +909,11 @@ local function reduce_local_task(solver, task)
       res = new_result(op_values(op))
       local status, out = finish_result()
       if status == LOCAL_CONTINUE then
-        -- The bind continuation supplied another operation.  Keep reducing it
+        -- The bind continuation supplied another option.  Keep reducing it
         -- while it remains inside the deterministic zero-premise corridor.
       else
         return status, out
       end
-    elseif k == 'never' then
-      return LOCAL_MISS
-    elseif k == 'map' then
-      task.stack[#task.stack + 1] = { kind = 'map', fn = op.fn }
-      task.op = op_inner(op)
     elseif k == 'bind' then
       task.stack[#task.stack + 1] = { kind = 'bind', fn = op.fn }
       task.op = op_inner(op)
@@ -975,7 +940,7 @@ local function reduce_local_task(solver, task)
 end
 
 function Solver:find_local_or_out_from(id)
-  if not self.pending[id] then return Outcome.miss({}) end
+  if not self.pending[id] then return Outcome.miss(AbsenceCert.new()) end
 
   local p = self.pending[id]
   local summary = op_summary(p.op)
@@ -990,23 +955,24 @@ function Solver:find_local_or_out_from(id)
     root_id = id,
     op = p.op,
     stack = {},
-    env = Resources.new_env(nil, self.collect_frontiers, self.track_observations),
+    env = nil,
     attempt = p.attempt,
   }
 
   local status, res = reduce_local_task(self, task)
   if status == LOCAL_DONE then
-    local world, err = World.local_root(id, res, task.env, self.collect_frontiers, self.track_observations)
+    local world, err = World.local_root(id, res, task.env)
     if not world then return Outcome.unknown(nil, err) end
     return Outcome.hit(world)
   elseif status == LOCAL_MISS then
-    return Outcome.miss({})
+    return Outcome.miss(AbsenceCert.new())
   end
 
   -- The local corridor reached a genuine proof-net premise, for example a
   -- resource, channel, branch or product.  Continue the same proof search from
   -- the reduced task rather than re-running any speculative algebra callbacks.
   local attempt = Attempt.new(self.rt, self.pending, id, self)
+  task.env = task.env or Resources.new_env(nil, self.capture)
   attempt.tasks[1] = task
   local out = search_state(attempt, 0)
   if out.tag ~= 'hit' then append_waits(self.waits, out.waits or attempt.frontier_waits) end
@@ -1014,7 +980,7 @@ function Solver:find_local_or_out_from(id)
 end
 
 function Solver:find_out_from(id)
-  if not self.pending[id] then return Outcome.miss({}) end
+  if not self.pending[id] then return Outcome.miss(AbsenceCert.new()) end
   local attempt = Attempt.new(self.rt, self.pending, id, self)
   local out = search_state(attempt, 0)
   if out.tag ~= 'hit' then append_waits(self.waits, out.waits or attempt.frontier_waits) end
@@ -1057,7 +1023,7 @@ function Solver:find_commit_outcome()
     end
   end
   if fallback_world then return Outcome.hit(fallback_world) end
-  return miss or Outcome.miss({}, self.waits)
+  return miss or Outcome.miss(AbsenceCert.new(), self.waits)
 end
 
 function Solver:find_commit_candidate()
@@ -1090,7 +1056,6 @@ function Cursor.new(solver)
   local self = setmetatable({
     solver = solver,
     rt = solver.rt,
-    epoch = solver.rt and solver.rt._epoch or 0,
     pending_sig = pending_signature(solver.pending),
     limit = nil,
     used = 0,
@@ -1100,8 +1065,7 @@ function Cursor.new(solver)
   }, Cursor)
 
   self.observer = Resources.new_observer('cursor', self)
-  solver.collect_frontiers = true
-  solver.track_observations = solver.track_observations or (solver.rt and solver.rt.opts and solver.rt.opts.debug_revalidate == true)
+  solver.capture = Capture.frontiers()
   solver.cursor = self
   solver.observer = self.observer
   self.co = coroutine.create(function()
@@ -1110,11 +1074,6 @@ function Cursor.new(solver)
   return self
 end
 
-function Cursor:invalidate(frontier, reason)
-  self.valid = false
-  self.invalidated_by = frontier
-  self.invalidated_reason = reason
-end
 
 function Cursor:dispose()
   if self.observer then
@@ -1135,10 +1094,9 @@ end
 
 function Cursor:is_valid(rt, pending)
   return self.rt == rt
-     and self.epoch == ((rt and rt._epoch) or 0)
      and self.valid ~= false
      and self.observer ~= nil
-     and self.observer.valid ~= false
+     and Resources.observer_valid(self.observer)
      and self.pending_sig == pending_signature(pending)
      and self.co ~= nil
      and coroutine.status(self.co) ~= 'dead'

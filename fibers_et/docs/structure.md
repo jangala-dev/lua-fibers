@@ -25,8 +25,8 @@ fibers/runner.lua
 
 fibers/kernel.lua
 fibers/kernel/
-  the eventful transaction engine: runtime, transaction net, resource frontier,
-  wait interests, protected calls and effect machinery
+  the eventful transaction engine: runtime, transaction net, resource protocol,
+  managed validity facts, wait interests, protected calls and effect machinery
 
 fibers/internal/
   private implementation details and invariants
@@ -107,3 +107,14 @@ children are not reassigned directly by default.
 This phase treats ownership as responsibility and settlement authority, not as a
 comprehensive access-control check on every retained Lua handle.  See
 `docs/facilities/settlement.md` for the full settlement account.
+
+## Managed validity
+
+`fibers.kernel.validity` is kernel machinery for resource authors.  It provides
+the managed facts used to make bounded search and absence proofs safe to reuse.
+Ordinary application code should normally meet these through public resources
+such as Cell, Source, Region, Lifetime and Stream, not by constructing validity
+facts directly.
+
+`fibers.kernel.frontier` is now the low-level generation-stamp substrate used by
+managed validity capabilities.  It is not a public resource-authoring API.

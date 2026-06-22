@@ -64,7 +64,7 @@ function BoxKind.eval(box, payload, ctx)
     rec.has_write, rec.write = true, payload.value
     return Result.ready(c)
   end
-  error('unknown box operation')
+  error('unknown box command')
 end
 
 local Box = {}

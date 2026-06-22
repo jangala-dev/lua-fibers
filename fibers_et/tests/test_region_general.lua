@@ -32,7 +32,7 @@ do
   -- Runtime returned by fibers.run is second result.
 end
 
--- Reassignment is one operation, not release-then-admit exposed as two public
+-- Reassignment is one ledger command, not release-then-admit exposed as two public
 -- transitions.  The ownership effect should be reassigned.
 do
   local a = fibers.Region.new('A2')
@@ -98,7 +98,7 @@ do
     fibers.perform(a:reassign_op(item, b))
     fibers.perform(b:seal_op())
   end)
-  -- Both operations can commit in sequence inside one fibre: reassign first,
+  -- Both options can commit in sequence inside one fibre: reassign first,
   -- then seal.  Check the target is still the owner afterwards.
   assert_status(st3, 'found')
   assert_eq(item.owner, b)

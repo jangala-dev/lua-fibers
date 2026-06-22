@@ -99,7 +99,7 @@ local function kick(worker_id)
 end
 ```
 
-Use it in an operation with `Op.emit`:
+Use it in an option with `Op.emit`:
 
 ```lua
 local Op = require('fibers.base.op')
@@ -228,6 +228,6 @@ record.  An ownership resource can do this for settlement: ownership handoff and
 close state are resource journal entries; settlement is a effect derived
 from the final committed ownership state.
 
-Resources can also expose public operations that simply emit effects.  The
+Resources can also expose public options that simply emit effects.  The
 right choice depends on whether the obligation is directly requested by user code
 or entailed by resource state.

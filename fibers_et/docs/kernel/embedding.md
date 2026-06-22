@@ -166,7 +166,7 @@ rt:spawn_raw(function()
 end)
 ```
 
-If the deadline has not arrived, the operation reports a typed time wait.  When
+If the deadline has not arrived, the option reports a typed time wait.  When
 the host clock reaches the deadline, the host calls `step` or `run` again.
 
 ## Readiness
@@ -226,7 +226,7 @@ or idempotency key, and delivery should be retried outside the transaction.
 
 ## Protected calls
 
-Embedded hosts should not need global `pcall`/`xpcall` monkey-patching.  Code running inside a fibre can use `fibers.pcall` and `fibers.xpcall` when the protected function may perform an operation and therefore suspend.
+Embedded hosts should not need global `pcall`/`xpcall` monkey-patching.  Code running inside a fibre can use `fibers.pcall` and `fibers.xpcall` when the protected function may perform an option and therefore suspend.
 
 On Lua 5.1-style hosts these functions use a coroutine-backed implementation.  On hosts whose native protected calls already support yielding, the native path is used unless fallback mode is forced for testing.
 

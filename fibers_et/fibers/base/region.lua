@@ -8,6 +8,8 @@
 
 local DefaultOp = require('fibers.base.op')
 local Resource = require('fibers.kernel.resources.protocol')
+local KernelResources = require('fibers.kernel.resources')
+local Validity = require('fibers.kernel.validity')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local EffectSet = require('fibers.kernel.effect.set')
@@ -337,6 +339,7 @@ function RegionKind.apply(prepared, _log)
   region.owned_count = n
   if prepared.seal then region.sealed = true end
   region.version = (region.version or 0) + 1
+  KernelResources.invalidate_object(region, 'region membership changed')
 end
 
 local function admit_candidate(region, owned_spec, expected_owner, ctx)
@@ -558,7 +561,7 @@ function RegionKind.eval(region, payload, ctx)
     read_region(c, region)
     return Result.ready(c)
   end
-  error('unknown region operation ' .. tostring(op), 2)
+  error('unknown region command ' .. tostring(op), 2)
 end
 
 
@@ -598,7 +601,9 @@ function Region.inert(item, opts) return Owned.inert(item, opts) end
 function Region.new(name)
   next_id = next_id + 1
   local id = 'region-' .. tostring(next_id)
-  return setmetatable({ name = name or id, owned = {}, owned_count = 0, sealed = false, version = 0, _fibers_id = id, _fibers_kind = RegionKind }, Region)
+  local region = setmetatable({ name = name or id, owned = {}, owned_count = 0, sealed = false, version = 0, _fibers_id = id, _fibers_kind = RegionKind }, Region)
+  region._validity_opaque = Validity.epoch((region.name or id) .. ':membership')
+  return region
 end
 
 function Region:admit_op(item_or_owned, from_owner)

@@ -34,7 +34,7 @@ do
 end
 
 -- Lifetime cancellation is authority-oriented and interrupts a task perform at the
--- boundary; the user operation is not rewritten as a choice.
+-- boundary; the user option is not rewritten as a choice.
 do
   local task
   local st = fibers.launch(fibers.facility.policy.nursery(), function(n)

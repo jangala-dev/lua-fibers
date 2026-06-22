@@ -28,7 +28,7 @@ handle:close(reason)
 ```
 
 Readiness is only a hint.  A handle may still return `would_block` after its
-readiness operation commits.  In that case the readiness hint should be cleared
+readiness option commits.  In that case the readiness hint should be cleared
 or consumed before the pump waits again.
 
 ## Manual/fake handles

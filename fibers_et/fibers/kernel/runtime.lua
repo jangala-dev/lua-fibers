@@ -83,7 +83,6 @@ function Runtime.new(opts)
     live_count = 0,
     _next_fibre_id = 0,
 
-    _epoch = 0,
     _cursor = nil,
     _net_wait_cache = nil,
     _phase = 'external',
@@ -93,19 +92,6 @@ function Runtime.new(opts)
   }, Runtime)
 end
 
-function Runtime:_bump_epoch()
-  if self._cursor and self._cursor.dispose then self._cursor:dispose() end
-  if self._net_wait_cache and self._net_wait_cache.observer and self._net_wait_cache.observer.dispose then
-    self._net_wait_cache.observer:dispose()
-  end
-  self._cursor = nil
-  self._net_wait_cache = nil
-  self._epoch = (self._epoch or 0) + 1
-end
-
-function Runtime:_invalidate_cursor()
-  self:_bump_epoch()
-end
 
 function Runtime:now()
   local now = self.host.now or self.opts.now
@@ -113,8 +99,9 @@ function Runtime:now()
   return 0
 end
 
--- Host/source arrival boundary.  External facts enter through the Runtime,
--- which updates the source and invalidates bounded search in one operation.
+-- Host/source arrival boundary.  External facts enter through the Runtime.
+-- SourceState updates the source's managed validity facts; bounded search
+-- cursors and wait caches are validated lazily against those facts.
 function Runtime:arrive(source, ...)
   self:_check_not_failed(2)
   self:_require_driver_call('arrive', 2)
@@ -297,7 +284,6 @@ function Runtime:_push_ready(f)
   local tail = (self.ready_tail or 0) + 1
   self.ready_tail = tail
   self.ready[tail] = f
-  self:_invalidate_cursor()
 end
 
 function Runtime:_pop_ready()
@@ -328,7 +314,6 @@ function Runtime:_add_waiting(f, req)
   local waiting = self.waiting
   waiting[#waiting + 1] = f
   f.wait_index = #waiting
-  self:_invalidate_cursor()
 end
 
 function Runtime:_remove_waiting(f)
@@ -344,7 +329,6 @@ function Runtime:_remove_waiting(f)
   end
   f.wait_index = nil
   f.waiting = nil
-  self:_invalidate_cursor()
   return true
 end
 
@@ -357,7 +341,6 @@ function Runtime:_retire_fibre(f)
   f.co = nil
   f.frame = nil
   self.live_count = (self.live_count or 1) - 1
-  self:_invalidate_cursor()
 end
 
 function Runtime:_resume(f, values)
@@ -417,7 +400,6 @@ end
 
 function Runtime:_discharge_interrupt(token, reason)
   Interrupt.raise(token, reason)
-  self:_invalidate_cursor()
   return true
 end
 
@@ -467,13 +449,6 @@ local function pending_has_any(pending)
 end
 
 
-local function observer_valid(observer)
-  return observer ~= nil and observer.valid ~= false
-end
-
-local function dispose_observer(observer)
-  if observer and observer.dispose then observer:dispose() end
-end
 
 function Runtime:_find_net_outcome(waiting, opts)
   local pending = pending_from_waiting(waiting)
@@ -486,10 +461,10 @@ function Runtime:_find_net_outcome(waiting, opts)
   if opts.max_work then
     local sig = Net.pending_signature and Net.pending_signature(pending) or nil
     local cache = self._net_wait_cache
-    if cache and cache.pending_sig == sig and observer_valid(cache.observer) then
+    if cache and cache.pending_sig == sig and Resources.observer_valid(cache.observer) then
       return cache.out, pending, cache.waits
     elseif cache then
-      dispose_observer(cache.observer)
+      if cache.observer and cache.observer.dispose then cache.observer:dispose() end
       self._net_wait_cache = nil
     end
 
@@ -531,7 +506,6 @@ function Runtime:_apply_net_world(world, pending)
   local ok, reason = world:commit(self)
   if not ok then return false, reason end
 
-  self:_bump_epoch()
 
   local single_id = world.single_root_id
   if single_id ~= nil then
@@ -613,7 +587,7 @@ end
 -- Return tags:
 --   found   : one transaction was committed and any selected fibres were resumed
 --   pending : useful work was performed but no transaction has yet committed, or
---             the optional algebra budget was exhausted without mutation
+--             the option algebra budget was exhausted without mutation
 --   absent  : no compatible transaction exists for the current waiting set
 --   idle    : all fibres are complete and there is no pending work
 --

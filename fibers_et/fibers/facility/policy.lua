@@ -1,7 +1,7 @@
 -- Launch policies for the friendly facade.
 --
 -- A policy is a small, explicit launch-time choice.  It may install a frame
--- that defines how facade operations such as fibers.perform and fibers.spawn
+-- that defines how facade options such as fibers.perform and fibers.spawn
 -- behave inside the launched computation.  It is not a generic scoped-values
 -- carrier.
 

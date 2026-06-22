@@ -14,7 +14,7 @@ local function assert_error(fn, msg)
   if ok then fail(msg or 'expected error') end
 end
 
--- The facility exports precisely the two operation constructors.
+-- The facility exports precisely the two option constructors.
 do
   assert_eq(type(Sleep.sleep_until_op), 'function', 'sleep_until_op export')
   assert_eq(type(Sleep.sleep_op), 'function', 'sleep_op export')
@@ -59,7 +59,7 @@ do
   assert_eq(observed, 104)
 end
 
--- Relative sleep is just operation syntax and composes with ordinary choice.
+-- Relative sleep is just option syntax and composes with ordinary choice.
 do
   local now = 0
   local rt = Runtime.new({ host = { now = function() return now end } })

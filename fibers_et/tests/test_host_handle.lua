@@ -72,7 +72,7 @@ do
   assert_eq(handle:written(), 'hello')
 end
 
--- The fd module is a registry/selector; concrete fd operations are exposed
+-- The fd module is a registry/selector; concrete fd options are exposed
 -- through selected host families or explicit fd backend selection.
 do
   local ok, Fd = pcall(require, 'fibers.host.fd')

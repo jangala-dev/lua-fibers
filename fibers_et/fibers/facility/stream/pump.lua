@@ -70,7 +70,7 @@ function Pump.read(stream)
         return
       end
     elseif err == 'would_block' or bytes == '' then
-      -- Readiness is only a hint. Loop back to the readiness operation.
+      -- Readiness is only a hint. Loop back to the readiness option.
     elseif err == Errors.EOF then
       masked_perform(rt, inlet:shutdown_op(Errors.EOF))
       return

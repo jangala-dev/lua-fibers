@@ -1,6 +1,6 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
--- Source: outside facts entering the operation algebra.
+-- Source: outside facts entering the option algebra.
 --
 -- This example uses signal and clock sources with an explicit Runtime so the
 -- host remains in control of time and stepping.

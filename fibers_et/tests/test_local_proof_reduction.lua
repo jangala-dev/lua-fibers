@@ -3,15 +3,14 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local Op = require('fibers.base.op')
 local Cell = require('fibers.base.cell')
 local Runtime = require('fibers.kernel.runtime')
-local Net = require('fibers.kernel.transaction_net')
+local Debug = require('fibers.kernel.transaction_debug')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
 local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
 
 local function world_for(rt, op)
-  local solver = Net.Solver.new(rt, { [1] = { op = op, fiber = nil, attempt = {} } })
-  local out = solver:find_commit_outcome()
+  local out = select(3, Debug.probe_world(rt, op))
   assert_eq(out.tag, 'hit', 'expected local proof world')
   assert_truthy(out.world, 'expected world')
   return out.world

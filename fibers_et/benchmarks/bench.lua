@@ -173,7 +173,7 @@ local function bench_effect(key, count)
 end
 
 -- --------------------------------------------------------------------------
--- Local operation and state cases.
+-- Local option and state cases.
 -- --------------------------------------------------------------------------
 
 add('local', 'always perform', 3000, function(n)

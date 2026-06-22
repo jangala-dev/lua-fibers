@@ -1,9 +1,9 @@
--- Socket-shaped stream backend over host-provided non-blocking operations.
+-- Socket-shaped stream backend over host-provided non-blocking options.
 --
 -- This module does not choose a socket library.  It is the contract adapter for
 -- hosts that can supply readiness plus non-blocking read/write/shutdown calls.
 -- The host callbacks remain authoritative: readiness only says that trying the
--- operation may be productive.
+-- option may be productive.
 
 local Source = require('fibers.base.source')
 local SourceState = require('fibers.internal.source_state')
@@ -15,7 +15,6 @@ local next_id = 0
 
 local function clear_hint(self, mode)
   if self.readiness then SourceState.clear(self.readiness, mode) end
-  if self.runtime and self.runtime._invalidate_cursor then self.runtime:_invalidate_cursor() end
 end
 
 local function callback(self, name, ...)

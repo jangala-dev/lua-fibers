@@ -1,5 +1,5 @@
 
--- Combined public operation algebra contract tests.
+-- Combined public option algebra contract tests.
 -- External fibers algebra behaviour tests.
 --
 
@@ -329,7 +329,7 @@ local function test_guard_is_delayed_and_participates_in_search()
   rt:spawn_raw(function() got = rt:perform(guarded) end, 'guarded')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'guarded')
-  assert_truthy(constructed >= 1, 'guard callback runs when the operation is attempted')
+  assert_truthy(constructed >= 1, 'guard callback runs when the option is attempted')
 end
 
 local function test_wrap_is_post_commit_and_not_transactional_sequence()
@@ -941,7 +941,7 @@ local function test_tensor_lane_wraps_apply_after_internal_rendezvous()
   assert_eq(table.concat(timeline, ','), 'put-wrap,get-wrap,outer-wrap', 'tensor lane wraps run after internal rendezvous resolution')
 end
 
-local function test_map_and_and_then_reject_operations_containing_wraps()
+local function test_map_and_and_then_reject_options_containing_wraps()
   local wrapped_product = Op.all({ Op.always('x'):wrap(function(v) return v end) })
   local ok_map = pcall(function()
     return wrapped_product:map(function(rows) return rows end)
@@ -966,7 +966,7 @@ local function test_choice_normalises_nested_lists_and_choice_nodes()
     Op.choice(Op.never(), Op.always('your'))
   )
   assert_eq(nested.kind, 'choice', 'normalised multi-way choice remains a choice')
-  assert_eq(#nested.choices, 5, 'choice flattens arrays and nested choices')
+  assert_eq(#nested.choices, 2, 'choice flattens arrays, nested choices, and drops empty choices')
   local status, values = one_perform(nested)
   assert_status(status, 'found')
   assert_eq(values[1], 'that')
@@ -1033,7 +1033,7 @@ local tests = {
   test_wrap_failure_does_not_rollback_committed_resources,
   test_product_lane_wraps_apply_inside_out_after_commit,
   test_tensor_lane_wraps_apply_after_internal_rendezvous,
-  test_map_and_and_then_reject_operations_containing_wraps,
+  test_map_and_and_then_reject_options_containing_wraps,
   test_tensor_all_and_internal_rendezvous_topology,
   test_tensor_is_parallel_not_sequential_for_cell_views,
   test_choice_backtracks_around_product_conflict,

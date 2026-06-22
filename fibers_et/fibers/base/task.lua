@@ -15,6 +15,7 @@ local Owned = require('fibers.base.region').Owned
 local Settlement = require('fibers.internal.settlement')
 local Protected = require('fibers.kernel.protected')
 local Exit = require('fibers.kernel.exit')
+local Validity = require('fibers.kernel.validity')
 
 local unpack_ = table.unpack or unpack
 local function pack(...) return { _fibers_pack = true, n = select('#', ...), ... } end
@@ -56,6 +57,7 @@ function Task.new(fn, name, frame)
     _fibers_kind = Ownership.Kind,
     _fibers_settle = Settlement.task_interrupt(),
     _fibers_settle_name = 'task_interrupt',
+    _validity_opaque = Validity.epoch((name or id) .. ':owner'),
   }, Task)
 end
 
