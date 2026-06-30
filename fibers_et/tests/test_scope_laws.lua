@@ -103,7 +103,7 @@ do
       inner_seen = fibers.current_scope() == inner
     end)
     restored_after_ok = fibers.current_scope() == root
-    pcall(function()
+    fibers.pcall(function()
       fibers.scope(function()
         error('inner boom')
       end)

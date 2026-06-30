@@ -52,25 +52,23 @@ local function request_cancel_item_op(scope, item, reason)
 end
 
 local function request_cancel_roots(scope, reason)
-  local roots = perform_masked(scope, scope:roots_op()) or {}
+  local roots = perform_masked(scope, scope:roots_op())
   for i = 1, #roots do
     local item = roots[i]
     if perform_masked(scope, scope:owns_op(item)) then
-      Protected.pcall(function()
-        perform_masked(scope, request_cancel_item_op(scope, item, reason))
-      end)
+      perform_masked(scope, request_cancel_item_op(scope, item, reason))
     end
   end
 end
 
 local function live_task_roots(scope, observed)
-  local roots = perform_masked(scope, scope:roots_op()) or {}
+  local roots = perform_masked(scope, scope:roots_op())
   local out = {}
   for i = 1, #roots do
     local item = roots[i]
     if is_task(item) and not observed[item] and perform_masked(scope, scope:owns_op(item)) then
       local rec = perform_masked(scope, scope:record_op(item))
-      if rec and (rec.phase or 'live') == 'live' then
+      if rec and rec.phase == 'live' then
         out[#out + 1] = { item = item, record = rec }
       end
     end
@@ -90,15 +88,8 @@ local function task_exit_choice_op(entries)
   return Op.choice(choices)
 end
 
-local function exit_is_cancelled(scope, item, exit)
-  if Exit.is(exit) and exit.tag == 'cancelled' then return true end
-  -- Existing task cancellation normally records Exit.cancelled. Keep the older
-  -- defensive check for tasks that report cancellation as a failed exit.
-  if Exit.is(exit) and exit.tag == 'failed' and type(item.state_op) == 'function' then
-    local ok_state, state = Protected.pcall(function() return perform_masked(scope, item:state_op()) end)
-    return ok_state and state and state.cancel_requested == true
-  end
-  return false
+local function exit_is_cancelled(_scope, _item, exit)
+  return Exit.is(exit) and exit.tag == 'cancelled'
 end
 
 local function await_task_roots(scope)
@@ -122,14 +113,14 @@ end
 local function retire_roots(scope, reason)
   local first_bad
   while true do
-    local roots = perform_masked(scope, scope:roots_op()) or {}
+    local roots = perform_masked(scope, scope:roots_op())
     if #roots == 0 then break end
     local progressed = false
     for i = 1, #roots do
       local item = roots[i]
       if perform_masked(scope, scope:owns_op(item)) then
         local rec = perform_masked(scope, scope:record_op(item))
-        local phase = rec and (rec.phase or 'live') or nil
+        local phase = rec and rec.phase
         if not rec then
           -- Ownership changed between roots_op and record_op; take another pass.
         elseif phase ~= 'live' then
@@ -163,7 +154,7 @@ local function report_for(scope, primary, secondaries, fields)
 end
 
 local function result_from(scope, body_ok, body_results, primary, child_bad, settlement_failures, close_reason)
-  settlement_failures = filter_duplicate_cancellation(primary, settlement_failures or {})
+  settlement_failures = filter_duplicate_cancellation(primary, settlement_failures)
   if not body_ok then
     local report = (#settlement_failures > 0) and report_for(scope, primary, settlement_failures, { reason = close_reason }) or nil
     local reason = Runtime.is_cancelled and Runtime.is_cancelled(primary) and 'cancelled' or 'body_error'

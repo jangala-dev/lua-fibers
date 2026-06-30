@@ -22,6 +22,13 @@ end
 
 function Settlement.perform_masked(op) return perform_masked(op) end
 
+local function require_context(ctx)
+  if type(ctx) ~= 'table' or type(ctx.claim_op) ~= 'function' or type(ctx.resolve_op) ~= 'function' then
+    error('settlement requires a context with claim_op and resolve_op', 3)
+  end
+  return ctx
+end
+
 local function ensure_op(op, label)
   if op == nil then return true_op() end
   if type(op) ~= 'table' or type(op.and_then) ~= 'function' then
@@ -151,14 +158,14 @@ local function protocol_for(record)
 end
 
 local function perform_protocols(ctx, claim)
-  for i = 1, #(claim.records or {}) do
+  for i = 1, #claim.records do
     local record = claim.records[i]
     perform_masked(protocol_for(record)(ctx, record, claim))
   end
 end
 
 local function with_settlement_authority(ctx, fn)
-  if type(ctx) ~= 'table' then return fn() end
+  require_context(ctx)
   ctx._settlement_depth = (ctx._settlement_depth or 0) + 1
   local ok, a, b, c = Protected.pcall(fn)
   ctx._settlement_depth = ctx._settlement_depth - 1
@@ -168,17 +175,13 @@ end
 
 
 local function resolve_failed_op(ctx, claim, err)
-  if type(ctx) == 'table' and type(ctx.resolve_op) == 'function' then
-    return ctx:resolve_op(claim, { kind = 'fail', error = err })
-  end
-  return ctx.region:fail_claim_op(claim, err)
+  require_context(ctx)
+  return ctx:resolve_op(claim, { kind = 'fail', error = err })
 end
 
 local function resolve_discharge_op(ctx, claim)
-  if type(ctx) == 'table' and type(ctx.resolve_op) == 'function' then
-    return ctx:resolve_op(claim, { kind = 'discharge' })
-  end
-  return ctx.region:discharge_claim_op(claim)
+  require_context(ctx)
+  return ctx:resolve_op(claim, { kind = 'discharge' })
 end
 
 local function mark_failed(ctx, claim, err)
@@ -218,8 +221,8 @@ local function make_driver(ctx, claim, after_settle)
 end
 
 function Settlement.claim_item_detached_op(ctx, item, purpose, after_settle)
-  local claim_op = type(ctx) == 'table' and type(ctx.claim_op) == 'function' and ctx:claim_op(item, purpose) or ctx.region:claim_op(item, purpose)
-  return claim_op:and_then(function(claim)
+  require_context(ctx)
+  return ctx:claim_op(item, purpose):and_then(function(claim)
     local driver = make_driver(ctx, claim, after_settle)
     return Op.emit(driver:_spawn_effect()):wrap(function()
       perform_masked(driver:await_op())
@@ -229,8 +232,8 @@ function Settlement.claim_item_detached_op(ctx, item, purpose, after_settle)
 end
 
 function Settlement.claim_item_inline_op(ctx, item, purpose, after_settle)
-  local claim_op = type(ctx) == 'table' and type(ctx.claim_op) == 'function' and ctx:claim_op(item, purpose) or ctx.region:claim_op(item, purpose)
-  return claim_op:wrap(function(claim)
+  require_context(ctx)
+  return ctx:claim_op(item, purpose):wrap(function(claim)
     return run_claim_inline(ctx, claim, after_settle)
   end)
 end
@@ -243,11 +246,6 @@ end
 
 function Settlement.retire_item_op(ctx, item, reason, after_settle, opts)
   return Settlement.claim_item_op(ctx, item, { type = 'retire', reason = reason }, after_settle, opts)
-end
-
--- Compatibility for lower-level settlement callers.
-function Settlement.settle_item_op(ctx, item, reason, after_settle, opts)
-  return Settlement.retire_item_op(ctx, item, reason, after_settle, opts)
 end
 
 return Settlement

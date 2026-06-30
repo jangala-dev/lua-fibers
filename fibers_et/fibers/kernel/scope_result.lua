@@ -32,7 +32,16 @@ end
 function ScopeResult.is(x) return type(x) == 'table' and x._fibers_scope_result == true end
 function ScopeResult:unpack() if not self.ok then return nil, self.reason, self.report end; return unpack_(self.values, 1, self.values.n or #self.values) end
 function ScopeResult:done_outcome() return { ok = self.ok == true, reason = self.reason, report = self.report } end
-function ScopeResult:raise() if self.ok then return self:unpack() end; error(self.report or self.primary or self.reason or 'scope failed', 0) end
+function ScopeResult:raise()
+  if self.ok then return self:unpack() end
+  -- Preserve runtime cancellation as the raised condition.  Reports may still
+  -- describe settlement facts, but cancellation remains the primary runtime
+  -- signal so task bodies record Exit.cancelled rather than an ordinary failure.
+  if type(self.primary) == 'table' and self.primary._fibers_cancelled == true then
+    error(self.primary, 0)
+  end
+  error(self.report or self.primary or self.reason or 'scope failed', 0)
+end
 function ScopeResult:tostring() if self.ok then return 'scope ok' end; if self.report and ScopeReport.is(self.report) then return self.report:tostring() end; return tostring(self.primary or self.reason or 'scope failed') end
 ScopeResult.__tostring = ScopeResult.tostring
 

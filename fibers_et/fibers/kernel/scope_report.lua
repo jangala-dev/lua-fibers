@@ -9,8 +9,7 @@ ScopeReport.__index = ScopeReport
 
 local function to_message(x)
   if x == nil then return nil end
-  local ok, s = pcall(tostring, x)
-  return ok and s or '<unprintable>'
+  return tostring(x)
 end
 
 function ScopeReport.new(scope, primary, secondaries, fields)

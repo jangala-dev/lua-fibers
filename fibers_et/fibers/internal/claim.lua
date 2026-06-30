@@ -9,6 +9,7 @@ local Claim = {}
 local next_claim = 0
 
 function Claim.new(region, root, records, purpose)
+  if type(records) ~= 'table' then error('Claim.new requires records table', 2) end
   next_claim = next_claim + 1
   local id = 'claim-' .. tostring(next_claim)
   return {
@@ -17,7 +18,7 @@ function Claim.new(region, root, records, purpose)
     id = id,
     region = region,
     root = root,
-    records = records or {},
+    records = records,
     purpose = purpose,
     reason = type(purpose) == 'table' and purpose.reason or nil,
   }

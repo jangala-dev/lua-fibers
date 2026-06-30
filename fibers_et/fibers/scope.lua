@@ -69,6 +69,7 @@ function Scope.new(name, opts)
   local id = 'scope-' .. tostring(next_id)
   local region = opts.region or Region.new(name or id)
   if not is_region(region) then error('Scope.new expects opts.region to be a Region', 2) end
+  if opts.parent ~= nil and not is_scope(opts.parent) then error('Scope.new expects opts.parent to be a Scope', 2) end
   local scope = setmetatable({
     name = name or region.name or id,
     parent = opts.parent,
@@ -200,7 +201,7 @@ end
 
 
 local function phase_live(record)
-  return record ~= nil and (record.phase or 'live') == 'live'
+  return record ~= nil and record.phase == 'live'
 end
 
 local function rights_allow(rights, right)
@@ -242,7 +243,7 @@ end
 
 function Scope:authorise_op(item, right)
   return self.region:record_op(item):and_then(function(record)
-    local phase = record and (record.phase or 'live')
+    local phase = record and record.phase
     if phase_live(record) and record_allows(record, right) then
       return Op.always(item, { kind = 'owned', scope = self, record = record, right = right })
     end
@@ -250,7 +251,7 @@ function Scope:authorise_op(item, right)
       return Op.always(item, { kind = 'settlement', scope = self, record = record, right = right })
     end
     local borrowed = borrow_authorise_op(self, item, right)
-    if self.parent and self.parent._fibers_scope and type(self.parent.authorise_op) == 'function' then
+    if self.parent then
       -- Child scopes inherit authority to use live obligations owned by their
       -- ancestors.  Custody does not move; ordinary use is delegated down the
       -- dynamic scope tree unless a membrane or borrow discipline later narrows it.
@@ -298,7 +299,8 @@ function Scope:claim_op(item, purpose)
 end
 
 function Scope:resolve_op(claim, resolution)
-  return self.region:resolve_claim_op(claim, resolution or { kind = 'discharge' })
+  if resolution == nil then error('Scope:resolve_op requires a resolution', 2) end
+  return self.region:resolve_claim_op(claim, resolution)
 end
 
 function Scope:seal_op(_reason)
@@ -346,7 +348,7 @@ function Scope:inspect_op()
           owned_count = region_status.owned_count,
           root_count = region_status.root_count,
           claimed_count = region_status.claimed_count,
-          failed_count = region_status.failed_count or region_status.settlement_failed_count,
+          failed_count = region_status.failed_count,
           settlement_failed_count = region_status.settlement_failed_count,
           region_version = region_status.version,
           region = self.region,

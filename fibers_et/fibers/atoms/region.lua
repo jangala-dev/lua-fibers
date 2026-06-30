@@ -32,6 +32,13 @@ local Phase = {
   retired = 'retired',
 }
 
+local function require_record_phase(record)
+  local phase = record and record.phase
+  if phase == nil then error('Region record missing phase', 3) end
+  return phase
+end
+
+
 -- Advanced Region ownership admission specifications.
 --
 -- Owned is intentionally part of Region's vocabulary, not an separate atom.
@@ -122,7 +129,7 @@ local function copy_record_internal(r)
     role = r.role,
     parent = r.parent,
     children = copy_list(r.children),
-    phase = r.phase or Phase.live,
+    phase = require_record_phase(r),
     claim = r.claim,
     claim_id = r.claim_id,
     claim_purpose = r.claim_purpose,
@@ -187,7 +194,7 @@ local function projected_counts(region, rec)
   for _, record in pairs(map) do
     owned = owned + 1
     if record.parent == nil then roots = roots + 1 end
-    local phase = record.phase or Phase.live
+    local phase = require_record_phase(record)
     if phase == Phase.claimed then claimed = claimed + 1 end
     if phase == Phase.failed or record.settlement_failed then failed = failed + 1 end
   end
@@ -290,7 +297,7 @@ end
 
 local function any_claimed(subtree)
   for _, record in pairs(subtree or {}) do
-    local phase = record.phase or Phase.live
+    local phase = require_record_phase(record)
     if phase == Phase.claimed or phase == Phase.failed then return true end
   end
   return false
@@ -413,7 +420,7 @@ local function release_candidate(region, item, ctx)
   local record = record_for(ctx, region, item)
   if not record then return nil end
   if record.parent ~= nil then return nil end
-  if (record.phase or Phase.live) ~= Phase.live then return nil end
+  if require_record_phase(record) ~= Phase.live then return nil end
   rrec.remove[item] = copy_record_internal(record)
   local current_map = projected_owned(region, nil)
   for i = 1, #(record.children or {}) do
@@ -469,10 +476,10 @@ local function discharge_claim_candidate(region, claim, ctx)
   local subtree = collect_subtree_from_map(map, item)
   if not next(subtree) then return nil end
   local expected = {}
-  for i = 1, #(claim.records or {}) do expected[claim.records[i].item] = true end
+  for i = 1, #claim.records do expected[claim.records[i].item] = true end
   for child, record in pairs(subtree) do
     if not expected[child] then return nil end
-    if (record.phase or Phase.live) ~= Phase.claimed then return nil end
+    if require_record_phase(record) ~= Phase.claimed then return nil end
     if record.claim ~= claim then return nil end
   end
   local c = Proposal.new(OpPack(item))
@@ -506,7 +513,7 @@ local function fail_claim_candidate(region, claim, failure, ctx)
   local rrec = read_region(c, region)
   for child, record in pairs(subtree) do
     if record.claim ~= claim then return nil end
-    local phase = record.phase or Phase.live
+    local phase = require_record_phase(record)
     if phase ~= Phase.claimed and phase ~= Phase.failed then return nil end
     local updated = copy_record_internal(record)
     updated.phase = Phase.failed
@@ -537,13 +544,13 @@ local function restore_claim_candidate(region, claim, ctx)
   local subtree = collect_subtree_from_map(map, item)
   if not next(subtree) then return nil end
   local expected = {}
-  for i = 1, #(claim.records or {}) do expected[claim.records[i].item] = true end
+  for i = 1, #claim.records do expected[claim.records[i].item] = true end
   local c = Proposal.new(OpPack(item))
   local rrec = read_region(c, region)
   for child, record in pairs(subtree) do
     if not expected[child] then return nil end
     if record.claim ~= claim then return nil end
-    local phase = record.phase or Phase.live
+    local phase = require_record_phase(record)
     if phase ~= Phase.claimed and phase ~= Phase.failed then return nil end
     local updated = copy_record_internal(record)
     updated.phase = Phase.live
@@ -562,14 +569,14 @@ local function restore_claim_candidate(region, claim, ctx)
 end
 
 local function resolve_claim_candidate(region, claim, resolution, ctx)
-  resolution = resolution or { kind = 'discharge' }
-  local kind = type(resolution) == 'table' and (resolution.kind or resolution.type) or resolution
-  if kind == nil or kind == 'discharge' or kind == 'retire' or kind == 'retired' then
+  if resolution == nil then error('Region:resolve_claim_op requires a resolution', 3) end
+  local kind = type(resolution) == 'table' and resolution.kind or resolution
+  if kind == 'discharge' then
     return discharge_claim_candidate(region, claim, ctx)
-  elseif kind == 'fail' or kind == 'failed' or kind == 'settlement_failed' then
-    local err = type(resolution) == 'table' and (resolution.error or resolution.err or resolution.reason) or resolution
-    return fail_claim_candidate(region, claim, err or 'claim resolution failed', ctx)
-  elseif kind == 'restore' or kind == 'live' then
+  elseif kind == 'fail' then
+    if type(resolution) ~= 'table' then error("fail resolution requires { kind = 'fail', error = err }", 3) end
+    return fail_claim_candidate(region, claim, resolution.error, ctx)
+  elseif kind == 'restore' then
     return restore_claim_candidate(region, claim, ctx)
   end
   return nil
@@ -654,11 +661,11 @@ function RegionKind.eval(region, payload, ctx)
     if payload.item then read_owned(c, payload.item) end
     return Result.ready(c)
   elseif op == 'children' then
-    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'children', item = payload.item }) or {}))
+    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'children', item = payload.item })))
     read_region(c, region)
     return Result.ready(c)
   elseif op == 'subtree' then
-    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'subtree', item = payload.item }) or {}))
+    local c = Proposal.new(OpPack(Resource.project(ctx, region, { op = 'subtree', item = payload.item })))
     read_region(c, region)
     return Result.ready(c)
   elseif op == 'snapshot' then
@@ -666,19 +673,19 @@ function RegionKind.eval(region, payload, ctx)
     read_region(c, region)
     return Result.ready(c)
   elseif op == 'members' then
-    local owned = Resource.project(ctx, region, 'members') or {}
+    local owned = Resource.project(ctx, region, 'members')
     local c = Proposal.new(OpPack(owned))
     read_region(c, region)
     return Result.ready(c)
   elseif op == 'roots' then
-    local roots = Resource.project(ctx, region, 'roots') or {}
+    local roots = Resource.project(ctx, region, 'roots')
     local c = Proposal.new(OpPack(roots))
     read_region(c, region)
     return Result.ready(c)
   elseif op == 'live' then
     local record = Resource.project(ctx, region, { op = 'record', item = payload.item })
     local current_owner = Resource.project(ctx, payload.item, 'owner')
-    local live = current_owner == region and type(record) == 'table' and (record.phase or Phase.live) == Phase.live
+    local live = current_owner == region and type(record) == 'table' and require_record_phase(record) == Phase.live
     local c = Proposal.new(OpPack(live and true or false))
     read_region(c, region)
     if payload.item then read_owned(c, payload.item) end
