@@ -10,7 +10,7 @@ local backend = Fake.new({ name = 'fake-host', write_chunk_size = 2 })
 local stream, line, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_backend_op(region, backend, {
+  stream = rt:perform(Stream.open_backend_in_op(region, backend, {
     name = 'fake-host-stream',
     read_capacity = 16,
     write_capacity = 16,

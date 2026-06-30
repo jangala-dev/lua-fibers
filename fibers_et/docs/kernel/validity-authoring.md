@@ -28,7 +28,7 @@ For example, a simple box resource should not maintain an unobserved version
 counter and a separate frontier.  It should use a managed scalar:
 
 ```lua
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Validity = require('fibers.kernel.validity')
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')

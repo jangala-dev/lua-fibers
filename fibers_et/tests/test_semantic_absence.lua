@@ -1,6 +1,6 @@
 -- Adversarial absence tests for semantic or_else fallbacks over resources.
 --
--- These cases are deliberately not channel-only.  They make a fallback tempting
+-- These cases are deliberately not rendezvous-only.  They make a fallback tempting
 -- while another root can still make the preferred resource/task/flow path true
 -- by committing first.  A too-local or_else commits "fallback" in these tests.
 
@@ -18,9 +18,9 @@ do
   local region = fibers.Region.new('absence-region-alone')
   local item = fibers.Region.handle('unowned')
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     got = fibers.perform(region:claim_op(item):map(function() return 'primary' end):or_else(fibers.always('fallback')))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
   assert_eq(item.owner, nil)
@@ -51,9 +51,9 @@ end
 do
   local task = fibers.Task.new(function() return 'unused' end, 'absence-never-started')
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     got = fibers.perform(task:await_op():or_else(fibers.always('fallback')))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
 end
@@ -81,9 +81,9 @@ end
 do
   local flow = fibers.Flow.new({ name = 'absence-flow-alone', capacity = 8 })
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     got = fibers.perform(flow:outlet():read_some_op(3):or_else(fibers.always('fallback')))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
 end

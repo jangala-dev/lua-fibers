@@ -1,7 +1,7 @@
 -- Adversarial cursor-validity tests for production managed facts.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Validity = require('fibers.kernel.validity')
 local Resources = require('fibers.kernel.resources')
@@ -32,9 +32,9 @@ function ManagedKind.eval(resource, payload, ctx)
     local value, present = resource.map:get(ctx, payload.key)
     if present and value == payload.expected then return Result.ready(Proposal.new(pack_(value))) end
     return Result.wait(wait_for(resource, 'map-expect:' .. tostring(payload.key), payload))
-  elseif op == 'claim_free' then
-    if resource.claims:is_free(ctx, payload.key) then return Result.ready(Proposal.new(pack_(true))) end
-    return Result.wait(wait_for(resource, 'claim-free:' .. tostring(payload.key), payload))
+  elseif op == 'lease_free' then
+    if resource.leases:is_free(ctx, payload.key) then return Result.ready(Proposal.new(pack_(true))) end
+    return Result.wait(wait_for(resource, 'lease-free:' .. tostring(payload.key), payload))
   elseif op == 'derived_true' then
     if resource.view:get(ctx) == true then return Result.ready(Proposal.new(pack_(true))) end
     return Result.wait(wait_for(resource, 'derived-true', payload))
@@ -64,9 +64,9 @@ function ManagedKind.absence(resource, payload, ctx)
       add_obs(ctx, frontier, 'map-value-mismatch', { key = payload.key, expected = payload.expected })
       return true
     end
-  elseif op == 'claim_free' then
-    if not resource.claims:is_free(ctx, payload.key) then
-      add_obs(ctx, resource.claims:frontier_for('membership', payload.key), 'claim-not-free', { key = payload.key })
+  elseif op == 'lease_free' then
+    if not resource.leases:is_free(ctx, payload.key) then
+      add_obs(ctx, resource.leases:frontier_for('membership', payload.key), 'claim-not-free', { key = payload.key })
       return true
     end
   elseif op == 'derived_true' then
@@ -84,7 +84,7 @@ local function new_managed_resource(name)
     _fibers_id = name,
     _fibers_kind = ManagedKind,
     map = Validity.map(name .. ':map'),
-    claims = Validity.claim(name .. ':claims'),
+    leases = Validity.lease(name .. ':leases'),
     gate = Validity.scalar(false, name .. ':gate'),
     members = Validity.set(name .. ':members'),
   }
@@ -97,7 +97,7 @@ end
 local function op(resource, payload) return Op._resource(resource, ManagedKind, payload) end
 local function map_get_op(resource, key) return op(resource, { op = 'map_get', key = key }) end
 local function map_expect_op(resource, key, expected) return op(resource, { op = 'map_expect', key = key, expected = expected }) end
-local function claim_free_op(resource, key) return op(resource, { op = 'claim_free', key = key }) end
+local function lease_free_op(resource, key) return op(resource, { op = 'lease_free', key = key }) end
 local function derived_true_op(resource) return op(resource, { op = 'derived_true' }) end
 
 local function drive_until_cache(rt, label)
@@ -150,20 +150,20 @@ do
   drive_until_value(rt, function() return got end, 'new', 'map expected value')
 end
 
--- Claim free-ness is a membership fact.  Owner transfer while still claimed
+-- Lease free-ness is a membership fact.  Owner transfer while still leased
 -- should not invalidate a waiter for "free"; release should.
 do
   local rt = Runtime.new()
-  local r = new_managed_resource('cursor-claim')
-  assert_eq(r.claims:claim('slot', 'owner-a'), true)
+  local r = new_managed_resource('cursor-lease')
+  assert_eq(r.leases:acquire('slot', 'owner-a'), true)
   local got
-  rt:spawn_raw(function() got = rt:perform(claim_free_op(r, 'slot')) end, 'cursor-claim-fibre')
-  local obs = drive_until_cache(rt, 'claim free')
-  assert_eq(r.claims:transfer('slot', 'owner-a', 'owner-b'), true)
+  rt:spawn_raw(function() got = rt:perform(lease_free_op(r, 'slot')) end, 'cursor-lease-fibre')
+  local obs = drive_until_cache(rt, 'lease free')
+  assert_eq(r.leases:transfer('slot', 'owner-a', 'owner-b'), true)
   assert_eq(Resources.observer_valid(obs), true, 'owner transfer must not invalidate free-ness observation')
-  assert_eq(r.claims:release('slot', 'owner-b'), true)
+  assert_eq(r.leases:release('slot', 'owner-b'), true)
   assert_eq(Resources.observer_valid(obs), false, 'release must invalidate free-ness observation')
-  drive_until_value(rt, function() return got end, true, 'claim free')
+  drive_until_value(rt, function() return got end, true, 'lease free')
 end
 
 -- A cached derived view must carry only the dependencies its body actually read.

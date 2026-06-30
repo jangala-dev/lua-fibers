@@ -1,15 +1,15 @@
 -- Runtime host, phase and error contract tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Cell = require('fibers.base.cell')
+local Scalar = require('fibers.atoms.scalar')
 local TC = require('tests.effect_helpers')
 
-local function update_cell(cell, fn)
-  return cell:read_op():and_then(function(old)
+local function update_scalar(scalar, fn)
+  return scalar:read_op():and_then(function(old)
     local new = fn(old)
-    return cell:write_op(new):map(function() return new, old end)
+    return scalar:write_op(new):map(function() return new, old end)
   end)
 end
 
@@ -175,16 +175,16 @@ end
 
 -- A wrap failure happens after commit and must not roll back committed resources.
 do
-  local cell = Cell.new(0, 'wrap-error-cell')
+  local scalar = Scalar.new(0, 'wrap-error-scalar')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:write_op(1):wrap(function()
+    rt:perform(scalar:write_op(1):wrap(function()
       error('wrap exploded')
     end))
   end, 'wrap-error')
   local ok, _err = pcall(function() rt:run() end)
   assert_eq(ok, false, 'wrap error should escape the driver by default')
-  assert_eq(cell.value, 1, 'wrap error does not roll back commit')
+  assert_eq(scalar.value, 1, 'wrap error does not roll back commit')
 end
 
 
@@ -222,18 +222,18 @@ end
 
 -- A raw effect handler error is also fatal and prevents later driver use.
 do
-  local cell = Cell.new(0, 'fatal-effect-cell')
+  local scalar = Scalar.new(0, 'fatal-effect-scalar')
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(Op.emit(TC.discharge_fatal()):and_then(function()
-      return cell:write_op(1)
+      return scalar:write_op(1)
     end))
   end, 'raw-effect-error')
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'effect_error', 'raw effect error is fatal')
   assert_eq(err.committed, true, 'raw effect error is after commit')
   assert_eq(err.fatal, true, 'raw effect error marks runtime fatal')
-  assert_eq(cell.value, 1, 'raw effect error does not roll back committed resource')
+  assert_eq(scalar.value, 1, 'raw effect error does not roll back committed resource')
   local ok_run, run_err = pcall(function() rt:run() end)
   assert_error_kind(ok_run, run_err, 'effect_error', 'failed runtime rejects later run')
 end
@@ -254,14 +254,14 @@ do
   assert_eq(ok_spawn, true, 'external spawn after fibre phase error is allowed')
 end
 
--- Cell updates expressed as algebra protect user callback errors
+-- Scalar updates expressed as algebra protect user callback errors
 -- callback errors rather than trusted resource-protocol failures.
 do
-  local cell = Cell.new(0, 'derived-update-error-cell')
+  local scalar = Scalar.new(0, 'derived-update-error-scalar')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(update_cell(cell, function()
-      error('cell update exploded')
+    rt:perform(update_scalar(scalar, function()
+      error('scalar update exploded')
     end))
   end, 'derived-update-error')
   local ok, err = pcall(function() rt:run() end)

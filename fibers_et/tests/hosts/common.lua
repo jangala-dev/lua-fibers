@@ -148,7 +148,7 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   local got, flushed, stream
 
   rt:spawn_raw(function()
-    stream = rt:perform(fibers.Stream.open_handle_op(region, handle, { name = name .. ':stream', capacity = 64, chunk_size = 16 }))
+    stream = rt:perform(fibers.Stream.open_handle_in_op(region, handle, { name = name .. ':stream', capacity = 64, chunk_size = 16 }))
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
     got = rt:perform(stream:reader():read_exactly_op(5))

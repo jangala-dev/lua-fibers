@@ -1,0 +1,43 @@
+package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+
+local fibers = require('fibers')
+local Stream = fibers.Stream
+local Scope = fibers.Scope
+
+local client, server = Stream.memory_pair({ name = 'negotiated-stream', capacity = 128 })
+local negotiator = Scope.new('negotiator')
+local responder = Scope.new('responder')
+local protocol = fibers.Scalar.new('unknown', 'protocol-state')
+local reply
+
+local function negotiate_op(stream)
+  return stream:reader():read_line_op():and_then(function(line)
+    if line == 'PING' then
+      return protocol:write_op('ping'):and_then(function()
+        return negotiator:move_op(stream, responder)
+      end):and_then(function()
+        return stream:writer():write_op('PONG\n')
+      end):map(function()
+        return 'ping'
+      end)
+    end
+    return stream:writer():write_op('BAD\n'):and_then(function()
+      return stream:close_op('bad protocol')
+    end):map(function()
+      return nil, 'bad_protocol'
+    end)
+  end)
+end
+
+local st = fibers.try_run(function()
+  fibers.perform(negotiator:raw_region():admit_op(server))
+  fibers.perform(client:writer():write_op('PING\n'))
+  fibers.perform(negotiate_op(server))
+  reply = fibers.perform(client:reader():read_line_op())
+end).runtime_status
+
+assert(st.tag == 'found')
+assert(protocol.value == 'ping')
+assert(reply == 'PONG')
+assert(server.owner == responder:raw_region())
+print('examples/10_stream_protocol_move.lua: ok')

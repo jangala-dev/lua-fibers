@@ -1,6 +1,6 @@
 -- Internal Source state mutation through managed validity capabilities.
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local OpPack = Op._pack
 
 local SourceState = {}
@@ -15,8 +15,8 @@ end
 function SourceState.arrive(source, ...)
   if source.kind == 'signal' then
     source._validity:set(OpPack(...), 'signal arrived')
-  elseif source.kind == 'queue' then
-    source._validity:push(OpPack(...), 'queue arrival')
+  elseif source.kind == 'events' then
+    source._validity:push(OpPack(...), 'events arrival')
   elseif source.kind == 'readiness' then
     local n, first = select('#', ...), ...
     local mode, value
@@ -37,8 +37,8 @@ end
 function SourceState.clear(source, mode)
   if source.kind == 'signal' then
     source._validity:clear('signal cleared')
-  elseif source.kind == 'queue' then
-    source._validity:clear('queue cleared')
+  elseif source.kind == 'events' then
+    source._validity:clear('events cleared')
   elseif source.kind == 'readiness' then
     if mode == nil then source._validity:clear(nil, 'readiness cleared')
     else source._validity:clear(readiness_mode(source, mode), 'readiness cleared') end

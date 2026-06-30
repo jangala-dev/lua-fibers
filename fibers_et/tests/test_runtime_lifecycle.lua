@@ -8,8 +8,8 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Runtime = require('fibers.kernel.runtime')
-local Op = require('fibers.base.op')
-local Channel = require('fibers.base.channel')
+local Op = require('fibers.atoms.op')
+local Rendezvous = require('fibers.atoms.rendezvous')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(actual, expected, msg)
@@ -75,11 +75,11 @@ do
   end
 end
 
--- Waiting and rendezvous behaviour is tested through Channel communication,
+-- Waiting and rendezvous behaviour is tested through Rendezvous communication,
 -- not by inspecting the runtime's waiting frontier.
 do
   local rt = Runtime.new()
-  local ch = Channel.new('frontier-channel')
+  local ch = Rendezvous.new('frontier-rendezvous')
   local got
   rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'receiver')
   local st = rt:run()

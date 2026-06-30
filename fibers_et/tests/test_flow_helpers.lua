@@ -2,8 +2,8 @@ package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path},
 
 local fibers = require('fibers')
 local Op = fibers.Op
-local Flow = fibers.Flow
-local Errors = require('fibers.facility.flow.errors')
+local Flow = require('fibers.flow')
+local Errors = require('fibers.flow.errors')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -14,11 +14,11 @@ local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail(
 do
   local flow = Flow.new({ name = 'peek-flow', capacity = 16 })
   local p, later
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
     p = fibers.perform(flow:outlet():peek_op(3))
     later = fibers.perform(flow:outlet():read_exactly_op(6))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(p, 'abc')
   assert_eq(later, 'abcdef')
@@ -29,12 +29,12 @@ end
 do
   local flow = Flow.new({ name = 'until-flow', capacity = 32 })
   local before, including, tail
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc--def--tail'))
     before = fibers.perform(flow:outlet():read_until_op('--'))
     including = fibers.perform(flow:outlet():read_including_op('--'))
     tail = fibers.perform(flow:outlet():read_exactly_op(4))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(before, 'abc')
   assert_eq(including, 'def--')
@@ -45,13 +45,13 @@ end
 do
   local flow = Flow.new({ name = 'until-partial-flow', capacity = 16 })
   local got, err, partial, after_err
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('unterminated'))
     fibers.perform(flow:inlet():shutdown_op())
     got, err, partial = fibers.perform(flow:outlet():read_until_op('\n'))
     local again
     again, after_err = fibers.perform(flow:outlet():read_some_op(1))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(got)
   assert_eq(err, 'eof')
@@ -63,12 +63,12 @@ end
 do
   local flow = Flow.new({ name = 'line-derived-flow', capacity = 16 })
   local line, eof, eof_err
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('tail'))
     fibers.perform(flow:inlet():shutdown_op())
     line = fibers.perform(flow:outlet():read_line_op())
     eof, eof_err = fibers.perform(flow:outlet():read_line_op())
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(line, 'tail')
   assert_nil(eof)
@@ -79,11 +79,11 @@ end
 do
   local flow = Flow.new({ name = 'drop-flow', capacity = 16 })
   local dropped, tail
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
     dropped = fibers.perform(flow:outlet():drop_op(2))
     tail = fibers.perform(flow:outlet():read_exactly_op(4))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(dropped, 2)
   assert_eq(tail, 'cdef')
@@ -95,7 +95,7 @@ do
   local src = Flow.new({ name = 'splice-src', capacity = 16 })
   local dst = Flow.new({ name = 'splice-dst', capacity = 16 })
   local choice, moved, src_left, dst_got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abcdef'))
     choice = fibers.perform(Op.choice(
       Op.always('winner'),
@@ -104,7 +104,7 @@ do
     moved = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_got = fibers.perform(dst:outlet():read_exactly_op(3))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(choice, 'winner')
   assert_eq(moved, 3)
@@ -119,12 +119,12 @@ do
   local src = Flow.new({ name = 'splice-too-large-src', capacity = 16 })
   local dst = Flow.new({ name = 'splice-too-large-dst', capacity = 2 })
   local moved, err, src_left, dst_snap
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
     moved, err = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_snap = fibers.perform(dst:inspect_op())
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(moved)
   assert_eq(err, Errors.TOO_LARGE)
@@ -138,13 +138,13 @@ do
   local src = Flow.new({ name = 'splice-closed-src', capacity = 16 })
   local dst = Flow.new({ name = 'splice-closed-dst', capacity = 16 })
   local moved, err, src_left, dst_snap
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
     fibers.perform(dst:inlet():shutdown_op())
     moved, err = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_snap = fibers.perform(dst:inspect_op())
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(moved)
   assert_eq(err, Errors.CLOSED)
@@ -176,11 +176,11 @@ end
 do
   local flow = Flow.new({ name = 'until-multibyte-too-large-flow', capacity = 16 })
   local got, err, left
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcd'))
     got, err = fibers.perform(flow:outlet():read_until_op('\r\n', { limit = 3 }))
     left = fibers.perform(flow:outlet():read_exactly_op(4))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(got)
   assert_eq(err, Errors.TOO_LARGE)
@@ -191,11 +191,11 @@ end
 do
   local flow = Flow.new({ name = 'aliases-flow', capacity = 16 })
   local n, drained, got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     n = fibers.perform(flow:inlet():append_op('xy'))
     got = fibers.perform(flow:outlet():read_exactly_op(2))
     drained = fibers.perform(flow:inlet():drain_op())
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(n, 2)
   assert_eq(got, 'xy')

@@ -1,11 +1,12 @@
--- Structural settlement driver for owned records.
+-- Structural settlement protocols for owned records.
 --
--- Admission installs ownership records containing Op-valued settlement
--- protocols.  A Region owns generic claim/settle state; this module provides a
--- standard driver that claims a subtree, performs settlement protocols, and then
--- settles the claim.
+-- Admission installs ownership records containing normalised settlement
+-- protocols. A Region owns generic claim/resolve state; this module provides
+-- standard strategies that claim a subtree, perform settlement protocols, and
+-- then resolve the claim. Inline settlement is the default for scope exit; a
+-- detached driver strategy remains available for callers that explicitly need it.
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Protected = require('fibers.kernel.protected')
 
@@ -15,32 +16,95 @@ local function true_op() return Op.always(true) end
 
 local function perform_masked(op)
   local rt = Runtime.current()
-  if not rt then error('settlement driver requires a current runtime', 2) end
+  if not rt then error('settlement requires a current runtime', 2) end
   return rt:perform(op, { masked = true })
 end
 
 function Settlement.perform_masked(op) return perform_masked(op) end
 
-function Settlement.none()
-  return function() return true_op() end
+local function ensure_op(op, label)
+  if op == nil then return true_op() end
+  if type(op) ~= 'table' or type(op.and_then) ~= 'function' then
+    error((label or 'settlement step') .. ' must return an Op', 3)
+  end
+  return op
 end
 
-function Settlement.protocol(fn)
-  if fn == nil then return Settlement.none() end
-  if type(fn) ~= 'function' then error('settlement protocol must be a function', 2) end
-  return fn
+function Settlement.normalize(settle, label)
+  if settle == nil then
+    return {
+      _fibers_settlement_protocol = true,
+      name = 'none',
+      discharge_op = function() return true_op() end,
+    }
+  end
+  if type(settle) == 'function' then
+    return {
+      _fibers_settlement_protocol = true,
+      name = label or 'function',
+      discharge_op = settle,
+    }
+  end
+  if type(settle) == 'table' then
+    if settle._fibers_settlement_protocol then return settle end
+    local discharge = settle.discharge_op or settle.discharge or settle.settle_op or settle.settle
+    if type(discharge) ~= 'function' then
+      error((label or 'settlement protocol') .. ' requires a discharge_op function', 3)
+    end
+    if settle.request_op ~= nil and type(settle.request_op) ~= 'function' then
+      error((label or 'settlement protocol') .. ' request_op must be a function', 3)
+    end
+    if settle.force_op ~= nil and type(settle.force_op) ~= 'function' then
+      error((label or 'settlement protocol') .. ' force_op must be a function', 3)
+    end
+    return {
+      _fibers_settlement_protocol = true,
+      name = settle.name or label or 'protocol',
+      request_op = settle.request_op,
+      discharge_op = discharge,
+      force_op = settle.force_op,
+      raw = settle,
+    }
+  end
+  error((label or 'settlement protocol') .. ' must be a function or protocol table', 3)
+end
+
+function Settlement.name_of(settle, fallback)
+  if type(settle) == 'table' then return settle.name or fallback end
+  return fallback
+end
+
+function Settlement.protocol(settle, label)
+  local protocol = Settlement.normalize(settle, label)
+  return function(ctx, record, claim)
+    local op
+    if protocol.request_op then
+      op = ensure_op(protocol.request_op(ctx, record, claim), protocol.name .. '.request_op')
+      return op:and_then(function()
+        return ensure_op(protocol.discharge_op(ctx, record, claim), protocol.name .. '.discharge_op')
+      end)
+    end
+    return ensure_op(protocol.discharge_op(ctx, record, claim), protocol.name .. '.discharge_op')
+  end
+end
+
+function Settlement.none()
+  return Settlement.protocol({
+    name = 'none',
+    discharge_op = function() return true_op() end,
+  })
 end
 
 function Settlement.request_then_wait(request_op, settled_op)
   if type(request_op) ~= 'function' then error('request_then_wait expects request_op function', 2) end
   if type(settled_op) ~= 'function' then error('request_then_wait expects settled_op function', 2) end
-  return function(ctx, record, claim)
+  return Settlement.protocol(function(ctx, record, claim)
     local reason = claim and claim.reason or nil
     return request_op(ctx, record, reason, claim):wrap(function(...)
       perform_masked(settled_op(ctx, record, reason, claim))
       return ...
     end)
-  end
+  end, 'request_then_wait')
 end
 
 function Settlement.task_interrupt()
@@ -51,9 +115,12 @@ function Settlement.task_interrupt()
 end
 
 function Settlement.task_join_only()
-  return function(_ctx, record)
-    return record.item:exit_op():map(function() return true end)
-  end
+  return Settlement.protocol({
+    name = 'task_join_only',
+    discharge_op = function(_ctx, record)
+      return record.item:exit_op():map(function() return true end)
+    end,
+  })
 end
 
 function Settlement.flow()
@@ -64,9 +131,12 @@ function Settlement.flow()
 end
 
 function Settlement.stream()
-  return function(_ctx, record, claim)
-    return record.item:shutdown_op(claim and claim.reason):map(function() return true end)
-  end
+  return Settlement.protocol({
+    name = 'stream',
+    discharge_op = function(_ctx, record, claim)
+      return record.item:shutdown_op(claim and claim.reason):map(function() return true end)
+    end,
+  })
 end
 
 local function driver_name_for(claim)
@@ -77,27 +147,7 @@ local function driver_name_for(claim)
 end
 
 local function protocol_for(record)
-  local f = record and record.settle
-  if f == nil then return Settlement.none() end
-  if type(f) ~= 'function' then error('owned record has non-function settlement protocol', 2) end
-  return f
-end
-
-local function failure_event_op(ctx, claim, err)
-  if type(ctx) == 'table' and type(ctx._event) == 'function' then
-    local first = claim.records and claim.records[1]
-    return Op.emit(ctx:_event('settlement_failed', {
-      item = claim.root,
-      task = claim.root,
-      claim = claim,
-      claim_id = claim.id,
-      purpose = claim.purpose,
-      settle = first and first.settle_name,
-      error = err,
-      error_message = tostring(err),
-    }))
-  end
-  return Op.always(true)
+  return Settlement.protocol(record and record.settle, record and record.settle_name or nil)
 end
 
 local function perform_protocols(ctx, claim)
@@ -107,25 +157,58 @@ local function perform_protocols(ctx, claim)
   end
 end
 
-local function make_driver(ctx, claim, after_settle)
-  local Task = require('fibers.base.task')
-  local driver = Task.new(function()
-    local ok, err = Protected.pcall(function()
+local function with_settlement_authority(ctx, fn)
+  if type(ctx) ~= 'table' then return fn() end
+  ctx._settlement_depth = (ctx._settlement_depth or 0) + 1
+  local ok, a, b, c = Protected.pcall(fn)
+  ctx._settlement_depth = ctx._settlement_depth - 1
+  if not ok then error(a, 0) end
+  return a, b, c
+end
+
+
+local function resolve_failed_op(ctx, claim, err)
+  if type(ctx) == 'table' and type(ctx.resolve_op) == 'function' then
+    return ctx:resolve_op(claim, { kind = 'fail', error = err })
+  end
+  return ctx.region:fail_claim_op(claim, err)
+end
+
+local function resolve_discharge_op(ctx, claim)
+  if type(ctx) == 'table' and type(ctx.resolve_op) == 'function' then
+    return ctx:resolve_op(claim, { kind = 'discharge' })
+  end
+  return ctx.region:discharge_claim_op(claim)
+end
+
+local function mark_failed(ctx, claim, err)
+  Protected.pcall(function()
+    perform_masked(resolve_failed_op(ctx, claim, err))
+  end)
+end
+
+local function run_claim_inline(ctx, claim, after_settle)
+  local ok, err = Protected.pcall(function()
+    with_settlement_authority(ctx, function()
       perform_protocols(ctx, claim)
-      perform_masked(ctx.region:settle_claim_op(claim))
     end)
-    if not ok then
-      -- The claim has already committed.  Settlement failure therefore becomes
-      -- committed, observable ownership state rather than an implicit rollback
-      -- or a silent failed driver task.
-      Protected.pcall(function()
-        perform_masked(ctx.region:settlement_failed_op(claim, err))
-        perform_masked(failure_event_op(ctx, claim, err))
-      end)
-      error(err, 0)
-    end
-    if after_settle then perform_masked(after_settle(ctx, claim)) end
-    return claim.root
+    perform_masked(resolve_discharge_op(ctx, claim))
+  end)
+  if not ok then
+    -- The claim has already committed. Settlement failure therefore becomes
+    -- committed, observable ownership state rather than an implicit rollback or
+    -- a silent cleanup error.
+    mark_failed(ctx, claim, err)
+    error(err, 0)
+  end
+  if after_settle then perform_masked(after_settle(ctx, claim)) end
+  return claim.root
+end
+
+local function make_driver(ctx, claim, after_settle)
+  local Task = require('fibers.task')
+  local driver = Task.new(function()
+    return run_claim_inline(ctx, claim, after_settle)
   end, driver_name_for(claim))
   driver._fibers_settlement_driver = true
   driver.claim = claim
@@ -134,8 +217,9 @@ local function make_driver(ctx, claim, after_settle)
   return driver
 end
 
-function Settlement.claim_item_op(ctx, item, purpose, after_settle)
-  return ctx.region:claim_op(item, purpose):and_then(function(claim)
+function Settlement.claim_item_detached_op(ctx, item, purpose, after_settle)
+  local claim_op = type(ctx) == 'table' and type(ctx.claim_op) == 'function' and ctx:claim_op(item, purpose) or ctx.region:claim_op(item, purpose)
+  return claim_op:and_then(function(claim)
     local driver = make_driver(ctx, claim, after_settle)
     return Op.emit(driver:_spawn_effect()):wrap(function()
       perform_masked(driver:await_op())
@@ -144,8 +228,26 @@ function Settlement.claim_item_op(ctx, item, purpose, after_settle)
   end)
 end
 
-function Settlement.settle_item_op(ctx, item, reason, after_settle)
-  return Settlement.claim_item_op(ctx, item, { type = 'settle', reason = reason }, after_settle)
+function Settlement.claim_item_inline_op(ctx, item, purpose, after_settle)
+  local claim_op = type(ctx) == 'table' and type(ctx.claim_op) == 'function' and ctx:claim_op(item, purpose) or ctx.region:claim_op(item, purpose)
+  return claim_op:wrap(function(claim)
+    return run_claim_inline(ctx, claim, after_settle)
+  end)
+end
+
+function Settlement.claim_item_op(ctx, item, purpose, after_settle, opts)
+  opts = opts or {}
+  if opts.mode == 'detached' then return Settlement.claim_item_detached_op(ctx, item, purpose, after_settle) end
+  return Settlement.claim_item_inline_op(ctx, item, purpose, after_settle)
+end
+
+function Settlement.retire_item_op(ctx, item, reason, after_settle, opts)
+  return Settlement.claim_item_op(ctx, item, { type = 'retire', reason = reason }, after_settle, opts)
+end
+
+-- Compatibility for lower-level settlement callers.
+function Settlement.settle_item_op(ctx, item, reason, after_settle, opts)
+  return Settlement.retire_item_op(ctx, item, reason, after_settle, opts)
 end
 
 return Settlement

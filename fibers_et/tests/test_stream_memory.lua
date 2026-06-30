@@ -17,7 +17,7 @@ end
 
 local Op = fibers.Op
 local Stream = fibers.Stream
-local Flow = fibers.Flow
+local Flow = require('fibers.flow')
 
 -- Primitive flow: inlet writes bytes, outlet reads bytes, handles are stable.
 do
@@ -27,10 +27,10 @@ do
   assert_nil(flow.writer, 'primitive Flow should not expose writer alias')
   assert_nil(flow.reader, 'primitive Flow should not expose reader alias')
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('flow\n'))
     got = fibers.perform(flow:outlet():read_line_op())
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'flow')
 end
@@ -39,10 +39,10 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'basic' })
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.spawn_raw(function() fibers.perform(a:writer():write_op('hello')) end, 'writer')
     got = fibers.perform(b:reader():read_exactly_op(5))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'hello')
 end
@@ -51,12 +51,12 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'losing-write' })
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
       Op.always('winner'),
       a:writer():write_op('x'):map(function() return 'loser' end)
     ))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
   assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'losing stream write must not append bytes')
@@ -66,14 +66,14 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'losing-read' })
   local got, later
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
     got = fibers.perform(Op.choice(
       Op.always('winner'),
       b:reader():read_some_op(1):map(function() return 'loser' end)
     ))
     later = fibers.perform(b:reader():read_exactly_op(3))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
   assert_eq(later, 'abc', 'losing stream read must not consume bytes')
@@ -114,12 +114,12 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'eof' })
   local one, two, err
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
     fibers.perform(a:writer():shutdown_op())
     one = fibers.perform(b:reader():read_some_op(10))
     two, err = fibers.perform(b:reader():read_some_op(10))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(one, 'abc')
   assert_nil(two)
@@ -130,10 +130,10 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'broken-pipe' })
   local n, err
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(b:reader():shutdown_op())
     n, err = fibers.perform(a:writer():write_op('x'))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(n)
   assert_eq(err, 'broken_pipe')
@@ -159,7 +159,7 @@ end
 -- Transactional request/response: consume request, update state, append response.
 do
   local a, b = Stream.memory_pair({ name = 'request-response' })
-  local state = fibers.Cell.new(0, 'state')
+  local state = fibers.Scalar.new(0, 'state')
   local response
   local function handle_one_op(stream)
     return stream:reader():read_line_op():and_then(function(line)
@@ -170,11 +170,11 @@ do
       end)
     end)
   end
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(b:writer():write_op('ping\n'))
     fibers.perform(handle_one_op(a))
     response = fibers.perform(b:reader():read_line_op())
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(state.value, 1)
   assert_eq(response, 'reply:ping')
@@ -186,7 +186,7 @@ do
   local a, b = Stream.memory_pair({ name = 'line-cases' })
   local line, rest, tail, eof, eof_err, limited, limit_err, after_limit, exact, exact_err, partial
 
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('one\nmore'))
     line = fibers.perform(b:reader():read_line_op())
     rest = fibers.perform(b:reader():read_exactly_op(4))
@@ -195,7 +195,7 @@ do
     fibers.perform(a:writer():shutdown_op())
     tail = fibers.perform(b:reader():read_line_op())
     eof, eof_err = fibers.perform(b:reader():read_some_op(1))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(line, 'one')
   assert_eq(rest, 'more')
@@ -204,22 +204,22 @@ do
   assert_eq(eof_err, 'eof')
 
   local c, d = Stream.memory_pair({ name = 'line-limit' })
-  st = fibers.run(function()
+  st = fibers.try_run(function()
     fibers.perform(c:writer():write_op('abcdef'))
     limited, limit_err = fibers.perform(d:reader():read_line_op({ limit = 3 }))
     after_limit = fibers.perform(d:reader():read_exactly_op(6))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(limited)
   assert_eq(limit_err, 'line_too_long')
   assert_eq(after_limit, 'abcdef', 'line limit failure must not consume bytes')
 
   local e, f = Stream.memory_pair({ name = 'exact-eof' })
-  st = fibers.run(function()
+  st = fibers.try_run(function()
     fibers.perform(e:writer():write_op('ab'))
     fibers.perform(e:writer():shutdown_op())
     exact, exact_err, partial = fibers.perform(f:reader():read_exactly_op(4))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(exact)
   assert_eq(exact_err, 'eof')
@@ -227,16 +227,16 @@ do
   assert_eq(Inspect.data(f:reader().flow.reservoir), '', 'exact EOF consumes the returned final partial')
 end
 
--- Region/Lifetime ownership handoff works for stream compounds.
+-- Region/Scope ownership movement works for stream compounds.
 do
-  local Lifetime = fibers.Lifetime
-  local a, _b = Stream.memory_pair({ name = 'handoff' })
-  local from = Lifetime.new('from')
-  local to = Lifetime.new('to')
-  local st = fibers.run(function()
+  local Scope = fibers.Scope
+  local a, _b = Stream.memory_pair({ name = 'movement' })
+  local from = Scope.new('from')
+  local to = Scope.new('to')
+  local st = fibers.try_run(function()
     fibers.perform(from:raw_region():admit_op(a))
     fibers.perform(a:transfer_op(from, to))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(a.owner, to:raw_region())
 end
@@ -248,14 +248,14 @@ do
   local big_a = string.rep('a', 9000)
   local big_b = string.rep('b', 9000)
   local first, cross, rest, st_snapshot
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op(big_a))
     fibers.perform(a:writer():write_op(big_b))
     st_snapshot = fibers.perform(b:reader().flow.reservoir:inspect_op())
     first = fibers.perform(b:reader():read_exactly_op(8999))
     cross = fibers.perform(b:reader():read_exactly_op(2))
     rest = fibers.perform(b:reader():read_exactly_op(8999))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(#first, 8999)
   assert_eq(first, string.rep('a', 8999))
@@ -269,30 +269,29 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'sequential-writes' })
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('a'):and_then(function()
       return a:writer():write_op('b')
     end))
     got = fibers.perform(b:reader():read_exactly_op(2))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'ab')
 end
 
 
--- Parallel writes to the same flow reservoir are deliberately conservative: they
--- conflict rather than silently inventing an ordering.
+-- Parallel writes to a scalar-state-machine flow serialise in transition order.
 do
-  local a, b = Stream.memory_pair({ name = 'parallel-write-conflict' })
+  local a, b = Stream.memory_pair({ name = 'parallel-write-serial' })
   local got
   local rt = fibers.Runtime.new({ quiet_deadlock = true })
   rt:spawn_raw(function()
     got = rt:perform(Op.tensor({ a:writer():write_op('a'), a:writer():write_op('b') }))
   end, 'parallel-stream-writes')
   local st = rt:run()
-  assert_uncommitted_status(st, 'parallel writes to the same stream queue should not commit')
-  assert_nil(got, 'participant should not resume from conflicting parallel writes')
-  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'conflicting parallel stream writes leave the queue unchanged')
+  assert_status(st, 'found')
+  assert_truthy(got, 'participant should resume from serialised parallel writes')
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'ab', 'parallel stream writes are ordered by scalar transition order')
 end
 
 
@@ -301,7 +300,7 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'long-read-abandon' })
   local line_choice, all_choice, after_line, after_all
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('partial'))
     line_choice = fibers.perform(Op.choice(
       b:reader():read_line_op({ limit = 64 }):map(function() return 'line' end),
@@ -315,7 +314,7 @@ do
       Op.always('timeout')
     ))
     after_all = fibers.perform(b:reader():read_exactly_op(4))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(line_choice, 'timeout')
   assert_eq(after_line, 'partial', 'abandoned read_line_op must not consume queued bytes')
@@ -367,11 +366,11 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'read-all-limit' })
   local out, err, after
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abcdef'))
     out, err = fibers.perform(b:reader():read_all_op({ max = 3 }))
     after = fibers.perform(b:reader():read_exactly_op(6))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_nil(out)
   assert_eq(err, 'too_large')
@@ -385,11 +384,11 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'read-all-unlimited' })
   local out
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('xyz'))
     fibers.perform(a:writer():shutdown_op())
     out = fibers.perform(b:reader():read_all_op({ unlimited = true }))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(out, 'xyz')
 end
@@ -398,11 +397,11 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'edge-validation' })
   local r0, e0, w0
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     r0 = fibers.perform(b:reader():read_some_op(0))
     e0 = fibers.perform(b:reader():read_exactly_op(0))
     w0 = fibers.perform(a:writer():write_op(''))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(r0, '')
   assert_eq(e0, '')
@@ -422,11 +421,11 @@ end
 do
   local flow = Flow.new({ name = 'flow-derived-read-facts', capacity = 32 })
   local line, tail
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc\ndef'))
     line = fibers.perform(flow:outlet():read_until_op('\n'))
     tail = fibers.perform(flow:outlet():read_exactly_op(3))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(line, 'abc')
   assert_eq(tail, 'def')

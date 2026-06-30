@@ -5,8 +5,8 @@ local fibers = require('fibers')
 local message
 local child
 
-local st = fibers.launch(fibers.facility.policy.nursery(), function(nursery)
-  local ch = fibers.Channel.new('nursery-example')
+local st = fibers.launch(fibers.policy.nursery(), function(nursery)
+  local ch = fibers.Rendezvous.new('nursery-example')
 
   child = fibers.spawn(function()
     fibers.perform(ch:put_op('hello from a structured task'))

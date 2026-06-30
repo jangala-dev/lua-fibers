@@ -2,20 +2,21 @@ package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path},
 
 -- Resource-author settlement in miniature.
 --
--- Ordinary code should normally use facilities such as Lifetime, Task and
+-- Ordinary code should normally use facilities such as Scope, Task and
 -- Stream.  Resource authors can admit an Owned value with an Op-valued
 -- settlement protocol.  Retirement claims the item, runs that protocol, then
 -- releases the ownership record.
 
 local fibers = require('fibers')
 
-local Lifetime = fibers.Lifetime
+local Scope = fibers.Scope
 local Region = fibers.Region
 local Owned = fibers.Region.Owned
-local Cell = fibers.Cell
+local Scalar = fibers.Scalar
+local Settlement = require('fibers.internal.settlement')
 
-local life = Lifetime.new('owned-resource-example')
-local closed = Cell.new(false, 'demo-handle-closed')
+local scope = Scope.new('owned-resource-example')
+local closed = Scalar.new(false, 'demo-handle-closed')
 local handle = Region.handle('demo-handle')
 
 local owned = Owned.item(handle, function(_ctx, record, claim)
@@ -31,11 +32,11 @@ end, {
 })
 
 local settled
-local st = fibers.run(function()
-  fibers.perform(life:raw_region():admit_op(owned))
-  fibers.perform(life:settle_item_op(handle, 'done'))
+local st = fibers.try_run(function()
+  fibers.perform(scope:raw_region():admit_op(owned))
+  fibers.perform(Settlement.retire_item_op(scope, handle, 'done'))
   settled = fibers.perform(closed:read_op())
-end)
+end).runtime_status
 
 assert(st.tag == 'found')
 assert(settled.closed == true)

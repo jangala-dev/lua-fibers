@@ -5,9 +5,9 @@
 --   * managed validity facts observed by cursors, caches and prepared worlds.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Source = require('fibers.base.source')
+local Source = require('fibers.atoms.source')
 local SourceState = require('fibers.internal.source_state')
 local Debug = require('fibers.kernel.transaction_debug')
 local Resources = require('fibers.kernel.resources')
@@ -48,7 +48,7 @@ end
 -- cache whose pending problem and observed facts are unchanged.
 do
   local rt = Runtime.new()
-  local q = Source.queue('no-epoch-ready-cache')
+  local q = Source.events('no-epoch-ready-cache')
   local got
   rt:spawn_raw(function() got = rt:perform(q:next_op()) end, 'no-epoch-cache-waiter')
   local cache = drive_until_cache(rt, 'ready cache')
@@ -68,8 +68,8 @@ end
 -- resource facts actually change.
 do
   local rt = Runtime.new()
-  local qa = Source.queue('no-epoch-cache-a')
-  local qb = Source.queue('no-epoch-cache-b')
+  local qa = Source.events('no-epoch-cache-a')
+  local qb = Source.events('no-epoch-cache-b')
   local got
   rt:spawn_raw(function() got = rt:perform(qa:next_op()) end, 'no-epoch-cache-a-waiter')
   local cache = drive_until_cache(rt, 'unrelated commit cache')
@@ -83,11 +83,11 @@ do
   assert_eq(reason, nil)
 
   assert_eq(Debug.wait_cache(rt), cache, 'unrelated commit must not discard cache')
-  assert_eq(Resources.observer_valid(observer), true, 'unrelated commit must not invalidate queue-A absence')
+  assert_eq(Resources.observer_valid(observer), true, 'unrelated commit must not invalidate events-A absence')
   assert_eq(got, nil)
 
   SourceState.arrive(qa, 'payload-a')
-  assert_eq(Resources.observer_valid(observer), false, 'related queue arrival must still invalidate cache')
+  assert_eq(Resources.observer_valid(observer), false, 'related events arrival must still invalidate cache')
 end
 
 -- Waiting-root shape is still guarded, but by pending_signature rather than by
@@ -96,8 +96,8 @@ end
 -- problem.
 do
   local rt = Runtime.new()
-  local qa = Source.queue('no-epoch-sig-a')
-  local qb = Source.queue('no-epoch-sig-b')
+  local qa = Source.events('no-epoch-sig-a')
+  local qb = Source.events('no-epoch-sig-b')
   rt:spawn_raw(function() rt:perform(qa:next_op()) end, 'no-epoch-sig-a-waiter')
   local cache = drive_until_cache(rt, 'signature cache')
   local observer = cache.observer

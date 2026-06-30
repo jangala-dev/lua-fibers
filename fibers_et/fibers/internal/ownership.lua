@@ -2,12 +2,12 @@
 --
 -- Ownership is the small transactional owner record beneath Regions.  A Region validates admission,
 -- sealing and membership; the ownership record is where item owner transitions
--- become concrete and where standard lifetime effects are derived.
+-- become concrete and where standard scope effects are derived.
 
 local EffectSet = require('fibers.kernel.effect.set')
 local KernelResources = require('fibers.kernel.resources')
 local Validity = require('fibers.kernel.validity')
-local Effect = require('fibers.base.effect')
+local Effect = require('fibers.atoms.effect')
 local Settlement = require('fibers.internal.settlement')
 
 local Ownership = {}
@@ -19,14 +19,14 @@ local function owner_id(owner)
 end
 
 local function item_kind(item)
-  return item and (item._fibers_obligation_kind or item._fibers_lifetime_kind or item._fibers_kind_name or item._fibers_id and 'owned' or nil)
+  return item and (item._fibers_obligation_kind or item._fibers_scope_kind or item._fibers_kind_name or item._fibers_id and 'owned' or nil)
 end
 
 local function transition_type(old_owner, new_owner)
   if old_owner == new_owner then return nil end
   if old_owner == nil and new_owner ~= nil then return 'admitted' end
   if old_owner ~= nil and new_owner == nil then return 'released' end
-  if old_owner ~= nil and new_owner ~= nil then return 'reassigned' end
+  if old_owner ~= nil and new_owner ~= nil then return 'moved' end
   return nil
 end
 
@@ -66,7 +66,7 @@ function Kind.prepare(item, rec, _resolve)
   local typ = transition_type(old_owner, new_owner)
   if typ then
     local effect_set = EffectSet.empty()
-    local ok, err = effect_set:add(Effect.lifetime {
+    local ok, err = effect_set:add(Effect.scope {
       type = typ,
       item = item,
       item_id = item._fibers_id,
@@ -85,6 +85,11 @@ end
 function Kind.apply(prepared, _log)
   local item = prepared.resource
   item.owner = prepared.owner
+  if prepared.old_owner ~= nil and prepared.owner == nil then
+    item._fibers_retired = true
+  elseif prepared.owner ~= nil then
+    item._fibers_retired = false
+  end
   item.owner_version = (item.owner_version or 0) + 1
   KernelResources.invalidate_object(item, 'owner changed')
 end

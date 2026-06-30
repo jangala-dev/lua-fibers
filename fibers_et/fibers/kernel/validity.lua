@@ -410,38 +410,38 @@ function Set:pairs(ctx)
 end
 function Set:clear(reason) return self.map:clear(reason or 'set clear') end
 
-local Claim = {}
-Claim.__index = Claim
+local Lease = {}
+Lease.__index = Lease
 
-function Validity.claim(name, opts)
-  return setmetatable({ kind = 'claim', name = name or 'claim', owners = Validity.map((name or 'claim') .. ':owners', opts) }, Claim)
+function Validity.lease(name, opts)
+  return setmetatable({ kind = 'lease', name = name or 'lease', owners = Validity.map((name or 'lease') .. ':owners', opts) }, Lease)
 end
 
-function Claim:frontier_for(kind, key) return self.owners:frontier_for(kind, key) end
-function Claim:owner(ctx, key) return self.owners:get(ctx, key) end
-function Claim:is_free(ctx, key) return not self.owners:contains(ctx, key) end
-function Claim:claim(key, owner, reason)
-  if owner == nil then error('claim owner must not be nil', 2) end
+function Lease:frontier_for(kind, key) return self.owners:frontier_for(kind, key) end
+function Lease:owner(ctx, key) return self.owners:get(ctx, key) end
+function Lease:is_free(ctx, key) return not self.owners:contains(ctx, key) end
+function Lease:acquire(key, owner, reason)
+  if owner == nil then error('lease holder must not be nil', 2) end
   local current, present = self.owners:get(nil, key)
   if present then
     if current == owner then return true, 'already-owner' end
-    return false, 'claimed', current
+    return false, 'leased', current
   end
-  self.owners:set(key, owner, reason or 'claim acquired')
+  self.owners:set(key, owner, reason or 'lease acquired')
   return true
 end
-function Claim:release(key, owner, reason)
+function Lease:release(key, owner, reason)
   local current, present = self.owners:get(nil, key)
   if not present then return false end
   if owner ~= nil and current ~= owner then return false, 'not-owner' end
-  return self.owners:remove(key, reason or 'claim released')
+  return self.owners:remove(key, reason or 'lease released')
 end
-function Claim:transfer(key, from_owner, to_owner, reason)
-  if to_owner == nil then error('claim transfer target must not be nil', 2) end
+function Lease:transfer(key, from_owner, to_owner, reason)
+  if to_owner == nil then error('lease transfer target must not be nil', 2) end
   local current, present = self.owners:get(nil, key)
   if not present then return false, 'free' end
   if from_owner ~= nil and current ~= from_owner then return false, 'not-owner' end
-  return self.owners:set(key, to_owner, reason or 'claim transferred')
+  return self.owners:set(key, to_owner, reason or 'lease transferred')
 end
 
 local Derived = {}
@@ -541,7 +541,7 @@ Validity.Clock = Clock
 Validity.Epoch = Epoch
 Validity.Map = Map
 Validity.Set = Set
-Validity.Claim = Claim
+Validity.Lease = Lease
 Validity.Derived = Derived
 
 return Validity

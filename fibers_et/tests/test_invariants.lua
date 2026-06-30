@@ -5,8 +5,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local fibers = require('fibers')
 local Runtime = fibers.Runtime
 local Op = fibers.Op
-local Cell = fibers.Cell
-local Channel = fibers.Channel
+local Scalar = fibers.Scalar
+local Rendezvous = fibers.Rendezvous
 local Effect = fibers.Effect
 local Interrupt = require('fibers.internal.interrupt')
 local EffectSet = require('fibers.kernel.effect.set')
@@ -26,48 +26,48 @@ end
 
 -- Plain user tables are opaque values, not solver structure.
 do
-  local ch = Channel.new('opaque-channel')
+  local ch = Rendezvous.new('opaque-rendezvous')
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function() rt:perform(ch:put_op(value)) end, 'opaque-put')
   rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'opaque-get')
   run_all(rt)
-  assert_eq(got, value, 'channel rendezvous preserves table identity')
-  assert_eq(got.x, 42, 'channel rendezvous preserves keyed fields')
-  assert_eq(got.nested.y, 7, 'channel rendezvous preserves nested user table')
+  assert_eq(got, value, 'rendezvous preserves table identity')
+  assert_eq(got.x, 42, 'rendezvous preserves keyed fields')
+  assert_eq(got.nested.y, 7, 'rendezvous preserves nested user table')
 end
 
 do
-  local cell = Cell.new(nil, 'opaque-cell')
+  local scalar = Scalar.new(nil, 'opaque-scalar')
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:write_op(value))
-    got = rt:perform(cell:read_op())
-  end, 'opaque-cell-fibre')
+    rt:perform(scalar:write_op(value))
+    got = rt:perform(scalar:read_op())
+  end, 'opaque-scalar-fibre')
   run_all(rt)
-  assert_eq(got, value, 'cell stores user table opaquely')
-  assert_eq(got.x, 42, 'cell preserves keyed fields')
+  assert_eq(got, value, 'scalar stores user table opaquely')
+  assert_eq(got.x, 42, 'scalar preserves keyed fields')
 end
 
--- Queue Source consumption is journalled: a losing branch does not steal an occurrence.
+-- Events Source consumption is journalled: a losing branch does not steal an occurrence.
 do
   local rt = Runtime.new()
-  local q, feed = rt:queue_source('journalled-source-queue')
+  local q, feed = rt:events_source('journalled-source-events')
   feed:push('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()
     choice_result = rt:perform(fibers.choice(
       Op.always('winner'),
-      q:next_op():map(function(v) return 'queue:' .. tostring(v) end)
+      q:next_op():map(function(v) return 'events:' .. tostring(v) end)
     ))
     next_result = rt:perform(q:next_op())
-  end, 'source-queue-loser')
+  end, 'source-events-loser')
   run_all(rt)
   assert_eq(choice_result, 'winner', 'left choice wins this deterministic race')
-  assert_eq(next_result, 'event-1', 'losing queue branch did not consume occurrence')
+  assert_eq(next_result, 'event-1', 'losing events branch did not consume occurrence')
 end
 
 -- Built-in effect merges are pure: merging does not mutate original payloads.
@@ -129,7 +129,10 @@ end
 do
   local r = fibers.Region.new('claim-surface')
   assert_eq(type(r.claim_op), 'function', 'Region should expose generic claim_op')
-  assert_eq(type(r.settle_claim_op), 'function', 'Region should expose generic settle_claim_op')
+  assert_eq(type(r.resolve_claim_op), 'function', 'Region should expose generic resolve_claim_op')
+  assert_eq(type(r.discharge_claim_op), 'function', 'Region should expose explicit discharge_claim_op')
+  assert_eq(type(r.fail_claim_op), 'function', 'Region should expose explicit fail_claim_op')
+  assert_eq(type(r.move_op), 'function', 'Region should expose explicit move_op')
   assert_eq(type(r.retire_tree_op), 'nil', 'Region should not expose retire_tree_op')
   assert_eq(type(r.release_tree_op), 'nil', 'Region should not expose release_tree_op')
 end

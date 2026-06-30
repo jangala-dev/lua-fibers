@@ -114,13 +114,13 @@ lua tests/run_all.lua --fail-fast
 Wait interests are not partial commits.  They are typed descriptions of future
 conditions under which search may become productive.
 
-The public wait kinds are centred on the base kit:
+The public wait kinds are centred on the atom kit:
 
 ```text
 source    host signal/queue/readiness occurrence
 time      clock source deadline
-cell      cell predicate or modify_when may become true
-region    region ownership/lifetime state may change
+scalar      scalar predicate or modify_when may become true
+region    region ownership/scope state may change
 ```
 
 Pending statuses carry the current wait summary:
@@ -139,7 +139,7 @@ the consumer `source` and the original `readiness_key`, so a host can later call
 ## Sources
 
 `fibers.Source` is the public way to expose host events.  A source may be a
-clock, a host signal, a queue source, or a readiness source.
+clock, a host signal, an events source, or a readiness source.
 
 ```lua
 local clock = fibers.Source.clock('clock')

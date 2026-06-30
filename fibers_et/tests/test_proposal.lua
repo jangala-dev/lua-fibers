@@ -2,7 +2,7 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Proposal = require('fibers.kernel.resources.proposal')
 
 local function fail(msg) error(msg, 2) end
@@ -51,16 +51,16 @@ local function test_nil_substitution_is_a_real_resolution()
 end
 
 local function test_clone_preserves_resource_deltas()
-  local Cell = require('fibers.base.cell')
+  local Scalar = require('fibers.atoms.scalar')
   local Resource = require('fibers.kernel.resources.protocol')
-  local cell = Cell.new('x', 'proposal-clone-cell')
+  local scalar = Scalar.new('x', 'proposal-clone-scalar')
   local p = Proposal.new(Op._pack('ok'))
-  local rec = Resource.ensure(p, cell, cell._fibers_kind)
+  local rec = Resource.ensure(p, scalar, scalar._fibers_kind)
   rec.write = 'y'
   local q = Proposal.clone(p)
-  assert_eq(q.res[cell].write, 'y', 'resource record is copied')
-  q.res[cell].write = 'z'
-  assert_eq(p.res[cell].write, 'y', 'clone does not mutate original resource record')
+  assert_eq(q.res[scalar].write, 'y', 'resource record is copied')
+  q.res[scalar].write = 'z'
+  assert_eq(p.res[scalar].write, 'y', 'clone does not mutate original resource record')
 end
 
 local tests = {

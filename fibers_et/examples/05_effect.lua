@@ -9,7 +9,7 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local fibers = require('fibers')
 
 local log = {}
-local counter = fibers.Cell.new(0, 'counter')
+local counter = fibers.Scalar.new(0, 'counter')
 
 local LogKind
 LogKind = fibers.Effect.kind {

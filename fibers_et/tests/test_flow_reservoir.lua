@@ -1,7 +1,7 @@
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
 
 local fibers = require('fibers')
-local Errors = require('fibers.facility.flow.errors')
+local Errors = require('fibers.flow.errors')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -11,14 +11,14 @@ local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail(
 -- Lease:length and Lease:inspect should be callable methods, not shadowed by
 -- fields on the lease table.
 do
-  local flow = fibers.Flow.new({ name = 'lease-method-flow', capacity = 10 })
+  local flow = require('fibers.flow').new({ name = 'lease-method-flow', capacity = 10 })
   local lease, len, info
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
     lease = fibers.perform(flow:outlet():lease_some_op(3, 'owner-a'))
     len = lease:length()
     info = lease:inspect()
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_truthy(lease, 'lease should commit')
   assert_eq(len, 3, 'lease:length should return leased byte length')
@@ -30,15 +30,15 @@ end
 -- reservoir.  A second owner cannot acquire a lease until the first is acked,
 -- returned, failed, or settled.
 do
-  local flow = fibers.Flow.new({ name = 'single-active-lease-flow', capacity = 10 })
+  local flow = require('fibers.flow').new({ name = 'single-active-lease-flow', capacity = 10 })
   local first, second, second_err, after_ack
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
     first = fibers.perform(flow:outlet():lease_some_op(3, 'owner-a'))
     second, second_err = fibers.perform(flow:outlet():lease_some_op(3, 'owner-b'))
     fibers.perform(first:ack_op(3))
     after_ack = fibers.perform(flow:outlet():lease_some_op(3, 'owner-b'))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_truthy(first, 'first lease should commit')
   assert_eq(first:bytes(), 'abc')
@@ -51,15 +51,15 @@ end
 -- Queued bytes are stored as a rope of chunks rather than a single mutable
 -- concatenated string.  The public observation remains a byte stream.
 do
-  local flow = fibers.Flow.new({ name = 'rope-backed-flow', capacity = 64 })
+  local flow = require('fibers.flow').new({ name = 'rope-backed-flow', capacity = 64 })
   local snap, got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('ab'))
     fibers.perform(flow:inlet():write_op('cd'))
     fibers.perform(flow:inlet():write_op('ef'))
     snap = fibers.perform(flow:inspect_op())
     got = fibers.perform(flow:outlet():read_exactly_op(6))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_truthy(snap.chunk_count >= 3, 'rope-backed reservoir should retain append chunks')
   assert_eq(snap.data, 'abcdef', 'inspection should materialise the byte stream')

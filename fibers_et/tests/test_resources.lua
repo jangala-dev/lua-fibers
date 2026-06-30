@@ -3,7 +3,7 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local tests = {
-  'tests/resources/test_cell.lua',
+  'tests/resources/test_scalar.lua',
   'tests/resources/test_event.lua',
 }
 

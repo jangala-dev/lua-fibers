@@ -56,7 +56,7 @@ local region = fibers.Region.new('example-socket-region')
 local stream, got, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'example-socket-stream' }))
+  stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'example-socket-stream' }))
   got = rt:perform(stream:reader():read_exactly_op(4))
   rt:perform(stream:writer():write_op('pong'))
   flushed = rt:perform(stream:writer():flush_op())

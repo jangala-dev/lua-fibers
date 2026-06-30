@@ -2,9 +2,9 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Cell = require('fibers.base.cell')
+local Scalar = require('fibers.atoms.scalar')
 local TC = require('tests.effect_helpers')
 
 local pack_ = table.pack or function(...)
@@ -114,10 +114,10 @@ local function test_prepare_refusal_backtracks_to_other_worlds()
 end
 
 local function test_discharge_failure_is_fatal_after_resource_commit()
-  local cell = Cell.new(0, 'discharge-fatal-cell')
+  local scalar = Scalar.new(0, 'discharge-fatal-scalar')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:write_op(1):and_then(function()
+    rt:perform(scalar:write_op(1):and_then(function()
       return Op.emit(TC.discharge_fatal())
     end))
   end, 'discharge-fatal')
@@ -126,7 +126,7 @@ local function test_discharge_failure_is_fatal_after_resource_commit()
   assert_error_kind(ok, err, 'effect_error', 'raw discharge failure is fatal effect error')
   assert_eq(err.fatal, true)
   assert_eq(err.committed, true, 'discharge failure is after resource commit')
-  assert_eq(cell.value, 1, 'resource commit is not rolled back by discharge failure')
+  assert_eq(scalar.value, 1, 'resource commit is not rolled back by discharge failure')
   assert_eq(rt:failed(), err, 'runtime stores fatal discharge failure')
 end
 

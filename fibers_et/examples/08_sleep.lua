@@ -30,7 +30,7 @@ local host = PureHost.new({
 print(stamp(), 'driver: starting standalone run')
 
 local done = false
-local st = fibers.run(function()
+local st = fibers.try_run(function()
   print(stamp(), 'fibre: starting')
   print(stamp(), 'fibre: performing sleep_op(' .. DELAY .. ')')
 
@@ -38,7 +38,7 @@ local st = fibers.run(function()
 
   print(stamp(), 'fibre: resumed after sleep')
   done = true
-end, { host = host, name = 'sleep-example' })
+end, { host = host, name = 'sleep-example' }).runtime_status
 
 print(stamp(), 'driver: runtime finished with status ' .. tostring(st and st.tag))
 assert(done, 'sleeping fibre should have resumed')

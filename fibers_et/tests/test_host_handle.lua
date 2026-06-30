@@ -36,7 +36,7 @@ do
   local stream, got
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_handle_op(region, handle, { name = 'handle-read-stream' }))
+    stream = rt:perform(Stream.open_handle_in_op(region, handle, { name = 'handle-read-stream' }))
     got = rt:perform(stream:reader():read_exactly_op(4))
   end, 'handle-reader')
 
@@ -58,7 +58,7 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_handle_op(region, handle, { name = 'handle-write-stream' }))
+    stream = rt:perform(Stream.open_handle_in_op(region, handle, { name = 'handle-write-stream' }))
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'handle-writer')

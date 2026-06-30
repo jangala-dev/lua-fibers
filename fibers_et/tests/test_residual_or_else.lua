@@ -1,10 +1,10 @@
 -- Focused residual or_else tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Channel = require('fibers.base.channel')
-local Source = require('fibers.base.source')
+local Rendezvous = require('fibers.atoms.rendezvous')
+local Source = require('fibers.atoms.source')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -97,7 +97,7 @@ end
 
 -- Global rendezvous primary still beats fallback.
 do
-  local ch = Channel.new('residual-primary')
+  local ch = Rendezvous.new('residual-primary')
   local rt = Runtime.new()
   local got, sent
   rt:spawn_raw(function() got = rt:perform(ch:get_op():or_else(Op.always('fallback'))) end, 'receiver')
@@ -109,8 +109,8 @@ end
 
 -- Partner backtracking can still make primary available.
 do
-  local wanted = Channel.new('residual-wanted')
-  local dead = Channel.new('residual-dead')
+  local wanted = Rendezvous.new('residual-wanted')
+  local dead = Rendezvous.new('residual-dead')
   local rt = Runtime.new()
   local receiver, partner
   rt:spawn_raw(function()
@@ -130,7 +130,7 @@ do
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
-    got = rt:perform(Channel.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
+    got = rt:perform(Rendezvous.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
   end, 'cursor-residual')
   local st
   for _ = 1, 80 do
@@ -144,7 +144,7 @@ end
 -- Bounded cursor must not commit fallback before an unstarted sender can make
 -- the primary globally available.
 do
-  local ch = Channel.new('cursor-residual-with-sender')
+  local ch = Rendezvous.new('cursor-residual-with-sender')
   local rt = Runtime.new()
   local got, sent
   rt:spawn_raw(function() got = rt:perform(ch:get_op():or_else(Op.always('fallback'))) end, 'receiver')

@@ -1,7 +1,7 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
-local Cell = require('fibers.base.cell')
+local Op = require('fibers.atoms.op')
+local Scalar = require('fibers.atoms.scalar')
 local Runtime = require('fibers.kernel.runtime')
 local Debug = require('fibers.kernel.transaction_debug')
 
@@ -47,7 +47,7 @@ end
 -- falling back to a fresh search.
 do
   local rt = Runtime.new()
-  local c = Cell.new(7, 'local-proof-cell')
+  local c = Scalar.new(7, 'local-proof-scalar')
   local bind_count = 0
   local op = Op.always('go'):and_then(function()
     bind_count = bind_count + 1
@@ -59,7 +59,7 @@ do
   local ok = world:commit(rt)
   assert_eq(ok, true, 'resource continuation world should commit')
   local vals = world:run_wraps_for(rt, 1)
-  assert_eq(vals[1], 7, 'resource continuation should deliver cell value')
+  assert_eq(vals[1], 7, 'resource continuation should deliver scalar value')
   assert_eq(bind_count, 1, 'bind callback must not be rerun by general proof search')
 end
 

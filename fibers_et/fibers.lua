@@ -1,42 +1,54 @@
 -- Convenience entry point for the fibers runtime.
 --
--- The low-level public machinery is the base kit:
---   Op, Cell, Channel, Source, Region, Task, Effect.
--- Everything else is kernel infrastructure or ordinary library code built from
--- those nouns.
+-- The low-level public machinery is the atom kit:
+--   Op, Scalar, Rendezvous, Index, Counter, Keyed, Lease, Source, Region, Effect.
+-- Task, Stream and Scope are ordinary library compounds built from those atoms.
 
 local M = {}
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Effect = require('fibers.base.effect')
+local Effect = require('fibers.atoms.effect')
 local Protected = require('fibers.kernel.protected')
-local Policy = require('fibers.facility.policy')
-local Sleep = require('fibers.facility.sleep')
-local Flow = require('fibers.facility.flow')
-local Stream = require('fibers.facility.stream')
+local Policy = require('fibers.policy')
+local Sleep = require('fibers.sleep')
+local Stream = require('fibers.stream')
 local Host = require('fibers.host')
 local Runner = require('fibers.runner')
-local Base = require('fibers.base')
-local Facility = require('fibers.facility')
+local Atoms = require('fibers.atoms')
 local Kernel = require('fibers.kernel')
+local ScopeResult = require('fibers.kernel.scope_result')
 
 M.Op = Op
 M.Runtime = Runtime
-M.Cell = require('fibers.base.cell')
-M.Channel = require('fibers.base.channel')
-M.Source = require('fibers.base.source')
-M.Region = require('fibers.base.region')
-M.Lifetime = require('fibers.facility.lifetime')
-M.Flow = Flow
+M.Scalar = require('fibers.atoms.scalar')
+M.Rendezvous = require('fibers.atoms.rendezvous')
+M.Index = require('fibers.atoms.index')
+M.Counter = require('fibers.atoms.counter')
+M.Keyed = require('fibers.atoms.keyed')
+M.Lease = require('fibers.atoms.lease')
+M.Queue = require('fibers.queue')
+M.Channel = require('fibers.channel')
+M.PriorityQueue = require('fibers.priority_queue')
+M.Pulse = require('fibers.pulse')
+M.Mailbox = require('fibers.mailbox')
+M.WaitGroup = require('fibers.waitgroup')
+M.Pool = require('fibers.pool')
+M.RateLimiter = require('fibers.rate_limiter')
+M.Source = require('fibers.atoms.source')
+M.Region = require('fibers.atoms.region')
+M.Scope = require('fibers.scope')
+M.Flow = require('fibers.flow')
 M.Stream = Stream
 M.sleep_op = Sleep.sleep_op
 M.sleep_until_op = Sleep.sleep_until_op
-M.Task = require('fibers.base.task')
+M.Task = require('fibers.task')
+M.Borrow = require('fibers.borrow')
+M.Phase = require('fibers.phase')
 M.Exit = require('fibers.kernel.exit')
+M.ScopeResult = ScopeResult
 M.Effect = Effect
-M.base = Base
-M.facility = Facility
+M.atoms = Atoms
 M.kernel = Kernel
 M.host = Host
 M.Runner = Runner
@@ -66,15 +78,19 @@ function M.current_runtime()
   return Runtime.current()
 end
 
-local function current_frame()
-  return Runtime._current_frame and Runtime._current_frame() or nil
+local function current_scope()
+  return Runtime.current_scope and Runtime.current_scope() or nil
+end
+
+function M.current_scope()
+  return current_scope()
 end
 
 function M.perform(op)
   local rt = Runtime.current()
   if not rt then error('fibers.perform must be called from a running fiber', 2) end
-  local frame = current_frame()
-  if frame and type(frame.perform) == 'function' then return frame:perform(op) end
+  local scope = current_scope()
+  if scope and type(scope.perform) == 'function' then return scope:perform(op) end
   return rt:perform(op)
 end
 
@@ -85,25 +101,49 @@ function M.spawn_raw(fn, name)
 end
 
 function M.spawn(fn, name)
-  local frame = current_frame()
-  if not frame or type(frame.spawn) ~= 'function' then
-    error('fibers.spawn requires a launch policy with structured spawning; use fibers.spawn_raw for unstructured fibres', 2)
+  local scope = current_scope()
+  if not scope or type(scope.spawn) ~= 'function' then
+    error('fibers.spawn requires a current scope; use fibers.spawn_raw for unstructured fibres', 2)
   end
-  return frame:spawn(fn, name)
+  return scope:spawn(fn, name)
 end
+
+function M.stream(backend, opts)
+  return M.perform(Stream.open_backend_op(backend, opts))
+end
+
+local unpack_ = table.unpack or unpack
+local function pack(...) return { n = select('#', ...), ... } end
 
 function M.mask(fn, ...)
   if type(fn) ~= 'function' then error('fibers.mask expects a function', 2) end
-  local frame = current_frame()
-  if not frame then return fn(...) end
-  frame.mask_depth = (frame.mask_depth or 0) + 1
-  local ok, a, b, c, d, e = Protected.pcall(fn, ...)
-  frame.mask_depth = frame.mask_depth - 1
-  if not ok then error(a, 0) end
-  return a, b, c, d, e
+  local scope = current_scope()
+  if not scope then return fn(...) end
+  scope.mask_depth = (scope.mask_depth or 0) + 1
+  local r = pack(Protected.pcall(fn, ...))
+  scope.mask_depth = scope.mask_depth - 1
+  if not r[1] then error(r[2], 0) end
+  return unpack_(r, 2, r.n)
 end
 
 M.uninterruptible = M.mask
+
+function M.try_scope(opts, fn)
+  if type(opts) == 'function' then fn, opts = opts, {} end
+  opts = opts or {}
+  if type(fn) ~= 'function' then error('fibers.try_scope expects a function', 2) end
+  local rt = Runtime.current()
+  if not rt then error('fibers.try_scope must be called from a running fiber', 2) end
+  local parent = current_scope()
+  local scope = M.Scope.new(opts.name or 'scope', { runtime = rt, parent = parent, policy = opts.policy or (parent and parent.policy) })
+  return scope:try_run(fn)
+end
+
+function M.scope(opts, fn)
+  if type(opts) == 'function' then fn, opts = opts, {} end
+  return M.try_scope(opts or {}, fn):raise()
+end
+
 
 local function runtime_options(opts, host)
   local rt_opts = {}
@@ -131,22 +171,44 @@ function M.launch(policy, fn, opts)
   if type(policy) ~= 'table' or type(policy.enter) ~= 'function' then error('fibers.launch expects a policy', 2) end
   local host = default_host(opts)
   local rt = Runtime.new(runtime_options(opts, host))
-  local frame = policy:enter(rt, nil)
+  local scope = policy:enter(rt, nil)
   rt:spawn_raw(function()
-    if type(policy.run_root) == 'function' then return policy:run_root(frame, fn, rt) end
-    return fn(rt)
-  end, opts.name or 'root', frame)
+    if type(policy.run_root) == 'function' then return policy:run_root(scope, fn, rt) end
+    return scope:run(fn)
+  end, opts.name or 'root', scope)
   local st = Runner.run(rt, { host = host, run = opts.run, host_options = opts.host_options, max_iterations = opts.max_iterations })
-  return st, rt, frame
+  return st, rt, scope
+end
+
+function M.try_run(fn, opts)
+  opts = opts or {}
+  if type(fn) ~= 'function' then error('fibers.try_run expects a function', 2) end
+  local host = default_host(opts)
+  local rt = Runtime.new(runtime_options(opts, host))
+  local scope = M.Scope.new(opts.name or 'root', { runtime = rt, policy = opts.policy or Policy.nursery({ name = opts.name or 'root' }) })
+  local result
+  local runner_status
+  local ok, err = Protected.pcall(function()
+    rt:spawn_raw(function()
+      result = scope:try_run(fn)
+      return result
+    end, opts.name or 'root', scope)
+    runner_status = Runner.run(rt, { host = host, run = opts.run, host_options = opts.host_options, max_iterations = opts.max_iterations })
+  end)
+  if ok and result then
+    result.runtime_status = runner_status
+    result.runtime = rt
+    result.scope = scope
+    return result
+  end
+  if not ok then
+    return ScopeResult.fail({ reason = 'runtime_error', primary = err, report = scope:_make_report(err, {}, { reason = 'runtime_error' }), runtime_status = runner_status })
+  end
+  return ScopeResult.fail({ reason = 'runtime_pending', primary = runner_status, report = scope:_make_report(runner_status, {}, { reason = 'runtime_pending' }), runtime_status = runner_status })
 end
 
 function M.run(fn, opts)
-  opts = opts or {}
-  local host = default_host(opts)
-  local rt = Runtime.new(runtime_options(opts, host))
-  rt:spawn_raw(function() return fn(rt) end, opts.name or 'root')
-  local st = Runner.run(rt, { host = host, run = opts.run, host_options = opts.host_options, max_iterations = opts.max_iterations })
-  return st, rt
+  return M.try_run(fn, opts):raise()
 end
 
 

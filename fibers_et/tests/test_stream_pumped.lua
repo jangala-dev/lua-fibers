@@ -28,12 +28,12 @@ do
   local backend = Fake.new({ name = 'losing-open-backend' })
   local region = fibers.Region.new('losing-open-region')
   local got
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      Stream.open_backend_op(region, backend, { name = 'losing-open-stream' }):map(function() return 'loser' end)
+      Stream.open_backend_in_op(region, backend, { name = 'losing-open-stream' }):map(function() return 'loser' end)
     ))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
   assert_nil(backend.runtime, 'losing open should not start or bind pump tasks')
@@ -47,7 +47,7 @@ do
   local backend = Fake.new({ name = 'compound-backend' })
   local stream
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'compound-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'compound-stream' }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_truthy(stream, 'open_backend_op should return a stream')
@@ -81,7 +81,7 @@ do
     return Op.always(s)
   end
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'custom-strategy-stream', pump_strategy = strategy }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'custom-strategy-stream', pump_strategy = strategy }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(seen_stream, stream, 'custom strategy should receive compound stream')
@@ -96,7 +96,7 @@ do
   local backend = Fake.new({ name = 'read-backend' })
   local stream, got
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'read-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'read-stream' }))
     got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'root')
   assert_status(rt:run(), 'found')
@@ -113,7 +113,7 @@ do
   local backend = Fake.new({ name = 'capacity-read-backend' })
   local stream, first, second
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'capacity-read-stream', read_capacity = 2, read_chunk_size = 4 }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'capacity-read-stream', read_capacity = 2, read_chunk_size = 4 }))
     first = rt:perform(stream:reader():read_exactly_op(2))
     second = rt:perform(stream:reader():read_exactly_op(2))
   end, 'root')
@@ -132,7 +132,7 @@ do
   local backend = Fake.new({ name = 'write-backend' })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'write-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -147,7 +147,7 @@ do
   local backend = Fake.new({ name = 'losing-write-backend' })
   local stream, got
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'losing-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'losing-write-stream' }))
     got = rt:perform(Op.choice(
       Op.always('winner'),
       stream:writer():write_op('abc'):map(function() return 'loser' end)
@@ -164,7 +164,7 @@ do
   local backend = Fake.new({ name = 'partial-write-backend', write_chunk_size = 2 })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'partial-write-stream', write_chunk_size = 6 }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'partial-write-stream', write_chunk_size = 6 }))
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -179,7 +179,7 @@ do
   local backend = Fake.new({ name = 'would-block-backend', write_blocked = true })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'would-block-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'would-block-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -200,7 +200,7 @@ do
   local backend = Fake.new({ name = 'eof-backend' })
   local stream, first, second, err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'eof-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'eof-stream' }))
     first = rt:perform(stream:reader():read_exactly_op(3))
     second, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
@@ -220,7 +220,7 @@ do
   local backend = Fake.new({ name = 'shutdown-write-backend', write_blocked = true })
   local stream, done
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'shutdown-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'shutdown-write-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     rt:perform(stream:writer():shutdown_op())
     done = rt:perform(stream:writer():flush_op())
@@ -240,7 +240,7 @@ do
   backend:fail_writes('connection_reset')
   local stream, flushed, flush_err, n, err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'write-error-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'write-error-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
     n, err = rt:perform(stream:writer():write_op('d'))
@@ -260,7 +260,7 @@ do
   local backend = Fake.new({ name = 'lease-capacity-backend', write_blocked = true })
   local stream, second_done, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'lease-capacity-stream', write_capacity = 3 }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'lease-capacity-stream', write_capacity = 3 }))
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'writer1')
@@ -287,7 +287,7 @@ do
   local backend = Fake.new({ name = 'blocked-read-close-backend', read_blocked = true })
   local stream
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'blocked-read-close-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'blocked-read-close-stream' }))
   end, 'open-blocked-read')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function()

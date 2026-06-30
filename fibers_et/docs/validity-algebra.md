@@ -101,7 +101,7 @@ v:set(n + 1)               -- bumps counter:value if the value changed
 v:bump('external change')  -- conservative explicit bump
 ```
 
-Use it for cells, modes, state fields and simple versions.
+Use it for scalars, modes, state fields and simple versions.
 
 ### Level
 
@@ -195,24 +195,24 @@ s:add(who)
 s:remove(who)
 ```
 
-### Claim
+### Lease
 
-A claim is an ownership-specialised keyspace.  It is useful for slots, ownership
+A lease is an ownership-specialised keyspace.  It is useful for slots, ownership
 pools and exclusive resource rights.
 
 ```lua
-local c = Validity.claim('buffers')
+local c = Validity.lease('buffers')
 
 if c:is_free(ctx, slot) then ... end       -- observes membership(slot)
 local owner, present = c:owner(ctx, slot)  -- observes membership and value
 
-c:claim(slot, owner)       -- succeeds only if free or already same owner
+c:acquire(slot, owner)     -- succeeds only if free or already same holder
 c:release(slot, owner)     -- optionally checks owner
-c:transfer(slot, old, new) -- explicit owner change while still claimed
+c:transfer(slot, old, new) -- explicit owner change while still leased
 ```
 
 `is_free` observes membership only.  A transfer from one owner to another while
-the slot remains claimed does not invalidate a waiter that only cared whether
+the slot remains leased does not invalidate a waiter that only cared whether
 the slot was free.
 
 ### Derived
@@ -286,12 +286,12 @@ Epoch law
 The built-in resources use managed facts:
 
 ```text
-Cell                  scalar
+Scalar                  scalar
 Source.signal         signal
-Source.queue          queue
+Source.events         events
 Source.readiness      level
 Source.clock          clock
-Channel               epoch
+Rendezvous               epoch
 Task                  epoch
 Region/Ownership      epoch
 Flow/Reservoir        epoch

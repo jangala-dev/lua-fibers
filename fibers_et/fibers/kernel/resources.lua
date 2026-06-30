@@ -4,12 +4,13 @@
 -- miss certification.  The transaction net owns option algebra; resource
 -- kinds only certify local mutable facts.
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Wait = require('fibers.kernel.wait')
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local EffectSet = require('fibers.kernel.effect.set')
+local ContributionSet = require('fibers.kernel.resources.contribution_set')
 local FrontierKit = require('fibers.kernel.frontier')
 local Proof = require('fibers.kernel.proof')
 local AbsenceCert = Proof.AbsenceCert
@@ -91,12 +92,17 @@ local function copy_effects(set)
   return set and set:copy() or nil
 end
 
+local function copy_contributions(set)
+  return set and set:copy() or nil
+end
+
 function Resources.new_env(parent, capture)
   capture = capture or (parent and parent.capture) or Capture.none()
   return {
     res = nil,
     res_list = nil,
     effects = nil,
+    contributions = nil,
     selected = nil,
     lost = nil,
     debug_observations = nil,
@@ -106,6 +112,7 @@ function Resources.new_env(parent, capture)
     capture = capture,
     has_absence = false,
     parent = parent,
+    parent_is_boundary = false,
   }
 end
 function Resources.copy_env(env)
@@ -113,6 +120,7 @@ function Resources.copy_env(env)
   local out = Resources.new_env(env.parent and Resources.copy_env(env.parent) or nil, env.capture)
   Resource.copy_from(out, env)
   out.effects = copy_effects(env.effects)
+  out.contributions = copy_contributions(env.contributions)
   out.selected = copy_list(env.selected)
   out.lost = copy_list(env.lost)
   out.debug_observations = copy_list(env.debug_observations)
@@ -123,17 +131,21 @@ function Resources.copy_env(env)
     for i = 1, #out.frontiers do out.frontier_seen[out.frontiers[i]] = true end
   end
   out.has_absence = env.has_absence or false
+  out.parent_is_boundary = env.parent_is_boundary or false
   return out
 end
 
 function Resources.lane_env_from(parent)
-  return Resources.new_env(parent)
+  local env = Resources.new_env(parent)
+  env.parent_is_boundary = true
+  return env
 end
 
 local function copy_without_parent(env)
   local out = Resources.new_env(nil, env.capture)
   Resource.copy_from(out, env)
   out.effects = copy_effects(env.effects)
+  out.contributions = copy_contributions(env.contributions)
   out.selected = copy_list(env.selected)
   out.lost = copy_list(env.lost)
   out.debug_observations = copy_list(env.debug_observations)
@@ -144,26 +156,77 @@ local function copy_without_parent(env)
     for i = 1, #out.frontiers do out.frontier_seen[out.frontiers[i]] = true end
   end
   out.has_absence = env.has_absence or false
+  out.parent_is_boundary = false
   return out
+end
+
+local flatten_env
+
+local function merge_contribution_proposals_seq(acc, contributions)
+  if not contributions or contributions:is_empty() then return true end
+  local items = contributions:items()
+  local cenv = Resources.new_env(nil, acc.capture)
+  for i = 1, #items do
+    local p = items[i].proposal
+    local ok, err = Resource.merge_parallel_into(cenv, p)
+    if not ok then return false, err end
+    if p.effects then
+      cenv.effects = cenv.effects or EffectSet.empty()
+      ok, err = cenv.effects:merge(p.effects)
+      if not ok then return false, err end
+    end
+    append_field(cenv, 'selected', p.selected_nacks)
+    append_field(cenv, 'lost', p.lost_nacks)
+  end
+  return Resources.merge_seq_into(acc, cenv)
+end
+
+local function collect_env_frames(env, include_boundary_parent)
+  local frames = {}
+  local e = env
+  while e do
+    frames[#frames + 1] = e
+    if e.parent and e.parent_is_boundary and not include_boundary_parent then break end
+    e = e.parent
+  end
+  local ordered = {}
+  for i = #frames, 1, -1 do ordered[#ordered + 1] = frames[i] end
+  return ordered
+end
+
+flatten_env = function(env, include_boundary_parent)
+  if not env then return Resources.new_env(nil) end
+  local out = Resources.new_env(nil, env.capture)
+  local frames = collect_env_frames(env, include_boundary_parent)
+  for i = 1, #frames do
+    local frame = copy_without_parent(frames[i])
+    local contributions = frame.contributions
+    frame.contributions = nil
+    local ok, err = Resources.merge_seq_into(out, frame)
+    if not ok then return nil, err end
+    ok, err = merge_contribution_proposals_seq(out, contributions)
+    if not ok then return nil, err end
+  end
+  return out
+end
+
+function Resources.flatten_env(env, include_boundary_parent)
+  return flatten_env(env, include_boundary_parent ~= false)
 end
 
 function Resources.copy_delta(env)
   if not env then return Resources.new_env() end
-  return copy_without_parent(env)
+  local flat, err = flatten_env(env, false)
+  if not flat then error(err or 'resource-delta-flatten-failed', 2) end
+  return flat
 end
 
 function Resources.overlay_for_env(env)
   if not env then return nil end
-  local acc = { res = nil, res_list = nil }
-  local function merge(e)
-    if not e then return true end
-    if e.parent then merge(e.parent) end
-    Resource.merge_seq_into(acc, e)
-    return true
-  end
-  merge(env)
-  if not acc.res_list then return nil end
-  return acc
+  local flat, err = flatten_env(env, true)
+  if not flat then return nil, err end
+  if not flat.res_list then return nil end
+  return flat
 end
 
 local function merge_effect_sets_seq(dst, src)
@@ -174,11 +237,25 @@ local function merge_effect_sets_seq(dst, src)
   return true
 end
 
+local function merge_contribution_sets(dst, src)
+  if not src then return true end
+  dst.contributions = dst.contributions or ContributionSet.empty()
+  local ok, err = dst.contributions:merge(src)
+  if not ok then return false, err end
+  return true
+end
+
 function Resources.merge_seq_into(dst, src)
-  if src.parent then src = copy_without_parent(src) end
+  if src.parent then
+    local flat, err = flatten_env(src, true)
+    if not flat then return false, err end
+    src = flat
+  end
   local ok, err = Resource.merge_seq_into(dst, src)
   if not ok then return false, err end
   ok, err = merge_effect_sets_seq(dst, src.effects)
+  if not ok then return false, err end
+  ok, err = merge_contribution_sets(dst, src.contributions)
   if not ok then return false, err end
   append_field(dst, 'selected', src.selected)
   append_field(dst, 'lost', src.lost)
@@ -190,10 +267,16 @@ function Resources.merge_seq_into(dst, src)
 end
 
 function Resources.merge_parallel_into(dst, src)
-  if src.parent then src = copy_without_parent(src) end
+  if src.parent then
+    local flat, err = flatten_env(src, true)
+    if not flat then return false, err end
+    src = flat
+  end
   local ok, err = Resource.merge_parallel_into(dst, src)
   if not ok then return false, err end
   ok, err = merge_effect_sets_seq(dst, src.effects)
+  if not ok then return false, err end
+  ok, err = merge_contribution_sets(dst, src.contributions)
   if not ok then return false, err end
   append_field(dst, 'selected', src.selected)
   append_field(dst, 'lost', src.lost)
@@ -219,6 +302,18 @@ end
 function Resources.add_effect(env, effect)
   env.effects = env.effects or EffectSet.empty()
   return env.effects:add(effect)
+end
+
+function Resources.add_contribution(env, id, proposal)
+  env.contributions = env.contributions or ContributionSet.empty()
+  return env.contributions:add(id, proposal)
+end
+
+function Resources.with_contribution_frame(env, id, proposal)
+  local frame = Resources.new_env(env, env and env.capture or nil)
+  local ok, err = Resources.add_contribution(frame, id, proposal)
+  if not ok then return nil, err end
+  return Resources.new_env(frame, env and env.capture or nil)
 end
 
 function Resources.add_selected(env, item) env.selected = env.selected or {}; env.selected[#env.selected + 1] = item end
@@ -313,15 +408,6 @@ local function primitive_resource(op)
   return op.resource, op.resource_kind, op.payload or {}
 end
 
-function Resources.channel_leaf(op)
-  local resource, kind, payload = primitive_resource(op)
-  if kind and kind.name == 'channel' then
-    if payload.op == 'get' then return 'get', resource, nil end
-    if payload.op == 'put' then return 'put', resource, payload.value end
-  end
-  return nil
-end
-
 local function make_resource_ctx(st, task)
   local observing = (st.capture and st.capture:frontiers_enabled()) or (st.observer ~= nil) or (task.env.capture and task.env.capture:debug_enabled())
   local ctx = {
@@ -357,7 +443,7 @@ local function make_resource_ctx(st, task)
   return ctx
 end
 
-local function commit_candidate_into_env(env, c)
+function Resources.commit_candidate_into_env(env, c)
   local ok, err = Resource.merge_seq_into(env, c)
   if not ok then return false, err end
   if c.effects then
@@ -379,12 +465,23 @@ function Resources.apply(st, task, op, complete_task, new_result)
 
   local resource, kind, payload = primitive_resource(op)
   if not resource then return false end
-  if kind and kind.name == 'channel' then return false end
   local eval = kind and kind.eval
   if not eval then error('resource primitive requires kind.eval', 2) end
 
   local ctx = make_resource_ctx(st, task)
   local r = Result.from(eval(resource, payload, ctx))
+  if r.status == 'premise' then
+    if not st.push_premise then st:set_unknown(nil, 'premise-unsupported'); return true end
+    st:push_premise({
+      resource = resource,
+      kind = kind,
+      payload = payload,
+      request = r.premise,
+      wait = r.wait,
+      task = task,
+    })
+    return true
+  end
   if r.status == 'wait' or r.status ~= 'ready' then
     local cert = AbsenceCert.new()
     if Resources.absence_leaf(st.rt, op, cert, st.observer, st.capture) then
@@ -396,7 +493,7 @@ function Resources.apply(st, task, op, complete_task, new_result)
   end
 
   local c = r.proposal
-  local ok, err = commit_candidate_into_env(task.env, c)
+  local ok, err = Resources.commit_candidate_into_env(task.env, c)
   if not ok then st:set_unknown(nil, err or 'resource-conflict'); return true end
   local vals = Proposal.resolve_pack(c.vals, c.subst)
   complete_task(st, task, new_result(vals))
@@ -442,23 +539,27 @@ function Resources.validate_observation(rt, obs)
     return object_version(obs.object) == obs.version
   elseif k == 'signal-absent' then
     return not obs.source._validity.ready
-  elseif k == 'queue-empty' then
-    return queue_count(obs.source) <= 0
+  elseif k == 'events-empty' then
+    return events_count(obs.source) <= 0
   elseif k == 'clock-before' or k == 'clock-before-selected' then
     return runtime_now(rt) < obs.deadline
   elseif k == 'readiness-absent' then
     return not readiness_is_set(obs.source, obs.mode)
-  elseif k == 'cell-unchanged' then
-    return (obs.cell.version or 0) == obs.version
+  elseif k == 'scalar-unchanged' then
+    return (obs.scalar.version or 0) == obs.version
   end
   return true
 end
 
 function Resources.prepare_env(rt, env)
-  local prepared_resources, reason, derived = Resource.prepare_combo({ env }, Proposal.raw_resolved, Proposal.resolve)
+  local flat, err = flatten_env(env, true)
+  if not flat then return nil, err end
+  local combo = { flat }
+
+  local prepared_resources, reason, derived = Resource.prepare_combo(combo, Proposal.raw_resolved, Proposal.resolve)
   if reason then return nil, reason end
 
-  local effect_set = env.effects
+  local effect_set = flat.effects
   if derived then
     effect_set = effect_set and effect_set:copy() or EffectSet.empty()
     local ok, err = effect_set:merge(derived)

@@ -1,4 +1,4 @@
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Resource = require('fibers.kernel.resources.protocol')
 local EffectSet = require('fibers.kernel.effect.set')
 

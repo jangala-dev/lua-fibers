@@ -1,8 +1,8 @@
 local Net = require('fibers.kernel.transaction_net')
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Wait = require('fibers.kernel.wait')
 local Resources = require('fibers.kernel.resources')
-local Source = require('fibers.base.source')
+local Source = require('fibers.atoms.source')
 local SourceState = require('fibers.internal.source_state')
 local Interrupt = require('fibers.internal.interrupt')
 local Protected = require('fibers.kernel.protected')
@@ -10,17 +10,22 @@ local Runtime = {}
 Runtime.__index = Runtime
 
 local current_runtime = nil
-local current_frame = nil
+local current_scope = nil
 
 function Runtime.current()
   return current_runtime
 end
 
-function Runtime._current_frame()
-  return current_frame
+function Runtime.current_scope()
+  return current_scope
+end
+
+function Runtime._current_scope()
+  return current_scope
 end
 
 local unpack_ = table.unpack or unpack
+local function pack(...) return { n = select('#', ...), ... } end
 
 local PERFORM_RESULT = {}
 
@@ -126,8 +131,8 @@ function Runtime:signal(name)
   }
 end
 
-function Runtime:queue_source(name)
-  local source = Source.queue(name)
+function Runtime:events_source(name)
+  local source = Source.events(name)
   return source, {
     push = function(_feed, ...) return self:arrive(source, ...) end,
     clear = function(_feed) return self:_clear_source(source) end,
@@ -157,7 +162,7 @@ end
 function Runtime:_make_error(kind, err, fields)
   fields = fields or {}
   local message = fields.message or tostring(err)
-  return setmetatable({
+  local out = {
     _fibers_error = true,
     kind = kind,
     phase = fields.phase or self._phase,
@@ -166,7 +171,13 @@ function Runtime:_make_error(kind, err, fields)
     committed = fields.committed,
     message = message,
     cause = err,
-  }, RuntimeError)
+  }
+  if type(err) == 'table' and err._fibers_scope_report == true then
+    out.scope_report = err
+    out.primary = err.primary
+    out.secondaries = err.secondaries
+  end
+  return setmetatable(out, RuntimeError)
 end
 
 function Runtime:_throw_error(e, level)
@@ -193,6 +204,43 @@ end
 
 function Runtime:failed()
   return self._failed
+end
+
+function Runtime:push_scope(scope)
+  self:_check_not_failed(2)
+  self:_require_perform_allowed(2)
+  local f = self._current_fibre
+  if not f then error('Runtime:push_scope requires a current fibre', 2) end
+  f.scope_stack = f.scope_stack or {}
+  local depth = #f.scope_stack + 1
+  f.scope_stack[depth] = scope
+  current_scope = scope
+  return { fibre = f, depth = depth, scope = scope }
+end
+
+function Runtime:pop_scope(token)
+  self:_check_not_failed(2)
+  self:_require_perform_allowed(2)
+  local f = self._current_fibre
+  if not token or token.fibre ~= f then error('Runtime:pop_scope token does not match current fibre', 2) end
+  local stack = f.scope_stack or {}
+  if #stack ~= token.depth or stack[token.depth] ~= token.scope then error('Runtime:pop_scope scope stack mismatch', 2) end
+  stack[token.depth] = nil
+  current_scope = stack[#stack]
+  return true
+end
+
+
+
+function Runtime:with_scope(scope, fn, ...)
+  if type(fn) ~= 'function' then error('Runtime:with_scope expects a function', 2) end
+  local args = pack(...)
+  local token = self:push_scope(scope)
+  local results = pack(Protected.pcall(function() return fn(unpack_(args, 1, args.n)) end))
+  local pop_ok, pop_err = Protected.pcall(function() return self:pop_scope(token) end)
+  if not pop_ok then error(pop_err, 0) end
+  if not results[1] then error(results[2], 0) end
+  return unpack_(results, 2, results.n)
 end
 
 function Runtime:_is_current_fibre()
@@ -261,13 +309,13 @@ function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
   return finish_phase_call(self, old, name, kind, true, committed, pcall(fn, ...))
 end
 
-local function new_fibre(self, fn, name, frame)
+local function new_fibre(self, fn, name, scope)
   self._next_fibre_id = (self._next_fibre_id or 0) + 1
   return {
     id = self._next_fibre_id,
     co = coroutine.create(fn),
     name = name or ('fiber-' .. tostring(self._next_fibre_id)),
-    frame = frame,
+    scope_stack = scope and { scope } or {},
     waiting = nil,
     wait_index = nil,
     state = 'new',
@@ -339,7 +387,7 @@ function Runtime:_retire_fibre(f)
   f.waiting = nil
   f.wait_index = nil
   f.co = nil
-  f.frame = nil
+  f.scope_stack = nil
   self.live_count = (self.live_count or 1) - 1
 end
 
@@ -356,13 +404,13 @@ function Runtime:_resume(f, values)
   local old_phase = self:_set_phase('fibre')
   local old_fibre = self._current_fibre
   local old_current_runtime = current_runtime
-  local old_current_frame = current_frame
+  local old_current_scope = current_scope
   self._current_fibre = f
   current_runtime = self
-  current_frame = f.frame
+  current_scope = f.scope_stack and f.scope_stack[#f.scope_stack] or nil
   local ok, req_or_err = coroutine.resume(co, values)
   current_runtime = old_current_runtime
-  current_frame = old_current_frame
+  current_scope = old_current_scope
   self:_restore_phase(old_phase)
   self._current_fibre = old_fibre
 
@@ -380,22 +428,22 @@ function Runtime:_resume(f, values)
   end
 end
 
-function Runtime:_spawn_fibre(fn, name, frame)
-  local f = new_fibre(self, fn, name, frame)
+function Runtime:_spawn_fibre(fn, name, scope)
+  local f = new_fibre(self, fn, name, scope)
   self.live_count = (self.live_count or 0) + 1
   self:_push_ready(f)
   return f
 end
 
-function Runtime:spawn_raw(fn, name, frame)
+function Runtime:spawn_raw(fn, name, scope)
   self:_check_not_failed(2)
   self:_require_spawn_allowed(2)
-  return self:_spawn_fibre(fn, name, frame)
+  return self:_spawn_fibre(fn, name, scope)
 end
 
-function Runtime:_spawn_committed(fn, name, frame)
+function Runtime:_spawn_committed(fn, name, scope)
   self:_check_not_failed(2)
-  return self:_spawn_fibre(fn, name, frame)
+  return self:_spawn_fibre(fn, name, scope)
 end
 
 function Runtime:_discharge_interrupt(token, reason)

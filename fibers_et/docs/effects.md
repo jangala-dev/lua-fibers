@@ -102,7 +102,7 @@ end
 Use it in an option with `Op.emit`:
 
 ```lua
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 
 local op = Op.emit(kick('delivery-worker'))
 ```
@@ -224,7 +224,7 @@ duplicates must be merged or rejected by domain-specific rules
 ## Relation to resources
 
 A resource may derive effects during preparation from the final committed
-record.  An ownership resource can do this for settlement: ownership handoff and
+record.  An ownership resource can do this for settlement: ownership movement and
 close state are resource journal entries; settlement is a effect derived
 from the final committed ownership state.
 

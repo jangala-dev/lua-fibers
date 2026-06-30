@@ -22,14 +22,14 @@ host waits only when no current world can commit
 fibers.lua
   Public convenience facade.
 
-fibers/base/op.lua
+fibers/atoms/op.lua
   Public option constructors and derived forms.
 
-fibers/base/{cell,channel,source,region,task,effect}.lua
-  Public base kit resources and values.
+fibers/atoms/{scalar,rendezvous,source,region,effect,...}.lua
+  Public atom kit resources and values.
 
-fibers/facility/*
-  Compound user-facing facilities: lifetime, policy, sleep, flow, stream.
+fibers/{task,sleep,scope,queue,pool,flow,stream,policy,...}.lua
+  Compound user-facing facilities: task, scope, policy, sleep, flow, stream.
 
 fibers/kernel/runtime.lua
   Cooperative runtime, fibre lifecycle, driver boundary and commit execution.
@@ -60,7 +60,7 @@ fibers/runner.lua
 
 ## Option representation
 
-`fibers.base.op` defines immutable-ish syntax nodes.  They are plain Lua tables
+`fibers.atoms.op` defines immutable-ish syntax nodes.  They are plain Lua tables
 with a metatable and a `kind` field.
 
 The internal option kinds are intentionally small:
@@ -126,7 +126,7 @@ current running slot
 
 Completed fibres are retired immediately.  They are not retained for later
 joining by the runtime.  Structured ownership is expressed through `Task`,
-`Region` and `Lifetime`, not by keeping completed coroutine stacks in the
+`Region` and `Scope`, not by keeping completed coroutine stacks in the
 scheduler.
 
 ### Running user code
@@ -204,7 +204,7 @@ product_lane
 
 The solver reduces local proof structure before handing a task back to full
 search.  Local reduction handles deterministic constructors such as `always`,
-`bind`, `wrap` and `guard` while stopping at channel, product, resource, choice
+`bind`, `wrap` and `guard` while stopping at rendezvous, product, resource, choice
 or absence-sensitive structure.
 
 This keeps simple options cheap without adding separate semantics for derived
@@ -366,12 +366,12 @@ real host matrix.
 
 ## Facilities
 
-Facilities are compounds over the base kit and kernel.  They should avoid adding
+Facilities are compounds over the atom kit and kernel.  They should avoid adding
 new kernel primitives.
 
-### Lifetime and policy
+### Scope and policy
 
-`Lifetime` builds structured concurrency out of:
+`Scope` builds structured concurrency out of:
 
 ```text
 Region ownership
@@ -437,7 +437,7 @@ Prefer this order:
 2. Can it be a resource kind?
 3. Can it be a typed effect kind?
 4. Can it be a source plus host adapter?
-5. Can it be a facility over Region/Task/Lifetime/Flow?
+5. Can it be a facility over Region/Task/Scope/Flow?
 6. Only then consider a new kernel primitive.
 ```
 
@@ -467,3 +467,38 @@ settlement and ownership invariants
 
 For derived constructor changes, structural tests may need to change, but
 behavioural tests should continue to hold.
+
+
+## Shared premise-resource helpers
+
+Premise-aware resources use a small internal helper layer rather than each atom
+re-implementing the same bookkeeping.  `fibers.kernel.premise_helpers` owns
+common premise utilities such as deterministic id ordering, pairwise
+compatibility checks, record-view extraction, and small map-copy helpers.
+
+`fibers.kernel.resources.presence_journal` owns the shared selected-remove
+journal used by presence-like resources.  `Index` uses it for
+`inserts/removes/selected_removes`; `Keyed` uses it for
+`puts/removes/selected_removes/replacements`.  This keeps the handoff law in one
+place:
+
+```text
+parallel supply + selected remove = handoff/cancellation
+sequential selected remove then supply = replacement
+```
+
+
+## Premise helper layer
+
+Common premise-resource mechanics live in `fibers/kernel/premise_helpers.lua`.
+The helper layer owns deterministic premise sorting, pairwise compatibility,
+record extraction from resource views, map cloning, and the shared
+`project_selective` law used by state-dependent selections.  In particular,
+`project_selective` captures the common rule used by Index, Keyed and Scalar
+selection-style operations: sibling positive supply may satisfy demand under
+`tensor`, while under `all` it may only constrain an already possible selection.
+
+Presence-style selected removals live in
+`fibers/kernel/resources/presence_journal.lua`, shared by `Index` and `Keyed`.
+This keeps the handoff/replacement law in one place rather than reimplementing
+selected-remove merging in every atom.

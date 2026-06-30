@@ -9,7 +9,7 @@ local Result = require('fibers.kernel.resources.result')
 local Resource = require('fibers.kernel.resources.protocol')
 local EffectSet = require('fibers.kernel.effect.set')
 local Wait = require('fibers.kernel.wait')
-local Effect = require('fibers.base.effect')
+local Effect = require('fibers.atoms.effect')
 
 local Versioned = {}
 

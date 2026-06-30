@@ -4,19 +4,22 @@
 local M = {}
 
 function M.data(res)
-  return res and res.rope and res.rope:tostring() or ''
+  local state = res and res.state and res.state.value or res
+  return state and state.rope and state.rope:tostring() or ''
 end
 
 function M.leased_bytes(res)
   local n = 0
-  if not (res and res.leases) then return 0 end
-  for _, lease in pairs(res.leases) do n = n + #(lease.bytes or '') end
+  local state = res and res.state and res.state.value or res
+  if not (state and state.leases) then return 0 end
+  for _, lease in pairs(state.leases) do n = n + #(lease.bytes or '') end
   return n
 end
 
 function M.first_lease_bytes(res)
-  if not (res and res.leases) then return nil end
-  for _, lease in pairs(res.leases) do return lease.bytes or '' end
+  local state = res and res.state and res.state.value or res
+  if not (state and state.leases) then return nil end
+  for _, lease in pairs(state.leases) do return lease.bytes or '' end
   return nil
 end
 

@@ -1,8 +1,8 @@
 -- Fine-grained invalidation tests for transaction-net frontiers.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
-local Source = require('fibers.base.source')
+local Op = require('fibers.atoms.op')
+local Source = require('fibers.atoms.source')
 local Runtime = require('fibers.kernel.runtime')
 local Debug = require('fibers.kernel.transaction_debug')
 local SourceState = require('fibers.internal.source_state')
@@ -30,13 +30,13 @@ end
 -- A fallback world justified by queue A being empty is not invalidated by queue B.
 do
   local rt = Runtime.new()
-  local qa = Source.queue('fg-empty-a')
-  local qb = Source.queue('fg-empty-b')
+  local qa = Source.events('fg-empty-a')
+  local qb = Source.events('fg-empty-b')
   local w = world_for(rt, qa:next_op():or_else(Op.always('fallback')))
   assert_truthy(w:has_absence(), 'fallback world should carry absence')
 
   SourceState.arrive(qb, 'unrelated')
-  assert_world_valid(w, true, 'unrelated queue arrival must not invalidate queue-A absence')
+  assert_world_valid(w, true, 'unrelated events arrival must not invalidate events-A absence')
 
   local ok, reason = w:commit(rt)
   assert_eq(ok, true, 'unrelated arrival should not prevent fallback commit')
@@ -46,11 +46,11 @@ end
 -- The same fallback world is invalidated by arrival on the queue whose emptiness it observed.
 do
   local rt = Runtime.new()
-  local qa = Source.queue('fg-empty-related')
+  local qa = Source.events('fg-empty-related')
   local w = world_for(rt, qa:next_op():or_else(Op.always('fallback')))
 
   SourceState.arrive(qa, 'now-present')
-  assert_world_valid(w, false, 'related queue arrival must invalidate queue-empty absence')
+  assert_world_valid(w, false, 'related events arrival must invalidate events-empty absence')
 
   local ok, reason = w:commit(rt)
   assert_eq(ok, false, 'invalidated fallback must not commit')
@@ -60,7 +60,7 @@ end
 -- A prepared queue-head consumer remains valid across a tail push.
 do
   local rt = Runtime.new()
-  local q = Source.queue('fg-head-tail')
+  local q = Source.events('fg-head-tail')
   SourceState.arrive(q, 'head')
 
   local w = world_for(rt, q:next_op())
@@ -78,7 +78,7 @@ end
 -- A prepared queue-head consumer is invalidated by a competing consume of that head.
 do
   local rt = Runtime.new()
-  local q = Source.queue('fg-head-consume')
+  local q = Source.events('fg-head-consume')
   SourceState.arrive(q, 'one')
 
   local w1 = world_for(rt, q:next_op())
@@ -125,8 +125,8 @@ end
 -- Bounded miss caches are invalidated by observed frontiers, not unrelated source mutation.
 do
   local rt = Runtime.new()
-  local qa = Source.queue('fg-cache-a')
-  local qb = Source.queue('fg-cache-b')
+  local qa = Source.events('fg-cache-a')
+  local qb = Source.events('fg-cache-b')
   local got
   rt:spawn_raw(function() got = rt:perform(qa:next_op()) end, 'fg-cache-waiter')
 
@@ -143,7 +143,7 @@ do
   assert_observer_valid(Debug.wait_cache_observer(rt), true, 'unrelated source should not invalidate miss cache')
 
   SourceState.arrive(qa, 'payload')
-  assert_observer_valid(Debug.wait_cache_observer(rt), false, 'observed queue arrival should invalidate miss cache')
+  assert_observer_valid(Debug.wait_cache_observer(rt), false, 'observed events arrival should invalidate miss cache')
 
   for _ = 1, 20 do
     rt:step({ max_work = 1 })

@@ -1,10 +1,10 @@
 -- Source semantics tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Source = require('fibers.base.source')
-local Channel = require('fibers.base.channel')
+local Source = require('fibers.atoms.source')
+local Rendezvous = require('fibers.atoms.rendezvous')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -46,7 +46,7 @@ end
 -- Ready external value still participates in the global rendezvous search.
 do
   local ev = Source.signal('ready-with-rendezvous')
-  local ch = Channel.new('external-plus-rendezvous')
+  local ch = Rendezvous.new('external-plus-rendezvous')
   local rt = Runtime.new()
   rt:arrive(ev, 'payload')
   local receiver, sender
@@ -97,9 +97,9 @@ do
   assert(st and (st.tag == 'found' or st.tag == 'pending'), 'expected bounded stepping to resume after arrival')
 end
 
--- Queue sources consume occurrences only if the selected transaction commits.
+-- Events sources consume occurrences only if the selected transaction commits.
 do
-  local q = Source.queue('queue-source')
+  local q = Source.events('events-source')
   local rt = Runtime.new()
   rt:arrive(q, 'a')
   rt:arrive(q, 'b', 'bee')
@@ -107,16 +107,16 @@ do
   rt:spawn_raw(function()
     first = rt:perform(q:next_op())
     second_a, second_b = rt:perform(q:next_op())
-  end, 'queue-consumer')
+  end, 'events-consumer')
   assert_status(rt:run(), 'found')
   assert_eq(first, 'a')
   assert_eq(second_a, 'b')
   assert_eq(second_b, 'bee')
 end
 
--- A losing queue branch does not consume the occurrence.
+-- A losing events branch does not consume the occurrence.
 do
-  local q = Source.queue('queue-loser')
+  local q = Source.events('events-loser')
   local rt = Runtime.new()
   rt:arrive(q, 'kept')
   local got, remaining
@@ -126,7 +126,7 @@ do
       Op.always('winner')
     ))
     remaining = rt:perform(q:next_op())
-  end, 'queue-loser-consumer')
+  end, 'events-loser-consumer')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner')
   assert_eq(remaining, 'kept')

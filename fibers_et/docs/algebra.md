@@ -76,7 +76,7 @@ op ::=
   | guard(k)
   | with_nack(make, op)
   | emit(effect)
-  | primitive(resource/source/channel option)
+  | primitive(resource/source/rendezvous option)
 ```
 
 Several familiar operators are derived:
@@ -219,7 +219,7 @@ Post-commit callbacks and obligations include:
 wrap callbacks
 effect discharge
 selected fibre resumption
-lifetime events
+scope boundary facts
 host wake/spawn/interrupt obligations
 ```
 
@@ -335,8 +335,8 @@ Example shape:
 
 ```lua
 fibers.tensor({
-  request:offer_handoff_op(session, supervisor),
-  supervisor:accept_handoff_op(),
+  request:offer_op(session, supervisor),
+  supervisor:accept_op(),
   registry:write_op({ owner = "supervisor", task = session.name }),
   audit:append_op("accepted session from request into supervisor"),
 })
@@ -384,6 +384,82 @@ all ≠ tensor
 ```
 
 The distinction is semantic. `tensor` permits internal rendezvous; `all` does not.
+
+### Allocation and handoff
+
+For resource premises, the distinction is best understood as allocation versus
+handoff.
+
+`all` may coordinate competing demands over shared stock. Its lanes still commit
+as one all-or-nothing product, so a resource resolver may allocate distinct
+pre-existing facts to different lanes. For example, two ordered-pop lanes may
+consume two different entries from the same committed index, and two counter
+take lanes may consume two different permits from the same committed counter.
+
+`all` may also let sibling lanes constrain one another. If one lane removes an
+entry, another ordered-pop lane must not select that removed entry, because the
+combined world would not be coherent.
+
+`all` must not let one lane positively supply the fact that makes another lane
+satisfiable. That is handoff, and belongs to `tensor`.
+
+```lua
+-- Allocation from shared committed stock: allowed for all and tensor.
+Op.all({
+  ix:pop_first_op(),
+  ix:pop_first_op(),
+})
+
+-- Constraint from a sibling lane: allowed for all and tensor.
+Op.all({
+  ix:remove_op("a"),
+  ix:pop_first_op(), -- must skip a
+})
+
+-- Handoff from sibling supply: tensor only.
+Op.tensor({
+  ix:insert_op("z", 0, "Z"),
+  ix:pop_first_op(), -- may receive z
+})
+
+-- Under all, the pop lane is not independently satisfiable from the insert.
+Op.all({
+  ix:insert_op("z", 0, "Z"),
+  ix:pop_first_op():or_else(Op.always("empty")),
+})
+-- commits the insert and returns "empty" for the pop lane.
+
+-- The same law applies to counters. From c = 2, this may allocate two permits.
+Op.all({
+  c:take_op(1),
+  c:take_op(1),
+})
+
+-- From c = 0, tensor may hand off a sibling give to a take.
+Op.tensor({
+  c:give_op(1),
+  c:take_op(1),
+})
+
+-- From c = 0, all may not use the sibling give as positive supply.
+Op.all({
+  c:give_op(1),
+  c:take_op(1):or_else(Op.always("none")),
+})
+-- commits the give and returns "none" for the take lane.
+
+-- A queue built from Index + Counter inherits the same law.
+Op.tensor({ q:put_op("x"), q:get_op() }) -- get may receive x
+Op.all({ q:put_op("x"), q:get_op():or_else(Op.always("empty")) })
+-- commits the put and returns "empty" for the get lane.
+```
+
+In short:
+
+```text
+all    permits shared allocation and sibling constraints
+tensor additionally permits sibling-to-sibling positive supply
+```
 
 ## 10. `or_else`
 
@@ -611,7 +687,7 @@ Examples:
 wake
 spawn
 interrupt
-lifetime event
+boundary fact
 host obligation
 ```
 
@@ -650,7 +726,7 @@ Options propose ownership journals:
 
 ```text
 admit(task, region)
-handoff(task, from, to)
+move(task, from, to)
 release(task)
 seal(region)
 settle(region)
@@ -662,7 +738,7 @@ Ownership laws:
 Unique ownership:
   a live owned claim has at most one owner.
 
-Atomic handoff:
+Atomic movement:
   ownership leaves the source and enters the target in the same committed world.
 
 No lost responsibility:
@@ -855,10 +931,10 @@ rendezvous
 transactional resources
 internal-world products
 certified fallback
-ownership handoff
+ownership movement
 post-commit effects
 managed source facts
-structured lifetime
+structured scope
 stream/flow safety
 ```
 

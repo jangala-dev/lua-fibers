@@ -4,10 +4,10 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Debug = require('fibers.kernel.transaction_debug')
-local Channel = require('fibers.base.channel')
+local Rendezvous = require('fibers.atoms.rendezvous')
 local Result = require('fibers.kernel.resources.result')
 
 local function fail(msg) error(msg, 2) end
@@ -63,7 +63,7 @@ end
 
 -- tensor permits internal rendezvous, while all does not.
 do
-  local ch = Channel.new('absence-law-channel')
+  local ch = Rendezvous.new('absence-law-rendezvous')
   assert_falsy(absent(Op.tensor({ ch:get_op(), ch:put_op('payload') })), 'tensor-internal rendezvous is a current world')
   assert_truthy(absent(Op.all({ ch:get_op(), ch:put_op('payload') })), 'all cannot close its own rendezvous')
   assert_truthy(absent(Op.tensor({ ch:get_op() })), 'unpaired tensor rendezvous is absent')
@@ -83,7 +83,7 @@ do
   local got_a, got_b
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    got_a = rt:perform(Channel.new('absence-law-no-partner'):get_op():or_else(Op.always('fallback')))
+    got_a = rt:perform(Rendezvous.new('absence-law-no-partner'):get_op():or_else(Op.always('fallback')))
   end, 'fallback-root')
   rt:spawn_raw(function()
     got_b = rt:perform(Op.always('progress'))

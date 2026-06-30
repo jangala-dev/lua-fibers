@@ -1,4 +1,4 @@
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Resources = require('fibers.kernel.resources')
 local Proof = require('fibers.kernel.proof')
 local AbsenceCert = Proof.AbsenceCert
@@ -114,22 +114,26 @@ local function copy_task(t)
   }
 end
 
-local function copy_wait(w)
+local function copy_premise(p)
   local groups = {}
-  for i = 1, #(w.groups or {}) do groups[i] = w.groups[i] end
+  for i = 1, #(p.groups or {}) do groups[i] = p.groups[i] end
   return {
-    id = w.id,
-    root_id = w.root_id,
-    kind = w.kind,
-    channel = w.channel,
-    value = w.value,
-    task = copy_task(w.task),
+    id = p.id,
+    root_id = p.root_id,
+    resource = p.resource,
+    kind = p.kind,
+    payload = p.payload,
+    request = p.request,
+    wait = p.wait,
+    task = copy_task(p.task),
     groups = groups,
   }
 end
 
 
 -- Mutable proof-search attempt -------------------------------------------
+
+local collect_groups_from_stack
 
 local Attempt = {}
 Attempt.__index = Attempt
@@ -142,12 +146,13 @@ function Attempt.new(rt, pending, start_id, solver)
     capture = solver and solver.capture or Capture.none(),
     selected = { [start_id] = true },
     tasks = {},
-    waits = {},
-    wait_index = {},
+    premises = {},
+    premise_index = {},
     done = {},
     groups = {},
     next_group = 0,
-    next_wait = 0,
+    next_premise = 0,
+    next_contribution = 0,
     conflict = false,
     conflict_reason = nil,
     frontier_waits = {},
@@ -178,15 +183,18 @@ end
 function Attempt:set_miss(cert, waits) self:set_outcome(Outcome.miss(cert, waits)) end
 function Attempt:set_unknown(waits, reason) self:set_outcome(Outcome.unknown(waits, reason)) end
 
-function Attempt:rebuild_wait_index()
+function Attempt:rebuild_premise_index()
   local idx = {}
-  for i = 1, #self.waits do
-    local w = self.waits[i]
-    local bucket = idx[w.channel]
-    if not bucket then bucket = { get = {}, put = {} }; idx[w.channel] = bucket end
-    bucket[w.kind][#bucket[w.kind] + 1] = i
+  for i = 1, #self.premises do
+    local p = self.premises[i]
+    local bucket = idx[p.resource]
+    if not bucket then
+      bucket = { resource = p.resource, kind = p.kind, indices = {} }
+      idx[p.resource] = bucket
+    end
+    bucket.indices[#bucket.indices + 1] = i
   end
-  self:set_field(self, 'wait_index', idx)
+  self:set_field(self, 'premise_index', idx)
 end
 
 function Attempt:push_task(task)
@@ -201,25 +209,30 @@ function Attempt:remove_task(idx)
   return task
 end
 
-function Attempt:push_wait(wait)
-  self:save(self.waits)
-  self.waits[#self.waits + 1] = wait
-  self:rebuild_wait_index()
+function Attempt:push_premise(premise)
+  self:set_field(self, 'next_premise', self.next_premise + 1)
+  premise.id = self.next_premise
+  premise.root_id = premise.task and premise.task.root_id or premise.root_id
+  premise.groups = premise.groups or collect_groups_from_stack(premise.task and premise.task.stack or {})
+  self:save(self.premises)
+  self.premises[#self.premises + 1] = premise
+  self:rebuild_premise_index()
 end
 
-function Attempt:remove_wait_pair(i, j)
-  local a = copy_wait(self.waits[i])
-  local b = copy_wait(self.waits[j])
-  self:save(self.waits)
-  if i < j then
-    table.remove(self.waits, j)
-    table.remove(self.waits, i)
-  else
-    table.remove(self.waits, i)
-    table.remove(self.waits, j)
+function Attempt:remove_premises(ids)
+  local wanted = {}
+  for i = 1, #(ids or {}) do wanted[ids[i]] = true end
+  local removed = {}
+  self:save(self.premises)
+  for i = #self.premises, 1, -1 do
+    local p = self.premises[i]
+    if p and wanted[p.id] then
+      removed[p.id] = copy_premise(p)
+      table.remove(self.premises, i)
+    end
   end
-  self:rebuild_wait_index()
-  return a, b
+  self:rebuild_premise_index()
+  return removed
 end
 
 function Attempt:add_done(root_id, res, env)
@@ -243,7 +256,7 @@ local function make_rows_from_raw(lane_results)
   return rows
 end
 
-local function collect_groups_from_stack(stack)
+function collect_groups_from_stack(stack)
   local groups = {}
   for i = 1, #stack do
     local f = stack[i]
@@ -267,13 +280,6 @@ end
 
 
 -- Branch application and continuations -----------------------------------
-
-local function waits_match(st, a, b)
-  if a.channel ~= b.channel then return false end
-  if a.kind == b.kind then return false end
-  if common_disallowed_group(st, a, b) then return false end
-  return true
-end
 
 local function settle_losing_nacks(op, out)
   if type(op) ~= 'table' then return end
@@ -457,39 +463,48 @@ local function apply_task_step(st, idx, branch)
     return st
   end
 
-  local channel_kind, channel, channel_value = Resources.channel_leaf(op)
-  if channel_kind then
-    st:set_field(st, 'next_wait', st.next_wait + 1)
-    st:push_wait({
-      id = st.next_wait,
-      root_id = task.root_id,
-      kind = channel_kind,
-      channel = channel,
-      value = channel_value,
-      task = task,
-      groups = collect_groups_from_stack(task.stack),
-    })
-    return st
-  elseif Resources.apply(st, task, op, complete_task, new_result) then
+  if Resources.apply(st, task, op, complete_task, new_result) then
     return st
   else
     error('unknown option kind: ' .. tostring(k))
   end
 end
 
-local function apply_wait_pair(st, i, j)
-  local a, b = st:remove_wait_pair(i, j)
-  local function resume_one(w, other)
-    local t = w.task
-    if w.kind == 'get' then
-      return complete_task(st, t, new_result(pack_(other.value)))
-    else
-      return complete_task(st, t, new_result(pack_(true)))
+local function apply_premise_solution(st, solution)
+  local ids = solution.ids or {}
+  local removed = st:remove_premises(ids)
+
+  -- A premise solution may carry one shared proposal.  This is proof evidence
+  -- for the solution as a whole, not a resource delta owned by one premise
+  -- lane.  Resolved tasks therefore carry the same once-only contribution id;
+  -- environment merges deduplicate it and final preparation expands it once.
+  local contribution_id = solution.contribution_id or solution.id
+  if solution.proposal then
+    if not contribution_id then
+      st:set_field(st, 'next_contribution', st.next_contribution + 1)
+      contribution_id = 'premise-solution-' .. tostring(st.next_contribution)
     end
   end
-  resume_one(a, b)
-  if st.conflict then return st end
-  resume_one(b, a)
+
+  for i = 1, #ids do
+    local id = ids[i]
+    local p = removed[id]
+    if not p then st:set_conflict('missing-premise'); return st end
+    local vals = solution.results and solution.results[id]
+    if not vals then st:set_conflict('missing-premise-result'); return st end
+    if solution.proposal then
+      local env, err = Resources.with_contribution_frame(p.task.env, contribution_id, solution.proposal)
+      if not env then st:set_unknown(nil, err or 'premise-contribution-conflict'); return st end
+      p.task.env = env
+    end
+    local proposal = solution.proposals and solution.proposals[id]
+    if proposal then
+      local ok, err = Resources.commit_candidate_into_env(p.task.env, proposal)
+      if not ok then st:set_unknown(nil, err or 'premise-resource-conflict'); return st end
+    end
+    complete_task(st, p.task, new_result(vals))
+    if st.conflict then return st end
+  end
   return st
 end
 
@@ -498,13 +513,66 @@ local function has_done(done)
   return false
 end
 
-local function wait_outcome(st)
-  local cert = AbsenceCert.new()
-  for i = 1, #(st.waits or {}) do
-    local w = st.waits[i]
-    cert:add({ kind = 'channel-absent', channel = w.channel, role = w.kind })
+local function sorted_premise_buckets(st)
+  local buckets = {}
+  for _, bucket in pairs(st.premise_index or {}) do buckets[#buckets + 1] = bucket end
+  table.sort(buckets, function(a, b)
+    local ar = a.resource
+    local br = b.resource
+    local ak = (ar and (ar._fibers_id or ar.name)) or tostring(ar)
+    local bk = (br and (br._fibers_id or br.name)) or tostring(br)
+    if ak == bk then
+      local an = a.kind and a.kind.name or ''
+      local bn = b.kind and b.kind.name or ''
+      return an < bn
+    end
+    return tostring(ak) < tostring(bk)
+  end)
+  return buckets
+end
+
+local function premise_absence_ctx(st, cert)
+  local ctx = { rt = st.rt, observer = st.observer, capture = st.capture, observing = (st.observer ~= nil) or (st.capture and st.capture:frontiers_enabled()) }
+  function ctx:observe_frontier(frontier)
+    if frontier and self.observer then frontier:observe(self.observer) end
+    return frontier and frontier.gen or nil
   end
-  return Outcome.miss(cert)
+  function ctx:add(obs)
+    if obs then
+      if obs.frontier and self.observer then obs.frontier:observe(self.observer) end
+      cert:add(obs)
+    end
+  end
+  return ctx
+end
+
+local function premise_outcome(st)
+  local cert = AbsenceCert.new()
+  local waits = {}
+  local buckets = sorted_premise_buckets(st)
+  for bi = 1, #buckets do
+    local bucket = buckets[bi]
+    local ps = {}
+    for i = 1, #(bucket.indices or {}) do
+      local p = st.premises[bucket.indices[i]]
+      if p then
+        ps[#ps + 1] = p
+        if p.wait then waits[#waits + 1] = p.wait end
+      end
+    end
+    local ok = false
+    local absence = bucket.kind and bucket.kind.absence_premises
+    if absence then
+      ok = absence(bucket.resource, ps, premise_absence_ctx(st, cert)) == true
+    end
+    if not ok then
+      for i = 1, #ps do
+        local p = ps[i]
+        cert:add({ kind = 'premise-absent', resource = p.resource, resource_kind = p.kind and p.kind.name, request = p.request })
+      end
+    end
+  end
+  return Outcome.miss(cert, waits)
 end
 
 
@@ -688,16 +756,93 @@ local function task_branches(st)
   end
 end
 
-local function wait_branches(st)
+local function premise_branches(st)
   local branches = {}
-  for _, bucket in pairs(st.wait_index or {}) do
-    for gi = 1, #bucket.get do
-      local i = bucket.get[gi]
-      for pi = 1, #bucket.put do
-        local j = bucket.put[pi]
-        if st.waits[i] and st.waits[j] and waits_match(st, st.waits[i], st.waits[j]) then
-          branches[#branches + 1] = { kind = 'wait_pair', i = i, j = j }
+  local ctx = {}
+  function ctx:compatible(a, b)
+    return not common_disallowed_group(st, a, b)
+  end
+  ctx.pack = pack_
+  ctx.attempt = st
+  function ctx:now() return self.attempt and self.attempt.rt and self.attempt.rt.now and self.attempt.rt:now() or 0 end
+
+  local function premise_lane_for_group(premise, gid)
+    local stack = premise and premise.task and premise.task.stack or {}
+    for i = #stack, 1, -1 do
+      local f = stack[i]
+      if f.kind == 'product_lane' and f.group_id == gid then return f.lane end
+    end
+    return nil
+  end
+
+  function ctx:resource_record_views(resource, premises)
+    local out, seen = {}, {}
+
+    local function add_env(env, relation, group, lane, delta_only)
+      if not env then return end
+      local key = tostring(env) .. ':' .. tostring(relation) .. ':' .. tostring(group and group.allow_internal) .. ':' .. tostring(lane)
+      if seen[key] then return end
+      seen[key] = true
+
+      local effective = env
+      if delta_only then effective = Resources.copy_delta(env) end
+      local overlay = Resources.overlay_for_env(effective)
+      local rec = overlay and overlay.res and overlay.res[resource]
+      if rec then
+        out[#out + 1] = {
+          rec = rec,
+          relation = relation,
+          group = group,
+          lane = lane,
+          allow_internal = group and group.allow_internal == true or false,
+        }
+      end
+    end
+
+    for i = 1, #(premises or {}) do
+      local p = premises[i]
+      if p and p.task then add_env(p.task.env, 'own', nil, nil, true) end
+      for gi = 1, #(p and p.groups or {}) do
+        local gid = p.groups[gi]
+        local g = st.groups[gid]
+        if g then
+          add_env(g.parent_env, 'outer', g, nil, false)
+          local own_lane = premise_lane_for_group(p, gid)
+          local lanes = {}
+          for lane, _ in pairs(g.envs or {}) do lanes[#lanes + 1] = lane end
+          table.sort(lanes)
+          for _, lane in ipairs(lanes) do
+            local relation = (own_lane ~= nil and lane == own_lane) and 'own' or 'sibling'
+            add_env(g.envs[lane], relation, g, lane, true)
+          end
         end
+      end
+    end
+    return out
+  end
+
+  function ctx:resource_records(resource, premises)
+    local views = self:resource_record_views(resource, premises)
+    local out = {}
+    for i = 1, #views do out[#out + 1] = views[i].rec end
+    return out
+  end
+
+  local buckets = sorted_premise_buckets(st)
+  for bi = 1, #buckets do
+    local bucket = buckets[bi]
+    local kind = bucket.kind
+    local resolver = kind and kind.resolve_premises
+    if resolver then
+      local ps = {}
+      for i = 1, #(bucket.indices or {}) do
+        local p = st.premises[bucket.indices[i]]
+        if p then ps[#ps + 1] = p end
+      end
+      table.sort(ps, function(a, b) return (a.id or 0) < (b.id or 0) end)
+      local sols = resolver(bucket.resource, ps, ctx) or {}
+      for i = 1, #sols do
+        branches[#branches + 1] = { kind = 'premise_solution', solution = sols[i] }
       end
     end
   end
@@ -718,8 +863,8 @@ end
 local function apply_branch(st, branch)
   if branch.kind == 'task' then
     return apply_task_step(st, branch.index, branch)
-  elseif branch.kind == 'wait_pair' then
-    return apply_wait_pair(st, branch.i, branch.j)
+  elseif branch.kind == 'premise_solution' then
+    return apply_premise_solution(st, branch.solution)
   elseif branch.kind == 'partner' then
     st:select_root(branch.id)
     st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = {}, env = Resources.new_env(nil, st.capture), attempt = st.pending[branch.id].attempt })
@@ -771,7 +916,7 @@ search_state = function(st, depth)
 
   local branches = task_branches(st)
   if not branches then
-    if #st.waits == 0 then
+    if #st.premises == 0 then
       if has_done(st.done) then
         local w = World.from_attempt(st)
         if w then
@@ -786,10 +931,10 @@ search_state = function(st, depth)
       return Outcome.miss(AbsenceCert.new())
     end
 
-    branches = wait_branches(st)
+    branches = premise_branches(st)
     local partners = partner_branches(st)
     for i = 1, #partners do branches[#branches + 1] = partners[i] end
-    if #branches == 0 then return wait_outcome(st) end
+    if #branches == 0 then return premise_outcome(st) end
   end
 
 
@@ -873,7 +1018,7 @@ local LOCAL_NEEDS_NET = 'needs-net' -- reduction reached a real proof-net premis
 -- reduce only deterministic zero-premise forms: always, bind while the bind
 -- result remains local, wrap, and guard construction.  It must
 -- not observe, prepare, or commit resources.  When it reaches a resource,
--- channel, product, choice, or absence question, the same task is passed back
+-- rendezvous, product, choice, or absence question, the same task is passed back
 -- to general search so callbacks already run are not repeated.
 local function reduce_local_task(solver, task)
   local st = { rt = solver.rt }
@@ -969,7 +1114,7 @@ function Solver:find_local_or_out_from(id)
   end
 
   -- The local corridor reached a genuine proof-net premise, for example a
-  -- resource, channel, branch or product.  Continue the same proof search from
+  -- resource, rendezvous, branch or product.  Continue the same proof search from
   -- the reduced task rather than re-running any speculative algebra callbacks.
   local attempt = Attempt.new(self.rt, self.pending, id, self)
   task.env = task.env or Resources.new_env(nil, self.capture)

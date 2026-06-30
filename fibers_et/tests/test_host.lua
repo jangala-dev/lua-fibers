@@ -24,10 +24,10 @@ do
   })
 
   local done = false
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(fibers.sleep_op(4))
     done = true
-  end, { host = host })
+  end, { host = host }).runtime_status
 
   assert_status(st, 'found')
   assert_truthy(done, 'sleeping fibre should resume')
@@ -39,10 +39,10 @@ end
 -- waits or polling; unsupported waits are returned to the caller as pending.
 do
   local source
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     source = fibers.Source.signal('unsupported-host-source')
     fibers.perform(source:wait_op())
-  end, { host = PureHost.new({ now = function() return 0 end, sleep = function() error('should not sleep') end }) })
+  end, { host = PureHost.new({ now = function() return 0 end, sleep = function() error('should not sleep') end }) }).runtime_status
 
   assert_status(st, 'pending')
   assert_eq(st.host_reason, 'unsupported-waits')

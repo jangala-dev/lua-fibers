@@ -38,7 +38,7 @@ or consumed before the pump waits again.
 ```lua
 local host = fibers.host.manual({ auto_advance_time = false })
 local handle = fibers.host.Handle.fake({ host = host, key = 'demo' })
-local stream = fibers.perform(fibers.Stream.open_handle_op(region, handle))
+local stream = fibers.perform(fibers.Stream.open_handle_in_op(region, handle))
 ```
 
 The fake handle has helpers such as:
@@ -92,7 +92,7 @@ directional handles into the duplex shape expected by `Stream.open_handle_op`:
 local Handle = require('fibers.host.handle')
 local r, w = Fd.pipe({ host = host })
 local h = Handle.duplex(r, w, { name = 'pipe-duplex' })
-local stream = fibers.perform(fibers.Stream.open_handle_op(region, h))
+local stream = fibers.perform(fibers.Stream.open_handle_in_op(region, h))
 ```
 
 This is mainly a test and plumbing helper.  Subprocess support will usually

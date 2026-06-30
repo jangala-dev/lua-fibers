@@ -4,8 +4,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local Validity = require('fibers.kernel.validity')
 local Resources = require('fibers.kernel.resources')
 local Debug = require('fibers.kernel.transaction_debug')
-local Op = require('fibers.base.op')
-local Source = require('fibers.base.source')
+local Op = require('fibers.atoms.op')
+local Source = require('fibers.atoms.source')
 local SourceState = require('fibers.internal.source_state')
 local Runtime = require('fibers.kernel.runtime')
 
@@ -52,13 +52,13 @@ end
 -- Source fallback validity is driven by managed queue facts, not manual bump calls.
 do
   local rt = Runtime.new()
-  local q = Source.queue('validity-source')
+  local q = Source.events('validity-source')
   local got
   rt:spawn_raw(function() got = rt:perform(q:next_op():or_else(Op.always('fallback'))) end, 'validity-source-fallback')
   for _ = 1, 20 do if got then break end; rt:step({ max_work = 5 }) end
   assert_eq(got, 'fallback')
 
-  local q2 = Source.queue('validity-source-pending')
+  local q2 = Source.events('validity-source-pending')
   local got2
   rt = Runtime.new()
   rt:spawn_raw(function() got2 = rt:perform(q2:next_op()) end, 'validity-source-pending-waiter')
@@ -119,21 +119,21 @@ do
   assert_eq(Resources.observer_valid(obs), false, 'set add invalidates membership observation')
 end
 
--- Claim is an ownership-specialised managed keyspace.
+-- Lease is an ownership-specialised managed keyspace.
 do
-  local claims = Validity.claim('validity-claim')
-  local obs = Resources.new_observer('claim-free')
-  assert_eq(claims:is_free(ctx_for(obs), 'slot'), true)
-  claims:claim('slot', 'owner-a')
-  assert_eq(Resources.observer_valid(obs), false, 'claim acquisition invalidates free observation')
+  local leases = Validity.lease('validity-lease')
+  local obs = Resources.new_observer('lease-free')
+  assert_eq(leases:is_free(ctx_for(obs), 'slot'), true)
+  leases:acquire('slot', 'owner-a')
+  assert_eq(Resources.observer_valid(obs), false, 'lease acquisition invalidates free observation')
 
-  local owner = Resources.new_observer('claim-owner')
-  assert_eq(claims:owner(ctx_for(owner), 'slot'), 'owner-a')
-  local ok, why = claims:release('slot', 'owner-b')
+  local owner = Resources.new_observer('lease-owner')
+  assert_eq(leases:owner(ctx_for(owner), 'slot'), 'owner-a')
+  local ok, why = leases:release('slot', 'owner-b')
   assert_eq(ok, false)
   assert_eq(why, 'not-owner')
   assert_eq(Resources.observer_valid(owner), true, 'failed release does not invalidate owner observation')
-  assert_eq(claims:release('slot', 'owner-a'), true)
+  assert_eq(leases:release('slot', 'owner-a'), true)
   assert_eq(Resources.observer_valid(owner), false, 'release invalidates owner observation')
 end
 

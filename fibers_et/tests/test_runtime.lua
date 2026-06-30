@@ -1,15 +1,15 @@
 -- Runtime stepping/cursor tests.
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Channel = require('fibers.base.channel')
-local Cell = require('fibers.base.cell')
+local Rendezvous = require('fibers.atoms.rendezvous')
+local Scalar = require('fibers.atoms.scalar')
 
 local function assert_eq(a,b,msg) if a ~= b then error((msg or '') .. ' expected '..tostring(b)..' got '..tostring(a),2) end end
 
 -- external loop stepping
 local rt = Runtime.new()
-local ch = Channel.new('step-ch')
+local ch = Rendezvous.new('step-ch')
 local got, sent
 rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'r')
 rt:spawn_raw(function() sent = rt:perform(ch:put_op('x')) end, 's')
@@ -24,19 +24,19 @@ assert_eq(got, 'x')
 assert_eq(sent, true)
 
 -- bounded solve should be non-mutating on budget exhaustion
-local cell = Cell.new(0, 'budget-cell')
+local scalar = Scalar.new(0, 'budget-scalar')
 local rt2 = Runtime.new()
 for i=1,4 do
   rt2:spawn_raw(function()
-    rt2:perform(cell:read_op():and_then(function(v)
-      return cell:write_op(v + 1)
+    rt2:perform(scalar:read_op():and_then(function(v)
+      return scalar:write_op(v + 1)
     end))
   end, 'u'..i)
 end
 rt2:_pump() -- start all fibres without solving
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending', 'budget status')
-assert_eq(cell.value, 0, 'pending budget does not mutate')
+assert_eq(scalar.value, 0, 'pending budget does not mutate')
 local committed = false
 for i=1,20 do
   local s = rt2:step({ max_work = 1000 })
@@ -44,15 +44,15 @@ for i=1,20 do
   if s.tag == 'idle' or s.tag == 'absent' then break end
 end
 assert_eq(committed, true, 'eventual bounded commit')
-assert_eq(cell.value, 4)
+assert_eq(scalar.value, 4)
 print('tests/test_runtime.lua: step ok')
 
 
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Channel = require('fibers.base.channel')
-local Cell = require('fibers.base.cell')
+local Rendezvous = require('fibers.atoms.rendezvous')
+local Scalar = require('fibers.atoms.scalar')
 
 local function assert_eq(a,b,msg) if a ~= b then error((msg or '') .. ' expected '..tostring(b)..' got '..tostring(a),2) end end
 local function assert_truthy(v,msg) if not v then error(msg or 'expected truthy',2) end end
@@ -60,7 +60,7 @@ local function assert_truthy(v,msg) if not v then error(msg or 'expected truthy'
 -- A low budget should preserve a live cursor across pending calls rather than
 -- starting algebra search from scratch each tick.
 local rt = Runtime.new()
-local ch = Channel.new('cursor-rendezvous')
+local ch = Rendezvous.new('cursor-rendezvous')
 local got, sent
 rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'r')
 rt:spawn_raw(function() sent = rt:perform(ch:put_op('x')) end, 's')
@@ -78,18 +78,18 @@ assert_eq(got, 'x')
 assert_eq(sent, true)
 
 -- Budget exhaustion must not mutate resources before a committable world is found.
-local cell = Cell.new(0, 'cursor-cell')
+local scalar = Scalar.new(0, 'cursor-scalar')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
-    rt2:perform(cell:read_op():and_then(function(v)
-      return cell:write_op(v + 1)
+    rt2:perform(scalar:read_op():and_then(function(v)
+      return scalar:write_op(v + 1)
     end))
   end, 'u'..i)
 end
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending')
-assert_eq(cell.value, 0, 'pending cursor step does not commit')
+assert_eq(scalar.value, 0, 'pending cursor step does not commit')
 local commits = 0
 for i = 1, 200 do
   st = rt2:step({ max_work = 3 })
@@ -97,15 +97,15 @@ for i = 1, 200 do
   if st.tag == 'idle' or st.tag == 'absent' then break end
 end
 assert_eq(commits, 4)
-assert_eq(cell.value, 4)
+assert_eq(scalar.value, 4)
 print('tests/test_runtime.lua: cursor ok')
 
 
 package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Channel = require('fibers.base.channel')
+local Rendezvous = require('fibers.atoms.rendezvous')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -116,7 +116,7 @@ local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail(
 -- inside the continuation need the fibre attempt and residual environment.
 do
   local rt = Runtime.new()
-  local ch = Channel.new('deferred-context-search')
+  local ch = Rendezvous.new('deferred-context-search')
   local got, sent
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op():and_then(function(v)
@@ -135,7 +135,7 @@ end
 -- The bounded cursor exercises the same deferred path through cursor.lua.
 do
   local rt = Runtime.new()
-  local ch = Channel.new('deferred-context-cursor')
+  local ch = Rendezvous.new('deferred-context-cursor')
   local got, sent, st
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op():and_then(function(v)

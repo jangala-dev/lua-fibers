@@ -1,6 +1,6 @@
 -- Result of asking a resource leaf whether it can participate now.
 -- Branching belongs to option algebra; a leaf is ready with one proposal,
--- waits for one future interest, or is blocked in the current world.
+-- waits for one future interest, opens a proof premise, or is blocked in the current world.
 local Result = {}
 
 local BLOCKED = { status = 'blocked' }
@@ -14,6 +14,11 @@ end
 function Result.wait(interest)
   if interest == nil then return BLOCKED end
   return { status = 'wait', wait = interest }
+end
+
+function Result.premise(request, wait)
+  if request == nil then return BLOCKED end
+  return { status = 'premise', premise = request, wait = wait }
 end
 
 function Result.blocked()

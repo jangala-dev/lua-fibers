@@ -53,13 +53,13 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'flush-after-delivery', capacity = 10 })
   local flushed, flush_err, later_n, later_err
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
     assert_eq(fibers.perform(b:reader():read_exactly_op(3)), 'abc')
     fibers.perform(b:reader():shutdown_op('reader_closed'))
     flushed, flush_err = fibers.perform(a:writer():flush_op())
     later_n, later_err = fibers.perform(a:writer():write_op('z'))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(flushed, true, 'flush should succeed when no prior bytes are retained')
   assert_nil(flush_err)
@@ -71,12 +71,12 @@ end
 do
   local a, b = Stream.memory_pair({ name = 'settle-graceful-eof', capacity = 10 })
   local one, two, err
-  local st = fibers.run(function()
+  local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
     fibers.perform(a:writer():shutdown_op())
     one = fibers.perform(b:reader():read_some_op(10))
     two, err = fibers.perform(b:reader():read_some_op(10))
-  end)
+  end).runtime_status
   assert_status(st, 'found')
   assert_eq(one, 'abc')
   assert_nil(two)
@@ -90,7 +90,7 @@ do
   local backend = Fake.new({ name = 'settle-backend', write_blocked = true })
   local stream, flushed, flush_err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'settle-backend-stream', write_capacity = 3 }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'settle-backend-stream', write_capacity = 3 }))
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
   end, 'writer')
@@ -122,7 +122,7 @@ do
   end
   local stream, flushed, flush_err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'settle-protocol-stream', write_capacity = 3 }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'settle-protocol-stream', write_capacity = 3 }))
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
   end, 'writer')

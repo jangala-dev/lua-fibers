@@ -6,7 +6,7 @@ local Stream = fibers.Stream
 local a, b = Stream.memory_pair({ name = 'example-stream', capacity = 64 })
 local line, eof, eof_err
 
-local st = fibers.run(function()
+local st = fibers.try_run(function()
   fibers.spawn_raw(function()
     fibers.perform(a:writer():write_op('hello stream\n'))
     fibers.perform(a:writer():shutdown_op())
@@ -14,7 +14,7 @@ local st = fibers.run(function()
 
   line = fibers.perform(b:reader():read_line_op())
   eof, eof_err = fibers.perform(b:reader():read_some_op(1024))
-end)
+end).runtime_status
 
 assert(st.tag == 'found')
 assert(line == 'hello stream')

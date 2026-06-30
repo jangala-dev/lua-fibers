@@ -5,15 +5,15 @@ work. It replaces the earlier small benchmark with grouped cases covering:
 
 ```text
 local Op perform, map/bind, wrap
-Cell reads, writes, and changed waits
-Channel rendezvous and tensor-internal rendezvous
+Scalar reads, writes, and changed waits
+Rendezvous and tensor-internal rendezvous
 all/tensor products, deferred lane bind, choice, or_else, and backtracking
-Source queue, external arrival, and clock readiness
+Source events, external arrival, and clock readiness
 Effect merge and discharge
 Region ownership
-Task/Lifetime spawning and settlement
+Task/Scope spawning and settlement
 Nursery policy spawning
-Negotiated lifetime handoff
+Negotiated scope handoff
 ```
 
 Run from the repository root with any supported Lua host:

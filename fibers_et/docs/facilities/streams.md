@@ -17,7 +17,7 @@ reservoir in algebraically derived Outlet options.
 A bidirectional stream is not primitive:
 
 ```text
-Stream(A, B) = Flow(A -> B) tensor Flow(B -> A) + lifetime policy
+Stream(A, B) = Flow(A -> B) tensor Flow(B -> A) + scope policy
 ```
 
 This is deliberately smaller than making a bidirectional stream the primitive.
@@ -91,7 +91,7 @@ stream.writer -> tx Flow -> write pump -> backend
 ```
 
 ```lua
-local stream = fibers.perform(Stream.open_backend_op(region, backend, {
+local stream = fibers.perform(Stream.open_backend_in_op(region, backend, {
   name = 'host-stream',
   read_capacity = 4096,
   write_capacity = 4096,
@@ -123,12 +123,12 @@ A host-backed stream can be opened directly from any object satisfying the
 
 ```lua
 local handle = fibers.host.Handle.fake({ host = host, key = 'demo' })
-local stream = fibers.perform(Stream.open_handle_op(region, handle, {
+local stream = fibers.perform(Stream.open_handle_in_op(region, handle, {
   name = 'handle-stream',
 }))
 ```
 
-`fibers.facility.stream.backend.handle` adapts a HostHandle into the backend
+`fibers.stream.backend.handle` adapts a HostHandle into the backend
 contract below.  Real fd handles are obtained from the selected host family, for
 example `fibers.host.luajit_linux().fd`, `fibers.host.luaposix().fd`, or
 `fibers.host.nixio().fd`.

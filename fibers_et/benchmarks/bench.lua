@@ -37,14 +37,14 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Channel = require('fibers.base.channel')
-local Cell = require('fibers.base.cell')
-local Source = require('fibers.base.source')
-local Region = require('fibers.base.region')
-local Lifetime = require('fibers.facility.lifetime')
-local Effect = require('fibers.base.effect')
+local Rendezvous = require('fibers.atoms.rendezvous')
+local Scalar = require('fibers.atoms.scalar')
+local Source = require('fibers.atoms.source')
+local Region = require('fibers.atoms.region')
+local Scope = require('fibers.scope')
+local Effect = require('fibers.atoms.effect')
 
 local unpack_ = table.unpack or unpack
 
@@ -215,36 +215,36 @@ add('local', 'wrap post commit', 1500, function(n)
   return n
 end)
 
-add('cell', 'serial read write', 1200, function(n)
+add('scalar', 'serial read write', 1200, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-cell-serial')
+  local scalar = Scalar.new(0, 'bench-scalar-serial')
   rt:spawn_raw(function()
     for _ = 1, n do
-      rt:perform(cell:read_op():and_then(function(v)
-        return cell:write_op(v + 1)
+      rt:perform(scalar:read_op():and_then(function(v)
+        return scalar:write_op(v + 1)
       end))
     end
-  end, 'bench-cell-serial')
+  end, 'bench-scalar-serial')
   run_rt(rt)
-  assert_eq(cell.value, n)
+  assert_eq(scalar.value, n)
   return n
 end)
 
-add('cell', 'changed wait wake', 400, function(n)
+add('scalar', 'changed wait wake', 400, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-cell-changed')
+  local scalar = Scalar.new(0, 'bench-scalar-changed')
   local observed = 0
   rt:spawn_raw(function()
-    local snap = rt:perform(cell:snapshot_op())
+    local snap = rt:perform(scalar:snapshot_op())
     for _ = 1, n do
-      local value, version = rt:perform(cell:changed_op(snap.version))
+      local value, version = rt:perform(scalar:changed_op(snap.version))
       observed = value
       snap = { value = value, version = version }
     end
-  end, 'bench-cell-waiter')
+  end, 'bench-scalar-waiter')
   rt:spawn_raw(function()
-    for i = 1, n do rt:perform(cell:write_op(i)) end
-  end, 'bench-cell-writer')
+    for i = 1, n do rt:perform(scalar:write_op(i)) end
+  end, 'bench-scalar-writer')
   run_rt(rt)
   assert_eq(observed, n)
   return n
@@ -256,7 +256,7 @@ end)
 
 add('rendezvous', 'external ping pong', 1000, function(n)
   local rt = Runtime.new()
-  local ch = Channel.new('bench-ping-pong')
+  local ch = Rendezvous.new('bench-ping-pong')
   local sum, sent = 0, 0
   rt:spawn_raw(function()
     for _ = 1, n do sum = sum + rt:perform(ch:get_op()) end
@@ -270,9 +270,9 @@ add('rendezvous', 'external ping pong', 1000, function(n)
   return n
 end)
 
-add('rendezvous', 'tensor internal channel', 700, function(n)
+add('rendezvous', 'tensor internal rendezvous', 700, function(n)
   local rt = Runtime.new()
-  local ch = Channel.new('bench-tensor-internal')
+  local ch = Rendezvous.new('bench-tensor-internal')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -285,11 +285,11 @@ add('rendezvous', 'tensor internal channel', 700, function(n)
   return n
 end)
 
-add('product', 'all independent cells', 900, function(n)
+add('product', 'all independent scalars', 900, function(n)
   local rt = Runtime.new()
-  local a = Cell.new(0, 'bench-all-a')
-  local b = Cell.new(0, 'bench-all-b')
-  local c = Cell.new(0, 'bench-all-c')
+  local a = Scalar.new(0, 'bench-all-a')
+  local b = Scalar.new(0, 'bench-all-b')
+  local c = Scalar.new(0, 'bench-all-c')
   local seen = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -310,8 +310,8 @@ end)
 
 add('product', 'tensor lane bind external rendezvous', 350, function(n)
   local rt = Runtime.new()
-  local internal = Channel.new('bench-bind-internal')
-  local external = Channel.new('bench-bind-external')
+  local internal = Rendezvous.new('bench-bind-internal')
+  local external = Rendezvous.new('bench-bind-external')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -334,27 +334,27 @@ end)
 
 add('product', 'choice conflict backtrack', 450, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-choice-conflict')
+  local scalar = Scalar.new(0, 'bench-choice-conflict')
   local wins = 0
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.tensor({
-        cell:write_op(1):map(function() return 'write-1' end):choice(Op.always('no-write')),
-        cell:write_op(2),
+        scalar:write_op(1):map(function() return 'write-1' end):choice(Op.always('no-write')),
+        scalar:write_op(2),
       }))
       if rows[1][1] == 'no-write' and rows[2][1] == true then wins = wins + 1 end
     end
   end, 'bench-choice-conflict')
   run_rt(rt)
   assert_eq(wins, n)
-  assert_eq(cell.value, 2)
+  assert_eq(scalar.value, 2)
   return n
 end)
 
 add('product', 'or_else waits for partner', 350, function(n)
   local rt = Runtime.new()
-  local wanted = Channel.new('bench-or-else-wanted')
-  local dead = Channel.new('bench-or-else-dead')
+  local wanted = Rendezvous.new('bench-or-else-wanted')
+  local dead = Rendezvous.new('bench-or-else-dead')
   local primary = 0
   rt:spawn_raw(function()
     for _ = 1, n do
@@ -370,14 +370,14 @@ add('product', 'or_else waits for partner', 350, function(n)
   return n
 end)
 
-add('product', 'dependent cell updaters', 180, function(n)
+add('product', 'dependent scalar updaters', 180, function(n)
   local total_commits = n * 4
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-dependent-cell')
+  local scalar = Scalar.new(0, 'bench-dependent-scalar')
   local returns = {}
   local function update_op()
-    return cell:read_op():and_then(function(old)
-      return cell:write_op(old + 1):and_then(function()
+    return scalar:read_op():and_then(function(old)
+      return scalar:write_op(old + 1):and_then(function()
         return Op.always(old)
       end)
     end)
@@ -388,7 +388,7 @@ add('product', 'dependent cell updaters', 180, function(n)
     end, 'bench-dependent-' .. tostring(i))
   end
   run_rt(rt)
-  assert_eq(cell.value, total_commits)
+  assert_eq(scalar.value, total_commits)
   assert_eq(#returns, total_commits)
   return total_commits
 end)
@@ -397,9 +397,9 @@ add('product', 'triple swap with decoy', 80, function(n)
   local completed = 0
   for k = 1, n do
     local rt = Runtime.new()
-    local ab = Channel.new('bench-triple-ab-' .. tostring(k))
-    local bc = Channel.new('bench-triple-bc-' .. tostring(k))
-    local ca = Channel.new('bench-triple-ca-' .. tostring(k))
+    local ab = Rendezvous.new('bench-triple-ab-' .. tostring(k))
+    local bc = Rendezvous.new('bench-triple-bc-' .. tostring(k))
+    local ca = Rendezvous.new('bench-triple-ca-' .. tostring(k))
     local a, b, c, decoy
     rt:spawn_raw(function() a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows) return rows[2][1] end)) end, 'A')
     rt:spawn_raw(function() b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows) return rows[2][1] end)) end, 'B')
@@ -421,12 +421,12 @@ end)
 
 add('source', 'queue preloaded consume', 1000, function(n)
   local rt = Runtime.new()
-  local q = Source.queue('bench-source-queue')
+  local q = Source.events('bench-source-events')
   for i = 1, n do rt:arrive(q, i) end
   local sum = 0
   rt:spawn_raw(function()
     for _ = 1, n do sum = sum + rt:perform(q:next_op()) end
-  end, 'bench-source-queue-consumer')
+  end, 'bench-source-events-consumer')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
   return n
@@ -434,7 +434,7 @@ end)
 
 add('source', 'external arrival driver loop', 250, function(n)
   local rt = Runtime.new()
-  local q = Source.queue('bench-source-driver')
+  local q = Source.events('bench-source-driver')
   local sum = 0
   rt:spawn_raw(function()
     for _ = 1, n do sum = sum + rt:perform(q:next_op()) end
@@ -480,7 +480,7 @@ add('effect', 'merge duplicate effects', 700, function(n)
 end)
 
 -- --------------------------------------------------------------------------
--- Region, Task, Lifetime, and policy cases.
+-- Region, Task, Scope, and policy cases.
 -- --------------------------------------------------------------------------
 
 add('region', 'admit owns release', 500, function(n)
@@ -502,15 +502,15 @@ add('region', 'admit owns release', 500, function(n)
   return n
 end)
 
-add('task', 'lifetime spawn await settle', 80, function(n)
+add('task', 'scope spawn await settle', 80, function(n)
   local rt = Runtime.new()
-  local life = Lifetime.new('bench-task-life')
+  local life = Scope.new('bench-task-life')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
       local task = rt:perform(life:spawn_op(function() return i end, { name = 'bench-task-' .. tostring(i) }))
       sum = sum + rt:perform(task:await_op())
-      rt:perform(life:settle_item_op(task))
+      rt:perform(life:retire_op(task))
     end
   end, 'bench-task-root')
   run_rt(rt)
@@ -519,10 +519,10 @@ add('task', 'lifetime spawn await settle', 80, function(n)
   return n
 end)
 
-add('policy', 'nursery spawn channel join', 80, function(n)
+add('policy', 'nursery spawn rendezvous join', 80, function(n)
   local sum = 0
   local st = fibers.launch(fibers.policy.nursery({ name = 'bench-nursery' }), function()
-    local ch = fibers.Channel.new('bench-nursery-channel')
+    local ch = fibers.Rendezvous.new('bench-nursery-rendezvous')
     for i = 1, n do
       fibers.spawn(function()
         fibers.perform(ch:put_op(i))
@@ -535,13 +535,13 @@ add('policy', 'nursery spawn channel join', 80, function(n)
   return n
 end)
 
-add('lifetime', 'negotiated handoff', 30, function(n)
+add('scope', 'negotiated handoff', 30, function(n)
   local completed = 0
   for i = 1, n do
     local rt = Runtime.new()
-    local request = Lifetime.new('bench-request-' .. tostring(i))
-    local supervisor = Lifetime.new('bench-supervisor-' .. tostring(i))
-    local resume = Channel.new('bench-resume-' .. tostring(i))
+    local request = Scope.new('bench-request-' .. tostring(i))
+    local supervisor = Scope.new('bench-supervisor-' .. tostring(i))
+    local resume = Rendezvous.new('bench-resume-' .. tostring(i))
     local ok = false
     rt:spawn_raw(function()
       local task = rt:perform(request:spawn_op(function()
@@ -549,15 +549,15 @@ add('lifetime', 'negotiated handoff', 30, function(n)
         return msg
       end, { name = 'bench-session-' .. tostring(i) }))
       local rows = rt:perform(Op.tensor({
-        request:offer_handoff_op(task, supervisor),
-        supervisor:accept_handoff_op(),
+        request:offer_op(task, supervisor),
+        supervisor:accept_op(),
       }))
       assert_truthy(rows[2][1].item == task, 'handoff receiver did not observe task')
       assert_eq(rt:perform(request:owns_op(task)), false)
       assert_eq(rt:perform(supervisor:owns_op(task)), true)
       rt:perform(resume:put_op('ok'))
       assert_eq(rt:perform(task:await_op()), 'ok')
-      rt:perform(supervisor:settle_item_op(task))
+      rt:perform(supervisor:retire_op(task))
       rt:perform(request:close_op())
       rt:perform(supervisor:close_op())
       rt:perform(request:settle_op())

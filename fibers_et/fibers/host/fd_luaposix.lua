@@ -3,7 +3,7 @@
 -- Optional.  Provides wrap(fd) and pipe() over numeric POSIX file descriptors.
 
 local Handle = require('fibers.host.handle')
-local Errors = require('fibers.facility.flow.errors')
+local Errors = require('fibers.flow.errors')
 
 local function unsupported(reason)
   return {

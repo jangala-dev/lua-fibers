@@ -1,10 +1,10 @@
--- Sleep facility tests.
+-- Sleep tests.
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Runtime = require('fibers.kernel.runtime')
-local Sleep = require('fibers.facility.sleep')
-local Op = require('fibers.base.op')
+local Sleep = require('fibers.sleep')
+local Op = require('fibers.atoms.op')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -14,7 +14,7 @@ local function assert_error(fn, msg)
   if ok then fail(msg or 'expected error') end
 end
 
--- The facility exports precisely the two option constructors.
+-- The module exports precisely the two option constructors.
 do
   assert_eq(type(Sleep.sleep_until_op), 'function', 'sleep_until_op export')
   assert_eq(type(Sleep.sleep_op), 'function', 'sleep_op export')

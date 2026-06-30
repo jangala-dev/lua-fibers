@@ -164,7 +164,7 @@ do
   local stream, got
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-read-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-read-stream' }))
     got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'socket-reader')
 
@@ -187,7 +187,7 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-write-stream' }))
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-writer')
@@ -215,7 +215,7 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-partial-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-partial-stream' }))
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-partial-writer')
@@ -235,7 +235,7 @@ do
   local stream, first, second, err
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'socket-eof-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-eof-stream' }))
     first = rt:perform(stream:reader():read_some_op(8))
     second, err = rt:perform(stream:reader():read_some_op(8))
   end, 'socket-eof-reader')

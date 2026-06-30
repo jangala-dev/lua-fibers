@@ -1,6 +1,6 @@
 # Settlement
 
-Settlement is the disciplined cleanup story beneath `Lifetime`, streams and
+Settlement is the disciplined cleanup story beneath `Scope`, streams and
 other owned facilities.
 
 Most users do not construct settlement protocols directly.  They use options
@@ -10,14 +10,14 @@ that ownership may be released.
 
 ## The ordinary story
 
-A lifetime owns work and resources.  When an owned thing is no longer needed, it
+A scope owns work and resources.  When an owned thing is no longer needed, it
 is retired.
 
 ```text
 create / open / spawn
         |
         v
-owned by a lifetime
+owned by a scope
         |
  close / cancel / retire
         |
@@ -45,11 +45,12 @@ phase
 claim metadata, if claimed or failed
 ```
 
-A simple live item may be reassigned or released.  A compound root may have
+A simple live item may be moved or released.  A compound root may have
 children; the root subtree moves or settles as one structure.
 
-A lifetime facility retires an item by asking the region to claim the root
-subtree, running the settlement protocols, then settling the claim.
+A scope facility retires an item by asking the region to claim the root
+subtree, running the settlement protocols, then resolving the claim with
+`discharge`.
 
 ```text
 owned subtree
@@ -62,7 +63,7 @@ claimed subtree
     v
 settlement complete
     |
-    | settle_claim_op(original_claim)
+    | resolve_claim_op(original_claim, { kind = 'discharge' })
     v
 released subtree
 ```
@@ -82,11 +83,10 @@ claim authority.
 
 Settlement protocols run as ordinary options after the claim commits.
 
-Final release requires the original claim authority object.
+Final release requires the original claim authority object and an explicit discharge resolution.
 
 Protocol failure does not erase the claim.  It records an observable
-settlement_failed state and discharges a settlement_failed lifetime event when the
-caller is a Lifetime.
+failed state in the Region ledger.
 ```
 
 ## Failure
@@ -97,16 +97,15 @@ committed, so the claim is not rolled back.
 The region record remains owned and becomes:
 
 ```text
-phase = "settlement_failed"
+phase = "failed"
 settlement_failed = true
 settlement_error_message = ...
 ```
 
-The item is not released.  Ordinary handoff, release and duplicate settlement
+The item is not released.  Ordinary movement, release and duplicate settlement
 remain blocked because the subtree is no longer live.
 
-Policy code may inspect the failed record and decide what to do next.  Retry and
-force-release policies are deliberately not part of this phase.
+Policy code may inspect the failed record and decide what to do next.  This phase adds explicit `restore` as a resolution for retry-style policies; tomb and force-release policies remain deliberately outside this phase.
 
 ## Owned values
 
@@ -124,19 +123,20 @@ end, {
 fibers.perform(region:admit_op(owned))
 ```
 
-The settlement function returns an `Op`.  It may perform transactional work,
+The settlement function returns an `Op`.  Settlement may also be supplied as a small protocol table with a `name`, optional `request_op`, and required `discharge_op`.  It may perform transactional work,
 wait, and compose with other options.  It must not do speculative external
 cleanup while merely constructing the option.
 
 Use `Owned.inert(item)` only when no cleanup is required.  Inert ownership is
 explicit structure, not absence of a protocol.
 
-## Ownership is not access control in this phase
+## Authority is incremental
 
-Ownership records determine responsibility, handoff and settlement.  This WIP
-phase does not yet use ownership as an access-control check on every retained Lua
-handle.  A caller that kept an old handle may still be able to call methods on
-it unless that particular facility performs its own authority checks.
+Ownership records determine responsibility, movement and settlement.  Authority
+checks determine who may act through a handle.  The current implementation now
+exposes `authorise_op` and `borrow_op`, but not every existing handle has yet
+been rewritten to enforce authority for every method.
 
-Future APIs may add owner-authorised handles, but the present settlement model is
-about responsibility and fate, not comprehensive capability enforcement.
+Resource authors should treat authority checks as the future direction: retained
+Lua reachability should not by itself imply permission to perform sensitive
+operations.  See `docs/authority-and-borrowing.md`.

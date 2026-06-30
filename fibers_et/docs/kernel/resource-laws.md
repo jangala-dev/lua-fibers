@@ -13,7 +13,7 @@ ordinary Lua table without the solver traversing or copying its keyed fields.
 Only solver-internal structures, such as option packs and product rows, are
 structural values.
 
-This means that a table sent through a channel or written to a cell is the same
+This means that a table sent through a rendezvous or written to a scalar is the same
 user value at the other side, including keyed fields and nested tables.
 
 
@@ -25,8 +25,8 @@ inside `all`, `tensor`, or an internally closed rendezvous.  Product options
 combine lane results only after lane-local deferred continuations have consumed
 their own lane values.
 
-This is what lets higher-level protocols, such as lifetime handoff, be written
-using ordinary value-blind channels plus `and_then`, instead of specialised
+This is what lets higher-level protocols, such as a scope custody offer, be written
+using ordinary value-blind rendezvous points plus `and_then`, instead of specialised
 rendezvous matching in the solver.
 
 ## Resource evaluation
@@ -35,17 +35,17 @@ A resource option should have a fixed meaning in the resource's own language.
 For example:
 
 ```lua
-cell:read_op()
-cell:write_op(value)
-region:reassign_op(item, target)
+scalar:read_op()
+scalar:write_op(value)
+region:move_op(item, target)
 queue:next_op()
 ```
 
 Resource evaluation must not call arbitrary user predicates, match functions, or
 update functions.  User interpretation belongs in ordinary Op composition.  For
-example, a cell increment is written as `read_op():and_then(...)` followed by
+example, a scalar increment is written as `read_op():and_then(...)` followed by
 `write_op(...)`; the function runs at the protected `and_then` boundary, not inside
-the cell resource protocol.
+the scalar resource protocol.
 
 
 ## Observation validation
@@ -127,7 +127,7 @@ discharge record.  Discharge happens only after resource commit.
 ## External arrivals
 
 External facts enter through runtime-bound producer capabilities, such as the
-feed returned by `Runtime:signal`, `Runtime:queue_source`, or
+feed returned by `Runtime:signal`, `Runtime:events_source`, or
 `Runtime:readiness`.  These feeds update managed validity facts and bump the
 corresponding stamps through the capability methods.  Solver cursors discover
 staleness by pull validation when they are resumed.

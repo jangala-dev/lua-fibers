@@ -2,10 +2,10 @@
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Source = require('fibers.base.source')
-local Channel = require('fibers.base.channel')
+local Source = require('fibers.atoms.source')
+local Rendezvous = require('fibers.atoms.rendezvous')
 local H = require('tests.resources.test_helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()
@@ -40,7 +40,7 @@ end
 
 local function test_ready_external_value_still_participates_in_global_rendezvous_search()
   local ev = Source.signal('ready-with-rendezvous')
-  local ch = Channel.new('external-plus-rendezvous')
+  local ch = Rendezvous.new('external-plus-rendezvous')
   local rt = Runtime.new()
   rt:arrive(ev, 'payload')
   local receiver, sender

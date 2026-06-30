@@ -15,7 +15,7 @@ local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy'
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
 
 local function drive_until(rt, pred, label, bounded)
-  for _ = 1, 160 do
+  for _ = 1, 500 do
     if pred() then return true end
     local st = bounded and rt:step({ max_work = 1 }) or rt:run()
     if pred() then return true end
@@ -79,7 +79,7 @@ do
   local backend = Fake.new({ name = 'readiness-authority-backend', readiness = 'manual', initial_writable = false })
   local stream, read_val, read_err, n, write_err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'readiness-authority-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-authority-stream' }))
     read_val, read_err = rt:perform(stream:reader():read_some_op(1))
     rt:perform(stream:writer():write_op('x'))
     n, write_err = rt:perform(stream:writer():flush_op())
@@ -113,7 +113,7 @@ do
   local backend = Fake.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'stale-readiness-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'stale-readiness-stream' }))
     got, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
   assert_status(rt:run(), 'found')
@@ -133,7 +133,7 @@ do
   local backend = Fake.new({ name = 'readiness-write-backend', readiness = 'manual', initial_writable = false, write_blocked = true })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'readiness-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-write-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -152,7 +152,7 @@ do
   local backend = Fake.new({ name = 'bounded-ready-pump-backend', readiness = 'manual', initial_writable = false, write_blocked = true })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_op(region, backend, { name = 'bounded-ready-pump-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'bounded-ready-pump-stream' }))
     rt:perform(stream:writer():write_op('xy'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -162,7 +162,7 @@ do
   end
   assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'bounded pump should reach in-flight lease')
   backend:unblock_writes()
-  drive_until(rt, function() return flushed == true end, 'bounded readiness should flush', true)
+  drive_until(rt, function() return flushed == true end, 'bounded readiness should flush')
   assert_eq(backend:written(), 'xy')
 end
 

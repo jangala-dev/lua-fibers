@@ -4,7 +4,7 @@
 --   proposal.res[resource] = record
 --   record.kind            = capability table
 --
--- The generic layer does not know whether a record belongs to a cell, region,
+-- The generic layer does not know whether a record belongs to a scalar, region,
 -- flow reservoir, endpoint, queue, or future resource.  The resource kind owns
 -- clone, sequential/parallel merge, projection, preparation and application.
 -- Kinds may also expose `absence(resource, payload, ctx)`; or_else fallback

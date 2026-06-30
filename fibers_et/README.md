@@ -17,22 +17,25 @@ resource changes and typed effects are committed
 selected fibres resume with their results
 ```
 
-The public base kit is deliberately small:
+The public atom kit is deliberately small:
 
 ```text
-Op       first-class option over possible committed worlds
-Cell     transactional fact
-Channel  synchronous rendezvous
-Source   external, host or time occurrence made transactional
-Region   transactional ownership boundary
-Task     owned running computation
-Effect   after-commit runtime obligation
+Op          first-class option over possible committed worlds
+Scalar      transactional fact
+Rendezvous  synchronous rendezvous
+Index       ordered transactional stock
+Counter     bounded numeric transactional stock
+Keyed       per-key transactional map/set
+Lease       compatibility-based transactional lease table
+Source      external, host or time occurrence made transactional
+Region      transactional ownership boundary
+Effect      after-commit runtime obligation
 ```
 
-`Lifetime` and launch policies are compound facilities built from that kit, not
-additional base nouns.  `Region.Owned` is the advanced ownership constructor for
-resource authors and ownership facilities; ordinary users should usually meet it
-through `Lifetime`, `Task` and `Stream`.
+`Task`, `Scope`, `Stream`, queues and launch policies are compound facilities
+built from that kit, not additional atoms.  `Region.Owned` is the advanced
+ownership constructor for resource authors and ownership facilities; ordinary
+users should usually meet it through `Scope`, `Task` and `Stream`.
 
 The algebra underneath is the distinctive part.  A commit is not just one event
 synchronising with another event.  A commit selects a world containing
@@ -40,7 +43,7 @@ rendezvous requirements, resource journals, fallback structure, wake interests,
 typed runtime effects, nacks, and post-commit value transformations.
 
 The resource side is governed by a managed validity algebra.  Resources declare
-managed facts such as scalars, queues, maps, claims and derived views.  Search
+managed facts such as scalars, queues, maps, leases and derived views.  Search
 records the facts it relied on, and saved cursors or prepared worlds are reused
 only while those fact stamps still validate.  This is what makes bounded search
 and absence-sensitive fallback safe in the presence of external arrivals.
@@ -51,15 +54,19 @@ This repository is WIP.  The implementation is intended to be portable Lua.
 The test suite is exercised with plain Lua, LuaJIT and texlua; optional host
 backends skip cleanly when their dependencies are unavailable.
 
-## Base kit rule of thumb
+## Atom kit rule of thumb
 
 ```text
-Facts go in Cells.
-Meetings go through Channels.
+Single replacement facts and small state machines go in Scalars.
+Ordered stock goes in Index.
+Numeric stock goes in Counter.
+Keyed facts go in Keyed.
+Compatibility leases go in Lease.
+Meetings go through Rendezvous values.
 External occurrences arrive through Sources.
 Ownership is recorded in Regions.
-Practical lifetime management normally uses Lifetime, a compound facility built over Region, Task, Source and Effect.
-Running work is a Task.
+Running work is a Task, a compound built over Region, Scalar and Effect.
+Practical scope management normally uses Scope, the lightweight lifetime container built over Region, Task, Source and Effect.
 Committed obligations are Effects.
 Everything composes as an Op, short for option.
 ```
@@ -69,10 +76,10 @@ Everything composes as an Op, short for option.
 ```lua
 local fibers = require('fibers')
 
-local ch = fibers.Channel.new('inbox')
+local ch = fibers.Rendezvous.new('inbox')
 local message
 
-fibers.launch(fibers.facility.policy.nursery(), function()
+fibers.launch(fibers.policy.nursery(), function()
   fibers.spawn(function()
     fibers.perform(ch:put_op('hello'))
   end, 'sender')
@@ -83,7 +90,7 @@ end)
 print(message)
 ```
 
-`fibers.launch` installs an explicit lifetime policy.  Inside the nursery
+`fibers.launch` installs an explicit scope policy.  Inside the nursery
 policy, the friendly `fibers.spawn` creates a structured `Task`; raw unstructured
 fibres remain available as `spawn_raw` for embedders and low-level tests.
 
@@ -111,44 +118,74 @@ host model.
 
 ## Transactional state
 
-Cells participate in the same transaction machinery as channels.
+Scalars participate in the same transaction machinery as rendezvous points.
 
 ```lua
-local counter = fibers.Cell.new(0, 'counter')
+local counter = fibers.Scalar.new(0, 'counter')
 
 local increment = counter:read_op():and_then(function(old)
   return counter:write_op(old + 1):map(function() return old + 1 end)
 end)
 ```
 
-Cell options do not run user update callbacks.  Interpret cell values with
-ordinary `Op` composition such as `and_then`, and use `Effect` for committed
-external work.
+For replacement state, use `read_op` and `write_op`. For a small atomic
+state machine, define typed transitions with `Scalar.transition` or
+`Scalar.kind`, optionally add `validate(payload)`, then run them with
+`transition_op`. Validation runs at operation construction. Transition callbacks receive
+the projected scalar value and return the new value followed by operation result
+values. Update and select transition premises are resolved in ordered
+proof-contribution frames. Use `Effect`, not scalar transitions, for committed
+external work. The raw `unsafe_update_op` and `unsafe_select_op` functions are
+low-level building blocks for typed transitions, not the ordinary public idiom.
 
-## Lifetimes, regions and tasks
+## Scopes, regions and tasks
 
-A region is a generic ownership and admission boundary.  A task is the standard owned computation: it is admitted to a region and started after the admitting transaction commits.
+A scope is the ordinary lightweight container for lifetimes.  Lifetime-bearing
+facilities such as tasks and safe stream acquisition should be created inside a
+scope so their custody can be settled, moved or reported.
 
 ```lua
-local life = fibers.Lifetime.new('main')
-local a, b = fibers.Stream.memory_pair()
+local fibers = require('fibers')
 
-fibers.run(function()
-  local task = fibers.perform(life:spawn_op(function()
+fibers.scope(function(scope)
+  local task = fibers.spawn(function()
     return 7
-  end, { name = 'child' }))
+  end)
 
   local value = fibers.perform(task:await_op())
   assert(value == 7)
-  fibers.perform(life:settle_item_op(task))
 end)
 ```
 
-`Region` is the ownership primitive: admit, reassign, seal and release. `Lifetime` is the compound facility most code should use for spawning, cancellation, matched handoff, observation, owned-item settlement and terminal settlement. Nursery and supervisor-style APIs are policies over `Lifetime`, not special cases in the algebra.
+The friendly `fibers.spawn` uses the current scope.  `Scope:spawn_op` is a
+compound over task construction, scope admission and an after-commit spawn
+effect.  If the admitting transaction loses, the task is not started.
+
+The scope calculus is deliberately small:
+
+```text
+admit      take custody
+move       transfer custody atomically
+authorise  prove a right to use
+borrow     grant temporary authority without custody
+claim      take exclusive resolution authority
+resolve    discharge, fail or restore a claim
+seal       stop new custody
+observe    explain the ledger
+```
+
+`Region` remains the ownership atom.  `Scope` is the compound facility most code
+should use for spawning, ambient ownership, negotiated custody offers,
+borrowing, observation, owned-item settlement and terminal reports.  Nursery,
+supervisor and future phase APIs are policies over `Scope`, not special cases in
+the algebra.
+
+See `docs/scope.md`, `docs/scope_laws.md`, `docs/lifetime-calculus.md`,
+`docs/authority-and-borrowing.md` and `docs/settlement.md`.
 
 ## Transactional streams
 
-The stream facility is built from unidirectional Flows.  An Inlet commits bytes into a Flow, an Outlet commits bytes out of a Flow, and ordinary bidirectional streams are compounds made from two Flows:
+The top-level `fibers.Stream` is built from two unidirectional `fibers.Flow` values. `fibers.Flow` is the scalar-state-machine byte facility: an Inlet commits bytes into a Flow, an Outlet commits bytes out of a Flow, and ordinary bidirectional streams are compounds made from two Flows:
 
 ```lua
 local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
@@ -157,7 +194,7 @@ local line = fibers.perform(b:reader():read_line_op())
 fibers.perform(a:writer():write_op('reply\n'))
 
 local stream = fibers.perform(
-  fibers.Stream.open_backend_op(region, backend, { name = 'host-stream' })
+  fibers.Stream.open_backend_in_op(region, backend, { name = 'host-stream' })
 )
 
 local r = stream:reader()
@@ -204,10 +241,20 @@ flat catalogue of modules:
 
 ```text
 fibers                    convenience entry point
-fibers.base               aggregate for the public base kit
-fibers.base.*             Op, Cell, Channel, Source, Region, Task, Effect
-fibers.facility           aggregate for compound facilities
-fibers.facility.*         Sleep, Lifetime, Stream/Flow and policy facilities
+fibers.atoms               aggregate for the public atom kit
+fibers.atoms.*             Op, Scalar, Rendezvous, Index, Counter, Keyed, Lease, Source, Region, Effect
+fibers.task                owned running computation over Region/Scalar/Effect
+fibers.sleep              clock-source sleep helpers
+fibers.channel            small facade: capacity 0 Rendezvous, capacity >0 Queue
+fibers.pulse              versioned broadcast Pulse over Scalar
+fibers.waitgroup          WaitGroup over Scalar
+fibers.mailbox            closeable Mailbox over Scalar + Queue/Rendezvous
+fibers.scope              structured scope facility over Region/Task/Source/Effect
+fibers.borrow             temporary authority as an owned obligation
+fibers.phase              prototype rhythmic lifetime boundary with declared crossings over Scope
+fibers.flow               Scalar-state-machine Flow
+fibers.stream             bidirectional Stream over two Flows
+fibers.policy             launch policies such as nursery
 fibers.host               host adapter helpers
 fibers.host.*             host helpers, HostHandle/fd support, and standalone/test host adapters
 fibers.runner             standalone Runtime runner over a host
@@ -221,10 +268,14 @@ The top-level module is the preferred starting point:
 ```lua
 local fibers = require('fibers')
 
-local cell = fibers.Cell.new(false)
-local ch = fibers.Channel.new()
+local scalar = fibers.Scalar.new(false)
+local ch = fibers.Rendezvous.new()
 local src = fibers.Source.signal('signal')
-local life = fibers.Lifetime.new('main')
+local scope = fibers.Scope.new('main')
+local ch2 = fibers.Channel.new(2)
+local pulse = fibers.Pulse.new()
+local tx, rx = fibers.Mailbox.new(16)
+local wg = fibers.WaitGroup.new()
 local a, b = fibers.Stream.memory_pair()
 local r = b:reader()
 local w = a:writer()
@@ -242,8 +293,8 @@ The `examples/` directory contains small usage guides, not regression tests.
 They are intended to be read and run individually:
 
 ```sh
-texlua examples/01_channel.lua
-texlua examples/02_cell.lua
+texlua examples/01_rendezvous.lua
+texlua examples/02_scalar.lua
 # etc.
 ```
 
@@ -327,20 +378,26 @@ See `benchmarks/README.md` for the current case groups.
 ## Documentation
 
 ```text
-docs/base-kit.md       the public base kit
-docs/structure.md      repository layers and placement rules
-docs/algebra.md        option algebra and semantic distinctions
-docs/validity-algebra.md      managed validity facts and pull validation
-docs/kernel/resources.md      open resource protocol
-docs/kernel/resource-laws.md  open resource and effect laws
+docs/atoms.md                    the public atom kit
+docs/structure.md                repository layers and placement rules
+docs/algebra.md                  option algebra and semantic distinctions
+docs/lifetime-calculus.md        custody, authority and obligations as the central design
+docs/scope.md                    practical scope guide
+docs/scope_laws.md               executable lifetime laws for Scope and Region
+docs/authority-and-borrowing.md  custody versus authority, borrows and leases
+docs/settlement.md               settlement as claim and resolution
+docs/future-compounds.md         quarry notes: phase, membrane, escrow, tomb and related forms
+docs/validity-algebra.md         managed validity facts and pull validation
+docs/kernel/resources.md         open resource protocol
+docs/kernel/resource-laws.md     open resource and effect laws
 docs/kernel/validity-authoring.md managed validity resource-authoring guide
-docs/effects.md   typed transaction effects / effects
-docs/facilities/sleep.md      sleep as a facility over clock sources
-docs/facilities/lifetimes.md  regions, tasks and ownership
-docs/facilities/settlement.md claims, settlement protocols and failure state
-docs/facilities/streams.md    byte flows, stream compounds and host-pumped streams
-docs/facilities/host-handles.md host I/O handles for pumped streams
-docs/kernel/embedding.md      bounded stepping and host integration
+docs/effects.md                  typed transaction effects / effects
+docs/facilities/sleep.md         sleep as a top-level facility over clock sources
+docs/facilities/scopes.md        detailed scope and region API notes
+docs/facilities/settlement.md    resource-author settlement details
+docs/facilities/streams.md       byte flows, stream compounds and host-pumped streams
+docs/facilities/host-handles.md  host I/O handles for pumped streams
+docs/kernel/embedding.md         bounded stepping and host integration
 ```
 
 ## Strict managed validity branch
@@ -348,3 +405,7 @@ docs/kernel/embedding.md      bounded stepping and host integration
 This experimental branch removes the fallback named-frontier path from the kernel resource boundary. Built-in resources now declare managed validity facts directly; resources without a managed validity fact fail at the protocol boundary instead of silently receiving an ad-hoc named frontier.
 
 The remaining `frontier` terminology refers to generation-stamped managed facts used for pull validation. It no longer refers to the old push-invalidation watcher mechanism.
+
+The scope lifetime laws are recorded in `docs/scope_laws.md`; the practical
+scope API is described in `docs/scope.md`, with lower-level API notes in
+`docs/facilities/scopes.md`.

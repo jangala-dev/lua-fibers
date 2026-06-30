@@ -1,7 +1,7 @@
 # Resource implementation process
 
 The resource protocol is open-world.  The transaction net and runtime do not
-know whether a resource is a cell, event, queue, flow reservoir or user type.
+know whether a resource is a scalar, event, queue, flow reservoir or user type.
 A resource participates by returning `Op._resource(resource, kind, payload)` and
 by providing a kind table with the relevant capabilities.
 
@@ -45,8 +45,8 @@ clone
 ```
 
 It also applies to functions that a resource kind deliberately evaluates as part
-of its own protocol.  For example, a cell update function executed by
-`CellKind.eval` is participating in transactional resource interpretation.  It
+of its own protocol.  For example, a scalar update function executed by
+`ScalarKind.eval` is participating in transactional resource interpretation.  It
 must compute the proposed transition and return normally.  It should not use an
 ordinary Lua error to express application-level rejection.
 
@@ -105,7 +105,7 @@ See `docs/validity-algebra.md` for the capability reference and
 A resource value usually stores managed semantic state plus `_fibers_kind`:
 
 ```lua
-local Op = require('fibers.base.op')
+local Op = require('fibers.atoms.op')
 local Validity = require('fibers.kernel.validity')
 
 local Box = {}
@@ -168,7 +168,7 @@ Useful helpers:
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local Resource = require('fibers.kernel.resources.protocol')
-local pack = require('fibers.base.op')._pack
+local pack = require('fibers.atoms.op')._pack
 ```
 
 Return current candidates with:
@@ -231,7 +231,7 @@ A record is a proposal, not a mutation.  It should contain enough information to
 - project tentative state to subsequent options;
 - prepare a concrete commit.
 
-For a simple cell-like resource, the record only needs the proposed write:
+For a simple scalar-like resource, the record only needs the proposed write:
 
 ```lua
 local function write_record(c, box, value)
@@ -415,7 +415,7 @@ local c = Proposal.new(pack(ph))
 c.endpoints[#c.endpoints + 1] = {
   kind = 'rendezvous',
   role = 'get',
-  key = channel,
+  key = rendezvous,
   ph = ph,
   origin = ctx.origin,
 }
@@ -429,7 +429,7 @@ local c = Proposal.new(pack(true))
 c.endpoints[#c.endpoints + 1] = {
   kind = 'rendezvous',
   role = 'put',
-  key = channel,
+  key = rendezvous,
   value = payload.value,
   origin = ctx.origin,
 }
@@ -440,7 +440,7 @@ return Result.ready(c })
 `all` does not close internal endpoints between lanes.
 
 The endpoint protocol is intentionally smaller than the local resource protocol.
-Channel rendezvous is value-blind: endpoints match by primitive, key and opposite role, and value interpretation belongs in the Op algebra.  Protocols such as Lifetime handoff use ordinary channel rendezvous and inspect offered values in and_then, before commit.
+Rendezvous is value-blind: endpoints match by primitive, key and opposite role, and value interpretation belongs in the Op algebra.  Protocols such as Scope custody offers use ordinary rendezvous and inspect offered values in and_then, before commit.
 
 ## Waitable resources
 
