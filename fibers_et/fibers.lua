@@ -161,24 +161,6 @@ local function default_host(opts)
   return host
 end
 
-function M.launch(policy, fn, opts)
-  if type(policy) == 'function' and fn == nil then
-    fn, policy, opts = policy, Policy.raw(), {}
-  end
-  opts = opts or {}
-  policy = policy or Policy.raw()
-  if type(fn) ~= 'function' then error('fibers.launch expects a function', 2) end
-  if type(policy) ~= 'table' or type(policy.enter) ~= 'function' then error('fibers.launch expects a policy', 2) end
-  local host = default_host(opts)
-  local rt = Runtime.new(runtime_options(opts, host))
-  local scope = policy:enter(rt, nil)
-  rt:spawn_raw(function()
-    if type(policy.run_root) == 'function' then return policy:run_root(scope, fn, rt) end
-    return scope:run(fn)
-  end, opts.name or 'root', scope)
-  local st = Runner.run(rt, { host = host, run = opts.run, host_options = opts.host_options, max_iterations = opts.max_iterations })
-  return st, rt, scope
-end
 
 function M.try_run(fn, opts)
   opts = opts or {}

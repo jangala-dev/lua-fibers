@@ -211,7 +211,7 @@ function Policy.try_run(scope, fn)
   local pop_ok, pop_err = true, nil
   if token and rt.pop_scope then pop_ok, pop_err = Protected.pcall(function() return rt:pop_scope(token) end) end
   if not pop_ok then
-    result = ScopeResult.fail({ reason = result.ok and 'settlement_failed' or result.reason, primary = result.ok and pop_err or result.primary, report = report_for(scope, result.primary or pop_err, { pop_err }, { reason = 'scope_pop_failed' }), values = result.values })
+    result = ScopeResult.fail({ reason = result.ok and 'settlement_failed' or result.reason, primary = result.ok and pop_err or result.primary, report = report_for(scope, result.primary or pop_err, { pop_err }, { reason = 'scope_pop_failed' }) })
   end
 
   return result

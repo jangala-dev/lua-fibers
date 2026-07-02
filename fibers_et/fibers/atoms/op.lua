@@ -98,7 +98,7 @@ local function contains_wrap(x)
   local found = false
   if x.kind == 'wrap' then
     found = true
-  elseif x.kind == 'bind' then
+  elseif x.kind == 'bind' or x.kind == 'map' then
     found = contains_wrap(x.p)
   elseif x.kind == 'or_else' then
     found = contains_wrap(x.p) or contains_wrap(x.q)
@@ -201,9 +201,7 @@ end
 
 function Op:map(fn)
   assert_not_wrapped(self, 'map')
-  return self:and_then(function(...)
-    return Op.always(fn(...))
-  end)
+  return op('map', { p = self, fn = fn })
 end
 
 function Op:and_then(fn)

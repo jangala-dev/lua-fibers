@@ -18,6 +18,29 @@ local Capture = Proof.Capture
 
 local Resources = {}
 
+-- Optional resource-layer counters.  Disabled by default; enable with
+-- FIBERS_COUNTERS=1 or Resources.enable_counters(true).
+local counters_enabled = os.getenv('FIBERS_COUNTERS') == '1'
+local counters = {}
+
+local function count(kind, n)
+  if not counters_enabled then return end
+  counters[kind] = (counters[kind] or 0) + (n or 1)
+end
+
+function Resources.enable_counters(enabled)
+  counters_enabled = enabled ~= false
+  counters = {}
+end
+
+function Resources.reset_counters() counters = {} end
+
+function Resources.counters()
+  local out = {}
+  for k, v in pairs(counters) do out[k] = v end
+  return out
+end
+
 local runtime_now
 
 local pack_ = Op._pack
@@ -97,6 +120,7 @@ local function copy_contributions(set)
 end
 
 function Resources.new_env(parent, capture)
+  if counters_enabled then count('env.new') end
   capture = capture or (parent and parent.capture) or Capture.none()
   return {
     res = nil,
@@ -116,6 +140,7 @@ function Resources.new_env(parent, capture)
   }
 end
 function Resources.copy_env(env)
+  if counters_enabled then count('env.copy') end
   if not env then return Resources.new_env() end
   local out = Resources.new_env(env.parent and Resources.copy_env(env.parent) or nil, env.capture)
   Resource.copy_from(out, env)
@@ -136,12 +161,14 @@ function Resources.copy_env(env)
 end
 
 function Resources.lane_env_from(parent)
+  if counters_enabled then count('env.lane') end
   local env = Resources.new_env(parent)
   env.parent_is_boundary = true
   return env
 end
 
 local function copy_without_parent(env)
+  if counters_enabled then count('env.copy_without_parent') end
   local out = Resources.new_env(nil, env.capture)
   Resource.copy_from(out, env)
   out.effects = copy_effects(env.effects)
@@ -195,6 +222,7 @@ local function collect_env_frames(env, include_boundary_parent)
 end
 
 flatten_env = function(env, include_boundary_parent)
+  if counters_enabled then count('env.flatten') end
   if not env then return Resources.new_env(nil) end
   local out = Resources.new_env(nil, env.capture)
   local frames = collect_env_frames(env, include_boundary_parent)
@@ -215,6 +243,7 @@ function Resources.flatten_env(env, include_boundary_parent)
 end
 
 function Resources.copy_delta(env)
+  if counters_enabled then count('env.copy_delta') end
   if not env then return Resources.new_env() end
   local flat, err = flatten_env(env, false)
   if not flat then error(err or 'resource-delta-flatten-failed', 2) end
@@ -222,11 +251,41 @@ function Resources.copy_delta(env)
 end
 
 function Resources.overlay_for_env(env)
+  if counters_enabled then count('env.overlay') end
   if not env then return nil end
   local flat, err = flatten_env(env, true)
   if not flat then return nil, err end
   if not flat.res_list then return nil end
   return flat
+end
+
+local LazyOverlay = {}
+LazyOverlay.__index = function(self, key)
+  if key == 'res' or key == 'res_list' then
+    local overlay = LazyOverlay.get(self)
+    return overlay and overlay[key] or nil
+  end
+  return LazyOverlay[key]
+end
+
+function LazyOverlay:get()
+  if self.loaded then return self.overlay end
+  self.loaded = true
+  local overlay, err = Resources.overlay_for_env(self.env)
+  self.overlay = overlay or nil
+  self.err = err
+  -- Cache the hot fields directly on the proxy after the first projection.
+  -- Code that performs multiple `ctx.overlay.res[...]` lookups then pays the
+  -- metamethod only once.
+  self.res = overlay and overlay.res or nil
+  self.res_list = overlay and overlay.res_list or nil
+  return self.overlay
+end
+
+function Resources.lazy_overlay_for_env(env)
+  if counters_enabled then count('env.lazy_overlay') end
+  if not env then return nil end
+  return setmetatable({ env = env, loaded = false, overlay = nil, err = nil }, LazyOverlay)
 end
 
 local function merge_effect_sets_seq(dst, src)
@@ -246,6 +305,7 @@ local function merge_contribution_sets(dst, src)
 end
 
 function Resources.merge_seq_into(dst, src)
+  if counters_enabled then count('merge.seq') end
   if src.parent then
     local flat, err = flatten_env(src, true)
     if not flat then return false, err end
@@ -259,14 +319,15 @@ function Resources.merge_seq_into(dst, src)
   if not ok then return false, err end
   append_field(dst, 'selected', src.selected)
   append_field(dst, 'lost', src.lost)
-  append_list(dst.debug_observations, src.debug_observations)
-  append_list(dst.debug_absence_observations, src.debug_absence_observations)
+  append_field(dst, 'debug_observations', src.debug_observations)
+  append_field(dst, 'debug_absence_observations', src.debug_absence_observations)
   for i = 1, #(src.frontiers or {}) do add_frontier_to_env(dst, src.frontiers[i]) end
   if src.has_absence then dst.has_absence = true end
   return true
 end
 
 function Resources.merge_parallel_into(dst, src)
+  if counters_enabled then count('merge.parallel') end
   if src.parent then
     local flat, err = flatten_env(src, true)
     if not flat then return false, err end
@@ -280,14 +341,15 @@ function Resources.merge_parallel_into(dst, src)
   if not ok then return false, err end
   append_field(dst, 'selected', src.selected)
   append_field(dst, 'lost', src.lost)
-  append_list(dst.debug_observations, src.debug_observations)
-  append_list(dst.debug_absence_observations, src.debug_absence_observations)
+  append_field(dst, 'debug_observations', src.debug_observations)
+  append_field(dst, 'debug_absence_observations', src.debug_absence_observations)
   for i = 1, #(src.frontiers or {}) do add_frontier_to_env(dst, src.frontiers[i]) end
   if src.has_absence then dst.has_absence = true end
   return true
 end
 
 function Resources.merge_lanes(parent, lanes)
+  if counters_enabled then count('merge.lanes') end
   local lane_acc = Resources.new_env(nil, parent and parent.capture)
   for i = 1, #(lanes or {}) do
     local ok, err = Resources.merge_parallel_into(lane_acc, lanes[i])
@@ -408,11 +470,32 @@ local function primitive_resource(op)
   return op.resource, op.resource_kind, op.payload or {}
 end
 
-local function make_resource_ctx(st, task)
+function Resources.primitive_summary(op)
+  local _resource, kind, payload = primitive_resource(op)
+  if not kind then return nil end
+  local cached = rawget(op, '_resource_summary')
+  if cached then return cached end
+
+  local out = { primitive = true, resources = false, endpoints = false, dynamic = false, reads = false, writes = false }
+  if type(kind.summary) == 'function' then
+    kind.summary(payload, out)
+  else
+    -- Unknown resource kinds keep the old conservative representation.
+    out.dynamic = true
+    out.closed = false
+    out.needs_overlay = true
+  end
+  if out.closed == nil then out.closed = false end
+  if out.needs_overlay == nil then out.needs_overlay = out.reads == true end
+  rawset(op, '_resource_summary', out)
+  return out
+end
+
+local function make_resource_ctx(st, task, summary)
   local observing = (st.capture and st.capture:frontiers_enabled()) or (st.observer ~= nil) or (task.env.capture and task.env.capture:debug_enabled())
   local ctx = {
     rt = st.rt,
-    overlay = Resources.overlay_for_env(task.env),
+    overlay = (not summary or summary.needs_overlay ~= false) and Resources.lazy_overlay_for_env(task.env) or nil,
     origin = task.root_id,
     observer = st.observer,
     capture = st.capture,
@@ -444,6 +527,7 @@ local function make_resource_ctx(st, task)
 end
 
 function Resources.commit_candidate_into_env(env, c)
+  if counters_enabled then count('candidate.commit_into_env') end
   local ok, err = Resource.merge_seq_into(env, c)
   if not ok then return false, err end
   if c.effects then
@@ -457,6 +541,7 @@ function Resources.commit_candidate_into_env(env, c)
 end
 
 function Resources.apply(st, task, op, complete_task, new_result)
+  if counters_enabled then count('apply') end
   if op.kind == 'emit' then
     local ok, err = Resources.add_effect(task.env, op.effect)
     if not ok then st:set_unknown(nil, err or 'effect-conflict') else complete_task(st, task, new_result(pack_(true))) end
@@ -468,7 +553,8 @@ function Resources.apply(st, task, op, complete_task, new_result)
   local eval = kind and kind.eval
   if not eval then error('resource primitive requires kind.eval', 2) end
 
-  local ctx = make_resource_ctx(st, task)
+  local summary = Resources.primitive_summary(op)
+  local ctx = make_resource_ctx(st, task, summary)
   local r = Result.from(eval(resource, payload, ctx))
   if r.status == 'premise' then
     if not st.push_premise then st:set_unknown(nil, 'premise-unsupported'); return true end
@@ -526,6 +612,7 @@ local function absence_ctx(rt, out, observer, capture)
 end
 
 function Resources.absence_leaf(rt, op, out, observer, capture)
+  if counters_enabled then count('absence.leaf') end
   local resource, kind, payload = primitive_resource(op)
   if not resource or not kind or type(kind.absence) ~= 'function' then return false end
   local before = #out
@@ -552,6 +639,7 @@ function Resources.validate_observation(rt, obs)
 end
 
 function Resources.prepare_env(rt, env)
+  if counters_enabled then count('env.prepare') end
   local flat, err = flatten_env(env, true)
   if not flat then return nil, err end
   local combo = { flat }
@@ -575,12 +663,14 @@ function Resources.prepare_env(rt, env)
 end
 
 function Resources.apply_prepared(prepared)
+  if counters_enabled then count('prepared.apply') end
   for i = 1, #(prepared and prepared.resources or {}) do
     Resource.apply_prepared(prepared.resources[i])
   end
 end
 
 function Resources.discharge_prepared(rt, prepared)
+  if counters_enabled then count('prepared.discharge') end
   for i = 1, #(prepared and prepared.effects or {}) do
     local pc = prepared.effects[i]
     local entry = {

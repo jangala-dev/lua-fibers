@@ -3,8 +3,8 @@
 -- Admission installs ownership records containing normalised settlement
 -- protocols. A Region owns generic claim/resolve state; this module provides
 -- standard strategies that claim a subtree, perform settlement protocols, and
--- then resolve the claim. Inline settlement is the default for scope exit; a
--- detached driver strategy remains available for callers that explicitly need it.
+-- then resolve the claim. Settlement is inline policy work; detached settlement
+-- drivers are not part of the core lifetime calculus.
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
@@ -54,7 +54,7 @@ function Settlement.normalize(settle, label)
   end
   if type(settle) == 'table' then
     if settle._fibers_settlement_protocol then return settle end
-    local discharge = settle.discharge_op or settle.discharge or settle.settle_op or settle.settle
+    local discharge = settle.discharge_op
     if type(discharge) ~= 'function' then
       error((label or 'settlement protocol') .. ' requires a discharge_op function', 3)
     end
@@ -146,15 +146,9 @@ function Settlement.stream()
   })
 end
 
-local function driver_name_for(claim)
-  local item = claim and claim.root
-  local name = item and (item.name or item._fibers_id) or 'item'
-  local typ = type(claim and claim.purpose) == 'table' and claim.purpose.type or 'claim'
-  return 'settle:' .. tostring(typ) .. ':' .. tostring(name)
-end
 
 local function protocol_for(record)
-  return Settlement.protocol(record and record.settle, record and record.settle_name or nil)
+  return Settlement.protocol(record.settle, record.settle_name)
 end
 
 local function perform_protocols(ctx, claim)
@@ -172,7 +166,6 @@ local function with_settlement_authority(ctx, fn)
   if not ok then error(a, 0) end
   return a, b, c
 end
-
 
 local function resolve_failed_op(ctx, claim, err)
   require_context(ctx)
@@ -198,9 +191,6 @@ local function run_claim_inline(ctx, claim, after_settle)
     perform_masked(resolve_discharge_op(ctx, claim))
   end)
   if not ok then
-    -- The claim has already committed. Settlement failure therefore becomes
-    -- committed, observable ownership state rather than an implicit rollback or
-    -- a silent cleanup error.
     mark_failed(ctx, claim, err)
     error(err, 0)
   end
@@ -208,44 +198,16 @@ local function run_claim_inline(ctx, claim, after_settle)
   return claim.root
 end
 
-local function make_driver(ctx, claim, after_settle)
-  local Task = require('fibers.task')
-  local driver = Task.new(function()
-    return run_claim_inline(ctx, claim, after_settle)
-  end, driver_name_for(claim))
-  driver._fibers_settlement_driver = true
-  driver.claim = claim
-  driver.settled_item = claim.root
-  driver.settled_records = claim.records
-  return driver
-end
-
-function Settlement.claim_item_detached_op(ctx, item, purpose, after_settle)
-  require_context(ctx)
-  return ctx:claim_op(item, purpose):and_then(function(claim)
-    local driver = make_driver(ctx, claim, after_settle)
-    return Op.emit(driver:_spawn_effect()):wrap(function()
-      perform_masked(driver:await_op())
-      return claim.root
-    end)
-  end)
-end
-
-function Settlement.claim_item_inline_op(ctx, item, purpose, after_settle)
+function Settlement.claim_item_op(ctx, item, purpose, after_settle)
   require_context(ctx)
   return ctx:claim_op(item, purpose):wrap(function(claim)
     return run_claim_inline(ctx, claim, after_settle)
   end)
 end
 
-function Settlement.claim_item_op(ctx, item, purpose, after_settle, opts)
-  opts = opts or {}
-  if opts.mode == 'detached' then return Settlement.claim_item_detached_op(ctx, item, purpose, after_settle) end
-  return Settlement.claim_item_inline_op(ctx, item, purpose, after_settle)
-end
 
-function Settlement.retire_item_op(ctx, item, reason, after_settle, opts)
-  return Settlement.claim_item_op(ctx, item, { type = 'retire', reason = reason }, after_settle, opts)
+function Settlement.retire_item_op(ctx, item, reason, after_settle)
+  return Settlement.claim_item_op(ctx, item, { type = 'retire', reason = reason }, after_settle)
 end
 
 return Settlement

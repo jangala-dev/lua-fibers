@@ -190,9 +190,17 @@ function SourceKind.absence(source, payload, ctx)
   return false
 end
 
-function SourceKind.summary(_payload, out)
+function SourceKind.summary(payload, out)
   out.dynamic = true
   out.closed = false
+  if payload and payload.op == 'next' then
+    out.resources = true
+    out.reads = true
+    out.writes = true
+    out.needs_overlay = true
+  else
+    out.needs_overlay = false
+  end
 end
 
 function Source.signal(name) return new_source('signal', { name = name }) end

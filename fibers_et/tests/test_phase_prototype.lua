@@ -21,10 +21,10 @@ do
       render_region = render:raw_region()
       fibers.perform(input:admit_op(h))
       undeclared_move = fibers.perform(fibers.choice(
-        frame:move_op(h, 'input', 'physics'):map(function() return 'moved' end),
+        frame:move_op(h, 'input', 'physics', 'asset'):map(function() return 'moved' end),
         fibers.always('blocked')
       ))
-      fibers.perform(frame:move_op(h, 'input', 'render'))
+      fibers.perform(frame:move_op(h, 'input', 'render', 'asset'))
     end)
     owner_after_input = h.owner
     frame:run('render', function(render)
@@ -51,10 +51,10 @@ do
     frame:run('simulate', function(sim)
       fibers.perform(sim:admit_op(world))
       undeclared_borrow = fibers.perform(fibers.choice(
-        frame:borrow_op('simulate', world, 'render', { 'read' }):map(function() return 'borrowed' end),
+        frame:borrow_op('simulate', world, 'render', { 'read' }, 'world_view'):map(function() return 'borrowed' end),
         fibers.always('blocked')
       ))
-      fibers.perform(frame:borrow_op('simulate', world, 'extract', { 'read' }))
+      fibers.perform(frame:borrow_op('simulate', world, 'extract', { 'read' }, 'world_view'))
       owner_after_borrow = world.owner
     end)
     frame:run('extract', function(extract)
@@ -69,6 +69,33 @@ do
   assert_eq(owner_after_borrow ~= nil, true, 'borrow should not move custody out of source phase')
   assert_eq(read_authorised, true, 'declared phase borrow should grant requested authority')
   assert_eq(write_authorised, false, 'declared read borrow should not grant write authority')
+end
+
+
+-- Declared fact crossings copy phase facts without moving custody or authority.
+do
+  local frame = fibers.Phase.new('frame-facts')
+    :phase('input')
+    :phase('simulate')
+  frame:edge('input', 'simulate'):fact('commands'):done()
+
+  local carried, blocked, seen
+  fibers.run(function()
+    frame:run('input', function(_input, ph)
+      fibers.perform(ph:put_fact_op('input', 'commands', { jump = true }))
+      blocked = fibers.perform(fibers.choice(
+        ph:carry_fact_op('commands', 'input', 'render'):map(function() return 'carried' end),
+        fibers.always('blocked')
+      ))
+      carried = fibers.perform(ph:carry_fact_op('commands', 'input', 'simulate'))
+    end)
+    frame:run('simulate', function(_sim, ph)
+      seen = fibers.perform(ph:get_fact_op('simulate', 'commands'))
+    end)
+  end)
+  assert_eq(blocked, 'blocked', 'fact crossing should require a declared fact edge')
+  assert_eq(carried.jump, true, 'carry_fact_op should return the carried fact')
+  assert_eq(seen.jump, true, 'later phase should receive the carried fact')
 end
 
 -- A phase interval is spent after it runs; running the same named phase again

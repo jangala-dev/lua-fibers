@@ -503,25 +503,21 @@ add('region', 'admit owns release', 500, function(n)
 end)
 
 add('task', 'scope spawn await settle', 80, function(n)
-  local rt = Runtime.new()
-  local life = Scope.new('bench-task-life')
   local sum = 0
-  rt:spawn_raw(function()
+  local r = fibers.try_run(function()
     for i = 1, n do
-      local task = rt:perform(life:spawn_op(function() return i end, { name = 'bench-task-' .. tostring(i) }))
-      sum = sum + rt:perform(task:await_op())
-      rt:perform(life:retire_op(task))
+      local task = fibers.spawn(function() return i end, { name = 'bench-task-' .. tostring(i) })
+      sum = sum + fibers.perform(task:await_op())
     end
-  end, 'bench-task-root')
-  run_rt(rt)
+  end)
+  assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(sum, n * (n + 1) / 2)
-  assert_eq(life.region.owned_count, 0)
   return n
 end)
 
 add('policy', 'nursery spawn rendezvous join', 80, function(n)
   local sum = 0
-  local st = fibers.launch(fibers.policy.nursery({ name = 'bench-nursery' }), function()
+  local r = fibers.try_run(function()
     local ch = fibers.Rendezvous.new('bench-nursery-rendezvous')
     for i = 1, n do
       fibers.spawn(function()
@@ -529,46 +525,208 @@ add('policy', 'nursery spawn rendezvous join', 80, function(n)
       end, 'bench-nursery-child-' .. tostring(i))
     end
     for _ = 1, n do sum = sum + fibers.perform(ch:get_op()) end
-  end)
-  assert_status(st, 'found')
+  end, { policy = fibers.policy.nursery({ name = 'bench-nursery' }) })
+  assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(sum, n * (n + 1) / 2)
   return n
 end)
 
-add('scope', 'negotiated handoff', 30, function(n)
+add('scope', 'custody offer', 30, function(n)
   local completed = 0
   for i = 1, n do
-    local rt = Runtime.new()
-    local request = Scope.new('bench-request-' .. tostring(i))
-    local supervisor = Scope.new('bench-supervisor-' .. tostring(i))
-    local resume = Rendezvous.new('bench-resume-' .. tostring(i))
     local ok = false
-    rt:spawn_raw(function()
-      local task = rt:perform(request:spawn_op(function()
-        local msg = fibers.perform(resume:get_op())
-        return msg
-      end, { name = 'bench-session-' .. tostring(i) }))
-      local rows = rt:perform(Op.tensor({
-        request:offer_op(task, supervisor),
-        supervisor:accept_op(),
-      }))
-      assert_truthy(rows[2][1].item == task, 'handoff receiver did not observe task')
-      assert_eq(rt:perform(request:owns_op(task)), false)
-      assert_eq(rt:perform(supervisor:owns_op(task)), true)
-      rt:perform(resume:put_op('ok'))
-      assert_eq(rt:perform(task:await_op()), 'ok')
-      rt:perform(supervisor:retire_op(task))
-      rt:perform(request:close_op())
-      rt:perform(supervisor:close_op())
-      rt:perform(request:settle_op())
-      rt:perform(supervisor:settle_op())
+    local r = fibers.try_run(function(root)
+      local rt = fibers.current_runtime()
+      local request = Scope.new('bench-request-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
+      local supervisor = Scope.new('bench-supervisor-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
+      local resume = Rendezvous.new('bench-resume-' .. tostring(i))
+      local task
+      request:run(function(req)
+        task = fibers.perform(req:spawn_op(function()
+          local msg = fibers.perform(resume:get_op())
+          return msg
+        end, { name = 'bench-session-' .. tostring(i) }))
+        local rows = fibers.perform(Op.tensor({
+          req:offer_op(task, supervisor),
+          supervisor:accept_op(),
+        }))
+        assert_truthy(rows[2][1].item == task, 'offer receiver did not observe task')
+        assert_eq(fibers.perform(req:owns_op(task)), false)
+        assert_eq(fibers.perform(supervisor:owns_op(task)), true)
+      end)
+      supervisor:run(function()
+        fibers.perform(resume:put_op('ok'))
+        assert_eq(fibers.perform(task:await_op()), 'ok')
+      end)
       ok = true
-    end, 'bench-handoff-root')
-    run_rt(rt)
-    assert_truthy(ok, 'handoff did not finish')
+    end)
+    assert_truthy(r.ok, tostring(r.report or r.reason))
+    assert_truthy(ok, 'custody offer did not finish')
     completed = completed + 1
   end
   return completed
+end)
+
+
+-- --------------------------------------------------------------------------
+-- Flow cases.
+-- --------------------------------------------------------------------------
+
+add('flow', 'write only unbounded', 400, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local flow = Flow.new({ name = 'bench-flow-write-only' })
+  local inlet = flow:inlet()
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do total = total + rt:perform(inlet:write_op('x')) end
+  end, 'bench-flow-write-only')
+  run_rt(rt)
+  assert_eq(total, n)
+  local snap
+  local rt2 = Runtime.new()
+  rt2:spawn_raw(function() snap = rt2:perform(flow:inspect_op()) end, 'inspect')
+  run_rt(rt2)
+  assert_eq(snap.queued_length, n)
+  return n
+end)
+
+add('flow', 'sequential write read small', 350, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local flow = Flow.new({ name = 'bench-flow-seq' })
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      rt:perform(inlet:write_op('abcd'))
+      local bytes = rt:perform(outlet:read_op(4))
+      total = total + #bytes
+    end
+  end, 'bench-flow-seq')
+  run_rt(rt)
+  assert_eq(total, n * 4)
+  return n
+end)
+
+add('flow', 'tensor write read handoff', 220, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local Op = fibers.Op
+  local flow = Flow.new({ name = 'bench-flow-tensor-handoff' })
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      local rows = rt:perform(Op.tensor({ inlet:write_op('abcd'), outlet:read_op(4) }))
+      total = total + rows[1][1] + #rows[2][1]
+    end
+  end, 'bench-flow-tensor')
+  run_rt(rt)
+  assert_eq(total, n * 8)
+  return n
+end)
+
+add('flow', 'capacity release handoff', 180, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local Op = fibers.Op
+  local flow = Flow.new({ name = 'bench-flow-capacity-release', capacity = 4 })
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local ok = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      rt:perform(inlet:write_op('abcd'))
+      local rows = rt:perform(Op.tensor({ outlet:read_op(4), inlet:write_op('wxyz') }))
+      if rows[1][1] == 'abcd' and rows[2][1] == 4 then ok = ok + 1 end
+      local tail = rt:perform(outlet:read_op(4))
+      assert_eq(tail, 'wxyz')
+    end
+  end, 'bench-flow-capacity')
+  run_rt(rt)
+  assert_eq(ok, n)
+  return n
+end)
+
+add('flow', 'lease ack return', 220, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local flow = Flow.new({ name = 'bench-flow-lease' })
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      rt:perform(inlet:write_op('abcdef'))
+      local lease = rt:perform(outlet:lease_op(4, 'owner'))
+      rt:perform(lease:ack_op(1))
+      rt:perform(lease:return_op())
+      local bytes = rt:perform(outlet:read_op(10))
+      total = total + #bytes
+    end
+  end, 'bench-flow-lease')
+  run_rt(rt)
+  assert_eq(total, n * 5)
+  return n
+end)
+
+add('flow', 'read until chunked', 180, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local flow = Flow.new({ name = 'bench-flow-until' })
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      rt:perform(inlet:write_op('abc'))
+      rt:perform(inlet:write_op('\r'))
+      rt:perform(inlet:write_op('\n'))
+      local line = rt:perform(outlet:read_until_op('\r\n'))
+      total = total + #line
+    end
+  end, 'bench-flow-until')
+  run_rt(rt)
+  assert_eq(total, n * 3)
+  return n
+end)
+
+add('flow', 'peek then drop', 250, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local flow = Flow.new({ name = 'bench-flow-peek-drop' })
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      rt:perform(inlet:write_op('abcdef'))
+      local p = rt:perform(outlet:peek_op(3))
+      local d = rt:perform(outlet:drop_op(3))
+      local r = rt:perform(outlet:read_exactly_op(3))
+      total = total + #p + d + #r
+    end
+  end, 'bench-flow-peek-drop')
+  run_rt(rt)
+  assert_eq(total, n * 9)
+  return n
+end)
+
+add('flow', 'splice derived', 140, function(n)
+  local rt = Runtime.new()
+  local Flow = fibers.Flow
+  local src = Flow.new({ name = 'bench-flow-splice-src' })
+  local dst = Flow.new({ name = 'bench-flow-splice-dst' })
+  local total = 0
+  rt:spawn_raw(function()
+    for _ = 1, n do
+      rt:perform(src:inlet():write_op('abcdef'))
+      local moved = rt:perform(src:outlet():splice_to(dst:inlet(), 3))
+      local left = rt:perform(src:outlet():read_exactly_op(3))
+      local got = rt:perform(dst:outlet():read_exactly_op(3))
+      total = total + moved + #left + #got
+    end
+  end, 'bench-flow-splice')
+  run_rt(rt)
+  assert_eq(total, n * 9)
+  return n
 end)
 
 -- --------------------------------------------------------------------------

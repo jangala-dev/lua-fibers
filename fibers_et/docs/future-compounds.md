@@ -179,7 +179,7 @@ time advances only when its obligations have been accounted for
 Implementation sentence:
 
 ```text
-a phase is a named scope interval with declared movement, borrowing and settlement at the boundary
+a phase is a named scope interval with declared custody movement, authority borrowing, fact propagation and settlement at the boundary
 ```
 
 Possible use:
@@ -189,7 +189,6 @@ game frame stages, render extraction, embedded power modes, radio awake/sleep cy
 ```
 
 The current `fibers.phase` module is a prototype.  It proves that phase can be
-built over scope and now enforces declared custody and borrow crossings by
-edge label.  It is still not a full phase language: it does not yet distinguish
-carried facts, emitted events, moved obligations and borrowed authority as
-separate edge kinds beyond the current `carry` and `borrow` declarations.
+built over scope and now enforces declared custody, authority and fact
+crossings by explicit edge label.  It is still not a full phase language: it
+does not yet model emitted events, active-phase ordering or richer edge policy.

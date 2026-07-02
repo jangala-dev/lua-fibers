@@ -19,18 +19,19 @@ do
   assert_truthy(child, 'fibers.spawn should return a task handle under the root scope')
 end
 
--- Nursery launch installs the policy once; ordinary perform/spawn are pleasant
--- inside the boundary.
+-- A custom nursery policy is now passed to run/try_run; it is not a separate
+-- launch path.
 do
   local got, child
-  local st = fibers.launch(fibers.policy.nursery(), function(n)
+  local r = fibers.try_run(function(scope)
     local ch = fibers.Rendezvous.new('policy-rendezvous')
     child = fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
     end, 'sender')
     got = fibers.perform(ch:get_op())
-  end)
-  assert_truthy(st.tag == 'found' or st.tag == 'pending' or st.tag == 'idle', 'unexpected status: ' .. tostring(st.tag))
+    assert_truthy(scope:raw_region(), 'root scope should expose its Region to compound authors')
+  end, { policy = fibers.policy.nursery() })
+  assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(got, 'hello')
   assert_truthy(child, 'nursery spawn should return a task handle')
 end
@@ -39,7 +40,7 @@ end
 -- protocols internally during settlement.
 do
   local task
-  local st = fibers.launch(fibers.policy.nursery(), function(n)
+  local r = fibers.try_run(function()
     local src = fibers.Source.signal('policy-cancel-source')
     task = fibers.spawn(function()
       fibers.perform(src:wait_op())
@@ -47,27 +48,27 @@ do
     fibers.perform(task:request_cancel_op('stop'))
     local exit = fibers.perform(task:exit_op())
     assert_truthy(exit.tag == 'cancelled' or exit.tag == 'failed', 'explicit cancellation should end the task')
-  end)
-  assert_truthy(st.tag == 'found' or st.tag == 'pending' or st.tag == 'idle', 'unexpected status: ' .. tostring(st.tag))
+  end, { policy = fibers.policy.nursery() })
+  assert_truthy(r.ok, tostring(r.report or r.reason))
 end
 
 -- Body failure cancels owned children before the nursery reports the body error.
 do
   local child
-  local ok, err = pcall(function()
-    fibers.launch(fibers.policy.nursery(), function()
-      local src = fibers.Source.signal('policy-body-failure-source')
-      child = fibers.spawn(function()
-        fibers.perform(src:wait_op())
-      end, 'owned-waiter')
-      error('body failed')
-    end)
-  end)
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):match('body failed'))
+  local r = fibers.try_run(function()
+    local src = fibers.Source.signal('policy-body-failure-source')
+    child = fibers.spawn(function()
+      fibers.perform(src:wait_op())
+    end, 'owned-waiter')
+    error('body failed')
+  end, { policy = fibers.policy.nursery() })
+  assert_eq(r.ok, false)
+  assert_eq(r.reason, 'body_error')
+  assert_truthy(tostring(r.primary):match('body failed'))
+
   local state
   local st = fibers.try_run(function() state = fibers.perform(child:state_op()) end).runtime_status
-  assert_truthy(st.tag == 'found' or st.tag == 'pending' or st.tag == 'idle', 'unexpected status: ' .. tostring(st.tag))
+  assert_status(st, 'found', 'status after inspecting cancelled child')
   assert_truthy(state.exit.tag == 'cancelled' or state.exit.tag == 'failed', 'child should be cancelled or report scope failure under body failure')
 end
 

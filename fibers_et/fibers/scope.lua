@@ -88,7 +88,6 @@ function Scope.new(name, opts)
     }, (name or id) .. '-authority'),
     interrupt = opts.interrupt or Interrupt.new((name or id) .. '-interrupt'),
     mask_depth = opts.mask_depth or 0,
-    children = opts.children or {}, -- policy aid only; Region roots are cleanup authority.
     _fibers_id = id,
     _fibers_scope = true,
   }, Scope)
@@ -100,17 +99,11 @@ function Scope:raw_region()
   return self.region
 end
 
-function Scope:region_op()
-  return Op.always(self.region)
-end
 
 function Scope:admit_op(item_or_owned, from_owner)
   return self.region:admit_op(item_or_owned, from_owner)
 end
 
-function Scope:parent_scope()
-  return self.parent
-end
 
 function Scope:perform(op)
   local rt = self.runtime or Runtime.current()
@@ -204,26 +197,6 @@ local function phase_live(record)
   return record ~= nil and record.phase == 'live'
 end
 
-local function rights_allow(rights, right)
-  if right == nil then return true end
-  if rights == nil then return true end
-  if rights == '*' then return true end
-  if type(rights) == 'string' then return rights == right or rights == '*' end
-  if type(rights) ~= 'table' then return false end
-  if rights[right] == true or rights['*'] == true then return true end
-  for i = 1, #rights do
-    if rights[i] == right or rights[i] == '*' then return true end
-  end
-  return false
-end
-
-local function record_allows(record, right)
-  if not record then return false end
-  local rights = record.rights
-  if rights == nil and type(record.meta) == 'table' then rights = record.meta.rights end
-  return rights_allow(rights, right)
-end
-
 local function borrow_authorise_op(scope, item, right)
   return scope.region:members_op():and_then(function(items)
     local function scan(i)
@@ -241,14 +214,25 @@ local function borrow_authorise_op(scope, item, right)
   end)
 end
 
+local function inherited_owner_scope(scope, item)
+  local owner = item and item.owner
+  local owner_scope = owner and owner._fibers_scope_owner
+  if not owner_scope or owner_scope == scope then return nil end
+  local p = scope.parent
+  while p do
+    if p == owner_scope then return owner_scope end
+    p = p.parent
+  end
+  return nil
+end
+
 function Scope:authorise_op(item, right)
-  return self.region:record_op(item):and_then(function(record)
-    local phase = record and record.phase
-    if phase_live(record) and record_allows(record, right) then
-      return Op.always(item, { kind = 'owned', scope = self, record = record, right = right })
-    end
-    if record and phase == 'claimed' and (self._settlement_depth or 0) > 0 and record_allows(record, right) then
-      return Op.always(item, { kind = 'settlement', scope = self, record = record, right = right })
+  local owner_scope = inherited_owner_scope(self, item)
+  if owner_scope then return owner_scope:authorise_op(item, right) end
+  return self.region:authorise_op(item, right, { allow_claimed = (self._settlement_depth or 0) > 0 }):and_then(function(ok, phase)
+    if ok then
+      local kind = phase == 'claimed' and 'settlement' or 'owned'
+      return Op.always(item, { kind = kind, scope = self, right = right })
     end
     local borrowed = borrow_authorise_op(self, item, right)
     if self.parent then
@@ -323,17 +307,10 @@ function Scope:done_op()
 end
 
 function Scope:owns_op(item) return self.region:owns_op(item) end
-function Scope:items_op() return self.region:members_op() end
 function Scope:roots_op() return self.region:roots_op() end
 function Scope:record_op(item) return self.region:record_op(item) end
 function Scope:subtree_op(item) return self.region:subtree_op(item) end
 
-function Scope:require_live_op(item)
-  return self.region:live_op(item):and_then(function(live)
-    if live then return Op.always(item) end
-    return Op.never()
-  end)
-end
 
 function Scope:inspect_op()
   return self.region:snapshot_op():and_then(function(region_status)

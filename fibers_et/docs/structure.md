@@ -14,7 +14,7 @@ fibers/atoms/
 
 fibers/*.lua
   compound public facilities built from the atom kit, such as Task, Sleep,
-  Scope, Queue, Pool, Flow, Stream and launch Policy helpers
+  Scope, Queue, Pool, Flow, Stream and scope policy helpers
 
 fibers/host.lua
 fibers/host/

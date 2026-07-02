@@ -75,6 +75,7 @@ end
 function RendezvousKind.summary(_payload, out)
   out.endpoints = true
   out.closed = false
+  out.needs_overlay = false
 end
 
 function Rendezvous.new(name)

@@ -104,7 +104,8 @@ function Debug.observed_frontiers(x)
   local observer = x and (x.observer or x)
   local out = {}
   for i = 1, #(observer and observer.observations or {}) do
-    out[#out + 1] = observer.observations[i].frontier
+    local item = observer.observations[i]
+    out[#out + 1] = item and (item.frontier or item)
   end
   return out
 end

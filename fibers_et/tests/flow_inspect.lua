@@ -11,14 +11,18 @@ end
 function M.leased_bytes(res)
   local n = 0
   local state = res and res.state and res.state.value or res
-  if not (state and state.leases) then return 0 end
+  if not state then return 0 end
+  if state.lease_bytes ~= nil then return #(state.lease_bytes or '') end
+  if not state.leases then return 0 end
   for _, lease in pairs(state.leases) do n = n + #(lease.bytes or '') end
   return n
 end
 
 function M.first_lease_bytes(res)
   local state = res and res.state and res.state.value or res
-  if not (state and state.leases) then return nil end
+  if not state then return nil end
+  if state.lease_bytes ~= nil then return state.lease_bytes or '' end
+  if not state.leases then return nil end
   for _, lease in pairs(state.leases) do return lease.bytes or '' end
   return nil
 end

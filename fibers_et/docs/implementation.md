@@ -382,8 +382,10 @@ settlement resources
 policy choices
 ```
 
-`fibers.launch(policy, fn)` is the friendly structured entry point.  Raw runtime
-spawning is for hosts, embedders and low-level tests.
+`fibers.run(fn, { policy = ... })` is the structured root entry point.  It creates
+a root Scope for lifetime-bearing work and returns the body values only after
+owned obligations are accounted for. Raw runtime spawning is for hosts,
+embedders and low-level tests.
 
 ### Flow and stream
 

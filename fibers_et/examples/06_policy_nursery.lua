@@ -5,7 +5,7 @@ local fibers = require('fibers')
 local message
 local child
 
-local st = fibers.launch(fibers.policy.nursery(), function(nursery)
+fibers.run(function(scope)
   local ch = fibers.Rendezvous.new('nursery-example')
 
   child = fibers.spawn(function()
@@ -14,12 +14,11 @@ local st = fibers.launch(fibers.policy.nursery(), function(nursery)
 
   message = fibers.perform(ch:get_op())
 
-  -- The nursery policy admits tasks to its Region.  On exit it seals the
-  -- Region, waits for owned tasks, and settles those that have completed.
-  assert(nursery.region)
-end)
+  -- The root scope admits tasks to its Region. On exit it seals the Region,
+  -- waits for owned tasks, and settles remaining obligations.
+  assert(scope:raw_region())
+end, { policy = fibers.policy.nursery() })
 
-assert(st.tag == 'found')
 assert(message == 'hello from a structured task')
 assert(child.owner == nil)
 

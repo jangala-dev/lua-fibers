@@ -24,7 +24,6 @@ function ScopeResult.fail(fields)
     reason = fields.reason or 'scope_failed',
     primary = fields.primary,
     report = fields.report,
-    values = copy_values(fields.values),
     runtime_status = fields.runtime_status,
   }, ScopeResult)
 end
@@ -34,9 +33,6 @@ function ScopeResult:unpack() if not self.ok then return nil, self.reason, self.
 function ScopeResult:done_outcome() return { ok = self.ok == true, reason = self.reason, report = self.report } end
 function ScopeResult:raise()
   if self.ok then return self:unpack() end
-  -- Preserve runtime cancellation as the raised condition.  Reports may still
-  -- describe settlement facts, but cancellation remains the primary runtime
-  -- signal so task bodies record Exit.cancelled rather than an ordinary failure.
   if type(self.primary) == 'table' and self.primary._fibers_cancelled == true then
     error(self.primary, 0)
   end

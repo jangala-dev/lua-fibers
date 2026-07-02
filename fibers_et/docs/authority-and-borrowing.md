@@ -106,4 +106,7 @@ forms.
 Phases need borrowing because a later interval may be allowed to observe or act
 on a value without taking permanent custody.  Render extraction, for example,
 may borrow the world read-only and then release that authority at the phase
-boundary.  The frame can advance only when those borrows have settled.
+boundary.  Phase edges distinguish three crossing kinds: custody carried with
+`edge:carry(label)`, authority borrowed with `edge:borrow(label)`, and ordinary
+facts propagated with `edge:fact(label)`.  Crossings use explicit labels; Phase
+does not infer them from record metadata.

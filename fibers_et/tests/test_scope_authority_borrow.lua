@@ -80,14 +80,15 @@ end
 
 
 
--- Flow endpoints now consult current-scope authority when their owning Region
--- belongs to a Scope.  A borrower may read only after receiving a read borrow;
--- failed authority does not consume bytes from the flow.
+-- Flow endpoints are byte-operation capabilities; Scope authority governs
+-- whether a scope is authorised to obtain/carry/borrow the capability, not each
+-- individual byte operation through an already-held endpoint.  Borrowing a
+-- reader grants read authority without moving custody.
 do
   local owner = fibers.Scope.new('flow-authority-owner')
   local borrower = fibers.Scope.new('flow-authority-borrower')
   local flow = fibers.Flow.new({ name = 'flow-authority', capacity = 8 })
-  local denied_err, borrowed_byte, borrowed_err, write_err
+  local direct_auth, borrowed_auth, borrowed_byte, borrowed_err, write_err
   fibers.run(function()
     local rt = fibers.Runtime.current()
     fibers.perform(owner:admit_op(fibers.Region.Owned.tree(flow, flow._fibers_settle, {
@@ -98,19 +99,18 @@ do
       local _n, err = fibers.perform(flow:inlet():write_op('ab'))
       write_err = err
     end)
-    rt:with_scope(borrower, function()
-      local _byte, err = fibers.perform(flow:outlet():read_op(1))
-      denied_err = err
-    end)
+    direct_auth = fibers.perform(maybe(borrower:authorise_op(flow:outlet(), 'read')))
     fibers.perform(owner:borrow_op(flow:outlet(), borrower, { 'read' }))
+    borrowed_auth = fibers.perform(maybe(borrower:authorise_op(flow:outlet(), 'read')))
     rt:with_scope(borrower, function()
       borrowed_byte, borrowed_err = fibers.perform(flow:outlet():read_op(1))
     end)
     fibers.perform(Settlement.retire_item_op(owner, flow, 'done'))
   end)
   assert_eq(write_err, nil, 'owner should be able to write through owned inlet')
-  assert_eq(denied_err, fibers.Flow.Errors.UNAUTHORISED, 'unborrowed scope should not read owned outlet')
-  assert_eq(borrowed_byte, 'a', 'borrowed reader should read the first byte after authority is granted')
+  assert_eq(direct_auth, 'no', 'borrower should not have read authority before borrowing')
+  assert_eq(borrowed_auth, 'yes', 'borrowed reader authority should be visible to authorise_op')
+  assert_eq(borrowed_byte, 'a', 'borrowed reader capability should read the first byte')
   assert_eq(borrowed_err, nil, 'borrowed read should not fail')
 end
 

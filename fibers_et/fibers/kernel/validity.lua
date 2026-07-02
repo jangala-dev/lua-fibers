@@ -449,7 +449,10 @@ Derived.__index = Derived
 
 local function replay_observer(ctx, observer)
   if not (ctx and observer and observer.observations) then return end
-  for i = 1, #observer.observations do observe(ctx, observer.observations[i].frontier) end
+  for i = 1, #observer.observations do
+    local item = observer.observations[i]
+    observe(ctx, item and (item.frontier or item))
+  end
 end
 
 local function derived_ctx(parent, observer)

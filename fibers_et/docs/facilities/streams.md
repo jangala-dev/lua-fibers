@@ -115,8 +115,10 @@ write pump Task admitted and spawned
 If the open option loses a choice, no pump starts and the backend is not
 attached.
 
-The compound itself does not expose byte options.  Use `stream:reader()` and
-`stream:writer()`.
+The compound itself exposes stable endpoint capabilities.  Use `stream:reader()`
+and `stream:writer()` for byte options.  These endpoints are deliberately the
+public stream authority surface: read authority attaches to the reader endpoint,
+and write authority attaches to the writer endpoint.
 
 A host-backed stream can be opened directly from any object satisfying the
 `HostHandle` contract:

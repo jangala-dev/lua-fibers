@@ -1,8 +1,8 @@
--- Structured scope exit reports.
+-- Structured scope boundary reports.
 --
 -- A scope body may fail, and settlement may also fail while retiring owned
--- roots.  ScopeReport keeps those facts together so policy and supervisor code
--- can preserve the primary failure while still observing cleanup failures.
+-- roots. ScopeReport keeps those facts together without becoming lifecycle
+-- status.
 
 local ScopeReport = {}
 ScopeReport.__index = ScopeReport
@@ -24,7 +24,6 @@ function ScopeReport.new(scope, primary, secondaries, fields)
     primary = primary,
     secondaries = s,
     secondary_count = #s,
-    phase = fields.phase or 'scope_exit',
     reason = fields.reason,
     message = fields.message,
   }, ScopeReport)
@@ -38,14 +37,6 @@ function ScopeReport:append(err)
   self.secondaries[#self.secondaries + 1] = err
   self.secondary_count = #self.secondaries
   return self
-end
-
-function ScopeReport:primary_error()
-  return self.primary
-end
-
-function ScopeReport:settlement_errors()
-  return self.secondaries
 end
 
 function ScopeReport:tostring()

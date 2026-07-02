@@ -47,7 +47,7 @@ do
   assert_eq(atoms.Region.Owned, fibers.Region.Owned, 'Owned is part of Region advanced API')
   assert_eq(atoms.Task, nil, 'atoms aggregate does not export Task')
   assert_eq(atoms.Effect, fibers.Effect, 'atoms aggregate exports Effect')
-  assert_eq(policy, fibers.policy, 'top-level policy module exports launch policies')
+  assert_eq(policy, fibers.policy, 'top-level policy module exports scope policies')
   assert_eq(kernel.Runtime, fibers.Runtime, 'kernel aggregate exports Runtime')
 end
 

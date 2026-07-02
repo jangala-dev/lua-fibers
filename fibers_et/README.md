@@ -32,7 +32,7 @@ Region      transactional ownership boundary
 Effect      after-commit runtime obligation
 ```
 
-`Task`, `Scope`, `Stream`, queues and launch policies are compound facilities
+`Task`, `Scope`, `Stream`, queues and scope policies are compound facilities
 built from that kit, not additional atoms.  `Region.Owned` is the advanced
 ownership constructor for resource authors and ownership facilities; ordinary
 users should usually meet it through `Scope`, `Task` and `Stream`.
@@ -79,7 +79,7 @@ local fibers = require('fibers')
 local ch = fibers.Rendezvous.new('inbox')
 local message
 
-fibers.launch(fibers.policy.nursery(), function()
+fibers.run(function()
   fibers.spawn(function()
     fibers.perform(ch:put_op('hello'))
   end, 'sender')
@@ -90,9 +90,10 @@ end)
 print(message)
 ```
 
-`fibers.launch` installs an explicit scope policy.  Inside the nursery
-policy, the friendly `fibers.spawn` creates a structured `Task`; raw unstructured
-fibres remain available as `spawn_raw` for embedders and low-level tests.
+`fibers.run` creates the runtime and the root scope.  The friendly
+`fibers.spawn` creates a structured `Task` owned by that current scope; raw
+unstructured fibres remain available as `spawn_raw` for embedders and
+low-level tests.
 
 The send and receive are not two independent actions.  The runtime finds one
 compatible transaction and resumes both fibres after the rendezvous has
@@ -212,7 +213,7 @@ bytes, and flush waits for the fate of prior retained bytes.  If prior bytes hav
 already been consumed, flush succeeds even if the peer has since closed; later
 writes still fail.  The reservoir is rope-backed and currently permits one active
 lease at a time.  Stream compounds
-do not expose byte methods directly; use `stream:reader()` and `stream:writer()`.
+use stable endpoint capabilities for byte movement; use `stream:reader()` and `stream:writer()`. These endpoints are the public stream authority surface.
 
 See `docs/facilities/streams.md`, `docs/facilities/settlement.md`, `examples/09_memory_stream.lua`, `examples/11_pumped_stream_fake_backend.lua`, `examples/12_readiness_stream.lua`, `examples/13_socket_backend_contract.lua`, `examples/14_host_handle_stream.lua`, and `examples/15_owned_resource_settlement.lua`.
 
@@ -254,7 +255,7 @@ fibers.borrow             temporary authority as an owned obligation
 fibers.phase              prototype rhythmic lifetime boundary with declared crossings over Scope
 fibers.flow               Scalar-state-machine Flow
 fibers.stream             bidirectional Stream over two Flows
-fibers.policy             launch policies such as nursery
+fibers.policy             scope policies such as nursery
 fibers.host               host adapter helpers
 fibers.host.*             host helpers, HostHandle/fd support, and standalone/test host adapters
 fibers.runner             standalone Runtime runner over a host

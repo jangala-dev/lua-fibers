@@ -45,22 +45,25 @@ function Observer:observe(frontier)
   if self.valid == false then return frontier.gen or 0 end
   local index = self.index
   if not index then index = {}; self.index = index; self.observations = {} end
-  local rec = index[frontier]
-  if rec then return rec.gen end
-  rec = { frontier = frontier, gen = frontier.gen or 0 }
-  index[frontier] = rec
-  self.observations[#self.observations + 1] = rec
-  return rec.gen
+  local gen = index[frontier]
+  if gen ~= nil then return gen end
+  gen = frontier.gen or 0
+  index[frontier] = gen
+  -- Store frontiers directly.  The stamp lives in `index[frontier]`, avoiding a
+  -- per-observation record table on validity-heavy search paths.
+  self.observations[#self.observations + 1] = frontier
+  return gen
 end
 
 function Observer:validate()
   if self.valid == false then return false end
   local observations = self.observations
   if not observations then return true end
+  local index = self.index or {}
   for i = 1, #observations do
-    local rec = observations[i]
-    local frontier = rec.frontier
-    if frontier and (frontier.gen or 0) ~= rec.gen then
+    local frontier = observations[i]
+    local gen = index[frontier]
+    if frontier and (frontier.gen or 0) ~= gen then
       self.valid = false
       self.invalidated_by = frontier
       self.invalidated_reason = 'frontier-stamp-changed'

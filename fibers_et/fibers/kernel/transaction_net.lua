@@ -9,6 +9,30 @@ local pack_ = Op._pack
 
 local Net = {}
 
+-- Optional structural counters.  Disabled by default so normal proof search
+-- does not retain accounting tables.  Set FIBERS_COUNTERS=1, or call
+-- Net.enable_counters(true), to collect representation/work counts.
+local counters_enabled = os.getenv('FIBERS_COUNTERS') == '1'
+local counters = {}
+
+local function count(kind, n)
+  if not counters_enabled then return end
+  counters[kind] = (counters[kind] or 0) + (n or 1)
+end
+
+function Net.enable_counters(enabled)
+  counters_enabled = enabled ~= false
+  counters = {}
+end
+
+function Net.reset_counters() counters = {} end
+
+function Net.counters()
+  local out = {}
+  for k, v in pairs(counters) do out[k] = v end
+  return out
+end
+
 -- Search outcomes ---------------------------------------------------------
 
 local Outcome = {}
@@ -24,12 +48,22 @@ function Outcome.unknown(waits, reason) return { tag = 'unknown', waits = waits 
 function Outcome.merge(a, b)
   if not a then return b end
   if not b then return a end
-  local waits = {}
-  append_all(waits, a.waits); append_all(waits, b.waits)
-  if a.tag == 'unknown' or b.tag == 'unknown' then return Outcome.unknown(waits, a.reason or b.reason) end
-  local cert = AbsenceCert.new()
-  cert:extend(a.cert):extend(b.cert)
-  return Outcome.miss(cert, waits)
+  local waits = a.waits
+  if not waits then waits = {}; a.waits = waits end
+  append_all(waits, b.waits)
+  if a.tag == 'unknown' or b.tag == 'unknown' then
+    a.tag = 'unknown'
+    a.reason = a.reason or b.reason
+    return a
+  end
+  if b.cert and (not b.cert.is_empty or not b.cert:is_empty()) then
+    if not (a.cert and a.cert.extend) then a.cert = AbsenceCert.new(a.cert) end
+    a.cert:extend(b.cert)
+  elseif a.cert and not a.cert.extend then
+    a.cert = AbsenceCert.new(a.cert)
+  end
+  a.tag = 'miss'
+  return a
 end
 
 Net.Outcome = Outcome
@@ -41,6 +75,7 @@ local Trail = {}
 Trail.__index = Trail
 
 function Trail.new()
+  if counters_enabled then count('trail.new') end
   return setmetatable({ entries = {} }, Trail)
 end
 
@@ -50,11 +85,33 @@ end
 
 function Trail:set(t, k, v)
   local old = t[k]
+  if counters_enabled then count('trail.entry') end
   self.entries[#self.entries + 1] = function() t[k] = old end
   t[k] = v
 end
 
+function Trail:append(t, v)
+  if counters_enabled then count('trail.append') end
+  local n = #t
+  self.entries[#self.entries + 1] = function() t[n + 1] = nil end
+  t[n + 1] = v
+end
+
+function Trail:remove_at(t, idx)
+  if counters_enabled then count('trail.remove_at') end
+  local n = #t
+  local old = t[idx]
+  self.entries[#self.entries + 1] = function()
+    for i = n, idx + 1, -1 do t[i] = t[i - 1] end
+    t[idx] = old
+    t[n + 1] = nil
+  end
+  table.remove(t, idx)
+  return old
+end
+
 function Trail:save_table(t)
+  if counters_enabled then count('trail.save_table') end
   local before = {}
   for k, v in pairs(t) do before[k] = v end
   self.entries[#self.entries + 1] = function()
@@ -74,6 +131,7 @@ Net.Trail = Trail
 -- Proof result and task helpers ------------------------------------------
 
 local function copy_pack(p)
+  if counters_enabled then count('alloc.pack') end
   local q = { _fibers_pack = true, n = p and (p.n or #p) or 0 }
   if p and p._fibers_pack then q._fibers_pack = true end
   for i = 1, q.n do q[i] = p[i] end
@@ -89,34 +147,49 @@ local function op_primary(op) return op.primary or op.p end
 local function op_fallback(op) return op.fallback or op.q end
 
 local function new_result(pack, lanes)
+  if counters_enabled then count('alloc.result') end
   return { pack = copy_pack(pack), wraps = {}, lanes = lanes }
 end
 
 
+local function stack_push(stack, frame)
+  if counters_enabled then count('stack.push') end
+  return { frame = frame, parent = stack, depth = (stack and stack.depth or 0) + 1 }
+end
+
+local function stack_pop(stack)
+  if not stack then return nil, nil end
+  if counters_enabled then count('stack.pop') end
+  return stack.frame, stack.parent
+end
+
 local function copy_stack(stack)
-  local s = {}
-  for i = 1, #(stack or {}) do
-    local f = stack[i]
-    local nf = {}
-    for k, v in pairs(f) do nf[k] = v end
-    s[i] = nf
-  end
-  return s
+  -- Continuation stacks are persistent linked frames.  Copying a task now shares
+  -- the immutable parent chain instead of cloning an array of frames.
+  if counters_enabled then count('stack.share') end
+  return stack
 end
 
 local function copy_task(t)
+  if counters_enabled then count('copy.task') end
   return {
     root_id = t.root_id,
     op = t.op,
-    stack = copy_stack(t.stack or {}),
+    stack = copy_stack(t.stack),
     env = Resources.copy_env(t.env),
     attempt = t.attempt,
   }
 end
 
 local function copy_premise(p)
+  if counters_enabled then count('copy.premise') end
   local groups = {}
   for i = 1, #(p.groups or {}) do groups[i] = p.groups[i] end
+  local group_lanes = nil
+  if p.group_lanes then
+    group_lanes = {}
+    for k, v in pairs(p.group_lanes) do group_lanes[k] = v end
+  end
   return {
     id = p.id,
     root_id = p.root_id,
@@ -127,6 +200,7 @@ local function copy_premise(p)
     wait = p.wait,
     task = copy_task(p.task),
     groups = groups,
+    group_lanes = group_lanes,
   }
 end
 
@@ -142,6 +216,7 @@ function Attempt.new(rt, pending, start_id, solver)
   local self = setmetatable({
     rt = rt,
     pending = pending,
+    pending_ids = solver and solver.pending_ids or nil,
     observer = solver and solver.observer or nil,
     capture = solver and solver.capture or Capture.none(),
     selected = { [start_id] = true },
@@ -160,7 +235,7 @@ function Attempt.new(rt, pending, start_id, solver)
     trail = Trail.new(),
     solver = solver,
   }, Attempt)
-  self:push_task({ root_id = start_id, op = pending[start_id].op, stack = {}, env = Resources.new_env(nil, self.capture), attempt = pending[start_id].attempt })
+  self:push_task({ root_id = start_id, op = pending[start_id].op, stack = nil, env = Resources.new_env(nil, self.capture), attempt = pending[start_id].attempt })
   return self
 end
 
@@ -168,6 +243,8 @@ function Attempt:mark() return self.trail:mark() end
 function Attempt:rollback(mark) self.trail:rollback(mark) end
 function Attempt:save(t) self.trail:save_table(t) end
 function Attempt:set_field(t, k, v) self.trail:set(t, k, v) end
+function Attempt:append(t, v) self.trail:append(t, v) end
+function Attempt:remove_at(t, idx) return self.trail:remove_at(t, idx) end
 function Attempt:charge(kind) if self.solver and self.solver.charge then self.solver:charge(kind) end end
 
 function Attempt:set_conflict(reason)
@@ -183,71 +260,109 @@ end
 function Attempt:set_miss(cert, waits) self:set_outcome(Outcome.miss(cert, waits)) end
 function Attempt:set_unknown(waits, reason) self:set_outcome(Outcome.unknown(waits, reason)) end
 
+local function premise_bucket_less(a, b)
+  local ar = a.resource
+  local br = b.resource
+  local ak = (ar and (ar._fibers_id or ar.name)) or tostring(ar)
+  local bk = (br and (br._fibers_id or br.name)) or tostring(br)
+  if tostring(ak) == tostring(bk) then
+    local an = a.kind and a.kind.name or ''
+    local bn = b.kind and b.kind.name or ''
+    return an < bn
+  end
+  return tostring(ak) < tostring(bk)
+end
+
+local function sort_premise_buckets(buckets)
+  table.sort(buckets, premise_bucket_less)
+  return buckets
+end
+
 function Attempt:rebuild_premise_index()
+  -- Compatibility fallback for tests/debugging.  Normal proof search treats
+  -- premise buckets as a lazy derived view so pushing or solving a premise does
+  -- not rebuild and sort the whole index immediately.
   local idx = {}
+  local buckets = {}
   for i = 1, #self.premises do
     local p = self.premises[i]
     local bucket = idx[p.resource]
     if not bucket then
-      bucket = { resource = p.resource, kind = p.kind, indices = {} }
+      bucket = { resource = p.resource, kind = p.kind, premises = {} }
       idx[p.resource] = bucket
+      buckets[#buckets + 1] = bucket
     end
-    bucket.indices[#bucket.indices + 1] = i
+    bucket.premises[#bucket.premises + 1] = p
   end
+  sort_premise_buckets(buckets)
   self:set_field(self, 'premise_index', idx)
+  self:set_field(self, 'premise_buckets', buckets)
 end
 
 function Attempt:push_task(task)
-  self:save(self.tasks)
-  self.tasks[#self.tasks + 1] = task
+  if counters_enabled then count('task.push') end
+  self:append(self.tasks, task)
 end
 
 function Attempt:remove_task(idx)
-  local task = copy_task(self.tasks[idx])
-  self:save(self.tasks)
-  table.remove(self.tasks, idx)
-  return task
+  if counters_enabled then count('task.remove') end
+  local original = self:remove_at(self.tasks, idx)
+  return copy_task(original)
 end
 
 function Attempt:push_premise(premise)
+  if counters_enabled then count('premise.push') end
   self:set_field(self, 'next_premise', self.next_premise + 1)
   premise.id = self.next_premise
   premise.root_id = premise.task and premise.task.root_id or premise.root_id
-  premise.groups = premise.groups or collect_groups_from_stack(premise.task and premise.task.stack or {})
-  self:save(self.premises)
-  self.premises[#self.premises + 1] = premise
-  self:rebuild_premise_index()
+  if not premise.groups then
+    premise.groups, premise.group_lanes = collect_groups_from_stack(premise.task and premise.task.stack or nil)
+  elseif not premise.group_lanes then
+    local _groups, group_lanes = collect_groups_from_stack(premise.task and premise.task.stack or nil)
+    premise.group_lanes = group_lanes
+  end
+  self:append(self.premises, premise)
+  -- Premise buckets are a derived view.  Do not trail-maintain them on the
+  -- hot push path; clear the cache and rebuild only when a resolver or absence
+  -- pass asks for grouped premises.
+  self.premise_index = nil
+  self.premise_buckets = nil
 end
 
 function Attempt:remove_premises(ids)
+  if counters_enabled then count('premise.remove_batch') end
   local wanted = {}
   for i = 1, #(ids or {}) do wanted[ids[i]] = true end
   local removed = {}
-  self:save(self.premises)
+  local any = false
   for i = #self.premises, 1, -1 do
     local p = self.premises[i]
     if p and wanted[p.id] then
       removed[p.id] = copy_premise(p)
-      table.remove(self.premises, i)
+      self:remove_at(self.premises, i)
+      any = true
     end
   end
-  self:rebuild_premise_index()
+  if any then
+    self.premise_index = nil
+    self.premise_buckets = nil
+  end
   return removed
 end
 
 function Attempt:add_done(root_id, res, env)
-  self:save(self.done)
-  self.done[root_id] = { res = res, env = env }
+  if counters_enabled then count('done.add') end
+  self:set_field(self.done, root_id, { res = res, env = env })
 end
 
 function Attempt:add_group(gid, group)
-  self:save(self.groups)
-  self.groups[gid] = group
+  if counters_enabled then count('group.add') end
+  self:set_field(self.groups, gid, group)
 end
 
 function Attempt:select_root(id)
-  self:save(self.selected)
-  self.selected[id] = true
+  if counters_enabled then count('root.select') end
+  self:set_field(self.selected, id, true)
 end
 
 local function make_rows_from_raw(lane_results)
@@ -258,11 +373,18 @@ end
 
 function collect_groups_from_stack(stack)
   local groups = {}
-  for i = 1, #stack do
-    local f = stack[i]
-    if f.kind == 'product_lane' then groups[#groups + 1] = f.group_id end
+  local group_lanes = nil
+  local node = stack
+  while node do
+    local f = node.frame
+    if f and f.kind == 'product_lane' then
+      groups[#groups + 1] = f.group_id
+      group_lanes = group_lanes or {}
+      group_lanes[f.group_id] = f.lane
+    end
+    node = node.parent
   end
-  return groups
+  return groups, group_lanes
 end
 
 local function common_disallowed_group(st, a, b)
@@ -291,7 +413,7 @@ local function settle_losing_nacks(op, out)
     for i = 1, #(op.choices or {}) do settle_losing_nacks(op.choices[i], out) end
   elseif op.kind == 'product' then
     for i = 1, #(op.lanes or {}) do settle_losing_nacks(op.lanes[i], out) end
-  elseif op.kind == 'wrap' or op.kind == 'bind' then
+  elseif op.kind == 'wrap' or op.kind == 'bind' or op.kind == 'map' then
     settle_losing_nacks(op_inner(op), out)
   elseif op.kind == 'or_else' then
     settle_losing_nacks(op_primary(op), out)
@@ -320,16 +442,14 @@ end
 local complete_task -- forward
 
 local function complete_product_lane(st, task, frame, res)
+  if counters_enabled then count('product.lane.complete') end
   local g = st.groups[frame.group_id]
   if not g then st:set_conflict('unknown-product-group'); return st end
   if g.results[frame.lane] then st:set_conflict('duplicate-product-lane'); return st end
 
-  st:save(g.results)
-  st:save(g.envs)
-  st:save(g)
-  g.results[frame.lane] = res
-  g.envs[frame.lane] = Resources.copy_delta(task.env)
-  g.done = (g.done or 0) + 1
+  st:set_field(g.results, frame.lane, res)
+  st:set_field(g.envs, frame.lane, Resources.copy_delta(task.env))
+  st:set_field(g, 'done', (g.done or 0) + 1)
 
   if g.done < g.n then return st end
 
@@ -344,13 +464,15 @@ local function complete_product_lane(st, task, frame, res)
 
   local rows = make_rows_from_raw(lane_results)
   local pres = new_result(pack_(rows), lane_results)
-  local parent = { root_id = g.root_id, op = nil, stack = copy_stack(g.parent_stack), env = merged, attempt = g.attempt }
+  local parent = { root_id = g.root_id, op = nil, stack = g.parent_stack, env = merged, attempt = g.attempt }
   return complete_task(st, parent, pres)
 end
 
 complete_task = function(st, task, res)
+  if counters_enabled then count('task.complete') end
   while true do
-    local frame = table.remove(task.stack)
+    local frame
+    frame, task.stack = stack_pop(task.stack)
     if not frame then
       st:add_done(task.root_id, res, task.env)
       return st
@@ -360,6 +482,8 @@ complete_task = function(st, task, res)
       task.op = next_op
       st:push_task(task)
       return st
+    elseif frame.kind == 'map' then
+      res.pack = pack_(call_callback(st, 'map', frame.fn, unpack_(res.pack, 1, res.pack.n)))
     elseif frame.kind == 'wrap' then
       res.wraps[#res.wraps + 1] = frame.fn
     elseif frame.kind == 'product_lane' then
@@ -371,6 +495,7 @@ complete_task = function(st, task, res)
 end
 
 local function apply_task_step(st, idx, branch)
+  if counters_enabled then count('task.step') end
   local task = st:remove_task(idx)
   local op = task.op
   task.op = nil
@@ -380,12 +505,17 @@ local function apply_task_step(st, idx, branch)
   if k == 'always' then
     return complete_task(st, task, new_result(op_values(op)))
   elseif k == 'bind' then
-    task.stack[#task.stack + 1] = { kind = 'bind', fn = op.fn }
+    task.stack = stack_push(task.stack, { kind = 'bind', fn = op.fn })
+    task.op = op_inner(op)
+    st:push_task(task)
+    return st
+  elseif k == 'map' then
+    task.stack = stack_push(task.stack, { kind = 'map', fn = op.fn })
     task.op = op_inner(op)
     st:push_task(task)
     return st
   elseif k == 'wrap' then
-    task.stack[#task.stack + 1] = { kind = 'wrap', fn = op.fn }
+    task.stack = stack_push(task.stack, { kind = 'wrap', fn = op.fn })
     task.op = op_inner(op)
     st:push_task(task)
     return st
@@ -437,7 +567,7 @@ local function apply_task_step(st, idx, branch)
   elseif k == 'product' then
     st:set_field(st, 'next_group', st.next_group + 1)
     local gid = st.next_group
-    local parent_stack = copy_stack(task.stack)
+    local parent_stack = task.stack
     local parent_env = Resources.copy_env(task.env)
     local group = {
       n = #(op.lanes or {}),
@@ -453,11 +583,11 @@ local function apply_task_step(st, idx, branch)
       local lt = {
         root_id = task.root_id,
         op = op.lanes[i],
-        stack = copy_stack(parent_stack),
+        stack = parent_stack,
         env = Resources.lane_env_from(parent_env),
         attempt = task.attempt,
       }
-      lt.stack[#lt.stack + 1] = { kind = 'product_lane', group_id = gid, lane = i }
+      lt.stack = stack_push(lt.stack, { kind = 'product_lane', group_id = gid, lane = i })
       st:push_task(lt)
     end
     return st
@@ -471,6 +601,7 @@ local function apply_task_step(st, idx, branch)
 end
 
 local function apply_premise_solution(st, solution)
+  if counters_enabled then count('premise.solution.apply') end
   local ids = solution.ids or {}
   local removed = st:remove_premises(ids)
 
@@ -514,20 +645,22 @@ local function has_done(done)
 end
 
 local function sorted_premise_buckets(st)
+  if st.premise_buckets then return st.premise_buckets end
+  local idx = {}
   local buckets = {}
-  for _, bucket in pairs(st.premise_index or {}) do buckets[#buckets + 1] = bucket end
-  table.sort(buckets, function(a, b)
-    local ar = a.resource
-    local br = b.resource
-    local ak = (ar and (ar._fibers_id or ar.name)) or tostring(ar)
-    local bk = (br and (br._fibers_id or br.name)) or tostring(br)
-    if ak == bk then
-      local an = a.kind and a.kind.name or ''
-      local bn = b.kind and b.kind.name or ''
-      return an < bn
+  for i = 1, #(st.premises or {}) do
+    local p = st.premises[i]
+    local bucket = idx[p.resource]
+    if not bucket then
+      bucket = { resource = p.resource, kind = p.kind, premises = {} }
+      idx[p.resource] = bucket
+      buckets[#buckets + 1] = bucket
     end
-    return tostring(ak) < tostring(bk)
-  end)
+    bucket.premises[#bucket.premises + 1] = p
+  end
+  sort_premise_buckets(buckets)
+  st.premise_index = idx
+  st.premise_buckets = buckets
   return buckets
 end
 
@@ -547,14 +680,15 @@ local function premise_absence_ctx(st, cert)
 end
 
 local function premise_outcome(st)
+  if counters_enabled then count('premise.outcome') end
   local cert = AbsenceCert.new()
   local waits = {}
   local buckets = sorted_premise_buckets(st)
   for bi = 1, #buckets do
     local bucket = buckets[bi]
     local ps = {}
-    for i = 1, #(bucket.indices or {}) do
-      local p = st.premises[bucket.indices[i]]
+    for i = 1, #(bucket.premises or {}) do
+      local p = bucket.premises[i]
       if p then
         ps[#ps + 1] = p
         if p.wait then waits[#waits + 1] = p.wait end
@@ -586,6 +720,7 @@ local World = {}
 World.__index = World
 
 function World.from_attempt(st)
+  if counters_enabled then count('world.from_attempt') end
   local ids = {}
   for id, _ in pairs(st.done) do ids[#ids + 1] = id end
   table.sort(ids)
@@ -604,6 +739,7 @@ local EMPTY_PREPARED = { resources = nil, effects = nil }
 local EMPTY_ENV = {}
 
 function World.local_root(root_id, res, env)
+  if counters_enabled then count('world.local_root') end
   -- A zero-premise proof has no resource/environment delta to prepare.  It is
   -- still represented as an ordinary World so commit and delivery use the same
   -- semantic path as general proof-net search.
@@ -635,6 +771,7 @@ end
 
 
 function World:probe(rt)
+  if counters_enabled then count('world.probe') end
   if self.consumed then return nil, 'consumed-world' end
   if self.prepared and self.valid ~= false then return true end
 
@@ -714,6 +851,7 @@ function World:run_wraps_for(rt, id)
 end
 
 function World:commit(rt)
+  if counters_enabled then count('world.commit') end
   if self.observer and not Resources.observer_valid(self.observer) then self.valid = false end
   if self.valid == false then return false, 'invalidated-world' end
   local prepared, reason = self:prepare(rt)
@@ -743,6 +881,7 @@ local Solver = {}
 Solver.__index = Solver
 
 local function task_branches(st)
+  if counters_enabled then count('branches.task') end
   if #st.tasks == 0 then return nil end
   local op = st.tasks[1].op
   if op and op.kind == 'choice' then
@@ -757,6 +896,7 @@ local function task_branches(st)
 end
 
 local function premise_branches(st)
+  if counters_enabled then count('branches.premise') end
   local branches = {}
   local ctx = {}
   function ctx:compatible(a, b)
@@ -767,10 +907,13 @@ local function premise_branches(st)
   function ctx:now() return self.attempt and self.attempt.rt and self.attempt.rt.now and self.attempt.rt:now() or 0 end
 
   local function premise_lane_for_group(premise, gid)
-    local stack = premise and premise.task and premise.task.stack or {}
-    for i = #stack, 1, -1 do
-      local f = stack[i]
-      if f.kind == 'product_lane' and f.group_id == gid then return f.lane end
+    local lanes = premise and premise.group_lanes
+    if lanes then return lanes[gid] end
+    local node = premise and premise.task and premise.task.stack or nil
+    while node do
+      local f = node.frame
+      if f and f.kind == 'product_lane' and f.group_id == gid then return f.lane end
+      node = node.parent
     end
     return nil
   end
@@ -780,14 +923,31 @@ local function premise_branches(st)
 
     local function add_env(env, relation, group, lane, delta_only)
       if not env then return end
-      local key = tostring(env) .. ':' .. tostring(relation) .. ':' .. tostring(group and group.allow_internal) .. ':' .. tostring(lane)
-      if seen[key] then return end
-      seen[key] = true
+      local by_relation = seen[env]
+      if not by_relation then by_relation = {}; seen[env] = by_relation end
+      local by_group = by_relation[relation]
+      if not by_group then by_group = {}; by_relation[relation] = by_group end
+      local group_key = group or false
+      local by_lane = by_group[group_key]
+      if not by_lane then by_lane = {}; by_group[group_key] = by_lane end
+      local lane_key = lane or false
+      if by_lane[lane_key] then return end
+      by_lane[lane_key] = true
 
-      local effective = env
-      if delta_only then effective = Resources.copy_delta(env) end
-      local overlay = Resources.overlay_for_env(effective)
-      local rec = overlay and overlay.res and overlay.res[resource]
+      local rec
+      -- Hot path: most proof frames are parentless sparse deltas.  Trust that
+      -- shape and inspect the record directly instead of flattening/copying the
+      -- environment merely to discover that no relevant overlay exists.
+      if not env.parent then
+        rec = env.res and env.res[resource]
+      elseif delta_only then
+        local effective = Resources.copy_delta(env)
+        local overlay = Resources.overlay_for_env(effective)
+        rec = overlay and overlay.res and overlay.res[resource]
+      else
+        local overlay = Resources.overlay_for_env(env)
+        rec = overlay and overlay.res and overlay.res[resource]
+      end
       if rec then
         out[#out + 1] = {
           rec = rec,
@@ -808,12 +968,11 @@ local function premise_branches(st)
         if g then
           add_env(g.parent_env, 'outer', g, nil, false)
           local own_lane = premise_lane_for_group(p, gid)
-          local lanes = {}
-          for lane, _ in pairs(g.envs or {}) do lanes[#lanes + 1] = lane end
-          table.sort(lanes)
-          for _, lane in ipairs(lanes) do
-            local relation = (own_lane ~= nil and lane == own_lane) and 'own' or 'sibling'
-            add_env(g.envs[lane], relation, g, lane, true)
+          for lane = 1, (g.n or 0) do
+            if g.envs and g.envs[lane] then
+              local relation = (own_lane ~= nil and lane == own_lane) and 'own' or 'sibling'
+              add_env(g.envs[lane], relation, g, lane, true)
+            end
           end
         end
       end
@@ -834,12 +993,7 @@ local function premise_branches(st)
     local kind = bucket.kind
     local resolver = kind and kind.resolve_premises
     if resolver then
-      local ps = {}
-      for i = 1, #(bucket.indices or {}) do
-        local p = st.premises[bucket.indices[i]]
-        if p then ps[#ps + 1] = p end
-      end
-      table.sort(ps, function(a, b) return (a.id or 0) < (b.id or 0) end)
+      local ps = bucket.premises or {}
       local sols = resolver(bucket.resource, ps, ctx) or {}
       for i = 1, #sols do
         branches[#branches + 1] = { kind = 'premise_solution', solution = sols[i] }
@@ -849,12 +1003,19 @@ local function premise_branches(st)
   return branches
 end
 
-local function partner_branches(st)
-  local branches = {}
+local function sorted_pending_ids(pending)
   local ids = {}
-  for id, _ in pairs(st.pending) do ids[#ids + 1] = id end
+  for id, _ in pairs(pending or {}) do ids[#ids + 1] = id end
   table.sort(ids)
-  for _, id in ipairs(ids) do
+  return ids
+end
+
+local function partner_branches(st)
+  if counters_enabled then count('branches.partner') end
+  local branches = {}
+  local ids = st.pending_ids or sorted_pending_ids(st.pending)
+  for i = 1, #ids do
+    local id = ids[i]
     if not st.selected[id] then branches[#branches + 1] = { kind = 'partner', id = id } end
   end
   return branches
@@ -867,7 +1028,7 @@ local function apply_branch(st, branch)
     return apply_premise_solution(st, branch.solution)
   elseif branch.kind == 'partner' then
     st:select_root(branch.id)
-    st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = {}, env = Resources.new_env(nil, st.capture), attempt = st.pending[branch.id].attempt })
+    st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = nil, env = Resources.new_env(nil, st.capture), attempt = st.pending[branch.id].attempt })
     return st
   else
     error('unknown search branch: ' .. tostring(branch.kind))
@@ -880,12 +1041,17 @@ local search_state
 -- All search paths use this helper so cursor suspension and backtracking obey
 -- the same rollback discipline.
 local function try_branch(st, branch, depth, charge_kind)
+  if counters_enabled then count('branch.try') end
   if charge_kind and st.charge then st:charge(charge_kind) end
   local mark = st:mark()
   apply_branch(st, branch)
   local out = search_state(st, depth + 1)
   if out.tag == 'hit' then return out end
   st:rollback(mark)
+  -- Cached premise buckets are derived from the speculative premise list.
+  -- They are intentionally not trailed, so discard them after any rollback.
+  st.premise_index = nil
+  st.premise_buckets = nil
   return out
 end
 
@@ -906,6 +1072,7 @@ local function search_or_else(st, depth)
 end
 
 search_state = function(st, depth)
+  if counters_enabled then count('search.state') end
   if depth > 800 then return Outcome.unknown({ { kind = 'budget' } }, 'budget') end
   if st.conflict then return st.outcome or Outcome.unknown(nil, st.conflict_reason) end
 
@@ -951,6 +1118,7 @@ function Solver.new(rt, pending)
   local self = setmetatable({
     rt = rt,
     pending = pending or {},
+    pending_ids = sorted_pending_ids(pending or {}),
     waits = {},
     capture = Capture.none(),
     observer = nil,
@@ -962,6 +1130,7 @@ function Solver.new(rt, pending)
   return self
 end
 function Solver:charge(kind)
+  if counters_enabled then count('charge.' .. tostring(kind)) end
   if self.cursor and self.cursor.charge then self.cursor:charge(kind) end
 end
 
@@ -973,7 +1142,7 @@ end
 local function local_nonlocal_kind(op)
   if type(op) ~= 'table' then return true end
   local k = op.kind
-  if k == 'always' or k == 'bind' or k == 'wrap' or k == 'guard' then return false end
+  if k == 'always' or k == 'bind' or k == 'map' or k == 'wrap' or k == 'guard' then return false end
   return true
 end
 
@@ -986,7 +1155,7 @@ local function op_summary(op)
   local summary
   if k == 'always' then
     summary = { may_start_local = true, static_local = true }
-  elseif k == 'wrap' then
+  elseif k == 'wrap' or k == 'map' then
     local inner = op_summary(op_inner(op))
     summary = {
       may_start_local = true,
@@ -1001,6 +1170,20 @@ local function op_summary(op)
     -- A guard is search-phase construction.  It may produce a local proof or a
     -- genuine net premise, so it can enter the corridor but is never static.
     summary = { may_start_local = true, static_local = false }
+  elseif k == 'prim' and op.prim == 'resource' then
+    local rs = Resources.primitive_summary(op) or {}
+    summary = {
+      may_start_local = false,
+      static_local = false,
+      primitive = true,
+      resources = rs.resources == true,
+      endpoints = rs.endpoints == true,
+      dynamic = rs.dynamic == true,
+      reads = rs.reads == true,
+      writes = rs.writes == true,
+      closed = rs.closed == true,
+      needs_overlay = rs.needs_overlay == true,
+    }
   else
     summary = { may_start_local = false, static_local = false }
   end
@@ -1021,13 +1204,15 @@ local LOCAL_NEEDS_NET = 'needs-net' -- reduction reached a real proof-net premis
 -- rendezvous, product, choice, or absence question, the same task is passed back
 -- to general search so callbacks already run are not repeated.
 local function reduce_local_task(solver, task)
+  if counters_enabled then count('local.reduce') end
   local st = { rt = solver.rt }
   local res = nil
 
   local function finish_result()
     while true do
       if solver.charge then solver:charge('local-frame') end
-      local frame = table.remove(task.stack)
+      local frame
+    frame, task.stack = stack_pop(task.stack)
       if not frame then return LOCAL_DONE, res end
       if frame.kind == 'bind' then
         local next_op = call_callback(st, 'bind', frame.fn, unpack_(res.pack, 1, res.pack.n))
@@ -1035,6 +1220,8 @@ local function reduce_local_task(solver, task)
         task.op = next_op
         res = nil
         return LOCAL_CONTINUE
+      elseif frame.kind == 'map' then
+        res.pack = pack_(call_callback(st, 'map', frame.fn, unpack_(res.pack, 1, res.pack.n)))
       elseif frame.kind == 'wrap' then
         res.wraps[#res.wraps + 1] = frame.fn
       else
@@ -1060,10 +1247,13 @@ local function reduce_local_task(solver, task)
         return status, out
       end
     elseif k == 'bind' then
-      task.stack[#task.stack + 1] = { kind = 'bind', fn = op.fn }
+      task.stack = stack_push(task.stack, { kind = 'bind', fn = op.fn })
+      task.op = op_inner(op)
+    elseif k == 'map' then
+      task.stack = stack_push(task.stack, { kind = 'map', fn = op.fn })
       task.op = op_inner(op)
     elseif k == 'wrap' then
-      task.stack[#task.stack + 1] = { kind = 'wrap', fn = op.fn }
+      task.stack = stack_push(task.stack, { kind = 'wrap', fn = op.fn })
       task.op = op_inner(op)
     elseif k == 'guard' then
       local cache = task.attempt and task.attempt.guard_cache
@@ -1099,7 +1289,7 @@ function Solver:find_local_or_out_from(id)
   local task = {
     root_id = id,
     op = p.op,
-    stack = {},
+    stack = nil,
     env = nil,
     attempt = p.attempt,
   }
@@ -1138,9 +1328,8 @@ function Solver:find_from(id)
 end
 
 function Solver:find_commit_outcome()
-  local ids = {}
-  for id, _ in pairs(self.pending) do ids[#ids + 1] = id end
-  table.sort(ids)
+  if counters_enabled then count('solver.find_commit_outcome') end
+  local ids = self.pending_ids or sorted_pending_ids(self.pending)
 
   if #ids == 1 then
     self:charge('root-scan')

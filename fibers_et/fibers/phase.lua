@@ -1,15 +1,18 @@
 -- Phase: prototype rhythmic lifetime boundary.
 --
 -- A Phase cycle is a small compound over Scope.  Each named phase has a Scope
--- interval.  Cross-phase custody movement and authority borrowing must be
--- declared on an edge before they can commit.  This keeps phase order from
--- being mere scheduler order: values cross phase boundaries only through named
--- obligations or authority grants.
+-- interval.  Cross-phase movement is explicit:
+--   * carry(label) permits custody movement
+--   * borrow(label) permits authority borrowing
+--   * fact(label) permits fact propagation
+-- Labels are declared on edges and supplied at the crossing site.  Phase does
+-- not infer labels from records or metadata.
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Scope = require('fibers.scope')
 local Protected = require('fibers.kernel.protected')
+local Keyed = require('fibers.atoms.keyed')
 
 local Phase = {}
 Phase.__index = Phase
@@ -24,28 +27,14 @@ local function is_scope(x) return type(x) == 'table' and x._fibers_scope == true
 local function pack(...) return { n = select('#', ...), ... } end
 local unpack_ = table.unpack or unpack
 
-local function item_kind(item)
-  return item and (item._fibers_obligation_kind or item._fibers_scope_kind or item._fibers_kind_name or item._fibers_id and 'obligation' or nil)
-end
-
-local function edge_label_from_record(item, record, opts)
-  opts = opts or {}
+local function crossing_label(opts, method)
   if type(opts) == 'string' then return opts end
-  if opts.label ~= nil then return opts.label end
-  if record then
-    if record.role ~= nil then return record.role end
-    if type(record.meta) == 'table' then
-      if record.meta.label ~= nil then return record.meta.label end
-      if record.meta.kind ~= nil then return record.meta.kind end
-      if record.meta.role ~= nil then return record.meta.role end
-    end
-  end
-  return item_kind(item)
+  if type(opts) == 'table' and opts.label ~= nil then return opts.label end
+  error(method .. ' requires an explicit crossing label', 3)
 end
 
 local function set_has(t, label)
-  if not t then return false end
-  return t['*'] == true or (label ~= nil and t[label] == true)
+  return t['*'] == true or t[label] == true
 end
 
 local function edge_for(self, from_name, to_name)
@@ -64,6 +53,7 @@ function Phase.new(name, opts)
     order = {},
     declared = {},
     scopes = {},
+    facts = {},
     edges = {},
     _fibers_id = id,
     _fibers_phase = true,
@@ -89,6 +79,8 @@ function Phase:edge(from_name, to_name, opts)
     carry_set = {},
     borrow_labels = {},
     borrow_set = {},
+    fact_labels = {},
+    fact_set = {},
     opts = opts or {},
   }, Edge)
   self.edges[from_name] = self.edges[from_name] or {}
@@ -109,6 +101,14 @@ function Edge:borrow(label)
   if type(label) ~= 'string' then error('Edge:borrow expects a label', 2) end
   self.borrow_labels[#self.borrow_labels + 1] = label
   self.borrow_set[label] = true
+  return self
+end
+
+function Edge:fact(label)
+  if label == nil then label = '*' end
+  if type(label) ~= 'string' then error('Edge:fact expects a label', 2) end
+  self.fact_labels[#self.fact_labels + 1] = label
+  self.fact_set[label] = true
   return self
 end
 
@@ -136,22 +136,51 @@ function Phase:scope(name, opts)
   return scope
 end
 
-function Phase:allows_move_op(item, from_name, to_name, opts)
-  local edge = edge_for(self, from_name, to_name)
-  if not edge then return Op.always(false, nil) end
-  return self:scope(from_name):record_op(item):map(function(record)
-    local label = edge_label_from_record(item, record, opts)
-    return set_has(edge.carry_set, label), label
-  end)
+function Phase:facts_for(name)
+  if type(name) ~= 'string' then error('Phase:facts_for expects a phase name', 2) end
+  self:phase(name)
+  local facts = self.facts[name]
+  if not facts then
+    facts = Keyed.new({}, (self.name or 'phase') .. ':' .. name .. ':facts')
+    self.facts[name] = facts
+  end
+  return facts
 end
 
-function Phase:allows_borrow_op(item, from_name, to_name, opts)
+function Phase:put_fact_op(name, label, value)
+  if type(label) ~= 'string' then error('Phase:put_fact_op expects a fact label', 2) end
+  return self:facts_for(name):put_op(label, value)
+end
+
+function Phase:get_fact_op(name, label)
+  if type(label) ~= 'string' then error('Phase:get_fact_op expects a fact label', 2) end
+  return self:facts_for(name):get_op(label)
+end
+
+function Phase:peek_fact_op(name, label)
+  if type(label) ~= 'string' then error('Phase:peek_fact_op expects a fact label', 2) end
+  return self:facts_for(name):peek_op(label)
+end
+
+function Phase:allows_move_op(_item, from_name, to_name, opts)
   local edge = edge_for(self, from_name, to_name)
   if not edge then return Op.always(false, nil) end
-  return self:scope(from_name):record_op(item):map(function(record)
-    local label = edge_label_from_record(item, record, opts)
-    return set_has(edge.borrow_set, label), label
-  end)
+  local label = crossing_label(opts, 'Phase:allows_move_op')
+  return Op.always(set_has(edge.carry_set, label), label)
+end
+
+function Phase:allows_borrow_op(_item, from_name, to_name, opts)
+  local edge = edge_for(self, from_name, to_name)
+  if not edge then return Op.always(false, nil) end
+  local label = crossing_label(opts, 'Phase:allows_borrow_op')
+  return Op.always(set_has(edge.borrow_set, label), label)
+end
+
+function Phase:allows_fact_op(label, from_name, to_name)
+  if type(label) ~= 'string' then error('Phase:allows_fact_op expects a fact label', 2) end
+  local edge = edge_for(self, from_name, to_name)
+  if not edge then return Op.always(false, label) end
+  return Op.always(set_has(edge.fact_set, label), label)
 end
 
 function Phase:move_op(item, from_name, to_name, opts)
@@ -162,11 +191,21 @@ function Phase:move_op(item, from_name, to_name, opts)
 end
 
 function Phase:borrow_op(from_name, item, to_name, rights, opts)
-  opts = opts or {}
-  return self:allows_borrow_op(item, from_name, to_name, opts):and_then(function(ok)
+  local label = crossing_label(opts, 'Phase:borrow_op')
+  local borrow_opts = type(opts) == 'table' and opts or { label = label }
+  return self:allows_borrow_op(item, from_name, to_name, label):and_then(function(ok)
     if not ok then return Op.never() end
-    opts.borrower = self:scope(to_name)
-    return self:scope(from_name):borrow_op(item, rights, opts)
+    borrow_opts.borrower = self:scope(to_name)
+    return self:scope(from_name):borrow_op(item, rights, borrow_opts)
+  end)
+end
+
+function Phase:carry_fact_op(label, from_name, to_name)
+  return self:allows_fact_op(label, from_name, to_name):and_then(function(ok)
+    if not ok then return Op.never() end
+    return self:facts_for(from_name):get_op(label):and_then(function(value)
+      return self:facts_for(to_name):put_op(label, value):map(function() return value end)
+    end)
   end)
 end
 
@@ -183,16 +222,11 @@ function Phase:run(name, fn, opts)
   -- a fresh interval; obligations intentionally carried forward must already
   -- have crossed through a declared edge to another open phase scope.
   self.scopes[name] = nil
+  self.facts[name] = nil
   if not r[1] then error(r[2], 0) end
   return unpack_(r, 2, r.n)
 end
 
-function Phase:open_scopes()
-  local out = {}
-  for name, scope in pairs(self.scopes) do out[#out + 1] = { name = name, scope = scope } end
-  table.sort(out, function(a, b) return a.name < b.name end)
-  return out
-end
 
 Phase.Edge = Edge
 return Phase

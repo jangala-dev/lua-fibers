@@ -38,6 +38,26 @@ local function require_record_phase(record)
   return phase
 end
 
+local function rights_allow(rights, right)
+  if right == nil then return true end
+  if rights == nil then return true end
+  if rights == '*' then return true end
+  if type(rights) == 'string' then return rights == right or rights == '*' end
+  if type(rights) ~= 'table' then return false end
+  if rights[right] == true or rights['*'] == true then return true end
+  for i = 1, #rights do
+    if rights[i] == right or rights[i] == '*' then return true end
+  end
+  return false
+end
+
+local function record_allows(record, right)
+  if not record then return false end
+  local rights = record.rights
+  if rights == nil and type(record.meta) == 'table' then rights = record.meta.rights end
+  return rights_allow(rights, right)
+end
+
 
 -- Advanced Region ownership admission specifications.
 --
@@ -582,6 +602,17 @@ local function resolve_claim_candidate(region, claim, resolution, ctx)
   return nil
 end
 
+local function authorise_candidate(region, item, right, allow_claimed, ctx)
+  local current_owner = Resource.project(ctx, item, 'owner')
+  if current_owner ~= region then return false, nil end
+  local record = record_for(ctx, region, item)
+  if not record then return false, nil end
+  local phase = require_record_phase(record)
+  if phase ~= Phase.live and not (allow_claimed and phase == Phase.claimed) then return false, phase end
+  if not record_allows(record, right) then return false, phase end
+  return true, phase
+end
+
 local function move_candidate(region, item, to_region, ctx)
   if not to_region or to_region._fibers_kind ~= RegionKind then return nil end
   local current_owner = Resource.project(ctx, item, 'owner')
@@ -651,6 +682,12 @@ function RegionKind.eval(region, payload, ctx)
     local c = Proposal.new(OpPack(not is_sealed(ctx, region)))
     read_region(c, region)
     return Result.ready(c)
+  elseif op == 'authorise' then
+    local ok_auth, phase = authorise_candidate(region, payload.item, payload.right, payload.allow_claimed, ctx)
+    local c = Proposal.new(OpPack(ok_auth and true or false, phase))
+    read_region(c, region)
+    if payload.item then read_owned(c, payload.item) end
+    return Result.ready(c)
   elseif op == 'owns' then
     local c = Proposal.new(OpPack(Resource.project(ctx, payload.item, 'owner') == region))
     read_region(c, region); read_owned(c, payload.item)
@@ -716,13 +753,15 @@ function RegionKind.absence(region, payload, ctx)
   elseif op == 'move' then
     observe_payload_item(ctx, payload.item, 'item')
     observe_payload_item(ctx, payload.to_region, 'target-region')
+  elseif op == 'authorise' then
+    observe_payload_item(ctx, payload.item, 'item')
   else
     observe_payload_item(ctx, payload and payload.item, 'item')
   end
   return true
 end
 
-function RegionKind.summary(_payload, out) out.resources = true; out.dynamic = true; out.closed = false end
+function RegionKind.summary(_payload, out) out.resources = true; out.dynamic = true; out.closed = false; out.needs_overlay = true end
 
 function Region.handle(name, fields) return Ownership.handle(name, fields) end
 function Region.owned(item, settle, opts) return Owned.item(item, settle, opts) end
@@ -749,6 +788,10 @@ function Region:resolve_claim_op(claim, resolution) return DefaultOp._resource(s
 function Region:move_op(item, to_region) return DefaultOp._resource(self, RegionKind, { op = 'move', item = item, to_region = to_region }) end
 function Region:seal_op() return DefaultOp._resource(self, RegionKind, { op = 'seal' }) end
 function Region:is_open_op() return DefaultOp._resource(self, RegionKind, { op = 'is_open' }) end
+function Region:authorise_op(item, right, opts)
+  opts = opts or {}
+  return DefaultOp._resource(self, RegionKind, { op = 'authorise', item = item, right = right, allow_claimed = opts.allow_claimed == true })
+end
 function Region:owns_op(item) return DefaultOp._resource(self, RegionKind, { op = 'owns', item = item }) end
 function Region:record_op(item) return DefaultOp._resource(self, RegionKind, { op = 'record', item = item }) end
 function Region:children_op(item) return DefaultOp._resource(self, RegionKind, { op = 'children', item = item }) end

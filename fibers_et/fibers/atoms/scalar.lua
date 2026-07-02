@@ -18,6 +18,19 @@ local OpPack = Op._pack
 local Scalar = {}
 Scalar.__index = Scalar
 
+local WAIT = { _fibers_scalar_wait = true }
+
+local Ready = {}
+function Ready.write(value, ...)
+  return { _fibers_scalar_ready = true, writes = true, value = value, pack = OpPack(...) }
+end
+function Ready.same(...)
+  return { _fibers_scalar_ready = true, writes = false, pack = OpPack(...) }
+end
+
+Scalar.Wait = WAIT
+Scalar.Ready = Ready
+
 local ScalarKind = { name = 'scalar' }
 local next_id = 0
 
@@ -30,18 +43,40 @@ local function copy_updates(updates)
   return out
 end
 
+local function update_id(u) return (u and u.id) or 0 end
+
+local function update_copy(u) return { id = u.id, value = u.value } end
+
 local function append_updates(dst, src)
-  if not src then return end
-  dst.updates = dst.updates or {}
-  for i = 1, #src do dst.updates[#dst.updates + 1] = { id = src[i].id, value = src[i].value } end
-  table.sort(dst.updates, function(a, b) return (a.id or 0) < (b.id or 0) end)
+  if not src or #src == 0 then return end
+  local cur = dst.updates
+  if not cur or #cur == 0 then
+    dst.updates = copy_updates(src)
+    return
+  end
+
+  -- Preserve the invariant that every update list is ordered by transition id.
+  -- This keeps projection as a straight fold and avoids repairing order with
+  -- table.sort on every merge/projection.
+  local out, i, j = {}, 1, 1
+  while i <= #cur and j <= #src do
+    if update_id(cur[i]) <= update_id(src[j]) then
+      out[#out + 1] = cur[i]
+      i = i + 1
+    else
+      out[#out + 1] = update_copy(src[j])
+      j = j + 1
+    end
+  end
+  while i <= #cur do out[#out + 1] = cur[i]; i = i + 1 end
+  while j <= #src do out[#out + 1] = update_copy(src[j]); j = j + 1 end
+  dst.updates = out
 end
 
 local function projected_value(scalar, rec)
   local value = scalar.value
   if rec and rec.has_write then value = rec.write end
   if rec and rec.updates then
-    table.sort(rec.updates, function(a, b) return (a.id or 0) < (b.id or 0) end)
     for i = 1, #rec.updates do value = rec.updates[i].value end
   end
   return value
@@ -75,8 +110,7 @@ end
 
 local function update_record(c, scalar, value, id, version)
   local rec = read_record(c, scalar, version)
-  rec.updates = rec.updates or {}
-  rec.updates[#rec.updates + 1] = { id = id or 0, value = value }
+  append_updates(rec, { { id = id or 0, value = value } })
   return rec
 end
 
@@ -202,23 +236,79 @@ local function update_context(ctx)
   return { now = function() return ctx and ctx.now and ctx:now() or 0 end }
 end
 
-local function run_update(fn, value, ctx)
-  if type(fn) ~= 'function' then return nil, nil, 'scalar-update-not-function' end
-  local packed = OpPack(fn(value, update_context(ctx)))
-  if (packed.n or #packed) == 0 then return nil, nil, 'scalar-update-returned-no-value' end
-  return packed[1], pack_tail(packed), nil
+local function is_wait_result(x)
+  return x == WAIT or (type(x) == 'table' and x._fibers_scalar_wait == true)
 end
 
-local function run_select(fn, value, ctx)
-  if type(fn) ~= 'function' then return nil, nil, 'scalar-select-not-function' end
-  local packed = OpPack(fn(value, update_context(ctx)))
-  if (packed.n or #packed) == 0 or packed[1] == nil then return nil, nil, nil end
-  return packed[1], pack_tail(packed), nil
+local function is_ready_result(x)
+  return type(x) == 'table' and x._fibers_scalar_ready == true
 end
 
-local function select_succeeds(fn, value, ctx)
-  local new_value = run_select(fn, value, ctx)
-  return new_value ~= nil
+local function packed_result_from_ready(r)
+  return r.pack or OpPack()
+end
+
+local function legacy_transition_result(mode, packed)
+  local n = packed and (packed.n or #packed) or 0
+  if mode == 'update' then
+    if n == 0 then return nil, 'scalar-update-returned-no-value' end
+    return { ready = true, writes = true, value = packed[1], pack = pack_tail(packed) }, nil
+  elseif mode == 'select' then
+    if n == 0 or packed[1] == nil then return { ready = false }, nil end
+    return { ready = true, writes = true, value = packed[1], pack = pack_tail(packed) }, nil
+  elseif mode == 'query' then
+    if n == 0 or packed[1] == nil then return { ready = false }, nil end
+    return { ready = true, writes = false, pack = packed }, nil
+  end
+  return nil, 'unknown-scalar-transition-mode'
+end
+
+local function parse_transition_result(mode, packed)
+  local first = packed and packed[1]
+  if (packed and (packed.n or #packed) == 1) and is_wait_result(first) then
+    return { ready = false }, nil
+  end
+  if is_ready_result(first) then
+    if mode == 'query' and first.writes then return nil, 'scalar-query-returned-write' end
+    return {
+      ready = true,
+      writes = first.writes == true,
+      value = first.value,
+      pack = packed_result_from_ready(first),
+    }, nil
+  end
+  return legacy_transition_result(mode, packed)
+end
+
+local function run_transition(req, mode, value, ctx)
+  local fn = req and req.fn
+  if type(fn) ~= 'function' then return nil, 'scalar-' .. tostring(mode) .. '-not-function' end
+  local packed = OpPack(fn(value, update_context(ctx)))
+  return parse_transition_result(mode, packed)
+end
+
+local function run_update(req, value, ctx)
+  return run_transition(req, 'update', value, ctx)
+end
+
+local function run_select(req, value, ctx)
+  return run_transition(req, 'select', value, ctx)
+end
+
+local function run_query(req, value, ctx)
+  return run_transition(req, 'query', value, ctx)
+end
+
+local function ready_probe(req, mode, value, ctx)
+  local transition = req and req.transition
+  if transition and type(transition.ready) == 'function' then
+    local out = transition.ready(value, req.payload or {}, update_context(ctx))
+    if out == nil or out == false or is_wait_result(out) then return false end
+    return true
+  end
+  local r, err = run_transition(req, mode, value, ctx)
+  if err then return false end
+  return r and r.ready == true
 end
 
 local function scalar_record_changed(rec)
@@ -229,11 +319,19 @@ local function scalar_apply_record(value, rec)
   return projected_value({ value = value, version = 0 }, rec)
 end
 
-local function projected_for_select(scalar, fn, views, ctx)
+local function projected_for_select(scalar, req, views, ctx)
   return Premise.project_selective(scalar.value, views, {
     changed = scalar_record_changed,
     apply = scalar_apply_record,
-    succeeds = function(value) return select_succeeds(fn, value, ctx) end,
+    succeeds = function(value) return ready_probe(req, 'select', value, ctx) end,
+  })
+end
+
+local function projected_for_query(scalar, req, views, ctx)
+  return Premise.project_selective(scalar.value, views, {
+    changed = scalar_record_changed,
+    apply = scalar_apply_record,
+    succeeds = function(value) return ready_probe(req, 'query', value, ctx) end,
   })
 end
 
@@ -270,6 +368,9 @@ function ScalarKind.eval(scalar, payload, ctx)
   elseif op == 'select' then
     local wait = Wait.resource('scalar', scalar._fibers_id, scalar, { op = 'select' })
     return Result.premise({ role = 'select', fn = payload.fn, transition = payload.transition, payload = payload.payload }, wait)
+  elseif op == 'query' then
+    local wait = Wait.resource('scalar', scalar._fibers_id, scalar, { op = 'query' })
+    return Result.premise({ role = 'query', fn = payload.fn, transition = payload.transition, payload = payload.payload }, wait)
   elseif op == 'changed' then
     local observed = observe_version(ctx, scalar)
     local version = Resource.project(ctx, scalar, 'version')
@@ -319,40 +420,155 @@ end
 local function update_solution(scalar, premise, ctx)
   local views = ctx.resource_record_views and ctx:resource_record_views(scalar, { premise }) or nil
   local current = projected_value_from_views(scalar, views)
-  local new_value, results, err = run_update(premise.request.fn, current, ctx)
-  if err then return nil, err end
+  local r, err = run_update(premise.request, current, ctx)
+  if err or not r or not r.ready then return nil, err end
   local c = Proposal.new(OpPack())
-  local id = transition_update_id(premise)
-  local max_id = max_update_id(views)
-  if max_id and max_id >= id then id = max_id + 0.000001 end
-  update_record(c, scalar, new_value, id, scalar.version or 0)
-  return { ids = { premise.id }, results = { [premise.id] = results }, proposal = c }
+  if r.writes then
+    local id = transition_update_id(premise)
+    local max_id = max_update_id(views)
+    if max_id and max_id >= id then id = max_id + 0.000001 end
+    update_record(c, scalar, r.value, id, scalar.version or 0)
+  else
+    read_record(c, scalar, scalar.version or 0)
+  end
+  return { ids = { premise.id }, results = { [premise.id] = r.pack }, proposal = c }
 end
 
 local function select_solution(scalar, premise, ctx)
   local views = ctx.resource_record_views and ctx:resource_record_views(scalar, { premise }) or nil
-  local current = projected_for_select(scalar, premise.request.fn, views, ctx)
-  local new_value, results, err = run_select(premise.request.fn, current, ctx)
-  if err or new_value == nil then return nil, err end
+  local current = projected_for_select(scalar, premise.request, views, ctx)
+  local r, err = run_select(premise.request, current, ctx)
+  if err or not r or not r.ready then return nil, err end
   local c = Proposal.new(OpPack())
-  local id = transition_update_id(premise)
-  local max_id = max_update_id(views)
-  if max_id and max_id >= id then id = max_id + 0.000001 end
-  update_record(c, scalar, new_value, id, scalar.version or 0)
-  return { ids = { premise.id }, results = { [premise.id] = results }, proposal = c }
+  if r.writes then
+    local id = transition_update_id(premise)
+    local max_id = max_update_id(views)
+    if max_id and max_id >= id then id = max_id + 0.000001 end
+    update_record(c, scalar, r.value, id, scalar.version or 0)
+  else
+    read_record(c, scalar, scalar.version or 0)
+  end
+  return { ids = { premise.id }, results = { [premise.id] = r.pack }, proposal = c }
+end
+
+local function query_solution(scalar, premise, ctx)
+  local views = ctx.resource_record_views and ctx:resource_record_views(scalar, { premise }) or nil
+  local current = projected_for_query(scalar, premise.request, views, ctx)
+  local r, err = run_query(premise.request, current, ctx)
+  if err or not r or not r.ready then return nil, err end
+  local c = Proposal.new(OpPack())
+  read_record(c, scalar, scalar.version or 0)
+  return { ids = { premise.id }, results = { [premise.id] = r.pack }, proposal = c }
+end
+
+local function append_view_list(dst, src)
+  for i = 1, #(src or {}) do dst[#dst + 1] = src[i] end
+end
+
+local function batch_view(prev, cur, rec, ctx)
+  local allow = true
+  if ctx and ctx.compatible and not ctx:compatible(prev, cur) then allow = false end
+  return { rec = rec, relation = 'sibling', allow_internal = allow }
+end
+
+local function current_for_request(scalar, req, role, views, ctx)
+  if role == 'select' then return projected_for_select(scalar, req, views, ctx) end
+  if role == 'query' then return projected_for_query(scalar, req, views, ctx) end
+  return projected_value_from_views(scalar, views)
+end
+
+local function run_for_role(role, req, current, ctx)
+  if role == 'update' then return run_update(req, current, ctx) end
+  if role == 'select' then return run_select(req, current, ctx) end
+  if role == 'query' then return run_query(req, current, ctx) end
+  return nil, 'unknown-scalar-transition-role'
+end
+
+local function batch_transition_solution(scalar, transitions, ctx)
+  -- The batch path has real bookkeeping cost.  It pays only when at least
+  -- three same-Scalar transition premises are available; for the common
+  -- two-premise handoff, the ordinary one-step resolver is faster in Lua.
+  if #transitions < 3 then return nil end
+
+  local accepted, results = {}, {}
+  local batch_records = {}
+  local any_write = false
+  local final_value = nil
+  local next_id = nil
+
+  for i = 1, #transitions do
+    local p = transitions[i].premise
+    local role = transitions[i].kind
+    local base_views = ctx.resource_record_views and ctx:resource_record_views(scalar, { p }) or nil
+    local views = {}
+    append_view_list(views, base_views)
+    for j = 1, #batch_records do
+      local br = batch_records[j]
+      views[#views + 1] = batch_view(br.premise, p, br.rec, ctx)
+    end
+
+    local current = current_for_request(scalar, p.request, role, views, ctx)
+    local r, err = run_for_role(role, p.request, current, ctx)
+    if err then return nil, err end
+    if r and r.ready then
+      accepted[#accepted + 1] = p
+      results[p.id] = r.pack
+      if r.writes then
+        any_write = true
+        final_value = r.value
+        local id = transition_update_id(p)
+        if not next_id then
+          local max_id = max_update_id(base_views)
+          if max_id and max_id >= id then id = max_id + 0.000001 end
+        elseif next_id >= id then
+          id = next_id + 0.000001
+        end
+        next_id = id
+        batch_records[#batch_records + 1] = {
+          premise = p,
+          rec = { kind = ScalarKind, read = scalar.version or 0, updates = { { id = id, value = r.value } } },
+        }
+      end
+    end
+  end
+
+  if #accepted < 2 then return nil end
+  local c = Proposal.new(OpPack())
+  if any_write then
+    update_record(c, scalar, final_value, next_id, scalar.version or 0)
+  else
+    read_record(c, scalar, scalar.version or 0)
+  end
+  local ids = {}
+  for i = 1, #accepted do ids[i] = accepted[i].id end
+  return { ids = ids, results = results, proposal = c }
 end
 
 function ScalarKind.resolve_premises(scalar, premises, ctx)
-  local expects, updates, selects = {}, {}, {}
-  for i = 1, #(premises or {}) do
+  if #premises == 1 then
+    local p = premises[1]
+    local role = p.request and p.request.role
+    local sol
+    if role == 'expect' then sol = allocate(scalar, { p }, ctx)
+    elseif role == 'update' then sol = update_solution(scalar, p, ctx)
+    elseif role == 'select' then sol = select_solution(scalar, p, ctx)
+    elseif role == 'query' then sol = query_solution(scalar, p, ctx) end
+    if sol then return { sol } end
+    return {}
+  end
+
+  local expects, updates, selects, queries = {}, {}, {}, {}
+  for i = 1, #premises do
     local p = premises[i]
     if p.request and p.request.role == 'expect' then expects[#expects + 1] = p
     elseif p.request and p.request.role == 'update' then updates[#updates + 1] = p
-    elseif p.request and p.request.role == 'select' then selects[#selects + 1] = p end
+    elseif p.request and p.request.role == 'select' then selects[#selects + 1] = p
+    elseif p.request and p.request.role == 'query' then queries[#queries + 1] = p end
   end
   Premise.sort_by_id(expects)
   table.sort(updates, function(a, b) return transition_update_id(a) < transition_update_id(b) end)
   table.sort(selects, function(a, b) return transition_update_id(a) < transition_update_id(b) end)
+  table.sort(queries, function(a, b) return transition_update_id(a) < transition_update_id(b) end)
   local out = {}
   if #expects > 0 and Premise.pairwise_compatible(expects, ctx) then local sol = allocate(scalar, expects, ctx); if sol then out[#out + 1] = sol end end
   for i = 1, #expects do local sol = allocate(scalar, { expects[i] }, ctx); if sol then out[#out + 1] = sol end end
@@ -363,11 +579,21 @@ function ScalarKind.resolve_premises(scalar, premises, ctx)
   local transitions = {}
   for i = 1, #updates do transitions[#transitions + 1] = { kind = 'update', premise = updates[i] } end
   for i = 1, #selects do transitions[#transitions + 1] = { kind = 'select', premise = selects[i] } end
+  for i = 1, #queries do transitions[#transitions + 1] = { kind = 'query', premise = queries[i] } end
   table.sort(transitions, function(a, b) return transition_update_id(a.premise) < transition_update_id(b.premise) end)
-  if #transitions > 0 then
-    local t = transitions[1]
-    local sol = t.kind == 'update' and update_solution(scalar, t.premise, ctx) or select_solution(scalar, t.premise, ctx)
-    if sol then out[#out + 1] = sol end
+  local batch_sol, batch_err = batch_transition_solution(scalar, transitions, ctx)
+  if batch_err then return out end
+  if batch_sol then out[#out + 1] = batch_sol end
+  for i = 1, #transitions do
+    local t = transitions[i]
+    local sol
+    if t.kind == 'update' then sol = update_solution(scalar, t.premise, ctx)
+    elseif t.kind == 'select' then sol = select_solution(scalar, t.premise, ctx)
+    else sol = query_solution(scalar, t.premise, ctx) end
+    if sol then
+      out[#out + 1] = sol
+      break
+    end
   end
   return out
 end
@@ -380,8 +606,11 @@ function ScalarKind.absence_premises(scalar, premises, ctx)
     if p.request.role == 'expect' then
       if equal(projected_for_expect(scalar, p.request.value, views), p.request.value) then ok = false end
     elseif p.request.role == 'select' then
-      local current = projected_for_select(scalar, p.request.fn, views, ctx)
-      if select_succeeds(p.request.fn, current, ctx) then ok = false end
+      local current = projected_for_select(scalar, p.request, views, ctx)
+      if ready_probe(p.request, 'select', current, ctx) then ok = false end
+    elseif p.request.role == 'query' then
+      local current = projected_for_query(scalar, p.request, views, ctx)
+      if ready_probe(p.request, 'query', current, ctx) then ok = false end
     else
       ok = false
     end
@@ -400,6 +629,8 @@ function ScalarKind.absence(scalar, payload, ctx)
     return ScalarKind.absence_premises(scalar, { { request = { role = 'expect', value = payload.value } } }, ctx)
   elseif payload and payload.op == 'select' then
     return ScalarKind.absence_premises(scalar, { { request = { role = 'select', fn = payload.fn } } }, ctx)
+  elseif payload and payload.op == 'query' then
+    return ScalarKind.absence_premises(scalar, { { request = { role = 'query', fn = payload.fn } } }, ctx)
   elseif payload and payload.op == 'changed' then
     local version = observe_version(ctx, scalar)
     if version == payload.version then
@@ -415,9 +646,14 @@ function ScalarKind.summary(payload, out)
   out.resources = true
   out.closed = false
   local op = payload and payload.op
-  if op == 'read' or op == 'snapshot' or op == 'changed' or op == 'expect' or op == 'update' or op == 'select' then out.reads = true end
+  if op == 'read' or op == 'snapshot' or op == 'changed' or op == 'expect' or op == 'update' or op == 'select' or op == 'query' then out.reads = true end
   if op == 'write' or op == 'update' or op == 'select' then out.writes = true end
-  if op == 'changed' or op == 'expect' or op == 'update' or op == 'select' then out.dynamic = true end
+  if op == 'changed' or op == 'expect' or op == 'update' or op == 'select' or op == 'query' then out.dynamic = true end
+
+  -- Eval-time projection is needed only for operations that consult the current
+  -- transactional overlay directly.  Premise operations inspect overlays later
+  -- through the premise resolver context.
+  out.needs_overlay = (op == 'read' or op == 'snapshot' or op == 'changed')
 end
 
 local function transition_name(spec)
@@ -433,15 +669,18 @@ end
 
 function Scalar.transition(spec)
   if type(spec) ~= 'table' then error('Scalar.transition expects a table', 2) end
-  if type(spec.step) ~= 'function' then error('Scalar.transition requires step', 2) end
+  if type(spec.step) ~= 'function' and type(spec.apply) ~= 'function' then error('Scalar.transition requires step or apply', 2) end
+  if spec.ready ~= nil and type(spec.ready) ~= 'function' then error('Scalar.transition ready must be a function', 2) end
   if spec.validate ~= nil and type(spec.validate) ~= 'function' then error('Scalar.transition validate must be a function', 2) end
   local mode = spec.mode or 'update'
-  if mode ~= 'update' and mode ~= 'select' then error('scalar transition mode must be update or select', 2) end
+  if mode ~= 'update' and mode ~= 'select' and mode ~= 'query' then error('scalar transition mode must be update, select, or query', 2) end
   return {
     _fibers_scalar_transition = true,
     name = spec.name,
     mode = mode,
-    step = spec.step,
+    step = spec.step or spec.apply,
+    apply = spec.apply or spec.step,
+    ready = spec.ready,
     validate = spec.validate,
     order = spec.order,
   }
@@ -467,7 +706,7 @@ end
 
 local function transition_fn(transition, payload)
   return function(state, ctx)
-    return transition.step(state, payload, ctx)
+    return (transition.apply or transition.step)(state, payload, ctx)
   end
 end
 
@@ -498,6 +737,8 @@ function Scalar:transition_op(transition, payload)
   local fn = transition_fn(transition, payload)
   if transition.mode == 'select' then
     return Op._resource(self, ScalarKind, { op = 'select', fn = fn, transition = transition, payload = payload })
+  elseif transition.mode == 'query' then
+    return Op._resource(self, ScalarKind, { op = 'query', fn = fn, transition = transition, payload = payload })
   end
   return Op._resource(self, ScalarKind, { op = 'update', fn = fn, transition = transition, payload = payload })
 end
