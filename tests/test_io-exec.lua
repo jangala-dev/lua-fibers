@@ -36,6 +36,46 @@ local function warm_up_exec_backend()
 	end)
 end
 
+
+local function file_exists(path)
+	local f = io.open(path, 'r')
+	if f then
+		f:close()
+		return true
+	end
+	return false
+end
+
+local function read_file(path)
+	local f = io.open(path, 'r')
+	if not f then
+		return nil
+	end
+	local s = f:read('*a')
+	f:close()
+	return s
+end
+
+local function pid_alive(pid)
+	pid = tonumber(pid)
+	if not pid then
+		return false
+	end
+	local ok, _ = os.execute(('kill -0 %d >/dev/null 2>&1'):format(pid))
+	return ok == true or ok == 0
+end
+
+local function wait_until(pred, timeout)
+	local deadline = fibers.now() + timeout
+	while fibers.now() < deadline do
+		if pred() then
+			return true
+		end
+		fibers.perform(sleep.sleep_op(0.05))
+	end
+	return pred()
+end
+
 local function shell_capture(cmd)
 	local p, perr = io.popen(cmd, 'r')
 	assert(p, 'io.popen failed: ' .. tostring(perr))
@@ -373,6 +413,91 @@ local function shutdown_long_running_process()
 	)
 end
 
+
+-- pdeathsig: accepts signal names where supported, rejects invalid names before spawn.
+local function pdeathsig_flag_validation()
+	print('running: pdeathsig_flag_validation')
+
+	local bad = exec.command {
+		'sh', '-c', 'exit 0',
+		stdin  = 'null',
+		stdout = 'null',
+		stderr = 'null',
+		flags  = { pdeathsig = 'NO_SUCH_SIGNAL' },
+	}
+	local status_bad, _, _, err_bad = fibers.perform(bad:run_op())
+	assert(status_bad == 'failed', 'invalid pdeathsig should fail command start')
+	assert(tostring(err_bad):match('flags%.pdeathsig'),
+		'invalid pdeathsig failure should mention flags.pdeathsig: ' .. tostring(err_bad))
+
+	local proc = exec.command {
+		'sh', '-c', 'exit 0',
+		stdin  = 'null',
+		stdout = 'null',
+		stderr = 'null',
+		flags  = { pdeathsig = 'TERM' },
+	}
+	local status, code, sig, err = fibers.perform(proc:run_op())
+	if status == 'failed' and tostring(err):match('pdeathsig is not supported') then
+		print('skipping pdeathsig supported-path assertion: ' .. tostring(err))
+		return
+	end
+	assert(err == nil, 'pdeathsig command failed: ' .. tostring(err))
+	assert(status == 'exited', 'pdeathsig command did not exit normally: ' .. tostring(status))
+	assert(code == 0, 'pdeathsig command exit code: ' .. tostring(code))
+	assert(sig == nil, 'pdeathsig command unexpectedly signalled: ' .. tostring(sig))
+end
+
+-- process_group: shutdown must signal the command's process group, not just
+-- the direct shell child.  The background grandchild ignores TERM, so it is
+-- only reliably removed if the shutdown escalation sends KILL to the group.
+local function process_group_shutdown_kills_grandchild()
+	print('running: process_group_shutdown_kills_grandchild')
+
+	local marker = ('/tmp/lua-fibers-exec-pg-%d-%d'):format(os.time(), math.random(1000000))
+	os.remove(marker)
+
+	local script = [[
+trap '' TERM
+( trap '' TERM; while :; do sleep 1; done ) &
+echo $! > "$1"
+while :; do sleep 1; done
+]]
+
+	local proc = exec.command {
+		'sh', '-c', script, 'sh', marker,
+		stdin  = 'null',
+		stdout = 'pipe',
+		stderr = 'null',
+		flags  = { process_group = true },
+	}
+
+	local out, start_err = proc:stdout_stream()
+	if not out and tostring(start_err):match('process_group is not supported') then
+		print('skipping process_group assertion: ' .. tostring(start_err))
+		os.remove(marker)
+		return
+	end
+	assert(out, 'failed to start process_group command: ' .. tostring(start_err))
+
+	assert(wait_until(function () return file_exists(marker) end, 3.0),
+		'grandchild pid marker was not written')
+	local child_pid = tonumber((read_file(marker) or ''):match('(%d+)'))
+	assert(child_pid, 'could not parse grandchild pid marker')
+	assert(pid_alive(child_pid), 'grandchild is not alive before shutdown')
+
+	local t0 = fibers.now()
+	local status, _, _, err = fibers.perform(proc:shutdown_op(0.15))
+	local t1 = fibers.now()
+	assert((t1 - t0) < 5.0, ('process-group shutdown took too long: %.3fs'):format(t1 - t0))
+	assert(status == 'exited' or status == 'signalled',
+		'process-group command did not reach terminal state: ' .. tostring(status) .. ' err=' .. tostring(err))
+
+	assert(wait_until(function () return not pid_alive(child_pid) end, 2.0),
+		'grandchild remained alive after process-group shutdown: pid=' .. tostring(child_pid))
+	os.remove(marker)
+end
+
 -- 7. Spawning as an Op for CML-shaped code (basic usage).
 local function spawn_op_basic_usage()
 	print('running: spawn_op_basic_usage')
@@ -504,6 +629,8 @@ local function main()
 	wait_op_with_timeout_pattern()
 	completed_commands_detach_scope_finalizers()
 	shutdown_long_running_process()
+	pdeathsig_flag_validation()
+	process_group_shutdown_kills_grandchild()
 	spawn_op_basic_usage()
 	many_short_lived_processes_stress()
 	large_output_output_op_stress()

@@ -28,7 +28,26 @@ local stdio   = require 'fibers.io.exec_backend.stdio'
 local bit = rawget(_G, 'bit') or require 'bit32'
 local jit = rawget(_G, "jit")
 
+local ok_prctl, prctl_mod = pcall(require, 'posix.sys.prctl')
+local ok_ffi, ffi = pcall(require, 'ffi')
+local C
+local have_ffi_prctl = false
+local have_ffi_setpgid = false
+if ok_ffi and ffi then
+	pcall(function ()
+		ffi.cdef [[
+		  typedef int pid_t;
+		  int prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5);
+		  int setpgid(pid_t pid, pid_t pgid);
+		]]
+	end)
+	C = ffi.C
+	have_ffi_prctl = pcall(function () return C.prctl end)
+	have_ffi_setpgid = pcall(function () return C.setpgid end)
+end
+
 local DEV_NULL = '/dev/null'
+local PR_SET_PDEATHSIG = 1
 
 ----------------------------------------------------------------------
 -- Global state for SIGCHLD handling
@@ -125,6 +144,63 @@ local function apply_child_env(env)
 		if ok == nil then
 			must_child(false, err, eno)
 		end
+	end
+end
+
+local function pdeathsig_supported()
+	return (ok_prctl and prctl_mod and type(prctl_mod.prctl) == 'function')
+		or (C and have_ffi_prctl)
+end
+
+local function apply_pdeathsig_child(sig)
+	if ok_prctl and prctl_mod and type(prctl_mod.prctl) == 'function' then
+		local ok, err, eno = prctl_mod.prctl(prctl_mod.PR_SET_PDEATHSIG or PR_SET_PDEATHSIG, sig)
+		if ok == nil or ok == -1 then
+			must_child(false, err, eno)
+		end
+		return
+	end
+
+	if C and have_ffi_prctl then
+		local rc = C.prctl(PR_SET_PDEATHSIG, sig, 0, 0, 0)
+		must_child(rc == 0)
+		return
+	end
+
+	must_child(false)
+end
+
+local function process_group_supported()
+	return type(unistd.setpgid) == 'function'
+		or type(unistd.setpid) == 'function'
+		or (C and have_ffi_setpgid)
+end
+
+local function set_process_group_child()
+	local res, err, eno
+	if type(unistd.setpgid) == 'function' then
+		res, err, eno = unistd.setpgid(0, 0)
+	elseif type(unistd.setpid) == 'function' then
+		res, err, eno = unistd.setpid('p', 0, 0)
+	elseif C and have_ffi_setpgid then
+		res = C.setpgid(0, 0)
+		must_child(res == 0)
+		return
+	else
+		must_child(false)
+	end
+	if res == nil then
+		must_child(false, err, eno)
+	end
+end
+
+local function set_process_group_parent(pid)
+	if type(unistd.setpgid) == 'function' then
+		pcall(unistd.setpgid, pid, pid)
+	elseif type(unistd.setpid) == 'function' then
+		pcall(unistd.setpid, 'p', pid, pid)
+	elseif C and have_ffi_setpgid then
+		pcall(function () C.setpgid(pid, pid) end)
 	end
 end
 
@@ -313,6 +389,10 @@ end
 
 ---@param spec table  -- child-facing spec with *fd fields
 local function child_exec(spec)
+	if spec.flags and spec.flags.pdeathsig then
+		apply_pdeathsig_child(spec.flags.pdeathsig)
+	end
+
 	if spec.cwd then
 		local ok, err, eno = unistd.chdir(spec.cwd)
 		if not ok then
@@ -330,6 +410,8 @@ local function child_exec(spec)
 		if res == nil then
 			must_child(false, err, eno)
 		end
+	elseif spec.flags and spec.flags.process_group then
+		set_process_group_child()
 	end
 
 	if spec.env then
@@ -400,6 +482,13 @@ local function spawn(spec)
 	assert(type(spec.argv) == 'table' and spec.argv[1],
 		'ExecBackend.spawn: spec.argv must be a non-empty array')
 
+	if spec.flags and spec.flags.pdeathsig and not pdeathsig_supported() then
+		return nil, nil, 'flags.pdeathsig is not supported by sigchld exec backend'
+	end
+	if spec.flags and spec.flags.process_group and not process_group_supported() then
+		return nil, nil, 'flags.process_group is not supported by sigchld exec backend'
+	end
+
 	install_self_pipe_and_handler()
 	start_reaper()
 
@@ -421,11 +510,16 @@ local function spawn(spec)
 		child_exec(child_spec)
 	end
 
+	if spec.flags and spec.flags.process_group then
+		set_process_group_parent(pid)
+	end
+
 	-- Parent: child-only fds no longer needed.
 	stdio.close_child_only(child_only, close_fd)
 
 	local state = {
 		pid    = pid,
+		pgid   = (spec.flags and spec.flags.process_group) and pid or nil,
 		exited = false,
 		status = nil,
 		code   = nil,
@@ -458,7 +552,8 @@ end
 
 local function send_signal(state, sig)
 	sig = sig or psignal.SIGTERM
-	local rc, err, eno = psignal.kill(state.pid, sig)
+	local target = state.pgid and -state.pgid or state.pid
+	local rc, err, eno = psignal.kill(target, sig)
 	if rc == 0 then
 		return true, nil
 	end

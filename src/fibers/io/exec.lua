@@ -24,7 +24,7 @@ local DEFAULT_SHUTDOWN_GRACE = 1.0
 ---@field [integer] string            # argv elements (1..n)
 ---@field cwd string|nil
 ---@field env table<string,string|nil>|nil
----@field flags table|nil
+---@field flags table|nil            # optional process flags; supports setsid, pdeathsig and process_group
 ---@field stdin ExecStdin|nil
 ---@field stdout ExecStdout|nil
 ---@field stderr ExecStderr|nil

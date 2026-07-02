@@ -151,6 +151,19 @@ local function apply_child_env(env)
 	end
 end
 
+local function process_group_supported()
+	-- nixio does not expose setpgid(), but setsid() creates a new
+	-- session and makes the child the leader of a new process group.
+	return type(nixio.setsid) == 'function'
+end
+
+local function set_process_group_child()
+	local sid, _ = nixio.setsid()
+	if not sid then
+		os.exit(127)
+	end
+end
+
 ---@param child_spec table  -- child-facing spec with *fd fields
 ---@param child_only table<any, boolean>|nil
 ---@param parent_fds table<string, any|nil>|nil
@@ -167,11 +180,16 @@ local function child_exec(child_spec, child_only, parent_fds, sentinel_w)
 		end
 	end
 
-	if child_spec.flags and child_spec.flags.setsid then
-		local sid, _ = nixio.setsid()
-		if not sid then
-			os.exit(127)
-		end
+	if child_spec.flags and child_spec.flags.pdeathsig then
+		-- The nixio backend has no safe prctl binding; spawn rejects this flag.
+		os.exit(127)
+	end
+
+	if child_spec.flags and (child_spec.flags.setsid or child_spec.flags.process_group) then
+		-- process_group is implemented using setsid(): the child becomes
+		-- leader of a new session and process group, so parent-side signal
+		-- delivery can target -child_pid.
+		set_process_group_child()
 	end
 
 	if child_spec.env then
@@ -351,6 +369,13 @@ local function spawn(spec)
 	assert(type(spec.argv) == 'table' and spec.argv[1],
 		'ExecBackend.spawn: spec.argv must be a non-empty array')
 
+	if spec.flags and spec.flags.pdeathsig then
+		return nil, nil, 'flags.pdeathsig is not supported by nixio exec backend'
+	end
+	if spec.flags and spec.flags.process_group and not process_group_supported() then
+		return nil, nil, 'flags.process_group is not supported by nixio exec backend'
+	end
+
 	local child_spec, child_only, parent_fds, cfg_err =
 		stdio.build_child_stdio(spec, open_dev_null, make_pipe, set_cloexec, close_fd)
 	if not child_spec then
@@ -388,7 +413,9 @@ local function spawn(spec)
 	stdio.close_child_only(child_only, close_fd)
 	close_fd(sentinel_w)
 
-	local state = reaper_common.new_state(reaper_pid, sentinel_r)
+	local state = reaper_common.new_state(reaper_pid, sentinel_r, {
+		signal_process_group = spec.flags and spec.flags.process_group,
+	})
 
 	-- Handshake: read sentinel until we have seen a pid line and/or a
 	-- terminal status. This guarantees child_pid is known before any

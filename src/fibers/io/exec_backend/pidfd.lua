@@ -46,6 +46,8 @@ ffi.cdef [[
   int   chdir(const char *path);
   int   setenv(const char *name, const char *value, int overwrite);
   pid_t setsid(void);
+  int   setpgid(pid_t pid, pid_t pgid);
+  int   prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5);
   int   execvp(const char *file, char *const argv[]);
 
   int   kill(pid_t pid, int sig);
@@ -94,6 +96,9 @@ local ENOSYS = 38
 -- Signals (Linux values).
 local SIGTERM = 15
 local SIGKILL = 9
+
+-- prctl(2) constants.
+local PR_SET_PDEATHSIG = 1
 
 ----------------------------------------------------------------------
 -- Small helpers
@@ -260,6 +265,11 @@ end
 
 ---@param spec table  -- child-facing spec with *fd fields
 local function child_exec(spec)
+	if spec.flags and spec.flags.pdeathsig then
+		local rc = toint(C.prctl(PR_SET_PDEATHSIG, spec.flags.pdeathsig, 0, 0, 0))
+		must_child(rc == 0)
+	end
+
 	if spec.cwd then
 		local rc = C.chdir(spec.cwd)
 		must_child(rc == 0)
@@ -268,6 +278,9 @@ local function child_exec(spec)
 	if spec.flags and spec.flags.setsid then
 		local rc = toint(C.setsid())
 		must_child(rc ~= -1)
+	elseif spec.flags and spec.flags.process_group then
+		local rc = toint(C.setpgid(0, 0))
+		must_child(rc == 0)
 	end
 
 	if spec.env then
@@ -450,6 +463,11 @@ local function spawn(spec)
 		child_exec(child_spec) -- never returns
 	end
 
+	if spec.flags and spec.flags.process_group then
+		-- Best effort: close the race before the child reaches setpgid().
+		C.setpgid(pid, pid)
+	end
+
 	-- Parent: child-only fds no longer needed.
 	stdio.close_child_only(child_only, close_fd)
 
@@ -470,6 +488,7 @@ local function spawn(spec)
 
 	local state = {
 		pid    = pid,
+		pgid   = (spec.flags and spec.flags.process_group) and pid or nil,
 		pidfd  = pidfd,
 		exited = false,
 		status = nil,
@@ -502,7 +521,8 @@ end
 local function send_signal(state, sig)
 	sig = sig or SIGTERM
 
-	local rc = toint(C.kill(state.pid, sig))
+	local target = state.pgid and -state.pgid or state.pid
+	local rc = toint(C.kill(target, sig))
 	if rc == 0 then
 		return true, nil
 	end

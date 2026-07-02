@@ -20,13 +20,17 @@ local M = {}
 
 ---@param reaper_pid integer
 ---@param sentinel any
+---@param opts table|nil
 ---@return table
-function M.new_state(reaper_pid, sentinel)
+function M.new_state(reaper_pid, sentinel, opts)
+	opts = opts or {}
 	return {
-		reaper_pid     = reaper_pid,
-		pid            = reaper_pid, -- updated to child pid by pid line
-		child_pid      = nil,
-		sentinel       = sentinel,
+		reaper_pid           = reaper_pid,
+		pid                  = reaper_pid, -- updated to child pid by pid line
+		child_pid            = nil,
+		pgid                 = nil,
+		signal_process_group = opts.signal_process_group and true or nil,
+		sentinel             = sentinel,
 		exited         = false,
 		code           = nil,
 		signal         = nil,
@@ -48,6 +52,9 @@ function M.parse_status_line_into_state(line, state)
 		if cpid then
 			state.child_pid = cpid
 			state.pid       = cpid
+			if state.signal_process_group then
+				state.pgid = cpid
+			end
 		end
 		return
 	elseif tag == 'exited' then
@@ -209,7 +216,12 @@ function M.send_signal(state, sig, ops)
 		return true, nil
 	end
 
-	local target = state.child_pid or state.pid or state.reaper_pid
+	local target
+	if state.signal_process_group and state.pgid then
+		target = -state.pgid
+	else
+		target = state.child_pid or state.pid or state.reaper_pid
+	end
 	if not target then
 		return false, 'no child or reaper pid available'
 	end

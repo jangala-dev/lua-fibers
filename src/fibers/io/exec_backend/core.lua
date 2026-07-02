@@ -9,6 +9,7 @@
 ---@module 'fibers.io.exec_backend.core'
 
 local waitmod = require 'fibers.wait'
+local flagmod = require 'fibers.io.exec_backend.flags'
 
 ---@class ExecBackend
 ---@field pid integer|nil
@@ -128,6 +129,14 @@ local function build_backend(ops)
 	assert(type(ops.register_wait) == 'function', 'ops.register_wait must be a function')
 
 	local function start(spec)
+		local flags, ferr = flagmod.normalise(spec.flags)
+		if not flags and ferr then
+			return nil, ferr
+		end
+		if flags then
+			spec = setmetatable({ flags = flags }, { __index = spec })
+		end
+
 		local state, streams, err = ops.spawn(spec)
 		if not state then
 			return nil, err

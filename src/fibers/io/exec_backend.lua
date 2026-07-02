@@ -8,7 +8,7 @@
 ---@field argv   string[]
 ---@field env    table<string,string|nil>|nil
 ---@field cwd    string|nil
----@field flags  table|nil
+---@field flags  table|nil            # optional process flags; supports setsid, pdeathsig and process_group
 ---@field stdin  ExecStreamConfig
 ---@field stdout ExecStreamConfig
 ---@field stderr ExecStreamConfig
