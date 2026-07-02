@@ -24,7 +24,7 @@ local DEFAULT_SHUTDOWN_GRACE = 1.0
 ---@field [integer] string            # argv elements (1..n)
 ---@field cwd string|nil
 ---@field env table<string,string|nil>|nil
----@field flags table|nil            # optional process flags; supports setsid, pdeathsig and process_group
+---@field flags table|nil            # optional process flags; supports setsid, pdeathsig, parent_death_signal and process_group
 ---@field stdin ExecStdin|nil
 ---@field stdout ExecStdout|nil
 ---@field stderr ExecStderr|nil
@@ -715,6 +715,26 @@ function exec.command(...)
 		spec[i] = assert(select(i, ...), 'argv must not contain nil')
 	end
 	return command_from_spec(spec)
+end
+
+
+---Return a copy of the selected backend's optional process feature map.
+---@return table<string, boolean>
+function exec.features()
+	if type(proc_mod.features) ~= 'function' then
+		return {}
+	end
+	local f = proc_mod.features()
+	local out = {}
+	for k, v in pairs(f or {}) do out[k] = not not v end
+	return out
+end
+
+---Return whether the selected exec backend supports an optional feature.
+---@param name string
+---@return boolean
+function exec.supports(name)
+	return not not exec.features()[name]
 end
 
 exec.Command = Command

@@ -119,6 +119,7 @@ end
 ---   kill(state)               -> ok:boolean, err|nil
 ---   close(state)              -> ok:boolean, err|nil
 ---   is_supported()            -> boolean
+---   features                 -> table|fun():table
 ---
 ---@param ops table
 ---@return table backend_module  -- { start = fn, ExecBackend = ExecBackend, is_supported = fn }
@@ -171,10 +172,28 @@ local function build_backend(ops)
 		return true
 	end
 
+	local function features()
+		local f = ops.features
+		if type(f) == 'function' then
+			f = f()
+		end
+		local out = {
+			pdeathsig = false,
+			parent_death_signal = false,
+			process_group = false,
+		}
+		if type(f) ~= 'table' then
+			return out
+		end
+		for k, v in pairs(f) do out[k] = not not v end
+		return out
+	end
+
 	return {
 		ExecBackend  = ExecBackend,
 		start        = start,
 		is_supported = is_supported,
+		features     = features,
 	}
 end
 

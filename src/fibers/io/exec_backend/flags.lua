@@ -69,12 +69,24 @@ function M.normalise(flags)
 		out[k] = v
 	end
 
+	if out.pdeathsig ~= nil and out.parent_death_signal ~= nil then
+		return nil, 'flags.pdeathsig and flags.parent_death_signal are mutually exclusive'
+	end
+
 	if out.pdeathsig ~= nil then
 		local sig, err = normalise_signal(out.pdeathsig, 'flags.pdeathsig')
 		if not sig then
 			return nil, err
 		end
 		out.pdeathsig = sig
+	end
+
+	if out.parent_death_signal ~= nil then
+		local sig, err = normalise_signal(out.parent_death_signal, 'flags.parent_death_signal')
+		if not sig then
+			return nil, err
+		end
+		out.parent_death_signal = sig
 	end
 
 	if out.process_group ~= nil then

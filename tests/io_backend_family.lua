@@ -25,18 +25,14 @@ local families = {
 	posix = {
 		fd     = 'fibers.io.fd_backend.posix',
 		poller = 'fibers.io.poller.select',
-		exec   = function ()
-			if rawget(_G, 'jit') then
-				return 'fibers.io.exec_backend.posix_reaper'
-			end
-			return 'fibers.io.exec_backend.sigchld'
-		end,
+		exec   = 'fibers.io.exec_backend.posix_reaper',
 		disable = {
 			'fibers.io.fd_backend.ffi',
 			'fibers.io.fd_backend.nixio',
 			'fibers.io.poller.epoll',
 			'fibers.io.poller.nixio',
 			'fibers.io.exec_backend.pidfd',
+			'fibers.io.exec_backend.sigchld',
 			'fibers.io.exec_backend.nixio',
 		},
 	},

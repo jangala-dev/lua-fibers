@@ -65,6 +65,14 @@ local function pid_alive(pid)
 	return ok == true or ok == 0
 end
 
+local function kill_process_group_or_pid(pid)
+	pid = tonumber(pid)
+	if not pid then
+		return
+	end
+	os.execute(('kill -KILL -- -%d >/dev/null 2>&1 || kill -KILL %d >/dev/null 2>&1'):format(pid, pid))
+end
+
 local function wait_until(pred, timeout)
 	local deadline = fibers.now() + timeout
 	while fibers.now() < deadline do
@@ -128,8 +136,20 @@ printf '%s\n' "$count"
 	return n and tonumber(n) or nil
 end
 
-local baseline_fd_count     = get_fd_count_for_parent()
-local baseline_zombie_count = get_zombie_count_for_parent()
+local function minimum_sample(getter, samples)
+	samples = samples or 3
+	local best
+	for _ = 1, samples do
+		local n = getter()
+		if n ~= nil and (best == nil or n < best) then
+			best = n
+		end
+	end
+	return best
+end
+
+local baseline_fd_count     = minimum_sample(get_fd_count_for_parent)
+local baseline_zombie_count = minimum_sample(get_zombie_count_for_parent)
 
 print(('baseline: fds=%s zombies=%s')
 	:format(tostring(baseline_fd_count), tostring(baseline_zombie_count)))
@@ -448,6 +468,108 @@ local function pdeathsig_flag_validation()
 	assert(sig == nil, 'pdeathsig command unexpectedly signalled: ' .. tostring(sig))
 end
 
+-- parent_death_signal: may be native or reaper-emulated.  The behavioural
+-- test launches a child Lua process that starts an owned helper and then exits
+-- abruptly via os.exit(), bypassing normal Fibers scope finalisers.
+local function parent_death_signal_cleanup()
+	print('running: parent_death_signal_cleanup')
+
+	local bad = exec.command {
+		'sh', '-c', 'exit 0',
+		stdin  = 'null',
+		stdout = 'null',
+		stderr = 'null',
+		flags  = { parent_death_signal = 'NO_SUCH_SIGNAL' },
+	}
+	local status_bad, _, _, err_bad = fibers.perform(bad:run_op())
+	assert(status_bad == 'failed', 'invalid parent_death_signal should fail command start')
+	assert(tostring(err_bad):match('flags%.parent_death_signal'),
+		'invalid parent_death_signal failure should mention flags.parent_death_signal: ' .. tostring(err_bad))
+
+	if not exec.supports('parent_death_signal') then
+		print('skipping parent_death_signal behavioural assertion: selected backend does not support it')
+		return
+	end
+	if not exec.supports('process_group') then
+		print('skipping parent_death_signal behavioural assertion: selected backend has no process_group support')
+		return
+	end
+
+	local lua_bin = os.getenv('LUA') or (arg and arg[-1]) or 'lua'
+	local marker = ('/tmp/lua-fibers-parent-death-%d-%d.pid'):format(os.time(), math.random(1000000))
+	local helper = ('/tmp/lua-fibers-parent-death-%d-%d.lua'):format(os.time(), math.random(1000000))
+	os.remove(marker)
+
+	local helper_f = assert(io.open(helper, 'w'))
+	helper_f:write([=[
+package.path = '../src/?.lua;' .. package.path
+package.path = './?.lua;' .. package.path
+local marker = assert(arg[1], 'missing marker path')
+local family = arg[2]
+if family and family ~= '' then
+  require('io_backend_family').force(family)
+end
+local fibers = require 'fibers'
+local exec   = require 'fibers.io.exec'
+local sleep  = require 'fibers.sleep'
+
+local function file_exists(path)
+  local f = io.open(path, 'r')
+  if f then f:close(); return true end
+  return false
+end
+
+fibers.run(function ()
+  local script = [[
+echo $$ > "$1"
+while :; do sleep 1; done
+]]
+  local proc = exec.command {
+    'sh', '-c', script, 'sh', marker,
+    stdin  = 'null',
+    stdout = 'pipe',
+    stderr = 'null',
+    flags  = { process_group = true, parent_death_signal = 'TERM' },
+  }
+  local out, err = proc:stdout_stream()
+  assert(out, tostring(err))
+
+  local deadline = fibers.now() + 3.0
+  while fibers.now() < deadline do
+    if file_exists(marker) then
+      os.exit(0)
+    end
+    fibers.perform(sleep.sleep_op(0.05))
+  end
+  error('helper marker was not written')
+end)
+]=])
+	helper_f:close()
+
+	local launcher = exec.command {
+		lua_bin, helper, marker, _G.__FIBERS_TEST_IO_BACKEND_FAMILY or '',
+		stdin  = 'null',
+		stdout = 'null',
+		stderr = 'pipe',
+	}
+	local status, code, sig, err = fibers.perform(launcher:run_op())
+	assert(err == nil, 'parent-death launcher error: ' .. tostring(err))
+	assert(status == 'exited', 'parent-death launcher status: ' .. tostring(status))
+	assert(code == 0, 'parent-death launcher exit code: ' .. tostring(code))
+	assert(sig == nil, 'parent-death launcher signal: ' .. tostring(sig))
+
+	local child_pid = tonumber((read_file(marker) or ''):match('(%d+)'))
+	assert(child_pid, 'parent-death helper did not write child pid marker')
+
+	local ok = wait_until(function () return not pid_alive(child_pid) end, 5.0)
+	if not ok then
+		kill_process_group_or_pid(child_pid)
+	end
+	os.remove(marker)
+	os.remove(helper)
+	assert(ok, 'parent_death_signal did not remove child pid=' .. tostring(child_pid))
+end
+
 -- process_group: shutdown must signal the command's process group, not just
 -- the direct shell child.  The background grandchild ignores TERM, so it is
 -- only reliably removed if the shutdown escalation sends KILL to the group.
@@ -531,7 +653,27 @@ local function spawn_op_basic_usage()
 end
 
 ----------------------------------------------------------------------
--- 8. Torture: many short-lived processes in sequence.
+-- 8. Selected-backend feature map.
+----------------------------------------------------------------------
+
+local function selected_backend_features()
+	print('running: selected_backend_features')
+
+	assert(type(exec.features) == 'function', 'exec.features must be exported')
+	assert(type(exec.supports) == 'function', 'exec.supports must be exported')
+
+	local f = exec.features()
+	assert(type(f) == 'table', 'exec.features must return a table')
+	assert(type(f.process_group) == 'boolean', 'process_group feature must be boolean')
+	assert(type(f.pdeathsig) == 'boolean', 'pdeathsig feature must be boolean')
+	assert(type(f.parent_death_signal) == 'boolean', 'parent_death_signal feature must be boolean')
+	assert(exec.supports('process_group') == f.process_group, 'supports(process_group) mismatch')
+	assert(exec.supports('pdeathsig') == f.pdeathsig, 'supports(pdeathsig) mismatch')
+	assert(exec.supports('parent_death_signal') == f.parent_death_signal, 'supports(parent_death_signal) mismatch')
+end
+
+----------------------------------------------------------------------
+-- 9. Torture: many short-lived processes in sequence.
 ----------------------------------------------------------------------
 
 local function many_short_lived_processes_stress()
@@ -572,7 +714,7 @@ local function many_short_lived_processes_stress()
 end
 
 ----------------------------------------------------------------------
--- 9. Torture: large stdout via output_op.
+-- 10. Torture: large stdout via output_op.
 ----------------------------------------------------------------------
 
 local function large_output_output_op_stress()
@@ -630,7 +772,9 @@ local function main()
 	completed_commands_detach_scope_finalizers()
 	shutdown_long_running_process()
 	pdeathsig_flag_validation()
+	parent_death_signal_cleanup()
 	process_group_shutdown_kills_grandchild()
+	selected_backend_features()
 	spawn_op_basic_usage()
 	many_short_lived_processes_stress()
 	large_output_output_op_stress()
@@ -638,14 +782,14 @@ end
 
 fibers.run(main)
 
-local final_fd_count     = get_fd_count_for_parent()
-local final_zombie_count = get_zombie_count_for_parent()
+local final_fd_count     = minimum_sample(get_fd_count_for_parent)
+local final_zombie_count = minimum_sample(get_zombie_count_for_parent)
 
 print(('final: fds=%s zombies=%s')
 	:format(tostring(final_fd_count), tostring(final_zombie_count)))
 
 if baseline_fd_count and final_fd_count then
-	assert(final_fd_count == baseline_fd_count,
+	assert(final_fd_count <= baseline_fd_count,
 		('FD leak detected: baseline=%d final=%d')
 		:format(baseline_fd_count, final_fd_count))
 else

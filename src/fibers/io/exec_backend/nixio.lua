@@ -157,6 +157,18 @@ local function process_group_supported()
 	return type(nixio.setsid) == 'function'
 end
 
+local function pdeathsig_supported()
+	-- nixio has no prctl binding, so native PR_SET_PDEATHSIG is not
+	-- available through this backend.  Use flags.parent_death_signal for
+	-- the reaper-backed emulation.
+	return false
+end
+
+local function parent_death_signal_supported()
+	return type(nixio.kill) == 'function'
+		and type(nixio.nanosleep) == 'function'
+end
+
 local function set_process_group_child()
 	local sid, _ = nixio.setsid()
 	if not sid then
@@ -178,11 +190,6 @@ local function child_exec(child_spec, child_only, parent_fds, sentinel_w)
 		if not ok1 then
 			os.exit(127)
 		end
-	end
-
-	if child_spec.flags and child_spec.flags.pdeathsig then
-		-- The nixio backend has no safe prctl binding; spawn rejects this flag.
-		os.exit(127)
 	end
 
 	if child_spec.flags and (child_spec.flags.setsid or child_spec.flags.process_group) then
@@ -282,16 +289,39 @@ local reaper_ops = {
 -- Reaper process path
 ----------------------------------------------------------------------
 
+local function parent_liveness_closed(fd)
+	if not fd then
+		return false
+	end
+	local chunk = fd:read(1)
+	if chunk then
+		return #chunk == 0
+	end
+	local eno = nixio.errno()
+	if eno == const.EAGAIN or eno == const.EWOULDBLOCK or eno == const.EINTR then
+		return false
+	end
+	return true
+end
+
+local function sleep_parent_death_poll_interval()
+	nixio.nanosleep(0, 100000000)
+end
+
 --- Run in the per-command reaper process.
 ---@param child_spec table
 ---@param child_only table<any, boolean>|nil
 ---@param parent_fds table<string, any|nil>|nil
 ---@param sentinel_r any        -- nixio File (parent-side read end, close here)
 ---@param sentinel_w any        -- nixio File (reaper-side writer)
-local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w)
-	-- Reaper does not need parent pipe ends or parent's sentinel read end.
+---@param parent_live_r any|nil -- nixio File (read end of parent-liveness pipe)
+---@param parent_live_w any|nil -- nixio File (parent-held write end, close here)
+local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w, parent_live_r, parent_live_w)
+	-- Reaper does not need parent pipe ends, parent's sentinel read end,
+	-- or the parent's liveness write end.
 	stdio.close_parent_fds(parent_fds, close_fd)
 	close_fd(sentinel_r)
+	close_fd(parent_live_w)
 
 	-- Fork the real child.
 	local child_pid, err = nixio.fork()
@@ -305,6 +335,7 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 
 	if child_pid == 0 then
 		-- In the real child.
+		close_fd(parent_live_r)
 		child_exec(child_spec, child_only, parent_fds, sentinel_w)
 		os.exit(127)
 	end
@@ -319,18 +350,48 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 		end)
 	end
 
-	-- Wait for the real child to exit.
+	-- Wait for the real child to exit.  When parent_death_signal is requested,
+	-- avoid a blocking waitpid() so the reaper can notice parent-liveness EOF.
 	local pid, how, what
-	while true do
-		pid, how, what = nixio.waitpid(child_pid)
-		if pid ~= nil then
-			break
+	local sent_parent_death_signal = false
+	local parent_lost = false
+	local parent_death_signal = child_spec.flags and child_spec.flags.parent_death_signal or nil
+	if parent_death_signal then
+		while true do
+			pid, how, what = nixio.waitpid(child_pid, 'nohang')
+			if pid and pid ~= 0 then
+				break
+			end
+			if pid == nil then
+				local eno = nixio.errno()
+				if eno ~= const.EINTR then
+					break
+				end
+			end
+
+			if not sent_parent_death_signal and parent_liveness_closed(parent_live_r) then
+				parent_lost = true
+				local target = (child_spec.flags and child_spec.flags.process_group) and -child_pid or child_pid
+				nixio.kill(target, parent_death_signal)
+				sent_parent_death_signal = true
+			end
+
+			sleep_parent_death_poll_interval()
 		end
-		local eno = nixio.errno()
-		if eno ~= const.EINTR then
-			break
+	else
+		while true do
+			pid, how, what = nixio.waitpid(child_pid)
+			if pid ~= nil then
+				break
+			end
+			local eno = nixio.errno()
+			if eno ~= const.EINTR then
+				break
+			end
 		end
 	end
+
+	close_fd(parent_live_r)
 
 	local line
 	if not pid then
@@ -347,11 +408,13 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 		end
 	end
 
-	if sentinel_w then
+	if sentinel_w and not parent_lost then
 		pcall(function ()
 			sentinel_w:write(line)
 			sentinel_w:close()
 		end)
+	else
+		close_fd(sentinel_w)
 	end
 
 	os.exit(0)
@@ -369,8 +432,11 @@ local function spawn(spec)
 	assert(type(spec.argv) == 'table' and spec.argv[1],
 		'ExecBackend.spawn: spec.argv must be a non-empty array')
 
-	if spec.flags and spec.flags.pdeathsig then
+	if spec.flags and spec.flags.pdeathsig and not pdeathsig_supported() then
 		return nil, nil, 'flags.pdeathsig is not supported by nixio exec backend'
+	end
+	if spec.flags and spec.flags.parent_death_signal and not parent_death_signal_supported() then
+		return nil, nil, 'flags.parent_death_signal is not supported by nixio exec backend'
 	end
 	if spec.flags and spec.flags.process_group and not process_group_supported() then
 		return nil, nil, 'flags.process_group is not supported by nixio exec backend'
@@ -394,6 +460,21 @@ local function spawn(spec)
 	-- handshake to learn the real child pid, then switch to non-blocking.
 	sentinel_r:setblocking(true)
 
+	local parent_live_r, parent_live_w
+	if spec.flags and spec.flags.parent_death_signal then
+		parent_live_r, parent_live_w = nixio.pipe()
+		if not parent_live_r or not parent_live_w then
+			stdio.close_child_only(child_only, close_fd)
+			stdio.close_parent_fds(parent_fds, close_fd)
+			close_fd(sentinel_r)
+			close_fd(sentinel_w)
+			close_fd(parent_live_r)
+			close_fd(parent_live_w)
+			return nil, nil, errno_msg('pipe (parent liveness)')
+		end
+		parent_live_r:setblocking(false)
+	end
+
 	-- Fork the per-command reaper.
 	local reaper_pid, ferr = nixio.fork()
 	if not reaper_pid then
@@ -401,21 +482,25 @@ local function spawn(spec)
 		stdio.close_parent_fds(parent_fds, close_fd)
 		close_fd(sentinel_r)
 		close_fd(sentinel_w)
+		close_fd(parent_live_r)
+		close_fd(parent_live_w)
 		return nil, nil, ferr or errno_msg('fork (reaper)')
 	end
 
 	if reaper_pid == 0 then
-		reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w)
+		reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w, parent_live_r, parent_live_w)
 		os.exit(127)
 	end
 
 	-- Parent.
 	stdio.close_child_only(child_only, close_fd)
 	close_fd(sentinel_w)
+	close_fd(parent_live_r)
 
 	local state = reaper_common.new_state(reaper_pid, sentinel_r, {
 		signal_process_group = spec.flags and spec.flags.process_group,
 	})
+	state.parent_live_w = parent_live_w
 
 	-- Handshake: read sentinel until we have seen a pid line and/or a
 	-- terminal status. This guarantees child_pid is known before any
@@ -426,11 +511,15 @@ local function spawn(spec)
 		local chunk, rerr = sentinel_r:read(bufsize)
 		if not chunk then
 			close_fd(sentinel_r)
+			close_fd(parent_live_w)
+			state.parent_live_w = nil
 			state.sentinel = nil
 			return nil, nil, rerr or errno_msg('sentinel handshake read')
 		end
 		if #chunk == 0 then
 			close_fd(sentinel_r)
+			close_fd(parent_live_w)
+			state.parent_live_w = nil
 			state.sentinel = nil
 			return nil, nil, 'sentinel closed during handshake'
 		end
@@ -483,6 +572,10 @@ local function kill_proc(state)
 end
 
 local function close_state(state)
+	if state.parent_live_w then
+		close_fd(state.parent_live_w)
+		state.parent_live_w = nil
+	end
 	return reaper_common.close_state(state, reaper_ops)
 end
 
@@ -503,6 +596,7 @@ local ops = {
 	terminate     = terminate,
 	kill          = kill_proc,
 	close         = close_state,
+	features      = function () return { pdeathsig = pdeathsig_supported(), parent_death_signal = parent_death_signal_supported(), process_group = process_group_supported() } end,
 	is_supported  = is_supported,
 }
 

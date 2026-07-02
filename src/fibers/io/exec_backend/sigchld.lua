@@ -485,6 +485,9 @@ local function spawn(spec)
 	if spec.flags and spec.flags.pdeathsig and not pdeathsig_supported() then
 		return nil, nil, 'flags.pdeathsig is not supported by sigchld exec backend'
 	end
+	if spec.flags and spec.flags.parent_death_signal then
+		return nil, nil, 'flags.parent_death_signal is not supported by sigchld exec backend'
+	end
 	if spec.flags and spec.flags.process_group and not process_group_supported() then
 		return nil, nil, 'flags.process_group is not supported by sigchld exec backend'
 	end
@@ -578,9 +581,8 @@ end
 
 local function is_supported()
 	-- LuaJIT + luaposix signal callbacks are not reliable in exec stress paths.
-	-- The selector falls through to exec_backend.posix_reaper for that runtime,
-	-- preserving evented completion via sentinel pipes without a Lua SIGCHLD
-	-- handler.  Keep this SIGCHLD self-pipe backend for ordinary Lua.
+	-- This backend is kept for explicit/manual use, but the automatic selector
+	-- now uses exec_backend.posix_reaper for the POSIX family.
 	if rawget(_G, 'jit') then
 		return false
 	end
@@ -600,6 +602,7 @@ local ops = {
 	terminate     = terminate,
 	kill          = kill_proc,
 	close         = close_state,
+	features      = function () return { pdeathsig = pdeathsig_supported(), parent_death_signal = false, process_group = process_group_supported() } end,
 	is_supported  = is_supported,
 }
 

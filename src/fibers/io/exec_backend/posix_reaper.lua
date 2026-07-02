@@ -39,6 +39,7 @@ local ok_signal, psig   = pcall(require, 'posix.signal')
 local ok_fcntl, fcntl   = pcall(require, 'posix.fcntl')
 local ok_errno, errno   = pcall(require, 'posix.errno')
 local ok_stdlib, stdlib = pcall(require, 'posix.stdlib')
+local ok_time, ptime   = pcall(require, 'posix.time')
 local ok_prctl, prctl_mod = pcall(require, 'posix.sys.prctl')
 local ok_ffi, ffi = pcall(require, 'ffi')
 local C
@@ -168,6 +169,12 @@ end
 local function pdeathsig_supported()
 	return (ok_prctl and prctl_mod and type(prctl_mod.prctl) == 'function')
 		or (C and have_ffi_prctl)
+end
+
+local function parent_death_signal_supported()
+	-- parent_death_signal is the reaper-backed emulation.  Native
+	-- PR_SET_PDEATHSIG remains exposed separately as flags.pdeathsig.
+	return ok_time and ptime and type(ptime.nanosleep) == 'function'
 end
 
 local function apply_pdeathsig_child(sig)
@@ -326,10 +333,40 @@ end
 ---@param parent_fds table<string, any|nil>|nil
 ---@param sentinel_r integer
 ---@param sentinel_w integer
-local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w)
-	-- The reaper does not need parent pipe ends or the parent's sentinel read end.
+local function parent_liveness_closed(fd)
+	if not fd then
+		return false
+	end
+	local chunk, err, eno = unistd.read(fd, 1)
+	if chunk ~= nil then
+		return #chunk == 0
+	end
+	if eno == errno.EAGAIN or eno == errno.EWOULDBLOCK or eno == errno.EINTR then
+		return false
+	end
+	return true
+end
+
+local function sleep_parent_death_poll_interval()
+	if not (ok_time and ptime and type(ptime.nanosleep) == 'function') then
+		return
+	end
+	local req = { tv_sec = 0, tv_nsec = 100000000 }
+	while true do
+		local ok, _, eno, rem = ptime.nanosleep(req)
+		if ok or eno ~= errno.EINTR then
+			return
+		end
+		req = rem or req
+	end
+end
+
+local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w, parent_live_r, parent_live_w)
+	-- The reaper does not need parent pipe ends, the parent's sentinel read end,
+	-- or the parent's liveness write end.
 	stdio.close_parent_fds(parent_fds, close_fd)
 	close_fd(sentinel_r)
+	close_fd(parent_live_w)
 
 	if child_spec.flags and child_spec.flags.pdeathsig then
 		apply_pdeathsig_child(child_spec.flags.pdeathsig)
@@ -343,6 +380,7 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 	end
 
 	if child_pid == 0 then
+		close_fd(parent_live_r)
 		child_exec(child_spec, child_only, parent_fds, sentinel_w)
 		unistd._exit(127)
 	end
@@ -355,7 +393,37 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 	stdio.close_child_only(child_only, close_fd)
 	write_all(sentinel_w, ('pid %d\n'):format(child_pid))
 
-	local pid, how, what, werr, weno = wait_blocking(child_pid)
+	local parent_death_signal = child_spec.flags and child_spec.flags.parent_death_signal or nil
+	local use_emulated_parent_death = parent_death_signal ~= nil
+	local sent_parent_death_signal = false
+	local parent_lost = false
+
+	local pid, how, what, werr, weno
+	if use_emulated_parent_death then
+		while true do
+			pid, how, what, werr, weno = syswait.wait(child_pid, syswait.WNOHANG)
+			if pid and pid ~= 0 then
+				break
+			end
+			if pid == nil and weno ~= errno.EINTR then
+				break
+			end
+
+			if not sent_parent_death_signal and parent_liveness_closed(parent_live_r) then
+				parent_lost = true
+				local target = (child_spec.flags and child_spec.flags.process_group) and -child_pid or child_pid
+				psig.kill(target, parent_death_signal)
+				sent_parent_death_signal = true
+			end
+
+			sleep_parent_death_poll_interval()
+		end
+	else
+		pid, how, what, werr, weno = wait_blocking(child_pid)
+	end
+
+	close_fd(parent_live_r)
+
 	local line
 	if not pid then
 		line = 'failed ' .. errno_msg('wait child', werr, weno) .. '\n'
@@ -365,7 +433,12 @@ local function reaper_main(child_spec, child_only, parent_fds, sentinel_r, senti
 		line = ('signaled %d\n'):format(tonumber(what) or 0)
 	end
 
-	write_all(sentinel_w, line)
+	-- If the parent has died there may be no reader for the sentinel.  Avoid
+	-- writing in the common emulated-parent-death case; the child has already
+	-- been reaped and there is no parent left to consume the status.
+	if not (use_emulated_parent_death and parent_lost) then
+		write_all(sentinel_w, line)
+	end
 	close_fd(sentinel_w)
 	unistd._exit(0)
 end
@@ -455,6 +528,9 @@ local function spawn(spec)
 	if spec.flags and spec.flags.pdeathsig and not pdeathsig_supported() then
 		return nil, nil, 'flags.pdeathsig is not supported by posix_reaper exec backend'
 	end
+	if spec.flags and spec.flags.parent_death_signal and not parent_death_signal_supported() then
+		return nil, nil, 'flags.parent_death_signal is not supported by posix_reaper exec backend'
+	end
 	if spec.flags and spec.flags.process_group and not process_group_supported() then
 		return nil, nil, 'flags.process_group is not supported by posix_reaper exec backend'
 	end
@@ -475,27 +551,46 @@ local function spawn(spec)
 	set_cloexec(sentinel_r)
 	set_cloexec(sentinel_w)
 
+	local parent_live_r, parent_live_w
+	if spec.flags and spec.flags.parent_death_signal then
+		parent_live_r, parent_live_w, serr = make_pipe()
+		if not parent_live_r then
+			stdio.close_child_only(child_only, close_fd)
+			stdio.close_parent_fds(parent_fds, close_fd)
+			close_fd(sentinel_r)
+			close_fd(sentinel_w)
+			return nil, nil, serr or 'pipe (parent liveness) failed'
+		end
+		set_cloexec(parent_live_r)
+		set_cloexec(parent_live_w)
+		set_nonblock(parent_live_r)
+	end
+
 	local reaper_pid, ferr, feno = unistd.fork()
 	if not reaper_pid then
 		stdio.close_child_only(child_only, close_fd)
 		stdio.close_parent_fds(parent_fds, close_fd)
 		close_fd(sentinel_r)
 		close_fd(sentinel_w)
+		close_fd(parent_live_r)
+		close_fd(parent_live_w)
 		return nil, nil, errno_msg('fork reaper', ferr, feno)
 	end
 
 	if reaper_pid == 0 then
-		reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w)
+		reaper_main(child_spec, child_only, parent_fds, sentinel_r, sentinel_w, parent_live_r, parent_live_w)
 		unistd._exit(127)
 	end
 
 	-- Parent.
 	stdio.close_child_only(child_only, close_fd)
 	close_fd(sentinel_w)
+	close_fd(parent_live_r)
 
 	local state = reaper_common.new_state(reaper_pid, sentinel_r, {
 		signal_process_group = spec.flags and spec.flags.process_group,
 	})
+	state.parent_live_w = parent_live_w
 
 	-- Handshake: block only at spawn time until the reaper has reported the
 	-- real child pid or a terminal failure. This guarantees send_signal()
@@ -504,6 +599,8 @@ local function spawn(spec)
 		local chunk, rerr, reno = unistd.read(sentinel_r, 4096)
 		if chunk == nil then
 			close_fd(sentinel_r)
+			close_fd(parent_live_w)
+			state.parent_live_w = nil
 			state.sentinel = nil
 			reap_reaper(state, false)
 			stdio.close_parent_fds(parent_fds, close_fd)
@@ -511,6 +608,8 @@ local function spawn(spec)
 		end
 		if #chunk == 0 then
 			close_fd(sentinel_r)
+			close_fd(parent_live_w)
+			state.parent_live_w = nil
 			state.sentinel = nil
 			reap_reaper(state, false)
 			stdio.close_parent_fds(parent_fds, close_fd)
@@ -523,6 +622,8 @@ local function spawn(spec)
 	local ok_nb, nb_err = set_nonblock(sentinel_r)
 	if not ok_nb then
 		close_fd(sentinel_r)
+		close_fd(parent_live_w)
+		state.parent_live_w = nil
 		state.sentinel = nil
 		stdio.close_parent_fds(parent_fds, close_fd)
 		return nil, nil, nb_err
@@ -566,6 +667,10 @@ local function kill_proc(state)
 end
 
 local function close_state(state)
+	if state.parent_live_w then
+		close_fd(state.parent_live_w)
+		state.parent_live_w = nil
+	end
 	return reaper_common.close_state(state, reaper_ops)
 end
 
@@ -590,6 +695,7 @@ local ops = {
 	terminate     = terminate,
 	kill          = kill_proc,
 	close         = close_state,
+	features      = function () return { pdeathsig = pdeathsig_supported(), parent_death_signal = parent_death_signal_supported(), process_group = process_group_supported() } end,
 	is_supported  = is_supported,
 }
 

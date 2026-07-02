@@ -265,8 +265,9 @@ end
 
 ---@param spec table  -- child-facing spec with *fd fields
 local function child_exec(spec)
-	if spec.flags and spec.flags.pdeathsig then
-		local rc = toint(C.prctl(PR_SET_PDEATHSIG, spec.flags.pdeathsig, 0, 0, 0))
+	local parent_death_sig = spec.flags and (spec.flags.pdeathsig or spec.flags.parent_death_signal) or nil
+	if parent_death_sig then
+		local rc = toint(C.prctl(PR_SET_PDEATHSIG, parent_death_sig, 0, 0, 0))
 		must_child(rc == 0)
 	end
 
@@ -582,6 +583,7 @@ local ops = {
 	terminate     = terminate,
 	kill          = kill_proc,
 	close         = close_state,
+	features      = { pdeathsig = true, parent_death_signal = true, process_group = true },
 	is_supported  = is_supported,
 }
 
