@@ -1,5 +1,10 @@
 -- Compact external transaction algebra for texlua.
--- Options are immutable syntax nodes; Runtime supplies the solver.
+-- Operations are immutable syntax nodes; Runtime supplies the solver.
+--
+-- The canonical search grammar is deliberately small:
+--   always | primitive | choose | and_then | product | or_else | consequence
+-- Post-commit value transforms and typed defeat obligations are orthogonal
+-- annotations on dynamic operation occurrences.
 
 local EffectKind = require('fibers.kernel.effect.kind')
 
@@ -96,9 +101,9 @@ local function contains_wrap(x)
   if x._contains_wrap ~= nil then return x._contains_wrap end
 
   local found = false
-  if x.kind == 'wrap' then
-    found = true
-  elseif x.kind == 'bind' or x.kind == 'map' then
+  if x.kind == 'annotated' then
+    found = x.post ~= nil or contains_wrap(x.p)
+  elseif x.kind == 'and_then' then
     found = contains_wrap(x.p)
   elseif x.kind == 'or_else' then
     found = contains_wrap(x.p) or contains_wrap(x.q)
@@ -122,6 +127,39 @@ local function assert_not_wrapped(self, name)
   end
 end
 
+local function copy_list(xs)
+  local out = {}
+  for i = 1, #(xs or {}) do out[i] = xs[i] end
+  return out
+end
+
+local function annotated(inner, post, defeat)
+  local base, existing_post, defeats
+  if inner.kind == 'annotated' then
+    base = inner.p
+    existing_post = inner.post
+    defeats = copy_list(inner.defeats)
+  else
+    base = inner
+    defeats = {}
+  end
+
+  if post and existing_post then
+    local first, second = existing_post, post
+    post = function(...) return second(first(...)) end
+  else
+    post = post or existing_post
+  end
+
+  if defeat then table.insert(defeats, 1, defeat) end
+  return op('annotated', {
+    p = base,
+    post = post,
+    defeats = #defeats > 0 and defeats or nil,
+    _contains_wrap = post ~= nil or contains_wrap(base),
+  })
+end
+
 function Op.always(...)
   return op('always', { vals = pack_(...) })
 end
@@ -130,23 +168,34 @@ function Op.never()
   return op('choice', { choices = {} })
 end
 
-function Op.emit(effect)
+function Op.consequence(effect)
   if not EffectKind.is_effect(effect) then
-    error('emit expects a typed effect obligation', 2)
+    error('consequence expects a typed effect obligation', 2)
   end
-  return op('emit', { effect = effect })
+  return op('consequence', { effect = effect })
 end
 
+Op.emit = Op.consequence
+
+-- Delayed construction is derived through and_then.  The cache key preserves the
+-- previous guarantee that a guard callback runs at most once per perform
+-- attempt, even when proof search backtracks.
 function Op.guard(fn)
-  return op('guard', { fn = fn })
+  local key = {}
+  return op('and_then', {
+    p = Op.always(),
+    fn = fn,
+    callback_phase = 'guard',
+    cache_key = key,
+  })
 end
 
-function Op.with_nack(fn)
-  return op('with_nack', { fn = fn })
-end
-
-function Op._nack(ref)
-  return op('nack', { ref = ref })
+-- A typed defeat obligation is discharged if this operation occurrence is
+-- entered as a competing branch and another incompatible branch commits.
+-- Retry, fallback and incomplete search are not defeat.
+function Op:on_defeat(effect)
+  if not EffectKind.is_effect(effect) then error('on_defeat expects a typed Effect', 2) end
+  return annotated(self, nil, effect)
 end
 
 function Op.choice(...)
@@ -167,14 +216,14 @@ function Op.named_choice(entries)
   return Op.choice(branches)
 end
 
-local function product(xs, allow_internal, label)
+local function product(xs, mode, label)
   if type(xs) ~= 'table' then error(label .. ' expects an array of Op values', 3) end
   if #xs == 0 then return Op.always(empty_rows()) end
-  return op('product', { lanes = xs, allow_internal = allow_internal, product_kind = label })
+  return op('product', { lanes = xs, mode = mode })
 end
 
 function Op.all(xs)
-  return product(xs, false, 'all')
+  return product(xs, 'independent', 'all')
 end
 
 function Op.named_all(entries)
@@ -196,17 +245,20 @@ function Op.named_all(entries)
 end
 
 function Op.tensor(xs)
-  return product(xs, true, 'tensor')
+  return product(xs, 'interacting', 'tensor')
 end
 
 function Op:map(fn)
   assert_not_wrapped(self, 'map')
-  return op('map', { p = self, fn = fn })
+  -- Canonically and_then followed by always. Retaining the original callback as
+  -- metadata lets the interpreter fuse that derived always without adding a
+  -- separate grammar node or allocation.
+  return op('and_then', { p = self, callback_phase = 'map', fn = fn, derived_map = true })
 end
 
 function Op:and_then(fn)
   assert_not_wrapped(self, 'and_then')
-  return op('bind', { p = self, fn = fn })
+  return op('and_then', { p = self, fn = fn, callback_phase = 'and_then' })
 end
 
 function Op:or_else(q)
@@ -214,23 +266,12 @@ function Op:or_else(q)
 end
 
 function Op:wrap(fn)
-  if self.kind == 'wrap' then
-    local inner = self.p
-    local first = self.fn
-    return op('wrap', {
-      p = inner,
-      fn = function(...)
-        return fn(first(...))
-      end,
-      _contains_wrap = true,
-    })
-  end
-  return op('wrap', { p = self, fn = fn, _contains_wrap = true })
+  return annotated(self, fn, nil)
 end
 
 -- Primitive constructor used by resources.
 function Op._resource(resource, kind, payload)
-  return op('prim', { prim = 'resource', resource = resource, resource_kind = kind, payload = payload })
+  return op('primitive', { primitive = 'resource', resource = resource, resource_kind = kind, payload = payload })
 end
 
 Op.is_op = is_op

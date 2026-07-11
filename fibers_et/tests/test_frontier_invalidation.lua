@@ -2,10 +2,12 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Op = require('fibers.atoms.op')
-local Source = require('fibers.atoms.source')
+local EventQueue = require('fibers.atoms.event_queue')
+local Readiness = require('fibers.atoms.readiness')
+local Clock = require('fibers.atoms.clock')
 local Runtime = require('fibers.kernel.runtime')
 local Debug = require('fibers.kernel.transaction_debug')
-local SourceState = require('fibers.internal.source_state')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Resources = require('fibers.kernel.resources')
 
 local function fail(msg) error(msg, 2) end
@@ -30,12 +32,12 @@ end
 -- A fallback world justified by queue A being empty is not invalidated by queue B.
 do
   local rt = Runtime.new()
-  local qa = Source.events('fg-empty-a')
-  local qb = Source.events('fg-empty-b')
+  local qa = EventQueue.new('fg-empty-a')
+  local qb = EventQueue.new('fg-empty-b')
   local w = world_for(rt, qa:next_op():or_else(Op.always('fallback')))
-  assert_truthy(w:has_absence(), 'fallback world should carry absence')
+  assert_truthy(w:has_retry(), 'fallback world should carry retry evidence')
 
-  SourceState.arrive(qb, 'unrelated')
+  UnsafeExternalMutation.deliver(qb, 'unrelated')
   assert_world_valid(w, true, 'unrelated events arrival must not invalidate events-A absence')
 
   local ok, reason = w:commit(rt)
@@ -46,10 +48,10 @@ end
 -- The same fallback world is invalidated by arrival on the queue whose emptiness it observed.
 do
   local rt = Runtime.new()
-  local qa = Source.events('fg-empty-related')
+  local qa = EventQueue.new('fg-empty-related')
   local w = world_for(rt, qa:next_op():or_else(Op.always('fallback')))
 
-  SourceState.arrive(qa, 'now-present')
+  UnsafeExternalMutation.deliver(qa, 'now-present')
   assert_world_valid(w, false, 'related events arrival must invalidate events-empty absence')
 
   local ok, reason = w:commit(rt)
@@ -60,11 +62,11 @@ end
 -- A prepared queue-head consumer remains valid across a tail push.
 do
   local rt = Runtime.new()
-  local q = Source.events('fg-head-tail')
-  SourceState.arrive(q, 'head')
+  local q = EventQueue.new('fg-head-tail')
+  UnsafeExternalMutation.deliver(q, 'head')
 
   local w = world_for(rt, q:next_op())
-  SourceState.arrive(q, 'tail')
+  UnsafeExternalMutation.deliver(q, 'tail')
   assert_world_valid(w, true, 'tail push must not invalidate a prepared head consumer')
 
   local ok = w:commit(rt)
@@ -78,8 +80,8 @@ end
 -- A prepared queue-head consumer is invalidated by a competing consume of that head.
 do
   local rt = Runtime.new()
-  local q = Source.events('fg-head-consume')
-  SourceState.arrive(q, 'one')
+  local q = EventQueue.new('fg-head-consume')
+  UnsafeExternalMutation.deliver(q, 'one')
 
   local w1 = world_for(rt, q:next_op())
   local w2 = world_for(rt, q:next_op())
@@ -96,13 +98,13 @@ end
 -- Read and write readiness frontiers are independent.
 do
   local rt = Runtime.new()
-  local src = Source.readiness('fd-1', 'read', 'fg-readiness')
+  local src = Readiness.new('fd-1', 'read', 'fg-readiness')
   local w = world_for(rt, src:readable_op():or_else(Op.always('fallback')))
 
-  SourceState.arrive(src, 'write', true)
+  UnsafeExternalMutation.deliver(src, 'write', true)
   assert_world_valid(w, true, 'write readiness must not invalidate read absence')
 
-  SourceState.arrive(src, 'read', true)
+  UnsafeExternalMutation.deliver(src, 'read', true)
   assert_world_valid(w, false, 'read readiness must invalidate read absence')
 end
 
@@ -110,23 +112,23 @@ end
 do
   local now = 0
   local rt = Runtime.new({ host = { now = function() return now end } })
-  local clock = Source.clock('fg-clock')
+  local clock = Clock.new('fg-clock')
   local w = world_for(rt, clock:at_op(5):or_else(Op.always('fallback')))
 
   now = 4
-  Resources.invalidate_matured_clock_frontiers(rt)
+  Resources.invalidate_matured_deadline_frontiers(rt)
   assert_world_valid(w, true, 'clock-before frontier should remain valid before deadline')
 
   now = 5
-  Resources.invalidate_matured_clock_frontiers(rt)
+  Resources.invalidate_matured_deadline_frontiers(rt)
   assert_world_valid(w, false, 'clock-before frontier should invalidate at deadline')
 end
 
 -- Bounded miss caches are invalidated by observed frontiers, not unrelated source mutation.
 do
   local rt = Runtime.new()
-  local qa = Source.events('fg-cache-a')
-  local qb = Source.events('fg-cache-b')
+  local qa = EventQueue.new('fg-cache-a')
+  local qb = EventQueue.new('fg-cache-b')
   local got
   rt:spawn_raw(function() got = rt:perform(qa:next_op()) end, 'fg-cache-waiter')
 
@@ -139,10 +141,10 @@ do
   assert_truthy(Debug.wait_cache_observer(rt), 'bounded miss cache should own an observer')
   assert_observer_valid(Debug.wait_cache_observer(rt), true)
 
-  SourceState.arrive(qb, 'unrelated')
+  UnsafeExternalMutation.deliver(qb, 'unrelated')
   assert_observer_valid(Debug.wait_cache_observer(rt), true, 'unrelated source should not invalidate miss cache')
 
-  SourceState.arrive(qa, 'payload')
+  UnsafeExternalMutation.deliver(qa, 'payload')
   assert_observer_valid(Debug.wait_cache_observer(rt), false, 'observed events arrival should invalidate miss cache')
 
   for _ = 1, 20 do

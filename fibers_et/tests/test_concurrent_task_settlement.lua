@@ -41,7 +41,7 @@ end
 do
   local waiter
   local r = fibers.try_run(function()
-    local src = fibers.Source.signal('concurrent-settlement-never')
+    local src = fibers.Signal.new('concurrent-settlement-never')
     waiter = fibers.spawn(function()
       fibers.perform(src:wait_op())
     end, 'pending-sibling')

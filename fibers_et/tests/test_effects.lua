@@ -24,7 +24,7 @@ local function assert_error_kind(ok, err, kind, msg)
 end
 local function assert_uncommitted(st, msg)
   local tag = st and st.tag
-  if tag ~= 'absent' and tag ~= 'pending' and tag ~= 'reject_candidate' then
+  if tag ~= 'quiescent' and tag ~= 'pending' and tag ~= 'reject_candidate' then
     fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end

@@ -8,8 +8,8 @@
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
+local Resolution = require('fibers.kernel.resources.resolution')
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
 local Validity = require('fibers.kernel.validity')
 local Premise = require('fibers.kernel.premise_helpers')
 
@@ -162,7 +162,7 @@ local function projected_holders(leases, subject, views, hide_all_sibling_releas
     if rec then
       local subrec = { acquires = rec.acquires and rec.acquires[subject] and { [subject] = rec.acquires[subject] } or nil,
                        releases = rec.releases and rec.releases[subject] and { [subject] = rec.releases[subject] } or nil }
-      local hide = hide_all_sibling_releases and view and view.relation == 'sibling' and view.allow_internal == false
+      local hide = hide_all_sibling_releases and view and view.relation == 'sibling' and view.mode == 'independent'
       apply_record_to_holders(holders, subrec, hide)
     end
   end
@@ -241,8 +241,7 @@ function LeaseKind.eval(leases, payload, ctx)
     rec.read_all = observe_structure(ctx, leases)
     return Result.ready(c)
   elseif op == 'acquire' then
-    local wait = Wait.resource('lease', leases._fibers_id .. ':' .. tostring(payload.subject), leases, { op = op, subject = payload.subject })
-    return Result.premise({ role = 'acquire', subject = payload.subject, mode = payload.mode, owner = payload.owner }, wait)
+    return Result.premise({ role = 'acquire', subject = payload.subject, mode = payload.mode, owner = payload.owner })
   end
   error('unknown lease command ' .. tostring(op), 2)
 end
@@ -276,30 +275,14 @@ function LeaseKind.resolve_premises(leases, premises, ctx)
   local out = {}
   if #ps > 0 and Premise.pairwise_compatible(ps, ctx) then local sol = allocate(leases, ps, ctx); if sol then out[#out + 1] = sol end end
   for i = 1, #ps do local sol = allocate(leases, { ps[i] }, ctx); if sol then out[#out + 1] = sol end end
-  return out
-end
-function LeaseKind.absence_premises(leases, premises, ctx)
-  local ok = true
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
-    local views = ctx and ctx.resource_record_views and ctx:resource_record_views(leases, { p }) or nil
-    local holders = projected_holders(leases, p.request.subject, views, true)
-    if can_add(leases, holders, p.request.owner, p.request.mode) then ok = false end
-  end
-  if not ok then return false end
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
+  local observations = {}
+  for i = 1, #ps do
+    local p = ps[i]
     local frontier = leases._validity and leases._validity:frontier_for('membership', p.request.subject) or nil
-    if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-    if ctx and ctx.add then ctx:add({ kind = 'lease-unavailable', leases = leases, subject = p.request.subject, frontier = frontier, stamp = frontier and frontier.gen or nil }) end
+    observations[#observations + 1] = { kind = 'lease-solutions-exhausted', leases = leases, subject = p.request.subject, frontier = frontier, stamp = frontier and frontier.gen or nil }
   end
-  return true
+  return Resolution.exhaustive_after(out, ctx, observations)
 end
-function LeaseKind.absence(leases, payload, ctx)
-  if payload and payload.op == 'acquire' then return LeaseKind.absence_premises(leases, { { request = { role = 'acquire', subject = payload.subject, mode = payload.mode, owner = payload.owner } } }, ctx) end
-  return false
-end
-
 function Lease.new(compat, name)
   next_id = next_id + 1
   local id = 'lease-' .. tostring(next_id)

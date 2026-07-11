@@ -8,8 +8,8 @@
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
+local Resolution = require('fibers.kernel.resources.resolution')
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
 local Validity = require('fibers.kernel.validity')
 local Premise = require('fibers.kernel.premise_helpers')
 local Presence = require('fibers.kernel.resources.presence_journal')
@@ -257,8 +257,7 @@ function IndexKind.eval(index, payload, ctx)
     ensure_rec(c, index, observe_version(ctx, index))
     return Result.ready(c)
   elseif op == 'pop_first' or op == 'pop_last' then
-    local wait = Wait.resource('index', index._fibers_id, index, { op = op })
-    return Result.premise({ role = op }, wait)
+    return Result.premise({ role = op })
   end
   error('unknown index command ' .. tostring(op), 2)
 end
@@ -315,31 +314,10 @@ function IndexKind.resolve_premises(index, premises, ctx)
     local sol = allocate(index, { pops[i] }, ctx)
     if sol then out[#out + 1] = sol end
   end
-  return out
-end
-
-function IndexKind.absence_premises(index, premises, ctx)
-  local views = ctx and ctx.resource_record_views and ctx:resource_record_views(index, premises) or nil
-  local entries = views and build_arena_from_views(index, views) or build_arena(index, ctx and ctx.resource_records and ctx:resource_records(index, premises) or nil)
-  local count = 0
-  for _ in pairs(entries) do count = count + 1 end
-  if count > 0 then return false end
   local frontier = index._validity_opaque and index._validity_opaque:frontier_for() or nil
-  if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
-    if ctx and ctx.add then
-      ctx:add({ kind = 'index-empty', index = index, role = p.request and p.request.role, frontier = frontier, stamp = frontier and frontier.gen or nil })
-    end
-  end
-  return true
-end
-
-function IndexKind.absence(index, payload, ctx)
-  if payload and (payload.op == 'pop_first' or payload.op == 'pop_last') then
-    return IndexKind.absence_premises(index, { { request = { role = payload.op } } }, ctx)
-  end
-  return false
+  return Resolution.exhaustive_after(out, ctx, {
+    { kind = 'index-solutions-exhausted', index = index, frontier = frontier, stamp = frontier and frontier.gen or nil },
+  })
 end
 
 function Index.new(entries, name)

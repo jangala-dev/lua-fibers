@@ -5,8 +5,9 @@ local Validity = require('fibers.kernel.validity')
 local Resources = require('fibers.kernel.resources')
 local Debug = require('fibers.kernel.transaction_debug')
 local Op = require('fibers.atoms.op')
-local Source = require('fibers.atoms.source')
-local SourceState = require('fibers.internal.source_state')
+local EventQueue = require('fibers.atoms.event_queue')
+local Signal = require('fibers.atoms.signal')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Runtime = require('fibers.kernel.runtime')
 
 local function fail(msg) error(msg, 2) end
@@ -49,22 +50,22 @@ do
   assert_eq(Resources.observer_valid(obs), false, 'push to empty invalidates empty observation')
 end
 
--- Source fallback validity is driven by managed queue facts, not manual bump calls.
+-- EventQueue fallback validity is driven by managed queue facts, not manual bump calls.
 do
   local rt = Runtime.new()
-  local q = Source.events('validity-source')
+  local q = EventQueue.new('validity-source')
   local got
   rt:spawn_raw(function() got = rt:perform(q:next_op():or_else(Op.always('fallback'))) end, 'validity-source-fallback')
   for _ = 1, 20 do if got then break end; rt:step({ max_work = 5 }) end
   assert_eq(got, 'fallback')
 
-  local q2 = Source.events('validity-source-pending')
+  local q2 = EventQueue.new('validity-source-pending')
   local got2
   rt = Runtime.new()
   rt:spawn_raw(function() got2 = rt:perform(q2:next_op()) end, 'validity-source-pending-waiter')
   for _ = 1, 5 do rt:step({ max_work = 1 }) end
   assert_truthy(Debug.wait_cache_observer(rt), 'expected a bounded wait cache')
-  SourceState.arrive(q2, 'payload')
+  UnsafeExternalMutation.deliver(q2, 'payload')
   assert_eq(Resources.observer_valid(Debug.wait_cache_observer(rt)), false, 'managed queue feed invalidates empty wait cache')
   for _ = 1, 20 do if got2 then break end; rt:step({ max_work = 1 }) end
   assert_eq(got2, 'payload')
@@ -73,8 +74,8 @@ end
 -- Managed signals are latched, non-consuming facts.
 do
   local rt = Runtime.new()
-  local sig = Source.signal('validity-signal')
-  SourceState.arrive(sig, 'latched')
+  local sig = Signal.new('validity-signal')
+  UnsafeExternalMutation.deliver(sig, 'latched')
   local a, b
   rt:spawn_raw(function() a = rt:perform(sig:wait_op()) end, 'validity-signal-a')
   rt:spawn_raw(function() b = rt:perform(sig:wait_op()) end, 'validity-signal-b')

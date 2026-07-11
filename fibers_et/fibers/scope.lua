@@ -8,6 +8,7 @@ local Op = require('fibers.atoms.op')
 local Region = require('fibers.atoms.region')
 local Rendezvous = require('fibers.atoms.rendezvous')
 local Scalar = require('fibers.atoms.scalar')
+local EventQueue = require('fibers.atoms.event_queue')
 local Task = require('fibers.task')
 local Lease = require('fibers.atoms.lease')
 local Borrow = require('fibers.borrow')
@@ -24,6 +25,18 @@ local function pack(...) return { n = select('#', ...), ... } end
 
 local Scope = {}
 Scope.__index = Scope
+
+local RequestCancellation = Scalar.transition {
+  name = 'scope.request_cancel',
+  mode = 'update',
+  step = function(state, payload)
+    if type(state) == 'table' and (state.requested or state.cancelled) then
+      return Scalar.Ready.same(false, state.reason)
+    end
+    local next_state = { requested = true, cancelled = true, reason = payload.reason }
+    return Scalar.Ready.write(next_state, true, payload.reason)
+  end,
+}
 
 local next_id = 0
 
@@ -43,6 +56,24 @@ end
 
 local function target_scope(target)
   return is_scope(target) and target or nil
+end
+
+local function policy_allows(scope, method, flag, ...)
+  local policy = scope.policy
+  if not policy then return true end
+  local f = policy[method]
+  if type(f) == 'function' then
+    local ok, reason = f(policy, scope, ...)
+    if ok == false then return false, reason end
+    return true
+  end
+  if flag and policy[flag] == false then return false, method .. ' denied by scope policy' end
+  return true
+end
+
+local function require_policy(scope, method, flag, ...)
+  local ok, reason = policy_allows(scope, method, flag, ...)
+  if not ok then error(reason or (method .. ' denied by scope policy'), 3) end
 end
 
 local function item_kind(item)
@@ -78,7 +109,9 @@ function Scope.new(name, opts)
     region = region,
     sealed = opts.sealed or Scalar.new(false, (name or id) .. '-sealed'),
     done = opts.done or Scalar.new({ status = 'pending' }, (name or id) .. '-done'),
+    cancellation = opts.cancellation or Scalar.new({ requested = false, cancelled = false }, (name or id) .. '-cancellation'),
     offers = opts.offers or new_offers((name or id) .. '-offers'),
+    _lifetime_events = opts.lifetime_events or EventQueue.new((name or id) .. '-lifetime-events'),
     authority_leases = opts.authority_leases or Lease.new(opts.authority_compat or {
       read = { read = true, observe = true },
       observe = { read = true, observe = true },
@@ -101,6 +134,7 @@ end
 
 
 function Scope:admit_op(item_or_owned, from_owner)
+  require_policy(self, 'allow_admit', 'permit_admission', item_or_owned, from_owner)
   return self.region:admit_op(item_or_owned, from_owner)
 end
 
@@ -108,7 +142,8 @@ end
 function Scope:perform(op)
   local rt = self.runtime or Runtime.current()
   if not rt then error('Scope:perform requires a current runtime or scope runtime', 2) end
-  local token = (self.mask_depth or 0) > 0 and nil or self.interrupt
+  local token
+  if (self.mask_depth or 0) <= 0 then token = self.interrupt end
   return rt:perform(op, { interrupt = token })
 end
 
@@ -128,6 +163,7 @@ function Scope:_run_child_body(fn, task, opts)
     policy = opts.policy or self.policy,
     runtime = self.runtime or Runtime.current(),
     interrupt = task and task.interrupt or nil,
+    cancellation = task and task.cancellation or nil,
   })
   return child:run(function(s)
     return fn(s, task)
@@ -157,6 +193,7 @@ end
 function Scope:move_op(item, target)
   local r = target_region(target)
   if not r then error('Scope:move_op expects a target Scope or Region', 2) end
+  require_policy(self, 'allow_move', 'permit_outward_move', item, target)
   return self.region:move_op(item, r):map(function() return item end)
 end
 
@@ -285,6 +322,57 @@ end
 function Scope:resolve_op(claim, resolution)
   if resolution == nil then error('Scope:resolve_op requires a resolution', 2) end
   return self.region:resolve_claim_op(claim, resolution)
+end
+
+
+function Scope:request_cancel_op(reason)
+  return self.cancellation:transition_op(RequestCancellation, { reason = reason }):and_then(function(first, recorded_reason)
+    if not first then return Op.always(false, recorded_reason) end
+    return Op.emit(require('fibers.atoms.effect').interrupt(self.interrupt, recorded_reason)):map(function()
+      return true, recorded_reason
+    end)
+  end)
+end
+
+function Scope:cancel_requested_op()
+  return wait_state(self.cancellation, function(v)
+    return type(v) == 'table' and (v.requested == true or v.cancelled == true)
+  end):map(function(v)
+    return true, v.reason
+  end)
+end
+
+function Scope:cancellation_op()
+  return self.cancellation:read_op()
+end
+
+function Scope:task_roots_snapshot_op()
+  return self.region:snapshot_op():and_then(function(status)
+    return self.region:roots_op():map(function(roots)
+      local tasks = {}
+      for i = 1, #roots do
+        local item = roots[i]
+        if type(item) == 'table' and item._fibers_obligation_kind == 'task' then
+          tasks[#tasks + 1] = item
+        end
+      end
+      return { version = status.version, tasks = tasks, roots = roots }
+    end)
+  end)
+end
+
+function Scope:begin_close_op(reason, opts)
+  opts = opts or {}
+  return self:task_roots_snapshot_op():and_then(function(snapshot)
+    local ops = { self:seal_op(reason) }
+    if opts.cancel_body ~= false then ops[#ops + 1] = self:request_cancel_op(reason) end
+    if opts.cancel_children ~= false then
+      for i = 1, #snapshot.tasks do
+        ops[#ops + 1] = snapshot.tasks[i]:request_cancel_op(reason)
+      end
+    end
+    return Op.all(ops):map(function() return snapshot end)
+  end)
 end
 
 function Scope:seal_op(_reason)

@@ -638,45 +638,78 @@ local function move_candidate(region, item, to_region, ctx)
   return c
 end
 
+
+local function observe_payload_item(ctx, item, label)
+  if item ~= nil and type(ctx.observe_version) == 'function' then ctx:observe_version(item, label) end
+end
+
+local function region_retry(region, payload, ctx)
+  ctx:observe_version(region, 'region')
+  local op = payload and payload.op
+  if op == 'admit' then
+    local owned = payload.owned or payload.item
+    observe_payload_item(ctx, owned and owned.item or owned, 'owned-item')
+    observe_payload_item(ctx, payload.from_owner, 'from-owner')
+  elseif op == 'discharge_claim' or op == 'fail_claim' or op == 'restore_claim' or op == 'resolve_claim' then
+    local claim = payload.claim
+    observe_payload_item(ctx, claim and claim.root, 'claim-root')
+    observe_payload_item(ctx, claim and claim.region, 'claim-region')
+  elseif op == 'move' then
+    observe_payload_item(ctx, payload.item, 'item')
+    observe_payload_item(ctx, payload.to_region, 'target-region')
+  elseif op == 'authorise' then
+    observe_payload_item(ctx, payload.item, 'item')
+  else
+    observe_payload_item(ctx, payload and payload.item, 'item')
+  end
+  return ctx:retry('region-operation-unavailable')
+end
+
 function RegionKind.eval(region, payload, ctx)
   local op = payload.op
   if op == 'admit' then
     local c = admit_candidate(region, payload.owned or payload.item, payload.from_owner, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'release' then
     local c = release_candidate(region, payload.item, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'claim' then
     local c = claim_candidate(region, payload.item, payload.purpose, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'discharge_claim' then
     local c = discharge_claim_candidate(region, payload.claim, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'fail_claim' then
     local c = fail_claim_candidate(region, payload.claim, payload.error, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'restore_claim' then
     local c = restore_claim_candidate(region, payload.claim, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'resolve_claim' then
     local c = resolve_claim_candidate(region, payload.claim, payload.resolution, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'move' then
     local c = move_candidate(region, payload.item, payload.to_region, ctx)
-    if not c then return Result.none() end
+    if not c then return region_retry(region, payload, ctx) end
     return Result.ready(c)
   elseif op == 'seal' then
-    if is_sealed(ctx, region) then return Result.none() end
+    if is_sealed(ctx, region) then return region_retry(region, payload, ctx) end
     local c = Proposal.new(OpPack(true))
     local rec = read_region(c, region)
     rec.seal = true
+    return Result.ready(c)
+  elseif op == 'changed' then
+    local current = region.version or 0
+    if current == payload.version then return region_retry(region, payload, ctx) end
+    local c = Proposal.new(OpPack(current))
+    read_region(c, region)
     return Result.ready(c)
   elseif op == 'is_open' then
     local c = Proposal.new(OpPack(not is_sealed(ctx, region)))
@@ -732,34 +765,6 @@ function RegionKind.eval(region, payload, ctx)
 end
 
 
-local function observe_payload_item(ctx, item, label)
-  if item ~= nil and type(ctx.observe_version) == 'function' then ctx:observe_version(item, label) end
-end
-
-function RegionKind.absence(region, payload, ctx)
-  -- Region absence depends on both the region membership version and the
-  -- relevant owner-bearing handle version.  This guards fallbacks against
-  -- concurrent admission, release, claim resolution, and movement.
-  ctx:observe_version(region, 'region')
-  local op = payload and payload.op
-  if op == 'admit' then
-    local owned = payload.owned or payload.item
-    observe_payload_item(ctx, owned and owned.item or owned, 'owned-item')
-    observe_payload_item(ctx, payload.from_owner, 'from-owner')
-  elseif op == 'discharge_claim' or op == 'fail_claim' or op == 'restore_claim' or op == 'resolve_claim' then
-    local claim = payload.claim
-    observe_payload_item(ctx, claim and claim.root, 'claim-root')
-    observe_payload_item(ctx, claim and claim.region, 'claim-region')
-  elseif op == 'move' then
-    observe_payload_item(ctx, payload.item, 'item')
-    observe_payload_item(ctx, payload.to_region, 'target-region')
-  elseif op == 'authorise' then
-    observe_payload_item(ctx, payload.item, 'item')
-  else
-    observe_payload_item(ctx, payload and payload.item, 'item')
-  end
-  return true
-end
 
 function RegionKind.summary(_payload, out) out.resources = true; out.dynamic = true; out.closed = false; out.needs_overlay = true end
 
@@ -788,6 +793,7 @@ function Region:resolve_claim_op(claim, resolution) return DefaultOp._resource(s
 function Region:move_op(item, to_region) return DefaultOp._resource(self, RegionKind, { op = 'move', item = item, to_region = to_region }) end
 function Region:seal_op() return DefaultOp._resource(self, RegionKind, { op = 'seal' }) end
 function Region:is_open_op() return DefaultOp._resource(self, RegionKind, { op = 'is_open' }) end
+function Region:changed_op(version) return DefaultOp._resource(self, RegionKind, { op = 'changed', version = version }) end
 function Region:authorise_op(item, right, opts)
   opts = opts or {}
   return DefaultOp._resource(self, RegionKind, { op = 'authorise', item = item, right = right, allow_claimed = opts.allow_claimed == true })

@@ -92,7 +92,7 @@ do
   local st2 = fibers.try_run(function()
     fibers.perform(a:admit_op(item2))
   end).runtime_status
-  assert_status(st2, 'absent')
+  assert_status(st2, 'quiescent')
 
   local st3 = fibers.try_run(function()
     fibers.perform(a:move_op(item, b))

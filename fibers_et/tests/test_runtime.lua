@@ -41,7 +41,7 @@ local committed = false
 for i=1,20 do
   local s = rt2:step({ max_work = 1000 })
   if s.tag == 'found' then committed = true end
-  if s.tag == 'idle' or s.tag == 'absent' then break end
+  if s.tag == 'idle' or s.tag == 'quiescent' then break end
 end
 assert_eq(committed, true, 'eventual bounded commit')
 assert_eq(scalar.value, 4)
@@ -94,7 +94,7 @@ local commits = 0
 for i = 1, 200 do
   st = rt2:step({ max_work = 3 })
   if st.tag == 'found' then commits = commits + 1 end
-  if st.tag == 'idle' or st.tag == 'absent' then break end
+  if st.tag == 'idle' or st.tag == 'quiescent' then break end
 end
 assert_eq(commits, 4)
 assert_eq(scalar.value, 4)
@@ -111,7 +111,7 @@ local function fail(msg) error(msg, 2) end
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tag .. ', got ' .. tostring(st and st.tag)) end end
 
--- Deferred bind continuations created before rendezvous closure must retain the
+-- Deferred and_then continuations created before rendezvous closure must retain the
 -- original evaluation context.  In particular, a guard and a residual or_else
 -- inside the continuation need the fibre attempt and residual environment.
 do

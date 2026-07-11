@@ -8,7 +8,10 @@ return {
   Counter = require('fibers.atoms.counter'),
   Keyed = require('fibers.atoms.keyed'),
   Lease = require('fibers.atoms.lease'),
-  Source = require('fibers.atoms.source'),
+  Signal = require('fibers.atoms.signal'),
+  EventQueue = require('fibers.atoms.event_queue'),
+  Clock = require('fibers.atoms.clock'),
+  Readiness = require('fibers.atoms.readiness'),
   Region = require('fibers.atoms.region'),
   Effect = require('fibers.atoms.effect'),
 }

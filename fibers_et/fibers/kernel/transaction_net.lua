@@ -1,8 +1,9 @@
 local Op = require('fibers.atoms.op')
 local Resources = require('fibers.kernel.resources')
-local Proof = require('fibers.kernel.proof')
-local AbsenceCert = Proof.AbsenceCert
-local Capture = Proof.Capture
+local RetryProof = require('fibers.kernel.retry')
+local Capture = require('fibers.kernel.capture')
+local RetryBuilder = require('fibers.kernel.retry_builder')
+local Resolution = require('fibers.kernel.resources.resolution')
 
 local unpack_ = Op._unpack
 local pack_ = Op._pack
@@ -42,30 +43,27 @@ local function append_all(dst, src)
 end
 
 function Outcome.hit(world) return { tag = 'hit', world = world } end
-function Outcome.miss(cert, waits) return { tag = 'miss', cert = cert or AbsenceCert.new(), waits = waits or {} } end
-function Outcome.unknown(waits, reason) return { tag = 'unknown', waits = waits or {}, reason = reason } end
+function Outcome.retry(proof)
+  proof = proof or RetryProof.new()
+  return { tag = 'retry', proof = proof, interests = proof.interests }
+end
+function Outcome.unknown(interests, reason)
+  return { tag = 'unknown', interests = interests or {}, reason = reason }
+end
 
 function Outcome.merge(a, b)
   if not a then return b end
   if not b then return a end
-  local waits = a.waits
-  if not waits then waits = {}; a.waits = waits end
-  append_all(waits, b.waits)
   if a.tag == 'unknown' or b.tag == 'unknown' then
-    a.tag = 'unknown'
-    a.reason = a.reason or b.reason
-    return a
+    local interests = {}
+    append_all(interests, a.interests)
+    append_all(interests, b.interests)
+    return Outcome.unknown(interests, a.reason or b.reason)
   end
-  if b.cert and (not b.cert.is_empty or not b.cert:is_empty()) then
-    if not (a.cert and a.cert.extend) then a.cert = AbsenceCert.new(a.cert) end
-    a.cert:extend(b.cert)
-  elseif a.cert and not a.cert.extend then
-    a.cert = AbsenceCert.new(a.cert)
-  end
-  a.tag = 'miss'
-  return a
+  local proof = a.proof or RetryProof.new()
+  proof:merge(b.proof)
+  return Outcome.retry(proof)
 end
-
 Net.Outcome = Outcome
 
 
@@ -138,13 +136,10 @@ local function copy_pack(p)
   return q
 end
 
-local function op_values(op)
-  return op.values or op.vals or pack_()
-end
-
-local function op_inner(op) return op.inner or op.p end
-local function op_primary(op) return op.primary or op.p end
-local function op_fallback(op) return op.fallback or op.q end
+local function op_values(op) return op.vals or pack_() end
+local function op_inner(op) return op.p end
+local function op_primary(op) return op.p end
+local function op_fallback(op) return op.q end
 
 local function new_result(pack, lanes)
   if counters_enabled then count('alloc.result') end
@@ -197,7 +192,6 @@ local function copy_premise(p)
     kind = p.kind,
     payload = p.payload,
     request = p.request,
-    wait = p.wait,
     task = copy_task(p.task),
     groups = groups,
     group_lanes = group_lanes,
@@ -222,7 +216,6 @@ function Attempt.new(rt, pending, start_id, solver)
     selected = { [start_id] = true },
     tasks = {},
     premises = {},
-    premise_index = {},
     done = {},
     groups = {},
     next_group = 0,
@@ -230,7 +223,6 @@ function Attempt.new(rt, pending, start_id, solver)
     next_contribution = 0,
     conflict = false,
     conflict_reason = nil,
-    frontier_waits = {},
     outcome = nil,
     trail = Trail.new(),
     solver = solver,
@@ -254,11 +246,11 @@ end
 
 function Attempt:set_outcome(outcome)
   self:set_field(self, 'outcome', outcome)
-  self:set_conflict(outcome and outcome.reason or (outcome and outcome.tag) or 'blocked')
+  self:set_conflict(outcome and outcome.reason or (outcome and outcome.tag) or 'retry')
 end
 
-function Attempt:set_miss(cert, waits) self:set_outcome(Outcome.miss(cert, waits)) end
-function Attempt:set_unknown(waits, reason) self:set_outcome(Outcome.unknown(waits, reason)) end
+function Attempt:set_retry(proof) self:set_outcome(Outcome.retry(proof)) end
+function Attempt:set_unknown(interests, reason) self:set_outcome(Outcome.unknown(interests, reason)) end
 
 local function premise_bucket_less(a, b)
   local ar = a.resource
@@ -276,27 +268,6 @@ end
 local function sort_premise_buckets(buckets)
   table.sort(buckets, premise_bucket_less)
   return buckets
-end
-
-function Attempt:rebuild_premise_index()
-  -- Compatibility fallback for tests/debugging.  Normal proof search treats
-  -- premise buckets as a lazy derived view so pushing or solving a premise does
-  -- not rebuild and sort the whole index immediately.
-  local idx = {}
-  local buckets = {}
-  for i = 1, #self.premises do
-    local p = self.premises[i]
-    local bucket = idx[p.resource]
-    if not bucket then
-      bucket = { resource = p.resource, kind = p.kind, premises = {} }
-      idx[p.resource] = bucket
-      buckets[#buckets + 1] = bucket
-    end
-    bucket.premises[#bucket.premises + 1] = p
-  end
-  sort_premise_buckets(buckets)
-  self:set_field(self, 'premise_index', idx)
-  self:set_field(self, 'premise_buckets', buckets)
 end
 
 function Attempt:push_task(task)
@@ -322,10 +293,8 @@ function Attempt:push_premise(premise)
     premise.group_lanes = group_lanes
   end
   self:append(self.premises, premise)
-  -- Premise buckets are a derived view.  Do not trail-maintain them on the
-  -- hot push path; clear the cache and rebuild only when a resolver or absence
-  -- pass asks for grouped premises.
-  self.premise_index = nil
+  -- Premise buckets are a derived view. Do not trail-maintain them on the
+  -- hot push path; rebuild only when a resolver asks for grouped premises.
   self.premise_buckets = nil
 end
 
@@ -344,7 +313,6 @@ function Attempt:remove_premises(ids)
     end
   end
   if any then
-    self.premise_index = nil
     self.premise_buckets = nil
   end
   return removed
@@ -393,7 +361,7 @@ local function common_disallowed_group(st, a, b)
     for j = 1, #(b.groups or {}) do
       if a.groups[i] == b.groups[j] then
         local g = st.groups[a.groups[i]]
-        if g and not g.allow_internal then return true end
+        if g and g.mode == 'independent' then return true end
       end
     end
   end
@@ -403,24 +371,30 @@ end
 
 -- Branch application and continuations -----------------------------------
 
-local function settle_losing_nacks(op, out)
-  if type(op) ~= 'table' then return end
-  if op.kind == 'with_nack' then
-    local ob = { state = 'pending' }
-    out[#out + 1] = ob
-    pcall(op.fn, { obligation = ob })
+local function add_losing_defeats(op, env)
+  if type(op) ~= 'table' then return true end
+  if op.kind == 'annotated' then
+    for i = 1, #(op.defeats or {}) do
+      local ok, err = Resources.add_effect(env, op.defeats[i])
+      if not ok then return nil, err end
+    end
+    return add_losing_defeats(op_inner(op), env)
   elseif op.kind == 'choice' then
-    for i = 1, #(op.choices or {}) do settle_losing_nacks(op.choices[i], out) end
+    for i = 1, #(op.choices or {}) do
+      local ok, err = add_losing_defeats(op.choices[i], env)
+      if not ok then return nil, err end
+    end
   elseif op.kind == 'product' then
-    for i = 1, #(op.lanes or {}) do settle_losing_nacks(op.lanes[i], out) end
-  elseif op.kind == 'wrap' or op.kind == 'bind' or op.kind == 'map' then
-    settle_losing_nacks(op_inner(op), out)
-  elseif op.kind == 'or_else' then
-    settle_losing_nacks(op_primary(op), out)
-    settle_losing_nacks(op_fallback(op), out)
-  elseif op.kind == 'guard' then
-    -- Guard bodies are not run merely to inspect losing branches.
+    -- Every product lane is entered together.
+    for i = 1, #(op.lanes or {}) do
+      local ok, err = add_losing_defeats(op.lanes[i], env)
+      if not ok then return nil, err end
+    end
   end
+  -- Do not speculate through `and_then` or `or_else`.  Defeat annotations created by
+  -- delayed continuations are armed only once that continuation reaches a
+  -- concrete competing choice.
+  return true
 end
 
 local function callback_ctx(st)
@@ -437,6 +411,42 @@ local function call_callback(st, phase, fn, ...)
     return rt:_call_in_phase(phase, 'callback_error', fn, ...)
   end
   return fn(...)
+end
+
+local FRAME_CONTINUE = 'continue'
+local FRAME_NEXT_OP = 'next-op'
+local FRAME_PRODUCT = 'product'
+
+local function apply_result_frame(st, task, res, frame)
+  if frame.kind == 'and_then' then
+    local phase = frame.callback_phase or 'and_then'
+    if phase == 'map' then
+      res.pack = pack_(call_callback(st, phase, frame.fn, unpack_(res.pack, 1, res.pack.n)))
+      return FRAME_CONTINUE
+    end
+
+    local cache = frame.cache_key and task.attempt and task.attempt.guard_cache or nil
+    local next_op = cache and cache[frame.cache_key] or nil
+    if next_op == nil then
+      if phase == 'guard' then
+        next_op = call_callback(st, phase, frame.fn, callback_ctx(st))
+      else
+        next_op = call_callback(st, phase, frame.fn, unpack_(res.pack, 1, res.pack.n))
+      end
+      if cache then cache[frame.cache_key] = next_op end
+    end
+    if type(next_op) ~= 'table' or not next_op.kind then
+      error('and_then callback must return an option')
+    end
+    task.op = next_op
+    return FRAME_NEXT_OP
+  elseif frame.kind == 'post' then
+    res.wraps[#res.wraps + 1] = frame.fn
+    return FRAME_CONTINUE
+  elseif frame.kind == 'product_lane' then
+    return FRAME_PRODUCT
+  end
+  error('unknown continuation frame: ' .. tostring(frame.kind))
 end
 
 local complete_task -- forward
@@ -476,23 +486,18 @@ complete_task = function(st, task, res)
     if not frame then
       st:add_done(task.root_id, res, task.env)
       return st
-    elseif frame.kind == 'bind' then
-      local next_op = call_callback(st, 'bind', frame.fn, unpack_(res.pack, 1, res.pack.n))
-      if type(next_op) ~= 'table' or not next_op.kind then error('and_then callback must return an option') end
-      task.op = next_op
+    end
+
+    local action = apply_result_frame(st, task, res, frame)
+    if action == FRAME_NEXT_OP then
       st:push_task(task)
       return st
-    elseif frame.kind == 'map' then
-      res.pack = pack_(call_callback(st, 'map', frame.fn, unpack_(res.pack, 1, res.pack.n)))
-    elseif frame.kind == 'wrap' then
-      res.wraps[#res.wraps + 1] = frame.fn
-    elseif frame.kind == 'product_lane' then
+    elseif action == FRAME_PRODUCT then
       return complete_product_lane(st, task, frame, res)
-    else
-      error('unknown continuation frame: ' .. tostring(frame.kind))
     end
   end
 end
+
 
 local function apply_task_step(st, idx, branch)
   if counters_enabled then count('task.step') end
@@ -504,44 +509,16 @@ local function apply_task_step(st, idx, branch)
   local k = op.kind
   if k == 'always' then
     return complete_task(st, task, new_result(op_values(op)))
-  elseif k == 'bind' then
-    task.stack = stack_push(task.stack, { kind = 'bind', fn = op.fn })
+  elseif k == 'and_then' then
+    task.stack = stack_push(task.stack, { kind = 'and_then', fn = op.fn, callback_phase = op.callback_phase, cache_key = op.cache_key })
     task.op = op_inner(op)
     st:push_task(task)
     return st
-  elseif k == 'map' then
-    task.stack = stack_push(task.stack, { kind = 'map', fn = op.fn })
+  elseif k == 'annotated' then
+    if op.post then task.stack = stack_push(task.stack, { kind = 'post', fn = op.post }) end
+    -- Selection discards defeat obligations; they are collected only when the
+    -- occurrence loses at an enclosing choice boundary.
     task.op = op_inner(op)
-    st:push_task(task)
-    return st
-  elseif k == 'wrap' then
-    task.stack = stack_push(task.stack, { kind = 'wrap', fn = op.fn })
-    task.op = op_inner(op)
-    st:push_task(task)
-    return st
-  elseif k == 'guard' then
-    local cache = task.attempt and task.attempt.guard_cache
-    local key = op._id or op
-    if cache and cache[key] ~= nil then
-      task.op = cache[key]
-    else
-      task.op = call_callback(st, 'guard', op.fn, callback_ctx(st))
-      if cache then cache[key] = task.op end
-    end
-    st:push_task(task)
-    return st
-  elseif k == 'nack' then
-    local ref = op.obligation or op.ref
-    if ref and ref.state == 'lost' then
-      return complete_task(st, task, new_result(pack_(true)))
-    end
-    st:set_conflict('nack-not-lost')
-    return st
-  elseif k == 'with_nack' then
-    local ob = { state = 'pending' }
-    Resources.add_selected(task.env, ob)
-    local next_op = call_callback(st, 'nack', op.fn, { obligation = ob })
-    task.op = next_op
     st:push_task(task)
     return st
   elseif k == 'choice' then
@@ -549,8 +526,8 @@ local function apply_task_step(st, idx, branch)
     task.op = op.choices[choice_index]
     for j = 1, #(op.choices or {}) do
       if j ~= choice_index then
-        task.env.lost = task.env.lost or {}
-        settle_losing_nacks(op.choices[j], task.env.lost)
+        local ok, err = add_losing_defeats(op.choices[j], task.env)
+        if not ok then st:set_unknown(nil, err or 'defeat-effect-conflict'); return st end
       end
     end
     st:push_task(task)
@@ -559,7 +536,7 @@ local function apply_task_step(st, idx, branch)
     if branch.or_else_side == 'primary' then
       task.op = op_primary(op)
     else
-      Resources.add_absence_cert(task.env, branch.cert)
+      Resources.add_retry_proof(task.env, branch.proof)
       task.op = op_fallback(op)
     end
     st:push_task(task)
@@ -571,7 +548,7 @@ local function apply_task_step(st, idx, branch)
     local parent_env = Resources.copy_env(task.env)
     local group = {
       n = #(op.lanes or {}),
-      allow_internal = op.allow_internal == true,
+      mode = op.mode,
       root_id = task.root_id,
       parent_stack = parent_stack,
       parent_env = parent_env,
@@ -659,55 +636,10 @@ local function sorted_premise_buckets(st)
     bucket.premises[#bucket.premises + 1] = p
   end
   sort_premise_buckets(buckets)
-  st.premise_index = idx
   st.premise_buckets = buckets
   return buckets
 end
 
-local function premise_absence_ctx(st, cert)
-  local ctx = { rt = st.rt, observer = st.observer, capture = st.capture, observing = (st.observer ~= nil) or (st.capture and st.capture:frontiers_enabled()) }
-  function ctx:observe_frontier(frontier)
-    if frontier and self.observer then frontier:observe(self.observer) end
-    return frontier and frontier.gen or nil
-  end
-  function ctx:add(obs)
-    if obs then
-      if obs.frontier and self.observer then obs.frontier:observe(self.observer) end
-      cert:add(obs)
-    end
-  end
-  return ctx
-end
-
-local function premise_outcome(st)
-  if counters_enabled then count('premise.outcome') end
-  local cert = AbsenceCert.new()
-  local waits = {}
-  local buckets = sorted_premise_buckets(st)
-  for bi = 1, #buckets do
-    local bucket = buckets[bi]
-    local ps = {}
-    for i = 1, #(bucket.premises or {}) do
-      local p = bucket.premises[i]
-      if p then
-        ps[#ps + 1] = p
-        if p.wait then waits[#waits + 1] = p.wait end
-      end
-    end
-    local ok = false
-    local absence = bucket.kind and bucket.kind.absence_premises
-    if absence then
-      ok = absence(bucket.resource, ps, premise_absence_ctx(st, cert)) == true
-    end
-    if not ok then
-      for i = 1, #ps do
-        local p = ps[i]
-        cert:add({ kind = 'premise-absent', resource = p.resource, resource_kind = p.kind and p.kind.name, request = p.request })
-      end
-    end
-  end
-  return Outcome.miss(cert, waits)
-end
 
 
 -- Completed proof worlds --------------------------------------------------
@@ -747,9 +679,10 @@ function World.local_root(root_id, res, env)
   return setmetatable({ roots = { [root_id] = res }, single_root_id = root_id, direct_delivery = true, env = env, prepared = EMPTY_PREPARED, observer = nil, valid = true, consumed = false }, World)
 end
 
-function World:has_absence()
-  return self.env and self.env.has_absence == true
+function World:has_retry()
+  return self.env and self.env.used_retry == true
 end
+
 
 
 function World:dispose_observer()
@@ -763,8 +696,8 @@ function World:validate_debug_observations(rt)
   for i = 1, #(self.env.debug_observations or {}) do
     if not Resources.validate_observation(rt, self.env.debug_observations[i]) then return false end
   end
-  for i = 1, #(self.env.debug_absence_observations or {}) do
-    if not Resources.validate_observation(rt, self.env.debug_absence_observations[i]) then return false end
+  for i = 1, #(self.env.debug_retry_observations or {}) do
+    if not Resources.validate_observation(rt, self.env.debug_retry_observations[i]) then return false end
   end
   return true
 end
@@ -799,10 +732,7 @@ function World:prepare(rt)
   return self.prepared
 end
 
-function World:settle_nacks()
-  for i = 1, #(self.env.selected or {}) do self.env.selected[i].state = 'selected' end
-  for i = 1, #(self.env.lost or {}) do self.env.lost[i].state = 'lost' end
-end
+
 
 local function post_for_result(res)
   local lane_posts = nil
@@ -865,7 +795,6 @@ function World:commit(rt)
 
   Resources.apply_prepared(prepared)
   Resources.discharge_prepared(rt, prepared)
-  self:settle_nacks()
   self.consumed = true
   self.valid = false
   return true
@@ -898,93 +827,136 @@ end
 local function premise_branches(st)
   if counters_enabled then count('branches.premise') end
   local branches = {}
-  local ctx = {}
-  function ctx:compatible(a, b)
-    return not common_disallowed_group(st, a, b)
-  end
-  ctx.pack = pack_
-  ctx.attempt = st
-  function ctx:now() return self.attempt and self.attempt.rt and self.attempt.rt.now and self.attempt.rt:now() or 0 end
+  local resolutions = {}
 
-  local function premise_lane_for_group(premise, gid)
-    local lanes = premise and premise.group_lanes
-    if lanes then return lanes[gid] end
-    local node = premise and premise.task and premise.task.stack or nil
-    while node do
-      local f = node.frame
-      if f and f.kind == 'product_lane' and f.group_id == gid then return f.lane end
-      node = node.parent
-    end
-    return nil
-  end
+  local function new_ctx()
+    local ctx = {
+      rt = st.rt,
+      observer = st.observer,
+      capture = st.capture,
+      observing = (st.observer ~= nil) or (st.capture and st.capture:frontiers_enabled()),
+      _retry_debug = st.capture and st.capture:debug_enabled() or false,
+      attempt = st,
+    }
 
-  function ctx:resource_record_views(resource, premises)
-    local out, seen = {}, {}
-
-    local function add_env(env, relation, group, lane, delta_only)
-      if not env then return end
-      local by_relation = seen[env]
-      if not by_relation then by_relation = {}; seen[env] = by_relation end
-      local by_group = by_relation[relation]
-      if not by_group then by_group = {}; by_relation[relation] = by_group end
-      local group_key = group or false
-      local by_lane = by_group[group_key]
-      if not by_lane then by_lane = {}; by_group[group_key] = by_lane end
-      local lane_key = lane or false
-      if by_lane[lane_key] then return end
-      by_lane[lane_key] = true
-
-      local rec
-      -- Hot path: most proof frames are parentless sparse deltas.  Trust that
-      -- shape and inspect the record directly instead of flattening/copying the
-      -- environment merely to discover that no relevant overlay exists.
-      if not env.parent then
-        rec = env.res and env.res[resource]
-      elseif delta_only then
-        local effective = Resources.copy_delta(env)
-        local overlay = Resources.overlay_for_env(effective)
-        rec = overlay and overlay.res and overlay.res[resource]
-      else
-        local overlay = Resources.overlay_for_env(env)
-        rec = overlay and overlay.res and overlay.res[resource]
-      end
-      if rec then
-        out[#out + 1] = {
-          rec = rec,
-          relation = relation,
-          group = group,
-          lane = lane,
-          allow_internal = group and group.allow_internal == true or false,
-        }
-      end
+    function ctx:compatible(a, b)
+      return not common_disallowed_group(st, a, b)
     end
 
-    for i = 1, #(premises or {}) do
-      local p = premises[i]
-      if p and p.task then add_env(p.task.env, 'own', nil, nil, true) end
-      for gi = 1, #(p and p.groups or {}) do
-        local gid = p.groups[gi]
-        local g = st.groups[gid]
-        if g then
-          add_env(g.parent_env, 'outer', g, nil, false)
-          local own_lane = premise_lane_for_group(p, gid)
-          for lane = 1, (g.n or 0) do
-            if g.envs and g.envs[lane] then
-              local relation = (own_lane ~= nil and lane == own_lane) and 'own' or 'sibling'
-              add_env(g.envs[lane], relation, g, lane, true)
+    ctx.pack = pack_
+
+    function ctx:now()
+      return self.attempt and self.attempt.rt and self.attempt.rt.now and self.attempt.rt:now() or 0
+    end
+
+    function ctx:observe_frontier(frontier)
+      if frontier and self.observer then frontier:observe(self.observer) end
+      RetryBuilder.observe(self, frontier)
+      return frontier and frontier.gen or nil
+    end
+
+    function ctx:add(obs)
+      if obs then
+        if obs.frontier and self.observer then obs.frontier:observe(self.observer) end
+        RetryBuilder.add(self, obs)
+      end
+      return obs
+    end
+
+    function ctx:add_interest(interest)
+      RetryBuilder.add_interest(self, interest)
+      return interest
+    end
+
+    function ctx:proof()
+      return RetryBuilder.materialise(self)
+    end
+
+    function ctx:retry(reason, interest)
+      RetryBuilder.set_reason(self, reason)
+      if interest then RetryBuilder.add_interest(self, interest) end
+      return RetryBuilder.materialise(self)
+    end
+
+    local function premise_lane_for_group(premise, gid)
+      local lanes = premise and premise.group_lanes
+      if lanes then return lanes[gid] end
+      local node = premise and premise.task and premise.task.stack or nil
+      while node do
+        local f = node.frame
+        if f and f.kind == 'product_lane' and f.group_id == gid then return f.lane end
+        node = node.parent
+      end
+      return nil
+    end
+
+    function ctx:resource_record_views(resource, premises)
+      local out, seen = {}, {}
+
+      local function add_env(env, relation, group, lane, delta_only)
+        if not env then return end
+        local by_relation = seen[env]
+        if not by_relation then by_relation = {}; seen[env] = by_relation end
+        local by_group = by_relation[relation]
+        if not by_group then by_group = {}; by_relation[relation] = by_group end
+        local group_key = group or false
+        local by_lane = by_group[group_key]
+        if not by_lane then by_lane = {}; by_group[group_key] = by_lane end
+        local lane_key = lane or false
+        if by_lane[lane_key] then return end
+        by_lane[lane_key] = true
+
+        local rec
+        if not env.parent then
+          rec = env.res and env.res[resource]
+        elseif delta_only then
+          local effective = Resources.copy_delta(env)
+          local overlay = Resources.overlay_for_env(effective)
+          rec = overlay and overlay.res and overlay.res[resource]
+        else
+          local overlay = Resources.overlay_for_env(env)
+          rec = overlay and overlay.res and overlay.res[resource]
+        end
+        if rec then
+          out[#out + 1] = {
+            rec = rec,
+            relation = relation,
+            group = group,
+            lane = lane,
+            mode = group and group.mode or nil,
+          }
+        end
+      end
+
+      for i = 1, #(premises or {}) do
+        local p = premises[i]
+        if p and p.task then add_env(p.task.env, 'own', nil, nil, true) end
+        for gi = 1, #(p and p.groups or {}) do
+          local gid = p.groups[gi]
+          local g = st.groups[gid]
+          if g then
+            add_env(g.parent_env, 'outer', g, nil, false)
+            local own_lane = premise_lane_for_group(p, gid)
+            for lane = 1, (g.n or 0) do
+              if g.envs and g.envs[lane] then
+                local relation = (own_lane ~= nil and lane == own_lane) and 'own' or 'sibling'
+                add_env(g.envs[lane], relation, g, lane, true)
+              end
             end
           end
         end
       end
+      return out
     end
-    return out
-  end
 
-  function ctx:resource_records(resource, premises)
-    local views = self:resource_record_views(resource, premises)
-    local out = {}
-    for i = 1, #views do out[#out + 1] = views[i].rec end
-    return out
+    function ctx:resource_records(resource, premises)
+      local views = self:resource_record_views(resource, premises)
+      local out = {}
+      for i = 1, #views do out[#out + 1] = views[i].rec end
+      return out
+    end
+
+    return ctx
   end
 
   local buckets = sorted_premise_buckets(st)
@@ -993,14 +965,26 @@ local function premise_branches(st)
     local kind = bucket.kind
     local resolver = kind and kind.resolve_premises
     if resolver then
+      local ctx = new_ctx()
       local ps = bucket.premises or {}
-      local sols = resolver(bucket.resource, ps, ctx) or {}
-      for i = 1, #sols do
-        branches[#branches + 1] = { kind = 'premise_solution', solution = sols[i] }
+      local resolution = resolver(bucket.resource, ps, ctx)
+      if not Resolution.is_resolution(resolution) then
+        error((kind.name or 'resource') .. '.resolve_premises must return Resolution.exhaustive(...)', 2)
+      end
+      resolutions[#resolutions + 1] = resolution
+      for i = 1, #(resolution.solutions or {}) do
+        branches[#branches + 1] = { kind = 'premise_solution', solution = resolution.solutions[i] }
       end
     end
   end
-  return branches
+  local function exhausted_proof()
+    local proof = RetryProof.new()
+    for i = 1, #resolutions do
+      proof:merge(Resolution.materialise_proof(resolutions[i]))
+    end
+    return proof
+  end
+  return branches, exhausted_proof
 end
 
 local function sorted_pending_ids(pending)
@@ -1050,7 +1034,6 @@ local function try_branch(st, branch, depth, charge_kind)
   st:rollback(mark)
   -- Cached premise buckets are derived from the speculative premise list.
   -- They are intentionally not trailed, so discard them after any rollback.
-  st.premise_index = nil
   st.premise_buckets = nil
   return out
 end
@@ -1058,17 +1041,18 @@ end
 local function search_or_else(st, depth)
   local primary = try_branch(st, { kind = 'task', index = 1, or_else_side = 'primary' }, depth, 'or-else-primary')
   if primary.tag == 'hit' then return primary end
-  if primary.tag ~= 'miss' then return primary end
-  local primary_cert = primary.cert or {}
+  if primary.tag ~= 'retry' then return primary end
+  local primary_proof = primary.proof or {}
 
-  local fallback = try_branch(st, { kind = 'task', index = 1, or_else_side = 'fallback', cert = primary_cert }, depth, 'or-else-fallback')
+  local fallback = try_branch(st, { kind = 'task', index = 1, or_else_side = 'fallback', proof = primary_proof }, depth, 'or-else-fallback')
   if fallback.tag == 'hit' then return fallback end
 
-  local waits = {}
-  append_all(waits, fallback.waits)
-  if fallback.tag == 'unknown' then return Outcome.unknown(waits, fallback.reason) end
-  local cert = AbsenceCert.new():extend(primary_cert):extend(fallback.cert)
-  return Outcome.miss(cert, waits)
+  local interests = {}
+  append_all(interests, fallback.interests)
+  if fallback.tag == 'unknown' then return Outcome.unknown(interests, fallback.reason) end
+  local proof = fallback.proof or RetryProof.new()
+  proof:merge_evidence(primary_proof)
+  return Outcome.retry(proof)
 end
 
 search_state = function(st, depth)
@@ -1081,6 +1065,7 @@ search_state = function(st, depth)
     if op and op.kind == 'or_else' then return search_or_else(st, depth) end
   end
 
+  local premise_proof
   local branches = task_branches(st)
   if not branches then
     if #st.premises == 0 then
@@ -1093,25 +1078,28 @@ search_state = function(st, depth)
             return Outcome.unknown(nil, reason)
           end
         end
-        return Outcome.miss(AbsenceCert.new())
+        return Outcome.retry(RetryProof.new())
       end
-      return Outcome.miss(AbsenceCert.new())
+      return Outcome.retry(RetryProof.new())
     end
 
-    branches = premise_branches(st)
+    branches, premise_proof = premise_branches(st)
     local partners = partner_branches(st)
     for i = 1, #partners do branches[#branches + 1] = partners[i] end
-    if #branches == 0 then return premise_outcome(st) end
+    if #branches == 0 then return Outcome.retry(premise_proof()) end
   end
 
 
-  local miss
+  local retry_outcome
   for i = 1, #branches do
     local out = try_branch(st, branches[i], depth, 'branch')
     if out.tag == 'hit' then return out end
-    miss = Outcome.merge(miss, out)
+    retry_outcome = Outcome.merge(retry_outcome, out)
   end
-  return miss or Outcome.miss({})
+  if premise_proof then
+    retry_outcome = Outcome.merge(retry_outcome, Outcome.retry(premise_proof()))
+  end
+  return retry_outcome or Outcome.retry(RetryProof.new())
 end
 
 function Solver.new(rt, pending)
@@ -1119,7 +1107,6 @@ function Solver.new(rt, pending)
     rt = rt,
     pending = pending or {},
     pending_ids = sorted_pending_ids(pending or {}),
-    waits = {},
     capture = Capture.none(),
     observer = nil,
     budget = nil,
@@ -1134,18 +1121,6 @@ function Solver:charge(kind)
   if self.cursor and self.cursor.charge then self.cursor:charge(kind) end
 end
 
-local function append_waits(dst, src)
-  for i = 1, #(src or {}) do dst[#dst + 1] = src[i] end
-end
-
-
-local function local_nonlocal_kind(op)
-  if type(op) ~= 'table' then return true end
-  local k = op.kind
-  if k == 'always' or k == 'bind' or k == 'map' or k == 'wrap' or k == 'guard' then return false end
-  return true
-end
-
 local function op_summary(op)
   if type(op) ~= 'table' then return { may_start_local = false, static_local = false } end
   local cached = rawget(op, '_net_summary')
@@ -1155,22 +1130,18 @@ local function op_summary(op)
   local summary
   if k == 'always' then
     summary = { may_start_local = true, static_local = true }
-  elseif k == 'wrap' or k == 'map' then
+  elseif k == 'annotated' then
     local inner = op_summary(op_inner(op))
     summary = {
       may_start_local = true,
       static_local = inner.static_local == true,
     }
-  elseif k == 'bind' then
-    -- A bind may stay inside local proof reduction, but only after running the
+  elseif k == 'and_then' then
+    -- An `and_then` may stay inside local proof reduction, but only after running the
     -- callback.  The cached summary therefore authorises entering the corridor
     -- without claiming that the whole option is statically local.
     summary = { may_start_local = true, static_local = false }
-  elseif k == 'guard' then
-    -- A guard is search-phase construction.  It may produce a local proof or a
-    -- genuine net premise, so it can enter the corridor but is never static.
-    summary = { may_start_local = true, static_local = false }
-  elseif k == 'prim' and op.prim == 'resource' then
+  elseif k == 'primitive' and op.primitive == 'resource' then
     local rs = Resources.primitive_summary(op) or {}
     summary = {
       may_start_local = false,
@@ -1193,15 +1164,14 @@ local function op_summary(op)
 end
 
 local LOCAL_DONE = 'done'          -- zero-premise proof completed with a result
-local LOCAL_MISS = 'miss'          -- structural absence
-local LOCAL_CONTINUE = 'continue'  -- a bind supplied another local option
+local LOCAL_CONTINUE = 'continue'  -- an and_then supplied another local option
 local LOCAL_NEEDS_NET = 'needs-net' -- reduction reached a real proof-net premise
 
 -- Local proof reduction is a proof-net phase, not a runtime bypass.  It may
--- reduce only deterministic zero-premise forms: always, bind while the bind
+-- reduce only deterministic zero-premise forms: `always`, `and_then` while the continuation
 -- result remains local, wrap, and guard construction.  It must
 -- not observe, prepare, or commit resources.  When it reaches a resource,
--- rendezvous, product, choice, or absence question, the same task is passed back
+-- rendezvous, product, choice, or retry question, the same task is passed back
 -- to general search so callbacks already run are not repeated.
 local function reduce_local_task(solver, task)
   if counters_enabled then count('local.reduce') end
@@ -1212,19 +1182,13 @@ local function reduce_local_task(solver, task)
     while true do
       if solver.charge then solver:charge('local-frame') end
       local frame
-    frame, task.stack = stack_pop(task.stack)
+      frame, task.stack = stack_pop(task.stack)
       if not frame then return LOCAL_DONE, res end
-      if frame.kind == 'bind' then
-        local next_op = call_callback(st, 'bind', frame.fn, unpack_(res.pack, 1, res.pack.n))
-        if type(next_op) ~= 'table' or not next_op.kind then error('and_then callback must return an option') end
-        task.op = next_op
+      local action = apply_result_frame(st, task, res, frame)
+      if action == FRAME_NEXT_OP then
         res = nil
         return LOCAL_CONTINUE
-      elseif frame.kind == 'map' then
-        res.pack = pack_(call_callback(st, 'map', frame.fn, unpack_(res.pack, 1, res.pack.n)))
-      elseif frame.kind == 'wrap' then
-        res.wraps[#res.wraps + 1] = frame.fn
-      else
+      elseif action == FRAME_PRODUCT then
         return LOCAL_NEEDS_NET
       end
     end
@@ -1241,32 +1205,17 @@ local function reduce_local_task(solver, task)
       res = new_result(op_values(op))
       local status, out = finish_result()
       if status == LOCAL_CONTINUE then
-        -- The bind continuation supplied another option.  Keep reducing it
+        -- The and_then continuation supplied another option.  Keep reducing it
         -- while it remains inside the deterministic zero-premise corridor.
       else
         return status, out
       end
-    elseif k == 'bind' then
-      task.stack = stack_push(task.stack, { kind = 'bind', fn = op.fn })
+    elseif k == 'and_then' then
+      task.stack = stack_push(task.stack, { kind = 'and_then', fn = op.fn, callback_phase = op.callback_phase, cache_key = op.cache_key })
       task.op = op_inner(op)
-    elseif k == 'map' then
-      task.stack = stack_push(task.stack, { kind = 'map', fn = op.fn })
+    elseif k == 'annotated' then
+      if op.post then task.stack = stack_push(task.stack, { kind = 'post', fn = op.post }) end
       task.op = op_inner(op)
-    elseif k == 'wrap' then
-      task.stack = stack_push(task.stack, { kind = 'wrap', fn = op.fn })
-      task.op = op_inner(op)
-    elseif k == 'guard' then
-      local cache = task.attempt and task.attempt.guard_cache
-      local key = op._id or op
-      if cache and cache[key] ~= nil then
-        task.op = cache[key]
-      else
-        task.op = call_callback(st, 'guard', op.fn, callback_ctx(st))
-        if cache then cache[key] = task.op end
-      end
-    elseif local_nonlocal_kind(op) then
-      task.op = op
-      return LOCAL_NEEDS_NET
     else
       task.op = op
       return LOCAL_NEEDS_NET
@@ -1275,14 +1224,13 @@ local function reduce_local_task(solver, task)
 end
 
 function Solver:find_local_or_out_from(id)
-  if not self.pending[id] then return Outcome.miss(AbsenceCert.new()) end
+  if not self.pending[id] then return Outcome.retry(RetryProof.new()) end
 
   local p = self.pending[id]
   local summary = op_summary(p.op)
   if not summary.may_start_local then
     local attempt = Attempt.new(self.rt, self.pending, id, self)
     local out = search_state(attempt, 0)
-    if out.tag ~= 'hit' then append_waits(self.waits, out.waits or attempt.frontier_waits) end
     return out
   end
 
@@ -1299,8 +1247,6 @@ function Solver:find_local_or_out_from(id)
     local world, err = World.local_root(id, res, task.env)
     if not world then return Outcome.unknown(nil, err) end
     return Outcome.hit(world)
-  elseif status == LOCAL_MISS then
-    return Outcome.miss(AbsenceCert.new())
   end
 
   -- The local corridor reached a genuine proof-net premise, for example a
@@ -1310,15 +1256,13 @@ function Solver:find_local_or_out_from(id)
   task.env = task.env or Resources.new_env(nil, self.capture)
   attempt.tasks[1] = task
   local out = search_state(attempt, 0)
-  if out.tag ~= 'hit' then append_waits(self.waits, out.waits or attempt.frontier_waits) end
   return out
 end
 
 function Solver:find_out_from(id)
-  if not self.pending[id] then return Outcome.miss(AbsenceCert.new()) end
+  if not self.pending[id] then return Outcome.retry(RetryProof.new()) end
   local attempt = Attempt.new(self.rt, self.pending, id, self)
   local out = search_state(attempt, 0)
-  if out.tag ~= 'hit' then append_waits(self.waits, out.waits or attempt.frontier_waits) end
   return out
 end
 
@@ -1336,28 +1280,28 @@ function Solver:find_commit_outcome()
     return self:find_local_or_out_from(ids[1])
   end
 
-  -- Absence-certified fallback is deliberately lowest priority.  A fallback
+  -- Retry-certified fallback is deliberately lowest priority.  A fallback
   -- world is a claim that no preferred world is presently available; before
-  -- committing it, ask every waiting root whether it can produce a non-absence
+  -- committing it, ask every waiting root whether it can produce a non-fallback
   -- world.  This prevents resource, task, and flow progress in another fibre
   -- from being masked by a too-local or_else fallback.
   local fallback_world = nil
-  local miss = nil
+  local retry_outcome = nil
   for _, id in ipairs(ids) do
     self:charge('root-scan')
     local out = self:find_out_from(id)
     if out.tag == 'hit' then
       local w = out.world
-      if not w:has_absence() then return Outcome.hit(w) end
+      if not w:has_retry() then return Outcome.hit(w) end
       fallback_world = fallback_world or w
     elseif out.tag == 'unknown' then
       return out
     else
-      miss = Outcome.merge(miss, out)
+      retry_outcome = Outcome.merge(retry_outcome, out)
     end
   end
   if fallback_world then return Outcome.hit(fallback_world) end
-  return miss or Outcome.miss(AbsenceCert.new(), self.waits)
+  return retry_outcome or Outcome.retry(RetryProof.new())
 end
 
 function Solver:find_commit_candidate()
@@ -1480,7 +1424,7 @@ function Solver:perform_sync(op)
   local pseudo = { op = op, fiber = nil }
   local pending = { [1] = pseudo }
   local out = search_state(Attempt.new(self.rt, pending, 1), 0)
-  if out.tag ~= 'hit' then return { tag = out.tag == 'miss' and 'absent' or 'pending' }, pack_() end
+  if out.tag ~= 'hit' then return { tag = out.tag, proof = out.proof, reason = out.reason }, pack_() end
   local world = out.world
   local ok = world:commit(self.rt)
   if not ok then return { tag = 'pending' }, pack_() end

@@ -7,8 +7,7 @@
 
 local Op = require('fibers.atoms.op')
 local EffectKind = require('fibers.kernel.effect.kind')
-local Source = require('fibers.atoms.source')
-local SourceState = require('fibers.internal.source_state')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
 local Effect = {}
 
@@ -133,12 +132,29 @@ ScopeKind = EffectKind.new {
       key = scope_key(payload),
       payload = payload,
       discharge = function(rt, entry, _log)
+        local seen = {}
         local function discharge_source(src)
-          if type(src) == 'table' and src._fibers_kind == Source.Kind then SourceState.arrive(src, entry.payload) end
+          if type(src) == 'table' and type(src._fibers_external_deliver) == 'function' and not seen[src] then
+            seen[src] = true
+            UnsafeExternalMutation.deliver(src, entry.payload)
+          end
+        end
+        local function discharge_region_owner(region)
+          local scope = type(region) == 'table' and region._fibers_scope_owner or nil
+          if scope and type(scope._ensure_policy_monitor) == 'function' then
+            scope:_ensure_policy_monitor(rt, entry.payload)
+          end
+          discharge_source(scope and scope._lifetime_events or nil)
         end
         discharge_source(entry.payload.source)
         local sources = entry.payload.sources
         if type(sources) == 'table' then for i = 1, #sources do discharge_source(sources[i]) end end
+        discharge_region_owner(entry.payload.from)
+        discharge_region_owner(entry.payload.to or entry.payload.region)
+        if entry.payload.type == 'task_exit' then
+          local item = entry.payload.item or entry.payload.task
+          discharge_region_owner(item and item.owner)
+        end
         local host = rt.host or {}
         local discharge = host.scope
         if discharge then return discharge(entry.payload, rt) end

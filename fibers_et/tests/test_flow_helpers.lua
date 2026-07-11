@@ -163,7 +163,7 @@ do
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function() got, err = rt:perform(flow:outlet():read_until_op('\r\n', { limit = 3 })) end, 'reader')
   local st = rt:run()
-  assert_status(st, 'pending', 'terminator prefix at limit should wait for more data')
+  assert_status(st, 'quiescent', 'terminator prefix at limit should have no external wake interest')
   assert_nil(got)
   assert_nil(err)
   rt:spawn_raw(function() rt:perform(flow:inlet():write_op('\n')) end, 'finish')

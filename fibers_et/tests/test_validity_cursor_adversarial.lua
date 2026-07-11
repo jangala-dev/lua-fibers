@@ -8,7 +8,6 @@ local Resources = require('fibers.kernel.resources')
 local Debug = require('fibers.kernel.transaction_debug')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
-local Wait = require('fibers.kernel.wait')
 
 local pack_ = Op._pack
 
@@ -18,66 +17,26 @@ local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy'
 
 local ManagedKind = { name = 'managed-validity-test' }
 
-local function wait_for(resource, interest, payload)
-  return Wait.resource('managed-validity-test', tostring(resource._fibers_id) .. ':' .. tostring(interest), resource, payload)
-end
-
 function ManagedKind.eval(resource, payload, ctx)
   local op = payload.op
   if op == 'map_get' then
     local value, present = resource.map:get(ctx, payload.key)
     if present then return Result.ready(Proposal.new(pack_(value))) end
-    return Result.wait(wait_for(resource, 'map:' .. tostring(payload.key), payload))
+    return ctx:retry('map-missing')
   elseif op == 'map_expect' then
     local value, present = resource.map:get(ctx, payload.key)
     if present and value == payload.expected then return Result.ready(Proposal.new(pack_(value))) end
-    return Result.wait(wait_for(resource, 'map-expect:' .. tostring(payload.key), payload))
+    return ctx:retry('map-value-mismatch')
   elseif op == 'lease_free' then
     if resource.leases:is_free(ctx, payload.key) then return Result.ready(Proposal.new(pack_(true))) end
-    return Result.wait(wait_for(resource, 'lease-free:' .. tostring(payload.key), payload))
+    return ctx:retry('claim-not-free')
   elseif op == 'derived_true' then
     if resource.view:get(ctx) == true then return Result.ready(Proposal.new(pack_(true))) end
-    return Result.wait(wait_for(resource, 'derived-true', payload))
+    return ctx:retry('derived-false')
   end
   error('unknown managed-validity test op ' .. tostring(op), 2)
 end
 
-local function add_obs(ctx, frontier, kind, fields)
-  fields = fields or {}
-  fields.kind = kind
-  fields.frontier = frontier
-  fields.stamp = frontier and frontier.gen or nil
-  if ctx and ctx.add then ctx:add(fields) end
-end
-
-function ManagedKind.absence(resource, payload, ctx)
-  local op = payload.op
-  if op == 'map_get' then
-    if not resource.map:contains(ctx, payload.key) then
-      add_obs(ctx, resource.map:frontier_for('membership', payload.key), 'map-missing', { key = payload.key })
-      return true
-    end
-  elseif op == 'map_expect' then
-    local value, present = resource.map:get(ctx, payload.key)
-    if not (present and value == payload.expected) then
-      local frontier = present and resource.map:frontier_for('value', payload.key) or resource.map:frontier_for('membership', payload.key)
-      add_obs(ctx, frontier, 'map-value-mismatch', { key = payload.key, expected = payload.expected })
-      return true
-    end
-  elseif op == 'lease_free' then
-    if not resource.leases:is_free(ctx, payload.key) then
-      add_obs(ctx, resource.leases:frontier_for('membership', payload.key), 'claim-not-free', { key = payload.key })
-      return true
-    end
-  elseif op == 'derived_true' then
-    if resource.view:get(ctx) ~= true then
-      -- The derived view has no independent frontier; the observations made by
-      -- its body are the certificate.
-      return true
-    end
-  end
-  return false
-end
 
 local function new_managed_resource(name)
   local resource = {

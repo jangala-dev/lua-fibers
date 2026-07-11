@@ -35,29 +35,29 @@ do
   assert_eq(now, 14, 'fake clock should have advanced')
 end
 
--- The pure host is deliberately limited.  It does not pretend to support source
+-- The pure host is deliberately limited.  It does not pretend to support external
 -- waits or polling; unsupported waits are returned to the caller as pending.
 do
-  local source
+  local signal
   local st = fibers.try_run(function()
-    source = fibers.Source.signal('unsupported-host-source')
-    fibers.perform(source:wait_op())
+    signal = fibers.Signal.new('unsupported-host-source')
+    fibers.perform(signal:wait_op())
   end, { host = PureHost.new({ now = function() return 0 end, sleep = function() error('should not sleep') end }) }).runtime_status
 
   assert_status(st, 'pending')
   assert_eq(st.host_reason, 'unsupported-waits')
-  assert_truthy(st.waits and st.waits[1] and st.waits[1].kind == 'source', 'pending status should report source wait')
+  assert_truthy(st.waits and st.waits[1] and st.waits[1].kind == 'external', 'pending status should report external wait')
 end
 
 -- Host helper extracts the earliest time wait and ignores non-time waits.
 do
   local deadline = Host.earliest_deadline({
-    { kind = 'source', key = 'x' },
-    { kind = 'time', deadline = 7 },
-    { kind = 'time', deadline = 3 },
+    { kind = 'external', key = 'x' },
+    { kind = 'timer', deadline = 7 },
+    { kind = 'timer', deadline = 3 },
   })
   assert_eq(deadline, 3)
-  assert_truthy(Host.has_non_time_waits({ { kind = 'time', deadline = 1 }, { kind = 'source' } }))
+  assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
 end
 
 

@@ -54,7 +54,7 @@ local function raw_resolved(x, subst, seen)
     if ok then return raw_resolved(v, subst, seen) end
     return false
   elseif type(x) == 'table' then
-    if is_opaque_value(x) or x._nack_ref then return true end
+    if is_opaque_value(x) then return true end
     if seen and seen[x] then return true end
     seen = seen or {}; seen[x] = true
     local n = x.n or #x
@@ -69,7 +69,7 @@ local function resolve(x, subst, seen)
     if ok then return resolve(v, subst, seen) end
     return x
   elseif type(x) == 'table' then
-    if is_opaque_value(x) or x._nack_ref then return x end
+    if is_opaque_value(x) then return x end
     if seen and seen[x] then return x end
     seen = seen or {}; seen[x] = true
     local y = {}
@@ -94,7 +94,7 @@ end
 
 local function structural_clone(x, seen)
   if type(x) ~= 'table' then return x end
-  if is_ph(x) or x._nack_ref or is_opaque_value(x) then return x end
+  if is_ph(x) or is_opaque_value(x) then return x end
   if seen and seen[x] then return seen[x] end
   seen = seen or {}
   local y = {}
@@ -111,8 +111,6 @@ local function new(vals)
   return {
     vals = vals or pack_(),
     effects = nil,
-    selected_nacks = {},
-    lost_nacks = {},
     endpoints = {},
     res = nil,
     res_list = nil,
@@ -124,8 +122,6 @@ local function clone(p)
   local q = new(structural_clone(p.vals))
   q.subst = subst_copy(p.subst)
   q.effects = p.effects and p.effects:copy() or nil
-  q.selected_nacks = list_copy(p.selected_nacks)
-  q.lost_nacks = list_copy(p.lost_nacks)
   Resource.copy_from(q, p)
   return q
 end

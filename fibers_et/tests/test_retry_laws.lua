@@ -9,6 +9,7 @@ local Runtime = require('fibers.kernel.runtime')
 local Debug = require('fibers.kernel.transaction_debug')
 local Rendezvous = require('fibers.atoms.rendezvous')
 local Result = require('fibers.kernel.resources.result')
+local RetryProof = require('fibers.kernel.retry')
 
 local function fail(msg) error(msg, 2) end
 local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
@@ -18,7 +19,7 @@ local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail(
 
 local function absent(op)
   local status = Debug.perform_sync(Runtime.new(), op)
-  return status.tag == 'absent'
+  return status.tag == 'retry'
 end
 
 -- choice is absent exactly when all alternatives are absent.
@@ -54,11 +55,11 @@ do
   assert_eq(wrapped, false, 'wrap on absent primary must not run')
 end
 
--- A bind whose prefix is absent is absent without running the continuation.
+-- A and_then whose prefix is absent is absent without running the continuation.
 do
   local called = false
-  assert_truthy(absent(Op.never():and_then(function() called = true; return Op.always('bad') end)), 'bind with absent prefix should be absent')
-  assert_eq(called, false, 'bind continuation must not run when the prefix is absent')
+  assert_truthy(absent(Op.never():and_then(function() called = true; return Op.always('bad') end)), 'and_then with absent prefix should be absent')
+  assert_eq(called, false, 'and_then continuation must not run when the prefix is absent')
 end
 
 -- tensor permits internal rendezvous, while all does not.
@@ -69,12 +70,16 @@ do
   assert_truthy(absent(Op.tensor({ ch:get_op() })), 'unpaired tensor rendezvous is absent')
 end
 
--- Absence is explicit by resource kind; an unknown blocking resource is not
--- given a plausible catch-all absence certificate by default.
+-- Resource retry must be explicit and proof-carrying; malformed legacy
+-- blocked results are rejected rather than guessed at by a second pass.
 do
   local fake = { name = 'fake-resource' }
-  local FakeKind = { name = 'fake', eval = function() return Result.blocked() end }
-  assert_falsy(absent(Op._resource(fake, FakeKind, { op = 'wait' })), 'unknown resource absence is uncertified')
+  local FakeKind = { name = 'fake', eval = function() return { status = 'blocked' } end }
+  local ok = pcall(function() Debug.perform_sync(Runtime.new(), Op._resource(fake, FakeKind, { op = 'wait' })) end)
+  assert_eq(ok, false, 'legacy blocked resource results must be rejected')
+
+  local ProofKind = { name = 'proof', eval = function() return Result.retry(RetryProof.permanent('test')) end }
+  assert_truthy(absent(Op._resource(fake, ProofKind, { op = 'wait' })), 'proof-carrying retry remains catchable by otherwise')
 end
 
 -- Runtime priority law: any non-absence world still beats an absence-certified
@@ -97,4 +102,4 @@ do
   assert_eq(got_a, 'fallback')
 end
 
-print('tests/test_absence_laws.lua: ok')
+print('tests/test_retry_laws.lua: ok')

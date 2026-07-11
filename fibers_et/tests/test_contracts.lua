@@ -90,7 +90,7 @@ do
       rt:perform(Op.always('bad'))
       return Op.always(v)
     end))
-  end, 'bind-performer')
+  end, 'and_then-performer')
   local ok, err = pcall(function() rt:run() end)
   assert_error_kind(ok, err, 'phase_error', 'perform inside and_then')
 end
@@ -204,7 +204,7 @@ do
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw guard error')
 end
 
--- Raw map/bind callback errors are also reported as callback errors without
+-- Raw map/and_then callback errors are also reported as callback errors without
 -- poisoning later external calls.
 do
   local rt = Runtime.new()

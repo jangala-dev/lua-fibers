@@ -23,6 +23,18 @@ local function pack(...) return { _fibers_pack = true, n = select('#', ...), ...
 local Task = {}
 Task.__index = Task
 
+local RequestCancel = Scalar.transition {
+  name = 'task.request_cancel',
+  mode = 'update',
+  step = function(state, payload)
+    if type(state) == 'table' and (state.cancelled or state.requested) then
+      return Scalar.Ready.same(false, state.reason)
+    end
+    local next_state = { requested = true, cancelled = true, reason = payload.reason }
+    return Scalar.Ready.write(next_state, true, payload.reason)
+  end,
+}
+
 local next_id = 0
 
 local function is_pending(v)
@@ -47,7 +59,7 @@ function Task.new(fn, name, scope)
     fn = fn,
     name = name or id,
     completion = Scalar.new({ status = 'pending' }, (name or id) .. '-completion'),
-    cancellation = Scalar.new({ cancelled = false }, (name or id) .. '-cancellation'),
+    cancellation = Scalar.new({ requested = false, cancelled = false }, (name or id) .. '-cancellation'),
     interrupt = Interrupt.new((name or id) .. '-interrupt'),
     scope = scope,
     owner = nil,
@@ -82,9 +94,24 @@ function Task:_spawn_body(fn)
     end
     rt:perform(task.completion:read_op():and_then(function(v)
       if not is_pending(v) then return Op.always(false) end
-      return task.completion:write_op(exit)
+      return task.completion:write_op(exit):and_then(function()
+        return Op.emit(Effect.scope {
+          type = 'task_exit',
+          item = task,
+          task = task,
+          exit = exit,
+        }):map(function() return true end)
+      end)
     end), { masked = true })
   end
+end
+
+function Task:_start_internal(rt, scope)
+  if not rt or type(rt._spawn_committed) ~= 'function' then error('Task:_start_internal requires a Runtime', 2) end
+  local body = self:_spawn_body(self.fn)
+  self.fn = nil
+  self.scope = nil
+  return rt:_spawn_committed(body, self.name, scope)
 end
 
 function Task:_spawn_effect()
@@ -133,12 +160,16 @@ function Task:await_op()
 end
 
 function Task:request_cancel_op(reason)
-  return self.cancellation:write_op({ cancelled = true, reason = reason })
-    :and_then(function() return Op.emit(Effect.interrupt(self.interrupt, reason)) end)
+  return self.cancellation:transition_op(RequestCancel, { reason = reason }):and_then(function(first, recorded_reason)
+    if not first then return Op.always(false, recorded_reason) end
+    return Op.emit(Effect.interrupt(self.interrupt, recorded_reason)):map(function()
+      return true, recorded_reason
+    end)
+  end)
 end
 
 function Task:cancel_requested_op()
-  return wait_for_scalar(self.cancellation, function(v) return type(v) == 'table' and v.cancelled end):map(function(v)
+  return wait_for_scalar(self.cancellation, function(v) return type(v) == 'table' and (v.cancelled or v.requested) end):map(function(v)
     return true, v.reason
   end)
 end
@@ -149,7 +180,7 @@ function Task:state_op()
       return {
         exited = Exit.is(completion),
         exit = completion,
-        cancel_requested = type(cancel) == 'table' and cancel.cancelled or false,
+        cancel_requested = type(cancel) == 'table' and (cancel.cancelled or cancel.requested) or false,
         cancel_reason = type(cancel) == 'table' and cancel.reason or nil,
         task = self,
       }

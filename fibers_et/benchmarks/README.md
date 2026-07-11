@@ -4,11 +4,11 @@
 work. It replaces the earlier small benchmark with grouped cases covering:
 
 ```text
-local Op perform, map/bind, wrap
+local Op perform, map/and_then, wrap
 Scalar reads, writes, and changed waits
 Rendezvous and tensor-internal rendezvous
-all/tensor products, deferred lane bind, choice, or_else, and backtracking
-Source events, external arrival, and clock readiness
+all/tensor products, deferred lane and_then, choice, or_else, and backtracking
+EventQueue consumption, external arrival, and clock readiness
 Effect merge and discharge
 Region ownership
 Task/Scope spawning and settlement

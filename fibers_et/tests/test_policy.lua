@@ -41,7 +41,7 @@ end
 do
   local task
   local r = fibers.try_run(function()
-    local src = fibers.Source.signal('policy-cancel-source')
+    local src = fibers.Signal.new('policy-cancel-source')
     task = fibers.spawn(function()
       fibers.perform(src:wait_op())
     end, 'waiter')
@@ -56,7 +56,7 @@ end
 do
   local child
   local r = fibers.try_run(function()
-    local src = fibers.Source.signal('policy-body-failure-source')
+    local src = fibers.Signal.new('policy-body-failure-source')
     child = fibers.spawn(function()
       fibers.perform(src:wait_op())
     end, 'owned-waiter')
@@ -70,6 +70,27 @@ do
   local st = fibers.try_run(function() state = fibers.perform(child:state_op()) end).runtime_status
   assert_status(st, 'found', 'status after inspecting cancelled child')
   assert_truthy(state.exit.tag == 'cancelled' or state.exit.tag == 'failed', 'child should be cancelled or report scope failure under body failure')
+end
+
+
+-- A custom policy owns the boundary algorithm and may delegate to the shared
+-- mechanism driver explicitly.
+do
+  local entered = false
+  local policy = {
+    name = 'custom-boundary',
+    permit_unstructured = false,
+    permit_outward_move = true,
+    permit_admission = true,
+    try_run = function(self, scope, fn, driver)
+      entered = true
+      return driver.run(scope, fn, self)
+    end,
+  }
+  local r = fibers.try_run(function() return 'custom-ok' end, { policy = policy })
+  assert_truthy(r.ok, tostring(r.report or r.reason))
+  assert_eq(r:unpack(), 'custom-ok')
+  assert_truthy(entered, 'custom policy try_run should own the boundary')
 end
 
 print('tests/test_policy.lua: ok')

@@ -12,7 +12,7 @@ local function drive(rt, limit)
   local st
   for _ = 1, limit do
     st = rt:run()
-    if st.tag == 'idle' or st.tag == 'absent' then return st end
+    if st.tag == 'idle' or st.tag == 'quiescent' then return st end
   end
   return st
 end

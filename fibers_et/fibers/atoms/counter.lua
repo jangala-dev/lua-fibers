@@ -8,8 +8,8 @@
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
+local Resolution = require('fibers.kernel.resources.resolution')
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
 local Validity = require('fibers.kernel.validity')
 local Premise = require('fibers.kernel.premise_helpers')
 
@@ -129,8 +129,7 @@ function CounterKind.eval(counter, payload, ctx)
       local c = Proposal.new(OpPack(true))
       return Result.ready(c)
     end
-    local wait = Wait.resource('counter', counter._fibers_id, counter, { op = op, amount = amount })
-    return Result.premise({ role = 'take', amount = amount }, wait)
+    return Result.premise({ role = 'take', amount = amount })
   end
   error('unknown counter command ' .. tostring(op), 2)
 end
@@ -142,7 +141,7 @@ local function visible_delta_for_view(view)
   -- `all` lanes may not positively supply another lane.  Their negative
   -- deltas still constrain joint allocation.  Tensor-internal sibling positive
   -- deltas are visible as handoff supply.
-  if view and view.relation == 'sibling' and view.allow_internal == false and d > 0 then return 0 end
+  if view and view.relation == 'sibling' and view.mode == 'independent' and d > 0 then return 0 end
   return d
 end
 
@@ -184,6 +183,7 @@ local function allocate(counter, premises, ctx)
 end
 
 function CounterKind.resolve_premises(counter, premises, ctx)
+  local frontier = counter._validity_opaque and counter._validity_opaque:frontier_for() or nil
   local takes = {}
   for i = 1, #(premises or {}) do
     local p = premises[i]
@@ -200,33 +200,9 @@ function CounterKind.resolve_premises(counter, premises, ctx)
     local sol = allocate(counter, { takes[i] }, ctx)
     if sol then out[#out + 1] = sol end
   end
-  return out
-end
-
-function CounterKind.absence_premises(counter, premises, ctx)
-  local avail = available(counter, premises, ctx)
-  local ok = true
-  for i = 1, #(premises or {}) do
-    local amount = (premises[i].request and premises[i].request.amount) or 1
-    if avail >= amount then ok = false; break end
-  end
-  if not ok then return false end
-  local frontier = counter._validity_opaque and counter._validity_opaque:frontier_for() or nil
-  if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
-    if ctx and ctx.add then
-      ctx:add({ kind = 'counter-insufficient', counter = counter, amount = p.request and p.request.amount, frontier = frontier, stamp = frontier and frontier.gen or nil })
-    end
-  end
-  return true
-end
-
-function CounterKind.absence(counter, payload, ctx)
-  if payload and payload.op == 'take' then
-    return CounterKind.absence_premises(counter, { { request = { role = 'take', amount = payload.amount or 1 } } }, ctx)
-  end
-  return false
+  return Resolution.exhaustive_after(out, ctx, {
+    { kind = 'counter-solutions-exhausted', counter = counter, frontier = frontier, stamp = frontier and frontier.gen or nil },
+  })
 end
 
 function Counter.new(opts, name)

@@ -27,7 +27,7 @@ local counter = fibers.Scalar.new(0, 'counter')
 local observed
 
 fibers.run(function()
-  fibers.spawn_raw(function()
+  fibers.spawn(function()
     fibers.perform(increment(counter))
     fibers.perform(increment(counter))
   end, 'incrementer')

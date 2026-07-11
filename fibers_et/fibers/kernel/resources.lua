@@ -1,20 +1,19 @@
 -- This module is the boundary between the algebraic transaction search and the
 -- mutable/external world.  Resource kinds own their local frontier protocol:
--- clone/merge/project/prepare/apply for committed deltas, plus optional leaf
--- miss certification.  The transaction net owns option algebra; resource
--- kinds only certify local mutable facts.
+-- clone/merge/project/prepare/apply for committed deltas, plus proof-carrying
+-- retry. The transaction net owns option algebra; resource kinds only certify
+-- local mutable facts.
 
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
 local EffectSet = require('fibers.kernel.effect.set')
 local ContributionSet = require('fibers.kernel.resources.contribution_set')
 local FrontierKit = require('fibers.kernel.frontier')
-local Proof = require('fibers.kernel.proof')
-local AbsenceCert = Proof.AbsenceCert
-local Capture = Proof.Capture
+local RetryProof = require('fibers.kernel.retry')
+local Capture = require('fibers.kernel.capture')
+local RetryBuilder = require('fibers.kernel.retry_builder')
 
 local Resources = {}
 
@@ -83,18 +82,18 @@ local function object_validity_frontier(obj)
 end
 
 
-local function clock_before_frontier(source, deadline)
+local function deadline_frontier(source, deadline)
   local v = source and rawget(source, '_validity')
   if not (v and v.before_frontier) then
-    error('clock source ' .. tostring(source and (source._fibers_id or source.name) or source) .. ' lacks managed clock validity', 3)
+    error('deadline resource ' .. tostring(source and (source._fibers_id or source.name) or source) .. ' lacks managed clock validity', 3)
   end
   return v:before_frontier(deadline)
 end
 
-local function register_clock_source(rt, source)
+local function register_deadline_resource(rt, source)
   if not (rt and source) then return end
-  rt._clock_sources = rt._clock_sources or setmetatable({}, { __mode = 'k' })
-  rt._clock_sources[source] = true
+  rt._deadline_resources = rt._deadline_resources or setmetatable({}, { __mode = 'k' })
+  rt._deadline_resources[source] = true
 end
 
 local function add_frontier_to_env(env, frontier)
@@ -127,14 +126,12 @@ function Resources.new_env(parent, capture)
     res_list = nil,
     effects = nil,
     contributions = nil,
-    selected = nil,
-    lost = nil,
     debug_observations = nil,
-    debug_absence_observations = nil,
+    debug_retry_observations = nil,
     frontiers = nil,
     frontier_seen = nil,
     capture = capture,
-    has_absence = false,
+    used_retry = false,
     parent = parent,
     parent_is_boundary = false,
   }
@@ -146,16 +143,14 @@ function Resources.copy_env(env)
   Resource.copy_from(out, env)
   out.effects = copy_effects(env.effects)
   out.contributions = copy_contributions(env.contributions)
-  out.selected = copy_list(env.selected)
-  out.lost = copy_list(env.lost)
   out.debug_observations = copy_list(env.debug_observations)
-  out.debug_absence_observations = copy_list(env.debug_absence_observations)
+  out.debug_retry_observations = copy_list(env.debug_retry_observations)
   out.frontiers = copy_list(env.frontiers)
   if out.frontiers and #out.frontiers > 0 then
     out.frontier_seen = {}
     for i = 1, #out.frontiers do out.frontier_seen[out.frontiers[i]] = true end
   end
-  out.has_absence = env.has_absence or false
+  out.used_retry = env.used_retry or false
   out.parent_is_boundary = env.parent_is_boundary or false
   return out
 end
@@ -173,16 +168,14 @@ local function copy_without_parent(env)
   Resource.copy_from(out, env)
   out.effects = copy_effects(env.effects)
   out.contributions = copy_contributions(env.contributions)
-  out.selected = copy_list(env.selected)
-  out.lost = copy_list(env.lost)
   out.debug_observations = copy_list(env.debug_observations)
-  out.debug_absence_observations = copy_list(env.debug_absence_observations)
+  out.debug_retry_observations = copy_list(env.debug_retry_observations)
   out.frontiers = copy_list(env.frontiers)
   if out.frontiers and #out.frontiers > 0 then
     out.frontier_seen = {}
     for i = 1, #out.frontiers do out.frontier_seen[out.frontiers[i]] = true end
   end
-  out.has_absence = env.has_absence or false
+  out.used_retry = env.used_retry or false
   out.parent_is_boundary = false
   return out
 end
@@ -202,8 +195,6 @@ local function merge_contribution_proposals_seq(acc, contributions)
       ok, err = cenv.effects:merge(p.effects)
       if not ok then return false, err end
     end
-    append_field(cenv, 'selected', p.selected_nacks)
-    append_field(cenv, 'lost', p.lost_nacks)
   end
   return Resources.merge_seq_into(acc, cenv)
 end
@@ -317,12 +308,10 @@ function Resources.merge_seq_into(dst, src)
   if not ok then return false, err end
   ok, err = merge_contribution_sets(dst, src.contributions)
   if not ok then return false, err end
-  append_field(dst, 'selected', src.selected)
-  append_field(dst, 'lost', src.lost)
   append_field(dst, 'debug_observations', src.debug_observations)
-  append_field(dst, 'debug_absence_observations', src.debug_absence_observations)
+  append_field(dst, 'debug_retry_observations', src.debug_retry_observations)
   for i = 1, #(src.frontiers or {}) do add_frontier_to_env(dst, src.frontiers[i]) end
-  if src.has_absence then dst.has_absence = true end
+  if src.used_retry then dst.used_retry = true end
   return true
 end
 
@@ -339,12 +328,10 @@ function Resources.merge_parallel_into(dst, src)
   if not ok then return false, err end
   ok, err = merge_contribution_sets(dst, src.contributions)
   if not ok then return false, err end
-  append_field(dst, 'selected', src.selected)
-  append_field(dst, 'lost', src.lost)
   append_field(dst, 'debug_observations', src.debug_observations)
-  append_field(dst, 'debug_absence_observations', src.debug_absence_observations)
+  append_field(dst, 'debug_retry_observations', src.debug_retry_observations)
   for i = 1, #(src.frontiers or {}) do add_frontier_to_env(dst, src.frontiers[i]) end
-  if src.has_absence then dst.has_absence = true end
+  if src.used_retry then dst.used_retry = true end
   return true
 end
 
@@ -378,8 +365,6 @@ function Resources.with_contribution_frame(env, id, proposal)
   return Resources.new_env(frame, env and env.capture or nil)
 end
 
-function Resources.add_selected(env, item) env.selected = env.selected or {}; env.selected[#env.selected + 1] = item end
-function Resources.add_lost(env, item) env.lost = env.lost or {}; env.lost[#env.lost + 1] = item end
 function Resources.add_frontier(env, frontier)
   add_frontier_to_env(env, frontier)
 end
@@ -392,18 +377,19 @@ function Resources.add_observation(env, obs)
   add_frontier_to_env(env, obs_frontier(obs))
 end
 
-function Resources.add_absence_cert(env, cert)
-  for i = 1, #(cert or {}) do
-    local obs = cert[i]
+function Resources.add_retry_proof(env, proof)
+  if not proof then return end
+  for i = 1, #(proof or {}) do
+    local obs = proof[i]
     if env.capture and env.capture:debug_enabled() then
-      env.debug_absence_observations = env.debug_absence_observations or {}
-      env.debug_absence_observations[#env.debug_absence_observations + 1] = obs
+      env.debug_retry_observations = env.debug_retry_observations or {}
+      env.debug_retry_observations[#env.debug_retry_observations + 1] = obs
     end
     add_frontier_to_env(env, obs_frontier(obs))
   end
-  env.has_absence = true
+  for i = 1, #(proof.frontiers or {}) do add_frontier_to_env(env, proof.frontiers[i]) end
+  env.used_retry = true
 end
-
 function Resources.register_frontiers(frontiers, observer)
   if not observer then return end
   for i = 1, #(frontiers or {}) do frontiers[i]:observe(observer) end
@@ -425,15 +411,16 @@ function Resources.observer_valid(observer)
 end
 
 
-function Resources.invalidate_matured_clock_frontiers(rt)
+function Resources.invalidate_matured_deadline_frontiers(rt)
   local now = runtime_now(rt)
-  if rt and rt._clock_sources then
-    for source in pairs(rt._clock_sources) do
+  if rt and rt._deadline_resources then
+    for source in pairs(rt._deadline_resources) do
       local v = source and source._validity
       if v and v.invalidate_matured then v:invalidate_matured(now) end
     end
   end
 end
+
 
 function Resources.observe_frontier(ctx, frontier, env)
   if not frontier then return nil end
@@ -466,7 +453,7 @@ end
 
 
 local function primitive_resource(op)
-  if type(op) ~= 'table' or op.kind ~= 'prim' or op.prim ~= 'resource' then return nil end
+  if type(op) ~= 'table' or op.kind ~= 'primitive' or op.primitive ~= 'resource' then return nil end
   return op.resource, op.resource_kind, op.payload or {}
 end
 
@@ -500,26 +487,53 @@ local function make_resource_ctx(st, task, summary)
     observer = st.observer,
     capture = st.capture,
     observing = observing,
+    _retry_debug = task.env.capture and task.env.capture:debug_enabled() or false,
   }
   function ctx:observe_frontier(frontier)
+    RetryBuilder.observe(self, frontier)
     Resources.observe_frontier(self, frontier, task.env)
     return frontier and frontier.gen or nil
+  end
+  function ctx:add(obs)
+    if obs then
+      RetryBuilder.add(self, obs)
+      Resources.add_observation(task.env, obs)
+    end
+    return obs
+  end
+  function ctx:add_interest(interest)
+    RetryBuilder.add_interest(self, interest)
+    return interest
+  end
+  function ctx:proof()
+    return RetryBuilder.materialise(self)
+  end
+  function ctx:retry(reason, interest)
+    RetryBuilder.set_reason(self, reason)
+    if interest then RetryBuilder.add_interest(self, interest) end
+    return Result.retry(RetryBuilder.materialise(self))
   end
   function ctx:observe_version(obj)
     local v = object_version(obj)
     if not ((self.capture and self.capture:frontiers_enabled()) or self.observer or (task.env.capture and task.env.capture:debug_enabled())) then return v end
     local frontier = object_validity_frontier(obj)
     Resources.observe_frontier(self, frontier, task.env)
-    Resources.add_observation(task.env, { kind = 'version', object = obj, version = v, frontier = frontier })
+    RetryBuilder.observe(self, frontier)
+    local obs = { kind = 'version', object = obj, version = v, frontier = frontier, stamp = frontier and frontier.gen or nil }
+    RetryBuilder.add(self, obs)
+    Resources.add_observation(task.env, obs)
     return v
   end
-  function ctx:before(source, deadline)
-    if deadline == nil then deadline, source = source, nil end
-    if not ((self.capture and self.capture:frontiers_enabled()) or self.observer or (task.env.capture and task.env.capture:debug_enabled())) then return deadline end
-    register_clock_source(st.rt, source)
-    local frontier = clock_before_frontier(source, deadline)
-    Resources.observe_frontier(self, frontier, task.env)
-    Resources.add_observation(task.env, { kind = 'clock-before-selected', source = source, deadline = deadline, observed_now = runtime_now(st.rt), frontier = frontier })
+  function ctx:before(resource, deadline)
+    if deadline == nil then deadline, resource = resource, nil end
+    register_deadline_resource(st.rt, resource)
+    local frontier = deadline_frontier(resource, deadline)
+    RetryBuilder.observe(self, frontier)
+    local observed = (self.capture and self.capture:frontiers_enabled()) or self.observer or (task.env.capture and task.env.capture:debug_enabled())
+    if observed then Resources.observe_frontier(self, frontier, task.env) end
+    local obs = { kind = 'clock-before-selected', source = resource, resource = resource, deadline = deadline, observed_now = runtime_now(st.rt), frontier = frontier, stamp = frontier and frontier.gen or nil }
+    RetryBuilder.add(self, obs)
+    if observed then Resources.add_observation(task.env, obs) end
     return deadline
   end
   function ctx:now() return runtime_now(st.rt) end
@@ -535,14 +549,12 @@ function Resources.commit_candidate_into_env(env, c)
     ok, err = env.effects:merge(c.effects)
     if not ok then return false, err end
   end
-  append_field(env, 'selected', c.selected_nacks)
-  append_field(env, 'lost', c.lost_nacks)
   return true
 end
 
 function Resources.apply(st, task, op, complete_task, new_result)
   if counters_enabled then count('apply') end
-  if op.kind == 'emit' then
+  if op.kind == 'consequence' then
     local ok, err = Resources.add_effect(task.env, op.effect)
     if not ok then st:set_unknown(nil, err or 'effect-conflict') else complete_task(st, task, new_result(pack_(true))) end
     return true
@@ -563,18 +575,12 @@ function Resources.apply(st, task, op, complete_task, new_result)
       kind = kind,
       payload = payload,
       request = r.premise,
-      wait = r.wait,
       task = task,
     })
     return true
   end
-  if r.status == 'wait' or r.status ~= 'ready' then
-    local cert = AbsenceCert.new()
-    if Resources.absence_leaf(st.rt, op, cert, st.observer, st.capture) then
-      st:set_miss(cert, r.status == 'wait' and { r.wait } or nil)
-    else
-      st:set_unknown(r.status == 'wait' and { r.wait } or nil, 'resource-blocked')
-    end
+  if r.status == 'retry' then
+    st:set_retry(r.proof)
     return true
   end
 
@@ -586,55 +592,12 @@ function Resources.apply(st, task, op, complete_task, new_result)
   return true
 end
 
-local function absence_ctx(rt, out, observer, capture)
-  local ctx = { rt = rt, observer = observer, capture = capture, observing = (observer ~= nil) or (capture and capture:frontiers_enabled()) }
-  function ctx:observe_frontier(frontier)
-    if frontier and self.observer then frontier:observe(self.observer) end
-    return frontier and frontier.gen or nil
-  end
-  function ctx:observe_version(obj, label)
-    if obj ~= nil then
-      local frontier
-      if self.observer or (self.capture and self.capture:frontiers_enabled()) then frontier = object_validity_frontier(obj) end
-      if frontier and self.observer then frontier:observe(self.observer) end
-      append(out, { kind = 'version', object = obj, version = object_version(obj), label = label, frontier = frontier })
-    end
-    return obj and object_version(obj) or 0
-  end
-  function ctx:add(obs)
-    if obs then
-      if obs.frontier and self.observer then obs.frontier:observe(self.observer) end
-      append(out, obs)
-    end
-  end
-  function ctx:now() return runtime_now(rt) end
-  return ctx
-end
 
-function Resources.absence_leaf(rt, op, out, observer, capture)
-  if counters_enabled then count('absence.leaf') end
-  local resource, kind, payload = primitive_resource(op)
-  if not resource or not kind or type(kind.absence) ~= 'function' then return false end
-  local before = #out
-  local ok = kind.absence(resource, payload or {}, absence_ctx(rt, out, observer, capture))
-  return ok == true or #out > before
-end
-function Resources.validate_observation(rt, obs)
-  if obs.frontier and obs.stamp ~= nil and (obs.frontier.gen or 0) ~= obs.stamp then return false end
-  local k = obs.kind
-  if k == 'version' then
-    return object_version(obs.object) == obs.version
-  elseif k == 'signal-absent' then
-    return not obs.source._validity.ready
-  elseif k == 'events-empty' then
-    return events_count(obs.source) <= 0
-  elseif k == 'clock-before' or k == 'clock-before-selected' then
-    return runtime_now(rt) < obs.deadline
-  elseif k == 'readiness-absent' then
-    return not readiness_is_set(obs.source, obs.mode)
-  elseif k == 'scalar-unchanged' then
-    return (obs.scalar.version or 0) == obs.version
+function Resources.validate_observation(_rt, obs)
+  if obs.frontier then
+    return (obs.frontier.gen or 0) == obs.stamp
   end
+  if obs.kind == 'version' then return object_version(obs.object) == obs.version end
   return true
 end
 

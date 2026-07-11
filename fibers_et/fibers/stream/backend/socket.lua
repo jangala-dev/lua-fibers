@@ -5,8 +5,8 @@
 -- The host callbacks remain authoritative: readiness only says that trying the
 -- option may be productive.
 
-local Source = require('fibers.atoms.source')
-local SourceState = require('fibers.internal.source_state')
+local Readiness = require('fibers.atoms.readiness')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
 local Socket = {}
 Socket.__index = Socket
@@ -14,7 +14,7 @@ Socket.__index = Socket
 local next_id = 0
 
 local function clear_hint(self, mode)
-  if self.readiness then SourceState.clear(self.readiness, mode) end
+  if self.readiness then UnsafeExternalMutation.clear(self.readiness, mode) end
 end
 
 local function callback(self, name, ...)
@@ -35,7 +35,7 @@ function Socket.new(opts)
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness or opts.source or Source.readiness(key, nil, (opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     _read = opts.read,
     _write = opts.write,

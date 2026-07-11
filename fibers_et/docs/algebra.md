@@ -2,7 +2,7 @@
 
 This document describes the algebraic model underlying Fibres options.
 
-The implementation is inspired by Concurrent ML, Software Transactional Memory, and Transactional Events, but the object being transacted here is broader than a memory update or a communication event. A Fibres option denotes a set of possible committed worlds. A world may contain synchronous rendezvous, transactional resource journals, source observations, ownership changes, and post-commit runtime effects.
+The implementation is inspired by Concurrent ML, Software Transactional Memory, and Transactional Events, but the object being transacted here is broader than a memory update or a communication event. A Fibres option denotes a set of possible committed worlds. A world may contain synchronous rendezvous, transactional resource journals, externally-fed resource observations, ownership changes, and post-commit runtime effects.
 
 The practical notions of `fibers` and `op`s come from Andy Wingo's work on the Snabb networking toolkit, which adapted CML-style first-class synchronisation to Lua and provided the starting vocabulary for this library.
 
@@ -22,11 +22,10 @@ A candidate world may contain:
 ```text
 result          the value delivered if the world wins
 rendezvous      synchronous handshakes between lanes or roots
-journals        transactional resource changes
-observations    managed facts used during proof
-absence         evidence that a preferred world is unavailable
-effects         runtime obligations to discharge after commit
-wraps           post-commit continuations
+journals        tentative resource state changes
+observations    managed facts used during proof and validation
+consequences    runtime obligations entailed by commit
+wraps           per-participant post-commit value continuations
 ```
 
 The runtime searches for a compatible world. If one is selected, it commits the world atomically with respect to the runtime state:
@@ -34,7 +33,7 @@ The runtime searches for a compatible world. If one is selected, it commits the 
 ```text
 search is speculative
 commit is atomic
-effects are post-commit
+consequences are post-commit
 wraps observe committed worlds
 losing worlds do not apply journals or discharge effects
 ```
@@ -55,79 +54,85 @@ Transactional Events:
 
 Fibres:
   all-or-nothing construction of worlds containing rendezvous,
-  resource journals, ownership changes, source observations, and
-  post-commit effects
+  resource journals, ownership changes, external observations and
+  post-commit consequences
 ```
 
-The distinguishing move is that communication, state, ownership, source readiness and runtime obligations are not separate mechanisms. They are components of one committed world.
+The distinguishing move is that communication, state, ownership, external readiness and runtime obligations are not separate mechanisms. They are components of one committed world.
+
+See [`comparison.md`](comparison.md) for a fuller comparison with CSP, CML, Transactional Events and Reagents.
 
 ## 3. Core option language
 
-The public API may expose convenience forms, but the core option language is small.
+The public API exposes convenience forms, but proof search interprets seven
+canonical term kinds:
 
 ```text
 op ::=
     always(v...)
-  | choice(op₁, ..., opₙ)
-  | bind(op, k)
+  | primitive(resource, request)
+  | choose(op₁, ..., opₙ)
+  | and_then(op, k)
+  | product(mode, op₁, ..., opₙ)
   | or_else(primary, fallback)
-  | product({ opᵢ }, allow_internal)
-  | wrap(op, k)
-  | guard(k)
-  | with_nack(make, op)
-  | emit(effect)
-  | primitive(resource/source/rendezvous option)
+  | consequence(commit_obligation)
+
+mode ::= independent | interacting
 ```
 
-Several familiar operators are derived:
+Several public operators elaborate to these forms:
 
 ```text
-never
-  ≜ choice()
-
-map(op, f)
-  ≜ bind(op, λxs. always(f(xs)))
-
-tensor({ opᵢ })
-  ≜ product({ opᵢ }, allow_internal = true)
-
-all({ opᵢ })
-  ≜ product({ opᵢ }, allow_internal = false)
-
-empty tensor/all
-  ≜ always(empty_rows)
+never          ≜ choose()
+map(op, f)     ≜ and_then(op, λxs. always(f(xs)))
+guard(f)       ≜ and_then(always(), f), with attempt-local callback caching
+all(ops)       ≜ product(independent, ops)
+tensor(ops)    ≜ product(interacting, ops)
+emit(c)        ≜ consequence(c)
 ```
 
-The public surface may keep `never`, `map`, `tensor`, and `all`; they need not be primitive in the transaction solver.
+Post-commit participant transforms (`wrap`) and typed defeat obligations
+(`on_defeat`) are annotations on dynamic operation occurrences. They do not add
+candidate-world constructors to the canonical search grammar.
 
 ## 4. Outcomes
 
-A solver must distinguish at least four outcomes.
+Proof search has three semantic outcomes:
 
 ```text
-commit W
-  A compatible world W has been found.
+Hit W
+  A compatible candidate world W has been found.
 
-blocked I
-  No world is available now. The runtime is waiting on interests I.
+Retry P
+  No committing world exists through this path under the managed facts in P.
+  P records validity frontiers and any host-actionable interests.
 
-absent A
-  A preferred world is certifiably absent under observations A.
-
-unknown U
-  The solver or a resource cannot certify availability or absence.
+Unknown K
+  Bounded or incomplete search has not established either Hit or Retry.
+  K is a resumable search cursor or diagnostic reason.
 ```
 
-This distinction is essential. In particular:
+The runtime may describe an uncaught `Retry` as pending or quiescent, but
+blockedness is a scheduling interpretation rather than another semantic result.
+Certified present absence is represented by `Retry`; there is no separate
+`Absent` outcome.
+
+The essential distinction is:
 
 ```text
-not found is not absence
-timeout is not absence
-resource staleness is not absence
-bounded search failure is not absence
+Retry ≠ Unknown
 ```
 
-`or_else` depends on this distinction.
+Consequently:
+
+```text
+not found is not Retry
+search-budget exhaustion is not Retry
+resource conflict is not Retry
+stale validation is not Retry
+```
+
+`or_else` may consume `Retry`. It must propagate `Unknown`.
 
 ## 5. Worlds and commit
 
@@ -140,8 +145,8 @@ World W =
     rendezvous,
     journals,
     observations,
-    absence_proofs,
-    effects,
+    fallback_evidence,
+    consequences,
     wraps
   }
 ```
@@ -152,7 +157,7 @@ A runtime commit has the shape:
 current state Σ
 candidate world W
 prepared resource journals J
-post-commit effects E
+post-commit consequences C
 result value v
 ```
 
@@ -162,9 +167,9 @@ Commit is valid only if:
 all rendezvous obligations are satisfied
 all journals merge without conflict
 all prepared resources are still valid
-all effect keys merge or are distinct
+all consequence keys merge or are distinct
 all ownership changes preserve region invariants
-all absence proofs are conservative
+all fallback Retry evidence remains valid
 ```
 
 Commit then proceeds conceptually as:
@@ -173,10 +178,9 @@ Commit then proceeds conceptually as:
 1. prepare resource journals
 2. reject if stale or conflicting
 3. apply journals
-4. record committed effects
-5. discharge effects
-6. run post-commit wraps
-7. resume selected fibres
+4. discharge selected commit and defeat consequences
+5. resume selected fibres with raw values and post-commit transforms
+6. apply wraps inside each resumed fibre's `perform`
 ```
 
 The ordering may be implemented efficiently, but the semantic boundary must be preserved.
@@ -194,17 +198,16 @@ deterministic
 non-suspending
 no irreversible I/O
 no mutation of external state
-no dependence on facts not represented as resources or sources
+no dependence on facts not represented as resource observations
 ```
 
 Search-phase callbacks include:
 
 ```text
-bind / and_then continuations
-map callbacks, as derived bind continuations
+and_then / and_then continuations
+map callbacks, as derived and_then continuations
 guard callbacks
-resource proposal functions
-nack construction
+resource proposal and resolver functions
 ```
 
 Search callbacks are proof code, not effect code.
@@ -225,12 +228,12 @@ host wake/spawn/interrupt obligations
 
 A callback that must observe the committed world belongs in `wrap`, not in `map` or `and_then`.
 
-## 7. `bind` and derived `map`
+## 7. `and_then` and derived `map`
 
-`bind` extends a proof using the value of a prior proof.
+`and_then` extends a proof using the value of a prior proof.
 
 ```text
-bind(op, k)
+and_then(op, k)
 ```
 
 If `op` proves a value `v`, then `k(v)` produces the next option in the same search.
@@ -238,7 +241,7 @@ If `op` proves a value `v`, then `k(v)` produces the next option in the same sea
 `map` is derived:
 
 ```text
-map(op, f) ≜ bind(op, λv. always(f(v)))
+map(op, f) ≜ and_then(op, λv. always(f(v)))
 ```
 
 This gives the usual functor behaviour under purity:
@@ -251,7 +254,7 @@ map(g, map(f, op)) ≈ map(g ∘ f, op)
 
 These are conditional laws. They require `f` and `g` to be pure search-phase functions.
 
-`bind` is more powerful than `map`: it can use a value to choose the next option and therefore change the candidate world.
+`and_then` is more powerful than `map`: it can use a value to choose the next option and therefore change the candidate world.
 
 ## 8. `choice`
 
@@ -294,17 +297,17 @@ Losing branches do not commit journals or effects.
 The internal product operator has two modes:
 
 ```text
-product(lanes, allow_internal)
+product(mode, lanes)
 ```
 
 The public operators are:
 
 ```text
 all(lanes)
-  ≜ product(lanes, allow_internal = false)
+  ≜ product(independent, lanes)
 
 tensor(lanes)
-  ≜ product(lanes, allow_internal = true)
+  ≜ product(interacting, lanes)
 ```
 
 ### `all`
@@ -474,10 +477,10 @@ It means:
 ```text
 commit primary if a primary world exists
 
-commit fallback only if primary is certifiably absent
+commit fallback only if primary returns a valid Retry proof
 ```
 
-A fallback is valid only under an absence proof. “Not immediately solved” is not enough.
+A fallback is valid only under a proof-carrying `Retry`. “Not immediately solved” is not enough.
 
 Safe fallback rule:
 
@@ -493,7 +496,7 @@ This is why `or_else` requires a world model. A preferred branch might be satisf
 another root
 a tensor-internal rendezvous
 a resource observation
-a source arrival
+an external feed delivery
 a retry after stale preparation
 ```
 
@@ -511,7 +514,7 @@ or_else is not local fallback
 primary or_else fallback ≠ fallback or_else primary
 ```
 
-`or_else` is preference under certified absence.
+`or_else` is preference under proof-carrying retry.
 
 ## 11. `wrap`
 
@@ -540,25 +543,26 @@ provided composition preserves multiple values and the callbacks are well behave
 Core distinction:
 
 ```text
-bind builds worlds
+and_then builds worlds
 wrap observes committed worlds
 ```
 
 Important non-law:
 
 ```text
-wrap is not bind
+wrap is not and_then
 ```
 
-`bind` can change the candidate world. `wrap` must not.
+`and_then` can change the candidate world. `wrap` must not.
 
 ## 12. `guard`
 
-`guard` is a search-phase option constructor. It allows an option to be constructed using attempt-local context.
+`guard` is delayed transaction construction. Formally it elaborates to an `and_then`
+from `always()`. The implementation retains an attempt-local cache key and passes
+the proof callback context, preserving the rule that one guard occurrence is
+evaluated at most once per perform attempt even when search backtracks.
 
-It is intentionally not reduced to ordinary `bind`, because guard evaluation is part of proof construction and may have attempt-level caching or context-sensitive behaviour.
-
-Guard callbacks must obey search-phase discipline:
+Guard callbacks obey the same search-phase discipline as `and_then` and `map`:
 
 ```text
 pure
@@ -567,47 +571,41 @@ no external mutation
 no irreversible effects
 ```
 
-A guard callback may inspect the proof context made available by the runtime, but any fact that should influence readiness or absence must be represented through resources or sources.
+Any mutable fact that influences readiness or retry must be observed through a
+resource frontier.
 
-## 13. Nacks
+## 13. Defeat consequences
 
-A nack is an obligation associated with a branch that was made eligible but did not win.
-
-Informally:
-
-```text
-with_nack(make, op)
-```
-
-means:
+A typed defeat consequence is attached to a dynamic operation occurrence:
 
 ```text
-construct a losing-branch obligation
-try op
-if the branch loses after becoming eligible, discharge the nack
+on_defeat(op, obligation)
 ```
 
-Nacks are useful for cancellation-like protocols and losing-branch cleanup, but they are subtle because they sit near the boundary between search and post-decision behaviour.
+It is dispatched when that occurrence was entered as a competing alternative
+and another incompatible alternative commits. The carrier is the operation
+occurrence, not each candidate world generated through it, so one occurrence can
+be defeated at most once.
 
-Expected discipline:
+These events are not defeat:
 
 ```text
-nack construction is search-phase code
-nack discharge is post-decision code
-nack discharge must not affect the committed world
-nack errors must have an explicit policy
+search backtracking
+validation conflict
+Retry
+Unknown
+primary Retry followed by an or_else fallback
+an unentered branch
 ```
 
-A desirable law:
+A selected occurrence discards its defeat obligations. An entered losing
+competitor dispatches them as typed runtime effects before participants resume.
+Products contain collaborators, not competitors: sibling lanes do not defeat
+one another. An enclosing choice may defeat the product occurrence as a whole.
 
-```text
-A nack belonging to a branch is discharged iff that branch became eligible
-for selection and did not commit.
-```
-
-If the implementation silently ignores errors in losing nack callbacks, that must be treated as an explicit runtime policy, not an algebraic fact.
-
-Longer term, nacks may be better represented as typed losing effects. Until then, they should remain primitive rather than derived through `bind`, because the solver must be able to see losing-branch obligations without running arbitrary branch continuations.
+Event-shaped negative acknowledgement is therefore a derived advanced pattern:
+a defeat consequence may publish a one-shot externally-fed resource fact which another
+operation observes. It is not primitive syntax.
 
 ## 14. Resources
 
@@ -617,12 +615,13 @@ A resource kind should define some or all of:
 
 ```text
 clone      create a speculative view
-propose    create a journal from an option
+propose    create a journal from a primitive request
 merge      combine compatible journals
-prepare    validate a journal against current state
+resolve    exhaustively solve open resource premises
+retry      return a proof observing the facts that justify no solution
+prepare    validate a selected journal against current state
 apply      commit a prepared journal
-absence    certify absence under observed managed facts
-observe    report interests that may change readiness
+interest   describe host action that may change an observed fact
 ```
 
 Resource soundness obligations:
@@ -641,41 +640,40 @@ Conflict refusal:
 Stale refusal:
   a journal prepared against stale state must not be applied.
 
-Absence conservatism:
-  absence may be reported only when no matching world can become available
-  without a new observation.
+Retry conservatism:
+  Retry may be returned only when no matching world can become available
+  without changing a recorded frontier.
 ```
 
-Resource authors must be conservative. Incorrect absence breaks `or_else`.
+Resource authors must be conservative. An unjustified Retry breaks `or_else`.
 
-## 15. Sources and managed validity
+## 15. Externally-fed resources and managed validity
 
-Sources represent external arrivals.
+External arrival is not a separate semantic category. A signal, event queue,
+readiness level or clock is an ordinary transactional resource whose committed
+state may also be changed through a runtime-bound `ExternalFeed` capability.
 
-A source contributes:
+Such a resource contributes:
 
 ```text
-managed facts   what search can observe, such as queue head or readiness level
-arrivals        events available through those managed facts
-interests       what the host should wait for
+managed facts   what search observes, such as queue head or readiness level
+frontiers       generation-stamped validity evidence
+interests       what the host may await when an uncaught Retry reaches it
+feed            authority to deliver an external state change
 ```
 
-Source law:
+External-feed law:
 
 ```text
-No false absence:
-  if a source/resource fact is used to certify absence,
-  any later arrival that could make the preferred branch available
-  must bump that fact's stamp so a saved proof fails pull validation.
+No false Retry:
+  if an externally-fed resource fact justifies Retry, every delivery that could
+  make the operation ready must invalidate the recorded frontier before search
+  is resumed.
 ```
 
-Runtime blockedness depends on truthful sources:
-
-```text
-If the runtime reports blocked interests I, then a future committed world
-requires at least one interest in I to change, unless a host violates the
-source contract.
-```
+Interests are actionable descriptions, not proof. The frontiers in a
+`RetryProof` justify the conclusion; timer and readiness interests merely tell
+the host how one of those facts may change.
 
 ## 16. Effects
 
@@ -767,15 +765,14 @@ managed fact stamping
 serialisation into the runtime
 ```
 
-The kernel reports wait interests. The host decides how to block for those interests.
+The kernel reports retry interests. The host decides how to block for those interests.
 
 Host law:
 
 ```text
 Host adequacy:
   if the host reports an arrival or readiness event, the corresponding managed
-  source fact must be updated through its capability so blocked options are
-  retried and saved absence proofs are invalidated by stamp validation.
+  externally-fed resource fact must be updated through its capability so retrying operations are retried and saved retry proofs are invalidated by stamp validation.
 ```
 
 Host bugs can break algebraic guarantees by lying about the external world.
@@ -806,7 +803,7 @@ Durability must be implemented as a resource/effect discipline on top of the run
 
 This section collects useful laws. Some are unconditional; others require purity, stable resources, or scheduler-insensitive observation.
 
-### Always and bind
+### Always and sequencing
 
 ```text
 always(v):and_then(k) ≈ k(v)
@@ -855,17 +852,17 @@ all(lanes) ≈ tensor(lanes)
 ### Or else
 
 ```text
-available(primary) ⇒ primary:or_else(fallback) commits primary
+Hit(primary) ⇒ primary:or_else(fallback) commits primary
 
-absent(primary) ⇒ primary:or_else(fallback) may try fallback
+Retry(primary, P) ⇒ primary:or_else(fallback) may search fallback under P
 
-unknown(primary) ⇒ primary:or_else(fallback) must not treat primary as absent
+Unknown(primary) ⇒ primary:or_else(fallback) propagates Unknown
 ```
 
 Important non-law:
 
 ```text
-primary:or_else(fallback) ≠ choice(primary, fallback)
+primary:or_else(fallback) ≠ choose(primary, fallback)
 ```
 
 ### Wrap
@@ -907,11 +904,11 @@ or_else is not choice
 
 or_else is not timeout
 
-absence is not failure to solve quickly
+Retry is not failure to solve quickly
 
 all is not tensor
 
-wrap is not bind
+wrap is not and_then
 
 effects are not resource writes
 
@@ -930,10 +927,10 @@ It has coherent answers for:
 rendezvous
 transactional resources
 internal-world products
-certified fallback
+proof-carrying fallback
 ownership movement
 post-commit effects
-managed source facts
+managed externally-fed resource facts
 structured scope
 stream/flow safety
 ```
@@ -942,9 +939,9 @@ The remaining work is chiefly contractual:
 
 ```text
 fairness policy
-solver budget and unknown outcome semantics
+solver budget and Unknown cursor semantics
 resource-author law tests
-nack error policy
+defeat-consequence error policy
 settlement failure policy
 host backend law coverage
 diagnostics for malformed yields or phase violations
@@ -959,17 +956,17 @@ A Fibres option is a proof search for a compatible committed world.
 ```text
 tensor composes proofs into one world
 
-or_else requires proof of absence of the preferred world
+or_else requires a valid Retry proof for the preferred operation
 
 resources provide transactional truth
 
-sources provide managed observed facts
+external feeds update managed resource facts
 
 effects are obligations of committed worlds
 
 regions make responsibility part of the world
 
-wrap observes commit; bind constructs worlds
+wrap observes commit; and_then constructs worlds
 ```
 
 That is the heart of the system.

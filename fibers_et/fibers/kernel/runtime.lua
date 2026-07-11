@@ -1,9 +1,11 @@
 local Net = require('fibers.kernel.transaction_net')
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
+local Interest = require('fibers.kernel.interest')
 local Resources = require('fibers.kernel.resources')
-local Source = require('fibers.atoms.source')
-local SourceState = require('fibers.internal.source_state')
+local Signal = require('fibers.atoms.signal')
+local EventQueue = require('fibers.atoms.event_queue')
+local Readiness = require('fibers.atoms.readiness')
+local ExternalFeed = require('fibers.kernel.external_feed')
 local Interrupt = require('fibers.internal.interrupt')
 local Protected = require('fibers.kernel.protected')
 local Runtime = {}
@@ -94,6 +96,7 @@ function Runtime.new(opts)
     _current_fibre = nil,
     _driver_depth = 0,
     _failed = nil,
+    _external_feeds = setmetatable({}, { __mode = 'k' }),
   }, Runtime)
 end
 
@@ -104,59 +107,43 @@ function Runtime:now()
   return 0
 end
 
--- Host/source arrival boundary.  External facts enter through the Runtime.
--- SourceState updates the source's managed validity facts; bounded search
--- cursors and wait caches are validated lazily against those facts.
-function Runtime:arrive(source, ...)
+-- External-resource delivery boundary.  External facts enter through a
+-- runtime-bound capability; the resource owns the mutation protocol.
+function Runtime:deliver(feed, ...)
   self:_check_not_failed(2)
-  self:_require_driver_call('arrive', 2)
-  if not source or source._fibers_kind ~= Source.Kind then error('Runtime:arrive expects a Source', 2) end
-  SourceState.arrive(source, ...)
-  return source
+  self:_require_driver_call('external delivery', 2)
+  if not ExternalFeed.is_feed(feed) then error('Runtime:deliver expects an ExternalFeed', 2) end
+  if feed.runtime ~= self then error('external feed belongs to another runtime', 2) end
+  feed:_deliver(...)
+  return feed.resource
 end
 
-function Runtime:_clear_source(source, ...)
+function Runtime:clear_external(feed, ...)
   self:_check_not_failed(2)
-  self:_require_driver_call('clear source', 2)
-  if not source or source._fibers_kind ~= Source.Kind then error('Runtime:_clear_source expects a Source', 2) end
-  SourceState.clear(source, ...)
-  return source
+  self:_require_driver_call('clear external resource', 2)
+  if not ExternalFeed.is_feed(feed) then error('Runtime:clear_external expects an ExternalFeed', 2) end
+  if feed.runtime ~= self then error('external feed belongs to another runtime', 2) end
+  feed:_clear(...)
+  return feed.resource
+end
+
+function Runtime:external_feed(resource)
+  return ExternalFeed.for_resource(self, resource)
 end
 
 function Runtime:signal(name)
-  local source = Source.signal(name)
-  return source, {
-    set = function(_feed, ...) return self:arrive(source, ...) end,
-    clear = function(_feed) return self:_clear_source(source) end,
-  }
+  local resource = Signal.new(name)
+  return resource, self:external_feed(resource)
 end
 
-function Runtime:events_source(name)
-  local source = Source.events(name)
-  return source, {
-    push = function(_feed, ...) return self:arrive(source, ...) end,
-    clear = function(_feed) return self:_clear_source(source) end,
-  }
+function Runtime:events(name)
+  local resource = EventQueue.new(name)
+  return resource, self:external_feed(resource)
 end
 
 function Runtime:readiness(key, name)
-  local source = Source.readiness(key, nil, name)
-  local feed = {}
-  function feed:ready(mode, value)
-    if mode == nil then mode = source.mode or 'read' end
-    return self._rt:arrive(source, mode, value == nil and true or value)
-  end
-  function feed:readable(value)
-    return self._rt:arrive(source, 'read', value == nil and true or value)
-  end
-  function feed:writable(value)
-    return self._rt:arrive(source, 'write', value == nil and true or value)
-  end
-  function feed:clear(mode)
-    return self._rt:_clear_source(source, mode)
-  end
-  feed._rt = self
-  return source, feed
+  local resource = Readiness.new(key, nil, name)
+  return resource, self:external_feed(resource)
 end
 
 function Runtime:_make_error(kind, err, fields)
@@ -471,7 +458,7 @@ function Runtime:perform(opnode, opts)
   if interrupt and interrupt.is_raised and interrupt:is_raised() then
     error(Runtime.cancelled(interrupt.reason, interrupt), 0)
   end
-  local attempt = { guard_cache = {}, nack_cache = {} }
+  local attempt = { guard_cache = {} }
   local result = coroutine.yield({ op = opnode, attempt = attempt, interrupt = interrupt })
   if Runtime.is_cancelled(result) then error(result, 0) end
   if type(result) ~= 'table' then return nil end
@@ -500,17 +487,17 @@ end
 
 function Runtime:_find_net_outcome(waiting, opts)
   local pending = pending_from_waiting(waiting)
-  if not pending_has_any(pending) then return { tag = 'miss', waits = {} }, pending, {} end
+  if not pending_has_any(pending) then return { tag = 'retry', proof = require('fibers.kernel.retry').permanent('no-pending'), interests = {} }, pending end
 
   opts = opts or {}
-  Resources.invalidate_matured_clock_frontiers(self)
+  Resources.invalidate_matured_deadline_frontiers(self)
 
   local solver, cursor, out
   if opts.max_work then
     local sig = Net.pending_signature and Net.pending_signature(pending) or nil
     local cache = self._net_wait_cache
     if cache and cache.pending_sig == sig and Resources.observer_valid(cache.observer) then
-      return cache.out, pending, cache.waits
+      return cache.out, pending
     elseif cache then
       if cache.observer and cache.observer.dispose then cache.observer:dispose() end
       self._net_wait_cache = nil
@@ -529,7 +516,7 @@ function Runtime:_find_net_outcome(waiting, opts)
     else
       self._cursor = nil
       if out.tag ~= 'hit' then
-        self._net_wait_cache = { pending_sig = sig, out = out, waits = solver and solver.waits or {}, observer = cursor and cursor:take_observer() or nil }
+        self._net_wait_cache = { pending_sig = sig, out = out, observer = cursor and cursor:take_observer() or nil }
       else
         if cursor and cursor.dispose then cursor:dispose() end
         self._net_wait_cache = nil
@@ -542,12 +529,7 @@ function Runtime:_find_net_outcome(waiting, opts)
     out = solver:find_commit_outcome()
   end
 
-  return out, pending, solver and solver.waits or {}
-end
-
-function Runtime:_find_net_world(waiting)
-  local out, pending, waits = self:_find_net_outcome(waiting)
-  return out.tag == 'hit' and out.world or nil, pending, waits
+  return out, pending
 end
 
 function Runtime:_apply_net_world(world, pending)
@@ -636,7 +618,7 @@ end
 --   found   : one transaction was committed and any selected fibres were resumed
 --   pending : useful work was performed but no transaction has yet committed, or
 --             the option algebra budget was exhausted without mutation
---   absent  : no compatible transaction exists for the current waiting set
+--   quiescent: retry is proved but no actionable external interest is known
 --   idle    : all fibres are complete and there is no pending work
 --
 -- Bounded work is conservative.  If opts.max_work is reached inside the algebra
@@ -653,14 +635,14 @@ function Runtime:_step(opts)
     return { tag = 'pending', kind = 'no-ready-work' }
   end
 
-  local out, pending, solver_waits = self:_find_net_outcome(waiting, opts)
+  local out, pending = self:_find_net_outcome(waiting, opts)
 
   if out.tag == 'budget' then
     return { tag = 'pending', kind = 'budget', work = out.used }
   end
 
   local world = out.tag == 'hit' and out.world or nil
-  if world and (not world:has_absence() or not self:_has_unstarted()) then
+  if world and (not world:has_retry() or not self:_has_unstarted()) then
     local ok, reason = self:_apply_net_world(world, pending)
     if ok then return { tag = 'found', value = true, kind = 'commit' } end
     return plan_failure_status(reason)
@@ -674,13 +656,13 @@ function Runtime:_step(opts)
     return plan_failure_status(reason)
   end
 
-  local waits = Wait.summarise(Wait.merge((out and out.waits) or solver_waits or {}))
+  local interests = Interest.summarise(Interest.merge((out and out.interests) or {}))
   if out.tag == 'unknown' then
-    if out.reason == 'budget' then return { tag = 'pending', kind = 'budget', waits_incomplete = true } end
-    return { tag = 'pending', kind = out.reason or 'unknown', waits = waits }
+    if out.reason == 'budget' then return { tag = 'pending', kind = 'budget', interests_incomplete = true } end
+    return { tag = 'pending', kind = out.reason or 'unknown', interests = interests, waits = interests }
   end
-  if #waits > 0 then return { tag = 'pending', kind = 'wakeup', waits = waits } end
-  return { tag = 'absent', reason = 'no compatible transaction' }
+  if #interests > 0 then return { tag = 'pending', kind = 'wakeup', interests = interests, waits = interests } end
+  return { tag = 'quiescent', reason = 'retry without actionable interest' }
 end
 
 function Runtime:_run(opts)
@@ -708,9 +690,9 @@ function Runtime:_run(opts)
         return { tag = 'pending', kind = 'no-ready-work' }
       end
     else
-      local out, pending, solver_waits = self:_find_net_outcome(waiting)
+      local out, pending = self:_find_net_outcome(waiting)
       local world = out.tag == 'hit' and out.world or nil
-      if world and (not world:has_absence() or not self:_has_unstarted()) then
+      if world and (not world:has_retry() or not self:_has_unstarted()) then
         local ok, reason = self:_apply_net_world(world, pending)
         if ok then
           committed = true
@@ -728,17 +710,17 @@ function Runtime:_run(opts)
           return plan_failure_status(reason)
         end
       else
-        local waits = Wait.summarise(Wait.merge((out and out.waits) or solver_waits or {}))
+        local interests = Interest.summarise(Interest.merge((out and out.interests) or {}))
         if out.tag == 'unknown' then
           if committed then return { tag = 'found', value = true } end
-          return { tag = 'pending', kind = out.reason or 'unknown', waits = waits }
+          return { tag = 'pending', kind = out.reason or 'unknown', interests = interests, waits = interests }
         end
-        if #waits > 0 then
+        if #interests > 0 then
           if committed then return { tag = 'found', value = true } end
-          return { tag = 'pending', kind = 'wakeup', waits = waits }
+          return { tag = 'pending', kind = 'wakeup', interests = interests, waits = interests }
         end
         if committed then return { tag = 'found', value = true } end
-        return { tag = 'absent', reason = 'no compatible transaction' }
+        return { tag = 'quiescent', reason = 'retry without actionable interest' }
       end
     end
   end

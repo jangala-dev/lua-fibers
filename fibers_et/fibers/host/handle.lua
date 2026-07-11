@@ -7,8 +7,8 @@
 -- handle stream backend, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
-local Source = require('fibers.atoms.source')
-local SourceState = require('fibers.internal.source_state')
+local Readiness = require('fibers.atoms.readiness')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Errors = require('fibers.flow.errors')
 
 local Handle = {}
@@ -25,14 +25,14 @@ end
 
 local function clear_hint(self, mode)
   mode = normalise_mode(mode)
-  if self.readiness then SourceState.clear(self.readiness, mode) end
+  if self.readiness then UnsafeExternalMutation.clear(self.readiness, mode) end
   local host = self.host
   if host and type(host.clear_readiness) == 'function' then host:clear_readiness(self.key, mode) end
 end
 
 local function mark_hint(self, mode)
   mode = normalise_mode(mode)
-  if self.readiness then SourceState.arrive(self.readiness, mode, true) end
+  if self.readiness then UnsafeExternalMutation.deliver(self.readiness, mode, true) end
   local host = self.host
   if host and type(host.set_readiness) == 'function' then host:set_readiness(self.key, mode, true) end
 end
@@ -55,7 +55,7 @@ function Handle.new(opts)
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness or opts.source or Source.readiness(key, nil, (opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     close_on_gc = opts.close_on_gc,
     _read = opts.read,

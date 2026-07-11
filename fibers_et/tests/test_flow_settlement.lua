@@ -16,7 +16,7 @@ local function drive_until(rt, pred, label)
     if pred() then return true end
     local st = rt:run()
     if pred() then return true end
-    if st.tag == 'idle' or st.tag == 'absent' then break end
+    if st.tag == 'idle' or st.tag == 'quiescent' then break end
   end
   fail(label or 'runtime did not reach expected state')
 end

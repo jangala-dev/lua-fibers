@@ -133,7 +133,7 @@ the outside world may be admitted as changing condition, not only discrete event
 Implementation sentence:
 
 ```text
-weather folds sources into scalar conditions with validity facts
+weather folds externally fed resources into scalar conditions with validity facts
 ```
 
 Possible use:
@@ -142,7 +142,7 @@ Possible use:
 readiness, deadlines, frame budget, power state, network condition, device state
 ```
 
-`Source` admits occurrences.  Weather would admit current conditions whose truth
+`Signal`, `EventQueue` and `Readiness` admit externally supplied facts.  Weather would admit current conditions whose truth
 may later stop holding.
 
 ## Mirror

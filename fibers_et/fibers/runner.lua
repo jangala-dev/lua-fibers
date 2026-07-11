@@ -30,18 +30,18 @@ function Runner.run(rt, opts)
       saw_found = true
       last_found = st
     elseif st and st.tag == 'pending' then
-      local waits = st.waits or {}
-      local progressed, reason = Host.block(host, rt, waits, st, opts.host_options)
+      local interests = st.interests or st.waits or {}
+      local progressed, reason = Host.block(host, rt, interests, st, opts.host_options)
       if progressed then
         -- Host time or readiness may now make a wait productive.  Re-enter the
         -- efficient Runtime:run path rather than looping over Runtime:step.
       else
         st.host_reason = reason
         st.reason = st.reason or reason
-        st.waits = waits
+        st.interests, st.waits = interests, interests
         return st
       end
-    elseif st and (st.tag == 'idle' or st.tag == 'absent') then
+    elseif st and (st.tag == 'idle' or st.tag == 'quiescent') then
       if saw_found then return last_found or { tag = 'found', value = true } end
       return st
     else

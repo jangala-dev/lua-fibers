@@ -136,7 +136,7 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local src = fibers.Source.readiness('manual-key', 'read', 'manual-key-readiness')
+  local src = fibers.Readiness.new('manual-key', 'read', 'manual-key-readiness')
   local seen, key, mode
   rt:spawn_raw(function() seen, key, mode = rt:perform(src:readable_op()) end, 'manual-readiness')
   local st = run(rt, host, 5)

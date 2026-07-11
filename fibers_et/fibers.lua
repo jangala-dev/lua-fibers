@@ -1,7 +1,7 @@
 -- Convenience entry point for the fibers runtime.
 --
 -- The low-level public machinery is the atom kit:
---   Op, Scalar, Rendezvous, Index, Counter, Keyed, Lease, Source, Region, Effect.
+--   Op, Scalar, Rendezvous, Index, Counter, Keyed, Lease, Signal, EventQueue, Clock, Readiness, Region and Effect.
 -- Task, Stream and Scope are ordinary library compounds built from those atoms.
 
 local M = {}
@@ -35,7 +35,10 @@ M.Mailbox = require('fibers.mailbox')
 M.WaitGroup = require('fibers.waitgroup')
 M.Pool = require('fibers.pool')
 M.RateLimiter = require('fibers.rate_limiter')
-M.Source = require('fibers.atoms.source')
+M.Signal = require('fibers.atoms.signal')
+M.EventQueue = require('fibers.atoms.event_queue')
+M.Clock = require('fibers.atoms.clock')
+M.Readiness = require('fibers.atoms.readiness')
 M.Region = require('fibers.atoms.region')
 M.Scope = require('fibers.scope')
 M.Flow = require('fibers.flow')
@@ -54,7 +57,7 @@ M.host = Host
 M.Runner = Runner
 M.policy = Policy
 
-M.clock = M.Source.clock('clock')
+M.clock = M.Clock.new('clock')
 
 M.always = Op.always
 M.never = Op.never
@@ -97,7 +100,18 @@ end
 function M.spawn_raw(fn, name)
   local rt = Runtime.current()
   if not rt then error('fibers.spawn_raw must be called from a running fiber; use fibers.run to start a root fiber', 2) end
-  return rt:spawn_raw(fn, name)
+  local scope = current_scope()
+  if scope then
+    local policy = scope.policy
+    local allowed = policy and policy.permit_unstructured == true
+    if policy and type(policy.allow_unstructured) == 'function' then
+      allowed = policy:allow_unstructured(scope, fn, name) ~= false
+    end
+    if not allowed then
+      error('unstructured spawn is prohibited by the current scope policy; use fibers.spawn or Runtime:spawn_raw', 2)
+    end
+  end
+  return rt:spawn_raw(fn, name, scope)
 end
 
 function M.spawn(fn, name)
@@ -176,6 +190,12 @@ function M.try_run(fn, opts)
       return result
     end, opts.name or 'root', scope)
     runner_status = Runner.run(rt, { host = host, run = opts.run, host_options = opts.host_options, max_iterations = opts.max_iterations })
+    -- Runner reports that some work committed even when the root remains
+    -- blocked.  Internal policy-monitor reads make that distinction observable,
+    -- so obtain the current terminal status when no root result was produced.
+    if not result and runner_status and runner_status.tag == 'found' then
+      runner_status = Runner.run(rt, { host = host, run = opts.run, host_options = opts.host_options, max_iterations = opts.max_iterations })
+    end
   end)
   if ok and result then
     result.runtime_status = runner_status

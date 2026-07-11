@@ -4,12 +4,16 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Source = require('fibers.atoms.source')
+
+local function deliver(rt, resource, ...)
+  return rt:external_feed(resource):deliver(...)
+end
+local Signal = require('fibers.atoms.signal')
 local Rendezvous = require('fibers.atoms.rendezvous')
 local H = require('tests.resources.test_helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()
-  local ev = Source.signal('unset')
+  local ev = Signal.new('unset')
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function() got = rt:perform(ev:wait_op():or_else(Op.always('fallback'))) end, 'fallback-on-not-ready')
@@ -18,7 +22,7 @@ local function test_not_ready_with_fallback_commits_fallback()
 end
 
 local function test_not_ready_without_fallback_reports_pending_wake_interest()
-  local ev = Source.signal('pending')
+  local ev = Signal.new('pending')
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function() got = rt:perform(ev:wait_op()) end, 'pending-no-fallback')
@@ -29,9 +33,9 @@ local function test_not_ready_without_fallback_reports_pending_wake_interest()
 end
 
 local function test_ready_now_beats_fallback()
-  local ev = Source.signal('ready')
+  local ev = Signal.new('ready')
   local rt = Runtime.new()
-  rt:arrive(ev, 'payload')
+  deliver(rt, ev, 'payload')
   local got
   rt:spawn_raw(function() got = rt:perform(ev:wait_op():or_else(Op.always('fallback'))) end, 'ready-beats-fallback')
   H.assert_status(rt:run(), 'found')
@@ -39,10 +43,10 @@ local function test_ready_now_beats_fallback()
 end
 
 local function test_ready_external_value_still_participates_in_global_rendezvous_search()
-  local ev = Source.signal('ready-with-rendezvous')
+  local ev = Signal.new('ready-with-rendezvous')
   local ch = Rendezvous.new('external-plus-rendezvous')
   local rt = Runtime.new()
-  rt:arrive(ev, 'payload')
+  deliver(rt, ev, 'payload')
   local receiver, sender
   rt:spawn_raw(function()
     receiver = rt:perform(

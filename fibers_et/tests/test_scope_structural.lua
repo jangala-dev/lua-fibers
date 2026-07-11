@@ -65,7 +65,7 @@ do
   local owned_inside
   fibers.run(function()
     local ch = fibers.Rendezvous.new('scope-stack-check')
-    fibers.spawn_raw(function()
+    fibers.spawn(function()
       fibers.perform(ch:put_op('go'))
     end, 'scope-stack-sender')
     fibers.scope(function(scope)

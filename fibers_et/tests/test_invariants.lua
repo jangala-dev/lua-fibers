@@ -52,10 +52,10 @@ do
   assert_eq(got.x, 42, 'scalar preserves keyed fields')
 end
 
--- Events Source consumption is journalled: a losing branch does not steal an occurrence.
+-- EventQueue consumption is journalled: a losing branch does not steal an occurrence.
 do
   local rt = Runtime.new()
-  local q, feed = rt:events_source('journalled-source-events')
+  local q, feed = rt:events('journalled-source-events')
   feed:push('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()

@@ -5,7 +5,7 @@
 
 local Op = require('fibers.atoms.op')
 local Scalar = require('fibers.atoms.scalar')
-local Source = require('fibers.atoms.source')
+local Clock = require('fibers.atoms.clock')
 
 local RateLimiter = {}
 RateLimiter.__index = RateLimiter
@@ -95,7 +95,7 @@ function RateLimiter.new(opts)
     name = name,
     capacity = capacity,
     rate = rate,
-    clock = opts.clock or Source.clock(name .. ':clock'),
+    clock = opts.clock or Clock.new(name .. ':clock'),
   }, RateLimiter)
   self.state = Scalar.new({ tokens = initial, last = last }, name .. ':state')
   return self

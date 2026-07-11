@@ -21,15 +21,15 @@ end
 -- delivery action.
 do
   local rt = Runtime.new()
-  local map_count, bind_count, wrap_count = 0, 0, 0
+  local map_count, and_then_count, wrap_count = 0, 0, 0
   local op = Op.always(1)
     :map(function(x) map_count = map_count + 1; return x + 1 end)
-    :and_then(function(x) bind_count = bind_count + 1; return Op.always(x * 3) end)
+    :and_then(function(x) and_then_count = and_then_count + 1; return Op.always(x * 3) end)
     :wrap(function(x) wrap_count = wrap_count + 1; return x + 4 end)
 
   local world = world_for(rt, op)
   assert_eq(map_count, 1, 'map callback should run during proof reduction')
-  assert_eq(bind_count, 1, 'bind callback should run during proof reduction')
+  assert_eq(and_then_count, 1, 'and_then callback should run during proof reduction')
   assert_eq(wrap_count, 0, 'wrap callback must not run before commit/delivery')
 
   local ok, reason = world:commit(rt)
@@ -42,25 +42,25 @@ do
   assert_eq(wrap_count, 1, 'wrap callback should run exactly once at delivery')
 end
 
--- If local reduction reaches a genuine resource premise after a bind, the same
--- reduced proof continues in the general net; the bind callback is not rerun by
+-- If local reduction reaches a genuine resource premise after a and_then, the same
+-- reduced proof continues in the general net; the and_then callback is not rerun by
 -- falling back to a fresh search.
 do
   local rt = Runtime.new()
   local c = Scalar.new(7, 'local-proof-scalar')
-  local bind_count = 0
+  local and_then_count = 0
   local op = Op.always('go'):and_then(function()
-    bind_count = bind_count + 1
+    and_then_count = and_then_count + 1
     return c:read_op()
   end)
 
   local world = world_for(rt, op)
-  assert_eq(bind_count, 1, 'bind callback should run once before resource proof')
+  assert_eq(and_then_count, 1, 'and_then callback should run once before resource proof')
   local ok = world:commit(rt)
   assert_eq(ok, true, 'resource continuation world should commit')
   local vals = world:run_wraps_for(rt, 1)
   assert_eq(vals[1], 7, 'resource continuation should deliver scalar value')
-  assert_eq(bind_count, 1, 'bind callback must not be rerun by general proof search')
+  assert_eq(and_then_count, 1, 'and_then callback must not be rerun by general proof search')
 end
 
 

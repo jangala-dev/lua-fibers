@@ -1,4 +1,4 @@
--- Adversarial absence tests for semantic or_else fallbacks over resources.
+-- Adversarial Retry-proof tests for semantic or_else fallbacks over resources.
 --
 -- These cases are deliberately not rendezvous-only.  They make a fallback tempting
 -- while another root can still make the preferred resource/task/flow path true
@@ -106,4 +106,4 @@ do
   assert_eq(got, 'abc')
 end
 
-print('tests/test_semantic_absence.lua: ok')
+print('tests/test_retry_semantics.lua: ok')

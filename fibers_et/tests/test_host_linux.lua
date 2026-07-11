@@ -31,12 +31,12 @@ do
   assert_truthy(type(cffi_host.new) == 'function', 'cffi host should expose new')
 end
 
--- Readiness waits must retain both the consumer Source and the host-facing key,
+-- Readiness waits must retain both the consumer Readiness resource and the host-facing key,
 -- otherwise host adapters cannot inject readiness arrivals back through the
 -- Runtime boundary.
 do
   local rt = fibers.Runtime.new()
-  local src = fibers.Source.readiness(42, 'read', 'fd-42')
+  local src = fibers.Readiness.new(42, 'read', 'fd-42')
   rt:spawn_raw(function()
     rt:perform(src:readable_op())
   end)
@@ -45,7 +45,8 @@ do
   local waits = (st.waits or {})
   local rw = Host.readiness_waits(waits)
   assert_eq(#rw, 1, 'one readiness wait expected')
-  assert_eq(rw[1].source, src, 'wait should carry source object')
+  assert_eq(rw[1].resource, src, 'interest should carry resource object')
+  assert_eq(rw[1].feed.resource, src, 'interest should carry a feed for the resource')
   assert_eq(rw[1].readiness_key, 42, 'wait should carry original readiness key')
   assert_eq(rw[1].mode, 'read', 'wait should carry readiness mode')
 end

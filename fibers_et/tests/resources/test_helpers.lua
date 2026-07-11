@@ -25,7 +25,7 @@ end
 
 function M.assert_uncommitted_status(status, msg)
   local tag = status and status.tag
-  if tag ~= 'absent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
+  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
     M.fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end

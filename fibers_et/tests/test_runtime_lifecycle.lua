@@ -27,7 +27,7 @@ local function drive(rt, limit)
   for _ = 1, limit do
     last = rt:run()
     if last.tag == 'found' then saw_found = true end
-    if last.tag == 'idle' or last.tag == 'absent' or last.tag == 'pending' then return saw_found, last end
+    if last.tag == 'idle' or last.tag == 'quiescent' or last.tag == 'pending' then return saw_found, last end
   end
   fail('runtime did not quiesce')
 end
@@ -83,7 +83,7 @@ do
   local got
   rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'receiver')
   local st = rt:run()
-  assert_eq(st.tag, 'absent', 'receiver has no compatible transaction until a sender arrives')
+  assert_eq(st.tag, 'quiescent', 'receiver has no compatible transaction until a sender arrives')
 
   rt:spawn_raw(function() rt:perform(ch:put_op('x')) end, 'sender')
   local found, last = drive(rt)

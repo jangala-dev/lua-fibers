@@ -8,8 +8,8 @@
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
+local Resolution = require('fibers.kernel.resources.resolution')
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
 local Validity = require('fibers.kernel.validity')
 local Premise = require('fibers.kernel.premise_helpers')
 local Presence = require('fibers.kernel.resources.presence_journal')
@@ -208,8 +208,7 @@ function KeyedKind.eval(map, payload, ctx)
     local rec = ensure_rec(c, map); rec.read_all = observe_structure(ctx, map)
     return Result.ready(c)
   elseif op == 'get' or op == 'remove_present' or op == 'put_absent' then
-    local wait = Wait.resource('keyed', map._fibers_id .. ':' .. tostring(key), map, { op = op, key = key })
-    return Result.premise({ role = op, key = key, value = payload.value }, wait)
+    return Result.premise({ role = op, key = key, value = payload.value })
   end
   error('unknown keyed command ' .. tostring(op), 2)
 end
@@ -252,33 +251,13 @@ function KeyedKind.resolve_premises(map, premises, ctx)
   local out = {}
   if #ps > 0 and Premise.pairwise_compatible(ps, ctx) then local sol = allocate(map, ps, ctx); if sol then out[#out + 1] = sol end end
   for i = 1, #ps do local sol = allocate(map, { ps[i] }, ctx); if sol then out[#out + 1] = sol end end
-  return out
-end
-
-function KeyedKind.absence_premises(map, premises, ctx)
-  local ok = true
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
-    local mode = p.request.role == 'put_absent' and 'demand_absence' or 'demand_presence'
-    local views = ctx and ctx.resource_record_views and ctx:resource_record_views(map, { p }) or nil
-    local entries = projected_from_views(map, views, mode)
-    local present = entries[p.request.key] ~= nil
-    if p.request.role == 'put_absent' then if not present then ok = false end else if present then ok = false end end
-  end
-  if not ok then return false end
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
+  local observations = {}
+  for i = 1, #ps do
+    local p = ps[i]
     local frontier = map._validity and map._validity:frontier_for('membership', p.request.key) or nil
-    if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-    if ctx and ctx.add then ctx:add({ kind = 'keyed-absent', map = map, role = p.request.role, key = p.request.key, frontier = frontier, stamp = frontier and frontier.gen or nil }) end
+    observations[#observations + 1] = { kind = 'keyed-solutions-exhausted', map = map, role = p.request.role, key = p.request.key, frontier = frontier, stamp = frontier and frontier.gen or nil }
   end
-  return true
-end
-function KeyedKind.absence(map, payload, ctx)
-  if payload and (payload.op == 'get' or payload.op == 'remove_present' or payload.op == 'put_absent') then
-    return KeyedKind.absence_premises(map, { { request = { role = payload.op, key = payload.key, value = payload.value } } }, ctx)
-  end
-  return false
+  return Resolution.exhaustive_after(out, ctx, observations)
 end
 
 function Keyed.new(entries, name)

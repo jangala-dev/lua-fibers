@@ -48,7 +48,7 @@ local function test_pulse_waits_and_close_wakes()
   local done = false
   local version, reason
   rt:spawn_raw(function() version, reason = rt:perform(p:changed_op(0)); done = true end, 'pulse-waiter')
-  assert_status(rt:run(), 'pending')
+  assert_status(rt:run(), 'quiescent')
   assert_eq(done, false)
   rt:spawn_raw(function() rt:perform(p:close_op('shutdown')) end, 'pulse-close')
   assert_status(rt:run(), 'found')
@@ -146,7 +146,7 @@ local function test_mailbox_close_wakes_blocked_sender_and_receiver()
   local send_done = false
   local send_result = 'unset'
   rt:spawn_raw(function() send_result = rt:perform(tx:send_op('x')); send_done = true end, 'mb-blocked-send')
-  assert_status(rt:run(), 'pending')
+  assert_status(rt:run(), 'quiescent')
   rt:spawn_raw(function() rt:perform(tx:close_op('bye')) end, 'mb-close')
   assert_status(rt:run(), 'found')
   assert_eq(send_done, true)
@@ -157,7 +157,7 @@ local function test_mailbox_close_wakes_blocked_sender_and_receiver()
   local recv_done = false
   local recv_result = 'unset'
   rt2:spawn_raw(function() recv_result = rt2:perform(rx2:recv_op()); recv_done = true end, 'mb-blocked-recv')
-  assert_status(rt2:run(), 'pending')
+  assert_status(rt2:run(), 'quiescent')
   rt2:spawn_raw(function() rt2:perform(tx2:close_op('bye')) end, 'mb-close2')
   assert_status(rt2:run(), 'found')
   assert_eq(recv_done, true)

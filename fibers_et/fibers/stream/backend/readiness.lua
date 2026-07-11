@@ -1,11 +1,11 @@
 -- Readiness-backed host stream backend.
 --
--- This is the generic adapter from Source readiness hints to host-pumped
--- streams.  A readiness Source means only that the host action is worth
+-- This is the generic adapter from readiness-resource hints to host-pumped
+-- streams.  A Readiness resource means only that the host action is worth
 -- trying; the non-blocking read/write callbacks remain authoritative and may
 -- still return would_block, eof, or errors.
 
-local Source = require('fibers.atoms.source')
+local Readiness = require('fibers.atoms.readiness')
 
 local Backend = {}
 Backend.__index = Backend
@@ -16,11 +16,11 @@ function Backend.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('readiness-backend-' .. tostring(next_id))
-  local source = opts.source or opts.readiness or Source.readiness(key, nil, (opts.name or tostring(key)) .. ':readiness')
+  local readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness')
   return setmetatable({
     name = opts.name or ('readiness-backend-' .. tostring(next_id)),
     key = key,
-    readiness = source,
+    readiness = readiness,
     feed = opts.feed,
     _read = opts.read,
     _write = opts.write,

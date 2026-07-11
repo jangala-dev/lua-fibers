@@ -9,8 +9,8 @@
 local Resource = require('fibers.kernel.resources.protocol')
 local Proposal = require('fibers.kernel.resources.proposal')
 local Result = require('fibers.kernel.resources.result')
+local Resolution = require('fibers.kernel.resources.resolution')
 local Op = require('fibers.atoms.op')
-local Wait = require('fibers.kernel.wait')
 local Validity = require('fibers.kernel.validity')
 local Premise = require('fibers.kernel.premise_helpers')
 local OpPack = Op._pack
@@ -361,16 +361,13 @@ function ScalarKind.eval(scalar, payload, ctx)
     write_record(c, scalar, payload.value, version)
     return Result.ready(c)
   elseif op == 'expect' then
-    local wait = Wait.resource('scalar', scalar._fibers_id, scalar, { op = 'expect', value = payload.value })
-    return Result.premise({ role = 'expect', value = payload.value }, wait)
+    return Result.premise({ role = 'expect', value = payload.value })
   elseif op == 'update' then
     return Result.premise({ role = 'update', fn = payload.fn, transition = payload.transition, payload = payload.payload })
   elseif op == 'select' then
-    local wait = Wait.resource('scalar', scalar._fibers_id, scalar, { op = 'select' })
-    return Result.premise({ role = 'select', fn = payload.fn, transition = payload.transition, payload = payload.payload }, wait)
+    return Result.premise({ role = 'select', fn = payload.fn, transition = payload.transition, payload = payload.payload })
   elseif op == 'query' then
-    local wait = Wait.resource('scalar', scalar._fibers_id, scalar, { op = 'query' })
-    return Result.premise({ role = 'query', fn = payload.fn, transition = payload.transition, payload = payload.payload }, wait)
+    return Result.premise({ role = 'query', fn = payload.fn, transition = payload.transition, payload = payload.payload })
   elseif op == 'changed' then
     local observed = observe_version(ctx, scalar)
     local version = Resource.project(ctx, scalar, 'version')
@@ -379,7 +376,9 @@ function ScalarKind.eval(scalar, payload, ctx)
       read_record(c, scalar, observed)
       return Result.ready(c)
     end
-    return Result.wait(Wait.resource('scalar', scalar._fibers_id, scalar, { op = 'changed', version = payload.version }))
+    local frontier = scalar._validity_value and scalar._validity_value:frontier_for() or nil
+    ctx:add({ kind = 'scalar-unchanged', scalar = scalar, version = version, frontier = frontier, stamp = frontier and frontier.gen or nil })
+    return ctx:retry('scalar-unchanged')
   end
   error('unknown scalar command ' .. tostring(op), 2)
 end
@@ -468,7 +467,7 @@ end
 local function batch_view(prev, cur, rec, ctx)
   local allow = true
   if ctx and ctx.compatible and not ctx:compatible(prev, cur) then allow = false end
-  return { rec = rec, relation = 'sibling', allow_internal = allow }
+  return { rec = rec, relation = 'sibling', mode = allow and 'interacting' or 'independent' }
 end
 
 local function current_for_request(scalar, req, role, views, ctx)
@@ -553,8 +552,11 @@ function ScalarKind.resolve_premises(scalar, premises, ctx)
     elseif role == 'update' then sol = update_solution(scalar, p, ctx)
     elseif role == 'select' then sol = select_solution(scalar, p, ctx)
     elseif role == 'query' then sol = query_solution(scalar, p, ctx) end
-    if sol then return { sol } end
-    return {}
+    local frontier = scalar._validity_value and scalar._validity_value:frontier_for() or nil
+    local solutions = sol and { sol } or {}
+    return Resolution.exhaustive_after(solutions, ctx, {
+      { kind = 'scalar-solutions-exhausted', scalar = scalar, role = role, frontier = frontier, stamp = frontier and frontier.gen or nil },
+    })
   end
 
   local expects, updates, selects, queries = {}, {}, {}, {}
@@ -595,51 +597,10 @@ function ScalarKind.resolve_premises(scalar, premises, ctx)
       break
     end
   end
-  return out
-end
-
-function ScalarKind.absence_premises(scalar, premises, ctx)
-  local ok = true
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
-    local views = ctx and ctx.resource_record_views and ctx:resource_record_views(scalar, { p }) or nil
-    if p.request.role == 'expect' then
-      if equal(projected_for_expect(scalar, p.request.value, views), p.request.value) then ok = false end
-    elseif p.request.role == 'select' then
-      local current = projected_for_select(scalar, p.request, views, ctx)
-      if ready_probe(p.request, 'select', current, ctx) then ok = false end
-    elseif p.request.role == 'query' then
-      local current = projected_for_query(scalar, p.request, views, ctx)
-      if ready_probe(p.request, 'query', current, ctx) then ok = false end
-    else
-      ok = false
-    end
-  end
-  if not ok then return false end
-  for i = 1, #(premises or {}) do
-    local frontier = scalar._validity_value and scalar._validity_value:frontier_for() or nil
-    if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-    if ctx and ctx.add then ctx:add({ kind = 'scalar-premise-absent', scalar = scalar, role = premises[i].request.role, value = premises[i].request.value, frontier = frontier, stamp = frontier and frontier.gen or nil }) end
-  end
-  return true
-end
-
-function ScalarKind.absence(scalar, payload, ctx)
-  if payload and payload.op == 'expect' then
-    return ScalarKind.absence_premises(scalar, { { request = { role = 'expect', value = payload.value } } }, ctx)
-  elseif payload and payload.op == 'select' then
-    return ScalarKind.absence_premises(scalar, { { request = { role = 'select', fn = payload.fn } } }, ctx)
-  elseif payload and payload.op == 'query' then
-    return ScalarKind.absence_premises(scalar, { { request = { role = 'query', fn = payload.fn } } }, ctx)
-  elseif payload and payload.op == 'changed' then
-    local version = observe_version(ctx, scalar)
-    if version == payload.version then
-      local frontier = scalar._validity_value and scalar._validity_value:frontier_for() or nil
-      if ctx and ctx.add then ctx:add({ kind = 'scalar-unchanged', scalar = scalar, version = version, frontier = frontier, stamp = frontier and frontier.gen or nil }) end
-      return true
-    end
-  end
-  return false
+  local frontier = scalar._validity_value and scalar._validity_value:frontier_for() or nil
+  return Resolution.exhaustive_after(out, ctx, {
+    { kind = 'scalar-solutions-exhausted', scalar = scalar, frontier = frontier, stamp = frontier and frontier.gen or nil },
+  })
 end
 
 function ScalarKind.summary(payload, out)

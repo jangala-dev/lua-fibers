@@ -23,7 +23,7 @@ rt:spawn_raw(function()
   status = rt:perform(life:inspect_op())
 end, 'root')
 local st = rt:run()
-assert(st.tag == 'found' or st.tag == 'absent')
+assert(st.tag == 'found' or st.tag == 'quiescent')
 assert(status.open == true and status.sealed == false and status.done == false)
 
 local life_a = fibers.Scope.new('a')
@@ -40,7 +40,7 @@ rt2:spawn_raw(function()
   rt2:perform(life_b:seal_op())
 end, 'scope-root')
 local st2 = rt2:run()
-assert(st2.tag == 'found' or st2.tag == 'absent')
+assert(st2.tag == 'found' or st2.tag == 'quiescent')
 assert(task and owned_a == true and owned_b == true)
 assert(report[1] == 'done')
 assert(life_b.region.sealed == true)
@@ -62,7 +62,7 @@ rt4:spawn_raw(function()
 end, 'custody-transfer-root')
 local st4
 repeat st4 = rt4:run() until st4.tag ~= 'found'
-assert(st4.tag == 'absent' or st4.tag == 'idle')
+assert(st4.tag == 'quiescent' or st4.tag == 'idle')
 assert(accepted.item == handed and accepted.from == from and accepted.to == to)
 assert(to_owns == true)
 
@@ -96,7 +96,7 @@ rt_match:spawn_raw(function()
 end, 'matched-custody-offer-root')
 local st_match
 repeat st_match = rt_match:run() until st_match.tag ~= 'found'
-assert(st_match.tag == 'absent' or st_match.tag == 'idle')
+assert(st_match.tag == 'quiescent' or st_match.tag == 'idle')
 assert(rejected_result == 'rejected')
 assert(accepted_match.item == task_b)
 assert(accepted_match.from == match_from_b)
@@ -155,7 +155,7 @@ do
   end, 'filtered-accept-root')
   local st_filter
   repeat st_filter = rt_filter:run() until st_filter.tag ~= 'found'
-  assert(st_filter.tag == 'absent' or st_filter.tag == 'idle')
+  assert(st_filter.tag == 'quiescent' or st_filter.tag == 'idle')
   assert(both_result == 'blocked')
   assert(accepted_b.item == task_b)
   assert(a_still_owned == true)

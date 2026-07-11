@@ -23,7 +23,7 @@ local ok, err = pcall(function()
   local n, werr = w:write('x')
   Common.assert_eq(n, 1, 'fd write should write one byte')
   local rt = fibers.Runtime.new({ host = host })
-  local src = fibers.Source.readiness(r:readiness_key(), 'read', 'fd-handle-readiness')
+  local src = fibers.Readiness.new(r:readiness_key(), 'read', 'fd-handle-readiness')
   local seen
   rt:spawn_raw(function() seen = rt:perform(src:readable_op()) end, 'fd-readiness')
   local st = fibers.Runner.run(rt, { host = host, max_iterations = 40 })

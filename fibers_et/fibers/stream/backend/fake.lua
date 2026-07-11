@@ -8,7 +8,7 @@
 -- Readiness remains only a hint.  EOF and errors are reported by read/write.
 
 local ReadinessBackend = require('fibers.stream.backend.readiness')
-local SourceState = require('fibers.internal.source_state')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
 local Errors = require('fibers.flow.errors')
 
@@ -22,13 +22,13 @@ end
 
 local function remember_ready(self, mode, value)
   value = value == nil and true or value
-  if self.readiness then SourceState.arrive(self.readiness, mode, value); note_change(self); return self.readiness end
+  if self.readiness then UnsafeExternalMutation.deliver(self.readiness, mode, value); note_change(self); return self.readiness end
   self._pending_ready = self._pending_ready or {}
   self._pending_ready[mode] = value
 end
 
 local function remember_clear(self, mode)
-  if self.readiness then SourceState.clear(self.readiness, mode); note_change(self); return self.readiness end
+  if self.readiness then UnsafeExternalMutation.clear(self.readiness, mode); note_change(self); return self.readiness end
   self._pending_clear = self._pending_clear or {}
   self._pending_clear[mode] = true
 end

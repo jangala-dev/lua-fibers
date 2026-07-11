@@ -48,14 +48,14 @@ local function test_rendezvous_kind_uses_premise_resolver()
   assert_nil(Resources.rendezvous_leaf, 'old rendezvous_leaf special casing should not be present')
 end
 
-local function test_rendezvous_premise_delivers_concrete_lua_value_to_bind()
+local function test_rendezvous_premise_delivers_concrete_lua_value_to_and_then()
   local rt = new_runtime()
-  local ch = Rendezvous.new('premise-bind')
+  local ch = Rendezvous.new('premise-and_then')
   local out
 
   rt:spawn_raw(function()
     out = rt:perform(ch:get_op():and_then(function(v)
-      assert_eq(type(v), 'table', 'bind should receive concrete table value')
+      assert_eq(type(v), 'table', 'and_then should receive concrete table value')
       assert_eq(v.kind, 'payload')
       return Op.always(v.n + 1)
     end))
@@ -97,7 +97,7 @@ local function test_all_still_blocks_internal_rendezvous()
 
   local status = rt:run()
   local tag = status and status.tag
-  if tag ~= 'absent' and tag ~= 'pending' and tag ~= 'conflict' and tag ~= 'reject_candidate' then
+  if tag ~= 'quiescent' and tag ~= 'pending' and tag ~= 'conflict' and tag ~= 'reject_candidate' then
     fail('all should not allow internal rendezvous; got ' .. tostring(tag))
   end
   assert_nil(rows, 'all root should not resume')
@@ -107,7 +107,7 @@ local tests = {
   test_result_premise_is_public_kernel_result,
   test_contribution_set_deduplicates_shared_solution_proposals,
   test_rendezvous_kind_uses_premise_resolver,
-  test_rendezvous_premise_delivers_concrete_lua_value_to_bind,
+  test_rendezvous_premise_delivers_concrete_lua_value_to_and_then,
   test_tensor_internal_rendezvous_is_resolved_by_premise_solution,
   test_all_still_blocks_internal_rendezvous,
 }

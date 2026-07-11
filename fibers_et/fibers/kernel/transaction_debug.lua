@@ -7,8 +7,7 @@
 
 local Net = require('fibers.kernel.transaction_net')
 local Resources = require('fibers.kernel.resources')
-local Proof = require('fibers.kernel.proof')
-local Capture = Proof.Capture
+local Capture = require('fibers.kernel.capture')
 
 local Debug = {}
 

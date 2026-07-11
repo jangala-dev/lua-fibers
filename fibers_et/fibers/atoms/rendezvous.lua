@@ -4,6 +4,7 @@
 -- selection belongs in the Op algebra.
 
 local Result = require('fibers.kernel.resources.result')
+local Resolution = require('fibers.kernel.resources.resolution')
 local Op = require('fibers.atoms.op')
 local Validity = require('fibers.kernel.validity')
 local OpPack = Op._pack
@@ -43,34 +44,12 @@ function RendezvousKind.resolve_premises(_rendezvous, premises, ctx)
       end
     end
   end
-  return out
+  local frontier = _rendezvous._validity_opaque and _rendezvous._validity_opaque:frontier_for() or nil
+  return Resolution.exhaustive_after(out, ctx, {
+    { kind = 'rendezvous-solutions-exhausted', rendezvous = _rendezvous, frontier = frontier, stamp = frontier and frontier.gen or nil },
+  })
 end
 
-
-function RendezvousKind.absence_premises(rendezvous, premises, ctx)
-  local frontier = rendezvous._validity_opaque and rendezvous._validity_opaque:frontier_for() or nil
-  if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-  for i = 1, #(premises or {}) do
-    local p = premises[i]
-    if ctx and ctx.add then
-      ctx:add({
-        kind = 'rendezvous-premise-absent',
-        rendezvous = rendezvous,
-        role = p.request and p.request.role,
-        frontier = frontier,
-        stamp = frontier and frontier.gen or nil,
-      })
-    end
-  end
-  return true
-end
-
-function RendezvousKind.absence(rendezvous, payload, ctx)
-  local frontier = rendezvous._validity_opaque and rendezvous._validity_opaque:frontier_for() or nil
-  if ctx and ctx.observe_frontier then ctx:observe_frontier(frontier) end
-  if ctx and ctx.add then ctx:add({ kind = 'rendezvous-absent', rendezvous = rendezvous, role = payload and payload.op, frontier = frontier, stamp = frontier and frontier.gen or nil }) end
-  return true
-end
 
 function RendezvousKind.summary(_payload, out)
   out.endpoints = true

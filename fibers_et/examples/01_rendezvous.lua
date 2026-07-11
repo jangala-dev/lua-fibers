@@ -11,7 +11,7 @@ local inbox = fibers.Rendezvous.new('inbox')
 local received
 
 fibers.run(function()
-  fibers.spawn_raw(function()
+  fibers.spawn(function()
     fibers.perform(inbox:put_op('hello from another fibre'))
   end, 'sender')
 

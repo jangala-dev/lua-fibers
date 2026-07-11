@@ -41,7 +41,8 @@ local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Rendezvous = require('fibers.atoms.rendezvous')
 local Scalar = require('fibers.atoms.scalar')
-local Source = require('fibers.atoms.source')
+local EventQueue = require('fibers.atoms.event_queue')
+local Clock = require('fibers.atoms.clock')
 local Region = require('fibers.atoms.region')
 local Scope = require('fibers.scope')
 local Effect = require('fibers.atoms.effect')
@@ -188,7 +189,7 @@ add('local', 'always perform', 3000, function(n)
   return n
 end)
 
-add('local', 'map bind chain', 1500, function(n)
+add('local', 'map and_then chain', 1500, function(n)
   local rt = Runtime.new()
   local sum = 0
   local op = Op.always(0)
@@ -197,7 +198,7 @@ add('local', 'map bind chain', 1500, function(n)
   end
   rt:spawn_raw(function()
     for _ = 1, n do sum = sum + rt:perform(op) end
-  end, 'bench-local-map-bind')
+  end, 'bench-local-map-and_then')
   run_rt(rt)
   assert_eq(sum, n * 8)
   return n
@@ -308,10 +309,10 @@ add('product', 'all independent scalars', 900, function(n)
   return n
 end)
 
-add('product', 'tensor lane bind external rendezvous', 350, function(n)
+add('product', 'tensor lane and_then external rendezvous', 350, function(n)
   local rt = Runtime.new()
-  local internal = Rendezvous.new('bench-bind-internal')
-  local external = Rendezvous.new('bench-bind-external')
+  local internal = Rendezvous.new('bench-and-then-internal')
+  local external = Rendezvous.new('bench-and-then-external')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -416,32 +417,34 @@ add('product', 'triple swap with decoy', 80, function(n)
 end)
 
 -- --------------------------------------------------------------------------
--- Source and Effect cases.
+-- External resource and Effect cases.
 -- --------------------------------------------------------------------------
 
-add('source', 'queue preloaded consume', 1000, function(n)
+add('external', 'queue preloaded consume', 1000, function(n)
   local rt = Runtime.new()
-  local q = Source.events('bench-source-events')
-  for i = 1, n do rt:arrive(q, i) end
+  local q = EventQueue.new('bench-external-events')
+  local feed = rt:external_feed(q)
+  for i = 1, n do feed:deliver(i) end
   local sum = 0
   rt:spawn_raw(function()
     for _ = 1, n do sum = sum + rt:perform(q:next_op()) end
-  end, 'bench-source-events-consumer')
+  end, 'bench-external-events-consumer')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
   return n
 end)
 
-add('source', 'external arrival driver loop', 250, function(n)
+add('external', 'external arrival driver loop', 250, function(n)
   local rt = Runtime.new()
-  local q = Source.events('bench-source-driver')
+  local q = EventQueue.new('bench-external-driver')
+  local feed = rt:external_feed(q)
   local sum = 0
   rt:spawn_raw(function()
     for _ = 1, n do sum = sum + rt:perform(q:next_op()) end
-  end, 'bench-source-driver-consumer')
+  end, 'bench-external-driver-consumer')
   assert_status(rt:run(), 'pending')
   for i = 1, n do
-    rt:arrive(q, i)
+    feed:deliver(i)
     assert_status(rt:run(), 'found')
     if i < n then assert_status(rt:run(), 'pending') end
   end
@@ -449,10 +452,10 @@ add('source', 'external arrival driver loop', 250, function(n)
   return n
 end)
 
-add('source', 'clock ready', 1000, function(n)
+add('external', 'clock ready', 1000, function(n)
   local now = 1000
   local rt = Runtime.new({ host = { now = function() return now end } })
-  local clock = Source.clock('bench-clock')
+  local clock = Clock.new('bench-clock')
   local count = 0
   local op = clock:at_op(1)
   rt:spawn_raw(function()

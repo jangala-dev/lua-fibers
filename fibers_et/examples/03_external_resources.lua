@@ -1,8 +1,8 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
--- Source: outside facts entering the option algebra.
+-- Externally fed resources: outside facts entering the option algebra.
 --
--- This example uses signal and clock sources with an explicit Runtime so the
+-- This example uses Signal and Clock resources with an explicit Runtime so the
 -- host remains in control of time and stepping.
 
 local fibers = require('fibers')
@@ -10,7 +10,7 @@ local fibers = require('fibers')
 local now = 0
 local rt = fibers.Runtime.new({ host = { now = function() return now end } })
 
-local clock = fibers.Source.clock('clock')
+local clock = fibers.Clock.new('clock')
 local signal, signal_feed = rt:signal('reload-signal')
 local result
 

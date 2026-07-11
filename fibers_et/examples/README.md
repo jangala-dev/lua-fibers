@@ -14,7 +14,7 @@ The examples build up the public atom kit:
 ```text
 01_rendezvous.lua          Rendezvous meeting and ordinary fibres
 02_scalar.lua           Scalar as transactional state
-03_source.lua           Source as host/time/external occurrence
+03_external_resources.lua Signal, Clock and external feed capabilities
 04_scope_task.lua    Scope-owned Task and await
 05_effect.lua           Effect as an after-commit obligation
 06_policy_nursery.lua   Policy-aware structured spawn

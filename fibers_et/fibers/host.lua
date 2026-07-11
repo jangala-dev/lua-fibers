@@ -16,7 +16,7 @@ function Host.earliest_deadline(waits)
   for i = 1, #(waits or {}) do
     local w = waits[i]
     local d = w and w.deadline
-    if w and w.kind == 'time' and is_finite_number(d) and (best == nil or d < best) then
+    if w and w.kind == 'timer' and is_finite_number(d) and (best == nil or d < best) then
       best = d
     end
   end
@@ -26,7 +26,7 @@ end
 function Host.has_non_time_waits(waits)
   for i = 1, #(waits or {}) do
     local w = waits[i]
-    if w and w.kind ~= 'time' then return true end
+    if w and w.kind ~= 'timer' then return true end
   end
   return false
 end
@@ -36,7 +36,7 @@ function Host.readiness_waits(waits)
   local out = {}
   for i = 1, #(waits or {}) do
     local w = waits[i]
-    if w and w.kind == 'source' and w.source_kind == 'readiness' and w.source then
+    if w and w.kind == 'external' and w.external_kind == 'readiness' and w.resource and w.feed then
       out[#out + 1] = w
     end
   end
@@ -56,8 +56,8 @@ function Host.normalise_readiness_mode(mode)
 end
 
 function Host.deliver_readiness(rt, wait)
-  if not (wait and wait.kind == 'source' and wait.source_kind == 'readiness' and wait.source) then return false end
-  rt:arrive(wait.source, Host.normalise_readiness_mode(wait.mode), true)
+  if not (wait and wait.kind == 'external' and wait.external_kind == 'readiness' and wait.resource and wait.feed) then return false end
+  rt:deliver(wait.feed, Host.normalise_readiness_mode(wait.mode), true)
   return true
 end
 
@@ -65,11 +65,11 @@ function Host.deliver_ready(rt, waits, is_ready)
   local n = 0
   for i = 1, #(waits or {}) do
     local w = waits[i]
-    if w and w.kind == 'source' and w.source_kind == 'readiness' and w.source then
+    if w and w.kind == 'external' and w.external_kind == 'readiness' and w.resource and w.feed then
       local mode = Host.normalise_readiness_mode(w.mode)
       local key = w.readiness_key
       if is_ready == nil or is_ready(key, mode, w) then
-        rt:arrive(w.source, mode, true)
+        rt:deliver(w.feed, mode, true)
         n = n + 1
       end
     end

@@ -25,7 +25,7 @@ test('fibers.pcall permits perform to suspend and resume', function()
   local protected_ok, got
   local st = fibers.try_run(function()
     local ch = fibers.Rendezvous.new('protected-rendezvous')
-    fibers.spawn_raw(function()
+    fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
     end, 'sender')
 
@@ -56,7 +56,7 @@ test('fibers.xpcall permits perform and handles errors', function()
   local sync_ok, got, err_ok, handled
   local st = fibers.try_run(function()
     local ch = fibers.Rendezvous.new('protected-xrendezvous')
-    fibers.spawn_raw(function()
+    fibers.spawn(function()
       fibers.perform(ch:put_op('x'))
     end, 'sender')
 

@@ -425,10 +425,10 @@ function Common.new(opts)
           local w = rec.waits[i]
           local mode = w.mode or 'read'
           if (mode == 'write' or mode == 'wr') and wr then
-            rt:arrive(w.source, 'write', true)
+            rt:deliver(w.feed, 'write', true)
             delivered = true
           elseif mode ~= 'write' and mode ~= 'wr' and rd then
-            rt:arrive(w.source, 'read', true)
+            rt:deliver(w.feed, 'read', true)
             delivered = true
           end
         end

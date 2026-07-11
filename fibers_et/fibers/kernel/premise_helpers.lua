@@ -7,7 +7,7 @@ function Premise.record_from_view(view)
 end
 
 function Premise.sibling_supply_hidden(view)
-  return view and view.relation == 'sibling' and view.allow_internal == false
+  return view and view.relation == 'sibling' and view.mode == 'independent'
 end
 
 function Premise.project_selective(initial, views, opts)

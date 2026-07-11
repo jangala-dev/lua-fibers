@@ -159,7 +159,7 @@ local function test_stream_memory_backpressure_with_small_capacity()
 
   rt:spawn_raw(function() second = rt:perform(writer:write_op('def')) end, 'blocked-write')
   local pending = rt:run()
-  assert_eq(pending.tag, 'pending', 'second write should wait for capacity')
+  assert_eq(pending.tag, 'quiescent', 'capacity retry has no external wake interest')
   assert_nil(second)
 
   rt:spawn_raw(function() read = rt:perform(reader:read_op(3)) end, 'reader')

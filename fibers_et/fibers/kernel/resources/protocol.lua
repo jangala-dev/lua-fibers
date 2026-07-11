@@ -7,8 +7,8 @@
 -- The generic layer does not know whether a record belongs to a scalar, region,
 -- flow reservoir, endpoint, queue, or future resource.  The resource kind owns
 -- clone, sequential/parallel merge, projection, preparation and application.
--- Kinds may also expose `absence(resource, payload, ctx)`; or_else fallback
--- worlds then validate the specific mutable facts named by the resource kind.
+-- Kinds return proof-carrying Retry directly; or_else fallback worlds validate
+-- the managed facts recorded by that proof.
 
 local EffectSet = require('fibers.kernel.effect.set')
 

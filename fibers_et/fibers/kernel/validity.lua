@@ -19,7 +19,7 @@
 --   derived  view whose validity is the facts read by its body
 --   epoch    conservative opaque fact
 --
--- See docs/validity-algebra.md and docs/kernel/validity-authoring.md.
+-- See docs/resource-authoring.md.
 
 local FrontierKit = require('fibers.kernel.frontier')
 

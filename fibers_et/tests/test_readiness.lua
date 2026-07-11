@@ -19,7 +19,7 @@ local function drive_until(rt, pred, label, bounded)
     if pred() then return true end
     local st = bounded and rt:step({ max_work = 1 }) or rt:run()
     if pred() then return true end
-    if st.tag == 'idle' or st.tag == 'absent' then break end
+    if st.tag == 'idle' or st.tag == 'quiescent' then break end
   end
   fail(label or 'runtime did not reach expected state')
 end

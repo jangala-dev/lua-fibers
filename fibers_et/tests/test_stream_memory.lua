@@ -10,7 +10,7 @@ local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy'
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
 local function assert_uncommitted_status(st, msg)
   local tag = st and st.tag
-  if tag ~= 'absent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
+  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
     fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end
@@ -40,7 +40,7 @@ do
   local a, b = Stream.memory_pair({ name = 'basic' })
   local got
   local st = fibers.try_run(function()
-    fibers.spawn_raw(function() fibers.perform(a:writer():write_op('hello')) end, 'writer')
+    fibers.spawn(function() fibers.perform(a:writer():write_op('hello')) end, 'writer')
     got = fibers.perform(b:reader():read_exactly_op(5))
   end).runtime_status
   assert_status(st, 'found')
@@ -99,7 +99,7 @@ do
   local got
   local rt = fibers.Runtime.new()
   rt:spawn_raw(function() got = rt:perform(b:reader():read_exactly_op(4)) end, 'reader')
-  assert_status(rt:run(), 'pending')
+  assert_status(rt:run(), 'quiescent')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'writer-ab')
   assert_status(rt:run(), 'found')
   assert_nil(got, 'exact read must still be waiting after partial data')
@@ -147,7 +147,7 @@ do
   rt:spawn_raw(function() rt:perform(a:writer():write_op('abc')) end, 'fill')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function() second_done = rt:perform(a:writer():write_op('d')) end, 'blocked-write')
-  assert_status(rt:run(), 'pending')
+  assert_status(rt:run(), 'quiescent')
   assert_nil(second_done, 'write should wait while capacity is full')
   rt:spawn_raw(function() read = rt:perform(b:reader():read_some_op(1)) end, 'reader')
   assert_status(rt:run(), 'found')
@@ -329,7 +329,7 @@ do
   local line
   local rt = fibers.Runtime.new()
   rt:spawn_raw(function() line = rt:perform(b:reader():read_line_op({ limit = 16 })) end, 'line-reader')
-  assert_status(rt:run(), 'pending')
+  assert_status(rt:run(), 'quiescent')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('abc')) end, 'write-prefix')
   assert_status(rt:run(), 'found')
   assert_nil(line, 'read_line_op should still be waiting before separator')
@@ -347,7 +347,7 @@ do
   local all
   local rt = fibers.Runtime.new()
   rt:spawn_raw(function() all = rt:perform(b:reader():read_all_op({ max = 16 })) end, 'read-all')
-  assert_status(rt:run(), 'pending')
+  assert_status(rt:run(), 'quiescent')
   rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'write-ab')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should wait before EOF')

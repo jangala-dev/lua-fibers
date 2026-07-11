@@ -1,15 +1,15 @@
 -- Sleep facility.
 --
--- Sleep is ordinary option syntax built over a clock Source.  Absolute sleep
--- is a clock-source wait.  Relative sleep is a guard that fixes its absolute
+-- Sleep is ordinary option syntax built over a clock resource.  Absolute sleep
+-- is a clock-resource wait.  Relative sleep is a guard that fixes its absolute
 -- deadline once for the perform attempt.
 
 local Op = require('fibers.atoms.op')
-local Source = require('fibers.atoms.source')
+local Clock = require('fibers.atoms.clock')
 
 local Sleep = {}
 
-local clock = Source.clock('sleep')
+local clock = Clock.new('sleep')
 
 local function assert_finite_number(x, name)
   if type(x) ~= 'number' or x ~= x or x == math.huge or x == -math.huge then

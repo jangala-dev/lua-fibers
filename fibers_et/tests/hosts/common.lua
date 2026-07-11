@@ -38,7 +38,7 @@ function Common.readiness_smoke(name, host, pipe)
   Common.assert_truthy(type(pipe.write_byte) == 'function', name .. ' pipe must expose write_byte')
 
   local rt = fibers.Runtime.new({ host = host })
-  local src = fibers.Source.readiness(pipe.read_key, 'read', name .. '-readiness')
+  local src = fibers.Readiness.new(pipe.read_key, 'read', name .. '-readiness')
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
@@ -59,7 +59,7 @@ function Common.write_readiness_smoke(name, host, pipe)
   Common.assert_truthy(pipe and pipe.write_key ~= nil, name .. ' pipe must expose write_key')
 
   local rt = fibers.Runtime.new({ host = host })
-  local src = fibers.Source.readiness(pipe.write_key, 'write', name .. '-write-readiness')
+  local src = fibers.Readiness.new(pipe.write_key, 'write', name .. '-write-readiness')
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
@@ -76,7 +76,7 @@ end
 function Common.ready_source_smoke(name, host, key, mode)
   mode = mode or 'read'
   local rt = fibers.Runtime.new({ host = host })
-  local src = fibers.Source.readiness(key, mode, name .. '-ready-source')
+  local src = fibers.Readiness.new(key, mode, name .. '-ready-source')
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
@@ -99,7 +99,7 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
   Common.assert_truthy(type(pipe.write_byte) == 'function', name .. ' pipe must expose write_byte')
 
   local rt = fibers.Runtime.new({ host = host })
-  local src = fibers.Source.readiness(pipe.read_key, 'read', name .. '-choice-readiness')
+  local src = fibers.Readiness.new(pipe.read_key, 'read', name .. '-choice-readiness')
   local winner
 
   rt:spawn_raw(function()
@@ -121,7 +121,7 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
   Common.assert_truthy(pipe and pipe.read_key ~= nil, name .. ' pipe must expose read_key')
 
   local rt = fibers.Runtime.new({ host = host })
-  local src = fibers.Source.readiness(pipe.read_key, 'read', name .. '-timeout-readiness')
+  local src = fibers.Readiness.new(pipe.read_key, 'read', name .. '-timeout-readiness')
   local winner
 
   rt:spawn_raw(function()

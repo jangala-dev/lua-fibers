@@ -41,7 +41,14 @@ do
   assert_eq(atoms.Scalar, fibers.Scalar, 'atoms aggregate exports Scalar')
   assert_eq(atoms.Scalar, fibers.Scalar, 'atoms aggregate exports Scalar')
   assert_eq(atoms.Rendezvous, fibers.Rendezvous, 'atoms aggregate exports Rendezvous')
-  assert_eq(atoms.Source, fibers.Source, 'atoms aggregate exports Source')
+  assert_eq(atoms.Signal, fibers.Signal, 'atoms aggregate exports Signal')
+  assert_eq(atoms.EventQueue, fibers.EventQueue, 'atoms aggregate exports EventQueue')
+  assert_eq(atoms.Clock, fibers.Clock, 'atoms aggregate exports Clock')
+  assert_eq(atoms.Readiness, fibers.Readiness, 'atoms aggregate exports Readiness')
+  assert_eq(atoms.Source, nil, 'Source compatibility aggregate is removed')
+  assert_eq(fibers.Source, nil, 'Source compatibility top-level export is removed')
+  local source_ok = pcall(require, 'fibers.atoms.source')
+  assert_eq(source_ok, false, 'Source compatibility module is removed')
   assert_eq(atoms.Lease, fibers.Lease, 'atoms aggregate exports Lease')
   assert_eq(atoms.Region, fibers.Region, 'atoms aggregate exports Region')
   assert_eq(atoms.Region.Owned, fibers.Region.Owned, 'Owned is part of Region advanced API')
@@ -56,7 +63,7 @@ do
   local ch = fibers.Rendezvous.new('inbox')
   local got
   local st = fibers.try_run(function()
-    fibers.spawn_raw(function()
+    fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
     end, 'sender')
     got = fibers.perform(ch:get_op())
@@ -70,7 +77,7 @@ do
   local scalar = fibers.Scalar.new(false, 'flag')
   local seen
   local st = fibers.try_run(function()
-    fibers.spawn_raw(function()
+    fibers.spawn(function()
       seen = fibers.perform(wait_until(scalar, function(v) return v == true end))
     end, 'waiter')
     fibers.perform(scalar:write_op(true))
@@ -95,25 +102,25 @@ do
   assert_eq(c.value, 0)
 end
 
--- A Source is a public waitable external occurrence.
+-- A Signal is a public waitable external resource.
 do
   local rt = fibers.Runtime.new()
-  local src, feed = rt:signal('signal')
+  local signal, feed = rt:signal('signal')
   local got
   rt:spawn_raw(function()
-    got = rt:perform(src:wait_op())
-  end, 'source-waiter')
+    got = rt:perform(signal:wait_op())
+  end, 'signal-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
   local waits = (st.waits or {})
-  assert_eq(waits[1].kind, 'source')
+  assert_eq(waits[1].kind, 'external')
   feed:set('ready')
   st = rt:step()
   assert_status(st, 'found')
   assert_eq(got, 'ready')
 end
 
--- Clock sources are ordinary Sources backed by host time.
+-- Clocks are ordinary resources backed by host time.
 do
   local now = 0
   local rt = fibers.Runtime.new({ host = { now = function() return now end } })
@@ -187,7 +194,7 @@ do
   local received, joined
 
   local st = fibers.try_run(function()
-    fibers.spawn_raw(function()
+    fibers.spawn(function()
       fibers.perform(inbox:put_op('hello'))
       fibers.perform(flag:write_op(true))
     end, 'sender')

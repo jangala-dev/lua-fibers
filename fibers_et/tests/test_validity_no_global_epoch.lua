@@ -7,8 +7,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Source = require('fibers.atoms.source')
-local SourceState = require('fibers.internal.source_state')
+local EventQueue = require('fibers.atoms.event_queue')
+local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Debug = require('fibers.kernel.transaction_debug')
 local Resources = require('fibers.kernel.resources')
 
@@ -48,7 +48,7 @@ end
 -- cache whose pending problem and observed facts are unchanged.
 do
   local rt = Runtime.new()
-  local q = Source.events('no-epoch-ready-cache')
+  local q = EventQueue.new('no-epoch-ready-cache')
   local got
   rt:spawn_raw(function() got = rt:perform(q:next_op()) end, 'no-epoch-cache-waiter')
   local cache = drive_until_cache(rt, 'ready cache')
@@ -68,14 +68,14 @@ end
 -- resource facts actually change.
 do
   local rt = Runtime.new()
-  local qa = Source.events('no-epoch-cache-a')
-  local qb = Source.events('no-epoch-cache-b')
+  local qa = EventQueue.new('no-epoch-cache-a')
+  local qb = EventQueue.new('no-epoch-cache-b')
   local got
   rt:spawn_raw(function() got = rt:perform(qa:next_op()) end, 'no-epoch-cache-a-waiter')
   local cache = drive_until_cache(rt, 'unrelated commit cache')
   local observer = cache.observer
 
-  SourceState.arrive(qb, 'payload-b')
+  UnsafeExternalMutation.deliver(qb, 'payload-b')
   local op = qb:next_op()
   local world, pending = world_for(rt, 99, op)
   local ok, reason = rt:_apply_net_world(world, pending)
@@ -86,7 +86,7 @@ do
   assert_eq(Resources.observer_valid(observer), true, 'unrelated commit must not invalidate events-A absence')
   assert_eq(got, nil)
 
-  SourceState.arrive(qa, 'payload-a')
+  UnsafeExternalMutation.deliver(qa, 'payload-a')
   assert_eq(Resources.observer_valid(observer), false, 'related events arrival must still invalidate cache')
 end
 
@@ -96,8 +96,8 @@ end
 -- problem.
 do
   local rt = Runtime.new()
-  local qa = Source.events('no-epoch-sig-a')
-  local qb = Source.events('no-epoch-sig-b')
+  local qa = EventQueue.new('no-epoch-sig-a')
+  local qb = EventQueue.new('no-epoch-sig-b')
   rt:spawn_raw(function() rt:perform(qa:next_op()) end, 'no-epoch-sig-a-waiter')
   local cache = drive_until_cache(rt, 'signature cache')
   local observer = cache.observer
