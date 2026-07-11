@@ -165,6 +165,10 @@ local function copy_stack(stack)
   return stack
 end
 
+local function path_step(path, kind, index)
+  return (path or '') .. '/' .. tostring(kind) .. (index ~= nil and tostring(index) or '')
+end
+
 local function copy_task(t)
   if counters_enabled then count('copy.task') end
   return {
@@ -173,6 +177,7 @@ local function copy_task(t)
     stack = copy_stack(t.stack),
     env = Resources.copy_env(t.env),
     attempt = t.attempt,
+    path = t.path,
   }
 end
 
@@ -221,13 +226,14 @@ function Attempt.new(rt, pending, start_id, solver)
     next_group = 0,
     next_premise = 0,
     next_contribution = 0,
+    choice_selections = {},
     conflict = false,
     conflict_reason = nil,
     outcome = nil,
     trail = Trail.new(),
     solver = solver,
   }, Attempt)
-  self:push_task({ root_id = start_id, op = pending[start_id].op, stack = nil, env = Resources.new_env(nil, self.capture), attempt = pending[start_id].attempt })
+  self:push_task({ root_id = start_id, op = pending[start_id].op, stack = nil, env = Resources.new_env(nil, self.capture), attempt = pending[start_id].attempt, path = '' })
   return self
 end
 
@@ -331,6 +337,52 @@ end
 function Attempt:select_root(id)
   if counters_enabled then count('root.select') end
   self:set_field(self.selected, id, true)
+end
+
+local function choice_occurrence(task, op)
+  return tostring(op and (op._id or op) or '') .. '\0' .. tostring(task and task.path or '')
+end
+
+function Attempt:choice_entry(task, op)
+  local dynamic = task.attempt or {}
+  local cache = dynamic.choice_orders
+  if not cache then
+    cache = { explicit = {}, implicit = {} }
+    dynamic.choice_orders = cache
+    task.attempt = dynamic
+  elseif cache.explicit == nil or cache.implicit == nil then
+    cache.explicit = cache.explicit or {}
+    cache.implicit = cache.implicit or {}
+  end
+
+  local occurrence = choice_occurrence(task, op)
+  local bucket, key
+  if rawget(op, '_choice_key') ~= nil then
+    bucket, key = cache.explicit, rawget(op, '_choice_key')
+  else
+    bucket, key = cache.implicit, occurrence
+  end
+
+  local count = #(op.choices or {})
+  local entry = bucket[key]
+  if entry and (not entry.state or entry.state.count ~= count) then
+    error('choice arbitration key reused with a different branch count', 2)
+  end
+  if not entry then
+    if not self.rt or not self.rt._choice_order then
+      error('runtime does not provide choice arbitration', 2)
+    end
+    entry = self.rt:_choice_order(task.root_id, op, occurrence, count)
+    bucket[key] = entry
+  end
+  return entry
+end
+
+function Attempt:record_choice(entry, branch)
+  self:append(self.choice_selections, {
+    state = entry and entry.state or nil,
+    branch = branch,
+  })
 end
 
 local function make_rows_from_raw(lane_results)
@@ -439,6 +491,7 @@ local function apply_result_frame(st, task, res, frame)
       error('and_then callback must return an option')
     end
     task.op = next_op
+    task.path = frame.next_path or task.path
     return FRAME_NEXT_OP
   elseif frame.kind == 'post' then
     res.wraps[#res.wraps + 1] = frame.fn
@@ -474,7 +527,7 @@ local function complete_product_lane(st, task, frame, res)
 
   local rows = make_rows_from_raw(lane_results)
   local pres = new_result(pack_(rows), lane_results)
-  local parent = { root_id = g.root_id, op = nil, stack = g.parent_stack, env = merged, attempt = g.attempt }
+  local parent = { root_id = g.root_id, op = nil, stack = g.parent_stack, env = merged, attempt = g.attempt, path = g.parent_path }
   return complete_task(st, parent, pres)
 end
 
@@ -507,11 +560,19 @@ local function apply_task_step(st, idx, branch)
   if not op then return st end
 
   local k = op.kind
+  local current_path = task.path or ''
   if k == 'always' then
     return complete_task(st, task, new_result(op_values(op)))
   elseif k == 'and_then' then
-    task.stack = stack_push(task.stack, { kind = 'and_then', fn = op.fn, callback_phase = op.callback_phase, cache_key = op.cache_key })
+    task.stack = stack_push(task.stack, {
+      kind = 'and_then',
+      fn = op.fn,
+      callback_phase = op.callback_phase,
+      cache_key = op.cache_key,
+      next_path = path_step(current_path, 'k'),
+    })
     task.op = op_inner(op)
+    task.path = path_step(current_path, 'a')
     st:push_task(task)
     return st
   elseif k == 'annotated' then
@@ -519,11 +580,14 @@ local function apply_task_step(st, idx, branch)
     -- Selection discards defeat obligations; they are collected only when the
     -- occurrence loses at an enclosing choice boundary.
     task.op = op_inner(op)
+    task.path = path_step(current_path, 'n')
     st:push_task(task)
     return st
   elseif k == 'choice' then
     local choice_index = branch.choice_index
+    st:record_choice(branch.choice_entry, choice_index)
     task.op = op.choices[choice_index]
+    task.path = path_step(current_path, 'c', choice_index)
     for j = 1, #(op.choices or {}) do
       if j ~= choice_index then
         local ok, err = add_losing_defeats(op.choices[j], task.env)
@@ -535,9 +599,11 @@ local function apply_task_step(st, idx, branch)
   elseif k == 'or_else' then
     if branch.or_else_side == 'primary' then
       task.op = op_primary(op)
+      task.path = path_step(current_path, 'o', 1)
     else
       Resources.add_retry_proof(task.env, branch.proof)
       task.op = op_fallback(op)
+      task.path = path_step(current_path, 'o', 2)
     end
     st:push_task(task)
     return st
@@ -553,6 +619,7 @@ local function apply_task_step(st, idx, branch)
       parent_stack = parent_stack,
       parent_env = parent_env,
       attempt = task.attempt,
+      parent_path = current_path,
       results = {}, envs = {}, done = 0,
     }
     st:add_group(gid, group)
@@ -563,6 +630,7 @@ local function apply_task_step(st, idx, branch)
         stack = parent_stack,
         env = Resources.lane_env_from(parent_env),
         attempt = task.attempt,
+        path = path_step(current_path, 'p', i),
       }
       lt.stack = stack_push(lt.stack, { kind = 'product_lane', group_id = gid, lane = i })
       st:push_task(lt)
@@ -664,7 +732,9 @@ function World.from_attempt(st)
     if not ok then return nil, err end
   end
   local single_root_id = (#ids == 1) and ids[1] or nil
-  return setmetatable({ roots = roots, single_root_id = single_root_id, env = merged, prepared = nil, observer = nil, valid = nil, consumed = false }, World)
+  local choice_selections = {}
+  for i = 1, #(st.choice_selections or {}) do choice_selections[i] = st.choice_selections[i] end
+  return setmetatable({ roots = roots, single_root_id = single_root_id, env = merged, choice_selections = choice_selections, prepared = nil, observer = nil, valid = nil, consumed = false }, World)
 end
 
 local EMPTY_PREPARED = { resources = nil, effects = nil }
@@ -676,7 +746,7 @@ function World.local_root(root_id, res, env)
   -- still represented as an ordinary World so commit and delivery use the same
   -- semantic path as general proof-net search.
   env = env or EMPTY_ENV
-  return setmetatable({ roots = { [root_id] = res }, single_root_id = root_id, direct_delivery = true, env = env, prepared = EMPTY_PREPARED, observer = nil, valid = true, consumed = false }, World)
+  return setmetatable({ roots = { [root_id] = res }, single_root_id = root_id, direct_delivery = true, env = env, choice_selections = {}, prepared = EMPTY_PREPARED, observer = nil, valid = true, consumed = false }, World)
 end
 
 function World:has_retry()
@@ -794,6 +864,7 @@ function World:commit(rt)
   self:dispose_observer()
 
   Resources.apply_prepared(prepared)
+  if rt and rt._commit_choice_selections then rt:_commit_choice_selections(self.choice_selections) end
   Resources.discharge_prepared(rt, prepared)
   self.consumed = true
   self.valid = false
@@ -812,10 +883,19 @@ Solver.__index = Solver
 local function task_branches(st)
   if counters_enabled then count('branches.task') end
   if #st.tasks == 0 then return nil end
-  local op = st.tasks[1].op
+  local task = st.tasks[1]
+  local op = task.op
   if op and op.kind == 'choice' then
     local branches = {}
-    for i = 1, #(op.choices or {}) do branches[#branches + 1] = { kind = 'task', index = 1, choice_index = i } end
+    local entry = st:choice_entry(task, op)
+    for i = 1, #(entry.order or {}) do
+      branches[#branches + 1] = {
+        kind = 'task',
+        index = 1,
+        choice_index = entry.order[i],
+        choice_entry = entry,
+      }
+    end
     return branches
   elseif op and op.kind == 'or_else' then
     return { { kind = 'task', index = 1, or_else_side = 'primary' } }
@@ -1012,7 +1092,7 @@ local function apply_branch(st, branch)
     return apply_premise_solution(st, branch.solution)
   elseif branch.kind == 'partner' then
     st:select_root(branch.id)
-    st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = nil, env = Resources.new_env(nil, st.capture), attempt = st.pending[branch.id].attempt })
+    st:push_task({ root_id = branch.id, op = st.pending[branch.id].op, stack = nil, env = Resources.new_env(nil, st.capture), attempt = st.pending[branch.id].attempt, path = '' })
     return st
   else
     error('unknown search branch: ' .. tostring(branch.kind))
@@ -1211,11 +1291,21 @@ local function reduce_local_task(solver, task)
         return status, out
       end
     elseif k == 'and_then' then
-      task.stack = stack_push(task.stack, { kind = 'and_then', fn = op.fn, callback_phase = op.callback_phase, cache_key = op.cache_key })
+      local current_path = task.path or ''
+      task.stack = stack_push(task.stack, {
+        kind = 'and_then',
+        fn = op.fn,
+        callback_phase = op.callback_phase,
+        cache_key = op.cache_key,
+        next_path = path_step(current_path, 'k'),
+      })
       task.op = op_inner(op)
+      task.path = path_step(current_path, 'a')
     elseif k == 'annotated' then
+      local current_path = task.path or ''
       if op.post then task.stack = stack_push(task.stack, { kind = 'post', fn = op.post }) end
       task.op = op_inner(op)
+      task.path = path_step(current_path, 'n')
     else
       task.op = op
       return LOCAL_NEEDS_NET
@@ -1240,6 +1330,7 @@ function Solver:find_local_or_out_from(id)
     stack = nil,
     env = nil,
     attempt = p.attempt,
+    path = '',
   }
 
   local status, res = reduce_local_task(self, task)

@@ -153,28 +153,28 @@ local function test_choice_selects_one_world_and_discards_loser()
   local wraps = {}
   local got
 
-  local winner = Op.emit(TC.tag('choice.winner')):and_then(function()
-    return Op.always('winner'):wrap(function(v)
-      wraps[#wraps + 1] = 'winner-wrap'
+  local a = Op.emit(TC.tag('choice.a')):and_then(function()
+    return Op.always('a'):wrap(function(v)
+      wraps[#wraps + 1] = 'a-wrap'
       return v
     end)
   end)
 
-  local loser = Op.emit(TC.tag('choice.loser')):and_then(function()
-    return Op.always('loser'):wrap(function(v)
-      wraps[#wraps + 1] = 'loser-wrap'
+  local b = Op.emit(TC.tag('choice.b')):and_then(function()
+    return Op.always('b'):wrap(function(v)
+      wraps[#wraps + 1] = 'b-wrap'
       return v
     end)
   end)
 
-  rt:spawn_raw(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-winner')
+  rt:spawn_raw(function() got = rt:perform(Op.choice(a, b)) end, 'choice-one-world')
   assert_status(rt:run(), 'found')
-  assert_eq(got, 'winner')
-  assert_eq(transaction_tags(rt), 'choice.winner', 'losing branch effect is discarded')
-  assert_eq(table.concat(wraps, ','), 'winner-wrap', 'losing branch wrap is not run')
+  assert_truthy(got == 'a' or got == 'b', 'choice selects one eligible branch')
+  assert_eq(transaction_tags(rt), 'choice.' .. got, 'only the selected branch effect is committed')
+  assert_eq(table.concat(wraps, ','), got .. '-wrap', 'only the selected branch wrap is run')
 
   local status2, values2 = one_perform(Op.choice(Op.never(), Op.always('right')))
-  assert_status(status2, 'found', 'choice may select right branch when left is impossible')
+  assert_status(status2, 'found', 'choice may select an eligible branch when another is impossible')
   assert_eq(values2[1], 'right')
 end
 
@@ -562,15 +562,65 @@ end
 local function test_choice_discards_loser_resource_state_even_when_loser_is_locally_possible()
   local rt = new_runtime()
   local scalar = Scalar.new(0, 'choice-loser-resource-scalar')
-  local got
+  local results, observed = {}, {}
+  local choice = Op.choice(
+    scalar:write_op(1):map(function() return 1 end),
+    scalar:write_op(2):map(function() return 2 end)
+  )
 
-  local winner = Op.always('winner')
-  local loser = scalar:write_op(99):map(function() return 'loser' end)
+  rt:spawn_raw(function()
+    for i = 1, 2 do
+      results[i] = rt:perform(choice)
+      observed[i] = scalar.value
+    end
+  end, 'choice-loser-resource')
 
-  rt:spawn_raw(function() got = rt:perform(Op.choice(winner, loser)) end, 'choice-loser-resource')
   assert_status(rt:run(), 'found')
-  assert_eq(got, 'winner', 'left choice branch is selected when both branches are locally possible')
-  assert_eq(scalar.value, 0, 'unselected choice branch does not commit its resource effects')
+  assert_eq(observed[1], results[1], 'only the selected branch commits its first resource journal')
+  assert_eq(observed[2], results[2], 'only the selected branch commits its second resource journal')
+  assert_truthy(results[1] ~= results[2], 'committed rotation gives both continuously eligible branches a turn')
+end
+
+local function test_choice_rotation_is_fair_for_reconstructed_keyed_choices()
+  local rt = new_runtime({ choice = { seed = 73 } })
+  local key = Op.choice_key('reconstructed-three-way')
+  local results = {}
+
+  rt:spawn_raw(function()
+    for i = 1, 6 do
+      results[i] = rt:perform(Op.choice(
+        Op.always('a'),
+        Op.always('b'),
+        Op.always('c')
+      ):with_choice_key(key))
+    end
+  end, 'choice-keyed-rotation')
+
+  assert_status(rt:run(), 'found')
+  for base = 1, 4, 3 do
+    local seen = {}
+    for i = base, base + 2 do seen[results[i]] = true end
+    assert_truthy(seen.a and seen.b and seen.c, 'each rotation visits every continuously eligible branch')
+  end
+end
+
+local function test_choice_seed_is_reproducible_with_an_explicit_key()
+  local function sequence(seed)
+    local rt = new_runtime({ choice = { seed = seed } })
+    local out = {}
+    rt:spawn_raw(function()
+      local key = 'reproducible-choice'
+      for i = 1, 6 do
+        out[i] = rt:perform(Op.choice(
+          Op.always('a'), Op.always('b'), Op.always('c')
+        ):with_choice_key(key))
+      end
+    end, 'choice-seed')
+    assert_status(rt:run(), 'found')
+    return table.concat(out, ',')
+  end
+
+  assert_eq(sequence(19), sequence(19), 'a fixed seed and explicit key reproduce the arbitration sequence')
 end
 
 local function test_choice_blocked_branch_does_not_partially_commit_before_right_branch_wins()
@@ -889,10 +939,14 @@ local function test_choice_normalises_nested_lists_and_choice_nodes()
     Op.choice(Op.never(), Op.always('your'))
   )
   assert_eq(nested.kind, 'choice', 'normalised multi-way choice remains a choice')
-  assert_eq(#nested.choices, 2, 'choice flattens arrays, nested choices, and drops empty choices')
+  assert_eq(#nested.choices, 2, 'choice flattens arrays, unkeyed nested choices, and drops empty choices')
+
+  local keyed = Op.choice(Op.always('a'), Op.always('b')):with_choice_key('nested-key')
+  local outer = Op.choice(keyed, Op.always('c'))
+  assert_eq(outer.choices[1], keyed, 'a keyed choice retains its arbitration boundary when nested')
   local status, values = one_perform(nested)
   assert_status(status, 'found')
-  assert_eq(values[1], 'that')
+  assert_truthy(values[1] == 'that' or values[1] == 'your', 'source order does not determine the selected branch')
 end
 
 local function test_choice_rejects_sparse_or_named_tables()
@@ -942,6 +996,8 @@ local tests = {
   test_and_then_is_all_or_nothing,
   test_choice_selects_one_world_and_discards_loser,
   test_choice_discards_loser_resource_state_even_when_loser_is_locally_possible,
+  test_choice_rotation_is_fair_for_reconstructed_keyed_choices,
+  test_choice_seed_is_reproducible_with_an_explicit_key,
   test_choice_blocked_branch_does_not_partially_commit_before_right_branch_wins,
   test_or_else_preference_and_fallback,
   test_or_else_primary_absence_is_checked_across_other_participants,

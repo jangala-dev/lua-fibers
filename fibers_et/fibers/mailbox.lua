@@ -238,7 +238,7 @@ function Tx:send_op(value)
   local send = require_sendable_op(mailbox, id):and_then(function()
     return accepted_put_op(mailbox, value)
   end)
-  return Op.choice(send, closed_or_inactive_op(mailbox, id))
+  return send:or_else(closed_or_inactive_op(mailbox, id))
 end
 
 function Tx:clone_op()

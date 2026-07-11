@@ -44,7 +44,7 @@ do
   rt:spawn_raw(function()
     got = rt:perform(Op.choice(
       Op.always('winner'),
-      Op.always('loser'):on_defeat(defeat('loser'))
+      Op.never():on_defeat(defeat('loser'))
     ))
   end, 'defeat-loser')
   assert_status(rt:run(), 'found')
@@ -107,6 +107,7 @@ do
       Op.all({
         Op.always('a'):on_defeat(defeat('lane-a')),
         Op.always('b'):on_defeat(defeat('lane-b')),
+        Op.never(),
       })
     ))
   end, 'defeat-product')

@@ -26,7 +26,7 @@ end
 do
   assert_truthy(absent(Op.choice(Op.never(), Op.never())), 'all-absent choice should be absent')
   assert_falsy(absent(Op.choice(Op.never(), Op.always('live'))), 'one live choice branch should defeat absence')
-  assert_falsy(absent(Op.choice(Op.always('live'), Op.never())), 'absence is not left-biased')
+  assert_falsy(absent(Op.choice(Op.always('live'), Op.never())), 'branch order does not affect absence')
 end
 
 -- nested or_else is absent only when both the preferred option and the

@@ -152,7 +152,7 @@ function Pool:retire_op(key, reason)
       Op.emit(retire_effect(self, key, state.item, reason)),
     }):map(function() return true end)
     local defer_until_release = self.items:put_op(key, retiring_state(state, reason)):map(function() return true end)
-    return Op.choice(retire_idle, defer_until_release)
+    return retire_idle:or_else(defer_until_release)
   end)
 end
 

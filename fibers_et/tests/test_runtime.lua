@@ -157,3 +157,55 @@ end
 print('tests/test_runtime.lua: deferred context ok')
 
 print('tests/test_runtime.lua: ok')
+
+-- Choice arbitration is cached across bounded cursor slices. Changing the work
+-- quantum must not alter the committed branch sequence.
+do
+  local function sequence(bounded)
+    local rt = Runtime.new({ choice = { seed = 41 } })
+    local out = {}
+    rt:spawn_raw(function()
+      local key = 'bounded-choice-sequence'
+      for i = 1, 6 do
+        out[i] = rt:perform(Op.choice(
+          Op.always('a'), Op.always('b'), Op.always('c')
+        ):with_choice_key(key))
+      end
+    end, 'bounded-choice')
+
+    if bounded then
+      for _ = 1, 1000 do
+        local status = rt:step({ max_work = 1 })
+        if status.tag == 'idle' then break end
+      end
+    else
+      rt:run()
+    end
+    return table.concat(out, ',')
+  end
+
+  assert_eq(sequence(true), sequence(false), 'bounded cursor slicing preserves choice arbitration')
+end
+
+-- Searching and rejecting every branch must not advance committed arbitration.
+do
+  local Debug = require('fibers.kernel.transaction_debug')
+  local function first_after(reject_first)
+    local rt = Runtime.new({ choice = { seed = 17 } })
+    local key = 'rejected-choice-does-not-advance'
+    if reject_first then
+      Debug.perform_sync(rt, Op.choice(
+        Op.always('a'):and_then(function() return Op.never() end),
+        Op.always('b'):and_then(function() return Op.never() end)
+      ):with_choice_key(key))
+    end
+    local _status, values = Debug.perform_sync(rt, Op.choice(
+      Op.always('a'), Op.always('b')
+    ):with_choice_key(key))
+    return values[1]
+  end
+
+  assert_eq(first_after(true), first_after(false), 'only a committed selection advances choice arbitration')
+end
+
+print('tests/test_runtime.lua: choice arbitration ok')

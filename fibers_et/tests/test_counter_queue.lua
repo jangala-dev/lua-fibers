@@ -160,7 +160,7 @@ local function test_queue_put_op_construction_does_not_mutate_queue_state()
   local rt = new_runtime()
   local out
   rt:spawn_raw(function()
-    out = rt:perform(Op.choice({ Op.always('skip'), op1 }))
+    out = rt:perform(Op.choice({ Op.always('skip'), op1:and_then(function() return Op.never() end) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(out, 'skip')

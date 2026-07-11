@@ -64,7 +64,7 @@ op:on_defeat(effect)
 
 ### Choice
 
-`choice` is eager competition:
+`choice` is unordered competition:
 
 ```lua
 local value, err = fibers.perform(fibers.choice(
@@ -75,11 +75,43 @@ local value, err = fibers.perform(fibers.choice(
 ))
 ```
 
-A selected branch commits; entered competing branches may produce typed defeat obligations. Temporary search failure, retry and bounded-search incompleteness are not defeat.
+Source order does not give the first branch priority. The runtime uses a seeded,
+deterministic rotating arbiter and advances it only after a committed winner.
+A fixed seed makes an execution reproducible:
+
+```lua
+fibers.run(main, {
+  choice = { mode = 'rotating', seed = 17 },
+})
+```
+
+Reuse the same choice operation to retain its rotation. When an operation must
+be reconstructed on each loop, use a stable key:
+
+```lua
+local input_key = fibers.choice_key('worker-input')
+
+while true do
+  local event = fibers.perform(fibers.choice(
+    inbox:get_op(),
+    control:get_op()
+  ):with_choice_key(input_key))
+end
+```
+
+A key must be reused with the same branch count. The guarantee is bounded branch
+fairness for continuously eligible branches of a repeatedly committed choice;
+it is not a global scheduler-fairness guarantee.
+
+A selected branch commits; entered competing branches may produce typed defeat
+obligations. Temporary search failure, retry and bounded-search incompleteness
+are not defeat.
 
 ### Residual fallback
 
-`or_else` is not priority choice. It opens the fallback only after the primary has returned a valid `Retry` proof.
+`or_else` is asymmetric, proof-dependent preference. It opens the fallback only
+after the primary has returned a valid `Retry` proof. Use it when protocol order
+matters; do not rely on `choice` source position.
 
 ```lua
 local op = cache:get_op(key):or_else(fetch_default_op(key))

@@ -258,7 +258,7 @@ These are conditional laws. They require `f` and `g` to be pure search-phase fun
 
 ## 8. `choice`
 
-`choice` denotes alternatives.
+`choice` denotes unordered competing alternatives.
 
 ```text
 choice(op₁, ..., opₙ)
@@ -280,17 +280,63 @@ choice(never, op) ≈ op
 choice(op, never) ≈ op
 
 choice(choice(a, b), c) ≈ choice(a, b, c)
+
+choice(a, b) ≈ choice(b, a)
 ```
 
-The operational scheduler may make choice order observable. Therefore, unless the scheduler contract says otherwise, `choice` should not be treated as fully commutative.
+Commutativity concerns the set of possible committed worlds and the guarantees
+made about them. It does not require two separately constructed operations to
+select the same winner on a particular execution.
 
-Important non-law:
+`choice` does not express priority. When more than one branch can participate
+in a committing world, the runtime uses deterministic committed rotation:
 
 ```text
-choice(a, b) ≠ choice(b, a)    when priority or fairness is observable
+runtime seed + fibre + choice occurrence
+  -> stable branch permutation
+  -> search begins at the current rotation point
+  -> the rotation advances past the winning branch only after commit
 ```
 
-Losing branches do not commit journals or effects.
+Backtracking, `Retry`, `Unknown`, budget suspension, stale validation and
+prepare refusal do not advance the rotation. The branch order is cached for the
+dynamic perform attempt, so slicing one search through a bounded cursor does not
+change arbitration.
+
+An unkeyed choice retains rotation while the same operation node and occurrence
+are reused by the same fibre. A stable key preserves rotation across reconstructed
+choice nodes:
+
+```lua
+local key = Op.choice_key('worker-input')
+
+local op = Op.choice(inbox:get_op(), control:get_op())
+  :with_choice_key(key)
+```
+
+A keyed choice is an arbitration boundary and is not flattened into an enclosing
+choice. Reusing a key requires a stable branch count. A runtime accepts an
+explicit reproducibility policy:
+
+```lua
+Runtime.new({
+  choice = { mode = 'rotating', seed = 17 },
+})
+```
+
+For a repeatedly committed keyed choice with `n` continuously eligible branches
+and an unchanged branch structure, committed rotation selects each branch
+within `n` commits of that choice. This is branch fairness, not a guarantee that
+the enclosing operation will commit or that another root cannot delay it.
+
+Choice is not idempotent:
+
+```text
+choice(a, a) ≉ a
+```
+
+The two occurrences may carry distinct defeat obligations and arbitration
+identity. Losing branches do not commit journals or ordinary consequences.
 
 ## 9. Product, `all`, and `tensor`
 
@@ -826,9 +872,12 @@ choice(never, op) ≈ op
 choice(op, never) ≈ op
 
 choice(choice(a, b), c) ≈ choice(a, b, c)
+
+choice(a, b) ≈ choice(b, a)
 ```
 
-Not generally commutative if scheduler order is observable.
+A keyed nested choice retains its arbitration boundary rather than flattening.
+Choice is not idempotent because duplicate occurrences remain distinct.
 
 ### Product
 
@@ -898,7 +947,9 @@ merge conflict rejects the candidate world
 These are deliberately not laws.
 
 ```text
-choice is not necessarily commutative
+choice does not express priority
+
+choice is not idempotent
 
 or_else is not choice
 
@@ -938,7 +989,7 @@ stream/flow safety
 The remaining work is chiefly contractual:
 
 ```text
-fairness policy
+root and cross-world fairness policy
 solver budget and Unknown cursor semantics
 resource-author law tests
 defeat-consequence error policy

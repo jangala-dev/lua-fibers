@@ -99,7 +99,7 @@ do
     fibers.perform(src:inlet():write_op('abcdef'))
     choice = fibers.perform(Op.choice(
       Op.always('winner'),
-      src:outlet():splice_to(dst:inlet(), 3):map(function() return 'loser' end)
+      src:outlet():splice_to(dst:inlet(), 3):and_then(function() return Op.never() end)
     ))
     moved = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))

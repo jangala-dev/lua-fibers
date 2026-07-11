@@ -54,7 +54,7 @@ do
   local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      a:writer():write_op('x'):map(function() return 'loser' end)
+      a:writer():write_op('x'):and_then(function() return Op.never() end)
     ))
   end).runtime_status
   assert_status(st, 'found')
@@ -70,7 +70,7 @@ do
     fibers.perform(a:writer():write_op('abc'))
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      b:reader():read_some_op(1):map(function() return 'loser' end)
+      b:reader():read_some_op(1):and_then(function() return Op.never() end)
     ))
     later = fibers.perform(b:reader():read_exactly_op(3))
   end).runtime_status

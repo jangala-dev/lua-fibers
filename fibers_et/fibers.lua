@@ -63,6 +63,7 @@ M.always = Op.always
 M.never = Op.never
 M.choice = Op.choice
 M.named_choice = Op.named_choice
+M.choice_key = Op.choice_key
 M.all = Op.all
 M.named_all = Op.named_all
 M.tensor = Op.tensor

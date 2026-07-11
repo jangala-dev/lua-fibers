@@ -19,7 +19,7 @@ consequence(commit_obligation)
 The central distinctions are:
 
 ```text
-choose        competing alternatives
+choose        unordered competing alternatives with committed rotation
 or_else       fallback after proof-carrying Retry
 all           independent lanes in one commit
 tensor        interacting lanes which may satisfy one another
@@ -64,6 +64,13 @@ local value, err = fibers.perform(fibers.choice(
 ```
 
 Time, readiness and external events are ordinary resources. External mutation is authorised through runtime-bound feed capabilities rather than a privileged source mechanism.
+
+`choice` source order does not express priority. Continuously eligible branches
+of a repeatedly committed choice are served by deterministic rotation. Use
+`or_else` for proof-dependent preference, and `fibers.choice_key(name)` with
+`:with_choice_key(key)` when a choice is reconstructed but should retain its
+rotation. `fibers.run` and `Runtime.new` accept
+`choice = { mode = 'rotating', seed = ... }` for reproducible arbitration.
 
 ## Transactional state
 

@@ -61,12 +61,12 @@ do
   rt:spawn_raw(function()
     choice_result = rt:perform(fibers.choice(
       Op.always('winner'),
-      q:next_op():map(function(v) return 'events:' .. tostring(v) end)
+      q:next_op():and_then(function() return Op.never() end)
     ))
     next_result = rt:perform(q:next_op())
   end, 'source-events-loser')
   run_all(rt)
-  assert_eq(choice_result, 'winner', 'left choice wins this deterministic race')
+  assert_eq(choice_result, 'winner', 'the only committable branch wins')
   assert_eq(next_result, 'event-1', 'losing events branch did not consume occurrence')
 end
 

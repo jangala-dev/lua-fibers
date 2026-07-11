@@ -8,6 +8,7 @@ local Readiness = require('fibers.atoms.readiness')
 local ExternalFeed = require('fibers.kernel.external_feed')
 local Interrupt = require('fibers.internal.interrupt')
 local Protected = require('fibers.kernel.protected')
+local ChoiceArbiter = require('fibers.kernel.choice_arbiter')
 local Runtime = {}
 Runtime.__index = Runtime
 
@@ -76,6 +77,8 @@ end
 function Runtime.new(opts)
   opts = opts or {}
   local host = opts.host or {}
+  local choice_opts = opts.choice or {}
+  local choice_arbiter = ChoiceArbiter.new(choice_opts)
   return setmetatable({
     opts = opts,
     host = host,
@@ -90,6 +93,9 @@ function Runtime.new(opts)
     live_count = 0,
     _next_fibre_id = 0,
 
+    _choice_arbiter = choice_arbiter,
+    choice_policy = { mode = choice_arbiter.mode, seed = choice_arbiter.seed },
+
     _cursor = nil,
     _net_wait_cache = nil,
     _phase = 'external',
@@ -100,6 +106,15 @@ function Runtime.new(opts)
   }, Runtime)
 end
 
+
+
+function Runtime:_choice_order(owner_id, op, occurrence, count)
+  return self._choice_arbiter:order(owner_id, op, occurrence, count)
+end
+
+function Runtime:_commit_choice_selections(selections)
+  return self._choice_arbiter:commit(selections)
+end
 
 function Runtime:now()
   local now = self.host.now or self.opts.now
@@ -369,6 +384,7 @@ end
 
 function Runtime:_retire_fibre(f)
   if not f or f.state == 'dead' then return end
+  if self._choice_arbiter and f.id ~= nil then self._choice_arbiter:discard_owner(f.id) end
   if f.wait_index then self:_remove_waiting(f) end
   f.state = 'dead'
   f.waiting = nil
@@ -458,7 +474,7 @@ function Runtime:perform(opnode, opts)
   if interrupt and interrupt.is_raised and interrupt:is_raised() then
     error(Runtime.cancelled(interrupt.reason, interrupt), 0)
   end
-  local attempt = { guard_cache = {} }
+  local attempt = { guard_cache = {}, choice_orders = {} }
   local result = coroutine.yield({ op = opnode, attempt = attempt, interrupt = interrupt })
   if Runtime.is_cancelled(result) then error(result, 0) end
   if type(result) ~= 'table' then return nil end

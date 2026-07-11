@@ -31,7 +31,7 @@ do
   local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      Stream.open_backend_in_op(region, backend, { name = 'losing-open-stream' }):map(function() return 'loser' end)
+      Stream.open_backend_in_op(region, backend, { name = 'losing-open-stream' }):and_then(function() return Op.never() end)
     ))
   end).runtime_status
   assert_status(st, 'found')
@@ -150,7 +150,7 @@ do
     stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'losing-write-stream' }))
     got = rt:perform(Op.choice(
       Op.always('winner'),
-      stream:writer():write_op('abc'):map(function() return 'loser' end)
+      stream:writer():write_op('abc'):and_then(function() return Op.never() end)
     ))
   end, 'root')
   drive_until(rt, function() return got == 'winner' end, 'losing write choice')

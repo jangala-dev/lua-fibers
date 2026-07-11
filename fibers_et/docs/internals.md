@@ -94,7 +94,7 @@ Only the currently resumed runtime fibre may call `perform`.
 
 - deterministic local reduction;
 - continuation frames for `and_then` and annotations;
-- choice enumeration;
+- unordered choice arbitration and enumeration;
 - independent and interacting product construction;
 - rendezvous and premise closure;
 - retry-proof accumulation;
@@ -117,6 +117,29 @@ The solver must not manufacture `Retry` from exhaustion of a work budget. Unknow
 Terms which require no resource or partner search are reduced locally. The local and general reducers share continuation handling so that `and_then`, post-result transforms and defeat annotation semantics cannot drift.
 
 Guard construction is cached per dynamic occurrence and perform attempt. Backtracking must not repeatedly call the same guard callback.
+
+### Choice arbitration
+
+`fibers/kernel/choice_arbiter.lua` owns committed branch rotation. The transaction
+net asks it for an order identified by runtime, fibre and dynamic choice
+occurrence. That order is cached in the perform attempt and is therefore stable
+across backtracking and bounded cursor suspension.
+
+A candidate attempt records every selected choice occurrence on the speculative
+trail. Rollback removes those records. `World.from_attempt` copies the surviving
+selections, and `World:commit` advances the arbiter only after resource journals
+have been applied. Search, retry, stale validation and prepare refusal never
+advance arbitration state.
+
+Unkeyed state is held by operation node and occurrence path. Explicit keys use a
+separate per-fibre namespace and allow reconstructed operation nodes to share a
+rotation. Keyed choices remain nested arbitration boundaries rather than being
+flattened by choice normalisation.
+
+Protocol priority must be represented by `or_else`, not by branch position.
+Internal examples include mailbox send before concurrent closure, immediate pool
+retirement before deferred retirement, and stream terminal state before advisory
+backend readiness.
 
 ### Occurrences and defeat
 
