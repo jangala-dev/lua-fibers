@@ -7,6 +7,8 @@ local ExternalFeed = require('fibers.external_feed')
 local Protected = require('fibers.internal.protected')
 local Machine = require('fibers.kernel.machine')
 local IR = require('fibers.kernel.ir')
+local Instrumentation = require('fibers.kernel.instrumentation')
+local DependencyIndex = require('fibers.kernel.dependency_index')
 
 local Runtime = {}
 
@@ -152,6 +154,14 @@ end
 function Runtime.new(opts)
   opts = opts or {}
   local machine, machine_name = select_machine(opts)
+  local instrumentation = nil
+  if opts.instrumentation then instrumentation = Instrumentation.new(opts.instrumentation) end
+  local dependency_index_threshold = math.max(1, math.floor(opts.dependency_index_threshold or 16))
+  local dependency_index_release_threshold = math.max(0, math.floor(opts.dependency_index_release_threshold
+    or math.floor(dependency_index_threshold / 2)))
+  if dependency_index_release_threshold >= dependency_index_threshold then
+    dependency_index_release_threshold = math.max(0, dependency_index_threshold - 1)
+  end
   return setmetatable({
     opts = opts,
     host = opts.host or {},
@@ -167,14 +177,24 @@ function Runtime.new(opts)
     _live_fibers = 0,
     pending = {},
     pending_by_id = {},
+    dependency_index = opts.dependency_index == false and nil or DependencyIndex.new(),
+    dependency_index_threshold = dependency_index_threshold,
+    dependency_index_release_threshold = dependency_index_release_threshold,
+    _dependency_index_active = opts.dependency_index ~= false and dependency_index_threshold <= 1,
+    component_search = opts.component_search ~= false,
+    normalise_search = opts.normalise_search ~= false,
+    branch_policy = opts.branch_policy or 'constrained',
+    verify_dependencies = opts.verify_dependencies == true,
     next_fiber = 0,
     next_request = 0,
     pending_generation = 0,
     epoch = 0,
     _last_search_steps = 0,
+    _plan_observations = {},
     _external_feeds = setmetatable({}, { __mode = 'kv' }),
     machine = machine,
     machine_name = machine_name,
+    instrumentation = instrumentation,
     stats = {
       plans = 0,
       search_calls = 0,
@@ -183,8 +203,21 @@ function Runtime.new(opts)
       refreshes = 0,
       commits = 0,
       fallback_commits = 0,
+      trail_entries = 0,
+      rollbacks = 0,
     },
   }, Runtime)
+end
+
+function Runtime:instrumentation_snapshot()
+  if not self.instrumentation then return nil end
+  return self.instrumentation:snapshot()
+end
+
+function Runtime:reset_instrumentation()
+  if self.instrumentation then self.instrumentation:reset() end
+  self._plan_observations = {}
+  return self
 end
 
 function Runtime:push_scope(scope)
@@ -277,6 +310,12 @@ local function spawn_unchecked(self, fn, name, scope)
   self._ready_tail = self._ready_tail + 1
   self._ready_fibers[self._ready_tail] = fiber
   self._live_fibers = self._live_fibers + 1
+  local instrumentation = self.instrumentation
+  if instrumentation then
+    instrumentation:inc('fibres_spawned')
+    instrumentation:max('live_fibres', self._live_fibers)
+    instrumentation:max('ready_fibres', self._ready_tail - self._ready_head + 1)
+  end
   return fiber
 end
 
@@ -321,19 +360,62 @@ function Runtime:perform(op, opts)
   return unpack_pack(packed)
 end
 
+function Runtime:_rebuild_dependency_index()
+  if not self.dependency_index then return end
+  self.dependency_index = DependencyIndex.new()
+  for i = 1, #self.pending do self.dependency_index:add(self.pending[i]) end
+  self._dependency_index_active = true
+  if self.instrumentation then self.instrumentation:inc('dependency_index_activations') end
+end
+
+function Runtime:_deactivate_dependency_index()
+  if not self.dependency_index then return end
+  self.dependency_index = DependencyIndex.new()
+  self._dependency_index_active = false
+  if self.instrumentation then self.instrumentation:inc('dependency_index_deactivations') end
+end
+
 function Runtime:_add_pending(fiber, yielded)
   self.next_request = self.next_request + 1
+  local metadata = self.instrumentation and IR.metadata(yielded.op) or nil
   local request = {
     id = self.next_request,
     fiber = fiber,
     op = yielded.op,
-    footprint = IR.footprint(yielded.op),
+    metadata = metadata,
+    footprint = metadata,
     memo = {},
     interrupt = yielded.opts and yielded.opts.interrupt or nil,
   }
   self.pending[#self.pending + 1] = request
   self.pending_by_id[request.id] = request
+  if self.dependency_index then
+    if self._dependency_index_active then
+      self.dependency_index:add(request)
+    elseif #self.pending >= self.dependency_index_threshold then
+      self:_rebuild_dependency_index()
+    end
+  end
   self.pending_generation = self.pending_generation + 1
+  local instrumentation = self.instrumentation
+  if instrumentation then
+    metadata = request.metadata or metadata or IR.metadata(yielded.op)
+    request.metadata, request.footprint = metadata, metadata
+    instrumentation:inc('perform_yields')
+    instrumentation:max('pending_requests', #self.pending)
+    if metadata.dynamic then instrumentation:inc('requests_dynamic')
+    else instrumentation:inc('requests_analysable') end
+    instrumentation:inc('operation_nodes', metadata.nodes or 0)
+    instrumentation:max('operation_nodes_per_request', metadata.nodes or 0)
+    instrumentation:observe('operation_nodes_per_request', metadata.nodes or 0)
+    local exchanges, locations, resources = IR.metadata_counts(metadata)
+    instrumentation:inc('dependency_exchange_resources', exchanges)
+    instrumentation:inc('dependency_locations', locations)
+    instrumentation:inc('dependency_wide_resources', resources)
+    instrumentation:max('dependency_exchange_resources_per_request', exchanges)
+    instrumentation:max('dependency_locations_per_request', locations)
+    instrumentation:max('dependency_wide_resources_per_request', resources)
+  end
 end
 
 function Runtime:_finish_fiber(fiber)
@@ -345,10 +427,15 @@ function Runtime:_finish_fiber(fiber)
   fiber.scope = nil
   fiber.scope_stack = nil
   self._live_fibers = math.max(self._live_fibers - 1, 0)
+  local instrumentation = self.instrumentation
+  if instrumentation then instrumentation:inc('fibres_completed') end
 end
 
 function Runtime:_resume_fiber(fiber, value)
   local ok, yielded
+  local instrumentation = self.instrumentation
+  local resume_started = instrumentation and instrumentation.clock() or nil
+  if instrumentation then instrumentation:inc('fibre_resumes') end
   local previous, previous_scope, previous_fiber = CURRENT_RUNTIME, CURRENT_SCOPE, self._current_fiber
   self._current_fiber = fiber
   CURRENT_RUNTIME, CURRENT_SCOPE = self, fiber.scope
@@ -360,6 +447,9 @@ function Runtime:_resume_fiber(fiber, value)
     ok, yielded = coroutine.resume(fiber.co)
   end
   self:_restore_phase(old_phase)
+  if instrumentation then
+    instrumentation:inc('fibre_cpu_ns', math.floor((instrumentation.clock() - resume_started) * 1000000000 + 0.5))
+  end
   CURRENT_RUNTIME, CURRENT_SCOPE = previous, previous_scope
   self._current_fiber = previous_fiber
   if not ok then
@@ -384,18 +474,110 @@ function Runtime:_remove_pending(ids)
   for i = 1, #self.pending do
     local request = self.pending[i]
     if remove[request.id] then
+      if self.dependency_index and self._dependency_index_active then self.dependency_index:remove(request) end
       self.pending_by_id[request.id] = nil
     else
       kept[#kept + 1] = request
     end
   end
   self.pending = kept
+  if self.dependency_index and self._dependency_index_active and #kept < self.dependency_index_release_threshold then
+    self:_deactivate_dependency_index()
+  end
   self.pending_generation = self.pending_generation + 1
+  local instrumentation = self.instrumentation
+  if instrumentation then instrumentation:inc('pending_removed', #ids) end
+end
+
+function Runtime:_component_requests(focus_id)
+  if not self.pending_by_id[focus_id] then return {}, self.instrumentation and { total = 0, size = 0 } or nil end
+  if not self.component_search or not self.dependency_index or not self._dependency_index_active then
+    if not self.instrumentation then return self.pending_by_id, nil end
+    local total, ids = #self.pending, {}
+    for id in pairs(self.pending_by_id) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local parts = {}
+    for i = 1, #ids do parts[i] = tostring(ids[i]) end
+    return self.pending_by_id, {
+      total = total, size = total, global = true, disabled = true,
+      ids = ids, signature = table.concat(parts, ','),
+    }
+  end
+  return self.dependency_index:component(focus_id, self.pending_by_id, self.instrumentation ~= nil)
+end
+
+function Runtime:_has_supplier(intents, entered, excluded, requests)
+  requests = requests or self.pending_by_id
+  if self.dependency_index and self._dependency_index_active then
+    return self.dependency_index:supplier_ids(intents, requests, entered, excluded)[1] ~= nil
+  end
+  for id, request in pairs(requests) do
+    if not (entered and entered[id]) and not (excluded and excluded[id]) then
+      local metadata = request.metadata or request.footprint or IR.metadata(request.op)
+      request.metadata, request.footprint = metadata, metadata
+      local can_supply = IR.footprint_may_supply(metadata, intents)
+      if can_supply then return true end
+    end
+  end
+  return false
+end
+
+function Runtime:_supplier_request_rows(intents, entered, excluded, requests)
+  requests = requests or self.pending_by_id
+  if self.dependency_index and self._dependency_index_active then
+    return self.dependency_index:supplier_ids(intents, requests, entered, excluded)
+  end
+  local rows = {}
+  for id, request in pairs(requests) do
+    if not (entered and entered[id]) and not (excluded and excluded[id]) then
+      local metadata = request.metadata or request.footprint or IR.metadata(request.op)
+      request.metadata, request.footprint = metadata, metadata
+      local score, reason = IR.supply_score(metadata, intents)
+      if score > 0 then rows[#rows + 1] = { id = id, score = score, reason = reason } end
+    end
+  end
+  table.sort(rows, function(a, b)
+    if a.score ~= b.score then return a.score > b.score end
+    return a.id < b.id
+  end)
+  return rows
 end
 
 function Runtime:_find_candidate_impl(focus_id, search_limit)
   if not self.pending_by_id[focus_id] then return nil end
-  return self.machine.search(self, self.pending_by_id, focus_id, search_limit)
+  local requests, component = self:_component_requests(focus_id)
+  local instrumentation = self.instrumentation
+  if instrumentation then
+    component = component or { total = #self.pending, size = #self.pending, global = true }
+    local previous = self._plan_observations[focus_id]
+    if previous then
+      instrumentation:inc('plan_revisits')
+      if previous.signature == component.signature then instrumentation:inc('plan_same_component')
+      else instrumentation:inc('plan_component_changed') end
+      if previous.epoch == self.epoch then instrumentation:inc('plan_same_epoch')
+      else instrumentation:inc('plan_epoch_changed') end
+      if previous.pending_generation == self.pending_generation then instrumentation:inc('plan_same_frontier')
+      else instrumentation:inc('plan_frontier_changed') end
+      if previous.signature == component.signature and previous.epoch == self.epoch
+          and previous.pending_generation == self.pending_generation then
+        instrumentation:inc('plan_reuse_eligible')
+      end
+      local intersection = 0
+      local prior_ids = previous.ids or {}
+      local current = {}
+      for i = 1, #(component.ids or {}) do current[component.ids[i]] = true end
+      for i = 1, #prior_ids do if current[prior_ids[i]] then intersection = intersection + 1 end end
+      local union = #prior_ids + #(component.ids or {}) - intersection
+      instrumentation:observe('component_overlap_percent', union > 0 and intersection * 100 / union or 100)
+    end
+    self._plan_observations[focus_id] = {
+      signature = component.signature,
+      ids = component.ids,
+      epoch = self.epoch,
+      pending_generation = self.pending_generation,
+    }
+  end
+  return self.machine.search(self, requests, focus_id, search_limit, component)
 end
 
 function Runtime:_find_candidate(focus_id, search_limit)
@@ -437,9 +619,16 @@ function Runtime:_prepare_effects(candidate)
 end
 
 function Runtime:_commit(candidate)
-  local valid = self:_validate(candidate)
+  local instrumentation = self.instrumentation
+  local commit_started = instrumentation and instrumentation.clock() or nil
+  local valid, validation_reason = self:_validate(candidate)
   if not valid then
     self.stats.validation_failures = self.stats.validation_failures + 1
+    if instrumentation then
+      instrumentation:inc('validation_failures')
+      instrumentation:inc('validation_failure_' .. tostring(validation_reason or 'unknown'))
+      instrumentation:inc('commit_cpu_ns', math.floor((instrumentation.clock() - commit_started) * 1000000000 + 0.5))
+    end
     return false, 'stale'
   end
 
@@ -460,6 +649,16 @@ function Runtime:_commit(candidate)
   self.epoch = self.epoch + 1
   self.stats.commits = self.stats.commits + 1
   if candidate.negative_guard then self.stats.fallback_commits = self.stats.fallback_commits + 1 end
+  if instrumentation then
+    instrumentation:inc('commits')
+    instrumentation:inc('commit_participants', #candidate.participants)
+    local write_count = 0
+    for _ in pairs(candidate.writes or {}) do write_count = write_count + 1 end
+    instrumentation:inc('commit_writes', write_count)
+    instrumentation:inc('commit_effects', #prepared)
+    instrumentation:observe('participants_per_commit', #candidate.participants)
+    instrumentation:observe('writes_per_commit', write_count)
+  end
 
   self:_remove_pending(candidate.participants)
 
@@ -472,6 +671,9 @@ function Runtime:_commit(candidate)
     local request = requests[i]
     local outcome = candidate.outcomes[request.id]
     self:_resume_fiber(request.fiber, outcome)
+  end
+  if instrumentation then
+    instrumentation:inc('commit_cpu_ns', math.floor((instrumentation.clock() - commit_started) * 1000000000 + 0.5))
   end
   return true
 end
@@ -569,6 +771,7 @@ function Runtime:_step_impl(opts)
         local ok = self:_commit(candidate)
         if not ok and self.pending_by_id[focus] then
           self.stats.refreshes = self.stats.refreshes + 1
+          if self.instrumentation then self.instrumentation:inc('refreshes') end
           candidate, ref, unknown = self:_find_candidate(focus, search_limit)
           refs[#refs + 1] = ref
           any_unknown = any_unknown or unknown == true
@@ -636,6 +839,7 @@ function Runtime:_run_impl(opts)
           local ok = self:_commit(candidate)
           if not ok and self.pending_by_id[focus] then
             self.stats.refreshes = self.stats.refreshes + 1
+            if self.instrumentation then self.instrumentation:inc('refreshes') end
             candidate, refs[i], unknowns[i] = self:_find_candidate(focus)
             if candidate then ok = self:_commit(candidate) end
           end

@@ -1,0 +1,33 @@
+case,profile,machine,median_seconds,digest,plans,search_calls,branches,max_search_steps,component_fraction,component_roots_excluded,forced_exchanges,forced_claims,requests_analysable,requests_dynamic,states_observed,state_duplicates,intent_pairs_scanned,footprint_checks
+isolated blocked components,legacy,trail,0.002450943,quiescent:24,48,48,0,1,1.000000,0,0,0,24,0,96,0,0,828
+isolated blocked components,legacy,reference,0.001739979,quiescent:24,48,48,0,1,1.000000,0,0,0,24,0,0,0,0,828
+isolated blocked components,architecture,trail,0.002204895,quiescent:24,48,48,0,1,0.174658,723,0,0,24,0,96,0,0,105
+isolated blocked components,architecture,reference,0.001456976,quiescent:24,48,48,0,1,0.174658,723,0,0,24,0,0,0,0,105
+hinted continuation isolation,legacy,trail,0.001292944,quiescent:13,26,26,0,1,1.000000,0,0,0,13,0,52,0,0,234
+hinted continuation isolation,legacy,reference,0.000883102,quiescent:13,26,26,0,1,1.000000,0,0,0,13,0,0,0,0,234
+hinted continuation isolation,architecture,trail,0.001194954,quiescent:13,26,26,0,1,0.100000,234,0,0,13,0,52,0,0,0
+hinted continuation isolation,architecture,reference,0.000782013,quiescent:13,26,26,0,1,0.100000,234,0,0,13,0,0,0,0,0
+opaque continuation slow path,legacy,trail,0.002856016,quiescent:13,26,74,48,3,1.000000,0,0,0,12,1,148,48,0,654
+opaque continuation slow path,legacy,reference,0.001470089,quiescent:13,26,74,0,1,1.000000,0,0,0,12,1,0,0,0,654
+opaque continuation slow path,architecture,trail,0.002902031,quiescent:13,26,74,48,3,1.000000,0,0,0,12,1,148,48,0,654
+opaque continuation slow path,architecture,reference,0.001595020,quiescent:13,26,74,0,1,1.000000,0,0,0,12,1,0,0,0,654
+binary rendezvous sequence,legacy,trail,0.014091015,sum:3240,162,484,322,3,1.000000,0,0,0,160,0,324,0,161,161
+binary rendezvous sequence,legacy,reference,0.009821892,sum:3240,162,484,0,1,1.000000,0,0,0,160,0,0,0,161,161
+binary rendezvous sequence,architecture,trail,0.012872934,sum:3240,162,484,161,3,1.000000,0,161,0,160,0,324,0,161,161
+binary rendezvous sequence,architecture,reference,0.009435892,sum:3240,162,484,0,1,1.000000,0,161,0,160,0,0,0,161,161
+forced scalar query sequence,legacy,trail,0.005860806,count:80,80,160,80,2,1.000000,0,0,0,80,0,80,0,0,0
+forced scalar query sequence,legacy,reference,0.003588915,count:80,80,160,0,1,1.000000,0,0,0,80,0,0,0,0,0
+forced scalar query sequence,architecture,trail,0.004511118,count:80,80,160,0,2,1.000000,0,0,80,80,0,80,0,0,0
+forced scalar query sequence,architecture,reference,0.003618002,count:80,80,160,0,1,1.000000,0,0,80,80,0,0,0,0,0
+contended producers,legacy,trail,0.006949902,sum:14480,73,203,130,3,1.000000,0,0,0,64,0,146,0,65,520
+contended producers,legacy,reference,0.004197121,sum:14480,73,203,0,1,1.000000,0,0,0,64,0,0,0,65,520
+contended producers,architecture,trail,0.005526781,sum:14480,73,203,70,3,1.000000,0,60,0,64,0,146,0,65,520
+contended producers,architecture,reference,0.004287958,sum:14480,73,203,0,1,1.000000,0,60,0,64,0,0,0,65,520
+triple swap with decoy,legacy,trail,0.006223917,C:A:B,10,179,169,74,1.000000,0,0,0,4,0,330,210,123,104
+triple swap with decoy,legacy,reference,0.007192850,C:A:B,10,179,0,1,1.000000,0,0,0,4,0,0,0,123,104
+triple swap with decoy,architecture,trail,0.004003048,C:A:B,10,105,92,37,1.000000,0,3,0,4,0,182,102,71,94
+triple swap with decoy,architecture,reference,0.003113985,C:A:B,10,105,0,1,1.000000,0,3,0,4,0,0,0,71,94
+nursery rendezvous fanout seven,legacy,trail,0.014737844,sum:28,142,278,137,8,1.000000,0,0,0,107,8,189,18,14,345
+nursery rendezvous fanout seven,legacy,reference,0.011791945,sum:28,142,278,0,1,1.000000,0,0,0,107,8,0,0,14,345
+nursery rendezvous fanout seven,architecture,trail,0.015468836,sum:28,142,278,71,8,1.000000,0,13,53,107,8,188,18,14,337
+nursery rendezvous fanout seven,architecture,reference,0.011607885,sum:28,142,278,0,1,1.000000,0,13,53,107,8,0,0,14,345

@@ -53,6 +53,27 @@ end)
 
 The put and get commit as one rendezvous. Neither side proceeds alone.
 
+
+## Declaring continuation dependencies
+
+Arbitrary `guard` and `and_then` callbacks remain conservative: because the
+operation returned by Lua code may depend on runtime values, an undeclared
+continuation is treated as capable of touching the complete pending frontier.
+Library and performance-sensitive code may declare a conservative union of the
+operations the continuation can return:
+
+```lua
+local receive = inbox:get_op()
+local op = prior:and_then(function(value)
+  return receive
+end, fibers.Op.dependencies(receive))
+```
+
+An incomplete declaration can make dependency isolation unsound.  During tests,
+`Runtime.new({ verify_dependencies = true })` checks executed continuations and
+rejects declarations which do not cover the returned operation.  Omitting a
+declaration is always correct and uses the slower opaque path.
+
 ## Unordered choice and principled priority
 
 `choice` expresses indifference between acceptable committed worlds:
@@ -199,6 +220,8 @@ The active semantic kernel is deliberately small:
 fibers/kernel/ir.lua            primitive programme records and footprints
 fibers/kernel/store.lua         versioned locations, views, deltas and commit
 fibers/kernel/choice_order.lua  deterministic unordered-choice permutation
+fibers/kernel/dependency_index.lua incremental pending dependency components
+fibers/kernel/branch_policy.lua  constrained residual branch ordering
 fibers/kernel/machine.lua       trail-based proof and refutation search
 fibers/kernel/runtime.lua       fibres, recruitment, scheduling and host boundary
 ```
@@ -220,7 +243,7 @@ texlua tests/run_protected_fallback.lua
 texlua tests/test_reference_lazy.lua
 ```
 
-The maintained aggregate suite currently contains 64 test programmes. Protected-call fallback and lazy-reference loading also run in isolated interpreters. Useful runner options are:
+The maintained aggregate suite currently contains 66 test programmes. Protected-call fallback and lazy-reference loading also run in isolated interpreters. Useful runner options are:
 
 ```sh
 lua tests/run_all.lua --list
@@ -229,15 +252,21 @@ lua tests/run_all.lua --verbose
 lua tests/run_all.lua --fail-fast
 ```
 
-Run examples and benchmarks with:
+Run examples and performance work with:
 
 ```sh
 texlua examples/01_rendezvous.lua
 lua benchmarks/bench.lua
 FIBERS_BENCH_CASE=product lua benchmarks/bench.lua
+texlua performance/suite.lua
+FIBERS_PERF_TIERS=all texlua performance/suite.lua
+texlua performance/seed_sweep.lua
+texlua performance/architecture_suite.lua
 ```
 
-Benchmarks are for local regression work, not cross-machine claims.
+`performance/README.md` describes the tiered validating suite, optional runtime
+instrumentation, seed sweeps and CSV regression checks. Benchmarks are for local
+regression work, not cross-machine claims.
 
 ## Documentation
 
@@ -250,6 +279,8 @@ docs/resource-authoring.md  trusted compact-facility authoring
 docs/internals.md           compact kernel and execution pipeline
 docs/comparison.md          comparison with CSP, CML, Transactional Events and Reagents
 docs/compatibility.md       portable coding constraints and current test environment
+performance/README.md        instrumentation and performance regression workflow
+PERFORMANCE-NOTES.md         current findings and optimisation roadmap
 ```
 
 The repository remains work in progress. Transactions are coherent within one runtime commit; they are not crash-durable database or distributed transactions.

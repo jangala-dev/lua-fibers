@@ -85,11 +85,12 @@ local function new_offers(name)
 end
 
 local function wait_state(scalar, pred)
+  local dependencies = Op.dependencies(scalar:snapshot_op(), scalar:changed_op(0))
   local function loop()
     return scalar:snapshot_op():and_then(function(s)
       if pred(s.value) then return Op.always(s.value) end
-      return scalar:changed_op(s.version):and_then(function() return loop() end)
-    end)
+      return scalar:changed_op(s.version):and_then(function() return loop() end, dependencies)
+    end, dependencies)
   end
   return loop()
 end
@@ -183,7 +184,7 @@ function Scope:spawn_op(fn, opts)
   })
   return self:admit_op(owned):and_then(function()
     return task:spawn_effect_op()
-  end):map(function() return task end)
+  end, false):map(function() return task end)
 end
 
 function Scope:spawn(fn, opts)
@@ -212,9 +213,10 @@ function Scope:offer_op(item, target, terms)
     terms = terms,
     name = item and item.name or nil,
   }
+  local put_offer = target_sc.offers:put_op(offer)
   return self:move_op(item, target_sc):and_then(function()
-    return target_sc.offers:put_op(offer):map(function() return offer end)
-  end)
+    return put_offer:map(function() return offer end)
+  end, Op.dependencies(put_offer))
 end
 
 function Scope:accept_op(filter)
@@ -226,7 +228,7 @@ function Scope:accept_op(filter)
     -- offer and loop, because the custody offer itself is part of the same committed
     -- transaction.
     return Op.never()
-  end)
+  end, false)
 end
 
 
@@ -331,7 +333,7 @@ function Scope:request_cancel_op(reason)
     return Op.emit(require('fibers.atoms.effect').interrupt(self.interrupt, recorded_reason)):map(function()
       return true, recorded_reason
     end)
-  end)
+  end, false)
 end
 
 function Scope:cancel_requested_op()
@@ -347,8 +349,9 @@ function Scope:cancellation_op()
 end
 
 function Scope:task_roots_snapshot_op()
+  local roots_op = self.region:roots_op()
   return self.region:snapshot_op():and_then(function(status)
-    return self.region:roots_op():map(function(roots)
+    return roots_op:map(function(roots)
       local tasks = {}
       for i = 1, #roots do
         local item = roots[i]
@@ -358,7 +361,7 @@ function Scope:task_roots_snapshot_op()
       end
       return { version = status.version, tasks = tasks, roots = roots }
     end)
-  end)
+  end, Op.dependencies(roots_op))
 end
 
 function Scope:begin_close_op(reason, opts)
@@ -376,9 +379,10 @@ function Scope:begin_close_op(reason, opts)
 end
 
 function Scope:seal_op(_reason)
+  local write_sealed = self.sealed:write_op(true)
   return self.region:seal_op():or_else(Op.always(true)):and_then(function()
-    return self.sealed:write_op(true)
-  end)
+    return write_sealed
+  end, Op.dependencies(write_sealed))
 end
 
 function Scope:sealed_op()
@@ -401,9 +405,10 @@ function Scope:subtree_op(item) return self.region:subtree_op(item) end
 
 
 function Scope:inspect_op()
+  local sealed_read, done_read = self.sealed:read_op(), self.done:read_op()
   return self.region:snapshot_op():and_then(function(region_status)
-    return self.sealed:read_op():and_then(function(sealed)
-      return self.done:read_op():map(function(done)
+    return sealed_read:and_then(function(sealed)
+      return done_read:map(function(done)
         local done_status = type(done) == 'table' and done.status == 'done'
         return {
           open = region_status.open,
@@ -420,8 +425,8 @@ function Scope:inspect_op()
           scope = self,
         }
       end)
-    end)
-  end)
+    end, Op.dependencies(done_read))
+  end, Op.dependencies(sealed_read, done_read))
 end
 
 

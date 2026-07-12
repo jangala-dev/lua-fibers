@@ -5,6 +5,7 @@ local Op = require('fibers.atoms.op')
 local Store = require('fibers.kernel.store')
 local IR = require('fibers.kernel.ir')
 local ChoiceOrder = require('fibers.kernel.choice_order')
+local BranchPolicy = require('fibers.kernel.branch_policy')
 
 local M = {}
 
@@ -27,6 +28,12 @@ local function copy_map(xs)
   return out
 end
 
+local function map_count(xs)
+  local n = 0
+  for _ in pairs(xs or {}) do n = n + 1 end
+  return n
+end
+
 local function copy_scope_path(path)
   local out = {}
   for i = 1, #(path or {}) do
@@ -47,6 +54,14 @@ local function copy_frames(frames)
   return out
 end
 
+local function rebuild_intent_indexes(state)
+  state.intent_by_id = {}
+  for i = 1, #(state.intents or {}) do
+    local intent = state.intents[i]
+    state.intent_by_id[intent.id] = intent
+  end
+end
+
 local function clone_state(s)
   s.runtime.stats.state_clones = s.runtime.stats.state_clones + 1
   local out = {
@@ -59,6 +74,7 @@ local function clone_state(s)
     groups = {},
     views = {},
     intents = {},
+    intent_by_id = {},
     effects = copy_array(s.effects),
     used_fallback = s.used_fallback,
     negative_checks = copy_array(s.negative_checks),
@@ -71,6 +87,7 @@ local function clone_state(s)
     next_machine_serial = s.next_machine_serial,
     search_steps = s.search_steps,
     search_limit = s.search_limit,
+    profile_plan = s.profile_plan,
   }
 
   for id, t in pairs(s.tasks) do
@@ -117,6 +134,7 @@ local function clone_state(s)
   end
 
   for i = 1, #s.intents do out.intents[i] = Store.copy_intent(s.intents[i]) end
+  rebuild_intent_indexes(out)
   return out
 end
 
@@ -186,6 +204,14 @@ local function finish_group_lane(state, task, frame, outcome)
   })
 end
 
+local function verify_continuation_dependencies(state, frame, next_op)
+  if not state.runtime.verify_dependencies or frame.continuation_footprint == nil then return end
+  local declared = IR.metadata_hint(frame.continuation_footprint)
+  local actual = IR.metadata(next_op)
+  local ok, reason = IR.metadata_covers(declared, actual)
+  if not ok then error('continuation dependency declaration is incomplete: ' .. tostring(reason), 0) end
+end
+
 complete_task = function(state, task, outcome)
   while true do
     local n = #task.frames
@@ -208,6 +234,7 @@ complete_task = function(state, task, outcome)
         if not cached then
           cached = state.runtime:_call_in_phase('guard', 'callback_error', frame.fn, { runtime = state.runtime, now = function() return state.runtime:now() end })
           if not Op.is_op(cached) then error('guard callback must return an Op', 0) end
+          verify_continuation_dependencies(state, frame, cached)
           request.memo[frame.cache_key] = cached
         end
         task.expr = cached
@@ -216,6 +243,7 @@ complete_task = function(state, task, outcome)
       else
         local next_op = state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
         if not Op.is_op(next_op) then error('and_then callback must return an Op', 0) end
+        verify_continuation_dependencies(state, frame, next_op)
         task.expr = next_op
       end
       add_active(state, task.id)
@@ -325,7 +353,7 @@ end
 
 local function remove_intent_ids(state, ids)
   local remove = {}
-  for i = 1, #ids do remove[ids[i]] = true end
+  for i = 1, #ids do remove[ids[i]] = true; state.intent_by_id[ids[i]] = nil end
   local kept = {}
   for i = 1, #state.intents do
     if not remove[state.intents[i].id] then kept[#kept + 1] = state.intents[i] end
@@ -464,7 +492,7 @@ end
 local function block_intent(state, task, program)
   state.next_intent = state.next_intent + 1
   task.status = 'blocked'
-  state.intents[#state.intents + 1] = {
+  local intent = {
     id = state.next_intent,
     kind = program.kind,
     task_id = task.id,
@@ -477,11 +505,13 @@ local function block_intent(state, task, program)
     interest = type(program.interest) == 'function' and program.interest(state.runtime, program) or program.interest,
     absence_check = program.absence_check,
   }
+  state.intents[#state.intents + 1] = intent
+  state.intent_by_id[intent.id] = intent
 end
-
-local function match_intents(state, i, j)
-  local a, b = state.intents[i], state.intents[j]
-  remove_two(state.intents, i, j)
+local function match_intents(state, left_id, right_id)
+  local a, b = state.intent_by_id[left_id], state.intent_by_id[right_id]
+  if not a or not b then return false end
+  remove_intent_ids(state, { left_id, right_id })
   local put = a.role == 'put' and a or b
   local get = a.role == 'get' and a or b
   local put_task = state.tasks[put.task_id]
@@ -675,7 +705,7 @@ local function claim_groups(state)
       group.ids[#group.ids + 1] = intent.id
     end
   end
-  return order
+  return BranchPolicy.order_claim_groups(order, state.runtime.branch_policy ~= 'legacy')
 end
 
 local function resolve_claim_set(state, group, ids)
@@ -933,13 +963,17 @@ local function state_accepts_participant_supply(state)
 end
 
 local function request_may_supply(request, intents)
-  return IR.footprint_may_supply(request.footprint or IR.footprint(request.op), intents)
+  local metadata = request.metadata or request.footprint or IR.metadata(request.op)
+  request.metadata, request.footprint = metadata, metadata
+  return IR.footprint_may_supply(metadata, intents)
 end
 
 local dfs
 
 dfs = function(state)
   state.runtime.stats.search_calls = state.runtime.stats.search_calls + 1
+  local profile_plan = state.profile_plan
+  if profile_plan then profile_plan.search_calls = profile_plan.search_calls + 1 end
   state.search_steps = state.search_steps + 1
   if state.search_steps > state.search_limit then
     return nil, { interests = {}, checks = {} }, true
@@ -952,6 +986,8 @@ dfs = function(state)
       if task.status ~= 'active' then
         -- A cloned queue may retain a task which completed through another lane.
       else
+        if profile_plan then profile_plan.task_steps = profile_plan.task_steps + 1 end
+        if profile_plan then profile_plan.deterministic_steps = profile_plan.deterministic_steps + 1 end
         local expr = task.expr
         local kind = expr.kind
 
@@ -960,7 +996,7 @@ dfs = function(state)
 
         elseif kind == 'and_then' then
           task.frames[#task.frames + 1] = {
-            kind = 'bind', fn = expr.fn, phase = expr.callback_phase, cache_key = expr.cache_key,
+            kind = 'bind', fn = expr.fn, phase = expr.callback_phase, cache_key = expr.cache_key, continuation_footprint = expr.continuation_footprint,
           }
           task.expr = expr.p
           add_active(state, task.id)
@@ -1040,17 +1076,36 @@ dfs = function(state)
       if candidate then return candidate end
       local refutation
 
-      for i = 1, #state.intents do
-        for j = i + 1, #state.intents do
-          if intents_compatible(state.intents[i], state.intents[j]) then
-            local branch = clone_state(state)
-            if match_intents(branch, i, j) then
-              local found, ref, unknown = dfs(branch)
-              if found then return found end
-              refutation = merge_refutation(refutation, ref)
-              if unknown then return nil, refutation, true end
-            end
+      local exchange = BranchPolicy.exchange_frontier(state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
+      if profile_plan then
+        profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans
+        profile_plan.compatible_pairs = profile_plan.compatible_pairs + exchange.compatible
+        profile_plan.exchange_domains = profile_plan.exchange_domains + (exchange.selected and 1 or 0)
+        profile_plan.zero_exchange_domains = profile_plan.zero_exchange_domains + exchange.zero_domains
+        profile_plan.max_exchange_domain = math.max(profile_plan.max_exchange_domain or 0, exchange.selected_degree or 0)
+      end
+      if state.runtime.normalise_search ~= false and #state.intents == 2
+          and exchange.selected_degree == 1 and #exchange.pairs == 1 then
+        if not state.runtime:_has_supplier({ exchange.selected }, state.roots, state.excluded_roots, state.requests) then
+          if profile_plan then
+            profile_plan.forced_exchange_opportunities = profile_plan.forced_exchange_opportunities + 1
+            profile_plan.forced_exchanges = profile_plan.forced_exchanges + 1
+            profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
           end
+          local branch = clone_state(state)
+          local pair = exchange.pairs[1]
+          if match_intents(branch, pair.left, pair.right) then return dfs(branch) end
+          return nil, terminal_refutation(state), false
+        end
+      end
+      for pi = 1, #exchange.pairs do
+        local pair = exchange.pairs[pi]
+        local branch = clone_state(state)
+        if match_intents(branch, pair.left, pair.right) then
+          local found, ref, unknown = dfs(branch)
+          if found then return found end
+          refutation = merge_refutation(refutation, ref)
+          if unknown then return nil, refutation, true end
         end
       end
 
@@ -1088,10 +1143,21 @@ dfs = function(state)
         end
 
         if all_machine and machine_supply_none then
+          local forced = false
+          if state.runtime.normalise_search ~= false and #groups == 1 and #group.ids == #state.intents then
+            local group_intents = {}
+            for ii = 1, #group.ids do group_intents[ii] = state.intent_by_id[group.ids[ii]] end
+            forced = not state.runtime:_has_supplier(group_intents, state.roots, state.excluded_roots, state.requests)
+          end
           -- Non-supplying serial transducers have an explicit deterministic
           -- order and can be resolved as one location journal. This avoids
           -- factorially re-enumerating Region and scope-monitor updates.
           local branch = clone_state(state)
+          if forced and profile_plan then
+            profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1
+            profile_plan.forced_claims = profile_plan.forced_claims + 1
+            profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
+          end
           if resolve_claim_set(branch, group, group.ids) then
             local found, ref, unknown = dfs(branch)
             if found then return found end
@@ -1132,42 +1198,31 @@ dfs = function(state)
         end
       end
 
-      local ids = {}
+      local suppliers = {}
       if state_accepts_participant_supply(state) then
-        for id in pairs(state.requests) do
-          if not state.roots[id] and not state.excluded_roots[id] then ids[#ids + 1] = id end
+        suppliers = state.runtime:_supplier_request_rows(state.intents, state.roots, state.excluded_roots, state.requests)
+      end
+      if profile_plan then
+        profile_plan.footprint_checks = profile_plan.footprint_checks + math.max(0, map_count(state.requests) - map_count(state.roots))
+        profile_plan.recruitment_candidates = profile_plan.recruitment_candidates + #suppliers
+        if suppliers[1] then
+          profile_plan.recruitment_best_score = math.max(profile_plan.recruitment_best_score or 0, suppliers[1].score or 0)
+          profile_plan.footprint_matches = profile_plan.footprint_matches + #suppliers
+          local key = 'footprint_' .. tostring(suppliers[1].reason or 'unknown') .. '_matches'
+          profile_plan[key] = (profile_plan[key] or 0) + 1
         end
       end
-      table.sort(ids)
-      if #ids > 0 then
-        -- Prefer a request whose entered syntax can supply one of the current
-        -- unmatched exchanges. Scope monitors and unrelated blocked tasks can
-        -- otherwise appear before the useful rendezvous partner in request-id
-        -- order, forcing an exponential walk through irrelevant participant
-        -- subsets. This is a search-order heuristic only: exclusion preserves
-        -- completeness and dynamic continuations remain discoverable.
-        local id = ids[1]
-        if #state.intents > 0 then
-          for i = 1, #ids do
-            local request = state.requests[ids[i]]
-            if request and request_may_supply(request, state.intents) then
-              id = ids[i]
-              break
-            end
-          end
-        end
-
-        -- Enumerate participant subsets canonically. For the selected undecided
-        -- request, branch once on inclusion and once on exclusion.
+      local row = suppliers[1]
+      if row then
         local included = clone_state(state)
-        add_root(included, id)
+        add_root(included, row.id)
         local found, ref, unknown = dfs(included)
         if found then return found end
         refutation = merge_refutation(refutation, ref)
         if unknown then return nil, refutation, true end
 
         local excluded = clone_state(state)
-        excluded.excluded_roots[id] = true
+        excluded.excluded_roots[row.id] = true
         found, ref, unknown = dfs(excluded)
         if found then return found end
         refutation = merge_refutation(refutation, ref)
@@ -1181,21 +1236,42 @@ dfs = function(state)
 end
 
 
-function M.search(runtime, requests, focus_id, search_limit)
+function M.search(runtime, requests, focus_id, search_limit, component)
   if not requests[focus_id] then return nil end
   runtime.stats.plans = runtime.stats.plans + 1
+  local instrumentation = runtime.instrumentation
+  local profile_plan = instrumentation and instrumentation:begin_plan({
+    focus = focus_id, pending = map_count(requests), machine = 'reference',
+    total_pending = component and component.total or map_count(requests),
+    component_size = component and component.size or map_count(requests),
+    component_dynamic = component and component.dynamic or 0,
+    component_global = component and component.global == true or false,
+    component_edge_visits = component and component.edge_visits or 0,
+  }) or nil
   local state = {
     runtime = runtime, requests = requests, focus = focus_id,
     tasks = {}, active = {}, roots = {}, groups = {}, views = {},
-    intents = {}, effects = {}, used_fallback = false,
+    intents = {}, intent_by_id = {},
+    effects = {}, used_fallback = false,
     negative_checks = {}, fallback_interests = {}, excluded_roots = {},
     next_task = 0, next_group = 0, next_view = 0, next_intent = 0,
     next_machine_serial = 0, search_steps = 0,
     search_limit = search_limit or runtime.search_limit,
+    profile_plan = profile_plan,
   }
   add_root(state, focus_id)
   local candidate, refutation, unknown = dfs(state)
   if candidate then runtime._last_search_steps = candidate.search_steps end
+  if profile_plan then
+    profile_plan.search_steps = state.search_steps
+    if candidate then
+      profile_plan.participants = #(candidate.participants or {})
+      profile_plan.observations = map_count(candidate.observations)
+      profile_plan.writes = map_count(candidate.writes)
+      profile_plan.effects = #(candidate.effects or {})
+    end
+    instrumentation:finish_plan(profile_plan, candidate and 'found' or (unknown and 'unknown' or 'retry'))
+  end
   return candidate, refutation, unknown
 end
 

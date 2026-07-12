@@ -79,6 +79,22 @@ op:on_defeat(effect)
 
 `map`, `and_then`, `guard` and primitive transition callbacks execute during speculative proof search. They must be deterministic, non-yielding and free of irreversible side effects.
 
+
+An arbitrary operation-valued continuation is conservatively opaque to the
+runtime.  Performance-sensitive library code may declare the union of possible
+continuation dependencies:
+
+```lua
+local receive = inbox:get_op()
+local op = prior:and_then(function(value)
+  return receive
+end, fibers.Op.dependencies(receive))
+```
+
+The declaration is optional.  Omitting it is always correct and may reduce
+dependency-component isolation.  In tests, `verify_dependencies = true` checks
+executed continuations against their declarations.
+
 `wrap` executes for the resumed participant after commit. It may perform another operation.
 
 ### Choice

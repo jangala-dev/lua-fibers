@@ -5,6 +5,7 @@ local Op = require('fibers.atoms.op')
 local Store = require('fibers.kernel.store')
 local IR = require('fibers.kernel.ir')
 local ChoiceOrder = require('fibers.kernel.choice_order')
+local BranchPolicy = require('fibers.kernel.branch_policy')
 
 local M = {}
 
@@ -33,9 +34,9 @@ end
 local Trail = {}
 Trail.__index = Trail
 
-function Trail.new(stats)
+function Trail.new(stats, plan)
   return setmetatable({ n = 0, kinds = {}, targets = {}, keys = {}, olds = {},
-    stats = stats, next_mark = 0, current_mark = 0, touched = { [0] = {} } }, Trail)
+    stats = stats, plan = plan, next_mark = 0, current_mark = 0, touched = { [0] = {} } }, Trail)
 end
 
 function Trail:mark()
@@ -49,6 +50,11 @@ local function add_entry(self, kind, target, key, old)
   local n = self.n + 1; self.n = n
   self.kinds[n], self.targets[n], self.keys[n], self.olds[n] = kind, target, key, old
   if self.stats then self.stats.trail_entries = (self.stats.trail_entries or 0) + 1 end
+  local plan = self.plan
+  if plan then
+    plan.trail_entries = plan.trail_entries + 1
+    if n > plan.max_trail then plan.max_trail = n end
+  end
 end
 
 function Trail:set(target, key, value)
@@ -73,6 +79,7 @@ local function restore_view(view, old)
 end
 
 function Trail:rollback(mark)
+  local removed = self.n - mark.n
   for i = self.n, mark.n + 1, -1 do
     local kind, target, key, old = self.kinds[i], self.targets[i], self.keys[i], self.olds[i]
     if kind == 1 then target[key] = old
@@ -83,6 +90,11 @@ function Trail:rollback(mark)
   end
   self.n = mark.n; self.touched[mark.id] = nil; self.current_mark = mark.parent
   if self.stats then self.stats.rollbacks = (self.stats.rollbacks or 0) + 1 end
+  local plan = self.plan
+  if plan then
+    plan.rollbacks = plan.rollbacks + 1
+    plan.rollback_entries = plan.rollback_entries + removed
+  end
 end
 
 function Trail:reset()
@@ -93,12 +105,19 @@ end
 local function setv(state, target, key, value) state.trail:set(target, key, value) end
 local function pushv(state, target, value) state.trail:push(target, value) end
 
+local function map_count(xs)
+  local n = 0
+  for _ in pairs(xs or {}) do n = n + 1 end
+  return n
+end
 
 local function new_view(state, root_id, scope_path, source_view_id)
   state.next_view = state.next_view + 1
   local id = state.next_view
   local source = source_view_id and state.views[source_view_id] or nil
   setv(state, state.views, id, Store.new_view(root_id, copy_scope_path(scope_path), source))
+  local profile_plan = state.profile_plan
+  if profile_plan and state.next_view > profile_plan.max_views then profile_plan.max_views = state.next_view end
   return id
 end
 
@@ -157,6 +176,14 @@ local function finish_group_lane(state, task, frame, outcome)
   })
 end
 
+local function verify_continuation_dependencies(state, frame, next_op)
+  if not state.runtime.verify_dependencies or frame.continuation_footprint == nil then return end
+  local declared = IR.metadata_hint(frame.continuation_footprint)
+  local actual = IR.metadata(next_op)
+  local ok, reason = IR.metadata_covers(declared, actual)
+  if not ok then error('continuation dependency declaration is incomplete: ' .. tostring(reason), 0) end
+end
+
 complete_task = function(state, task, outcome)
   while true do
     local n = #task.frames
@@ -179,6 +206,7 @@ complete_task = function(state, task, outcome)
         if not cached then
           cached = state.runtime:_call_in_phase('guard', 'callback_error', frame.fn, { runtime = state.runtime, now = function() return state.runtime:now() end })
           if not Op.is_op(cached) then error('guard callback must return an Op', 0) end
+          verify_continuation_dependencies(state, frame, cached)
           request.memo[frame.cache_key] = cached
         end
         setv(state, task, 'expr', cached)
@@ -187,6 +215,7 @@ complete_task = function(state, task, outcome)
       else
         local next_op = state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
         if not Op.is_op(next_op) then error('and_then callback must return an Op', 0) end
+        verify_continuation_dependencies(state, frame, next_op)
         setv(state, task, 'expr', next_op)
       end
       add_active(state, task.id)
@@ -230,6 +259,13 @@ local function add_root(state, root_id)
     scope_stack = scope and { scope } or {},
   })
   pushv(state, state.active, task_id)
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    local active, roots = #state.active - state.active_head + 1, map_count(state.roots)
+    if roots > profile_plan.max_roots then profile_plan.max_roots = roots end
+    if state.next_task > profile_plan.max_tasks then profile_plan.max_tasks = state.next_task end
+    if active > profile_plan.max_active then profile_plan.max_active = active end
+  end
 end
 
 local function start_product(state, task, op)
@@ -248,6 +284,8 @@ local function start_product(state, task, op)
   setv(state, state.groups, group_id, group)
   setv(state, task, 'status', 'waiting_group')
 
+  local profile_plan = state.profile_plan
+  if profile_plan then state.runtime.instrumentation:event(profile_plan, 'product', { mode = op.mode, lanes = #op.lanes }) end
   for i = 1, #op.lanes do
     local path = copy_scope_path(task.scope_path)
     path[#path + 1] = { group_id = group_id, mode = op.mode, lane = i }
@@ -266,6 +304,11 @@ local function start_product(state, task, op)
       choice_serial = 0,
     })
     pushv(state, state.active, child_id)
+  end
+  if profile_plan then
+    local active = #state.active - state.active_head + 1
+    if state.next_task > profile_plan.max_tasks then profile_plan.max_tasks = state.next_task end
+    if active > profile_plan.max_active then profile_plan.max_active = active end
   end
 end
 
@@ -290,7 +333,10 @@ end
 
 local function remove_intent_ids(state, ids)
   local remove = {}
-  for i = 1, #ids do remove[ids[i]] = true end
+  for i = 1, #ids do
+    remove[ids[i]] = true
+    setv(state, state.intent_by_id, ids[i], nil)
+  end
   local kept = {}
   for i = 1, #state.intents do
     if not remove[state.intents[i].id] then kept[#kept + 1] = state.intents[i] end
@@ -301,7 +347,7 @@ end
 local function block_intent(state, task, program)
   state.next_intent = state.next_intent + 1
   setv(state, task, 'status', 'blocked')
-  pushv(state, state.intents, {
+  local intent = {
     id = state.next_intent,
     kind = program.kind,
     task_id = task.id,
@@ -313,14 +359,21 @@ local function block_intent(state, task, program)
     scope_path = copy_scope_path(task.scope_path),
     interest = type(program.interest) == 'function' and program.interest(state.runtime, program) or program.interest,
     absence_check = program.absence_check,
-  })
+  }
+  pushv(state, state.intents, intent)
+  setv(state, state.intent_by_id, intent.id, intent)
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    if #state.intents > profile_plan.max_intents then profile_plan.max_intents = #state.intents end
+    state.runtime.instrumentation:event(profile_plan, 'intent', {
+      program_kind = program.kind, role = program.role, resource = tostring(program.resource or program.group),
+    })
+  end
 end
-
-local function match_intents(state, i, j)
-  local a, b = state.intents[i], state.intents[j]
-  local kept = {}
-  for k = 1, #state.intents do if k ~= i and k ~= j then kept[#kept + 1] = state.intents[k] end end
-  setv(state, state, 'intents', kept)
+local function match_intents(state, left_id, right_id)
+  local a, b = state.intent_by_id[left_id], state.intent_by_id[right_id]
+  if not a or not b then return false end
+  remove_intent_ids(state, { left_id, right_id })
   local put = a.role == 'put' and a or b
   local get = a.role == 'get' and a or b
   local put_task = state.tasks[put.task_id]
@@ -344,6 +397,8 @@ local function machine_context(state)
 end
 
 local function machine_probe(state, program, value)
+  local profile_plan = state.profile_plan
+  if profile_plan then profile_plan.machine_probes = profile_plan.machine_probes + 1 end
   local t, payload = program.transition, program.payload or {}
   if type(t.ready) == 'function' then
     local out = t.ready(value, payload, machine_context(state))
@@ -358,6 +413,8 @@ local function machine_probe(state, program, value)
 end
 
 local function run_machine_transition(state, program, value)
+  local profile_plan = state.profile_plan
+  if profile_plan then profile_plan.machine_steps = profile_plan.machine_steps + 1 end
   local t, payload = program.transition, program.payload or {}
   local packed = pack_(t.step(value, payload, machine_context(state)))
   local first = packed[1]
@@ -514,7 +571,7 @@ local function claim_groups(state)
       group.ids[#group.ids + 1] = intent.id
     end
   end
-  return order
+  return BranchPolicy.order_claim_groups(order, state.runtime.branch_policy ~= 'legacy')
 end
 
 local function resolve_claim_set(state, group, ids)
@@ -590,6 +647,13 @@ local function final_candidate(state)
   local prepared = state.runtime:_prepare_effects(candidate)
   if not prepared then return nil end
   candidate.prepared_effects = prepared
+  local plan = state.profile_plan
+  if plan then
+    plan.participants = #participants
+    plan.observations = map_count(observations)
+    plan.writes = map_count(writes)
+    plan.effects = #candidate.effects
+  end
   return candidate
 end
 
@@ -772,23 +836,90 @@ local function state_accepts_participant_supply(state)
 end
 
 local function request_may_supply(request, intents)
-  return IR.footprint_may_supply(request.footprint or IR.footprint(request.op), intents)
+  local metadata = request.metadata or request.footprint or IR.metadata(request.op)
+  request.metadata, request.footprint = metadata, metadata
+  return IR.footprint_may_supply(metadata, intents)
+end
+
+local function value_key(value)
+  local t = type(value)
+  if t == 'nil' or t == 'boolean' or t == 'number' or t == 'string' then return t .. ':' .. tostring(value) end
+  return t .. ':' .. tostring(value)
+end
+
+local function state_signature(state, terminal)
+  local parts = { terminal and 'T' or 'B' }
+  local root_ids = {}
+  for id in pairs(state.roots) do root_ids[#root_ids + 1] = id end
+  table.sort(root_ids)
+  for i = 1, #root_ids do
+    local root = state.roots[root_ids[i]]
+    parts[#parts + 1] = 'r' .. tostring(root_ids[i]) .. ':' .. (root.done and '1' or '0')
+    if root.done and root.outcome and root.outcome.pack then
+      for j = 1, root.outcome.pack.n or #root.outcome.pack do parts[#parts + 1] = value_key(root.outcome.pack[j]) end
+    end
+  end
+  local intents = {}
+  for i = 1, #state.intents do
+    local x = state.intents[i]
+    local loc = x.program and (x.program.location or x.program.group)
+    intents[#intents + 1] = table.concat({
+      tostring(x.root_id), tostring(x.kind), tostring(x.resource or ''), tostring(loc and loc.id or ''),
+      tostring(x.role or ''), value_key(x.value),
+    }, ':')
+  end
+  table.sort(intents)
+  for i = 1, #intents do parts[#parts + 1] = 'i' .. intents[i] end
+  local deltas = {}
+  for _, view in pairs(state.views) do
+    for loc, patch in pairs(view.delta or {}) do
+      local p = tostring(loc.id) .. ':' .. tostring(patch.kind)
+      if patch.kind == 'replace' then p = p .. ':' .. value_key(patch.value)
+      elseif patch.kind == 'add' then p = p .. ':' .. tostring(patch.delta)
+      elseif patch.kind == 'machine' then
+        for j = 1, #(patch.steps or {}) do p = p .. ':' .. value_key(patch.steps[j].value) end
+      elseif patch.ops then
+        for j = 1, #patch.ops do
+          local op = patch.ops[j]
+          p = p .. ':' .. tostring(op.op) .. ':' .. value_key(op.key) .. ':' .. value_key(op.value)
+        end
+      end
+      deltas[#deltas + 1] = tostring(view.root_id) .. ':' .. p
+    end
+  end
+  table.sort(deltas)
+  for i = 1, #deltas do parts[#parts + 1] = 'd' .. deltas[i] end
+  return table.concat(parts, '|')
 end
 
 local dfs
 
 local function explore(state, prepare)
+  local profile_plan = state.profile_plan
+  if profile_plan then profile_plan.branches = profile_plan.branches + 1 end
   local mark = state.trail:mark()
   local ready = prepare == nil or prepare() ~= false
   local found, refutation, unknown
-  if ready then found, refutation, unknown = dfs(state) end
+  if ready then
+    state.search_depth = state.search_depth + 1
+    if profile_plan and state.search_depth > profile_plan.max_depth then profile_plan.max_depth = state.search_depth end
+    found, refutation, unknown = dfs(state)
+    state.search_depth = state.search_depth - 1
+  end
   state.trail:rollback(mark)
   return found, refutation, unknown
 end
 
 dfs = function(state)
   state.runtime.stats.search_calls = state.runtime.stats.search_calls + 1
+  local profile_plan = state.profile_plan
   state.search_steps = state.search_steps + 1
+  if profile_plan then
+    profile_plan.search_calls = profile_plan.search_calls + 1
+    local active, intents = #state.active - state.active_head + 1, #state.intents
+    if active > profile_plan.max_active then profile_plan.max_active = active end
+    if intents > profile_plan.max_intents then profile_plan.max_intents = intents end
+  end
   if state.search_steps > state.search_limit then
     return nil, { interests = {}, checks = {} }, true
   end
@@ -799,11 +930,14 @@ dfs = function(state)
       setv(state, state, 'active_head', state.active_head + 1)
       local task = state.tasks[task_id]
       if task and task.status == 'active' then
+        if profile_plan then profile_plan.task_steps = profile_plan.task_steps + 1 end
+        if profile_plan then profile_plan.deterministic_steps = profile_plan.deterministic_steps + 1 end
         local expr, kind = task.expr, task.expr.kind
+        if profile_plan then local key = 'op_' .. tostring(kind); profile_plan[key] = (profile_plan[key] or 0) + 1 end
         if kind == 'always' then
           if not complete_task(state, task, { pack = expr.vals }) then return nil, terminal_refutation(state), false end
         elseif kind == 'and_then' then
-          pushv(state, task.frames, { kind = 'bind', fn = expr.fn, phase = expr.callback_phase, cache_key = expr.cache_key })
+          pushv(state, task.frames, { kind = 'bind', fn = expr.fn, phase = expr.callback_phase, cache_key = expr.cache_key, continuation_footprint = expr.continuation_footprint })
           setv(state, task, 'expr', expr.p); add_active(state, task.id)
         elseif kind == 'annotated' then
           if expr.post then pushv(state, task.frames, { kind = 'wrap', fn = expr.post }) end
@@ -817,10 +951,12 @@ dfs = function(state)
           start_product(state, task, expr)
         elseif kind == 'choice' then
           local refutation
+          if profile_plan then state.runtime.instrumentation:event(profile_plan, 'choice', { alternatives = #(expr.choices or {}) }) end
           local occurrence = (task.choice_serial or 0) + 1
           setv(state, task, 'choice_serial', occurrence)
           local order = ChoiceOrder.indices(state.runtime, task, occurrence, #(expr.choices or {}))
           for k = 1, #order do
+            if profile_plan then profile_plan.choice_branches = profile_plan.choice_branches + 1 end
             local i = order[k]
             local found, ref, unknown = explore(state, function()
               setv(state, task, 'expr', expr.choices[i]); add_active(state, task.id)
@@ -836,11 +972,15 @@ dfs = function(state)
           end
           return nil, refutation or terminal_refutation(state), false
         elseif kind == 'or_else' then
+          if profile_plan then profile_plan.preferred_branches = profile_plan.preferred_branches + 1 end
+          if profile_plan then state.runtime.instrumentation:event(profile_plan, 'or_else_preferred') end
           local found, pref, unknown = explore(state, function()
             setv(state, task, 'expr', expr.p); add_active(state, task.id)
           end)
           if found then return found end
           if unknown then return nil, pref, true end
+          if profile_plan then profile_plan.fallback_branches = profile_plan.fallback_branches + 1 end
+          if profile_plan then state.runtime.instrumentation:event(profile_plan, 'or_else_fallback') end
           local fallback_found, fref, funknown = explore(state, function()
             setv(state, state, 'used_fallback', true)
             for i = 1, #((pref and pref.checks) or {}) do pushv(state, state.negative_checks, pref.checks[i]) end
@@ -857,16 +997,51 @@ dfs = function(state)
       local candidate = final_candidate(state)
       if candidate then return candidate end
       local refutation
+      if profile_plan and state.runtime.instrumentation.state_hash then
+        state.runtime.instrumentation:observe_state(profile_plan, state_signature(state, false), false)
+      end
 
-      for i = 1, #state.intents do
-        for j = i + 1, #state.intents do
-          if intents_compatible(state.intents[i], state.intents[j]) then
-            local found, ref, unknown = explore(state, function() return match_intents(state, i, j) end)
-            if found then return found end
-            refutation = merge_refutation(refutation, ref)
-            if unknown then return nil, refutation, true end
+      local exchange = BranchPolicy.exchange_frontier(state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
+      if profile_plan then
+        profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans
+        profile_plan.compatible_pairs = profile_plan.compatible_pairs + exchange.compatible
+        profile_plan.exchange_domains = profile_plan.exchange_domains + (exchange.selected and 1 or 0)
+        profile_plan.zero_exchange_domains = profile_plan.zero_exchange_domains + exchange.zero_domains
+        profile_plan.max_exchange_domain = math.max(profile_plan.max_exchange_domain or 0, exchange.selected_degree or 0)
+      end
+
+      -- The unambiguous binary rendezvous is a certified reduction: with only
+      -- two current intents and no unentered supplier, every successful world
+      -- must use this pair.  More general degree-one cases are not forced
+      -- because another continuation may first introduce a new partner.
+      if state.runtime.normalise_search ~= false and #state.intents == 2
+          and exchange.selected_degree == 1 and #exchange.pairs == 1 then
+        local selected = exchange.selected
+        if not state.runtime:_has_supplier({ selected }, state.roots, state.excluded_roots, state.requests) then
+          if profile_plan then
+            profile_plan.forced_exchange_opportunities = profile_plan.forced_exchange_opportunities + 1
+            profile_plan.forced_exchanges = profile_plan.forced_exchanges + 1
+            profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
           end
+          local pair = exchange.pairs[1]
+          if match_intents(state, pair.left, pair.right) then return dfs(state) end
+          local terminal = terminal_refutation(state)
+          if profile_plan and state.runtime.instrumentation.state_hash then
+            state.runtime.instrumentation:observe_state(profile_plan, state_signature(state, true), true)
+          end
+          return nil, terminal, false
         end
+      end
+
+      for pi = 1, #exchange.pairs do
+        local pair = exchange.pairs[pi]
+        if profile_plan then state.runtime.instrumentation:event(profile_plan, 'exchange_pair', {
+          left = pair.left, right = pair.right, domain = exchange.selected_degree,
+        }) end
+        local found, ref, unknown = explore(state, function() return match_intents(state, pair.left, pair.right) end)
+        if found then return found end
+        refutation = merge_refutation(refutation, ref)
+        if unknown then return nil, refutation, true end
       end
 
       for ii = 1, #state.intents do
@@ -875,6 +1050,7 @@ dfs = function(state)
           local cursor = witness_cursor(state, intent)
           while true do
             local alt = cursor:next(); if alt == nil then break end
+            if profile_plan then profile_plan.witness_alternatives = profile_plan.witness_alternatives + 1 end
             local found, ref, unknown = explore(state, function() return resolve_witness(state, intent.id, alt) end)
             if found then return found end
             refutation = merge_refutation(refutation, ref)
@@ -884,8 +1060,10 @@ dfs = function(state)
       end
 
       local groups = claim_groups(state)
+      if profile_plan then profile_plan.claim_groups_scanned = profile_plan.claim_groups_scanned + #groups end
       for gi = 1, #groups do
         local group = groups[gi]
+        if profile_plan and #group.ids > profile_plan.max_claim_group then profile_plan.max_claim_group = #group.ids end
         local all_machine, supply_none = true, true
         for ii = 1, #group.ids do
           local x
@@ -894,12 +1072,35 @@ dfs = function(state)
           if x.program.transition.supply ~= 'none' then supply_none = false end
         end
         if all_machine and supply_none then
+          local forced = false
+          if state.runtime.normalise_search ~= false and #groups == 1 and #group.ids == #state.intents then
+            local group_intents = {}
+            for ii = 1, #group.ids do group_intents[ii] = state.intent_by_id[group.ids[ii]] end
+            forced = not state.runtime:_has_supplier(group_intents, state.roots, state.excluded_roots, state.requests)
+          end
+          if forced then
+            if profile_plan then
+              profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1
+              profile_plan.forced_claims = profile_plan.forced_claims + 1
+              profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
+            end
+            if resolve_claim_set(state, group, group.ids) then return dfs(state) end
+            return nil, terminal_refutation(state), false
+          end
+          if profile_plan then
+            profile_plan.claim_branches = profile_plan.claim_branches + 1
+            profile_plan.claim_all_branches = profile_plan.claim_all_branches + 1
+          end
           local found, ref, unknown = explore(state, function() return resolve_claim_set(state, group, group.ids) end)
           if found then return found end
           refutation = merge_refutation(refutation, ref)
           if unknown then return nil, refutation, true end
         else
           if all_machine and #group.ids > 1 then
+            if profile_plan then
+              profile_plan.claim_branches = profile_plan.claim_branches + 1
+              profile_plan.claim_all_branches = profile_plan.claim_all_branches + 1
+            end
             local found, ref, unknown = explore(state, function() return resolve_claim_set(state, group, group.ids) end)
             if found then return found end
             refutation = merge_refutation(refutation, ref)
@@ -907,6 +1108,10 @@ dfs = function(state)
           end
           for ii = 1, #group.ids do
             local id = group.ids[ii]
+            if profile_plan then
+              profile_plan.claim_branches = profile_plan.claim_branches + 1
+              profile_plan.claim_single_branches = profile_plan.claim_single_branches + 1
+            end
             local found, ref, unknown = explore(state, function() return resolve_claim_set(state, group, { id }) end)
             if found then return found end
             refutation = merge_refutation(refutation, ref)
@@ -915,29 +1120,40 @@ dfs = function(state)
         end
       end
 
-      local ids = {}
+      local suppliers = {}
       if state_accepts_participant_supply(state) then
-        for id in pairs(state.requests) do if not state.roots[id] and not state.excluded_roots[id] then ids[#ids + 1] = id end end
+        suppliers = state.runtime:_supplier_request_rows(state.intents, state.roots, state.excluded_roots, state.requests)
       end
-      table.sort(ids)
-      if #ids > 0 then
-        local id = ids[1]
-        if #state.intents > 0 then
-          for i = 1, #ids do
-            local request = state.requests[ids[i]]
-            if request and request_may_supply(request, state.intents) then id = ids[i]; break end
-          end
+      if profile_plan then
+        profile_plan.footprint_checks = profile_plan.footprint_checks + math.max(0, map_count(state.requests) - map_count(state.roots))
+        profile_plan.recruitment_candidates = profile_plan.recruitment_candidates + #suppliers
+        if suppliers[1] then
+          profile_plan.recruitment_best_score = math.max(profile_plan.recruitment_best_score or 0, suppliers[1].score or 0)
+          profile_plan.footprint_matches = profile_plan.footprint_matches + #suppliers
+          local key = 'footprint_' .. tostring(suppliers[1].reason or 'unknown') .. '_matches'
+          profile_plan[key] = (profile_plan[key] or 0) + 1
         end
+      end
+      local row = suppliers[1]
+      if row then
+        local id = row.id
+        if profile_plan then profile_plan.recruit_branches = profile_plan.recruit_branches + 1 end
+        if profile_plan then state.runtime.instrumentation:event(profile_plan, 'recruit_root', { root = id, score = row.score }) end
         local found, ref, unknown = explore(state, function() add_root(state, id) end)
         if found then return found end
         refutation = merge_refutation(refutation, ref)
         if unknown then return nil, refutation, true end
+        if profile_plan then profile_plan.exclude_branches = profile_plan.exclude_branches + 1 end
+        if profile_plan then state.runtime.instrumentation:event(profile_plan, 'exclude_root', { root = id }) end
         found, ref, unknown = explore(state, function() setv(state, state.excluded_roots, id, true) end)
         if found then return found end
         refutation = merge_refutation(refutation, ref)
         if unknown then return nil, refutation, true end
       end
 
+      if profile_plan and state.runtime.instrumentation.state_hash then
+        state.runtime.instrumentation:observe_state(profile_plan, state_signature(state, true), true)
+      end
       refutation = merge_refutation(refutation, terminal_refutation(state))
       return nil, refutation, false
     end
@@ -945,23 +1161,38 @@ dfs = function(state)
 end
 
 
-function M.search(runtime, requests, focus_id, search_limit)
+function M.search(runtime, requests, focus_id, search_limit, component)
   if not requests[focus_id] then return nil end
   runtime.stats.plans = runtime.stats.plans + 1
+  local instrumentation = runtime.instrumentation
+  local profile_plan = instrumentation and instrumentation:begin_plan({
+    focus = focus_id, pending = map_count(requests), machine = 'trail',
+    total_pending = component and component.total or map_count(requests),
+    component_size = component and component.size or map_count(requests),
+    component_dynamic = component and component.dynamic or 0,
+    component_global = component and component.global == true or false,
+    component_edge_visits = component and component.edge_visits or 0,
+  }) or nil
   local state = {
     runtime = runtime, requests = requests, focus = focus_id,
     tasks = {}, active = {}, active_head = 1, roots = {}, groups = {}, views = {},
-    intents = {}, effects = {}, used_fallback = false,
+    intents = {}, intent_by_id = {},
+    effects = {}, used_fallback = false,
     negative_checks = {}, fallback_interests = {}, excluded_roots = {},
     next_task = 0, next_group = 0, next_view = 0, next_intent = 0,
-    next_machine_serial = 0, search_steps = 0,
+    next_machine_serial = 0, search_steps = 0, search_depth = 1,
     search_limit = search_limit or runtime.search_limit,
+    profile_plan = profile_plan,
   }
-  state.trail = Trail.new(runtime.stats)
+  state.trail = Trail.new(runtime.stats, profile_plan)
   add_root(state, focus_id)
   state.trail:reset()
   local candidate, refutation, unknown = dfs(state)
   if candidate then runtime._last_search_steps = candidate.search_steps end
+  if profile_plan then
+    profile_plan.search_steps = state.search_steps
+    instrumentation:finish_plan(profile_plan, candidate and 'found' or (unknown and 'unknown' or 'retry'))
+  end
   return candidate, refutation, unknown
 end
 

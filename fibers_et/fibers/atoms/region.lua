@@ -223,7 +223,7 @@ local function with_event(op, event)
     return Op.consequence(event_of(event)):map(function()
       return unpack_(values, 1, values.n)
     end)
-  end)
+  end, false)
 end
 
 local function region_state(s, region)

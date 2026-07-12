@@ -4,4 +4,5 @@ return {
   Machine = require('fibers.kernel.machine'),
   IR = require('fibers.kernel.ir'),
   Store = require('fibers.kernel.store'),
+  Instrumentation = require('fibers.kernel.instrumentation'),
 }

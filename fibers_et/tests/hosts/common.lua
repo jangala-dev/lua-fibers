@@ -103,10 +103,13 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
   local winner
 
   rt:spawn_raw(function()
-    winner = rt:perform(
-      src:readable_op():map(function() return 'readiness' end)
-        :or_else(fibers.sleep_op(0.25):map(function() return 'timeout' end))
-    )
+    -- This is a temporal race.  Keep both waits visible to the host.
+    -- or_else is proof-directed fallback and deliberately discards the
+    -- preferred branch's wait after the fallback has been entered.
+    winner = rt:perform(fibers.choice(
+      src:readable_op():map(function() return 'readiness' end),
+      fibers.sleep_op(0.25):map(function() return 'timeout' end)
+    ))
   end, name .. '-readiness-v-timeout')
 
   local ok, err = pipe.write_byte('x')

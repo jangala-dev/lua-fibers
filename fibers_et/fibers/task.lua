@@ -41,11 +41,12 @@ local function is_pending(v)
 end
 
 local function wait_for_scalar(scalar, pred)
+  local dependencies = Op.dependencies(scalar:snapshot_op(), scalar:changed_op(0))
   local function loop()
     return scalar:snapshot_op():and_then(function(s)
       if pred(s.value) then return Op.always(s.value) end
-      return scalar:changed_op(s.version):and_then(function() return loop() end)
-    end)
+      return scalar:changed_op(s.version):and_then(function() return loop() end, dependencies)
+    end, dependencies)
   end
   return loop()
 end
@@ -90,17 +91,18 @@ function Task:_spawn_body(fn)
         exit = Exit.failed(err)
       end
     end
+    local completion_write = task.completion:write_op(exit)
     rt:perform(task.completion:read_op():and_then(function(v)
       if not is_pending(v) then return Op.always(false) end
-      return task.completion:write_op(exit):and_then(function()
+      return completion_write:and_then(function()
         return Op.emit(Effect.scope {
           type = 'task_exit',
           item = task,
           task = task,
           exit = exit,
         }):map(function() return true end)
-      end)
-    end), { masked = true })
+      end, false)
+    end, Op.dependencies(completion_write)), { masked = true })
   end
 end
 
@@ -135,7 +137,7 @@ function Task:start_op(region, settle, opts)
   local task = self
   return region:admit_op(task:owned(settle, opts)):and_then(function()
     return task:spawn_effect_op()
-  end)
+  end, false)
 end
 
 function Task.spawn_op(region, fn, name)
@@ -163,7 +165,7 @@ function Task:request_cancel_op(reason)
     return Op.emit(Effect.interrupt(self.interrupt, recorded_reason)):map(function()
       return true, recorded_reason
     end)
-  end)
+  end, false)
 end
 
 function Task:cancel_requested_op()
@@ -173,8 +175,9 @@ function Task:cancel_requested_op()
 end
 
 function Task:state_op()
+  local cancellation_read = self.cancellation:read_op()
   return self.completion:read_op():and_then(function(completion)
-    return self.cancellation:read_op():map(function(cancel)
+    return cancellation_read:map(function(cancel)
       return {
         exited = Exit.is(completion),
         exit = completion,
@@ -183,7 +186,7 @@ function Task:state_op()
         task = self,
       }
     end)
-  end)
+  end, Op.dependencies(cancellation_read))
 end
 
 

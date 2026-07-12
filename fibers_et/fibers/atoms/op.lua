@@ -180,13 +180,32 @@ Op.emit = Op.consequence
 -- Delayed construction is derived through and_then.  The cache key preserves the
 -- previous guarantee that a guard callback runs at most once per perform
 -- attempt, even when proof search backtracks.
-function Op.guard(fn)
+function Op.dependencies(...)
+  local parts = {}
+  for i = 1, select('#', ...) do
+    local value = select(i, ...)
+    if value ~= nil then parts[#parts + 1] = value end
+  end
+  return { _fibers_dependencies = true, parts = parts }
+end
+
+local function continuation_hint(opts)
+  if opts == nil or opts == false then return opts end
+  if is_op(opts) then return opts end
+  if type(opts) ~= 'table' then
+    error('continuation metadata must be an Op or a footprint table', 3)
+  end
+  return opts.footprint or opts.continuation or opts
+end
+
+function Op.guard(fn, opts)
   local key = {}
   return op('and_then', {
     p = Op.always(),
     fn = fn,
     callback_phase = 'guard',
     cache_key = key,
+    continuation_footprint = continuation_hint(opts),
   })
 end
 
@@ -253,12 +272,17 @@ function Op:map(fn)
   -- Canonically and_then followed by always. Retaining the original callback as
   -- metadata lets the interpreter fuse that derived always without adding a
   -- separate grammar node or allocation.
-  return op('and_then', { p = self, callback_phase = 'map', fn = fn, derived_map = true })
+  return op('and_then', { p = self, callback_phase = 'map', fn = fn, derived_map = true, continuation_footprint = false })
 end
 
-function Op:and_then(fn)
+function Op:and_then(fn, opts)
   assert_not_wrapped(self, 'and_then')
-  return op('and_then', { p = self, fn = fn, callback_phase = 'and_then' })
+  return op('and_then', {
+    p = self,
+    fn = fn,
+    callback_phase = 'and_then',
+    continuation_footprint = continuation_hint(opts),
+  })
 end
 
 function Op:or_else(q)

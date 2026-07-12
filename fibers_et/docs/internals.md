@@ -8,6 +8,8 @@ This document describes the active compact implementation. `algebra.md` is the s
 fibers/kernel/ir.lua            inert primitive programmes and operation footprints
 fibers/kernel/store.lua         versioned locations, speculative views and commit
 fibers/kernel/choice_order.lua  pure seed-derived branch permutations
+fibers/kernel/dependency_index.lua incremental pending dependency components
+fibers/kernel/branch_policy.lua constrained residual branch ordering
 fibers/kernel/machine.lua       closed-world trail-based proof search
 fibers/kernel/runtime.lua       fibres, open-world scheduling and host boundary
 ```
@@ -17,11 +19,13 @@ fibers/kernel/runtime.lua       fibres, open-world scheduling and host boundary
 Current sizes are deliberately bounded:
 
 ```text
-ir.lua            about 210 lines
-store.lua         about 600 lines
-choice_order.lua  under 60 lines
-machine.lua       under 1,000 lines
-runtime.lua       about 660 lines
+ir.lua                 about 400 lines
+dependency_index.lua    about 225 lines
+branch_policy.lua       about 115 lines
+store.lua              about 600 lines
+choice_order.lua       under 60 lines
+machine.lua            about 1,200 lines
+runtime.lua            about 900 lines
 ```
 
 The boundaries are intended to map directly to a systems-language port:
@@ -84,14 +88,27 @@ When a fibre performs an operation, the runtime records a conservative footprint
 
 ```text
 possible exchange resources and roles
-possible versioned locations
+possible versioned locations and access modes
+resource-wide observation or supply
+operation-node identities and kinds
 dynamic-continuation marker
 external-observation marker
 ```
 
 During participant recruitment, the machine uses those footprints to prefer pending requests which may satisfy current intents. Footprints are an over-approximation and are not proof. Dynamic `and_then` continuations are marked conservatively.
 
-The current runtime scans pending requests and applies the footprint filter; it does not yet maintain separate incremental indexes per location or exchange resource.
+`map` has no operation-valued continuation.  `guard` and `and_then` may carry a
+conservative continuation declaration produced by `Op.dependencies(...)`.
+Unannotated callbacks remain opaque and therefore correct on the global slow
+path.  Tests may enable `Runtime.new({ verify_dependencies = true })` to check
+that an executed continuation is covered by its declaration.
+
+For larger pending frontiers, `dependency_index.lua` incrementally indexes
+exchange roles, versioned locations, resource-wide dependencies and opaque
+requests.  The runtime derives the connected component containing the focus and
+passes only that conservative component to the evaluator.  The index is
+activated and released with hysteresis so tiny frontiers retain the direct-scan
+path.
 
 ## Versioned store
 
@@ -160,6 +177,15 @@ The active store assumes the runtime driver enters serially; it is not a paralle
 ## Trail-based search machine
 
 `machine.lua` searches a selected map of pending perform requests with one focus request and a search limit.
+
+Before general branching, the evaluator exhausts deterministic operation work
+and applies two certified reductions: an unambiguous binary exchange with no
+possible unentered supplier, and a sole all-member non-supplying machine claim
+with no possible unentered supplier.  Residual exchange branching uses the
+smallest positive partner domain; claim groups use the smallest domain first;
+participant recruitment prefers the request which can supply the greatest
+number of current blocked intents.  `branch_policy.lua` contains this shared
+structural policy for both evaluators.
 
 Its implementation returns:
 
