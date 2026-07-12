@@ -9,7 +9,6 @@ local Scalar = fibers.Scalar
 local Rendezvous = fibers.Rendezvous
 local Effect = fibers.Effect
 local Interrupt = require('fibers.internal.interrupt')
-local EffectSet = require('fibers.kernel.effect.set')
 
 local function fail(msg) error(msg, 2) end
 local function assert_eq(actual, expected, msg)
@@ -54,19 +53,19 @@ end
 
 -- EventQueue consumption is journalled: a losing branch does not steal an occurrence.
 do
-  local rt = Runtime.new()
+  local rt = Runtime.new({ choice_seed = 2 })
   local q, feed = rt:events('journalled-source-events')
   feed:push('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()
     choice_result = rt:perform(fibers.choice(
       Op.always('winner'),
-      q:next_op():and_then(function() return Op.never() end)
+      q:next_op():map(function(v) return 'events:' .. tostring(v) end)
     ))
     next_result = rt:perform(q:next_op())
   end, 'source-events-loser')
   run_all(rt)
-  assert_eq(choice_result, 'winner', 'the only committable branch wins')
+  assert_eq(choice_result, 'winner', 'the replay seed selects the non-consuming occurrence')
   assert_eq(next_result, 'event-1', 'losing events branch did not consume occurrence')
 end
 
@@ -75,14 +74,14 @@ do
   local token = Interrupt.new('pure-merge-token')
   local first = Effect.interrupt(token, nil)
   local second = Effect.interrupt(token, 'later')
-  local set = EffectSet.empty()
-  assert_truthy(set:add(first), 'first interrupt effect accepted')
-  assert_truthy(set:add(second), 'second interrupt effect merged')
+  local rt = Runtime.new()
+  rt:spawn_raw(function()
+    rt:perform(Op.all({ Op.emit(first), Op.emit(second) }))
+  end, 'pure-effect-merge')
+  run_all(rt)
   assert_eq(first.payload.reason, nil, 'merge did not mutate first payload')
   assert_eq(second.payload.reason, 'later', 'merge did not mutate second payload')
-  local items = set:items()
-  assert_eq(#items, 1, 'duplicate interrupt effects merge')
-  assert_eq(items[1].payload.reason, 'later', 'merged payload carries reason')
+  assert_eq(token.reason, 'later', 'merged effect carries the later reason')
 end
 
 -- Interrupt tokens cannot be raised through the public token surface.

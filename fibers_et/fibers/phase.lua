@@ -11,7 +11,7 @@
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Scope = require('fibers.scope')
-local Protected = require('fibers.kernel.protected')
+local Protected = require('fibers.internal.protected')
 local Keyed = require('fibers.atoms.keyed')
 
 local Phase = {}
@@ -56,7 +56,6 @@ function Phase.new(name, opts)
     facts = {},
     edges = {},
     _fibers_id = id,
-    _fibers_phase = true,
   }, Phase)
 end
 

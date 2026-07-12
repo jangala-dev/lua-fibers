@@ -40,11 +40,11 @@ end
 do
   fired = {}
   local got
-  local rt = Runtime.new()
+  local rt = Runtime.new({ choice_seed = 2 })
   rt:spawn_raw(function()
     got = rt:perform(Op.choice(
       Op.always('winner'),
-      Op.never():on_defeat(defeat('loser'))
+      Op.always('loser'):on_defeat(defeat('loser'))
     ))
   end, 'defeat-loser')
   assert_status(rt:run(), 'found')
@@ -100,14 +100,13 @@ end
 do
   fired = {}
   local got
-  local rt = Runtime.new()
+  local rt = Runtime.new({ choice_seed = 2 })
   rt:spawn_raw(function()
     got = rt:perform(Op.choice(
       Op.always('winner'),
       Op.all({
         Op.always('a'):on_defeat(defeat('lane-a')),
         Op.always('b'):on_defeat(defeat('lane-b')),
-        Op.never(),
       })
     ))
   end, 'defeat-product')

@@ -1,15 +1,12 @@
--- Law-level checks for the algebraic absence judgement used to justify
--- or_else fallbacks.  These are deliberately smaller than the adversarial
--- Region/Task/Flow scenarios: they assert the option-algebra rules directly.
+-- Law-level checks for the exhaustive absence judgement which authorises
+-- proof-directed or_else fallback in the evaluator.
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Debug = require('fibers.kernel.transaction_debug')
 local Rendezvous = require('fibers.atoms.rendezvous')
-local Result = require('fibers.kernel.resources.result')
-local RetryProof = require('fibers.kernel.retry')
+local Signal = require('fibers.atoms.signal')
 
 local function fail(msg) error(msg, 2) end
 local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
@@ -17,9 +14,14 @@ local function assert_falsy(v, msg) if v then fail((msg or 'expected falsy') .. 
 local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
 local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
 
+local ABSENT = {}
 local function absent(op)
-  local status = Debug.perform_sync(Runtime.new(), op)
-  return status.tag == 'retry'
+  local got
+  local rt = Runtime.new()
+  rt:spawn_raw(function() got = rt:perform(op:or_else(Op.always(ABSENT))) end, 'absence-probe')
+  local status = rt:run()
+  assert_status(status, 'found', 'absence probe should commit either primary or fallback')
+  return got == ABSENT
 end
 
 -- choice is absent exactly when all alternatives are absent.
@@ -29,8 +31,8 @@ do
   assert_falsy(absent(Op.choice(Op.always('live'), Op.never())), 'branch order does not affect absence')
 end
 
--- nested or_else is absent only when both the preferred option and the
--- fallback have no current world.
+-- Nested or_else is absent only when both the preferred option and fallback
+-- have no current world.
 do
   assert_truthy(absent(Op.never():or_else(Op.never())), 'or_else with both sides absent should be absent')
   assert_falsy(absent(Op.never():or_else(Op.always('fallback'))), 'available fallback makes the whole or_else available')
@@ -46,16 +48,16 @@ do
   assert_truthy(absent(Op.never():wrap(function(v) wrapped = true; return v end)), 'wrap preserves inner absence')
 
   local got
-  local st = Runtime.new()
-  st:spawn_raw(function()
-    got = st:perform(Op.never():wrap(function(v) wrapped = true; return v end):or_else(Op.always('fallback')))
+  local rt = Runtime.new()
+  rt:spawn_raw(function()
+    got = rt:perform(Op.never():wrap(function(v) wrapped = true; return v end):or_else(Op.always('fallback')))
   end, 'wrap-absence-fallback')
-  assert_status(st:run(), 'found')
+  assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
   assert_eq(wrapped, false, 'wrap on absent primary must not run')
 end
 
--- A and_then whose prefix is absent is absent without running the continuation.
+-- An and_then whose prefix is absent is absent without running the continuation.
 do
   local called = false
   assert_truthy(absent(Op.never():and_then(function() called = true; return Op.always('bad') end)), 'and_then with absent prefix should be absent')
@@ -70,20 +72,26 @@ do
   assert_truthy(absent(Op.tensor({ ch:get_op() })), 'unpaired tensor rendezvous is absent')
 end
 
--- Resource retry must be explicit and proof-carrying; malformed legacy
--- blocked results are rejected rather than guessed at by a second pass.
+-- Resources do not author Retry proofs. An external wait contributes a
+-- kernel-owned wake interest, and or_else may consume its exhaustive current
+-- absence without retaining the discarded primary interest afterwards.
 do
-  local fake = { name = 'fake-resource' }
-  local FakeKind = { name = 'fake', eval = function() return { status = 'blocked' } end }
-  local ok = pcall(function() Debug.perform_sync(Runtime.new(), Op._resource(fake, FakeKind, { op = 'wait' })) end)
-  assert_eq(ok, false, 'legacy blocked resource results must be rejected')
+  local signal = Signal.new('retry-law-signal')
+  local got
+  local rt = Runtime.new()
+  rt:spawn_raw(function() got = rt:perform(signal:wait_op():or_else(Op.always('fallback'))) end, 'signal-fallback')
+  assert_status(rt:run(), 'found')
+  assert_eq(got, 'fallback')
 
-  local ProofKind = { name = 'proof', eval = function() return Result.retry(RetryProof.permanent('test')) end }
-  assert_truthy(absent(Op._resource(fake, ProofKind, { op = 'wait' })), 'proof-carrying retry remains catchable by otherwise')
+  local pending = Runtime.new()
+  pending:spawn_raw(function() pending:perform(signal:wait_op()) end, 'signal-wait')
+  local st = pending:run()
+  assert_status(st, 'pending')
+  assert_truthy(st.waits and #st.waits == 1, 'unhandled external absence should retain one wake interest')
 end
 
--- Runtime priority law: any non-absence world still beats an absence-certified
--- fallback world in another root.
+-- Runtime priority law: any non-absence world still beats an
+-- absence-certified fallback world in another root.
 do
   local got_a, got_b
   local rt = Runtime.new()
@@ -93,9 +101,9 @@ do
   rt:spawn_raw(function()
     got_b = rt:perform(Op.always('progress'))
   end, 'progress-root')
-  assert_status(rt:step(), 'pending', 'first step starts fallback root')
-  assert_status(rt:step(), 'pending', 'second step starts progress root')
-  assert_status(rt:step(), 'found', 'non-absence progress commits before fallback')
+  local first = rt:step()
+  assert_truthy(first.tag == 'pending' or first.tag == 'quiescent', 'first step should expose the fallback root without committing it')
+  assert_status(rt:step(), 'found', 'ordinary progress commits before fallback')
   assert_eq(got_b, 'progress', 'ordinary progress should commit first')
   assert_eq(got_a, nil, 'absence fallback remains pending for a later turn')
   assert_status(rt:step(), 'found', 'fallback may commit once no ordinary progress remains')

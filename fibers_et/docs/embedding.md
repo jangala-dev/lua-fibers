@@ -1,10 +1,8 @@
 # Embedding and host integration
 
-`fibers` does not require ownership of the process event loop. The runtime can be driven directly by an embedding host or through the standalone runner.
+`fibers` does not require ownership of the process event loop. An application may use the standalone runner or drive a `Runtime` directly.
 
-## Runtime driving
-
-Create a runtime explicitly for embedding:
+## Creating and driving a runtime
 
 ```lua
 local fibers = require('fibers')
@@ -17,31 +15,46 @@ rt:spawn_raw(function()
 end, 'root')
 ```
 
-The main driver methods are:
+The driver methods are:
 
 ```lua
 rt:run(opts)
-rt:step({ max_work = 100 })
+rt:step({ max_work = n })
 ```
 
-`run` executes ready work efficiently until it finds a commit, becomes pending, reaches quiescence, or fails. `step` applies a bounded algebra budget and may return an incomplete search cursor through the runtime status.
+`Runtime:run` starts ready fibres and searches all pending focuses until at least one transaction commits or no further immediate progress is found.
 
-Typical status tags are:
+`Runtime:step` applies a bounded search allowance. Repeated bounded calls increase the current allowance and search again; the runtime does not expose a persistent whole-search cursor.
+
+Current status shapes are:
 
 ```text
-found       a transaction committed
-pending     external interests or further driver work may make progress
-quiescent   Retry was established but no actionable host interest remains
-idle        no runnable or waiting work
-unknown     bounded search has not completed, where exposed by the driver
-failed      fatal runtime failure
+{ tag = 'found', ... }
+    at least one transaction committed
+
+{ tag = 'pending', kind = 'wakeup', interests = {...} }
+    host-actionable waits may make progress
+
+{ tag = 'pending', kind = 'budget', interests_incomplete = true, ... }
+    bounded search has not completed
+
+{ tag = 'pending', kind = 'started' | 'no-ready-work', ... }
+    more driver work may be required
+
+{ tag = 'quiescent', reason = ... }
+    Retry was established but no actionable host interest remains
+
+{ tag = 'idle', ... }
+    no live or pending work remains
 ```
 
-Do not interpret a work-budget exhaustion as semantic `Retry`. `Unknown` must be resumed or reported, not used to enable `or_else`.
+Fatal runtime errors are raised; they are not returned as a `failed` status tag.
+
+A budget-pending status is operational `Unknown`, not semantic `Retry`, and cannot enable `or_else`.
 
 ## Standalone runner
 
-`fibers.run` uses `fibers.Runner` around a runtime and host:
+`fibers.run` creates a runtime and uses `fibers.Runner`:
 
 ```lua
 fibers.run(function()
@@ -51,59 +64,71 @@ end, {
 })
 ```
 
-The runner repeatedly calls the efficient `Runtime:run` path. When the runtime reports `pending`, it asks the host to block for the current interests and re-enters the runtime after the host reports progress.
+The runner repeatedly calls `Runtime:run`. When the runtime reports actionable pending interests, it calls the host's blocking hook and re-enters the runtime after the host reports progress.
 
-An embedding which already owns an event loop should normally call `step` or `run` directly instead.
+An embedding which already owns an event loop should normally drive `Runtime:run` or `Runtime:step` itself.
+
+## Reproducible unordered choice
+
+`Runtime.new` accepts a `choice_seed`:
+
+```lua
+local rt = fibers.Runtime.new({
+  host = host,
+  choice_seed = 17,
+})
+```
+
+For each dynamic `choice` occurrence, the evaluator derives a deterministic branch permutation from this seed and replay-visible runtime identities. It does not consume `math.random`. Given the same seed, programme, request sequence and external inputs, the same evaluator reproduces the traversal.
+
+This is a replay aid, not a fairness or probability contract. A different host delivery order, task/request construction order, solver version or operation graph may produce a different execution. Record the seed alongside failure diagnostics.
 
 ## Host contract
 
-A host adapter has a narrow contract:
+A host object may provide:
 
 ```text
-host.now(rt) -> number
-host.block(rt, interests, status, opts) -> progressed, reason
+host:now(runtime) -> number
+host:block(runtime, interests, status, opts) -> progressed, reason
 ```
 
-`now` supplies monotonic or otherwise application-defined runtime time. `block` waits, polls or registers the reported interests. If the host cannot support them, it returns `nil, reason`; the runner then returns the pending status to its caller.
+`Runtime:now` calls the host's time function. Time should be monotonic for timer semantics unless the application deliberately supplies another model.
 
-Built-in host families are:
+`host:block` may block, poll, register interests or decline them. If it returns no progress, `Runner.run` returns the pending status to its caller with the host reason attached.
 
-```text
-pure          portable time-only host
-manual        deterministic test and embedding host
-luajit_linux  LuaJIT FFI epoll host
-cffi_linux    cffi epoll host for plain Lua
-luaposix      luaposix poll host
-nixio         nixio poll host
-```
-
-They are selected through:
+Built-in host constructors are:
 
 ```lua
-local host = fibers.host.pure()
-local host = fibers.host.manual()
-local host = fibers.host.luajit_linux()
-local host = fibers.host.cffi_linux()
-local host = fibers.host.luaposix()
-local host = fibers.host.nixio()
-local host = fibers.host.select('luaposix')
-local host = fibers.host.default()
+fibers.host.pure(opts)
+fibers.host.manual(opts)
+fibers.host.luajit_linux(opts)
+fibers.host.cffi_linux(opts)
+fibers.host.luaposix(opts)
+fibers.host.nixio(opts)
+fibers.host.select(name, opts)
+fibers.host.default(opts)
 ```
 
-Optional hosts expose `is_supported()` in their implementation modules and fail clearly when unavailable.
+`pure` is portable and time-oriented. `manual` is deterministic and intended for tests and explicit event-loop integration. Native hosts are optional and expose support checks in their implementation modules.
 
-## Retry interests
+Inspect availability with:
 
-A `RetryProof` contains validity frontiers and may contain host-actionable interests. Interests are not partial commits and do not justify retry by themselves.
+```lua
+for _, item in ipairs(fibers.host.available()) do
+  print(item.name, item.supported, item.reason)
+end
+```
 
-Current interest kinds are centred on:
+## Interests and refutation
+
+An uncaught Retry may carry host-actionable interests. Current public interest kinds are:
 
 ```text
-timer       a clock deadline
-external    an externally fed resource condition, including readiness
+timer       a deadline
+external    a runtime-bound external facility condition
 ```
 
-A pending runtime status carries interests:
+A runtime pending status exposes summarised interests:
 
 ```lua
 local status = rt:run()
@@ -114,19 +139,21 @@ if status.tag == 'pending' then
 end
 ```
 
-Internal resource changes often require no host interest. Their retry proofs are invalidated when another committed transaction changes the observed frontier.
+Interests are not proof. Exhaustive search and negative checks justify Retry; an interest only describes how one of the relevant facts may change.
+
+Internal location changes often need no host interest. Their recorded versions invalidate stale proofs when another transaction commits.
 
 ## Runtime-bound external feeds
 
-`Signal`, `EventQueue` and `Readiness` may be paired with an `ExternalFeed` bound to one runtime and resource:
+Create externally driven facilities through the runtime:
 
 ```lua
 local signal, signal_feed = rt:signal('shutdown')
 local events, event_feed = rt:events('callbacks')
-local readiness, readiness_feed = rt:readiness(handle_key)
+local readiness, readiness_feed = rt:readiness(handle_key, 'handle-readiness')
 ```
 
-Consumer code performs resource operations:
+Consumer operations are ordinary transactions:
 
 ```lua
 signal:wait_op()
@@ -135,7 +162,7 @@ readiness:readable_op()
 readiness:writable_op()
 ```
 
-Host or producer code delivers changes through the feed:
+Producer or host code uses the bound feed:
 
 ```lua
 signal_feed:set('requested')
@@ -145,87 +172,101 @@ readiness_feed:writable()
 readiness_feed:clear('read')
 ```
 
-A feed may update only its bound resource through its bound runtime. Delivery invalidates the managed facts on which saved cursors and retry proofs depend before the runtime resumes search.
+A feed is cached per runtime/resource pair and cannot be delivered through another runtime.
 
-Low-level hosts may call:
+Low-level delivery is available when an interest already carries the authorised feed:
 
 ```lua
 rt:deliver(interest.feed, mode, value)
+rt:clear_external(interest.feed, mode)
 ```
 
-when the interest already carries the authorised feed.
+Delivery updates only the bound facility, increments its version and runtime epoch, and invalidates saved positive or negative candidates which relied on the old fact.
 
 ## Time and sleep
 
-`Clock` is an ordinary resource which observes `rt:now()` through the host. Application code normally uses:
+`Clock` observes `Runtime:now()`. Application code usually uses:
 
 ```lua
 fibers.sleep_until_op(deadline)
 fibers.sleep_op(duration)
 ```
 
-Relative sleep is guarded so that the absolute deadline is fixed once per perform attempt. Search restart does not slide the deadline forward.
+A relative sleep fixes its absolute deadline once per perform attempt. Backtracking and validation refresh do not slide the deadline.
 
-An embedded timer flow is:
+The host flow is:
 
 ```text
-sleep operation returns Retry with Timer(deadline)
-host records or waits for the deadline
-host calls run or step again when time may have advanced
-clock evaluation becomes ready once rt:now() >= deadline
+clock operation is refuted under now < deadline
+runtime reports a timer interest
+host waits or arranges a wake
+host time advances
+embedding re-enters run or step
+clock operation becomes ready
 ```
 
-If the embedding never re-enters the runtime, sleeping fibres do not resume.
+Clock negative checks are pull-validated against current host time. A matured deadline therefore invalidates a stale fallback without external feed mutation.
 
 ## Readiness
 
-Readiness keys are host-defined. They may identify file descriptors, sockets, GUI handles, game-engine objects or other event-loop tokens.
+Readiness keys are host-defined tokens: file descriptors, sockets, GUI handles, game-engine objects or similar values.
 
-Readiness is a level hint, not proof that I/O will succeed. A non-blocking I/O attempt may still return `would_block` after a readiness operation commits. The driver or handle must then clear or consume the hint before waiting again.
+Readiness is a level hint. It is not proof that a subsequent non-blocking I/O call will succeed. The call may still return `would_block`; the host or handle must then clear or refresh the readiness level before waiting again.
 
-A host typically processes readiness interests as follows:
+Helpers include:
 
 ```lua
-for _, interest in ipairs(fibers.host.readiness_waits(status.interests)) do
+local waits = fibers.host.readiness_waits(status.interests)
+
+for _, interest in ipairs(waits) do
   poller:register(interest.readiness_key, interest.mode, interest)
 end
 
--- after polling reports ready
+-- after polling
 fibers.host.deliver_readiness(rt, interest)
 ```
 
-There is no dynamic `host.ready` query during transaction search. External truth must enter through a feed so that validation remains correct.
-
-## Host handles and streams
-
-A `HostHandle` is the boundary between non-blocking host I/O and transactional stream pumps.
-
-The contract is:
+or:
 
 ```lua
+fibers.host.deliver_ready(rt, status.interests, function(key, mode, interest)
+  return poller:is_ready(key, mode)
+end)
+```
+
+There is no host readiness query during transaction search. External truth enters through feeds so that validation remains meaningful.
+
+## HostHandle and streams
+
+`fibers.host.Handle` provides the boundary between non-blocking host I/O and transactional stream pumps.
+
+A handle supplies:
+
+```text
 handle:readiness_key()
 handle:read_ready_op()
 handle:write_ready_op()
-handle:read(max)              -- bytes | nil, err
-handle:write(bytes)           -- n | nil, err
+handle:read(max)              -> bytes | nil, err
+handle:write(bytes)           -> count | nil, err
 handle:shutdown_read(reason)
 handle:shutdown_write(reason)
 handle:close(reason)
 ```
 
-Read and write are called only by pump task bodies after the corresponding readiness operation commits. They must not run during transaction search.
+The irreversible `read` and `write` calls occur in pump fibre bodies only after the matching readiness operation commits. They must not run during proof search.
 
-A deterministic fake handle is available for tests:
+A deterministic fake handle is available:
 
 ```lua
 local host = fibers.host.manual({ auto_advance_time = false })
 local handle = fibers.host.Handle.fake({ host = host, key = 'demo' })
+
 local stream = fibers.perform(
   fibers.Stream.open_handle_in_op(scope:raw_region(), handle)
 )
 ```
 
-Useful fake-handle controls include:
+Useful controls include:
 
 ```lua
 handle:feed_read(bytes)
@@ -235,11 +276,9 @@ handle:unblock_writes()
 handle:written()
 ```
 
-Real host families expose paired descriptor helpers through `host.fd`. A directional pair can be combined for plumbing tests with `fibers.host.Handle.duplex(read_handle, write_handle)`.
+A stream backend may instead implement:
 
-A stream backend may also implement the smaller direct contract:
-
-```lua
+```text
 backend:read_ready_op()
 backend:write_ready_op()
 backend:read(max)
@@ -248,54 +287,60 @@ backend:shutdown_read(reason)
 backend:shutdown_write(reason)
 ```
 
-The pump owns the irreversible host call; flow journals remain transactional.
+Flow state remains transactional; host I/O remains owned by pump tasks.
 
 ## Effects and host callbacks
 
-Effects are runtime obligations which discharge after resource commit. Built-in uses include task spawn, wake, interruption and settlement work.
-
-A host may provide effect-related callbacks, for example:
+Hosts may receive post-commit callbacks such as wake or scope notifications:
 
 ```lua
 local rt = fibers.Runtime.new({
   host = {
     now = function() return os.clock() end,
-    wake = function(payload, runtime, log)
-      -- nudge or register host-side work
+    wake = function(payload, runtime)
+      -- nudge host-side work
+    end,
+    scope = function(event, runtime)
+      -- observe committed lifetime events
     end,
   },
 })
 ```
 
-The in-process commit guarantee does not imply crash recovery. External delivery should use durable state or idempotency where required.
+These callbacks run after location state has committed. They must not call `perform` re-entrantly.
 
-## Protected calls and phase rules
+The runtime guarantee is in-process. Crash durability requires durable external state and idempotent integration.
 
-Use `fibers.pcall` and `fibers.xpcall` inside fibres when protected code may perform an operation. These helpers provide portable yieldable protection on Lua implementations where native `pcall` cannot cross coroutine suspension.
+## Protected calls and runtime phases
 
-`perform` remains forbidden from:
+Use `fibers.pcall` and `fibers.xpcall` inside fibres when protected code may suspend. They provide yieldable protection on Lua 5.1 as well as later versions.
 
-- driver callbacks;
-- transaction search callbacks other than through returned operation structure;
-- resource evaluation, resolution, preparation and application;
-- effect preparation and discharge;
-- arbitrary host callbacks.
+`perform` is forbidden from:
+
+```text
+host callbacks
+driver callbacks
+search callbacks
+transition and witness callbacks
+effect preparation and discharge
+```
+
+Only fibre-phase code may suspend through `perform`.
 
 ## Host acceptance checklist
 
 A host adapter should be tested for:
 
 ```text
-clock progression and timer wake
-read readiness
-write readiness
-readiness winning against a later timeout
-timeout winning against an unready handle
-would_block after a readiness hint
-feed delivery invalidating saved search
-handle deregistration and close
+monotonic clock progression
+timer wake
+read and write readiness
+readiness against timeout competition
+would-block after a stale readiness hint
+feed delivery invalidating a stale fallback
+handle close and deregistration
 unsupported-interest reporting
 serial entry into the runtime driver boundary
 ```
 
-The host tests under `tests/hosts/` provide the current executable contract.
+The host and readiness tests in `tests/` are the executable contract.

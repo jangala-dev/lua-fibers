@@ -14,10 +14,10 @@ do
   local result, owns
   fibers.run(function()
     fibers.perform(life:seal_op('test'))
-    result = fibers.perform(fibers.choice(
-      life:admit_op(h):map(function() return 'unexpected' end),
-      fibers.always('sealed')
-    ))
+    result = fibers.perform(
+      life:admit_op(h):map(function() return 'unexpected' end)
+        :or_else(fibers.always('sealed'))
+    )
     owns = fibers.perform(life:owns_op(h))
   end)
   assert_eq(result, 'sealed', 'sealed scope should reject admission')
@@ -38,10 +38,10 @@ do
     from_after = fibers.perform(from:owns_op(h))
     to_after = fibers.perform(to:owns_op(h))
     fibers.perform(sealed:seal_op('closed-target'))
-    failed_move = fibers.perform(fibers.choice(
-      to:move_op(h, sealed):map(function() return 'unexpected' end),
-      fibers.always('blocked')
-    ))
+    failed_move = fibers.perform(
+      to:move_op(h, sealed):map(function() return 'unexpected' end)
+        :or_else(fibers.always('blocked'))
+    )
     still_to = fibers.perform(to:owns_op(h))
     fibers.perform(Settlement.retire_item_op(to, h))
   end)

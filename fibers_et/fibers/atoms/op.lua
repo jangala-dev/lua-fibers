@@ -1,4 +1,4 @@
--- Compact external transaction algebra for texlua.
+-- Compact external transaction algebra for lua.
 -- Operations are immutable syntax nodes; Runtime supplies the solver.
 --
 -- The canonical search grammar is deliberately small:
@@ -6,14 +6,13 @@
 -- Post-commit value transforms and typed defeat obligations are orthogonal
 -- annotations on dynamic operation occurrences.
 
-local EffectKind = require('fibers.kernel.effect.kind')
+local EffectKind = require('fibers.effect_kind')
 
 local Op = {}
 Op.__index = Op
 
 local unpack_ = table.unpack or unpack
 local next_op_id = 0
-local next_choice_key_id = 0
 
 local function pack_(...)
   return { _fibers_pack = true, n = select('#', ...), ... }
@@ -43,7 +42,7 @@ end
 local function append_choice_arg(out, x, level)
   level = level or 2
   if is_op(x) then
-    if x.kind == 'choice' and rawget(x, '_choice_key') == nil then
+    if x.kind == 'choice' then
       for i = 1, #(x.choices or {}) do out[#out + 1] = x.choices[i] end
     else
       out[#out + 1] = x
@@ -207,21 +206,6 @@ function Op.choice(...)
   return op('choice', { choices = xs })
 end
 
-function Op.choice_key(name)
-  next_choice_key_id = next_choice_key_id + 1
-  return {
-    _fibers_choice_key = true,
-    id = next_choice_key_id,
-    name = name or ('choice-key-' .. tostring(next_choice_key_id)),
-  }
-end
-
-function Op:with_choice_key(key)
-  if self.kind ~= 'choice' then error('with_choice_key expects a choice operation', 2) end
-  if key == nil then error('with_choice_key expects a non-nil key', 2) end
-  return op('choice', { choices = copy_list(self.choices), _choice_key = key })
-end
-
 function Op.named_choice(entries)
   local parsed = parse_named_entries(entries, 'named_choice')
   local branches = {}
@@ -247,7 +231,7 @@ function Op.named_all(entries)
   local lanes = {}
   for i = 1, #parsed do lanes[i] = parsed[i][2] end
   return Op.all(lanes):map(function(rows)
-    local out = { _fibers_named_rows = true }
+    local out = {}
     local raw = {}
     out._rows = raw
     for i = 1, #parsed do
@@ -285,7 +269,7 @@ function Op:wrap(fn)
   return annotated(self, fn, nil)
 end
 
--- Primitive constructor used by resources.
+-- Primitive constructor used by trusted facilities.
 function Op._resource(resource, kind, payload)
   return op('primitive', { primitive = 'resource', resource = resource, resource_kind = kind, payload = payload })
 end

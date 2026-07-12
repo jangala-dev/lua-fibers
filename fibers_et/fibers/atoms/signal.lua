@@ -1,46 +1,72 @@
 local Op = require('fibers.atoms.op')
-local Proposal = require('fibers.kernel.resources.proposal')
-local Result = require('fibers.kernel.resources.result')
-local Validity = require('fibers.kernel.validity')
-local Common = require('fibers.atoms.external_common')
+local Scalar = require('fibers.atoms.scalar')
+local Program = require('fibers.kernel.ir')
+local Interest = require('fibers.interest')
+local ExternalFeed = require('fibers.external_feed')
 
-local pack_ = Op._pack
 local Signal = {}
 Signal.__index = Signal
 local Kind = { name = 'signal' }
+local next_id = 0
+local unpack_ = table.unpack or unpack
+
+local function clone_state(s)
+  return { ready = s.ready, pack = s.pack }
+end
+
+local function touch(signal, state)
+  local loc = signal._location
+  loc.value = state
+  loc.version = loc.version + 1
+  signal.version = loc.version
+end
 
 local function deliver(signal, ...)
-  signal._validity:set(pack_(...), 'signal arrived')
+  touch(signal, { ready = true, pack = Op._pack(...) })
 end
 
 local function clear(signal)
-  signal._validity:clear('signal cleared')
+  touch(signal, { ready = false, pack = nil })
 end
 
 function Signal.new(name)
-  local signal = Common.new('signal', Signal, Kind, { name = name }, Validity.signal)
+  next_id = next_id + 1
+  local signal = setmetatable({
+    name = name or ('signal-' .. tostring(next_id)),
+    _fibers_id = 'signal-' .. tostring(next_id),
+    _fibers_kind = Kind,
+    version = 0,
+  }, Signal)
+  signal._location = require('fibers.kernel.store').new_location({
+    name = signal.name .. ':state', merge = 'machine', domain = 'external',
+    value = { ready = false, pack = nil }, owner = signal, clone_value = clone_state,
+    apply = function(v, loc) signal.version = loc.version end,
+  })
   signal._fibers_external_deliver = deliver
   signal._fibers_external_clear = clear
   return signal
 end
 
-function Kind.eval(signal, payload, ctx)
-  if payload.op ~= 'wait' then error('signal resources support wait_op', 2) end
-  local values, ready = signal._validity:get(ctx)
-  if ready then return Result.ready(Proposal.new(values or pack_(true))) end
-  local frontier = signal._validity:frontier_for('signal.state')
-  ctx:add({ kind = 'signal-absent', resource = signal, frontier = frontier, stamp = frontier.gen })
-  return ctx:retry('signal-not-ready', Common.interest(ctx, signal, payload.interest or 'ready', { external_kind = 'signal' }))
-end
-
-function Kind.summary(_payload, out)
-  out.dynamic = true
-  out.closed = false
-  out.needs_overlay = false
-end
-
 function Signal:wait_op()
-  return Op._resource(self, Kind, { op = 'wait', interest = 'ready' })
+  local signal = self
+  local transition = Scalar.transition({
+    name = self.name .. ':wait', mode = 'query', supply = 'none',
+    step = function(state)
+      if not state.ready then return Scalar.Wait end
+      return Scalar.Ready.same(unpack_(state.pack, 1, state.pack.n))
+    end,
+  })
+  return Op._resource(self, Kind, Program.machine_transition({
+    location = self._location, resource = self, transition = transition,
+    interest = function(rt)
+      return Interest.external(signal, 'ready', {
+        external_kind = 'signal', feed = ExternalFeed.for_resource(rt, signal),
+      })
+    end,
+    absence_check = function()
+      return not signal._location.value.ready
+    end,
+  }))
 end
 
 Signal.Kind = Kind

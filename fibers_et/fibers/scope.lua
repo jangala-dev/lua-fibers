@@ -13,9 +13,9 @@ local Task = require('fibers.task')
 local Lease = require('fibers.atoms.lease')
 local Borrow = require('fibers.borrow')
 local Runtime = require('fibers.kernel.runtime')
-local Protected = require('fibers.kernel.protected')
-local ScopeReport = require('fibers.kernel.scope_report')
-local ScopeResult = require('fibers.kernel.scope_result')
+local Protected = require('fibers.internal.protected')
+local ScopeReport = require('fibers.scope.report')
+local ScopeResult = require('fibers.scope.result')
 local Interrupt = require('fibers.internal.interrupt')
 local Settlement = require('fibers.internal.settlement')
 local ScopePolicy = require('fibers.scope.policy')
@@ -77,7 +77,7 @@ local function require_policy(scope, method, flag, ...)
 end
 
 local function item_kind(item)
-  return item and (item._fibers_obligation_kind or item._fibers_scope_kind or item._fibers_kind_name or item._fibers_id and 'owned' or nil)
+  return item and (item._fibers_obligation_kind or item._fibers_kind_name or item._fibers_id and 'owned' or nil)
 end
 
 local function new_offers(name)

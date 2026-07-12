@@ -20,10 +20,10 @@ do
       local render = frame:scope('render')
       render_region = render:raw_region()
       fibers.perform(input:admit_op(h))
-      undeclared_move = fibers.perform(fibers.choice(
-        frame:move_op(h, 'input', 'physics', 'asset'):map(function() return 'moved' end),
-        fibers.always('blocked')
-      ))
+      undeclared_move = fibers.perform(
+        frame:move_op(h, 'input', 'physics', 'asset'):map(function() return 'moved' end)
+          :or_else(fibers.always('blocked'))
+      )
       fibers.perform(frame:move_op(h, 'input', 'render', 'asset'))
     end)
     owner_after_input = h.owner
@@ -50,19 +50,19 @@ do
   fibers.run(function()
     frame:run('simulate', function(sim)
       fibers.perform(sim:admit_op(world))
-      undeclared_borrow = fibers.perform(fibers.choice(
-        frame:borrow_op('simulate', world, 'render', { 'read' }, 'world_view'):map(function() return 'borrowed' end),
-        fibers.always('blocked')
-      ))
+      undeclared_borrow = fibers.perform(
+        frame:borrow_op('simulate', world, 'render', { 'read' }, 'world_view'):map(function() return 'borrowed' end)
+          :or_else(fibers.always('blocked'))
+      )
       fibers.perform(frame:borrow_op('simulate', world, 'extract', { 'read' }, 'world_view'))
       owner_after_borrow = world.owner
     end)
     frame:run('extract', function(extract)
       read_authorised = fibers.perform(extract:authorise_op(world, 'read')) == world
-      write_authorised = fibers.perform(fibers.choice(
-        extract:authorise_op(world, 'write'):map(function() return true end),
-        fibers.always(false)
-      ))
+      write_authorised = fibers.perform(
+        extract:authorise_op(world, 'write'):map(function() return true end)
+          :or_else(fibers.always(false))
+      )
     end)
   end)
   assert_eq(undeclared_borrow, 'blocked', 'phase borrowing should require a declared borrow edge')
@@ -83,10 +83,10 @@ do
   fibers.run(function()
     frame:run('input', function(_input, ph)
       fibers.perform(ph:put_fact_op('input', 'commands', { jump = true }))
-      blocked = fibers.perform(fibers.choice(
-        ph:carry_fact_op('commands', 'input', 'render'):map(function() return 'carried' end),
-        fibers.always('blocked')
-      ))
+      blocked = fibers.perform(
+        ph:carry_fact_op('commands', 'input', 'render'):map(function() return 'carried' end)
+          :or_else(fibers.always('blocked'))
+      )
       carried = fibers.perform(ph:carry_fact_op('commands', 'input', 'simulate'))
     end)
     frame:run('simulate', function(_sim, ph)

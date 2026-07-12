@@ -1,4 +1,4 @@
-local EffectKind = require('fibers.kernel.effect.kind')
+local EffectKind = require('fibers.effect_kind')
 
 local M = {}
 

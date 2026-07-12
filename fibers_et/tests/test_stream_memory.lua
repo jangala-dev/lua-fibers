@@ -54,9 +54,9 @@ do
   local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      a:writer():write_op('x'):and_then(function() return Op.never() end)
+      a:writer():write_op('x'):map(function() return 'loser' end)
     ))
-  end).runtime_status
+  end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
   assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'losing stream write must not append bytes')
@@ -70,10 +70,10 @@ do
     fibers.perform(a:writer():write_op('abc'))
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      b:reader():read_some_op(1):and_then(function() return Op.never() end)
+      b:reader():read_some_op(1):map(function() return 'loser' end)
     ))
     later = fibers.perform(b:reader():read_exactly_op(3))
-  end).runtime_status
+  end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
   assert_eq(later, 'abc', 'losing stream read must not consume bytes')
@@ -302,17 +302,17 @@ do
   local line_choice, all_choice, after_line, after_all
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('partial'))
-    line_choice = fibers.perform(Op.choice(
-      b:reader():read_line_op({ limit = 64 }):map(function() return 'line' end),
-      Op.always('timeout')
-    ))
+    line_choice = fibers.perform(
+      b:reader():read_line_op({ limit = 64 }):map(function() return 'line' end)
+        :or_else(Op.always('timeout'))
+    )
     after_line = fibers.perform(b:reader():read_exactly_op(7))
 
     fibers.perform(a:writer():write_op('body'))
-    all_choice = fibers.perform(Op.choice(
-      b:reader():read_all_op({ max = 64 }):map(function() return 'all' end),
-      Op.always('timeout')
-    ))
+    all_choice = fibers.perform(
+      b:reader():read_all_op({ max = 64 }):map(function() return 'all' end)
+        :or_else(Op.always('timeout'))
+    )
     after_all = fibers.perform(b:reader():read_exactly_op(4))
   end).runtime_status
   assert_status(st, 'found')

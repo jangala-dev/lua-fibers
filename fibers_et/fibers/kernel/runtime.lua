@@ -1,135 +1,239 @@
-local Net = require('fibers.kernel.transaction_net')
+-- Open-world fibre scheduler and commit driver.
+
 local Op = require('fibers.atoms.op')
-local Interest = require('fibers.kernel.interest')
-local Resources = require('fibers.kernel.resources')
-local Signal = require('fibers.atoms.signal')
-local EventQueue = require('fibers.atoms.event_queue')
-local Readiness = require('fibers.atoms.readiness')
-local ExternalFeed = require('fibers.kernel.external_feed')
-local Interrupt = require('fibers.internal.interrupt')
-local Protected = require('fibers.kernel.protected')
-local ChoiceArbiter = require('fibers.kernel.choice_arbiter')
+local Store = require('fibers.kernel.store')
+local Interest = require('fibers.interest')
+local ExternalFeed = require('fibers.external_feed')
+local Protected = require('fibers.internal.protected')
+local Machine = require('fibers.kernel.machine')
+local IR = require('fibers.kernel.ir')
+
 local Runtime = {}
+
+local function select_machine(opts)
+  local requested = opts.machine
+  if requested == nil and os and os.getenv then requested = os.getenv('FIBERS_MACHINE') end
+  if requested == 'reference' then
+    return require('fibers.internal.reference_machine'), 'reference'
+  end
+  return Machine, 'trail'
+end
 Runtime.__index = Runtime
-
-local current_runtime = nil
-local current_scope = nil
-
-function Runtime.current()
-  return current_runtime
-end
-
-function Runtime.current_scope()
-  return current_scope
-end
-
-function Runtime._current_scope()
-  return current_scope
-end
+local CURRENT_RUNTIME = nil
+local CURRENT_SCOPE = nil
+function Runtime.current() return CURRENT_RUNTIME end
+function Runtime.current_scope() return CURRENT_SCOPE end
 
 local unpack_ = table.unpack or unpack
-local function pack(...) return { n = select('#', ...), ... } end
+local pack_ = Op._pack
+local function unpack_pack(p) return unpack_(p, 1, p.n or #p) end
 
-local PERFORM_RESULT = {}
+local function merge_effects(effects)
+  local order, by_key = {}, {}
+  for i = 1, #effects do
+    local effect = effects[i]
+    local kind = effect.kind
+    local key = tostring(kind._fibers_kind_id or kind.name) .. '\0' .. tostring(kind.key(effect.payload))
+    local old = by_key[key]
+    if old then
+      local payload, err = kind.merge(old.payload, effect.payload)
+      if not payload then return nil, err end
+      old.payload = payload
+    else
+      local copy = { _fibers_effect = true, kind = kind, payload = effect.payload }
+      by_key[key] = copy
+      order[#order + 1] = key
+    end
+  end
+  local out = {}
+  for i = 1, #order do out[i] = by_key[order[i]] end
+  return out
+end
 
 local Cancellation = {}
 Cancellation.__index = Cancellation
 Cancellation.__tostring = function(e) return e.message or 'fiber cancelled' end
-
 function Runtime.cancelled(reason, token)
-  return setmetatable({
-    _fibers_cancelled = true,
-    kind = 'cancelled',
-    reason = reason,
-    token = token,
-    message = reason and tostring(reason) or 'fiber cancelled',
-  }, Cancellation)
+  return setmetatable({ _fibers_cancelled = true, reason = reason, token = token,
+    message = reason and tostring(reason) or 'fiber cancelled' }, Cancellation)
 end
-
-function Runtime.is_cancelled(e)
-  return type(e) == 'table' and e._fibers_cancelled == true
-end
+function Runtime.is_cancelled(e) return type(e) == 'table' and e._fibers_cancelled == true end
 
 local RuntimeError = {}
 RuntimeError.__index = RuntimeError
 RuntimeError.__tostring = function(e) return e.message or tostring(e.cause) end
 
-local function pack_perform_result(vals, post)
-  return { _token = PERFORM_RESULT, vals = vals, post = post }
+function Runtime:_make_error(kind, err, fields)
+  fields = fields or {}
+  local out = {
+    _fibers_error = true,
+    kind = kind,
+    phase = fields.phase or self._phase,
+    action = fields.action,
+    committed = fields.committed,
+    message = fields.message or tostring(err),
+    cause = err,
+  }
+  return setmetatable(out, RuntimeError)
 end
 
-
-local function plan_retriable(reason)
-  return reason == 'stale' or reason == 'stale-cursor' or reason == 'resource-not-fresh'
+function Runtime:_throw_error(e, level)
+  self._driver_depth = 0
+  error(e, level or 0)
 end
 
-local function plan_failure_status(reason)
-  if plan_retriable(reason) then return { tag = 'pending', reason = reason or 'stale world' } end
-  return { tag = 'reject_candidate', reason = reason or 'candidate rejected during commit preparation' }
+function Runtime:_fail(kind, err, fields)
+  local e = self:_make_error(kind, err, fields)
+  return self:_throw_error(e, fields and fields.level or 0)
 end
 
-local function score_is_zero(score)
-  if not score then return true end
-  for i = 1, #score do if (score[i] or 0) ~= 0 then return false end end
-  return true
+function Runtime:_fatal(kind, err, fields)
+  fields = fields or {}
+  local e = self:_make_error(kind, err, fields)
+  e.fatal = true
+  self._failed = e
+  return self:_throw_error(e, fields.level or 0)
+end
+
+function Runtime:failed() return self._failed end
+function Runtime:_check_not_failed(level) if self._failed then error(self._failed, level or 0) end end
+
+function Runtime:_is_current_fiber()
+  local f = self._current_fiber
+  if not f then return false end
+  -- Yieldable protected calls may execute user code in a child coroutine.
+  -- Resolve that child back to the owning runtime fibre before enforcing the
+  -- perform/driver phase boundary.
+  local running = Protected.running(coroutine.running())
+  return running == f.co
+end
+
+function Runtime:_require_perform_allowed(level)
+  if self:_is_current_fiber() and self._phase == 'fiber' then return true end
+  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fibre', {
+    action = 'perform', phase = self._phase, level = level or 0,
+  })
+end
+
+function Runtime:_require_spawn_allowed(level)
+  if self._phase == 'external' or self._phase == 'fiber' then return true end
+  return self:_fail('phase_error', 'spawn may not be called from runtime internals', {
+    action = 'spawn', phase = self._phase, level = level or 0,
+  })
+end
+
+function Runtime:_require_driver_call(action, level)
+  if not self:_is_current_fiber() and self._phase == 'external' then return true end
+  return self:_fail('phase_error', tostring(action) .. ' may only be called by external driver code', {
+    action = action, phase = self._phase, level = level or 0,
+  })
+end
+
+local function finish_phase_call(self, old_phase, name, kind, fatal, committed, ok, ...)
+  self._phase = old_phase
+  if ok then return ... end
+  local err = ...
+  if type(err) == 'table' and err._fibers_error and not fatal then error(err, 0) end
+  if fatal then return self:_fatal(kind or 'effect_error', err, { phase = name, committed = committed, level = 0 }) end
+  return self:_fail(kind or 'callback_error', err, { phase = name, level = 0 })
+end
+
+function Runtime:_set_phase(name) local old = self._phase; self._phase = name; return old end
+function Runtime:_restore_phase(old) self._phase = old end
+function Runtime:_call_in_phase(name, kind, fn, ...)
+  local old = self:_set_phase(name)
+  return finish_phase_call(self, old, name, kind, false, nil, pcall(fn, ...))
+end
+function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
+  local old = self:_set_phase(name)
+  return finish_phase_call(self, old, name, kind, true, committed, pcall(fn, ...))
 end
 
 function Runtime.new(opts)
   opts = opts or {}
-  local host = opts.host or {}
-  local choice_opts = opts.choice or {}
-  local choice_arbiter = ChoiceArbiter.new(choice_opts)
+  local machine, machine_name = select_machine(opts)
   return setmetatable({
     opts = opts,
-    host = host,
-
-    -- Live frontier state.  A live fibre is owned by exactly one of:
-    --   ready queue, waiting frontier, or the currently running slot.
-    -- Completed fibres are retired immediately and are not kept by the runtime.
-    ready = {},
-    ready_head = 1,
-    ready_tail = 0,
-    waiting = {},
-    live_count = 0,
-    _next_fibre_id = 0,
-
-    _choice_arbiter = choice_arbiter,
-    choice_policy = { mode = choice_arbiter.mode, seed = choice_arbiter.seed },
-
-    _cursor = nil,
-    _net_wait_cache = nil,
+    host = opts.host or {},
     _phase = 'external',
-    _current_fibre = nil,
     _driver_depth = 0,
     _failed = nil,
-    _external_feeds = setmetatable({}, { __mode = 'k' }),
+    quiet_deadlock = opts.quiet_deadlock == true,
+    search_limit = opts.search_limit or 1000000,
+    choice_seed = opts.choice_seed or 1,
+    _ready_fibers = {},
+    _ready_head = 1,
+    _ready_tail = 0,
+    _live_fibers = 0,
+    pending = {},
+    pending_by_id = {},
+    next_fiber = 0,
+    next_request = 0,
+    pending_generation = 0,
+    epoch = 0,
+    _last_search_steps = 0,
+    _external_feeds = setmetatable({}, { __mode = 'kv' }),
+    machine = machine,
+    machine_name = machine_name,
+    stats = {
+      plans = 0,
+      search_calls = 0,
+      state_clones = 0,
+      validation_failures = 0,
+      refreshes = 0,
+      commits = 0,
+      fallback_commits = 0,
+    },
   }, Runtime)
 end
 
-
-
-function Runtime:_choice_order(owner_id, op, occurrence, count)
-  return self._choice_arbiter:order(owner_id, op, occurrence, count)
+function Runtime:push_scope(scope)
+  local fiber = self._current_fiber
+  if not fiber then error('Runtime:push_scope requires current fibre', 2) end
+  fiber.scope_stack = fiber.scope_stack or {}
+  fiber.scope_stack[#fiber.scope_stack + 1] = scope
+  fiber.scope = scope
+  CURRENT_SCOPE = scope
+  return { fiber = fiber, depth = #fiber.scope_stack, scope = scope }
 end
 
-function Runtime:_commit_choice_selections(selections)
-  return self._choice_arbiter:commit(selections)
+function Runtime:pop_scope(token)
+  local fiber = self._current_fiber
+  if not token or token.fiber ~= fiber then error('Runtime:pop_scope token mismatch', 2) end
+  local stack = fiber.scope_stack or {}
+  if #stack ~= token.depth or stack[#stack] ~= token.scope then error('Runtime:pop_scope stack mismatch', 2) end
+  stack[#stack] = nil
+  fiber.scope = stack[#stack]
+  CURRENT_SCOPE = fiber.scope
+  return true
+end
+
+function Runtime:with_scope(scope, fn, ...)
+  local token = self:push_scope(scope)
+  local packed = pack_(Protected.pcall(fn, ...))
+  local ok = packed[1]
+  self:pop_scope(token)
+  if not ok then error(packed[2], 0) end
+  return unpack_(packed, 2, packed.n)
 end
 
 function Runtime:now()
-  local now = self.host.now or self.opts.now
-  if now then return now(self) end
+  local now = self.host and self.host.now
+  if type(now) == 'function' then return now(self) end
   return 0
 end
 
--- External-resource delivery boundary.  External facts enter through a
--- runtime-bound capability; the resource owns the mutation protocol.
+function Runtime:external_feed(resource)
+  return ExternalFeed.for_resource(self, resource)
+end
+
 function Runtime:deliver(feed, ...)
   self:_check_not_failed(2)
   self:_require_driver_call('external delivery', 2)
   if not ExternalFeed.is_feed(feed) then error('Runtime:deliver expects an ExternalFeed', 2) end
   if feed.runtime ~= self then error('external feed belongs to another runtime', 2) end
   feed:_deliver(...)
+  self.epoch = self.epoch + 1
   return feed.resource
 end
 
@@ -139,640 +243,453 @@ function Runtime:clear_external(feed, ...)
   if not ExternalFeed.is_feed(feed) then error('Runtime:clear_external expects an ExternalFeed', 2) end
   if feed.runtime ~= self then error('external feed belongs to another runtime', 2) end
   feed:_clear(...)
+  self.epoch = self.epoch + 1
   return feed.resource
 end
 
-function Runtime:external_feed(resource)
-  return ExternalFeed.for_resource(self, resource)
-end
-
 function Runtime:signal(name)
-  local resource = Signal.new(name)
+  local resource = require('fibers.atoms.signal').new(name)
   return resource, self:external_feed(resource)
 end
 
 function Runtime:events(name)
-  local resource = EventQueue.new(name)
+  local resource = require('fibers.atoms.event_queue').new(name)
   return resource, self:external_feed(resource)
 end
 
 function Runtime:readiness(key, name)
-  local resource = Readiness.new(key, nil, name)
+  local resource = require('fibers.atoms.readiness').new(key, nil, name)
   return resource, self:external_feed(resource)
 end
 
-function Runtime:_make_error(kind, err, fields)
-  fields = fields or {}
-  local message = fields.message or tostring(err)
-  local out = {
-    _fibers_error = true,
-    kind = kind,
-    phase = fields.phase or self._phase,
-    fibre = fields.fibre,
-    action = fields.action,
-    committed = fields.committed,
-    message = message,
-    cause = err,
-  }
-  if type(err) == 'table' and err._fibers_scope_report == true then
-    out.scope_report = err
-    out.primary = err.primary
-    out.secondaries = err.secondaries
-  end
-  return setmetatable(out, RuntimeError)
-end
-
-function Runtime:_throw_error(e, level)
-  if not self:_is_current_fibre() then self._driver_depth = 0 end
-  error(e, level)
-end
-
-function Runtime:_fail(kind, err, fields)
-  local e = self:_make_error(kind, err, fields)
-  return self:_throw_error(e, fields and fields.level or 2)
-end
-
-function Runtime:_check_not_failed(level)
-  if self._failed then error(self._failed, level or 2) end
-end
-
-function Runtime:_fatal(kind, err, fields)
-  fields = fields or {}
-  local e = self:_make_error(kind, err, fields)
-  e.fatal = true
-  self._failed = e
-  return self:_throw_error(e, fields.level or 2)
-end
-
-function Runtime:failed()
-  return self._failed
-end
-
-function Runtime:push_scope(scope)
-  self:_check_not_failed(2)
-  self:_require_perform_allowed(2)
-  local f = self._current_fibre
-  if not f then error('Runtime:push_scope requires a current fibre', 2) end
-  f.scope_stack = f.scope_stack or {}
-  local depth = #f.scope_stack + 1
-  f.scope_stack[depth] = scope
-  current_scope = scope
-  return { fibre = f, depth = depth, scope = scope }
-end
-
-function Runtime:pop_scope(token)
-  self:_check_not_failed(2)
-  self:_require_perform_allowed(2)
-  local f = self._current_fibre
-  if not token or token.fibre ~= f then error('Runtime:pop_scope token does not match current fibre', 2) end
-  local stack = f.scope_stack or {}
-  if #stack ~= token.depth or stack[token.depth] ~= token.scope then error('Runtime:pop_scope scope stack mismatch', 2) end
-  stack[token.depth] = nil
-  current_scope = stack[#stack]
-  return true
-end
-
-
-
-function Runtime:with_scope(scope, fn, ...)
-  if type(fn) ~= 'function' then error('Runtime:with_scope expects a function', 2) end
-  local args = pack(...)
-  local token = self:push_scope(scope)
-  local results = pack(Protected.pcall(function() return fn(unpack_(args, 1, args.n)) end))
-  local pop_ok, pop_err = Protected.pcall(function() return self:pop_scope(token) end)
-  if not pop_ok then error(pop_err, 0) end
-  if not results[1] then error(results[2], 0) end
-  return unpack_(results, 2, results.n)
-end
-
-function Runtime:_is_current_fibre()
-  local f = self._current_fibre
-  if not f then return false end
-  return Protected.running() == f.co
-end
-
-function Runtime:_require_driver_call(action, level)
-  if not self:_is_current_fibre() and (self._driver_depth or 0) == 0 then return true end
-  return self:_fail('phase_error', action .. ' may only be called by external driver code', {
-    action = action,
-    phase = self._phase,
-    message = action .. ' may only be called by external driver code',
-    level = level or 3,
-  })
-end
-
-function Runtime:_require_spawn_allowed(level)
-  if self:_is_current_fibre() or (self._driver_depth or 0) == 0 then return true end
-  return self:_fail('phase_error', 'spawn may not be called from runtime internals', {
-    action = 'spawn',
-    phase = self._phase,
-    message = 'spawn may only be called from external driver code or from a resumed fibre',
-    level = level or 3,
-  })
-end
-
-function Runtime:_require_perform_allowed(level)
-  if self:_is_current_fibre() then return true end
-  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fibre', {
-    action = 'perform',
-    phase = self._phase,
-    message = 'perform may only be called by the currently resumed runtime fibre',
-    level = level or 3,
-  })
-end
-
-local function finish_phase_call(self, old_phase, phase_name, kind, fatal, committed, ok, ...)
-  self._phase = old_phase
-  if ok then return ... end
-
-  local err = ...
-  if type(err) == 'table' and err._fibers_error and not fatal then error(err, 0) end
-  if fatal then return self:_fatal(kind, err, { phase = phase_name, committed = committed, level = 0 }) end
-  return self:_fail(kind or 'callback_error', err, { phase = phase_name, level = 0 })
-end
-
-function Runtime:_set_phase(name)
-  local old = self._phase
-  self._phase = name
-  return old
-end
-
-function Runtime:_restore_phase(old)
-  self._phase = old
-end
-
-function Runtime:_call_in_phase(name, kind, fn, ...)
-  local old = self:_set_phase(name)
-  return finish_phase_call(self, old, name, kind, false, nil, pcall(fn, ...))
-end
-
-function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
-  local old = self:_set_phase(name)
-  return finish_phase_call(self, old, name, kind, true, committed, pcall(fn, ...))
-end
-
-local function new_fibre(self, fn, name, scope)
-  self._next_fibre_id = (self._next_fibre_id or 0) + 1
-  return {
-    id = self._next_fibre_id,
+local function spawn_unchecked(self, fn, name, scope)
+  if type(fn) ~= 'function' then error('spawn expects a function', 3) end
+  self.next_fiber = self.next_fiber + 1
+  local fiber = {
+    id = self.next_fiber,
+    name = name or ('fiber-' .. tostring(self.next_fiber)),
     co = coroutine.create(fn),
-    name = name or ('fiber-' .. tostring(self._next_fibre_id)),
+    started = false,
+    done = false,
+    scope = scope,
     scope_stack = scope and { scope } or {},
-    waiting = nil,
-    wait_index = nil,
-    state = 'new',
   }
-end
-
-function Runtime:_has_ready()
-  return self.ready_head <= (self.ready_tail or 0)
-end
-
-function Runtime:_push_ready(f)
-  assert(f and f.state ~= 'dead', 'cannot ready a dead fibre')
-  f.state = 'ready'
-  local tail = (self.ready_tail or 0) + 1
-  self.ready_tail = tail
-  self.ready[tail] = f
-end
-
-function Runtime:_pop_ready()
-  local head = self.ready_head
-  local tail = self.ready_tail or 0
-  if head > tail then return nil end
-  local f = self.ready[head]
-  self.ready[head] = nil
-  self.ready_head = head + 1
-  if self.ready_head > 64 and self.ready_head > ((tail + 1) / 2) then
-    local old, new = self.ready, {}
-    local n = 0
-    for i = self.ready_head, tail do
-      n = n + 1
-      new[n] = old[i]
-    end
-    self.ready = new
-    self.ready_head = 1
-    self.ready_tail = n
-  end
-  return f
-end
-
-function Runtime:_add_waiting(f, req)
-  assert(f and f.state == 'running', 'waiting fibre must be running')
-  f.waiting = req
-  f.state = 'waiting'
-  local waiting = self.waiting
-  waiting[#waiting + 1] = f
-  f.wait_index = #waiting
-end
-
-function Runtime:_remove_waiting(f)
-  local i = f and f.wait_index
-  if not i then return false end
-  local waiting = self.waiting
-  local last_i = #waiting
-  local last = waiting[last_i]
-  waiting[last_i] = nil
-  if i ~= last_i then
-    waiting[i] = last
-    if last then last.wait_index = i end
-  end
-  f.wait_index = nil
-  f.waiting = nil
-  return true
-end
-
-function Runtime:_retire_fibre(f)
-  if not f or f.state == 'dead' then return end
-  if self._choice_arbiter and f.id ~= nil then self._choice_arbiter:discard_owner(f.id) end
-  if f.wait_index then self:_remove_waiting(f) end
-  f.state = 'dead'
-  f.waiting = nil
-  f.wait_index = nil
-  f.co = nil
-  f.scope_stack = nil
-  self.live_count = (self.live_count or 1) - 1
-end
-
-function Runtime:_resume(f, values)
-  if f.state == 'waiting' then self:_remove_waiting(f) end
-  if f.state == 'dead' then return end
-
-  local co = f.co
-  if not co then return self:_retire_fibre(f) end
-
-  f.state = 'running'
-  f.waiting = nil
-
-  local old_phase = self:_set_phase('fibre')
-  local old_fibre = self._current_fibre
-  local old_current_runtime = current_runtime
-  local old_current_scope = current_scope
-  self._current_fibre = f
-  current_runtime = self
-  current_scope = f.scope_stack and f.scope_stack[#f.scope_stack] or nil
-  local ok, req_or_err = coroutine.resume(co, values)
-  current_runtime = old_current_runtime
-  current_scope = old_current_scope
-  self:_restore_phase(old_phase)
-  self._current_fibre = old_fibre
-
-  if not ok then
-    local name = f.name
-    self:_retire_fibre(f)
-    if type(req_or_err) == 'table' and req_or_err._fibers_error then error(req_or_err, 0) end
-    self:_fail('fibre_error', req_or_err, { fibre = name, level = 0 })
-  end
-
-  if coroutine.status(co) == 'dead' then
-    self:_retire_fibre(f)
-  else
-    self:_add_waiting(f, req_or_err)
-  end
-end
-
-function Runtime:_spawn_fibre(fn, name, scope)
-  local f = new_fibre(self, fn, name, scope)
-  self.live_count = (self.live_count or 0) + 1
-  self:_push_ready(f)
-  return f
+  self._ready_tail = self._ready_tail + 1
+  self._ready_fibers[self._ready_tail] = fiber
+  self._live_fibers = self._live_fibers + 1
+  return fiber
 end
 
 function Runtime:spawn_raw(fn, name, scope)
   self:_check_not_failed(2)
   self:_require_spawn_allowed(2)
-  return self:_spawn_fibre(fn, name, scope)
+  return spawn_unchecked(self, fn, name, scope)
 end
 
 function Runtime:_spawn_committed(fn, name, scope)
   self:_check_not_failed(2)
-  return self:_spawn_fibre(fn, name, scope)
+  return spawn_unchecked(self, fn, name, scope)
 end
 
 function Runtime:_discharge_interrupt(token, reason)
+  local Interrupt = require('fibers.internal.interrupt')
   Interrupt.raise(token, reason)
+  local ids, requests = {}, {}
+  for i = 1, #self.pending do
+    local req = self.pending[i]
+    if req.interrupt == token then ids[#ids + 1] = req.id; requests[#requests + 1] = req end
+  end
+  if #ids > 0 then self:_remove_pending(ids) end
+  for i = 1, #requests do
+    self:_resume_fiber(requests[i].fiber, { cancelled = Runtime.cancelled(reason, token) })
+  end
   return true
 end
 
-
-
-function Runtime:pcall(fn, ...)
-  self:_check_not_failed(2)
-  return Protected.pcall(fn, ...)
-end
-
-function Runtime:xpcall(fn, handler, ...)
-  self:_check_not_failed(2)
-  return Protected.xpcall(fn, handler, ...)
-end
-
-function Runtime:perform(opnode, opts)
+function Runtime:perform(op, opts)
   self:_check_not_failed(2)
   self:_require_perform_allowed(2)
+  if not Op.is_op(op) then error('perform expects an Op', 2) end
   opts = opts or {}
-  local interrupt = not opts.masked and opts.interrupt or nil
-  if interrupt and interrupt.is_raised and interrupt:is_raised() then
-    error(Runtime.cancelled(interrupt.reason, interrupt), 0)
+  if opts.interrupt and opts.interrupt.raised and not opts.masked then
+    error(Runtime.cancelled(opts.interrupt.reason, opts.interrupt), 0)
   end
-  local attempt = { guard_cache = {}, choice_orders = {} }
-  local result = coroutine.yield({ op = opnode, attempt = attempt, interrupt = interrupt })
-  if Runtime.is_cancelled(result) then error(result, 0) end
-  if type(result) ~= 'table' then return nil end
-
-  local vals, post = result.vals or Op._pack(), result.post
-  if post then vals = post(vals) end
-  return unpack_(vals, 1, vals.n or #vals)
+  local response = coroutine.yield({ _fibers_perform = true, op = op, opts = opts })
+  if response and response.cancelled then error(response.cancelled, 0) end
+  local packed = response.pack
+  if response.wrap then packed = response.wrap(packed) end
+  return unpack_pack(packed)
 end
 
-local function pending_from_waiting(waiting)
-  local pending = {}
-  for i = 1, #waiting do
-    local f = waiting[i]
-    local w = f and f.waiting
-    if w and w.op then pending[f.id or i] = { fiber = f, op = w.op, attempt = w.attempt } end
-  end
-  return pending
+function Runtime:_add_pending(fiber, yielded)
+  self.next_request = self.next_request + 1
+  local request = {
+    id = self.next_request,
+    fiber = fiber,
+    op = yielded.op,
+    footprint = IR.footprint(yielded.op),
+    memo = {},
+    interrupt = yielded.opts and yielded.opts.interrupt or nil,
+  }
+  self.pending[#self.pending + 1] = request
+  self.pending_by_id[request.id] = request
+  self.pending_generation = self.pending_generation + 1
 end
 
-local function pending_has_any(pending)
-  for _ in pairs(pending or {}) do return true end
-  return false
+function Runtime:_finish_fiber(fiber)
+  if fiber.done then return end
+  fiber.done = true
+  -- A completed fibre handle remains useful for identity and diagnostics, but
+  -- its coroutine and dynamic scope graph must not be retained by the runtime.
+  fiber.co = nil
+  fiber.scope = nil
+  fiber.scope_stack = nil
+  self._live_fibers = math.max(self._live_fibers - 1, 0)
 end
 
-
-
-function Runtime:_find_net_outcome(waiting, opts)
-  local pending = pending_from_waiting(waiting)
-  if not pending_has_any(pending) then return { tag = 'retry', proof = require('fibers.kernel.retry').permanent('no-pending'), interests = {} }, pending end
-
-  opts = opts or {}
-  Resources.invalidate_matured_deadline_frontiers(self)
-
-  local solver, cursor, out
-  if opts.max_work then
-    local sig = Net.pending_signature and Net.pending_signature(pending) or nil
-    local cache = self._net_wait_cache
-    if cache and cache.pending_sig == sig and Resources.observer_valid(cache.observer) then
-      return cache.out, pending
-    elseif cache then
-      if cache.observer and cache.observer.dispose then cache.observer:dispose() end
-      self._net_wait_cache = nil
-    end
-
-    cursor = self:_valid_cursor(pending)
-    if cursor then
-      solver = cursor.solver
-    else
-      solver = Net.Solver.new(self, pending)
-      cursor = solver:new_cursor()
-    end
-    out = solver:advance(cursor, opts.max_work)
-    if out.tag == 'budget' then
-      self._cursor = out.cursor
-    else
-      self._cursor = nil
-      if out.tag ~= 'hit' then
-        self._net_wait_cache = { pending_sig = sig, out = out, observer = cursor and cursor:take_observer() or nil }
-      else
-        if cursor and cursor.dispose then cursor:dispose() end
-        self._net_wait_cache = nil
-      end
-    end
+function Runtime:_resume_fiber(fiber, value)
+  local ok, yielded
+  local previous, previous_scope, previous_fiber = CURRENT_RUNTIME, CURRENT_SCOPE, self._current_fiber
+  self._current_fiber = fiber
+  CURRENT_RUNTIME, CURRENT_SCOPE = self, fiber.scope
+  local old_phase = self:_set_phase('fiber')
+  if fiber.started then
+    ok, yielded = coroutine.resume(fiber.co, value)
   else
-    self._cursor = nil
-    self._net_wait_cache = nil
-    solver = Net.Solver.new(self, pending)
-    out = solver:find_commit_outcome()
+    fiber.started = true
+    ok, yielded = coroutine.resume(fiber.co)
   end
-
-  return out, pending
+  self:_restore_phase(old_phase)
+  CURRENT_RUNTIME, CURRENT_SCOPE = previous, previous_scope
+  self._current_fiber = previous_fiber
+  if not ok then
+    self:_finish_fiber(fiber)
+    error(yielded, 0)
+  end
+  if coroutine.status(fiber.co) == 'dead' then
+    self:_finish_fiber(fiber)
+    return
+  end
+  if type(yielded) ~= 'table' or yielded._fibers_perform ~= true then
+    self:_finish_fiber(fiber)
+    error('runtime received an unsupported coroutine yield', 0)
+  end
+  self:_add_pending(fiber, yielded)
 end
 
-function Runtime:_apply_net_world(world, pending)
-  local ok, reason = world:commit(self)
-  if not ok then return false, reason end
-
-
-  local single_id = world.single_root_id
-  if single_id ~= nil then
-    local entry = pending and pending[single_id]
-    local f = entry and entry.fiber
-    if f then
-      local vals, post = world:delivery_for(self, single_id)
-      self:_resume(f, pack_perform_result(vals, post))
-    end
-    return true
-  end
-
-  local ids = {}
-  for id, _ in pairs(world.roots or {}) do ids[#ids + 1] = id end
-  table.sort(ids)
-  for i = 1, #ids do
-    local id = ids[i]
-    local entry = pending and pending[id]
-    local f = entry and entry.fiber
-    if f then
-      local vals, post = world:delivery_for(self, id)
-      self:_resume(f, pack_perform_result(vals, post))
-    end
-  end
-  return true
-end
-
-
-function Runtime:_deliver_interrupts()
-  local delivered = false
-  local i = 1
-  while i <= #self.waiting do
-    local f = self.waiting[i]
-    local w = f and f.waiting
-    local token = w and w.interrupt
-    if token and token.is_raised and token:is_raised() then
-      self:_resume(f, Runtime.cancelled(token.reason, token))
-      delivered = true
-      -- _resume removes f from waiting by swap-with-tail, so inspect this
-      -- position again on the next loop.
+function Runtime:_remove_pending(ids)
+  local remove = {}
+  for i = 1, #ids do remove[ids[i]] = true end
+  local kept = {}
+  for i = 1, #self.pending do
+    local request = self.pending[i]
+    if remove[request.id] then
+      self.pending_by_id[request.id] = nil
     else
-      i = i + 1
+      kept[#kept + 1] = request
     end
   end
-  return delivered
+  self.pending = kept
+  self.pending_generation = self.pending_generation + 1
 end
 
-function Runtime:_pump_one()
-  local f = self:_pop_ready()
-  if not f then return false end
-  self:_resume(f, nil)
+function Runtime:_find_candidate_impl(focus_id, search_limit)
+  if not self.pending_by_id[focus_id] then return nil end
+  return self.machine.search(self, self.pending_by_id, focus_id, search_limit)
+end
+
+function Runtime:_find_candidate(focus_id, search_limit)
+  return self:_call_in_phase('search', 'search_error', function()
+    return self:_find_candidate_impl(focus_id, search_limit)
+  end)
+end
+
+function Runtime:_validate(candidate)
+  for i = 1, #candidate.participants do
+    if not self.pending_by_id[candidate.participants[i]] then return false, 'participant-changed' end
+  end
+  local valid, validity_err = Store.validate(candidate.observations)
+  if not valid then return false, validity_err end
+  if candidate.negative_guard then
+    if self.epoch ~= candidate.epoch then return false, 'stale-negative-epoch' end
+    if self.pending_generation ~= candidate.pending_generation then return false, 'stale-negative-frontier' end
+    for i = 1, #(candidate.negative_checks or {}) do
+      local check = candidate.negative_checks[i]
+      if check and type(check.validate) == 'function' and not check.validate(self, check) then
+        return false, 'stale-negative-check'
+      end
+    end
+  end
   return true
 end
 
-function Runtime:_pump()
-  while self:_pump_one() do end
+function Runtime:_prepare_effects(candidate)
+  local effects, merge_err = merge_effects(candidate.effects)
+  if not effects then return nil, merge_err end
+  local prepared = {}
+  for i = 1, #effects do
+    local effect = effects[i]
+    local p, err = self:_call_in_phase('effect_prepare', 'effect_error', effect.kind.prepare, self, effect.payload)
+    if not p then return nil, err end
+    prepared[#prepared + 1] = p
+  end
+  return prepared
 end
 
-function Runtime:_waiting()
-  return self.waiting
+function Runtime:_commit(candidate)
+  local valid = self:_validate(candidate)
+  if not valid then
+    self.stats.validation_failures = self.stats.validation_failures + 1
+    return false, 'stale'
+  end
+
+  local prepared = candidate.prepared_effects
+  if not prepared then
+    local err
+    prepared, err = self:_prepare_effects(candidate)
+    if not prepared then return false, err or 'effect-prepare-refused' end
+  end
+
+  local requests = {}
+  for i = 1, #candidate.participants do
+    local id = candidate.participants[i]
+    requests[i] = self.pending_by_id[id]
+  end
+
+  Store.commit(candidate.writes)
+  self.epoch = self.epoch + 1
+  self.stats.commits = self.stats.commits + 1
+  if candidate.negative_guard then self.stats.fallback_commits = self.stats.fallback_commits + 1 end
+
+  self:_remove_pending(candidate.participants)
+
+  for i = 1, #prepared do
+    local p = prepared[i]
+    self:_call_fatal_in_phase('effect_discharge', 'effect_error', true, p.discharge, self, p, nil)
+  end
+
+  for i = 1, #requests do
+    local request = requests[i]
+    local outcome = candidate.outcomes[request.id]
+    self:_resume_fiber(request.fiber, outcome)
+  end
+  return true
 end
 
-function Runtime:_has_unstarted()
-  return self:_has_ready()
+local function merge_runtime_refutations(refs)
+  local out = { interests = {}, checks = {} }
+  local seen = {}
+  for i = 1, #(refs or {}) do
+    local ref = refs[i]
+    for j = 1, #((ref and ref.interests) or {}) do
+      local x = ref.interests[j]
+      local id = x.id or tostring(x)
+      if not seen[id] then seen[id] = true; out.interests[#out.interests + 1] = x end
+    end
+  end
+  return out
 end
 
-function Runtime:_valid_cursor(pending)
-  local c = self._cursor
-  if c and c.is_valid and c:is_valid(self, pending) then return c end
-  if c and c.dispose then c:dispose() end
-  self._cursor = nil
-  return nil
+function Runtime:_pending_status(refs, unknown)
+  local ref = merge_runtime_refutations(refs)
+  local waits = Interest.summarise(Interest.merge(ref.interests))
+  if unknown then return { tag = 'pending', kind = 'budget', interests_incomplete = true, waits = waits, interests = waits } end
+  if #waits > 0 then return { tag = 'pending', kind = 'wakeup', waits = waits, interests = waits } end
+  return { tag = 'quiescent', reason = self.quiet_deadlock and 'quiet-deadlock' or 'retry without actionable interest' }
 end
 
+function Runtime:_start_one()
+  local head, tail = self._ready_head, self._ready_tail
+  if head > tail then return nil end
 
+  local fiber = self._ready_fibers[head]
+  self._ready_fibers[head] = nil
+  head = head + 1
+  if head > tail then
+    -- Reset the consumed queue so indices and the backing table do not grow
+    -- with the lifetime of a long-running runtime.
+    self._ready_fibers = {}
+    self._ready_head = 1
+    self._ready_tail = 0
+  else
+    self._ready_head = head
+  end
 
--- One externally-drivable scheduler transition.
---
--- Return tags:
---   found   : one transaction was committed and any selected fibres were resumed
---   pending : useful work was performed but no transaction has yet committed, or
---             the option algebra budget was exhausted without mutation
---   quiescent: retry is proved but no actionable external interest is known
---   idle    : all fibres are complete and there is no pending work
---
--- Bounded work is conservative.  If opts.max_work is reached inside the algebra
--- solver, no resource state is mutated and no fibre is resumed; the caller can
--- call step again later with a fresh budget.
-function Runtime:_step(opts)
+  self:_resume_fiber(fiber)
+  return fiber
+end
+
+function Runtime:_step_impl(opts)
   opts = opts or {}
-  if self:_deliver_interrupts() then return { tag = 'pending', kind = 'interrupt' } end
-
-  local waiting = self:_waiting()
-  if #waiting == 0 then
-    if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-    if (self.live_count or 0) == 0 then return { tag = 'idle', value = true } end
-    return { tag = 'pending', kind = 'no-ready-work' }
-  end
-
-  local out, pending = self:_find_net_outcome(waiting, opts)
-
-  if out.tag == 'budget' then
-    return { tag = 'pending', kind = 'budget', work = out.used }
-  end
-
-  local world = out.tag == 'hit' and out.world or nil
-  if world and (not world:has_retry() or not self:_has_unstarted()) then
-    local ok, reason = self:_apply_net_world(world, pending)
-    if ok then return { tag = 'found', value = true, kind = 'commit' } end
-    return plan_failure_status(reason)
-  end
-
-  if self:_pump_one() then return { tag = 'pending', kind = 'started' } end
-
-  if world then
-    local ok, reason = self:_apply_net_world(world, pending)
-    if ok then return { tag = 'found', value = true, kind = 'commit' } end
-    return plan_failure_status(reason)
-  end
-
-  local interests = Interest.summarise(Interest.merge((out and out.interests) or {}))
-  if out.tag == 'unknown' then
-    if out.reason == 'budget' then return { tag = 'pending', kind = 'budget', interests_incomplete = true } end
-    return { tag = 'pending', kind = out.reason or 'unknown', interests = interests, waits = interests }
-  end
-  if #interests > 0 then return { tag = 'pending', kind = 'wakeup', interests = interests, waits = interests } end
-  return { tag = 'quiescent', reason = 'retry without actionable interest' }
-end
-
-function Runtime:_run(opts)
-  opts = opts or {}
+  local search_limit
   if opts.max_work then
-    -- Bounded mode performs one externally drivable transition, resuming the
-    -- private transaction-net cursor if the waiting frontier is unchanged.
-    return self:_step(opts)
+    self._bounded_credit = (self._bounded_credit or 0) + math.max(1, opts.max_work)
+    search_limit = self._bounded_credit
+  else
+    self._bounded_credit = 0
+  end
+  local fiber = self:_start_one()
+  if search_limit and search_limit <= 1 then
+    return { tag = 'pending', kind = fiber and 'started' or 'budget', interests_incomplete = true }
+  end
+  if fiber then
+    local request = self.pending[#self.pending]
+    if request and request.fiber == fiber then
+      local candidate, ref, unknown = self:_find_candidate(request.id, search_limit)
+      if candidate and not candidate.negative_guard then
+        local ok = self:_commit(candidate)
+        if ok then self._bounded_credit = 0; return { tag = 'found', kind = 'commit', value = true } end
+      end
+      return self:_pending_status({ref}, unknown)
+    end
+    return { tag = 'pending', kind = 'started' }
   end
 
-  self._cursor = nil
-  local committed = false
-  while true do
-    if self:_deliver_interrupts() then committed = true end
-    local waiting = self:_waiting()
+  if #self.pending == 0 then
+    if self._live_fibers > 0 then return { tag = 'pending', kind = 'no-ready-work' } end
+    return { tag = 'idle', value = true }
+  end
 
-    if #waiting == 0 then
-      if self:_pump_one() then
-        -- newly started work may now participate in a world
-      elseif (self.live_count or 0) == 0 then
-        if committed then return { tag = 'found', value = true } end
-        return { tag = 'idle', value = true }
-      else
-        if committed then return { tag = 'found', value = true } end
-        return { tag = 'pending', kind = 'no-ready-work' }
-      end
-    else
-      local out, pending = self:_find_net_outcome(waiting)
-      local world = out.tag == 'hit' and out.world or nil
-      if world and (not world:has_retry() or not self:_has_unstarted()) then
-        local ok, reason = self:_apply_net_world(world, pending)
+  -- Bounded stepping must not pin itself to the oldest blocked request. Try
+  -- each pending focus in round-robin order until one commit is found. This is
+  -- the single-step counterpart of Runtime:run's all-focus pass and allows
+  -- background pumps and policy monitors to progress behind a blocked root.
+  local count = #self.pending
+  local start = ((self._step_cursor or 0) % count) + 1
+  local refs, any_unknown = {}, false
+  for offset = 0, count - 1 do
+    local idx = ((start + offset - 1) % count) + 1
+    local request = self.pending[idx]
+    local focus = request and request.id
+    if focus and self.pending_by_id[focus] then
+      local candidate, ref, unknown = self:_find_candidate(focus, search_limit)
+      refs[#refs + 1] = ref
+      any_unknown = any_unknown or unknown == true
+      if candidate then
+        local ok = self:_commit(candidate)
+        if not ok and self.pending_by_id[focus] then
+          self.stats.refreshes = self.stats.refreshes + 1
+          candidate, ref, unknown = self:_find_candidate(focus, search_limit)
+          refs[#refs + 1] = ref
+          any_unknown = any_unknown or unknown == true
+          if candidate then ok = self:_commit(candidate) end
+        end
         if ok then
-          committed = true
-        elseif not plan_retriable(reason) then
-          return plan_failure_status(reason)
+          self._step_cursor = idx
+          self._bounded_credit = 0; return { tag = 'found', kind = 'commit', value = true }
         end
-      elseif self:_pump_one() then
-        -- A not-yet-started public participant may satisfy the primary side of
-        -- an or_else; start it before accepting an absence-certified fallback.
-      elseif world then
-        local ok, reason = self:_apply_net_world(world, pending)
-        if ok then
-          committed = true
-        elseif not plan_retriable(reason) then
-          return plan_failure_status(reason)
-        end
-      else
-        local interests = Interest.summarise(Interest.merge((out and out.interests) or {}))
-        if out.tag == 'unknown' then
-          if committed then return { tag = 'found', value = true } end
-          return { tag = 'pending', kind = out.reason or 'unknown', interests = interests, waits = interests }
-        end
-        if #interests > 0 then
-          if committed then return { tag = 'found', value = true } end
-          return { tag = 'pending', kind = 'wakeup', interests = interests, waits = interests }
-        end
-        if committed then return { tag = 'found', value = true } end
-        return { tag = 'quiescent', reason = 'retry without actionable interest' }
       end
     end
   end
+  self._step_cursor = start
+  return self:_pending_status(refs, any_unknown)
+end
+
+function Runtime:_run_impl(opts)
+  opts = opts or {}
+  if opts.max_work then return self:step(opts) end
+  local committed = false
+  local last_refs, last_unknown = {}, false
+
+  -- Start fibres in scheduler order. Closed positive worlds may commit before
+  -- later fibres are entered; absence-certified fallbacks wait until all
+  -- currently runnable fibres have exposed their attempts.
+  while true do
+    local fiber = self:_start_one()
+    if not fiber then break end
+    local request = self.pending[#self.pending]
+    if request and request.fiber == fiber then
+      local candidate = self:_find_candidate(request.id)
+      -- During fibre entry, commit only a closed world belonging solely to the
+      -- newly entered request. A later-started background fibre must not recruit
+      -- an older pending participant through that participant's non-preferred
+      -- choice branch before the older request has had its own scheduling turn.
+      -- Multi-participant worlds are considered by the ordinary all-focus pass
+      -- once all currently runnable fibres have exposed their attempts.
+      if candidate and not candidate.negative_guard
+          and #candidate.participants == 1
+          and candidate.participants[1] == request.id then
+        local ok = self:_commit(candidate)
+        if ok then committed = true end
+      end
+    end
+  end
+
+  while #self.pending > 0 do
+    local ids = {}
+    for i = 1, #self.pending do ids[i] = self.pending[i].id end
+    local plans, refs, unknowns = {}, {}, {}
+    for i = 1, #ids do
+      if self.pending_by_id[ids[i]] then
+        plans[i], refs[i], unknowns[i] = self:_find_candidate(ids[i])
+      end
+    end
+
+    local progressed = false
+    last_refs, last_unknown = refs, false
+    for i = 1, #unknowns do if unknowns[i] then last_unknown = true end end
+    for i = 1, #ids do
+      local focus = ids[i]
+      if self.pending_by_id[focus] then
+        local candidate = plans[i]
+        if candidate then
+          local ok = self:_commit(candidate)
+          if not ok and self.pending_by_id[focus] then
+            self.stats.refreshes = self.stats.refreshes + 1
+            candidate, refs[i], unknowns[i] = self:_find_candidate(focus)
+            if candidate then ok = self:_commit(candidate) end
+          end
+          if ok then committed, progressed = true, true end
+        end
+      end
+    end
+
+    while self:_start_one() do progressed = true end
+    if not progressed then break end
+  end
+
+  if committed then return { tag = 'found', value = true } end
+  if #self.pending == 0 then return { tag = 'idle', value = true } end
+  return self:_pending_status(last_refs, last_unknown)
 end
 
 
-local function finish_driver_call(self, old_depth, old_phase, ok, ...)
-  self._driver_depth = old_depth
-  self._phase = old_phase
-  if ok then return ... end
-
-  local err = ...
-  if type(err) == 'table' and err._fibers_error then error(err, 0) end
-
-  local e = self:_make_error('runtime_error', err, { phase = old_phase, level = 0 })
-  e.fatal = true
-  self._failed = e
-  return self:_throw_error(e, 0)
+local function driver_call(self, action, fn, ...)
+  self:_check_not_failed(2)
+  self:_require_driver_call(action, 2)
+  local old = self:_set_phase('driver')
+  self._driver_depth = (self._driver_depth or 0) + 1
+  local result = pack_(pcall(fn, self, ...))
+  self._driver_depth = math.max((self._driver_depth or 1) - 1, 0)
+  self:_restore_phase(old)
+  if not result[1] then
+    local err = result[2]
+    -- Structured scope reports are already the public failure object. Preserve
+    -- them across the driver boundary rather than obscuring them inside a
+    -- generic RuntimeError.
+    if type(err) == 'table' and (err._fibers_error or err._fibers_scope_report) then error(err, 0) end
+    return self:_fail('runtime_error', err, { phase = action, level = 0 })
+  end
+  return unpack_(result, 2, result.n)
 end
 
 function Runtime:step(opts)
-  self:_check_not_failed(2)
-  self:_require_driver_call('step', 2)
-  local old_depth, old_phase = self._driver_depth or 0, self._phase
-  self._driver_depth = old_depth + 1
-  return finish_driver_call(self, old_depth, old_phase, pcall(self._step, self, opts))
+  return driver_call(self, 'step', Runtime._step_impl, opts)
 end
 
-
-
 function Runtime:run(opts)
+  return driver_call(self, 'run', Runtime._run_impl, opts)
+end
+
+function Runtime:_pump()
   self:_check_not_failed(2)
-  self:_require_driver_call('run', 2)
-  local old_depth, old_phase = self._driver_depth or 0, self._phase
-  self._driver_depth = old_depth + 1
-  return finish_driver_call(self, old_depth, old_phase, pcall(self._run, self, opts))
+  self:_require_driver_call('pump', 2)
+  local old = self:_set_phase('driver')
+  self._driver_depth = (self._driver_depth or 0) + 1
+  while self:_start_one() do end
+  self._driver_depth = self._driver_depth - 1
+  self:_restore_phase(old)
+  return true
 end
 
 return Runtime

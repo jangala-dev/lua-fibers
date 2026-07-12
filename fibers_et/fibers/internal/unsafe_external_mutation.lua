@@ -1,23 +1,14 @@
--- Trusted direct mutation inside the runtime boundary. Ordinary external code must use ExternalFeed.
-
-local UnsafeExternalMutation = {}
-
-function UnsafeExternalMutation.deliver(resource, ...)
-  local apply = resource and resource._fibers_external_deliver
-  if type(apply) ~= 'function' then
+local M = {}
+function M.deliver(resource, ...)
+  if type(resource) ~= 'table' or type(resource._fibers_external_deliver) ~= 'function' then
     error('resource does not support external delivery', 2)
   end
-  apply(resource, ...)
-  return resource
+  return resource:_fibers_external_deliver(...)
 end
-
-function UnsafeExternalMutation.clear(resource, ...)
-  local apply = resource and resource._fibers_external_clear
-  if type(apply) ~= 'function' then
+function M.clear(resource, ...)
+  if type(resource) ~= 'table' or type(resource._fibers_external_clear) ~= 'function' then
     error('resource does not support external clear', 2)
   end
-  apply(resource, ...)
-  return resource
+  return resource:_fibers_external_clear(...)
 end
-
-return UnsafeExternalMutation
+return M

@@ -23,7 +23,6 @@ local function test_top_level_exports()
   assert_eq(type(fibers.WaitGroup.new), 'function', 'WaitGroup export')
   assert_eq(type(fibers.Mailbox.new), 'function', 'Mailbox export')
   assert_eq(type(fibers.Channel.new), 'function', 'Channel export')
-  assert_eq(type(fibers.choice_key), 'function', 'choice_key export')
 end
 
 local function test_pulse_signal_and_changed()
@@ -60,10 +59,10 @@ end
 
 local function test_pulse_losing_signal_branch_does_not_mutate()
   local p = fibers.Pulse.new()
-  local rt = new_runtime()
+  local rt = new_runtime({ choice_seed = 2 })
   local got
   rt:spawn_raw(function()
-    got = rt:perform(Op.choice({ Op.always('skip'), p:signal_op():and_then(function() return Op.never() end) }))
+    got = rt:perform(Op.choice({ Op.always('skip'), p:signal_op() }))
   end, 'pulse-choice')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'skip')
@@ -218,10 +217,10 @@ end
 
 local function test_mailbox_losing_send_branch_does_not_enqueue()
   local tx, rx = fibers.Mailbox.new(1)
-  local rt = new_runtime()
+  local rt = new_runtime({ choice_seed = 2 })
   local got
   rt:spawn_raw(function()
-    got = rt:perform(Op.choice({ Op.always('skip'), tx:send_op('lost'):and_then(function() return Op.never() end) }))
+    got = rt:perform(Op.choice({ Op.always('skip'), tx:send_op('lost') }))
   end, 'mb-losing-send')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'skip')

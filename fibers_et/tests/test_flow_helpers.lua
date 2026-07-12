@@ -99,12 +99,12 @@ do
     fibers.perform(src:inlet():write_op('abcdef'))
     choice = fibers.perform(Op.choice(
       Op.always('winner'),
-      src:outlet():splice_to(dst:inlet(), 3):and_then(function() return Op.never() end)
+      src:outlet():splice_to(dst:inlet(), 3):map(function() return 'loser' end)
     ))
     moved = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_got = fibers.perform(dst:outlet():read_exactly_op(3))
-  end).runtime_status
+  end, { choice_seed = 1 }).runtime_status
   assert_status(st, 'found')
   assert_eq(choice, 'winner')
   assert_eq(moved, 3)

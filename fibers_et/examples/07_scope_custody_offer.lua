@@ -46,10 +46,11 @@ rt:spawn_raw(function()
 
   -- Without receiver participation, offer_op cannot close its custody-offer rendezvous.
   -- The fallback branch commits and ownership remains with request.
-  result.offer_without_accept = rt:perform(fibers.choice(
-    request:offer_op(session, supervisor):map(function() return 'unexpected custody offer' end),
-    fibers.always('no accept; no custody offer')
-  ))
+  result.offer_without_accept = rt:perform(
+    request:offer_op(session, supervisor)
+      :map(function() return 'unexpected custody offer' end)
+      :or_else(fibers.always('no accept; no custody offer'))
+  )
   result.request_still_owns = rt:perform(request:owns_op(session))
   result.supervisor_owns_before = rt:perform(supervisor:owns_op(session))
 

@@ -1,375 +1,411 @@
 # Implementation internals
 
-This document is for contributors changing the runtime, resource protocol or compound facilities. `algebra.md` owns semantic definitions; this document explains where those semantics are implemented.
+This document describes the active compact implementation. `algebra.md` is the semantic contract. The copy-on-branch evaluator in `fibers/internal/reference_machine.lua` is retained as a differential oracle; it is not the production path.
 
-## Repository layout
-
-```text
-fibers.lua                 top-level convenience API
-fibers/atoms/              canonical operations and standard resources
-fibers/kernel/             transaction search, runtime, retry and effects
-fibers/internal/           trusted implementation helpers
-fibers/host/               host adapters and non-blocking handle families
-fibers/scope/              scope policy support
-fibers/stream/             stream backends and pumps
-fibers/*.lua               compound facilities
-examples/                  executable usage examples
-tests/                     semantic and integration tests
-benchmarks/                validating microbenchmarks
-```
-
-Placement rule:
+## Compact semantic kernel
 
 ```text
-atom       one resource algebra or canonical operation machinery
-kernel     generic interpretation, search, commit or host boundary
-internal   private trusted helper with no supported public contract
-compound   ordinary Lua composition over atoms and kernel facilities
+fibers/kernel/ir.lua            inert primitive programmes and operation footprints
+fibers/kernel/store.lua         versioned locations, speculative views and commit
+fibers/kernel/choice_order.lua  pure seed-derived branch permutations
+fibers/kernel/machine.lua       closed-world trail-based proof search
+fibers/kernel/runtime.lua       fibres, open-world scheduling and host boundary
 ```
 
-Do not add a kernel primitive merely because a facility is important. `Task`, `Scope`, `Queue`, `Flow` and `Stream` remain compounds.
+`fibers/kernel.lua` is a small aggregate. External feeds, effects, protected calls and scope reports live outside the semantic kernel.
 
-## Operation representation
+Current sizes are deliberately bounded:
 
-`fibers/atoms/op.lua` constructs the seven canonical term kinds:
+```text
+ir.lua            about 210 lines
+store.lua         about 600 lines
+choice_order.lua  under 60 lines
+machine.lua       under 1,000 lines
+runtime.lua       about 660 lines
+```
+
+The boundaries are intended to map directly to a systems-language port:
+
+```text
+store    knows no fibres
+machine  knows no host event loop
+runtime  does not implement facility-specific transition semantics
+```
+
+## Operation graph and primitive IR
+
+The public operation graph contains:
 
 ```text
 always
 primitive
-choose
+choice
 and_then
-product
+product(independent | interacting)
 or_else
 consequence
+annotated occurrence
 ```
 
-Derived forms are normalised at construction:
+Public helpers elaborate to those forms. Operations are ordinary immutable-by-convention Lua tables; the runtime does not mutate them. Static footprint caching is stored in a weak-key side table.
+
+A dynamic `choice` occurrence receives an occurrence serial within its evaluator task. `choice_order.lua` derives a pure permutation from the runtime's `choice_seed`, epoch, pending generation, request identity, evaluator task identity and occurrence serial. The permutation consumes no process-global random state, so speculative rollback does not perturb later choices and the trail and reference evaluators can reproduce the same traversal.
+
+Primitive facilities compile to records in `fibers/kernel/ir.lua`:
 
 ```text
-never   -> empty choose
-map     -> fused and_then/always where possible
-guard   -> delayed and_then with attempt-local cache metadata
-all     -> independent product
-tensor  -> interacting product
-emit    -> consequence
+read
+patch
+claim
+conditional_claim
+machine_transition
+witness_transition
+version_wait
+exchange
+snapshot
 ```
 
-Post-result transforms and defeat obligations use one annotation representation around the underlying term. They are not candidate-world constructors.
+Convenience constructors such as `IR.select` and `IR.admit` build ordinary claims.
 
-Raw operation tables are not a public extension mechanism. All internal code should use the canonical fields produced by the constructors.
-
-## Runtime lifecycle
-
-`fibers/kernel/runtime.lua` owns:
-
-- fibre registration and runnable state;
-- current runtime and current scope dynamic context;
-- perform attempts;
-- driver phase checks;
-- transaction search invocation;
-- commit preparation and application;
-- external feed delivery;
-- bounded cursors and runtime status;
-- fatal integrity failure state.
-
-A normal perform cycle is:
+A primitive programme cannot redefine:
 
 ```text
-fibre calls perform(op)
-  -> create attempt occurrence
-  -> suspend fibre
-  -> transaction net searches active roots
-  -> select and prepare a closed world
-  -> apply resource journals
-  -> discharge outcome effects
-  -> mark selected fibres runnable
-  -> resumed perform applies post-result transforms
+search ordering
+product visibility
+Retry or Unknown
+rollback
+validation
+commit
 ```
 
-Only the currently resumed runtime fibre may call `perform`.
+### Compiled footprints
 
-## Transaction-net search
-
-`fibers/kernel/transaction_net.lua` implements the semantic search. It contains:
-
-- deterministic local reduction;
-- continuation frames for `and_then` and annotations;
-- unordered choice arbitration and enumeration;
-- independent and interacting product construction;
-- rendezvous and premise closure;
-- retry-proof accumulation;
-- `or_else` fallback validation;
-- bounded-search cursor creation and reuse;
-- selected and losing occurrence accounting.
-
-Search results are:
+When a fibre performs an operation, the runtime records a conservative footprint containing:
 
 ```text
-Hit(world)
-Retry(proof)
-Unknown(cursor, reason)
+possible exchange resources and roles
+possible versioned locations
+dynamic-continuation marker
+external-observation marker
 ```
 
-The solver must not manufacture `Retry` from exhaustion of a work budget. Unknown search state remains resumable and cannot open `or_else`.
+During participant recruitment, the machine uses those footprints to prefer pending requests which may satisfy current intents. Footprints are an over-approximation and are not proof. Dynamic `and_then` continuations are marked conservatively.
 
-### Local reduction
+The current runtime scans pending requests and applies the footprint filter; it does not yet maintain separate incremental indexes per location or exchange resource.
 
-Terms which require no resource or partner search are reduced locally. The local and general reducers share continuation handling so that `and_then`, post-result transforms and defeat annotation semantics cannot drift.
+## Versioned store
 
-Guard construction is cached per dynamic occurrence and perform attempt. Backtracking must not repeatedly call the same guard callback.
-
-### Choice arbitration
-
-`fibers/kernel/choice_arbiter.lua` owns committed branch rotation. The transaction
-net asks it for an order identified by runtime, fibre and dynamic choice
-occurrence. That order is cached in the perform attempt and is therefore stable
-across backtracking and bounded cursor suspension.
-
-A candidate attempt records every selected choice occurrence on the speculative
-trail. Rollback removes those records. `World.from_attempt` copies the surviving
-selections, and `World:commit` advances the arbiter only after resource journals
-have been applied. Search, retry, stale validation and prepare refusal never
-advance arbitration state.
-
-Unkeyed state is held by operation node and occurrence path. Explicit keys use a
-separate per-fibre namespace and allow reconstructed operation nodes to share a
-rotation. Keyed choices remain nested arbitration boundaries rather than being
-flattened by choice normalisation.
-
-Protocol priority must be represented by `or_else`, not by branch position.
-Internal examples include mailbox send before concurrent closure, immediate pool
-retirement before deferred retirement, and stream terminal state before advisory
-backend readiness.
-
-### Occurrences and defeat
-
-A reusable operation becomes a dynamic occurrence when entered by an attempt. Defeat obligations belong to the occurrence, not to each candidate world it produces.
-
-An occurrence may be:
+A location contains:
 
 ```text
-latent
-armed in competition
-selected
-permanently defeated by a selected competitor
+integer identity
+name
+committed value
+version
+merge algebra
+optional owner and apply callback
 ```
 
-Backtracking, retry, validation conflict, fallback and Unknown are not defeat.
-
-## Candidate worlds
-
-A candidate proposal may contain:
+Current merge algebras are:
 
 ```text
-packed participant values
-resource records
-rendezvous requirements
-premises and substitutions
-effect set
-post-result transforms
-managed observations
-fallback retry evidence
+replace
+add
+presence
+finite_map
+machine
 ```
 
-Candidate cloning must preserve semantic identity without copying more than necessary. Resource records are cloned through the resource kind where provided.
+The store supplies fixed sequential, independent-parallel and interacting-parallel composition rules for each algebra.
 
-A selected combination is closed only when all rendezvous and premise requirements are resolved and all resource records merge.
+### Speculative views
 
-## Resource integration
+Each selected root has a root view. Product lanes fork from their parent view. Sequential continuations retain the same view.
 
-The generic resource layer is split between:
+A view contains:
 
 ```text
-fibers/kernel/resources.lua
-  solver-facing resource evaluation and premise integration
-
-fibers/kernel/resources/protocol.lua
-  sparse record merge, projection, preparation and application
-
-fibers/kernel/resources/result.lua
-  Ready | Premise | Retry
-
-fibers/kernel/resources/resolution.lua
-  exhaustive premise solutions and deferred proof construction
-
-fibers/kernel/resources/proposal.lua
-  candidate contribution container
+observed value/version records by location
+sparse staged deltas by location
+root identity
+product scope path
+merged marker
 ```
 
-The kernel never switches on resource names. A kind table owns its record algebra.
+The committed value is not copied merely because a view exists. Large facility values use persistent or path-copying internal structures so speculative successors share unchanged data.
 
-Resource evaluation contexts share the lazy retry builder in `fibers/kernel/retry_builder.lua`. Successful paths retain compact observations; a full `RetryProof` is materialised only when the path actually retries or an exhaustive premise proof is needed.
+### Product projection
 
-## Premises
-
-Premises defer resource-specific allocation until the solver can see the relevant combined world.
-
-`fibers/kernel/premise_helpers.lua` provides shared utilities for:
-
-- stable premise ordering;
-- provenance-aware resource record views;
-- product lane and mode information;
-- once-only proof contributions;
-- substitution result packing.
-
-A premise resolver returns every current solution in semantic preference order and a proof under which that enumeration is exhaustive.
-
-The independent/interacting distinction is enforced through record provenance:
+All sibling changes participate in final-world consistency. For partial operations, view projection enforces the product law:
 
 ```text
-independent sibling
-  may constrain a solution but may not positively supply it
+all
+    constraining and neutral sibling changes are visible
+    positive sibling supply is hidden
 
-interacting sibling
-  may positively supply a fact or rendezvous partner
+tensor
+    compatible sibling supply is visible
 ```
 
-## Retry and validity
+For monotone claims, supply is selected by orientation. For serial machine transitions, the store compares readiness before and after each sibling step. A transition may declare `supply = 'none'` where explicit sequencing is required.
 
-`fibers/kernel/retry.lua` represents proof-carrying retry. It records:
+### Candidate collection and commit
 
-- observed generation-stamped frontiers;
-- host-actionable interests;
-- optional diagnostic observations;
-- permanent structural retry where explicit.
+When all selected roots complete, the store combines their root deltas in external composition mode and records one observed version per location.
 
-`fibers/kernel/validity.lua` supplies managed mutable facts. Capability reads register observations through the active context. Capability writes invalidate the appropriate frontiers.
+Validation checks current location versions. Commit applies each combined delta, increments the location version and invokes the optional apply callback.
 
-Cursor and fallback reuse is pull-validated: the runtime checks recorded generations when considering a saved result. There is no global invalidation broadcast graph.
+The active store assumes the runtime driver enters serially; it is not a parallel lock-free commit protocol.
 
-`fibers/kernel/interest.lua` is deliberately separate from validity. An interest says how a host may make progress; it is not the evidence which justifies retry.
+## Trail-based search machine
 
-## Effects and commit
+`machine.lua` searches a selected map of pending perform requests with one focus request and a search limit.
 
-Effect kinds and sets live under `fibers/kernel/effect/`.
-
-A commit proceeds conceptually as:
+Its implementation returns:
 
 ```text
-1. validate selected observations and fallback proofs
-2. merge and prepare resource records
-3. prepare selected commit effects and losing defeat effects
-4. apply prepared resource journals
-5. discharge the complete outcome-effect batch
-6. make spawned or awakened work runnable
-7. resume selected participants
-8. apply post-result transforms inside perform
+candidate or nil
+refutation data
+unknown boolean
 ```
 
-No user fibre may run in the middle of the effect batch.
+These correspond to semantic `Hit`, `Retry` and `Unknown`. The machine does not currently return a resumable whole-search cursor. Bounded stepping raises the search limit on later calls and searches again.
 
-Effect preparation is side-effect-free. Effect discharge occurs after resource commit and is currently fatal on failure because rollback is no longer possible.
+### Numeric arenas
 
-## External resources and hosts
-
-`Signal`, `EventQueue`, `Clock` and `Readiness` are ordinary resources. Runtime-bound producer authority is implemented by `fibers/kernel/external_feed.lua`.
-
-A host interest may carry the exact feed required to update an external resource. Hosts do not gain generic mutation authority merely by holding the consumer resource.
-
-`fibers/internal/unsafe_external_mutation.lua` is reserved for trusted implementation paths already inside the runtime boundary. New ordinary host integration should use feeds.
-
-`fibers/runner.lua` wraps `Runtime:run` with host blocking. Host adapters live under `fibers/host/`; descriptor helpers are paired with their host family.
-
-## Scopes and settlement
-
-`fibers/atoms/region.lua` is the ownership resource. `fibers/scope.lua` and `fibers/scope/policy.lua` provide the ordinary structured-lifetime compound.
-
-Task admission is transactional:
+Dynamic search objects use monotonic integer identifiers:
 
 ```text
-construct Task
-admit its owned record to Region
-emit post-commit spawn
+TaskId
+GroupId
+ViewId
+IntentId
 ```
 
-Settlement helpers under `fibers/internal/settlement.lua` claim roots, run resource-specific settlement operations under the policy, and resolve or retain failure.
+Tables keyed by those IDs act as arenas. IDs are not reused during one search.
 
-The policy monitor is an internal Task created lazily when a scope first acquires a task root. Region admission and movement effects, together with task-completion effects, append committed records to a private `EventQueue`. The monitor drains this queue in batches and checks current ownership before accounting for an exit. This avoids repeatedly rebuilding a choice over every retained child while preserving Region as the source of custody truth.
-
-Do not embed task cancellation, stream close or other resource-specific settlement behaviour into Region itself.
-
-## Flows and streams
-
-`fibers/flow.lua` implements transactional byte reservoirs and endpoint state. `fibers/stream.lua` combines two flows. Host-backed stream code under `fibers/stream/` owns backend adaptation, leases and pump tasks.
-
-The irreversible boundary is the pump task's backend call. It occurs only after readiness commits and outside search. Reservoir leases retain capacity while bytes are offered to the host and are later acknowledged, returned or failed transactionally.
-
-The current reservoir permits one active lease at a time to preserve ordering.
-
-## Error and phase policy
-
-Recoverable application errors belong in fibre code and are represented through normal Lua errors protected by `fibers.pcall` or through operation results.
-
-Errors in trusted search, resource or commit machinery are fatal. The public driver boundary restores its phase bookkeeping, marks the runtime failed and re-raises. A failed runtime is not reusable.
-
-Important phase restrictions:
+Tasks carry:
 
 ```text
-search callbacks       non-yielding, no external side effects
-resource machinery     non-yielding, no committed mutation before apply
-effect preparation     non-yielding and side-effect-free
-effect discharge       non-yielding trusted runtime work
-host callbacks          serialised through the driver boundary
-post-result transforms  run in resumed fibre context and may perform again
+root request
+current expression
+continuation frames
+view identity
+product scope path
+status
 ```
 
-## Testing changes
+Product groups retain parent task and view, lane views, lane outcomes and completion count.
 
-Every semantic change should have a focused test before or with the implementation change.
+### One rollback trail
 
-Expected test classes include:
+The production machine mutates one search state and records undo entries in one trail. Current entry forms cover:
 
 ```text
-operation laws and derived forms
-choice and defeat occurrence lifecycle
-all/tensor provenance
-Retry versus Unknown
-fallback proof invalidation
-resource merge and stale preparation
-premise exhaustiveness
-external feed authority and wake
-scope ownership and settlement failure
-flow losing-branch safety
-host readiness and timeout races
+field assignment
+array append
+first view mutation within a branch
 ```
 
-Run the full suite after local tests:
+A speculative branch records a trail mark. Backtracking restores that mark.
+
+The same branch mechanism is used for:
+
+```text
+public choice alternatives
+exchange partners
+witness cursor alternatives
+claim resolution order
+participant inclusion or exclusion
+preferred and fallback search scopes
+```
+
+The trail is implemented in Lua with parallel arrays. A systems port can use a compact tagged vector.
+
+### Continuations and occurrence locality
+
+`and_then` frames belong to the occurrence which produced their input. A provisional result may activate a new operation in the same transaction. If the continuation later fails, the prior result binding and state are rolled back.
+
+Product results preserve lane and nested row structure. Wraps are composed per lane and captured as immutable wrap vectors before speculative group state is rolled back.
+
+### Linear exchange
+
+Rendezvous puts and gets become linear intents with root and product ancestry. Same-root intents may match only when their first diverging product group is interacting. Cross-root intents may match when roles and resources are compatible.
+
+A match remains provisional until both participant operations and all continuations close.
+
+### Claims and machine transitions
+
+Claims are grouped by location and explored through the ordinary branch mechanism. Serial machine transitions are ordered by a search-assigned serial number and folded into the location's machine delta.
+
+A partial machine transition which cannot proceed becomes an intent. Tensor siblings or recruited roots may supply it unless the transition declares `supply = 'none'`.
+
+### Lazy witness cursors
+
+A witnessed transition provides a cursor factory returning:
+
+```lua
+local cursor = {
+  next = function()
+    return next_candidate_or_nil
+  end,
+}
+```
+
+Each `next()` result is one candidate successor and packed result. The machine owns progression, rollback and exhaustion. Petri token bindings and Calendar slot choices use lazy cursors.
+
+The older eager `enumerate` callback is adapted to a cursor for source compatibility; it should not be used for large search spaces.
+
+### Refutation and `or_else`
+
+Local query exhaustion does not by itself establish Retry. Refutation is composed only after operation branches, witnesses, matches, claims and relevant participant choices are exhausted.
+
+When a preferred `or_else` scope is refuted, the fallback branch receives:
+
+```text
+negative checks from the preferred refutation
+preferred host interests for candidate validation and reporting
+negative runtime epoch and pending-generation guards
+```
+
+If fallback also fails, the runtime reports the residual fallback interests rather than retaining discarded preferred waits.
+
+## Runtime and open-world scheduling
+
+`runtime.lua` owns:
+
+```text
+coroutines and current scope context
+pending perform requests
+scheduler order
+participant request maps
+machine selection and invocation
+candidate validation and refresh
+atomic commit orchestration
+effect preparation and discharge
+external feeds and interests
+driver phase checks
+```
+
+The trail machine is selected by default. Use either:
+
+```lua
+Runtime.new({ machine = 'reference' })
+```
+
+or:
 
 ```sh
-lua tests/run_all.lua
+FIBERS_MACHINE=reference lua tests/run_all.lua
 ```
 
-Optional host tests should skip cleanly when their dependency is unavailable.
+to select the copy-on-branch oracle.
 
-## Performance-sensitive paths
+### Scheduling boundary
 
-The main allocation-sensitive areas are:
+New fibres are started in scheduler order. A closed positive world belonging solely to the newly entered request may commit immediately. Multi-participant worlds and absence-certified fallbacks are considered after currently runnable fibres have exposed their attempts.
 
-- operation construction and derived `map` chains;
-- candidate cloning;
-- product lane combination;
-- premise solution enumeration;
-- retry-proof materialisation;
-- saved cursor validation;
-- flow delimiter scans and reservoir leases;
-- task and scope admission.
+This prevents a later-started background fibre from recruiting an older request through a non-preferred branch before that older request receives its own scheduling turn.
 
-Keep retry capture lazy. Do not allocate a full proof on a successful resource path. Preserve single-item fast paths where measurements support them.
+### Runtime statuses
 
-Benchmark changes with both the complete scale-1 suite and focused higher-scale product, fallback or rendezvous cases. The benchmark harness validates semantics before timing.
-
-## Adding behaviour
-
-Before adding a module, decide which layer owns it:
+`Runtime:run` and `Runtime:step` return statuses such as:
 
 ```text
-new mutable transactional truth       resource
-new combination of existing truth     compound facility
-new host condition                     external resource plus interest/feed
-new runtime obligation                 typed effect kind
-new lifetime behaviour                 settlement protocol or scope policy
-new operation syntax                   only if it cannot be derived without a
-                                       semantic loss
+found       at least one transaction committed
+pending     more driver work or an external interest may make progress
+quiescent   Retry was established with no actionable host interest
+idle        no live or pending work remains
 ```
 
-The preferred direction is to keep the kernel small and make new facilities ordinary compositions over the existing algebra.
+Budget exhaustion is represented as `tag = 'pending', kind = 'budget'` with `interests_incomplete = true`. There is no public `unknown` status tag in the current implementation.
+
+### Validation and refresh
+
+Before commit, the runtime checks:
+
+```text
+all participant requests still exist
+observed location versions
+preferred-side negative guards
+runtime epoch and pending-participant generation for fallback candidates
+resource-specific external absence checks
+```
+
+A stale positive or fallback candidate is discarded. Search is run again against current state; stale validation is never converted into Retry.
+
+### Commit phases
+
+```text
+1. validate candidate
+2. merge and prepare effects
+3. install store deltas
+4. increment runtime epoch
+5. discharge effects
+6. remove selected pending requests
+7. resume selected fibres
+8. apply participant wraps inside Runtime:perform
+```
+
+Perform, spawning and driver entry are restricted by runtime phases. Irreversible work is forbidden during search and effect preparation.
+
+## External observations
+
+Signal, EventQueue and Readiness are host-owned versioned facilities. `Runtime:external_feed` returns a capability bound to one runtime and one resource.
+
+An exhausted external programme may attach:
+
+```text
+Interest              host-actionable wait description
+absence_check         negative fact to validate before fallback commit
+```
+
+Delivery mutates only the bound resource, increments its location version and runtime epoch, then allows later driver entry to reconsider pending work.
+
+Clock waits are pull-validated against `Runtime:now()`. A matured deadline invalidates a stale fallback even without feed delivery.
+
+## Persistent facility data
+
+The store treats committed values as opaque. Large facilities therefore use sharing internally:
+
+```text
+Flow       persistent measured byte deque
+Region     layered persistent maps and immutable custody order
+Petri      layered persistent place maps and copied touched token bags
+Calendar   path-copying interval treap and persistent reservation index
+```
+
+The current data structures are Lua reference implementations. A native port may replace them while preserving transducer and delta semantics.
+
+## Systems-language mapping
+
+A direct port can use:
+
+```text
+immutable operation and programme arenas
+integer TaskId, GroupId, ViewId, IntentId and LocationId
+vectors for tasks, groups, intents and active work
+one tagged rollback trail
+one tagged alternative stack or recursive search frames
+compact location read and write sets
+lazy index cursors
+persistent facility roots
+an outbox of prepared post-commit effects
+```
+
+Lua values, host callbacks and facility state roots can remain opaque handles at the kernel boundary.
+
+## Verification
+
+The supported suite runs the trail and reference machines through the same public API. Coverage includes:
+
+```text
+global exchange, claim and witness backtracking
+nested product and continuation locality
+Retry, Unknown and stale fallback validation
+all/tensor supply laws
+external interests and feeds
+scope ownership and settlement
+Flow and stream losing-branch safety
+host readiness and bounded stepping
+```

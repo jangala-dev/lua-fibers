@@ -1,121 +1,75 @@
-# The Fibres Algebra
+# The fibers algebra
 
-This document describes the algebraic model underlying Fibres options.
+This document states the semantic model implemented by `fibers`. It is not a complete formalisation, but it defines the distinctions which implementations and trusted facilities must preserve.
 
-The implementation is inspired by Concurrent ML, Software Transactional Memory, and Transactional Events, but the object being transacted here is broader than a memory update or a communication event. A Fibres option denotes a set of possible committed worlds. A world may contain synchronous rendezvous, transactional resource journals, externally-fed resource observations, ownership changes, and post-commit runtime effects.
+## 1. Transactions describe worlds
 
-The practical notions of `fibers` and `op`s come from Andy Wingo's work on the Snabb networking toolkit, which adapted CML-style first-class synchronisation to Lua and provided the starting vocabulary for this library.
-
-This document is not a complete formal semantics. It is a compact statement of the model, the intended laws, and the boundaries that implementations and extensions must preserve.
-
-## 1. Central idea
-
-An option is not an action. It is a description of possible worlds.
+An operation is inert. It denotes possible committed worlds rather than performing an action immediately.
 
 ```text
-option     ≈  set of candidate committed worlds
-runtime    ≈  search, select, prepare, commit, discharge, resume
+operation  ≈ a search problem for compatible committed worlds
+runtime    ≈ search, validate, commit, discharge, resume
 ```
 
-A candidate world may contain:
+A successful world may contain:
 
 ```text
-result          the value delivered if the world wins
-rendezvous      synchronous handshakes between lanes or roots
-journals        tentative resource state changes
-observations    managed facts used during proof and validation
-consequences    runtime obligations entailed by commit
-wraps           per-participant post-commit value continuations
+participant results
+synchronous exchange matches
+versioned-location deltas
+ownership changes
+observations and negative guards
+commit and defeat effects
+participant-local wraps
 ```
 
-The runtime searches for a compatible world. If one is selected, it commits the world atomically with respect to the runtime state:
+Search is speculative. Losing worlds install no state and discharge no effects.
 
-```text
-search is speculative
-commit is atomic
-consequences are post-commit
-wraps observe committed worlds
-losing worlds do not apply journals or discharge effects
-```
+## 2. Canonical operation language
 
-## 2. Lineage
-
-Fibres sits in a line of ideas:
-
-```text
-CML:
-  first-class synchronous events
-
-STM:
-  composable all-or-nothing memory transactions
-
-Transactional Events:
-  all-or-nothing synchronous event protocols
-
-Fibres:
-  all-or-nothing construction of worlds containing rendezvous,
-  resource journals, ownership changes, external observations and
-  post-commit consequences
-```
-
-The distinguishing move is that communication, state, ownership, external readiness and runtime obligations are not separate mechanisms. They are components of one committed world.
-
-See [`comparison.md`](comparison.md) for a fuller comparison with CSP, CML, Transactional Events and Reagents.
-
-## 3. Core option language
-
-The public API exposes convenience forms, but proof search interprets seven
-canonical term kinds:
+The public API elaborates to seven canonical forms:
 
 ```text
 op ::=
-    always(v...)
-  | primitive(resource, request)
-  | choose(op₁, ..., opₙ)
-  | and_then(op, k)
+    always(values)
+  | primitive(programme)
+  | choice(op₁, ..., opₙ)
+  | and_then(op, continuation)
   | product(mode, op₁, ..., opₙ)
   | or_else(primary, fallback)
-  | consequence(commit_obligation)
+  | consequence(effect)
 
 mode ::= independent | interacting
 ```
 
-Several public operators elaborate to these forms:
+Derived forms include:
 
 ```text
-never          ≜ choose()
-map(op, f)     ≜ and_then(op, λxs. always(f(xs)))
-guard(f)       ≜ and_then(always(), f), with attempt-local callback caching
-all(ops)       ≜ product(independent, ops)
-tensor(ops)    ≜ product(interacting, ops)
-emit(c)        ≜ consequence(c)
+never          = choice()
+map(op, f)     = and_then(op, values -> always(f(values)))
+guard(f)       = attempt-local delayed construction
+all(lanes)     = product(independent, lanes)
+tensor(lanes)  = product(interacting, lanes)
+emit(effect)   = consequence(effect)
 ```
 
-Post-commit participant transforms (`wrap`) and typed defeat obligations
-(`on_defeat`) are annotations on dynamic operation occurrences. They do not add
-candidate-world constructors to the canonical search grammar.
+`wrap` and `on_defeat` annotate dynamic occurrences. They do not add new candidate-world constructors.
 
-## 4. Outcomes
+## 3. Search outcomes
 
-Proof search has three semantic outcomes:
+The semantic outcomes are:
 
 ```text
 Hit W
   A compatible candidate world W has been found.
 
 Retry P
-  No committing world exists through this path under the managed facts in P.
-  P records validity frontiers and any host-actionable interests.
+  The relevant search scope has been exhaustively refuted under managed facts P.
+  P records negative validation checks and any host-actionable interests.
 
-Unknown K
-  Bounded or incomplete search has not established either Hit or Retry.
-  K is a resumable search cursor or diagnostic reason.
+Unknown
+  Bounded search has not established Hit or Retry.
 ```
-
-The runtime may describe an uncaught `Retry` as pending or quiescent, but
-blockedness is a scheduling interpretation rather than another semantic result.
-Certified present absence is represented by `Retry`; there is no separate
-`Absent` outcome.
 
 The essential distinction is:
 
@@ -126,898 +80,493 @@ Retry ≠ Unknown
 Consequently:
 
 ```text
-not found is not Retry
+failure to find a world quickly is not Retry
 search-budget exhaustion is not Retry
-resource conflict is not Retry
-stale validation is not Retry
+one rejected candidate is not Retry
+validation conflict is not Retry
+one exhausted primitive query is not necessarily Retry
 ```
 
-`or_else` may consume `Retry`. It must propagate `Unknown`.
+The current bounded driver increases its search allowance and searches again; it does not expose a persistent whole-machine search cursor. Witnessed primitive programmes do use lazy local cursors.
 
-## 5. Worlds and commit
+## 4. Candidate proof and commit
 
-A world is a structured candidate.
+A candidate may be viewed as:
 
 ```text
-World W =
-  {
-    result,
-    rendezvous,
-    journals,
-    observations,
-    fallback_evidence,
-    consequences,
-    wraps
-  }
+Candidate {
+    participants
+    packed results
+    observed location versions
+    combined location deltas
+    negative guards from preferred-side refutations
+    selected effects
+    participant wrap trees
+}
 ```
 
-A runtime commit has the shape:
+Commit is valid only while:
 
 ```text
-current state Σ
-candidate world W
-prepared resource journals J
-post-commit consequences C
-result value v
+all selected participants still wait on the same attempts
+all observed versions remain current
+all negative guards remain true
+deltas remain mutually compatible
+effects can be prepared as one batch
 ```
 
-Commit is valid only if:
+The commit sequence is:
 
 ```text
-all rendezvous obligations are satisfied
-all journals merge without conflict
-all prepared resources are still valid
-all consequence keys merge or are distinct
-all ownership changes preserve region invariants
-all fallback Retry evidence remains valid
+1. validate versions, attempts and negative guards
+2. prepare the complete effect batch
+3. install location deltas
+4. discharge commit and defeat effects
+5. resume selected fibres with raw packed results
+6. run each participant's wraps inside its returning perform call
 ```
 
-Commit then proceeds conceptually as:
+Effect discharge occurs after state installation. A discharge failure is fatal because the state commit cannot be rolled back.
+
+## 5. Search-phase purity
+
+The following execute during speculative search:
 
 ```text
-1. prepare resource journals
-2. reject if stale or conflicting
-3. apply journals
-4. discharge selected commit and defeat consequences
-5. resume selected fibres with raw values and post-commit transforms
-6. apply wraps inside each resumed fibre's `perform`
-```
-
-The ordering may be implemented efficiently, but the semantic boundary must be preserved.
-
-## 6. Search phase and commit phase
-
-Fibres has two important phases.
-
-### Search phase
-
-Search phase constructs possible worlds. Search-phase code must be pure in the operational sense:
-
-```text
-deterministic
-non-suspending
-no irreversible I/O
-no mutation of external state
-no dependence on facts not represented as resource observations
-```
-
-Search-phase callbacks include:
-
-```text
-and_then / and_then continuations
-map callbacks, as derived and_then continuations
+map and and_then callbacks
 guard callbacks
-resource proposal and resolver functions
+Scalar transition callbacks
+witness cursor factories and guards
+facility-specific pure state calculations
 ```
 
-Search callbacks are proof code, not effect code.
-
-### Commit phase
-
-Commit phase applies one selected world.
-
-Post-commit callbacks and obligations include:
+They must be:
 
 ```text
-wrap callbacks
-effect discharge
-selected fibre resumption
-scope boundary facts
-host wake/spawn/interrupt obligations
+deterministic for their explicit inputs
+non-yielding
+free of irreversible I/O
+free of external mutation
+independent of undeclared transactional facts
 ```
 
-A callback that must observe the committed world belongs in `wrap`, not in `map` or `and_then`.
+A callback which must observe a committed world belongs in `wrap` or an effect, not in `map`, `and_then` or a primitive transducer.
 
-## 7. `and_then` and derived `map`
+## 6. Sequencing
 
-`and_then` extends a proof using the value of a prior proof.
+`and_then` extends a speculative proof with the value of an earlier proof:
 
 ```text
-and_then(op, k)
+op:and_then(k)
 ```
 
-If `op` proves a value `v`, then `k(v)` produces the next option in the same search.
+If `op` provisionally yields `v`, `k(v)` is entered in the same transaction and the same lane-local speculative view. If the continuation later fails, the earlier proof is retracted.
 
-`map` is derived:
+Conditional laws, assuming pure callbacks:
 
 ```text
-map(op, f) ≜ and_then(op, λv. always(f(v)))
+always(v):and_then(k) ≈ k(v)
+
+op:map(f) ≈ op:and_then(v -> always(f(v)))
 ```
 
-This gives the usual functor behaviour under purity:
+`and_then` is not post-commit code. It may change the world which must be proved.
 
-```text
-map(id, op) ≈ op
+## 7. Choice
 
-map(g, map(f, op)) ≈ map(g ∘ f, op)
-```
+`choice(a, b, ...)` denotes unordered competing alternative occurrences. If several alternatives can form a committed world, source position gives none of them semantic priority. In this document, *unbiased* means absence of source-position priority; it does not mean statistical uniformity. Selection remains provisional until a complete world closes.
 
-These are conditional laws. They require `f` and `g` to be pure search-phase functions.
-
-`and_then` is more powerful than `map`: it can use a value to choose the next option and therefore change the candidate world.
-
-## 8. `choice`
-
-`choice` denotes unordered competing alternatives.
-
-```text
-choice(op₁, ..., opₙ)
-```
-
-`never` is the empty choice:
-
-```text
-never ≜ choice()
-```
-
-Basic laws:
+Expected laws for the set of admissible committed worlds are:
 
 ```text
 choice() ≈ never
-
 choice(never, op) ≈ op
-
 choice(op, never) ≈ op
-
 choice(choice(a, b), c) ≈ choice(a, b, c)
-
 choice(a, b) ≈ choice(b, a)
 ```
 
-Commutativity concerns the set of possible committed worlds and the guarantees
-made about them. It does not require two separately constructed operations to
-select the same winner on a particular execution.
+The last law is about admissible outcomes, not probability or scheduling. The current evaluator traverses a seed-derived deterministic permutation. It does not promise uniform probability or fairness between perpetually available alternatives. Bounded search may still return `Unknown` before every branch has been resolved.
 
-`choice` does not express priority. When more than one branch can participate
-in a committing world, the runtime uses deterministic committed rotation:
+Alternative occurrences remain distinct. In particular, `on_defeat` attaches to an occurrence, so idempotence is not claimed:
 
 ```text
-runtime seed + fibre + choice occurrence
-  -> stable branch permutation
-  -> search begins at the current rotation point
-  -> the rotation advances past the winning branch only after commit
+choice(a, a) need not be observationally equal to a
 ```
 
-Backtracking, `Retry`, `Unknown`, budget suspension, stale validation and
-prepare refusal do not advance the rotation. The branch order is cached for the
-dynamic perform attempt, so slicing one search through a bounded cursor does not
-change arbitration.
+The evaluator may abandon any locally viable branch if it conflicts with the enclosing product or another selected participant. An application which requires preference should express it with `or_else`, not textual branch order.
 
-An unkeyed choice retains rotation while the same operation node and occurrence
-are reused by the same fibre. A stable key preserves rotation across reconstructed
-choice nodes:
+## 8. Products, `all` and `tensor`
 
-```lua
-local key = Op.choice_key('worker-input')
-
-local op = Op.choice(inbox:get_op(), control:get_op())
-  :with_choice_key(key)
-```
-
-A keyed choice is an arbitration boundary and is not flattened into an enclosing
-choice. Reusing a key requires a stable branch count. A runtime accepts an
-explicit reproducibility policy:
-
-```lua
-Runtime.new({
-  choice = { mode = 'rotating', seed = 17 },
-})
-```
-
-For a repeatedly committed keyed choice with `n` continuously eligible branches
-and an unchanged branch structure, committed rotation selects each branch
-within `n` commits of that choice. This is branch fairness, not a guarantee that
-the enclosing operation will commit or that another root cannot delay it.
-
-Choice is not idempotent:
+Both product modes:
 
 ```text
-choice(a, a) ≉ a
-```
-
-The two occurrences may carry distinct defeat obligations and arbitration
-identity. Losing branches do not commit journals or ordinary consequences.
-
-## 9. Product, `all`, and `tensor`
-
-The internal product operator has two modes:
-
-```text
-product(mode, lanes)
-```
-
-The public operators are:
-
-```text
-all(lanes)
-  ≜ product(independent, lanes)
-
-tensor(lanes)
-  ≜ product(interacting, lanes)
+start each lane from the same parent speculative view
+require every lane to complete
+merge compatible lane deltas
+commit as one world
+preserve lane and nested result structure
 ```
 
 ### `all`
 
-`all` requires its lanes to be independently satisfiable.
-
-```text
-all({ a, b, c })
-```
-
-Each lane contributes to the result, but lanes do not satisfy one another’s rendezvous.
-
-`all` is a value product, not an internal synchronisation product.
+`all` requires independent satisfaction. A sibling change may constrain or invalidate another lane, but may not make an otherwise-unready lane ready.
 
 ### `tensor`
 
-`tensor` constructs one world with multiple lanes.
+`tensor` additionally permits intentional sibling supply, including internal rendezvous and transactional hand-off.
+
+The shared rule is:
 
 ```text
-tensor({ a, b, c })
+all sibling changes participate in final-world consistency
+only tensor exposes compatible positive sibling supply
 ```
 
-Lanes may rendezvous with one another inside the same candidate world. Their journals, effects, ownership changes and observations merge into one atomic world.
+A sibling change is classified relative to a partial operation:
 
-This is the operator that makes negotiated handoff natural.
+```text
+supplying     unready before, ready after
+constraining  ready before, unready after
+neutral       readiness unchanged
+```
 
-Example shape:
+Under `all`, only positive supply is hidden. Constraining and neutral changes remain visible. Under `tensor`, compatible supply is visible.
+
+Examples:
 
 ```lua
-fibers.tensor({
-  request:offer_op(session, supervisor),
-  supervisor:accept_op(),
-  registry:write_op({ owner = "supervisor", task = session.name }),
-  audit:append_op("accepted session from request into supervisor"),
-})
+-- Joint allocation from committed stock.
+fibers.all({ counter:take_op(1), counter:take_op(1) })
+
+-- Sibling deletion constrains the pop; the pop must skip the deleted entry.
+fibers.all({ index:remove_op('a'), index:pop_first_op() })
+
+-- Sibling addition may supply a take only in tensor.
+fibers.tensor({ counter:give_op(1), counter:take_op(1) })
+
+-- Sibling put may supply a get only in tensor.
+fibers.tensor({ keyed:put_op('k', 'v'), keyed:get_op('k') })
 ```
 
-This means:
+Product identities are represented as product rows:
 
 ```text
-the source offers
-the target accepts
-the registry changes
-the audit records
-
-or none of them happen
+all({})    ≈ always(empty rows)
+tensor({}) ≈ always(empty rows)
 ```
 
-### Product laws
+Singleton products are equivalent to their lane modulo row packaging.
 
-Unconditional:
-
-```text
-all({}) ≈ always(empty_rows)
-
-tensor({}) ≈ always(empty_rows)
-```
-
-Conditional:
-
-```text
-all({ op }) ≈ op, modulo row packaging
-
-tensor({ op }) ≈ op, modulo row packaging
-
-tensor is associative up to lane renaming
-  if resource/effect merge order is observationally irrelevant
-
-all(lanes) ≈ tensor(lanes)
-  only when no internal rendezvous is possible or required
-```
-
-Important non-law:
-
-```text
-all ≠ tensor
-```
-
-The distinction is semantic. `tensor` permits internal rendezvous; `all` does not.
-
-### Allocation and handoff
-
-For resource premises, the distinction is best understood as allocation versus
-handoff.
-
-`all` may coordinate competing demands over shared stock. Its lanes still commit
-as one all-or-nothing product, so a resource resolver may allocate distinct
-pre-existing facts to different lanes. For example, two ordered-pop lanes may
-consume two different entries from the same committed index, and two counter
-take lanes may consume two different permits from the same committed counter.
-
-`all` may also let sibling lanes constrain one another. If one lane removes an
-entry, another ordered-pop lane must not select that removed entry, because the
-combined world would not be coherent.
-
-`all` must not let one lane positively supply the fact that makes another lane
-satisfiable. That is handoff, and belongs to `tensor`.
-
-```lua
--- Allocation from shared committed stock: allowed for all and tensor.
-Op.all({
-  ix:pop_first_op(),
-  ix:pop_first_op(),
-})
-
--- Constraint from a sibling lane: allowed for all and tensor.
-Op.all({
-  ix:remove_op("a"),
-  ix:pop_first_op(), -- must skip a
-})
-
--- Handoff from sibling supply: tensor only.
-Op.tensor({
-  ix:insert_op("z", 0, "Z"),
-  ix:pop_first_op(), -- may receive z
-})
-
--- Under all, the pop lane is not independently satisfiable from the insert.
-Op.all({
-  ix:insert_op("z", 0, "Z"),
-  ix:pop_first_op():or_else(Op.always("empty")),
-})
--- commits the insert and returns "empty" for the pop lane.
-
--- The same law applies to counters. From c = 2, this may allocate two permits.
-Op.all({
-  c:take_op(1),
-  c:take_op(1),
-})
-
--- From c = 0, tensor may hand off a sibling give to a take.
-Op.tensor({
-  c:give_op(1),
-  c:take_op(1),
-})
-
--- From c = 0, all may not use the sibling give as positive supply.
-Op.all({
-  c:give_op(1),
-  c:take_op(1):or_else(Op.always("none")),
-})
--- commits the give and returns "none" for the take lane.
-
--- A queue built from Index + Counter inherits the same law.
-Op.tensor({ q:put_op("x"), q:get_op() }) -- get may receive x
-Op.all({ q:put_op("x"), q:get_op():or_else(Op.always("empty")) })
--- commits the put and returns "empty" for the get lane.
-```
-
-In short:
-
-```text
-all    permits shared allocation and sibling constraints
-tensor additionally permits sibling-to-sibling positive supply
-```
-
-## 10. `or_else`
-
-`or_else` is not ordinary choice.
+## 9. `or_else`
 
 ```text
 primary:or_else(fallback)
 ```
 
-It means:
+means:
 
 ```text
-commit primary if a primary world exists
-
-commit fallback only if primary returns a valid Retry proof
+commit a primary world if one exists
+otherwise search fallback only after primary yields Retry
 ```
 
-A fallback is valid only under a proof-carrying `Retry`. “Not immediately solved” is not enough.
+The preferred search scope includes its operation branches, primitive witnesses, compatible partners, recruited participants and dynamically constructed continuations.
 
-Safe fallback rule:
-
-```text
-If primary or_else fallback commits a fallback world,
-then no compatible primary world exists in the certified managed facts
-used by that commit.
-```
-
-This is why `or_else` requires a world model. A preferred branch might be satisfiable only through:
-
-```text
-another root
-a tensor-internal rendezvous
-a resource observation
-an external feed delivery
-a retry after stale preparation
-```
-
-Fallback must not commit merely because the local proof did not find the preferred world quickly.
+A fallback candidate carries the preferred refutation's negative guards. It may commit only while those guards remain valid. If a signal arrives, a deadline matures, a location changes or a relevant participant appears, validation rejects the stale fallback and search restarts.
 
 Important non-laws:
 
 ```text
 or_else is not choice
-
 or_else is not timeout
-
-or_else is not local fallback
-
-primary or_else fallback ≠ fallback or_else primary
+or_else is not an operational try-once probe
+primary:or_else(fallback) is not commutative
 ```
 
-`or_else` is preference under proof-carrying retry.
+`or_else` is proof-directed immediate fallback. For a primitive with a complete revalidatable negative fact—such as a managed readiness level, signal, queue absence or state predicate—it also acts as a validated transactional snapshot probe.
 
-## 11. `wrap`
+Together, `choice` and `or_else` form priority tiers:
 
-`wrap` is a post-commit continuation.
-
-```text
-wrap(op, k)
+```lua
+preferred:or_else(choice(a, b, c))
+choice(a, b):or_else(fallback)
 ```
 
-It must not affect which world can commit. It changes what happens after a world has been selected and committed.
+The first expression gives `preferred` semantic priority and then admits any of `a`, `b` or `c` without source-order preference. The second admits `fallback` only after the complete choice scope containing both `a` and `b` has produced a valid `Retry` proof.
 
-Law:
+## 10. Guard lifetime
+
+`guard(f)` delays operation construction. One dynamic guard occurrence is evaluated at most once per perform attempt.
+
+The cached operation survives:
 
 ```text
-wrap(op, id) ≈ op
+choice backtracking
+witness backtracking
+validation refresh
 ```
 
-Conditional law:
+A new `perform` attempt evaluates the guard again. Guard construction remains speculative and must satisfy search-phase purity.
+
+## 11. Wraps
+
+`wrap` transforms one participant's committed result:
 
 ```text
-wrap(wrap(op, f), g) ≈ wrap(op, g ∘ f)
+op:wrap(f)
 ```
 
-provided composition preserves multiple values and the callbacks are well behaved.
-
-Core distinction:
+It cannot affect which world commits. It runs after state and effects have committed, inside the resumed participant's `perform` call.
 
 ```text
-and_then builds worlds
+and_then constructs worlds
 wrap observes committed worlds
 ```
 
-Important non-law:
+A transactional continuation cannot consume a wrapped value. A wrap may begin a new transaction.
+
+Conditional laws:
 
 ```text
-wrap is not and_then
+wrap(op, identity) ≈ op
+wrap(wrap(op, f), g) ≈ wrap(op, g ∘ f)
 ```
 
-`and_then` can change the candidate world. `wrap` must not.
+provided multiple return values and errors are preserved.
 
-## 12. `guard`
+## 12. Defeat obligations
 
-`guard` is delayed transaction construction. Formally it elaborates to an `and_then`
-from `always()`. The implementation retains an attempt-local cache key and passes
-the proof callback context, preserving the rule that one guard occurrence is
-evaluated at most once per perform attempt even when search backtracks.
+`op:on_defeat(effect)` attaches a typed obligation to an entered occurrence which loses to a committed competitor.
 
-Guard callbacks obey the same search-phase discipline as `and_then` and `map`:
+These do not count as defeat:
 
 ```text
-pure
-non-suspending
-no external mutation
-no irreversible effects
-```
-
-Any mutable fact that influences readiness or retry must be observed through a
-resource frontier.
-
-## 13. Defeat consequences
-
-A typed defeat consequence is attached to a dynamic operation occurrence:
-
-```text
-on_defeat(op, obligation)
-```
-
-It is dispatched when that occurrence was entered as a competing alternative
-and another incompatible alternative commits. The carrier is the operation
-occurrence, not each candidate world generated through it, so one occurrence can
-be defeated at most once.
-
-These events are not defeat:
-
-```text
-search backtracking
-validation conflict
 Retry
 Unknown
-primary Retry followed by an or_else fallback
-an unentered branch
+validation conflict
+preferred-side refutation followed by fallback
+an operation which was never entered
 ```
 
-A selected occurrence discards its defeat obligations. An entered losing
-competitor dispatches them as typed runtime effects before participants resume.
-Products contain collaborators, not competitors: sibling lanes do not defeat
-one another. An enclosing choice may defeat the product occurrence as a whole.
+Defeat effects are prepared and discharged with the winning world's effect batch.
 
-Event-shaped negative acknowledgement is therefore a derived advanced pattern:
-a defeat consequence may publish a one-shot externally-fed resource fact which another
-operation observes. It is not primitive syntax.
+## 13. Fixed primitive substrate
 
-## 14. Resources
-
-Resources provide transactional truth.
-
-A resource kind should define some or all of:
+Trusted facilities compile to fixed primitive programme forms:
 
 ```text
-clone      create a speculative view
-propose    create a journal from a primitive request
-merge      combine compatible journals
-resolve    exhaustively solve open resource premises
-retry      return a proof observing the facts that justify no solution
-prepare    validate a selected journal against current state
-apply      commit a prepared journal
-interest   describe host action that may change an observed fact
+read
+patch
+claim
+conditional claim
+serial machine transition
+witnessed transition
+version wait
+linear exchange
+snapshot
 ```
 
-Resource soundness obligations:
+The kernel owns:
 
 ```text
-Rollback:
-  losing worlds do not apply journals.
-
-Merge soundness:
-  if two journals merge, the merged journal represents both intentions
-  atomically.
-
-Conflict refusal:
-  incompatible journals reject the candidate world.
-
-Stale refusal:
-  a journal prepared against stale state must not be applied.
-
-Retry conservatism:
-  Retry may be returned only when no matching world can become available
-  without changing a recorded frontier.
+search and alternative ordering
+product visibility and provenance
+Retry and Unknown
+rollback
+validation
+atomic commit
 ```
 
-Resource authors must be conservative. An unjustified Retry breaks `or_else`.
+A facility cannot manufacture Retry or commit independently.
 
-## 15. Externally-fed resources and managed validity
+### Versioned locations
 
-External arrival is not a separate semantic category. A signal, event queue,
-readiness level or clock is an ordinary transactional resource whose committed
-state may also be changed through a runtime-bound `ExternalFeed` capability.
-
-Such a resource contributes:
+A location contains an opaque committed value, a version and one fixed merge algebra. Current algebras are:
 
 ```text
-managed facts   what search observes, such as queue head or readiness level
-frontiers       generation-stamped validity evidence
-interests       what the host may await when an uncaught Retry reaches it
-feed            authority to deliver an external state change
+replace
+add
+presence
+finite_map
+machine
 ```
 
-External-feed law:
+The store defines sequential, independent-parallel and interacting-parallel composition for these algebras.
+
+### Deterministic partial transducers
+
+A serial machine transition has the semantic form:
 
 ```text
-No false Retry:
-  if an externally-fed resource fact justifies Retry, every delivery that could
-  make the operation ready must invalidate the recorded frontier before search
-  is resumed.
+S -> Wait
+S -> ReadySame(result)
+S -> ReadyWrite(S', result)
 ```
 
-Interests are actionable descriptions, not proof. The frontiers in a
-`RetryProof` justify the conclusion; timer and readiness interests merely tell
-the host how one of those facts may change.
+Flow, Region, RateLimiter and several coordination facilities use this form.
 
-## 16. Effects
+### Witnessed transitions
 
-Effects are post-commit runtime obligations.
-
-Examples:
+A witnessed transition lazily enumerates zero or more candidate successors:
 
 ```text
-wake
-spawn
-interrupt
-boundary fact
-host obligation
+S -> Ready(S₁, r₁), Ready(S₂, r₂), ...
 ```
 
-Effects are not speculative. A candidate world may contain effects, but they are not discharged unless the world commits.
+Each witness is an ordinary global alternative. Petri token bindings and Calendar interval choices use this form. The kernel, not facility code, owns progression, rollback and exhaustion of the cursor.
 
-Effect laws:
+### Linear exchange
+
+Rendezvous compiles to a one-use exchange intent. Matching remains provisional until both participants and their continuations close.
+
+## 14. External observations
+
+Signal, EventQueue and Readiness use host-owned versioned locations updated through runtime-bound `ExternalFeed` capabilities. Clock operations read host time and carry deadline checks.
+
+An exhausted external operation may contribute:
 
 ```text
-No speculative effects:
-  effects from losing worlds are never discharged.
-
-Effect merge:
-  effects with distinct keys may coexist.
-
-Effect conflict:
-  effects with the same key must merge according to their effect kind,
-  or reject the candidate world.
-
-Post-commit discharge:
-  effects discharge only after resource journals commit.
+negative validation check
+host-actionable Interest
 ```
 
-Effect keys must be stable. Effect kinds should use string, number or other stable key values. Identity-like keys derived from arbitrary tables should be avoided unless identity is the intended semantics.
+Interests explain how progress might occur; they are not evidence by themselves. Retry follows from exhaustive proof search and managed negative checks.
 
-## 17. Regions, tasks and ownership
-
-Regions make responsibility transactional.
-
-The ownership state may be thought of as a resource:
+External law:
 
 ```text
-ownership graph Ω
+Any delivery which could make a preferred operation ready must invalidate a
+fallback proof before that fallback may commit.
 ```
 
-Options propose ownership journals:
+## 15. Effects
+
+Effects are typed post-commit obligations. Built-in uses include spawn, interrupt, scope lifecycle notification and host wake.
+
+Laws:
 
 ```text
-admit(task, region)
-move(task, from, to)
-release(task)
-seal(region)
-settle(region)
+losing worlds discharge no effects
+all effects are prepared before state installation
+same-key effects merge according to their EffectKind or conflict
+prepared effects discharge after state installation
 ```
 
-Ownership laws:
+Effects are in-process obligations, not a durable outbox.
+
+## 16. Ownership and settlement
+
+Region operations make custody part of the committed world:
 
 ```text
-Unique ownership:
-  a live owned claim has at most one owner.
-
-Atomic movement:
-  ownership leaves the source and enters the target in the same committed world.
-
-No lost responsibility:
-  a claim cannot disappear except through release, settlement, or transfer.
-
-Settlement soundness:
-  a region may report settled only when all claims in its subtree are settled,
-  released, or transferred according to policy.
+admit
+move
+release
+seal
+claim
+resolve by discharge, failure or restoration
 ```
 
-This is one of the central ways Fibres extends transactional events. Ownership transfer is not procedural aftermath; it is part of the committed world.
-
-## 18. Host boundary
-
-Hosts do not decide the algebra. Hosts provide truthful blocking and arrivals.
-
-A host must preserve:
+Principal laws:
 
 ```text
-readiness accuracy
-arrival delivery
-timer delivery
-fd/handle deregistration
-wake delivery
-managed fact stamping
-serialisation into the runtime
+a live owned root has at most one owner
+movement leaves one owner and enters the other in one commit
+a claim grants exclusive settlement authority over its subtree
+failed settlement remains represented in the ledger
+scope completion requires policy accounting for retained roots
 ```
 
-The kernel reports retry interests. The host decides how to block for those interests.
+Settlement protocols run after a claim commits and may themselves perform operations.
 
-Host law:
+## 17. Host boundary
+
+Hosts supply time, blocking and readiness delivery. They do not define transaction semantics.
+
+A truthful host must:
 
 ```text
-Host adequacy:
-  if the host reports an arrival or readiness event, the corresponding managed
-  externally-fed resource fact must be updated through its capability so retrying operations are retried and saved retry proofs are invalidated by stamp validation.
+advance or report time consistently
+deliver external facts through authorised feeds
+serialise entry into the runtime driver boundary
+clear or refresh readiness hints after would-block outcomes
 ```
 
-Host bugs can break algebraic guarantees by lying about the external world.
+A host bug can invalidate assumptions about the external world, but cannot lawfully bypass feed validation.
 
-## 19. Runtime transactions are not durable transactions
+## 18. Runtime scope
 
-Fibres transactions are runtime transactions.
-
-They are not:
+Transactions are coherent within one runtime commit. They are not:
 
 ```text
-database transactions
 crash-durable logs
+database transactions
 distributed consensus
 persistent message queues
 ```
 
-The guarantee is:
+External durability must be implemented through durable state and idempotent effects above this runtime.
 
-```text
-within one runtime commit, selected journals/effects/ownership changes are
-coherent and losing worlds do not partially apply
-```
+## 19. Expected laws and non-laws
 
-Durability must be implemented as a resource/effect discipline on top of the runtime, not assumed from the option algebra itself.
-
-## 20. Expected laws
-
-This section collects useful laws. Some are unconditional; others require purity, stable resources, or scheduler-insensitive observation.
-
-### Always and sequencing
+Expected laws, subject to callback purity and value packaging:
 
 ```text
 always(v):and_then(k) ≈ k(v)
-
-op:and_then(always) ≈ op
-  where always means λx. Op.always(x)
-
-op:map(f) ≈ op:and_then(λx. always(f(x)))
-```
-
-Conditional on pure callbacks.
-
-### Choice
-
-```text
+op:map(f) ≈ op:and_then(v -> always(f(v)))
 choice() ≈ never
-
-choice(never, op) ≈ op
-
-choice(op, never) ≈ op
-
-choice(choice(a, b), c) ≈ choice(a, b, c)
-
-choice(a, b) ≈ choice(b, a)
+choice(a, b) ≈ choice(b, a) for admissible committed worlds
+all({}) ≈ always(empty rows)
+tensor({}) ≈ always(empty rows)
+Unknown(primary) never enables primary:or_else(fallback)
+losing worlds install no deltas and discharge no effects
 ```
 
-A keyed nested choice retains its arbitration boundary rather than flattening.
-Choice is not idempotent because duplicate occurrences remain distinct.
-
-### Product
+Important non-laws:
 
 ```text
-all({}) ≈ always(empty_rows)
-
-tensor({}) ≈ always(empty_rows)
-
-all({op}) ≈ op, modulo row packaging
-
-tensor({op}) ≈ op, modulo row packaging
-```
-
-Conditional:
-
-```text
-all(lanes) ≈ tensor(lanes)
-  only when no internal rendezvous is possible or required
-```
-
-### Or else
-
-```text
-Hit(primary) ⇒ primary:or_else(fallback) commits primary
-
-Retry(primary, P) ⇒ primary:or_else(fallback) may search fallback under P
-
-Unknown(primary) ⇒ primary:or_else(fallback) propagates Unknown
-```
-
-Important non-law:
-
-```text
-primary:or_else(fallback) ≠ choose(primary, fallback)
-```
-
-### Wrap
-
-```text
-wrap(op, id) ≈ op
-
-wrap(wrap(op, f), g) ≈ wrap(op, g ∘ f)
-```
-
-Conditional on post-commit callback discipline.
-
-### Effects
-
-```text
-effects(losing_world) are not discharged
-
-effects(committed_world) discharge after resource commit
-```
-
-### Resources
-
-```text
-journals(losing_world) are not applied
-
-stale prepare rejects or retries
-
-merge conflict rejects the candidate world
-```
-
-## 21. Important non-laws
-
-These are deliberately not laws.
-
-```text
-choice does not express priority
-
-choice is not idempotent
-
+choice does not promise fairness or uniform probability
+choice occurrence identity is not idempotent when defeat obligations are observable
 or_else is not choice
-
 or_else is not timeout
-
 Retry is not failure to solve quickly
-
 all is not tensor
-
 wrap is not and_then
-
-effects are not resource writes
-
-runtime transactions are not durable storage transactions
+effects are not location writes
+runtime transactions are not durable transactions
 ```
 
-Stating non-laws is part of the public contract. It prevents appealing but false simplifications.
+## 20. Implementation obligations
 
-## 22. Completeness status
-
-The algebra is substantially complete in shape.
-
-It has coherent answers for:
+The current trail machine and copy-on-branch reference machine consume the same operation IR and store. The test suite exercises:
 
 ```text
-rendezvous
-transactional resources
-internal-world products
-proof-carrying fallback
-ownership movement
-post-commit effects
-managed externally-fed resource facts
-structured scope
-stream/flow safety
+global exchange and witness backtracking
+nested product and continuation locality
+proof-directed fallback and stale validation
+all/tensor supply laws
+external interests
+ownership and settlement
+Flow and stream losing-branch safety
 ```
 
-The remaining work is chiefly contractual:
+Fairness and uniform probability between perpetually available alternatives are not currently promised. `choice_seed` makes traversal reproducible for the same programme, request sequence and external inputs. Search budgets are operational controls and must never alter fallback semantics.
+
+## 21. Summary
 
 ```text
-root and cross-world fairness policy
-solver budget and Unknown cursor semantics
-resource-author law tests
-defeat-consequence error policy
-settlement failure policy
-host backend law coverage
-diagnostics for malformed yields or phase violations
+operation       proof search for a compatible committed world
+Hit             constructive proof that a world exists
+Retry           exhaustive present refutation under managed facts
+Unknown         incomplete bounded search
+all             joint commit without positive sibling supply
+tensor          joint commit with compatible sibling hand-off
+choice          unordered disjunction of acceptable committed worlds
+or_else         fallback guarded by a valid preferred-side refutation
+location delta  speculative state component
+consequence     selected runtime obligation
+wrap            participant-local post-commit continuation
 ```
 
-The next step is not to add more cleverness. It is to protect the algebra by naming the laws, testing them, and making extension points conservative.
-
-## 23. Summary
-
-A Fibres option is a proof search for a compatible committed world.
-
-```text
-tensor composes proofs into one world
-
-or_else requires a valid Retry proof for the preferred operation
-
-resources provide transactional truth
-
-external feeds update managed resource facts
-
-effects are obligations of committed worlds
-
-regions make responsibility part of the world
-
-wrap observes commit; and_then constructs worlds
-```
-
-That is the heart of the system.
+That is the semantic centre of the library.

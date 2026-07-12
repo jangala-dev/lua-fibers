@@ -11,6 +11,7 @@ local Rope = require('fibers.flow.rope')
 local Lease = require('fibers.flow.lease')
 local Errors = require('fibers.flow.errors')
 local Ownership = require('fibers.internal.ownership')
+local Settlement = require('fibers.internal.settlement')
 
 local Flow = {}
 Flow.__index = Flow
@@ -728,10 +729,11 @@ function Flow.new(opts)
   self.name = name
   self.capacity = as_capacity(opts.capacity)
   self.limit = self.capacity
-  self.state = Scalar.new(new_state(), name .. ':state')
+  self.state = Scalar.machine(new_state(), name .. ':state')
   self.reservoir = Reservoir.new(self, opts)
   self.reservoir.state = self.state
-  self._fibers_settle = require('fibers.internal.settlement').flow()
+  self._fibers_settle = Settlement.flow()
+  self._fibers_settle_name = 'flow'
   self.input = Ownership.handle(name .. ':inlet', { kind = 'flow_inlet', flow = self })
   setmetatable(self.input, Inlet)
   self.output = Ownership.handle(name .. ':outlet', { kind = 'flow_outlet', flow = self })

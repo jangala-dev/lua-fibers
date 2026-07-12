@@ -3,7 +3,7 @@
 -- Policies own boundary decisions.  The supplied driver offers a Region-backed
 -- live monitor, atomic closure, masked settlement and result construction.
 
-local ScopeResult = require('fibers.kernel.scope_result')
+local ScopeResult = require('fibers.scope.result')
 
 local Policy = {}
 

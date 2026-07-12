@@ -6,7 +6,7 @@
 -- starts a fibre after its admission has committed.
 
 local Op = require('fibers.atoms.op')
-local EffectKind = require('fibers.kernel.effect.kind')
+local EffectKind = require('fibers.effect_kind')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
 local Effect = {}

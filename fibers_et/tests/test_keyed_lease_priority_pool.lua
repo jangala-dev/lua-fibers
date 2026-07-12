@@ -1,4 +1,4 @@
--- Keyed, Lease, PriorityQueue, and Pool facilities over premise atomics.
+-- Keyed, Lease, PriorityQueue, and Pool facility laws.
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 

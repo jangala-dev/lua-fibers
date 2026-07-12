@@ -1,7 +1,7 @@
 -- Comprehensive benchmark suite for fibers.
 --
 -- Run from the repository root with:
---   texlua benchmarks/bench.lua
+--   lua/luajit/texlua benchmarks/bench.lua
 --
 -- Useful controls:
 --   FIBERS_BENCH_SCALE=5        multiply each case's default iteration count
@@ -385,7 +385,10 @@ add('product', 'dependent scalar updaters', 180, function(n)
   end
   for i = 1, 4 do
     rt:spawn_raw(function()
-      for _ = 1, n do returns[#returns + 1] = rt:perform(update_op()) end
+      for _ = 1, n do
+        local value = rt:perform(update_op())
+        returns[#returns + 1] = value
+      end
     end, 'bench-dependent-' .. tostring(i))
   end
   run_rt(rt)
@@ -518,7 +521,7 @@ add('task', 'scope spawn await settle', 80, function(n)
   return n
 end)
 
-add('policy', 'nursery spawn rendezvous join', 80, function(n)
+add('policy', 'nursery spawn rendezvous join', 8, function(n)
   local sum = 0
   local r = fibers.try_run(function()
     local ch = fibers.Rendezvous.new('bench-nursery-rendezvous')

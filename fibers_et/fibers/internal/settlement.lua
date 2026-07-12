@@ -8,7 +8,7 @@
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
-local Protected = require('fibers.kernel.protected')
+local Protected = require('fibers.internal.protected')
 
 local Settlement = {}
 
@@ -19,8 +19,6 @@ local function perform_masked(op)
   if not rt then error('settlement requires a current runtime', 2) end
   return rt:perform(op, { masked = true })
 end
-
-function Settlement.perform_masked(op) return perform_masked(op) end
 
 local function require_context(ctx)
   if type(ctx) ~= 'table' or type(ctx.claim_op) ~= 'function' or type(ctx.resolve_op) ~= 'function' then

@@ -103,10 +103,10 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
   local winner
 
   rt:spawn_raw(function()
-    winner = rt:perform(fibers.choice(
-      src:readable_op():map(function() return 'readiness' end),
-      fibers.sleep_op(0.25):map(function() return 'timeout' end)
-    ))
+    winner = rt:perform(
+      src:readable_op():map(function() return 'readiness' end)
+        :or_else(fibers.sleep_op(0.25):map(function() return 'timeout' end))
+    )
   end, name .. '-readiness-v-timeout')
 
   local ok, err = pipe.write_byte('x')
@@ -125,10 +125,10 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
   local winner
 
   rt:spawn_raw(function()
-    winner = rt:perform(fibers.choice(
-      src:readable_op():map(function() return 'readiness' end),
-      fibers.sleep_op(0.01):map(function() return 'timeout' end)
-    ))
+    winner = rt:perform(
+      src:readable_op():map(function() return 'readiness' end)
+        :or_else(fibers.sleep_op(0.01):map(function() return 'timeout' end))
+    )
   end, name .. '-timeout-v-readiness')
 
   local st = run_host(name, host, 80)(rt)

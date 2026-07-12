@@ -4,9 +4,6 @@
 -- mutation is only used by the runtime when discharging a committed interrupt
 -- Effect.
 
-local KernelResources = require('fibers.kernel.resources')
-local Validity = require('fibers.kernel.validity')
-
 local Interrupt = {}
 
 local Token = {}
@@ -29,7 +26,6 @@ function Interrupt.new(name)
     _fibers_id = id,
     _fibers_interrupt = true,
   }, Token)
-  token._validity_opaque = Validity.epoch((token.name or id) .. ':interrupt')
   return token
 end
 
@@ -38,7 +34,6 @@ function Interrupt.raise(token, reason)
   token.raised = true
   token.reason = reason
   token.version = (token.version or 0) + 1
-  KernelResources.invalidate_object(token, 'interrupt raised')
   return true
 end
 

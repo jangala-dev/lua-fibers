@@ -1,15 +1,15 @@
 -- Convenience entry point for the fibers runtime.
 --
--- The low-level public machinery is the atom kit:
---   Op, Scalar, Rendezvous, Index, Counter, Keyed, Lease, Signal, EventQueue, Clock, Readiness, Region and Effect.
--- Task, Stream and Scope are ordinary library compounds built from those atoms.
+-- The low-level public machinery is the atom kit plus the fixed compact kernel.
+-- Higher-level facilities such as Task, Scope, Flow, Stream, Petri and Calendar
+-- compile to the same operation and primitive programme substrate.
 
 local M = {}
 
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 local Effect = require('fibers.atoms.effect')
-local Protected = require('fibers.kernel.protected')
+local Protected = require('fibers.internal.protected')
 local Policy = require('fibers.policy')
 local Sleep = require('fibers.sleep')
 local Stream = require('fibers.stream')
@@ -17,7 +17,7 @@ local Host = require('fibers.host')
 local Runner = require('fibers.runner')
 local Atoms = require('fibers.atoms')
 local Kernel = require('fibers.kernel')
-local ScopeResult = require('fibers.kernel.scope_result')
+local ScopeResult = require('fibers.scope.result')
 
 M.Op = Op
 M.Runtime = Runtime
@@ -42,13 +42,15 @@ M.Readiness = require('fibers.atoms.readiness')
 M.Region = require('fibers.atoms.region')
 M.Scope = require('fibers.scope')
 M.Flow = require('fibers.flow')
+M.Petri = require('fibers.petri')
+M.Calendar = require('fibers.calendar')
 M.Stream = Stream
 M.sleep_op = Sleep.sleep_op
 M.sleep_until_op = Sleep.sleep_until_op
 M.Task = require('fibers.task')
 M.Borrow = require('fibers.borrow')
 M.Phase = require('fibers.phase')
-M.Exit = require('fibers.kernel.exit')
+M.Exit = require('fibers.exit')
 M.ScopeResult = ScopeResult
 M.Effect = Effect
 M.atoms = Atoms
@@ -63,7 +65,6 @@ M.always = Op.always
 M.never = Op.never
 M.choice = Op.choice
 M.named_choice = Op.named_choice
-M.choice_key = Op.choice_key
 M.all = Op.all
 M.named_all = Op.named_all
 M.tensor = Op.tensor

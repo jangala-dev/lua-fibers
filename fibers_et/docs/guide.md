@@ -1,24 +1,16 @@
 # Programming guide
 
-This guide covers the ordinary application-facing use of `fibers`. The semantic definitions are in `algebra.md`; ownership and settlement are in `lifetimes.md`.
+This guide covers the ordinary application-facing use of `fibers`. See `algebra.md` for semantics, `lifetimes.md` for custody and settlement, and `embedding.md` for direct runtime driving.
 
-## Runtime, scope and fibres
+## Runtime, scopes and fibres
 
 Most programmes begin with `fibers.run`:
 
 ```lua
 local fibers = require('fibers')
 
-fibers.run(function()
-  -- root scope body
-end)
-```
-
-`fibers.run` creates a runtime, a root scope and a standalone runner. The body may spawn structured tasks and perform operations.
-
-```lua
-fibers.run(function()
-  local task = fibers.spawn(function()
+fibers.run(function(scope)
+  local task = scope:spawn(function()
     return 'done'
   end, 'worker')
 
@@ -26,12 +18,12 @@ fibers.run(function()
 end)
 ```
 
-`fibers.spawn` requires a current scope and is governed by that scope's policy. The default nursery rejects `fibers.spawn_raw`; deliberately unstructured work must be enabled explicitly with `policy.nursery({ allow_unstructured = true })`, or started through the low-level `Runtime:spawn_raw` embedding API.
+`fibers.run` creates a runtime, a root scope and a standalone runner. The callback receives the root scope.
 
-Nested scopes use `fibers.scope`:
+`fibers.spawn` is shorthand for spawning in the current scope:
 
 ```lua
-fibers.scope(function(scope)
+fibers.run(function()
   local task = fibers.spawn(function()
     return 7
   end)
@@ -39,98 +31,116 @@ fibers.scope(function(scope)
 end)
 ```
 
-The raising forms `run` and `scope` return body values or raise after accounting for the boundary. `try_run` and `try_scope` return structured result and report values instead.
+The default nursery policy rejects high-level unstructured spawning. `fibers.spawn_raw` is permitted only when the current policy allows it. Embedders may call `Runtime:spawn_raw` directly at the driver boundary.
+
+Nested scopes use `fibers.scope`:
+
+```lua
+local result = fibers.scope(function(scope)
+  local task = scope:spawn(function() return 7 end)
+  return fibers.perform(task:await_op())
+end)
+
+assert(result == 7)
+```
+
+The raising forms `run` and `scope` return body values or raise after the boundary has accounted for retained custody. `try_run` and `try_scope` return a `ScopeResult`:
+
+```lua
+local outcome = fibers.try_scope(function()
+  return 'ok'
+end)
+
+if outcome.ok then
+  assert(outcome:unpack() == 'ok')
+else
+  print(outcome:tostring())
+end
+```
 
 ## Operations
 
-An `Op` is an immutable description of a possible transaction. Constructing an operation does not perform it.
+An `Op` is an inert transaction description. Constructing one does not perform it.
 
 ```lua
 local op = fibers.always(42)
 assert(fibers.perform(op) == 42)
 ```
 
-The common combinators are:
+Common combinators are:
 
-```lua
-op:map(function(value) ... end)
-op:and_then(function(value) return another_op end)
+```text
+op:map(function(...) ... end)
+op:and_then(function(...) return another_op end)
 op:or_else(fallback_op)
-op:wrap(function(committed_value) ... end)
+op:wrap(function(...) ... end)
 op:on_defeat(effect)
 ```
 
-`map` and `and_then` run during speculative search and must not perform external side effects. `wrap` runs inside the resumed participant after commit and may perform another operation.
+`map`, `and_then`, `guard` and primitive transition callbacks execute during speculative proof search. They must be deterministic, non-yielding and free of irreversible side effects.
+
+`wrap` executes for the resumed participant after commit. It may perform another operation.
 
 ### Choice
 
-`choice` is unordered competition:
+`choice` is unordered disjunction:
 
 ```lua
-local value, err = fibers.perform(fibers.choice(
-  inbox:get_op(),
-  fibers.sleep_op(1):map(function()
-    return nil, 'timeout'
-  end)
+local value = fibers.perform(fibers.choice(
+  left:get_op(),
+  right:get_op()
 ))
 ```
 
-Source order does not give the first branch priority. The runtime uses a seeded,
-deterministic rotating arbiter and advances it only after a committed winner.
-A fixed seed makes an execution reproducible:
+If both branches can commit, either result is valid; the first branch has no special status. Unbiased here means absence of source-position priority, not statistical uniformity. A winning branch commits. Other entered branches may contribute typed defeat obligations. Retry, validation conflict and bounded-search incompleteness are not defeat.
+
+The runtime uses a deterministic traversal derived from `choice_seed`:
 
 ```lua
-fibers.run(main, {
-  choice = { mode = 'rotating', seed = 17 },
-})
+local rt = fibers.Runtime.new({ choice_seed = 17 })
 ```
 
-Reuse the same choice operation to retain its rotation. When an operation must
-be reconstructed on each loop, use a stable key:
+The same seed reproduces branch traversal when the programme, request sequence and external inputs are also the same. `choice` does not promise fairness or uniform probability.
+
+### Principled immediate fallback
+
+`or_else` provides validated instantaneous priority:
 
 ```lua
-local input_key = fibers.choice_key('worker-input')
-
-while true do
-  local event = fibers.perform(fibers.choice(
-    inbox:get_op(),
-    control:get_op()
-  ):with_choice_key(input_key))
-end
+local value = fibers.perform(
+  cache:get_op(key):or_else(fibers.always(default_value))
+)
 ```
 
-A key must be reused with the same branch count. The guarantee is bounded branch
-fairness for continuously eligible branches of a repeatedly committed choice;
-it is not a global scheduler-fairness guarantee.
+The fallback becomes eligible only after the preferred search scope has been completely refuted under recorded managed facts. A bounded `Unknown` never opens the fallback. The negative proof is validated again with the fallback before commit.
 
-A selected branch commits; entered competing branches may produce typed defeat
-obligations. Temporary search failure, retry and bounded-search incompleteness
-are not defeat.
-
-### Residual fallback
-
-`or_else` is asymmetric, proof-dependent preference. It opens the fallback only
-after the primary has returned a valid `Retry` proof. Use it when protocol order
-matters; do not rely on `choice` source position.
+This composes naturally with unordered choice:
 
 ```lua
-local op = cache:get_op(key):or_else(fetch_default_op(key))
+local event = fibers.perform(
+  socket:readable_op():or_else(fibers.choice(
+    shutdown:wait_op(),
+    maintenance:wait_op()
+  ))
+)
 ```
 
-An `Unknown` result from bounded search never enables fallback.
+Socket readiness has semantic priority at the commit point. If it is absent in the managed world, either eligible secondary event may be selected without source-order preference. To put several operations in the preferred tier, write `fibers.choice(a, b):or_else(fallback)`; the fallback opens only when the complete choice has been refuted.
 
 ### Products
 
-`all` combines independent lanes in one commit. Sibling lanes may constrain allocation but cannot positively supply one another.
+`all` combines independent lanes in one commit:
 
 ```lua
-local a, b = fibers.perform(fibers.all({
+local rows = fibers.perform(fibers.all({
   left:take_op(1),
   right:take_op(1),
 }))
 ```
 
-`tensor` allows interacting lanes to close internal rendezvous and transactional handoffs:
+Product results are row values. Each row preserves the number of values returned by its lane, including nil values.
+
+`tensor` additionally permits sibling hand-off:
 
 ```lua
 fibers.perform(fibers.tensor({
@@ -139,46 +149,50 @@ fibers.perform(fibers.tensor({
 }))
 ```
 
-Use `all` when several requirements must be independently satisfied from the current world. Use `tensor` when sibling operations intentionally provide facts or communication to one another.
+In both modes, all lane deltas must form one coherent final world. Under `all`, sibling changes may constrain or invalidate another lane but cannot positively supply readiness. Under `tensor`, compatible supply is visible.
+
+Use `all` for joint requirements which must each be satisfiable without sibling supply. Use `tensor` for protocols where lanes intentionally communicate or transfer transactional stock.
 
 ## Rendezvous and channels
 
-A `Rendezvous` is an unbuffered synchronous meeting:
+A `Rendezvous` is an unbuffered synchronous exchange:
 
 ```lua
-local ch = fibers.Rendezvous.new('jobs')
+local meeting = fibers.Rendezvous.new('jobs')
 
-local send = ch:put_op({ id = 1 })
-local receive = ch:get_op()
+local send = meeting:put_op({ id = 1 })
+local receive = meeting:get_op()
 ```
 
-The send and receive commit together.
+Put and get commit together. Pairing is provisional until both participants and their continuations close.
 
 `Channel` is a convenience façade:
 
 ```lua
-local unbuffered = fibers.Channel.new(0)  -- Rendezvous
-local buffered = fibers.Channel.new(16)  -- bounded Queue
+local unbuffered = fibers.Channel.new(0)
+local buffered = fibers.Channel.new(16)
 ```
 
-Both expose `put_op` and `get_op` through their underlying implementation.
+Both expose `put_op` and `get_op`; the bounded form is implemented as a queue.
 
-## Transactional state
+## Transactional state and allocation
 
 ### Scalar
 
-Use `Scalar` for one replaceable fact or a small state machine:
+Use `Scalar` for one replaceable fact:
 
 ```lua
 local state = fibers.Scalar.new({ open = true, count = 0 }, 'state')
 
-local op = state:read_op():and_then(function(old)
+local increment = state:read_op():and_then(function(old)
   if not old.open then return fibers.never() end
   return state:write_op({ open = true, count = old.count + 1 })
 end)
+
+fibers.perform(increment)
 ```
 
-For a single ordered state transition, prefer typed transitions:
+For an ordered state machine, define a typed transition:
 
 ```lua
 local Increment = fibers.Scalar.transition {
@@ -189,115 +203,166 @@ local Increment = fibers.Scalar.transition {
   end,
   step = function(value, payload)
     local next_value = value + payload.by
-    return next_value, next_value
+    return fibers.Scalar.Ready.write(next_value, next_value)
   end,
 }
 
-local counter = fibers.Scalar.new(0)
+local counter = fibers.Scalar.machine(0, 'counter')
 local next_value = fibers.perform(counter:transition_op(Increment, { by = 1 }))
+assert(next_value == 1)
 ```
 
-Transition callbacks are trusted transactional code. They must be non-yielding and free of external side effects.
+Transition modes are `update`, `select` and `query`. The callback returns `Scalar.Ready.write`, `Scalar.Ready.same`, or no ready value. See `resource-authoring.md` before writing primitive transitions.
 
-### Standard allocation resources
-
-`Index`, `Counter`, `Keyed` and `Lease` cover common allocation problems:
+### Counter, Keyed, Index and Lease
 
 ```lua
-local index = fibers.Index.new()
-index:insert_op('a', 10, 'value')
-index:pop_first_op()
-
 local permits = fibers.Counter.new({ initial = 4, min = 0, max = 4 })
-permits:take_op(1)
-permits:give_op(1)
+fibers.perform(permits:take_op(1))
+fibers.perform(permits:give_op(1))
 
-local table_state = fibers.Keyed.new()
-table_state:put_op('key', 'value')
-table_state:get_op('key')
+local keyed = fibers.Keyed.new()
+fibers.perform(keyed:put_op('key', 'value'))
+assert(fibers.perform(keyed:get_op('key')) == 'value')
 
-local leases = fibers.Lease.new({ read = { read = true }, write = {} })
-leases:acquire_op('document', 'read', 'worker-1')
-leases:release_op('document', 'worker-1')
+local index = fibers.Index.new()
+fibers.perform(index:insert_op('a', 10, 'value'))
+local entry = fibers.perform(index:pop_first_op())
+assert(entry.key == 'a')
+
+local leases = fibers.Lease.new({
+  read = { read = true },
+  write = {},
+})
+fibers.perform(leases:acquire_op('document', 'read', 'worker-1'))
+fibers.perform(leases:release_op('document', 'worker-1'))
 ```
 
-These resources participate in the `all`/`tensor` distinction. Under `tensor`, positive sibling supply may satisfy a premise in the same committed world.
+These facilities obey the same product law. For example, a sibling insertion may supply a Keyed get under `tensor`, but not under `all`.
 
 ## Compound coordination facilities
 
-The following facilities are library compounds rather than new kernel primitives:
+The following are ordinary Lua facilities over the fixed transaction substrate:
 
 ```text
-Queue          Index + Counter
-PriorityQueue  Index + Counter
-Pulse          Scalar
-WaitGroup      Scalar
-Mailbox        Scalar + Queue or Rendezvous
-Pool           Index + Keyed + Lease + Scalar + Effect
-RateLimiter    Scalar state machine
-Task           Region + Scalar + Effect
-Scope          Region + Task + policy
+Queue          ordered bounded queue
+PriorityQueue  ordered bounded queue with ranks
+Pulse          level-like notification
+WaitGroup      structured count-to-zero coordination
+Mailbox        buffered or rendezvous messaging endpoints
+Pool           indexed allocation with keyed and lease state
+RateLimiter    token-bucket Scalar machine
+Task           Region-owned structured fibre
+Scope          Region, Task and policy boundary
 Flow           transactional byte reservoir and endpoints
 Stream         two Flows plus optional host pumps
 ```
 
-Typical use remains operation-oriented:
+Example:
 
 ```lua
 local wg = fibers.WaitGroup.new()
 fibers.perform(wg:add_op(1))
 fibers.perform(wg:done_op())
 fibers.perform(wg:wait_op())
-
-local tx, rx = fibers.Mailbox.new(16)
-fibers.perform(tx:send_op('message'))
-assert(fibers.perform(rx:recv_op()) == 'message')
 ```
+
+## Witnessed facilities: Petri and Calendar
+
+`Petri` expresses coloured linear-multiset transitions. A transition may have several token bindings; the kernel searches those bindings globally and may backtrack if another lane later fails.
+
+```lua
+local net = fibers.Petri.new({
+  jobs = { { id = 1, priority = 10 } },
+  workers = { 'alice' },
+})
+
+local start = net:transition {
+  name = 'start',
+  inputs = {
+    { place = 'jobs', as = 'job' },
+    { place = 'workers', as = 'worker' },
+  },
+  produce = function(binding)
+    return {
+      running = {
+        { job = binding.job, worker = binding.worker },
+      },
+    }
+  end,
+  result = function(binding)
+    return binding.job, binding.worker
+  end,
+}
+
+local job, worker = fibers.perform(net:fire_op(start))
+```
+
+`Calendar` searches feasible intervals across one or more named resources:
+
+```lua
+local calendar = fibers.Calendar.new()
+
+local booking = fibers.perform(calendar:reserve_op {
+  resources = { 'room-a', 'alice' },
+  earliest = 9,
+  latest = 17,
+  duration = 1,
+  preference = 'earliest',
+  payload = { purpose = 'review' },
+})
+
+fibers.perform(calendar:cancel_op(booking.id))
+```
+
+Both facilities use lazy witness cursors owned by the kernel search. They do not run private solvers.
 
 ## External facts and time
 
-`Signal`, `EventQueue`, `Clock` and `Readiness` are ordinary resources whose state may be updated through a runtime-bound feed.
+Create runtime-bound external resources through the runtime. Feed delivery is an external-driver action and is not permitted from an ordinary fibre:
 
 ```lua
-fibers.run(function()
-  local rt = fibers.current_runtime()
-  local signal, feed = rt:signal('shutdown')
+local rt = fibers.Runtime.new({ host = fibers.host.manual() })
+local signal, feed = rt:signal('shutdown')
+local result
 
-  fibers.spawn(function()
-    feed:set('requested')
-  end)
+rt:spawn_raw(function()
+  result = rt:perform(signal:wait_op())
+end, 'waiter')
 
-  assert(fibers.perform(signal:wait_op()) == 'requested')
-end)
+rt:run()                 -- waiter becomes pending
+feed:set('requested')    -- external driver delivery
+rt:run()
+assert(result == 'requested')
 ```
 
-A `Signal` is latched. An `EventQueue` stores externally delivered occurrences which are consumed transactionally. A `Clock` observes host time. `Readiness` records host readiness levels.
+A `Signal` is latched. `EventQueue` stores externally delivered occurrences which are consumed transactionally. `Readiness` records level-like read or write hints. `Clock` observes host time.
 
-Application code normally uses `sleep_op` rather than constructing clock deadlines directly:
+Application code normally sleeps through:
 
 ```lua
 fibers.perform(fibers.sleep_op(0.25))
 ```
 
-Relative sleep fixes its absolute deadline once for the current perform attempt.
+The relative deadline is fixed once per perform attempt; validation restart does not slide it forwards.
 
-## Effects and outcome obligations
+## Effects and participant aftermath
 
-An effect is typed runtime work entailed by a committed world:
+An effect is runtime-owned work selected with a committed world:
 
 ```lua
 local op = fibers.after_commit(effect)
 ```
 
-Effects are prepared before resource commit and discharged after resource journals are installed but before selected participants resume. Losing worlds discharge nothing.
+Effect preparation occurs before state installation. Discharge occurs after installation and before selected fibres resume. A discharge failure is fatal because the committed state cannot be rolled back.
 
-`op:on_defeat(effect)` attaches a typed obligation to an entered operation occurrence which loses to a committed competitor. Retry, fallback, validation conflict and incomplete search are not defeat.
+`op:on_defeat(effect)` attaches an obligation to an entered occurrence which loses to a committed competitor.
 
-The guarantee is in-process and per commit. It is not crash-durable exactly-once delivery.
+`wrap` is different: it transforms one participant's committed result after the transaction has committed and may begin a new transaction.
 
 ## Scopes, custody and settlement
 
-Most lifetime-bearing objects should be created inside a scope. A scope takes custody and accounts for the object when its boundary closes.
+Most lifetime-bearing values should be created or admitted inside a scope:
 
 ```lua
 fibers.scope(function(scope)
@@ -309,13 +374,13 @@ fibers.scope(function(scope)
 end)
 ```
 
-The ordinary operations are:
+The principal lifetime verbs are:
 
 ```text
-admit     take custody
+admit     enter custody
 move      transfer custody atomically
 borrow    grant temporary authority without moving custody
-seal      stop accepting new custody
+seal      reject new custody
 claim     take exclusive settlement authority
 resolve   discharge, fail or restore a claim
 ```
@@ -324,7 +389,7 @@ See `lifetimes.md` before directly using `Region`, claims, custom settlement or 
 
 ## Flows and streams
 
-A `Flow` is a unidirectional transactional byte reservoir. Its inlet writes bytes and its outlet reads them:
+A `Flow` is a unidirectional transactional byte reservoir:
 
 ```lua
 local flow = fibers.Flow.new({ capacity = 4096 })
@@ -332,10 +397,10 @@ local inlet = flow:inlet()
 local outlet = flow:outlet()
 
 fibers.perform(inlet:write_op('abc'))
-assert(fibers.perform(outlet:read_op(3)) == 'abc')
+assert(fibers.perform(outlet:read_exactly_op(3)) == 'abc')
 ```
 
-A `Stream` is two flows arranged bidirectionally:
+A `Stream` is bidirectional:
 
 ```lua
 local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
@@ -344,22 +409,19 @@ fibers.perform(a:writer():write_op('hello\n'))
 assert(fibers.perform(b:reader():read_line_op()) == 'hello')
 ```
 
-Important properties are:
+Important properties include:
 
 ```text
 losing writes append nothing
 losing reads consume nothing
-read_exactly waits without consuming a partial prefix
-peek observes without freeing bytes
-splice moves bytes in one committed world
-retained bytes, including active leases, consume capacity
+read_exactly does not consume an incomplete prefix
+peek does not free capacity
+active leases retain capacity
 producer closure yields EOF after retained bytes drain
 consumer closure settles retained bytes as failure
 ```
 
-`write_op(bytes)` is all-or-nothing for one commit. `write_some_op` commits one non-empty prefix. Large multi-commit programmes should be explicit rather than presented as one transaction.
-
-Host-backed streams use a backend and read/write pump tasks:
+Host-backed streams are opened transactionally:
 
 ```lua
 local stream = fibers.perform(
@@ -369,18 +431,24 @@ local stream = fibers.perform(
 )
 ```
 
-Opening is transactional: if the open operation loses, no pump starts. Use `stream:reader()` and `stream:writer()` as the stable authority-bearing endpoints. The backend contract and readiness rules are described in `embedding.md`.
+If the open operation loses, no pump starts. Use `stream:reader()` and `stream:writer()` as the stable authority-bearing endpoints. See `embedding.md` for backend and HostHandle contracts.
 
 ## Errors and protected calls
 
-Inside fibres, use `fibers.pcall` and `fibers.xpcall` when protected code may perform operations. This is required for portable behaviour on Lua 5.1, where native protected calls cannot reliably cross coroutine suspension.
+Use `fibers.pcall` and `fibers.xpcall` when protected code may suspend:
 
-Resource protocol code, effect preparation and commit internals are trusted and non-yielding. An escaping error from those layers is a fatal runtime integrity failure.
+```lua
+local ok, value = fibers.pcall(function()
+  return fibers.perform(op)
+end)
+```
+
+These helpers provide yieldable protection on Lua 5.1 as well as later versions.
 
 ## Further reading
 
-- `algebra.md` defines the operation semantics and laws.
-- `lifetimes.md` covers scopes, ownership, authority and settlement.
-- `embedding.md` covers hosts, feeds, readiness and bounded stepping.
-- `resource-authoring.md` is for implementing new resource kinds.
-- `internals.md` describes the source tree and runtime pipeline.
+- `algebra.md` — operation semantics and laws
+- `lifetimes.md` — custody, borrowing, claims and policy
+- `embedding.md` — direct runtime driving and hosts
+- `resource-authoring.md` — trusted primitive facility implementation
+- `internals.md` — kernel representation and execution

@@ -34,10 +34,10 @@ do
   local st
   st = fibers.try_run(function()
     stream = fibers.perform(Stream.open_backend_in_op(life:raw_region(), backend, { name = 'tree-stream' }))
-    direct_release = fibers.perform(fibers.choice(
-      life:raw_region():release_op(stream):map(function() return 'released' end),
-      fibers.always('blocked')
-    ))
+    direct_release = fibers.perform(
+      life:raw_region():release_op(stream):map(function() return 'released' end)
+        :or_else(fibers.always('blocked'))
+    )
     fibers.perform(Settlement.retire_item_op(life, stream, 'done'))
     settled_status = fibers.perform(life:inspect_op())
   end).runtime_status
@@ -57,10 +57,10 @@ do
     fibers.perform(a:move_op(stream, b))
     a_count_after = fibers.perform(a:inspect_op()).owned_count
     b_count_after_move = fibers.perform(b:inspect_op()).owned_count
-    child_transfer = fibers.perform(fibers.choice(
-      b:raw_region():move_op(stream:reader(), a:raw_region()):map(function() return 'moved-child' end),
-      fibers.always('blocked')
-    ))
+    child_transfer = fibers.perform(
+      b:raw_region():move_op(stream:reader(), a:raw_region()):map(function() return 'moved-child' end)
+        :or_else(fibers.always('blocked'))
+    )
     fibers.perform(Settlement.retire_item_op(b, stream, 'done'))
     b_count_after_settlement = fibers.perform(b:inspect_op()).owned_count
   end).runtime_status
@@ -122,18 +122,18 @@ do
     local crec = rt:perform(life:raw_region():record_op(child))
     phase_parent = prec and prec.phase
     phase_child = crec and crec.phase
-    move_during_settle = rt:perform(fibers.choice(
-      life:raw_region():move_op(parent, other:raw_region()):map(function() return 'moved' end),
-      fibers.always('blocked')
-    ))
-    release_child = rt:perform(fibers.choice(
-      life:raw_region():release_op(child):map(function() return 'released-child' end),
-      fibers.always('blocked')
-    ))
-    settle_without_claim = rt:perform(fibers.choice(
-      life:raw_region():resolve_claim_op(parent, { kind = 'discharge' }):map(function() return 'settled-tree' end),
-      fibers.always('blocked')
-    ))
+    move_during_settle = rt:perform(
+      life:raw_region():move_op(parent, other:raw_region()):map(function() return 'moved' end)
+        :or_else(fibers.always('blocked'))
+    )
+    release_child = rt:perform(
+      life:raw_region():release_op(child):map(function() return 'released-child' end)
+        :or_else(fibers.always('blocked'))
+    )
+    settle_without_claim = rt:perform(
+      life:raw_region():resolve_claim_op(parent, { kind = 'discharge' }):map(function() return 'settled-tree' end)
+        :or_else(fibers.always('blocked'))
+    )
   end, 'phase-monitor')
 
   for _ = 1, 20 do

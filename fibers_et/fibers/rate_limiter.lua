@@ -125,7 +125,7 @@ function RateLimiter:state_op()
     local now = ctx:now()
     return self.state:read_op():map(function(state)
       local s = refill_state(self, state, now)
-      return { tokens = s.tokens, last = s.last, capacity = self.capacity, rate = self.rate, _fibers_rate_limiter_state = true }
+      return { tokens = s.tokens, last = s.last, capacity = self.capacity, rate = self.rate }
     end)
   end)
 end

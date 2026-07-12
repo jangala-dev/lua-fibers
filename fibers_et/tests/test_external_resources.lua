@@ -198,7 +198,7 @@ end
 
 -- External feeds are resource-generic capabilities rather than resource-kind checks.
 do
-  local ExternalFeed = require('fibers.kernel.external_feed')
+  local ExternalFeed = require('fibers.external_feed')
   local rt = Runtime.new()
   local resource = {
     _fibers_external_deliver = function(self, value) self.value = value end,

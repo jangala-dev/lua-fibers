@@ -6,9 +6,9 @@
 -- task itself.
 
 local Runtime = require('fibers.kernel.runtime')
-local Protected = require('fibers.kernel.protected')
-local Exit = require('fibers.kernel.exit')
-local ScopeResult = require('fibers.kernel.scope_result')
+local Protected = require('fibers.internal.protected')
+local Exit = require('fibers.exit')
+local ScopeResult = require('fibers.scope.result')
 local Settlement = require('fibers.internal.settlement')
 local Op = require('fibers.atoms.op')
 local Scalar = require('fibers.atoms.scalar')

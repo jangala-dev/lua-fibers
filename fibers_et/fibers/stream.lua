@@ -52,8 +52,6 @@ local function duplex(opts)
     read_task = nil,
     write_task = nil,
     pump_task = nil,
-    _fibers_stream = true,
-    _fibers_duplex_stream = true,
     _fibers_kind_name = opts.kind or 'duplex_stream',
     _fibers_obligation_kind = opts.kind or 'duplex_stream',
     settle = opts.settle or Settlement.stream(),
@@ -116,7 +114,6 @@ local function host_stream(opts)
   }
   h.read_chunk_size = opts.read_chunk_size or opts.chunk_size or 4096
   h.write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096
-  h._fibers_host_stream = true
   return h
 end
 

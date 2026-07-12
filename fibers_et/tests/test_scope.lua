@@ -75,13 +75,13 @@ local rt_match = fibers.Runtime.new()
 rt_match:spawn_raw(function()
   task_a = rt_match:perform(match_from_a:spawn_op(function() return 'a' end, { name = 'task-a' }))
   task_b = rt_match:perform(match_from_b:spawn_op(function() return 'b' end, { name = 'task-b' }))
-  rejected_result = rt_match:perform(fibers.choice(
+  rejected_result = rt_match:perform(
     fibers.tensor({
       match_from_a:offer_op(task_a, match_to),
       accept_matching(match_to, function(offer) return offer.from_scope == match_from_b end),
-    }):map(function() return 'unexpected' end),
-    fibers.always('rejected')
-  ))
+    }):map(function() return 'unexpected' end)
+      :or_else(fibers.always('rejected'))
+  )
   local rows = rt_match:perform(fibers.tensor({
     match_from_b:offer_op(task_b, match_to),
     accept_matching(match_to, function(offer) return offer.from_scope == match_from_b and offer.item_kind == 'task' end),
@@ -133,14 +133,14 @@ do
   rt_filter:spawn_raw(function()
     task_a = rt_filter:perform(from_a:spawn_op(function() return 'a' end, { name = 'filter-task-a' }))
     task_b = rt_filter:perform(from_b:spawn_op(function() return 'b' end, { name = 'filter-task-b' }))
-    both_result = rt_filter:perform(fibers.choice(
+    both_result = rt_filter:perform(
       fibers.tensor({
         from_a:offer_op(task_a, to),
         from_b:offer_op(task_b, to),
         to:accept_op(function(offer) return offer.from_scope == from_b end),
-      }):map(function() return 'unexpected' end),
-      fibers.always('blocked')
-    ))
+      }):map(function() return 'unexpected' end)
+        :or_else(fibers.always('blocked'))
+    )
     local rows = rt_filter:perform(fibers.tensor({
       from_b:offer_op(task_b, to),
       to:accept_op(function(offer) return offer.from_scope == from_b end),

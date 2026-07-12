@@ -1,107 +1,117 @@
 # Lifetimes, custody and settlement
 
-`fibers` treats continuing work and resources as obligations with explicit custody. A transaction establishes truth at commit; the lifetime system records which responsibilities remain afterwards.
-
-Most users should work through `Scope`. `Region` is the underlying transactional ownership resource.
+`fibers` treats structured lifetime management as transactional custody recorded in a Region ledger. Scope policy decides how a boundary reacts to body completion, child failure, cancellation and unresolved settlement.
 
 ## Ordinary scope use
 
 ```lua
 local fibers = require('fibers')
 
-fibers.run(function()
-  fibers.scope(function(scope)
-    local task = fibers.spawn(function()
-      return 'ok'
-    end)
+fibers.run(function(scope)
+  local task = scope:spawn(function()
+    return 'done'
+  end, 'worker')
 
-    assert(fibers.perform(task:await_op()) == 'ok')
-  end)
+  assert(fibers.perform(task:await_op()) == 'done')
 end)
 ```
 
-The ordinary contract is:
+A scope callback receives the scope. `fibers.spawn` targets the current scope; `scope:spawn` is the explicit form.
+
+Raising forms:
 
 ```text
-Create lifetime-bearing things inside a scope.
-The scope accounts for them before its boundary completes.
-Move or borrow things explicitly when they cross a boundary.
-Settlement failure remains visible.
+fibers.run
+fibers.scope
+Scope:run
 ```
 
-`fibers.run` creates the root scope. `fibers.scope` creates a nested scope. `fibers.spawn` admits a task to the current scope and starts it only after admission commits.
+return body values or raise after boundary accounting.
 
-Use `try_run` and `try_scope` when the boundary report is part of normal control flow. The raising forms call `:raise()` on that result.
+Checked forms:
+
+```text
+fibers.try_run
+fibers.try_scope
+Scope:try_run
+```
+
+return a `ScopeResult` containing success values or a structured report.
 
 ## Vocabulary
 
 | Term | Meaning |
 | --- | --- |
-| Obligation | Continuing responsibility created, admitted or moved by a committed world. |
+| Obligation | Continuing responsibility admitted or created by a committed world. |
 | Custody | Responsibility to resolve an obligation. |
 | Authority | Permission to act through a handle. |
-| Borrow | Temporary authority without moving custody. |
-| Admission | Committed entry into custody. |
+| Admission | Transactional entry into custody. |
 | Movement | Atomic transfer of custody. |
-| Seal | Stop accepting new custody. |
-| Claim | Exclusive authority to resolve custody. |
+| Borrow | Temporary authority without transfer of custody. |
+| Seal | Refusal of new custody. |
+| Claim | Exclusive authority to resolve an owned subtree. |
 | Resolution | Discharge, failure or restoration of a claim. |
-| Settlement | Resource-specific work which attempts to discharge custody. |
+| Settlement | Protocol work undertaken after a claim commits. |
 
-Custody and authority are intentionally separate. Retaining a Lua reference does not necessarily mean that the current scope is responsible for the object or authorised to use it.
+Custody and Lua reachability are not the same. Holding a reference does not necessarily mean the current scope owns or is authorised to use it.
 
-## Scope operations
+## Scope surface
 
-The principal scope surface is:
+Principal methods include:
 
 ```lua
 scope:spawn_op(fn, opts)
-scope:admit_op(item_or_owned)
-scope:move_op(item, target)
+scope:spawn(fn, opts)
+scope:admit_op(item_or_owned, from_owner)
+scope:move_op(item, target_scope_or_region)
 scope:offer_op(item, target_scope, terms)
 scope:accept_op(filter)
 scope:authorise_op(item, right)
-scope:borrow_op(item, rights, opts)
+scope:borrow_op(item, borrower_or_rights, rights_or_opts, maybe_opts)
 scope:claim_op(item, purpose)
 scope:resolve_op(claim, resolution)
+scope:request_cancel_op(reason)
 scope:seal_op(reason)
 
+scope:cancel_requested_op()
+scope:cancellation_op()
 scope:sealed_op()
 scope:done_op()
 scope:owns_op(item)
 scope:record_op(item)
+scope:subtree_op(item)
 scope:roots_op()
 scope:inspect_op()
 ```
 
-`sealed_op` means no new custody may enter. `done_op` means the boundary has reached an accounted outcome; it does not imply success. `inspect_op` is intended for diagnostics and tests rather than ordinary programme logic.
+`scope:raw_region()` exposes the underlying Region for trusted facility code and APIs which explicitly require a Region owner.
 
-### Admission and task spawning
+## Admission and structured spawn
 
-`Scope:spawn_op` is a compound transaction:
+`Scope:spawn_op` constructs a Task, admits it to the Region and emits a post-commit spawn effect in one operation.
 
 ```text
 construct Task
-admit owned Task to the Scope
-emit the post-commit spawn obligation
-return the Task
++ admit owned Task
++ select spawn effect
++ return Task
 ```
 
-If the admission operation loses, the task is not started.
+If that operation loses, the task does not start.
 
-Custom obligations are admitted as ordinary items or as `Region.Owned` values carrying settlement information.
+`scope:spawn` performs `spawn_op` immediately in the current fibre.
 
-### Movement
+Custom lifetime-bearing values may be admitted as bare items or as `Region.Owned` specifications carrying settlement metadata.
 
-Direct movement transfers a live root atomically:
+## Atomic movement
+
+Direct movement transfers a live root in one commit:
 
 ```lua
 fibers.perform(source:move_op(item, destination))
 ```
 
-The item leaves the source and enters the destination in one committed world.
-
-Negotiated movement combines transfer with synchronous consent:
+Negotiated movement composes movement with synchronous consent:
 
 ```lua
 fibers.perform(fibers.tensor({
@@ -112,112 +122,133 @@ fibers.perform(fibers.tensor({
 }))
 ```
 
-A rejected offer rejects that candidate world. It does not consume and discard an unrelated offer.
+A rejected offer rejects that candidate. It does not consume an unrelated offer.
+
+Movement covers the complete owned subtree rooted at the item. A contained child cannot be moved independently.
 
 ## Region records and phases
 
-A `Region` stores ownership records. A record may include:
+A Region stores records containing fields such as:
 
 ```text
 item
 role
-children
-settlement protocol and name
+parent and children
+settlement function and name
 phase
 claim metadata
-failure information
+settlement failure information
 ```
 
 The relevant lifecycle is:
 
 ```text
-live      admitted and available for movement or claim
-claimed   exclusively held for resolution
-failed    resolution failed and remains observable
-retired   discharged; represented by absence from the live ledger
+live      available for movement or claim
+claimed   exclusively held by a claim capability
+failed    settlement failed and custody remains observable
+absent    discharged or moved out of the Region
 ```
 
-A subtree moves or settles as one owned structure. A live item has at most one owner.
+A live item has at most one owner.
 
 The low-level Region surface includes:
 
 ```lua
-region:admit_op(item_or_owned)
-region:move_op(item, target_region)
+region:admit_op(item_or_owned, from_owner)
 region:release_op(item)
+region:move_op(item, target_region)
 region:claim_op(item, purpose)
 region:resolve_claim_op(claim, resolution)
-region:restore_claim_op(claim)
 region:discharge_claim_op(claim)
 region:fail_claim_op(claim, err)
+region:restore_claim_op(claim)
 region:seal_op()
 
+region:is_open_op()
+region:changed_op(version)
 region:owns_op(item)
 region:record_op(item)
+region:children_op(item)
 region:subtree_op(item)
+region:members_op()
 region:roots_op()
 region:snapshot_op()
+region:live_op(item)
+region:authorise_op(item, right, opts)
 ```
 
-A bare Region maintains the ledger. It does not know how to cancel a task, flush a stream or close a host handle. Those behaviours belong to settlement protocols and scope policy.
+A bare Region records ownership truth. It does not itself know how to interrupt a task, flush a stream or close a host handle. Those behaviours are supplied by settlement protocols and scope policy.
 
 ## Authority and borrowing
 
 A scope can prove authority for an owned or borrowed item:
 
 ```lua
-scope:authorise_op(item, 'read')
+fibers.perform(scope:authorise_op(item, 'read'))
 ```
 
-Borrowing grants rights to another scope without transferring custody:
+Borrowing grants rights without transferring custody:
 
 ```lua
-owner:borrow_op(item, borrower, { 'read' }, {
-  name = 'temporary-reader',
-})
+local borrow = fibers.perform(
+  owner:borrow_op(item, borrower, { 'read' }, {
+    name = 'temporary-reader',
+  })
+)
 ```
 
-The borrow is itself an owned obligation in the borrower scope. When the borrower settles, the temporary authority is released. The original owner remains responsible for the underlying item.
+The borrow is itself an obligation in the borrower scope. Settling it releases the temporary authority. The original owner remains responsible for the underlying item.
 
-A useful distinction is:
+Distinguish:
 
 ```text
-move    responsibility changes owner
-borrow  responsibility remains; temporary authority is granted
-lease   compatibility-managed right over a resource fact
-claim   exclusive authority to resolve custody
+move    custody changes owner
+borrow  custody remains; temporary authority is granted
+lease   compatibility-managed transactional right
+claim   exclusive authority to settle custody
 ```
 
-Authority enforcement is incremental. Facilities which expose safe endpoint handles, such as Flow and Stream, are the main current users of the authority seam. Resource authors should not assume that Lua reachability alone is a sufficient future authority model.
+Authority enforcement is currently strongest at explicit endpoint and ownership seams, including Flow and Stream handles. It is not a general Lua object-capability sandbox.
 
-## Claims and settlement
+## Claims
 
-Settlement runs after a claim commits:
+A claim is a fresh capability object tied to one Region, one root and its complete owned subtree.
+
+Claim creation:
 
 ```text
-live root
-  -> claim_op
-claimed subtree
-  -> run settlement protocol operations
-  -> resolve claim
-retired, failed or restored subtree
+verify live root
+compute subtree closure
+verify every member is live
+create fresh claim capability
+mark every member claimed
 ```
 
-This ordering matters. Settlement may itself perform transactions and wait. It is not speculative cleanup inside resource evaluation.
+Only the original capability object can resolve the claim. Reconstructing its diagnostic fields does not confer authority.
+
+While claimed, the subtree cannot be moved, released or claimed again.
 
 Resolution kinds are:
 
 ```text
-discharge   settlement succeeded; release custody
-fail        settlement failed; retain the failed record
-restore     return the claimed subtree to live custody
+discharge   remove custody after successful settlement
+fail        retain custody in failed phase with error information
+restore     return the subtree to live custody
 ```
 
-The original claim object is the authority to resolve the claim. A diagnostic claim identifier is not sufficient.
+## Settlement protocol
 
-### Custom owned values
+Settlement starts only after the claim commits:
 
-Advanced facilities may construct an owned item:
+```text
+transaction: claim subtree
+post-commit participant work: run settlement operation
+transaction: resolve claim
+```
+
+Settlement may perform further operations and may wait. It is not speculative cleanup inside a state transition.
+
+A custom owned value can be constructed with:
 
 ```lua
 local owned = fibers.Region.Owned.item(handle, function(ctx, record, claim)
@@ -230,42 +261,41 @@ end, {
 fibers.perform(scope:admit_op(owned))
 ```
 
-The settlement function returns an `Op`. It may wait and compose transactional work. It must not carry out external cleanup while merely constructing the operation.
+The settlement callback returns an `Op`. Merely constructing that operation must not perform irreversible cleanup.
 
-Use `Region.Owned.inert(item)` only when no settlement work is required.
+Use `Region.Owned.tree` for an item with explicit owned children and `Region.Owned.inert` when no settlement work is required.
 
-## Failure remains ownership truth
+## Failed settlement remains custody truth
 
-A settlement failure occurs after the claim has committed, so it cannot be rolled back as though the claim never happened.
+A settlement failure occurs after the claim has committed. It cannot be rolled back as though the claim never existed.
 
-The record remains owned in failed phase, with diagnostic information such as:
+The record remains owned in failed phase with diagnostic fields including the settlement error. Ordinary movement, release and duplicate claim remain blocked until policy explicitly restores or otherwise resolves it.
+
+Central rule:
+
+> Failed settlement is an unresolved obligation, not an exception erased during unwinding.
+
+## Scope policy
+
+The default nursery policy:
 
 ```text
-phase = "failed"
-settlement_failed = true
-settlement_error_message = ...
+monitors admitted task roots
+seals on body completion or failure
+on child failure, records the cause and requests body/sibling cancellation
+waits for retained tasks
+settles remaining roots while masked
+completes only after every retained root is accounted for
 ```
-
-The item is not silently released. Ordinary movement, duplicate claim and duplicate settlement remain blocked until policy explicitly restores or otherwise resolves it.
-
-This is the central failure rule:
-
-> A failed settlement is an unresolved obligation, not an exception which disappeared during unwinding.
-
-## Scope boundary policy
-
-Structured concurrency is policy over the lifetime calculus.
-
-The default nursery policy monitors owned tasks while the body is running. A child failure atomically seals the scope, records the cause, interrupts the body and requests sibling cancellation. Successful body return seals admission and waits for retained children; body failure seals, cancels and joins them. Cleanup and settlement run masked, and the boundary completes only after every retained root has been accounted for.
 
 ```lua
 fibers.run(function()
   fibers.spawn(function() error('worker failed') end)
-  fibers.perform(wait_for_work_op()) -- interrupted by the child failure
+  fibers.perform(wait_for_work_op())
 end)
 ```
 
-A supervisor isolates child failures from the body and siblings:
+A supervisor isolates child failure according to its mode:
 
 ```lua
 fibers.scope({
@@ -275,13 +305,25 @@ fibers.scope({
 end)
 ```
 
-Supervisor `child_failure` modes are `fail_at_exit`, `collect` and `ignore`. Reports retain observed child exits and failures even when the collecting supervisor returns successfully.
+Supported `child_failure` values are:
 
-Policies also gate escape hatches. The default policy rejects high-level `fibers.spawn_raw`. `allow_unstructured = true` permits it explicitly. `allow_outward_move = false` prohibits `Scope:move_op` and negotiated offers from moving custody out of that scope; the low-level `Region` API remains available to trusted implementation code.
+```text
+fail_at_exit
+collect
+ignore
+```
 
-A custom policy may implement `try_run(scope, fn, driver)` and own the complete boundary algorithm. The supplied driver exposes `run`, `start_monitor`, `begin_close`, `seal` and `retire_roots`; these are mechanisms rather than nursery decisions. Policies receive `on_child_exit`, `on_cancel_requested`, `on_body_exit` and `result` callbacks when they delegate to `driver.run`.
+Policies also gate escape hatches:
 
-The task monitor is created lazily on first admission. Membership changes and task exits are delivered as committed lifecycle consequences to a private queue. The Region ledger remains authoritative: the queue wakes policy code, but does not replace custody records.
+```text
+allow_unstructured   permit high-level fibers.spawn_raw
+allow_outward_move   permit custody movement out of the scope
+allow_admission      permit new admission
+```
+
+The low-level Region API remains available to trusted implementation code.
+
+A custom policy may implement `try_run(scope, fn, driver)`. The supplied driver provides mechanisms such as monitor start, close, seal and root retirement; policy owns the boundary decisions.
 
 ## Principal laws
 
@@ -290,43 +332,33 @@ Unique custody
   A live owned root has at most one Region owner.
 
 Atomic admission
-  Losing admission does not create custody or start admitted work.
+  Losing admission creates no custody and starts no work.
 
 Atomic movement
-  Custody leaves the source and enters the target in one commit.
+  A complete subtree leaves one Region and enters another in one commit.
 
 Seal monotonicity
-  A sealed Region does not accept new custody.
-
-Atomic closure
-  Closure seals the Region and captures the retained task roots in one
-  transaction. Concurrent admission is either included or loses.
-
-Boundary accounting
-  A scope does not complete while it retains an unaccounted live task root.
-
-Policy causality
-  Nursery-induced cancellation exits do not replace the child or body failure
-  which caused closure.
+  A sealed Region accepts no new custody.
 
 Exclusive claim
-  A claimed subtree cannot be moved, released or claimed again except through
-  its claim authority.
+  A claimed subtree cannot be moved, released or claimed again.
 
 Explicit resolution
   A claim ends only through discharge, failure or restoration.
 
 Failure retention
-  Settlement failure remains represented in the ownership ledger.
+  Failed settlement remains represented in the ledger.
 
 Borrow separation
   Borrowing changes authority, not custody.
 
 Boundary accounting
-  A scope does not report completion while unaccounted live roots remain under
-  its policy.
+  A scope does not complete while its policy retains unaccounted live roots.
+
+Policy causality
+  Cancellation induced by a failure does not replace the failure which caused it.
 ```
 
-## What remains above this layer
+## Facilities above the lifetime layer
 
-Facilities such as streams, pools and tasks define their own settlement protocols but use the same custody verbs. Experimental forms such as phases, escrow or tombs should also be derived from this layer rather than introduce unrelated lifetime mechanisms.
+Task, Flow, Stream, Pool and host-backed handles define facility-specific settlement protocols but use the same Region and Scope mechanisms. Future lifetime abstractions should be derived from custody, authority, claims and policy rather than creating unrelated cleanup systems.

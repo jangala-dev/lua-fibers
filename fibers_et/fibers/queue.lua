@@ -1,7 +1,7 @@
 -- Transactional FIFO queue built from Index + Counter.
 --
 -- Queue is intentionally ordinary Lua code over base primitives.  Index handles
--- ordered selection premises; Counter handles bounded capacity/free slots.
+-- ordered witnessed selection; Counter handles bounded capacity/free slots.
 
 local Op = require('fibers.atoms.op')
 local Index = require('fibers.atoms.index')

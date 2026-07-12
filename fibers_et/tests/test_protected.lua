@@ -1,13 +1,7 @@
 -- Tests for yieldable protected calls.
 --
--- The suite forces the coroutine-backed path so the behaviour is exercised even
--- on hosts whose native pcall/xpcall already allow yielding.
-
-_G.__FIBERS_PROTECTED_FORCE_FALLBACK = true
-package.loaded['fibers.kernel.protected'] = nil
-package.loaded['fibers.kernel.runtime'] = nil
-package.loaded['fibers.task'] = nil
-package.loaded['fibers'] = nil
+-- This file does not alter module or global state.  The forced coroutine-backed
+-- path is exercised by tests/run_protected_fallback.lua in a fresh interpreter.
 
 local function fail(msg) error(msg, 2) end
 local function eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
@@ -15,11 +9,14 @@ local function ok(v, msg) if not v then fail(msg or 'expected truthy') end end
 local function test(_name, fn) fn() end
 
 local fibers = require('fibers')
-local Protected = require('fibers.kernel.protected')
+local Protected = require('fibers.internal.protected')
 
-test('fallback path is active when forced', function()
-  eq(Protected.using_native(), false)
-end)
+local expected_native = rawget(_G, '__FIBERS_PROTECTED_EXPECT_NATIVE')
+if expected_native ~= nil then
+  test('selected protected-call path matches the isolated runner', function()
+    eq(Protected.using_native(), expected_native)
+  end)
+end
 
 test('fibers.pcall permits perform to suspend and resume', function()
   local protected_ok, got
@@ -81,7 +78,7 @@ test('fibers.xpcall permits perform and handles errors', function()
 end)
 
 test('task bodies may perform while protected for result reporting', function()
-  local status, value
+  local value
   local st = fibers.try_run(function()
     local region = fibers.Region.new('protected-region')
     local task = fibers.perform(fibers.Task.spawn_op(region, function()

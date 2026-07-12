@@ -30,16 +30,8 @@ local function masked_perform(rt, op)
   return rt:perform(op, { masked = true })
 end
 
--- Priority in the pump protocol is explicit: terminal flow state is observed
--- before advisory backend readiness. Ordinary choice is deliberately unordered.
-local function preferred_named(entries)
-  local out
-  for i = #entries, 1, -1 do
-    local name, branch = entries[i][1], entries[i][2]
-    local tagged = branch:map(function(...) return name, ... end)
-    out = out and tagged:or_else(out) or tagged
-  end
-  return out
+local function named(name, operation)
+  return operation:map(function(...) return name, ... end)
 end
 
 function Pump.read(stream)
@@ -51,20 +43,22 @@ function Pump.read(stream)
   local flow = stream.read_flow
   local inlet = flow:inlet()
   while true do
-    local cap_or_closed, value = masked_perform(rt, preferred_named({
-      { 'reader_closed', flow.output:closed_op() },
-      { 'capacity', flow.reservoir:capacity_some_op(stream.read_chunk_size) },
-    }))
+    local cap_or_closed, value = masked_perform(rt,
+      named('reader_closed', flow.output:closed_op()):or_else(
+        named('capacity', flow.reservoir:capacity_some_op(stream.read_chunk_size))
+      )
+    )
     if cap_or_closed == 'reader_closed' then
       backend_call(backend, 'shutdown_read', 'reader_closed')
       return
     end
     local max = value
 
-    local ready_or_closed = masked_perform(rt, preferred_named({
-      { 'reader_closed', flow.output:closed_op() },
-      { 'backend_ready', backend_ready_op(backend, 'read_ready_op') },
-    }))
+    local ready_or_closed = masked_perform(rt,
+      named('reader_closed', flow.output:closed_op()):or_else(
+        named('backend_ready', backend_ready_op(backend, 'read_ready_op'))
+      )
+    )
     if ready_or_closed == 'reader_closed' then
       backend_call(backend, 'shutdown_read', 'reader_closed')
       return
@@ -111,15 +105,17 @@ function Pump.write(stream)
       return
     end
     local bytes = lease:bytes()
-    local ready_or_failed = masked_perform(rt, preferred_named({
-      { 'write_failed', flow.output:error_op() },
-      { 'write_closed', flow.output:closed_op() },
-      { 'backend_ready', backend_ready_op(backend, 'write_ready_op') },
-    }))
+    local ready_or_failed = masked_perform(rt,
+      named('write_failed', flow.output:error_op()):or_else(
+        named('write_closed', flow.output:closed_op()):or_else(
+          named('backend_ready', backend_ready_op(backend, 'write_ready_op'))
+        )
+      )
+    )
     if ready_or_failed == 'write_failed' or ready_or_failed == 'write_closed' then return end
     local n, err = backend_call(backend, 'write', bytes)
     if n and n > 0 then
-      local ok, ack_err = masked_perform(rt, outlet:ack_lease_op(lease, n))
+      local ok = masked_perform(rt, outlet:ack_lease_op(lease, n))
       if not ok then
         masked_perform(rt, outlet:fail_write_op(Errors.BACKEND_PROTOCOL_ERROR))
         return

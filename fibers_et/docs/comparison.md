@@ -1,275 +1,289 @@
-# Comparison with CSP, CML, Transactional Events and Reagents
+# fibers in relation to CSP, CML, Transactional Events and Reagents
 
-This document places the `fibers` model in its principal concurrency lineage. It
-is an orientation guide, not an expressiveness proof: each comparison concerns
-the characteristic core of the cited system, and implementations or later
-variants may provide additional facilities.
+This document places the `fibers` operation algebra beside four established approaches to concurrent programming:
 
-The short account is:
+- Communicating Sequential Processes (CSP);
+- Concurrent ML (CML);
+- Transactional Events (TE);
+- Reagents.
 
-```text
-CSP                  processes communicate and synchronise
-CML                  synchronisations become first-class values
-Transactional Events sequences of synchronisations become all-or-nothing
-Reagents              shared-state updates and synchronous exchanges compose
-fibers                open resources contribute to candidate committed worlds
-```
-
-The closest technical precedent is Reagents. `fibers` differs chiefly in making
-resource participation open, making bounded search outcomes explicit, and using
-the same transaction machinery to govern structured task and resource lifetime.
-
-## At a glance
-
-| Model | Primary compositional unit | Communication | Shared state | Atomic composition | After commit | Extension boundary |
-| --- | --- | --- | --- | --- | --- | --- |
-| CSP | Process expression | Synchronous input and output between processes | Normally local process state | Process sequencing, parallel composition and guarded alternatives; not a general transaction | Ordinary continuation of the selected process | New processes and protocols |
-| CML | First-class event | Synchronous channel event | Ordinary host-language state outside the event commit | Choice among events; one selected synchronisation is the commit point | `wrap` runs a participant action after synchronisation | New event abstractions built from event combinators and server protocols |
-| Transactional Events | First-class transactional event | Synchronous channel events | Encodable transactionally; not an open resource protocol | `thenEvt` sequences several communications all-or-nothing | Event result and subsequent participant code | New transactional event protocols |
-| Reagents | `Reagent[A,B]` | Synchronous endpoint swap | Atomic reference update | Choice, sequencing and pairing combine updates and exchanges | `postCommit`; persistent catalyst invocation is also provided | Composition over the fixed `upd` and `swap` foundations |
-| `fibers` | First-class `Op` denoting candidate worlds | Rendezvous resources, including multi-party closure | Resource-specific speculative journals | `and_then`, choice, independent and interacting products, and certified fallback | Commit consequences, defeat consequences and participant `wrap`s are distinct | New resource kinds define requests, solving, validation, preparation and application |
-
-## CSP
-
-[Hoare's original CSP proposal](https://www.cs.cmu.edu/~crary/819-f09/Hoare78.pdf) treats input and output as programming primitives
-and parallel composition of communicating sequential processes as a fundamental
-structuring method. Guarded commands provide conditional and nondeterministic
-selection, including guards whose readiness depends on communication. A parallel
-command terminates when all its constituent processes have terminated.
-
-The enduring CSP contribution to this lineage is the view that synchronous
-communication is both data transfer and control: the parties proceed together,
-and guarded alternatives can make communication readiness part of programme
-structure.
-
-`fibers` retains that interaction model in `Rendezvous`, but changes the unit of
-composition:
+The comparison is conceptual rather than a formal expressiveness result. `fibers` does not yet have published translations, separation theorems or a mechanised semantics proving that it subsumes any of these systems. The useful lineage is:
 
 ```text
-CSP       compose processes whose commands communicate
-fibers    compose inert operation values which may later recruit fibres and resources
+CSP behavioural processes
+  → CML first-class selectable synchronisation
+  → Transactional Events all-or-nothing synchronisation sequences
+  → Reagents atomic shared-state and message-passing reactions
+  → fibers proof search for compatible committed resource worlds
 ```
 
-An `Op` can be stored, passed, selected and combined before any fibre performs
-it. Its commit may also include resource journals and runtime obligations which
-are not communications. Conversely, `fibers` is not offered as a replacement
-for CSP's process algebra, trace models or verification tradition.
+The arrows indicate inherited questions and increasingly rich composition, not direct implementation ancestry.
 
-## Concurrent ML
+## Summary
 
-[CML's decisive step](https://www.cs.tufts.edu/~nr/cs257/archive/john-reppy/cml-pldi.pdf) is to make synchronous operations first-class. Channel
-receive and transmit produce event values; `sync` performs an event; `choose`
-forms selective communication; and `wrap` associates a post-synchronisation
-function with a selected event. This permits user-defined communication
-abstractions such as buffered channels, RPC and multicast to be built as
-libraries rather than fixed language constructs.
+| Dimension | CSP | CML | Transactional Events | Reagents | fibers |
+|---|---|---|---|---|---|
+| Principal semantic object | Continuing process behaviour | One selectable event | Transactional event programme | Atomic concurrent function/reaction | Search for a compatible committed world |
+| Main interaction | Events and synchronous channels | Two-party rendezvous | All-or-nothing sequences of rendezvous | Atomic-reference updates and synchronous swaps | Versioned state, exchange, recruitment, custody and consequences |
+| Alternative | Internal/external process choice | Nondeterministic event choice | Nondeterministic transactional choice | Operationally left-biased choice | Unordered `choice`; validated priority through `or_else` |
+| Sequencing | Prefix and process sequencing | Work before or after one selected event | Transactional `thenEvt` | End-to-end composition | Transactional `and_then` |
+| Side-by-side conjunction | Parallel process composition | No general event product | Usually encoded through sequence | Pairing `*` | Independent `all` and interacting `tensor` |
+| Shared state | Modelled as processes | Commonly hidden behind server threads | Encodable over events | Native atomic updates | Native versioned locations and transition algebras |
+| Failure information | Traces, refusals and divergence in semantic models | Event not presently selectable | Transactional search failure | `Block` and transient implementation `Retry` | `Hit`, proof-bearing `Retry` and bounded-search `Unknown` |
+| Primitive-authoring centre | Process definitions and refinements | Event-valued protocols | Transactional channel protocols | Scalable lock-free data structures | Trusted declarative transactional facilities |
+| Principal implementation aim | Specification and protocol reasoning | Practical selective communication | Composable atomic protocols | Parallel scalability and lock-free progress | Correct cross-resource coordination in one runtime domain |
 
-The direct inheritance in `fibers` is substantial:
+## 1. CSP
+
+### Algebra
+
+CSP is an algebra of continuing process behaviours. Prefix, choice, parallel composition, hiding and recursion describe possible observations over time. Mature CSP models support reasoning about traces, refusals, deadlock and divergence, with refinement used to compare specifications and implementations.
+
+A `fibers` operation has a different extent. It describes one attempted atomic transition rather than the complete future behaviour of a process. Persistent behaviour is written as fibres which repeatedly perform operations, whereas persistence is intrinsic to a recursive CSP process.
+
+CSP parallel composition and a `fibers` product should not be identified:
 
 ```text
-CML event value       fibers Op value
-CML sync              fibers.perform
-CML alwaysEvt         Op.always
-CML choose            Op.choose
-CML wrap              Op.wrap
-CML guard             Op.guard
+CSP parallel       combines continuing processes and their event alphabets
+fibers product     combines lanes participating in one candidate commit
 ```
 
-The important change is the commit boundary. A CML selection commits one base
-synchronisation. Further communication performed by a wrapper is a later event.
-A `fibers` candidate world may instead close several rendezvous and install
-several resource journals in one commit.
+CSP is consequently stronger as a behavioural specification and refinement theory. `fibers` is more directly an executable calculus of atomic resource changes.
 
-CML's negative acknowledgement mechanism makes the loss of an event observable
-as another event. `fibers` does not retain `withNack` in its core. A dynamic
-operation occurrence may carry a typed defeat consequence, dispatched when an
-entered competitor is permanently retired. An event-shaped notification can be
-constructed as a library protocol when it is genuinely required.
+### Primitive authoring
 
-## Transactional Events
+A CSP author normally builds a resource or protocol as another process expression. Adding a new observable event is easy at the model level, but giving it new host-level operational behaviour generally belongs to the CSP implementation or to a translation into existing processes.
 
-[Transactional Events](https://www.cs.cornell.edu/people/fluet/research/tx-events/ICFP06/icfp06.pdf) address CML's single-commit-point limitation. Their
-`thenEvt` combinator tentatively completes one event and constructs the next;
-the entire sequence either synchronises or aborts. Together with transactional
-choice, this supports modular guarded receive, multi-way rendezvous and other
-protocols which are difficult to package using CML alone.
+`fibers` instead exposes a fixed internal programme language for trusted facilities. A facility author supplies a transition, witness cursor, exchange or observation while the common kernel owns search, rollback, validation and commit.
 
-`Op:and_then` follows the same central intuition: the value proved by one
-part of an operation may construct the remainder of the same transaction.
-Neither prefix commits independently.
+### Expressivity
 
-The difference is what may inhabit the transaction. The characteristic TE
-substrate is synchronous events, with richer facilities encoded through event
-protocols. A `fibers` primitive addresses an open transactional resource:
+CSP naturally expresses long-lived protocols, concealment, recursive topologies and behavioural properties over complete histories. `fibers` naturally expresses one atomic world containing several state changes, participants and consequences. Neither advantage is a simple subset relation.
+
+## 2. Concurrent ML
+
+### Algebra
+
+CML makes synchronous operations first-class event values. Events can be passed around and combined before being submitted to `sync`. Characteristic operators include event choice, wrapping after selection, delayed construction and negative-acknowledgement handling.
+
+Approximate correspondences are:
+
+| CML | fibers |
+|---|---|
+| event value | inert `Op` |
+| `choose` | `choice` |
+| `wrap` | `wrap` |
+| `guard` | `guard`, or `and_then` where construction is transactional |
+| `withNack`/`wrapAbort` | occurrence defeat obligations |
+| channel send/receive | `Rendezvous` put/get |
+
+CML event choice is nondeterministic when several events can proceed. The revised `fibers.choice` has the same important algebraic intention: branch position does not confer priority. `fibers` uses a deterministic seed-derived traversal for reproducibility, but this is runtime policy rather than source-order semantics.
+
+The main difference is CML's single selected synchronisation point. Work may be arranged before or after that point, but a compound protocol must still decide which communication constitutes commitment. `fibers.and_then` keeps earlier state changes and exchanges provisional until the complete continuation and all recruited participants close.
+
+### Primitive authoring
+
+CML is effective for application-level event abstraction. Buffered channels, remote calls and selectable protocols can be built from channels and event combinators. Implementing a new base event with its own polling, blocking and cancellation behaviour is more closely tied to the runtime selection mechanism.
+
+In `fibers`, trusted primitive authors do not implement their own scheduler protocol. They compile facilities to the closed IR and provide lawful callbacks. This is broader than ordinary CML event composition, but it imposes purity, determinism and completeness obligations on facility code.
+
+### Expressivity
+
+Relative to CML's core event model, `fibers` directly adds:
+
+- transactional continuation across several synchronisations;
+- native versioned state;
+- multi-participant recruitment;
+- global witness and partner backtracking;
+- independent and interacting n-ary products;
+- proof-certified immediate fallback;
+- post-commit consequences selected with the complete world.
+
+CML remains appreciably simpler to explain and has a mature practical account of selective synchronous communication.
+
+## 3. Transactional Events
+
+### Algebra
+
+Transactional Events add all-or-nothing sequencing to first-class synchronous events. `thenEvt` tentatively completes one event and continues to another; none of the sequence commits unless the complete transactional event succeeds. Together with event choice and always/never events, the system has a monadic transactional event structure.
+
+The closest correspondences are:
+
+| Transactional Events | fibers |
+|---|---|
+| `alwaysEvt` | `always` |
+| `neverEvt` | `never` |
+| `chooseEvt` | unordered `choice` |
+| `thenEvt` | `and_then` |
+| `sync` | `perform` |
+
+Both systems admit a search-and-backtracking account: apparently completed communications remain tentative while later parts of the transaction are explored.
+
+`fibers` extends this shape in four principal directions.
+
+First, it has native versioned resource transitions rather than a core centred on synchronous channels. Secondly, it has side-by-side products as well as monadic sequence. Thirdly, it distinguishes independent `all` from interacting `tensor`. Fourthly, its bounded implementation exposes `Unknown` rather than treating a failure to complete search as a semantic refutation.
+
+### Choice and priority
+
+Transactional Events choice is nondeterministic rather than left-biased. That aligns with the revised `fibers.choice`.
+
+Priority in `fibers` is not encoded by branch position. It is expressed through:
+
+```lua
+preferred:or_else(fibers.choice(a, b, c))
+```
+
+The fallback tier is admitted only after the preferred transactional scope has produced a complete, revalidatable `Retry` proof. This separates indifference within a tier from justified priority between tiers.
+
+### Primitive authoring
+
+Transactional Events make compound channel protocols much easier to author than CML. Guarded receive and multi-stage request/reply arrangements can remain local event programmes rather than manually managed cancellation protocols.
+
+The original core does not provide the same general facility-authoring substrate as `fibers`. Stateful resources can be encoded using channel protocols or added beneath the event implementation. `fibers` instead lets a trusted facility describe versioned transitions, claims, finite or lazy witnessed successors, exchanges and host observations directly.
+
+### Expressivity
+
+Transactional Events has a published strict expressiveness result over CML, based in part on higher-arity rendezvous constructions which cannot be encoded in the corresponding CML model. `fibers` appears able to express the same examples, but this repository does not claim the result formally. A future semantics should include an explicit translation from Transactional Events into the compact operation language.
+
+## 4. Reagents
+
+### Algebra
+
+Reagents are the closest comparison in breadth. Their core combines atomic shared-state updates and synchronous communication with choice, sequencing, side-by-side pairing and post-commit work.
+
+Approximate correspondences are:
+
+| Reagents | fibers |
+|---|---|
+| `upd`/atomic update | versioned location transition or patch |
+| `swap` | exchange |
+| choice `+` | `choice`, but with different bias |
+| sequencing `>>` | `and_then` |
+| pairing `*` | product |
+| `postCommit` | consequence or wrap, depending on ownership |
+| blocking partial update | a primitive whose complete absence contributes `Retry` |
+
+Reagent choice is deliberately left-biased in order to support algorithms such as elimination backoff. `fibers.choice` is instead unordered. A correctness-relevant preference is stated using `or_else`; a throughput preference which does not require refutation should remain runtime policy rather than changing the denotation of the operation.
+
+The principal algebraic distinction introduced by `fibers` is the split between two product modes:
 
 ```text
-primitive(resource, request)
+all       every lane must succeed without positive sibling supply
+tensor    every lane must succeed and compatible siblings may supply one another
 ```
 
-A resource kind may contribute tentative state, matching or allocation
-premises, validation observations and commit consequences. Rendezvous is one
-resource family rather than the privileged definition of a transaction.
+Reagent pairing makes constituent reactions atomic together. `fibers` additionally makes the isolation-versus-interaction boundary explicit and asks each store algebra to provide separate sequential, independent-parallel and interacting-parallel composition rules.
 
-`fibers` also distinguishes eager competition from certified fallback:
+### Primitive authoring
+
+Reagents are designed for authors of scalable concurrent data structures. The author describes updates, reads, CAS-style actions, exchanges and composition; the implementation supplies retry, blocking and multi-location atomicity. Their performance objective is close to hand-written lock-free algorithms on multicore shared memory.
+
+`fibers` asks a different question. A facility author describes a declarative transactional transition relation, possibly with lazy alternative witnesses. The kernel performs global proof search, participant recruitment and a serial validated commit.
+
+| Concern | Reagents | fibers |
+|---|---|---|
+| Author describes | Fine-grained concurrent algorithm | Transactional resource relation |
+| Execution centre | Distributed CAS/kCAS-style reaction | Runtime-local search and commit authority |
+| Main correctness burden | Atomic composition and lock-free interaction | Callback purity, complete witnesses and merge laws |
+| Main performance risk | Contention and CAS retries | Branching, recruitment and witness search |
+| Natural domain | Parallel concurrent data structures | Rich cross-resource coordination |
+
+### Expressivity
+
+Reagents are stronger in the intended domain of parallel, lock-free implementation and persistent reusable catalysts. `fibers` is stronger in its direct vocabulary for proof-bearing fallback, explicit bounded-search incompleteness, ownership movements and the distinction between independent and interacting conjunction.
+
+A formal relationship between Reagent pairing and `fibers.all`/`fibers.tensor` remains open work.
+
+## 5. The distinctive fibres algebra
+
+The compact public basis can be read as:
 
 ```text
-choose(p, q)      both alternatives compete
-or_else(p, q)     q is opened only after p yields a valid Retry proof
+choice      unordered disjunction: any compatible alternative is acceptable
+or_else     justified priority: fallback requires a valid refutation
+and_then    transactional causality: later proof may retract earlier work
+all         independent conjunction: no positive sibling supply
+tensor      interacting conjunction: compatible sibling hand-off is visible
 ```
 
-A bounded search which has not finished returns `Unknown`, not `Retry`, and
-therefore cannot enable `or_else`. This distinction has no direct counterpart in
-the core TE interface.
-
-## Reagents
-
-[Reagents](https://aturon.github.io/academic/reagents.pdf) are the nearest precedent in both ambition and structure. A
-`Reagent[A,B]` is an inert concurrent transformation which may combine atomic
-shared-state updates with synchronous endpoint exchanges. The core includes:
+The corresponding search outcomes are:
 
 ```text
-upd          isolated atomic reference update
-swap         synchronous exchange
-+            choice
->>           sequencing
-*            pairing
-postCommit   action after a successful reaction
+Hit       constructive evidence for a candidate committed world
+Retry     complete present refutation under managed, revalidatable facts
+Unknown   bounded search has established neither Hit nor Retry
 ```
 
-Reagents explicitly connect shared state with message passing, or isolation
-with interaction. They also distinguish active one-shot invocation from passive
-persistent catalysts. Their implementation goal is fine-grained shared-memory
-parallelism with a clear cost model and performance competitive with specialised
-lock-free algorithms.
+This makes several common decisions concise.
 
-`fibers` agrees with the central Reagents claim that useful concurrent
-abstractions often need both isolation and interaction. There are nevertheless
-material differences.
+### Priority followed by indifference
 
-### Open resources rather than two foundational interactions
-
-Reagents deliberately build from atomic reference updates and synchronous
-swaps. `fibers` exposes a resource protocol. Standard instances include scalar,
-counter, ordered, keyed, leasing, rendezvous, external-event and ownership
-resources. A resource may solve a domain-specific set of combined requests
-rather than reducing every interaction to a reference update or endpoint swap.
-
-This openness has a cost: writing a lawful advanced resource is closer to
-writing part of a transaction engine than to implementing an ordinary Lua
-object. `fibers` therefore does not inherit Reagents' compact cost model merely
-by resemblance.
-
-### Two product modes
-
-Reagent sequencing and pairing conjoin interactions. `fibers` makes a further
-operational distinction:
-
-```text
-all       lanes are jointly committed but may not satisfy one another
-
-tensor    lanes form a local interaction network and may close internal
-          rendezvous or positive resource supply
+```lua
+preferred:or_else(fibers.choice(a, b, c))
 ```
 
-This separates joint allocation from internal handoff. It is a deliberate
-semantic distinction, not merely an API spelling of pairing.
+Use the preferred operation whenever it can commit in the selected world. Otherwise choose any acceptable operation in the second tier.
 
-### Proof-carrying retry and bounded search
+### A tier of preferred alternatives followed by fallback
 
-Reagents distinguish transient interference, which should retry immediately,
-from permanent failure, which should block until the environment changes.
-`fibers` expresses the corresponding completed-search result as `Retry P`, where
-`P` records managed validity frontiers and host interests.
-
-It adds a separate `Unknown K` result for bounded or incomplete search. This
-allows an embeddable runtime to suspend proof work without pretending that the
-operation is currently impossible.
-
-### Outcome scope
-
-Reagents provide `postCommit`, and therefore precede `fibers` in attaching work
-to a successful reaction. `fibers` divides outcome behaviour more finely:
-
-```text
-resource journal       state installed by the commit
-commit consequence     runtime obligation selected with the world
-
-defeat consequence     runtime obligation of an entered losing occurrence
-wrap                    value transformation run by one resumed participant
+```lua
+fibers.choice(socket_a, socket_b):or_else(timeout)
 ```
 
-The distinction is about ownership and ordering, not a claim that post-commit
-actions are new.
+The timeout is admitted only after both socket alternatives have been completely refuted at the relevant managed instant.
 
-### Lifetime as a transactional application
+### Joint requirements without hand-off
 
-Reagents provide persistent catalysts, while their core paper leaves catalyst
-cancellation as an addition. `fibers` currently lacks an equivalent general
-passive-reaction operator. Instead, its developed lifetime application is
-structured scopes: task admission, custody movement, cancellation, closure and
-settlement are represented through ordinary resource transactions and policy.
+```lua
+fibers.all({ account_a:take_op(1), account_b:take_op(1) })
+```
 
-This is one of the model's intended demonstrations: structured concurrency is
-not a separate scheduler convention, but a policy over transactionally recorded
-obligations. It does not imply that CSP, CML, TE or Reagents cannot host
-structured concurrency by other means.
+Both withdrawals must be supported by the parent world; one lane cannot fund the other.
 
-## Where `fibers` is deliberately different
+### Intentional transactional hand-off
 
-The model can be summarised by five choices.
+```lua
+fibers.tensor({ slots:give_op(1), slots:take_op(1) })
+```
 
-### The transaction denotes a world, not only an event sequence
+Compatible sibling supply may participate in the same committed world.
 
-A candidate world may contain communication, state changes, ownership changes,
-external observations and runtime obligations. Commit selects one compatible
-world and makes those components real together.
+## 6. Present strengths and limitations
 
-### Resource semantics are open
+`fibers` is strongest where a programme needs one coherent decision across several kinds of managed resource:
 
-The runtime does not know all resource algebras in advance. Resource kinds own
-their request composition, solving and journal semantics, subject to global
-validity and commit laws.
+- synchronous exchange;
+- state transitions and allocation;
+- alternative witnesses;
+- ownership and lifetime changes;
+- readiness and timer observations;
+- selected post-commit obligations.
 
-### Search outcomes carry semantic information
+The present system does not yet provide:
 
-`Hit`, `Retry` and `Unknown` are distinct. In particular, incomplete bounded
-search is not interpreted as absence and cannot trigger fallback.
+- a denotational semantics or mechanised proof;
+- a behavioural refinement relation comparable with mature CSP work;
+- a published encoding or separation theorem for the systems above;
+- fairness or uniform-probability guarantees for `choice`;
+- lock-free or parallel commit progress comparable with Reagents;
+- static enforcement of primitive callback purity and witness completeness;
+- crash-durable or distributed transactions.
 
-### Participant continuation is not transaction consequence
+The most useful formal development would therefore concentrate on:
 
-A `wrap` belongs to one resumed fibre. A consequence belongs to the selected
-world or defeated occurrence and is discharged by the runtime before ordinary
-participant continuation.
+1. translations of CML and Transactional Events into the compact operation language;
+2. a precise relationship between Reagent pairing and `all`/`tensor`;
+3. laws for unordered `choice`, proof-certified `or_else` and occurrence-sensitive defeat;
+4. soundness and completeness statements for `Hit`, `Retry` and `Unknown`;
+5. a separation example showing why independent and interacting product modes are both necessary.
 
-### Lifetime is governed by policy over recorded custody
+## References
 
-Scopes account for tasks and resources before their boundaries complete.
-Nursery, supervisor and custom policies determine failure propagation while the
-Region ledger records custody.
+Primary sources used for this comparison:
 
-## Non-claims
+- C. A. R. Hoare, *Communicating Sequential Processes*, Prentice Hall, 1985. Oxford CSP resources: <https://www.cs.ox.ac.uk/activities/concurrency/books/>
+- John H. Reppy, “CML: A Higher-order Concurrent Language”, PLDI 1991: <https://www.cs.tufts.edu/~nr/cs257/archive/john-reppy/cml-pldi.pdf>
+- Kevin Donnelly and Matthew Fluet, “Transactional Events”, ICFP 2006: <https://www.cs.cornell.edu/people/fluet/research/tx-events/ICFP06/icfp06.pdf>
+- Aaron Turon, “Reagents: Expressing and Composing Fine-Grained Concurrency”, PLDI 2012: <https://aturon.github.io/academic/pldi-2012-reagents.pdf>
 
-The comparison should not be read as claiming that `fibers` strictly subsumes
-these systems.
-
-- It does not provide CSP's established process-algebraic verification model.
-- It does not adopt CML's exact scheduling, fairness or event semantics.
-- Its algebra is not simply TE's monad-with-plus: `or_else`, product modes,
-  consequences and bounded `Unknown` add different structure and laws.
-- It does not currently provide Reagents' lock-free progress or performance
-  guarantees, nor a general catalyst facility.
-- Its guarantees are in-process. Commit consequences are not crash-durable
-  distributed transactions.
-
-The intended position is narrower:
-
-> `fibers` is a cooperative Lua runtime for first-class transactions over
-> extensible resources, combining synchronous interaction, speculative state,
-> proof-carrying retry, runtime consequences and structured lifetime.
-
-## Primary references
-
-- C. A. R. Hoare, [“Communicating Sequential Processes”](https://www.cs.cmu.edu/~crary/819-f09/Hoare78.pdf), *Communications of the ACM*, 1978.
-- John H. Reppy, [“CML: A Higher-order Concurrent Language”](https://www.cs.tufts.edu/~nr/cs257/archive/john-reppy/cml-pldi.pdf), PLDI 1991.
-- Kevin Donnelly and Matthew Fluet, [“Transactional Events”](https://www.cs.cornell.edu/people/fluet/research/tx-events/ICFP06/icfp06.pdf), ICFP 2006.
-- Aaron Turon, [“Reagents: Expressing and Composing Fine-grained Concurrency”](https://aturon.github.io/academic/reagents.pdf), PLDI 2012.
+The reference list is deliberately limited to primary material. The terminology used for `fibers` is defined in `algebra.md` and `resource-authoring.md`.
