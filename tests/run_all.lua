@@ -16,6 +16,7 @@ local Harness = require('tests.harness')
 local tests = {
   'tests/test_protected.lua',
   'tests/test_atoms_kit.lua',
+  'tests/test_bitops.lua',
   'tests/test_calendar.lua',
   'tests/test_calendar_completeness.lua',
   'tests/test_concurrent_task_settlement.lua',

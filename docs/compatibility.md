@@ -48,11 +48,14 @@ luarocks-5.1 ... luarocks-5.5
 luarocks-luajit
 ```
 
-`cffi-lua` is installed for stock Lua 5.1–5.5. The `bit32` compatibility
-rock is installed for Lua 5.1 and 5.4, where the native host adapters require
-that API. `luaposix` is installed for Lua 5.1–5.4 and LuaJIT; its current
+`cffi-lua` is installed for stock Lua 5.1–5.5. Native host adapters resolve
+native bit operations first (LuaJIT's built-in `bit` library or Lua 5.3+
+native operators), then a `bit` module, then global or installed `bit32`.
+The `bit32` compatibility rock remains installed for Lua 5.1 and Lua 5.4.
+`luaposix` is installed for Lua 5.1–5.4 and LuaJIT; its current
 release does not declare Lua 5.5 support. The LuaJIT FFI backend uses LuaJIT's
-built-in `ffi`. `nixio` remains an optional compatibility target.
+built-in `ffi`. `nixio` is installed in the development container for Lua
+5.1 and LuaJIT, the Lua 5.1 ABI family targeted by its upstream build defaults.
 
 ## Verification
 

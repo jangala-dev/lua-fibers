@@ -14,9 +14,10 @@ if not ok_ffi or type(ffi) ~= 'table' then
   return unsupported('LuaJIT ffi not available')
 end
 
-local bit = rawget(_G, 'bit')
+local BitOps = require('fibers.internal.bitops')
+local bit, bit_error = BitOps.resolve()
 if not bit then
-  return unsupported('LuaJIT bit operations not available')
+  return unsupported(bit_error)
 end
 
 return Common.new({

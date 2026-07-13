@@ -9,7 +9,8 @@ Opening the repository in a Dev Container bootstraps `make` first, then installs
 - StyLua 2.5.2;
 - `cffi-lua` for stock Lua 5.1–5.5;
 - `luaposix` for Lua 5.1–5.4 and LuaJIT;
-- the `bit32` compatibility rock for Lua 5.1 and Lua 5.4.
+- the `bit32` compatibility rock for Lua 5.1 and Lua 5.4;
+- `nixio` 0.4.1 for Lua 5.1–5.5 and LuaJIT, installed from a repository-local rockspec pinned to an exact upstream commit.
 
 The system package set includes the compiler toolchain, CMake, Meson, Ninja,
 `libffi` and OpenSSL headers, Lua readline dependencies, and the archive and patch tools
@@ -27,11 +28,14 @@ luarocks-5.5 install <rock>
 luarocks-luajit install <rock>
 ```
 
-`nixio` is deliberately opt-in because its available rock is old:
-
-```sh
-sudo make -f .devcontainer/Makefile rocks-nixio
-```
+`nixio` is part of the standard bootstrap for Lua 5.1–5.5 and LuaJIT.
+Upstream declares Lua 5.1 or later and contains compatibility code for the
+post-5.1 C API. The bootstrap builds it independently for every runtime and
+runs the nixio host and file-descriptor host tests under each one. The public
+LuaRocks entry is uploader-scoped and is not resolved by the default manifest,
+so `.devcontainer/rocks/nixio-0.4.1-1.rockspec` uses the immutable upstream
+commit for release v0.4.1. It also supplies `<limits.h>` because upstream
+`process.c` uses `PATH_MAX` without including that standard header directly.
 
 For reproducible CI or release images, override `LUAJIT_REF` with an exact tested
 commit rather than following the branch head.

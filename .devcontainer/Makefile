@@ -26,13 +26,15 @@ LUAU_REF ?= 0.728
 LUAROCKS_VERSION ?= 3.13.0
 CFFI_VERSION ?= 0.2.4-1
 LUAPOSIX_VERSION ?= 36.3-1
-NIXIO_VERSION ?= 0.4-1
+NIXIO_VERSION ?= 0.4.1-1
+NIXIO_ROCKSPEC := $(CURDIR)/.devcontainer/rocks/nixio-$(NIXIO_VERSION).rockspec
 BIT32_VERSION ?= 5.3.5.1-1
 STYLUA_VERSION ?= 2.5.2
 
 .PHONY: bootstrap validate-pins system lua lua51 lua52 lua53 lua54 lua55 \
 	luajit luau stylua luarocks wrappers rocks rocks-bit32 rocks-cffi \
-	rocks-luaposix rocks-nixio verify clean-build
+	rocks-luaposix rocks-nixio verify verify-lua verify-luajit verify-luau \
+	verify-tools verify-luarocks clean-build
 
 bootstrap: validate-pins system lua luajit luau stylua luarocks wrappers rocks verify clean-build
 
@@ -219,11 +221,11 @@ wrappers: luarocks
 	make_wrapper luajit 5.1 "$(PREFIX_ROOT)/luajit" "$(PREFIX_ROOT)/luajit"
 	ln -sfn "$(PREFIX_ROOT)/luarocks/bin/luarocks" /usr/local/bin/luarocks
 
-rocks: rocks-bit32 rocks-cffi rocks-luaposix
+rocks: rocks-bit32 rocks-cffi rocks-luaposix rocks-nixio
 
-# Fibers native host adapters need the bit32 API on Lua 5.1 and Lua 5.4.
+# Keep bit32 available where current native dependencies expect its API.
 # Lua 5.2 provides it, Lua 5.3 reports it as VM-provided, and the current rock
-# does not yet declare Lua 5.5 support.
+# does not yet declare Lua 5.5 support. Fibers itself prefers native operations.
 rocks-bit32: wrappers lua51 lua54
 	luarocks-5.1 install bit32 "$(BIT32_VERSION)"
 	luarocks-5.4 install bit32 "$(BIT32_VERSION)"
@@ -238,21 +240,52 @@ rocks-luaposix: wrappers lua51 lua52 lua53 lua54 luajit
 		"luarocks-$$runtime" install luaposix "$(LUAPOSIX_VERSION)"
 	done
 
-# nixio is useful for compatibility testing but is old and therefore opt-in.
-rocks-nixio: wrappers lua51 luajit
-	luarocks-5.1 install nixio "$(NIXIO_VERSION)"
-	luarocks-luajit install nixio "$(NIXIO_VERSION)"
+# nixio declares Lua >= 5.1 and its C compatibility layer supports the
+# post-5.1 API. Install and verify it independently for every supported stock
+# Lua runtime and LuaJIT. The repository-local rockspec pins the exact source
+# revision and supplies a missing standard header required by LuaJIT builds.
+rocks-nixio: wrappers lua luajit
+	test -f "$(NIXIO_ROCKSPEC)"
+	for runtime in 5.1 5.2 5.3 5.4 5.5 luajit; do
+		"luarocks-$$runtime" install "$(NIXIO_ROCKSPEC)"
+	done
 
-verify: lua luajit luau stylua luarocks wrappers rocks
-	lua5.1 -e "assert(_VERSION == 'Lua 5.1'); assert(require('bit32')); assert(require('cffi')); assert(require('posix.sys.socket'))"
-	lua5.2 -e "assert(_VERSION == 'Lua 5.2'); assert(require('cffi')); assert(require('posix.sys.socket'))"
-	lua5.3 -e "assert(_VERSION == 'Lua 5.3'); assert(require('cffi')); assert(require('posix.sys.socket'))"
-	lua5.4 -e "assert(_VERSION == 'Lua 5.4'); assert(require('bit32')); assert(require('cffi')); assert(require('posix.sys.socket'))"
-	lua5.5 -e "assert(_VERSION == 'Lua 5.5'); assert(require('cffi'))"
-	luajit -e "assert(jit and jit.version); assert(require('ffi')); assert(require('posix.sys.socket'))"
-	luau -h >/dev/null
-	luau-analyze --help >/dev/null
+verify: verify-lua verify-luajit verify-luau verify-tools verify-luarocks
+
+verify-lua: rocks
+	for slot in 5.1 5.2 5.3 5.4 5.5; do
+		LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' "lua$$slot" -e "assert(_VERSION == 'Lua $$slot'); assert(require('cffi')); assert(require('nixio')); local h = require('fibers.host.nixio'); local ok, why = h.is_supported(); assert(ok, why)"
+		"lua$$slot" tests/hosts/test_nixio.lua
+		"lua$$slot" tests/hosts/test_fd_nixio.lua
+	done
+	lua5.1 -e "assert(require('bit32')); assert(require('posix.sys.socket'))"
+	lua5.2 -e "assert(require('posix.sys.socket'))"
+	lua5.3 -e "assert(require('posix.sys.socket'))"
+	lua5.4 -e "assert(require('bit32')); assert(require('posix.sys.socket'))"
+	LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' lua5.5 -e "local h = require('fibers.host.cffi_linux'); local ok, why = h.is_supported(); assert(ok, why)"
+
+verify-luajit: rocks
+	LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' luajit -e "assert(jit and jit.version); assert(require('ffi')); assert(require('posix.sys.socket')); assert(require('nixio')); local h = require('fibers.host.nixio'); local ok, why = h.is_supported(); assert(ok, why)"
+	luajit tests/hosts/test_nixio.lua
+	luajit tests/hosts/test_fd_nixio.lua
+
+# Luau has no --version option. Execute and analyse a small typed programme
+# instead, which checks both installed CLI binaries.
+verify-luau: luau
+	smoke="$(BUILD_ROOT)/verify-luau.luau"
+	printf '%s\n' \
+		'local value: number = 1' \
+		'assert(value == 1)' \
+		'print("luau ok")' \
+		> "$$smoke"
+	luau "$$smoke"
+	luau-analyze "$$smoke" >/dev/null
+	rm -f "$$smoke"
+
+verify-tools: stylua
 	stylua --version
+
+verify-luarocks: wrappers
 	for command in luarocks-5.1 luarocks-5.2 luarocks-5.3 luarocks-5.4 luarocks-5.5 luarocks-luajit; do
 		"$$command" --version
 	done

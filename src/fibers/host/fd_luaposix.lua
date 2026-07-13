@@ -29,13 +29,8 @@ local ok_unistd, unistd = pcall(require, 'posix.unistd')
 local ok_fcntl, fcntl = pcall(require, 'posix.fcntl')
 local ok_errno, errno = pcall(require, 'posix.errno')
 local ok_socket, socket_mod = pcall(require, 'posix.sys.socket')
-local bit = rawget(_G, 'bit') or rawget(_G, 'bit32')
-if not bit then
-  local ok_bit32, bit32_mod = pcall(require, 'bit32')
-  if ok_bit32 then
-    bit = bit32_mod
-  end
-end
+local BitOps = require('fibers.internal.bitops')
+local bit, bit_error = BitOps.resolve()
 
 if
   not ok_unistd
@@ -48,7 +43,7 @@ then
   return unsupported('luaposix unistd/fcntl/errno not available')
 end
 if not bit then
-  return unsupported('bit or bit32 operations not available')
+  return unsupported(bit_error)
 end
 
 local Fd = {}

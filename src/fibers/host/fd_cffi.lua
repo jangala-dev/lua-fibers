@@ -14,15 +14,10 @@ if not ok_cffi or type(ffi) ~= 'table' then
   return unsupported('cffi module not available')
 end
 
-local bit = rawget(_G, 'bit') or rawget(_G, 'bit32')
+local BitOps = require('fibers.internal.bitops')
+local bit, bit_error = BitOps.resolve()
 if not bit then
-  local ok_bit32, bit32_mod = pcall(require, 'bit32')
-  if ok_bit32 then
-    bit = bit32_mod
-  end
-end
-if not bit then
-  return unsupported('bit or bit32 operations not available')
+  return unsupported(bit_error)
 end
 
 return Common.new({
