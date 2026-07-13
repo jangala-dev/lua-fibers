@@ -1,147 +1,401 @@
-# lua-fibers
+# fibers
 
-Lightweight Go-like concurrency and non-blocking IO for Lua (5.1-5.4) and LuaJIT.
+`fibers` runs lots of concurrent work in one Lua process, using cooperative fibers and an event loop. The aim is not “threads in Lua”, but something closer to:
+
+* **structured lifetimes** (supervision scopes),
+* **first-class blocking operations** (Ops),
+* **I/O and subprocesses that behave like Ops**,
+* **errors as control flow** (throw freely; catch rarely).
+
+A typical entry point:
 
 ```lua
-local function fibonacci(c, quit)
-    local x, y = 0, 1
-    local done = false
-    repeat
-        op.choice(
-            c:put_op(x):wrap(function(value)
-                x, y = y, x+y
-            end),
-            quit:get_op():wrap(function(value)
-                print("quit")
-                done = true
-            end)
-        ):perform()
-    until done
+local fibers = require "fibers"
+
+local function main(scope)
+  -- application code here
 end
 
-fiber.spawn(function()
-    local c = channel.new()
-    local quit = channel.new()
-    fiber.spawn(function()
-        for i=1, 10 do
-            print(c:get())
-        end
-        quit:put(0)
+fibers.run(main)
+```
+
+Inside `main`, you write ordinary Lua. When you need to wait for something, you perform an op. When you need concurrency, you spawn. When you need cleanup, you register a finaliser. Scopes do the rest.
+
+---
+
+## The mental model
+
+### 1) Scopes own time
+
+Every fiber runs “inside” a scope. A scope is the unit of:
+
+* what work is allowed to start,
+* what gets cancelled when something goes wrong,
+* what must be joined before the scope is considered finished,
+* and where cleanup belongs.
+
+If you start work in a scope, that scope is responsible for joining it and running cleanup, even if things fail.
+
+### 2) Waiting is explicit
+
+Anything that might block is an **Op**. Examples:
+
+* `sleep.sleep_op(dt)`
+* channel `get_op` / `put_op`
+* stream reads/writes (`read_line_op`, `write_string_op`, …)
+* socket accept/connect ops
+* waiting for a subprocess
+* joining a scope
+
+Ops compose. If you can race a channel receive against a timeout, you can do the same with I/O, process completion, or a scope boundary.
+
+### 3) Errors are normal (and scoped)
+
+Inside a scope, it is normal to use `error`, `assert`, or let exceptions escape. The scope boundary is what turns “chaos” into a reportable outcome.
+
+You rarely need `pcall`. When you do catch, it should be because you have a real local recovery plan.
+
+---
+
+## Highlights
+
+## Fail-fast scopes
+
+Within a scope:
+
+* the **first non-cancellation failure** becomes the **primary failure**,
+* siblings are cancelled (fail-fast),
+* cleanup runs (finalisers),
+* later faults become **secondary errors** collected in the report.
+
+At boundaries you get structured outcomes. In most application code, you just throw and move on.
+
+## Ops: a small algebra for waiting
+
+Ops can complete immediately, or they can suspend and resume later. You can combine them using:
+
+* `choice`, `named_choice`, `boolean_choice`, `race`
+* `guard`
+* `bracket` / `:finally` / `:wrap`
+* (advanced) `with_nack` and abort behaviour
+
+Timeouts are not special-cased. They’re just “race X against sleep”.
+
+## I/O and subprocesses participate fully
+
+Streams, sockets, pollers, and subprocesses are built to “feel like ops”:
+
+* blocking reads/writes are ops,
+* readiness is registered with the poller and unregistered on abort,
+* subprocess lifetime is attached to a scope and shut down on scope exit,
+* and you can race them against timeouts like anything else.
+
+---
+
+## Examples
+
+## 1) Fail fast, and inspect the outcome at a boundary
+
+`fibers.run_scope` returns:
+
+* `status` (`"ok"|"failed"|"cancelled"`)
+* a `report` snapshot
+* either results (on `"ok"`) or the primary error/reason (on not-ok)
+
+```lua
+local fibers = require "fibers"
+local sleep  = require "fibers.sleep"
+
+local function main()
+  fibers.spawn(function()
+    sleep.sleep(0.5)
+    print("sibling: finished ok")
+  end)
+
+  local status, report, value_or_primary = fibers.run_scope(function(child)
+    child:finally(function()
+      print("finaliser 1")
     end)
-    fibonacci(c, quit)
-    fiber.stop()
-end)
 
-fiber.main()
+    child:finally(function()
+      print("finaliser 2 (oops)")
+      error("finaliser 2 failed")
+    end)
+
+    sleep.sleep(0.1)
+    error("child: boom")
+  end)
+
+  print("child scope:", status, tostring(value_or_primary))
+
+  if report and report.extra_errors and #report.extra_errors > 0 then
+    print("secondary errors:")
+    for i, e in ipairs(report.extra_errors) do
+      print(("  [%d] %s"):format(i, tostring(e)))
+    end
+  end
+end
+
+fibers.run(main)
 ```
 
-Ported from the Snabb Project's [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [`streams`](https://github.com/snabbco/snabb/tree/master/src/lib/stream) libraries, written by 
-Andy Wingo as an implementation of Reppy et al's Concurrent ML(CML), and a fibers-based reimplementation of Lua's streams enabling smooth non-blocking access to files and sockets.
+Inside scopes, errors can escape. The scope records the failure, cancels siblings, runs finalisers, and reports the outcome at the boundary.
 
-Inspired by Andy's [blog post](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) introducing fibers on Lua
+If the top-level `main` fails, `fibers.run(main)` raises the primary failure.
 
-## Usage
+---
 
-You can find examples in the `/examples` directory.
+## 2) Channels and timeouts: the intended pattern
 
-Much of the (excellent) documentation from the [Guile manual on
-fibers](https://github.com/wingo/fibers/wiki/Manual) is directly relevant here,
-with the following points to bear in mind:
-  - Guile's implementation runs X fibers across Y cores, with one work stealing
-    scheduler per core. The Lua port is single threaded, running in a single Lua
-    process. In the future we may well implement true parallelism perhaps using
-    a Lanes/Lindas approach
+```lua
+local fibers = require "fibers"
+local chan   = require "fibers.channel"
+local sleep  = require "fibers.sleep"
 
-## Installation
+local function main()
+  local c = chan.new()
 
-This is a pure Lua (with FFI) module with the following dependencies:
-  - lua-posix (for micro/nano timing and sleeping options, for forking and 
-  other syscall operations)
-  - libffi and lua-cffi (if not using LuaJIT)
-  - lua-bit32 (if not using LuaJIT)
+  fibers.spawn(function()
+    sleep.sleep(0.1)
+    c:put("hello")
+  end)
 
-These dependencies will be installed in a VScode devcontainer automatically. To install manually follow the following steps:
+  local ev = fibers.named_choice{
+    data    = c:get_op(),
+    timeout = sleep.sleep_op(1.0),
+  }
 
-1. Copy the `fibers` directory somewhere lua can find it
-1. Choose between Lua and LuaJIT:
-   1. If using LuaJIT:
-      1. Install LuaJIT (tested with 2.1.0-beta 3) according to your platform instructions
-   1. If using Lua:
-      1. Install Lua (5.1 to 5.4) according to your platform instructions
-      1. bit32 with `luarocks install bit32`
-      1. Install `libffi`
-      1. Install `cffi-lua` with `luarocks install cffi`
-1. Install dependencies:
-   1. luaposix with `luarocks install luaposix`
+  local which, value = fibers.perform(ev)
 
-### Installation with LuaJIT on OpenWRT
+  if which == "data" then
+    print("got:", value)
+  else
+    print("timed out")
+  end
+end
 
-This is the simplest set up for running on OpenWRT.  
-
-`opkg update; opkg install luajit; opkg install luaposix`
-
-Note that `luaposix` should be installed with `opkg` and not with `luarocks` in this context.
-
-That's it!
-
-## Why Fibers?
-
-There are many possible advantages of fibers, in comparison to other async models such as callbacks, async/await, and promises. This is especially in highly complex programs with lots of semi-independent code doing async IO (such as in-process microservices).
-
-|   | **Callbacks** | **Promises** | **Async/Await** | **Fibers** |
-|---|---|---|---|---|
-| **Readability** | Less readable due to "callback hell", a situation where callbacks are nested within callbacks, making the code hard to read and debug. | More readable than callbacks, but still requires then-catch chains for error handling, which can become cumbersome. | Most readable, as it makes asynchronous code look synchronous, improving comprehension and maintainability. | Very readable, since fibers can be used to write asynchronous code in a synchronous style without the need for callbacks or promises. |
-| **Stack Traces** | Less clear, as each callback function creates a new stack frame, so errors can be hard to trace back to their origin. | Better than callbacks, but still might have challenges because Promises swallow errors if not handled correctly. | Good, because async/await allows to use traditional try-catch error handling which provides clear stack traces. | Best, because fibers maintain their own stack, providing a clean and comprehensive  trace. |
-| [**'Coloured Function' Problem**](https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/) | Highly affected. If a function is asynchronous (uses callbacks), all of its callers must be too. | Less affected, but still present to some extent.  | Still present but significantly reduced as compared to callbacks and promises.  | Not affected. Fibers can pause and resume execution, meaning asynchronous functions can be called as if they were synchronous, without requiring callers to be async. |
-| **Debugging** | Difficult, because the asynchronous nature of callbacks can make it hard to step through the code or maintain a consistent state for inspection. | Easier than callbacks, but may still be challenging due to the chaining of promises. | Easier, because async/await can be stepped through like synchronous code. | Easiest, because fibers allow you to write code that's structurally synchronous and therefore easier to debug. |
-| **Performance** | Callbacks are generally faster as there is no extra abstraction layer. But the complexity may increase with the number of operations. | Promises have extra abstraction which may have some performance impact. | Similar performance to promises as it's built on top of them. | Fibers may introduce some performance overhead as each fiber has its own stack, but this is small and outweighed by benefits in terms of readability, error handling, and simplicity. |
-
-
-## Beyond Go's concurrency
-
-This library implements a simple version of Concurrent ML(CML), and provides primitives very similar to those offered by Go. However, while both Go and CML offer powerful models for concurrent programming, the flexibility and expressibility of Concurrent ML's first-class synchronisable events (here called 'operations') provide more advanced mechanisms to handle complex synchronisation scenarios.
-
-|   | Go | Concurrent ML (CML) |
-|---|---|---|
-| Basic Mechanism | Uses goroutines and channels as the primary concurrency mechanisms. | Uses threads and synchronous message-passing channels, but also introduces the concept of 'synchronisable events'. |
-| Choice | Provides non-deterministic choice over multiple channel operations using the `select` statement. However, it can only work with channels and the options must be statically declared at compile-time. | Supports non-deterministic choice among a dynamic set of 'synchronisable events' that can be constructed at runtime. These events can represent a wider variety of actions beyond just message-passing. |
-| Timeouts | Achievable with `select` and timer channels. However, the syntax can be more verbose. | Timeouts are easily created as an event and composed with other events using the choice combinator. |
-| User-Defined Concurrency Primitives | Limited. The primary concurrency primitive is the channel, and `select` can't be easily extended by users. | Highly flexible. CML's first-class events and combinators allow users to build their own high-level concurrency primitives (like barriers, semaphores, or read/write locks). These user-defined primitives can be composed and manipulated just like built-in ones. |
-| Overall Flexibility | Go's model is relatively simple and straightforward, but may not have the necessary flexibility for more complex synchronisation patterns. | CML's model is extremely flexible, allowing for the expression of complex synchronisation patterns in a direct and elegant manner. |
-
-## Progress
-
-All of the Snabb 'fibers' modules the following have so far been ported and 
-tested. All of Snabb's 'stream' module has also been ported, which can do 
-non-blocking reads and writes from file descriptors using familiar `line` 
-and `all` approaches. 
-
-We use the `cffi` module to port Wingo's `luajit` C ffi based
-buffers implementation in a way that will work across multiple architectures, as
-Lua versions of these buffers would be inefficient and lead to allocation and
-garbage collection without a substantial investment of time. 
-
-## Structured concurrency
-
-While it's fun spinning off fibers/goroutines like popcorn, it comes with a [cost](https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/). Structured concurrency is a possible enhancement, basically the idea that no fiber/goroutine should outlive its parent:
-https://about.sourcegraph.com/blog/building-conc-better-structured-concurrency-for-go
-
-
-## Fibers module map
-
-```mermaid
-graph TD;
-    timer.lua-->sched.lua;
-    sched.lua-->fiber.lua;
-    fiber.lua-->op.lua;
-    fiber.lua-->sleep.lua;
-    op.lua-->sleep.lua;
-    epoll.lua-->file.lua;
-    fiber.lua-->file.lua;
-    op.lua-->file.lua;
-    op.lua-->cond.lua;
-    op.lua-->channel.lua;
-    fiber.lua-->queue.lua;
-    op.lua-->queue.lua;
-    channel.lua-->queue.lua;
+fibers.run(main)
 ```
+
+Timeouts are deliberately expressed as “race an op against `sleep_op`”.
+
+---
+
+## 3) Race an entire subtree of work against a timeout
+
+A scope boundary can itself be an op: `fibers.run_scope_op`. It resolves when the child scope has joined (including its finalisers and attached children).
+
+```lua
+local fibers = require "fibers"
+local sleep  = require "fibers.sleep"
+
+local function main()
+  local subtree = fibers.run_scope_op(function(child)
+    child:spawn(function()
+      sleep.sleep(2.0)
+      print("subtree: finished")
+    end)
+    return "started"
+  end)
+
+  local ev = fibers.named_choice{
+    subtree  = subtree,            -- yields: st, rep, results/primary
+    timeout  = sleep.sleep_op(1.0),
+  }
+
+  local which, st, rep, v = fibers.perform(ev)
+
+  if which == "timeout" then
+    print("timed out; subtree was cancelled")
+    return
+  end
+
+  if st == "ok" then
+    print("subtree ok:", tostring(v))
+  else
+    print("subtree not ok:", st, tostring(v))
+  end
+
+  if rep and rep.extra_errors and #rep.extra_errors > 0 then
+    print("secondary errors:", #rep.extra_errors)
+  end
+end
+
+fibers.run(main)
+```
+
+If `run_scope_op(...)` loses in an outer `choice`, the child scope is cancelled (reason `"aborted"`) and then joined deterministically.
+
+---
+
+## 4) Subprocesses are scope-owned
+
+```lua
+local fibers = require "fibers"
+local exec   = require "fibers.io.exec"
+
+local function main()
+  local status, report, out_or_primary = fibers.run_scope(function()
+    local cmd = exec.command{
+      "ls", "-l",
+      stdout = "pipe",
+    }
+
+    local out, st, code, sig, err = fibers.perform(cmd:output_op())
+
+    if st == "exited" and code == 0 then
+      return out
+    end
+
+    error(("command failed: %s code=%s sig=%s err=%s"):format(
+      tostring(st), tostring(code), tostring(sig), tostring(err)
+    ))
+  end)
+
+  if status == "ok" then
+    print(out_or_primary)
+  else
+    print("scope failed:", status, tostring(out_or_primary))
+  end
+end
+
+fibers.run(main)
+```
+
+Commands are attached to the current scope. On scope exit, they are shut down and their owned streams/handles are cleaned up.
+
+---
+
+## Concepts in brief
+
+## Fibers
+
+A **fiber** is a lightweight task scheduled by the runtime.
+
+* `fibers.run(main)` starts the scheduler and runs `main` inside a scope under the process root.
+* `fibers.spawn(fn, ...)` creates a new fiber under the current scope and calls `fn(...)`.
+
+You do not manually join fibers. Scopes track obligations and join deterministically.
+
+## Scopes
+
+A **scope** is a supervision domain with a tree structure and fail-fast semantics.
+
+When a scope fails or is cancelled:
+
+* admission closes (new work is rejected),
+* attached child scopes are cancelled,
+* in-flight ops observe cancellation via `fibers.perform`,
+* finalisers run in LIFO order during join.
+
+Scope outcomes at boundaries:
+
+```lua
+status, report, ...         -- on ok: ... are results
+status, report, primary     -- on not-ok: primary is error/reason
+```
+
+The `report` contains:
+
+* `extra_errors`: faults after the primary is established,
+* `children`: joined child outcomes with nested reports.
+
+## Operations (Ops)
+
+An **Op** represents “something that may block”, they are a close translation of `events` in Concurrent ML.
+
+* Perform an op with `fibers.perform(op)` (must be called inside a fiber).
+* If the current scope is cancelled or failed, `perform` raises (cancellation uses a sentinel internally).
+
+Because everything that blocks is an op, you can write one set of patterns and reuse them everywhere:
+
+* timeouts (`choice` against `sleep_op`)
+* “first ready wins” (`race`, `named_choice`)
+* resource safety (`bracket`, `:finally`)
+* cancellation-safe cleanups (finalisers, abort handlers)
+
+If you want status-first handling, use an explicit boundary (`run_scope`, `run_scope_op`) or work directly with scope APIs.
+
+## I/O and streams
+
+The I/O layer wraps non-blocking file descriptors as buffered `Stream` objects and exposes ops such as:
+
+* `read_line_op`, `read_all_op`, `read_exactly_op`
+* `write_string_op`
+
+These ops integrate with the poller and can be raced, timed out, and cancelled like anything else.
+
+A particularly useful helper is `stream.merge_lines_op`, which races a line read across multiple named streams:
+
+```lua
+local name, line, err = fibers.perform(stream.merge_lines_op({ a = s1, b = s2 }))
+```
+
+## Subprocesses
+
+The exec layer runs subprocesses under scopes:
+
+* commands and stdio wiring are configured up-front,
+* lifecycle is exposed as ops (`run_op`, `shutdown_op`, `output_op`, …),
+* cleanup is attached to scope finalisers so processes are shut down on scope exit.
+
+---
+
+## Error handling
+
+Inside a scope:
+
+* letting an error escape a fiber is normal;
+* the first failure becomes the primary failure and triggers cancellation of siblings;
+* additional failures (including finaliser failures once not-ok) become secondary errors in `report.extra_errors`.
+
+At boundaries:
+
+* `fibers.run(main)` returns results on success, otherwise raises the primary failure/reason (as a string/number),
+* `fibers.run_scope(fn)` returns `status, report, ...` as described above.
+
+Rule of thumb:
+
+* **Throw freely** inside a scope.
+* **Catch rarely**, only when you genuinely want local recovery.
+* **Always register cleanup** with `finally`/`bracket`/scope finalisers rather than trying to “survive” cancellation.
+
+---
+
+## Requirements and installation
+
+### Lua and platform
+
+* Lua 5.1–5.5 or LuaJIT.
+* A POSIX-like platform (currently developed and tested on Linux).
+
+### Backend support
+
+`fibers` uses pluggable backends for polling and subprocess handling. You need at least one compatible stack:
+
+* **FFI backend (preferred)**
+
+  * LuaJIT (or PUC Lua with cffi-lua)
+  * `epoll` for I/O; `pidfd` for process completion (when available)
+
+* **luaposix backend**
+
+  * `luaposix`
+  * `poll`/`select` plus `SIGCHLD` for process completion
+
+* **nixio backend**
+
+  * `nixio`
+  * `poll` for I/O; a double-fork scheme for evented process completion
+
+OS-specific code is isolated in `fibers.io.*_backend` and poller backends, so adding a platform is “implement the backend contract”, not “rewrite the library”.
+
+### Installation
+
+Add the repository to your `package.path` (and `package.cpath` if needed) so modules such as `fibers`, `fibers.channel`, `fibers.sleep`, `fibers.io.file`, `fibers.io.stream`, and `fibers.io.exec` can be `require`d.
+
+---
+
+## Acknowledgements
+
+The design owes a substantial debt to Andy Wingo’s writing on concurrency, including his article [_lightweight concurrency in lua_](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) and his Snabb [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [`stream`](https://github.com/snabbco/snabb/tree/master/src/lib/stream) implementations. And of course to John Reppy's original CML!
