@@ -1,401 +1,367 @@
 # fibers
 
-`fibers` runs lots of concurrent work in one Lua process, using cooperative fibers and an event loop. The aim is not “threads in Lua”, but something closer to:
+`fibers` is a cooperative concurrency runtime for Lua. Fibres perform inert operation values; a proof-search kernel finds a compatible committed world containing synchronous exchange, versioned state changes, ownership changes and post-commit obligations.
 
-* **structured lifetimes** (supervision scopes),
-* **first-class blocking operations** (Ops),
-* **I/O and subprocesses that behave like Ops**,
-* **errors as control flow** (throw freely; catch rarely).
+The production source uses the portable Lua 5.1 grammar. The version 1 runtime policy targets Lua 5.1, 5.2, 5.3, 5.4 and 5.5, the maintained LuaJIT `v2.1` branch, and Luau. Optional native host backends depend on modules available in the embedding environment; Luau host integration is treated separately from the stock-Lua module ABI.
 
-A typical entry point:
 
-```lua
-local fibers = require "fibers"
+## Repository layout
 
-local function main(scope)
-  -- application code here
-end
-
-fibers.run(main)
+```text
+src/          installable Fibers source
+reference/    repository-only reference solver used for differential tests
+tests/        correctness and host-backend tests
+examples/     runnable examples
+performance/  validating benchmarks and solver diagnostics
+docs/         design and user documentation
 ```
 
-Inside `main`, you write ordinary Lua. When you need to wait for something, you perform an op. When you need concurrency, you spawn. When you need cleanup, you register a finaliser. Scopes do the rest.
+Run repository commands from the project root so the development-only reference
+path is available to tests and performance tools.
 
----
+## The operation algebra
 
-## The mental model
+The canonical operation forms are:
 
-### 1) Scopes own time
+```text
+always(values)
+primitive(programme)
+choice(operations)
+and_then(operation, values -> operation)
+product(independent | interacting, lanes)
+or_else(primary, fallback)
+consequence(effect)
+```
 
-Every fiber runs “inside” a scope. A scope is the unit of:
+The public helpers `never`, `map`, `guard`, `all`, `tensor` and `emit` elaborate to those forms. `wrap` and `on_defeat` annotate dynamic occurrences.
 
-* what work is allowed to start,
-* what gets cancelled when something goes wrong,
-* what must be joined before the scope is considered finished,
-* and where cleanup belongs.
+The central distinctions are:
 
-If you start work in a scope, that scope is responsible for joining it and running cleanup, even if things fail.
+```text
+choice      unordered alternatives with no source-position priority
+or_else     fallback only after a complete, valid Retry proof
+all         lanes commit together but cannot positively supply one another
+tensor      lanes commit together and may perform intentional hand-off
+Retry       the preferred search scope is presently impossible
+Unknown     bounded search has not established Hit or Retry
+wrap        participant-local work after commit
+consequence runtime-owned work selected with the committed world
+```
 
-### 2) Waiting is explicit
-
-Anything that might block is an **Op**. Examples:
-
-* `sleep.sleep_op(dt)`
-* channel `get_op` / `put_op`
-* stream reads/writes (`read_line_op`, `write_string_op`, …)
-* socket accept/connect ops
-* waiting for a subprocess
-* joining a scope
-
-Ops compose. If you can race a channel receive against a timeout, you can do the same with I/O, process completion, or a scope boundary.
-
-### 3) Errors are normal (and scoped)
-
-Inside a scope, it is normal to use `error`, `assert`, or let exceptions escape. The scope boundary is what turns “chaos” into a reportable outcome.
-
-You rarely need `pcall`. When you do catch, it should be because you have a real local recovery plan.
-
----
-
-## Highlights
-
-## Fail-fast scopes
-
-Within a scope:
-
-* the **first non-cancellation failure** becomes the **primary failure**,
-* siblings are cancelled (fail-fast),
-* cleanup runs (finalisers),
-* later faults become **secondary errors** collected in the report.
-
-At boundaries you get structured outcomes. In most application code, you just throw and move on.
-
-## Ops: a small algebra for waiting
-
-Ops can complete immediately, or they can suspend and resume later. You can combine them using:
-
-* `choice`, `named_choice`, `boolean_choice`, `race`
-* `guard`
-* `bracket` / `:finally` / `:wrap`
-* (advanced) `with_nack` and abort behaviour
-
-Timeouts are not special-cased. They’re just “race X against sleep”.
-
-## I/O and subprocesses participate fully
-
-Streams, sockets, pollers, and subprocesses are built to “feel like ops”:
-
-* blocking reads/writes are ops,
-* readiness is registered with the poller and unregistered on abort,
-* subprocess lifetime is attached to a scope and shut down on scope exit,
-* and you can race them against timeouts like anything else.
-
----
-
-## Examples
-
-## 1) Fail fast, and inspect the outcome at a boundary
-
-`fibers.run_scope` returns:
-
-* `status` (`"ok"|"failed"|"cancelled"`)
-* a `report` snapshot
-* either results (on `"ok"`) or the primary error/reason (on not-ok)
+## First programme
 
 ```lua
-local fibers = require "fibers"
-local sleep  = require "fibers.sleep"
+local fibers = require('fibers')
 
-local function main()
+local inbox = fibers.Rendezvous.new('inbox')
+
+fibers.run(function()
   fibers.spawn(function()
-    sleep.sleep(0.5)
-    print("sibling: finished ok")
-  end)
+    fibers.perform(inbox:put_op('hello'))
+  end, 'sender')
 
-  local status, report, value_or_primary = fibers.run_scope(function(child)
-    child:finally(function()
-      print("finaliser 1")
-    end)
-
-    child:finally(function()
-      print("finaliser 2 (oops)")
-      error("finaliser 2 failed")
-    end)
-
-    sleep.sleep(0.1)
-    error("child: boom")
-  end)
-
-  print("child scope:", status, tostring(value_or_primary))
-
-  if report and report.extra_errors and #report.extra_errors > 0 then
-    print("secondary errors:")
-    for i, e in ipairs(report.extra_errors) do
-      print(("  [%d] %s"):format(i, tostring(e)))
-    end
-  end
-end
-
-fibers.run(main)
+  assert(fibers.perform(inbox:get_op()) == 'hello')
+end)
 ```
 
-Inside scopes, errors can escape. The scope records the failure, cancels siblings, runs finalisers, and reports the outcome at the boundary.
+`fibers.run` creates a runtime and root scope. `fibers.spawn` creates a structured task owned by the current scope. `fibers.perform` submits an operation to the runtime.
 
-If the top-level `main` fails, `fibers.run(main)` raises the primary failure.
+The put and get commit as one rendezvous. Neither side proceeds alone.
 
----
 
-## 2) Channels and timeouts: the intended pattern
+## Declaring continuation dependencies
+
+Arbitrary `guard` and `and_then` callbacks remain conservative: because the
+operation returned by Lua code may depend on runtime values, an undeclared
+continuation is treated as capable of touching the complete pending frontier.
+Library and performance-sensitive code may declare a conservative union of the
+operations the continuation can return:
 
 ```lua
-local fibers = require "fibers"
-local chan   = require "fibers.channel"
-local sleep  = require "fibers.sleep"
+local receive = inbox:get_op()
+local op = prior:and_then(function(value)
+  return receive
+end, fibers.Op.dependencies(receive))
+```
 
-local function main()
-  local c = chan.new()
+An incomplete declaration can make dependency isolation unsound.  During tests,
+`Runtime.new({ verify_dependencies = true })` checks executed continuations and
+rejects declarations which do not cover the returned operation.  Omitting a
+declaration is always correct and uses the slower opaque path.
 
-  fibers.spawn(function()
-    sleep.sleep(0.1)
-    c:put("hello")
+## Certified symmetry and adaptive search reuse
+
+For homogeneous pending work, advanced code may certify that complete operation
+occurrences are observationally interchangeable:
+
+```lua
+local send = queue:put_op(item):certify_symmetry('homogeneous-worker-send')
+```
+
+The certificate includes the fibre continuation after commit.  The runtime does
+not infer symmetry, and an incorrect certificate can remove a valid committed
+world.  Use a key only when any occurrence carrying that key may replace any
+other without changing transactional behaviour.
+
+The production trail machine also retains bounded `Unknown` searches by default,
+resuming their explicit alternative stack while a conservative dependency stamp
+remains valid.  This is controlled by `resumable_search`.
+
+The runtime also enables three conservative search accelerators by default:
+
+- a narrow no-supplier refutation cache;
+- exact per-plan refutation memoisation; and
+- dependency-stamped reuse of unchanged plans across driver cycles.
+
+They are disabled automatically for opaque continuations and external
+dependencies. `Unknown` is never cached, and positive cross-cycle reuse is
+limited to effect-free candidates without negative guards.  The defaults are
+adaptive: memo tables begin after 48 plan-wide search calls on structurally
+large plans, and plan stamps are omitted until the total pending frontier
+reaches sixteen.
+
+They may be controlled explicitly when measuring or embedding:
+
+```lua
+local rt = fibers.Runtime.new({
+  refutation_cache = true,
+  state_memoization = true,
+  certified_symmetry = true,
+  plan_reuse = true,
+  resumable_search = true,
+  refutation_cache_min_steps = 48,
+  state_memoization_min_steps = 48,
+  plan_reuse_threshold = 16,
+})
+```
+
+## Unordered choice and principled priority
+
+`choice` expresses indifference between acceptable committed worlds:
+
+```lua
+local value = fibers.perform(fibers.choice(
+  left:get_op(),
+  right:get_op()
+))
+```
+
+When several branches can commit, source position gives no branch priority. Unbiased here means absence of source-position priority, not statistical uniformity. The runtime explores a deterministic permutation derived from `Runtime.new({ choice_seed = ... })`. Reusing the seed with the same programme, request sequence and external inputs reproduces the traversal. No fairness or uniform-probability guarantee is made.
+
+`or_else` expresses validated instantaneous priority:
+
+```lua
+local value = fibers.perform(
+  cache:get_op(key):or_else(fibers.always(default_value))
+)
+```
+
+The fallback is searched only after the primary has been exhaustively refuted under recorded versioned facts. A search budget expiring produces `Unknown`, not `Retry`, and cannot enable the fallback. A fallback candidate is validated again before commit.
+
+The two operators form useful priority tiers:
+
+```lua
+local result = fibers.perform(
+  preferred:or_else(fibers.choice(
+    acceptable_a,
+    acceptable_b,
+    acceptable_c
+  ))
+)
+```
+
+This means: prefer `preferred` whenever it can commit in the selected world; otherwise choose without source-order preference among the acceptable alternatives. Conversely, `fibers.choice(a, b):or_else(fallback)` admits the fallback only when both `a` and `b` have been refuted.
+
+## Products
+
+`all` is independent joint satisfaction:
+
+```lua
+local a, b = fibers.perform(fibers.all({
+  left:take_op(1),
+  right:take_op(1),
+}))
+```
+
+`tensor` additionally permits intentional sibling hand-off:
+
+```lua
+fibers.perform(fibers.tensor({
+  slots:give_op(1),
+  slots:take_op(1),
+}))
+```
+
+In both modes, sibling changes must form one coherent final world. Under `all`, a sibling may constrain or invalidate another lane but may not make an otherwise-unready lane ready. Under `tensor`, compatible positive supply is allowed.
+
+## Transactional facilities
+
+The fixed compact kernel supports versioned locations, deterministic and witnessed partial transducers, version waits and linear exchange. Public facilities compile to that substrate; they do not extend search, Retry, validation or commit semantics.
+
+The low-level atom kit includes:
+
+```text
+Scalar       replacement facts and serial state machines
+Rendezvous   synchronous one-use exchange
+Counter      bounded numeric stock
+Keyed        keyed presence and absence
+Index        ordered allocation
+Lease        compatibility-managed rights
+Signal       externally latched fact
+EventQueue   externally delivered transactional events
+Clock        host-time observation
+Readiness    host readiness levels
+Region       ownership and custody ledger
+Effect       typed post-commit obligations
+```
+
+Additional public facilities include:
+
+```text
+Queue, Channel, PriorityQueue, Pool, Mailbox, Pulse, WaitGroup
+RateLimiter, Task, Scope, Flow, Stream
+Petri, Calendar
+```
+
+`Petri` provides coloured linear-multiset transitions. `Calendar` provides witnessed multi-resource interval reservation. Both use the same global alternative search as ordinary `choice` and rendezvous matching.
+
+## Structured lifetimes
+
+```lua
+fibers.scope(function(scope)
+  local task = scope:spawn(function()
+    return 7
   end)
 
-  local ev = fibers.named_choice{
-    data    = c:get_op(),
-    timeout = sleep.sleep_op(1.0),
-  }
-
-  local which, value = fibers.perform(ev)
-
-  if which == "data" then
-    print("got:", value)
-  else
-    print("timed out")
-  end
-end
-
-fibers.run(main)
+  assert(fibers.perform(task:await_op()) == 7)
+end)
 ```
 
-Timeouts are deliberately expressed as “race an op against `sleep_op`”.
+Scopes record custody in a Region ledger. On exit, policy seals admission, accounts for retained roots and runs settlement protocols. A failed settlement remains represented as unresolved ownership truth rather than being silently discarded.
 
----
+## Flows and streams
 
-## 3) Race an entire subtree of work against a timeout
-
-A scope boundary can itself be an op: `fibers.run_scope_op`. It resolves when the child scope has joined (including its finalisers and attached children).
+A `Flow` is a transactional byte reservoir. A `Stream` is a bidirectional pair of flows.
 
 ```lua
-local fibers = require "fibers"
-local sleep  = require "fibers.sleep"
+local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
 
-local function main()
-  local subtree = fibers.run_scope_op(function(child)
-    child:spawn(function()
-      sleep.sleep(2.0)
-      print("subtree: finished")
-    end)
-    return "started"
-  end)
-
-  local ev = fibers.named_choice{
-    subtree  = subtree,            -- yields: st, rep, results/primary
-    timeout  = sleep.sleep_op(1.0),
-  }
-
-  local which, st, rep, v = fibers.perform(ev)
-
-  if which == "timeout" then
-    print("timed out; subtree was cancelled")
-    return
-  end
-
-  if st == "ok" then
-    print("subtree ok:", tostring(v))
-  else
-    print("subtree not ok:", st, tostring(v))
-  end
-
-  if rep and rep.extra_errors and #rep.extra_errors > 0 then
-    print("secondary errors:", #rep.extra_errors)
-  end
-end
-
-fibers.run(main)
+fibers.perform(a:writer():write_op('hello\n'))
+assert(fibers.perform(b:reader():read_line_op()) == 'hello')
 ```
 
-If `run_scope_op(...)` loses in an outer `choice`, the child scope is cancelled (reason `"aborted"`) and then joined deterministically.
+Losing writes append nothing and losing reads consume nothing. Host-backed streams use readiness and pump tasks; irreversible I/O occurs only after a readiness operation commits.
 
----
+## External observations and embedding
 
-## 4) Subprocesses are scope-owned
+The runtime can be driven directly:
 
 ```lua
-local fibers = require "fibers"
-local exec   = require "fibers.io.exec"
+local rt = fibers.Runtime.new({
+  host = fibers.host.manual(),
+  choice_seed = 17,
+})
+local signal, feed = rt:signal('shutdown')
 
-local function main()
-  local status, report, out_or_primary = fibers.run_scope(function()
-    local cmd = exec.command{
-      "ls", "-l",
-      stdout = "pipe",
-    }
+rt:spawn_raw(function()
+  assert(rt:perform(signal:wait_op()) == 'requested')
+end, 'waiter')
 
-    local out, st, code, sig, err = fibers.perform(cmd:output_op())
-
-    if st == "exited" and code == 0 then
-      return out
-    end
-
-    error(("command failed: %s code=%s sig=%s err=%s"):format(
-      tostring(st), tostring(code), tostring(sig), tostring(err)
-    ))
-  end)
-
-  if status == "ok" then
-    print(out_or_primary)
-  else
-    print("scope failed:", status, tostring(out_or_primary))
-  end
-end
-
-fibers.run(main)
+feed:set('requested')
+rt:run()
 ```
 
-Commands are attached to the current scope. On scope exit, they are shut down and their owned streams/handles are cleaned up.
+Signal, EventQueue and Readiness producers receive runtime-bound feed capabilities. Clock waits are validated against host time. An uncaught Retry may report timer or external interests to an embedding loop.
 
----
+## Kernel architecture
 
-## Concepts in brief
+The active semantic kernel is deliberately small:
 
-## Fibers
-
-A **fiber** is a lightweight task scheduled by the runtime.
-
-* `fibers.run(main)` starts the scheduler and runs `main` inside a scope under the process root.
-* `fibers.spawn(fn, ...)` creates a new fiber under the current scope and calls `fn(...)`.
-
-You do not manually join fibers. Scopes track obligations and join deterministically.
-
-## Scopes
-
-A **scope** is a supervision domain with a tree structure and fail-fast semantics.
-
-When a scope fails or is cancelled:
-
-* admission closes (new work is rejected),
-* attached child scopes are cancelled,
-* in-flight ops observe cancellation via `fibers.perform`,
-* finalisers run in LIFO order during join.
-
-Scope outcomes at boundaries:
-
-```lua
-status, report, ...         -- on ok: ... are results
-status, report, primary     -- on not-ok: primary is error/reason
+```text
+src/fibers/kernel/ir.lua            primitive programme records and footprints
+src/fibers/kernel/store.lua         versioned locations, views, deltas and commit
+src/fibers/kernel/choice_order.lua  deterministic unordered-choice permutation
+src/fibers/kernel/dependencies.lua pending components, validation and coordination
+src/fibers/kernel/frontier.lua      blocked-frontier analysis and branch ordering
+src/fibers/kernel/adaptive_search.lua adaptive memoisation and retained proofs
+src/fibers/kernel/machine.lua       trail-based proof and refutation search
+src/fibers/kernel/search_session.lua retained search lifecycle
+src/fibers/kernel/runtime.lua       fibres, recruitment, scheduling and host boundary
 ```
 
-The `report` contains:
+The copy-on-branch evaluator in `reference/fibers/internal/reference_machine.lua` consumes the same IR and store and is retained for differential testing:
 
-* `extra_errors`: faults after the primary is established,
-* `children`: joined child outcomes with nested reports.
-
-## Operations (Ops)
-
-An **Op** represents “something that may block”, they are a close translation of `events` in Concurrent ML.
-
-* Perform an op with `fibers.perform(op)` (must be called inside a fiber).
-* If the current scope is cancelled or failed, `perform` raises (cancellation uses a sentinel internally).
-
-Because everything that blocks is an op, you can write one set of patterns and reuse them everywhere:
-
-* timeouts (`choice` against `sleep_op`)
-* “first ready wins” (`race`, `named_choice`)
-* resource safety (`bracket`, `:finally`)
-* cancellation-safe cleanups (finalisers, abort handlers)
-
-If you want status-first handling, use an explicit boundary (`run_scope`, `run_scope_op`) or work directly with scope APIs.
-
-## I/O and streams
-
-The I/O layer wraps non-blocking file descriptors as buffered `Stream` objects and exposes ops such as:
-
-* `read_line_op`, `read_all_op`, `read_exactly_op`
-* `write_string_op`
-
-These ops integrate with the poller and can be raced, timed out, and cancelled like anything else.
-
-A particularly useful helper is `stream.merge_lines_op`, which races a line read across multiple named streams:
-
-```lua
-local name, line, err = fibers.perform(stream.merge_lines_op({ a = s1, b = s2 }))
+```sh
+FIBERS_MACHINE=reference lua tests/run_all.lua
+texlua tests/run_protected_fallback.lua
+texlua tests/test_reference_lazy.lua
 ```
 
-## Subprocesses
+## Running the repository
 
-The exec layer runs subprocesses under scopes:
+```sh
+texlua tests/run_all.lua
+FIBERS_MACHINE=reference texlua tests/run_all.lua
+texlua tests/run_protected_fallback.lua
+texlua tests/test_reference_lazy.lua
+```
 
-* commands and stdio wiring are configured up-front,
-* lifecycle is exposed as ops (`run_op`, `shutdown_op`, `output_op`, …),
-* cleanup is attached to scope finalisers so processes are shut down on scope exit.
+The maintained aggregate suite currently contains 72 test programmes. Protected-call fallback and
+lazy-reference loading also run in isolated interpreters. Useful runner options are:
 
----
+```sh
+lua tests/run_all.lua --list
+lua tests/run_all.lua --filter external
+lua tests/run_all.lua --verbose
+lua tests/run_all.lua --fail-fast
+```
 
-## Error handling
+Run examples and performance work with:
 
-Inside a scope:
+```sh
+texlua examples/01_rendezvous.lua
+lua performance/bench.lua
+FIBERS_BENCH_CASE=product lua performance/bench.lua
+texlua performance/suite.lua
+FIBERS_PERF_TIERS=all texlua performance/suite.lua
+texlua performance/seed_sweep.lua
+texlua performance/architecture_suite.lua
+texlua performance/advanced_suite.lua
+```
 
-* letting an error escape a fiber is normal;
-* the first failure becomes the primary failure and triggers cancellation of siblings;
-* additional failures (including finaliser failures once not-ok) become secondary errors in `report.extra_errors`.
+`performance/README.md` describes the tiered validating suite, optional runtime
+instrumentation, seed sweeps and CSV regression checks. Benchmarks are for local
+regression work, not cross-machine claims.
 
-At boundaries:
+## Formatting
 
-* `fibers.run(main)` returns results on success, otherwise raises the primary failure/reason (as a string/number),
-* `fibers.run_scope(fn)` returns `status, report, ...` as described above.
+Lua source is formatted with StyLua using the repository `.stylua.toml`. The
+configured width is 100 columns, with two-space indentation and expanded simple
+statements. Run:
 
-Rule of thumb:
+```sh
+scripts/check-format.sh
+```
 
-* **Throw freely** inside a scope.
-* **Catch rarely**, only when you genuinely want local recovery.
-* **Always register cleanup** with `finally`/`bracket`/scope finalisers rather than trying to “survive” cancellation.
+The ordinary `fibers` facade exposes application and embedding APIs. Trusted
+facility authors may require `fibers.kernel` for `Runtime`, `IR` and `Store`;
+the production machine, instrumentation implementation and prototype `Phase`
+remain internal or explicitly imported modules.
 
----
+## Documentation
 
-## Requirements and installation
+```text
+docs/guide.md               application-facing programming guide
+docs/algebra.md             semantic model, laws and non-laws
+docs/lifetimes.md           custody, authority and settlement
+docs/embedding.md           runtime driving, hosts and external feeds
+docs/resource-authoring.md  trusted compact-facility authoring
+docs/internals.md           compact kernel and execution pipeline
+docs/comparison.md          comparison with CSP, CML, Transactional Events and Reagents
+docs/compatibility.md       portable coding constraints and current test environment
+performance/README.md        instrumentation and performance regression workflow
+docs/notes/performance/      performance findings and optimisation history
+```
 
-### Lua and platform
-
-* Lua 5.1–5.5 or LuaJIT.
-* A POSIX-like platform (currently developed and tested on Linux).
-
-### Backend support
-
-`fibers` uses pluggable backends for polling and subprocess handling. You need at least one compatible stack:
-
-* **FFI backend (preferred)**
-
-  * LuaJIT (or PUC Lua with cffi-lua)
-  * `epoll` for I/O; `pidfd` for process completion (when available)
-
-* **luaposix backend**
-
-  * `luaposix`
-  * `poll`/`select` plus `SIGCHLD` for process completion
-
-* **nixio backend**
-
-  * `nixio`
-  * `poll` for I/O; a double-fork scheme for evented process completion
-
-OS-specific code is isolated in `fibers.io.*_backend` and poller backends, so adding a platform is “implement the backend contract”, not “rewrite the library”.
-
-### Installation
-
-Add the repository to your `package.path` (and `package.cpath` if needed) so modules such as `fibers`, `fibers.channel`, `fibers.sleep`, `fibers.io.file`, `fibers.io.stream`, and `fibers.io.exec` can be `require`d.
-
----
-
-## Acknowledgements
-
-The design owes a substantial debt to Andy Wingo’s writing on concurrency, including his article [_lightweight concurrency in lua_](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua) and his Snabb [`fibers`](https://github.com/snabbco/snabb/tree/master/src/lib/fibers) and [`stream`](https://github.com/snabbco/snabb/tree/master/src/lib/stream) implementations. And of course to John Reppy's original CML!
+The repository remains work in progress. Transactions are coherent within one runtime commit; they
+are not crash-durable database or distributed transactions.

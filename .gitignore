@@ -1,2 +1,5 @@
-*DS_Store
-/scratch*
+.DS_Store
+performance/*.csv
+performance/*.json
+performance/*.txt
+node_modules/

@@ -1,88 +1,117 @@
--- fibers/waitgroup.lua
----
--- Wait group for tracking completion of a set of tasks.
--- A waitgroup supports generations: when the counter returns to zero,
--- the current generation completes and a new one starts on the next increment.
----@module 'fibers.waitgroup'
+-- Transactional wait group built on typed Scalar transitions.
+--
+-- A WaitGroup tracks a count and a generation.  wait_op() succeeds only when
+-- the projected count for the committed world is zero.  Under tensor a sibling
+-- done_op() can therefore satisfy a wait; under all a sibling positive supply
+-- is not hidden from the zero predicate.
 
-local op       = require 'fibers.op'
-local perform  = require 'fibers.performer'.perform
-local cond_mod = require 'fibers.cond'
+local Scalar = require('fibers.atoms.scalar')
 
---- Waitgroup with a counter and per-generation condition.
----@class Waitgroup
----@field _counter integer
----@field _cond Cond|nil  # per-generation condition; nil when there is no active generation
-local Waitgroup = {}
-Waitgroup.__index = Waitgroup
+local WaitGroup = {}
+WaitGroup.__index = WaitGroup
 
---- Create a new waitgroup.
----@return Waitgroup
-local function new()
-	return setmetatable({
-		_counter = 0,
-		_cond    = nil, -- per-generation condition; nil when idle
-	}, Waitgroup)
+local next_id = 0
+
+local function integer(n, name, level)
+  if type(n) ~= 'number' or n ~= math.floor(n) then
+    error(name .. ' must be an integer', level or 3)
+  end
+  return n
 end
 
---- Adjust the waitgroup counter by delta.
---- When the counter returns to zero, the current generation completes.
----@param delta integer
-function Waitgroup:add(delta)
-	if delta == 0 then
-		return
-	end
-
-	local old_count = self._counter
-	local new_count = old_count + delta
-
-	if new_count < 0 then
-		error('waitgroup counter goes negative')
-	end
-
-	self._counter = new_count
-
-	if new_count == 0 then
-		-- This generation completes: wake any waiters and drop the condition.
-		if self._cond then
-			self._cond:signal()
-			self._cond = nil
-		end
-	elseif old_count == 0 and new_count > 0 then
-		-- Starting a new generation: create a condition for new work.
-		self._cond = cond_mod.new()
-	end
+local function copy_state(st)
+  st = st or {}
+  return {
+    count = st.count or 0,
+    generation = st.generation or 0,
+  }
 end
 
---- Decrement the waitgroup counter by one.
-function Waitgroup:done()
-	self:add(-1)
+local State = Scalar.kind({
+  name = 'waitgroup.state',
+  transitions = {
+    add = {
+      mode = 'select',
+      order = 0,
+      validate = function(payload)
+        integer(payload.n, 'waitgroup add amount', 3)
+      end,
+      step = function(st, payload)
+        st = copy_state(st)
+        local n = payload.n
+        local new_count = st.count + n
+        if new_count < 0 then
+          return nil
+        end
+        local generation = st.generation
+        if st.count == 0 and new_count > 0 then
+          generation = generation + 1
+        end
+        return { count = new_count, generation = generation }, true, new_count, generation
+      end,
+    },
+    wait = {
+      mode = 'select',
+      order = 100,
+      step = function(st)
+        st = copy_state(st)
+        if st.count == 0 then
+          return st, true, st.generation
+        end
+        return nil
+      end,
+    },
+  },
+})
+
+function WaitGroup.new(opts, name)
+  opts = opts or {}
+  if type(opts) == 'string' then
+    opts = { name = opts }
+  end
+  next_id = next_id + 1
+  local id = 'waitgroup-' .. tostring(next_id)
+  local wname = opts.name or name or id
+  local count = opts.count or 0
+  local generation = opts.generation or 0
+  integer(count, 'waitgroup initial count', 2)
+  integer(generation, 'waitgroup initial generation', 2)
+  if count < 0 then
+    error('waitgroup initial count must be non-negative', 2)
+  end
+  if generation < 0 then
+    error('waitgroup initial generation must be non-negative', 2)
+  end
+  return setmetatable({
+    name = wname,
+    state = opts.state or Scalar.new({ count = count, generation = generation }, wname .. ':state'),
+  }, WaitGroup)
 end
 
---- Build an Op that completes when the current generation drains.
----@return Op
-function Waitgroup:wait_op()
-	-- Build the op lazily at perform time.
-	return op.guard(function ()
-		-- If there is nothing outstanding, fire immediately.
-		if self._counter == 0 then
-			return op.always()
-		end
-
-		-- Active generation: delegate to the generation's condition.
-		local cond = assert(self._cond, 'waitgroup internal error: missing condition for active generation')
-		return cond:wait_op()
-	end)
+function WaitGroup:add_op(n)
+  n = n or 1
+  integer(n, 'waitgroup add amount', 2)
+  if n == 0 then
+    return self:state_op():map(function(st)
+      return true, st.count, st.generation
+    end)
+  end
+  return self.state:transition_op(State:transition('add'), { n = n })
 end
 
---- Block until the current generation completes.
----@return any ...
-function Waitgroup:wait()
-	return perform(self:wait_op())
+function WaitGroup:done_op()
+  return self:add_op(-1)
 end
 
-return {
-	--- Construct a new waitgroup.
-	---@return Waitgroup
-	new = new,
-}
+function WaitGroup:wait_op()
+  return self.state:transition_op(State:transition('wait'))
+end
+
+function WaitGroup:state_op()
+  return self.state:read_op():map(function(st)
+    return copy_state(st)
+  end)
+end
+
+WaitGroup.State = State
+return WaitGroup

@@ -1,13 +1,15 @@
 {
-  "image": "ghcr.io/jangala-dev/mini-lua-image:bookworm",
+  "name": "fibers",
+  "image": "debian:trixie-slim",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "vscode",
+      "installZsh": false,
+      "installOhMyZsh": false,
+      "upgradePackages": false
+    }
+  },
   "remoteUser": "vscode",
-  "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"sumneko.lua",
-				"rog2.luacheck"
-			]
-		}
-	}
+  "updateRemoteUserUID": true,
+  "postCreateCommand": "sudo /bin/sh '${containerWorkspaceFolder}/.devcontainer/bootstrap.sh'"
 }
