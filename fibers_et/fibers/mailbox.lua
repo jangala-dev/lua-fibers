@@ -25,13 +25,21 @@ end
 
 local function copy_senders(src)
   local out = {}
-  for k, v in pairs(src or {}) do if v then out[k] = true end end
+  for k, v in pairs(src or {}) do
+    if v then
+      out[k] = true
+    end
+  end
   return out
 end
 
 local function sender_count(senders)
   local n = 0
-  for _, v in pairs(senders or {}) do if v then n = n + 1 end end
+  for _, v in pairs(senders or {}) do
+    if v then
+      n = n + 1
+    end
+  end
   return n
 end
 
@@ -58,7 +66,7 @@ local function counted_tx(mailbox, id)
   return setmetatable({ _mailbox = mailbox, _id = id }, Tx)
 end
 
-local Meta = Scalar.kind {
+local Meta = Scalar.kind({
   name = 'mailbox.meta',
   transitions = {
     check_sendable = {
@@ -66,7 +74,9 @@ local Meta = Scalar.kind {
       order = 0,
       step = function(st, payload)
         st = copy_meta(st)
-        if not st.closed and active_sender(st, payload.id) then return st, true end
+        if not st.closed and active_sender(st, payload.id) then
+          return st, true
+        end
         return nil
       end,
     },
@@ -75,7 +85,9 @@ local Meta = Scalar.kind {
       order = 10,
       step = function(st, payload)
         st = copy_meta(st)
-        if st.closed or not active_sender(st, payload.id) then return st, nil, st.reason end
+        if st.closed or not active_sender(st, payload.id) then
+          return st, nil, st.reason
+        end
         return nil
       end,
     },
@@ -84,7 +96,9 @@ local Meta = Scalar.kind {
       order = 10,
       step = function(st)
         st = copy_meta(st)
-        if st.closed then return st, nil, st.reason end
+        if st.closed then
+          return st, nil, st.reason
+        end
         return nil
       end,
     },
@@ -93,7 +107,9 @@ local Meta = Scalar.kind {
       order = 20,
       step = function(st, payload)
         st = copy_meta(st)
-        if st.closed or not active_sender(st, payload.id) then return st, inert_tx(payload.mailbox) end
+        if st.closed or not active_sender(st, payload.id) then
+          return st, inert_tx(payload.mailbox)
+        end
 
         local seq = (st.next_sender_seq or 0) + 1
         local new_id = sender_id_for(payload.mailbox_id, seq)
@@ -111,10 +127,16 @@ local Meta = Scalar.kind {
       order = 30,
       step = function(st, payload)
         st = copy_meta(st)
-        if not active_sender(st, payload.id) then return st, true end
-        if st.reason == nil and payload.reason ~= nil then st.reason = payload.reason end
+        if not active_sender(st, payload.id) then
+          return st, true
+        end
+        if st.reason == nil and payload.reason ~= nil then
+          st.reason = payload.reason
+        end
         st.senders[payload.id] = nil
-        if sender_count(st.senders) == 0 then st.closed = true end
+        if sender_count(st.senders) == 0 then
+          st.closed = true
+        end
         return st, true
       end,
     },
@@ -123,7 +145,9 @@ local Meta = Scalar.kind {
       order = 30,
       step = function(st, payload)
         st = copy_meta(st)
-        if st.reason == nil and payload.reason ~= nil then st.reason = payload.reason end
+        if st.reason == nil and payload.reason ~= nil then
+          st.reason = payload.reason
+        end
         st.closed = true
         return st, true
       end,
@@ -138,10 +162,12 @@ local Meta = Scalar.kind {
       end,
     },
   },
-}
+})
 
 local function normalise_capacity(capacity)
-  if capacity == nil then return 0 end
+  if capacity == nil then
+    return 0
+  end
   if type(capacity) ~= 'number' or capacity < 0 or capacity ~= math.floor(capacity) then
     error('mailbox capacity must be a non-negative integer', 3)
   end
@@ -153,7 +179,9 @@ local function normalise_full_policy(full, capacity)
   if full ~= 'block' and full ~= 'reject_newest' and full ~= 'drop_oldest' then
     error('mailbox full policy must be block, reject_newest or drop_oldest', 3)
   end
-  if capacity == 0 and full == 'drop_oldest' then full = 'reject_newest' end
+  if capacity == 0 and full == 'drop_oldest' then
+    full = 'reject_newest'
+  end
   return full
 end
 
@@ -179,7 +207,13 @@ function Mailbox.new(capacity, opts)
     _mailbox_id = id,
     capacity = capacity,
     full = full,
-    meta = opts.meta or Scalar.new({ closed = false, reason = nil, senders = { [sender_id] = true }, dropped = 0, next_sender_seq = 1 }, name .. ':meta'),
+    meta = opts.meta or Scalar.new({
+      closed = false,
+      reason = nil,
+      senders = { [sender_id] = true },
+      dropped = 0,
+      next_sender_seq = 1,
+    }, name .. ':meta'),
     queue = nil,
     rendezvous = nil,
   }, Mailbox)
@@ -208,33 +242,49 @@ local function drop_op(mailbox)
 end
 
 local function put_raw_op(mailbox, value)
-  if mailbox.queue then return mailbox.queue:put_op(value) end
+  if mailbox.queue then
+    return mailbox.queue:put_op(value)
+  end
   return mailbox.rendezvous:put_op(value)
 end
 
 local function get_raw_op(mailbox)
-  if mailbox.queue then return mailbox.queue:get_op() end
+  if mailbox.queue then
+    return mailbox.queue:get_op()
+  end
   return mailbox.rendezvous:get_op()
 end
 
 local function accepted_put_op(mailbox, value)
-  local put = put_raw_op(mailbox, value):map(function() return true end)
-  if mailbox.full == 'block' then return put end
+  local put = put_raw_op(mailbox, value):map(function()
+    return true
+  end)
+  if mailbox.full == 'block' then
+    return put
+  end
   if mailbox.full == 'reject_newest' then
-    return put:or_else(drop_op(mailbox):map(function() return false, 'full' end))
+    return put:or_else(drop_op(mailbox):map(function()
+      return false, 'full'
+    end))
   end
   local drop_oldest = Op.tensor({
     mailbox.queue:get_op(),
     mailbox.queue:put_op(value),
     drop_op(mailbox),
-  }):map(function() return true end)
+  }):map(function()
+    return true
+  end)
   return put:or_else(drop_oldest)
 end
 
 function Tx:send_op(value)
-  if value == nil then error('mailbox send_op does not accept nil payloads', 2) end
+  if value == nil then
+    error('mailbox send_op does not accept nil payloads', 2)
+  end
   local mailbox, id = self._mailbox, self._id
-  if not mailbox or id == nil then return Op.always(nil) end
+  if not mailbox or id == nil then
+    return Op.always(nil)
+  end
   local send = require_sendable_op(mailbox, id):and_then(function()
     return accepted_put_op(mailbox, value)
   end)
@@ -243,22 +293,33 @@ end
 
 function Tx:clone_op()
   local mailbox, id = self._mailbox, self._id
-  if not mailbox or id == nil then return Op.always(inert_tx(mailbox)) end
-  return mailbox.meta:transition_op(Meta:transition('clone_sender'), { id = id, mailbox = mailbox, mailbox_id = mailbox._mailbox_id })
+  if not mailbox or id == nil then
+    return Op.always(inert_tx(mailbox))
+  end
+  return mailbox.meta:transition_op(
+    Meta:transition('clone_sender'),
+    { id = id, mailbox = mailbox, mailbox_id = mailbox._mailbox_id }
+  )
 end
 
 function Tx:close_op(reason)
   local mailbox, id = self._mailbox, self._id
-  if not mailbox or id == nil then return Op.always(true) end
+  if not mailbox or id == nil then
+    return Op.always(true)
+  end
   return mailbox.meta:transition_op(Meta:transition('close_sender'), { id = id, reason = reason })
 end
 
 function Tx:why_op()
-  return self._mailbox.meta:read_op():map(function(st) return st and st.reason or nil end)
+  return self._mailbox.meta:read_op():map(function(st)
+    return st and st.reason or nil
+  end)
 end
 
 function Tx:dropped_op()
-  return self._mailbox.meta:read_op():map(function(st) return st and st.dropped or 0 end)
+  return self._mailbox.meta:read_op():map(function(st)
+    return st and st.dropped or 0
+  end)
 end
 
 function Tx:snapshot_op()
@@ -271,11 +332,15 @@ function Rx:recv_op()
 end
 
 function Rx:why_op()
-  return self._mailbox.meta:read_op():map(function(st) return st and st.reason or nil end)
+  return self._mailbox.meta:read_op():map(function(st)
+    return st and st.reason or nil
+  end)
 end
 
 function Rx:dropped_op()
-  return self._mailbox.meta:read_op():map(function(st) return st and st.dropped or 0 end)
+  return self._mailbox.meta:read_op():map(function(st)
+    return st and st.dropped or 0
+  end)
 end
 
 function Rx:snapshot_op()

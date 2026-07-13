@@ -28,7 +28,9 @@ function Lease:_location(subject)
     -- should keep committed holder state opaque.
     if self.holders[subject] ~= loc.value then
       local fresh = {}
-      for owner, mode in pairs(self.holders[subject] or {}) do fresh[owner] = mode end
+      for owner, mode in pairs(self.holders[subject] or {}) do
+        fresh[owner] = mode
+      end
       loc.value = fresh
       loc.version = (loc.version or 0) + 1
       self.versions[subject] = loc.version
@@ -36,7 +38,9 @@ function Lease:_location(subject)
     return loc
   end
   local initial = {}
-  for owner, mode in pairs(self.holders[subject] or {}) do initial[owner] = mode end
+  for owner, mode in pairs(self.holders[subject] or {}) do
+    initial[owner] = mode
+  end
   loc = Substrate.new_location({
     name = self.name .. ':' .. tostring(subject),
     merge = 'finite_map',
@@ -57,36 +61,54 @@ function Lease:_location(subject)
 end
 
 function Lease:acquire_op(subject, mode, owner)
-  if subject == nil then error('lease acquire requires subject', 2) end
-  if mode == nil then error('lease acquire requires mode', 2) end
-  if owner == nil then error('lease acquire requires owner', 2) end
+  if subject == nil then
+    error('lease acquire requires subject', 2)
+  end
+  if mode == nil then
+    error('lease acquire requires mode', 2)
+  end
+  if owner == nil then
+    error('lease acquire requires owner', 2)
+  end
   local loc = self:_location(subject)
-  return Op._resource(self, Kind, Program.admit({
-    location = loc,
-    group = loc,
-    orientation = 'down', -- removing blockers supplies compatibility
-    key = owner,
-    value = mode,
-    compatibility = self.compat,
-    result_kind = 'constant',
-    result_value = true,
-  }))
+  return Op._resource(
+    self,
+    Kind,
+    Program.admit({
+      location = loc,
+      group = loc,
+      orientation = 'down', -- removing blockers supplies compatibility
+      key = owner,
+      value = mode,
+      compatibility = self.compat,
+      result_kind = 'constant',
+      result_value = true,
+    })
+  )
 end
 
 function Lease:release_op(subject, owner)
-  if subject == nil then error('lease release requires subject', 2) end
-  if owner == nil then error('lease release requires owner', 2) end
+  if subject == nil then
+    error('lease release requires subject', 2)
+  end
+  if owner == nil then
+    error('lease release requires owner', 2)
+  end
   local loc = self:_location(subject)
-  return Op._resource(self, Kind, Program.claim({
-    location = loc,
-    group = loc,
-    orientation = 'up', -- presence is supplied by insertion; removal constrains
-    predicate = 'map_present',
-    key = owner,
-    patch = { kind = 'finite_map', ops = { { op = 'remove', key = owner } } },
-    result_kind = 'constant',
-    result_value = true,
-  }))
+  return Op._resource(
+    self,
+    Kind,
+    Program.claim({
+      location = loc,
+      group = loc,
+      orientation = 'up', -- presence is supplied by insertion; removal constrains
+      predicate = 'map_present',
+      key = owner,
+      patch = { kind = 'finite_map', ops = { { op = 'remove', key = owner } } },
+      result_kind = 'constant',
+      result_value = true,
+    })
+  )
 end
 
 function Lease:snapshot_op()

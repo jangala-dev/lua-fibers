@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
@@ -9,11 +9,35 @@ local Region = fibers.Region
 local Stream = fibers.Stream
 local SocketBackend = Stream.backend.Socket
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_nil(v, msg)
+  if v ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 local function run(rt, host, iters)
   return Runner.run(rt, { host = host, max_iterations = iters or 80 })
@@ -21,9 +45,13 @@ end
 
 local function drive_until(rt, host, pred, label, iters)
   for _ = 1, (iters or 20) do
-    if pred() then return true end
+    if pred() then
+      return true
+    end
     run(rt, host, 40)
-    if pred() then return true end
+    if pred() then
+      return true
+    end
   end
   fail(label or 'runtime did not reach expected state')
 end
@@ -44,7 +72,9 @@ local function make_handle(host, key)
   }
 
   function h:feed(bytes)
-    if bytes and bytes ~= '' then self.input[#self.input + 1] = bytes end
+    if bytes and bytes ~= '' then
+      self.input[#self.input + 1] = bytes
+    end
     host:readable(self.key)
   end
 
@@ -60,14 +90,23 @@ local function make_handle(host, key)
 
   function h:read(max)
     max = max or 4096
-    if self.read_blocked then host:clear_readiness(self.key, 'read'); return nil, 'would_block' end
+    if self.read_blocked then
+      host:clear_readiness(self.key, 'read')
+      return nil, 'would_block'
+    end
     if #self.input > 0 then
       local first = self.input[1]
       local n = math.min(#first, max)
       local out = string.sub(first, 1, n)
       local rest = string.sub(first, n + 1)
-      if rest == '' then table.remove(self.input, 1) else self.input[1] = rest end
-      if #self.input == 0 and not self.eof and not self.read_error then host:clear_readiness(self.key, 'read') end
+      if rest == '' then
+        table.remove(self.input, 1)
+      else
+        self.input[1] = rest
+      end
+      if #self.input == 0 and not self.eof and not self.read_error then
+        host:clear_readiness(self.key, 'read')
+      end
       return out
     end
     if self.read_error then
@@ -86,10 +125,17 @@ local function make_handle(host, key)
   end
 
   function h:write(bytes)
-    if self.write_error then return nil, self.write_error end
-    if self.write_blocked then host:clear_readiness(self.key, 'write'); return nil, 'would_block' end
+    if self.write_error then
+      return nil, self.write_error
+    end
+    if self.write_blocked then
+      host:clear_readiness(self.key, 'write')
+      return nil, 'would_block'
+    end
     local n = math.min(#bytes, self.write_chunk_size or #bytes)
-    if n <= 0 then return 0 end
+    if n <= 0 then
+      return 0
+    end
     self.output[#self.output + 1] = string.sub(bytes, 1, n)
     host:writable(self.key)
     return n
@@ -119,16 +165,26 @@ local function make_handle(host, key)
 end
 
 local function make_backend(host, h)
-  return SocketBackend.new {
+  return SocketBackend.new({
     name = h.key .. '-backend',
     key = h.key,
     host = host,
-    read = function(_backend, max) return h:read(max) end,
-    write = function(_backend, bytes) return h:write(bytes) end,
-    shutdown_read = function(_backend, reason) return h:shutdown_read(reason) end,
-    shutdown_write = function(_backend, reason) return h:shutdown_write(reason) end,
-    close = function(_backend, reason) return h:close(reason) end,
-  }
+    read = function(_backend, max)
+      return h:read(max)
+    end,
+    write = function(_backend, bytes)
+      return h:write(bytes)
+    end,
+    shutdown_read = function(_backend, reason)
+      return h:shutdown_read(reason)
+    end,
+    shutdown_write = function(_backend, reason)
+      return h:shutdown_write(reason)
+    end,
+    close = function(_backend, reason)
+      return h:close(reason)
+    end,
+  })
 end
 
 -- Manual host delivers readiness waits through the same runtime-bound source path
@@ -138,7 +194,9 @@ do
   local rt = Runtime.new({ host = host })
   local src = fibers.Readiness.new('manual-key', 'read', 'manual-key-readiness')
   local seen, key, mode
-  rt:spawn_raw(function() seen, key, mode = rt:perform(src:readable_op()) end, 'manual-readiness')
+  rt:spawn_raw(function()
+    seen, key, mode = rt:perform(src:readable_op())
+  end, 'manual-readiness')
   local st = run(rt, host, 5)
   assert_status(st, 'pending')
   local waits = (st.waits or {})
@@ -172,7 +230,9 @@ do
   assert_status(st, 'pending')
   assert_truthy(stream, 'stream should have opened before waiting for input')
   handle:feed('abc')
-  drive_until(rt, host, function() return got == 'abc' end, 'socket read should deliver bytes')
+  drive_until(rt, host, function()
+    return got == 'abc'
+  end, 'socket read should deliver bytes')
   assert_eq(got, 'abc')
 end
 
@@ -187,18 +247,26 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-write-stream' }))
+    stream =
+      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-write-stream' }))
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-writer')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'write pump should lease committed bytes')
+  assert_truthy(
+    stream
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '',
+    'write pump should lease committed bytes'
+  )
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)
-  drive_until(rt, host, function() return flushed == true end, 'socket write should flush')
+  drive_until(rt, host, function()
+    return flushed == true
+  end, 'socket write should flush')
   assert_eq(flushed, true)
   assert_eq(handle:written(), 'hello')
 end
@@ -215,12 +283,15 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-partial-stream' }))
+    stream =
+      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-partial-stream' }))
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-partial-writer')
 
-  drive_until(rt, host, function() return flushed == true end, 'partial socket write should flush', 40)
+  drive_until(rt, host, function()
+    return flushed == true
+  end, 'partial socket write should flush', 40)
   assert_eq(flushed, true)
   assert_eq(handle:written(), 'abcdef')
 end
@@ -243,7 +314,9 @@ do
   assert_status(run(rt, host, 80), 'pending')
   handle:feed('xy')
   handle:feed_eof()
-  drive_until(rt, host, function() return err == 'eof' end, 'socket EOF should be delivered', 40)
+  drive_until(rt, host, function()
+    return err == 'eof'
+  end, 'socket EOF should be delivered', 40)
   assert_eq(first, 'xy')
   assert_nil(second)
   assert_eq(err, 'eof')

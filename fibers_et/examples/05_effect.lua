@@ -12,10 +12,14 @@ local log = {}
 local counter = fibers.Scalar.new(0, 'counter')
 
 local LogKind
-LogKind = fibers.Effect.kind {
+LogKind = fibers.Effect.kind({
   name = 'example-log',
-  key = function(payload) return payload.id end,
-  merge = function(a, _b) return a end,
+  key = function(payload)
+    return payload.id
+  end,
+  merge = function(a, _b)
+    return a
+  end,
   prepare = function(_rt, payload)
     return {
       kind = LogKind,
@@ -26,7 +30,7 @@ LogKind = fibers.Effect.kind {
       end,
     }
   end,
-}
+})
 
 local function log_effect(id, message)
   return fibers.Effect.of(LogKind, { id = id, message = message })

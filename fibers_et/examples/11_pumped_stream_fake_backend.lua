@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Stream = fibers.Stream
@@ -27,7 +27,9 @@ rt:run()
 backend:feed_read('hello\n')
 
 for _ = 1, 100 do
-  if flushed and backend.shutdown_write_reason then break end
+  if flushed and backend.shutdown_write_reason then
+    break
+  end
   rt:run()
 end
 

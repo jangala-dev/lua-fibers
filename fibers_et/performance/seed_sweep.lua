@@ -19,7 +19,11 @@ local search_limit = math.max(1, math.floor(env_number('FIBERS_SWEEP_SEARCH_LIMI
 local output = os.getenv('FIBERS_SWEEP_OUTPUT') or ''
 
 local lines = {
-  'fanout,seed,status,elapsed_seconds,plans,search_calls,branches,rollbacks,trail_entries,intent_pairs_scanned,compatible_pairs,claim_branches,recruit_branches,exclude_branches,footprint_checks,footprint_matches,footprint_dynamic_matches,footprint_exchange_matches,footprint_location_matches,max_search_steps,max_search_depth,max_intents,max_roots,max_claim_group,max_trail'
+  'fanout,seed,status,elapsed_seconds,plans,search_calls,branches,rollbacks,'
+    .. 'trail_entries,intent_pairs_scanned,compatible_pairs,claim_branches,recruit_branches,'
+    .. 'exclude_branches,footprint_checks,footprint_matches,footprint_dynamic_matches,'
+    .. 'footprint_exchange_matches,footprint_location_matches,max_search_steps,'
+    .. 'max_search_depth,max_intents,max_roots,max_claim_group,max_trail',
 }
 
 for fanout = min_size, max_size do
@@ -30,9 +34,13 @@ for fanout = min_size, max_size do
     local result = fibers.try_run(function()
       local ch = fibers.Rendezvous.new('seed-sweep-' .. tostring(fanout) .. '-' .. tostring(seed))
       for i = 1, fanout do
-        fibers.spawn(function() fibers.perform(ch:put_op(i)) end, 'seed-child-' .. tostring(i))
+        fibers.spawn(function()
+          fibers.perform(ch:put_op(i))
+        end, 'seed-child-' .. tostring(i))
       end
-      for _ = 1, fanout do total = total + fibers.perform(ch:get_op()) end
+      for _ = 1, fanout do
+        total = total + fibers.perform(ch:get_op())
+      end
     end, {
       name = 'seed-sweep',
       choice_seed = seed,
@@ -41,22 +49,50 @@ for fanout = min_size, max_size do
       policy = fibers.policy.nursery({ name = 'seed-sweep-policy' }),
     })
     local elapsed = Clock.now() - started
-    local snapshot = result.runtime and result.runtime:instrumentation_snapshot() or { counters = {}, maxima = {} }
+    local snapshot = result.runtime and result.runtime:instrumentation_snapshot()
+      or { counters = {}, maxima = {} }
     local c, m = snapshot.counters or {}, snapshot.maxima or {}
     local status = result.ok and 'ok' or tostring(result.reason or 'failed')
-    if result.ok and total ~= fanout * (fanout + 1) / 2 then status = 'wrong-result' end
+    if result.ok and total ~= fanout * (fanout + 1) / 2 then
+      status = 'wrong-result'
+    end
     lines[#lines + 1] = table.concat({
-      fanout, seed, status, string.format('%.9f', elapsed), c.plans or 0,
-      c.search_calls or 0, c.branches or 0, c.rollbacks or 0, c.trail_entries or 0,
-      c.intent_pairs_scanned or 0, c.compatible_pairs or 0, c.claim_branches or 0,
-      c.recruit_branches or 0, c.exclude_branches or 0, c.footprint_checks or 0,
-      c.footprint_matches or 0, c.footprint_dynamic_matches or 0,
-      c.footprint_exchange_matches or 0, c.footprint_location_matches or 0,
-      m.search_steps_per_plan or 0, m.search_depth or 0, m.intents or 0,
-      m.roots or 0, m.claim_group_size or 0, m.trail_entries_live or 0,
+      fanout,
+      seed,
+      status,
+      string.format('%.9f', elapsed),
+      c.plans or 0,
+      c.search_calls or 0,
+      c.branches or 0,
+      c.rollbacks or 0,
+      c.trail_entries or 0,
+      c.intent_pairs_scanned or 0,
+      c.compatible_pairs or 0,
+      c.claim_branches or 0,
+      c.recruit_branches or 0,
+      c.exclude_branches or 0,
+      c.footprint_checks or 0,
+      c.footprint_matches or 0,
+      c.footprint_dynamic_matches or 0,
+      c.footprint_exchange_matches or 0,
+      c.footprint_location_matches or 0,
+      m.search_steps_per_plan or 0,
+      m.search_depth or 0,
+      m.intents or 0,
+      m.roots or 0,
+      m.claim_group_size or 0,
+      m.trail_entries_live or 0,
     }, ',')
-    io.stderr:write(string.format('fanout=%d seed=%d status=%s elapsed=%.3fs max_steps=%d\n',
-      fanout, seed, status, elapsed, m.search_steps_per_plan or 0))
+    io.stderr:write(
+      string.format(
+        'fanout=%d seed=%d status=%s elapsed=%.3fs max_steps=%d\n',
+        fanout,
+        seed,
+        status,
+        elapsed,
+        m.search_steps_per_plan or 0
+      )
+    )
   end
 end
 
@@ -68,4 +104,6 @@ if output ~= '' then
   file:close()
 end
 
-if os and os.exit then os.exit(0, false) end
+if os and os.exit then
+  os.exit(0, false)
+end

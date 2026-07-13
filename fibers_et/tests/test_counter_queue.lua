@@ -7,14 +7,34 @@ local Counter = require('fibers.atoms.counter')
 local Queue = require('fibers.queue')
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
+local function fail(msg)
+  error(msg, 2)
+end
 local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
 end
 local function assert_status(status, tag, msg)
-  if not status or status.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(status and status.tag)) end
+  if not status or status.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(status and status.tag)
+    )
+  end
 end
-local function new_runtime(opts) return Runtime.new(opts or {}) end
+local function new_runtime(opts)
+  return Runtime.new(opts or {})
+end
 
 local function test_counter_all_allocates_existing_stock()
   local rt = new_runtime()
@@ -68,15 +88,20 @@ local function test_counter_overdraw_fails_as_one_world()
     rt:perform(Op.tensor({ c:take_op(1), c:take_op(1) }))
   end, 'root')
   local status = rt:run()
-  if status and status.tag == 'found' then fail('overdrawn counter tensor should not commit') end
+  if status and status.tag == 'found' then
+    fail('overdrawn counter tensor should not commit')
+  end
   assert_eq(c.value, 1)
 end
 
-
 local function test_counter_add_is_positive_and_adjust_is_signed()
   local c = Counter.new({ initial = 2, min = 0 }, 'ctr-api')
-  local ok = pcall(function() c:add_op(-1) end)
-  if ok then fail('counter add_op should reject negative amounts') end
+  local ok = pcall(function()
+    c:add_op(-1)
+  end)
+  if ok then
+    fail('counter add_op should reject negative amounts')
+  end
 
   local rt = new_runtime()
   rt:spawn_raw(function()
@@ -116,7 +141,9 @@ local function test_queue_all_put_does_not_supply_get()
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'empty')
   local only
-  for _, e in pairs(q.items.entries) do only = e end
+  for _, e in pairs(q.items.entries) do
+    only = e
+  end
   assert_eq(only.value, 'x')
 end
 
@@ -151,7 +178,6 @@ local function test_bounded_queue_capacity_and_release()
   assert_eq(next(q.items.entries), nil)
 end
 
-
 local function test_queue_put_op_construction_does_not_mutate_queue_state()
   local q = Queue.new({ name = 'q-construction' })
   local op1 = q:put_op('lost')
@@ -172,7 +198,9 @@ local function test_queue_put_op_construction_does_not_mutate_queue_state()
   end, 'root')
   assert_status(rt2:run(), 'found')
   local only
-  for _, e in pairs(q.items.entries) do only = e end
+  for _, e in pairs(q.items.entries) do
+    only = e
+  end
   assert_eq(only.value, 'won')
 end
 
@@ -189,6 +217,8 @@ local tests = {
   test_queue_put_op_construction_does_not_mutate_queue_state,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 
 print('tests/test_counter_queue.lua: ok')

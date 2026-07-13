@@ -9,27 +9,57 @@ local Runtime = require('fibers.kernel.runtime')
 local Runner = require('fibers.runner')
 local Host = require('fibers.host')
 
-local function fail(msg) error(msg, 2) end
+local function fail(msg)
+  error(msg, 2)
+end
 local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
 end
 local function assert_status(status, tag, msg)
-  if not status or status.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(status and status.tag)) end
+  if not status or status.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(status and status.tag)
+    )
+  end
 end
 local function assert_near(actual, expected, eps, msg)
   eps = eps or 1e-9
-  if math.abs(actual - expected) > eps then fail((msg or 'assert_near failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+  if math.abs(actual - expected) > eps then
+    fail(
+      (msg or 'assert_near failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
 end
-local function new_runtime(opts) return Runtime.new(opts or {}) end
+local function new_runtime(opts)
+  return Runtime.new(opts or {})
+end
 
 local function test_scalar_transition_serialises_parallel_updates()
   local rt = new_runtime()
   local s = Scalar.new(0, 'scalar-transition-all')
-  local inc = Scalar.transition {
+  local inc = Scalar.transition({
     name = 'test.scalar.inc',
     mode = 'update',
-    step = function(v, payload) return v + payload.by, v + payload.by end,
-  }
+    step = function(v, payload)
+      return v + payload.by, v + payload.by
+    end,
+  })
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({
@@ -46,7 +76,8 @@ end
 local function test_rate_limiter_parallel_acquire_serialises_without_double_refill()
   local host = Host.manual({ now = 1 })
   local rt = Runtime.new({ host = host })
-  local rl = RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-parallel' })
+  local rl =
+    RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-parallel' })
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({ rl:acquire_op(1), rl:acquire_op(1) }))
@@ -92,7 +123,8 @@ end
 local function test_rate_limiter_available_is_observational()
   local host = Host.manual({ now = 1 })
   local rt = Runtime.new({ host = host })
-  local rl = RateLimiter.new({ capacity = 3, rate = 2, initial = 0, last = 0, name = 'rl-available' })
+  local rl =
+    RateLimiter.new({ capacity = 3, rate = 2, initial = 0, last = 0, name = 'rl-available' })
   local available
   rt:spawn_raw(function()
     available = rt:perform(rl:available_op())
@@ -103,21 +135,24 @@ local function test_rate_limiter_available_is_observational()
   assert_near(rl.state.value.last, 0)
 end
 
-
 local function test_scalar_transition_ordering_is_direct_and_deterministic()
   local s = Scalar.new('', 'scalar-ordering')
-  local first = Scalar.transition {
+  local first = Scalar.transition({
     name = 'test.order.first',
     mode = 'update',
     order = 0,
-    step = function(v) return v .. 'b', 'first' end,
-  }
-  local second = Scalar.transition {
+    step = function(v)
+      return v .. 'b', 'first'
+    end,
+  })
+  local second = Scalar.transition({
     name = 'test.order.second',
     mode = 'update',
     order = 100,
-    step = function(v) return v .. 'a', 'second' end,
-  }
+    step = function(v)
+      return v .. 'a', 'second'
+    end,
+  })
   local rows
   local rt = new_runtime()
   rt:spawn_raw(function()
@@ -131,18 +166,25 @@ end
 
 local function test_scalar_transition_ordering_controls_select_handoff()
   local s = Scalar.new(0, 'scalar-select-ordering')
-  local supply = Scalar.transition {
+  local supply = Scalar.transition({
     name = 'test.order.supply',
     mode = 'update',
     order = 0,
-    step = function(v) return v + 1, true end,
-  }
-  local take = Scalar.transition {
+    step = function(v)
+      return v + 1, true
+    end,
+  })
+  local take = Scalar.transition({
     name = 'test.order.take',
     mode = 'select',
     order = 100,
-    step = function(v) if v <= 0 then return nil end; return v - 1, v end,
-  }
+    step = function(v)
+      if v <= 0 then
+        return nil
+      end
+      return v - 1, v
+    end,
+  })
   local rows
   local rt = new_runtime()
   rt:spawn_raw(function()
@@ -156,18 +198,26 @@ end
 
 local function test_scalar_transition_payload_validation()
   local s = Scalar.new(0, 'scalar-validation')
-  local checked = Scalar.transition {
+  local checked = Scalar.transition({
     name = 'test.validation',
     mode = 'update',
     validate = function(payload)
-      if type(payload.n) ~= 'number' or payload.n <= 0 then error('n must be positive', 2) end
+      if type(payload.n) ~= 'number' or payload.n <= 0 then
+        error('n must be positive', 2)
+      end
     end,
-    step = function(v, payload) return v + payload.n, true end,
-  }
-  local ok = pcall(function() s:transition_op(checked, { n = 0 }) end)
+    step = function(v, payload)
+      return v + payload.n, true
+    end,
+  })
+  local ok = pcall(function()
+    s:transition_op(checked, { n = 0 })
+  end)
   assert_eq(ok, false, 'invalid transition payload should fail at construction time')
   local rt = new_runtime()
-  rt:spawn_raw(function() rt:perform(s:transition_op(checked, { n = 2 })) end, 'root')
+  rt:spawn_raw(function()
+    rt:perform(s:transition_op(checked, { n = 2 }))
+  end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(s.value, 2)
 end
@@ -180,5 +230,7 @@ local tests = {
   test_rate_limiter_available_is_observational,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 print('tests/test_scalar_transitions_rate_limiter.lua: ok')

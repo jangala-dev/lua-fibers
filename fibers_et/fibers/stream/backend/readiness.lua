@@ -16,7 +16,8 @@ function Backend.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('readiness-backend-' .. tostring(next_id))
-  local readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness')
+  local readiness = opts.readiness
+    or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness')
   return setmetatable({
     name = opts.name or ('readiness-backend-' .. tostring(next_id)),
     key = key,
@@ -33,7 +34,9 @@ function Backend.new(opts)
 end
 
 function Backend:bind_runtime(rt)
-  if self.runtime == rt and self.feed then return self end
+  if self.runtime == rt and self.feed then
+    return self
+  end
   self.runtime = rt
   if not self.feed then
     local source, feed = rt:readiness(self.key, (self.name or tostring(self.key)) .. ':readiness')
@@ -48,7 +51,9 @@ function Backend:attach_stream(stream)
 end
 
 function Backend:ready_op(mode)
-  if mode == 'write' or mode == 'wr' then return self.readiness:writable_op() end
+  if mode == 'write' or mode == 'wr' then
+    return self.readiness:writable_op()
+  end
   return self.readiness:readable_op()
 end
 
@@ -61,27 +66,37 @@ function Backend:write_ready_op()
 end
 
 function Backend:read(max)
-  if not self._read then return nil, 'would_block' end
+  if not self._read then
+    return nil, 'would_block'
+  end
   return self._read(self, max)
 end
 
 function Backend:write(bytes)
-  if not self._write then return nil, 'would_block' end
+  if not self._write then
+    return nil, 'would_block'
+  end
   return self._write(self, bytes)
 end
 
 function Backend:shutdown_read(reason)
-  if self._shutdown_read then return self._shutdown_read(self, reason) end
+  if self._shutdown_read then
+    return self._shutdown_read(self, reason)
+  end
   return true
 end
 
 function Backend:shutdown_write(reason)
-  if self._shutdown_write then return self._shutdown_write(self, reason) end
+  if self._shutdown_write then
+    return self._shutdown_write(self, reason)
+  end
   return true
 end
 
 function Backend:close(reason)
-  if self._close then return self._close(self, reason) end
+  if self._close then
+    return self._close(self, reason)
+  end
   self:shutdown_read(reason)
   self:shutdown_write(reason)
   return true

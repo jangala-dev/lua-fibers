@@ -6,7 +6,9 @@ local Rendezvous = require('fibers.atoms.rendezvous')
 local Scalar = require('fibers.atoms.scalar')
 
 local function assert_eq(a, b, msg)
-  if a ~= b then error((msg or 'assertion failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
+  if a ~= b then
+    error((msg or 'assertion failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
+  end
 end
 
 -- A negative fallback plan must be invalidated when the pending-participant
@@ -30,13 +32,13 @@ do
   end, 'sender')
   rt:_resume_fiber(sender)
 
-  local committed = rt:_commit(fallback_plan)
+  local committed = rt:_commit_hit(fallback_plan)
   assert_eq(committed, false, 'stale negative plan must not commit')
   assert_eq(rt.stats.validation_failures, 1, 'negative-frontier validation failure recorded')
 
   local refreshed = assert(rt:_find_candidate(receiver_id))
   assert_eq(refreshed.negative_guard, false, 'refreshed plan should use primary')
-  assert(rt:_commit(refreshed))
+  assert(rt:_commit_hit(refreshed))
   assert_eq(receiver_result, 'primary')
   assert_eq(sender_result, true)
 end
@@ -63,12 +65,10 @@ do
     first_result = value
   end, 'first')
   local second = rt:spawn_raw(function()
-    local label, value = rt:perform(
-      Op.guard(function()
-        guard_calls = guard_calls + 1
-        return increment_result('primary')
-      end):or_else(Op.always('fallback', -1))
-    )
+    local label, value = rt:perform(Op.guard(function()
+      guard_calls = guard_calls + 1
+      return increment_result('primary')
+    end):or_else(Op.always('fallback', -1)))
     second_result = label .. ':' .. tostring(value)
   end, 'second')
 
@@ -79,12 +79,12 @@ do
   local second_plan = assert(rt:_find_candidate(second_id))
   assert_eq(guard_calls, 1, 'guard constructed once while planning')
 
-  assert(rt:_commit(first_plan))
-  assert_eq(rt:_commit(second_plan), false, 'second snapshot plan should be stale')
+  assert(rt:_commit_hit(first_plan))
+  assert_eq(rt:_commit_hit(second_plan), false, 'second snapshot plan should be stale')
 
   local refreshed = assert(rt:_find_candidate(second_id))
   assert_eq(refreshed.negative_guard, false, 'stale primary refresh must remain primary')
-  assert(rt:_commit(refreshed))
+  assert(rt:_commit_hit(refreshed))
 
   assert_eq(first_result, 1)
   assert_eq(second_result, 'primary:2')

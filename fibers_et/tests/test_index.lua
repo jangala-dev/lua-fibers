@@ -8,16 +8,40 @@ local Op = require('fibers.atoms.op')
 local Index = require('fibers.atoms.index')
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+local function fail(msg)
+  error(msg, 2)
 end
-local function assert_nil(value, msg) if value ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(value)) end end
+local function assert_eq(actual, expected, msg)
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
+end
+local function assert_nil(value, msg)
+  if value ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(value))
+  end
+end
 local function assert_status(status, tag, msg)
-  if not status or status.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(status and status.tag)) end
+  if not status or status.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(status and status.tag)
+    )
+  end
 end
 
-local function new_runtime(opts) return Runtime.new(opts or {}) end
+local function new_runtime(opts)
+  return Runtime.new(opts or {})
+end
 
 local function seeded_index(name)
   return Index.new({
@@ -34,8 +58,12 @@ local function test_two_parallel_pop_first_claims_get_distinct_concrete_values()
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
-      ix:pop_first_op():map(function(e) return e.key, e.value end),
-      ix:pop_first_op():map(function(e) return e.key, e.value end),
+      ix:pop_first_op():map(function(e)
+        return e.key, e.value
+      end),
+      ix:pop_first_op():map(function(e)
+        return e.key, e.value
+      end),
     }))
   end, 'root')
 
@@ -56,8 +84,12 @@ local function test_parallel_pop_last_claims_get_distinct_tail_values()
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
-      ix:pop_last_op():map(function(e) return e.key end),
-      ix:pop_last_op():map(function(e) return e.key end),
+      ix:pop_last_op():map(function(e)
+        return e.key
+      end),
+      ix:pop_last_op():map(function(e)
+        return e.key
+      end),
     }))
   end, 'root')
 
@@ -77,7 +109,9 @@ local function test_remove_plus_pop_skips_removed_head()
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       ix:remove_op('a'),
-      ix:pop_first_op():map(function(e) return e.key end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
     }))
   end, 'root')
 
@@ -121,7 +155,11 @@ local function test_pop_then_reinsert_same_key_is_sequential_replacement()
 
   assert_status(rt:run(), 'found')
   assert_eq(out, 'a')
-  assert_eq(ix.entries.a.value, 'A2', 'later insert in continuation should follow selected remove sequentially')
+  assert_eq(
+    ix.entries.a.value,
+    'A2',
+    'later insert in continuation should follow selected remove sequentially'
+  )
 end
 
 local function test_empty_index_claim_uses_absence_fallback()
@@ -145,7 +183,9 @@ local function test_insert_plus_pop_first_consumes_same_world_insert()
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       ix:insert_op('z', 0, 'Z'),
-      ix:pop_first_op():map(function(e) return e.key, e.value end),
+      ix:pop_first_op():map(function(e)
+        return e.key, e.value
+      end),
     }))
   end, 'root')
 
@@ -164,7 +204,9 @@ local function test_insert_plus_pop_first_uses_projected_order()
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       ix:insert_op('z', 0, 'Z'),
-      ix:pop_first_op():map(function(e) return e.key end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
     }))
   end, 'root')
 
@@ -182,8 +224,12 @@ local function test_insert_plus_two_pops_allocates_insert_then_existing()
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
       ix:insert_op('z', 0, 'Z'),
-      ix:pop_first_op():map(function(e) return e.key end),
-      ix:pop_first_op():map(function(e) return e.key end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
     }))
   end, 'root')
 
@@ -232,7 +278,6 @@ local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
   assert_eq(ix.entries.a.value, 'A', 'failed tensor should leave entry intact')
 end
 
-
 local function test_all_insert_does_not_supply_pop_but_commits_insert()
   local rt = new_runtime()
   local ix = Index.new({}, 'idx-all-insert-pop')
@@ -276,8 +321,12 @@ local function test_all_parallel_pops_allocate_shared_committed_stock()
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({
-      ix:pop_first_op():map(function(e) return e.key end),
-      ix:pop_first_op():map(function(e) return e.key end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
     }))
   end, 'root')
 
@@ -297,7 +346,9 @@ local function test_all_remove_constrains_sibling_pop_without_supplying()
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({
       ix:remove_op('a'),
-      ix:pop_first_op():map(function(e) return e.key end),
+      ix:pop_first_op():map(function(e)
+        return e.key
+      end),
     }))
   end, 'root')
 
@@ -327,6 +378,8 @@ local tests = {
   test_all_remove_constrains_sibling_pop_without_supplying,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 
 print('tests/test_claim_index.lua: ok')

@@ -1,10 +1,13 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Common = require('tests.hosts.common')
 
 local ok_mod, NixioHost = pcall(require, 'fibers.host.nixio')
 Common.assert_truthy(ok_mod, 'nixio host module should be require-able')
-Common.assert_truthy(type(NixioHost.is_supported) == 'function', 'nixio host should expose is_supported')
+Common.assert_truthy(
+  type(NixioHost.is_supported) == 'function',
+  'nixio host should expose is_supported'
+)
 Common.assert_truthy(type(NixioHost.new) == 'function', 'nixio host should expose new')
 
 if not NixioHost.is_supported() then
@@ -24,13 +27,21 @@ local function make_pipe()
   Common.assert_truthy(r and w, 'nixio.pipe should return read and write descriptors')
   local closed = false
   local function close_one(x)
-    if x and type(x.close) == 'function' then pcall(function() x:close() end) end
+    if x and type(x.close) == 'function' then
+      pcall(function()
+        x:close()
+      end)
+    end
   end
   local function write_byte(_ch)
-    if type(w.writeall) == 'function' then return w:writeall('x') end
+    if type(w.writeall) == 'function' then
+      return w:writeall('x')
+    end
     if type(w.write) == 'function' then
       local n, err = w:write('x')
-      if n == true or n == 1 then return true end
+      if n == true or n == 1 then
+        return true
+      end
       return nil, err or ('short write: ' .. tostring(n))
     end
     return nil, 'nixio write method unavailable'
@@ -40,9 +51,12 @@ local function make_pipe()
     write_key = w,
     write_byte = write_byte,
     close = function()
-      if closed then return end
+      if closed then
+        return
+      end
       closed = true
-      close_one(r); close_one(w)
+      close_one(r)
+      close_one(w)
     end,
   }
 end
@@ -50,9 +64,13 @@ end
 local function with_host_pipe(label, fn)
   local host = NixioHost.new()
   local pipe = make_pipe()
-  local ok, err = pcall(function() fn(label, host, pipe) end)
+  local ok, err = pcall(function()
+    fn(label, host, pipe)
+  end)
   Common.cleanup(host, pipe)
-  if not ok then error(err, 0) end
+  if not ok then
+    error(err, 0)
+  end
 end
 
 with_host_pipe('nixio:readiness', Common.readiness_smoke)

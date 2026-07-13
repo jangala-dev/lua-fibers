@@ -87,7 +87,7 @@ validation conflict is not Retry
 one exhausted primitive query is not necessarily Retry
 ```
 
-The current bounded driver increases its search allowance and searches again; it does not expose a persistent whole-machine search cursor. Witnessed primitive programmes do use lazy local cursors.
+The production trail machine retains its explicit alternative stack when a bounded search returns `Unknown`. A later bounded call resumes the same proof while its pending frontier, committed observations and external epoch remain unchanged. The copy-on-branch reference evaluator deliberately restarts and remains the semantic oracle.
 
 ## 4. Candidate proof and commit
 

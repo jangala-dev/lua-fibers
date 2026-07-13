@@ -6,16 +6,38 @@ local Runtime = require('fibers.kernel.runtime')
 local Rendezvous = require('fibers.atoms.rendezvous')
 local Signal = require('fibers.atoms.signal')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_falsy(v, msg) if v then fail((msg or 'expected falsy') .. ': got ' .. tostring(v)) end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tag .. ', got ' .. tostring(st and st.tag)) end end
-local pack_ = table.pack or function(...) return { n = select('#', ...), ... } end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_falsy(v, msg)
+  if v then
+    fail((msg or 'expected falsy') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail((msg or 'status mismatch') .. ': expected ' .. tag .. ', got ' .. tostring(st and st.tag))
+  end
+end
+local pack_ = table.pack or function(...)
+  return { n = select('#', ...), ... }
+end
 local function one_perform(op, opts)
   local rt = Runtime.new(opts or {})
   local values = { n = 0 }
-  rt:spawn_raw(function() values = pack_(rt:perform(op)) end, 'one')
+  rt:spawn_raw(function()
+    values = pack_(rt:perform(op))
+  end, 'one')
   local st = rt:run()
   return st, values, rt
 end
@@ -64,8 +86,12 @@ do
   local ch = Rendezvous.new('residual-primary')
   local rt = Runtime.new()
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(ch:get_op():or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(ch:put_op('payload')) end, 'sender')
+  rt:spawn_raw(function()
+    got = rt:perform(ch:get_op():or_else(Op.always('fallback')))
+  end, 'receiver')
+  rt:spawn_raw(function()
+    sent = rt:perform(ch:put_op('payload'))
+  end, 'sender')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'payload')
   assert_eq(sent, true)
@@ -78,7 +104,12 @@ do
   local rt = Runtime.new()
   local receiver, partner
   rt:spawn_raw(function()
-    receiver = rt:perform(wanted:get_op():map(function(v) return 'primary:' .. v end):or_else(Op.always('fallback')))
+    receiver = rt:perform(wanted
+      :get_op()
+      :map(function(v)
+        return 'primary:' .. v
+      end)
+      :or_else(Op.always('fallback')))
   end, 'receiver')
   rt:spawn_raw(function()
     partner = rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok')))
@@ -88,18 +119,21 @@ do
   assert_eq(partner, true)
 end
 
-
 -- Bounded cursor also opens residual fallback over repeated steps.
 do
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
-    got = rt:perform(Rendezvous.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
+    got = rt:perform(
+      Rendezvous.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback'))
+    )
   end, 'cursor-residual')
   local st
   for _ = 1, 80 do
     st = rt:step({ max_work = 1 })
-    if st.tag == 'found' then break end
+    if st.tag == 'found' then
+      break
+    end
   end
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
@@ -111,12 +145,18 @@ do
   local ch = Rendezvous.new('cursor-residual-with-sender')
   local rt = Runtime.new()
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(ch:get_op():or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(ch:put_op('payload')) end, 'sender')
+  rt:spawn_raw(function()
+    got = rt:perform(ch:get_op():or_else(Op.always('fallback')))
+  end, 'receiver')
+  rt:spawn_raw(function()
+    sent = rt:perform(ch:put_op('payload'))
+  end, 'sender')
   local st
   for _ = 1, 120 do
     st = rt:step({ max_work = 1 })
-    if st.tag == 'found' then break end
+    if st.tag == 'found' then
+      break
+    end
   end
   assert_status(st, 'found')
   assert_eq(got, 'payload')

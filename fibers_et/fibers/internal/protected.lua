@@ -22,12 +22,16 @@ end
 
 local function running_raw()
   local co, is_main = coroutine.running()
-  if is_main then return nil end
+  if is_main then
+    return nil
+  end
   return co
 end
 
 local function force_fallback()
-  if rawget(_G, '__FIBERS_PROTECTED_FORCE_FALLBACK') then return true end
+  if rawget(_G, '__FIBERS_PROTECTED_FORCE_FALLBACK') then
+    return true
+  end
   if os and os.getenv then
     local v = os.getenv('FIBERS_PROTECTED_FORCE_FALLBACK')
     return v == '1' or v == 'true' or v == 'yes'
@@ -44,7 +48,11 @@ local function probe_yieldable_pcall()
   end)
 
   local ok, yielded = coroutine.resume(co)
-  if not ok or yielded ~= 'fibers.internal.protected.probe' or coroutine.status(co) ~= 'suspended' then
+  if
+    not ok
+    or yielded ~= 'fibers.internal.protected.probe'
+    or coroutine.status(co) ~= 'suspended'
+  then
     return false
   end
 
@@ -63,7 +71,11 @@ local function probe_yieldable_xpcall()
   end)
 
   local ok, yielded = coroutine.resume(co)
-  if not ok or yielded ~= 'fibers.internal.protected.probe' or coroutine.status(co) ~= 'suspended' then
+  if
+    not ok
+    or yielded ~= 'fibers.internal.protected.probe'
+    or coroutine.status(co) ~= 'suspended'
+  then
     return false
   end
 
@@ -80,7 +92,9 @@ local parent_of = setmetatable({}, { __mode = 'k' })
 
 local function make_coroutine(fn)
   local ok, co = native_pcall(coroutine.create, fn)
-  if ok then return co end
+  if ok then
+    return co
+  end
 
   -- Lua's pcall accepts callable tables.  coroutine.create is stricter on some
   -- hosts, so wrap non-function callables.
@@ -126,7 +140,9 @@ local function fallback_pcall(fn, ...)
   local r = pack(resume_until_done(co, ...))
   parent_of[co] = nil
 
-  if r[1] then return true, unpack_(r, 2, r.n) end
+  if r[1] then
+    return true, unpack_(r, 2, r.n)
+  end
   return false, r[2]
 end
 
@@ -134,10 +150,14 @@ local function run_handler(handler, err, caller)
   local hco = make_coroutine(function()
     return handler(err)
   end)
-  if caller then parent_of[hco] = caller end
+  if caller then
+    parent_of[hco] = caller
+  end
   local r = pack(resume_until_done(hco))
   parent_of[hco] = nil
-  if r[1] then return false, r[2] end
+  if r[1] then
+    return false, r[2]
+  end
   return false, 'error in error handling'
 end
 
@@ -161,7 +181,9 @@ local function fallback_xpcall(fn, handler, ...)
   local r = pack(resume_until_done(co, ...))
   parent_of[co] = nil
 
-  if r[1] then return true, unpack_(r, 2, r.n) end
+  if r[1] then
+    return true, unpack_(r, 2, r.n)
+  end
   return run_handler(handler, r[2], caller)
 end
 

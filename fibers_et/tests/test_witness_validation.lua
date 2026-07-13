@@ -17,16 +17,18 @@ do
   local fallback = assert(rt:_find_candidate(receiver_id))
   assert(fallback.negative_guard == true)
 
-  local producer = rt:spawn_raw(function() rt:perform(net:put_op('p', 'primary')) end)
+  local producer = rt:spawn_raw(function()
+    rt:perform(net:put_op('p', 'primary'))
+  end)
   rt:_resume_fiber(producer)
   local producer_id = rt.pending[2].id
   local production = assert(rt:_find_candidate(producer_id))
-  assert(rt:_commit(production))
-  assert(rt:_commit(fallback) == false)
+  assert(rt:_commit_hit(production))
+  assert(rt:_commit_hit(fallback) == false)
 
   local refreshed = assert(rt:_find_candidate(receiver_id))
   assert(refreshed.negative_guard == false)
-  assert(rt:_commit(refreshed))
+  assert(rt:_commit_hit(refreshed))
   assert(receiver_result == 'primary')
 end
 
@@ -44,15 +46,17 @@ do
   local fallback = assert(rt:_find_candidate(reserver_id))
   assert(fallback.negative_guard == true)
 
-  local canceller = rt:spawn_raw(function() rt:perform(cal:cancel_op(1)) end)
+  local canceller = rt:spawn_raw(function()
+    rt:perform(cal:cancel_op(1))
+  end)
   rt:_resume_fiber(canceller)
   local cancel_id = rt.pending[2].id
-  assert(rt:_commit(assert(rt:_find_candidate(cancel_id))))
-  assert(rt:_commit(fallback) == false)
+  assert(rt:_commit_hit(assert(rt:_find_candidate(cancel_id))))
+  assert(rt:_commit_hit(fallback) == false)
 
   local refreshed = assert(rt:_find_candidate(reserver_id))
   assert(refreshed.negative_guard == false)
-  assert(rt:_commit(refreshed))
+  assert(rt:_commit_hit(refreshed))
   assert(result == 'primary')
 end
 

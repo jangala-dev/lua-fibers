@@ -72,6 +72,7 @@ FIBERS_PERF_DIAGNOSTICS       0 disables the separate diagnostic pass
 FIBERS_PERF_TRACE             1 retains capped events for the slowest plans
 FIBERS_PERF_STATE_HASH        0 disables diagnostic duplicate-state hashing
 FIBERS_PERF_SLOW_PLANS        number of slow-plan summaries to retain
+FIBERS_PERF_ADVANCED          full or off; A/B the passes 8--10 defaults
 ```
 
 Use the same interpreter, host, CPU policy and environment when comparing two
@@ -136,6 +137,61 @@ longer pathological under the current policy, but remains opt-in so the A/B
 suite stays compact.
 
 The acceptance rules are recorded in `performance/INVARIANTS.md`.
+
+
+## Advanced cache and symmetry suite
+
+The remaining architectural passes have a separate validating comparison:
+
+```sh
+texlua performance/advanced_suite.lua
+FIBERS_ADV_MACHINE=reference texlua performance/advanced_suite.lua
+FIBERS_ADV_FORMAT=csv FIBERS_ADV_OUTPUT=advanced.csv \
+  texlua performance/advanced_suite.lua
+```
+
+It runs four profiles over the same validating scenarios:
+
+- `baseline`: all remaining mechanisms disabled;
+- `refutation`: narrow supplier no-goods only;
+- `memo`: refutation caching plus adaptive per-plan state memoisation; and
+- `full`: refutation caching, state memoisation, certified symmetry and
+  cross-cycle plan reuse.
+
+The cases cover repeated blocked alternatives, repeated supplier refutations,
+certified homogeneous suppliers, unchanged blocked driver cycles, ordinary
+binary rendezvous and the triple-swap stress case.  CSV output includes search
+calls, branches, footprint checks, cache hits, symmetry pruning and plan reuse.
+
+Controls are:
+
+```text
+FIBERS_ADV_REPEATS        timed samples; median is reported
+FIBERS_ADV_FORMAT         text or csv
+FIBERS_ADV_OUTPUT         optional output file
+FIBERS_ADV_MACHINE        trail or reference
+FIBERS_ADV_CASE           literal substring filter
+```
+
+The safety model and current measurements are recorded in
+`docs/notes/performance/PERFORMANCE-PASSES-8-10.md`.
+
+## Sparse store-view suite
+
+Product lanes use sparse parent-linked speculative views.  The focused store
+benchmark first observes a configurable number of locations in a parent view,
+then forks a configurable product.  It reports both elapsed time and
+GC-disabled transient allocation per round:
+
+```sh
+texlua performance/store_view_suite.lua
+FIBERS_STORE_CELLS=32 FIBERS_STORE_LANES=16 FIBERS_STORE_ROUNDS=500 \
+  texlua performance/store_view_suite.lua
+```
+
+The benchmark validates its result.  It is intended to detect regressions in
+view forking, copy-on-write promotion and product merging rather than general
+proof-search changes.
 
 ## Seed sweep
 

@@ -30,7 +30,9 @@ function Interrupt.new(name)
 end
 
 function Interrupt.raise(token, reason)
-  if type(token) ~= 'table' or token._fibers_interrupt ~= true then error('Interrupt.raise expects an interrupt token', 2) end
+  if type(token) ~= 'table' or token._fibers_interrupt ~= true then
+    error('Interrupt.raise expects an interrupt token', 2)
+  end
   token.raised = true
   token.reason = reason
   token.version = (token.version or 0) + 1

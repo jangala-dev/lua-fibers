@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Stream = fibers.Stream
@@ -13,19 +13,27 @@ local reply
 local function negotiate_op(stream)
   return stream:reader():read_line_op():and_then(function(line)
     if line == 'PING' then
-      return protocol:write_op('ping'):and_then(function()
-        return negotiator:move_op(stream, responder)
-      end):and_then(function()
-        return stream:writer():write_op('PONG\n')
-      end):map(function()
-        return 'ping'
-      end)
+      return protocol
+        :write_op('ping')
+        :and_then(function()
+          return negotiator:move_op(stream, responder)
+        end)
+        :and_then(function()
+          return stream:writer():write_op('PONG\n')
+        end)
+        :map(function()
+          return 'ping'
+        end)
     end
-    return stream:writer():write_op('BAD\n'):and_then(function()
-      return stream:close_op('bad protocol')
-    end):map(function()
-      return nil, 'bad_protocol'
-    end)
+    return stream
+      :writer()
+      :write_op('BAD\n')
+      :and_then(function()
+        return stream:close_op('bad protocol')
+      end)
+      :map(function()
+        return nil, 'bad_protocol'
+      end)
   end)
 end
 

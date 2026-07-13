@@ -10,16 +10,36 @@ local Rendezvous = fibers.Rendezvous
 local Effect = fibers.Effect
 local Interrupt = require('fibers.internal.interrupt')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+local function fail(msg)
+  error(msg, 2)
 end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_falsy(v, msg) if v then fail((msg or 'expected falsy') .. ': got ' .. tostring(v)) end end
+local function assert_eq(actual, expected, msg)
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_falsy(v, msg)
+  if v then
+    fail((msg or 'expected falsy') .. ': got ' .. tostring(v))
+  end
+end
 
 local function run_all(rt)
   local st
-  repeat st = rt:run() until st.tag ~= 'found'
+  repeat
+    st = rt:run()
+  until st.tag ~= 'found'
   return st
 end
 
@@ -29,8 +49,12 @@ do
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
   local got
   local rt = Runtime.new()
-  rt:spawn_raw(function() rt:perform(ch:put_op(value)) end, 'opaque-put')
-  rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'opaque-get')
+  rt:spawn_raw(function()
+    rt:perform(ch:put_op(value))
+  end, 'opaque-put')
+  rt:spawn_raw(function()
+    got = rt:perform(ch:get_op())
+  end, 'opaque-get')
   run_all(rt)
   assert_eq(got, value, 'rendezvous preserves table identity')
   assert_eq(got.x, 42, 'rendezvous preserves keyed fields')
@@ -60,7 +84,9 @@ do
   rt:spawn_raw(function()
     choice_result = rt:perform(fibers.choice(
       Op.always('winner'),
-      q:next_op():map(function(v) return 'events:' .. tostring(v) end)
+      q:next_op():map(function(v)
+        return 'events:' .. tostring(v)
+      end)
     ))
     next_result = rt:perform(q:next_op())
   end, 'source-events-loser')
@@ -89,9 +115,15 @@ do
   local token = Interrupt.new('capability-safe-token')
   assert_eq(token.raise, nil, 'interrupt token has no public raise method')
   assert_eq(token.clear, nil, 'interrupt token has no public clear method')
-  assert_eq(require('fibers').interrupt, nil, 'interrupt module is not part of top-level public surface')
+  assert_eq(
+    require('fibers').interrupt,
+    nil,
+    'interrupt module is not part of top-level public surface'
+  )
   local rt = Runtime.new()
-  rt:spawn_raw(function() rt:perform(Op.emit(Effect.interrupt(token, 'stop'))) end, 'raise-by-effect')
+  rt:spawn_raw(function()
+    rt:perform(Op.emit(Effect.interrupt(token, 'stop')))
+  end, 'raise-by-effect')
   run_all(rt)
   assert_truthy(token:is_raised(), 'committed interrupt effect raises token')
   assert_eq(token.reason, 'stop', 'committed interrupt effect records reason')
@@ -101,10 +133,14 @@ end
 -- effect prepare, which may run speculatively during search.
 do
   local BadKind
-  BadKind = Effect.kind {
+  BadKind = Effect.kind({
     name = 'bad-prepare-arrival',
-    key = function() return 'bad' end,
-    merge = function(a, _b) return a end,
+    key = function()
+      return 'bad'
+    end,
+    merge = function(a, _b)
+      return a
+    end,
     prepare = function(_rt, payload)
       payload.feed:set('illegal')
       return {
@@ -113,23 +149,30 @@ do
         discharge = function() end,
       }
     end,
-  }
+  })
   local rt = Runtime.new()
   local _sig, feed = rt:signal('bad-prepare-signal')
-  rt:spawn_raw(function() rt:perform(Op.emit(Effect.of(BadKind, { feed = feed }))) end, 'bad-prepare')
-  local ok, err = pcall(function() rt:run() end)
+  rt:spawn_raw(function()
+    rt:perform(Op.emit(Effect.of(BadKind, { feed = feed })))
+  end, 'bad-prepare')
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_falsy(ok, 'host arrival in prepare is rejected')
   assert_eq(type(err), 'table', 'phase error is structured')
   assert_eq(err.kind, 'phase_error', 'host arrival in prepare is a phase error')
 end
-
 
 -- Region exposes generic claim/settle machinery, not settlement-policy-specific tree methods.
 do
   local r = fibers.Region.new('claim-surface')
   assert_eq(type(r.claim_op), 'function', 'Region should expose generic claim_op')
   assert_eq(type(r.resolve_claim_op), 'function', 'Region should expose generic resolve_claim_op')
-  assert_eq(type(r.discharge_claim_op), 'function', 'Region should expose explicit discharge_claim_op')
+  assert_eq(
+    type(r.discharge_claim_op),
+    'function',
+    'Region should expose explicit discharge_claim_op'
+  )
   assert_eq(type(r.fail_claim_op), 'function', 'Region should expose explicit fail_claim_op')
   assert_eq(type(r.move_op), 'function', 'Region should expose explicit move_op')
   assert_eq(type(r.retire_tree_op), 'nil', 'Region should not expose retire_tree_op')

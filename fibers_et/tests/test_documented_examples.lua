@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 
@@ -13,7 +13,7 @@ end)
 
 -- Programming-guide Scalar transition.
 fibers.run(function()
-  local Increment = fibers.Scalar.transition {
+  local Increment = fibers.Scalar.transition({
     name = 'counter.increment',
     mode = 'update',
     validate = function(payload)
@@ -23,7 +23,7 @@ fibers.run(function()
       local next_value = value + payload.by
       return fibers.Scalar.Ready.write(next_value, next_value)
     end,
-  }
+  })
 
   local counter = fibers.Scalar.machine(0, 'counter')
   assert(fibers.perform(counter:transition_op(Increment, { by = 1 })) == 1)
@@ -36,7 +36,7 @@ fibers.run(function()
     workers = { 'alice' },
   })
 
-  local start = net:transition {
+  local start = net:transition({
     name = 'start',
     inputs = {
       { place = 'jobs', as = 'job' },
@@ -52,7 +52,7 @@ fibers.run(function()
     result = function(binding)
       return binding.job, binding.worker
     end,
-  }
+  })
 
   local job, worker = fibers.perform(net:fire_op(start))
   assert(job.id == 1 and worker == 'alice')
@@ -61,14 +61,14 @@ end)
 -- Programming-guide Calendar reservation.
 fibers.run(function()
   local calendar = fibers.Calendar.new()
-  local booking = fibers.perform(calendar:reserve_op {
+  local booking = fibers.perform(calendar:reserve_op({
     resources = { 'room-a', 'alice' },
     earliest = 9,
     latest = 17,
     duration = 1,
     preference = 'earliest',
     payload = { purpose = 'review' },
-  })
+  }))
 
   assert(booking.start == 9 and booking.finish == 10)
   assert(fibers.perform(calendar:cancel_op(booking.id)).id == booking.id)

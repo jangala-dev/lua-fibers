@@ -5,12 +5,18 @@ local Runtime = require('fibers.kernel.runtime')
 local Region = require('fibers.atoms.region')
 local Signal = require('fibers.atoms.signal')
 
-local function fail(msg) error(msg, 2) end
+local function fail(msg)
+  error(msg, 2)
+end
 local function eq(a, b, msg)
-  if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
 end
 local function collect()
-  for _ = 1, 6 do collectgarbage('collect') end
+  for _ = 1, 6 do
+    collectgarbage('collect')
+  end
 end
 
 -- Repeated batches must consume and reset the ready queue. Completed handles
@@ -20,7 +26,9 @@ do
   for batch = 1, 40 do
     local handles = {}
     for i = 1, 25 do
-      handles[i] = rt:spawn_raw(function() return batch, i end, 'short')
+      handles[i] = rt:spawn_raw(function()
+        return batch, i
+      end, 'short')
     end
     local st = rt:run()
     eq(st.tag, 'idle', 'short-fibre batch should drain')
@@ -67,7 +75,9 @@ do
     end, 'temporary-owner')
     while true do
       local st = rt:run()
-      if st.tag == 'idle' or st.tag == 'quiescent' then break end
+      if st.tag == 'idle' or st.tag == 'quiescent' then
+        break
+      end
     end
     rt, region, item = nil, nil, nil
   end

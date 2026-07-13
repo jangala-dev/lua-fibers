@@ -9,7 +9,9 @@ local tests = {
 
 for i = 1, #tests do
   local ok, err = pcall(dofile, tests[i])
-  if not ok then error(tests[i] .. ' failed: ' .. tostring(err), 0) end
+  if not ok then
+    error(tests[i] .. ' failed: ' .. tostring(err), 0)
+  end
 end
 
 print('tests/test_resources.lua: ok')

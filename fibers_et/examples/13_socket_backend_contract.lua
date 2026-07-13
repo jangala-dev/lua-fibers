@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Stream = fibers.Stream
@@ -29,8 +29,14 @@ function handle:read(max)
   local n = math.min(#first, max)
   local out = string.sub(first, 1, n)
   local rest = string.sub(first, n + 1)
-  if rest == '' then table.remove(self.input, 1) else self.input[1] = rest end
-  if #self.input == 0 then host:clear_readiness(self.key, 'read') end
+  if rest == '' then
+    table.remove(self.input, 1)
+  else
+    self.input[1] = rest
+  end
+  if #self.input == 0 then
+    host:clear_readiness(self.key, 'read')
+  end
   return out
 end
 
@@ -43,20 +49,25 @@ function handle:written()
   return table.concat(self.output)
 end
 
-local backend = Stream.backend.Socket.new {
+local backend = Stream.backend.Socket.new({
   name = 'example-socket-backend',
   key = handle.key,
   host = host,
-  read = function(_backend, max) return handle:read(max) end,
-  write = function(_backend, bytes) return handle:write(bytes) end,
-}
+  read = function(_backend, max)
+    return handle:read(max)
+  end,
+  write = function(_backend, bytes)
+    return handle:write(bytes)
+  end,
+})
 
 local rt = fibers.Runtime.new({ host = host })
 local region = fibers.Region.new('example-socket-region')
 local stream, got, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'example-socket-stream' }))
+  stream =
+    rt:perform(Stream.open_backend_in_op(region, backend, { name = 'example-socket-stream' }))
   got = rt:perform(stream:reader():read_exactly_op(4))
   rt:perform(stream:writer():write_op('pong'))
   flushed = rt:perform(stream:writer():flush_op())

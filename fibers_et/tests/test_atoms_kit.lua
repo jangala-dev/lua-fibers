@@ -1,17 +1,41 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 local function wait_until(scalar, pred)
   local function loop()
     return scalar:snapshot_op():and_then(function(s)
-      if pred(s.value) then return fibers.always(s.value) end
-      return scalar:changed_op(s.version):and_then(function() return loop() end)
+      if pred(s.value) then
+        return fibers.always(s.value)
+      end
+      return scalar:changed_op(s.version):and_then(function()
+        return loop()
+      end)
     end)
   end
   return loop()
@@ -21,15 +45,18 @@ local function modify_when(scalar, pred, update)
   local function loop()
     return scalar:snapshot_op():and_then(function(s)
       if not pred(s.value) then
-        return scalar:changed_op(s.version):and_then(function() return loop() end)
+        return scalar:changed_op(s.version):and_then(function()
+          return loop()
+        end)
       end
       local new = update(s.value)
-      return scalar:write_op(new):map(function() return new, s.value end)
+      return scalar:write_op(new):map(function()
+        return new, s.value
+      end)
     end)
   end
   return loop()
 end
-
 
 -- Layer aggregates make the repository structure explicit without changing the
 -- ordinary convenience facade.
@@ -56,6 +83,14 @@ do
   assert_eq(atoms.Effect, fibers.Effect, 'atoms aggregate exports Effect')
   assert_eq(policy, fibers.policy, 'top-level policy module exports scope policies')
   assert_eq(kernel.Runtime, fibers.Runtime, 'kernel aggregate exports Runtime')
+  assert_eq(kernel.IR, require('fibers.kernel.ir'), 'kernel aggregate exports trusted IR')
+  assert_eq(kernel.Store, require('fibers.kernel.store'), 'kernel aggregate exports trusted Store')
+  assert_eq(kernel.Machine, nil, 'kernel aggregate hides the production machine')
+  assert_eq(kernel.Instrumentation, nil, 'kernel aggregate hides instrumentation internals')
+  assert_eq(fibers.kernel, nil, 'top-level facade does not export the kernel aggregate')
+  assert_eq(fibers.Phase, nil, 'prototype Phase is not part of the top-level v1 surface')
+  assert_eq(fibers.Region._ledger, nil, 'Region does not export its shared ledger')
+  assert_eq(fibers.Region._clone_ledger, nil, 'Region does not export ledger cloning')
 end
 
 -- The friendly top-level surface is enough for ordinary rendezvous use.
@@ -72,13 +107,16 @@ do
   assert_eq(got, 'hello')
 end
 
--- Scalars provide transactional facts; waiting is expressed with snapshot/changed and Op composition.
+-- Scalars provide transactional facts. Waiting is expressed with snapshot/changed
+-- and Op composition.
 do
   local scalar = fibers.Scalar.new(false, 'flag')
   local seen
   local st = fibers.try_run(function()
     fibers.spawn(function()
-      seen = fibers.perform(wait_until(scalar, function(v) return v == true end))
+      seen = fibers.perform(wait_until(scalar, function(v)
+        return v == true
+      end))
     end, 'waiter')
     fibers.perform(scalar:write_op(true))
   end).runtime_status
@@ -91,10 +129,11 @@ do
   local c = fibers.Scalar.new(1, 'credits')
   local new, old
   local st = fibers.try_run(function()
-    new, old = fibers.perform(modify_when(c,
-      function(v) return v > 0 end,
-      function(v) return v - 1 end
-    ))
+    new, old = fibers.perform(modify_when(c, function(v)
+      return v > 0
+    end, function(v)
+      return v - 1
+    end))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(old, 1)
@@ -123,7 +162,11 @@ end
 -- Clocks are ordinary resources backed by host time.
 do
   local now = 0
-  local rt = fibers.Runtime.new({ host = { now = function() return now end } })
+  local rt = fibers.Runtime.new({ host = {
+    now = function()
+      return now
+    end,
+  } })
   local ok, observed
   rt:spawn_raw(function()
     ok, observed = rt:perform(fibers.sleep_op(5))
@@ -140,10 +183,14 @@ end
 -- Effects are the public form of typed transaction effects.
 do
   local discharged = 0
-  local Kind = fibers.Effect.kind {
+  local Kind = fibers.Effect.kind({
     name = 'test-effect',
-    key = function(payload) return payload.key end,
-    merge = function(a, _b) return a end,
+    key = function(payload)
+      return payload.key
+    end,
+    merge = function(a, _b)
+      return a
+    end,
     prepare = function(_rt, payload)
       return {
         kind = Kind,
@@ -154,7 +201,7 @@ do
         end,
       }
     end,
-  }
+  })
   local effect = fibers.Effect.of(Kind, { key = 'once' })
   local st = fibers.try_run(function()
     fibers.perform(fibers.after_commit(effect))
@@ -181,10 +228,11 @@ do
   assert_status(st, 'found')
   assert_truthy(task, 'spawn should return a task handle')
   assert_eq(value, 7)
-  for _ = 1, 4 do collectgarbage('collect') end
+  for _ = 1, 4 do
+    collectgarbage('collect')
+  end
   assert_eq(weak.marker, nil, 'completed task handle should not retain start closure captures')
 end
-
 
 -- The public atom-kit pieces compose in one ordinary programme.
 do
@@ -200,13 +248,17 @@ do
     end, 'sender')
 
     local task = fibers.perform(fibers.Task.spawn_op(region, function()
-      local value = fibers.perform(wait_until(flag, function(v) return v == true end))
+      local value = fibers.perform(wait_until(flag, function(v)
+        return v == true
+      end))
       return value and 42 or 0
     end, 'worker'))
 
     received = fibers.perform(fibers.choice(
       inbox:get_op(),
-      fibers.sleep_op(1):map(function() return 'timeout' end)
+      fibers.sleep_op(1):map(function()
+        return 'timeout'
+      end)
     ))
 
     local value = fibers.perform(task:await_op())
@@ -217,7 +269,6 @@ do
   assert_eq(received, 'hello')
   assert_eq(joined.value, 42)
 end
-
 
 -- Task await unwraps Exit and preserves Lua multiple-return values.
 do

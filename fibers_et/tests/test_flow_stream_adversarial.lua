@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Op = fibers.Op
@@ -6,13 +6,35 @@ local Flow = fibers.Flow
 local Stream = fibers.Stream
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg)
-  if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end
+local function fail(msg)
+  error(msg, 2)
 end
-local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_nil(v, msg)
+  if v ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 local function test_parallel_lease_and_read_do_not_duplicate_bytes()
   local flow = Flow.new({ name = 'adv-lease-read' })
@@ -76,7 +98,11 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
     }))
   end).runtime_status
   assert_status(st_same, 'found')
-  assert_eq(same_rows[2][1], 'not-yet-eof', 'same-world close should not fabricate EOF for an empty read')
+  assert_eq(
+    same_rows[2][1],
+    'not-yet-eof',
+    'same-world close should not fabricate EOF for an empty read'
+  )
 
   local flow = Flow.new({ name = 'adv-close-drain' })
   local data, eof, eof_err
@@ -153,16 +179,22 @@ local function test_stream_memory_backpressure_with_small_capacity()
   local reader = b:reader()
   local rt = Runtime.new({ quiet_deadlock = true })
   local first, second, read
-  rt:spawn_raw(function() first = rt:perform(writer:write_op('abc')) end, 'first-write')
+  rt:spawn_raw(function()
+    first = rt:perform(writer:write_op('abc'))
+  end, 'first-write')
   assert_status(rt:run(), 'found')
   assert_eq(first, 3)
 
-  rt:spawn_raw(function() second = rt:perform(writer:write_op('def')) end, 'blocked-write')
+  rt:spawn_raw(function()
+    second = rt:perform(writer:write_op('def'))
+  end, 'blocked-write')
   local pending = rt:run()
   assert_eq(pending.tag, 'quiescent', 'capacity retry has no external wake interest')
   assert_nil(second)
 
-  rt:spawn_raw(function() read = rt:perform(reader:read_op(3)) end, 'reader')
+  rt:spawn_raw(function()
+    read = rt:perform(reader:read_op(3))
+  end, 'reader')
   assert_status(rt:run(), 'found')
   assert_eq(read, 'abc')
   assert_eq(second, 3, 'second write should complete after read releases capacity')
@@ -177,5 +209,7 @@ local tests = {
   test_stream_memory_backpressure_with_small_capacity,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 print('tests/test_flow_stream_adversarial.lua: ok')

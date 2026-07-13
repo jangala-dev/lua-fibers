@@ -1,18 +1,30 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Stream = fibers.Stream
 local Fake = Stream.backend.Fake
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 local function drive(rt, limit)
   limit = limit or 100
   local st
   for _ = 1, limit do
     st = rt:run()
-    if st.tag == 'idle' or st.tag == 'quiescent' then return st end
+    if st.tag == 'idle' or st.tag == 'quiescent' then
+      return st
+    end
   end
   return st
 end
@@ -21,7 +33,8 @@ end
 -- remains primary; cleanup failure is retained as a structured secondary.
 do
   local rt = fibers.Runtime.new()
-  local scope = fibers.Scope.new('compound-failure-scope', { runtime = rt, policy = fibers.policy.nursery() })
+  local scope =
+    fibers.Scope.new('compound-failure-scope', { runtime = rt, policy = fibers.policy.nursery() })
   rt:spawn_raw(function()
     scope:run(function(s)
       local h = fibers.Region.handle('compound-failure-owned')
@@ -31,13 +44,21 @@ do
       error('body boom')
     end)
   end, 'compound-failure-root', scope)
-  local ok, err = pcall(function() drive(rt, 100) end)
+  local ok, err = pcall(function()
+    drive(rt, 100)
+  end)
   assert_eq(ok, false, 'scope should fail')
   local report = fibers.Scope.is_report(err) and err or err.scope_report
-  assert_truthy(fibers.Scope.is_report(report), 'scope should raise a structured report when body and settlement both fail')
+  assert_truthy(
+    fibers.Scope.is_report(report),
+    'scope should raise a structured report when body and settlement both fail'
+  )
   assert_truthy(tostring(report.primary):match('body boom'), 'body error should remain primary')
   assert_eq(report.secondary_count, 1, 'settlement failure should be secondary')
-  assert_truthy(tostring(report.secondaries[1]):match('settlement boom'), 'secondary should describe settlement failure')
+  assert_truthy(
+    tostring(report.secondaries[1]):match('settlement boom'),
+    'secondary should describe settlement failure'
+  )
 end
 
 -- Policy hooks are first-class scope extension points rather than hard-coded
@@ -51,7 +72,8 @@ do
     end,
   }
   local rt = fibers.Runtime.new()
-  local root = fibers.Scope.new('policy-hook-root', { runtime = rt, policy = fibers.policy.nursery() })
+  local root =
+    fibers.Scope.new('policy-hook-root', { runtime = rt, policy = fibers.policy.nursery() })
   rt:spawn_raw(function()
     root:run(function()
       fibers.scope({ policy = policy }, function()
@@ -59,7 +81,9 @@ do
       end)
     end)
   end, 'policy-hook-root-fibre', root)
-  local ok = pcall(function() drive(rt, 100) end)
+  local ok = pcall(function()
+    drive(rt, 100)
+  end)
   assert_eq(ok, false, 'body failure should still propagate')
   assert_eq(seen_body_failure, true, 'policy hook should observe body failure')
 end
@@ -90,19 +114,25 @@ end
 do
   local stream, read_err
   local rt = fibers.Runtime.new()
-  local root = fibers.Scope.new('retired-authority-root', { runtime = rt, policy = fibers.policy.nursery() })
+  local root =
+    fibers.Scope.new('retired-authority-root', { runtime = rt, policy = fibers.policy.nursery() })
   rt:spawn_raw(function()
     root:run(function()
       fibers.scope(function()
         local backend = Fake.new({ name = 'retired-authority-backend', input = 'x' })
-        stream = fibers.perform(Stream.open_backend_op(backend, { name = 'retired-authority-stream' }))
+        stream =
+          fibers.perform(Stream.open_backend_op(backend, { name = 'retired-authority-stream' }))
       end)
       local bytes, err = fibers.perform(stream:reader():read_op(1))
       read_err = err or bytes
     end)
   end, 'retired-authority-root-fibre', root)
   drive(rt, 100)
-  assert_eq(read_err, fibers.Flow.Errors.RETIRED, 'read after scope retirement should fail with retired authority')
+  assert_eq(
+    read_err,
+    fibers.Flow.Errors.RETIRED,
+    'read after scope retirement should fail with retired authority'
+  )
 end
 
 -- inspect_op exposes sealed boundary facts while root settlement is in
@@ -110,13 +140,16 @@ end
 do
   local rt = fibers.Runtime.new()
   local settled, feed = rt:signal('hardening-settled')
-  local scope = fibers.Scope.new('hardening-settling', { runtime = rt, policy = fibers.policy.nursery() })
+  local scope =
+    fibers.Scope.new('hardening-settling', { runtime = rt, policy = fibers.policy.nursery() })
   local h = fibers.Region.handle('hardening-settling-owned')
   local state
   rt:spawn_raw(function()
     scope:run(function(s)
       rt:perform(s:raw_region():admit_op(fibers.Region.Owned.item(h, function()
-        return settled:wait_op():map(function() return true end)
+        return settled:wait_op():map(function()
+          return true
+        end)
       end, { settle_name = 'wait' })))
     end)
   end, 'hardening-settling-root', scope)
@@ -124,14 +157,18 @@ do
   local st
   for _ = 1, 20 do
     st = rt:run()
-    if st.tag == 'pending' then break end
+    if st.tag == 'pending' then
+      break
+    end
   end
   rt:spawn_raw(function()
     state = rt:perform(scope:inspect_op())
   end, 'hardening-settling-monitor')
   for _ = 1, 20 do
     st = rt:run()
-    if state then break end
+    if state then
+      break
+    end
   end
   assert_truthy(state, 'monitor should read scope state')
   assert_eq(state.sealed, true, 'scope should expose sealed boundary fact')
@@ -139,8 +176,6 @@ do
   feed:set(true)
   rt:run()
 end
-
-
 
 -- Friendly fibers.stream(...) performs safe acquisition in the current scope.
 do

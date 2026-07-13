@@ -1,14 +1,34 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Op = fibers.Op
 local Flow = require('fibers.flow')
 local Errors = require('fibers.flow.errors')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_nil(v, msg)
+  if v ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 -- peek observes without consuming, even when the selected world commits.
 do
@@ -97,10 +117,14 @@ do
   local choice, moved, src_left, dst_got
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abcdef'))
-    choice = fibers.perform(Op.choice(
-      Op.always('winner'),
-      src:outlet():splice_to(dst:inlet(), 3):map(function() return 'loser' end)
-    ))
+    choice = fibers.perform(
+      Op.choice(
+        Op.always('winner'),
+        src:outlet():splice_to(dst:inlet(), 3):map(function()
+          return 'loser'
+        end)
+      )
+    )
     moved = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_got = fibers.perform(dst:outlet():read_exactly_op(3))
@@ -111,7 +135,6 @@ do
   assert_eq(src_left, 'def')
   assert_eq(dst_got, 'abc')
 end
-
 
 -- splice_to must not consume source bytes when the destination cannot accept
 -- the bytes.  The derived law is peek -> write -> drop, not read -> write.
@@ -159,16 +182,24 @@ do
   local flow = Flow.new({ name = 'until-multibyte-prefix-flow', capacity = 16 })
   local got, err
   local rt = fibers.Runtime.new()
-  rt:spawn_raw(function() rt:perform(flow:inlet():write_op('abc\r')) end, 'seed')
+  rt:spawn_raw(function()
+    rt:perform(flow:inlet():write_op('abc\r'))
+  end, 'seed')
   assert_status(rt:run(), 'found')
-  rt:spawn_raw(function() got, err = rt:perform(flow:outlet():read_until_op('\r\n', { limit = 3 })) end, 'reader')
+  rt:spawn_raw(function()
+    got, err = rt:perform(flow:outlet():read_until_op('\r\n', { limit = 3 }))
+  end, 'reader')
   local st = rt:run()
   assert_status(st, 'quiescent', 'terminator prefix at limit should have no external wake interest')
   assert_nil(got)
   assert_nil(err)
-  rt:spawn_raw(function() rt:perform(flow:inlet():write_op('\n')) end, 'finish')
+  rt:spawn_raw(function()
+    rt:perform(flow:inlet():write_op('\n'))
+  end, 'finish')
   st = rt:run()
-  if got == nil then st = rt:run() end
+  if got == nil then
+    st = rt:run()
+  end
   assert_eq(got, 'abc')
   assert_nil(err)
 end

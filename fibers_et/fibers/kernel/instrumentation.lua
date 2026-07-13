@@ -11,7 +11,9 @@ Instrumentation.__index = Instrumentation
 
 local function copy_map(src)
   local out = {}
-  for k, v in pairs(src or {}) do out[k] = v end
+  for k, v in pairs(src or {}) do
+    out[k] = v
+  end
   return out
 end
 
@@ -21,7 +23,9 @@ local function copy_array(src)
     local value = src[i]
     if type(value) == 'table' then
       local row = {}
-      for k, v in pairs(value) do row[k] = v end
+      for k, v in pairs(value) do
+        row[k] = v
+      end
       out[i] = row
     else
       out[i] = value
@@ -31,29 +35,45 @@ local function copy_array(src)
 end
 
 local function default_clock()
-  if os and type(os.clock) == 'function' then return os.clock() end
+  if os and type(os.clock) == 'function' then
+    return os.clock()
+  end
   return 0
 end
 
 local function bucket(value)
-  if value == nil then return 'nil' end
-  if value <= 0 then return '0' end
+  if value == nil then
+    return 'nil'
+  end
+  if value <= 0 then
+    return '0'
+  end
   local upper = 1
-  while upper < value do upper = upper * 2 end
-  if upper == 1 then return '1' end
+  while upper < value do
+    upper = upper * 2
+  end
+  if upper == 1 then
+    return '1'
+  end
   return tostring(math.floor(upper / 2) + 1) .. '-' .. tostring(upper)
 end
 
 local function normalise_options(opts)
-  if opts == true then return {} end
-  if type(opts) ~= 'table' then return {} end
+  if opts == true then
+    return {}
+  end
+  if type(opts) ~= 'table' then
+    return {}
+  end
   return opts
 end
 
 function Instrumentation.new(opts)
   opts = normalise_options(opts)
   local clock = opts.clock
-  if type(clock) ~= 'function' then clock = default_clock end
+  if type(clock) ~= 'function' then
+    clock = default_clock
+  end
   return setmetatable({
     clock = clock,
     counters = {},
@@ -76,13 +96,18 @@ end
 
 function Instrumentation:max(name, value)
   local old = self.maxima[name]
-  if old == nil or value > old then self.maxima[name] = value end
+  if old == nil or value > old then
+    self.maxima[name] = value
+  end
   return value
 end
 
 function Instrumentation:observe(name, value)
   local h = self.histograms[name]
-  if not h then h = {}; self.histograms[name] = h end
+  if not h then
+    h = {}
+    self.histograms[name] = h
+  end
   local key = bucket(value)
   h[key] = (h[key] or 0) + 1
   return value
@@ -148,6 +173,15 @@ function Instrumentation:begin_plan(meta)
     state_duplicates = 0,
     terminal_states_observed = 0,
     terminal_state_duplicates = 0,
+    refutation_cache_hits = 0,
+    refutation_cache_stores = 0,
+    supplier_refutation_hits = 0,
+    supplier_refutation_stores = 0,
+    state_memo_hits = 0,
+    state_memo_stores = 0,
+    state_fingerprint_probes = 0,
+    state_fingerprint_repeats = 0,
+    symmetry_exchange_pruned = 0,
     state_seen = self.state_hash and {} or nil,
     events = self.trace and {} or nil,
   }
@@ -156,25 +190,34 @@ function Instrumentation:begin_plan(meta)
 end
 
 function Instrumentation:event(plan, kind, fields)
-  if not self.trace or not plan or not plan.events then return end
+  if not self.trace or not plan or not plan.events then
+    return
+  end
   if #plan.events >= self.trace_limit then
     plan.trace_truncated = true
     return
   end
   local event = { kind = kind }
-  for k, v in pairs(fields or {}) do event[k] = v end
+  for k, v in pairs(fields or {}) do
+    event[k] = v
+  end
   plan.events[#plan.events + 1] = event
 end
 
-
 function Instrumentation:observe_state(plan, signature, terminal)
-  if not self.state_hash or not plan or not plan.state_seen or not signature then return false end
+  if not self.state_hash or not plan or not plan.state_seen or not signature then
+    return false
+  end
   plan.states_observed = plan.states_observed + 1
-  if terminal then plan.terminal_states_observed = plan.terminal_states_observed + 1 end
+  if terminal then
+    plan.terminal_states_observed = plan.terminal_states_observed + 1
+  end
   local old = plan.state_seen[signature]
   if old then
     plan.state_duplicates = plan.state_duplicates + 1
-    if terminal then plan.terminal_state_duplicates = plan.terminal_state_duplicates + 1 end
+    if terminal then
+      plan.terminal_state_duplicates = plan.terminal_state_duplicates + 1
+    end
     return true
   end
   plan.state_seen[signature] = terminal and 'terminal' or 'branch'
@@ -182,7 +225,9 @@ function Instrumentation:observe_state(plan, signature, terminal)
 end
 
 local function insert_slow_plan(self, plan)
-  if self.slow_plan_limit <= 0 then return end
+  if self.slow_plan_limit <= 0 then
+    return
+  end
   local row = {
     id = plan.id,
     machine = plan.machine,
@@ -244,20 +289,35 @@ local function insert_slow_plan(self, plan)
     state_duplicates = plan.state_duplicates,
     terminal_states_observed = plan.terminal_states_observed,
     terminal_state_duplicates = plan.terminal_state_duplicates,
+    refutation_cache_hits = plan.refutation_cache_hits,
+    refutation_cache_stores = plan.refutation_cache_stores,
+    supplier_refutation_hits = plan.supplier_refutation_hits,
+    supplier_refutation_stores = plan.supplier_refutation_stores,
+    state_memo_hits = plan.state_memo_hits,
+    state_memo_stores = plan.state_memo_stores,
+    state_fingerprint_probes = plan.state_fingerprint_probes,
+    state_fingerprint_repeats = plan.state_fingerprint_repeats,
+    symmetry_exchange_pruned = plan.symmetry_exchange_pruned,
     trace_truncated = plan.trace_truncated,
     events = plan.events and copy_array(plan.events) or nil,
   }
   local xs = self.slow_plans
   xs[#xs + 1] = row
   table.sort(xs, function(a, b)
-    if a.search_steps ~= b.search_steps then return a.search_steps > b.search_steps end
+    if a.search_steps ~= b.search_steps then
+      return a.search_steps > b.search_steps
+    end
     return (a.elapsed or 0) > (b.elapsed or 0)
   end)
-  while #xs > self.slow_plan_limit do xs[#xs] = nil end
+  while #xs > self.slow_plan_limit do
+    xs[#xs] = nil
+  end
 end
 
 function Instrumentation:finish_plan(plan, outcome)
-  if not plan then return end
+  if not plan then
+    return
+  end
   plan.outcome = outcome or 'retry'
   plan.elapsed = self.clock() - plan.started
   self:inc('plan_' .. plan.outcome)
@@ -301,13 +361,30 @@ function Instrumentation:finish_plan(plan, outcome)
   self:inc('state_duplicates', plan.state_duplicates)
   self:inc('terminal_states_observed', plan.terminal_states_observed)
   self:inc('terminal_state_duplicates', plan.terminal_state_duplicates)
+  self:inc('refutation_cache_hits', plan.refutation_cache_hits)
+  self:inc('refutation_cache_stores', plan.refutation_cache_stores)
+  self:inc('supplier_refutation_hits', plan.supplier_refutation_hits)
+  self:inc('supplier_refutation_stores', plan.supplier_refutation_stores)
+  self:inc('state_memo_hits', plan.state_memo_hits)
+  self:inc('state_memo_stores', plan.state_memo_stores)
+  self:inc('state_fingerprint_probes', plan.state_fingerprint_probes)
+  self:inc('state_fingerprint_repeats', plan.state_fingerprint_repeats)
+  self:inc('symmetry_exchange_pruned', plan.symmetry_exchange_pruned)
   self:inc('component_roots_total', plan.component_size or 0)
   self:inc('frontier_roots_total', plan.total_pending or plan.pending or 0)
-  self:inc('component_roots_excluded', math.max(0, (plan.total_pending or 0) - (plan.component_size or 0)))
-  if plan.component_global then self:inc('component_global_plans') end
+  self:inc(
+    'component_roots_excluded',
+    math.max(0, (plan.total_pending or 0) - (plan.component_size or 0))
+  )
+  if plan.component_global then
+    self:inc('component_global_plans')
+  end
   self:max('component_size', plan.component_size or 0)
   self:observe('component_size_per_plan', plan.component_size or 0)
-  self:observe('component_fraction_percent', (plan.total_pending or 0) > 0 and ((plan.component_size or 0) * 100 / plan.total_pending) or 0)
+  self:observe(
+    'component_fraction_percent',
+    (plan.total_pending or 0) > 0 and ((plan.component_size or 0) * 100 / plan.total_pending) or 0
+  )
   self:observe('exchange_domain_size', plan.max_exchange_domain or 0)
   self:inc('search_cpu_ns', math.floor(plan.elapsed * 1000000000 + 0.5))
 
@@ -332,7 +409,9 @@ end
 
 function Instrumentation:snapshot()
   local histograms = {}
-  for name, values in pairs(self.histograms) do histograms[name] = copy_map(values) end
+  for name, values in pairs(self.histograms) do
+    histograms[name] = copy_map(values)
+  end
   return {
     counters = copy_map(self.counters),
     maxima = copy_map(self.maxima),

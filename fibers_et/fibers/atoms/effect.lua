@@ -13,7 +13,9 @@ local Effect = {}
 
 local function shallow_copy(t)
   local out = {}
-  for k, v in pairs(t or {}) do out[k] = v end
+  for k, v in pairs(t or {}) do
+    out[k] = v
+  end
   return out
 end
 
@@ -25,9 +27,13 @@ Effect.is_kind = EffectKind.is_kind
 Effect.is_effect = EffectKind.is_effect
 
 function Effect.of(kind, payload)
-  if not EffectKind.is_kind(kind) then error('Effect.of expects an Effect kind', 2) end
+  if not EffectKind.is_kind(kind) then
+    error('Effect.of expects an Effect kind', 2)
+  end
   local e, err = kind:of(payload)
-  if not e then error(err and (err.message or tostring(err)) or 'invalid effect payload', 2) end
+  if not e then
+    error(err and (err.message or tostring(err)) or 'invalid effect payload', 2)
+  end
   return e
 end
 
@@ -35,13 +41,12 @@ function Effect.after_commit(effect)
   return Op.emit(effect)
 end
 
-
 local WakeKind
 local function wake_key(payload)
   return payload.id or payload.key or tostring(payload.kind) .. ':' .. tostring(payload.source)
 end
 
-WakeKind = EffectKind.new {
+WakeKind = EffectKind.new({
   name = 'wake',
   order = 50,
   key = wake_key,
@@ -56,11 +61,13 @@ WakeKind = EffectKind.new {
       discharge = function(rt, entry, log)
         local host = rt.host or {}
         local wake = host.wake
-        if wake then return wake(entry.payload, rt) end
+        if wake then
+          return wake(entry.payload, rt)
+        end
       end,
     }
   end,
-}
+})
 
 function Effect.wake(kind, key, detail)
   return Effect.of(WakeKind, {
@@ -71,16 +78,13 @@ function Effect.wake(kind, key, detail)
   })
 end
 
-
-
-
 local InterruptKind
 local function interrupt_key(payload)
   local token = payload.token
   return token and (token._fibers_id or token.name) or tostring(token)
 end
 
-InterruptKind = EffectKind.new {
+InterruptKind = EffectKind.new({
   name = 'interrupt',
   order = 55,
   key = interrupt_key,
@@ -96,12 +100,14 @@ InterruptKind = EffectKind.new {
       key = interrupt_key(payload),
       payload = payload,
       discharge = function(rt, entry, _log)
-        if not rt._discharge_interrupt then error('runtime does not support committed interrupt', 2) end
+        if not rt._discharge_interrupt then
+          error('runtime does not support committed interrupt', 2)
+        end
         return rt:_discharge_interrupt(entry.payload.token, entry.payload.reason)
       end,
     }
   end,
-}
+})
 
 function Effect.interrupt(token, reason)
   return Effect.of(InterruptKind, { token = token, reason = reason })
@@ -116,10 +122,16 @@ local function scope_key(payload)
   local to = payload.to or payload.region
   local from_id = from and (from._fibers_id or from.name) or payload.from_id or ''
   local to_id = to and (to._fibers_id or to.name) or payload.to_id or ''
-  return tostring(typ) .. ':' .. tostring(item_id) .. ':' .. tostring(from_id) .. ':' .. tostring(to_id)
+  return tostring(typ)
+    .. ':'
+    .. tostring(item_id)
+    .. ':'
+    .. tostring(from_id)
+    .. ':'
+    .. tostring(to_id)
 end
 
-ScopeKind = EffectKind.new {
+ScopeKind = EffectKind.new({
   name = 'scope',
   order = 60,
   key = scope_key,
@@ -134,7 +146,11 @@ ScopeKind = EffectKind.new {
       discharge = function(rt, entry, _log)
         local seen = {}
         local function discharge_source(src)
-          if type(src) == 'table' and type(src._fibers_external_deliver) == 'function' and not seen[src] then
+          if
+            type(src) == 'table'
+            and type(src._fibers_external_deliver) == 'function'
+            and not seen[src]
+          then
             seen[src] = true
             UnsafeExternalMutation.deliver(src, entry.payload)
           end
@@ -148,7 +164,11 @@ ScopeKind = EffectKind.new {
         end
         discharge_source(entry.payload.source)
         local sources = entry.payload.sources
-        if type(sources) == 'table' then for i = 1, #sources do discharge_source(sources[i]) end end
+        if type(sources) == 'table' then
+          for i = 1, #sources do
+            discharge_source(sources[i])
+          end
+        end
         discharge_region_owner(entry.payload.from)
         discharge_region_owner(entry.payload.to or entry.payload.region)
         if entry.payload.type == 'task_exit' then
@@ -157,14 +177,18 @@ ScopeKind = EffectKind.new {
         end
         local host = rt.host or {}
         local discharge = host.scope
-        if discharge then return discharge(entry.payload, rt) end
+        if discharge then
+          return discharge(entry.payload, rt)
+        end
       end,
     }
   end,
-}
+})
 
 function Effect.scope(event)
-  if type(event) ~= 'table' then error('Effect.scope expects an event table', 2) end
+  if type(event) ~= 'table' then
+    error('Effect.scope expects an event table', 2)
+  end
   return Effect.of(ScopeKind, event)
 end
 
@@ -174,7 +198,7 @@ local function spawn_key(payload)
   return payload.id or payload.name or tostring(payload.fn)
 end
 
-SpawnKind = EffectKind.new {
+SpawnKind = EffectKind.new({
   name = 'spawn',
   order = 100,
   key = spawn_key,
@@ -182,13 +206,17 @@ SpawnKind = EffectKind.new {
     return nil, { kind = 'effect_conflict', message = 'duplicate spawn effect' }
   end,
   prepare = function(_rt, payload)
-    if type(payload.fn) ~= 'function' then return nil, 'spawn effect requires a function' end
+    if type(payload.fn) ~= 'function' then
+      return nil, 'spawn effect requires a function'
+    end
     return {
       kind = SpawnKind,
       key = spawn_key(payload),
       payload = payload,
       discharge = function(rt, entry, _log)
-        if not rt._spawn_committed then error('runtime does not support committed spawn', 2) end
+        if not rt._spawn_committed then
+          error('runtime does not support committed spawn', 2)
+        end
         local owner = entry.payload.owner
         if owner then
           owner.fn = nil
@@ -198,11 +226,17 @@ SpawnKind = EffectKind.new {
       end,
     }
   end,
-}
+})
 
 function Effect.spawn(fn, name, id, scope, owner)
   next_spawn = next_spawn + 1
-  return Effect.of(SpawnKind, { fn = fn, name = name, id = id or ('spawn-' .. tostring(next_spawn)), scope = scope, owner = owner })
+  return Effect.of(SpawnKind, {
+    fn = fn,
+    name = name,
+    id = id or ('spawn-' .. tostring(next_spawn)),
+    scope = scope,
+    owner = owner,
+  })
 end
 
 Effect.WakeKind = WakeKind

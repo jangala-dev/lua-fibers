@@ -1,11 +1,21 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Host = require('fibers.host')
 
-local function fail(msg) error(msg, 2) end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
 
 -- Optional Linux host modules must be require-able even when their platform
 -- dependencies are unavailable under the test interpreter.
@@ -17,12 +27,18 @@ do
 
   local ok2, nixio_host = pcall(require, 'fibers.host.nixio')
   assert_truthy(ok2, 'nixio linux host module should be require-able')
-  assert_truthy(type(nixio_host.is_supported) == 'function', 'nixio host should expose is_supported')
+  assert_truthy(
+    type(nixio_host.is_supported) == 'function',
+    'nixio host should expose is_supported'
+  )
   assert_truthy(type(nixio_host.new) == 'function', 'nixio host should expose new')
 
   local ok3, posix_host = pcall(require, 'fibers.host.luaposix')
   assert_truthy(ok3, 'luaposix host module should be require-able')
-  assert_truthy(type(posix_host.is_supported) == 'function', 'luaposix host should expose is_supported')
+  assert_truthy(
+    type(posix_host.is_supported) == 'function',
+    'luaposix host should expose is_supported'
+  )
   assert_truthy(type(posix_host.new) == 'function', 'luaposix host should expose new')
 
   local ok4, cffi_host = pcall(require, 'fibers.host.cffi_linux')

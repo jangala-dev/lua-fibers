@@ -1,0 +1,25 @@
+case,profile,machine,median_seconds,digest,plans,search_calls,branches,max_search_steps,footprint_checks,refutation_hits,supplier_refutation_hits,state_memo_hits,symmetry_pruned,plan_reuse_hits,plan_reuse_invalidations,max_plan_cache_entries
+duplicate blocked alternatives,baseline,trail,0.005754948,retry:128,2,258,256,129,0,0,0,0,0,0,0,0
+duplicate blocked alternatives,refutation,trail,0.005062103,retry:128,2,258,256,129,0,162,162,0,0,0,0,0
+duplicate blocked alternatives,memo,trail,0.003572941,retry:128,2,98,256,49,0,2,2,160,0,0,0,0
+duplicate blocked alternatives,full,trail,0.003374100,retry:128,2,98,256,49,0,2,2,160,0,0,0,0
+repeated supplier no-good,baseline,trail,0.016016960,retry:96+64,130,322,192,97,12320,0,0,0,0,0,0,0
+repeated supplier no-good,refutation,trail,0.012370110,retry:96+64,130,322,192,97,9184,98,98,0,0,0,0,0
+repeated supplier no-good,memo,trail,0.012011051,retry:96+64,130,226,192,49,9184,2,2,96,0,0,0,0
+repeated supplier no-good,full,trail,0.014420033,retry:96+64,129,225,192,49,9120,2,2,96,0,1,0,65
+certified symmetric suppliers,baseline,trail,0.276058912,retry:10,22,4134,8164,2047,22526,0,0,0,0,0,0,0
+certified symmetric suppliers,refutation,trail,0.272102833,retry:10,22,4134,8164,2047,22526,0,0,0,0,0,0,0
+certified symmetric suppliers,memo,trail,0.270335913,retry:10,22,4134,8164,2047,22526,0,0,0,0,0,0,0
+certified symmetric suppliers,full,trail,0.006199121,retry:10,22,82,96,21,402,0,0,0,90,0,0,0
+repeated blocked driver cycles,baseline,trail,0.014159918,cycles:9,320,320,0,1,105,0,0,0,0,0,0,0
+repeated blocked driver cycles,refutation,trail,0.014488935,cycles:9,320,320,0,1,105,0,0,0,0,0,0,0
+repeated blocked driver cycles,memo,trail,0.014326096,cycles:9,320,320,0,1,105,0,0,0,0,0,0,0
+repeated blocked driver cycles,full,trail,0.005650997,cycles:9,63,63,0,1,105,0,0,0,0,257,0,32
+ordinary binary rendezvous,baseline,trail,0.107656956,sum:45150,1202,3604,1201,3,1201,0,0,0,0,0,0,0
+ordinary binary rendezvous,refutation,trail,0.104432106,sum:45150,1202,3604,1201,3,1201,0,0,0,0,0,0,0
+ordinary binary rendezvous,memo,trail,0.106081963,sum:45150,1202,3604,1201,3,1201,0,0,0,0,0,0,0
+ordinary binary rendezvous,full,trail,0.106997013,sum:45150,1202,3604,1201,3,1201,0,0,0,0,0,0,0
+triple swap with decoy,baseline,trail,0.004101992,C:A:B,10,105,92,37,94,0,0,0,0,0,0,0
+triple swap with decoy,refutation,trail,0.005095959,C:A:B,10,105,92,37,94,0,0,0,0,0,0,0
+triple swap with decoy,memo,trail,0.004251957,C:A:B,10,105,92,37,94,0,0,0,0,0,0,0
+triple swap with decoy,full,trail,0.004184008,C:A:B,10,105,92,37,94,0,0,0,0,0,0,0

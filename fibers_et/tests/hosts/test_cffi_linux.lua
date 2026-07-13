@@ -1,16 +1,27 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Common = require('tests.hosts.common')
 local fibers = require('fibers')
 
 local ok_mod, LinuxHost = pcall(require, 'fibers.host.cffi_linux')
 Common.assert_truthy(ok_mod, 'cffi linux host module should be require-able')
-Common.assert_truthy(type(LinuxHost.is_supported) == 'function', 'cffi linux host should expose is_supported')
+Common.assert_truthy(
+  type(LinuxHost.is_supported) == 'function',
+  'cffi linux host should expose is_supported'
+)
 Common.assert_truthy(type(LinuxHost.new) == 'function', 'cffi linux host should expose new')
 
 local supported, support_reason = LinuxHost.is_supported()
 if not supported then
-  return Common.skip('tests/hosts/test_cffi_linux.lua', 'cffi Linux backend not available: ' .. tostring(support_reason or (LinuxHost.support_reason and LinuxHost.support_reason()) or 'unknown reason'))
+  return Common.skip(
+    'tests/hosts/test_cffi_linux.lua',
+    'cffi Linux backend not available: '
+      .. tostring(
+        support_reason
+          or (LinuxHost.support_reason and LinuxHost.support_reason())
+          or 'unknown reason'
+      )
+  )
 end
 
 local ok_cffi, ffi = pcall(require, 'cffi')
@@ -42,9 +53,13 @@ end
 local function with_host_pipe(label, fn)
   local host = LinuxHost.new()
   local pipe = make_pipe()
-  local ok, err = pcall(function() fn(label, host, pipe) end)
+  local ok, err = pcall(function()
+    fn(label, host, pipe)
+  end)
   Common.cleanup(host, pipe)
-  if not ok then error(err, 0) end
+  if not ok then
+    error(err, 0)
+  end
 end
 
 with_host_pipe('cffi_linux:readiness', Common.readiness_smoke)
@@ -57,10 +72,15 @@ do
   local file = make_regular_file()
   local ok, err = pcall(function()
     Common.ready_source_smoke('cffi_linux:unpollable-regular-file', host, file.read_key, 'read')
-    Common.assert_truthy(host.unpollable[file.read_key], 'regular file fd should be marked unpollable')
+    Common.assert_truthy(
+      host.unpollable[file.read_key],
+      'regular file fd should be marked unpollable'
+    )
   end)
   Common.cleanup(host, file)
-  if not ok then error(err, 0) end
+  if not ok then
+    error(err, 0)
+  end
 end
 
 do
@@ -72,9 +92,14 @@ end
 do
   local host = LinuxHost.new()
   host:close()
-  local ok, err = pcall(function() host:block(fibers.Runtime.new({ host = host }), {}, { tag = 'pending' }, {}) end)
+  local ok, err = pcall(function()
+    host:block(fibers.Runtime.new({ host = host }), {}, { tag = 'pending' }, {})
+  end)
   Common.assert_eq(ok, false, 'block after close should fail')
-  Common.assert_truthy(string.find(tostring(err), 'host is closed', 1, true) ~= nil, 'block-after-close error should be clear')
+  Common.assert_truthy(
+    string.find(tostring(err), 'host is closed', 1, true) ~= nil,
+    'block-after-close error should be clear'
+  )
 end
 
 do

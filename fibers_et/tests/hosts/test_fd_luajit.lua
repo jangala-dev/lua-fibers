@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Common = require('tests.hosts.common')
 local fibers = require('fibers')
@@ -25,19 +25,29 @@ local ok, err = pcall(function()
   local rt = fibers.Runtime.new({ host = host })
   local src = fibers.Readiness.new(r:readiness_key(), 'read', 'fd-handle-readiness')
   local seen
-  rt:spawn_raw(function() seen = rt:perform(src:readable_op()) end, 'fd-readiness')
+  rt:spawn_raw(function()
+    seen = rt:perform(src:readable_op())
+  end, 'fd-readiness')
   local st = fibers.Runner.run(rt, { host = host, max_iterations = 40 })
   Common.assert_status(st, 'found', 'fd readiness should be delivered')
   Common.assert_eq(seen, true, 'fd readiness result')
   local b, rerr = r:read(1)
   Common.assert_eq(b, 'x', 'fd read should return written byte')
 end)
-r:close('test'); w:close('test'); host:close()
-if not ok then error(err, 0) end
+r:close('test')
+w:close('test')
+host:close()
+if not ok then
+  error(err, 0)
+end
 
 local host2 = LinuxHost.new()
-local ok2, err2 = pcall(function() Common.handle_stream_pipe_smoke('fd_luajit:stream-pipe', host2, Fd) end)
+local ok2, err2 = pcall(function()
+  Common.handle_stream_pipe_smoke('fd_luajit:stream-pipe', host2, Fd)
+end)
 Common.close_quietly(host2)
-if not ok2 then error(err2, 0) end
+if not ok2 then
+  error(err2, 0)
+end
 
 print('tests/hosts/test_fd_luajit.lua: ok')

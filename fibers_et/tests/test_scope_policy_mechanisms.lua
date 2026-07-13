@@ -1,9 +1,11 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 
 local function assert_eq(a, b, msg)
-  if a ~= b then error((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
+  if a ~= b then
+    error((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
+  end
 end
 
 -- Region change observation is a managed transactional fact.
@@ -16,7 +18,8 @@ do
     rt:perform(region:admit_op(fibers.Region.handle('changed-item')))
     changed = rt:perform(region:changed_op(first.version))
   end, 'region-change')
-  repeat until rt:run().tag ~= 'found'
+  repeat
+  until rt:run().tag ~= 'found'
   assert_eq(changed, first.version + 1)
 end
 

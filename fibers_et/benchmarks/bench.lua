@@ -15,7 +15,9 @@
 -- cross-machine claims.
 
 local function join_path(prefix, suffix)
-  if prefix == '' then return suffix end
+  if prefix == '' then
+    return suffix
+  end
   return prefix .. suffix
 end
 
@@ -59,17 +61,34 @@ end
 
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
   end
 end
 
 local function assert_truthy(value, msg)
-  if not value then fail(msg or 'expected truthy value') end
+  if not value then
+    fail(msg or 'expected truthy value')
+  end
 end
 
 local function assert_status(status, tag, msg)
   if not status or status.tag ~= tag then
-    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(status and status.tag) .. ' (' .. tostring(status and status.reason) .. ')')
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(status and status.tag)
+        .. ' ('
+        .. tostring(status and status.reason)
+        .. ')'
+    )
   end
   return status.value
 end
@@ -79,21 +98,29 @@ local function run_rt(rt, expected)
   repeat
     st = rt:run()
   until st.tag ~= 'found'
-  if expected then assert_status(st, expected) end
+  if expected then
+    assert_status(st, expected)
+  end
   return st
 end
 
 local function env_number(name, default)
   local value = os.getenv(name)
-  if value == nil or value == '' then return default end
+  if value == nil or value == '' then
+    return default
+  end
   value = tonumber(value)
-  if not value or value < 0 then return default end
+  if not value or value < 0 then
+    return default
+  end
   return value
 end
 
 local function env_string(name, default)
   local value = os.getenv(name)
-  if value == nil or value == '' then return default end
+  if value == nil or value == '' then
+    return default
+  end
   return value
 end
 
@@ -117,26 +144,40 @@ end
 local function median(xs)
   table.sort(xs)
   local n = #xs
-  if n % 2 == 1 then return xs[(n + 1) / 2] end
+  if n % 2 == 1 then
+    return xs[(n + 1) / 2]
+  end
   return (xs[n / 2] + xs[n / 2 + 1]) / 2
 end
 
 local function min_value(xs)
   local m = xs[1]
-  for i = 2, #xs do if xs[i] < m then m = xs[i] end end
+  for i = 2, #xs do
+    if xs[i] < m then
+      m = xs[i]
+    end
+  end
   return m
 end
 
 local function max_value(xs)
   local m = xs[1]
-  for i = 2, #xs do if xs[i] > m then m = xs[i] end end
+  for i = 2, #xs do
+    if xs[i] > m then
+      m = xs[i]
+    end
+  end
   return m
 end
 
 local function should_run(case)
-  if not filter or filter == '' then return true end
+  if not filter or filter == '' then
+    return true
+  end
   local key = case.group .. '/' .. case.name
-  return key:find(filter, 1, true) ~= nil or case.group:find(filter, 1, true) ~= nil or case.name:find(filter, 1, true) ~= nil
+  return key:find(filter, 1, true) ~= nil
+    or case.group:find(filter, 1, true) ~= nil
+    or case.name:find(filter, 1, true) ~= nil
 end
 
 local function fmt_num(n)
@@ -150,10 +191,12 @@ local function json_escape(s)
 end
 
 local BenchEffectKind
-BenchEffectKind = Effect.kind {
+BenchEffectKind = Effect.kind({
   name = 'bench-merge',
   order = 75,
-  key = function(payload) return payload.key end,
+  key = function(payload)
+    return payload.key
+  end,
   merge = function(a, b)
     return { key = a.key, count = (a.count or 1) + (b.count or 1) }
   end,
@@ -167,7 +210,7 @@ BenchEffectKind = Effect.kind {
       end,
     }
   end,
-}
+})
 
 local function bench_effect(key, count)
   return Effect.of(BenchEffectKind, { key = key, count = count or 1 })
@@ -182,7 +225,9 @@ add('local', 'always perform', 3000, function(n)
   local sum = 0
   local op = Op.always(1)
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(op) end
+    for _ = 1, n do
+      sum = sum + rt:perform(op)
+    end
   end, 'bench-local-always')
   run_rt(rt)
   assert_eq(sum, n)
@@ -194,10 +239,16 @@ add('local', 'map and_then chain', 1500, function(n)
   local sum = 0
   local op = Op.always(0)
   for _ = 1, 4 do
-    op = op:map(function(v) return v + 1 end):and_then(function(v) return Op.always(v + 1) end)
+    op = op:map(function(v)
+      return v + 1
+    end):and_then(function(v)
+      return Op.always(v + 1)
+    end)
   end
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(op) end
+    for _ = 1, n do
+      sum = sum + rt:perform(op)
+    end
   end, 'bench-local-map-and_then')
   run_rt(rt)
   assert_eq(sum, n * 8)
@@ -207,9 +258,13 @@ end)
 add('local', 'wrap post commit', 1500, function(n)
   local rt = Runtime.new()
   local sum = 0
-  local op = Op.always(1):wrap(function(v) return v + 1 end)
+  local op = Op.always(1):wrap(function(v)
+    return v + 1
+  end)
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(op) end
+    for _ = 1, n do
+      sum = sum + rt:perform(op)
+    end
   end, 'bench-local-wrap')
   run_rt(rt)
   assert_eq(sum, n * 2)
@@ -244,7 +299,9 @@ add('scalar', 'changed wait wake', 400, function(n)
     end
   end, 'bench-scalar-waiter')
   rt:spawn_raw(function()
-    for i = 1, n do rt:perform(scalar:write_op(i)) end
+    for i = 1, n do
+      rt:perform(scalar:write_op(i))
+    end
   end, 'bench-scalar-writer')
   run_rt(rt)
   assert_eq(observed, n)
@@ -260,10 +317,16 @@ add('rendezvous', 'external ping pong', 1000, function(n)
   local ch = Rendezvous.new('bench-ping-pong')
   local sum, sent = 0, 0
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(ch:get_op()) end
+    for _ = 1, n do
+      sum = sum + rt:perform(ch:get_op())
+    end
   end, 'bench-ping-recv')
   rt:spawn_raw(function()
-    for i = 1, n do if rt:perform(ch:put_op(i)) then sent = sent + i end end
+    for i = 1, n do
+      if rt:perform(ch:put_op(i)) then
+        sent = sent + i
+      end
+    end
   end, 'bench-ping-send')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
@@ -299,7 +362,9 @@ add('product', 'all independent scalars', 900, function(n)
         b:read_op(),
         c:write_op(i * 2),
       }))
-      if rows[1][1] and rows[3][1] then seen = seen + rows[2][1] end
+      if rows[1][1] and rows[3][1] then
+        seen = seen + rows[2][1]
+      end
     end
   end, 'bench-all-independent')
   run_rt(rt)
@@ -318,7 +383,9 @@ add('product', 'tensor lane and_then external rendezvous', 350, function(n)
     for i = 1, n do
       local rows = rt:perform(Op.tensor({
         internal:get_op():and_then(function(v)
-          return external:get_op():map(function(x) return v + x end)
+          return external:get_op():map(function(x)
+            return v + x
+          end)
         end),
         internal:put_op(i),
       }))
@@ -326,7 +393,9 @@ add('product', 'tensor lane and_then external rendezvous', 350, function(n)
     end
   end, 'bench-product-main')
   rt:spawn_raw(function()
-    for i = 1, n do rt:perform(external:put_op(1000 + i)) end
+    for i = 1, n do
+      rt:perform(external:put_op(1000 + i))
+    end
   end, 'bench-product-partner')
   run_rt(rt)
   assert_eq(sum, n * 1000 + n * (n + 1))
@@ -340,10 +409,17 @@ add('product', 'choice conflict backtrack', 450, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.tensor({
-        scalar:write_op(1):map(function() return 'write-1' end):choice(Op.always('no-write')),
+        scalar
+          :write_op(1)
+          :map(function()
+            return 'write-1'
+          end)
+          :choice(Op.always('no-write')),
         scalar:write_op(2),
       }))
-      if rows[1][1] == 'no-write' and rows[2][1] == true then wins = wins + 1 end
+      if rows[1][1] == 'no-write' and rows[2][1] == true then
+        wins = wins + 1
+      end
     end
   end, 'bench-choice-conflict')
   run_rt(rt)
@@ -359,12 +435,21 @@ add('product', 'or_else waits for partner', 350, function(n)
   local primary = 0
   rt:spawn_raw(function()
     for _ = 1, n do
-      local v = rt:perform(wanted:get_op():map(function(x) return 'primary:' .. x end):or_else(Op.always('fallback')))
-      if v == 'primary:ok' then primary = primary + 1 end
+      local v = rt:perform(wanted
+        :get_op()
+        :map(function(x)
+          return 'primary:' .. x
+        end)
+        :or_else(Op.always('fallback')))
+      if v == 'primary:ok' then
+        primary = primary + 1
+      end
     end
   end, 'bench-or-else-receiver')
   rt:spawn_raw(function()
-    for _ = 1, n do rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok'))) end
+    for _ = 1, n do
+      rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok')))
+    end
   end, 'bench-or-else-partner')
   run_rt(rt)
   assert_eq(primary, n)
@@ -405,10 +490,24 @@ add('product', 'triple swap with decoy', 80, function(n)
     local bc = Rendezvous.new('bench-triple-bc-' .. tostring(k))
     local ca = Rendezvous.new('bench-triple-ca-' .. tostring(k))
     local a, b, c, decoy
-    rt:spawn_raw(function() a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows) return rows[2][1] end)) end, 'A')
-    rt:spawn_raw(function() b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows) return rows[2][1] end)) end, 'B')
-    rt:spawn_raw(function() c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows) return rows[2][1] end)) end, 'C')
-    rt:spawn_raw(function() decoy = rt:perform(ab:get_op()) end, 'decoy')
+    rt:spawn_raw(function()
+      a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows)
+        return rows[2][1]
+      end))
+    end, 'A')
+    rt:spawn_raw(function()
+      b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows)
+        return rows[2][1]
+      end))
+    end, 'B')
+    rt:spawn_raw(function()
+      c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows)
+        return rows[2][1]
+      end))
+    end, 'C')
+    rt:spawn_raw(function()
+      decoy = rt:perform(ab:get_op())
+    end, 'decoy')
     run_rt(rt)
     assert_eq(a, 'C')
     assert_eq(b, 'A')
@@ -427,10 +526,14 @@ add('external', 'queue preloaded consume', 1000, function(n)
   local rt = Runtime.new()
   local q = EventQueue.new('bench-external-events')
   local feed = rt:external_feed(q)
-  for i = 1, n do feed:deliver(i) end
+  for i = 1, n do
+    feed:deliver(i)
+  end
   local sum = 0
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(q:next_op()) end
+    for _ = 1, n do
+      sum = sum + rt:perform(q:next_op())
+    end
   end, 'bench-external-events-consumer')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
@@ -443,13 +546,17 @@ add('external', 'external arrival driver loop', 250, function(n)
   local feed = rt:external_feed(q)
   local sum = 0
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(q:next_op()) end
+    for _ = 1, n do
+      sum = sum + rt:perform(q:next_op())
+    end
   end, 'bench-external-driver-consumer')
   assert_status(rt:run(), 'pending')
   for i = 1, n do
     feed:deliver(i)
     assert_status(rt:run(), 'found')
-    if i < n then assert_status(rt:run(), 'pending') end
+    if i < n then
+      assert_status(rt:run(), 'pending')
+    end
   end
   assert_eq(sum, n * (n + 1) / 2)
   return n
@@ -457,14 +564,20 @@ end)
 
 add('external', 'clock ready', 1000, function(n)
   local now = 1000
-  local rt = Runtime.new({ host = { now = function() return now end } })
+  local rt = Runtime.new({ host = {
+    now = function()
+      return now
+    end,
+  } })
   local clock = Clock.new('bench-clock')
   local count = 0
   local op = clock:at_op(1)
   rt:spawn_raw(function()
     for _ = 1, n do
       local ok = rt:perform(op)
-      if ok then count = count + 1 end
+      if ok then
+        count = count + 1
+      end
     end
   end, 'bench-clock-ready')
   run_rt(rt)
@@ -475,10 +588,14 @@ end)
 add('effect', 'merge duplicate effects', 700, function(n)
   local rt = Runtime.new()
   local lanes = {}
-  for i = 1, 8 do lanes[i] = Effect.after_commit(bench_effect('same-key', 1)) end
+  for i = 1, 8 do
+    lanes[i] = Effect.after_commit(bench_effect('same-key', 1))
+  end
   local op = Op.tensor(lanes)
   rt:spawn_raw(function()
-    for _ = 1, n do rt:perform(op) end
+    for _ = 1, n do
+      rt:perform(op)
+    end
   end, 'bench-effect-merge')
   run_rt(rt)
   assert_eq(rt.bench_effect_total, n * 8)
@@ -499,7 +616,9 @@ add('region', 'admit owns release', 500, function(n)
       local admitted = rt:perform(region:admit_op(h))
       local owns = rt:perform(region:owns_op(h))
       local released = rt:perform(region:release_op(h))
-      if admitted == h and owns == true and released == h then ok_count = ok_count + 1 end
+      if admitted == h and owns == true and released == h then
+        ok_count = ok_count + 1
+      end
     end
   end, 'bench-region')
   run_rt(rt)
@@ -512,7 +631,9 @@ add('task', 'scope spawn await settle', 80, function(n)
   local sum = 0
   local r = fibers.try_run(function()
     for i = 1, n do
-      local task = fibers.spawn(function() return i end, { name = 'bench-task-' .. tostring(i) })
+      local task = fibers.spawn(function()
+        return i
+      end, { name = 'bench-task-' .. tostring(i) })
       sum = sum + fibers.perform(task:await_op())
     end
   end)
@@ -530,7 +651,9 @@ add('policy', 'nursery spawn rendezvous join', 8, function(n)
         fibers.perform(ch:put_op(i))
       end, 'bench-nursery-child-' .. tostring(i))
     end
-    for _ = 1, n do sum = sum + fibers.perform(ch:get_op()) end
+    for _ = 1, n do
+      sum = sum + fibers.perform(ch:get_op())
+    end
   end, { policy = fibers.policy.nursery({ name = 'bench-nursery' }) })
   assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(sum, n * (n + 1) / 2)
@@ -543,8 +666,14 @@ add('scope', 'custody offer', 30, function(n)
     local ok = false
     local r = fibers.try_run(function(root)
       local rt = fibers.current_runtime()
-      local request = Scope.new('bench-request-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
-      local supervisor = Scope.new('bench-supervisor-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
+      local request = Scope.new(
+        'bench-request-' .. tostring(i),
+        { runtime = rt, parent = root, policy = root.policy }
+      )
+      local supervisor = Scope.new(
+        'bench-supervisor-' .. tostring(i),
+        { runtime = rt, parent = root, policy = root.policy }
+      )
       local resume = Rendezvous.new('bench-resume-' .. tostring(i))
       local task
       request:run(function(req)
@@ -573,7 +702,6 @@ add('scope', 'custody offer', 30, function(n)
   return completed
 end)
 
-
 -- --------------------------------------------------------------------------
 -- Flow cases.
 -- --------------------------------------------------------------------------
@@ -585,13 +713,17 @@ add('flow', 'write only unbounded', 400, function(n)
   local inlet = flow:inlet()
   local total = 0
   rt:spawn_raw(function()
-    for _ = 1, n do total = total + rt:perform(inlet:write_op('x')) end
+    for _ = 1, n do
+      total = total + rt:perform(inlet:write_op('x'))
+    end
   end, 'bench-flow-write-only')
   run_rt(rt)
   assert_eq(total, n)
   local snap
   local rt2 = Runtime.new()
-  rt2:spawn_raw(function() snap = rt2:perform(flow:inspect_op()) end, 'inspect')
+  rt2:spawn_raw(function()
+    snap = rt2:perform(flow:inspect_op())
+  end, 'inspect')
   run_rt(rt2)
   assert_eq(snap.queued_length, n)
   return n
@@ -644,7 +776,9 @@ add('flow', 'capacity release handoff', 180, function(n)
     for _ = 1, n do
       rt:perform(inlet:write_op('abcd'))
       local rows = rt:perform(Op.tensor({ outlet:read_op(4), inlet:write_op('wxyz') }))
-      if rows[1][1] == 'abcd' and rows[2][1] == 4 then ok = ok + 1 end
+      if rows[1][1] == 'abcd' and rows[2][1] == 4 then
+        ok = ok + 1
+      end
       local tail = rt:perform(outlet:read_op(4))
       assert_eq(tail, 'wxyz')
     end
@@ -743,7 +877,9 @@ local results = {}
 
 for _, case in ipairs(cases) do
   if should_run(case) then
-    if warmup_enabled then case.fn(math.max(1, math.floor(case.iters / 20))) end
+    if warmup_enabled then
+      case.fn(math.max(1, math.floor(case.iters / 20)))
+    end
     local samples = {}
     local logical_ops = nil
     for r = 1, repeats do
@@ -801,18 +937,45 @@ elseif format == 'json' then
     io.write('"max_seconds": ' .. fmt_num(r.max) .. ', ')
     io.write('"median_us_per_op": ' .. fmt_num((r.median / r.ops) * 1000000))
     io.write('}')
-    if i < #results then io.write(',') end
+    if i < #results then
+      io.write(',')
+    end
     io.write('\n')
   end
   print('  ]')
   print('}')
 else
   print('fibers benchmark suite')
-  print('scale=' .. tostring(scale) .. ' repeats=' .. tostring(repeats) .. (filter ~= '' and (' filter=' .. filter) or ''))
-  print(string.format('%-12s  %-36s %8s %8s %12s %12s', 'group', 'case', 'iters', 'ops', 'median s', 'us/op'))
+  print(
+    'scale='
+      .. tostring(scale)
+      .. ' repeats='
+      .. tostring(repeats)
+      .. (filter ~= '' and (' filter=' .. filter) or '')
+  )
+  print(
+    string.format(
+      '%-12s  %-36s %8s %8s %12s %12s',
+      'group',
+      'case',
+      'iters',
+      'ops',
+      'median s',
+      'us/op'
+    )
+  )
   print(string.rep('-', 96))
   for _, r in ipairs(results) do
-    print(string.format('%-12s  %-36s %8d %8d %12.6f %12.3f',
-      r.group, r.name, r.iters, r.ops, r.median, (r.median / r.ops) * 1000000))
+    print(
+      string.format(
+        '%-12s  %-36s %8d %8d %12.6f %12.3f',
+        r.group,
+        r.name,
+        r.iters,
+        r.ops,
+        r.median,
+        (r.median / r.ops) * 1000000
+      )
+    )
   end
 end

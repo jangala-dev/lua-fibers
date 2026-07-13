@@ -7,26 +7,53 @@ local Op = fibers.Op
 local Flow = fibers.Flow
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
+local function fail(msg)
+  error(msg, 2)
+end
 local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
 end
 local function assert_status(st, tag, msg)
-  if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
 end
-local function new_runtime(opts) return Runtime.new(opts or {}) end
+local function new_runtime(opts)
+  return Runtime.new(opts or {})
+end
 
 local function test_scalar_select_tensor_supply_but_all_non_handoff()
-  local supply = fibers.Scalar.transition {
+  local supply = fibers.Scalar.transition({
     name = 'test.scalar.supply',
     mode = 'update',
-    step = function(v) return v + 1, true end,
-  }
-  local take = fibers.Scalar.transition {
+    step = function(v)
+      return v + 1, true
+    end,
+  })
+  local take = fibers.Scalar.transition({
     name = 'test.scalar.take',
     mode = 'select',
-    step = function(v) if v <= 0 then return nil end; return v - 1, v end,
-  }
+    step = function(v)
+      if v <= 0 then
+        return nil
+      end
+      return v - 1, v
+    end,
+  })
   local s = fibers.Scalar.new(0, 'select-law')
   local rt = new_runtime()
   local rows
@@ -80,7 +107,9 @@ local function test_flow_tensor_write_read_handoff()
   assert_eq(rows[1][1], 3)
   assert_eq(rows[2][1], 'abc')
   local inspect
-  fibers.run(function() inspect = fibers.perform(flow:inspect_op()) end)
+  fibers.run(function()
+    inspect = fibers.perform(flow:inspect_op())
+  end)
   assert_eq(inspect.queued, 0)
 end
 
@@ -98,7 +127,9 @@ local function test_flow_all_write_does_not_supply_read()
   assert_eq(rows[1][1], 3)
   assert_eq(rows[2][1], 'empty')
   local got
-  fibers.run(function() got = fibers.perform(outlet:read_op(3)) end)
+  fibers.run(function()
+    got = fibers.perform(outlet:read_op(3))
+  end)
   assert_eq(got, 'abc')
 end
 
@@ -159,5 +190,7 @@ local tests = {
   test_flow_lease_ack_and_return,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 print('tests/test_flow_scalar_state_machine.lua: ok')

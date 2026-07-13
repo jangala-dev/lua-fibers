@@ -3,7 +3,9 @@ local next_handle = 0
 local Kind = { name = 'ownership' }
 
 local function no_settlement()
-  return function() return require('fibers.atoms.op').always(true) end
+  return function()
+    return require('fibers.atoms.op').always(true)
+  end
 end
 
 function Ownership.handle(name, fields)

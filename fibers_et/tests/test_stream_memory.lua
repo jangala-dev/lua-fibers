@@ -1,16 +1,45 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_nil(v, msg)
+  if v ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 local function assert_uncommitted_status(st, msg)
   local tag = st and st.tag
-  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
+  if
+    tag ~= 'quiescent'
+    and tag ~= 'conflict'
+    and tag ~= 'reject_candidate'
+    and tag ~= 'pending'
+  then
     fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end
@@ -40,7 +69,9 @@ do
   local a, b = Stream.memory_pair({ name = 'basic' })
   local got
   local st = fibers.try_run(function()
-    fibers.spawn(function() fibers.perform(a:writer():write_op('hello')) end, 'writer')
+    fibers.spawn(function()
+      fibers.perform(a:writer():write_op('hello'))
+    end, 'writer')
     got = fibers.perform(b:reader():read_exactly_op(5))
   end).runtime_status
   assert_status(st, 'found')
@@ -54,12 +85,18 @@ do
   local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      a:writer():write_op('x'):map(function() return 'loser' end)
+      a:writer():write_op('x'):map(function()
+        return 'loser'
+      end)
     ))
   end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
-  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'losing stream write must not append bytes')
+  assert_eq(
+    Inspect.data(b:reader().flow.reservoir),
+    '',
+    'losing stream write must not append bytes'
+  )
 end
 
 -- Losing read branches consume nothing.
@@ -70,7 +107,9 @@ do
     fibers.perform(a:writer():write_op('abc'))
     got = fibers.perform(Op.choice(
       Op.always('winner'),
-      b:reader():read_some_op(1):map(function() return 'loser' end)
+      b:reader():read_some_op(1):map(function()
+        return 'loser'
+      end)
     ))
     later = fibers.perform(b:reader():read_exactly_op(3))
   end, { choice_seed = 3 }).runtime_status
@@ -84,9 +123,15 @@ do
   local a, b = Stream.memory_pair({ name = 'competing-reads' })
   local r1, r2
   local rt = fibers.Runtime.new()
-  rt:spawn_raw(function() r1 = rt:perform(b:reader():read_some_op(1)) end, 'r1')
-  rt:spawn_raw(function() r2 = rt:perform(b:reader():read_some_op(1)) end, 'r2')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('x')) end, 'writer')
+  rt:spawn_raw(function()
+    r1 = rt:perform(b:reader():read_some_op(1))
+  end, 'r1')
+  rt:spawn_raw(function()
+    r2 = rt:perform(b:reader():read_some_op(1))
+  end, 'r2')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('x'))
+  end, 'writer')
   assert_status(rt:run(), 'found')
   rt:run() -- settle to pending if the second reader is still waiting
   local count = (r1 == 'x' and 1 or 0) + (r2 == 'x' and 1 or 0)
@@ -98,13 +143,23 @@ do
   local a, b = Stream.memory_pair({ name = 'exact' })
   local got
   local rt = fibers.Runtime.new()
-  rt:spawn_raw(function() got = rt:perform(b:reader():read_exactly_op(4)) end, 'reader')
+  rt:spawn_raw(function()
+    got = rt:perform(b:reader():read_exactly_op(4))
+  end, 'reader')
   assert_status(rt:run(), 'quiescent')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'writer-ab')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('ab'))
+  end, 'writer-ab')
   assert_status(rt:run(), 'found')
   assert_nil(got, 'exact read must still be waiting after partial data')
-  assert_eq(Inspect.data(b:reader().flow.reservoir), 'ab', 'partial exact read must not consume while waiting')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('cd')) end, 'writer-cd')
+  assert_eq(
+    Inspect.data(b:reader().flow.reservoir),
+    'ab',
+    'partial exact read must not consume while waiting'
+  )
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('cd'))
+  end, 'writer-cd')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'abcd')
   assert_eq(Inspect.data(b:reader().flow.reservoir), '')
@@ -144,12 +199,18 @@ do
   local a, b = Stream.memory_pair({ name = 'capacity', capacity = 3 })
   local second_done, read
   local rt = fibers.Runtime.new()
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('abc')) end, 'fill')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('abc'))
+  end, 'fill')
   assert_status(rt:run(), 'found')
-  rt:spawn_raw(function() second_done = rt:perform(a:writer():write_op('d')) end, 'blocked-write')
+  rt:spawn_raw(function()
+    second_done = rt:perform(a:writer():write_op('d'))
+  end, 'blocked-write')
   assert_status(rt:run(), 'quiescent')
   assert_nil(second_done, 'write should wait while capacity is full')
-  rt:spawn_raw(function() read = rt:perform(b:reader():read_some_op(1)) end, 'reader')
+  rt:spawn_raw(function()
+    read = rt:perform(b:reader():read_some_op(1))
+  end, 'reader')
   assert_status(rt:run(), 'found')
   assert_eq(read, 'a')
   assert_eq(second_done, 1)
@@ -164,9 +225,14 @@ do
   local function handle_one_op(stream)
     return stream:reader():read_line_op():and_then(function(line)
       return state:read_op():and_then(function(old)
-        return state:write_op(old + 1):and_then(function()
-          return stream:writer():write_op('reply:' .. line .. '\n')
-        end):map(function() return line end)
+        return state
+          :write_op(old + 1)
+          :and_then(function()
+            return stream:writer():write_op('reply:' .. line .. '\n')
+          end)
+          :map(function()
+            return line
+          end)
       end)
     end)
   end
@@ -179,7 +245,6 @@ do
   assert_eq(state.value, 1)
   assert_eq(response, 'reply:ping')
 end
-
 
 -- Line and exact read edge cases are transactional and precise.
 do
@@ -224,7 +289,11 @@ do
   assert_nil(exact)
   assert_eq(exact_err, 'eof')
   assert_eq(partial, 'ab')
-  assert_eq(Inspect.data(f:reader().flow.reservoir), '', 'exact EOF consumes the returned final partial')
+  assert_eq(
+    Inspect.data(f:reader().flow.reservoir),
+    '',
+    'exact EOF consumes the returned final partial'
+  )
 end
 
 -- Region/Scope ownership movement works for stream compounds.
@@ -240,7 +309,6 @@ do
   assert_status(st, 'found')
   assert_eq(a.owner, to:raw_region())
 end
-
 
 -- Chunked storage preserves order without keeping one monolithic data string.
 do
@@ -279,7 +347,6 @@ do
   assert_eq(got, 'ab')
 end
 
-
 -- Parallel writes to a scalar-state-machine flow serialise in transition order.
 do
   local a, b = Stream.memory_pair({ name = 'parallel-write-serial' })
@@ -291,9 +358,12 @@ do
   local st = rt:run()
   assert_status(st, 'found')
   assert_truthy(got, 'participant should resume from serialised parallel writes')
-  assert_eq(Inspect.data(b:reader().flow.reservoir), 'ab', 'parallel stream writes are ordered by scalar transition order')
+  assert_eq(
+    Inspect.data(b:reader().flow.reservoir),
+    'ab',
+    'parallel stream writes are ordered by scalar transition order'
+  )
 end
-
 
 -- Long reads are observational until commit: abandoned read_line/read_all
 -- attempts leave already queued bytes in the queue.
@@ -302,17 +372,21 @@ do
   local line_choice, all_choice, after_line, after_all
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('partial'))
-    line_choice = fibers.perform(
-      b:reader():read_line_op({ limit = 64 }):map(function() return 'line' end)
-        :or_else(Op.always('timeout'))
-    )
+    line_choice = fibers.perform(b:reader()
+      :read_line_op({ limit = 64 })
+      :map(function()
+        return 'line'
+      end)
+      :or_else(Op.always('timeout')))
     after_line = fibers.perform(b:reader():read_exactly_op(7))
 
     fibers.perform(a:writer():write_op('body'))
-    all_choice = fibers.perform(
-      b:reader():read_all_op({ max = 64 }):map(function() return 'all' end)
-        :or_else(Op.always('timeout'))
-    )
+    all_choice = fibers.perform(b:reader()
+      :read_all_op({ max = 64 })
+      :map(function()
+        return 'all'
+      end)
+      :or_else(Op.always('timeout')))
     after_all = fibers.perform(b:reader():read_exactly_op(4))
   end).runtime_status
   assert_status(st, 'found')
@@ -328,13 +402,23 @@ do
   local a, b = Stream.memory_pair({ name = 'line-grows' })
   local line
   local rt = fibers.Runtime.new()
-  rt:spawn_raw(function() line = rt:perform(b:reader():read_line_op({ limit = 16 })) end, 'line-reader')
+  rt:spawn_raw(function()
+    line = rt:perform(b:reader():read_line_op({ limit = 16 }))
+  end, 'line-reader')
   assert_status(rt:run(), 'quiescent')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('abc')) end, 'write-prefix')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('abc'))
+  end, 'write-prefix')
   assert_status(rt:run(), 'found')
   assert_nil(line, 'read_line_op should still be waiting before separator')
-  assert_eq(Inspect.data(b:reader().flow.reservoir), 'abc', 'waiting read_line_op must not consume prefix')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('\nrest')) end, 'write-sep')
+  assert_eq(
+    Inspect.data(b:reader().flow.reservoir),
+    'abc',
+    'waiting read_line_op must not consume prefix'
+  )
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('\nrest'))
+  end, 'write-sep')
   assert_status(rt:run(), 'found')
   assert_eq(line, 'abc')
   assert_eq(Inspect.data(b:reader().flow.reservoir), 'rest')
@@ -346,16 +430,24 @@ do
   local a, b = Stream.memory_pair({ name = 'read-all' })
   local all
   local rt = fibers.Runtime.new()
-  rt:spawn_raw(function() all = rt:perform(b:reader():read_all_op({ max = 16 })) end, 'read-all')
+  rt:spawn_raw(function()
+    all = rt:perform(b:reader():read_all_op({ max = 16 }))
+  end, 'read-all')
   assert_status(rt:run(), 'quiescent')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('ab')) end, 'write-ab')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('ab'))
+  end, 'write-ab')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should wait before EOF')
   assert_eq(Inspect.data(b:reader().flow.reservoir), 'ab', 'waiting read_all_op must not consume')
-  rt:spawn_raw(function() rt:perform(a:writer():write_op('cd')) end, 'write-cd')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():write_op('cd'))
+  end, 'write-cd')
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should still wait before EOF')
-  rt:spawn_raw(function() rt:perform(a:writer():shutdown_op()) end, 'eof')
+  rt:spawn_raw(function()
+    rt:perform(a:writer():shutdown_op())
+  end, 'eof')
   assert_status(rt:run(), 'found')
   assert_eq(all, 'abcd')
   assert_eq(Inspect.data(b:reader().flow.reservoir), '')
@@ -376,7 +468,9 @@ do
   assert_eq(err, 'too_large')
   assert_eq(after, 'abcdef', 'read_all limit failure must not consume bytes')
 
-  local ok = pcall(function() b:reader():read_all_op() end)
+  local ok = pcall(function()
+    b:reader():read_all_op()
+  end)
   assert_eq(ok, false, 'read_all_op should require opts.max or opts.unlimited = true')
 end
 
@@ -406,16 +500,23 @@ do
   assert_eq(r0, '')
   assert_eq(e0, '')
   assert_eq(w0, 0)
-  local ok = pcall(function() b:reader():read_some_op(-1) end)
+  local ok = pcall(function()
+    b:reader():read_some_op(-1)
+  end)
   assert_eq(ok, false, 'negative read size should be rejected')
-  ok = pcall(function() b:reader():read_line_op({ sep = '' }) end)
+  ok = pcall(function()
+    b:reader():read_line_op({ sep = '' })
+  end)
   assert_eq(ok, false, 'empty line separator should be rejected')
-  ok = pcall(function() b:reader():read_line_op({ limit = -1 }) end)
+  ok = pcall(function()
+    b:reader():read_line_op({ limit = -1 })
+  end)
   assert_eq(ok, false, 'negative line limit should be rejected')
-  ok = pcall(function() b:reader():read_all_op({ max = -1 }) end)
+  ok = pcall(function()
+    b:reader():read_all_op({ max = -1 })
+  end)
   assert_eq(ok, false, 'negative read_all max should be rejected')
 end
-
 
 -- Flow exposes delimiter helpers above the byte-only reservoir.
 do
@@ -433,6 +534,5 @@ do
   assert_truthy(Flow.Lease, 'Lease should be the public name for retained byte ownership')
   assert_nil(Flow.Claim, 'pump Claim should not be part of the public Flow facility')
 end
-
 
 print('tests/test_stream_memory.lua: ok')

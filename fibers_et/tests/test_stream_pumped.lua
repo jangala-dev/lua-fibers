@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
@@ -6,19 +6,53 @@ local Op = fibers.Op
 local Stream = fibers.Stream
 local Fake = Stream.backend.Fake
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
-local function assert_not_eq(a, b, msg) if a == b then fail((msg or 'assert_not_eq failed') .. ': both were ' .. tostring(a)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_nil(v, msg)
+  if v ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
+local function assert_not_eq(a, b, msg)
+  if a == b then
+    fail((msg or 'assert_not_eq failed') .. ': both were ' .. tostring(a))
+  end
+end
 
 local function drive_until(rt, pred, label)
   for _ = 1, 100 do
-    if pred() then return true end
+    if pred() then
+      return true
+    end
     local st = rt:run()
-    if pred() then return true end
-    if st.tag == 'idle' or st.tag == 'quiescent' then break end
+    if pred() then
+      return true
+    end
+    if st.tag == 'idle' or st.tag == 'quiescent' then
+      break
+    end
   end
   fail(label or 'runtime did not reach expected state')
 end
@@ -29,10 +63,14 @@ do
   local region = fibers.Region.new('losing-open-region')
   local got
   local st = fibers.try_run(function()
-    got = fibers.perform(Op.choice(
-      Op.always('winner'),
-      Stream.open_backend_in_op(region, backend, { name = 'losing-open-stream' }):map(function() return 'loser' end)
-    ))
+    got = fibers.perform(
+      Op.choice(
+        Op.always('winner'),
+        Stream.open_backend_in_op(region, backend, { name = 'losing-open-stream' }):map(function()
+          return 'loser'
+        end)
+      )
+    )
   end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
@@ -51,7 +89,10 @@ do
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_truthy(stream, 'open_backend_op should return a stream')
-  assert_truthy(stream:reader() and stream:writer(), 'stream should expose reader and writer handles')
+  assert_truthy(
+    stream:reader() and stream:writer(),
+    'stream should expose reader and writer handles'
+  )
   assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
   assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
   assert_nil(stream.read_line_op, 'duplex should not expose reader methods directly')
@@ -81,7 +122,13 @@ do
     return Op.always(s)
   end
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'custom-strategy-stream', pump_strategy = strategy }))
+    stream = rt:perform(
+      Stream.open_backend_in_op(
+        region,
+        backend,
+        { name = 'custom-strategy-stream', pump_strategy = strategy }
+      )
+    )
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(seen_stream, stream, 'custom strategy should receive compound stream')
@@ -89,7 +136,8 @@ do
   assert_eq(stream.pump_task, 'custom-pump-placeholder')
 end
 
--- Host input enters the stream only through the read pump committing bytes into the incoming Flow reservoir.
+-- Host input enters the stream only through the read pump committing bytes into
+-- the incoming Flow reservoir.
 do
   local rt = fibers.Runtime.new()
   local region = fibers.Region.new('read-region')
@@ -102,7 +150,9 @@ do
   assert_status(rt:run(), 'found')
   assert_nil(got)
   backend:feed_read('abc')
-  drive_until(rt, function() return got == 'abc' end, 'host read bytes should become stream bytes')
+  drive_until(rt, function()
+    return got == 'abc'
+  end, 'host read bytes should become stream bytes')
   assert_eq(got, 'abc')
 end
 
@@ -113,15 +163,25 @@ do
   local backend = Fake.new({ name = 'capacity-read-backend' })
   local stream, first, second
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'capacity-read-stream', read_capacity = 2, read_chunk_size = 4 }))
+    stream = rt:perform(
+      Stream.open_backend_in_op(
+        region,
+        backend,
+        { name = 'capacity-read-stream', read_capacity = 2, read_chunk_size = 4 }
+      )
+    )
     first = rt:perform(stream:reader():read_exactly_op(2))
     second = rt:perform(stream:reader():read_exactly_op(2))
   end, 'root')
   assert_status(rt:run(), 'found')
   backend:feed_read('abcd')
-  drive_until(rt, function() return first == 'ab' end, 'first capacity-limited read')
+  drive_until(rt, function()
+    return first == 'ab'
+  end, 'first capacity-limited read')
   assert_eq(first, 'ab')
-  drive_until(rt, function() return second == 'cd' end, 'second capacity-limited read')
+  drive_until(rt, function()
+    return second == 'cd'
+  end, 'second capacity-limited read')
   assert_eq(second, 'cd')
 end
 
@@ -136,7 +196,9 @@ do
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
-  drive_until(rt, function() return flushed == true end, 'write should flush')
+  drive_until(rt, function()
+    return flushed == true
+  end, 'write should flush')
   assert_eq(backend:written(), 'abc')
 end
 
@@ -147,13 +209,18 @@ do
   local backend = Fake.new({ name = 'losing-write-backend' })
   local stream, got
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'losing-write-stream' }))
+    stream =
+      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'losing-write-stream' }))
     got = rt:perform(Op.choice(
       Op.always('winner'),
-      stream:writer():write_op('abc'):map(function() return 'loser' end)
+      stream:writer():write_op('abc'):map(function()
+        return 'loser'
+      end)
     ))
   end, 'root')
-  drive_until(rt, function() return got == 'winner' end, 'losing write choice')
+  drive_until(rt, function()
+    return got == 'winner'
+  end, 'losing write choice')
   assert_eq(backend:written(), '')
 end
 
@@ -164,11 +231,19 @@ do
   local backend = Fake.new({ name = 'partial-write-backend', write_chunk_size = 2 })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'partial-write-stream', write_chunk_size = 6 }))
+    stream = rt:perform(
+      Stream.open_backend_in_op(
+        region,
+        backend,
+        { name = 'partial-write-stream', write_chunk_size = 6 }
+      )
+    )
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
-  drive_until(rt, function() return flushed == true end, 'partial writes should eventually flush')
+  drive_until(rt, function()
+    return flushed == true
+  end, 'partial writes should eventually flush')
   assert_eq(backend:written(), 'abcdef')
 end
 
@@ -184,12 +259,28 @@ do
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   -- Let the write commit and the pump lease the bytes, then stop at writability.
-  for _ = 1, 10 do if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "" then break end; rt:run() end
-  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "", 'write pump should hold an in-flight lease while blocked')
+  for _ = 1, 10 do
+    if
+      stream
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
+    then
+      break
+    end
+    rt:run()
+  end
+  assert_truthy(
+    stream
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '',
+    'write pump should hold an in-flight lease while blocked'
+  )
   assert_nil(flushed, 'flush should wait while bytes are in flight')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
-  drive_until(rt, function() return flushed == true end, 'unblocked write should flush')
+  drive_until(rt, function()
+    return flushed == true
+  end, 'unblocked write should flush')
   assert_eq(backend:written(), 'abc')
 end
 
@@ -207,7 +298,9 @@ do
   assert_status(rt:run(), 'found')
   backend:feed_read('abc')
   backend:feed_eof()
-  drive_until(rt, function() return err == 'eof' end, 'EOF should reach stream')
+  drive_until(rt, function()
+    return err == 'eof'
+  end, 'EOF should reach stream')
   assert_eq(first, 'abc')
   assert_nil(second)
   assert_eq(err, 'eof')
@@ -220,15 +313,27 @@ do
   local backend = Fake.new({ name = 'shutdown-write-backend', write_blocked = true })
   local stream, done
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'shutdown-write-stream' }))
+    stream =
+      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'shutdown-write-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     rt:perform(stream:writer():shutdown_op())
     done = rt:perform(stream:writer():flush_op())
   end, 'root')
-  for _ = 1, 10 do if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= "" then break end; rt:run() end
+  for _ = 1, 10 do
+    if
+      stream
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
+    then
+      break
+    end
+    rt:run()
+  end
   assert_nil(backend.shutdown_write_reason, 'backend write should not shut down before draining')
   backend:unblock_writes()
-  drive_until(rt, function() return done == true and backend.shutdown_write_reason ~= nil end, 'shutdown should happen after drain')
+  drive_until(rt, function()
+    return done == true and backend.shutdown_write_reason ~= nil
+  end, 'shutdown should happen after drain')
   assert_eq(backend:written(), 'abc')
 end
 
@@ -245,13 +350,14 @@ do
     flushed, flush_err = rt:perform(stream:writer():flush_op())
     n, err = rt:perform(stream:writer():write_op('d'))
   end, 'root')
-  drive_until(rt, function() return err == 'connection_reset' end, 'write error should commit')
+  drive_until(rt, function()
+    return err == 'connection_reset'
+  end, 'write error should commit')
   assert_nil(flushed)
   assert_eq(flush_err, 'connection_reset')
   assert_nil(n)
   assert_eq(err, 'connection_reset')
 end
-
 
 -- A pump lease keeps byte capacity reserved until the host acknowledges it.
 do
@@ -260,25 +366,54 @@ do
   local backend = Fake.new({ name = 'lease-capacity-backend', write_blocked = true })
   local stream, second_done, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'lease-capacity-stream', write_capacity = 3 }))
+    stream = rt:perform(
+      Stream.open_backend_in_op(
+        region,
+        backend,
+        { name = 'lease-capacity-stream', write_capacity = 3 }
+      )
+    )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'writer1')
   for _ = 1, 10 do
-    if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '' then break end
+    if
+      stream
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
+    then
+      break
+    end
     rt:run()
   end
-  assert_eq(Inspect.first_lease_bytes(stream:writer().flow.reservoir), 'abc', 'pump should have leased the first write')
-  assert_eq((stream:writer().flow.reservoir.limit - (#(stream:writer().flow.reservoir.data or '') + Inspect.leased_bytes(stream:writer().flow.reservoir))), 0, 'leased bytes should still reserve capacity')
-  rt:spawn_raw(function() second_done = rt:perform(stream:writer():write_op('d')) end, 'writer2')
+  assert_eq(
+    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    'abc',
+    'pump should have leased the first write'
+  )
+  assert_eq(
+    (
+      stream:writer().flow.reservoir.limit
+      - (
+        #(stream:writer().flow.reservoir.data or '')
+        + Inspect.leased_bytes(stream:writer().flow.reservoir)
+      )
+    ),
+    0,
+    'leased bytes should still reserve capacity'
+  )
+  rt:spawn_raw(function()
+    second_done = rt:perform(stream:writer():write_op('d'))
+  end, 'writer2')
   assert_status(rt:run(), 'pending')
   assert_nil(second_done, 'second write should wait while leased bytes hold capacity')
   assert_nil(flushed, 'flush should wait while lease is blocked')
   backend:unblock_writes()
-  drive_until(rt, function() return second_done == 1 and flushed == true end, 'acknowledged lease should release capacity')
+  drive_until(rt, function()
+    return second_done == 1 and flushed == true
+  end, 'acknowledged lease should release capacity')
   assert_eq(backend:written(), 'abcd')
 end
-
 
 -- The read pump notices reader shutdown even while backend readability never arrives.
 do
@@ -287,13 +422,16 @@ do
   local backend = Fake.new({ name = 'blocked-read-close-backend', read_blocked = true })
   local stream
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'blocked-read-close-stream' }))
+    stream =
+      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'blocked-read-close-stream' }))
   end, 'open-blocked-read')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function()
     rt:perform(stream:reader():shutdown_op('close_reader'))
   end, 'close-reader')
-  drive_until(rt, function() return backend.shutdown_read_reason == 'reader_closed' end, 'read pump should notice reader shutdown')
+  drive_until(rt, function()
+    return backend.shutdown_read_reason == 'reader_closed'
+  end, 'read pump should notice reader shutdown')
   assert_eq(backend.shutdown_read_reason, 'reader_closed')
 end
 

@@ -1,14 +1,26 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Settlement = require('fibers.internal.settlement')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 
 local function maybe(op)
-  return op:map(function() return 'yes' end):or_else(fibers.always('no'))
+  return op:map(function()
+    return 'yes'
+  end):or_else(fibers.always('no'))
 end
 
 -- Owned live custody grants authority; claimed custody suspends ordinary use.
@@ -67,18 +79,18 @@ do
   local read_read
   fibers.run(function()
     fibers.perform(owner:admit_op(h))
-    local borrows = fibers.perform(fibers.all({
-      owner:borrow_op(h, r1, { 'read' }),
-      owner:borrow_op(h, r2, { 'read' }),
-    }):or_else(fibers.always(false)))
+    local borrows = fibers.perform(fibers
+      .all({
+        owner:borrow_op(h, r1, { 'read' }),
+        owner:borrow_op(h, r2, { 'read' }),
+      })
+      :or_else(fibers.always(false)))
     read_read = borrows and 'yes' or 'no'
     -- This test is only about coexisting borrows. Borrow release itself is
     -- covered above; avoiding manual policy here keeps the test algebraic.
   end)
   assert_eq(read_read, 'yes', 'compatible read borrows should commit together')
 end
-
-
 
 -- Flow endpoints are byte-operation capabilities; Scope authority governs
 -- whether a scope is authorised to obtain/carry/borrow the capability, not each

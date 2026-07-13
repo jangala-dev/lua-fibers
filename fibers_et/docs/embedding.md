@@ -24,7 +24,7 @@ rt:step({ max_work = n })
 
 `Runtime:run` starts ready fibres and searches all pending focuses until at least one transaction commits or no further immediate progress is found.
 
-`Runtime:step` applies a bounded search allowance. Repeated bounded calls increase the current allowance and search again; the runtime does not expose a persistent whole-search cursor.
+`Runtime:step` applies a bounded search allowance. The production trail machine retains an incomplete search and resumes its exact alternative stack on a later call while the observed frontier and committed dependencies remain unchanged. A relevant admission, commit or external delivery invalidates the retained session. The reference evaluator continues to restart bounded searches.
 
 Current status shapes are:
 

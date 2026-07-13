@@ -21,19 +21,36 @@ end
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
+    error(
+      (message or 'values differ')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual),
+      2
+    )
   end
 end
 
 local function assert_ok(value, message)
-  if not value then error(message or 'expected success', 2) end
+  if not value then
+    error(message or 'expected success', 2)
+  end
 end
 
 local function drain(rt)
   local status
-  repeat status = rt:run() until status.tag ~= 'found'
+  repeat
+    status = rt:run()
+  until status.tag ~= 'found'
   if status.tag ~= 'idle' and status.tag ~= 'quiescent' then
-    error('runtime did not drain: ' .. tostring(status.tag) .. '/' .. tostring(status.kind or status.reason), 2)
+    error(
+      'runtime did not drain: '
+        .. tostring(status.tag)
+        .. '/'
+        .. tostring(status.kind or status.reason),
+      2
+    )
   end
   return status
 end
@@ -45,7 +62,9 @@ add('simple', 'kernel', 'always perform', 4000, function(ctx, n)
   local sum = 0
   local op = Op.always(1)
   rt:spawn_raw(function()
-    for _ = 1, n do sum = sum + rt:perform(op) end
+    for _ = 1, n do
+      sum = sum + rt:perform(op)
+    end
   end, 'perf-always')
   drain(rt)
   assert_eq(sum, n)
@@ -94,10 +113,14 @@ add('simple', 'external', 'preloaded event queue', 1200, function(ctx, n)
   local rt = ctx:runtime()
   local queue = EventQueue.new('perf-events')
   local feed = rt:external_feed(queue)
-  for i = 1, n do feed:deliver(i) end
+  for i = 1, n do
+    feed:deliver(i)
+  end
   local total = 0
   rt:spawn_raw(function()
-    for _ = 1, n do total = total + rt:perform(queue:next_op()) end
+    for _ = 1, n do
+      total = total + rt:perform(queue:next_op())
+    end
   end, 'perf-events-consumer')
   drain(rt)
   assert_eq(total, n * (n + 1) / 2)
@@ -115,7 +138,9 @@ add('moderate', 'product', 'internal then external rendezvous', 260, function(ct
     for i = 1, n do
       local rows = rt:perform(Op.tensor({
         inside:get_op():and_then(function(value)
-          return outside:get_op():map(function(other) return value + other end)
+          return outside:get_op():map(function(other)
+            return value + other
+          end)
         end, outside_dependencies),
         inside:put_op(i),
       }))
@@ -123,7 +148,9 @@ add('moderate', 'product', 'internal then external rendezvous', 260, function(ct
     end
   end, 'perf-product-main')
   rt:spawn_raw(function()
-    for i = 1, n do rt:perform(outside:put_op(1000 + i)) end
+    for i = 1, n do
+      rt:perform(outside:put_op(1000 + i))
+    end
   end, 'perf-product-partner')
   drain(rt)
   assert_eq(total, n * 1000 + n * (n + 1))
@@ -137,10 +164,17 @@ add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.tensor({
-        scalar:write_op(1):map(function() return 'write' end):choice(Op.always('fallback')),
+        scalar
+          :write_op(1)
+          :map(function()
+            return 'write'
+          end)
+          :choice(Op.always('fallback')),
         scalar:write_op(2),
       }))
-      if rows[1][1] == 'fallback' then fallbacks = fallbacks + 1 end
+      if rows[1][1] == 'fallback' then
+        fallbacks = fallbacks + 1
+      end
     end
   end, 'perf-choice-conflict-fibre')
   drain(rt)
@@ -169,7 +203,9 @@ add('moderate', 'scope', 'spawn await settlement', 36, function(ctx, n)
   local total = 0
   local result = fibers.try_run(function()
     for i = 1, n do
-      local task = fibers.spawn(function() return i end, { name = 'perf-task-' .. tostring(i) })
+      local task = fibers.spawn(function()
+        return i
+      end, { name = 'perf-task-' .. tostring(i) })
       total = total + fibers.perform(task:await_op())
     end
   end, ctx:run_options({ name = 'perf-scope' }))
@@ -191,17 +227,27 @@ add('complex', 'search', 'triple swap with decoy', 14, function(ctx, n)
     local ca = Rendezvous.new('perf-ca-' .. tostring(round))
     local a, b, c
     rt:spawn_raw(function()
-      a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows) return rows[2][1] end))
+      a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows)
+        return rows[2][1]
+      end))
     end, 'perf-swap-a')
     rt:spawn_raw(function()
-      b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows) return rows[2][1] end))
+      b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows)
+        return rows[2][1]
+      end))
     end, 'perf-swap-b')
     rt:spawn_raw(function()
-      c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows) return rows[2][1] end))
+      c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows)
+        return rows[2][1]
+      end))
     end, 'perf-swap-c')
-    rt:spawn_raw(function() rt:perform(ab:get_op()) end, 'perf-decoy')
+    rt:spawn_raw(function()
+      rt:perform(ab:get_op())
+    end, 'perf-decoy')
     drain(rt)
-    assert_eq(a, 'C'); assert_eq(b, 'A'); assert_eq(c, 'B')
+    assert_eq(a, 'C')
+    assert_eq(b, 'A')
+    assert_eq(c, 'B')
     completed = completed + 1
   end
   return completed
@@ -223,7 +269,9 @@ add('complex', 'search', 'contended producers', 6, function(ctx, rounds)
       end, 'perf-producer-' .. tostring(producer))
     end
     rt:spawn_raw(function()
-      for _ = 1, producers * messages do total = total + rt:perform(ch:get_op()) end
+      for _ = 1, producers * messages do
+        total = total + rt:perform(ch:get_op())
+      end
     end, 'perf-contention-consumer')
     drain(rt)
     assert_ok(total > 0)
@@ -237,16 +285,23 @@ add('complex', 'search', 'nursery rendezvous fanout seven', 1, function(ctx, rou
   local completed = 0
   for round = 1, rounds do
     local total = 0
-    local result = fibers.try_run(function()
-      local ch = fibers.Rendezvous.new('perf-nursery-fanout-' .. tostring(round))
-      for i = 1, fanout do
-        fibers.spawn(function() fibers.perform(ch:put_op(i)) end, 'perf-child-' .. tostring(i))
-      end
-      for _ = 1, fanout do total = total + fibers.perform(ch:get_op()) end
-    end, ctx:run_options({
-      name = 'perf-nursery-fanout',
-      policy = fibers.policy.nursery({ name = 'perf-nursery-policy' }),
-    }))
+    local result = fibers.try_run(
+      function()
+        local ch = fibers.Rendezvous.new('perf-nursery-fanout-' .. tostring(round))
+        for i = 1, fanout do
+          fibers.spawn(function()
+            fibers.perform(ch:put_op(i))
+          end, 'perf-child-' .. tostring(i))
+        end
+        for _ = 1, fanout do
+          total = total + fibers.perform(ch:get_op())
+        end
+      end,
+      ctx:run_options({
+        name = 'perf-nursery-fanout',
+        policy = fibers.policy.nursery({ name = 'perf-nursery-policy' }),
+      })
+    )
     ctx:add_runtime(result.runtime)
     assert_ok(result.ok, tostring(result.report or result.reason))
     assert_eq(total, fanout * (fanout + 1) / 2)

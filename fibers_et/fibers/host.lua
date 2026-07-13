@@ -26,11 +26,12 @@ end
 function Host.has_non_time_waits(waits)
   for i = 1, #(waits or {}) do
     local w = waits[i]
-    if w and w.kind ~= 'timer' then return true end
+    if w and w.kind ~= 'timer' then
+      return true
+    end
   end
   return false
 end
-
 
 function Host.readiness_waits(waits)
   local out = {}
@@ -47,16 +48,29 @@ function Host.has_readiness_waits(waits)
   return #Host.readiness_waits(waits) > 0
 end
 
-
 function Host.normalise_readiness_mode(mode)
   mode = mode or 'read'
-  if mode == 'wr' then mode = 'write' end
-  if mode ~= 'read' and mode ~= 'write' then error('readiness mode must be read or write', 2) end
+  if mode == 'wr' then
+    mode = 'write'
+  end
+  if mode ~= 'read' and mode ~= 'write' then
+    error('readiness mode must be read or write', 2)
+  end
   return mode
 end
 
 function Host.deliver_readiness(rt, wait)
-  if not (wait and wait.kind == 'external' and wait.external_kind == 'readiness' and wait.resource and wait.feed) then return false end
+  if
+    not (
+      wait
+      and wait.kind == 'external'
+      and wait.external_kind == 'readiness'
+      and wait.resource
+      and wait.feed
+    )
+  then
+    return false
+  end
   rt:deliver(wait.feed, Host.normalise_readiness_mode(wait.mode), true)
   return true
 end
@@ -78,17 +92,25 @@ function Host.deliver_ready(rt, waits, is_ready)
 end
 
 function Host.delay_until(rt, deadline)
-  if deadline == nil then return nil end
+  if deadline == nil then
+    return nil
+  end
   local delay = deadline - rt:now()
-  if delay < 0 then delay = 0 end
+  if delay < 0 then
+    delay = 0
+  end
   return delay
 end
 
 function Host.timeout_ms(rt, deadline)
-  if deadline == nil then return -1 end
+  if deadline == nil then
+    return -1
+  end
   local delay = Host.delay_until(rt, deadline) or 0
   local ms = math.ceil(delay * 1000)
-  if ms < 0 then ms = 0 end
+  if ms < 0 then
+    ms = 0
+  end
   return ms
 end
 
@@ -115,7 +137,6 @@ function Host.nixio(opts)
   return require('fibers.host.nixio').new(opts)
 end
 
-
 function Host.luaposix(opts)
   return require('fibers.host.luaposix').new(opts)
 end
@@ -135,7 +156,9 @@ local host_names = {
 
 function Host.select(name, opts)
   local modname = host_names[name]
-  if not modname then error('unknown host backend ' .. tostring(name), 2) end
+  if not modname then
+    error('unknown host backend ' .. tostring(name), 2)
+  end
   return require(modname).new(opts)
 end
 
@@ -151,9 +174,12 @@ function Host.available()
     else
       reason = mod
     end
-    out[#out + 1] = { name = name, module = modname, supported = not not supported, reason = reason }
+    out[#out + 1] =
+      { name = name, module = modname, supported = not not supported, reason = reason }
   end
-  table.sort(out, function(a, b) return a.name < b.name end)
+  table.sort(out, function(a, b)
+    return a.name < b.name
+  end)
   return out
 end
 
@@ -172,7 +198,5 @@ function Host.default(opts)
 end
 
 Host.Handle = require('fibers.host.handle')
-
-
 
 return Host

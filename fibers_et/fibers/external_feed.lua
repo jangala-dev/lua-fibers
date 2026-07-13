@@ -4,10 +4,14 @@ local ExternalFeed = {}
 ExternalFeed.__index = ExternalFeed
 
 function ExternalFeed.new(runtime, resource, apply, clear)
-  if type(resource) ~= 'table' then error('ExternalFeed requires a resource', 2) end
+  if type(resource) ~= 'table' then
+    error('ExternalFeed requires a resource', 2)
+  end
   apply = apply or resource._fibers_external_deliver
   clear = clear or resource._fibers_external_clear
-  if type(apply) ~= 'function' then error('resource does not support external delivery', 2) end
+  if type(apply) ~= 'function' then
+    error('resource does not support external delivery', 2)
+  end
   return setmetatable({
     _fibers_external_feed = true,
     runtime = runtime,
@@ -18,7 +22,9 @@ function ExternalFeed.new(runtime, resource, apply, clear)
 end
 
 function ExternalFeed.for_resource(runtime, resource)
-  if not runtime then return ExternalFeed.new(runtime, resource) end
+  if not runtime then
+    return ExternalFeed.new(runtime, resource)
+  end
   local cache = rawget(runtime, '_external_feeds')
   if not cache then
     cache = setmetatable({}, { __mode = 'kv' })
@@ -41,7 +47,9 @@ function ExternalFeed:_deliver(...)
 end
 
 function ExternalFeed:_clear(...)
-  if type(self.clear_apply) ~= 'function' then error('resource does not support external clear', 2) end
+  if type(self.clear_apply) ~= 'function' then
+    error('resource does not support external clear', 2)
+  end
   return self.clear_apply(self.resource, ...)
 end
 

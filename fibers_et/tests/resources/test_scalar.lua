@@ -1,4 +1,3 @@
-
 -- Scalar resource contract tests.
 
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
@@ -12,7 +11,9 @@ local TC = require('tests.effect_helpers')
 local function update_scalar(scalar, fn)
   return scalar:read_op():and_then(function(old)
     local new = fn(old)
-    return scalar:write_op(new):map(function() return new, old end)
+    return scalar:write_op(new):map(function()
+      return new, old
+    end)
   end)
 end
 
@@ -24,11 +25,15 @@ local function test_resource_observation_retries_independent_scalar_updates()
   local a, b
 
   rt:spawn_raw(function()
-    a = rt:perform(update_scalar(scalar, function(v) return v + 1 end))
+    a = rt:perform(update_scalar(scalar, function(v)
+      return v + 1
+    end))
   end, 'observation-updater-a')
 
   rt:spawn_raw(function()
-    b = rt:perform(update_scalar(scalar, function(v) return v + 1 end))
+    b = rt:perform(update_scalar(scalar, function(v)
+      return v + 1
+    end))
   end, 'observation-updater-b')
 
   H.assert_status(rt:run(), 'found', 'both contending scalar updates eventually commit')
@@ -45,24 +50,32 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
   local first, second
 
   rt:spawn_raw(function()
-    first = rt:perform(update_scalar(scalar, function(v) return v + 1 end))
+    first = rt:perform(update_scalar(scalar, function(v)
+      return v + 1
+    end))
   end, 'observation-or-else-first')
 
   rt:spawn_raw(function()
-    second = rt:perform(
-      update_scalar(scalar, function(v) return v + 1 end)
-        :map(function(v) return 'primary:' .. tostring(v) end)
-        :or_else(Op.emit(TC.tag('observation.bad-fallback')):and_then(function()
-          return Op.always('fallback')
-        end))
-    )
+    second = rt:perform(update_scalar(scalar, function(v)
+        return v + 1
+      end)
+      :map(function(v)
+        return 'primary:' .. tostring(v)
+      end)
+      :or_else(Op.emit(TC.tag('observation.bad-fallback')):and_then(function()
+        return Op.always('fallback')
+      end)))
   end, 'observation-or-else-second')
 
   H.assert_status(rt:run(), 'found', 'stale primary is retried, not treated as absent')
   H.assert_eq(scalar.value, 2)
   H.assert_eq(first, 1)
   H.assert_eq(second, 'primary:2')
-  H.assert_eq(H.transaction_tags(rt), '', 'fallback effect is not discharged when primary is fresh-possible')
+  H.assert_eq(
+    H.transaction_tags(rt),
+    '',
+    'fallback effect is not discharged when primary is fresh-possible'
+  )
 end
 
 local tests = {
@@ -70,5 +83,7 @@ local tests = {
   test_resource_observation_retries_primary_before_or_else_fallback,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 print('tests/resources/test_scalar.lua: ok')

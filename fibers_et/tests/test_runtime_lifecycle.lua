@@ -11,13 +11,29 @@ local Runtime = require('fibers.kernel.runtime')
 local Op = require('fibers.atoms.op')
 local Rendezvous = require('fibers.atoms.rendezvous')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+local function fail(msg)
+  error(msg, 2)
 end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function assert_eq(actual, expected, msg)
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 local function collect()
-  for _ = 1, 4 do collectgarbage('collect') end
+  for _ = 1, 4 do
+    collectgarbage('collect')
+  end
 end
 
 local function drive(rt, limit)
@@ -26,8 +42,12 @@ local function drive(rt, limit)
   local last
   for _ = 1, limit do
     last = rt:run()
-    if last.tag == 'found' then saw_found = true end
-    if last.tag == 'idle' or last.tag == 'quiescent' or last.tag == 'pending' then return saw_found, last end
+    if last.tag == 'found' then
+      saw_found = true
+    end
+    if last.tag == 'idle' or last.tag == 'quiescent' or last.tag == 'pending' then
+      return saw_found, last
+    end
   end
   fail('runtime did not quiesce')
 end
@@ -81,11 +101,15 @@ do
   local rt = Runtime.new()
   local ch = Rendezvous.new('frontier-rendezvous')
   local got
-  rt:spawn_raw(function() got = rt:perform(ch:get_op()) end, 'receiver')
+  rt:spawn_raw(function()
+    got = rt:perform(ch:get_op())
+  end, 'receiver')
   local st = rt:run()
   assert_eq(st.tag, 'quiescent', 'receiver has no compatible transaction until a sender arrives')
 
-  rt:spawn_raw(function() rt:perform(ch:put_op('x')) end, 'sender')
+  rt:spawn_raw(function()
+    rt:perform(ch:put_op('x'))
+  end, 'sender')
   local found, last = drive(rt)
   assert_truthy(found, 'sender and receiver should rendezvous')
   assert_eq(got, 'x')

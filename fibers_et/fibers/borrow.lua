@@ -15,32 +15,46 @@ Borrow.__index = Borrow
 local next_id = 0
 
 local function list_rights(rights)
-  if rights == nil then return { 'use' } end
-  if type(rights) == 'string' then return { rights } end
-  if type(rights) ~= 'table' then error('borrow rights must be a string or table', 3) end
+  if rights == nil then
+    return { 'use' }
+  end
+  if type(rights) == 'string' then
+    return { rights }
+  end
+  if type(rights) ~= 'table' then
+    error('borrow rights must be a string or table', 3)
+  end
   local out = {}
   local is_array = #rights > 0
   if is_array then
     for i = 1, #rights do
-      if type(rights[i]) ~= 'string' then error('borrow rights list must contain strings', 3) end
+      if type(rights[i]) ~= 'string' then
+        error('borrow rights list must contain strings', 3)
+      end
       out[#out + 1] = rights[i]
     end
   else
     for k, v in pairs(rights) do
       if v then
-        if type(k) ~= 'string' then error('borrow rights map keys must be strings', 3) end
+        if type(k) ~= 'string' then
+          error('borrow rights map keys must be strings', 3)
+        end
         out[#out + 1] = k
       end
     end
     table.sort(out)
   end
-  if #out == 0 then error('borrow rights must not be empty', 3) end
+  if #out == 0 then
+    error('borrow rights must not be empty', 3)
+  end
   return out
 end
 
 local function rights_set(list)
   local set = {}
-  for i = 1, #list do set[list[i]] = true end
+  for i = 1, #list do
+    set[list[i]] = true
+  end
   return set
 end
 
@@ -54,16 +68,28 @@ local function release_all_op(borrow)
     local mode = borrow.right_list[i]
     ops[#ops + 1] = borrow.lease:release_op(borrow.subject, mode_owner(borrow._fibers_id, mode))
   end
-  if #ops == 0 then return Op.always(true) end
-  return Op.all(ops):map(function() return true end)
+  if #ops == 0 then
+    return Op.always(true)
+  end
+  return Op.all(ops):map(function()
+    return true
+  end)
 end
 
 function Borrow.new(grantor_scope, borrower_scope, subject, rights, opts)
   opts = opts or {}
-  if subject == nil then error('Borrow.new expects a subject', 2) end
-  if not grantor_scope or not grantor_scope._fibers_scope then error('Borrow.new expects a grantor Scope', 2) end
-  if not borrower_scope or not borrower_scope._fibers_scope then error('Borrow.new expects a borrower Scope', 2) end
-  if not opts.lease then error('Borrow.new expects opts.lease', 2) end
+  if subject == nil then
+    error('Borrow.new expects a subject', 2)
+  end
+  if not grantor_scope or not grantor_scope._fibers_scope then
+    error('Borrow.new expects a grantor Scope', 2)
+  end
+  if not borrower_scope or not borrower_scope._fibers_scope then
+    error('Borrow.new expects a borrower Scope', 2)
+  end
+  if not opts.lease then
+    error('Borrow.new expects opts.lease', 2)
+  end
   next_id = next_id + 1
   local id = 'borrow-' .. tostring(next_id)
   local list = list_rights(rights)
@@ -99,11 +125,20 @@ function Borrow.rights_list(rights)
 end
 
 function Borrow:has_right(right)
-  if right == nil then return true end
-  if self.rights and (self.rights[right] or self.rights['*']) then return true end
+  if right == nil then
+    return true
+  end
+  if self.rights and (self.rights[right] or self.rights['*']) then
+    return true
+  end
   -- Owners commonly check for a general use right.
   if right == 'use' and self.rights then
-    return self.rights.read or self.rights.write or self.rights.observe or self.rights.use or self.rights['*'] or false
+    return self.rights.read
+      or self.rights.write
+      or self.rights.observe
+      or self.rights.use
+      or self.rights['*']
+      or false
   end
   return false
 end

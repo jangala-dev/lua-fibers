@@ -14,15 +14,21 @@ Socket.__index = Socket
 local next_id = 0
 
 local function clear_hint(self, mode)
-  if self.readiness then UnsafeExternalMutation.clear(self.readiness, mode) end
+  if self.readiness then
+    UnsafeExternalMutation.clear(self.readiness, mode)
+  end
 end
 
 local function callback(self, name, ...)
   local f = self['_' .. name]
-  if type(f) == 'function' then return f(self, ...) end
+  if type(f) == 'function' then
+    return f(self, ...)
+  end
   local host = self.host
   local hf = host and (host['socket_' .. name] or host[name])
-  if type(hf) == 'function' then return hf(host, self.handle or self.key, ..., self) end
+  if type(hf) == 'function' then
+    return hf(host, self.handle or self.key, ..., self)
+  end
   return nil, 'unsupported_' .. tostring(name)
 end
 
@@ -35,7 +41,8 @@ function Socket.new(opts)
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness
+      or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     _read = opts.read,
     _write = opts.write,
@@ -48,7 +55,9 @@ function Socket.new(opts)
 end
 
 function Socket:bind_runtime(rt)
-  if self.runtime == rt and self.feed then return self end
+  if self.runtime == rt and self.feed then
+    return self
+  end
   self.runtime = rt
   if not self.feed then
     local source, feed = rt:readiness(self.key, (self.name or tostring(self.key)) .. ':readiness')
@@ -64,7 +73,9 @@ function Socket:attach_stream(stream)
 end
 
 function Socket:ready_op(mode)
-  if mode == 'write' or mode == 'wr' then return self.readiness:writable_op() end
+  if mode == 'write' or mode == 'wr' then
+    return self.readiness:writable_op()
+  end
   return self.readiness:readable_op()
 end
 
@@ -90,13 +101,17 @@ end
 
 function Socket:shutdown_read(reason)
   local ok, err = callback(self, 'shutdown_read', reason)
-  if ok == nil and err and tostring(err):match('^unsupported_') then return true end
+  if ok == nil and err and tostring(err):match('^unsupported_') then
+    return true
+  end
   return ok, err
 end
 
 function Socket:shutdown_write(reason)
   local ok, err = callback(self, 'shutdown_write', reason)
-  if ok == nil and err and tostring(err):match('^unsupported_') then return true end
+  if ok == nil and err and tostring(err):match('^unsupported_') then
+    return true
+  end
   return ok, err
 end
 

@@ -15,9 +15,13 @@ end
 
 local function default_sleep(seconds)
   seconds = tonumber(seconds) or 0
-  if seconds <= 0 then return true end
+  if seconds <= 0 then
+    return true
+  end
   local whole = math.ceil(seconds)
-  if whole <= 0 then return true end
+  if whole <= 0 then
+    return true
+  end
   return os.execute('sleep ' .. tostring(whole))
 end
 
@@ -57,14 +61,20 @@ function Pure:block(rt, waits, status, _opts)
     local now = rt:now()
     local delay = deadline - now
     if delay > 0 then
-      if self.on_wait then self.on_wait(deadline, delay, waits, status) end
+      if self.on_wait then
+        self.on_wait(deadline, delay, waits, status)
+      end
       self:sleep(delay)
-      if self.on_wake then self.on_wake(deadline, waits, status) end
+      if self.on_wake then
+        self.on_wake(deadline, waits, status)
+      end
     end
     return true, 'time'
   end
 
-  if self.on_unsupported then self.on_unsupported(waits, status) end
+  if self.on_unsupported then
+    self.on_unsupported(waits, status)
+  end
   return nil, 'unsupported-waits'
 end
 

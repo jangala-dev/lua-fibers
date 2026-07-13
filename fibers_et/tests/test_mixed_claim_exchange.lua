@@ -9,7 +9,8 @@ local Scalar = require('fibers.atoms.scalar')
 local Runtime = require('fibers.kernel.runtime')
 
 local rt = Runtime.new()
-local c, ch, s = Counter.new({ initial = 0, min = 0 }), Rendezvous.new('claim-backtrack'), Scalar.new(0)
+local c, ch, s =
+  Counter.new({ initial = 0, min = 0 }), Rendezvous.new('claim-backtrack'), Scalar.new(0)
 local taken, sent
 rt:spawn_raw(function()
   local rows = rt:perform(Op.all({ c:take_op(1), ch:get_op(), s:write_op(2) }))
@@ -17,8 +18,12 @@ rt:spawn_raw(function()
 end, 'taker')
 rt:spawn_raw(function()
   sent = rt:perform(Op.choice({
-    Op.all({ c:give_op(1), ch:put_op('bad'), s:write_op(1) }):map(function() return 'bad' end),
-    Op.all({ c:give_op(1), ch:put_op('good'), s:write_op(2) }):map(function() return 'good' end),
+    Op.all({ c:give_op(1), ch:put_op('bad'), s:write_op(1) }):map(function()
+      return 'bad'
+    end),
+    Op.all({ c:give_op(1), ch:put_op('good'), s:write_op(2) }):map(function()
+      return 'good'
+    end),
   }))
 end, 'giver')
 local status = rt:run()

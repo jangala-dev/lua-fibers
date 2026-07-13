@@ -22,16 +22,26 @@ local next_region = 0
 
 local function copy_list(xs)
   local out = {}
-  for i = 1, #(xs or {}) do out[i] = xs[i] end
+  for i = 1, #(xs or {}) do
+    out[i] = xs[i]
+  end
   return out
 end
 
 local function copy_set(xs)
-  local out = {}; for k, v in pairs(xs or {}) do if v then out[k] = true end end; return out
+  local out = {}
+  for k, v in pairs(xs or {}) do
+    if v then
+      out[k] = true
+    end
+  end
+  return out
 end
 
 local function copy_record(r, public)
-  if not r then return nil end
+  if not r then
+    return nil
+  end
   local out = {
     _fibers_value = true,
     item = r.item,
@@ -57,7 +67,9 @@ end
 local TOMBSTONE = {}
 local next_pmap_key = 0
 local function pmap_key(key)
-  if type(key) ~= 'table' then return key end
+  if type(key) ~= 'table' then
+    return key
+  end
   local id = rawget(key, '_fibers_ledger_key')
   if id == nil then
     next_pmap_key = next_pmap_key + 1
@@ -72,7 +84,12 @@ PMap.__index = function(self, key)
   key = pmap_key(key)
   local delta = rawget(self, '_delta')
   local value = delta[key]
-  if value ~= nil then if value == TOMBSTONE then return nil end; return value end
+  if value ~= nil then
+    if value == TOMBSTONE then
+      return nil
+    end
+    return value
+  end
   local parent = rawget(self, '_parent')
   return parent and parent[key] or nil
 end
@@ -80,9 +97,15 @@ PMap.__newindex = function(self, key, value)
   rawget(self, '_delta')[pmap_key(key)] = value == nil and TOMBSTONE or value
 end
 local function pmap(parent)
-  return setmetatable({ _parent = parent, _delta = {}, _depth = parent and ((rawget(parent, '_depth') or 0) + 1) or 0 }, PMap)
+  return setmetatable({
+    _parent = parent,
+    _delta = {},
+    _depth = parent and ((rawget(parent, '_depth') or 0) + 1) or 0,
+  }, PMap)
 end
-local function pmap_local(map, key) return rawget(map, '_delta')[pmap_key(key)] ~= nil end
+local function pmap_local(map, key)
+  return rawget(map, '_delta')[pmap_key(key)] ~= nil
+end
 
 local function pmap_flatten(map)
   local flat = pmap(nil)
@@ -92,7 +115,9 @@ local function pmap_flatten(map)
     for key, value in pairs(rawget(node, '_delta') or {}) do
       if not seen[key] then
         seen[key] = true
-        if value ~= TOMBSTONE then delta[key] = value end
+        if value ~= TOMBSTONE then
+          delta[key] = value
+        end
       end
     end
     node = rawget(node, '_parent')
@@ -116,7 +141,11 @@ local function compact_region_order(records, order)
     if records[key] ~= nil and seen[key] == nil then
       seen[key] = true
       local copy = { key = key }
-      if tail then tail.next = copy else head = copy end
+      if tail then
+        tail.next = copy
+      else
+        head = copy
+      end
       tail = copy
     end
     node = node.next
@@ -130,22 +159,42 @@ local function copy_region_state(rs, region)
       sealed = region and region.sealed == true or false,
       version = region and region.version or 0,
       count = 0,
-      records = pmap(nil), order = nil, seen = pmap(nil),
+      records = pmap(nil),
+      order = nil,
+      seen = pmap(nil),
     }
   end
   if (rs.count or 0) == 0 then
-    return { sealed = rs.sealed == true, version = rs.version or 0, count = 0,
-      records = pmap(nil), order = nil, seen = pmap(nil) }
+    return {
+      sealed = rs.sealed == true,
+      version = rs.version or 0,
+      count = 0,
+      records = pmap(nil),
+      order = nil,
+      seen = pmap(nil),
+    }
   end
   local compact = (rawget(rs.records, '_depth') or 0) > 24 or (rawget(rs.seen, '_depth') or 0) > 24
   if compact then
     local records = pmap_flatten(rs.records)
     local order, seen = compact_region_order(records, rs.order)
-    return { sealed = rs.sealed == true, version = rs.version or 0, count = rs.count or 0,
-      records = pmap(records), order = order, seen = pmap(seen) }
+    return {
+      sealed = rs.sealed == true,
+      version = rs.version or 0,
+      count = rs.count or 0,
+      records = pmap(records),
+      order = order,
+      seen = pmap(seen),
+    }
   end
-  return { sealed = rs.sealed == true, version = rs.version or 0, count = rs.count or 0,
-    records = pmap(rs.records), order = rs.order, seen = pmap(rs.seen) }
+  return {
+    sealed = rs.sealed == true,
+    version = rs.version or 0,
+    count = rs.count or 0,
+    records = pmap(rs.records),
+    order = rs.order,
+    seen = pmap(rs.seen),
+  }
 end
 
 local function clone_ledger(s)
@@ -159,19 +208,27 @@ local function clone_ledger(s)
   }
 end
 
-local initial_ledger = { regions = pmap(nil), owners = pmap(nil), region_count = 0, owner_count = 0, dirty_regions = {}, dirty_items = {} }
+local initial_ledger = {
+  regions = pmap(nil),
+  owners = pmap(nil),
+  region_count = 0,
+  owner_count = 0,
+  dirty_regions = {},
+  dirty_items = {},
+}
 local ledger = Scalar.machine(initial_ledger, 'region-ledger')
 ledger._location.clone_value = nil
 
 local function sync_projection(s, loc)
   local removed_region = false
   for region in pairs(s.dirty_regions or {}) do
-    local rs = s.regions[region] or {
-      sealed = region.sealed == true,
-      version = region.version or 0,
-      count = 0,
-      records = pmap(nil),
-    }
+    local rs = s.regions[region]
+      or {
+        sealed = region.sealed == true,
+        version = region.version or 0,
+        count = 0,
+        records = pmap(nil),
+      }
     region.sealed, region.version = rs.sealed == true, rs.version or 0
     if (rs.count or 0) == 0 and s.regions[region] ~= nil then
       s.regions[region] = nil
@@ -182,20 +239,28 @@ local function sync_projection(s, loc)
   for item in pairs(s.dirty_items or {}) do
     local old_owner, new_owner = item.owner, s.owners[item]
     if old_owner ~= new_owner then
-      if old_owner and old_owner.owned[item] then old_owner.owned[item] = nil; old_owner.owned_count = old_owner.owned_count - 1 end
+      if old_owner and old_owner.owned[item] then
+        old_owner.owned[item] = nil
+        old_owner.owned_count = old_owner.owned_count - 1
+      end
       if new_owner then
         local rec = (s.regions[new_owner] and s.regions[new_owner].records[item]) or nil
-        if not new_owner.owned[item] then new_owner.owned_count = new_owner.owned_count + 1 end
+        if not new_owner.owned[item] then
+          new_owner.owned_count = new_owner.owned_count + 1
+        end
         new_owner.owned[item] = copy_record(rec, false)
       end
       item.owner_version = (item.owner_version or 0) + 1
     elseif new_owner then
-      new_owner.owned[item] = copy_record(s.regions[new_owner] and s.regions[new_owner].records[item], false)
+      new_owner.owned[item] =
+        copy_record(s.regions[new_owner] and s.regions[new_owner].records[item], false)
     end
     item.owner = new_owner
     item._fibers_retired = new_owner == nil and item.owner_version > 0 or false
   end
-  if (s.owner_count or 0) == 0 then s.owners = pmap(nil) end
+  if (s.owner_count or 0) == 0 then
+    s.owners = pmap(nil)
+  end
   if (s.region_count or 0) == 0 then
     s.regions = pmap(nil)
   elseif removed_region then
@@ -217,7 +282,9 @@ local function event_of(event)
 end
 
 local function with_event(op, event)
-  if not event then return op end
+  if not event then
+    return op
+  end
   return op:and_then(function(...)
     local values = Op._pack(...)
     return Op.consequence(event_of(event)):map(function()
@@ -227,18 +294,23 @@ local function with_event(op, event)
 end
 
 local function region_state(s, region)
-  return s.regions[region] or {
-    sealed = region.sealed == true,
-    version = region.version or 0,
-    count = 0,
-    records = pmap(nil), order = nil, seen = pmap(nil),
-  }
+  return s.regions[region]
+    or {
+      sealed = region.sealed == true,
+      version = region.version or 0,
+      count = 0,
+      records = pmap(nil),
+      order = nil,
+      seen = pmap(nil),
+    }
 end
 
 local function ensure_region(s, region)
   if not pmap_local(s.regions, region) then
     local existing = s.regions[region]
-    if existing == nil then s.region_count = (s.region_count or 0) + 1 end
+    if existing == nil then
+      s.region_count = (s.region_count or 0) + 1
+    end
     s.regions[region] = copy_region_state(existing, region)
   end
   s.dirty_regions[region] = true
@@ -247,7 +319,8 @@ end
 local function record_set(s, region, rs, item, value)
   local old = rs.records[item]
   if value ~= nil and not rs.seen[item] then
-    rs.seen[item] = true; rs.order = { key = pmap_key(item), next = rs.order }
+    rs.seen[item] = true
+    rs.order = { key = pmap_key(item), next = rs.order }
   end
   rs.records[item] = value
   if old == nil and value ~= nil then
@@ -265,7 +338,8 @@ local function record_set(s, region, rs, item, value)
       rs.records, rs.order, rs.seen = records, order, seen
     end
   end
-  s.dirty_items[item] = true; s.dirty_regions[region] = true
+  s.dirty_items[item] = true
+  s.dirty_regions[region] = true
 end
 local function owner_set(s, item, owner)
   local old = s.owners[item]
@@ -288,18 +362,26 @@ local function each_record(rs, fn)
   local node = rs.order
   while node do
     local rec = rs.records[node.key]
-    if rec ~= nil then fn(rec.item, rec) end
+    if rec ~= nil then
+      fn(rec.item, rec)
+    end
     node = node.next
   end
 end
-local function bump(rs) rs.version = (rs.version or 0) + 1 end
+local function bump(rs)
+  rs.version = (rs.version or 0) + 1
+end
 
 local function collect_subtree(records, root, out)
   out = out or {}
   local rec = records[root]
-  if not rec or out[root] then return out end
+  if not rec or out[root] then
+    return out
+  end
   out[root] = rec
-  for i = 1, #(rec.children or {}) do collect_subtree(records, rec.children[i], out) end
+  for i = 1, #(rec.children or {}) do
+    collect_subtree(records, rec.children[i], out)
+  end
   return out
 end
 
@@ -307,9 +389,13 @@ local function subtree_list(records, root, public)
   local out = {}
   local function walk(item)
     local rec = records[item]
-    if not rec then return end
+    if not rec then
+      return
+    end
     out[#out + 1] = copy_record(rec, public)
-    for i = 1, #(rec.children or {}) do walk(rec.children[i]) end
+    for i = 1, #(rec.children or {}) do
+      walk(rec.children[i])
+    end
   end
   walk(root)
   return out
@@ -318,7 +404,9 @@ end
 local function sorted_items(region_state_value, roots_only)
   local out = {}
   each_record(region_state_value, function(item, rec)
-    if not roots_only or rec.parent == nil then out[#out + 1] = item end
+    if not roots_only or rec.parent == nil then
+      out[#out + 1] = item
+    end
   end)
   table.sort(out, function(a, b)
     return tostring(a._fibers_id or a.name or a) < tostring(b._fibers_id or b.name or b)
@@ -327,11 +415,23 @@ local function sorted_items(region_state_value, roots_only)
 end
 
 local function rights_allow(rights, right)
-  if right == nil or rights == nil or rights == '*' then return true end
-  if type(rights) == 'string' then return rights == right or rights == '*' end
-  if type(rights) ~= 'table' then return false end
-  if rights[right] == true or rights['*'] == true then return true end
-  for i = 1, #rights do if rights[i] == right or rights[i] == '*' then return true end end
+  if right == nil or rights == nil or rights == '*' then
+    return true
+  end
+  if type(rights) == 'string' then
+    return rights == right or rights == '*'
+  end
+  if type(rights) ~= 'table' then
+    return false
+  end
+  if rights[right] == true or rights['*'] == true then
+    return true
+  end
+  for i = 1, #rights do
+    if rights[i] == right or rights[i] == '*' then
+      return true
+    end
+  end
   return false
 end
 
@@ -354,15 +454,24 @@ local function owned_spec(item, settle, children, opts)
     children = children or {},
   }
 end
-function Owned.item(item, settle, opts) return owned_spec(item, settle, nil, opts) end
-function Owned.tree(item, settle, children, opts) return owned_spec(item, settle, children or {}, opts) end
+function Owned.item(item, settle, opts)
+  return owned_spec(item, settle, nil, opts)
+end
+function Owned.tree(item, settle, children, opts)
+  return owned_spec(item, settle, children or {}, opts)
+end
 function Owned.inert(item, opts)
-  opts = opts or {}; opts.settle_name = opts.settle_name or 'none'
+  opts = opts or {}
+  opts.settle_name = opts.settle_name or 'none'
   return owned_spec(item, Settlement.none(), nil, opts)
 end
-function Owned.is(x) return type(x) == 'table' and x._fibers_owned_spec == true end
+function Owned.is(x)
+  return type(x) == 'table' and x._fibers_owned_spec == true
+end
 function Owned.from_item(item)
-  if Owned.is(item) then return item end
+  if Owned.is(item) then
+    return item
+  end
   if type(item) ~= 'table' or item._fibers_kind ~= Ownership.Kind then
     error('owned admission expects a Region.Owned value or owned handle', 3)
   end
@@ -375,7 +484,9 @@ end
 local function spec_to_records(spec, parent, out)
   spec = Owned.from_item(spec)
   out = out or {}
-  if out[spec.item] then error('Owned tree contains duplicate item', 3) end
+  if out[spec.item] then
+    error('Owned tree contains duplicate item', 3)
+  end
   local rec = {
     _fibers_value = true,
     item = spec.item,
@@ -406,219 +517,307 @@ local function op_transition(t, payload)
 end
 
 local function query_transition(name, fn)
-  return transition {
-    name = name, mode = 'query', order = 10, supply = 'none',
+  return transition({
+    name = name,
+    mode = 'query',
+    order = 10,
+    supply = 'none',
     step = function(s, p)
       return Ready.same(fn(s, p))
     end,
-  }
+  })
 end
 
 local function select_transition(name, ready, step, order)
-  return transition {
-    name = name, mode = 'select', order = order or 50, supply = 'none',
+  return transition({
+    name = name,
+    mode = 'select',
+    order = order or 50,
+    supply = 'none',
     ready = ready,
     step = function(s, p)
-      if not ready(s, p) then return Wait end
+      if not ready(s, p) then
+        return Wait
+      end
       return step(s, p)
     end,
-  }
+  })
 end
 
 function Region.handle(name, fields)
   local h = Ownership.handle(name, fields)
   return h
 end
-function Region.owned(item, settle, opts) return Owned.item(item, settle, opts) end
-function Region.inert(item, opts) return Owned.inert(item, opts) end
+function Region.owned(item, settle, opts)
+  return Owned.item(item, settle, opts)
+end
+function Region.inert(item, opts)
+  return Owned.inert(item, opts)
+end
 
 function Region.new(name)
   next_region = next_region + 1
   local id = 'region-' .. tostring(next_region)
   local region = setmetatable({
-    name = name or id, owned = {}, owned_count = 0, sealed = false,
-    version = 0, _fibers_id = id, _fibers_kind = Kind,
+    name = name or id,
+    owned = {},
+    owned_count = 0,
+    sealed = false,
+    version = 0,
+    _fibers_id = id,
+    _fibers_kind = Kind,
   }, Region)
   return region
 end
 
 function Region:admit_op(item_or_owned, from_owner)
   local records, root = spec_to_records(Owned.from_item(item_or_owned))
-  local t = select_transition('region.admit',
-    function(s)
-      local rs = region_state(s, self)
-      if rs.sealed then return false end
-      for item in pairs(records) do
-        local owner = s.owners[item]
-        if owner ~= nil and owner ~= from_owner then return false end
+  local t = select_transition('region.admit', function(s)
+    local rs = region_state(s, self)
+    if rs.sealed then
+      return false
+    end
+    for item in pairs(records) do
+      local owner = s.owners[item]
+      if owner ~= nil and owner ~= from_owner then
+        return false
       end
-      return true
-    end,
-    function(s)
-      local ns = clone_ledger(s)
-      local rs = ensure_region(ns, self)
-      for item, rec in pairs(records) do
-        record_set(ns, self, rs, item, copy_record(rec, false))
-        owner_set(ns, item, self)
-      end
-      bump(rs)
-      return ns, root
-    end, 40)
+    end
+    return true
+  end, function(s)
+    local ns = clone_ledger(s)
+    local rs = ensure_region(ns, self)
+    for item, rec in pairs(records) do
+      record_set(ns, self, rs, item, copy_record(rec, false))
+      owner_set(ns, item, self)
+    end
+    bump(rs)
+    return ns, root
+  end, 40)
   return with_event(op_transition(t), {
-    type = 'admitted', item = root, item_id = root._fibers_id,
-    from = from_owner, to = self, to_id = self._fibers_id,
+    type = 'admitted',
+    item = root,
+    item_id = root._fibers_id,
+    from = from_owner,
+    to = self,
+    to_id = self._fibers_id,
   })
 end
 
 function Region:release_op(item)
-  local t = select_transition('region.release',
-    function(s)
-      local rs = region_state(s, self)
-      local rec = rs.records[item]
-      if s.owners[item] ~= self or not rec or rec.parent ~= nil or rec.phase ~= Phase.live then return false end
-      for i = 1, #(rec.children or {}) do if rs.records[rec.children[i]] then return false end end
-      return true
-    end,
-    function(s)
-      local ns = clone_ledger(s); local rs = ensure_region(ns, self)
-      record_set(ns, self, rs, item, nil); owner_set(ns, item, nil); bump(rs)
-      return ns, item
-    end)
+  local t = select_transition('region.release', function(s)
+    local rs = region_state(s, self)
+    local rec = rs.records[item]
+    if s.owners[item] ~= self or not rec or rec.parent ~= nil or rec.phase ~= Phase.live then
+      return false
+    end
+    for i = 1, #(rec.children or {}) do
+      if rs.records[rec.children[i]] then
+        return false
+      end
+    end
+    return true
+  end, function(s)
+    local ns = clone_ledger(s)
+    local rs = ensure_region(ns, self)
+    record_set(ns, self, rs, item, nil)
+    owner_set(ns, item, nil)
+    bump(rs)
+    return ns, item
+  end)
   return with_event(op_transition(t), {
-    type = 'released', item = item, item_id = item._fibers_id,
-    from = self, from_id = self._fibers_id, to = nil,
+    type = 'released',
+    item = item,
+    item_id = item._fibers_id,
+    from = self,
+    from_id = self._fibers_id,
+    to = nil,
   })
 end
 
 function Region:move_op(item, to_region)
-  local t = select_transition('region.move',
-    function(s)
-      local from, to = region_state(s, self), region_state(s, to_region)
-      local rec = from.records[item]
-      if to.sealed or s.owners[item] ~= self or not rec or rec.parent ~= nil then return false end
-      local subtree = collect_subtree(from.records, item)
-      for _, r in pairs(subtree) do if r.phase ~= Phase.live then return false end end
-      return true
-    end,
-    function(s)
-      if to_region == self then return clone_ledger(s), item end
-      local ns = clone_ledger(s)
-      local from, to = ensure_region(ns, self), ensure_region(ns, to_region)
-      local subtree = collect_subtree(from.records, item)
-      for child, rec in pairs(subtree) do
-        record_set(ns, self, from, child, nil)
-        record_set(ns, to_region, to, child, copy_record(rec, false))
-        owner_set(ns, child, to_region)
+  local t = select_transition('region.move', function(s)
+    local from, to = region_state(s, self), region_state(s, to_region)
+    local rec = from.records[item]
+    if to.sealed or s.owners[item] ~= self or not rec or rec.parent ~= nil then
+      return false
+    end
+    local subtree = collect_subtree(from.records, item)
+    for _, r in pairs(subtree) do
+      if r.phase ~= Phase.live then
+        return false
       end
-      bump(from); bump(to)
-      return ns, item
-    end)
+    end
+    return true
+  end, function(s)
+    if to_region == self then
+      return clone_ledger(s), item
+    end
+    local ns = clone_ledger(s)
+    local from, to = ensure_region(ns, self), ensure_region(ns, to_region)
+    local subtree = collect_subtree(from.records, item)
+    for child, rec in pairs(subtree) do
+      record_set(ns, self, from, child, nil)
+      record_set(ns, to_region, to, child, copy_record(rec, false))
+      owner_set(ns, child, to_region)
+    end
+    bump(from)
+    bump(to)
+    return ns, item
+  end)
   return with_event(op_transition(t), {
-    type = 'moved', item = item, item_id = item._fibers_id,
-    from = self, to = to_region, from_id = self._fibers_id, to_id = to_region._fibers_id,
+    type = 'moved',
+    item = item,
+    item_id = item._fibers_id,
+    from = self,
+    to = to_region,
+    from_id = self._fibers_id,
+    to_id = to_region._fibers_id,
   })
 end
 
 function Region:claim_op(item, purpose)
-  local t = select_transition('region.claim',
-    function(s)
-      local rs = region_state(s, self); local root = rs.records[item]
-      if s.owners[item] ~= self or not root or root.parent ~= nil then return false end
-      local subtree = collect_subtree(rs.records, item)
-      for _, rec in pairs(subtree) do if rec.phase ~= Phase.live then return false end end
-      return true
-    end,
-    function(s)
-      local ns = clone_ledger(s); local rs = ensure_region(ns, self)
-      local records = subtree_list(rs.records, item, false)
-      local claim = Claim.new(self, item, records, purpose)
-      local subtree = collect_subtree(rs.records, item)
-      for child, rec in pairs(subtree) do
-        local nr = copy_record(rec, false)
-        nr.phase = Phase.claimed; nr.claim = claim; nr.claim_id = claim.id
-        nr.claim_purpose = purpose; nr.claim_reason = claim.reason
-        record_set(ns, self, rs, child, nr)
+  local t = select_transition('region.claim', function(s)
+    local rs = region_state(s, self)
+    local root = rs.records[item]
+    if s.owners[item] ~= self or not root or root.parent ~= nil then
+      return false
+    end
+    local subtree = collect_subtree(rs.records, item)
+    for _, rec in pairs(subtree) do
+      if rec.phase ~= Phase.live then
+        return false
       end
-      bump(rs)
-      return ns, claim
-    end)
+    end
+    return true
+  end, function(s)
+    local ns = clone_ledger(s)
+    local rs = ensure_region(ns, self)
+    local records = subtree_list(rs.records, item, false)
+    local claim = Claim.new(self, item, records, purpose)
+    local subtree = collect_subtree(rs.records, item)
+    for child, rec in pairs(subtree) do
+      local nr = copy_record(rec, false)
+      nr.phase = Phase.claimed
+      nr.claim = claim
+      nr.claim_id = claim.id
+      nr.claim_purpose = purpose
+      nr.claim_reason = claim.reason
+      record_set(ns, self, rs, child, nr)
+    end
+    bump(rs)
+    return ns, claim
+  end)
   return op_transition(t)
 end
 
 local function valid_claim(s, region, claim)
-  if not Claim.is(claim) or claim.region ~= region then return nil end
+  if not Claim.is(claim) or claim.region ~= region then
+    return nil
+  end
   local rs = region_state(s, region)
   local root = rs.records[claim.root]
-  if not root or root.claim ~= claim then return nil end
+  if not root or root.claim ~= claim then
+    return nil
+  end
   local subtree = collect_subtree(rs.records, claim.root)
   for _, rec in pairs(subtree) do
-    if rec.claim ~= claim or (rec.phase ~= Phase.claimed and rec.phase ~= Phase.failed) then return nil end
+    if rec.claim ~= claim or (rec.phase ~= Phase.claimed and rec.phase ~= Phase.failed) then
+      return nil
+    end
   end
   return subtree
 end
 
 function Region:resolve_claim_op(claim, resolution)
   resolution = resolution or { kind = 'discharge' }
-  local t = select_transition('region.resolve_claim',
-    function(s) return valid_claim(s, self, claim) ~= nil end,
-    function(s)
-      local ns = clone_ledger(s); local rs = ensure_region(ns, self)
-      local subtree = valid_claim(ns, self, claim)
-      local kind = resolution.kind or resolution
-      if kind == 'discharge' then
-        for child in pairs(subtree) do record_set(ns, self, rs, child, nil); owner_set(ns, child, nil) end
-      elseif kind == 'restore' then
-        for child, rec in pairs(subtree) do
-          local nr = copy_record(rec, false)
-          nr.phase = Phase.live; nr.claim = nil; nr.claim_id = nil
-          nr.claim_purpose = nil; nr.claim_reason = nil
-          nr.settlement_failed = nil; nr.settlement_error = nil; nr.settlement_error_message = nil
-          record_set(ns, self, rs, child, nr)
-        end
-      elseif kind == 'fail' then
-        for child, rec in pairs(subtree) do
-          local nr = copy_record(rec, false)
-          nr.phase = Phase.failed; nr.settlement_failed = true
-          nr.settlement_error = resolution.error
-          nr.settlement_error_message = tostring(resolution.error)
-          record_set(ns, self, rs, child, nr)
-        end
-      else
-        error('unknown claim resolution ' .. tostring(kind), 0)
+  local t = select_transition('region.resolve_claim', function(s)
+    return valid_claim(s, self, claim) ~= nil
+  end, function(s)
+    local ns = clone_ledger(s)
+    local rs = ensure_region(ns, self)
+    local subtree = valid_claim(ns, self, claim)
+    local kind = resolution.kind or resolution
+    if kind == 'discharge' then
+      for child in pairs(subtree) do
+        record_set(ns, self, rs, child, nil)
+        owner_set(ns, child, nil)
       end
-      bump(rs)
-      return ns, claim.root
-    end)
+    elseif kind == 'restore' then
+      for child, rec in pairs(subtree) do
+        local nr = copy_record(rec, false)
+        nr.phase = Phase.live
+        nr.claim = nil
+        nr.claim_id = nil
+        nr.claim_purpose = nil
+        nr.claim_reason = nil
+        nr.settlement_failed = nil
+        nr.settlement_error = nil
+        nr.settlement_error_message = nil
+        record_set(ns, self, rs, child, nr)
+      end
+    elseif kind == 'fail' then
+      for child, rec in pairs(subtree) do
+        local nr = copy_record(rec, false)
+        nr.phase = Phase.failed
+        nr.settlement_failed = true
+        nr.settlement_error = resolution.error
+        nr.settlement_error_message = tostring(resolution.error)
+        record_set(ns, self, rs, child, nr)
+      end
+    else
+      error('unknown claim resolution ' .. tostring(kind), 0)
+    end
+    bump(rs)
+    return ns, claim.root
+  end)
   return op_transition(t)
 end
-function Region:discharge_claim_op(claim) return self:resolve_claim_op(claim, { kind = 'discharge' }) end
-function Region:fail_claim_op(claim, err) return self:resolve_claim_op(claim, { kind = 'fail', error = err }) end
-function Region:restore_claim_op(claim) return self:resolve_claim_op(claim, { kind = 'restore' }) end
-function Region:resolve_op(claim, resolution) return self:resolve_claim_op(claim, resolution) end
+function Region:discharge_claim_op(claim)
+  return self:resolve_claim_op(claim, { kind = 'discharge' })
+end
+function Region:fail_claim_op(claim, err)
+  return self:resolve_claim_op(claim, { kind = 'fail', error = err })
+end
+function Region:restore_claim_op(claim)
+  return self:resolve_claim_op(claim, { kind = 'restore' })
+end
+function Region:resolve_op(claim, resolution)
+  return self:resolve_claim_op(claim, resolution)
+end
 
 function Region:seal_op()
-  local t = select_transition('region.seal',
-    function(s) return not region_state(s, self).sealed end,
-    function(s)
-      local ns = clone_ledger(s); local rs = ensure_region(ns, self)
-      rs.sealed = true; bump(rs); return ns, true
-    end)
+  local t = select_transition('region.seal', function(s)
+    return not region_state(s, self).sealed
+  end, function(s)
+    local ns = clone_ledger(s)
+    local rs = ensure_region(ns, self)
+    rs.sealed = true
+    bump(rs)
+    return ns, true
+  end)
   return op_transition(t)
 end
 
 function Region:is_open_op()
-  return op_transition(query_transition('region.is_open', function(s) return not region_state(s, self).sealed end))
+  return op_transition(query_transition('region.is_open', function(s)
+    return not region_state(s, self).sealed
+  end))
 end
 
 function Region:changed_op(version)
-  local t = select_transition('region.changed',
-    function(s) return region_state(s, self).version ~= version end,
-    function(s) return Ready.same(region_state(s, self).version) end)
+  local t = select_transition('region.changed', function(s)
+    return region_state(s, self).version ~= version
+  end, function(s)
+    return Ready.same(region_state(s, self).version)
+  end)
   return op_transition(t)
 end
 
 function Region:owns_op(item)
-  return op_transition(query_transition('region.owns', function(s) return s.owners[item] == self end))
+  return op_transition(query_transition('region.owns', function(s)
+    return s.owners[item] == self
+  end))
 end
 
 function Region:record_op(item)
@@ -637,28 +836,49 @@ end
 function Region:subtree_op(item)
   return op_transition(query_transition('region.subtree', function(s)
     local rs = region_state(s, self)
-    if not rs.records[item] then return nil end
+    if not rs.records[item] then
+      return nil
+    end
     return subtree_list(rs.records, item, true)
   end))
 end
 
 function Region:members_op()
-  return op_transition(query_transition('region.members', function(s) return sorted_items(region_state(s, self), false) end))
+  return op_transition(query_transition('region.members', function(s)
+    return sorted_items(region_state(s, self), false)
+  end))
 end
 function Region:roots_op()
-  return op_transition(query_transition('region.roots', function(s) return sorted_items(region_state(s, self), true) end))
+  return op_transition(query_transition('region.roots', function(s)
+    return sorted_items(region_state(s, self), true)
+  end))
 end
 function Region:snapshot_op()
   return op_transition(query_transition('region.snapshot', function(s)
     local rs = region_state(s, self)
     local owned, roots, claimed, failed = 0, 0, 0, 0
     each_record(rs, function(_, rec)
-      owned = owned + 1; if rec.parent == nil then roots = roots + 1 end
-      if rec.phase == Phase.claimed then claimed = claimed + 1 end
-      if rec.phase == Phase.failed or rec.settlement_failed then failed = failed + 1 end
+      owned = owned + 1
+      if rec.parent == nil then
+        roots = roots + 1
+      end
+      if rec.phase == Phase.claimed then
+        claimed = claimed + 1
+      end
+      if rec.phase == Phase.failed or rec.settlement_failed then
+        failed = failed + 1
+      end
     end)
-    return { sealed = rs.sealed, open = not rs.sealed, owned_count = owned, root_count = roots,
-      claimed_count = claimed, failed_count = failed, settlement_failed_count = failed, version = rs.version }
+    return {
+      sealed = rs.sealed,
+      open = not rs.sealed,
+      owned_count = owned,
+      root_count = roots,
+      claimed_count = claimed,
+      failed_count = failed,
+      settlement_failed_count = failed,
+      version = rs.version,
+    }
   end))
 end
 function Region:live_op(item)
@@ -671,11 +891,15 @@ function Region:authorise_op(item, right, opts)
   opts = opts or {}
   return op_transition(query_transition('region.authorise', function(s)
     local rec = region_state(s, self).records[item]
-    if s.owners[item] ~= self or not rec then return false, nil end
+    if s.owners[item] ~= self or not rec then
+      return false, nil
+    end
     local phase = rec.phase
     local phase_ok = phase == Phase.live or (opts.allow_claimed == true and phase == Phase.claimed)
     local rights = rec.rights
-    if rights == nil and type(rec.meta) == 'table' then rights = rec.meta.rights end
+    if rights == nil and type(rec.meta) == 'table' then
+      rights = rec.meta.rights
+    end
     return phase_ok and rights_allow(rights, right), phase
   end))
 end
@@ -683,6 +907,4 @@ end
 Region.Kind = Kind
 Region.Phase = Phase
 Region.Owned = Owned
-Region._ledger = ledger
-Region._clone_ledger = clone_ledger
 return Region

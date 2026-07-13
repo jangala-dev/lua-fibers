@@ -19,18 +19,26 @@ local function printf(fmt, ...)
 end
 
 local function normalise_name(test)
-  if type(test) == 'table' then return test.name or test.path end
+  if type(test) == 'table' then
+    return test.name or test.path
+  end
   return tostring(test)
 end
 
 local function normalise_path(test)
-  if type(test) == 'table' then return test.path or test[1] end
+  if type(test) == 'table' then
+    return test.path or test[1]
+  end
   return tostring(test)
 end
 
 local function matches_filter(name, filter)
-  if not filter or filter == '' then return true end
-  if string.find(name, filter, 1, true) then return true end
+  if not filter or filter == '' then
+    return true
+  end
+  if string.find(name, filter, 1, true) then
+    return true
+  end
   local ok, found = pcall(string.find, name, filter)
   return ok and found ~= nil
 end
@@ -77,7 +85,10 @@ function Harness.parse_args(argv, env_prefix)
 end
 
 function Harness.print_help(command)
-  printf('usage: %s [--list] [-v|--verbose] [-k PATTERN|--filter PATTERN] [--fail-fast]', command or 'lua tests/run_all.lua')
+  printf(
+    'usage: %s [--list] [-v|--verbose] [-k PATTERN|--filter PATTERN] [--fail-fast]',
+    command or 'lua tests/run_all.lua'
+  )
   printf('')
   printf('Filters match literal substrings first, then Lua patterns if literal matching fails.')
   printf('Environment: FIBERS_TEST_VERBOSE=1 FIBERS_TEST_FILTER=PATTERN FIBERS_TEST_FAIL_FAST=1')
@@ -121,7 +132,9 @@ function Harness.run(tests, opts)
   end
 
   if opts.list then
-    for i = 1, #selected do printf('%s', normalise_name(selected[i])) end
+    for i = 1, #selected do
+      printf('%s', normalise_name(selected[i]))
+    end
     return { status = 'ok', listed = true, total = #selected, ok = 0, skipped = 0, failed = 0 }
   end
 
@@ -129,13 +142,21 @@ function Harness.run(tests, opts)
   local results = {}
   local start_all = now()
 
-  printf('%s: running %d test%s%s', label, #selected, #selected == 1 and '' or 's', opts.filter and (' matching ' .. tostring(opts.filter)) or '')
+  printf(
+    '%s: running %d test%s%s',
+    label,
+    #selected,
+    #selected == 1 and '' or 's',
+    opts.filter and (' matching ' .. tostring(opts.filter)) or ''
+  )
 
   for i = 1, #selected do
     local test = selected[i]
     local name = normalise_name(test)
     local path = normalise_path(test)
-    if opts.verbose then printf('test %d/%d %s', i, #selected, name) end
+    if opts.verbose then
+      printf('test %d/%d %s', i, #selected, name)
+    end
 
     local previous = rawget(_G, '_FIBERS_TEST_HARNESS')
     local previous_print = _G.print
@@ -153,11 +174,16 @@ function Harness.run(tests, opts)
     io.write = previous_io_write
 
     local status, detail = classify_result(ok, result_or_err)
-    if status == 'ok' then counts.ok = counts.ok + 1
-    elseif status == 'skip' then counts.skipped = counts.skipped + 1
-    else counts.failed = counts.failed + 1 end
+    if status == 'ok' then
+      counts.ok = counts.ok + 1
+    elseif status == 'skip' then
+      counts.skipped = counts.skipped + 1
+    else
+      counts.failed = counts.failed + 1
+    end
 
-    results[#results + 1] = { name = name, path = path, status = status, detail = detail, elapsed = elapsed }
+    results[#results + 1] =
+      { name = name, path = path, status = status, detail = detail, elapsed = elapsed }
 
     if status == 'ok' then
       printf('ok   %-42s %.3fs', name, elapsed)
@@ -165,12 +191,22 @@ function Harness.run(tests, opts)
       printf('skip %-42s %s', name, tostring(detail or 'skipped'))
     else
       printf('FAIL %-42s %s', name, tostring(detail))
-      if opts.fail_fast then break end
+      if opts.fail_fast then
+        break
+      end
     end
   end
 
   local elapsed_all = now() - start_all
-  printf('%s: summary: %d ok, %d skipped, %d failed, %d total in %.3fs', label, counts.ok, counts.skipped, counts.failed, counts.total, elapsed_all)
+  printf(
+    '%s: summary: %d ok, %d skipped, %d failed, %d total in %.3fs',
+    label,
+    counts.ok,
+    counts.skipped,
+    counts.failed,
+    counts.total,
+    elapsed_all
+  )
 
   if counts.failed > 0 then
     for i = 1, #results do

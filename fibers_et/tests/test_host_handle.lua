@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 local Inspect = require('tests.flow_inspect')
 
 local fibers = require('fibers')
@@ -9,10 +9,30 @@ local Region = fibers.Region
 local Stream = fibers.Stream
 local Handle = require('fibers.host.handle')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 local function run(rt, host, iters)
   return Runner.run(rt, { host = host, max_iterations = iters or 80 })
@@ -20,9 +40,13 @@ end
 
 local function drive_until(rt, host, pred, label, iters)
   for _ = 1, (iters or 20) do
-    if pred() then return true end
+    if pred() then
+      return true
+    end
     run(rt, host, 80)
-    if pred() then return true end
+    if pred() then
+      return true
+    end
   end
   fail(label or 'runtime did not reach expected state')
 end
@@ -44,7 +68,9 @@ do
   assert_status(st, 'pending')
   assert_truthy(stream, 'stream should open before waiting for input')
   handle:feed_read('ping')
-  drive_until(rt, host, function() return got == 'ping' end, 'handle read should deliver bytes')
+  drive_until(rt, host, function()
+    return got == 'ping'
+  end, 'handle read should deliver bytes')
   assert_eq(got, 'ping')
 end
 
@@ -65,10 +91,15 @@ do
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil, 'write pump should hold a lease while host write is blocked')
+  assert_truthy(
+    stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil,
+    'write pump should hold a lease while host write is blocked'
+  )
   assert_eq(handle:written(), '')
   handle:unblock_writes()
-  drive_until(rt, host, function() return flushed == true end, 'handle write should flush')
+  drive_until(rt, host, function()
+    return flushed == true
+  end, 'handle write should flush')
   assert_eq(handle:written(), 'hello')
 end
 
@@ -79,7 +110,9 @@ do
   assert_truthy(ok, 'fibers.host.fd should be require-able')
   assert_truthy(type(Fd.select) == 'function', 'fd registry should expose select')
   assert_truthy(type(Fd.available) == 'function', 'fd registry should expose available')
-  local ok_sel, backend = pcall(function() return Fd.select('luajit') end)
+  local ok_sel, backend = pcall(function()
+    return Fd.select('luajit')
+  end)
   assert_truthy(ok_sel and backend, 'fd registry should select luajit backend')
 end
 

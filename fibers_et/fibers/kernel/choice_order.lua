@@ -16,7 +16,9 @@ end
 
 local function initial_seed(x)
   local seed = residue(x)
-  if seed == 0 then return 1 end
+  if seed == 0 then
+    return 1
+  end
   return seed
 end
 
@@ -24,14 +26,23 @@ local function step(state, salt)
   return (state * MUL + residue(salt)) % MOD
 end
 
-function M.indices(runtime, task, occurrence, n)
+function M.indices(runtime, task, occurrence, n, component_generation)
   local order = {}
-  for i = 1, n do order[i] = i end
-  if n < 2 then return order end
+  for i = 1, n do
+    order[i] = i
+  end
+  if n < 2 then
+    return order
+  end
 
   local state = initial_seed(runtime.choice_seed)
-  state = step(state, runtime.epoch or 0)
-  state = step(state, runtime.pending_generation or 0)
+  if type(component_generation) == 'table' then
+    state = step(state, component_generation.epoch or 0)
+    state = step(state, component_generation.pending or 0)
+  else
+    state = step(state, runtime.epoch or 0)
+    state = step(state, component_generation or runtime.pending_generation or 0)
+  end
   state = step(state, task.root_id or 0)
   state = step(state, task.id or 0)
   state = step(state, occurrence or 0)

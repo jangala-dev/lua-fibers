@@ -5,21 +5,37 @@ local Op = require('fibers.atoms.op')
 local Effect = require('fibers.atoms.effect')
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
+local function fail(msg)
+  error(msg, 2)
+end
 local function assert_eq(a, b, msg)
-  if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
 end
 local function assert_status(st, tag, msg)
-  if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
 end
 
 local fired = {}
 local DefeatKind
-DefeatKind = Effect.kind {
+DefeatKind = Effect.kind({
   name = 'test-defeat',
   order = 40,
-  key = function(payload) return payload.id end,
-  merge = function(a, _b) return a end,
+  key = function(payload)
+    return payload.id
+  end,
+  merge = function(a, _b)
+    return a
+  end,
   prepare = function(_rt, payload)
     return {
       kind = DefeatKind,
@@ -30,7 +46,7 @@ DefeatKind = Effect.kind {
       end,
     }
   end,
-}
+})
 
 local function defeat(id)
   return Effect.of(DefeatKind, { id = id })
@@ -42,10 +58,7 @@ do
   local got
   local rt = Runtime.new({ choice_seed = 2 })
   rt:spawn_raw(function()
-    got = rt:perform(Op.choice(
-      Op.always('winner'),
-      Op.always('loser'):on_defeat(defeat('loser'))
-    ))
+    got = rt:perform(Op.choice(Op.always('winner'), Op.always('loser'):on_defeat(defeat('loser'))))
   end, 'defeat-loser')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner')
@@ -58,10 +71,7 @@ do
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    got = rt:perform(Op.choice(
-      Op.always('selected'):on_defeat(defeat('selected')),
-      Op.never()
-    ))
+    got = rt:perform(Op.choice(Op.always('selected'):on_defeat(defeat('selected')), Op.never()))
   end, 'defeat-selected')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'selected')
@@ -86,10 +96,9 @@ do
   fired = {}
   local rt = Runtime.new({ quiet_deadlock = true })
   rt:spawn_raw(function()
-    rt:perform(Op.choice(
-      Op.never():on_defeat(defeat('left')),
-      Op.never():on_defeat(defeat('right'))
-    ))
+    rt:perform(
+      Op.choice(Op.never():on_defeat(defeat('left')), Op.never():on_defeat(defeat('right')))
+    )
   end, 'defeat-no-commit')
   assert_status(rt:run(), 'quiescent')
   assert_eq(#fired, 0)

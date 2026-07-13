@@ -8,11 +8,18 @@ local Interest = {}
 local next_id = 0
 
 local function stable_resource_id(resource)
-  if resource == nil then return nil end
-  if type(resource) ~= 'table' then return tostring(resource) end
-  if resource._fibers_id then return tostring(resource._fibers_id) end
+  if resource == nil then
+    return nil
+  end
+  if type(resource) ~= 'table' then
+    return tostring(resource)
+  end
+  if resource._fibers_id then
+    return tostring(resource._fibers_id)
+  end
   next_id = next_id + 1
-  resource._fibers_interest_id = resource._fibers_interest_id or ('interest-resource-' .. tostring(next_id))
+  resource._fibers_interest_id = resource._fibers_interest_id
+    or ('interest-resource-' .. tostring(next_id))
   return resource._fibers_interest_id
 end
 
@@ -42,9 +49,13 @@ function Interest.external(resource, interest, detail)
   local rid = stable_resource_id(resource)
   local key = tostring(rid) .. ':' .. tostring(interest or 'ready')
   detail = detail or {}
-  if detail.resource_key == nil and detail.key ~= nil then detail.resource_key = detail.key end
+  if detail.resource_key == nil and detail.key ~= nil then
+    detail.resource_key = detail.key
+  end
   -- Compatibility for existing readiness host adapters.
-  if detail.readiness_key == nil and detail.key ~= nil then detail.readiness_key = detail.key end
+  if detail.readiness_key == nil and detail.key ~= nil then
+    detail.readiness_key = detail.key
+  end
   detail.resource = resource
   detail.interest = interest or 'ready'
   detail.external_kind = detail.external_kind or detail.kind or resource and resource.kind
@@ -90,6 +101,5 @@ function Interest.summarise(list)
   end
   return out
 end
-
 
 return Interest

@@ -11,10 +11,14 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local fibers = require('fibers')
 local Settlement = require('fibers.internal.settlement')
 
-local function yn(v) return v and 'yes' or 'no' end
+local function yn(v)
+  return v and 'yes' or 'no'
+end
 
 local function named(x)
-  if type(x) ~= 'table' then return tostring(x) end
+  if type(x) ~= 'table' then
+    return tostring(x)
+  end
   return x.name or x._fibers_id or tostring(x)
 end
 
@@ -46,11 +50,12 @@ rt:spawn_raw(function()
 
   -- Without receiver participation, offer_op cannot close its custody-offer rendezvous.
   -- The fallback branch commits and ownership remains with request.
-  result.offer_without_accept = rt:perform(
-    request:offer_op(session, supervisor)
-      :map(function() return 'unexpected custody offer' end)
-      :or_else(fibers.always('no accept; no custody offer'))
-  )
+  result.offer_without_accept = rt:perform(request
+    :offer_op(session, supervisor)
+    :map(function()
+      return 'unexpected custody offer'
+    end)
+    :or_else(fibers.always('no accept; no custody offer')))
   result.request_still_owns = rt:perform(request:owns_op(session))
   result.supervisor_owns_before = rt:perform(supervisor:owns_op(session))
 
@@ -82,7 +87,9 @@ rt:spawn_raw(function()
 end, 'custody-offer-root')
 
 local st
-repeat st = rt:run() until st.tag ~= 'found'
+repeat
+  st = rt:run()
+until st.tag ~= 'found'
 
 assert(result.accepted.item)
 assert(result.request_still_owns == true)
@@ -98,10 +105,22 @@ print('spawned task owner:          ' .. result.spawned_owner)
 print('offer without accept:        ' .. result.offer_without_accept)
 print('request still owns then?     ' .. yn(result.request_still_owns))
 print('supervisor owns before?      ' .. yn(result.supervisor_owns_before))
-print('custody offer accepted:    ' .. named(result.accepted.item) .. ' from ' .. named(result.accepted.from) .. ' to ' .. named(result.accepted.to))
+print(
+  'custody offer accepted:    '
+    .. named(result.accepted.item)
+    .. ' from '
+    .. named(result.accepted.from)
+    .. ' to '
+    .. named(result.accepted.to)
+)
 print('request owns after?          ' .. yn(result.request_owns_after))
 print('supervisor owns after?       ' .. yn(result.supervisor_owns_after))
-print('registry owner after commit: ' .. result.registry_after.owner .. ' / ' .. result.registry_after.task)
+print(
+  'registry owner after commit: '
+    .. result.registry_after.owner
+    .. ' / '
+    .. result.registry_after.task
+)
 print('task await result:            ' .. tostring(result.await[1]))
 print('supervisor owns after release? ' .. yn(result.supervisor_owns_released))
 print('request sealed?              ' .. yn(result.request_state.sealed))

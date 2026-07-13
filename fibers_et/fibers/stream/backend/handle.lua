@@ -12,7 +12,9 @@ Backend.__index = Backend
 local next_id = 0
 
 local function ensure_handle(h)
-  if type(h) ~= 'table' then error('handle backend expects a HostHandle table', 3) end
+  if type(h) ~= 'table' then
+    error('handle backend expects a HostHandle table', 3)
+  end
   if type(h.read) ~= 'function' or type(h.write) ~= 'function' then
     error('handle backend expects read/write methods', 3)
   end
@@ -41,14 +43,18 @@ end
 function Backend:bind_runtime(rt)
   self.runtime = rt
   local h = self.handle
-  if h and type(h.bind_runtime) == 'function' then h:bind_runtime(rt) end
+  if h and type(h.bind_runtime) == 'function' then
+    h:bind_runtime(rt)
+  end
   return self
 end
 
 function Backend:attach_stream(stream)
   self.stream = stream
   local h = self.handle
-  if h and type(h.attach_stream) == 'function' then h:attach_stream(stream) end
+  if h and type(h.attach_stream) == 'function' then
+    h:attach_stream(stream)
+  end
   return self
 end
 
@@ -69,17 +75,23 @@ function Backend:write(bytes)
 end
 
 function Backend:shutdown_read(reason)
-  if type(self.handle.shutdown_read) == 'function' then return self.handle:shutdown_read(reason) end
+  if type(self.handle.shutdown_read) == 'function' then
+    return self.handle:shutdown_read(reason)
+  end
   return true
 end
 
 function Backend:shutdown_write(reason)
-  if type(self.handle.shutdown_write) == 'function' then return self.handle:shutdown_write(reason) end
+  if type(self.handle.shutdown_write) == 'function' then
+    return self.handle:shutdown_write(reason)
+  end
   return true
 end
 
 function Backend:close(reason)
-  if type(self.handle.close) == 'function' then return self.handle:close(reason) end
+  if type(self.handle.close) == 'function' then
+    return self.handle:close(reason)
+  end
   self:shutdown_read(reason)
   self:shutdown_write(reason)
   return true

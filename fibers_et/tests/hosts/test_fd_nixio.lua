@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Common = require('tests.hosts.common')
 
@@ -18,8 +18,12 @@ end
 local host = NixioHost.new()
 Fd = host.fd
 Common.assert_truthy(Fd, 'nixio host should expose paired fd backend')
-local ok, err = pcall(function() Common.handle_stream_pipe_smoke('fd_nixio:stream-pipe', host, Fd) end)
+local ok, err = pcall(function()
+  Common.handle_stream_pipe_smoke('fd_nixio:stream-pipe', host, Fd)
+end)
 Common.close_quietly(host)
-if not ok then error(err, 0) end
+if not ok then
+  error(err, 0)
+end
 
 print('tests/hosts/test_fd_nixio.lua: ok')

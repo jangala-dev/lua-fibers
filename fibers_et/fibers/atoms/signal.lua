@@ -1,6 +1,5 @@
 local Op = require('fibers.atoms.op')
 local Scalar = require('fibers.atoms.scalar')
-local Program = require('fibers.kernel.ir')
 local Interest = require('fibers.interest')
 local ExternalFeed = require('fibers.external_feed')
 
@@ -38,35 +37,54 @@ function Signal.new(name)
     version = 0,
   }, Signal)
   signal._location = require('fibers.kernel.store').new_location({
-    name = signal.name .. ':state', merge = 'machine', domain = 'external',
-    value = { ready = false, pack = nil }, owner = signal, clone_value = clone_state,
-    apply = function(v, loc) signal.version = loc.version end,
+    name = signal.name .. ':state',
+    merge = 'machine',
+    domain = 'external',
+    value = { ready = false, pack = nil },
+    owner = signal,
+    clone_value = clone_state,
+    apply = function(v, loc)
+      signal.version = loc.version
+    end,
   })
   signal._fibers_external_deliver = deliver
   signal._fibers_external_clear = clear
+  signal._wait_op = false
   return signal
 end
 
 function Signal:wait_op()
+  if self._wait_op ~= false then
+    return self._wait_op
+  end
   local signal = self
   local transition = Scalar.transition({
-    name = self.name .. ':wait', mode = 'query', supply = 'none',
+    name = self.name .. ':wait',
+    mode = 'query',
+    supply = 'none',
     step = function(state)
-      if not state.ready then return Scalar.Wait end
+      if not state.ready then
+        return Scalar.Wait
+      end
       return Scalar.Ready.same(unpack_(state.pack, 1, state.pack.n))
     end,
   })
-  return Op._resource(self, Kind, Program.machine_transition({
-    location = self._location, resource = self, transition = transition,
+  self._wait_op = Op._compact_resource(self, Kind, 'machine_transition', {
+    location = self._location,
+    resource = self,
+    transition = transition,
+    order = transition.order or 0,
     interest = function(rt)
       return Interest.external(signal, 'ready', {
-        external_kind = 'signal', feed = ExternalFeed.for_resource(rt, signal),
+        external_kind = 'signal',
+        feed = ExternalFeed.for_resource(rt, signal),
       })
     end,
     absence_check = function()
       return not signal._location.value.ready
     end,
-  }))
+  })
+  return self._wait_op
 end
 
 Signal.Kind = Kind

@@ -28,7 +28,7 @@ local function copy_state(st)
   }
 end
 
-local State = Scalar.kind {
+local State = Scalar.kind({
   name = 'pulse.state',
   transitions = {
     signal = {
@@ -36,7 +36,9 @@ local State = Scalar.kind {
       order = 0,
       step = function(st)
         st = copy_state(st)
-        if st.closed then return st, nil end
+        if st.closed then
+          return st, nil
+        end
         st.version = st.version + 1
         return st, st.version
       end,
@@ -46,7 +48,9 @@ local State = Scalar.kind {
       order = 10,
       step = function(st, payload)
         st = copy_state(st)
-        if st.reason == nil and payload.reason ~= nil then st.reason = payload.reason end
+        if st.reason == nil and payload.reason ~= nil then
+          st.reason = payload.reason
+        end
         st.closed = true
         return st, true
       end,
@@ -59,50 +63,69 @@ local State = Scalar.kind {
       end,
       step = function(st, payload)
         st = copy_state(st)
-        if st.version > payload.last_seen then return st, st.version, nil end
-        if st.closed then return st, nil, st.reason end
+        if st.version > payload.last_seen then
+          return st, st.version, nil
+        end
+        if st.closed then
+          return st, nil, st.reason
+        end
         return nil
       end,
     },
   },
-}
+})
 
 function Pulse.new(opts, name)
   opts = opts or {}
-  if type(opts) == 'number' then opts = { initial_version = opts } end
+  if type(opts) == 'number' then
+    opts = { initial_version = opts }
+  end
   next_id = next_id + 1
   local id = 'pulse-' .. tostring(next_id)
   local pname = opts.name or name or id
   local initial = opts.initial_version
-  if initial == nil then initial = opts.version or 0 end
+  if initial == nil then
+    initial = opts.version or 0
+  end
   non_negative_integer(initial, 'pulse initial_version', 2)
   return setmetatable({
     name = pname,
-    state = opts.state or Scalar.new({ version = initial, closed = false, reason = nil }, pname .. ':state'),
+    state = opts.state
+      or Scalar.new({ version = initial, closed = false, reason = nil }, pname .. ':state'),
   }, Pulse)
 end
 
 function Pulse:snapshot_op()
-  return self.state:read_op():map(function(st) return copy_state(st) end)
+  return self.state:read_op():map(function(st)
+    return copy_state(st)
+  end)
 end
 
 function Pulse:version_op()
-  return self.state:read_op():map(function(st) return (st and st.version) or 0 end)
+  return self.state:read_op():map(function(st)
+    return (st and st.version) or 0
+  end)
 end
 
 function Pulse:why_op()
-  return self.state:read_op():map(function(st) return st and st.reason or nil end)
+  return self.state:read_op():map(function(st)
+    return st and st.reason or nil
+  end)
 end
 
 function Pulse:is_closed_op()
-  return self.state:read_op():map(function(st) return st and st.closed == true or false end)
+  return self.state:read_op():map(function(st)
+    return st and st.closed == true or false
+  end)
 end
 
 function Pulse:signal_op()
   return Op.guard(function()
     return self.state:read_op():and_then(function(st)
       st = copy_state(st)
-      if st.closed then return Op.always(nil) end
+      if st.closed then
+        return Op.always(nil)
+      end
       return self.state:transition_op(State:transition('signal'))
     end)
   end)

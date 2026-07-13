@@ -74,6 +74,52 @@ An incomplete declaration can make dependency isolation unsound.  During tests,
 rejects declarations which do not cover the returned operation.  Omitting a
 declaration is always correct and uses the slower opaque path.
 
+## Certified symmetry and adaptive search reuse
+
+For homogeneous pending work, advanced code may certify that complete operation
+occurrences are observationally interchangeable:
+
+```lua
+local send = queue:put_op(item):certify_symmetry('homogeneous-worker-send')
+```
+
+The certificate includes the fibre continuation after commit.  The runtime does
+not infer symmetry, and an incorrect certificate can remove a valid committed
+world.  Use a key only when any occurrence carrying that key may replace any
+other without changing transactional behaviour.
+
+The production trail machine also retains bounded `Unknown` searches by default,
+resuming their explicit alternative stack while a conservative dependency stamp
+remains valid.  This is controlled by `resumable_search`.
+
+The runtime also enables three conservative search accelerators by default:
+
+- a narrow no-supplier refutation cache;
+- exact per-plan refutation memoisation; and
+- dependency-stamped reuse of unchanged plans across driver cycles.
+
+They are disabled automatically for opaque continuations and external
+dependencies. `Unknown` is never cached, and positive cross-cycle reuse is
+limited to effect-free candidates without negative guards.  The defaults are
+adaptive: memo tables begin after 48 plan-wide search calls on structurally
+large plans, and plan stamps are omitted until the total pending frontier
+reaches sixteen.
+
+They may be controlled explicitly when measuring or embedding:
+
+```lua
+local rt = fibers.Runtime.new({
+  refutation_cache = true,
+  state_memoization = true,
+  certified_symmetry = true,
+  plan_reuse = true,
+  resumable_search = true,
+  refutation_cache_min_steps = 48,
+  state_memoization_min_steps = 48,
+  plan_reuse_threshold = 16,
+})
+```
+
 ## Unordered choice and principled priority
 
 `choice` expresses indifference between acceptable committed worlds:
@@ -220,9 +266,11 @@ The active semantic kernel is deliberately small:
 fibers/kernel/ir.lua            primitive programme records and footprints
 fibers/kernel/store.lua         versioned locations, views, deltas and commit
 fibers/kernel/choice_order.lua  deterministic unordered-choice permutation
-fibers/kernel/dependency_index.lua incremental pending dependency components
-fibers/kernel/branch_policy.lua  constrained residual branch ordering
+fibers/kernel/dependencies.lua pending components, validation and coordination
+fibers/kernel/frontier.lua      blocked-frontier analysis and branch ordering
+fibers/kernel/adaptive_search.lua adaptive memoisation and retained proofs
 fibers/kernel/machine.lua       trail-based proof and refutation search
+fibers/kernel/search_session.lua retained search lifecycle
 fibers/kernel/runtime.lua       fibres, recruitment, scheduling and host boundary
 ```
 
@@ -243,7 +291,8 @@ texlua tests/run_protected_fallback.lua
 texlua tests/test_reference_lazy.lua
 ```
 
-The maintained aggregate suite currently contains 66 test programmes. Protected-call fallback and lazy-reference loading also run in isolated interpreters. Useful runner options are:
+The maintained aggregate suite currently contains 72 test programmes. Protected-call fallback and
+lazy-reference loading also run in isolated interpreters. Useful runner options are:
 
 ```sh
 lua tests/run_all.lua --list
@@ -262,11 +311,27 @@ texlua performance/suite.lua
 FIBERS_PERF_TIERS=all texlua performance/suite.lua
 texlua performance/seed_sweep.lua
 texlua performance/architecture_suite.lua
+texlua performance/advanced_suite.lua
 ```
 
 `performance/README.md` describes the tiered validating suite, optional runtime
 instrumentation, seed sweeps and CSV regression checks. Benchmarks are for local
 regression work, not cross-machine claims.
+
+## Formatting
+
+Lua source is formatted with StyLua using the repository `.stylua.toml`. The
+configured width is 100 columns, with two-space indentation and expanded simple
+statements. Run:
+
+```sh
+scripts/check-format.sh
+```
+
+The ordinary `fibers` facade exposes application and embedding APIs. Trusted
+facility authors may require `fibers.kernel` for `Runtime`, `IR` and `Store`;
+the production machine, instrumentation implementation and prototype `Phase`
+remain internal or explicitly imported modules.
 
 ## Documentation
 
@@ -280,7 +345,8 @@ docs/internals.md           compact kernel and execution pipeline
 docs/comparison.md          comparison with CSP, CML, Transactional Events and Reagents
 docs/compatibility.md       portable coding constraints and current test environment
 performance/README.md        instrumentation and performance regression workflow
-PERFORMANCE-NOTES.md         current findings and optimisation roadmap
+docs/notes/performance/      performance findings and optimisation history
 ```
 
-The repository remains work in progress. Transactions are coherent within one runtime commit; they are not crash-durable database or distributed transactions.
+The repository remains work in progress. Transactions are coherent within one runtime commit; they
+are not crash-durable database or distributed transactions.

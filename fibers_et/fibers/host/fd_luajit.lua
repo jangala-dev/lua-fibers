@@ -10,15 +10,19 @@ local function unsupported(reason)
 end
 
 local ok_ffi, ffi = pcall(require, 'ffi')
-if not ok_ffi or type(ffi) ~= 'table' then return unsupported('LuaJIT ffi not available') end
+if not ok_ffi or type(ffi) ~= 'table' then
+  return unsupported('LuaJIT ffi not available')
+end
 
 local bit = rawget(_G, 'bit')
-if not bit then return unsupported('LuaJIT bit operations not available') end
+if not bit then
+  return unsupported('LuaJIT bit operations not available')
+end
 
-return Common.new {
+return Common.new({
   name = 'fd_luajit',
   error_prefix = 'fibers.host.fd_luajit',
   ffi = ffi,
   bit = bit,
   C = ffi.C,
-}
+})

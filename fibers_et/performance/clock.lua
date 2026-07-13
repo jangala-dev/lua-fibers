@@ -17,7 +17,9 @@ else
     M.now = os.clock
     M.name = 'os.clock'
   else
-    M.now = function() return 0 end
+    M.now = function()
+      return 0
+    end
     M.name = 'unavailable'
   end
 end

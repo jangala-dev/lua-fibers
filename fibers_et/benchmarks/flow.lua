@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 local fibers = require('fibers')
 local Op = fibers.Op
 local Flow = fibers.Flow
@@ -15,11 +15,14 @@ fibers.run(function()
     end
   elseif mode == 'tensor' then
     for _ = 1, n do
-      local rows = fibers.perform(Op.tensor({ inlet:write_op('abcdefgh'), outlet:read_exactly_op(8) }))
+      local rows =
+        fibers.perform(Op.tensor({ inlet:write_op('abcdefgh'), outlet:read_exactly_op(8) }))
       total = total + rows[1][1] + #rows[2][1]
     end
   elseif mode == 'fill' then
-    for _ = 1, n do fibers.perform(inlet:write_op('x')) end
+    for _ = 1, n do
+      fibers.perform(inlet:write_op('x'))
+    end
     total = #fibers.perform(outlet:read_exactly_op(n))
     assert(total == n)
     print(total)

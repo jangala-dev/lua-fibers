@@ -11,13 +11,21 @@ local ok_poll, poll_mod = pcall(require, 'posix.poll')
 local ok_time, ptime = pcall(require, 'posix.time')
 local ok_errno, errno = pcall(require, 'posix.errno')
 
-if not ok_poll or type(poll_mod) ~= 'table'
-  or not ok_time or type(ptime) ~= 'table'
-  or not ok_errno or type(errno) ~= 'table'
+if
+  not ok_poll
+  or type(poll_mod) ~= 'table'
+  or not ok_time
+  or type(ptime) ~= 'table'
+  or not ok_errno
+  or type(errno) ~= 'table'
 then
   return {
-    is_supported = function() return false end,
-    new = function() error('fibers.host.luaposix requires posix.poll, posix.time and posix.errno', 2) end,
+    is_supported = function()
+      return false
+    end,
+    new = function()
+      error('fibers.host.luaposix requires posix.poll, posix.time and posix.errno', 2)
+    end,
   }
 end
 
@@ -33,20 +41,29 @@ end
 
 local function monotonic()
   local ts, err = ptime.clock_gettime(CLOCK_MONOTONIC)
-  if not ts then error('posix.clock_gettime(CLOCK_MONOTONIC) failed: ' .. tostring(err), 2) end
+  if not ts then
+    error('posix.clock_gettime(CLOCK_MONOTONIC) failed: ' .. tostring(err), 2)
+  end
   return ts_to_seconds(ts)
 end
 
 local function nanosleep(seconds)
   seconds = tonumber(seconds) or 0
-  if seconds <= 0 then return true end
+  if seconds <= 0 then
+    return true
+  end
   local sec = math.floor(seconds)
   local nsec = math.floor((seconds - sec) * 1e9 + 0.5)
-  if nsec >= 1000000000 then sec = sec + 1; nsec = nsec - 1000000000 end
+  if nsec >= 1000000000 then
+    sec = sec + 1
+    nsec = nsec - 1000000000
+  end
   local req = { tv_sec = sec, tv_nsec = nsec }
   while true do
     local ok, err, eno, rem = ptime.nanosleep(req)
-    if ok then return true end
+    if ok then
+      return true
+    end
     if eno == errno.EINTR and rem then
       req = rem
     else
@@ -56,13 +73,23 @@ local function nanosleep(seconds)
 end
 
 local function fd_of(key)
-  if type(key) == 'number' then return key end
-  if type(key) == 'string' and tonumber(key) then return tonumber(key) end
+  if type(key) == 'number' then
+    return key
+  end
+  if type(key) == 'string' and tonumber(key) then
+    return tonumber(key)
+  end
   if type(key) == 'table' then
-    if type(key.fd) == 'number' then return key.fd end
+    if type(key.fd) == 'number' then
+      return key.fd
+    end
     if type(key.fileno) == 'function' then
-      local ok, fd = pcall(function() return key:fileno() end)
-      if ok and fd ~= nil then return tonumber(fd) end
+      local ok, fd = pcall(function()
+        return key:fileno()
+      end)
+      if ok and fd ~= nil then
+        return tonumber(fd)
+      end
     end
   end
   return tonumber(key)
@@ -84,7 +111,11 @@ local function collect_readiness(waits)
         fds[fd] = { events = rec.events }
       end
       local mode = w.mode or 'read'
-      if mode == 'write' or mode == 'wr' then rec.events.OUT = true else rec.events.IN = true end
+      if mode == 'write' or mode == 'wr' then
+        rec.events.OUT = true
+      else
+        rec.events.IN = true
+      end
       rec.waits[#rec.waits + 1] = w
     end
   end
@@ -100,7 +131,9 @@ end
 
 function Posix.new(opts)
   opts = opts or {}
-  if not Posix.is_supported() then error('fibers.host.luaposix: required luaposix functions are unavailable', 2) end
+  if not Posix.is_supported() then
+    error('fibers.host.luaposix: required luaposix functions are unavailable', 2)
+  end
   local self = setmetatable({
     kind = 'luaposix',
     name = 'luaposix',
@@ -109,9 +142,12 @@ function Posix.new(opts)
     on_wake = opts.on_wake,
     on_unsupported = opts.on_unsupported,
   }, Posix)
-  self.now = function(_rt) return monotonic() end
+  self.now = function(_rt)
+    return monotonic()
+  end
   self.fd = require('fibers.host.fd_luaposix')
-  self.capabilities = { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
+  self.capabilities =
+    { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
   return self
 end
 
@@ -125,32 +161,47 @@ function Posix:block(rt, waits, status, _opts)
   local fds, by_fd, unsupported = collect_readiness(waits)
 
   if unsupported then
-    if self.on_unsupported then self.on_unsupported(waits, status) end
+    if self.on_unsupported then
+      self.on_unsupported(waits, status)
+    end
     return nil, 'unsupported-readiness-key'
   end
 
   local have_fd = false
-  for _ in pairs(by_fd) do have_fd = true; break end
+  for _ in pairs(by_fd) do
+    have_fd = true
+    break
+  end
 
   if not have_fd then
     if deadline ~= nil then
       local delay = Host.delay_until(rt, deadline) or 0
       if delay > 0 then
-        if self.on_wait then self.on_wait(deadline, delay, waits, status) end
+        if self.on_wait then
+          self.on_wait(deadline, delay, waits, status)
+        end
         local ok, err = self:sleep(delay)
-        if not ok then error(err, 2) end
-        if self.on_wake then self.on_wake(deadline, waits, status) end
+        if not ok then
+          error(err, 2)
+        end
+        if self.on_wake then
+          self.on_wake(deadline, waits, status)
+        end
       end
       return true, 'time'
     end
-    if self.on_unsupported then self.on_unsupported(waits, status) end
+    if self.on_unsupported then
+      self.on_unsupported(waits, status)
+    end
     return nil, 'unsupported-waits'
   end
 
   local timeout_ms = Host.timeout_ms(rt, deadline)
   local nready, err, eno = poll_fn(fds, timeout_ms)
   if nready == nil then
-    if eno == errno.EINTR then return true, 'poll-interrupted' end
+    if eno == errno.EINTR then
+      return true, 'poll-interrupted'
+    end
     error(tostring(err or eno or 'posix.poll failed'), 2)
   end
 
@@ -167,9 +218,11 @@ function Posix:block(rt, waits, status, _opts)
             local w = rec.waits[i]
             local mode = w.mode or 'read'
             if (mode == 'write' or mode == 'wr') and wr then
-              rt:deliver(w.feed, 'write', true); delivered = true
+              rt:deliver(w.feed, 'write', true)
+              delivered = true
             elseif mode ~= 'write' and mode ~= 'wr' and rd then
-              rt:deliver(w.feed, 'read', true); delivered = true
+              rt:deliver(w.feed, 'read', true)
+              delivered = true
             end
           end
         end
@@ -177,8 +230,12 @@ function Posix:block(rt, waits, status, _opts)
     end
   end
 
-  if delivered then return true, 'readiness' end
-  if deadline ~= nil and rt:now() >= deadline then return true, 'time' end
+  if delivered then
+    return true, 'readiness'
+  end
+  if deadline ~= nil and rt:now() >= deadline then
+    return true, 'time'
+  end
   return true, 'poll'
 end
 

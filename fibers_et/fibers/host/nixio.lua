@@ -9,8 +9,12 @@ local Host = require('fibers.host')
 local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
   return {
-    is_supported = function() return false end,
-    new = function() error('fibers.host.nixio requires nixio', 2) end,
+    is_supported = function()
+      return false
+    end,
+    new = function()
+      error('fibers.host.nixio requires nixio', 2)
+    end,
   }
 end
 
@@ -19,7 +23,9 @@ Nixio.__index = Nixio
 
 local function read_uptime()
   local f = io.open('/proc/uptime', 'r')
-  if not f then return nil end
+  if not f then
+    return nil
+  end
   local line = f:read('*l')
   f:close()
   local first = line and line:match('^%s*(%S+)')
@@ -32,14 +38,21 @@ end
 
 local function nanosleep(seconds)
   seconds = tonumber(seconds) or 0
-  if seconds <= 0 then return true end
+  if seconds <= 0 then
+    return true
+  end
   local deadline = monotonic() + seconds
   while true do
     local remaining = deadline - monotonic()
-    if remaining <= 0 then return true end
+    if remaining <= 0 then
+      return true
+    end
     local sec = math.floor(remaining)
     local nsec = math.floor((remaining - sec) * 1e9 + 0.5)
-    if nsec >= 1000000000 then sec = sec + 1; nsec = nsec - 1000000000 end
+    if nsec >= 1000000000 then
+      sec = sec + 1
+      nsec = nsec - 1000000000
+    end
     local ok, err, eno = nixio.nanosleep(sec, nsec)
     if not ok then
       local msg = tostring(err or eno or '')
@@ -57,7 +70,9 @@ local function poll_flags(...)
 end
 
 local function add_event(events, mode)
-  if events == nil then return poll_flags(mode) end
+  if events == nil then
+    return poll_flags(mode)
+  end
   return poll_flags(events, mode)
 end
 
@@ -78,7 +93,11 @@ local function collect_readiness(waits)
         fds[#fds + 1] = rec
       end
       local mode = w.mode or 'read'
-      if mode == 'write' or mode == 'wr' then rec.events = add_event(rec.events, 'out') else rec.events = add_event(rec.events, 'in') end
+      if mode == 'write' or mode == 'wr' then
+        rec.events = add_event(rec.events, 'out')
+      else
+        rec.events = add_event(rec.events, 'in')
+      end
       rec.waits[#rec.waits + 1] = w
     end
   end
@@ -94,7 +113,9 @@ end
 
 function Nixio.new(opts)
   opts = opts or {}
-  if not Nixio.is_supported() then error('fibers.host.nixio: required nixio functions are unavailable', 2) end
+  if not Nixio.is_supported() then
+    error('fibers.host.nixio: required nixio functions are unavailable', 2)
+  end
   local self = setmetatable({
     kind = 'nixio',
     name = 'nixio',
@@ -103,9 +124,12 @@ function Nixio.new(opts)
     on_wake = opts.on_wake,
     on_unsupported = opts.on_unsupported,
   }, Nixio)
-  self.now = function(_rt) return monotonic() end
+  self.now = function(_rt)
+    return monotonic()
+  end
   self.fd = require('fibers.host.fd_nixio')
-  self.capabilities = { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
+  self.capabilities =
+    { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
   return self
 end
 
@@ -119,7 +143,9 @@ function Nixio:block(rt, waits, status, _opts)
   local fd_recs, _by_key, unsupported = collect_readiness(waits)
 
   if unsupported then
-    if self.on_unsupported then self.on_unsupported(waits, status) end
+    if self.on_unsupported then
+      self.on_unsupported(waits, status)
+    end
     return nil, 'unsupported-readiness-key'
   end
 
@@ -127,14 +153,22 @@ function Nixio:block(rt, waits, status, _opts)
     if deadline ~= nil then
       local delay = Host.delay_until(rt, deadline) or 0
       if delay > 0 then
-        if self.on_wait then self.on_wait(deadline, delay, waits, status) end
+        if self.on_wait then
+          self.on_wait(deadline, delay, waits, status)
+        end
         local ok, err = self:sleep(delay)
-        if not ok then error(err, 2) end
-        if self.on_wake then self.on_wake(deadline, waits, status) end
+        if not ok then
+          error(err, 2)
+        end
+        if self.on_wake then
+          self.on_wake(deadline, waits, status)
+        end
       end
       return true, 'time'
     end
-    if self.on_unsupported then self.on_unsupported(waits, status) end
+    if self.on_unsupported then
+      self.on_unsupported(waits, status)
+    end
     return nil, 'unsupported-waits'
   end
 
@@ -165,9 +199,11 @@ function Nixio:block(rt, waits, status, _opts)
             local w = rec.waits[i]
             local mode = w.mode or 'read'
             if (mode == 'write' or mode == 'wr') and wr then
-              rt:deliver(w.feed, 'write', true); delivered = true
+              rt:deliver(w.feed, 'write', true)
+              delivered = true
             elseif mode ~= 'write' and mode ~= 'wr' and rd then
-              rt:deliver(w.feed, 'read', true); delivered = true
+              rt:deliver(w.feed, 'read', true)
+              delivered = true
             end
           end
         end
@@ -175,8 +211,12 @@ function Nixio:block(rt, waits, status, _opts)
     end
   end
 
-  if delivered then return true, 'readiness' end
-  if deadline ~= nil and rt:now() >= deadline then return true, 'time' end
+  if delivered then
+    return true, 'readiness'
+  end
+  if deadline ~= nil and rt:now() >= deadline then
+    return true, 'time'
+  end
   return true, 'poll'
 end
 

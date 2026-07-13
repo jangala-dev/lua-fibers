@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Common = require('tests.hosts.common')
 
@@ -19,8 +19,12 @@ end
 local host = CffiHost.new()
 Fd = host.fd
 Common.assert_truthy(Fd, 'cffi host should expose paired fd backend')
-local ok, err = pcall(function() Common.handle_stream_pipe_smoke('fd_cffi:stream-pipe', host, Fd) end)
+local ok, err = pcall(function()
+  Common.handle_stream_pipe_smoke('fd_cffi:stream-pipe', host, Fd)
+end)
 Common.close_quietly(host)
-if not ok then error(err, 0) end
+if not ok then
+  error(err, 0)
+end
 
 print('tests/hosts/test_fd_cffi.lua: ok')

@@ -15,7 +15,9 @@ local names = {
 
 function Fd.select(name)
   local modname = names[name]
-  if not modname then error('unknown fd backend ' .. tostring(name), 2) end
+  if not modname then
+    error('unknown fd backend ' .. tostring(name), 2)
+  end
   return require(modname)
 end
 
@@ -31,15 +33,20 @@ function Fd.available()
     else
       reason = mod
     end
-    out[#out + 1] = { name = name, module = modname, supported = not not supported, reason = reason }
+    out[#out + 1] =
+      { name = name, module = modname, supported = not not supported, reason = reason }
   end
-  table.sort(out, function(a, b) return a.name < b.name end)
+  table.sort(out, function(a, b)
+    return a.name < b.name
+  end)
   return out
 end
 
 function Fd.names()
   local out = {}
-  for name in pairs(names) do out[#out + 1] = name end
+  for name in pairs(names) do
+    out[#out + 1] = name
+  end
   table.sort(out)
   return out
 end

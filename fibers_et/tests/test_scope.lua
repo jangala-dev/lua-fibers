@@ -5,7 +5,9 @@ local Settlement = require('fibers.internal.settlement')
 
 local function accept_matching(life, pred)
   return life:accept_op():and_then(function(offer)
-    if pred(offer) then return fibers.always(offer) end
+    if pred(offer) then
+      return fibers.always(offer)
+    end
     return fibers.never()
   end)
 end
@@ -31,7 +33,9 @@ local life_b = fibers.Scope.new('b')
 local task, owned_a, owned_b, report
 local rt2 = fibers.Runtime.new()
 rt2:spawn_raw(function()
-  task = rt2:perform(life_a:spawn_op(function() return 'done' end, { name = 'owned-task' }))
+  task = rt2:perform(life_a:spawn_op(function()
+    return 'done'
+  end, { name = 'owned-task' }))
   owned_a = rt2:perform(life_a:owns_op(task))
   rt2:perform(life_a:move_op(task, life_b))
   owned_b = rt2:perform(life_b:owns_op(task))
@@ -50,7 +54,9 @@ local to = fibers.Scope.new('to')
 local handed, accepted, to_owns
 local rt4 = fibers.Runtime.new()
 rt4:spawn_raw(function()
-  handed = rt4:perform(from:spawn_op(function() return 'custody-transfer' end))
+  handed = rt4:perform(from:spawn_op(function()
+    return 'custody-transfer'
+  end))
   local rows = rt4:perform(fibers.tensor({
     from:offer_op(handed, to),
     to:accept_op(),
@@ -61,7 +67,9 @@ rt4:spawn_raw(function()
   retire(rt4, to, handed)
 end, 'custody-transfer-root')
 local st4
-repeat st4 = rt4:run() until st4.tag ~= 'found'
+repeat
+  st4 = rt4:run()
+until st4.tag ~= 'found'
 assert(st4.tag == 'quiescent' or st4.tag == 'idle')
 assert(accepted.item == handed and accepted.from == from and accepted.to == to)
 assert(to_owns == true)
@@ -73,18 +81,28 @@ local match_to = fibers.Scope.new('match-to')
 local task_a, task_b, rejected_result, accepted_match, owns_a_after, owns_b_after
 local rt_match = fibers.Runtime.new()
 rt_match:spawn_raw(function()
-  task_a = rt_match:perform(match_from_a:spawn_op(function() return 'a' end, { name = 'task-a' }))
-  task_b = rt_match:perform(match_from_b:spawn_op(function() return 'b' end, { name = 'task-b' }))
-  rejected_result = rt_match:perform(
-    fibers.tensor({
+  task_a = rt_match:perform(match_from_a:spawn_op(function()
+    return 'a'
+  end, { name = 'task-a' }))
+  task_b = rt_match:perform(match_from_b:spawn_op(function()
+    return 'b'
+  end, { name = 'task-b' }))
+  rejected_result = rt_match:perform(fibers
+    .tensor({
       match_from_a:offer_op(task_a, match_to),
-      accept_matching(match_to, function(offer) return offer.from_scope == match_from_b end),
-    }):map(function() return 'unexpected' end)
-      :or_else(fibers.always('rejected'))
-  )
+      accept_matching(match_to, function(offer)
+        return offer.from_scope == match_from_b
+      end),
+    })
+    :map(function()
+      return 'unexpected'
+    end)
+    :or_else(fibers.always('rejected')))
   local rows = rt_match:perform(fibers.tensor({
     match_from_b:offer_op(task_b, match_to),
-    accept_matching(match_to, function(offer) return offer.from_scope == match_from_b and offer.item_kind == 'task' end),
+    accept_matching(match_to, function(offer)
+      return offer.from_scope == match_from_b and offer.item_kind == 'task'
+    end),
   }))
   accepted_match = rows[2][1]
   owns_a_after = rt_match:perform(match_from_a:owns_op(task_a))
@@ -95,7 +113,9 @@ rt_match:spawn_raw(function()
   retire(rt_match, match_to, task_b)
 end, 'matched-custody-offer-root')
 local st_match
-repeat st_match = rt_match:run() until st_match.tag ~= 'found'
+repeat
+  st_match = rt_match:run()
+until st_match.tag ~= 'found'
 assert(st_match.tag == 'quiescent' or st_match.tag == 'idle')
 assert(rejected_result == 'rejected')
 assert(accepted_match.item == task_b)
@@ -131,19 +151,29 @@ do
   local task_a, task_b, both_result, accepted_b, a_still_owned, b_moved
   local rt_filter = fibers.Runtime.new()
   rt_filter:spawn_raw(function()
-    task_a = rt_filter:perform(from_a:spawn_op(function() return 'a' end, { name = 'filter-task-a' }))
-    task_b = rt_filter:perform(from_b:spawn_op(function() return 'b' end, { name = 'filter-task-b' }))
-    both_result = rt_filter:perform(
-      fibers.tensor({
+    task_a = rt_filter:perform(from_a:spawn_op(function()
+      return 'a'
+    end, { name = 'filter-task-a' }))
+    task_b = rt_filter:perform(from_b:spawn_op(function()
+      return 'b'
+    end, { name = 'filter-task-b' }))
+    both_result = rt_filter:perform(fibers
+      .tensor({
         from_a:offer_op(task_a, to),
         from_b:offer_op(task_b, to),
-        to:accept_op(function(offer) return offer.from_scope == from_b end),
-      }):map(function() return 'unexpected' end)
-        :or_else(fibers.always('blocked'))
-    )
+        to:accept_op(function(offer)
+          return offer.from_scope == from_b
+        end),
+      })
+      :map(function()
+        return 'unexpected'
+      end)
+      :or_else(fibers.always('blocked')))
     local rows = rt_filter:perform(fibers.tensor({
       from_b:offer_op(task_b, to),
-      to:accept_op(function(offer) return offer.from_scope == from_b end),
+      to:accept_op(function(offer)
+        return offer.from_scope == from_b
+      end),
     }))
     accepted_b = rows[2][1]
     a_still_owned = rt_filter:perform(from_a:owns_op(task_a))
@@ -154,7 +184,9 @@ do
     retire(rt_filter, to, task_b)
   end, 'filtered-accept-root')
   local st_filter
-  repeat st_filter = rt_filter:run() until st_filter.tag ~= 'found'
+  repeat
+    st_filter = rt_filter:run()
+  until st_filter.tag ~= 'found'
   assert(st_filter.tag == 'quiescent' or st_filter.tag == 'idle')
   assert(both_result == 'blocked')
   assert(accepted_b.item == task_b)

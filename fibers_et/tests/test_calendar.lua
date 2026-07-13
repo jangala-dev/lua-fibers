@@ -9,7 +9,9 @@ end
 
 local function reservation_count(calendar)
   local n = 0
-  for _ in pairs(calendar:snapshot()) do n = n + 1 end
+  for _ in pairs(calendar:snapshot()) do
+    n = n + 1
+  end
   return n
 end
 
@@ -17,7 +19,9 @@ end
 do
   local cal = Calendar.new()
   local r
-  run(function() r = fibers.perform(cal:reserve_at_op({ 'room', 'alice' }, 10, 11, 'meeting')) end)
+  run(function()
+    r = fibers.perform(cal:reserve_at_op({ 'room', 'alice' }, 10, 11, 'meeting'))
+  end)
   assert(r.start == 10 and r.finish == 11 and r.payload == 'meeting')
   assert(reservation_count(cal) == 1)
 end
@@ -27,7 +31,8 @@ do
   local cal = Calendar.new({ { id = 1, start = 10, finish = 11, resources = { 'room', 'alice' } } })
   local result
   run(function()
-    result = fibers.perform(cal:reserve_at_op({ 'alice', 'bob' }, 10, 11):or_else(Op.always('busy')))
+    result =
+      fibers.perform(cal:reserve_at_op({ 'alice', 'bob' }, 10, 11):or_else(Op.always('busy')))
   end)
   assert(result == 'busy' and reservation_count(cal) == 1)
 end
@@ -54,7 +59,13 @@ do
   local rows
   run(function()
     rows = fibers.perform(Op.all({
-      cal:reserve_op({ resources = { 'room' }, earliest = 0, latest = 10, duration = 5, starts = { 0, 5 } }),
+      cal:reserve_op({
+        resources = { 'room' },
+        earliest = 0,
+        latest = 10,
+        duration = 5,
+        starts = { 0, 5 },
+      }),
       cal:reserve_at_op({ 'room' }, 0, 5),
     }))
   end)
@@ -77,7 +88,10 @@ do
   local cal = Calendar.new({ { id = 1, start = 0, finish = 5, resources = { 'room' } } })
   local result
   run(function()
-    result = fibers.perform(Op.all({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }):or_else(Op.always('fallback')))
+    result = fibers.perform(
+      Op.all({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) })
+        :or_else(Op.always('fallback'))
+    )
   end)
   assert(result == 'fallback')
   assert(reservation_count(cal) == 1 and cal:snapshot()[1] ~= nil)
@@ -91,7 +105,9 @@ do
   })
   local r
   run(function()
-    r = fibers.perform(cal:reserve_op({ resources = { 'room' }, earliest = 0, latest = 10, duration = 2 }))
+    r = fibers.perform(
+      cal:reserve_op({ resources = { 'room' }, earliest = 0, latest = 10, duration = 2 })
+    )
   end)
   assert(r.start == 3 and r.finish == 5)
 end
@@ -101,7 +117,9 @@ do
   local cal = Calendar.new()
   local slot
   run(function()
-    slot = fibers.perform(cal:find_op({ resources = { 'room' }, earliest = 4, latest = 12, duration = 3 }))
+    slot = fibers.perform(
+      cal:find_op({ resources = { 'room' }, earliest = 4, latest = 12, duration = 3 })
+    )
   end)
   assert(slot.start == 4 and slot.finish == 7 and reservation_count(cal) == 0)
 end

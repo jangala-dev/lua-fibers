@@ -8,10 +8,12 @@ This document describes the active compact implementation. `algebra.md` is the s
 fibers/kernel/ir.lua            inert primitive programmes and operation footprints
 fibers/kernel/store.lua         versioned locations, speculative views and commit
 fibers/kernel/choice_order.lua  pure seed-derived branch permutations
-fibers/kernel/dependency_index.lua incremental pending dependency components
-fibers/kernel/branch_policy.lua constrained residual branch ordering
-fibers/kernel/machine.lua       closed-world trail-based proof search
-fibers/kernel/runtime.lua       fibres, open-world scheduling and host boundary
+fibers/kernel/dependencies.lua pending components, retained-work validation and coordination
+fibers/kernel/frontier.lua     blocked-frontier classification and branch ordering
+fibers/kernel/adaptive_search.lua lazy memoisation, no-goods and retention policy
+fibers/kernel/machine.lua      closed-world trail-based proof search
+fibers/kernel/search_session.lua retained production-search lifecycle
+fibers/kernel/runtime.lua      fibres, open-world scheduling and host boundary
 ```
 
 `fibers/kernel.lua` is a small aggregate. External feeds, effects, protected calls and scope reports live outside the semantic kernel.
@@ -20,12 +22,14 @@ Current sizes are deliberately bounded:
 
 ```text
 ir.lua                 about 400 lines
-dependency_index.lua    about 225 lines
-branch_policy.lua       about 115 lines
-store.lua              about 600 lines
-choice_order.lua       under 60 lines
-machine.lua            about 1,200 lines
-runtime.lua            about 900 lines
+dependencies.lua     about 750 lines
+frontier.lua            about 180 lines
+adaptive_search.lua     about 560 lines
+store.lua               about 670 lines
+choice_order.lua        under 60 lines
+machine.lua             about 1,470 lines
+search_session.lua      about 450 lines
+runtime.lua             about 1,400 lines
 ```
 
 The boundaries are intended to map directly to a systems-language port:
@@ -103,7 +107,7 @@ Unannotated callbacks remain opaque and therefore correct on the global slow
 path.  Tests may enable `Runtime.new({ verify_dependencies = true })` to check
 that an executed continuation is covered by its declaration.
 
-For larger pending frontiers, `dependency_index.lua` incrementally indexes
+For larger pending frontiers, `dependencies.lua` incrementally indexes
 exchange roles, versioned locations, resource-wide dependencies and opaque
 requests.  The runtime derives the connected component containing the focus and
 passes only that conservative component to the evaluator.  The index is
@@ -184,8 +188,7 @@ possible unentered supplier, and a sole all-member non-supplying machine claim
 with no possible unentered supplier.  Residual exchange branching uses the
 smallest positive partner domain; claim groups use the smallest domain first;
 participant recruitment prefers the request which can supply the greatest
-number of current blocked intents.  `branch_policy.lua` contains this shared
-structural policy for both evaluators.
+number of current blocked intents.  `frontier.lua` contains this shared structural policy for both evaluators.
 
 Its implementation returns:
 
@@ -195,7 +198,7 @@ refutation data
 unknown boolean
 ```
 
-These correspond to semantic `Hit`, `Retry` and `Unknown`. The machine does not currently return a resumable whole-search cursor. Bounded stepping raises the search limit on later calls and searches again.
+These correspond to semantic `Hit`, `Retry` and `Unknown`. The production machine represents branch control as an explicit stack. On bounded `Unknown`, the runtime may retain that `SearchSession` and resume it from the exact branch position, provided a conservative dependency stamp still validates. The copy-on-branch reference evaluator restarts bounded searches.
 
 ### Numeric arenas
 
@@ -223,6 +226,11 @@ status
 
 Product groups retain parent task and view, lane views, lane outcomes and completion count.
 
+Product lane views are sparse and parent-linked.  Creating a lane does not copy
+the parent observation map.  Reads walk the short parent chain; the first local
+write promotes only that location into the lane.  On product completion, only
+locally observed cells and local deltas are merged back into the parent.
+
 ### One rollback trail
 
 The production machine mutates one search state and records undo entries in one trail. Current entry forms cover:
@@ -230,8 +238,11 @@ The production machine mutates one search state and records undo entries in one 
 ```text
 field assignment
 array append
-first view mutation within a branch
 ```
+
+Store observations, cell-value changes, patch insertion and patch-array
+appends use those same field and array undo records.  The production evaluator
+does not clone a complete view on first mutation.
 
 A speculative branch records a trail mark. Backtracking restores that mark.
 

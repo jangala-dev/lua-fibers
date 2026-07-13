@@ -2,7 +2,7 @@
 
 ## Scope
 
-This pass implements the first seven architectural stages of the Lua performance
+This document records the first seven architectural stages of the Lua performance
 programme.  It deliberately addresses search shape before low-level allocation
 or instruction tuning:
 
@@ -220,33 +220,19 @@ for contended producers, and about 38% faster for the triple swap.  The residual
 common-case cost nevertheless remains a legitimate target for later profiling;
 it should not be obscured by the large tail improvement.
 
-## What has not been implemented
+## Subsequent stages
 
-This pass stops deliberately after stage seven.  It does not yet add:
+Stages eight through ten have now been implemented in a separate, measured pass:
 
-- no-good or refutation caches;
-- whole-state memoisation;
-- certified participant symmetry;
-- cross-cycle plan or deterministic-prefix reuse; or
-- dense-array, arena, pooling or other Lua micro-optimisations.
+- narrow no-supplier refutation caching;
+- exact per-plan refutation memoisation;
+- explicitly certified participant symmetry; and
+- dependency-stamped cross-cycle plan reuse.
 
-The instrumentation added here is intended to make those later decisions
-evidence-led.
-
-## Recommended next order
-
-The next principled work is:
-
-1. use the repeated-state diagnostics to define narrow, dependency-versioned
-   no-good caches;
-2. add generated differential operation graphs and larger mixed-component
-   workloads;
-3. measure cache hit rate and invalidation before retaining any cache;
-4. introduce cross-cycle component refutation reuse;
-5. consider certified symmetry only for built-ins able to provide an exact
-   equivalence key; and
-6. profile the now-bounded hot paths before changing Lua representation.
+See `PERFORMANCE-PASSES-8-10.md` and `performance/advanced_suite.lua` for the
+safety rules, measurements and validating workloads.
 
 The main performance objective remains: ordinary programmes should reach the
-search machine with a small relevant component, exhaust deterministic work, and
-branch only over genuine residual ambiguity.
+search machine with a small relevant component, exhaust deterministic work,
+branch only over genuine residual ambiguity, and avoid reproving an unchanged
+blocked world.

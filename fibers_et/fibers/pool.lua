@@ -18,11 +18,15 @@ Pool.__index = Pool
 local next_id = 0
 
 local RetireKind
-RetireKind = Effect.kind {
+RetireKind = Effect.kind({
   name = 'pool.retire',
   order = 850,
-  key = function(payload) return (payload.pool_id or '') .. ':' .. tostring(payload.key) end,
-  merge = function(a, _b) return a end,
+  key = function(payload)
+    return (payload.pool_id or '') .. ':' .. tostring(payload.key)
+  end,
+  merge = function(a, _b)
+    return a
+  end,
   prepare = function(_rt, payload)
     return {
       kind = RetireKind,
@@ -30,13 +34,17 @@ RetireKind = Effect.kind {
       payload = payload,
       discharge = function(rt, entry)
         local p = entry.payload
-        if p.retire then return p.retire(p.item, p.reason, p.key, p.pool) end
+        if p.retire then
+          return p.retire(p.item, p.reason, p.key, p.pool)
+        end
         local host = rt.host or {}
-        if host.pool_retire then return host.pool_retire(p.item, p.reason, p.key, p.pool) end
+        if host.pool_retire then
+          return host.pool_retire(p.item, p.reason, p.key, p.pool)
+        end
       end,
     }
   end,
-}
+})
 
 local function retire_effect(pool, key, item, reason)
   return Effect.of(RetireKind, {
@@ -57,28 +65,34 @@ local function retiring_state(state, reason)
   return { item = state.item, retire_on_release = true, reason = reason or state.reason }
 end
 
-local OpenTransitions = Scalar.kind {
+local OpenTransitions = Scalar.kind({
   name = 'pool.open',
   transitions = {
     check_open = {
       mode = 'update',
       order = 100,
       step = function(open)
-        if open == true then return true, true end
+        if open == true then
+          return true, true
+        end
         return open, false
       end,
     },
     close = {
       mode = 'update',
       order = 0,
-      step = function(_open) return false, true end,
+      step = function(_open)
+        return false, true
+      end,
     },
   },
-}
+})
 
 local function require_open(pool)
   return pool.open:transition_op(OpenTransitions:transition('check_open')):and_then(function(ok)
-    if ok then return Op.always(true) end
+    if ok then
+      return Op.always(true)
+    end
     return Op.never()
   end)
 end
@@ -100,7 +114,9 @@ function Pool.new(opts, name)
 end
 
 function Pool:add_op(key, item)
-  if key == nil then error('pool add requires key', 2) end
+  if key == nil then
+    error('pool add requires key', 2)
+  end
   return require_open(self):and_then(function()
     return self.items:put_absent_op(key, item_state(item)):and_then(function()
       return self.idle:insert_op(key, math.huge, key)
@@ -109,12 +125,16 @@ function Pool:add_op(key, item)
 end
 
 function Pool:acquire_op(owner)
-  if owner == nil then error('pool acquire requires owner', 2) end
+  if owner == nil then
+    error('pool acquire requires owner', 2)
+  end
   return require_open(self):and_then(function()
     return self.idle:pop_first_op():and_then(function(entry)
       local key = entry.value
       return self.items:get_op(key):and_then(function(state)
-        if type(state) ~= 'table' then return Op.never() end
+        if type(state) ~= 'table' then
+          return Op.never()
+        end
         return self.leases:acquire_op(key, 'lease', owner):map(function()
           return { pool = self, key = key, item = state.item, owner = owner }
         end)
@@ -124,34 +144,50 @@ function Pool:acquire_op(owner)
 end
 
 function Pool:release_op(lease)
-  if type(lease) ~= 'table' then error('pool release expects a lease table', 2) end
+  if type(lease) ~= 'table' then
+    error('pool release expects a lease table', 2)
+  end
   local key, owner = lease.key, lease.owner
   return self.items:get_op(key):and_then(function(state)
-    if type(state) ~= 'table' then return Op.never() end
+    if type(state) ~= 'table' then
+      return Op.never()
+    end
     if state.retire_on_release then
       return Op.tensor({
         self.leases:release_op(key, owner),
         self.items:remove_present_op(key),
         Op.emit(retire_effect(self, key, state.item, state.reason)),
-      }):map(function() return true end)
+      }):map(function()
+        return true
+      end)
     end
     return Op.tensor({
       self.leases:release_op(key, owner),
       self.idle:insert_op(key, math.huge, key),
-    }):map(function() return true end)
+    }):map(function()
+      return true
+    end)
   end)
 end
 
 function Pool:retire_op(key, reason)
-  if key == nil then error('pool retire requires key', 2) end
+  if key == nil then
+    error('pool retire requires key', 2)
+  end
   return self.items:get_op(key):and_then(function(state)
-    if type(state) ~= 'table' then return Op.never() end
+    if type(state) ~= 'table' then
+      return Op.never()
+    end
     local retire_idle = Op.tensor({
       self.idle:remove_op(key),
       self.items:remove_present_op(key),
       Op.emit(retire_effect(self, key, state.item, reason)),
-    }):map(function() return true end)
-    local defer_until_release = self.items:put_op(key, retiring_state(state, reason)):map(function() return true end)
+    }):map(function()
+      return true
+    end)
+    local defer_until_release = self.items:put_op(key, retiring_state(state, reason)):map(function()
+      return true
+    end)
     return retire_idle:or_else(defer_until_release)
   end)
 end
@@ -161,8 +197,18 @@ function Pool:close_op(_reason)
 end
 
 function Pool:snapshot_op()
-  return Op.all({ self.open:read_op(), self.items:snapshot_op(), self.idle:snapshot_op(), self.leases:snapshot_op() }):map(function(rows)
-    return { open = rows[1][1], items = rows[2][1].entries, idle = rows[3][1].entries, leases = rows[4][1].holders }
+  return Op.all({
+    self.open:read_op(),
+    self.items:snapshot_op(),
+    self.idle:snapshot_op(),
+    self.leases:snapshot_op(),
+  }):map(function(rows)
+    return {
+      open = rows[1][1],
+      items = rows[2][1].entries,
+      idle = rows[3][1].entries,
+      leases = rows[4][1].holders,
+    }
   end)
 end
 

@@ -12,23 +12,33 @@ local Protected = require('fibers.internal.protected')
 
 local Settlement = {}
 
-local function true_op() return Op.always(true) end
+local function true_op()
+  return Op.always(true)
+end
 
 local function perform_masked(op)
   local rt = Runtime.current()
-  if not rt then error('settlement requires a current runtime', 2) end
-  return rt:perform(op, { masked = true })
+  if not rt then
+    error('settlement requires a current runtime', 2)
+  end
+  return rt:_perform_current(op, nil, true)
 end
 
 local function require_context(ctx)
-  if type(ctx) ~= 'table' or type(ctx.claim_op) ~= 'function' or type(ctx.resolve_op) ~= 'function' then
+  if
+    type(ctx) ~= 'table'
+    or type(ctx.claim_op) ~= 'function'
+    or type(ctx.resolve_op) ~= 'function'
+  then
     error('settlement requires a context with claim_op and resolve_op', 3)
   end
   return ctx
 end
 
 local function ensure_op(op, label)
-  if op == nil then return true_op() end
+  if op == nil then
+    return true_op()
+  end
   if type(op) ~= 'table' or type(op.and_then) ~= 'function' then
     error((label or 'settlement step') .. ' must return an Op', 3)
   end
@@ -40,7 +50,9 @@ function Settlement.normalize(settle, label)
     return {
       _fibers_settlement_protocol = true,
       name = 'none',
-      discharge_op = function() return true_op() end,
+      discharge_op = function()
+        return true_op()
+      end,
     }
   end
   if type(settle) == 'function' then
@@ -51,7 +63,9 @@ function Settlement.normalize(settle, label)
     }
   end
   if type(settle) == 'table' then
-    if settle._fibers_settlement_protocol then return settle end
+    if settle._fibers_settlement_protocol then
+      return settle
+    end
     local discharge = settle.discharge_op
     if type(discharge) ~= 'function' then
       error((label or 'settlement protocol') .. ' requires a discharge_op function', 3)
@@ -75,7 +89,9 @@ function Settlement.normalize(settle, label)
 end
 
 function Settlement.name_of(settle, fallback)
-  if type(settle) == 'table' then return settle.name or fallback end
+  if type(settle) == 'table' then
+    return settle.name or fallback
+  end
   return fallback
 end
 
@@ -86,7 +102,10 @@ function Settlement.protocol(settle, label)
     if protocol.request_op then
       op = ensure_op(protocol.request_op(ctx, record, claim), protocol.name .. '.request_op')
       return op:and_then(function()
-        return ensure_op(protocol.discharge_op(ctx, record, claim), protocol.name .. '.discharge_op')
+        return ensure_op(
+          protocol.discharge_op(ctx, record, claim),
+          protocol.name .. '.discharge_op'
+        )
       end)
     end
     return ensure_op(protocol.discharge_op(ctx, record, claim), protocol.name .. '.discharge_op')
@@ -96,13 +115,19 @@ end
 function Settlement.none()
   return Settlement.protocol({
     name = 'none',
-    discharge_op = function() return true_op() end,
+    discharge_op = function()
+      return true_op()
+    end,
   })
 end
 
 function Settlement.request_then_wait(request_op, settled_op)
-  if type(request_op) ~= 'function' then error('request_then_wait expects request_op function', 2) end
-  if type(settled_op) ~= 'function' then error('request_then_wait expects settled_op function', 2) end
+  if type(request_op) ~= 'function' then
+    error('request_then_wait expects request_op function', 2)
+  end
+  if type(settled_op) ~= 'function' then
+    error('request_then_wait expects settled_op function', 2)
+  end
   return Settlement.protocol(function(ctx, record, claim)
     local reason = claim and claim.reason or nil
     return request_op(ctx, record, reason, claim):wrap(function(...)
@@ -113,37 +138,48 @@ function Settlement.request_then_wait(request_op, settled_op)
 end
 
 function Settlement.task_interrupt()
-  return Settlement.request_then_wait(
-    function(_ctx, record, reason) return record.item:request_cancel_op(reason) end,
-    function(_ctx, record) return record.item:exit_op():map(function() return true end) end
-  )
+  return Settlement.request_then_wait(function(_ctx, record, reason)
+    return record.item:request_cancel_op(reason)
+  end, function(_ctx, record)
+    return record.item:exit_op():map(function()
+      return true
+    end)
+  end)
 end
 
 function Settlement.task_join_only()
   return Settlement.protocol({
     name = 'task_join_only',
     discharge_op = function(_ctx, record)
-      return record.item:exit_op():map(function() return true end)
+      return record.item:exit_op():map(function()
+        return true
+      end)
     end,
   })
 end
 
 function Settlement.flow()
-  return Settlement.request_then_wait(
-    function(_ctx, record, reason) return record.item:shutdown_op(reason):map(function() return true end) end,
-    function(_ctx, record) return record.item:closed_op():map(function() return true end) end
-  )
+  return Settlement.request_then_wait(function(_ctx, record, reason)
+    return record.item:shutdown_op(reason):map(function()
+      return true
+    end)
+  end, function(_ctx, record)
+    return record.item:closed_op():map(function()
+      return true
+    end)
+  end)
 end
 
 function Settlement.stream()
   return Settlement.protocol({
     name = 'stream',
     discharge_op = function(_ctx, record, claim)
-      return record.item:shutdown_op(claim and claim.reason):map(function() return true end)
+      return record.item:shutdown_op(claim and claim.reason):map(function()
+        return true
+      end)
     end,
   })
 end
-
 
 local function protocol_for(record)
   return Settlement.protocol(record.settle, record.settle_name)
@@ -161,7 +197,9 @@ local function with_settlement_authority(ctx, fn)
   ctx._settlement_depth = (ctx._settlement_depth or 0) + 1
   local ok, a, b, c = Protected.pcall(fn)
   ctx._settlement_depth = ctx._settlement_depth - 1
-  if not ok then error(a, 0) end
+  if not ok then
+    error(a, 0)
+  end
   return a, b, c
 end
 
@@ -192,7 +230,9 @@ local function run_claim_inline(ctx, claim, after_settle)
     mark_failed(ctx, claim, err)
     error(err, 0)
   end
-  if after_settle then perform_masked(after_settle(ctx, claim)) end
+  if after_settle then
+    perform_masked(after_settle(ctx, claim))
+  end
   return claim.root
 end
 
@@ -202,7 +242,6 @@ function Settlement.claim_item_op(ctx, item, purpose, after_settle)
     return run_claim_inline(ctx, claim, after_settle)
   end)
 end
-
 
 function Settlement.retire_item_op(ctx, item, reason, after_settle)
   return Settlement.claim_item_op(ctx, item, { type = 'retire', reason = reason }, after_settle)

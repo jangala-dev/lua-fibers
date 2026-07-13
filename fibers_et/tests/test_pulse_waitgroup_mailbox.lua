@@ -6,17 +6,39 @@ local fibers = require('fibers')
 local Op = require('fibers.atoms.op')
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
+local function fail(msg)
+  error(msg, 2)
+end
 local function assert_eq(actual, expected, msg)
-  if actual ~= expected then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual)) end
+  if actual ~= expected then
+    fail(
+      (msg or 'assert_eq failed')
+        .. ': expected '
+        .. tostring(expected)
+        .. ', got '
+        .. tostring(actual)
+    )
+  end
 end
 local function assert_status(status, tag, msg)
-  if not status or status.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(status and status.tag)) end
+  if not status or status.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(status and status.tag)
+    )
+  end
 end
 local function assert_not_found(status, msg)
-  if status and status.tag == 'found' then fail(msg or 'operation unexpectedly committed') end
+  if status and status.tag == 'found' then
+    fail(msg or 'operation unexpectedly committed')
+  end
 end
-local function new_runtime(opts) return Runtime.new(opts or {}) end
+local function new_runtime(opts)
+  return Runtime.new(opts or {})
+end
 
 local function test_top_level_exports()
   assert_eq(type(fibers.Pulse.new), 'function', 'Pulse export')
@@ -29,14 +51,18 @@ local function test_pulse_signal_and_changed()
   local p = fibers.Pulse.new()
   local rt = new_runtime()
   local version
-  rt:spawn_raw(function() version = rt:perform(p:signal_op()) end, 'pulse-signal')
+  rt:spawn_raw(function()
+    version = rt:perform(p:signal_op())
+  end, 'pulse-signal')
   assert_status(rt:run(), 'found')
   assert_eq(version, 1)
   assert_eq(p.state.value.version, 1)
 
   local rt2 = new_runtime()
   local seen, reason
-  rt2:spawn_raw(function() seen, reason = rt2:perform(p:changed_op(0)) end, 'pulse-changed')
+  rt2:spawn_raw(function()
+    seen, reason = rt2:perform(p:changed_op(0))
+  end, 'pulse-changed')
   assert_status(rt2:run(), 'found')
   assert_eq(seen, 1)
   assert_eq(reason, nil)
@@ -47,10 +73,15 @@ local function test_pulse_waits_and_close_wakes()
   local rt = new_runtime({ quiet_deadlock = true })
   local done = false
   local version, reason
-  rt:spawn_raw(function() version, reason = rt:perform(p:changed_op(0)); done = true end, 'pulse-waiter')
+  rt:spawn_raw(function()
+    version, reason = rt:perform(p:changed_op(0))
+    done = true
+  end, 'pulse-waiter')
   assert_status(rt:run(), 'quiescent')
   assert_eq(done, false)
-  rt:spawn_raw(function() rt:perform(p:close_op('shutdown')) end, 'pulse-close')
+  rt:spawn_raw(function()
+    rt:perform(p:close_op('shutdown'))
+  end, 'pulse-close')
   assert_status(rt:run(), 'found')
   assert_eq(done, true)
   assert_eq(version, nil)
@@ -101,7 +132,9 @@ end
 local function test_waitgroup_negative_count_is_absent()
   local wg = fibers.WaitGroup.new()
   local rt = new_runtime({ quiet_deadlock = true })
-  rt:spawn_raw(function() rt:perform(wg:done_op()) end, 'wg-negative')
+  rt:spawn_raw(function()
+    rt:perform(wg:done_op())
+  end, 'wg-negative')
   assert_not_found(rt:run(), 'negative waitgroup count should not commit')
   assert_eq(wg.state.value.count, 0)
 end
@@ -110,8 +143,12 @@ local function test_mailbox_rendezvous_send_recv()
   local tx, rx = fibers.Mailbox.new()
   local rt = new_runtime()
   local sent, got
-  rt:spawn_raw(function() sent = rt:perform(tx:send_op('hello')) end, 'mb-send')
-  rt:spawn_raw(function() got = rt:perform(rx:recv_op()) end, 'mb-recv')
+  rt:spawn_raw(function()
+    sent = rt:perform(tx:send_op('hello'))
+  end, 'mb-send')
+  rt:spawn_raw(function()
+    got = rt:perform(rx:recv_op())
+  end, 'mb-recv')
   assert_status(rt:run(), 'found')
   assert_eq(sent, true)
   assert_eq(got, 'hello')
@@ -145,9 +182,14 @@ local function test_mailbox_close_wakes_blocked_sender_and_receiver()
   local rt = new_runtime({ quiet_deadlock = true })
   local send_done = false
   local send_result = 'unset'
-  rt:spawn_raw(function() send_result = rt:perform(tx:send_op('x')); send_done = true end, 'mb-blocked-send')
+  rt:spawn_raw(function()
+    send_result = rt:perform(tx:send_op('x'))
+    send_done = true
+  end, 'mb-blocked-send')
   assert_status(rt:run(), 'quiescent')
-  rt:spawn_raw(function() rt:perform(tx:close_op('bye')) end, 'mb-close')
+  rt:spawn_raw(function()
+    rt:perform(tx:close_op('bye'))
+  end, 'mb-close')
   assert_status(rt:run(), 'found')
   assert_eq(send_done, true)
   assert_eq(send_result, nil)
@@ -156,9 +198,14 @@ local function test_mailbox_close_wakes_blocked_sender_and_receiver()
   local rt2 = new_runtime({ quiet_deadlock = true })
   local recv_done = false
   local recv_result = 'unset'
-  rt2:spawn_raw(function() recv_result = rt2:perform(rx2:recv_op()); recv_done = true end, 'mb-blocked-recv')
+  rt2:spawn_raw(function()
+    recv_result = rt2:perform(rx2:recv_op())
+    recv_done = true
+  end, 'mb-blocked-recv')
   assert_status(rt2:run(), 'quiescent')
-  rt2:spawn_raw(function() rt2:perform(tx2:close_op('bye')) end, 'mb-close2')
+  rt2:spawn_raw(function()
+    rt2:perform(tx2:close_op('bye'))
+  end, 'mb-close2')
   assert_status(rt2:run(), 'found')
   assert_eq(recv_done, true)
   assert_eq(recv_result, nil)
@@ -168,7 +215,9 @@ local function test_mailbox_clone_and_last_sender_close()
   local tx, rx = fibers.Mailbox.new(1)
   local rt = new_runtime()
   local tx2
-  rt:spawn_raw(function() tx2 = rt:perform(tx:clone_op()) end, 'mb-clone')
+  rt:spawn_raw(function()
+    tx2 = rt:perform(tx:clone_op())
+  end, 'mb-clone')
   assert_status(rt:run(), 'found')
 
   local rt2 = new_runtime()
@@ -227,22 +276,27 @@ local function test_mailbox_losing_send_branch_does_not_enqueue()
 
   local rt2 = new_runtime()
   local snap
-  rt2:spawn_raw(function() snap = rt2:perform(rx:snapshot_op()) end, 'mb-snapshot')
+  rt2:spawn_raw(function()
+    snap = rt2:perform(rx:snapshot_op())
+  end, 'mb-snapshot')
   assert_status(rt2:run(), 'found')
   assert_eq(#snap.items, 0)
 end
 
-
 local function test_pulse_signal_after_close_is_noop()
   local p = fibers.Pulse.new()
   local rt = new_runtime()
-  rt:spawn_raw(function() rt:perform(p:close_op('done')) end, 'pulse-close')
+  rt:spawn_raw(function()
+    rt:perform(p:close_op('done'))
+  end, 'pulse-close')
   assert_status(rt:run(), 'found')
   local scalar_version = p.state.version
 
   local rt2 = new_runtime()
   local v
-  rt2:spawn_raw(function() v = rt2:perform(p:signal_op()) end, 'pulse-closed-signal')
+  rt2:spawn_raw(function()
+    v = rt2:perform(p:signal_op())
+  end, 'pulse-closed-signal')
   assert_status(rt2:run(), 'found')
   assert_eq(v, nil)
   assert_eq(p.state.value.version, 0)
@@ -260,7 +314,9 @@ local function test_mailbox_stale_sender_close_cannot_set_reason()
 
   local rt2 = new_runtime()
   local snap
-  rt2:spawn_raw(function() snap = rt2:perform(rx:snapshot_op()) end, 'mb-stale-snapshot')
+  rt2:spawn_raw(function()
+    snap = rt2:perform(rx:snapshot_op())
+  end, 'mb-stale-snapshot')
   assert_status(rt2:run(), 'found')
   assert_eq(snap.closed, true)
   assert_eq(snap.reason, nil)
@@ -300,8 +356,12 @@ local function test_channel_facade()
   local rv = fibers.Channel.new(0)
   local rt = new_runtime()
   local sent, got
-  rt:spawn_raw(function() sent = rt:perform(rv:put_op('rv')) end, 'ch-rv-put')
-  rt:spawn_raw(function() got = rt:perform(rv:get_op()) end, 'ch-rv-get')
+  rt:spawn_raw(function()
+    sent = rt:perform(rv:put_op('rv'))
+  end, 'ch-rv-put')
+  rt:spawn_raw(function()
+    got = rt:perform(rv:get_op())
+  end, 'ch-rv-get')
   assert_status(rt:run(), 'found')
   assert_eq(sent, true)
   assert_eq(got, 'rv')
@@ -340,6 +400,8 @@ local tests = {
   test_channel_facade,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 
 print('tests/test_pulse_waitgroup_mailbox.lua: ok')

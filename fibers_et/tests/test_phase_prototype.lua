@@ -1,16 +1,21 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
+local Phase = require('fibers.phase')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
 
 -- Phase is a prototype compound over Scope: a later phase can receive custody
 -- before it runs, but only through a declared crossing.
 do
-  local frame = fibers.Phase.new('frame')
-    :phase('input')
-    :phase('render')
+  local frame = Phase.new('frame'):phase('input'):phase('render')
   frame:edge('input', 'render'):carry('asset'):done()
 
   local h = fibers.Region.handle('phase-resource', { kind = 'asset' })
@@ -20,10 +25,12 @@ do
       local render = frame:scope('render')
       render_region = render:raw_region()
       fibers.perform(input:admit_op(h))
-      undeclared_move = fibers.perform(
-        frame:move_op(h, 'input', 'physics', 'asset'):map(function() return 'moved' end)
-          :or_else(fibers.always('blocked'))
-      )
+      undeclared_move = fibers.perform(frame
+        :move_op(h, 'input', 'physics', 'asset')
+        :map(function()
+          return 'moved'
+        end)
+        :or_else(fibers.always('blocked')))
       fibers.perform(frame:move_op(h, 'input', 'render', 'asset'))
     end)
     owner_after_input = h.owner
@@ -32,7 +39,11 @@ do
     end)
     owner_after_render = h.owner
   end)
-  assert_eq(undeclared_move, 'blocked', 'phase movement should require a declared edge and carry label')
+  assert_eq(
+    undeclared_move,
+    'blocked',
+    'phase movement should require a declared edge and carry label'
+  )
   assert_eq(owner_after_input, render_region, 'later phase should receive custody moved from input')
   assert_eq(render_authorised, true, 'render phase should authorise the carried resource')
   assert_eq(owner_after_render, nil, 'render phase should settle carried resource on exit')
@@ -40,9 +51,7 @@ end
 
 -- Declared borrow crossings grant authority without moving custody.
 do
-  local frame = fibers.Phase.new('frame-borrow')
-    :phase('simulate')
-    :phase('extract')
+  local frame = Phase.new('frame-borrow'):phase('simulate'):phase('extract')
   frame:edge('simulate', 'extract'):borrow('world_view'):done()
 
   local world = fibers.Region.handle('phase-world-view', { kind = 'world_view' })
@@ -50,19 +59,23 @@ do
   fibers.run(function()
     frame:run('simulate', function(sim)
       fibers.perform(sim:admit_op(world))
-      undeclared_borrow = fibers.perform(
-        frame:borrow_op('simulate', world, 'render', { 'read' }, 'world_view'):map(function() return 'borrowed' end)
-          :or_else(fibers.always('blocked'))
-      )
+      undeclared_borrow = fibers.perform(frame
+        :borrow_op('simulate', world, 'render', { 'read' }, 'world_view')
+        :map(function()
+          return 'borrowed'
+        end)
+        :or_else(fibers.always('blocked')))
       fibers.perform(frame:borrow_op('simulate', world, 'extract', { 'read' }, 'world_view'))
       owner_after_borrow = world.owner
     end)
     frame:run('extract', function(extract)
       read_authorised = fibers.perform(extract:authorise_op(world, 'read')) == world
-      write_authorised = fibers.perform(
-        extract:authorise_op(world, 'write'):map(function() return true end)
-          :or_else(fibers.always(false))
-      )
+      write_authorised = fibers.perform(extract
+        :authorise_op(world, 'write')
+        :map(function()
+          return true
+        end)
+        :or_else(fibers.always(false)))
     end)
   end)
   assert_eq(undeclared_borrow, 'blocked', 'phase borrowing should require a declared borrow edge')
@@ -71,22 +84,20 @@ do
   assert_eq(write_authorised, false, 'declared read borrow should not grant write authority')
 end
 
-
 -- Declared fact crossings copy phase facts without moving custody or authority.
 do
-  local frame = fibers.Phase.new('frame-facts')
-    :phase('input')
-    :phase('simulate')
+  local frame = Phase.new('frame-facts'):phase('input'):phase('simulate')
   frame:edge('input', 'simulate'):fact('commands'):done()
 
   local carried, blocked, seen
   fibers.run(function()
     frame:run('input', function(_input, ph)
       fibers.perform(ph:put_fact_op('input', 'commands', { jump = true }))
-      blocked = fibers.perform(
-        ph:carry_fact_op('commands', 'input', 'render'):map(function() return 'carried' end)
-          :or_else(fibers.always('blocked'))
-      )
+      blocked = fibers.perform(ph:carry_fact_op('commands', 'input', 'render')
+        :map(function()
+          return 'carried'
+        end)
+        :or_else(fibers.always('blocked')))
       carried = fibers.perform(ph:carry_fact_op('commands', 'input', 'simulate'))
     end)
     frame:run('simulate', function(_sim, ph)
@@ -101,11 +112,15 @@ end
 -- A phase interval is spent after it runs; running the same named phase again
 -- creates a fresh Scope interval.
 do
-  local frame = fibers.Phase.new('frame-fresh'):phase('tick')
+  local frame = Phase.new('frame-fresh'):phase('tick')
   local first, second
   fibers.run(function()
-    frame:run('tick', function(scope) first = scope end)
-    frame:run('tick', function(scope) second = scope end)
+    frame:run('tick', function(scope)
+      first = scope
+    end)
+    frame:run('tick', function(scope)
+      second = scope
+    end)
   end)
   assert_eq(first ~= second, true, 'phase run should create a fresh interval after settlement')
 end

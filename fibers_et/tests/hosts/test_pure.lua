@@ -1,4 +1,4 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Host = require('fibers.host')
@@ -11,7 +11,9 @@ do
   local now = 10
   local slept
   local host = PureHost.new({
-    now = function() return now end,
+    now = function()
+      return now
+    end,
     sleep = function(seconds)
       slept = seconds
       now = now + seconds
@@ -38,11 +40,23 @@ do
   local st = fibers.try_run(function()
     signal = fibers.Signal.new('unsupported-host-source')
     fibers.perform(signal:wait_op())
-  end, { host = PureHost.new({ now = function() return 0 end, sleep = function() error('should not sleep') end }) }).runtime_status
+  end, {
+    host = PureHost.new({
+      now = function()
+        return 0
+      end,
+      sleep = function()
+        error('should not sleep')
+      end,
+    }),
+  }).runtime_status
 
   Common.assert_status(st, 'pending')
   Common.assert_eq(st.host_reason, 'unsupported-waits')
-  Common.assert_truthy(st.waits and st.waits[1] and st.waits[1].kind == 'external', 'pending status should report external wait')
+  Common.assert_truthy(
+    st.waits and st.waits[1] and st.waits[1].kind == 'external',
+    'pending status should report external wait'
+  )
 end
 
 -- Host helper extracts the earliest time wait and ignores non-time waits.
@@ -53,7 +67,9 @@ do
     { kind = 'timer', deadline = 3 },
   })
   Common.assert_eq(deadline, 3)
-  Common.assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
+  Common.assert_truthy(
+    Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } })
+  )
 end
 
 print('tests/hosts/test_pure.lua: ok')

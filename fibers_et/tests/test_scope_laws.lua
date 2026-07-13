@@ -1,11 +1,21 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Settlement = require('fibers.internal.settlement')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 
 -- A sealed scope accepts no new custody.
 do
@@ -14,10 +24,12 @@ do
   local result, owns
   fibers.run(function()
     fibers.perform(life:seal_op('test'))
-    result = fibers.perform(
-      life:admit_op(h):map(function() return 'unexpected' end)
-        :or_else(fibers.always('sealed'))
-    )
+    result = fibers.perform(life
+      :admit_op(h)
+      :map(function()
+        return 'unexpected'
+      end)
+      :or_else(fibers.always('sealed')))
     owns = fibers.perform(life:owns_op(h))
   end)
   assert_eq(result, 'sealed', 'sealed scope should reject admission')
@@ -38,10 +50,11 @@ do
     from_after = fibers.perform(from:owns_op(h))
     to_after = fibers.perform(to:owns_op(h))
     fibers.perform(sealed:seal_op('closed-target'))
-    failed_move = fibers.perform(
-      to:move_op(h, sealed):map(function() return 'unexpected' end)
-        :or_else(fibers.always('blocked'))
-    )
+    failed_move = fibers.perform(to:move_op(h, sealed)
+      :map(function()
+        return 'unexpected'
+      end)
+      :or_else(fibers.always('blocked')))
     still_to = fibers.perform(to:owns_op(h))
     fibers.perform(Settlement.retire_item_op(to, h))
   end)
@@ -95,8 +108,11 @@ end
 
 -- Ambient scope usage is restored after nested scopes and errors.
 do
-  local root_seen, inner_seen, restored_after_ok, restored_after_err, spawn_outside_ok, spawn_outside_err
-  spawn_outside_ok, spawn_outside_err = pcall(function() fibers.spawn(function() end) end)
+  local root_seen, inner_seen, restored_after_ok, restored_after_err
+  local spawn_outside_ok, spawn_outside_err
+  spawn_outside_ok, spawn_outside_err = pcall(function()
+    fibers.spawn(function() end)
+  end)
   fibers.run(function(root)
     root_seen = fibers.current_scope() == root
     fibers.scope(function(inner)
@@ -111,10 +127,17 @@ do
     restored_after_err = fibers.current_scope() == root
   end)
   assert_eq(spawn_outside_ok, false, 'fibers.spawn outside a scope should fail')
-  assert_truthy(tostring(spawn_outside_err):match('current scope'), 'spawn error should mention current scope')
+  assert_truthy(
+    tostring(spawn_outside_err):match('current scope'),
+    'spawn error should mention current scope'
+  )
   assert_eq(root_seen, true, 'fibers.run should install root current scope')
   assert_eq(inner_seen, true, 'fibers.scope should install nested current scope')
-  assert_eq(restored_after_ok, true, 'current scope should be restored after normal nested scope exit')
+  assert_eq(
+    restored_after_ok,
+    true,
+    'current scope should be restored after normal nested scope exit'
+  )
   assert_eq(restored_after_err, true, 'current scope should be restored after nested scope error')
 end
 

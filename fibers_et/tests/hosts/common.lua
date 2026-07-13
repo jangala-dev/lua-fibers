@@ -1,14 +1,36 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 local Runner = require('fibers.runner')
 
 local Common = {}
 
-function Common.fail(msg) error(msg, 2) end
-function Common.assert_truthy(v, msg) if not v then Common.fail(msg or 'expected truthy') end end
-function Common.assert_eq(a, b, msg) if a ~= b then Common.fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-function Common.assert_status(st, tag, msg) if not st or st.tag ~= tag then Common.fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+function Common.fail(msg)
+  error(msg, 2)
+end
+function Common.assert_truthy(v, msg)
+  if not v then
+    Common.fail(msg or 'expected truthy')
+  end
+end
+function Common.assert_eq(a, b, msg)
+  if a ~= b then
+    Common.fail(
+      (msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)
+    )
+  end
+end
+function Common.assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    Common.fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 function Common.skip(name, reason)
   local result = { status = 'skip', name = name, reason = tostring(reason or 'not available') }
@@ -19,7 +41,11 @@ function Common.skip(name, reason)
 end
 
 function Common.close_quietly(x)
-  if x and type(x.close) == 'function' then pcall(function() x:close() end) end
+  if x and type(x.close) == 'function' then
+    pcall(function()
+      x:close()
+    end)
+  end
 end
 
 function Common.cleanup(host, pipe)
@@ -91,7 +117,11 @@ function Common.ready_source_smoke(name, host, key, mode)
   Common.assert_status(st, 'found', name .. ' ready-source runner')
   Common.assert_eq(seen, true, name .. ' should deliver readiness')
   Common.assert_eq(seen_key, key, name .. ' should preserve readiness key')
-  Common.assert_eq(seen_mode, (mode == 'write' or mode == 'wr') and 'write' or mode, name .. ' should deliver readiness mode')
+  Common.assert_eq(
+    seen_mode,
+    (mode == 'write' or mode == 'wr') and 'write' or mode,
+    name .. ' should deliver readiness mode'
+  )
 end
 
 function Common.readiness_beats_timeout_smoke(name, host, pipe)
@@ -107,8 +137,12 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
     -- or_else is proof-directed fallback and deliberately discards the
     -- preferred branch's wait after the fallback has been entered.
     winner = rt:perform(fibers.choice(
-      src:readable_op():map(function() return 'readiness' end),
-      fibers.sleep_op(0.25):map(function() return 'timeout' end)
+      src:readable_op():map(function()
+        return 'readiness'
+      end),
+      fibers.sleep_op(0.25):map(function()
+        return 'timeout'
+      end)
     ))
   end, name .. '-readiness-v-timeout')
 
@@ -128,17 +162,20 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
   local winner
 
   rt:spawn_raw(function()
-    winner = rt:perform(
-      src:readable_op():map(function() return 'readiness' end)
-        :or_else(fibers.sleep_op(0.01):map(function() return 'timeout' end))
-    )
+    winner = rt:perform(src
+      :readable_op()
+      :map(function()
+        return 'readiness'
+      end)
+      :or_else(fibers.sleep_op(0.01):map(function()
+        return 'timeout'
+      end)))
   end, name .. '-timeout-v-readiness')
 
   local st = run_host(name, host, 80)(rt)
   Common.assert_status(st, 'found', name .. ' timeout should complete')
   Common.assert_eq(winner, 'timeout', name .. ' should choose timeout when pipe is unready')
 end
-
 
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
@@ -151,7 +188,13 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   local got, flushed, stream
 
   rt:spawn_raw(function()
-    stream = rt:perform(fibers.Stream.open_handle_in_op(region, handle, { name = name .. ':stream', capacity = 64, chunk_size = 16 }))
+    stream = rt:perform(
+      fibers.Stream.open_handle_in_op(
+        region,
+        handle,
+        { name = name .. ':stream', capacity = 64, chunk_size = 16 }
+      )
+    )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
     got = rt:perform(stream:reader():read_exactly_op(5))

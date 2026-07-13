@@ -8,7 +8,9 @@ local Kind = { name = 'index' }
 local next_id, next_append_id = 0, 0
 
 local function copy_entry(e)
-  if not e then return nil end
+  if not e then
+    return nil
+  end
   return { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
 end
 
@@ -51,20 +53,29 @@ local function insert_program(index, key, rank, value, seq)
     orientation = 'down', -- absence is improved by deletion, not insertion
     predicate = 'map_absent',
     key = key,
-    patch = { kind = 'finite_map', ops = { { op = 'put', key = key, value = entry, policy = 'insert' } } },
+    patch = {
+      kind = 'finite_map',
+      ops = { { op = 'put', key = key, value = entry, policy = 'insert' } },
+    },
     result_kind = 'constant',
     result_value = true,
   })
 end
 
 function Index:insert_op(key, rank, value)
-  if key == nil then error('index insert requires a key', 2) end
-  if rank == nil then error('index insert requires a rank', 2) end
+  if key == nil then
+    error('index insert requires a key', 2)
+  end
+  if rank == nil then
+    error('index insert requires a rank', 2)
+  end
   return Op._resource(self, Kind, insert_program(self, key, rank, value, 0))
 end
 
 function Index:insert_auto_op(rank, value)
-  if rank == nil then error('index insert_auto requires a rank', 2) end
+  if rank == nil then
+    error('index insert_auto requires a rank', 2)
+  end
   next_append_id = next_append_id + 1
   local seq = next_append_id
   local key = (self._fibers_id or 'index') .. ':auto:' .. tostring(seq)
@@ -79,37 +90,51 @@ function Index:append_op(value)
 end
 
 function Index:remove_op(key)
-  if key == nil then error('index remove requires a key', 2) end
-  return Op._resource(self, Kind, Program.claim({
-    location = self._location,
-    group = self._location,
-    orientation = 'up',
-    predicate = 'map_present',
-    key = key,
-    patch = { kind = 'finite_map', ops = { { op = 'remove', key = key } } },
-    result_kind = 'constant',
-    result_value = true,
-  }))
+  if key == nil then
+    error('index remove requires a key', 2)
+  end
+  return Op._resource(
+    self,
+    Kind,
+    Program.claim({
+      location = self._location,
+      group = self._location,
+      orientation = 'up',
+      predicate = 'map_present',
+      key = key,
+      patch = { kind = 'finite_map', ops = { { op = 'remove', key = key } } },
+      result_kind = 'constant',
+      result_value = true,
+    })
+  )
 end
 
 function Index:pop_first_op()
-  return Op._resource(self, Kind, Program.select({
-    location = self._location,
-    group = self._location,
-    order = 'min',
-    orientation = 'up',
-    result_kind = 'index_entry',
-  }))
+  return Op._resource(
+    self,
+    Kind,
+    Program.select({
+      location = self._location,
+      group = self._location,
+      order = 'min',
+      orientation = 'up',
+      result_kind = 'index_entry',
+    })
+  )
 end
 
 function Index:pop_last_op()
-  return Op._resource(self, Kind, Program.select({
-    location = self._location,
-    group = self._location,
-    order = 'max',
-    orientation = 'up',
-    result_kind = 'index_entry',
-  }))
+  return Op._resource(
+    self,
+    Kind,
+    Program.select({
+      location = self._location,
+      group = self._location,
+      order = 'max',
+      orientation = 'up',
+      result_kind = 'index_entry',
+    })
+  )
 end
 
 function Index:snapshot_op()

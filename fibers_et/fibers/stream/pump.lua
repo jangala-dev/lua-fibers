@@ -16,34 +16,47 @@ Pump.Strategy = {}
 
 local function backend_ready_op(backend, name)
   local f = backend and backend[name]
-  if type(f) == 'function' then return f(backend) end
+  if type(f) == 'function' then
+    return f(backend)
+  end
   return Op.always(true)
 end
 
 local function backend_call(backend, name, ...)
   local f = backend and backend[name]
-  if type(f) == 'function' then return f(backend, ...) end
+  if type(f) == 'function' then
+    return f(backend, ...)
+  end
   return nil, 'unsupported_' .. tostring(name)
 end
 
 local function masked_perform(rt, op)
-  return rt:perform(op, { masked = true })
+  return rt:_perform_current(op, nil, true)
 end
 
 local function named(name, operation)
-  return operation:map(function(...) return name, ... end)
+  return operation:map(function(...)
+    return name, ...
+  end)
 end
 
 function Pump.read(stream)
   local rt = Runtime.current()
-  if not rt then error('stream read pump started without a runtime', 2) end
+  if not rt then
+    error('stream read pump started without a runtime', 2)
+  end
   local backend = stream.backend
-  if backend and type(backend.attach_stream) == 'function' then backend:attach_stream(stream) end
-  if backend and type(backend.bind_runtime) == 'function' then backend:bind_runtime(rt) end
+  if backend and type(backend.attach_stream) == 'function' then
+    backend:attach_stream(stream)
+  end
+  if backend and type(backend.bind_runtime) == 'function' then
+    backend:bind_runtime(rt)
+  end
   local flow = stream.read_flow
   local inlet = flow:inlet()
   while true do
-    local cap_or_closed, value = masked_perform(rt,
+    local cap_or_closed, value = masked_perform(
+      rt,
       named('reader_closed', flow.output:closed_op()):or_else(
         named('capacity', flow.reservoir:capacity_some_op(stream.read_chunk_size))
       )
@@ -54,7 +67,8 @@ function Pump.read(stream)
     end
     local max = value
 
-    local ready_or_closed = masked_perform(rt,
+    local ready_or_closed = masked_perform(
+      rt,
       named('reader_closed', flow.output:closed_op()):or_else(
         named('backend_ready', backend_ready_op(backend, 'read_ready_op'))
       )
@@ -89,14 +103,21 @@ end
 
 function Pump.write(stream)
   local rt = Runtime.current()
-  if not rt then error('stream write pump started without a runtime', 2) end
+  if not rt then
+    error('stream write pump started without a runtime', 2)
+  end
   local backend = stream.backend
-  if backend and type(backend.attach_stream) == 'function' then backend:attach_stream(stream) end
-  if backend and type(backend.bind_runtime) == 'function' then backend:bind_runtime(rt) end
+  if backend and type(backend.attach_stream) == 'function' then
+    backend:attach_stream(stream)
+  end
+  if backend and type(backend.bind_runtime) == 'function' then
+    backend:bind_runtime(rt)
+  end
   local flow = stream.write_flow
   local outlet = flow:outlet()
   while true do
-    local lease, lease_err = masked_perform(rt, outlet:lease_some_op(stream.write_chunk_size, stream))
+    local lease, lease_err =
+      masked_perform(rt, outlet:lease_some_op(stream.write_chunk_size, stream))
     if not lease then
       if lease_err == Errors.CLOSED_AND_DRAINED then
         backend_call(backend, 'shutdown_write', 'stream_closed')
@@ -105,14 +126,17 @@ function Pump.write(stream)
       return
     end
     local bytes = lease:bytes()
-    local ready_or_failed = masked_perform(rt,
+    local ready_or_failed = masked_perform(
+      rt,
       named('write_failed', flow.output:error_op()):or_else(
         named('write_closed', flow.output:closed_op()):or_else(
           named('backend_ready', backend_ready_op(backend, 'write_ready_op'))
         )
       )
     )
-    if ready_or_failed == 'write_failed' or ready_or_failed == 'write_closed' then return end
+    if ready_or_failed == 'write_failed' or ready_or_failed == 'write_closed' then
+      return
+    end
     local n, err = backend_call(backend, 'write', bytes)
     if n and n > 0 then
       local ok = masked_perform(rt, outlet:ack_lease_op(lease, n))
@@ -132,8 +156,12 @@ end
 function Pump.Strategy.split_tasks(stream, opts)
   opts = opts or {}
   local name = stream.name or 'host-stream'
-  local read_task = Task.new(function() return Pump.read(stream) end, name .. ':read-pump', opts.scope)
-  local write_task = Task.new(function() return Pump.write(stream) end, name .. ':write-pump', opts.scope)
+  local read_task = Task.new(function()
+    return Pump.read(stream)
+  end, name .. ':read-pump', opts.scope)
+  local write_task = Task.new(function()
+    return Pump.write(stream)
+  end, name .. ':write-pump', opts.scope)
   stream.read_task = read_task
   stream.write_task = write_task
   return read_task, write_task
@@ -143,26 +171,48 @@ function Pump.Strategy.split(stream, region, opts)
   opts = opts or {}
   local read_task, write_task = Pump.Strategy.split_tasks(stream, opts)
   return Op.named_all({
-    { 'read_task', read_task:start_op(region, Settlement.task_join_only(), { settle_name = 'task_join_only', role = 'read_pump' }) },
-    { 'write_task', write_task:start_op(region, Settlement.task_join_only(), { settle_name = 'task_join_only', role = 'write_pump' }) },
-  }):map(function() return stream end)
+    {
+      'read_task',
+      read_task:start_op(
+        region,
+        Settlement.task_join_only(),
+        { settle_name = 'task_join_only', role = 'read_pump' }
+      ),
+    },
+    {
+      'write_task',
+      write_task:start_op(
+        region,
+        Settlement.task_join_only(),
+        { settle_name = 'task_join_only', role = 'write_pump' }
+      ),
+    },
+  }):map(function()
+    return stream
+  end)
 end
 
 function Pump.create_tasks(stream, opts)
   opts = opts or {}
   local strategy = opts.pump_strategy or opts.strategy or stream.pump_strategy or 'split'
-  if strategy ~= 'split' then return nil, 'Pump.create_tasks currently supports split strategy only' end
+  if strategy ~= 'split' then
+    return nil, 'Pump.create_tasks currently supports split strategy only'
+  end
   stream.pump_strategy = strategy
   return Pump.Strategy.split_tasks(stream, opts)
 end
 
 function Pump.spawn_tasks_op(stream)
   local read_task, write_task = stream.read_task, stream.write_task
-  if not read_task or not write_task then error('Pump.spawn_tasks_op requires prepared pump tasks', 2) end
+  if not read_task or not write_task then
+    error('Pump.spawn_tasks_op requires prepared pump tasks', 2)
+  end
   return Op.named_all({
     { 'read_task', read_task:spawn_effect_op() },
     { 'write_task', write_task:spawn_effect_op() },
-  }):map(function() return stream end)
+  }):map(function()
+    return stream
+  end)
 end
 
 function Pump.start_op(stream, region, opts)
@@ -172,11 +222,15 @@ function Pump.start_op(stream, region, opts)
   if type(strategy) == 'function' then
     start = strategy
   elseif type(strategy) == 'table' and type(strategy.start_op) == 'function' then
-    start = function(s, r, o) return strategy:start_op(s, r, o) end
+    start = function(s, r, o)
+      return strategy:start_op(s, r, o)
+    end
   else
     start = Pump.Strategy[strategy]
   end
-  if type(start) ~= 'function' then error('unknown stream pump strategy ' .. tostring(strategy), 2) end
+  if type(start) ~= 'function' then
+    error('unknown stream pump strategy ' .. tostring(strategy), 2)
+  end
   stream.pump_strategy = strategy
   return start(stream, region, opts)
 end

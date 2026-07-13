@@ -17,27 +17,40 @@ Fake.__index = Fake
 
 local next_id = 0
 
-local function note_change(self)
-end
+local function note_change(self) end
 
 local function remember_ready(self, mode, value)
   value = value == nil and true or value
-  if self.readiness then UnsafeExternalMutation.deliver(self.readiness, mode, value); note_change(self); return self.readiness end
+  if self.readiness then
+    UnsafeExternalMutation.deliver(self.readiness, mode, value)
+    note_change(self)
+    return self.readiness
+  end
   self._pending_ready = self._pending_ready or {}
   self._pending_ready[mode] = value
 end
 
 local function remember_clear(self, mode)
-  if self.readiness then UnsafeExternalMutation.clear(self.readiness, mode); note_change(self); return self.readiness end
+  if self.readiness then
+    UnsafeExternalMutation.clear(self.readiness, mode)
+    note_change(self)
+    return self.readiness
+  end
   self._pending_clear = self._pending_clear or {}
   self._pending_clear[mode] = true
 end
 
 local function apply_pending(self)
-  if not self.feed then return end
-  for mode, value in pairs(self._pending_ready or {}) do remember_ready(self, mode, value) end
+  if not self.feed then
+    return
+  end
+  for mode, value in pairs(self._pending_ready or {}) do
+    remember_ready(self, mode, value)
+  end
   self._pending_ready = {}
-  for mode in pairs(self._pending_clear or {}) do remember_clear(self, mode) end
+  for mode in pairs(self._pending_clear or {}) do
+    remember_clear(self, mode)
+  end
   self._pending_clear = {}
 end
 
@@ -50,17 +63,31 @@ local function auto(self)
 end
 
 local function update_read_ready(self)
-  if not auto(self) then return end
-  if has_read_event(self) and not self.read_blocked then remember_ready(self, 'read') else remember_clear(self, 'read') end
+  if not auto(self) then
+    return
+  end
+  if has_read_event(self) and not self.read_blocked then
+    remember_ready(self, 'read')
+  else
+    remember_clear(self, 'read')
+  end
 end
 
 local function update_write_ready(self)
-  if not auto(self) then return end
-  if self.write_blocked then remember_clear(self, 'write') else remember_ready(self, 'write') end
+  if not auto(self) then
+    return
+  end
+  if self.write_blocked then
+    remember_clear(self, 'write')
+  else
+    remember_ready(self, 'write')
+  end
 end
 
 local function maybe_clear_manual(self, mode)
-  if not auto(self) then remember_clear(self, mode) end
+  if not auto(self) then
+    remember_clear(self, mode)
+  end
 end
 
 function Fake.new(opts)
@@ -85,20 +112,40 @@ function Fake.new(opts)
     _pending_ready = {},
     _pending_clear = {},
   }, Fake)
-  self._backend = ReadinessBackend.new {
+  self._backend = ReadinessBackend.new({
     name = self.name,
     key = self.key,
-    read = function(_, max) return self:read(max) end,
-    write = function(_, bytes) return self:write(bytes) end,
-    shutdown_read = function(_, reason) return self:shutdown_read(reason) end,
-    shutdown_write = function(_, reason) return self:shutdown_write(reason) end,
-    close = function(_, reason) return self:close(reason) end,
-  }
-  if opts.input then self:feed_read(opts.input) end
-  if opts.eof then self:feed_eof() end
-  if opts.read_error then self:feed_read_error(opts.read_error) end
-  if opts.initial_readable then self:mark_readable() end
-  if opts.initial_writable ~= false and not self.write_blocked then self:mark_writable() end
+    read = function(_, max)
+      return self:read(max)
+    end,
+    write = function(_, bytes)
+      return self:write(bytes)
+    end,
+    shutdown_read = function(_, reason)
+      return self:shutdown_read(reason)
+    end,
+    shutdown_write = function(_, reason)
+      return self:shutdown_write(reason)
+    end,
+    close = function(_, reason)
+      return self:close(reason)
+    end,
+  })
+  if opts.input then
+    self:feed_read(opts.input)
+  end
+  if opts.eof then
+    self:feed_eof()
+  end
+  if opts.read_error then
+    self:feed_read_error(opts.read_error)
+  end
+  if opts.initial_readable then
+    self:mark_readable()
+  end
+  if opts.initial_writable ~= false and not self.write_blocked then
+    self:mark_writable()
+  end
   return self
 end
 
@@ -118,17 +165,33 @@ function Fake:attach_stream(stream)
   return self._backend:attach_stream(stream)
 end
 
-function Fake:read_ready_op() return self._backend:read_ready_op() end
-function Fake:write_ready_op() return self._backend:write_ready_op() end
+function Fake:read_ready_op()
+  return self._backend:read_ready_op()
+end
+function Fake:write_ready_op()
+  return self._backend:write_ready_op()
+end
 
-function Fake:mark_readable() return remember_ready(self, 'read') end
-function Fake:mark_writable() return remember_ready(self, 'write') end
-function Fake:clear_readable() return remember_clear(self, 'read') end
-function Fake:clear_writable() return remember_clear(self, 'write') end
+function Fake:mark_readable()
+  return remember_ready(self, 'read')
+end
+function Fake:mark_writable()
+  return remember_ready(self, 'write')
+end
+function Fake:clear_readable()
+  return remember_clear(self, 'read')
+end
+function Fake:clear_writable()
+  return remember_clear(self, 'write')
+end
 
 function Fake:feed_read(bytes)
-  if type(bytes) ~= 'string' then error('FakeBackend:feed_read expects bytes', 2) end
-  if bytes ~= '' then self.input[#self.input + 1] = bytes end
+  if type(bytes) ~= 'string' then
+    error('FakeBackend:feed_read expects bytes', 2)
+  end
+  if bytes ~= '' then
+    self.input[#self.input + 1] = bytes
+  end
   update_read_ready(self)
 end
 
@@ -144,15 +207,23 @@ end
 
 function Fake:read(max)
   max = max or 4096
-  if self.read_blocked then return nil, 'would_block' end
+  if self.read_blocked then
+    return nil, 'would_block'
+  end
   if #self.input > 0 then
     local first = self.input[1]
     local take = math.min(#first, max)
     local out = string.sub(first, 1, take)
     local rest = string.sub(first, take + 1)
-    if rest == '' then table.remove(self.input, 1) else self.input[1] = rest end
+    if rest == '' then
+      table.remove(self.input, 1)
+    else
+      self.input[1] = rest
+    end
     update_read_ready(self)
-    if #self.input == 0 and not self.eof and not self.read_error then maybe_clear_manual(self, 'read') end
+    if #self.input == 0 and not self.eof and not self.read_error then
+      maybe_clear_manual(self, 'read')
+    end
     return out
   end
   if self.read_error then
@@ -185,12 +256,20 @@ end
 
 function Fake:block_writes()
   self.write_blocked = true
-  if auto(self) then update_write_ready(self) else self:clear_writable() end
+  if auto(self) then
+    update_write_ready(self)
+  else
+    self:clear_writable()
+  end
 end
 
 function Fake:unblock_writes()
   self.write_blocked = false
-  if auto(self) then update_write_ready(self) else self:mark_writable() end
+  if auto(self) then
+    update_write_ready(self)
+  else
+    self:mark_writable()
+  end
 end
 
 function Fake:set_write_chunk_size(n)
@@ -203,10 +282,17 @@ function Fake:fail_writes(err)
 end
 
 function Fake:write(bytes)
-  if self.write_error then return nil, self.write_error end
-  if self.write_blocked then maybe_clear_manual(self, 'write'); return nil, 'would_block' end
+  if self.write_error then
+    return nil, self.write_error
+  end
+  if self.write_blocked then
+    maybe_clear_manual(self, 'write')
+    return nil, 'would_block'
+  end
   local n = math.min(#bytes, self.write_chunk_size or #bytes)
-  if n <= 0 then return 0 end
+  if n <= 0 then
+    return 0
+  end
   self.output[#self.output + 1] = string.sub(bytes, 1, n)
   return n
 end

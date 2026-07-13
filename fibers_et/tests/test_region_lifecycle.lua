@@ -1,10 +1,20 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 
 -- Region lifecycle is explicit: live -> claimed -> live/failed/retired.
 do
@@ -26,7 +36,10 @@ do
     local failed = fibers.perform(region:record_op(h))
     phases[#phases + 1] = failed.phase
     assert_truthy(failed.settlement_failed, 'failed resolution should mark settlement_failed')
-    assert_truthy(tostring(failed.settlement_error_message):match('boom'), 'failed resolution should retain error message')
+    assert_truthy(
+      tostring(failed.settlement_error_message):match('boom'),
+      'failed resolution should retain error message'
+    )
 
     fibers.perform(region:resolve_claim_op(c2, { kind = 'restore' }))
     phases[#phases + 1] = fibers.perform(region:record_op(h)).phase

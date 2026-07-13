@@ -1,10 +1,20 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 
 -- run and scope are value-returning lifetime boundaries.
 do
@@ -59,11 +69,16 @@ do
   end)
   assert_eq(r.ok, false)
   assert_eq(r.reason, 'child_failed')
-  assert_truthy(tostring(r.primary):match('child boom') or tostring(r.report):match('child boom'), 'child failure should be reported')
+  assert_truthy(
+    tostring(r.primary):match('child boom') or tostring(r.report):match('child boom'),
+    'child failure should be reported'
+  )
 
   local ok, err = pcall(function()
     fibers.run(function()
-      fibers.spawn(function() error('child boom', 0) end)
+      fibers.spawn(function()
+        error('child boom', 0)
+      end)
     end)
   end)
   assert_eq(ok, false)
@@ -83,7 +98,10 @@ do
   end)
   assert_eq(r.ok, false)
   assert_truthy(r.reason == 'body_error' or r.reason == 'settlement_failed')
-  assert_truthy(tostring(r.report or r.primary):match('settlement failed'), 'settlement failure should be reported')
+  assert_truthy(
+    tostring(r.report or r.primary):match('settlement failed'),
+    'settlement failure should be reported'
+  )
 end
 
 print('tests/test_scope_result_run.lua: ok')

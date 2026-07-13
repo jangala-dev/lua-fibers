@@ -19,7 +19,10 @@ end
 local host = PureHost.new({
   now = os.time,
   on_wait = function(deadline, delay)
-    print(stamp(), 'host: no runnable work; sleeping about ' .. tostring(math.ceil(delay)) .. ' second(s)')
+    print(
+      stamp(),
+      'host: no runnable work; sleeping about ' .. tostring(math.ceil(delay)) .. ' second(s)'
+    )
     print(stamp(), 'host: next runtime deadline is ' .. stamp(deadline))
   end,
   on_wake = function(deadline)

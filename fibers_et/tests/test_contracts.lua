@@ -9,31 +9,52 @@ local TC = require('tests.effect_helpers')
 local function update_scalar(scalar, fn)
   return scalar:read_op():and_then(function(old)
     local new = fn(old)
-    return scalar:write_op(new):map(function() return new, old end)
+    return scalar:write_op(new):map(function()
+      return new, old
+    end)
   end)
 end
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg)
-  if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end
+local function fail(msg)
+  error(msg, 2)
 end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
 local function assert_error_kind(ok, err, kind, msg)
-  if ok then fail((msg or 'expected error') .. ': call succeeded') end
+  if ok then
+    fail((msg or 'expected error') .. ': call succeeded')
+  end
   if type(err) ~= 'table' or err.kind ~= kind then
-    fail((msg or 'wrong error kind') .. ': expected ' .. tostring(kind) .. ', got ' .. tostring(type(err) == 'table' and err.kind or err))
+    fail(
+      (msg or 'wrong error kind')
+        .. ': expected '
+        .. tostring(kind)
+        .. ', got '
+        .. tostring(type(err) == 'table' and err.kind or err)
+    )
   end
 end
 
 -- rt:now uses the injected host clock.
 do
   local clock = 12.5
-  local rt = Runtime.new({ host = { now = function() return clock end } })
+  local rt = Runtime.new({ host = {
+    now = function()
+      return clock
+    end,
+  } })
   assert_eq(rt:now(), 12.5, 'initial host clock')
   clock = 99
   assert_eq(rt:now(), 99, 'updated host clock')
 end
-
 
 -- Phase helper preserves arbitrary arity, including nils, without result packing.
 do
@@ -54,7 +75,9 @@ end
 -- perform is only legal from a resumed runtime fibre.
 do
   local rt = Runtime.new()
-  local ok, err = pcall(function() return rt:perform(Op.always('x')) end)
+  local ok, err = pcall(function()
+    return rt:perform(Op.always('x'))
+  end)
   assert_error_kind(ok, err, 'phase_error', 'perform outside fibre')
 end
 
@@ -66,7 +89,9 @@ do
       return rt:perform(Op.always('bad'))
     end))
   end, 'guard-performer')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'phase_error', 'perform inside guard')
 end
 
@@ -78,7 +103,9 @@ do
       return v .. rt:perform(Op.always('bad'))
     end))
   end, 'map-performer')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'phase_error', 'perform inside map')
 end
 
@@ -91,17 +118,21 @@ do
       return Op.always(v)
     end))
   end, 'and_then-performer')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'phase_error', 'perform inside and_then')
 end
 
-
--- spawn is allowed from external driver code and from a resumed fibre, but not from runtime internals.
+-- Spawn is allowed from external driver code and from a resumed fibre, but not
+-- from runtime internals.
 do
   local rt = Runtime.new()
   local child_ran = false
   rt:spawn_raw(function()
-    rt:spawn_raw(function() child_ran = true end, 'spawned-from-fibre-child')
+    rt:spawn_raw(function()
+      child_ran = true
+    end, 'spawned-from-fibre-child')
   end, 'spawned-from-fibre-parent')
   rt:run()
   assert_eq(child_ran, true, 'spawn from resumed fibre is allowed')
@@ -116,10 +147,14 @@ do
       return Op.always('x')
     end))
   end, 'guard-spawner')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'phase_error', 'spawn inside guard')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after caught phase error')
-  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-spawn-after-guard-error') end)
+  local ok_spawn = pcall(function()
+    rt:spawn_raw(function() end, 'external-spawn-after-guard-error')
+  end)
   assert_eq(ok_spawn, true, 'external spawn is not blocked after caught phase error')
 end
 
@@ -135,15 +170,31 @@ do
       end,
     },
   })
-  rt:spawn_raw(function() rt:perform(Op.emit(TC.kind('contract-test'))) end, 'effect-performer')
-  local ok, err = pcall(function() rt:run() end)
-  assert_error_kind(ok, err, 'effect_error', 'perform inside effect handler is fatal effect failure')
+  rt:spawn_raw(function()
+    rt:perform(Op.emit(TC.kind('contract-test')))
+  end, 'effect-performer')
+  local ok, err = pcall(function()
+    rt:run()
+  end)
+  assert_error_kind(
+    ok,
+    err,
+    'effect_error',
+    'perform inside effect handler is fatal effect failure'
+  )
   assert_eq(err.committed, true, 'effect failure records that commit already happened')
   assert_eq(err.fatal, true, 'effect failure is fatal')
   assert_eq(rt:failed(), err, 'runtime stores fatal effect error')
   assert_eq(rt._phase, 'external', 'effect phase restored after handler error')
-  local ok_spawn, spawn_err = pcall(function() rt:spawn_raw(function() end, 'after-fatal') end)
-  assert_error_kind(ok_spawn, spawn_err, 'effect_error', 'failed runtime rejects later spawn with fatal error')
+  local ok_spawn, spawn_err = pcall(function()
+    rt:spawn_raw(function() end, 'after-fatal')
+  end)
+  assert_error_kind(
+    ok_spawn,
+    spawn_err,
+    'effect_error',
+    'failed runtime rejects later spawn with fatal error'
+  )
 end
 
 -- wrap runs in the resumed fibre and may perform a fresh post-commit transaction.
@@ -165,8 +216,12 @@ do
   local rt = Runtime.new()
   local step_ok, step_err, run_ok, run_err
   rt:spawn_raw(function()
-    step_ok, step_err = pcall(function() return rt:step() end)
-    run_ok, run_err = pcall(function() return rt:run() end)
+    step_ok, step_err = pcall(function()
+      return rt:step()
+    end)
+    run_ok, run_err = pcall(function()
+      return rt:run()
+    end)
   end, 'driver-guard')
   rt:run()
   assert_error_kind(step_ok, step_err, 'phase_error', 'step inside fibre')
@@ -182,11 +237,12 @@ do
       error('wrap exploded')
     end))
   end, 'wrap-error')
-  local ok, _err = pcall(function() rt:run() end)
+  local ok, _err = pcall(function()
+    rt:run()
+  end)
   assert_eq(ok, false, 'wrap error should escape the driver by default')
   assert_eq(scalar.value, 1, 'wrap error does not roll back commit')
 end
-
 
 -- A raw error inside guard should not leave the runtime believing that an
 -- external caller is still inside driver internals.
@@ -197,10 +253,14 @@ do
       error('boom')
     end))
   end, 'guard-raw-error')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'callback_error', 'raw guard error is structured')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after raw guard error')
-  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-after-raw-guard-error') end)
+  local ok_spawn = pcall(function()
+    rt:spawn_raw(function() end, 'external-after-raw-guard-error')
+  end)
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw guard error')
 end
 
@@ -213,10 +273,14 @@ do
       error('map boom')
     end))
   end, 'map-raw-error')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'callback_error', 'raw map error is structured')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after raw map error')
-  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-after-raw-map-error') end)
+  local ok_spawn = pcall(function()
+    rt:spawn_raw(function() end, 'external-after-raw-map-error')
+  end)
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw map error')
 end
 
@@ -229,15 +293,18 @@ do
       return scalar:write_op(1)
     end))
   end, 'raw-effect-error')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'effect_error', 'raw effect error is fatal')
   assert_eq(err.committed, true, 'raw effect error is after commit')
   assert_eq(err.fatal, true, 'raw effect error marks runtime fatal')
   assert_eq(scalar.value, 1, 'raw effect error does not roll back committed resource')
-  local ok_run, run_err = pcall(function() rt:run() end)
+  local ok_run, run_err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok_run, run_err, 'effect_error', 'failed runtime rejects later run')
 end
-
 
 -- An uncaught phase error from a fibre must not leave later external calls
 -- misclassified as runtime-internal calls.
@@ -246,11 +313,15 @@ do
   rt:spawn_raw(function()
     rt:run()
   end, 'fibre-calls-run')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'phase_error', 'run inside fibre escapes as phase error')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after fibre phase error')
   assert_eq(rt._phase, 'external', 'phase restored after fibre phase error')
-  local ok_spawn = pcall(function() rt:spawn_raw(function() end, 'external-after-fibre-phase-error') end)
+  local ok_spawn = pcall(function()
+    rt:spawn_raw(function() end, 'external-after-fibre-phase-error')
+  end)
   assert_eq(ok_spawn, true, 'external spawn after fibre phase error is allowed')
 end
 
@@ -264,7 +335,9 @@ do
       error('scalar update exploded')
     end))
   end, 'derived-update-error')
-  local ok, err = pcall(function() rt:run() end)
+  local ok, err = pcall(function()
+    rt:run()
+  end)
   assert_error_kind(ok, err, 'callback_error', 'derived update error is a protected callback error')
   assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after derived callback error')
   assert_eq(rt._phase, 'external', 'phase restored after derived callback error')

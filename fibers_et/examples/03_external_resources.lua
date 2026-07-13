@@ -8,7 +8,11 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 local fibers = require('fibers')
 
 local now = 0
-local rt = fibers.Runtime.new({ host = { now = function() return now end } })
+local rt = fibers.Runtime.new({ host = {
+  now = function()
+    return now
+  end,
+} })
 
 local clock = fibers.Clock.new('clock')
 local signal, signal_feed = rt:signal('reload-signal')

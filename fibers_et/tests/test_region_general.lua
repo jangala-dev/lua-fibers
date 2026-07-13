@@ -1,11 +1,31 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local fibers = require('fibers')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_truthy(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
 
 -- Region is a generic ownership boundary: it can admit, move and release a
 -- non-task handle, and ownership transitions discharge scope effects.
@@ -43,14 +63,23 @@ do
   st = fibers.try_run(function()
     fibers.perform(a:admit_op(item))
     fibers.perform(a:move_op(item, b))
-  end, { host = { scope = function(e) events[#events + 1] = e end } }).runtime_status
+  end, { host = {
+    scope = function(e)
+      events[#events + 1] = e
+    end,
+  } }).runtime_status
 
   assert_status(st, 'found')
   assert_eq(item.owner, b)
   local saw_move = false
   local saw_release_admit_pair = false
   for i = 1, #events do
-    if events[i].type == 'moved' and events[i].item == item and events[i].from == a and events[i].to == b then
+    if
+      events[i].type == 'moved'
+      and events[i].item == item
+      and events[i].from == a
+      and events[i].to == b
+    then
       saw_move = true
     end
   end
@@ -62,7 +91,11 @@ do
     end
   end
   assert_truthy(saw_move, 'movement should discharge moved region event')
-  assert_eq(saw_release_admit_pair, false, 'movement should not discharge released event from source region')
+  assert_eq(
+    saw_release_admit_pair,
+    false,
+    'movement should not discharge released event from source region'
+  )
 end
 
 -- Sealing is admission policy only: it blocks new admissions and incoming
@@ -109,7 +142,9 @@ do
   local region = fibers.Region.new('task-region')
   local task, value
   local st = fibers.try_run(function()
-    task = fibers.perform(fibers.Task.spawn_op(region, function() return 99 end, 'child'))
+    task = fibers.perform(fibers.Task.spawn_op(region, function()
+      return 99
+    end, 'child'))
     value = fibers.perform(task:await_op())
   end).runtime_status
   assert_status(st, 'found')
@@ -123,7 +158,9 @@ do
   local region = fibers.Region.new('settle-task-region')
   local task
   local st = fibers.try_run(function()
-    task = fibers.perform(fibers.Task.spawn_op(region, function() return 'done' end, 'settle-child'))
+    task = fibers.perform(fibers.Task.spawn_op(region, function()
+      return 'done'
+    end, 'settle-child'))
     fibers.perform(task:await_op())
     fibers.perform(region:release_op(task))
   end).runtime_status
@@ -131,7 +168,6 @@ do
   assert_eq(task.owner, nil)
   assert_eq(region.owned[task], nil)
 end
-
 
 -- Region exposes committed ownership as a fact; policy need not shadow it.
 do
@@ -151,7 +187,6 @@ do
   assert_eq(#owned_after, 1)
   assert_eq(owned_after[1], b)
 end
-
 
 -- A claim is a capability object, not just a visible claim id.  Public record
 -- projections may reveal diagnostic claim metadata, but must not expose the
@@ -181,10 +216,12 @@ do
       reason = claim.reason,
     }
 
-    forged_result = fibers.perform(
-      region:resolve_claim_op(fake, { kind = 'discharge' }):map(function() return 'forged-settled' end)
-        :or_else(fibers.always('blocked'))
-    )
+    forged_result = fibers.perform(region
+      :resolve_claim_op(fake, { kind = 'discharge' })
+      :map(function()
+        return 'forged-settled'
+      end)
+      :or_else(fibers.always('blocked')))
     settled = fibers.perform(region:resolve_claim_op(claim, { kind = 'discharge' }))
   end).runtime_status
 

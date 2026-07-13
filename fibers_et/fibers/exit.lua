@@ -44,7 +44,9 @@ function Exit.status(x)
 end
 
 function Exit.unwrap(x)
-  if not Exit.is(x) then error('Exit.unwrap expects an Exit value', 2) end
+  if not Exit.is(x) then
+    error('Exit.unwrap expects an Exit value', 2)
+  end
   if x.tag == 'returned' then
     local vals = x.values or { n = 0 }
     return unpack_(vals, 1, vals.n or #vals)
@@ -57,9 +59,15 @@ function Exit.unwrap(x)
 end
 
 function Exit:tostring()
-  if self.tag == 'returned' then return 'Exit.returned' end
-  if self.tag == 'cancelled' then return 'Exit.cancelled: ' .. tostring(self.reason) end
-  if self.tag == 'failed' then return 'Exit.failed: ' .. tostring(self.error) end
+  if self.tag == 'returned' then
+    return 'Exit.returned'
+  end
+  if self.tag == 'cancelled' then
+    return 'Exit.cancelled: ' .. tostring(self.reason)
+  end
+  if self.tag == 'failed' then
+    return 'Exit.failed: ' .. tostring(self.error)
+  end
   return 'Exit.' .. tostring(self.tag)
 end
 

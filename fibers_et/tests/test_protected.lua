@@ -3,10 +3,22 @@
 -- This file does not alter module or global state.  The forced coroutine-backed
 -- path is exercised by tests/run_protected_fallback.lua in a fresh interpreter.
 
-local function fail(msg) error(msg, 2) end
-local function eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function ok(v, msg) if not v then fail(msg or 'expected truthy') end end
-local function test(_name, fn) fn() end
+local function fail(msg)
+  error(msg, 2)
+end
+local function eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function ok(v, msg)
+  if not v then
+    fail(msg or 'expected truthy')
+  end
+end
+local function test(_name, fn)
+  fn()
+end
 
 local fibers = require('fibers')
 local Protected = require('fibers.internal.protected')
@@ -74,7 +86,10 @@ test('fibers.xpcall permits perform and handles errors', function()
   eq(sync_ok, true)
   eq(got, 'x')
   eq(err_ok, false)
-  ok(tostring(handled):match('handled:.*xboom'), 'expected handled xboom, got: ' .. tostring(handled))
+  ok(
+    tostring(handled):match('handled:.*xboom'),
+    'expected handled xboom, got: ' .. tostring(handled)
+  )
 end)
 
 test('task bodies may perform while protected for result reporting', function()

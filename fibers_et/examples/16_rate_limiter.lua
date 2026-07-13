@@ -2,7 +2,8 @@ package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.pa
 
 local fibers = require('fibers')
 
-local limiter = fibers.RateLimiter.new({ capacity = 2, rate = 2, initial = 2, name = 'example-limiter' })
+local limiter =
+  fibers.RateLimiter.new({ capacity = 2, rate = 2, initial = 2, name = 'example-limiter' })
 
 fibers.run(function()
   fibers.perform(limiter:acquire_op(1))

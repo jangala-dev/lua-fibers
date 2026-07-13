@@ -36,7 +36,9 @@ function Nursery:on_cancel_requested(_scope, _state, reason)
 end
 
 function Nursery:on_body_exit(_scope, _state, ok, primary)
-  if ok then return { seal = true, cancel_children = false } end
+  if ok then
+    return { seal = true, cancel_children = false }
+  end
   return { seal = true, cancel_children = true, reason = primary }
 end
 
@@ -76,20 +78,33 @@ function Supervisor:on_cancel_requested(_scope, _state, reason)
 end
 
 function Supervisor:on_body_exit(_scope, _state, ok, primary)
-  if ok then return { seal = true, cancel_children = false } end
+  if ok then
+    return { seal = true, cancel_children = false }
+  end
   return { seal = true, cancel_children = true, reason = primary }
 end
 
 function Supervisor:result(scope, state, account)
   if self.child_failure == 'collect' and account.body_ok and #account.settlement_failures == 0 then
-    return ScopeResult.ok((function()
-      local values = { n = math.max((account.body_results.n or #account.body_results) - 1, 0) }
-      for i = 1, values.n do values[i] = account.body_results[i + 1] end
-      return values
-    end)(), scope:_make_report(nil, {}, account.fields))
-  elseif self.child_failure == 'ignore' and account.body_ok and #account.settlement_failures == 0 then
+    return ScopeResult.ok(
+      (function()
+        local values = { n = math.max((account.body_results.n or #account.body_results) - 1, 0) }
+        for i = 1, values.n do
+          values[i] = account.body_results[i + 1]
+        end
+        return values
+      end)(),
+      scope:_make_report(nil, {}, account.fields)
+    )
+  elseif
+    self.child_failure == 'ignore'
+    and account.body_ok
+    and #account.settlement_failures == 0
+  then
     local values = { n = math.max((account.body_results.n or #account.body_results) - 1, 0) }
-    for i = 1, values.n do values[i] = account.body_results[i + 1] end
+    for i = 1, values.n do
+      values[i] = account.body_results[i + 1]
+    end
     return ScopeResult.ok(values, scope:_make_report(nil, {}, account.fields))
   end
   return nil

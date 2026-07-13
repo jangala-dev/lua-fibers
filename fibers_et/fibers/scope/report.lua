@@ -8,7 +8,9 @@ local ScopeReport = {}
 ScopeReport.__index = ScopeReport
 
 local function to_message(x)
-  if x == nil then return nil end
+  if x == nil then
+    return nil
+  end
   return tostring(x)
 end
 
@@ -17,7 +19,8 @@ function ScopeReport.new(scope, primary, secondaries, fields)
   local s = secondaries or {}
   return setmetatable({
     _fibers_scope_report = true,
-    kind = fields.kind or ((primary ~= nil or #s > 0 or fields.reason ~= nil) and 'scope_failure' or 'scope_report'),
+    kind = fields.kind
+      or ((primary ~= nil or #s > 0 or fields.reason ~= nil) and 'scope_failure' or 'scope_report'),
     scope = scope,
     scope_id = scope and scope._fibers_id,
     scope_name = scope and scope.name,
@@ -45,7 +48,9 @@ function ScopeReport:append(err)
 end
 
 function ScopeReport:tostring()
-  if self.message then return self.message end
+  if self.message then
+    return self.message
+  end
   local parts = {}
   parts[#parts + 1] = 'scope '
   parts[#parts + 1] = tostring(self.scope_name or self.scope_id or '?')
@@ -56,7 +61,9 @@ function ScopeReport:tostring()
     parts[#parts + 1] = ' completed with '
     parts[#parts + 1] = tostring(#self.child_failures)
     parts[#parts + 1] = ' child failure'
-    if #self.child_failures ~= 1 then parts[#parts + 1] = 's' end
+    if #self.child_failures ~= 1 then
+      parts[#parts + 1] = 's'
+    end
   else
     parts[#parts + 1] = ' completed'
   end
@@ -66,10 +73,14 @@ function ScopeReport:tostring()
   end
   if #self.secondaries > 0 then
     parts[#parts + 1] = ' (secondary failure'
-    if #self.secondaries ~= 1 then parts[#parts + 1] = 's' end
+    if #self.secondaries ~= 1 then
+      parts[#parts + 1] = 's'
+    end
     parts[#parts + 1] = ': '
     local msgs = {}
-    for i = 1, #self.secondaries do msgs[#msgs + 1] = to_message(self.secondaries[i]) end
+    for i = 1, #self.secondaries do
+      msgs[#msgs + 1] = to_message(self.secondaries[i])
+    end
     parts[#parts + 1] = table.concat(msgs, '; ')
     parts[#parts + 1] = ')'
   end

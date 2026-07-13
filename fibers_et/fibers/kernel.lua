@@ -1,8 +1,9 @@
--- Transaction kernel aggregate for advanced users and embedders.
+-- Trusted kernel aggregate for embedders and facility authors.
+--
+-- The production search machine and instrumentation implementation remain
+-- internal. Require their modules directly only within the Fibers repository.
 return {
   Runtime = require('fibers.kernel.runtime'),
-  Machine = require('fibers.kernel.machine'),
   IR = require('fibers.kernel.ir'),
   Store = require('fibers.kernel.store'),
-  Instrumentation = require('fibers.kernel.instrumentation'),
 }

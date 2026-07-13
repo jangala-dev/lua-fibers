@@ -25,21 +25,29 @@ local function refill_state(self, state, now)
   state = copy_state(state or {})
   now = finite_number(now, 'rate limiter time')
   local elapsed = now - (state.last or 0)
-  if elapsed < 0 then elapsed = 0 end
+  if elapsed < 0 then
+    elapsed = 0
+  end
   local tokens = (state.tokens or 0) + elapsed * self.rate
-  if tokens > self.capacity then tokens = self.capacity end
+  if tokens > self.capacity then
+    tokens = self.capacity
+  end
   return { tokens = tokens, last = now }
 end
 
 local function normalise_amount(self, n)
   n = n or 1
   finite_number(n, 'rate limiter amount')
-  if n <= 0 then error('rate limiter amount must be positive', 3) end
-  if n > self.capacity then error('rate limiter amount exceeds capacity', 3) end
+  if n <= 0 then
+    error('rate limiter amount must be positive', 3)
+  end
+  if n > self.capacity then
+    error('rate limiter amount exceeds capacity', 3)
+  end
   return n
 end
 
-local Bucket = Scalar.kind {
+local Bucket = Scalar.kind({
   name = 'rate_limiter.bucket',
   transitions = {
     refill = {
@@ -53,8 +61,12 @@ local Bucket = Scalar.kind {
       mode = 'update',
       validate = function(payload)
         finite_number(payload.n, 'rate limiter amount')
-        if payload.n <= 0 then error('rate limiter amount must be positive', 3) end
-        if payload.n > payload.capacity then error('rate limiter amount exceeds capacity', 3) end
+        if payload.n <= 0 then
+          error('rate limiter amount must be positive', 3)
+        end
+        if payload.n > payload.capacity then
+          error('rate limiter amount exceeds capacity', 3)
+        end
       end,
       step = function(state, payload, ctx)
         local now = ctx:now()
@@ -70,25 +82,37 @@ local Bucket = Scalar.kind {
       end,
     },
   },
-}
+})
 
 local function bucket_payload(self, extra)
   local p = { capacity = self.capacity, rate = self.rate }
-  for k, v in pairs(extra or {}) do p[k] = v end
+  for k, v in pairs(extra or {}) do
+    p[k] = v
+  end
   return p
 end
 
 function RateLimiter.new(opts)
   opts = opts or {}
   local capacity = finite_number(opts.capacity or 1, 'rate limiter capacity')
-  if capacity <= 0 then error('rate limiter capacity must be positive', 2) end
+  if capacity <= 0 then
+    error('rate limiter capacity must be positive', 2)
+  end
   local rate = finite_number(opts.rate or opts.per_second or 1, 'rate limiter rate')
-  if rate <= 0 then error('rate limiter rate must be positive', 2) end
+  if rate <= 0 then
+    error('rate limiter rate must be positive', 2)
+  end
   local initial = opts.initial
-  if initial == nil then initial = capacity end
+  if initial == nil then
+    initial = capacity
+  end
   initial = finite_number(initial, 'rate limiter initial')
-  if initial < 0 then initial = 0 end
-  if initial > capacity then initial = capacity end
+  if initial < 0 then
+    initial = 0
+  end
+  if initial > capacity then
+    initial = capacity
+  end
   local last = finite_number(opts.last or opts.initial_time or 0, 'rate limiter initial time')
   local name = opts.name or 'rate-limiter'
   local self = setmetatable({
@@ -113,7 +137,9 @@ end
 function RateLimiter:acquire_op(n)
   n = normalise_amount(self, n)
   return self:try_acquire_op(n):and_then(function(ok, deadline)
-    if ok then return Op.always(true) end
+    if ok then
+      return Op.always(true)
+    end
     return self.clock:at_op(deadline):and_then(function()
       return self:acquire_op(n)
     end)
@@ -131,7 +157,9 @@ function RateLimiter:state_op()
 end
 
 function RateLimiter:available_op()
-  return self:state_op():map(function(state) return state.tokens end)
+  return self:state_op():map(function(state)
+    return state.tokens
+  end)
 end
 
 return RateLimiter

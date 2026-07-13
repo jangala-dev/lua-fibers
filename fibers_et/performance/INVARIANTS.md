@@ -13,7 +13,12 @@ For every optimisation and every fixed input:
 - occurrence identity, product-lane compatibility and settlement truth are
   preserved;
 - trail and reference evaluators agree on validating scenarios;
-- a fixed machine, seed and frontier remains replayable.
+- a fixed machine, seed and frontier remains replayable;
+- `Unknown` is never converted into a cached refutation;
+- per-plan memoisation stores only refutations;
+- cross-cycle positive reuse is restricted to effect-free, non-negative plans;
+- opaque and external components remain outside reusable caches; and
+- symmetry is applied only under an explicit complete-occurrence certificate.
 
 Branch heuristics may select a different member of the existing valid outcome
 set. Tests therefore compare exact results where the programme has one valid
@@ -31,7 +36,10 @@ The suite records both ordinary throughput and solver shape:
 - forced exchanges and claims;
 - opaque versus analysable pending requests;
 - repeated diagnostic search states;
-- retained Lua heap after collection.
+- retained Lua heap after collection;
+- no-supplier and state-memo hit rates;
+- plan-cache hits, invalidations and ineligibility reasons; and
+- certified symmetry reductions.
 
 A change which improves the median while materially worsening p99 or maximum
 search cost is not treated as a general improvement. Structural thresholds are
@@ -43,3 +51,6 @@ runners.
 The principal suite retains simple, moderate and complex application-shaped
 work. `performance/architecture_suite.lua` separately exercises the architectural
 mechanisms and compares them with the legacy policy switches.
+`performance/advanced_suite.lua` isolates the cache, memoisation, symmetry and
+cross-cycle reuse passes from one another and retains ordinary rendezvous as a
+fixed-cost control.

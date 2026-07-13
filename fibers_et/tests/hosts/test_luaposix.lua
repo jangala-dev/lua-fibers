@@ -1,10 +1,13 @@
-package.path = table.concat({'./?.lua','./?/init.lua','./?/?.lua',package.path}, ';')
+package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local Common = require('tests.hosts.common')
 
 local ok_mod, PosixHost = pcall(require, 'fibers.host.luaposix')
 Common.assert_truthy(ok_mod, 'luaposix host module should be require-able')
-Common.assert_truthy(type(PosixHost.is_supported) == 'function', 'luaposix host should expose is_supported')
+Common.assert_truthy(
+  type(PosixHost.is_supported) == 'function',
+  'luaposix host should expose is_supported'
+)
 Common.assert_truthy(type(PosixHost.new) == 'function', 'luaposix host should expose new')
 
 if not PosixHost.is_supported() then
@@ -23,9 +26,13 @@ end
 local function with_host_pipe(label, fn)
   local host = PosixHost.new()
   local pipe = make_pipe()
-  local ok, err = pcall(function() fn(label, host, pipe) end)
+  local ok, err = pcall(function()
+    fn(label, host, pipe)
+  end)
   Common.cleanup(host, pipe)
-  if not ok then error(err, 0) end
+  if not ok then
+    error(err, 0)
+  end
 end
 
 with_host_pipe('luaposix:readiness', Common.readiness_smoke)

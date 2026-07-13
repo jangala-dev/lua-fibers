@@ -9,11 +9,33 @@ local PriorityQueue = require('fibers.priority_queue')
 local Pool = require('fibers.pool')
 local Runtime = require('fibers.kernel.runtime')
 
-local function fail(msg) error(msg, 2) end
-local function assert_eq(a, b, msg) if a ~= b then fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)) end end
-local function assert_nil(v, msg) if v ~= nil then fail((msg or 'expected nil') .. ': got ' .. tostring(v)) end end
-local function assert_status(st, tag, msg) if not st or st.tag ~= tag then fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)) end end
-local function new_runtime(opts) return Runtime.new(opts or {}) end
+local function fail(msg)
+  error(msg, 2)
+end
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
+  end
+end
+local function assert_nil(v, msg)
+  if v ~= nil then
+    fail((msg or 'expected nil') .. ': got ' .. tostring(v))
+  end
+end
+local function assert_status(st, tag, msg)
+  if not st or st.tag ~= tag then
+    fail(
+      (msg or 'status mismatch')
+        .. ': expected '
+        .. tostring(tag)
+        .. ', got '
+        .. tostring(st and st.tag)
+    )
+  end
+end
+local function new_runtime(opts)
+  return Runtime.new(opts or {})
+end
 
 local function test_keyed_tensor_put_supplies_get()
   local rt = new_runtime()
@@ -56,7 +78,9 @@ local function test_keyed_remove_present_returns_value()
   local rt = new_runtime()
   local m = Keyed.new({ a = 'A' }, 'keyed-remove-present')
   local v
-  rt:spawn_raw(function() v = rt:perform(m:remove_present_op('a')) end, 'root')
+  rt:spawn_raw(function()
+    v = rt:perform(m:remove_present_op('a'))
+  end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(v, 'A')
   assert_nil(m.entries.a)
@@ -76,9 +100,13 @@ local function test_lease_readers_merge_and_writer_conflicts()
   assert_eq(c.holders.s.b, 'read')
 
   local rt2 = new_runtime({ quiet_deadlock = true })
-  rt2:spawn_raw(function() rt2:perform(c:acquire_op('s', 'write', 'w')) end, 'root')
+  rt2:spawn_raw(function()
+    rt2:perform(c:acquire_op('s', 'write', 'w'))
+  end, 'root')
   local st = rt2:run()
-  if st and st.tag == 'found' then fail('writer should not acquire while readers hold') end
+  if st and st.tag == 'found' then
+    fail('writer should not acquire while readers hold')
+  end
 end
 
 local function test_lease_tensor_release_supplies_acquire_but_all_does_not()
@@ -88,7 +116,10 @@ local function test_lease_tensor_release_supplies_acquire_but_all_does_not()
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader'):or_else(Op.always('blocked')) }))
+    rows = rt:perform(Op.all({
+      c:release_op('s', 'writer'),
+      c:acquire_op('s', 'read', 'reader'):or_else(Op.always('blocked')),
+    }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'blocked')
@@ -99,7 +130,8 @@ local function test_lease_tensor_release_supplies_acquire_but_all_does_not()
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
-    rows2 = rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
+    rows2 =
+      rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)
@@ -115,7 +147,9 @@ local function test_priority_queue_order_and_handoff_laws()
   assert_status(rt:run(), 'found')
   local rt2 = new_runtime()
   local v, priority
-  rt2:spawn_raw(function() v, priority = rt2:perform(pq:get_op()) end, 'root')
+  rt2:spawn_raw(function()
+    v, priority = rt2:perform(pq:get_op())
+  end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(v, 'high')
   assert_eq(priority, 1)
@@ -134,7 +168,8 @@ local function test_priority_queue_order_and_handoff_laws()
   local rt4 = new_runtime()
   local rows4
   rt4:spawn_raw(function()
-    rows4 = rt4:perform(Op.all({ pq3:put_op(0, 'urgent'), pq3:get_op():or_else(Op.always('empty')) }))
+    rows4 =
+      rt4:perform(Op.all({ pq3:put_op(0, 'urgent'), pq3:get_op():or_else(Op.always('empty')) }))
   end, 'root')
   assert_status(rt4:run(), 'found')
   assert_eq(rows4[2][1], 'empty')
@@ -142,11 +177,18 @@ end
 
 local function test_pool_acquire_release_and_retirement()
   local retired = {}
-  local pool = Pool.new({ name = 'pool-basic', retire = function(item, reason, key) retired[#retired + 1] = { item = item, reason = reason, key = key } end })
+  local pool = Pool.new({
+    name = 'pool-basic',
+    retire = function(item, reason, key)
+      retired[#retired + 1] = { item = item, reason = reason, key = key }
+    end,
+  })
   local rt = new_runtime()
   local lease
   rt:spawn_raw(function()
-    lease = rt:perform(pool:add_op('a', 'A'):and_then(function() return pool:acquire_op('u1') end))
+    lease = rt:perform(pool:add_op('a', 'A'):and_then(function()
+      return pool:acquire_op('u1')
+    end))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(lease.key, 'a')
@@ -154,14 +196,18 @@ local function test_pool_acquire_release_and_retirement()
   assert_eq(pool.leases.holders.a.u1, 'lease')
 
   local rt2 = new_runtime()
-  rt2:spawn_raw(function() rt2:perform(pool:release_op(lease)) end, 'root')
+  rt2:spawn_raw(function()
+    rt2:perform(pool:release_op(lease))
+  end, 'root')
   assert_status(rt2:run(), 'found')
   assert_nil(pool.leases.holders.a.u1)
   assert_eq(pool.items.entries.a.item, 'A')
   assert_eq(pool.idle.entries.a.value, 'a')
 
   local rt3 = new_runtime()
-  rt3:spawn_raw(function() rt3:perform(pool:retire_op('a', 'bad')) end, 'root')
+  rt3:spawn_raw(function()
+    rt3:perform(pool:retire_op('a', 'bad'))
+  end, 'root')
   assert_status(rt3:run(), 'found')
   assert_nil(pool.items.entries.a)
   assert_eq(#retired, 1)
@@ -173,7 +219,9 @@ local function test_pool_all_add_does_not_supply_acquire_but_tensor_does()
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ pool:add_op('x', 'X'), pool:acquire_op('u'):or_else(Op.always('empty')) }))
+    rows = rt:perform(
+      Op.all({ pool:add_op('x', 'X'), pool:acquire_op('u'):or_else(Op.always('empty')) })
+    )
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'empty')
@@ -195,25 +243,35 @@ end
 
 local function test_pool_retire_leased_defers_until_release()
   local retired = {}
-  local pool = Pool.new({ name = 'pool-defer', retire = function(item, reason, key) retired[#retired + 1] = { item = item, reason = reason, key = key } end })
+  local pool = Pool.new({
+    name = 'pool-defer',
+    retire = function(item, reason, key)
+      retired[#retired + 1] = { item = item, reason = reason, key = key }
+    end,
+  })
   local lease
   local rt = new_runtime()
   rt:spawn_raw(function()
-    lease = rt:perform(pool:add_op('a', 'A'):and_then(function() return pool:acquire_op('u') end))
+    lease = rt:perform(pool:add_op('a', 'A'):and_then(function()
+      return pool:acquire_op('u')
+    end))
   end, 'seed')
   assert_status(rt:run(), 'found')
   local rt2 = new_runtime()
-  rt2:spawn_raw(function() rt2:perform(pool:retire_op('a', 'old')) end, 'retire')
+  rt2:spawn_raw(function()
+    rt2:perform(pool:retire_op('a', 'old'))
+  end, 'retire')
   assert_status(rt2:run(), 'found')
   assert_eq(#retired, 0)
   assert_eq(pool.items.entries.a.retire_on_release, true)
   local rt3 = new_runtime()
-  rt3:spawn_raw(function() rt3:perform(pool:release_op(lease)) end, 'release')
+  rt3:spawn_raw(function()
+    rt3:perform(pool:release_op(lease))
+  end, 'release')
   assert_status(rt3:run(), 'found')
   assert_eq(#retired, 1)
   assert_nil(pool.items.entries.a)
 end
-
 
 local function test_keyed_remove_present_then_put_replaces()
   local rt = new_runtime()
@@ -221,7 +279,9 @@ local function test_keyed_remove_present_then_put_replaces()
   local old
   rt:spawn_raw(function()
     old = rt:perform(m:remove_present_op('a'):and_then(function(v)
-      return m:put_op('a', 'A2'):map(function() return v end)
+      return m:put_op('a', 'A2'):map(function()
+        return v
+      end)
     end))
   end, 'root')
   assert_status(rt:run(), 'found')
@@ -235,7 +295,10 @@ local function test_pool_close_constrains_acquire_under_tensor_and_all()
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(pool:add_op('a', 'A'):and_then(function()
-      return Op.tensor({ pool:close_op('shutdown'), pool:acquire_op('u'):or_else(Op.always('closed')) })
+      return Op.tensor({
+        pool:close_op('shutdown'),
+        pool:acquire_op('u'):or_else(Op.always('closed')),
+      })
     end))
   end, 'root')
   assert_status(rt:run(), 'found')
@@ -249,7 +312,10 @@ local function test_pool_close_constrains_acquire_under_tensor_and_all()
   local rows2
   rt2:spawn_raw(function()
     rows2 = rt2:perform(pool2:add_op('a', 'A'):and_then(function()
-      return Op.all({ pool2:close_op('shutdown'), pool2:acquire_op('u'):or_else(Op.always('closed')) })
+      return Op.all({
+        pool2:close_op('shutdown'),
+        pool2:acquire_op('u'):or_else(Op.always('closed')),
+      })
     end))
   end, 'root')
   assert_status(rt2:run(), 'found')
@@ -294,6 +360,8 @@ local tests = {
   test_lease_snapshot_records_structure_validity,
 }
 
-for i = 1, #tests do tests[i]() end
+for i = 1, #tests do
+  tests[i]()
+end
 
 print('tests/test_keyed_lease_priority_pool.lua: ok')

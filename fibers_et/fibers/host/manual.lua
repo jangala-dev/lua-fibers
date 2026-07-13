@@ -12,8 +12,12 @@ Manual.__index = Manual
 
 local function normalise_mode(mode)
   mode = mode or 'read'
-  if mode == 'wr' then mode = 'write' end
-  if mode ~= 'read' and mode ~= 'write' then error('readiness mode must be read or write', 3) end
+  if mode == 'wr' then
+    mode = 'write'
+  end
+  if mode ~= 'read' and mode ~= 'write' then
+    error('readiness mode must be read or write', 3)
+  end
   return mode
 end
 
@@ -31,7 +35,9 @@ function Manual.new(opts)
     _now = opts.now or 0,
   }, Manual)
 
-  self.now = function(_rt) return self._now end
+  self.now = function(_rt)
+    return self._now
+  end
   self.capabilities = { time = true, readiness = true, fd = false, pipe = false }
   return self
 end
@@ -50,7 +56,11 @@ function Manual:set_readiness(key, mode, value)
   mode = normalise_mode(mode)
   local k = tostring(key)
   self.ready[k] = self.ready[k] or {}
-  if value == false or value == nil then self.ready[k][mode] = nil else self.ready[k][mode] = true end
+  if value == false or value == nil then
+    self.ready[k][mode] = nil
+  else
+    self.ready[k][mode] = true
+  end
   return true
 end
 
@@ -68,7 +78,9 @@ end
 
 function Manual:clear_readiness(key, mode)
   local k = tostring(key)
-  if not self.ready[k] then return true end
+  if not self.ready[k] then
+    return true
+  end
   if mode == nil then
     self.ready[k] = nil
   else
@@ -90,7 +102,9 @@ function Manual:block(rt, waits, status, opts)
     return self:is_ready(key, mode)
   end)
   if delivered and delivered > 0 then
-    if self.on_wake then self.on_wake('readiness', waits, status) end
+    if self.on_wake then
+      self.on_wake('readiness', waits, status)
+    end
     return true, 'readiness'
   end
 
@@ -98,17 +112,25 @@ function Manual:block(rt, waits, status, opts)
   if deadline ~= nil then
     if self.auto_advance_time and opts.auto_advance_time ~= false then
       if self._now < deadline then
-        if self.on_wait then self.on_wait(deadline, deadline - self._now, waits, status) end
+        if self.on_wait then
+          self.on_wait(deadline, deadline - self._now, waits, status)
+        end
         self._now = deadline
       end
-      if self.on_wake then self.on_wake('time', waits, status) end
+      if self.on_wake then
+        self.on_wake('time', waits, status)
+      end
       return true, 'time'
     end
     return nil, 'time-not-ready'
   end
 
-  if self.on_unsupported then self.on_unsupported(waits, status) end
-  if Host.has_readiness_waits(waits) then return nil, 'readiness-not-ready' end
+  if self.on_unsupported then
+    self.on_unsupported(waits, status)
+  end
+  if Host.has_readiness_waits(waits) then
+    return nil, 'readiness-not-ready'
+  end
   return nil, 'unsupported-waits'
 end
 

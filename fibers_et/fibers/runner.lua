@@ -42,7 +42,9 @@ function Runner.run(rt, opts)
         return st
       end
     elseif st and (st.tag == 'idle' or st.tag == 'quiescent') then
-      if saw_found then return last_found or { tag = 'found', value = true } end
+      if saw_found then
+        return last_found or { tag = 'found', value = true }
+      end
       return st
     else
       return st
