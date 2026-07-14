@@ -13,6 +13,7 @@ local DependencyIndex = Dependencies.Index
 local DependencyVector = Dependencies.Vector
 local ComponentCoordinator = Dependencies.Coordinator
 local SearchCache = require('fibers.kernel.adaptive_search')
+local Activation = require('fibers.kernel.activation')
 local SearchPolicy = SearchCache.Policy
 
 local Runtime = {}
@@ -42,6 +43,7 @@ local function clear_pending_fields(fiber)
   fiber.metadata = nil
   fiber.footprint = nil
   fiber._dependency_indexed = nil
+  fiber.activation_root = nil
   if fiber.memo then
     clear_table(fiber.memo)
   else
@@ -620,6 +622,7 @@ function Runtime:_add_pending(fiber, op, interrupt)
   local request = fiber
   clear_table(request.memo)
   request.id = self.next_request
+  request.activation_root = Activation.new_request(request.id)
   request.op = op
   request.symmetry_key = Op._symmetry_key(op)
   request.interrupt = interrupt

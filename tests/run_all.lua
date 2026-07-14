@@ -32,6 +32,7 @@ local tests = {
   'tests/test_flow_settlement.lua',
   'tests/test_flow_stream_adversarial.lua',
   'tests/test_flow_validation.lua',
+  'tests/test_guard_activations.lua',
   'tests/test_host.lua',
   'tests/test_host_handle.lua',
   'tests/test_host_linux.lua',

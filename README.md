@@ -68,6 +68,7 @@ end)
 
 The put and get commit as one rendezvous. Neither side proceeds alone.
 
+`guard(f)` performs activation-relative preparation. It is evaluated once for each speculative progression which enters it, so a guarded relative sleep begins when its enclosing `and_then` progression activates. Separate uses in a tensor or choice are independent; backtracking or resuming the same progression reuses the operation already returned by the guard.
 
 ## Declaring continuation dependencies
 

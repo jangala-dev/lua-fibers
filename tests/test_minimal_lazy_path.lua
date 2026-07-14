@@ -90,6 +90,7 @@ do
   eq(total, 210)
   eq(fiber.id, nil, 'completed fibre retained a request id')
   eq(fiber.op, nil, 'completed fibre retained an operation')
+  eq(fiber.activation_root, nil, 'completed fibre retained an activation root')
   eq(next(fiber.memo), nil, 'completed fibre retained callback memo values')
   eq(rt._handoff_pool, nil, 'runtime should not allocate a perform hand-off pool')
 end

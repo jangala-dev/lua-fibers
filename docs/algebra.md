@@ -47,7 +47,7 @@ Derived forms include:
 ```text
 never          = choice()
 map(op, f)     = and_then(op, values -> always(f(values)))
-guard(f)       = attempt-local delayed construction
+guard(f)       = activation-local delayed construction
 all(lanes)     = product(independent, lanes)
 tensor(lanes)  = product(interacting, lanes)
 emit(effect)   = consequence(effect)
@@ -128,29 +128,22 @@ The commit sequence is:
 
 Effect discharge occurs after state installation. A discharge failure is fatal because the state commit cannot be rolled back.
 
-## 5. Search-phase purity
+## 5. Speculative callbacks and guard preparation
 
-The following execute during speculative search:
+The following callbacks may be replayed while proof search explores candidate worlds:
 
 ```text
 map and and_then callbacks
-guard callbacks
 Scalar transition callbacks
-witness cursor factories and guards
-facility-specific pure state calculations
+witness cursor factories and witness predicates
+facility-specific state calculations
 ```
 
-They must be:
+They must be deterministic for their explicit inputs, non-yielding, free of irreversible I/O and external mutation, and independent of undeclared transactional facts.
 
-```text
-deterministic for their explicit inputs
-non-yielding
-free of irreversible I/O
-free of external mutation
-independent of undeclared transactional facts
-```
+`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. Guard preparation may allocate fresh private values or take an intentional activation-time snapshot, but it remains immediate and non-transactional: it must not yield, call `perform`, drive the runtime or mutate Fibers-managed transactional state outside an operation. Its effects are not rolled back, and programs must not depend on the relative evaluation order of separate guard activations.
 
-A callback which must observe a committed world belongs in `wrap` or an effect, not in `map`, `and_then` or a primitive transducer.
+A callback which must observe a committed world belongs in `wrap` or an effect, not in `map`, `and_then`, `guard` or a primitive transducer.
 
 ## 6. Sequencing
 
@@ -295,19 +288,31 @@ choice(a, b):or_else(fallback)
 
 The first expression gives `preferred` semantic priority and then admits any of `a`, `b` or `c` without source-order preference. The second admits `fallback` only after the complete choice scope containing both `a` and `b` has produced a valid `Retry` proof.
 
-## 10. Guard lifetime
+## 10. Guard activation lifetime
 
-`guard(f)` delays operation construction. One dynamic guard occurrence is evaluated at most once per perform attempt.
+`guard(f)` is a reusable delayed operation constructor. Each activated structural guard occurrence is evaluated at most once within one speculative activation.
 
-The cached operation survives:
+A speculative activation is one live elaboration of an operation in a candidate world. The operation initially passed to `perform` has a root activation. Separate product lanes and choice positions receive separate activations, and each provisional result which progresses through `and_then` creates a child activation for the operation returned by the continuation.
 
-```text
-choice backtracking
-witness backtracking
-validation refresh
+Consequently, host-language sharing is not semantic sharing:
+
+```lua
+local g = Op.guard(f)
+Op.tensor({ g, g }) -- evaluates f twice
 ```
 
-A new `perform` attempt evaluates the guard again. Guard construction remains speculative and must satisfy search-phase purity.
+Explicit construction sharing is expressed with one outer guard:
+
+```lua
+Op.guard(function()
+  local prepared = f()
+  return Op.tensor({ prepared, prepared })
+end) -- evaluates f once
+```
+
+The operation returned for an activation remains fixed across local backtracking, bounded-search suspension, retained-search reconstruction and validation while the same transactional observations remain valid. A different proof progression or a changed observed version creates a different activation and reevaluates its guards. A new `perform` attempt starts with a fresh activation root.
+
+Guard evaluation is demand-driven. An unopened `or_else` fallback or an unentered choice branch need not evaluate its guards.
 
 ## 11. Wraps
 

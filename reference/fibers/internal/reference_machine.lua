@@ -7,6 +7,7 @@ local IR = require('fibers.kernel.ir')
 local ChoiceOrder = require('fibers.kernel.choice_order')
 local Frontier = require('fibers.kernel.frontier')
 local SearchCache = require('fibers.kernel.adaptive_search')
+local Activation = require('fibers.kernel.activation')
 
 local M = {}
 
@@ -19,6 +20,28 @@ local PACK_TRUE = pack_(true)
 
 local function unpack_pack(p)
   return unpack_(p, 1, p.n or #p)
+end
+
+local function new_outcome(task, packed, wrap)
+  return { pack = packed, wrap = wrap, activation = task and task.activation or nil }
+end
+
+local function object_version_label(value)
+  if value == nil then
+    return '-'
+  end
+  return tostring(value.id or value) .. '@' .. tostring(value.version or '')
+end
+
+local function advance_activation(task, fact)
+  task.activation = Activation.child(task.activation, fact)
+end
+
+local function intent_activation_label(intent)
+  local program = intent.program or {}
+  return Activation.label(intent.activation)
+    .. '@'
+    .. object_version_label(program.location or program.group)
 end
 
 local function copy_array(xs)
@@ -121,6 +144,7 @@ local function clone_state(s)
       status = t.status,
       choice_serial = t.choice_serial,
       symmetry_key = t.symmetry_key,
+      activation = t.activation,
     }
   end
 
@@ -147,6 +171,7 @@ local function clone_state(s)
       lane_views = copy_array(g.lane_views),
       lane_outcomes = lane_outcomes,
       completed = g.completed,
+      activation = g.activation,
     }
   end
 
@@ -244,11 +269,20 @@ local function finish_group_lane(state, task, frame, outcome)
     rows[i] = group.lane_outcomes[i].pack
   end
   local parent = state.tasks[group.parent_task]
+  local activation_parts = {}
+  for i = 1, group.count do
+    activation_parts[i] = Activation.label(group.lane_outcomes[i].activation)
+  end
+  parent.activation = Activation.child(
+    group.activation,
+    'product:result:' .. table.concat(activation_parts, ',')
+  )
   parent.status = 'active'
-  return complete_task(state, parent, {
-    pack = pack_(rows),
-    wrap = product_wrap(group.lane_outcomes),
-  })
+  return complete_task(
+    state,
+    parent,
+    new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes))
+  )
 end
 
 local function verify_continuation_dependencies(state, frame, next_op)
@@ -283,7 +317,7 @@ complete_task = function(state, task, outcome)
       end
       local request = state.roots[task.root_id].request
       if frame.phase == 'guard' then
-        local cached = request.memo[frame.cache_key]
+        local cached = request.memo[frame.activation]
         if not cached then
           cached = state.runtime:_call_in_phase('guard', 'callback_error', frame.fn, {
             runtime = state.runtime,
@@ -295,9 +329,10 @@ complete_task = function(state, task, outcome)
             error('guard callback must return an Op', 0)
           end
           verify_continuation_dependencies(state, frame, cached)
-          request.memo[frame.cache_key] = cached
+          request.memo[frame.activation] = cached
         end
         task.expr = cached
+        task.activation = Activation.child(frame.activation, 'guard:result')
       elseif frame.phase == 'map' then
         task.expr = Op.always(
           state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
@@ -314,11 +349,15 @@ complete_task = function(state, task, outcome)
         end
         verify_continuation_dependencies(state, frame, next_op)
         task.expr = next_op
+        task.activation = Activation.child(
+          frame.activation,
+          'and_then:result:' .. Activation.label(outcome.activation)
+        )
       end
       add_active(state, task.id)
       return true
     elseif frame.kind == 'wrap' then
-      outcome = { pack = outcome.pack, wrap = compose_wrap(outcome.wrap, frame.fn) }
+      outcome = new_outcome(task, outcome.pack, compose_wrap(outcome.wrap, frame.fn))
     elseif frame.kind == 'symmetry_restore' then
       task.symmetry_key = frame.previous_symmetry
     elseif frame.kind == 'group_lane' then
@@ -337,6 +376,9 @@ local function add_root(state, root_id)
   if not request then
     return
   end
+  if not request.activation_root then
+    request.activation_root = Activation.new_request(request.id or root_id)
+  end
 
   local view_id = new_view(state, root_id, {})
   state.next_task = state.next_task + 1
@@ -351,6 +393,7 @@ local function add_root(state, root_id)
     status = 'active',
     choice_serial = 0,
     symmetry_key = nil,
+    activation = request.activation_root,
   }
   state.roots[root_id] = {
     request = request,
@@ -374,6 +417,7 @@ local function start_product(state, task, op)
     lane_views = {},
     lane_outcomes = {},
     completed = 0,
+    activation = task.activation,
   }
   state.groups[group_id] = group
   task.status = 'waiting_group'
@@ -395,6 +439,7 @@ local function start_product(state, task, op)
       status = 'active',
       choice_serial = 0,
       symmetry_key = task.symmetry_key,
+      activation = Activation.child(task.activation, 'product:lane:' .. tostring(i)),
     }
     state.active[#state.active + 1] = child_id
   end
@@ -646,6 +691,7 @@ local function block_intent(state, task, program, occurrence)
     task_id = task.id,
     root_id = task.root_id,
     program = program,
+    activation = task.activation,
     resource = program.resource or program.group,
     role = program.role,
     value = program.payload_field == 'value' and occurrence.payload or program.value,
@@ -668,10 +714,15 @@ local function match_intents(state, left_id, right_id)
   local get = a.role == 'get' and a or b
   local put_task = state.tasks[put.task_id]
   local get_task = state.tasks[get.task_id]
-  if not complete_task(state, put_task, { pack = PACK_TRUE }) then
+  local labels = { Activation.label(a.activation), Activation.label(b.activation) }
+  table.sort(labels)
+  local fact = 'exchange:' .. table.concat(labels, '+')
+  put_task.activation = Activation.child(put_task.activation, fact)
+  get_task.activation = Activation.child(get_task.activation, fact)
+  if not complete_task(state, put_task, new_outcome(put_task, PACK_TRUE)) then
     return false
   end
-  if not complete_task(state, get_task, { pack = pack_(put.value) }) then
+  if not complete_task(state, get_task, new_outcome(get_task, pack_(put.value))) then
     return false
   end
   return true
@@ -762,6 +813,12 @@ local function resolve_machine_transitions(state, selected)
     local bo = (b.program.order or 0) + ((b.id or 0) / 1000000)
     return ao < bo
   end)
+  local proof_labels = {}
+  for i = 1, #selected do
+    proof_labels[i] = intent_activation_label(selected[i])
+  end
+  table.sort(proof_labels)
+  local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
   local resolved = {}
   for i = 1, #selected do
     local intent = selected[i]
@@ -792,7 +849,15 @@ local function resolve_machine_transitions(state, selected)
   end
   remove_intent_ids(state, ids)
   for i = 1, #resolved do
-    if not complete_task(state, resolved[i].task, { pack = resolved[i].result }) then
+    resolved[i].task.activation = Activation.child(
+      resolved[i].task.activation,
+      activation_fact
+    )
+    if not complete_task(
+      state,
+      resolved[i].task,
+      new_outcome(resolved[i].task, resolved[i].result)
+    ) then
       return false
     end
   end
@@ -820,6 +885,12 @@ local function resolve_claims(state, intent_ids)
     return resolve_machine_transitions(state, selected)
   end
 
+  local proof_labels = {}
+  for i = 1, #selected do
+    proof_labels[i] = intent_activation_label(selected[i])
+  end
+  table.sort(proof_labels)
+  local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
   local resolved = {}
   for i = 1, #selected do
     local intent = selected[i]
@@ -850,7 +921,8 @@ local function resolve_claims(state, intent_ids)
   remove_intent_ids(state, intent_ids)
   for i = 1, #resolved do
     local r = resolved[i]
-    if not complete_task(state, r.task, { pack = r.result }) then
+    r.task.activation = Activation.child(r.task.activation, activation_fact)
+    if not complete_task(state, r.task, new_outcome(r.task, r.result)) then
       return false
     end
   end
@@ -874,7 +946,7 @@ local function witness_cursor(state, intent)
   return IR.open_witness_cursor(program, value, program.payload or {}, {})
 end
 
-local function resolve_witness(state, intent_id, alt)
+local function resolve_witness(state, intent_id, alt, alternative_index)
   local intent, intent_pos
   for i = 1, #state.intents do
     if state.intents[i].id == intent_id then
@@ -906,6 +978,13 @@ local function resolve_witness(state, intent_id, alt)
   else
     state.intents = kept
   end
+  task.activation = Activation.child(
+    task.activation,
+    'witness:'
+      .. intent_activation_label(intent)
+      .. ':'
+      .. tostring(alternative_index or 1)
+  )
   local packed = alt.result
   if not (type(packed) == 'table' and packed._fibers_pack == true) then
     if type(packed) == 'table' and packed.n ~= nil then
@@ -914,7 +993,7 @@ local function resolve_witness(state, intent_id, alt)
       packed = pack_(packed)
     end
   end
-  return complete_task(state, task, { pack = packed })
+  return complete_task(state, task, new_outcome(task, packed))
 end
 
 local function resolve_claim_set(state, group, ids)
@@ -1044,10 +1123,11 @@ local function execute_program(state, task, program, occurrence)
           end
         end
       end
+      advance_activation(task, 'primitive:snapshot:keyed:' .. object_version_label(resource))
       return complete_task(
         state,
         task,
-        { pack = pack_({ entries = entries, version = resource.version }) }
+        new_outcome(task, pack_({ entries = entries, version = resource.version }))
       )
     elseif program.snapshot_kind == 'index' then
       local value = Store.read(view, resource._location)
@@ -1055,10 +1135,11 @@ local function execute_program(state, task, program, occurrence)
       for k, e in pairs(value or {}) do
         entries[k] = { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
       end
+      advance_activation(task, 'primitive:snapshot:index:' .. object_version_label(resource))
       return complete_task(
         state,
         task,
-        { pack = pack_({ entries = entries, version = resource.version }) }
+        new_outcome(task, pack_({ entries = entries, version = resource.version }))
       )
     elseif program.snapshot_kind == 'lease' then
       local holders = {}
@@ -1077,10 +1158,11 @@ local function execute_program(state, task, program, occurrence)
           holders[subject][owner] = mode
         end
       end
+      advance_activation(task, 'primitive:snapshot:lease:' .. object_version_label(resource))
       return complete_task(
         state,
         task,
-        { pack = pack_({ holders = holders, version = resource.version }) }
+        new_outcome(task, pack_({ holders = holders, version = resource.version }))
       )
     end
     error('unknown snapshot kind', 0)
@@ -1092,7 +1174,8 @@ local function execute_program(state, task, program, occurrence)
   if kind == 'version_wait' then
     if loc.version ~= program.version then
       Store.cell(view, loc)
-      return complete_task(state, task, { pack = pack_(Store.read(view, loc), loc.version) })
+      advance_activation(task, 'primitive:version_wait:' .. object_version_label(loc))
+      return complete_task(state, task, new_outcome(task, pack_(Store.read(view, loc), loc.version)))
     end
     program.observed_version = loc.version
     block_intent(state, task, program)
@@ -1100,7 +1183,8 @@ local function execute_program(state, task, program, occurrence)
   end
 
   if kind == 'read' then
-    return complete_task(state, task, { pack = result_pack(program, Store.read(view, loc)) })
+    advance_activation(task, 'primitive:read:' .. object_version_label(loc))
+    return complete_task(state, task, new_outcome(task, result_pack(program, Store.read(view, loc))))
   end
 
   if kind == 'patch' then
@@ -1109,7 +1193,8 @@ local function execute_program(state, task, program, occurrence)
       patch = { kind = 'replace', value = occurrence.payload }
     end
     Store.stage(view, loc, patch)
-    return complete_task(state, task, { pack = result_pack(program, Store.read(view, loc)) })
+    advance_activation(task, 'primitive:patch:' .. object_version_label(loc))
+    return complete_task(state, task, new_outcome(task, result_pack(program, Store.read(view, loc))))
   end
 
   if kind == 'claim' or kind == 'machine_transition' or kind == 'witness_transition' then
@@ -1121,7 +1206,8 @@ local function execute_program(state, task, program, occurrence)
     local value = Store.read(view, loc)
     if predicate_holds(program, value) then
       Store.stage(view, loc, program.immediate_patch)
-      return complete_task(state, task, { pack = result_pack(program, value) })
+      advance_activation(task, 'primitive:conditional_claim:' .. object_version_label(loc))
+      return complete_task(state, task, new_outcome(task, result_pack(program, value)))
     end
     block_intent(state, task, program)
     return true
@@ -1180,13 +1266,17 @@ local function merge_refutation(dst, src)
   if not src then
     return dst
   end
-  dst = dst or { interests = {}, checks = {} }
-  local seen_i, seen_c = {}, {}
+  dst = dst or { interests = {}, checks = {}, activation_keys = {} }
+  dst.activation_keys = dst.activation_keys or {}
+  local seen_i, seen_c, seen_a = {}, {}, {}
   for i = 1, #dst.interests do
     seen_i[dst.interests[i].id or tostring(dst.interests[i])] = true
   end
   for i = 1, #dst.checks do
     seen_c[dst.checks[i].id or tostring(dst.checks[i])] = true
+  end
+  for i = 1, #dst.activation_keys do
+    seen_a[dst.activation_keys[i]] = true
   end
   for i = 1, #(src.interests or {}) do
     local x = src.interests[i]
@@ -1204,11 +1294,27 @@ local function merge_refutation(dst, src)
       dst.checks[#dst.checks + 1] = x
     end
   end
+  for i = 1, #(src.activation_keys or {}) do
+    local key = src.activation_keys[i]
+    if not seen_a[key] then
+      seen_a[key] = true
+      dst.activation_keys[#dst.activation_keys + 1] = key
+    end
+  end
   return dst
 end
 
+local function refutation_activation_label(refutation)
+  local keys = {}
+  for i = 1, #((refutation and refutation.activation_keys) or {}) do
+    keys[i] = refutation.activation_keys[i]
+  end
+  table.sort(keys)
+  return #keys > 0 and table.concat(keys, '|') or '-'
+end
+
 local function terminal_refutation(state)
-  local out = { interests = {}, checks = {} }
+  local out = { interests = {}, checks = {}, activation_keys = {} }
   for i = 1, #state.intents do
     local intent = state.intents[i]
     if intent.interest then
@@ -1231,6 +1337,17 @@ local function terminal_refutation(state)
       }
     end
   end
+  local facts = {}
+  for i = 1, #out.interests do
+    local interest = out.interests[i]
+    facts[#facts + 1] = 'i:' .. tostring(interest.id or interest)
+  end
+  for i = 1, #out.checks do
+    local check = out.checks[i]
+    facts[#facts + 1] = 'c:' .. tostring(check.id or check)
+  end
+  table.sort(facts)
+  out.activation_keys[1] = #facts > 0 and table.concat(facts, ',') or '-'
   return out
 end
 
@@ -1338,20 +1455,23 @@ dfs_impl = function(state)
         local kind = expr.kind
 
         if kind == 'always' then
-          if not complete_task(state, task, { pack = expr.vals }) then
+          if not complete_task(state, task, new_outcome(task, expr.vals)) then
             return nil, terminal_refutation(state), false
           end
         elseif kind == 'and_then' then
+          local parent_activation = task.activation
           task.frames[#task.frames + 1] = {
             kind = 'bind',
             fn = expr.fn,
             phase = expr.callback_phase,
-            cache_key = expr.cache_key,
+            activation = parent_activation,
             continuation_footprint = expr.continuation_footprint,
           }
           task.expr = expr.p
+          task.activation = Activation.child(parent_activation, 'and_then:prefix')
           add_active(state, task.id)
         elseif kind == 'annotated' then
+          local parent_activation = task.activation
           if expr.post then
             task.frames[#task.frames + 1] = { kind = 'wrap', fn = expr.post }
           end
@@ -1361,10 +1481,11 @@ dfs_impl = function(state)
             task.symmetry_key = expr.symmetry_key
           end
           task.expr = expr.p
+          task.activation = Activation.child(parent_activation, 'annotated:body')
           add_active(state, task.id)
         elseif kind == 'consequence' then
           state.effects[#state.effects + 1] = expr.effect
-          if not complete_task(state, task, { pack = pack_() }) then
+          if not complete_task(state, task, new_outcome(task, pack_())) then
             return nil, terminal_refutation(state), false
           end
         elseif kind == 'primitive' then
@@ -1388,6 +1509,7 @@ dfs_impl = function(state)
             local branch = clone_state(state)
             local bt = branch.tasks[task.id]
             bt.expr = expr.choices[i]
+            bt.activation = Activation.child(task.activation, 'choice:' .. tostring(i))
             add_active(branch, bt.id)
             local found, ref, unknown = dfs(branch)
             if found then
@@ -1412,6 +1534,7 @@ dfs_impl = function(state)
           local primary = clone_state(state)
           local pt = primary.tasks[task.id]
           pt.expr = expr.p
+          pt.activation = Activation.child(task.activation, 'or_else:preferred')
           add_active(primary, pt.id)
           local found, pref, unknown = dfs(primary)
           if found then
@@ -1431,6 +1554,10 @@ dfs_impl = function(state)
           end
           local ft = fallback.tasks[task.id]
           ft.expr = expr.q
+          ft.activation = Activation.child(
+            task.activation,
+            'or_else:fallback:' .. refutation_activation_label(pref)
+          )
           add_active(fallback, ft.id)
           local fallback_found, fref, funknown = dfs(fallback)
           if fallback_found then

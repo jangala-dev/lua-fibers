@@ -79,6 +79,8 @@ Approximate correspondences are:
 
 CML event choice is nondeterministic when several events can proceed. The revised `fibers.choice` has the same important algebraic intention: branch position does not confer priority. `fibers` uses a deterministic seed-derived traversal for reproducibility, but this is runtime policy rather than source-order semantics.
 
+Fibers gives `guard` an activation-scoped interpretation. Each structural use is prepared independently, so `tensor({ g, g })` evaluates a reused guard twice, while one outer guard may deliberately construct a shared operation. A guard returned by `and_then` is evaluated when that particular provisional progression activates. Its result is then retained while the same progression is searched, suspended or reconstructed. This resembles CML pre-synchronisation preparation while accounting for Fibers' multi-step speculative worlds.
+
 The main difference is CML's single selected synchronisation point. Work may be arranged before or after that point, but a compound protocol must still decide which communication constitutes commitment. `fibers.and_then` keeps earlier state changes and exchanges provisional until the complete continuation and all recruited participants close.
 
 ### Primitive authoring

@@ -524,6 +524,16 @@ function Session:can_reopen_retry()
   if not state or state.active_head <= #state.active then
     return false
   end
+  -- Guard expansions are keyed by semantic activation rather than evaluator
+  -- frames.  Rebuild an invalidated residual seed so versioned primitive facts
+  -- can select a new activation; unchanged paths still recover their memoised
+  -- guard expansion from the request.
+  for _, root in pairs(state.roots or {}) do
+    local request = root.request
+    if request and request.memo and next(request.memo) ~= nil then
+      return false
+    end
+  end
   -- A retained residual seed is presently limited to a genuinely blocked
   -- frontier.  Exhausted structural branches are rebuilt rather than guessed.
   return #(state.intents or {}) > 0

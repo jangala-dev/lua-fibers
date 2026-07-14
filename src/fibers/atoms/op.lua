@@ -246,9 +246,6 @@ end
 
 Op.emit = Op.consequence
 
--- Delayed construction is derived through and_then.  The cache key preserves the
--- previous guarantee that a guard callback runs at most once per perform
--- attempt, even when proof search backtracks.
 function Op.dependencies(...)
   local parts = {}
   for i = 1, select('#', ...) do
@@ -273,13 +270,14 @@ local function continuation_hint(opts)
   return opts.footprint or opts.continuation or opts
 end
 
+-- Delayed construction is derived through and_then.  The evaluator memoises
+-- each guard by its request-local speculative activation, rather than by Op
+-- object identity.
 function Op.guard(fn, opts)
-  local key = {}
   return op('and_then', {
     p = Op.always(),
     fn = fn,
     callback_phase = 'guard',
-    cache_key = key,
     continuation_footprint = continuation_hint(opts),
   })
 end

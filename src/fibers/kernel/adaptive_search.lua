@@ -84,6 +84,7 @@ function Policy:plan_cache_candidate(pending_count)
 end
 
 local IR = require('fibers.kernel.ir')
+local Activation = require('fibers.kernel.activation')
 
 local M = {}
 
@@ -270,7 +271,7 @@ local function frame_key(frame)
     tostring(frame.group_id or ''),
     tostring(frame.lane or ''),
     tostring(frame.fn or ''),
-    tostring(frame.cache_key or ''),
+    Activation.label(frame.activation),
     tostring(frame.continuation_footprint or ''),
     value_key(frame.previous_symmetry),
   }, ':')
@@ -308,7 +309,24 @@ local function outcome_key(outcome)
   if not outcome then
     return '-'
   end
-  return pack_key(outcome.pack) .. '/w:' .. tostring(outcome.wrap or '')
+  return pack_key(outcome.pack)
+    .. '/w:'
+    .. tostring(outcome.wrap or '')
+    .. '/a:'
+    .. Activation.label(outcome.activation)
+end
+
+local function task_activation_key(task)
+  for i = 1, #(task.frames or {}) do
+    if task.frames[i].kind == 'bind' then
+      return Activation.label(task.activation)
+    end
+  end
+  local kind = task.expr and task.expr.kind
+  if task.status == 'active' and kind ~= 'always' and kind ~= 'primitive' and kind ~= 'consequence' then
+    return Activation.label(task.activation)
+  end
+  return '-'
 end
 
 local function task_key(task, task_id)
@@ -322,6 +340,7 @@ local function task_key(task, task_id)
     tostring(task.choice_serial or 0),
     value_key(task.symmetry_key),
     scope_key(task.scope_path),
+    task_activation_key(task),
   }
   for i = 1, #(task.frames or {}) do
     row[#row + 1] = frame_key(task.frames[i])
@@ -444,6 +463,7 @@ function M.signature(state, terminal)
       tostring(intent.interest and (intent.interest.id or intent.interest) or ''),
       tostring(intent.absence_check or ''),
       tostring(task and task.view_id or ''),
+      task_activation_key(task),
     }
     for j = 1, #((task and task.frames) or {}) do
       row[#row + 1] = frame_key(task.frames[j])

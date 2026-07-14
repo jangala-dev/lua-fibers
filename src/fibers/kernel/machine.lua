@@ -8,6 +8,7 @@ local ChoiceOrder = require('fibers.kernel.choice_order')
 local Frontier = require('fibers.kernel.frontier')
 local SearchCache = require('fibers.kernel.adaptive_search')
 local SearchSession = require('fibers.kernel.search_session')
+local Activation = require('fibers.kernel.activation')
 
 local M = {}
 
@@ -36,7 +37,7 @@ local function new_outcome(state, packed, wrap, task)
     return task
   end
   local outcome = state.session:acquire_record('outcome')
-  outcome.pack, outcome.wrap = packed, wrap
+  outcome.pack, outcome.wrap, outcome.activation = packed, wrap, task and task.activation or nil
   return outcome
 end
 
@@ -189,6 +190,24 @@ local function pushv(state, target, value)
   state.trail:push(target, value)
 end
 
+local function object_version_label(value)
+  if value == nil then
+    return '-'
+  end
+  return tostring(value.id or value) .. '@' .. tostring(value.version or '')
+end
+
+local function advance_activation(state, task, fact)
+  setv(state, task, 'activation', Activation.child(task.activation, fact))
+end
+
+local function intent_activation_label(intent)
+  local program = intent.program or {}
+  return Activation.label(intent.activation)
+    .. '@'
+    .. object_version_label(program.location or program.group)
+end
+
 local function map_count(xs)
   local n = 0
   for _ in pairs(xs or {}) do
@@ -292,6 +311,16 @@ local function finish_group_lane(state, task, frame, outcome)
     rows[i] = packed
   end
   local parent = state.tasks[group.parent_task]
+  local activation_parts = {}
+  for i = 1, group.count do
+    activation_parts[i] = Activation.label(group.lane_outcomes[i].activation)
+  end
+  setv(
+    state,
+    parent,
+    'activation',
+    Activation.child(group.activation, 'product:result:' .. table.concat(activation_parts, ','))
+  )
   setv(state, parent, 'status', 'active')
   return complete_task(
     state,
@@ -351,7 +380,7 @@ complete_task = function(state, task, outcome)
         )
       else
         if frame.phase == 'guard' then
-          local cached = request.memo[frame.cache_key]
+          local cached = request.memo[frame.activation]
           if not cached then
             cached = state.runtime:_call_in_phase('guard', 'callback_error', frame.fn, {
               runtime = state.runtime,
@@ -363,9 +392,10 @@ complete_task = function(state, task, outcome)
               error('guard callback must return an Op', 0)
             end
             verify_continuation_dependencies(state, frame, cached)
-            request.memo[frame.cache_key] = cached
+            request.memo[frame.activation] = cached
           end
           setv(state, task, 'expr', cached)
+          setv(state, task, 'activation', Activation.child(frame.activation, 'guard:result'))
         else
           local next_op = state.runtime:_call_in_phase(
             'and_then',
@@ -378,6 +408,15 @@ complete_task = function(state, task, outcome)
           end
           verify_continuation_dependencies(state, frame, next_op)
           setv(state, task, 'expr', next_op)
+          setv(
+            state,
+            task,
+            'activation',
+            Activation.child(
+              frame.activation,
+              'and_then:result:' .. Activation.label(outcome.activation)
+            )
+          )
         end
         add_active(state, task.id)
         return true
@@ -402,6 +441,9 @@ local function add_root(state, root_id)
   if not request then
     return
   end
+  if not request.activation_root then
+    request.activation_root = Activation.new_request(request.id or root_id)
+  end
 
   state.next_task = state.next_task + 1
   local task_id = state.next_task
@@ -410,6 +452,7 @@ local function add_root(state, root_id)
   -- and other child tasks remain ordinary task records.
   local task = state.session:acquire_record('task')
   task.id, task.root_id, task.expr = task_id, root_id, request.op
+  task.activation = request.activation_root
   task.view_id, task.scope_path, task.status = nil, nil, 'active'
   task.choice_serial, task.symmetry_key = 0, nil
   task.request, task.task_id, task.done, task.outcome = request, task_id, false, nil
@@ -444,6 +487,7 @@ local function start_product(state, task, op)
   local group = state.session:acquire_record('group')
   local _, parent_view_id = ensure_task_view(state, task)
   group.id, group.parent_task, group.parent_view = group_id, task.id, parent_view_id
+  group.activation = task.activation
   group.mode, group.count, group.completed = op.mode, #op.lanes, 0
   setv(state, state.groups, group_id, group)
   setv(state, task, 'status', 'waiting_group')
@@ -464,6 +508,7 @@ local function start_product(state, task, op)
     local child_id = state.next_task
     local child = state.session:acquire_record('task')
     child.id, child.root_id, child.expr = child_id, task.root_id, op.lanes[i]
+    child.activation = Activation.child(task.activation, 'product:lane:' .. tostring(i))
     child.frames[1] = { kind = 'group_lane', group_id = group_id, lane = i }
     child.view_id, child.scope_path, child.status = view_id, path, 'active'
     child.choice_serial, child.symmetry_key = 0, task.symmetry_key
@@ -522,6 +567,7 @@ local function block_intent(state, task, program, occurrence)
   local intent = state.session:acquire_record('intent')
   intent.id, intent.kind = state.next_intent, programme_kind(program)
   intent.task_id, intent.root_id, intent.program = task.id, task.root_id, program
+  intent.activation = task.activation
   intent.resource, intent.role = program.resource or program.group, program.role
   intent.value = program.payload_field == 'value' and occurrence.payload or program.value
   intent.symmetry_key, intent.scope_path = task.symmetry_key, task.scope_path
@@ -553,6 +599,11 @@ local function match_intents(state, left_id, right_id)
   local get = a.role == 'get' and a or b
   local put_task = state.tasks[put.task_id]
   local get_task = state.tasks[get.task_id]
+  local labels = { Activation.label(a.activation), Activation.label(b.activation) }
+  table.sort(labels)
+  local fact = 'exchange:' .. table.concat(labels, '+')
+  setv(state, put_task, 'activation', Activation.child(put_task.activation, fact))
+  setv(state, get_task, 'activation', Activation.child(get_task.activation, fact))
   if not complete_task(state, put_task, new_outcome(state, PACK_TRUE, nil, put_task)) then
     return false
   end
@@ -661,6 +712,12 @@ local function resolve_machine_transitions(state, selected)
     local bo = (b.program.order or 0) + ((b.id or 0) / 1000000)
     return ao < bo
   end)
+  local proof_labels = {}
+  for i = 1, #selected do
+    proof_labels[i] = intent_activation_label(selected[i])
+  end
+  table.sort(proof_labels)
+  local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
   local resolved = {}
   for i = 1, #selected do
     local intent = selected[i]
@@ -692,6 +749,12 @@ local function resolve_machine_transitions(state, selected)
   end
   remove_intent_ids(state, ids)
   for i = 1, #resolved do
+    setv(
+      state,
+      resolved[i].task,
+      'activation',
+      Activation.child(resolved[i].task.activation, activation_fact)
+    )
     if
       not complete_task(
         state,
@@ -726,6 +789,12 @@ local function resolve_claims(state, intent_ids)
     return resolve_machine_transitions(state, selected)
   end
 
+  local proof_labels = {}
+  for i = 1, #selected do
+    proof_labels[i] = intent_activation_label(selected[i])
+  end
+  table.sort(proof_labels)
+  local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
   local resolved = {}
   for i = 1, #selected do
     local intent = selected[i]
@@ -758,6 +827,7 @@ local function resolve_claims(state, intent_ids)
   remove_intent_ids(state, intent_ids)
   for i = 1, #resolved do
     local r = resolved[i]
+    setv(state, r.task, 'activation', Activation.child(r.task.activation, activation_fact))
     if not complete_task(state, r.task, new_outcome(state, r.result, nil, r.task)) then
       return false
     end
@@ -783,7 +853,7 @@ local function witness_cursor(state, intent)
   return IR.open_witness_cursor(program, value, program.payload or {}, {})
 end
 
-local function resolve_witness(state, intent_id, alt)
+local function resolve_witness(state, intent_id, alt, alternative_index)
   local intent, intent_pos
   for i = 1, #state.intents do
     if state.intents[i].id == intent_id then
@@ -815,6 +885,18 @@ local function resolve_witness(state, intent_id, alt)
   else
     state.intents = kept
   end
+  setv(
+    state,
+    task,
+    'activation',
+    Activation.child(
+      task.activation,
+      'witness:'
+        .. intent_activation_label(intent)
+        .. ':'
+        .. tostring(alternative_index or 1)
+    )
+  )
   local packed = alt.result
   if not (type(packed) == 'table' and packed._fibers_pack == true) then
     if type(packed) == 'table' and packed.n ~= nil then
@@ -1014,6 +1096,11 @@ local function execute_program(state, task, program, occurrence)
           end
         end
       end
+      advance_activation(
+        state,
+        task,
+        'primitive:snapshot:keyed:' .. object_version_label(resource)
+      )
       return complete_task(
         state,
         task,
@@ -1030,6 +1117,11 @@ local function execute_program(state, task, program, occurrence)
       for k, e in pairs(value or {}) do
         entries[k] = { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
       end
+      advance_activation(
+        state,
+        task,
+        'primitive:snapshot:index:' .. object_version_label(resource)
+      )
       return complete_task(
         state,
         task,
@@ -1057,6 +1149,11 @@ local function execute_program(state, task, program, occurrence)
           holders[subject][owner] = mode
         end
       end
+      advance_activation(
+        state,
+        task,
+        'primitive:snapshot:lease:' .. object_version_label(resource)
+      )
       return complete_task(
         state,
         task,
@@ -1078,6 +1175,11 @@ local function execute_program(state, task, program, occurrence)
     view = ensure_task_view(state, task)
     if loc.version ~= program.version then
       Store.cell(view, loc, state.trail)
+      advance_activation(
+        state,
+        task,
+        'primitive:version_wait:' .. object_version_label(loc)
+      )
       return complete_task(
         state,
         task,
@@ -1096,12 +1198,15 @@ local function execute_program(state, task, program, occurrence)
 
   if kind == 'read' then
     view = ensure_task_view(state, task)
+    advance_activation(state, task, 'primitive:read:' .. object_version_label(loc))
     return complete_task(
       state,
       task,
       new_outcome(
         state,
-        Store.result_pack(program, Store.read(view, loc, state.trail), state.session)
+        Store.result_pack(program, Store.read(view, loc, state.trail), state.session),
+        nil,
+        task
       )
     )
   end
@@ -1113,6 +1218,7 @@ local function execute_program(state, task, program, occurrence)
       patch = { kind = 'replace', value = occurrence.payload }
     end
     Store.stage(view, loc, patch, state.trail)
+    advance_activation(state, task, 'primitive:patch:' .. object_version_label(loc))
     return complete_task(
       state,
       task,
@@ -1135,6 +1241,11 @@ local function execute_program(state, task, program, occurrence)
     local value = Store.read(view, loc, state.trail)
     if Store.predicate_holds(program, value) then
       Store.stage(view, loc, program.immediate_patch, state.trail)
+      advance_activation(
+        state,
+        task,
+        'primitive:conditional_claim:' .. object_version_label(loc)
+      )
       return complete_task(
         state,
         task,
@@ -1198,13 +1309,17 @@ local function merge_refutation(dst, src)
   if not src then
     return dst
   end
-  dst = dst or { interests = {}, checks = {} }
-  local seen_i, seen_c = {}, {}
+  dst = dst or { interests = {}, checks = {}, activation_keys = {} }
+  dst.activation_keys = dst.activation_keys or {}
+  local seen_i, seen_c, seen_a = {}, {}, {}
   for i = 1, #dst.interests do
     seen_i[dst.interests[i].id or tostring(dst.interests[i])] = true
   end
   for i = 1, #dst.checks do
     seen_c[dst.checks[i].id or tostring(dst.checks[i])] = true
+  end
+  for i = 1, #dst.activation_keys do
+    seen_a[dst.activation_keys[i]] = true
   end
   for i = 1, #(src.interests or {}) do
     local x = src.interests[i]
@@ -1222,11 +1337,27 @@ local function merge_refutation(dst, src)
       dst.checks[#dst.checks + 1] = x
     end
   end
+  for i = 1, #(src.activation_keys or {}) do
+    local key = src.activation_keys[i]
+    if not seen_a[key] then
+      seen_a[key] = true
+      dst.activation_keys[#dst.activation_keys + 1] = key
+    end
+  end
   return dst
 end
 
+local function refutation_activation_label(refutation)
+  local keys = {}
+  for i = 1, #((refutation and refutation.activation_keys) or {}) do
+    keys[i] = refutation.activation_keys[i]
+  end
+  table.sort(keys)
+  return #keys > 0 and table.concat(keys, '|') or '-'
+end
+
 local function terminal_refutation(state)
-  local out = { interests = {}, checks = {} }
+  local out = { interests = {}, checks = {}, activation_keys = {} }
   for i = 1, #state.intents do
     local intent = state.intents[i]
     if intent.interest then
@@ -1249,6 +1380,17 @@ local function terminal_refutation(state)
       }
     end
   end
+  local facts = {}
+  for i = 1, #out.interests do
+    local interest = out.interests[i]
+    facts[#facts + 1] = 'i:' .. tostring(interest.id or interest)
+  end
+  for i = 1, #out.checks do
+    local check = out.checks[i]
+    facts[#facts + 1] = 'c:' .. tostring(check.id or check)
+  end
+  table.sort(facts)
+  out.activation_keys[1] = #facts > 0 and table.concat(facts, ',') or '-'
   return out
 end
 
@@ -1373,16 +1515,19 @@ local function drain_active(state)
           return 'retry', terminal_refutation(state)
         end
       elseif kind == 'and_then' then
+        local parent_activation = task.activation
         pushv(state, task.frames, {
           kind = 'bind',
           fn = expr.fn,
           phase = expr.callback_phase,
-          cache_key = expr.cache_key,
+          activation = parent_activation,
           continuation_footprint = expr.continuation_footprint,
         })
         setv(state, task, 'expr', expr.p)
+        setv(state, task, 'activation', Activation.child(parent_activation, 'and_then:prefix'))
         add_active(state, task.id)
       elseif kind == 'annotated' then
+        local parent_activation = task.activation
         if expr.post then
           pushv(state, task.frames, { kind = 'wrap', fn = expr.post })
         end
@@ -1395,6 +1540,7 @@ local function drain_active(state)
           setv(state, task, 'symmetry_key', expr.symmetry_key)
         end
         setv(state, task, 'expr', expr.p)
+        setv(state, task, 'activation', Activation.child(parent_activation, 'annotated:body'))
         add_active(state, task.id)
       elseif kind == 'consequence' then
         pushv(state, state.effects, expr.effect)
@@ -1422,6 +1568,7 @@ local function drain_active(state)
             kind = 'choice',
             task_id = task.id,
             expr = expr,
+            activation = task.activation,
             order = ChoiceOrder.indices(
               state.runtime,
               task,
@@ -1438,6 +1585,7 @@ local function drain_active(state)
             kind = 'or_else',
             task_id = task.id,
             expr = expr,
+            activation = task.activation,
             phase = 'preferred',
             refutation = nil,
             preferred_refutation = nil,
@@ -1660,8 +1808,15 @@ local function next_frontier_alternative(state, frame)
         end
         local alt = frame.witness_cursor:next()
         if alt ~= nil then
-          return { kind = 'witness', intent_id = intent.id, alternative = alt }
+          frame.witness_alternative_index = (frame.witness_alternative_index or 0) + 1
+          return {
+            kind = 'witness',
+            intent_id = intent.id,
+            alternative = alt,
+            alternative_index = frame.witness_alternative_index,
+          }
         end
+        frame.witness_alternative_index = 0
         frame.witness_cursor = nil
         frame.witness_index = frame.witness_index + 1
       end
@@ -1752,6 +1907,12 @@ local function prepare_alternative(state, frame, alt)
     end
     local task = state.tasks[frame.task_id]
     setv(state, task, 'expr', frame.expr.choices[alt.choice_index])
+    setv(
+      state,
+      task,
+      'activation',
+      Activation.child(frame.activation, 'choice:' .. tostring(alt.choice_index))
+    )
     add_active(state, task.id)
     return true
   elseif alt.kind == 'or_else_preferred' then
@@ -1761,6 +1922,7 @@ local function prepare_alternative(state, frame, alt)
     end
     local task = state.tasks[frame.task_id]
     setv(state, task, 'expr', frame.expr.p)
+    setv(state, task, 'activation', Activation.child(frame.activation, 'or_else:preferred'))
     add_active(state, task.id)
     return true
   elseif alt.kind == 'or_else_fallback' then
@@ -1778,6 +1940,15 @@ local function prepare_alternative(state, frame, alt)
     end
     local task = state.tasks[frame.task_id]
     setv(state, task, 'expr', frame.expr.q)
+    setv(
+      state,
+      task,
+      'activation',
+      Activation.child(
+        frame.activation,
+        'or_else:fallback:' .. refutation_activation_label(pref)
+      )
+    )
     add_active(state, task.id)
     return true
   elseif alt.kind == 'exchange' then
@@ -1793,7 +1964,7 @@ local function prepare_alternative(state, frame, alt)
     if profile_plan then
       profile_plan.witness_alternatives = profile_plan.witness_alternatives + 1
     end
-    return resolve_witness(state, alt.intent_id, alt.alternative)
+    return resolve_witness(state, alt.intent_id, alt.alternative, alt.alternative_index)
   elseif alt.kind == 'claim' then
     if profile_plan then
       profile_plan.claim_branches = profile_plan.claim_branches + 1

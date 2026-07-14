@@ -77,8 +77,9 @@ op:wrap(function(...) ... end)
 op:on_defeat(effect)
 ```
 
-`map`, `and_then`, `guard` and primitive transition callbacks execute during speculative proof search. They must be deterministic, non-yielding and free of irreversible side effects.
+`map`, `and_then` and primitive transition callbacks execute during speculative proof search and may be replayed. They must be deterministic, non-yielding and free of irreversible side effects.
 
+`guard` is evaluated once per activated speculative progression. It is suitable for activation-relative preparation such as fixing a deadline or allocating a fresh private reply endpoint. The returned operation remains fixed while that progression is searched and resumed. Guard preparation is immediate and non-transactional: it must not yield, call `perform` or mutate Fibers-managed transactional state, and its effects are not rolled back if the candidate loses.
 
 An arbitrary operation-valued continuation is conservatively opaque to the
 runtime.  Performance-sensitive library code may declare the union of possible

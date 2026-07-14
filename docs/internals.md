@@ -11,6 +11,7 @@ src/fibers/kernel/choice_order.lua  pure seed-derived branch permutations
 src/fibers/kernel/dependencies.lua pending components, retained-work validation and coordination
 src/fibers/kernel/frontier.lua     blocked-frontier classification and branch ordering
 src/fibers/kernel/adaptive_search.lua lazy memoisation, no-goods and retention policy
+src/fibers/kernel/activation.lua    request-local speculative activation paths
 src/fibers/kernel/machine.lua      closed-world trail-based proof search
 src/fibers/kernel/search_session.lua retained production-search lifecycle
 src/fibers/kernel/runtime.lua      fibres, open-world scheduling and host boundary
@@ -58,6 +59,10 @@ annotated occurrence
 Public helpers elaborate to those forms. Operations are ordinary immutable-by-convention Lua tables; the runtime does not mutate them. Static footprint caching is stored in a weak-key side table.
 
 A dynamic `choice` occurrence receives an occurrence serial within its evaluator task. `choice_order.lua` derives a pure permutation from the runtime's `choice_seed`, epoch, pending generation, request identity, evaluator task identity and occurrence serial. The permutation consumes no process-global random state, so speculative rollback does not perturb later choices and the trail and reference evaluators can reproduce the same traversal.
+
+`activation.lua` interns a small request-local tree of semantic progression tokens. Evaluator tasks carry one token. Structural descent adds lane or branch facts; primitive outcomes add observed-version facts; exchanges, claims and witnesses add the selected proof fact; and an `or_else` fallback includes the certified Retry interests and checks which opened it. An `and_then` result is addressed by the activation of its provisional predecessor outcome. Guard expansions remain in the existing request memo, keyed by the enclosing activation token rather than by reusable `Op` identity. The token tree is monotonic and outside rollback, while task references to tokens remain ordinary speculative evaluator state.
+
+This permits the same progression to recover a guarded deadline after search reconstruction, while a different tensor lane, proof alternative or observed location version receives a fresh guard evaluation. Exact search-state identity includes activation information only where a continuation can observe it, preserving memoisation of guard-free duplicate branches.
 
 Primitive facilities compile to records in `src/fibers/kernel/ir.lua`:
 
