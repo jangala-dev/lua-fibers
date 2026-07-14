@@ -2,7 +2,7 @@
 
 This document preserves quarry notes.  It is not an API promise.
 
-The atom kit and lifetime calculus suggest larger compounds.  Some may become
+The resource toolkit and lifetime calculus suggest larger compounds.  Some may become
 facilities.  Some may remain design language.  A name earns its place only if it
 reduces ambiguity in the system.
 
@@ -188,7 +188,7 @@ Possible use:
 game frame stages, render extraction, embedded power modes, radio awake/sleep cycles
 ```
 
-The current `fibers.phase` module is a prototype.  It proves that phase can be
+The current `experiments.phase` module is a prototype.  It proves that phase can be
 built over scope and now enforces declared custody, authority and fact
 crossings by explicit edge label.  It is still not a full phase language: it
 does not yet model emitted events, active-phase ordering or richer edge policy.

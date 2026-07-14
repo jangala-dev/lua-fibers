@@ -16,4 +16,4 @@ package.path = table.concat({
 _G.__FIBERS_PROTECTED_FORCE_FALLBACK = true
 _G.__FIBERS_PROTECTED_EXPECT_NATIVE = false
 
-return dofile('tests/test_protected.lua')
+return dofile('tests/internal/test_protected.lua')

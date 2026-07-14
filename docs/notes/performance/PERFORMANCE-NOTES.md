@@ -8,7 +8,7 @@ or instruction tuning:
 
 1. performance and semantic invariants;
 2. diagnostic dependency and repeated-state measurement;
-3. compiled operation metadata and continuation declarations;
+3. compiled option metadata and continuation declarations;
 4. incremental pending-request dependency indexes;
 5. conservative dependency-component isolation;
 6. deterministic normalisation and forced reductions; and
@@ -58,12 +58,12 @@ than accepting a favourable default seed.
 
 ## 2. Diagnostic dependency model
 
-Operation metadata is compiled and cached by operation identity.  It records:
+Option metadata is compiled and cached by option identity.  It records:
 
 - exchange resources and roles;
 - versioned locations and access modes;
 - resource-wide dependencies;
-- operation-node kinds and counts;
+- option-node kinds and counts;
 - external dependencies; and
 - whether any continuation remains opaque.
 
@@ -83,8 +83,8 @@ local op = prior:and_then(function(value)
 end, Op.dependencies(next_op))
 ```
 
-Declarations may combine several operations or metadata parts.  They state the
-union of dependencies the callback may return, not the operation it must return
+Declarations may combine several options or metadata parts.  They state the
+union of dependencies the callback may return, not the option it must return
 on every invocation.
 
 An unannotated arbitrary Lua continuation remains dynamic and conservatively
@@ -97,7 +97,7 @@ This is intended as a test and development aid; verification is not enabled on
 the normal fast path.
 
 Task, Scope, Region, Flow and benchmark-owned continuations whose future
-operations are structurally known now use this declaration path.
+options are structurally known now use this declaration path.
 
 ## 4. Incremental pending dependency index
 
@@ -112,7 +112,7 @@ The index is activated adaptively at 16 pending requests and normally released
 only after the frontier falls below 8.  This hysteresis avoids rebuilding the
 index when a workload oscillates around the activation boundary.  Small
 frontiers use direct scans and avoid the fixed cost of maintaining a graph for
-one- and two-party operations.
+one- and two-party options.
 
 A per-search-node exchange-intent index was also tested.  It reduced comparisons
 but allocated enough Lua tables to slow ordinary rendezvous after component
@@ -144,7 +144,7 @@ Before ordinary branching, both evaluators recognise certified forced work:
 - a sole compatible binary rendezvous with no unentered possible supplier;
 - a sole all-member, non-supplying claim group with no unentered possible
   supplier; and
-- deterministic operation prefixes already handled by the evaluator loop.
+- deterministic option prefixes already handled by the evaluator loop.
 
 These reductions do not guess a preferred outcome.  They remove a branch only
 when no alternative remains in the current conservative component.

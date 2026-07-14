@@ -4,10 +4,10 @@
 -- handles and drop count) is a Scalar state machine.  Buffered storage is a
 -- Queue; capacity-zero mailboxes rendezvous directly.
 
-local Op = require('fibers.atoms.op')
-local Scalar = require('fibers.atoms.scalar')
-local Queue = require('fibers.queue')
-local Rendezvous = require('fibers.atoms.rendezvous')
+local Op = require('fibers.op')
+local Scalar = require('fibers.scalar')
+local Queue = require('fibers.internal.fifo')
+local Rendezvous = require('fibers.resource.rendezvous')
 
 local Mailbox = {}
 local Tx = {}

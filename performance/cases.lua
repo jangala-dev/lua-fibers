@@ -1,9 +1,11 @@
 local fibers = require('fibers')
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
-local Rendezvous = require('fibers.atoms.rendezvous')
-local Scalar = require('fibers.atoms.scalar')
-local EventQueue = require('fibers.atoms.event_queue')
+local Flow = require('fibers.internal.flow')
+local Policy = require('fibers.policy')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.scalar')
+local EventQueue = require('fibers.external.event_queue')
 
 local cases = {}
 
@@ -185,7 +187,7 @@ end)
 
 add('moderate', 'flow', 'sequential write read', 280, function(ctx, n)
   local rt = ctx:runtime()
-  local flow = fibers.Flow.new({ name = 'perf-flow' })
+  local flow = Flow.new({ name = 'perf-flow' })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -287,7 +289,7 @@ add('complex', 'search', 'nursery rendezvous fanout seven', 1, function(ctx, rou
     local total = 0
     local result = fibers.try_run(
       function()
-        local ch = fibers.Rendezvous.new('perf-nursery-fanout-' .. tostring(round))
+        local ch = Rendezvous.new('perf-nursery-fanout-' .. tostring(round))
         for i = 1, fanout do
           fibers.spawn(function()
             fibers.perform(ch:put_op(i))
@@ -299,7 +301,7 @@ add('complex', 'search', 'nursery rendezvous fanout seven', 1, function(ctx, rou
       end,
       ctx:run_options({
         name = 'perf-nursery-fanout',
-        policy = fibers.policy.nursery({ name = 'perf-nursery-policy' }),
+        policy = Policy.nursery({ name = 'perf-nursery-policy' }),
       })
     )
     ctx:add_runtime(result.runtime)

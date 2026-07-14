@@ -5,11 +5,11 @@
 -- the backend only on bytes that have been committed into a lease, then ack,
 -- retain, or fail that lease according to the host result.
 
-local Runtime = require('fibers.kernel.runtime')
-local Op = require('fibers.atoms.op')
+local Runtime = require('fibers.runtime')
+local Op = require('fibers.op')
 local Task = require('fibers.task')
 local Settlement = require('fibers.internal.settlement')
-local Errors = require('fibers.flow.errors')
+local Errors = require('fibers.internal.flow.errors')
 
 local Pump = {}
 Pump.Strategy = {}
@@ -34,8 +34,8 @@ local function masked_perform(rt, op)
   return rt:_perform_current(op, nil, true)
 end
 
-local function named(name, operation)
-  return operation:map(function(...)
+local function named(name, option)
+  return option:map(function(...)
     return name, ...
   end)
 end

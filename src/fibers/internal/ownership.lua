@@ -4,7 +4,7 @@ local Kind = { name = 'ownership' }
 
 local function no_settlement()
   return function()
-    return require('fibers.atoms.op').always(true)
+    return require('fibers.op').always(true)
   end
 end
 

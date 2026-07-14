@@ -1,6 +1,6 @@
 # Performance and semantic invariants
 
-Architectural performance work is accepted only when it preserves the operation
+Architectural performance work is accepted only when it preserves the option
 algebra and improves measured work rather than merely one elapsed-time sample.
 
 ## Semantic invariants

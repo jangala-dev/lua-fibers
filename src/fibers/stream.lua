@@ -1,16 +1,16 @@
 -- Bidirectional streams built from unidirectional byte flows.
 --
--- Flow is the primitive byte abstraction. A Stream/Duplex is a compound over
+-- Flow is the current internal byte engine. A Stream/Duplex is a compound over
 -- two Flows. Host streams add a backend and pump obligations around those two
 -- Flows.
 
-local Op = require('fibers.atoms.op')
-local Region = require('fibers.atoms.region')
+local Op = require('fibers.op')
+local Region = require('fibers.lifetime.region')
 local Pump = require('fibers.stream.pump')
 local Ownership = require('fibers.internal.ownership')
-local Owned = require('fibers.atoms.region').Owned
+local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
-local Flow = require('fibers.flow')
+local Flow = require('fibers.internal.flow')
 
 local Stream = {}
 local Duplex = {}
@@ -255,7 +255,7 @@ function Stream.open_backend_op(backend, opts)
       2
     )
   end
-  local Runtime = require('fibers.kernel.runtime')
+  local Runtime = require('fibers.runtime')
   local scope = opts.owner or (Runtime.current_scope and Runtime.current_scope())
   if not scope then
     error('Stream.open_backend_op requires a current Scope or opts.owner', 2)

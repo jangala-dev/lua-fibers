@@ -6,8 +6,8 @@
 -- then resolve the claim. Settlement is inline policy work; detached settlement
 -- drivers are not part of the core lifetime calculus.
 
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
 local Protected = require('fibers.internal.protected')
 
 local Settlement = {}

@@ -1,20 +1,20 @@
 -- Task: public owned computation.
 --
 -- A Task is not a second scheduler primitive. It is the standard owned running
--- work abstraction built from the atom kit: Region admits ownership, Scalar holds
--- completion and cancellation facts, and Effect.spawn starts the fibre after
+-- work abstraction built from the supported resource and lifetime layers. Region
+-- admits ownership, Scalar holds completion and cancellation facts, and Effect.spawn starts the fibre after
 -- commit.
 
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
-local Scalar = require('fibers.atoms.scalar')
-local Effect = require('fibers.atoms.effect')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Scalar = require('fibers.scalar')
+local Effect = require('fibers.lifetime.effect')
 local Interrupt = require('fibers.internal.interrupt')
 local Ownership = require('fibers.internal.ownership')
-local Owned = require('fibers.atoms.region').Owned
+local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
 local Protected = require('fibers.internal.protected')
-local Exit = require('fibers.exit')
+local Exit = require('fibers.lifetime.exit')
 
 local unpack_ = table.unpack or unpack
 local function pack(...)

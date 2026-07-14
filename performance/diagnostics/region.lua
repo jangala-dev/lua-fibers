@@ -11,11 +11,12 @@ package.path = table.concat({
   package.path,
 }, ';')
 local fibers = require('fibers')
+local Region = require('fibers.lifetime.region')
 local n = tonumber(arg[1]) or 100
-local r = fibers.Region.new('bench-region')
+local r = Region.new('bench-region')
 local hs = {}
 for i = 1, n do
-  hs[i] = fibers.Region.handle('h' .. i)
+  hs[i] = Region.handle('h' .. i)
 end
 local t = os.clock()
 fibers.run(function()

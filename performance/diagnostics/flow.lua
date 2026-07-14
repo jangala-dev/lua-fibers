@@ -11,8 +11,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 local fibers = require('fibers')
-local Op = fibers.Op
-local Flow = fibers.Flow
+local Op = require('fibers.op')
+local Flow = require('fibers.internal.flow')
+
 local n = tonumber(arg[1]) or 2000
 local mode = arg[2] or 'sequential'
 local flow = Flow.new({ capacity = 64, name = 'bench-flow' })

@@ -4,15 +4,15 @@
 -- provides ordinary execution, custody/authority commands, two boundary facts
 -- (sealed and done), and diagnostic inspection.
 
-local Op = require('fibers.atoms.op')
-local Region = require('fibers.atoms.region')
-local Rendezvous = require('fibers.atoms.rendezvous')
-local Scalar = require('fibers.atoms.scalar')
-local EventQueue = require('fibers.atoms.event_queue')
+local Op = require('fibers.op')
+local Region = require('fibers.lifetime.region')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.scalar')
+local EventQueue = require('fibers.external.event_queue')
 local Task = require('fibers.task')
-local Lease = require('fibers.atoms.lease')
-local Borrow = require('fibers.borrow')
-local Runtime = require('fibers.kernel.runtime')
+local Lease = require('fibers.resource.lease')
+local Borrow = require('fibers.lifetime.borrow')
+local Runtime = require('fibers.runtime')
 local Protected = require('fibers.internal.protected')
 local ScopeReport = require('fibers.scope.report')
 local ScopeResult = require('fibers.scope.result')
@@ -411,7 +411,7 @@ function Scope:request_cancel_op(reason)
       if not first then
         return Op.always(false, recorded_reason)
       end
-      return Op.emit(require('fibers.atoms.effect').interrupt(self.interrupt, recorded_reason))
+      return Op.emit(require('fibers.lifetime.effect').interrupt(self.interrupt, recorded_reason))
         :map(function()
           return true, recorded_reason
         end)

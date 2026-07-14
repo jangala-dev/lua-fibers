@@ -10,7 +10,7 @@
 local ReadinessBackend = require('fibers.stream.backend.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
-local Errors = require('fibers.flow.errors')
+local Errors = require('fibers.internal.flow.errors')
 
 local Fake = {}
 Fake.__index = Fake

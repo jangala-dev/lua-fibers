@@ -4,8 +4,8 @@
 -- is a clock-resource wait.  Relative sleep is a guard that fixes its absolute
 -- deadline once for the perform attempt.
 
-local Op = require('fibers.atoms.op')
-local Clock = require('fibers.atoms.clock')
+local Op = require('fibers.op')
+local Clock = require('fibers.external.clock')
 
 local Sleep = {}
 

@@ -11,84 +11,29 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Harness = require('tests.harness')
+local Harness = require('tests.support.harness')
+local groups = require('tests.groups')
 
-local tests = {
-  'tests/test_protected.lua',
-  'tests/test_atoms_kit.lua',
-  'tests/test_bitops.lua',
-  'tests/test_calendar.lua',
-  'tests/test_calendar_completeness.lua',
-  'tests/test_concurrent_task_settlement.lua',
-  'tests/test_contracts.lua',
-  'tests/test_counter_queue.lua',
-  'tests/test_defeat.lua',
-  'tests/test_documented_examples.lua',
-  'tests/test_effects.lua',
-  'tests/test_external_resources.lua',
-  'tests/test_flow_helpers.lua',
-  'tests/test_flow_reservoir.lua',
-  'tests/test_flow_scalar_state_machine.lua',
-  'tests/test_flow_settlement.lua',
-  'tests/test_flow_stream_adversarial.lua',
-  'tests/test_flow_validation.lua',
-  'tests/test_guard_activations.lua',
-  'tests/test_host.lua',
-  'tests/test_host_handle.lua',
-  'tests/test_host_linux.lua',
-  'tests/test_index_lease_extended.lua',
-  'tests/test_invariants.lua',
-  'tests/test_instrumentation.lua',
-  'tests/test_keyed_lease_priority_pool.lua',
-  'tests/test_kernel_machine.lua',
-  'tests/test_lease_laws.lua',
-  'tests/test_op.lua',
-  'tests/test_petri.lua',
-  'tests/test_performance_architecture.lua',
-  'tests/test_phase_prototype.lua',
-  'tests/test_policy.lua',
-  'tests/test_index.lua',
-  'tests/test_priority_queue_composition.lua',
-  'tests/test_pulse_waitgroup_mailbox.lua',
-  'tests/test_readiness.lua',
-  'tests/test_region_general.lua',
-  'tests/test_region_lifecycle.lua',
-  'tests/test_region_laws.lua',
-  'tests/test_region_task_effects.lua',
-  'tests/test_residual_or_else.lua',
-  'tests/test_resumable_search.lua',
-  'tests/test_resources.lua',
-  'tests/test_retry_laws.lua',
-  'tests/test_retry_semantics.lua',
-  'tests/test_runtime.lua',
-  'tests/test_runtime_lifecycle.lua',
-  'tests/test_search_state_identity.lua',
-  'tests/test_search_stack.lua',
-  'tests/test_slim_retention.lua',
-  'tests/test_scalar_transitions_rate_limiter.lua',
-  'tests/test_scope.lua',
-  'tests/test_scope_authority_borrow.lua',
-  'tests/test_scope_hardening.lua',
-  'tests/test_scope_laws.lua',
-  'tests/test_scope_policy_mechanisms.lua',
-  'tests/test_scope_result_run.lua',
-  'tests/test_scope_structural.lua',
-  'tests/test_settlement_structure.lua',
-  'tests/test_sleep.lua',
-  'tests/test_stream_memory.lua',
-  'tests/test_stream_pumped.lua',
-  'tests/test_stream_socket_backend.lua',
-  'tests/test_structured_policy.lua',
-  'tests/test_store_algebra.lua',
-  'tests/test_store_rollback.lua',
-  'tests/test_minimal_lazy_path.lua',
-  'tests/test_mixed_claim_exchange.lua',
-  'tests/test_state_resource_laws.lua',
-  'tests/test_validation_paths.lua',
-  'tests/test_witness_validation.lua',
-  'tests/test_search_session_reopen.lua',
-  'tests/hosts/test_all.lua',
+local order = {
+  'public',
+  'composition',
+  'resources',
+  'lifetimes',
+  'embedding',
+  'kernel',
+  'internal',
+  'case_studies',
+  'experiments',
+  'performance',
 }
+
+local tests = {}
+for i = 1, #order do
+  local group = groups[order[i]] or {}
+  for j = 1, #group do
+    tests[#tests + 1] = group[j]
+  end
+end
 
 local opts = Harness.parse_args(arg, 'FIBERS_TEST')
 opts.label = 'tests/run_all.lua'

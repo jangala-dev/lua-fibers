@@ -83,7 +83,7 @@ runs. The figures are local regression measurements, not cross-machine claims.
 Instrumentation is opt-in:
 
 ```lua
-local Runtime = require('fibers.kernel.runtime')
+local Runtime = require('fibers.runtime')
 
 local rt = Runtime.new({
   instrumentation = {

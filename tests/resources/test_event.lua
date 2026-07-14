@@ -13,14 +13,14 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
 
 local function deliver(rt, resource, ...)
   return rt:external_feed(resource):deliver(...)
 end
-local Signal = require('fibers.atoms.signal')
-local Rendezvous = require('fibers.atoms.rendezvous')
+local Signal = require('fibers.external.signal')
+local Rendezvous = require('fibers.resource.rendezvous')
 local H = require('tests.resources.test_helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()

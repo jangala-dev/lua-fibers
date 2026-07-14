@@ -15,6 +15,8 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Policy = require('fibers.policy')
 local Clock = require('performance.clock')
 
 local function env_number(name, default)
@@ -43,7 +45,7 @@ for fanout = min_size, max_size do
     local total = 0
     local started = Clock.now()
     local result = fibers.try_run(function()
-      local ch = fibers.Rendezvous.new('seed-sweep-' .. tostring(fanout) .. '-' .. tostring(seed))
+      local ch = Rendezvous.new('seed-sweep-' .. tostring(fanout) .. '-' .. tostring(seed))
       for i = 1, fanout do
         fibers.spawn(function()
           fibers.perform(ch:put_op(i))
@@ -57,7 +59,7 @@ for fanout = min_size, max_size do
       choice_seed = seed,
       search_limit = search_limit,
       instrumentation = { slow_plan_limit = 1, clock = Clock.now },
-      policy = fibers.policy.nursery({ name = 'seed-sweep-policy' }),
+      policy = Policy.nursery({ name = 'seed-sweep-policy' }),
     })
     local elapsed = Clock.now() - started
     local snapshot = result.runtime and result.runtime:instrumentation_snapshot()

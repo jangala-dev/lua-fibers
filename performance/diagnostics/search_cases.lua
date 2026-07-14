@@ -10,10 +10,10 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
-local Rendezvous = require('fibers.atoms.rendezvous')
-local Scalar = require('fibers.atoms.scalar')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.scalar')
 
 local function report(name, rt)
   local s = rt.stats

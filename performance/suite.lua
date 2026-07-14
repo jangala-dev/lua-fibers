@@ -27,7 +27,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Runtime = require('fibers.kernel.runtime')
+local Runtime = require('fibers.runtime')
 local Clock = require('performance.clock')
 local cases = require('performance.cases')
 

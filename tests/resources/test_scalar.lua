@@ -13,11 +13,11 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
-local Scalar = require('fibers.atoms.scalar')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Scalar = require('fibers.scalar')
 local H = require('tests.resources.test_helpers')
-local TC = require('tests.effect_helpers')
+local TC = require('tests.support.effect_helpers')
 
 local function update_scalar(scalar, fn)
   return scalar:read_op():and_then(function(old)

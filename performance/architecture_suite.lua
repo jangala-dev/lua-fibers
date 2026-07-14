@@ -16,11 +16,12 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Runtime = require('fibers.kernel.runtime')
-local Rendezvous = require('fibers.atoms.rendezvous')
-local Scalar = require('fibers.atoms.scalar')
-local Op = require('fibers.atoms.op')
+local Runtime = require('fibers.runtime')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.scalar')
+local Op = require('fibers.op')
 local fibers = require('fibers')
+local Policy = require('fibers.policy')
 local Clock = require('performance.clock')
 
 local function env(name, default)
@@ -253,10 +254,10 @@ local function nursery_case(fanout)
       machine = machine,
       choice_seed = 1,
       instrumentation = { clock = Clock.now, state_hash = true, slow_plan_limit = 3 },
-      policy = fibers.policy.nursery({ name = 'arch-nursery-policy' }),
+      policy = Policy.nursery({ name = 'arch-nursery-policy' }),
     })
     local result = fibers.try_run(function()
-      local channel = fibers.Rendezvous.new('arch-nursery-channel-' .. tostring(fanout))
+      local channel = Rendezvous.new('arch-nursery-channel-' .. tostring(fanout))
       for i = 1, fanout do
         fibers.spawn(function()
           fibers.perform(channel:put_op(i))

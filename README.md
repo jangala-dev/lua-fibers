@@ -1,368 +1,380 @@
-# fibers
+# Fibers
 
-`fibers` is a cooperative concurrency runtime for Lua. Fibres perform inert operation values; a proof-search kernel finds a compatible committed world containing synchronous exchange, versioned state changes, ownership changes and post-commit obligations.
+Readable structured concurrency for Lua and Luau.
 
-The production source uses the portable Lua 5.1 grammar. The version 1 runtime policy targets Lua 5.1, 5.2, 5.3, 5.4 and 5.5, the maintained LuaJIT `v2.1` branch, and Luau. Optional native host backends depend on modules available in the embedding environment; Luau host integration is treated separately from the stock-Lua module ABI.
+Fibers lets a programme describe possible concurrent actions, combine those descriptions in ordinary Lua, and perform one coherent result. The same small vocabulary applies to channels, time, transactional state, task lifetimes and host resources.
 
+Fibers version 1 is an advanced work in progress. Its public surface is being reduced and settled before the first release.
 
-## Repository layout
+## One concurrent decision
 
-```text
-src/          installable Fibers source
-reference/    repository-only reference solver used for differential tests
-tests/        correctness and host-backend tests
-examples/     runnable examples
-performance/  validating benchmarks and solver diagnostics
-docs/         design and user documentation
+Here is the central option from a small robot dispatcher:
+
+```lua
+local result = perform(choice(
+  all({
+    safety:expect_op('clear'),
+    power:take_op(1),
+  }):and_then(function()
+    return call_op(robot, 'inspection')
+  end):or_else(always('dispatch unavailable')),
+
+  stop:get_op():map(function(reason)
+    return 'stopped: ' .. reason
+  end)
+):wrap(report))
 ```
 
-Run repository commands from the project root so the development-only reference
-path is available to tests and performance tools.
+Read it as follows:
 
-## The operation algebra
+> Either accept an operator stop, or require clear safety state and one unit of power, then complete an inspection call. Report `dispatch unavailable` only when that whole preferred protocol is proved unable to commit. Report the result after the decision has committed.
 
-The canonical operation forms are:
+The call itself is a request-and-reply protocol:
 
-```text
-always(values)
-primitive(programme)
-choice(operations)
-and_then(operation, values -> operation)
-product(independent | interacting, lanes)
-or_else(primary, fallback)
-consequence(effect)
+```lua
+local function call_op(robot, command)
+  return robot.online:expect_op(true):and_then(function()
+    return robot.requests:put_op(command):and_then(function()
+      return robot.replies:get_op()
+    end)
+  end)
+end
 ```
 
-The public helpers `never`, `map`, `guard`, `all`, `tensor` and `emit` elaborate to those forms. `wrap` and `on_defeat` annotate dynamic occurrences.
+The first send may initially have no local result. That does not make the call absent. Fibers may recruit the robot fibre, match the request, continue to the reply, and commit the whole chain. While that coherent world exists, the fallback is not eligible.
 
-The central distinctions are:
+If the managed facts instead prove that the complete dispatch cannot commit, `or_else` admits the fallback. Fibers calls this **certified present absence**.
 
-```text
-choice      unordered alternatives with no source-position priority
-or_else     fallback only after a complete, valid Retry proof
-all         lanes commit together but cannot positively supply one another
-tensor      lanes commit together and may perform intentional hand-off
-Retry       the preferred search scope is presently impossible
-Unknown     bounded search has not established Hit or Retry
-wrap        participant-local work after commit
-consequence runtime-owned work selected with the committed world
+The complete runnable example is [`examples/tutorial/00_robot_dispatch.lua`](examples/tutorial/00_robot_dispatch.lua).
+
+## The model
+
+Five ideas are enough to begin.
+
+### Fibres are ordinary sequential code
+
+A fibre is a cooperatively scheduled Lua function. Within a fibre, code remains direct and sequential.
+
+```lua
+fibers.spawn(function()
+  local message = fibers.perform(inbox:get_op())
+  handle(message)
+end)
 ```
 
-## First programme
+### Options describe possible actions
+
+An option is inert. Constructing one does not send, receive, sleep or change state.
+
+The API calls this value `Op`: short for option. Methods ending in `_op` return options which may be combined before one is submitted to `perform`.
+
+```lua
+local receive = inbox:get_op()
+local timeout = fibers.sleep_op(1)
+```
+
+The suffix keeps possible actions visible in application code.
+
+### `perform` resolves an option
+
+`perform` submits an option to the runtime and is the explicit execution and suspension boundary.
+
+```lua
+local message = fibers.perform(inbox:get_op())
+```
+
+The option may commit immediately, wait for other participants, or compose several actions into one transaction. Application code uses the same boundary in each case.
+
+### Effects belong to committed worlds
+
+An effect is a typed runtime obligation selected with an option and discharged only if that world commits. Fibers uses effects for task spawning, interruption, scope notification and host wake-up.
+
+Most application code uses effects through ordinary facilities rather than constructing them directly. The important guarantee is that speculative alternatives do not start tasks or mutate the outside world merely because they were considered.
+
+### Scopes account for lifetimes
+
+Every structured task belongs to a scope. A scope accounts for its children and retained obligations before it returns.
+
+```lua
+fibers.run(function(scope)
+  local task = scope:spawn(function()
+    return produce_result()
+  end, 'worker')
+
+  return fibers.perform(task:await_op())
+end)
+```
+
+Options compose possibilities. Scopes compose lifetimes.
+
+## A small algebra
+
+In Fibers, an algebra is simply a small set of ways to combine options. No formal background is required. The useful property is that the same combinations retain their meanings across different facilities.
+
+| Expression | Read it as |
+|---|---|
+| `always(value)` | this result is already available |
+| `never()` | this construction cannot succeed |
+| `choice(a, b)` | either coherent result is acceptable |
+| `a:or_else(b)` | use `b` only with certified present absence of `a` |
+| `a:and_then(f)` | continue transactionally from the result of `a` |
+| `all({ a, b })` | satisfy both without positive supply between siblings |
+| `tensor({ a, b })` | satisfy both, allowing compatible sibling hand-off |
+| `a:map(f)` | transform a speculative result |
+| `a:wrap(f)` | run participant-local code after commitment |
+
+Most programmes begin with `perform`, `choice`, `or_else`, `and_then`, `wrap`, `spawn` and scopes. The product operators become useful when several requirements must form one decision.
+
+### Choice expresses permission
+
+```lua
+local result = fibers.perform(fibers.choice(
+  inbox:get_op(),
+  fibers.sleep_op(1):wrap(function()
+    return 'timeout'
+  end)
+))
+```
+
+Either result is acceptable. If several branches can commit, source order does not make the first one a priority.
+
+### `or_else` requires proof
+
+```lua
+local result = preferred:or_else(fallback)
+```
+
+The fallback is not chosen because `preferred` appears locally blocked or because a search budget has been exhausted. It becomes eligible only after the relevant preferred search has been refuted under recorded managed facts.
+
+This distinction is central:
+
+```text
+choice(a, b)  either result is permitted
+a:or_else(b)  b requires a valid refutation of a
+```
+
+The preferred side may itself contain choices, products, state transitions and chains of communication. If any coherent committed world satisfies it, Fibers still prefers it.
+
+Internally, Fibers distinguishes:
+
+- a constructive result;
+- an exhaustive present refutation;
+- an undecided bounded search.
+
+An undecided search is not treated as absence. Implementation limits therefore do not silently change the meaning of `or_else`.
+
+### Sequencing remains transactional
+
+```lua
+local reserve_and_send = slots:take_op(1):and_then(function()
+  return requests:put_op('start')
+end)
+```
+
+The slot is not consumed independently if the continuation cannot complete. Earlier communication and state changes remain provisional until the whole sequence commits.
+
+Callbacks used by `map`, `and_then` and transactional resource transitions may be revisited during proof search. They must be deterministic, non-yielding and free of irreversible side effects.
+
+### Two forms of conjunction
+
+`all` combines requirements which must each be supportable without positive supply from their siblings:
+
+```lua
+fibers.all({
+  account_a:take_op(1),
+  account_b:take_op(1),
+})
+```
+
+One lane cannot fund the other.
+
+`tensor` permits compatible siblings to participate in an intentional transactional hand-off:
+
+```lua
+fibers.tensor({
+  slots:give_op(1),
+  slots:take_op(1),
+})
+```
+
+Both forms still commit as one coherent world. The distinction is whether sibling options may positively make one another possible.
+
+## Committed work
+
+Concurrent programmes need a clear account of when callbacks run.
+
+### During proof search
+
+`map`, `and_then`, guards and resource-transition callbacks calculate possible worlds. They may be replayed and must not perform irreversible work.
+
+### After a participant commits
+
+`wrap` runs in the resumed fibre after its option has committed:
+
+```lua
+local receive_and_report = inbox:get_op():wrap(function(message)
+  print('received:', message)
+  return message
+end)
+```
+
+A wrap may perform further options because proof search has finished for the selected occurrence.
+
+### As part of the committed world
+
+Typed effects represent obligations which belong to the selected world itself. They are prepared transactionally and discharged only after commitment. Task admission is an important example: a task whose admission option loses is never started.
+
+Advanced facilities can define effect kinds, but most users encounter effects through tasks, scopes, interruption and host-backed resources. See [`docs/advanced/option-algebra.md`](docs/advanced/option-algebra.md) for the complete distinction, including defeat obligations.
+
+## Structured lifetimes
+
+`fibers.run` creates a runtime and root scope. `fibers.spawn` starts a task in the current scope; `fibers.scope` creates a nested boundary.
 
 ```lua
 local fibers = require('fibers')
 
-local inbox = fibers.Rendezvous.new('inbox')
-
 fibers.run(function()
-  fibers.spawn(function()
-    fibers.perform(inbox:put_op('hello'))
-  end, 'sender')
+  local task = fibers.spawn(function()
+    return 40 + 2
+  end, 'worker')
 
-  assert(fibers.perform(inbox:get_op()) == 'hello')
+  assert(fibers.perform(task:await_op()) == 42)
 end)
 ```
 
-`fibers.run` creates a runtime and root scope. `fibers.spawn` creates a structured task owned by the current scope. `fibers.perform` submits an operation to the runtime.
+The raising forms `run` and `scope` return body values or raise after their boundaries have accounted for retained custody. `try_run` and `try_scope` return structured results instead.
 
-The put and get commit as one rendezvous. Neither side proceeds alone.
+The lifetime model also supports cancellation, owned resources, transactional movement, borrowing, claims and settlement. These facilities are deliberately progressive: ordinary programmes can begin with tasks and scopes, while systems code can state stronger ownership protocols where required.
 
-`guard(f)` performs activation-relative preparation. It is evaluated once for each speculative progression which enters it, so a guarded relative sleep begins when its enclosing `and_then` progression activates. Separate uses in a tensor or choice are independent; backtracking or resuming the same progression reuses the operation already returned by the guard.
+See [`docs/advanced/lifetimes-and-custody.md`](docs/advanced/lifetimes-and-custody.md).
 
-## Declaring continuation dependencies
+## Everyday facilities
 
-Arbitrary `guard` and `and_then` callbacks remain conservative: because the
-operation returned by Lua code may depend on runtime values, an undeclared
-continuation is treated as capable of touching the complete pending frontier.
-Library and performance-sensitive code may declare a conservative union of the
-operations the continuation can return:
+The root `fibers` module contains the execution and composition language. Facilities live in named modules.
+
+### Channels
 
 ```lua
-local receive = inbox:get_op()
-local op = prior:and_then(function(value)
-  return receive
-end, fibers.Op.dependencies(receive))
+local channel = require('fibers.channel')
+
+local synchronous = channel.new()
+local buffered = channel.new(16)
 ```
 
-An incomplete declaration can make dependency isolation unsound.  During tests,
-`Runtime.new({ verify_dependencies = true })` checks executed continuations and
-rejects declarations which do not cover the returned operation.  Omitting a
-declaration is always correct and uses the slower opaque path.
+Both forms expose `put_op` and `get_op` and compose with the same algebra.
 
-## Certified symmetry and adaptive search reuse
-
-For homogeneous pending work, advanced code may certify that complete operation
-occurrences are observationally interchangeable:
+### Transactional state
 
 ```lua
-local send = queue:put_op(item):certify_symmetry('homogeneous-worker-send')
+local Scalar = require('fibers.scalar')
+local state = Scalar.new('idle', 'state')
+
+fibers.perform(state:expect_op('idle'):and_then(function()
+  return state:write_op('running')
+end))
 ```
 
-The certificate includes the fibre continuation after commit.  The runtime does
-not infer symmetry, and an incorrect certificate can remove a valid committed
-world.  Use a key only when any occurrence carrying that key may replace any
-other without changing transactional behaviour.
+Scalar also supports typed state-machine transitions for facilities whose rules should be defined once and reused.
 
-The production trail machine also retains bounded `Unknown` searches by default,
-resuming their explicit alternative stack while a conservative dependency stamp
-remains valid.  This is controlled by `resumable_search`.
+### Notification, messaging and streams
 
-The runtime also enables three conservative search accelerators by default:
+`fibers.pulse` provides coalescing change notification. `fibers.mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies. `fibers.stream` provides supported bidirectional byte streams over memory or host backends.
 
-- a narrow no-supplier refutation cache;
-- exact per-plan refutation memoisation; and
-- dependency-stamped reuse of unchanged plans across driver cycles.
-
-They are disabled automatically for opaque continuations and external
-dependencies. `Unknown` is never cached, and positive cross-cycle reuse is
-limited to effect-free candidates without negative guards.  The defaults are
-adaptive: memo tables begin after 48 plan-wide search calls on structurally
-large plans, and plan stamps are omitted until the total pending frontier
-reaches sixteen.
-
-They may be controlled explicitly when measuring or embedding:
+### Time
 
 ```lua
-local rt = fibers.Runtime.new({
-  refutation_cache = true,
-  state_memoization = true,
-  certified_symmetry = true,
-  plan_reuse = true,
-  resumable_search = true,
-  refutation_cache_min_steps = 48,
-  state_memoization_min_steps = 48,
-  plan_reuse_threshold = 16,
-})
+fibers.perform(fibers.sleep_op(0.25))
 ```
 
-## Unordered choice and principled priority
+Timers are options, so timeouts require no separate cancellation mechanism.
 
-`choice` expresses indifference between acceptable committed worlds:
+Lower-level materials for facility authors live under `fibers.resource`, `fibers.external` and `fibers.lifetime`. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
 
-```lua
-local value = fibers.perform(fibers.choice(
-  left:get_op(),
-  right:get_op()
-))
-```
+## Why the algebra goes further
 
-When several branches can commit, source position gives no branch priority. Unbiased here means absence of source-position priority, not statistical uniformity. The runtime explores a deterministic permutation derived from `Runtime.new({ choice_seed = ... })`. Reusing the seed with the same programme, request sequence and external inputs reproduces the traversal. No fairness or uniform-probability guarantee is made.
+Fibers is designed for readable application code, but its small surface carries stronger semantics than ordinary event selection.
 
-`or_else` expresses validated instantaneous priority:
+- **Transactional continuation:** `and_then` can join several communications and state changes into one all-or-nothing protocol.
+- **Certified priority:** `or_else` distinguishes a genuine proof of present absence from incomplete search.
+- **Two conjunctions:** `all` and `tensor` distinguish joint requirements from intentional transactional hand-off.
+- **Occurrence-sensitive commitment:** wraps, effects and defeat obligations belong to precise dynamic option occurrences.
+- **Cross-resource decisions:** communication, state, external observations, ownership changes and selected consequences can participate in one coherent commit.
 
-```lua
-local value = fibers.perform(
-  cache:get_op(key):or_else(fibers.always(default_value))
-)
-```
+The implementation searches for a compatible resource world, validates the facts on which that world depends, and commits it through one serial authority. A separate repository-local reference evaluator runs the same semantic test corpus using a simpler strategy.
 
-The fallback is searched only after the primary has been exhaustively refuted under recorded versioned facts. A search budget expiring produces `Unknown`, not `Retry`, and cannot enable the fallback. A fallback candidate is validated again before commit.
+Readers interested in CSP, Concurrent ML, Transactional Events, Reagents or transactional memory may wish to begin with:
 
-The two operators form useful priority tiers:
+- [`docs/design/comparison.md`](docs/design/comparison.md)
+- [`docs/advanced/option-algebra.md`](docs/advanced/option-algebra.md)
+- [`docs/design/kernel.md`](docs/design/kernel.md)
+- [`reference/README.md`](reference/README.md)
 
-```lua
-local result = fibers.perform(
-  preferred:or_else(fibers.choice(
-    acceptable_a,
-    acceptable_b,
-    acceptable_c
-  ))
-)
-```
+The project does not presently claim a denotational semantics, a mechanised proof, a published encoding result, fairness for unordered choice, or lock-free parallel commit. The comparison document states the present strengths and limits directly.
 
-This means: prefer `preferred` whenever it can commit in the selected world; otherwise choose without source-order preference among the acceptable alternatives. Conversely, `fibers.choice(a, b):or_else(fallback)` admits the fallback only when both `a` and `b` have been refuted.
+## Intended uses
 
-## Products
+Fibers is intended for programmes whose concurrent behaviour should remain readable as it becomes more exact. This includes interactive systems written in Lua or Luau, as well as device, robotics and control software where suspension, cancellation, resource lifetime and failure boundaries need to remain visible.
 
-`all` is independent joint satisfaction:
+The same expression can therefore be read at two levels:
 
-```lua
-local a, b = fibers.perform(fibers.all({
-  left:take_op(1),
-  right:take_op(1),
-}))
-```
+- as a plain description of what the programme should do;
+- as a precise statement about which actions may commit together.
 
-`tensor` additionally permits intentional sibling hand-off:
+Fibers coordinates work within one cooperative runtime domain. It is not a durable database, a distributed transaction system or a substitute for hardware fault containment.
 
-```lua
-fibers.perform(fibers.tensor({
-  slots:give_op(1),
-  slots:take_op(1),
-}))
-```
+## Project status and compatibility
 
-In both modes, sibling changes must form one coherent final world. Under `all`, a sibling may constrain or invalidate another lane but may not make an otherwise-unready lane ready. Under `tensor`, compatible positive supply is allowed.
+Version 1 is an advanced work in progress. The core algebra, runtime, resource substrate, lifetime model and reference evaluator are substantial, but the public API and packaging are still being settled.
 
-## Transactional facilities
-
-The fixed compact kernel supports versioned locations, deterministic and witnessed partial transducers, version waits and linear exchange. Public facilities compile to that substrate; they do not extend search, Retry, validation or commit semantics.
-
-The low-level atom kit includes:
+The production source uses the Lua 5.1 grammar. The development matrix covers:
 
 ```text
-Scalar       replacement facts and serial state machines
-Rendezvous   synchronous one-use exchange
-Counter      bounded numeric stock
-Keyed        keyed presence and absence
-Index        ordered allocation
-Lease        compatibility-managed rights
-Signal       externally latched fact
-EventQueue   externally delivered transactional events
-Clock        host-time observation
-Readiness    host readiness levels
-Region       ownership and custody ledger
-Effect       typed post-commit obligations
+Lua 5.1, 5.2, 5.3, 5.4 and 5.5
+LuaJIT v2.1
+Luau
 ```
 
-Additional public facilities include:
+Luau has a distinct loader and host-integration path. Native host facilities also depend on the selected environment. See [`docs/contributing/compatibility.md`](docs/contributing/compatibility.md) for the current policy and verification commands.
 
-```text
-Queue, Channel, PriorityQueue, Pool, Mailbox, Pulse, WaitGroup
-RateLimiter, Task, Scope, Flow, Stream
-Petri, Calendar
-```
+## Getting started
 
-`Petri` provides coloured linear-multiset transitions. `Calendar` provides witnessed multi-resource interval reservation. Both use the same global alternative search as ordinary `choice` and rendezvous matching.
-
-## Structured lifetimes
-
-```lua
-fibers.scope(function(scope)
-  local task = scope:spawn(function()
-    return 7
-  end)
-
-  assert(fibers.perform(task:await_op()) == 7)
-end)
-```
-
-Scopes record custody in a Region ledger. On exit, policy seals admission, accounts for retained roots and runs settlement protocols. A failed settlement remains represented as unresolved ownership truth rather than being silently discarded.
-
-## Flows and streams
-
-A `Flow` is a transactional byte reservoir. A `Stream` is a bidirectional pair of flows.
-
-```lua
-local a, b = fibers.Stream.memory_pair({ capacity = 4096 })
-
-fibers.perform(a:writer():write_op('hello\n'))
-assert(fibers.perform(b:reader():read_line_op()) == 'hello')
-```
-
-Losing writes append nothing and losing reads consume nothing. Host-backed streams use readiness and pump tasks; irreversible I/O occurs only after a readiness operation commits.
-
-## External observations and embedding
-
-The runtime can be driven directly:
-
-```lua
-local rt = fibers.Runtime.new({
-  host = fibers.host.manual(),
-  choice_seed = 17,
-})
-local signal, feed = rt:signal('shutdown')
-
-rt:spawn_raw(function()
-  assert(rt:perform(signal:wait_op()) == 'requested')
-end, 'waiter')
-
-feed:set('requested')
-rt:run()
-```
-
-Signal, EventQueue and Readiness producers receive runtime-bound feed capabilities. Clock waits are validated against host time. An uncaught Retry may report timer or external interests to an embedding loop.
-
-## Kernel architecture
-
-The active semantic kernel is deliberately small:
-
-```text
-src/fibers/kernel/ir.lua            primitive programme records and footprints
-src/fibers/kernel/store.lua         versioned locations, views, deltas and commit
-src/fibers/kernel/choice_order.lua  deterministic unordered-choice permutation
-src/fibers/kernel/dependencies.lua pending components, validation and coordination
-src/fibers/kernel/frontier.lua      blocked-frontier analysis and branch ordering
-src/fibers/kernel/adaptive_search.lua adaptive memoisation and retained proofs
-src/fibers/kernel/machine.lua       trail-based proof and refutation search
-src/fibers/kernel/search_session.lua retained search lifecycle
-src/fibers/kernel/runtime.lua       fibres, recruitment, scheduling and host boundary
-```
-
-The copy-on-branch evaluator in `reference/fibers/internal/reference_machine.lua` consumes the same IR and store and is retained for differential testing:
+From a repository checkout:
 
 ```sh
-FIBERS_MACHINE=reference lua tests/run_all.lua
-texlua tests/run_protected_fallback.lua
-texlua tests/test_reference_lazy.lua
+make test
+make examples
 ```
 
-## Running the repository
+Run the opening example directly with an available Lua interpreter:
 
 ```sh
-texlua tests/run_all.lua
-FIBERS_MACHINE=reference texlua tests/run_all.lua
-texlua tests/run_protected_fallback.lua
-texlua tests/test_reference_lazy.lua
+lua5.4 examples/tutorial/00_robot_dispatch.lua
 ```
 
-The maintained aggregate suite currently contains 72 test programmes. Protected-call fallback and
-lazy-reference loading also run in isolated interpreters. Useful runner options are:
+Until the first packaged release, add `src` to the Lua module path or vendor `src/fibers` with the application. The programming guide begins with the public surface and ordinary facilities:
 
-```sh
-lua tests/run_all.lua --list
-lua tests/run_all.lua --filter external
-lua tests/run_all.lua --verbose
-lua tests/run_all.lua --fail-fast
-```
+- [`docs/guide/getting-started.md`](docs/guide/getting-started.md)
+- [`examples/README.md`](examples/README.md)
 
-Run examples and performance work with:
+## Further reading
 
-```sh
-texlua examples/01_rendezvous.lua
-lua performance/bench.lua
-FIBERS_BENCH_CASE=product lua performance/bench.lua
-texlua performance/suite.lua
-FIBERS_PERF_TIERS=all texlua performance/suite.lua
-texlua performance/seed_sweep.lua
-texlua performance/architecture_suite.lua
-texlua performance/advanced_suite.lua
-```
+### Using Fibers
 
-`performance/README.md` describes the tiered validating suite, optional runtime
-instrumentation, seed sweeps and CSV regression checks. Benchmarks are for local
-regression work, not cross-machine claims.
+- [Programming guide](docs/guide/getting-started.md)
+- [Tutorial and embedding examples](examples/README.md)
+- [Facility recipes](examples/recipes/README.md)
 
-## Formatting
+### Understanding the design
 
-Lua source is formatted with StyLua using the repository `.stylua.toml`. The
-configured width is 100 columns, with two-space indentation and expanded simple
-statements. Run:
+- [Option algebra](docs/advanced/option-algebra.md)
+- [Lifetimes, custody and settlement](docs/advanced/lifetimes-and-custody.md)
+- [Embedding and host integration](docs/advanced/embedding.md)
+- [Comparison with related systems](docs/design/comparison.md)
+- [Kernel design](docs/design/kernel.md)
 
-```sh
-scripts/check-format.sh
-```
+### Extending and contributing
 
-The ordinary `fibers` facade exposes application and embedding APIs. Trusted
-facility authors may require `fibers.kernel` for `Runtime`, `IR` and `Store`;
-the production machine, instrumentation implementation and prototype `Phase`
-remain internal or explicitly imported modules.
-
-## Documentation
-
-```text
-docs/guide.md               application-facing programming guide
-docs/algebra.md             semantic model, laws and non-laws
-docs/lifetimes.md           custody, authority and settlement
-docs/embedding.md           runtime driving, hosts and external feeds
-docs/resource-authoring.md  trusted compact-facility authoring
-docs/internals.md           compact kernel and execution pipeline
-docs/comparison.md          comparison with CSP, CML, Transactional Events and Reagents
-docs/compatibility.md       portable coding constraints and current test environment
-performance/README.md        instrumentation and performance regression workflow
-docs/notes/performance/      performance findings and optimisation history
-```
-
-The repository remains work in progress. Transactions are coherent within one runtime commit; they
-are not crash-durable database or distributed transactions.
+- [Facility authoring](docs/advanced/facility-authoring.md)
+- [Trusted resource programmes](docs/contributing/trusted-resource-programmes.md)
+- [Repository layout](docs/contributing/repository-layout.md)
+- [Lua compatibility](docs/contributing/compatibility.md)

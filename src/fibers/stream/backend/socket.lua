@@ -5,7 +5,7 @@
 -- The host callbacks remain authoritative: readiness only says that trying the
 -- option may be productive.
 
-local Readiness = require('fibers.atoms.readiness')
+local Readiness = require('fibers.external.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
 local Socket = {}

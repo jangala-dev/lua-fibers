@@ -4,8 +4,8 @@
 -- waiters observe that the version has advanced, or that the pulse has been
 -- closed.  It is a facility over Scalar, not a scheduler-side wait list.
 
-local Scalar = require('fibers.atoms.scalar')
-local Op = require('fibers.atoms.op')
+local Scalar = require('fibers.scalar')
+local Op = require('fibers.op')
 
 local Pulse = {}
 Pulse.__index = Pulse

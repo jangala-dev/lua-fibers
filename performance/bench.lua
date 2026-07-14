@@ -39,15 +39,17 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
-local Rendezvous = require('fibers.atoms.rendezvous')
-local Scalar = require('fibers.atoms.scalar')
-local EventQueue = require('fibers.atoms.event_queue')
-local Clock = require('fibers.atoms.clock')
-local Region = require('fibers.atoms.region')
+local Flow = require('fibers.internal.flow')
+local Policy = require('fibers.policy')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.scalar')
+local EventQueue = require('fibers.external.event_queue')
+local Clock = require('fibers.external.clock')
+local Region = require('fibers.lifetime.region')
 local Scope = require('fibers.scope')
-local Effect = require('fibers.atoms.effect')
+local Effect = require('fibers.lifetime.effect')
 
 local unpack_ = table.unpack or unpack
 
@@ -645,7 +647,7 @@ end)
 add('policy', 'nursery spawn rendezvous join', 8, function(n)
   local sum = 0
   local r = fibers.try_run(function()
-    local ch = fibers.Rendezvous.new('bench-nursery-rendezvous')
+    local ch = Rendezvous.new('bench-nursery-rendezvous')
     for i = 1, n do
       fibers.spawn(function()
         fibers.perform(ch:put_op(i))
@@ -654,7 +656,7 @@ add('policy', 'nursery spawn rendezvous join', 8, function(n)
     for _ = 1, n do
       sum = sum + fibers.perform(ch:get_op())
     end
-  end, { policy = fibers.policy.nursery({ name = 'bench-nursery' }) })
+  end, { policy = Policy.nursery({ name = 'bench-nursery' }) })
   assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(sum, n * (n + 1) / 2)
   return n
@@ -708,7 +710,6 @@ end)
 
 add('flow', 'write only unbounded', 400, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
   local flow = Flow.new({ name = 'bench-flow-write-only' })
   local inlet = flow:inlet()
   local total = 0
@@ -731,7 +732,6 @@ end)
 
 add('flow', 'sequential write read small', 350, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
   local flow = Flow.new({ name = 'bench-flow-seq' })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
@@ -749,8 +749,6 @@ end)
 
 add('flow', 'tensor write read handoff', 220, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
-  local Op = fibers.Op
   local flow = Flow.new({ name = 'bench-flow-tensor-handoff' })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
@@ -767,8 +765,6 @@ end)
 
 add('flow', 'capacity release handoff', 180, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
-  local Op = fibers.Op
   local flow = Flow.new({ name = 'bench-flow-capacity-release', capacity = 4 })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local ok = 0
@@ -790,7 +786,6 @@ end)
 
 add('flow', 'lease ack return', 220, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
   local flow = Flow.new({ name = 'bench-flow-lease' })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
@@ -811,7 +806,6 @@ end)
 
 add('flow', 'read until chunked', 180, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
   local flow = Flow.new({ name = 'bench-flow-until' })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
@@ -831,7 +825,6 @@ end)
 
 add('flow', 'peek then drop', 250, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
   local flow = Flow.new({ name = 'bench-flow-peek-drop' })
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
@@ -851,7 +844,6 @@ end)
 
 add('flow', 'splice derived', 140, function(n)
   local rt = Runtime.new()
-  local Flow = fibers.Flow
   local src = Flow.new({ name = 'bench-flow-splice-src' })
   local dst = Flow.new({ name = 'bench-flow-splice-dst' })
   local total = 0

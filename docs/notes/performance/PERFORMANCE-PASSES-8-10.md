@@ -24,8 +24,8 @@ All three mechanisms are deliberately conservative.
 - Cross-cycle positive reuse is limited to non-negative, effect-free candidates.
 - Cross-cycle entries are accepted only while the component dependency stamp is
   unchanged.
-- Symmetry is never inferred from similar-looking operations.  It requires an
-  explicit certificate attached to the complete operation occurrence.
+- Symmetry is never inferred from similar-looking options.  It requires an
+  explicit certificate attached to the complete option occurrence.
 
 The full aggregate suite runs against both the trail evaluator and the
 copy-on-branch reference evaluator.  The reference evaluator now uses one shared
@@ -54,7 +54,7 @@ reconstructing a refutation but did not avoid search.  The no-supplier cache act
 earlier and can avoid repeated scans of the pending component.
 
 The cache is allocated lazily after 48 search calls by default, and only for a
-structurally large operation or frontier.  On a deliberately global 65-request
+structurally large option or frontier.  On a deliberately global 65-request
 frontier with 96 repeated blocked alternatives, the measured footprint checks
 fell from 12,320 to 9,184 while search calls remained 322.  The median local
 time fell from about 16.0 ms to 12.4 ms in the retained advanced suite run.
@@ -76,7 +76,7 @@ cache therefore prefers a missed opportunity to an unsafe equality assumption.
 It never persists beyond one call to the search machine.
 
 Memo tables are created lazily after 48 plan-wide search calls by default, and
-only when the operation metadata or frontier indicates a structurally large
+only when the option metadata or frontier indicates a structurally large
 plan.  The threshold avoids hashing medium and simple searches where
 reconstruction costs more than the work saved.  A runtime reuses one scratch
 descriptor; the potentially large tables exist only for a plan which crosses
@@ -89,7 +89,7 @@ workloads.
 
 ### Certified symmetry
 
-Operations may explicitly certify that pending occurrences sharing a key are
+Options may explicitly certify that pending occurrences sharing a key are
 observationally interchangeable:
 
 ```lua
@@ -120,7 +120,7 @@ result in the pass and is algorithmic rather than an inner-loop speed-up.
 
 Each analysable component can carry a dependency stamp containing:
 
-- pending request and operation identities;
+- pending request and option identities;
 - relevant versioned location versions;
 - versioned resource-wide dependencies; and
 - machine, seed, normalisation, branch and symmetry policies.
@@ -195,7 +195,7 @@ The principal architectural search passes are now present.  The next performance
 work should be evidence-led profiling of the bounded implementation, including:
 
 - cache memory and hit-rate measurements on long-running mixed applications;
-- generated differential operation graphs with varied seeds;
+- generated differential option graphs with varied seeds;
 - LuaJIT and stock-Lua comparison on the same hardware;
 - native-host throughput and latency suites; and
 - only then dense representations, allocation reduction and hot-loop tuning.

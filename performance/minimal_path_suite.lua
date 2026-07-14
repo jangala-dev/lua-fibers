@@ -23,10 +23,10 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Op = require('fibers.atoms.op')
-local Runtime = require('fibers.kernel.runtime')
-local Rendezvous = require('fibers.atoms.rendezvous')
-local Scalar = require('fibers.atoms.scalar')
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.scalar')
 local Clock = require('performance.clock')
 
 local function env_number(name, default)

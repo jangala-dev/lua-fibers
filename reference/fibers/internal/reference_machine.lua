@@ -1,13 +1,13 @@
 -- Copy-on-branch semantic reference evaluator.
 -- Kept outside the active kernel for differential testing.
 
-local Op = require('fibers.atoms.op')
-local Store = require('fibers.kernel.store')
-local IR = require('fibers.kernel.ir')
-local ChoiceOrder = require('fibers.kernel.choice_order')
-local Frontier = require('fibers.kernel.frontier')
-local SearchCache = require('fibers.kernel.adaptive_search')
-local Activation = require('fibers.kernel.activation')
+local Op = require('fibers.op')
+local Store = require('fibers.internal.kernel.store')
+local IR = require('fibers.internal.kernel.ir')
+local ChoiceOrder = require('fibers.internal.kernel.choice_order')
+local Frontier = require('fibers.internal.kernel.frontier')
+local SearchCache = require('fibers.internal.kernel.adaptive_search')
+local Activation = require('fibers.internal.kernel.activation')
 
 local M = {}
 
@@ -729,7 +729,7 @@ local function match_intents(state, left_id, right_id)
 end
 
 local function is_machine_wait(x)
-  return x == require('fibers.atoms.scalar').Wait
+  return x == require('fibers.scalar').Wait
     or (type(x) == 'table' and x._fibers_scalar_wait == true)
 end
 

@@ -11,9 +11,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Runtime = require('fibers.kernel.runtime')
-local Op = require('fibers.atoms.op')
-local Scalar = require('fibers.atoms.scalar')
+local Runtime = require('fibers.runtime')
+local Op = require('fibers.op')
+local Scalar = require('fibers.scalar')
 local Clock = require('performance.clock')
 
 local cells = tonumber(os.getenv('FIBERS_STORE_CELLS') or '16')

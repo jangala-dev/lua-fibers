@@ -5,7 +5,7 @@
 -- trying; the non-blocking read/write callbacks remain authoritative and may
 -- still return would_block, eof, or errors.
 
-local Readiness = require('fibers.atoms.readiness')
+local Readiness = require('fibers.external.readiness')
 
 local Backend = {}
 Backend.__index = Backend

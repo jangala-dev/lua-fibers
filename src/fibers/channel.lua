@@ -3,8 +3,8 @@
 -- Channel.new(0) returns a Rendezvous; Channel.new(n > 0) returns a bounded
 -- Queue of capacity n.  It deliberately introduces no new resource law.
 
-local Queue = require('fibers.queue')
-local Rendezvous = require('fibers.atoms.rendezvous')
+local Queue = require('fibers.internal.fifo')
+local Rendezvous = require('fibers.resource.rendezvous')
 
 local Channel = {}
 

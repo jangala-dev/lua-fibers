@@ -11,7 +11,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 local fibers = require('fibers')
-local Petri, Calendar = fibers.Petri, fibers.Calendar
+local Calendar = require('examples.case_studies.calendar.calendar')
+local Petri = require('examples.case_studies.petri.petri')
+local Petri, Calendar = FibersPetri, Calendar
 
 local function measure(fn)
   collectgarbage('collect')

@@ -3,7 +3,7 @@
 -- Optional.  Uses nixio File/Socket objects directly as readiness keys.
 
 local Handle = require('fibers.host.handle')
-local Errors = require('fibers.flow.errors')
+local Errors = require('fibers.internal.flow.errors')
 
 local function unsupported(reason)
   return {

@@ -5,13 +5,13 @@
 -- of custody truth; the monitor observes task roots without becoming an owned
 -- task itself.
 
-local Runtime = require('fibers.kernel.runtime')
+local Runtime = require('fibers.runtime')
 local Protected = require('fibers.internal.protected')
-local Exit = require('fibers.exit')
+local Exit = require('fibers.lifetime.exit')
 local ScopeResult = require('fibers.scope.result')
 local Settlement = require('fibers.internal.settlement')
-local Op = require('fibers.atoms.op')
-local Scalar = require('fibers.atoms.scalar')
+local Op = require('fibers.op')
+local Scalar = require('fibers.scalar')
 local Task = require('fibers.task')
 
 local Driver = {}
@@ -38,7 +38,7 @@ end
 local function perform_masked(scope, op)
   local rt = scope.runtime or Runtime.current()
   if not rt then
-    error('masked scope operation requires a current runtime', 2)
+    error('masked scope option requires a current runtime', 2)
   end
   return rt:_perform_current(op, nil, true)
 end

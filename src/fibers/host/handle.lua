@@ -7,9 +7,9 @@
 -- handle stream backend, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
-local Readiness = require('fibers.atoms.readiness')
+local Readiness = require('fibers.external.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
-local Errors = require('fibers.flow.errors')
+local Errors = require('fibers.internal.flow.errors')
 
 local Handle = {}
 Handle.__index = Handle
