@@ -46,13 +46,7 @@ local function assert_nil(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -264,8 +258,7 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-write-stream' }))
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-writer')
@@ -300,8 +293,7 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-partial-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-partial-stream' }))
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-partial-writer')

@@ -252,8 +252,7 @@ local function sync_projection(s, loc)
       end
       item.owner_version = (item.owner_version or 0) + 1
     elseif new_owner then
-      new_owner.owned[item] =
-        copy_record(s.regions[new_owner] and s.regions[new_owner].records[item], false)
+      new_owner.owned[item] = copy_record(s.regions[new_owner] and s.regions[new_owner].records[item], false)
     end
     item.owner = new_owner
     item._fibers_retired = new_owner == nil and item.owner_version > 0 or false

@@ -115,11 +115,8 @@ add('isolated blocked components', function(profile, machine)
 end)
 
 add('hinted continuation isolation', function(profile, machine)
-  local rt = runtime(
-    profile,
-    machine,
-    { dependency_index_threshold = 1, dependency_index_release_threshold = 0 }
-  )
+  local rt =
+    runtime(profile, machine, { dependency_index_threshold = 1, dependency_index_release_threshold = 0 })
   local focus = Rendezvous.new('arch-hinted-focus')
   rt:spawn_raw(function()
     rt:perform(Op.guard(function()
@@ -138,11 +135,8 @@ add('hinted continuation isolation', function(profile, machine)
 end)
 
 add('opaque continuation slow path', function(profile, machine)
-  local rt = runtime(
-    profile,
-    machine,
-    { dependency_index_threshold = 1, dependency_index_release_threshold = 0 }
-  )
+  local rt =
+    runtime(profile, machine, { dependency_index_threshold = 1, dependency_index_release_threshold = 0 })
   local focus = Rendezvous.new('arch-opaque-focus')
   rt:spawn_raw(function()
     rt:perform(Op.guard(function()
@@ -422,8 +416,7 @@ local function render_text()
     )
   end
   lines[#lines + 1] = ''
-  lines[#lines + 1] =
-    'All profile and evaluator variants produced the same validating digest per case.'
+  lines[#lines + 1] = 'All profile and evaluator variants produced the same validating digest per case.'
   return table.concat(lines, '\n') .. '\n'
 end
 

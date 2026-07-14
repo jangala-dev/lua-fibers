@@ -8,13 +8,7 @@ end
 
 function M.assert_eq(actual, expected, msg)
   if actual ~= expected then
-    M.fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    M.fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 
@@ -42,12 +36,7 @@ end
 
 function M.assert_uncommitted_status(status, msg)
   local tag = status and status.tag
-  if
-    tag ~= 'quiescent'
-    and tag ~= 'conflict'
-    and tag ~= 'reject_candidate'
-    and tag ~= 'pending'
-  then
+  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
     M.fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end

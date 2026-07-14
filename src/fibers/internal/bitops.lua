@@ -57,11 +57,7 @@ local function try_native()
     return nil, 'dynamic loader unavailable'
   end
 
-  local ok_compile, chunk, compile_error = pcall(
-    compile,
-    NATIVE_SOURCE,
-    '=(fibers native bit operations)'
-  )
+  local ok_compile, chunk, compile_error = pcall(compile, NATIVE_SOURCE, '=(fibers native bit operations)')
   if not ok_compile then
     return nil, tostring(chunk)
   end

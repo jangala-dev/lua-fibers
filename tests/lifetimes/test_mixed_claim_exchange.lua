@@ -20,8 +20,7 @@ local Scalar = require('fibers.scalar')
 local Runtime = require('fibers.runtime')
 
 local rt = Runtime.new()
-local c, ch, s =
-  Counter.new({ initial = 0, min = 0 }), Rendezvous.new('claim-backtrack'), Scalar.new(0)
+local c, ch, s = Counter.new({ initial = 0, min = 0 }), Rendezvous.new('claim-backtrack'), Scalar.new(0)
 local taken, sent
 rt:spawn_raw(function()
   local rows = rt:perform(Op.all({ c:take_op(1), ch:get_op(), s:write_op(2) }))

@@ -105,8 +105,7 @@ do
     f.try_run(function()
       f.perform(r:admit_op(h))
       claim = f.perform(r:claim_op(h, { reason = 'x' }))
-      local fake =
-        { _fibers_claim = true, id = claim.id, region = r, root = h, records = claim.records }
+      local fake = { _fibers_claim = true, id = claim.id, region = r, root = h, records = claim.records }
       forged = f.perform(r:resolve_claim_op(fake, { kind = 'discharge' })
         :map(function()
           return true

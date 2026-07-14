@@ -90,8 +90,7 @@ function Pulse.new(opts, name)
   non_negative_integer(initial, 'pulse initial_version', 2)
   return setmetatable({
     name = pname,
-    state = opts.state
-      or Scalar.new({ version = initial, closed = false, reason = nil }, pname .. ':state'),
+    state = opts.state or Scalar.new({ version = initial, closed = false, reason = nil }, pname .. ':state'),
   }, Pulse)
 end
 

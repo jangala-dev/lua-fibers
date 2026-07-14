@@ -39,23 +39,12 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 local function assert_uncommitted_status(st, msg)
   local tag = st and st.tag
-  if
-    tag ~= 'quiescent'
-    and tag ~= 'conflict'
-    and tag ~= 'reject_candidate'
-    and tag ~= 'pending'
-  then
+  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
     fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end
@@ -108,11 +97,7 @@ do
   end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
-  assert_eq(
-    Inspect.data(b:reader().flow.reservoir),
-    '',
-    'losing stream write must not append bytes'
-  )
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'losing stream write must not append bytes')
 end
 
 -- Losing read branches consume nothing.
@@ -305,11 +290,7 @@ do
   assert_nil(exact)
   assert_eq(exact_err, 'eof')
   assert_eq(partial, 'ab')
-  assert_eq(
-    Inspect.data(f:reader().flow.reservoir),
-    '',
-    'exact EOF consumes the returned final partial'
-  )
+  assert_eq(Inspect.data(f:reader().flow.reservoir), '', 'exact EOF consumes the returned final partial')
 end
 
 -- Region/Scope ownership movement works for stream compounds.
@@ -427,11 +408,7 @@ do
   end, 'write-prefix')
   assert_status(rt:run(), 'found')
   assert_nil(line, 'read_line_op should still be waiting before separator')
-  assert_eq(
-    Inspect.data(b:reader().flow.reservoir),
-    'abc',
-    'waiting read_line_op must not consume prefix'
-  )
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'abc', 'waiting read_line_op must not consume prefix')
   rt:spawn_raw(function()
     rt:perform(a:writer():write_op('\nrest'))
   end, 'write-sep')

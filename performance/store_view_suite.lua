@@ -63,10 +63,9 @@ local function build_case()
     end
   end, 'store-view-benchmark')
 
-  return rt,
-    function()
-      assert(total == rounds * lanes, 'store-view benchmark result mismatch')
-    end
+  return rt, function()
+    assert(total == rounds * lanes, 'store-view benchmark result mismatch')
+  end
 end
 
 local times, allocations = {}, {}

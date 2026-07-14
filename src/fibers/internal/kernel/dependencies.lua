@@ -518,8 +518,7 @@ function Index:supplier_ids(intents, pending, entered, excluded, dependencies)
       end)
     else
       local location = intent.program and (intent.program.location or intent.program.group)
-      local suppliers = location
-        and bucket(self.location_suppliers, location, 'location-supplier', true)
+      local suppliers = location and bucket(self.location_suppliers, location, 'location-supplier', true)
       observe(suppliers)
       if suppliers then
         suppliers:each(function(id)
@@ -625,8 +624,7 @@ function Vector.capture(runtime, requests, component, refutation)
   local precise_external = refutation ~= nil
   if component and component.dynamic and component.dynamic > 0 then
     vector.dynamic = true
-    vector.rows[#vector.rows + 1] =
-      { kind = 'runtime-epoch', object = runtime, value = runtime.epoch }
+    vector.rows[#vector.rows + 1] = { kind = 'runtime-epoch', object = runtime, value = runtime.epoch }
     vector.generation = mix(vector.generation, runtime.epoch)
   end
 
@@ -662,8 +660,7 @@ function Vector.capture(runtime, requests, component, refutation)
       op = request.op,
     }
     vector.generation = mix(vector.generation, id)
-    vector.generation =
-      mix(vector.generation, request.op and request.op._id or tostring(request.op))
+    vector.generation = mix(vector.generation, request.op and request.op._id or tostring(request.op))
     for location in pairs(metadata.locations or {}) do
       locations[location] = true
     end

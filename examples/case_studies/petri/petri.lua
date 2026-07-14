@@ -263,11 +263,7 @@ local function binding_cursor(transition, state, payload)
 end
 
 function Petri:fire_op(transition, payload)
-  if
-    type(transition) ~= 'table'
-    or transition._petri_transition ~= true
-    or transition.net ~= self
-  then
+  if type(transition) ~= 'table' or transition._petri_transition ~= true or transition.net ~= self then
     error('Petri fire expects a transition belonging to this net', 2)
   end
   local program = Program.witness_transition({

@@ -41,13 +41,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 local function assert_not_eq(a, b, msg)
@@ -104,10 +98,7 @@ do
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_truthy(stream, 'open_backend_op should return a stream')
-  assert_truthy(
-    stream:reader() and stream:writer(),
-    'stream should expose reader and writer handles'
-  )
+  assert_truthy(stream:reader() and stream:writer(), 'stream should expose reader and writer handles')
   assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
   assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
   assert_nil(stream.read_line_op, 'duplex should not expose reader methods directly')
@@ -224,8 +215,7 @@ do
   local backend = Fake.new({ name = 'losing-write-backend' })
   local stream, got
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'losing-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'losing-write-stream' }))
     got = rt:perform(Op.choice(
       Op.always('winner'),
       stream:writer():write_op('abc'):map(function()
@@ -247,11 +237,7 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_backend_in_op(
-        region,
-        backend,
-        { name = 'partial-write-stream', write_chunk_size = 6 }
-      )
+      Stream.open_backend_in_op(region, backend, { name = 'partial-write-stream', write_chunk_size = 6 })
     )
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -328,8 +314,7 @@ do
   local backend = Fake.new({ name = 'shutdown-write-backend', write_blocked = true })
   local stream, done
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'shutdown-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'shutdown-write-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     rt:perform(stream:writer():shutdown_op())
     done = rt:perform(stream:writer():flush_op())
@@ -382,11 +367,7 @@ do
   local stream, second_done, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_backend_in_op(
-        region,
-        backend,
-        { name = 'lease-capacity-stream', write_capacity = 3 }
-      )
+      Stream.open_backend_in_op(region, backend, { name = 'lease-capacity-stream', write_capacity = 3 })
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -409,10 +390,7 @@ do
   assert_eq(
     (
       stream:writer().flow.reservoir.limit
-      - (
-        #(stream:writer().flow.reservoir.data or '')
-        + Inspect.leased_bytes(stream:writer().flow.reservoir)
-      )
+      - (#(stream:writer().flow.reservoir.data or '') + Inspect.leased_bytes(stream:writer().flow.reservoir))
     ),
     0,
     'leased bytes should still reserve capacity'
@@ -437,8 +415,7 @@ do
   local backend = Fake.new({ name = 'blocked-read-close-backend', read_blocked = true })
   local stream
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'blocked-read-close-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'blocked-read-close-stream' }))
   end, 'open-blocked-read')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function()

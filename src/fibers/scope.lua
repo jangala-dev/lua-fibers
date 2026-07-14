@@ -92,12 +92,7 @@ end
 
 local function item_kind(item)
   return item
-    and (
-      item._fibers_obligation_kind
-      or item._fibers_kind_name
-      or item._fibers_id and 'owned'
-      or nil
-    )
+    and (item._fibers_obligation_kind or item._fibers_kind_name or item._fibers_id and 'owned' or nil)
 end
 
 local function new_offers(name)
@@ -368,8 +363,7 @@ local function parse_borrow_args(self, a, b, c)
 end
 
 function Scope:borrow_op(item, borrower_or_rights, rights_or_opts, maybe_opts)
-  local borrower, rights, opts =
-    parse_borrow_args(self, borrower_or_rights, rights_or_opts, maybe_opts)
+  local borrower, rights, opts = parse_borrow_args(self, borrower_or_rights, rights_or_opts, maybe_opts)
   local borrow = Borrow.new(self, borrower, item, rights, {
     lease = opts.lease or self.authority_leases,
     name = opts.name,

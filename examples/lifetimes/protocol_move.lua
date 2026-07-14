@@ -16,7 +16,6 @@ local Scalar = require('fibers.scalar')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
-
 local client, server = Stream.memory_pair({ name = 'negotiated-stream', capacity = 128 })
 local negotiator = Scope.new('negotiator')
 local responder = Scope.new('responder')

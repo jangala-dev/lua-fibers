@@ -48,11 +48,7 @@ local function probe_yieldable_pcall()
   end)
 
   local ok, yielded = coroutine.resume(co)
-  if
-    not ok
-    or yielded ~= 'fibers.internal.protected.probe'
-    or coroutine.status(co) ~= 'suspended'
-  then
+  if not ok or yielded ~= 'fibers.internal.protected.probe' or coroutine.status(co) ~= 'suspended' then
     return false
   end
 
@@ -71,11 +67,7 @@ local function probe_yieldable_xpcall()
   end)
 
   local ok, yielded = coroutine.resume(co)
-  if
-    not ok
-    or yielded ~= 'fibers.internal.protected.probe'
-    or coroutine.status(co) ~= 'suspended'
-  then
+  if not ok or yielded ~= 'fibers.internal.protected.probe' or coroutine.status(co) ~= 'suspended' then
     return false
   end
 

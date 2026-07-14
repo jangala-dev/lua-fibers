@@ -18,10 +18,7 @@ local FibersHost = require('fibers.host')
 
 local ok_mod, LinuxHost = pcall(require, 'fibers.host.luajit_linux')
 Common.assert_truthy(ok_mod, 'luajit linux host module should be require-able')
-Common.assert_truthy(
-  type(LinuxHost.is_supported) == 'function',
-  'luajit host should expose is_supported'
-)
+Common.assert_truthy(type(LinuxHost.is_supported) == 'function', 'luajit host should expose is_supported')
 Common.assert_truthy(type(LinuxHost.new) == 'function', 'luajit host should expose new')
 
 if not LinuxHost.is_supported() then
@@ -88,10 +85,7 @@ do
   local file = make_regular_file()
   local ok, err = pcall(function()
     Common.ready_source_smoke('luajit_linux:unpollable-regular-file', host, file.read_key, 'read')
-    Common.assert_truthy(
-      host.unpollable[file.read_key],
-      'regular file fd should be marked unpollable'
-    )
+    Common.assert_truthy(host.unpollable[file.read_key], 'regular file fd should be marked unpollable')
   end)
   Common.cleanup(host, file)
   if not ok then
@@ -107,19 +101,12 @@ do
   local pipe = make_pipe()
   local ok, err = pcall(function()
     Common.readiness_smoke('luajit_linux:active-delete-prime', host, pipe)
-    Common.assert_truthy(
-      host.active[pipe.read_key] ~= nil,
-      'pipe read fd should have been registered'
-    )
+    Common.assert_truthy(host.active[pipe.read_key] ~= nil, 'pipe read fd should have been registered')
     local rt = FibersRuntime.new({ host = host })
     local progressed, reason = host:block(rt, {}, { tag = 'pending' }, {})
     Common.assert_eq(progressed, nil, 'empty wait set should not progress')
     Common.assert_eq(reason, 'unsupported-waits', 'empty wait set should be unsupported')
-    Common.assert_eq(
-      host.active[pipe.read_key],
-      nil,
-      'withdrawn fd should be deleted from active epoll set'
-    )
+    Common.assert_eq(host.active[pipe.read_key], nil, 'withdrawn fd should be deleted from active epoll set')
   end)
   Common.cleanup(host, pipe)
   if not ok then

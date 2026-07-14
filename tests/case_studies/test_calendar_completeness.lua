@@ -66,10 +66,7 @@ for case = 1, 80 do
     )
     got = r and r.start or nil
   end, { quiet_deadlock = true })
-  assert(
-    got == expected,
-    ('case %d: expected %s, got %s'):format(case, tostring(expected), tostring(got))
-  )
+  assert(got == expected, ('case %d: expected %s, got %s'):format(case, tostring(expected), tostring(got)))
 end
 
 print('tests/test_calendar_completeness.lua: ok')

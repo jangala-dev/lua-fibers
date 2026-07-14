@@ -39,13 +39,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -81,11 +75,7 @@ do
     rt:run()
   end
   assert_nil(flushed, 'flush should wait while bytes are retained')
-  assert_eq(
-    Inspect.data(b:reader().flow.reservoir),
-    'abc',
-    'bytes should be queued before peer close'
-  )
+  assert_eq(Inspect.data(b:reader().flow.reservoir), 'abc', 'bytes should be queued before peer close')
 
   rt:spawn_raw(function()
     rt:perform(b:reader():shutdown_op('reader_closed'))
@@ -95,11 +85,7 @@ do
   end, 'peer close should settle retained bytes and fail flush with close reason')
   assert_nil(flushed)
   assert_eq(flush_err, 'reader_closed')
-  assert_eq(
-    Inspect.data(b:reader().flow.reservoir),
-    '',
-    'peer close should discard queued retained bytes'
-  )
+  assert_eq(Inspect.data(b:reader().flow.reservoir), '', 'peer close should discard queued retained bytes')
   assert_eq(
     Inspect.leased_bytes(b:reader().flow.reservoir),
     0,
@@ -151,11 +137,7 @@ do
   local stream, flushed, flush_err
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_backend_in_op(
-        region,
-        backend,
-        { name = 'settle-backend-stream', write_capacity = 3 }
-      )
+      Stream.open_backend_in_op(region, backend, { name = 'settle-backend-stream', write_capacity = 3 })
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
@@ -203,11 +185,7 @@ do
   local stream, flushed, flush_err
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_backend_in_op(
-        region,
-        backend,
-        { name = 'settle-protocol-stream', write_capacity = 3 }
-      )
+      Stream.open_backend_in_op(region, backend, { name = 'settle-protocol-stream', write_capacity = 3 })
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())

@@ -18,8 +18,7 @@ local function stable_resource_id(resource)
     return tostring(resource._fibers_id)
   end
   next_id = next_id + 1
-  resource._fibers_interest_id = resource._fibers_interest_id
-    or ('interest-resource-' .. tostring(next_id))
+  resource._fibers_interest_id = resource._fibers_interest_id or ('interest-resource-' .. tostring(next_id))
   return resource._fibers_interest_id
 end
 

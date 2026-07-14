@@ -130,12 +130,7 @@ print(
 )
 print('request owns after?          ' .. yn(result.request_owns_after))
 print('supervisor owns after?       ' .. yn(result.supervisor_owns_after))
-print(
-  'registry owner after commit: '
-    .. result.registry_after.owner
-    .. ' / '
-    .. result.registry_after.task
-)
+print('registry owner after commit: ' .. result.registry_after.owner .. ' / ' .. result.registry_after.task)
 print('task await result:            ' .. tostring(result.await[1]))
 print('supervisor owns after release? ' .. yn(result.supervisor_owns_released))
 print('request sealed?              ' .. yn(result.request_state.sealed))

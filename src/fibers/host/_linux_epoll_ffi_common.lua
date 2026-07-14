@@ -235,11 +235,7 @@ function Common.new(opts)
     local size = epoll_event_size()
     if (ARCH == 'x64' or ARCH == 'x86') and size ~= 12 then
       return nil,
-        'unexpected epoll_event ABI size for '
-          .. tostring(ARCH)
-          .. ': '
-          .. tostring(size)
-          .. ' (expected 12)'
+        'unexpected epoll_event ABI size for ' .. tostring(ARCH) .. ': ' .. tostring(size) .. ' (expected 12)'
     end
     if size < 12 then
       return nil, 'unexpected epoll_event ABI size for ' .. tostring(ARCH) .. ': ' .. tostring(size)

@@ -73,9 +73,7 @@ do
   local net = Petri.new()
   local result
   run(function()
-    result = fibers.perform(
-      Op.all({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback'))
-    )
+    result = fibers.perform(Op.all({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
   assert(count(net:snapshot(), 'p') == 0)
@@ -119,8 +117,7 @@ do
   local net = Petri.new({ p = { 'only' } })
   local result
   run(function()
-    result =
-      fibers.perform(Op.all({ net:take_op('p'), net:take_op('p') }):or_else(Op.always('fallback')))
+    result = fibers.perform(Op.all({ net:take_op('p'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
   assert(count(net:snapshot(), 'p') == 1)

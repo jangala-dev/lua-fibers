@@ -39,13 +39,7 @@ local function assert_eq(a, b, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -68,19 +62,13 @@ do
     absent(Op.choice(Op.never(), Op.always('live'))),
     'one live choice branch should defeat absence'
   )
-  assert_falsy(
-    absent(Op.choice(Op.always('live'), Op.never())),
-    'branch order does not affect absence'
-  )
+  assert_falsy(absent(Op.choice(Op.always('live'), Op.never())), 'branch order does not affect absence')
 end
 
 -- Nested or_else is absent only when both the preferred option and fallback
 -- have no current world.
 do
-  assert_truthy(
-    absent(Op.never():or_else(Op.never())),
-    'or_else with both sides absent should be absent'
-  )
+  assert_truthy(absent(Op.never():or_else(Op.never())), 'or_else with both sides absent should be absent')
   assert_falsy(
     absent(Op.never():or_else(Op.always('fallback'))),
     'available fallback makes the whole or_else available'
@@ -150,10 +138,7 @@ do
     absent(Op.tensor({ ch:get_op(), ch:put_op('payload') })),
     'tensor-internal rendezvous is a current world'
   )
-  assert_truthy(
-    absent(Op.all({ ch:get_op(), ch:put_op('payload') })),
-    'all cannot close its own rendezvous'
-  )
+  assert_truthy(absent(Op.all({ ch:get_op(), ch:put_op('payload') })), 'all cannot close its own rendezvous')
   assert_truthy(absent(Op.tensor({ ch:get_op() })), 'unpaired tensor rendezvous is absent')
 end
 
@@ -176,10 +161,7 @@ do
   end, 'signal-wait')
   local st = pending:run()
   assert_status(st, 'pending')
-  assert_truthy(
-    st.waits and #st.waits == 1,
-    'unhandled external absence should retain one wake interest'
-  )
+  assert_truthy(st.waits and #st.waits == 1, 'unhandled external absence should retain one wake interest')
 end
 
 -- Runtime priority law: any non-absence world still beats an
@@ -188,8 +170,7 @@ do
   local got_a, got_b
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    got_a =
-      rt:perform(Rendezvous.new('absence-law-no-partner'):get_op():or_else(Op.always('fallback')))
+    got_a = rt:perform(Rendezvous.new('absence-law-no-partner'):get_op():or_else(Op.always('fallback')))
   end, 'fallback-root')
   rt:spawn_raw(function()
     got_b = rt:perform(Op.always('progress'))

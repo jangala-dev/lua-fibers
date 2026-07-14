@@ -26,13 +26,7 @@ local function assert_eq(a, b, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -107,9 +101,7 @@ do
   fired = {}
   local rt = Runtime.new({ quiet_deadlock = true })
   rt:spawn_raw(function()
-    rt:perform(
-      Op.choice(Op.never():on_defeat(defeat('left')), Op.never():on_defeat(defeat('right')))
-    )
+    rt:perform(Op.choice(Op.never():on_defeat(defeat('left')), Op.never():on_defeat(defeat('right'))))
   end, 'defeat-no-commit')
   assert_status(rt:run(), 'quiescent')
   assert_eq(#fired, 0)

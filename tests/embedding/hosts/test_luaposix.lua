@@ -15,10 +15,7 @@ local Common = require('tests.embedding.hosts.common')
 
 local ok_mod, PosixHost = pcall(require, 'fibers.host.luaposix')
 Common.assert_truthy(ok_mod, 'luaposix host module should be require-able')
-Common.assert_truthy(
-  type(PosixHost.is_supported) == 'function',
-  'luaposix host should expose is_supported'
-)
+Common.assert_truthy(type(PosixHost.is_supported) == 'function', 'luaposix host should expose is_supported')
 Common.assert_truthy(type(PosixHost.new) == 'function', 'luaposix host should expose new')
 
 if not PosixHost.is_supported() then

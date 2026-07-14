@@ -30,13 +30,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -87,12 +81,7 @@ do
   local saw_move = false
   local saw_release_admit_pair = false
   for i = 1, #events do
-    if
-      events[i].type == 'moved'
-      and events[i].item == item
-      and events[i].from == a
-      and events[i].to == b
-    then
+    if events[i].type == 'moved' and events[i].item == item and events[i].from == a and events[i].to == b then
       saw_move = true
     end
   end
@@ -104,11 +93,7 @@ do
     end
   end
   assert_truthy(saw_move, 'movement should discharge moved region event')
-  assert_eq(
-    saw_release_admit_pair,
-    false,
-    'movement should not discharge released event from source region'
-  )
+  assert_eq(saw_release_admit_pair, false, 'movement should not discharge released event from source region')
 end
 
 -- Sealing is admission policy only: it blocks new admissions and incoming

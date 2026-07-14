@@ -13,8 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local RateLimiter = require('examples.recipes.rate_limiter')
-local limiter =
-  RateLimiter.new({ capacity = 2, rate = 2, initial = 2, name = 'example-limiter' })
+local limiter = RateLimiter.new({ capacity = 2, rate = 2, initial = 2, name = 'example-limiter' })
 
 fibers.run(function()
   fibers.perform(limiter:acquire_op(1))

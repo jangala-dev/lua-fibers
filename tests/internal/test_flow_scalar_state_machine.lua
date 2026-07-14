@@ -26,24 +26,12 @@ local function fail(msg)
 end
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 local function new_runtime(opts)

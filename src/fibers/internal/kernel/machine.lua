@@ -28,11 +28,7 @@ local function packv(state, ...)
 end
 
 local function new_outcome(state, packed, wrap, task)
-  if
-    task
-    and #task.frames == 0
-    and state.roots[task.root_id] == task
-  then
+  if task and #task.frames == 0 and state.roots[task.root_id] == task then
     task.pack, task.wrap = packed, wrap
     return task
   end
@@ -157,7 +153,6 @@ function Trail:rollback(mark)
   end
 end
 
-
 function Trail:begin(stats, plan)
   if self.n ~= 0 or self.current_mark ~= 0 then
     error('cannot begin a search with a non-empty trail', 2)
@@ -203,9 +198,7 @@ end
 
 local function intent_activation_label(intent)
   local program = intent.program or {}
-  return Activation.label(intent.activation)
-    .. '@'
-    .. object_version_label(program.location or program.group)
+  return Activation.label(intent.activation) .. '@' .. object_version_label(program.location or program.group)
 end
 
 local function map_count(xs)
@@ -368,12 +361,7 @@ complete_task = function(state, task, outcome)
           state,
           packv(
             state,
-            state.runtime:_call_in_phase(
-              'map',
-              'callback_error',
-              frame.fn,
-              unpack_pack(outcome.pack)
-            )
+            state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
           ),
           nil,
           task
@@ -397,12 +385,8 @@ complete_task = function(state, task, outcome)
           setv(state, task, 'expr', cached)
           setv(state, task, 'activation', Activation.child(frame.activation, 'guard:result'))
         else
-          local next_op = state.runtime:_call_in_phase(
-            'and_then',
-            'callback_error',
-            frame.fn,
-            unpack_pack(outcome.pack)
-          )
+          local next_op =
+            state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
           if not Op.is_op(next_op) then
             error('and_then callback must return an Op', 0)
           end
@@ -412,10 +396,7 @@ complete_task = function(state, task, outcome)
             state,
             task,
             'activation',
-            Activation.child(
-              frame.activation,
-              'and_then:result:' .. Activation.label(outcome.activation)
-            )
+            Activation.child(frame.activation, 'and_then:result:' .. Activation.label(outcome.activation))
           )
         end
         add_active(state, task.id)
@@ -494,11 +475,7 @@ local function start_product(state, task, op)
 
   local profile_plan = state.profile_plan
   if profile_plan then
-    state.runtime.instrumentation:event(
-      profile_plan,
-      'product',
-      { mode = op.mode, lanes = #op.lanes }
-    )
+    state.runtime.instrumentation:event(profile_plan, 'product', { mode = op.mode, lanes = #op.lanes })
   end
   for i = 1, #op.lanes do
     local path = extend_scope_path(task.scope_path, group_id, op.mode, i)
@@ -571,8 +548,7 @@ local function block_intent(state, task, program, occurrence)
   intent.resource, intent.role = program.resource or program.group, program.role
   intent.value = program.payload_field == 'value' and occurrence.payload or program.value
   intent.symmetry_key, intent.scope_path = task.symmetry_key, task.scope_path
-  intent.interest = type(program.interest) == 'function'
-      and program.interest(state.runtime, program)
+  intent.interest = type(program.interest) == 'function' and program.interest(state.runtime, program)
     or program.interest
   intent.absence_check = program.absence_check
   pushv(state, state.intents, intent)
@@ -607,21 +583,14 @@ local function match_intents(state, left_id, right_id)
   if not complete_task(state, put_task, new_outcome(state, PACK_TRUE, nil, put_task)) then
     return false
   end
-  if
-    not complete_task(
-      state,
-      get_task,
-      new_outcome(state, packv(state, put.value), nil, get_task)
-    )
-  then
+  if not complete_task(state, get_task, new_outcome(state, packv(state, put.value), nil, get_task)) then
     return false
   end
   return true
 end
 
 local function is_machine_wait(x)
-  return x == require('fibers.scalar').Wait
-    or (type(x) == 'table' and x._fibers_scalar_wait == true)
+  return x == require('fibers.scalar').Wait or (type(x) == 'table' and x._fibers_scalar_wait == true)
 end
 
 local function is_machine_ready(x)
@@ -802,8 +771,7 @@ local function resolve_claims(state, intent_ids)
     local loc = program.location
     local task = state.tasks[intent.task_id]
     ensure_task_view(state, task)
-    local value =
-      Store.project(state, task, loc, program.orientation or program.demand_tag, state.trail)
+    local value = Store.project(state, task, loc, program.orientation or program.demand_tag, state.trail)
     if value == nil then
       return false
     end
@@ -842,14 +810,8 @@ local function witness_cursor(state, intent)
   local function ready(value)
     return IR.witness_ready(program, value, program.payload or {}, {})
   end
-  local value = Store.project_machine(
-    state,
-    task,
-    program.location,
-    ready,
-    program.supply or 'interacting',
-    state.trail
-  )
+  local value =
+    Store.project_machine(state, task, program.location, ready, program.supply or 'interacting', state.trail)
   return IR.open_witness_cursor(program, value, program.payload or {}, {})
 end
 
@@ -891,10 +853,7 @@ local function resolve_witness(state, intent_id, alt, alternative_index)
     'activation',
     Activation.child(
       task.activation,
-      'witness:'
-        .. intent_activation_label(intent)
-        .. ':'
-        .. tostring(alternative_index or 1)
+      'witness:' .. intent_activation_label(intent) .. ':' .. tostring(alternative_index or 1)
     )
   )
   local packed = alt.result
@@ -920,11 +879,7 @@ local function resolve_claim_set(state, group, ids)
   for i = 1, #(group.ids or {}) do
     local id = group.ids[i]
     local intent = state.intent_by_id[id]
-    if
-      intent
-      and intent.kind == 'machine_transition'
-      and intent.program.transition.mode == 'update'
-    then
+    if intent and intent.kind == 'machine_transition' and intent.program.transition.mode == 'update' then
       selected[id] = true
     end
   end
@@ -1096,20 +1051,11 @@ local function execute_program(state, task, program, occurrence)
           end
         end
       end
-      advance_activation(
-        state,
-        task,
-        'primitive:snapshot:keyed:' .. object_version_label(resource)
-      )
+      advance_activation(state, task, 'primitive:snapshot:keyed:' .. object_version_label(resource))
       return complete_task(
         state,
         task,
-        new_outcome(
-          state,
-          packv(state, { entries = entries, version = resource.version }),
-          nil,
-          task
-        )
+        new_outcome(state, packv(state, { entries = entries, version = resource.version }), nil, task)
       )
     elseif program.snapshot_kind == 'index' then
       local value = Store.read(view, resource._location, state.trail)
@@ -1117,20 +1063,11 @@ local function execute_program(state, task, program, occurrence)
       for k, e in pairs(value or {}) do
         entries[k] = { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
       end
-      advance_activation(
-        state,
-        task,
-        'primitive:snapshot:index:' .. object_version_label(resource)
-      )
+      advance_activation(state, task, 'primitive:snapshot:index:' .. object_version_label(resource))
       return complete_task(
         state,
         task,
-        new_outcome(
-          state,
-          packv(state, { entries = entries, version = resource.version }),
-          nil,
-          task
-        )
+        new_outcome(state, packv(state, { entries = entries, version = resource.version }), nil, task)
       )
     elseif program.snapshot_kind == 'lease' then
       local holders = {}
@@ -1149,20 +1086,11 @@ local function execute_program(state, task, program, occurrence)
           holders[subject][owner] = mode
         end
       end
-      advance_activation(
-        state,
-        task,
-        'primitive:snapshot:lease:' .. object_version_label(resource)
-      )
+      advance_activation(state, task, 'primitive:snapshot:lease:' .. object_version_label(resource))
       return complete_task(
         state,
         task,
-        new_outcome(
-          state,
-          packv(state, { holders = holders, version = resource.version }),
-          nil,
-          task
-        )
+        new_outcome(state, packv(state, { holders = holders, version = resource.version }), nil, task)
       )
     end
     error('unknown snapshot kind', 0)
@@ -1175,20 +1103,11 @@ local function execute_program(state, task, program, occurrence)
     view = ensure_task_view(state, task)
     if loc.version ~= program.version then
       Store.cell(view, loc, state.trail)
-      advance_activation(
-        state,
-        task,
-        'primitive:version_wait:' .. object_version_label(loc)
-      )
+      advance_activation(state, task, 'primitive:version_wait:' .. object_version_label(loc))
       return complete_task(
         state,
         task,
-        new_outcome(
-          state,
-          packv(state, Store.read(view, loc, state.trail), loc.version),
-          nil,
-          task
-        )
+        new_outcome(state, packv(state, Store.read(view, loc, state.trail), loc.version), nil, task)
       )
     end
     program.observed_version = loc.version
@@ -1241,11 +1160,7 @@ local function execute_program(state, task, program, occurrence)
     local value = Store.read(view, loc, state.trail)
     if Store.predicate_holds(program, value) then
       Store.stage(view, loc, program.immediate_patch, state.trail)
-      advance_activation(
-        state,
-        task,
-        'primitive:conditional_claim:' .. object_version_label(loc)
-      )
+      advance_activation(state, task, 'primitive:conditional_claim:' .. object_version_label(loc))
       return complete_task(
         state,
         task,
@@ -1276,8 +1191,7 @@ local function has_supplier(state, intents)
   if signature and SearchCache.get_no_supplier(cache, signature) then
     return false
   end
-  local found =
-    state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
+  local found = state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
   if not found and signature then
     SearchCache.put_no_supplier(cache, signature)
   end
@@ -1293,12 +1207,8 @@ local function supplier_rows(state)
   if signature and SearchCache.get_no_supplier(cache, signature) then
     return {}, true
   end
-  local rows = state.runtime:_supplier_request_rows(
-    state.intents,
-    state.roots,
-    state.excluded_roots,
-    state.requests
-  )
+  local rows =
+    state.runtime:_supplier_request_rows(state.intents, state.roots, state.excluded_roots, state.requests)
   if #rows == 0 and signature then
     SearchCache.put_no_supplier(cache, signature)
   end
@@ -1532,11 +1442,7 @@ local function drain_active(state)
           pushv(state, task.frames, { kind = 'wrap', fn = expr.post })
         end
         if expr.symmetry_key ~= nil then
-          pushv(
-            state,
-            task.frames,
-            { kind = 'symmetry_restore', previous_symmetry = task.symmetry_key }
-          )
+          pushv(state, task.frames, { kind = 'symmetry_restore', previous_symmetry = task.symmetry_key })
           setv(state, task, 'symmetry_key', expr.symmetry_key)
         end
         setv(state, task, 'expr', expr.p)
@@ -1601,11 +1507,7 @@ end
 local function analyse_frontier(state)
   local profile_plan = state.profile_plan
   if profile_plan and state.runtime.instrumentation.state_hash then
-    state.runtime.instrumentation:observe_state(
-      profile_plan,
-      SearchCache.signature(state, false),
-      false
-    )
+    state.runtime.instrumentation:observe_state(profile_plan, SearchCache.signature(state, false), false)
   end
   local frontier = Frontier.analyse(
     state,
@@ -1653,11 +1555,7 @@ local function raw_exchange_program(op)
 end
 
 local function recruit_forced_raw_exchange(state, exchange)
-  if
-    #state.intents ~= 1
-    or #exchange.pairs ~= 0
-    or state.session.stack ~= nil
-  then
+  if #state.intents ~= 1 or #exchange.pairs ~= 0 or state.session.stack ~= nil then
     return false
   end
   local intent = state.intents[1]
@@ -1673,11 +1571,7 @@ local function recruit_forced_raw_exchange(state, exchange)
   local row = rows[1]
   local request = state.requests[row.id]
   local supplier = raw_exchange_program(request and request.op)
-  if
-    not supplier
-    or supplier.resource ~= current.resource
-    or supplier.role == current.role
-  then
+  if not supplier or supplier.resource ~= current.resource or supplier.role == current.role then
     return false
   end
   add_root(state, row.id)
@@ -1711,11 +1605,7 @@ local function apply_forced_frontier(state, frontier)
       end
       local terminal = terminal_refutation(state)
       if profile_plan and state.runtime.instrumentation.state_hash then
-        state.runtime.instrumentation:observe_state(
-          profile_plan,
-          SearchCache.signature(state, true),
-          true
-        )
+        state.runtime.instrumentation:observe_state(profile_plan, SearchCache.signature(state, true), true)
       end
       return false, terminal
     end
@@ -1944,10 +1834,7 @@ local function prepare_alternative(state, frame, alt)
       state,
       task,
       'activation',
-      Activation.child(
-        frame.activation,
-        'or_else:fallback:' .. refutation_activation_label(pref)
-      )
+      Activation.child(frame.activation, 'or_else:fallback:' .. refutation_activation_label(pref))
     )
     add_active(state, task.id)
     return true
@@ -1979,11 +1866,7 @@ local function prepare_alternative(state, frame, alt)
     local row = alt.row
     if profile_plan then
       profile_plan.recruit_branches = profile_plan.recruit_branches + 1
-      state.runtime.instrumentation:event(
-        profile_plan,
-        'recruit_root',
-        { root = row.id, score = row.score }
-      )
+      state.runtime.instrumentation:event(profile_plan, 'recruit_root', { root = row.id, score = row.score })
     end
     add_root(state, row.id)
     return true

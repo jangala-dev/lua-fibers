@@ -122,13 +122,7 @@ local function scope_key(payload)
   local to = payload.to or payload.region
   local from_id = from and (from._fibers_id or from.name) or payload.from_id or ''
   local to_id = to and (to._fibers_id or to.name) or payload.to_id or ''
-  return tostring(typ)
-    .. ':'
-    .. tostring(item_id)
-    .. ':'
-    .. tostring(from_id)
-    .. ':'
-    .. tostring(to_id)
+  return tostring(typ) .. ':' .. tostring(item_id) .. ':' .. tostring(from_id) .. ':' .. tostring(to_id)
 end
 
 ScopeKind = EffectKind.new({
@@ -146,11 +140,7 @@ ScopeKind = EffectKind.new({
       discharge = function(rt, entry, _log)
         local seen = {}
         local function discharge_source(src)
-          if
-            type(src) == 'table'
-            and type(src._fibers_external_deliver) == 'function'
-            and not seen[src]
-          then
+          if type(src) == 'table' and type(src._fibers_external_deliver) == 'function' and not seen[src] then
             seen[src] = true
             UnsafeExternalMutation.deliver(src, entry.payload)
           end

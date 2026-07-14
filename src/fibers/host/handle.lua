@@ -71,8 +71,7 @@ function Handle.new(opts)
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness
-      or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     close_on_gc = opts.close_on_gc,
     _read = opts.read,

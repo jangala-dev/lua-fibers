@@ -40,13 +40,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -112,11 +106,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
     }))
   end).runtime_status
   assert_status(st_same, 'found')
-  assert_eq(
-    same_rows[2][1],
-    'not-yet-eof',
-    'same-world close should not fabricate EOF for an empty read'
-  )
+  assert_eq(same_rows[2][1], 'not-yet-eof', 'same-world close should not fabricate EOF for an empty read')
 
   local flow = Flow.new({ name = 'adv-close-drain' })
   local data, eof, eof_err

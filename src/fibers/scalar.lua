@@ -116,12 +116,7 @@ function Scalar:snapshot_op()
 end
 
 function Scalar:changed_op(version)
-  return Op._compact_resource(
-    self,
-    Kind,
-    'version_wait',
-    { location = self._location, version = version }
-  )
+  return Op._compact_resource(self, Kind, 'version_wait', { location = self._location, version = version })
 end
 
 function Scalar:expect_op(value)

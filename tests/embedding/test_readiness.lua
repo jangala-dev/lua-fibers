@@ -44,13 +44,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -145,9 +139,7 @@ do
   })
   local stream, read_val, read_err, n, write_err
   rt:spawn_raw(function()
-    stream = rt:perform(
-      Stream.open_backend_in_op(region, backend, { name = 'readiness-authority-stream' })
-    )
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-authority-stream' }))
     read_val, read_err = rt:perform(stream:reader():read_some_op(1))
     rt:perform(stream:writer():write_op('x'))
     n, write_err = rt:perform(stream:writer():flush_op())
@@ -193,8 +185,7 @@ do
     Fake.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'stale-readiness-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'stale-readiness-stream' }))
     got, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
   assert_status(rt:run(), 'found')
@@ -226,8 +217,7 @@ do
   })
   local stream, flushed
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-write-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-write-stream' }))
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -267,8 +257,7 @@ do
   })
   local stream, flushed
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_backend_in_op(region, backend, { name = 'bounded-ready-pump-stream' }))
+    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'bounded-ready-pump-stream' }))
     rt:perform(stream:writer():write_op('xy'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')

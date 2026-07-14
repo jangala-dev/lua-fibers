@@ -212,9 +212,7 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
     or nil
 
   local focus_request = requests[focus_id]
-  local focus_metadata = component
-    and focus_request
-    and (focus_request.metadata or focus_request.footprint)
+  local focus_metadata = component and focus_request and (focus_request.metadata or focus_request.footprint)
   if component and focus_metadata and (focus_metadata.node_kinds or {}).choice then
     runtime:_ensure_component_coordinator(component)
   end
@@ -265,8 +263,7 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
       and (policy and policy.supplier_min_steps or runtime.refutation_cache_min_steps)
     or nil
   state.component = (state_memoization_possible or refutation_cache_possible) and component or nil
-  state.plan_id = (state_memoization_possible or refutation_cache_possible) and runtime.stats.plans
-    or nil
+  state.plan_id = (state_memoization_possible or refutation_cache_possible) and runtime.stats.plans or nil
   state.search_cache = nil
 
   session._fibers_search_session = true
@@ -569,9 +566,7 @@ function Session:reopen_retry(args)
 
   state.requests = args.requests or state.requests
   state.choice_generation = component and component.choice_generation or state.choice_generation
-  state.component = (state.state_memoization_possible or state.refutation_cache_possible)
-      and component
-    or nil
+  state.component = (state.state_memoization_possible or state.refutation_cache_possible) and component or nil
   state.profile_plan = profile_plan
   state.plan_id = (state.state_memoization_possible or state.refutation_cache_possible)
       and runtime.stats.plans

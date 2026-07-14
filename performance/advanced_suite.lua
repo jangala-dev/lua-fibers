@@ -243,10 +243,7 @@ for _, scenario in ipairs(scenarios) do
         final_rt, digest = rt, value
       end
       expected[scenario.name] = expected[scenario.name] or digest
-      assert(
-        expected[scenario.name] == digest,
-        'profile changed validating digest for ' .. scenario.name
-      )
+      assert(expected[scenario.name] == digest, 'profile changed validating digest for ' .. scenario.name)
       local snap = final_rt:instrumentation_snapshot()
       local c, m = snap.counters, snap.maxima
       rows[#rows + 1] = {
@@ -317,13 +314,7 @@ end
 local function text()
   local lines = {
     'fibers advanced performance suite',
-    string.format(
-      'lua=%s machine=%s repeats=%d clock=%s',
-      tostring(_VERSION),
-      machine,
-      repeats,
-      Clock.name
-    ),
+    string.format('lua=%s machine=%s repeats=%d clock=%s', tostring(_VERSION), machine, repeats, Clock.name),
     string.format(
       '%-34s %-11s %9s %9s %9s %9s %8s %8s %8s %8s',
       'case',

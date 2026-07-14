@@ -75,8 +75,7 @@ local function test_release_supply_law()
   c.holders.s = { writer = 'write' }
   local rt2, rows2 = new_runtime()
   rt2:spawn_raw(function()
-    rows2 =
-      rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
+    rows2 = rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
   end)
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)

@@ -57,13 +57,7 @@ end
 
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 
@@ -88,12 +82,7 @@ end
 
 local function assert_uncommitted_status(status, msg)
   local tag = status and status.tag
-  if
-    tag ~= 'quiescent'
-    and tag ~= 'conflict'
-    and tag ~= 'reject_candidate'
-    and tag ~= 'pending'
-  then
+  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
     fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end
@@ -268,16 +257,8 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
         end)))
     end, 'or-else-cross-no-partner-receiver')
 
-    assert_status(
-      rt:run(),
-      'found',
-      'or_else fallback commits when rendezvous primary has no partner'
-    )
-    assert_eq(
-      receiver,
-      'fallback',
-      'blocked primary is absent when no other participant can satisfy it'
-    )
+    assert_status(rt:run(), 'found', 'or_else fallback commits when rendezvous primary has no partner')
+    assert_eq(receiver, 'fallback', 'blocked primary is absent when no other participant can satisfy it')
     assert_eq(
       transaction_tags(rt),
       'or_else.cross.no_partner.fallback',
@@ -306,11 +287,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       sender1 = rt:perform(ch1:put_op('a'))
     end, 'or-else-cross-partial-absent-sender-1')
 
-    assert_status(
-      rt:run(),
-      'found',
-      'or_else fallback commits when the whole primary cannot be satisfied'
-    )
+    assert_status(rt:run(), 'found', 'or_else fallback commits when the whole primary cannot be satisfied')
     assert_eq(receiver, 'fallback', 'a partially satisfiable primary is still absent as a whole')
     assert_eq(sender1, nil, 'stray partner for an abandoned primary does not commit')
     assert_eq(
@@ -373,11 +350,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       sender2 = rt:perform(ch2:put_op('b'))
     end, 'or-else-cross-all-sender-2')
 
-    assert_status(
-      rt:run(),
-      'found',
-      'or_else primary absence considers all required external participants'
-    )
+    assert_status(rt:run(), 'found', 'or_else primary absence considers all required external participants')
     assert_eq(receiver, 'a+b', 'multi-requirement primary beats fallback when partners exist')
     assert_eq(sender1, true)
     assert_eq(sender2, true)
@@ -511,12 +484,8 @@ local function test_tensor_all_and_internal_rendezvous_topology()
 
   do
     local ch = Rendezvous.new('all-no-internal')
-    local status =
-      one_perform(Op.all({ ch:put_op('payload'), ch:get_op() }), { quiet_deadlock = true })
-    assert_uncommitted_status(
-      status,
-      'all does not permit internal rendezvous between its own lanes'
-    )
+    local status = one_perform(Op.all({ ch:put_op('payload'), ch:get_op() }), { quiet_deadlock = true })
+    assert_uncommitted_status(status, 'all does not permit internal rendezvous between its own lanes')
   end
 
   do
@@ -629,10 +598,7 @@ local function test_triple_swap_does_not_partially_commit_when_a_party_is_missin
   end, 'partial-triple-B')
 
   local status = rt:run()
-  assert_uncommitted_status(
-    status,
-    'triple swap cannot partially commit with a missing participant'
-  )
+  assert_uncommitted_status(status, 'triple swap cannot partially commit with a missing participant')
   assert_eq(a_got, nil)
   assert_eq(b_got, nil)
 end
@@ -749,11 +715,7 @@ local function test_tensor_is_parallel_not_sequential_for_scalar_views()
   assert_status(rt:run(), 'found')
   assert_eq(scalar.value, 1, 'tensor commits the selected write')
   assert_eq(rows[1][1], true)
-  assert_eq(
-    rows[2][1],
-    0,
-    'sibling tensor lane sees the shared pre-transaction view, not a sequential write'
-  )
+  assert_eq(rows[2][1], 0, 'sibling tensor lane sees the shared pre-transaction view, not a sequential write')
 end
 
 local function test_tensor_or_else_prefers_internal_rendezvous_over_fallback()
@@ -832,11 +794,7 @@ local function test_choice_backtracks_around_product_conflict()
   end, 'choice-product-conflict')
 
   assert_status(rt:run(), 'found')
-  assert_eq(
-    scalar.value,
-    2,
-    'search backtracks from a locally possible branch that conflicts in the product'
-  )
+  assert_eq(scalar.value, 2, 'search backtracks from a locally possible branch that conflicts in the product')
   assert_eq(rows[1][1], 'no-write')
   assert_eq(rows[2][1], true)
 end
@@ -1078,19 +1036,12 @@ local function test_map_and_and_then_reject_options_containing_wraps()
 
   assert_eq(ok_map, false, 'map cannot consume a product containing a post-commit wrap')
   assert_eq(ok_and_then, false, 'and_then cannot consume a product containing a post-commit wrap')
-  assert_eq(
-    ok_outer_wrap,
-    true,
-    'outer wrap remains valid on a product containing lane-local wraps'
-  )
+  assert_eq(ok_outer_wrap, true, 'outer wrap remains valid on a product containing lane-local wraps')
 end
 
 local function test_choice_normalises_nested_lists_and_choice_nodes()
-  local nested = Op.choice(
-    Op.never(),
-    { Op.never(), { Op.always('that') } },
-    Op.choice(Op.never(), Op.always('your'))
-  )
+  local nested =
+    Op.choice(Op.never(), { Op.never(), { Op.always('that') } }, Op.choice(Op.never(), Op.always('your')))
   assert_eq(nested.kind, 'choice', 'normalised multi-way choice remains a choice')
   assert_eq(#nested.choices, 2, 'choice flattens arrays, nested choices, and drops empty choices')
   local status, values = one_perform(nested)
@@ -1111,10 +1062,7 @@ local function test_choice_seed_replays_unordered_selection()
 
   local first = select(1)
   assert_eq(select(1), first, 'the same choice seed should replay the same traversal')
-  assert_truthy(
-    select(2) ~= first,
-    'different seeds should be able to select a different viable branch'
-  )
+  assert_truthy(select(2) ~= first, 'different seeds should be able to select a different viable branch')
 end
 
 local function test_choice_rejects_sparse_or_named_tables()
@@ -1145,10 +1093,7 @@ local function test_named_all_returns_record_values_and_raw_rows()
   assert_status(status, 'found')
   local r = values[1]
   assert_eq(r.a, 'A')
-  assert_truthy(
-    type(r.b) == 'table' and r.b.n == 2,
-    'multi-valued named_all entry should keep its row pack'
-  )
+  assert_truthy(type(r.b) == 'table' and r.b.n == 2, 'multi-valued named_all entry should keep its row pack')
   assert_eq(r.b[1], 'B')
   assert_eq(r.b[2], 2)
   assert_eq(r._rows.a[1], 'A')
@@ -1316,12 +1261,7 @@ end
 
 local function assert_uncommitted_status(status, msg)
   local tag = status and status.tag
-  if
-    tag ~= 'quiescent'
-    and tag ~= 'conflict'
-    and tag ~= 'reject_candidate'
-    and tag ~= 'pending'
-  then
+  if tag ~= 'quiescent' and tag ~= 'conflict' and tag ~= 'reject_candidate' and tag ~= 'pending' then
     fail((msg or 'expected uncommitted status') .. ': got ' .. tostring(tag))
   end
 end
@@ -1538,10 +1478,7 @@ local function test_nested_or_else_uses_nearest_available_world()
 
   do
     local status, values = one_perform(
-      Rendezvous.new('nested-or-else-absent')
-        :get_op()
-        :or_else(Op.always('inner'))
-        :or_else(Op.always('outer'))
+      Rendezvous.new('nested-or-else-absent'):get_op():or_else(Op.always('inner')):or_else(Op.always('outer'))
     )
     assert_status(status, 'found')
     assert_eq(values[1], 'inner', 'inner fallback wins when primary is absent')
@@ -1570,11 +1507,7 @@ local function test_tensor_lane_and_then_after_internal_rendezvous_is_lane_local
 
   assert_status(rt:run(), 'found')
   assert_truthy(rows and rows._fibers_rows, 'tensor returns rows')
-  assert_eq(
-    rows[1][1],
-    'got:payload',
-    'lane-local and_then sees received payload, not product rows'
-  )
+  assert_eq(rows[1][1], 'got:payload', 'lane-local and_then sees received payload, not product rows')
   assert_eq(rows[2][1], true, 'send lane commits')
 end
 
@@ -1595,11 +1528,7 @@ local function test_tensor_lane_and_then_returned_wrap_is_lane_local()
   end, 'tensor-lane-and_then-wrap-root')
 
   assert_status(rt:run(), 'found')
-  assert_eq(
-    rows[1][1],
-    'wrapped:payload',
-    'wrap returned by lane-local and_then applies to that lane only'
-  )
+  assert_eq(rows[1][1], 'wrapped:payload', 'wrap returned by lane-local and_then applies to that lane only')
   assert_eq(rows[2][1], true, 'send lane is not wrapped')
 end
 
@@ -1621,10 +1550,7 @@ local function test_tensor_lane_and_then_rejection_after_internal_rendezvous_bac
   end, 'tensor-lane-and_then-reject-root')
 
   local status = rt:run()
-  assert_uncommitted_status(
-    status,
-    'rejected lane-local and_then should make the tensor world absent'
-  )
+  assert_uncommitted_status(status, 'rejected lane-local and_then should make the tensor world absent')
   assert_eq(rows, nil, 'rejected world does not resume the participant')
 end
 
@@ -1674,15 +1600,8 @@ local function test_nested_product_deferred_and_then_preserves_inner_lane_locali
   assert_status(status, 'found')
   local outer_rows = values[1]
   local inner_rows = outer_rows[1][1]
-  assert_truthy(
-    inner_rows and inner_rows._fibers_rows,
-    'nested tensor lane returns its own row table'
-  )
-  assert_eq(
-    inner_rows[1][1],
-    'inner:payload',
-    'deferred and_then rewrites the nested receive lane only'
-  )
+  assert_truthy(inner_rows and inner_rows._fibers_rows, 'nested tensor lane returns its own row table')
+  assert_eq(inner_rows[1][1], 'inner:payload', 'deferred and_then rewrites the nested receive lane only')
   assert_eq(inner_rows[2][1], true, 'nested send lane is preserved')
   assert_eq(outer_rows[2][1], 'outer-side', 'outer sibling lane is preserved')
 end
@@ -1706,11 +1625,7 @@ local function test_all_lane_and_then_after_external_rendezvous_is_lane_local()
   end, 'all-lane-and_then-external-sender')
 
   assert_status(rt:run(), 'found')
-  assert_eq(
-    rows[1][1],
-    'got:payload',
-    'all lane and_then sees the value supplied by an external participant'
-  )
+  assert_eq(rows[1][1], 'got:payload', 'all lane and_then sees the value supplied by an external participant')
   assert_eq(rows[2][1], 'side', 'all sibling lane is preserved')
   assert_eq(sender, true, 'external rendezvous partner commits')
 end
@@ -1790,11 +1705,7 @@ local function test_tensor_internal_and_external_rendezvous_must_all_close()
   end, 'external-partner')
 
   assert_status(rt:run(), 'found')
-  assert_eq(
-    a,
-    'inside+outside',
-    'tensor root commits only after internal and external rendezvous close'
-  )
+  assert_eq(a, 'inside+outside', 'tensor root commits only after internal and external rendezvous close')
   assert_eq(b, true)
 end
 
@@ -1808,10 +1719,7 @@ local function test_all_does_not_allow_internal_rendezvous_even_nested()
     }),
     { quiet_deadlock = true }
   )
-  assert_uncommitted_status(
-    status,
-    'all still does not permit internal rendezvous between its own lanes'
-  )
+  assert_uncommitted_status(status, 'all still does not permit internal rendezvous between its own lanes')
 end
 
 local function test_triple_swap_with_decoy_does_not_greedily_partially_commit()

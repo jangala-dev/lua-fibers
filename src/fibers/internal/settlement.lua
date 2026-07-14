@@ -25,11 +25,7 @@ local function perform_masked(op)
 end
 
 local function require_context(ctx)
-  if
-    type(ctx) ~= 'table'
-    or type(ctx.claim_op) ~= 'function'
-    or type(ctx.resolve_op) ~= 'function'
-  then
+  if type(ctx) ~= 'table' or type(ctx.claim_op) ~= 'function' or type(ctx.resolve_op) ~= 'function' then
     error('settlement requires a context with claim_op and resolve_op', 3)
   end
   return ctx
@@ -102,10 +98,7 @@ function Settlement.protocol(settle, label)
     if protocol.request_op then
       op = ensure_op(protocol.request_op(ctx, record, claim), protocol.name .. '.request_op')
       return op:and_then(function()
-        return ensure_op(
-          protocol.discharge_op(ctx, record, claim),
-          protocol.name .. '.discharge_op'
-        )
+        return ensure_op(protocol.discharge_op(ctx, record, claim), protocol.name .. '.discharge_op')
       end)
     end
     return ensure_op(protocol.discharge_op(ctx, record, claim), protocol.name .. '.discharge_op')

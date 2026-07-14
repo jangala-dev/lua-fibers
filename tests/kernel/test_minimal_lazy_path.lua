@@ -25,11 +25,7 @@ local Host = require('fibers.host')
 local function eq(actual, expected, message)
   if actual ~= expected then
     error(
-      (message or 'values differ')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual),
+      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
       2
     )
   end
@@ -54,10 +50,7 @@ do
   local scalar = Scalar.new(0, 'minimal-cached-scalar')
   eq(scalar:read_op(), scalar:read_op(), 'scalar read option should be cached')
   eq(scalar:snapshot_op(), scalar:snapshot_op(), 'scalar snapshot option should be cached')
-  truthy(
-    scalar:read_op()._fibers_program,
-    'cached scalar read should use compact primitive programme'
-  )
+  truthy(scalar:read_op()._fibers_program, 'cached scalar read should use compact primitive programme')
 
   local counter = Counter.new(0, 'minimal-cached-counter')
   eq(counter:read_op(), counter:read_op(), 'counter read option should be cached')
@@ -119,10 +112,7 @@ do
   eq(rt:run().tag, 'quiescent')
   local counters = rt:instrumentation_snapshot().counters
   truthy((counters.state_fingerprint_probes or 0) > 0, 'state fingerprints were not probed')
-  truthy(
-    (counters.state_fingerprint_repeats or 0) > 0,
-    'repeated state fingerprint was not observed'
-  )
+  truthy((counters.state_fingerprint_repeats or 0) > 0, 'repeated state fingerprint was not observed')
   truthy((counters.state_memo_hits or 0) > 0, 'exact memoisation did not activate after repetition')
 end
 

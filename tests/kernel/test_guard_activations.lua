@@ -25,13 +25,7 @@ end
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    fail(
-      (message or 'values differ')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 

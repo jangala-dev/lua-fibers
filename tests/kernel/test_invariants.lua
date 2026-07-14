@@ -32,13 +32,7 @@ local function fail(msg)
 end
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 local function assert_truthy(v, msg)
@@ -132,11 +126,7 @@ do
   local token = Interrupt.new('capability-safe-token')
   assert_eq(token.raise, nil, 'interrupt token has no public raise method')
   assert_eq(token.clear, nil, 'interrupt token has no public clear method')
-  assert_eq(
-    require('fibers').interrupt,
-    nil,
-    'interrupt module is not part of top-level public surface'
-  )
+  assert_eq(require('fibers').interrupt, nil, 'interrupt module is not part of top-level public surface')
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(Op.emit(Effect.interrupt(token, 'stop')))
@@ -185,11 +175,7 @@ do
   local r = FibersRegion.new('claim-surface')
   assert_eq(type(r.claim_op), 'function', 'Region should expose generic claim_op')
   assert_eq(type(r.resolve_claim_op), 'function', 'Region should expose generic resolve_claim_op')
-  assert_eq(
-    type(r.discharge_claim_op),
-    'function',
-    'Region should expose explicit discharge_claim_op'
-  )
+  assert_eq(type(r.discharge_claim_op), 'function', 'Region should expose explicit discharge_claim_op')
   assert_eq(type(r.fail_claim_op), 'function', 'Region should expose explicit fail_claim_op')
   assert_eq(type(r.move_op), 'function', 'Region should expose explicit move_op')
   assert_eq(type(r.retire_tree_op), 'nil', 'Region should not expose retire_tree_op')

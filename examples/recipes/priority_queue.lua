@@ -22,8 +22,7 @@ function PriorityQueue.new(opts, name)
   return setmetatable({
     name = qname,
     items = opts.items or Index.new({}, qname .. ':items'),
-    slots = cap and Counter.new({ initial = cap, min = 0, max = cap, name = qname .. ':slots' })
-      or nil,
+    slots = cap and Counter.new({ initial = cap, min = 0, max = cap, name = qname .. ':slots' }) or nil,
     capacity = cap,
   }, PriorityQueue)
 end

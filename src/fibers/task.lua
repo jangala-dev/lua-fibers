@@ -67,10 +67,7 @@ function Task.new(fn, name, scope)
     fn = fn,
     name = name or id,
     completion = Scalar.new({ status = 'pending' }, (name or id) .. '-completion'),
-    cancellation = Scalar.new(
-      { requested = false, cancelled = false },
-      (name or id) .. '-cancellation'
-    ),
+    cancellation = Scalar.new({ requested = false, cancelled = false }, (name or id) .. '-cancellation'),
     interrupt = Interrupt.new((name or id) .. '-interrupt'),
     scope = scope,
     owner = nil,
@@ -221,8 +218,7 @@ function Task:state_op()
       return {
         exited = Exit.is(completion),
         exit = completion,
-        cancel_requested = type(cancel) == 'table' and (cancel.cancelled or cancel.requested)
-          or false,
+        cancel_requested = type(cancel) == 'table' and (cancel.cancelled or cancel.requested) or false,
         cancel_reason = type(cancel) == 'table' and cancel.reason or nil,
         task = self,
       }

@@ -93,10 +93,7 @@ do
   fibers.run(function()
     waiter_state = fibers.perform(waiter:state_op())
   end)
-  assert_truthy(
-    waiter_state and waiter_state.exited,
-    'pending sibling should be cancelled and settled'
-  )
+  assert_truthy(waiter_state and waiter_state.exited, 'pending sibling should be cancelled and settled')
   assert_truthy(
     waiter_state.exit.tag == 'cancelled' or waiter_state.exit.tag == 'failed',
     'pending sibling should not remain pending'

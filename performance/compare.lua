@@ -4,13 +4,10 @@
 
 local baseline_path, candidate_path = arg[1], arg[2]
 local time_threshold = tonumber(arg[3] or os.getenv('FIBERS_PERF_REGRESSION_PERCENT') or '10') or 10
-local search_threshold = tonumber(
-  arg[4] or os.getenv('FIBERS_PERF_SEARCH_REGRESSION_PERCENT') or '25'
-) or 25
+local search_threshold = tonumber(arg[4] or os.getenv('FIBERS_PERF_SEARCH_REGRESSION_PERCENT') or '25') or 25
 if not baseline_path or not candidate_path then
   io.stderr:write(
-    'usage: lua performance/compare.lua BASELINE.csv CANDIDATE.csv '
-      .. '[TIME_PERCENT] [SEARCH_PERCENT]\n'
+    'usage: lua performance/compare.lua BASELINE.csv CANDIDATE.csv ' .. '[TIME_PERCENT] [SEARCH_PERCENT]\n'
   )
   os.exit(2)
 end

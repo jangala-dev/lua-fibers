@@ -182,8 +182,7 @@ function Harness.run(tests, opts)
       counts.failed = counts.failed + 1
     end
 
-    results[#results + 1] =
-      { name = name, path = path, status = status, detail = detail, elapsed = elapsed }
+    results[#results + 1] = { name = name, path = path, status = status, detail = detail, elapsed = elapsed }
 
     if status == 'ok' then
       printf('ok   %-42s %.3fs', name, elapsed)

@@ -18,11 +18,7 @@ local Rendezvous = require('fibers.resource.rendezvous')
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
     error(
-      (message or 'assertion failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual),
+      (message or 'assertion failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
       2
     )
   end
@@ -96,11 +92,7 @@ do
   assert_eq(got, 'value')
   assert_eq(sent, true)
   if rt.machine_name == 'trail' then
-    assert_eq(
-      rt.stats.plans,
-      2,
-      'bounded rendezvous should retain one session per focus rather than restart'
-    )
+    assert_eq(rt.stats.plans, 2, 'bounded rendezvous should retain one session per focus rather than restart')
   end
 end
 
@@ -165,11 +157,7 @@ do
   end, 'precise-unrelated')
   rt:_start_one()
   rt:_find_candidate(focus, 1)
-  assert_eq(
-    rt.stats.plans,
-    plans,
-    'unrelated dependency admission should preserve the suspended session'
-  )
+  assert_eq(rt.stats.plans, plans, 'unrelated dependency admission should preserve the suspended session')
 
   rt:spawn_raw(function()
     rt:perform(primary:put_op('ready'))

@@ -33,13 +33,7 @@ local function assert_nil(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -130,14 +124,13 @@ do
   local choice, moved, src_left, dst_got
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abcdef'))
-    choice = fibers.perform(
-      Op.choice(
+    choice =
+      fibers.perform(Op.choice(
         Op.always('winner'),
         src:outlet():splice_to(dst:inlet(), 3):map(function()
           return 'loser'
         end)
-      )
-    )
+      ))
     moved = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_got = fibers.perform(dst:outlet():read_exactly_op(3))

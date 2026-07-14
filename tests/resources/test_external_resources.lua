@@ -212,11 +212,7 @@ do
       break
     end
   end
-  assert_eq(
-    ok,
-    true,
-    'bounded clock wait should commit after deadline without explicit invalidation'
-  )
+  assert_eq(ok, true, 'bounded clock wait should commit after deadline without explicit invalidation')
   assert_eq(observed, 5)
 end
 

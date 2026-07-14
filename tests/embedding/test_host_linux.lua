@@ -40,18 +40,12 @@ do
 
   local ok2, nixio_host = pcall(require, 'fibers.host.nixio')
   assert_truthy(ok2, 'nixio linux host module should be require-able')
-  assert_truthy(
-    type(nixio_host.is_supported) == 'function',
-    'nixio host should expose is_supported'
-  )
+  assert_truthy(type(nixio_host.is_supported) == 'function', 'nixio host should expose is_supported')
   assert_truthy(type(nixio_host.new) == 'function', 'nixio host should expose new')
 
   local ok3, posix_host = pcall(require, 'fibers.host.luaposix')
   assert_truthy(ok3, 'luaposix host module should be require-able')
-  assert_truthy(
-    type(posix_host.is_supported) == 'function',
-    'luaposix host should expose is_supported'
-  )
+  assert_truthy(type(posix_host.is_supported) == 'function', 'luaposix host should expose is_supported')
   assert_truthy(type(posix_host.new) == 'function', 'luaposix host should expose new')
 
   local ok4, cffi_host = pcall(require, 'fibers.host.cffi_linux')

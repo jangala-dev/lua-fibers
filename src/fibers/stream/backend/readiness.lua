@@ -16,8 +16,7 @@ function Backend.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('readiness-backend-' .. tostring(next_id))
-  local readiness = opts.readiness
-    or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness')
+  local readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness')
   return setmetatable({
     name = opts.name or ('readiness-backend-' .. tostring(next_id)),
     key = key,

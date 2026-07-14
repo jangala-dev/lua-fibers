@@ -30,10 +30,8 @@ local function ensure_front(self)
 end
 
 function Rope.new(data)
-  local r = setmetatable(
-    { front = nil, back = nil, head_off = 0, len = 0, front_count = 0, back_count = 0 },
-    Rope
-  )
+  local r =
+    setmetatable({ front = nil, back = nil, head_off = 0, len = 0, front_count = 0, back_count = 0 }, Rope)
   if data and data ~= '' then
     r:append(data)
   end

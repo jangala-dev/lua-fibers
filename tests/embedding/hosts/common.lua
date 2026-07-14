@@ -30,19 +30,13 @@ function Common.assert_truthy(v, msg)
 end
 function Common.assert_eq(a, b, msg)
   if a ~= b then
-    Common.fail(
-      (msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a)
-    )
+    Common.fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
   end
 end
 function Common.assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
     Common.fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
+      (msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag)
     )
   end
 end

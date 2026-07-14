@@ -71,11 +71,7 @@ local function select_machine(opts)
   if requested == 'reference' then
     local ok, reference = pcall(require, 'fibers.internal.reference_machine')
     if not ok then
-      error(
-        'the reference solver is a repository-only development component: '
-          .. tostring(reference),
-        3
-      )
+      error('the reference solver is a repository-only development component: ' .. tostring(reference), 3)
     end
     return reference, 'reference'
   end
@@ -102,9 +98,7 @@ local function merge_effects(effects)
   for i = 1, #effects do
     local effect = effects[i]
     local kind = effect.kind
-    local key = tostring(kind._fibers_kind_id or kind.name)
-      .. '\0'
-      .. tostring(kind.key(effect.payload))
+    local key = tostring(kind._fibers_kind_id or kind.name) .. '\0' .. tostring(kind.key(effect.payload))
     local old = by_key[key]
     if old then
       local payload, err = kind.merge(old.payload, effect.payload)
@@ -205,15 +199,11 @@ function Runtime:_require_perform_allowed(level)
   if self:_is_current_fiber() and self._phase == 'fiber' then
     return true
   end
-  return self:_fail(
-    'phase_error',
-    'perform may only be called by the currently resumed runtime fibre',
-    {
-      action = 'perform',
-      phase = self._phase,
-      level = level or 0,
-    }
-  )
+  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fibre', {
+    action = 'perform',
+    phase = self._phase,
+    level = level or 0,
+  })
 end
 
 function Runtime:_require_spawn_allowed(level)
@@ -231,15 +221,11 @@ function Runtime:_require_driver_call(action, level)
   if not self:_is_current_fiber() and self._phase == 'external' then
     return true
   end
-  return self:_fail(
-    'phase_error',
-    tostring(action) .. ' may only be called by external driver code',
-    {
-      action = action,
-      phase = self._phase,
-      level = level or 0,
-    }
-  )
+  return self:_fail('phase_error', tostring(action) .. ' may only be called by external driver code', {
+    action = action,
+    phase = self._phase,
+    level = level or 0,
+  })
 end
 
 local function finish_phase_call(self, old_phase, name, kind, fatal, committed, ok, ...)
@@ -252,11 +238,7 @@ local function finish_phase_call(self, old_phase, name, kind, fatal, committed, 
     error(err, 0)
   end
   if fatal then
-    return self:_fatal(
-      kind or 'effect_error',
-      err,
-      { phase = name, committed = committed, level = 0 }
-    )
+    return self:_fatal(kind or 'effect_error', err, { phase = name, committed = committed, level = 0 })
   end
   return self:_fail(kind or 'callback_error', err, { phase = name, level = 0 })
 end
@@ -316,10 +298,7 @@ function Runtime.new(opts)
     resumable_search = opts.resumable_search ~= false,
     plan_reuse_threshold = math.max(1, math.floor(opts.plan_reuse_threshold or 16)),
     state_memoization_min_steps = math.max(0, math.floor(opts.state_memoization_min_steps or 48)),
-    state_memoization_min_intents = math.max(
-      0,
-      math.floor(opts.state_memoization_min_intents or 0)
-    ),
+    state_memoization_min_intents = math.max(0, math.floor(opts.state_memoization_min_intents or 0)),
     refutation_cache_min_steps = math.max(0, math.floor(opts.refutation_cache_min_steps or 48)),
     search_policy = SearchPolicy.new(opts),
     _search_sessions = {},
@@ -685,8 +664,7 @@ function Runtime:_resume_fiber(fiber, a, b, c)
   if instrumentation then
     instrumentation:inc('fibre_resumes')
   end
-  local previous, previous_scope, previous_fiber =
-    CURRENT_RUNTIME, CURRENT_SCOPE, self._current_fiber
+  local previous, previous_scope, previous_fiber = CURRENT_RUNTIME, CURRENT_SCOPE, self._current_fiber
   self._current_fiber = fiber
   CURRENT_RUNTIME, CURRENT_SCOPE = self, fiber.scope
   local old_phase = self:_set_phase('fiber')
@@ -959,8 +937,7 @@ function Runtime:_component_requests(focus_id)
   end
 
   local diagnostics = self.instrumentation ~= nil or self._search_sessions[focus_id] ~= nil
-  local requests, component =
-    self.dependency_index:component(focus_id, self.pending_by_id, diagnostics)
+  local requests, component = self.dependency_index:component(focus_id, self.pending_by_id, diagnostics)
   return requests, component
 end
 
@@ -1066,12 +1043,8 @@ function Runtime:_search_session_dependencies(requests, component, focus_id, ses
       component = indexed_component or component
     end
   end
-  local vector, reason = DependencyVector.capture(
-    self,
-    requests,
-    component,
-    refutation or (session and session.result_refutation)
-  )
+  local vector, reason =
+    DependencyVector.capture(self, requests, component, refutation or (session and session.result_refutation))
   if vector and self.instrumentation then
     self.instrumentation:inc('dependency_vectors')
   end
@@ -1205,10 +1178,7 @@ function Runtime:_observe_plan_component(focus_id, component)
       end
     end
     local union = #prior_ids + #(component.ids or {}) - intersection
-    instrumentation:observe(
-      'component_overlap_percent',
-      union > 0 and intersection * 100 / union or 100
-    )
+    instrumentation:observe('component_overlap_percent', union > 0 and intersection * 100 / union or 100)
   end
   self._plan_observations[focus_id] = {
     signature = component.signature,
@@ -1243,9 +1213,7 @@ function Runtime:_store_lightweight_refutation(focus_id, requests, component, re
       if metadata.dynamic or metadata.external then
         if instrumentation then
           instrumentation:inc('plan_reuse_ineligible')
-          instrumentation:inc(
-            'plan_reuse_ineligible_' .. (metadata.dynamic and 'dynamic' or 'external')
-          )
+          instrumentation:inc('plan_reuse_ineligible_' .. (metadata.dynamic and 'dynamic' or 'external'))
         end
         return false, component
       end
@@ -1349,14 +1317,7 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
           self:_search_session_dependencies(requests, component, focus_id, session)
         component = retained_component or component
         if session_dependencies then
-          self:_store_search_session(
-            focus_id,
-            'active',
-            session,
-            session_dependencies,
-            nil,
-            component
-          )
+          self:_store_search_session(focus_id, 'active', session, session_dependencies, nil, component)
         else
           session:discard('unretained')
         end
@@ -1366,14 +1327,7 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
           self:_retry_session_dependencies(session, requests, component, focus_id)
         component = retained_component or component
         if session_dependencies then
-          self:_store_search_session(
-            focus_id,
-            'retry',
-            session,
-            session_dependencies,
-            refutation,
-            component
-          )
+          self:_store_search_session(focus_id, 'retry', session, session_dependencies, refutation, component)
         else
           session:discard('unretained-retry')
           self:_store_lightweight_refutation(focus_id, requests, component, refutation)
@@ -1390,8 +1344,7 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
     self:_clear_search_session(focus_id, 'invalidated')
   end
 
-  hit, refutation, unknown, session =
-    self.machine.search(self, requests, focus_id, search_limit, component)
+  hit, refutation, unknown, session = self.machine.search(self, requests, focus_id, search_limit, component)
   if unknown and session then
     if not self.resumable_search then
       session:discard('unretained')
@@ -1401,14 +1354,7 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
         self:_search_session_dependencies(requests, component, focus_id, session)
       component = retained_component or component
       if session_dependencies then
-        self:_store_search_session(
-          focus_id,
-          'active',
-          session,
-          session_dependencies,
-          nil,
-          component
-        )
+        self:_store_search_session(focus_id, 'active', session, session_dependencies, nil, component)
       else
         session:discard('unretained')
       end
@@ -1419,14 +1365,7 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
       self:_retry_session_dependencies(session, requests, component, focus_id)
     component = retained_component or component
     if session_dependencies then
-      self:_store_search_session(
-        focus_id,
-        'retry',
-        session,
-        session_dependencies,
-        refutation,
-        component
-      )
+      self:_store_search_session(focus_id, 'retry', session, session_dependencies, refutation, component)
     else
       session:discard('unretained-retry')
       self:_store_lightweight_refutation(focus_id, requests, component, refutation)
@@ -1511,13 +1450,8 @@ function Runtime:_prepare_hit_effects(hit)
   local prepared = {}
   for i = 1, #effects do
     local effect = effects[i]
-    local p, err = self:_call_in_phase(
-      'effect_prepare',
-      'effect_error',
-      effect.kind.prepare,
-      self,
-      effect.payload
-    )
+    local p, err =
+      self:_call_in_phase('effect_prepare', 'effect_error', effect.kind.prepare, self, effect.payload)
     if not p then
       return nil, err
     end

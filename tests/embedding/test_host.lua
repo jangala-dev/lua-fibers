@@ -97,9 +97,7 @@ do
     { kind = 'timer', deadline = 3 },
   })
   assert_eq(deadline, 3)
-  assert_truthy(
-    Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } })
-  )
+  assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
 end
 
 -- Host selection returns complete families; fd selection remains low-level.
@@ -124,10 +122,7 @@ do
   assert_eq(pure.family, 'pure')
 
   local available = Host.available()
-  assert_truthy(
-    type(available) == 'table' and #available > 0,
-    'host.available should list selectable hosts'
-  )
+  assert_truthy(type(available) == 'table' and #available > 0, 'host.available should list selectable hosts')
 
   local fd_registry = require('fibers.host.fd')
   assert_truthy(type(fd_registry.select) == 'function', 'host.fd should be a registry/selector')

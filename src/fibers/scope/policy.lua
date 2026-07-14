@@ -137,10 +137,8 @@ local function add_active_task(scope, state, task)
   if Exit.is(exit) then
     local entry = record_child_exit(state, task, exit)
     if entry then
-      local decision = normalise_decision(
-        call_policy(state.policy, 'on_child_exit', scope, state, task, exit),
-        exit
-      )
+      local decision =
+        normalise_decision(call_policy(state.policy, 'on_child_exit', scope, state, task, exit), exit)
       apply_decision(scope, state, decision, exit.error or exit.reason or exit)
     end
   else
@@ -235,8 +233,7 @@ local function monitor_loop(scope, state, policy)
       changed_event_op(state.body_done, body.version, 'body_done'),
     }
     if not state.cancel_seen then
-      choices[#choices + 1] =
-        changed_event_op(scope.cancellation, cancellation.version, 'cancel_requested')
+      choices[#choices + 1] = changed_event_op(scope.cancellation, cancellation.version, 'cancel_requested')
     end
 
     local event = monitor_perform(Op.choice(choices))
@@ -286,8 +283,7 @@ local function retire_roots(scope, reason)
         if not rec then
           -- Ownership changed between roots_op and record_op; take another pass.
         elseif phase ~= 'live' then
-          local err = rec.settlement_error
-            or ('cannot retire non-live root in phase ' .. tostring(phase))
+          local err = rec.settlement_error or ('cannot retire non-live root in phase ' .. tostring(phase))
           if not first_bad then
             first_bad = err
           end
@@ -332,15 +328,7 @@ local function report_for(scope, primary, secondaries, fields)
   return scope:_make_report(primary, secondaries or {}, fields or {})
 end
 
-local function default_result(
-  scope,
-  policy,
-  state,
-  body_ok,
-  body_results,
-  settlement_failures,
-  close_reason
-)
+local function default_result(scope, policy, state, body_ok, body_results, settlement_failures, close_reason)
   local body_primary = body_results[2]
   local child_entry = state.first_child_failure
   local child_exit = child_entry and child_entry.exit
@@ -348,14 +336,11 @@ local function default_result(
   local primary = body_primary
   local reason
 
-  if
-    child_primary and (body_ok or (Runtime.is_cancelled and Runtime.is_cancelled(body_primary)))
-  then
+  if child_primary and (body_ok or (Runtime.is_cancelled and Runtime.is_cancelled(body_primary))) then
     primary = child_primary
     reason = 'child_failed'
   elseif not body_ok then
-    reason = Runtime.is_cancelled and Runtime.is_cancelled(body_primary) and 'cancelled'
-      or 'body_error'
+    reason = Runtime.is_cancelled and Runtime.is_cancelled(body_primary) and 'cancelled' or 'body_error'
   elseif child_primary then
     primary = child_primary
     reason = 'child_failed'
@@ -462,8 +447,7 @@ function Driver.run(scope, fn, policy)
     end
     local decision = call_policy(policy, 'on_body_exit', scope, state, body_ok, body_primary)
     if decision == nil then
-      decision = body_ok and { seal = true }
-        or { seal = true, cancel_children = legacy_handled == nil }
+      decision = body_ok and { seal = true } or { seal = true, cancel_children = legacy_handled == nil }
     end
     if decision.seal or decision.cancel_children then
       Driver.begin_close(scope, decision.reason or close_reason, {
@@ -477,10 +461,7 @@ function Driver.run(scope, fn, policy)
   end
 
   local done_ok, done_err = Protected.pcall(function()
-    perform_masked(
-      scope,
-      state.body_done:write_op({ done = true, ok = body_ok, primary = body_primary })
-    )
+    perform_masked(scope, state.body_done:write_op({ done = true, ok = body_ok, primary = body_primary }))
   end)
   if not done_ok then
     settlement_failures[#settlement_failures + 1] = done_err
@@ -529,12 +510,7 @@ function Driver.run(scope, fn, policy)
     result = ScopeResult.fail({
       reason = result.ok and 'settlement_failed' or result.reason,
       primary = result.ok and pop_err or result.primary,
-      report = report_for(
-        scope,
-        result.primary or pop_err,
-        { pop_err },
-        { reason = 'scope_pop_failed' }
-      ),
+      report = report_for(scope, result.primary or pop_err, { pop_err }, { reason = 'scope_pop_failed' }),
     })
   end
   return result

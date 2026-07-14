@@ -146,11 +146,7 @@ do
   )
   assert_eq(root_seen, true, 'fibers.run should install root current scope')
   assert_eq(inner_seen, true, 'fibers.scope should install nested current scope')
-  assert_eq(
-    restored_after_ok,
-    true,
-    'current scope should be restored after normal nested scope exit'
-  )
+  assert_eq(restored_after_ok, true, 'current scope should be restored after normal nested scope exit')
   assert_eq(restored_after_err, true, 'current scope should be restored after nested scope error')
 end
 

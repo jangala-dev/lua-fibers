@@ -51,11 +51,7 @@ do
     end)
     owner_after_render = h.owner
   end)
-  assert_eq(
-    undeclared_move,
-    'blocked',
-    'phase movement should require a declared edge and carry label'
-  )
+  assert_eq(undeclared_move, 'blocked', 'phase movement should require a declared edge and carry label')
   assert_eq(owner_after_input, render_region, 'later phase should receive custody moved from input')
   assert_eq(render_authorised, true, 'render phase should authorise the carried resource')
   assert_eq(owner_after_render, nil, 'render phase should settle carried resource on exit')

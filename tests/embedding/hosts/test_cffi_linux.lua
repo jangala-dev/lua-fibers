@@ -17,10 +17,7 @@ local FibersRuntime = require('fibers.runtime')
 
 local ok_mod, LinuxHost = pcall(require, 'fibers.host.cffi_linux')
 Common.assert_truthy(ok_mod, 'cffi linux host module should be require-able')
-Common.assert_truthy(
-  type(LinuxHost.is_supported) == 'function',
-  'cffi linux host should expose is_supported'
-)
+Common.assert_truthy(type(LinuxHost.is_supported) == 'function', 'cffi linux host should expose is_supported')
 Common.assert_truthy(type(LinuxHost.new) == 'function', 'cffi linux host should expose new')
 
 local supported, support_reason = LinuxHost.is_supported()
@@ -29,9 +26,7 @@ if not supported then
     'tests/hosts/test_cffi_linux.lua',
     'cffi Linux backend not available: '
       .. tostring(
-        support_reason
-          or (LinuxHost.support_reason and LinuxHost.support_reason())
-          or 'unknown reason'
+        support_reason or (LinuxHost.support_reason and LinuxHost.support_reason()) or 'unknown reason'
       )
   )
 end
@@ -84,10 +79,7 @@ do
   local file = make_regular_file()
   local ok, err = pcall(function()
     Common.ready_source_smoke('cffi_linux:unpollable-regular-file', host, file.read_key, 'read')
-    Common.assert_truthy(
-      host.unpollable[file.read_key],
-      'regular file fd should be marked unpollable'
-    )
+    Common.assert_truthy(host.unpollable[file.read_key], 'regular file fd should be marked unpollable')
   end)
   Common.cleanup(host, file)
   if not ok then

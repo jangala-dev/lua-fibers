@@ -15,10 +15,7 @@ local Common = require('tests.embedding.hosts.common')
 
 local ok_mod, NixioHost = pcall(require, 'fibers.host.nixio')
 Common.assert_truthy(ok_mod, 'nixio host module should be require-able')
-Common.assert_truthy(
-  type(NixioHost.is_supported) == 'function',
-  'nixio host should expose is_supported'
-)
+Common.assert_truthy(type(NixioHost.is_supported) == 'function', 'nixio host should expose is_supported')
 Common.assert_truthy(type(NixioHost.new) == 'function', 'nixio host should expose new')
 
 if not NixioHost.is_supported() then

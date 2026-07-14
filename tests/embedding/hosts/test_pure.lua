@@ -79,9 +79,7 @@ do
     { kind = 'timer', deadline = 3 },
   })
   Common.assert_eq(deadline, 3)
-  Common.assert_truthy(
-    Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } })
-  )
+  Common.assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
 end
 
 print('tests/hosts/test_pure.lua: ok')

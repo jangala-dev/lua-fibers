@@ -372,10 +372,7 @@ function Instrumentation:finish_plan(plan, outcome)
   self:inc('symmetry_exchange_pruned', plan.symmetry_exchange_pruned)
   self:inc('component_roots_total', plan.component_size or 0)
   self:inc('frontier_roots_total', plan.total_pending or plan.pending or 0)
-  self:inc(
-    'component_roots_excluded',
-    math.max(0, (plan.total_pending or 0) - (plan.component_size or 0))
-  )
+  self:inc('component_roots_excluded', math.max(0, (plan.total_pending or 0) - (plan.component_size or 0)))
   if plan.component_global then
     self:inc('component_global_plans')
   end

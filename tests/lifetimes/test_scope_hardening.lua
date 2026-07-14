@@ -50,8 +50,7 @@ end
 -- remains primary; cleanup failure is retained as a structured secondary.
 do
   local rt = FibersRuntime.new()
-  local scope =
-    FibersScope.new('compound-failure-scope', { runtime = rt, policy = FibersPolicy.nursery() })
+  local scope = FibersScope.new('compound-failure-scope', { runtime = rt, policy = FibersPolicy.nursery() })
   rt:spawn_raw(function()
     scope:run(function(s)
       local h = FibersRegion.handle('compound-failure-owned')
@@ -89,8 +88,7 @@ do
     end,
   }
   local rt = FibersRuntime.new()
-  local root =
-    FibersScope.new('policy-hook-root', { runtime = rt, policy = FibersPolicy.nursery() })
+  local root = FibersScope.new('policy-hook-root', { runtime = rt, policy = FibersPolicy.nursery() })
   rt:spawn_raw(function()
     root:run(function()
       fibers.scope({ policy = policy }, function()
@@ -131,14 +129,12 @@ end
 do
   local stream, read_err
   local rt = FibersRuntime.new()
-  local root =
-    FibersScope.new('retired-authority-root', { runtime = rt, policy = FibersPolicy.nursery() })
+  local root = FibersScope.new('retired-authority-root', { runtime = rt, policy = FibersPolicy.nursery() })
   rt:spawn_raw(function()
     root:run(function()
       fibers.scope(function()
         local backend = Fake.new({ name = 'retired-authority-backend', input = 'x' })
-        stream =
-          fibers.perform(Stream.open_backend_op(backend, { name = 'retired-authority-stream' }))
+        stream = fibers.perform(Stream.open_backend_op(backend, { name = 'retired-authority-stream' }))
       end)
       local bytes, err = fibers.perform(stream:reader():read_op(1))
       read_err = err or bytes
@@ -157,8 +153,7 @@ end
 do
   local rt = FibersRuntime.new()
   local settled, feed = rt:signal('hardening-settled')
-  local scope =
-    FibersScope.new('hardening-settling', { runtime = rt, policy = FibersPolicy.nursery() })
+  local scope = FibersScope.new('hardening-settling', { runtime = rt, policy = FibersPolicy.nursery() })
   local h = FibersRegion.handle('hardening-settling-owned')
   local state
   rt:spawn_raw(function()

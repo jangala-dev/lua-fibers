@@ -90,10 +90,7 @@ test('fibers.xpcall permits perform and handles errors', function()
   eq(sync_ok, true)
   eq(got, 'x')
   eq(err_ok, false)
-  ok(
-    tostring(handled):match('handled:.*xboom'),
-    'expected handled xboom, got: ' .. tostring(handled)
-  )
+  ok(tostring(handled):match('handled:.*xboom'), 'expected handled xboom, got: ' .. tostring(handled))
 end)
 
 test('task bodies may perform while protected for result reporting', function()

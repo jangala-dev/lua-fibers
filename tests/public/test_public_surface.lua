@@ -42,13 +42,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -101,20 +95,13 @@ do
   assert_eq(policy, FibersPolicy, 'policy remains available as a named module')
   assert_eq(require('fibers.op'), FibersOp, 'Op has a direct named module')
   assert_eq(require('fibers.scalar'), FibersScalar, 'Scalar has a direct named module')
-  assert_eq(
-    require('fibers.resource.rendezvous'),
-    FibersRendezvous,
-    'Rendezvous is in the resource toolkit'
-  )
+  assert_eq(require('fibers.resource.rendezvous'), FibersRendezvous, 'Rendezvous is in the resource toolkit')
   assert_eq(require('fibers.external.signal'), FibersSignal, 'Signal is an external fact')
   assert_eq(require('fibers.lifetime.region'), FibersRegion, 'Region is lifetime machinery')
   assert_eq(require('fibers.lifetime.effect'), FibersEffect, 'Effect is lifetime machinery')
   assert_eq(FibersRegion._ledger, nil, 'Region does not export its shared ledger')
   assert_eq(FibersRegion._clone_ledger, nil, 'Region does not export ledger cloning')
-  assert_truthy(
-    type(FibersPhase.new) == 'function',
-    'Phase remains available only as an experiment'
-  )
+  assert_truthy(type(FibersPhase.new) == 'function', 'Phase remains available only as an experiment')
   local atoms_ok = pcall(require, 'fibers.atoms')
   local kernel_ok = pcall(require, 'fibers.kernel')
   assert_eq(atoms_ok, false, 'the obsolete atoms aggregate is removed')

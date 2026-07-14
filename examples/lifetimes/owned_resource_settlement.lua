@@ -23,7 +23,6 @@ local Scalar = require('fibers.scalar')
 local Region = require('fibers.lifetime.region')
 local Scope = require('fibers.scope')
 
-
 local Owned = Region.Owned
 
 local Settlement = require('fibers.internal.settlement')

@@ -135,9 +135,7 @@ do
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
-    got = rt:perform(
-      Rendezvous.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback'))
-    )
+    got = rt:perform(Rendezvous.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
   end, 'cursor-residual')
   local st
   for _ = 1, 80 do

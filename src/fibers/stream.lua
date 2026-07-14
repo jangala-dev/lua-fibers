@@ -160,10 +160,8 @@ function Stream.memory_pair(opts)
   local name = opts.name or 'memory-flow'
   local flow_ab = Flow.new({ name = name .. ':a->b', capacity = opts.capacity })
   local flow_ba = Flow.new({ name = name .. ':b->a', capacity = opts.capacity })
-  local a =
-    duplex({ name = name .. ':a', read_flow = flow_ba, write_flow = flow_ab, mode = 'memory' })
-  local b =
-    duplex({ name = name .. ':b', read_flow = flow_ab, write_flow = flow_ba, mode = 'memory' })
+  local a = duplex({ name = name .. ':a', read_flow = flow_ba, write_flow = flow_ab, mode = 'memory' })
+  local b = duplex({ name = name .. ':b', read_flow = flow_ab, write_flow = flow_ba, mode = 'memory' })
   return a, b
 end
 
@@ -212,14 +210,10 @@ function Stream.open_backend_in_op(owner, backend, opts)
       pump_opts.scope = pump_opts.scope or owner
     end
     local read_task, write_task = Pump.create_tasks(hs, pump_opts)
-    owned_children[#owned_children + 1] = read_task:owned(
-      Settlement.task_join_only(),
-      { role = 'read_pump', settle_name = 'task_join_only' }
-    )
-    owned_children[#owned_children + 1] = write_task:owned(
-      Settlement.task_join_only(),
-      { role = 'write_pump', settle_name = 'task_join_only' }
-    )
+    owned_children[#owned_children + 1] =
+      read_task:owned(Settlement.task_join_only(), { role = 'read_pump', settle_name = 'task_join_only' })
+    owned_children[#owned_children + 1] =
+      write_task:owned(Settlement.task_join_only(), { role = 'write_pump', settle_name = 'task_join_only' })
     start_op = Pump.spawn_tasks_op(hs)
   else
     start_op = Pump.start_op(hs, region, opts)

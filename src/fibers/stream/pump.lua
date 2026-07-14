@@ -116,8 +116,7 @@ function Pump.write(stream)
   local flow = stream.write_flow
   local outlet = flow:outlet()
   while true do
-    local lease, lease_err =
-      masked_perform(rt, outlet:lease_some_op(stream.write_chunk_size, stream))
+    local lease, lease_err = masked_perform(rt, outlet:lease_some_op(stream.write_chunk_size, stream))
     if not lease then
       if lease_err == Errors.CLOSED_AND_DRAINED then
         backend_call(backend, 'shutdown_write', 'stream_closed')

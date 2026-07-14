@@ -86,11 +86,7 @@ function Keyed:peek_op(key)
   if key == nil then
     error('keyed peek requires key', 2)
   end
-  return Op._resource(
-    self,
-    Kind,
-    Program.read(self:_location(key), 'presence_value', result_opts(self))
-  )
+  return Op._resource(self, Kind, Program.read(self:_location(key), 'presence_value', result_opts(self)))
 end
 function Keyed:contains_op(key)
   if key == nil then

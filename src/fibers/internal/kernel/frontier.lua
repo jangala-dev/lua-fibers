@@ -123,7 +123,6 @@ function M.detach(frontier)
   }
 end
 
-
 local function active_intent(state, id)
   if state.intent_by_id then
     return state.intent_by_id[id]
@@ -153,12 +152,7 @@ function M.exchange_frontier(state, compatible, constrained)
   for i = 1, #(state.intents or {}) do
     for j = i + 1, #(state.intents or {}) do
       local a, b = state.intents[i], state.intents[j]
-      if
-        a.kind == 'exchange'
-        and b.kind == 'exchange'
-        and a.resource == b.resource
-        and a.role ~= b.role
-      then
+      if a.kind == 'exchange' and b.kind == 'exchange' and a.resource == b.resource and a.role ~= b.role then
         scans = scans + 1
         append_pair(pairs, degrees, a, b, compatible)
       end

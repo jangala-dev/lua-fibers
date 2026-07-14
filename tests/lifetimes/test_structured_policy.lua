@@ -92,15 +92,12 @@ end
 -- Collecting supervisors retain child failures without failing the boundary.
 do
   local r = fibers.try_run(function()
-    return fibers.try_scope(
-      { policy = FibersPolicy.supervisor({ child_failure = 'collect' }) },
-      function()
-        fibers.spawn(function()
-          error('collected boom', 0)
-        end)
-        return 42
-      end
-    )
+    return fibers.try_scope({ policy = FibersPolicy.supervisor({ child_failure = 'collect' }) }, function()
+      fibers.spawn(function()
+        error('collected boom', 0)
+      end)
+      return 42
+    end)
   end)
   assert_truthy(r.ok)
   local inner = r.values[1]
@@ -190,10 +187,7 @@ do
     local ok, err = fibers.pcall(function()
       fibers.perform(never:wait_op())
     end)
-    assert_truthy(
-      not ok and FibersRuntime.is_cancelled(err),
-      'body should observe fail-fast cancellation'
-    )
+    assert_truthy(not ok and FibersRuntime.is_cancelled(err), 'body should observe fail-fast cancellation')
     fibers.mask(function()
       late_result = fibers.perform(scope
         :spawn_op(function()
@@ -214,18 +208,15 @@ end
 -- Supervisors retain every independently failing child, not only the first.
 do
   local r = fibers.try_run(function()
-    return fibers.try_scope(
-      { policy = FibersPolicy.supervisor({ child_failure = 'collect' }) },
-      function()
-        fibers.spawn(function()
-          error('first collected failure', 0)
-        end, 'first-collected')
-        fibers.spawn(function()
-          error('second collected failure', 0)
-        end, 'second-collected')
-        return 'done'
-      end
-    )
+    return fibers.try_scope({ policy = FibersPolicy.supervisor({ child_failure = 'collect' }) }, function()
+      fibers.spawn(function()
+        error('first collected failure', 0)
+      end, 'first-collected')
+      fibers.spawn(function()
+        error('second collected failure', 0)
+      end, 'second-collected')
+      return 'done'
+    end)
   end)
   assert_truthy(r.ok)
   local inner = r.values[1]

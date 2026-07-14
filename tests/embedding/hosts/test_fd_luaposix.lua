@@ -23,10 +23,7 @@ local ok_fd, Fd = pcall(require, 'fibers.host.fd_luaposix')
 Common.assert_truthy(ok_fd, 'fd_luaposix module should be require-able')
 if not Fd.is_supported() then
   local _, reason = Fd.is_supported()
-  return Common.skip(
-    'tests/hosts/test_fd_luaposix.lua',
-    reason or 'fd luaposix backend not available'
-  )
+  return Common.skip('tests/hosts/test_fd_luaposix.lua', reason or 'fd luaposix backend not available')
 end
 
 local host = PosixHost.new()

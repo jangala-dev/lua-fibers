@@ -18,13 +18,7 @@ local function fail(message)
 end
 local function eq(actual, expected, message)
   if actual ~= expected then
-    fail(
-      (message or 'values differ')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 local function truth(value, message)
@@ -102,19 +96,9 @@ eq(#view.delta[presence].ops, 1, 'presence operation append should roll back')
 eq(Store.read(view, presence), 'a', 'presence value should restore')
 
 local finite = location('finite_map', {})
-Store.stage(
-  view,
-  finite,
-  { kind = 'finite_map', ops = { { op = 'put', key = 'a', value = 1 } } },
-  trail
-)
+Store.stage(view, finite, { kind = 'finite_map', ops = { { op = 'put', key = 'a', value = 1 } } }, trail)
 mark = trail:mark()
-Store.stage(
-  view,
-  finite,
-  { kind = 'finite_map', ops = { { op = 'put', key = 'b', value = 2 } } },
-  trail
-)
+Store.stage(view, finite, { kind = 'finite_map', ops = { { op = 'put', key = 'b', value = 2 } } }, trail)
 eq(#view.delta[finite].ops, 2, 'finite-map operation should append')
 trail:rollback(mark)
 eq(#view.delta[finite].ops, 1, 'finite-map append should roll back')
@@ -166,10 +150,7 @@ eq(next(nested.cells), nil, 'nested inherited read should remain sparse')
 local fresh_loc = location('replace', 'fresh')
 Store.read(nested, fresh_loc)
 truth(nested.cells[fresh_loc], 'first observation in nested lane should be local')
-truth(
-  Store.merge_views(lane, { nested }, 'independent', trail),
-  'nested sparse merge should succeed'
-)
+truth(Store.merge_views(lane, { nested }, 'independent', trail), 'nested sparse merge should succeed')
 truth(lane.cells[fresh_loc], 'nested local observation should merge to immediate parent')
 truth(Store.merge_views(root, { lane }, 'independent', trail), 'outer sparse merge should succeed')
 truth(root.cells[fresh_loc], 'nested observation should reach the root through merges')

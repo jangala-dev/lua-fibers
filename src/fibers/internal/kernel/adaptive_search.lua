@@ -63,10 +63,7 @@ function Policy:retry_candidate(session, component)
   end
   local state = session.state
   local component_size = component and component.size or 1
-  if
-    component_size >= self.retry_min_component
-    or (state.search_steps or 0) >= self.retry_min_steps
-  then
+  if component_size >= self.retry_min_component or (state.search_steps or 0) >= self.retry_min_steps then
     return true
   end
   local intents = state.intents or {}
@@ -570,15 +567,9 @@ local function initialise(cache, state)
   cache.states = nil
   cache.supplier_refutations = nil
   local policy = runtime.search_policy
-  cache.state_min_steps = policy and policy.state_min_steps
-    or runtime.state_memoization_min_steps
-    or 0
-  cache.state_min_intents = policy and policy.state_min_intents
-    or runtime.state_memoization_min_intents
-    or 0
-  cache.refutation_min_steps = policy and policy.supplier_min_steps
-    or runtime.refutation_cache_min_steps
-    or 0
+  cache.state_min_steps = policy and policy.state_min_steps or runtime.state_memoization_min_steps or 0
+  cache.state_min_intents = policy and policy.state_min_intents or runtime.state_memoization_min_intents or 0
+  cache.refutation_min_steps = policy and policy.supplier_min_steps or runtime.refutation_cache_min_steps or 0
   cache.fingerprint_seen = nil
   return cache
 end
@@ -696,8 +687,7 @@ function M.supplier_enabled(cache, state)
       return false
     end
   elseif
-    cache.runtime.refutation_cache == false
-    or M.work_steps(state) < (cache.refutation_min_steps or 0)
+    cache.runtime.refutation_cache == false or M.work_steps(state) < (cache.refutation_min_steps or 0)
   then
     return false
   end

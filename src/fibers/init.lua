@@ -64,10 +64,7 @@ end
 function M.spawn_raw(fn, name)
   local rt = Runtime.current()
   if not rt then
-    error(
-      'fibers.spawn_raw must be called from a running fiber; use fibers.run to start a root fiber',
-      2
-    )
+    error('fibers.spawn_raw must be called from a running fiber; use fibers.run to start a root fiber', 2)
   end
   local scope = current_scope()
   if scope then

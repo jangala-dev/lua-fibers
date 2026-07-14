@@ -44,8 +44,7 @@ end
 
 function EffectKind:of(payload)
   if type(payload) ~= 'table' then
-    return nil,
-      { kind = 'invalid_effect_payload', message = self.name .. ' payload must be a table' }
+    return nil, { kind = 'invalid_effect_payload', message = self.name .. ' payload must be a table' }
   end
 
   if self.validate_payload then

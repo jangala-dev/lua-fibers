@@ -41,8 +41,7 @@ function Socket.new(opts)
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness
-      or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     _read = opts.read,
     _write = opts.write,

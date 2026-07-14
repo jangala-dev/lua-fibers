@@ -25,13 +25,7 @@ local function fail(msg)
 end
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 local function assert_status(status, tag, msg)
@@ -48,13 +42,7 @@ end
 local function assert_near(actual, expected, eps, msg)
   eps = eps or 1e-9
   if math.abs(actual - expected) > eps then
-    fail(
-      (msg or 'assert_near failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_near failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 local function new_runtime(opts)
@@ -87,8 +75,7 @@ end
 local function test_rate_limiter_parallel_acquire_serialises_without_double_refill()
   local host = Host.manual({ now = 1 })
   local rt = Runtime.new({ host = host })
-  local rl =
-    RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-parallel' })
+  local rl = RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-parallel' })
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({ rl:acquire_op(1), rl:acquire_op(1) }))
@@ -134,8 +121,7 @@ end
 local function test_rate_limiter_available_is_observational()
   local host = Host.manual({ now = 1 })
   local rt = Runtime.new({ host = host })
-  local rl =
-    RateLimiter.new({ capacity = 3, rate = 2, initial = 0, last = 0, name = 'rl-available' })
+  local rl = RateLimiter.new({ capacity = 3, rate = 2, initial = 0, last = 0, name = 'rl-available' })
   local available
   rt:spawn_raw(function()
     available = rt:perform(rl:available_op())

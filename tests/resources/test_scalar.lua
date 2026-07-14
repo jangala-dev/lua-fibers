@@ -82,11 +82,7 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
   H.assert_eq(scalar.value, 2)
   H.assert_eq(first, 1)
   H.assert_eq(second, 'primary:2')
-  H.assert_eq(
-    H.transaction_tags(rt),
-    '',
-    'fallback effect is not discharged when primary is fresh-possible'
-  )
+  H.assert_eq(H.transaction_tags(rt), '', 'fallback effect is not discharged when primary is fresh-possible')
 end
 
 local tests = {

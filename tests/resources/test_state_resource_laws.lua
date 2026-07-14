@@ -21,13 +21,7 @@ local function fail(msg)
 end
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 local function assert_nil(actual, msg)
@@ -172,9 +166,7 @@ end
 local function test_keyed_all_put_does_not_supply_remove_present()
   local rt, m, rows = new_runtime(), Keyed.new({})
   rt:spawn_raw(function()
-    rows = rt:perform(
-      Op.all({ m:put_op('k', 'v'), m:remove_present_op('k'):or_else(Op.always('missing')) })
-    )
+    rows = rt:perform(Op.all({ m:put_op('k', 'v'), m:remove_present_op('k'):or_else(Op.always('missing')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'missing')
@@ -196,8 +188,7 @@ end
 local function test_keyed_all_partial_put_does_not_supply_partial_get()
   local rt, m, rows = new_runtime(), Keyed.new({})
   rt:spawn_raw(function()
-    rows =
-      rt:perform(Op.all({ m:put_absent_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.all({ m:put_absent_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)

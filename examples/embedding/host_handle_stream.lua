@@ -25,8 +25,7 @@ local handle = Host.Handle.fake({ host = host, key = 'example-handle' })
 local stream, got, flushed
 
 rt:spawn_raw(function()
-  stream =
-    rt:perform(Stream.open_handle_in_op(region, handle, { name = 'example-handle-stream' }))
+  stream = rt:perform(Stream.open_handle_in_op(region, handle, { name = 'example-handle-stream' }))
   got = rt:perform(stream:reader():read_exactly_op(5))
   rt:perform(stream:writer():write_op('pong'))
   flushed = rt:perform(stream:writer():flush_op())

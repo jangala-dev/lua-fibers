@@ -35,13 +35,7 @@ local function assert_nil(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 local function new_runtime(opts)
@@ -141,8 +135,7 @@ local function test_lease_tensor_release_supplies_acquire_but_all_does_not()
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
-    rows2 =
-      rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
+    rows2 = rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)
@@ -179,8 +172,7 @@ local function test_priority_queue_order_and_handoff_laws()
   local rt4 = new_runtime()
   local rows4
   rt4:spawn_raw(function()
-    rows4 =
-      rt4:perform(Op.all({ pq3:put_op(0, 'urgent'), pq3:get_op():or_else(Op.always('empty')) }))
+    rows4 = rt4:perform(Op.all({ pq3:put_op(0, 'urgent'), pq3:get_op():or_else(Op.always('empty')) }))
   end, 'root')
   assert_status(rt4:run(), 'found')
   assert_eq(rows4[2][1], 'empty')
@@ -230,9 +222,7 @@ local function test_pool_all_add_does_not_supply_acquire_but_tensor_does()
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(
-      Op.all({ pool:add_op('x', 'X'), pool:acquire_op('u'):or_else(Op.always('empty')) })
-    )
+    rows = rt:perform(Op.all({ pool:add_op('x', 'X'), pool:acquire_op('u'):or_else(Op.always('empty')) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'empty')

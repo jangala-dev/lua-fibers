@@ -153,10 +153,7 @@ end
 eq(isolated:run().tag, 'quiescent')
 local isolated_snap = isolated:instrumentation_snapshot()
 truthy((isolated_snap.maxima.component_size or 20) < 20, 'unrelated roots were not isolated')
-truthy(
-  (isolated_snap.counters.component_roots_excluded or 0) > 0,
-  'component exclusion was not measured'
-)
+truthy((isolated_snap.counters.component_roots_excluded or 0) > 0, 'component exclusion was not measured')
 
 -- An opaque continuation deliberately joins the full pending frontier.
 local global = Runtime.new({ instrumentation = true, dependency_index_threshold = 1 })
@@ -205,10 +202,7 @@ local function independent_components(machine)
     eq(values[i], i * 10, 'component result missing')
   end
   local snap = rt:instrumentation_snapshot()
-  truthy(
-    (snap.counters.component_roots_excluded or 0) > 0,
-    'committing components were not isolated'
-  )
+  truthy((snap.counters.component_roots_excluded or 0) > 0, 'committing components were not isolated')
   return status.tag
 end
 eq(
@@ -292,10 +286,7 @@ do
   rt:_pump()
   local candidate = assert(rt:_find_candidate(rt.pending[1].id))
   if rt.machine_name == 'trail' then
-    truthy(
-      candidate._fibers_session_hit == true,
-      'production hit was copied into a detached candidate'
-    )
+    truthy(candidate._fibers_session_hit == true, 'production hit was copied into a detached candidate')
   end
   eq(candidate.observations, nil, 'empty observations should remain absent')
   eq(candidate.writes, nil, 'empty writes should remain absent')

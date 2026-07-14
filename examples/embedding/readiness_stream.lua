@@ -28,8 +28,7 @@ local backend = Stream.backend.Fake.new({
 local stream, line, flushed
 
 rt:spawn_raw(function()
-  stream =
-    rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-example-stream' }))
+  stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-example-stream' }))
   rt:perform(stream:writer():write_op('ping\n'))
   flushed = rt:perform(stream:writer():flush_op())
   line = rt:perform(stream:reader():read_line_op())

@@ -35,13 +35,7 @@ local function assert_truthy(v, msg)
 end
 local function assert_status(st, tag, msg)
   if not st or st.tag ~= tag then
-    fail(
-      (msg or 'status mismatch')
-        .. ': expected '
-        .. tostring(tag)
-        .. ', got '
-        .. tostring(st and st.tag)
-    )
+    fail((msg or 'status mismatch') .. ': expected ' .. tostring(tag) .. ', got ' .. tostring(st and st.tag))
   end
 end
 
@@ -62,10 +56,7 @@ do
   fibers.run(function()
     rec = fibers.perform(r:record_op(h))
   end)
-  assert_truthy(
-    rec and rec.settle_name == 'none',
-    'handle admission should record inert settlement protocol'
-  )
+  assert_truthy(rec and rec.settle_name == 'none', 'handle admission should record inert settlement protocol')
 end
 
 -- A parent with children cannot be released directly. Generic Scope
@@ -77,9 +68,7 @@ do
   local stream, direct_release, settled_status
   local st
   st = fibers.try_run(function()
-    stream = fibers.perform(
-      Stream.open_backend_in_op(life:raw_region(), backend, { name = 'tree-stream' })
-    )
+    stream = fibers.perform(Stream.open_backend_in_op(life:raw_region(), backend, { name = 'tree-stream' }))
     direct_release = fibers.perform(life
       :raw_region()
       :release_op(stream)
@@ -102,9 +91,7 @@ do
   local backend = Fake.new({ name = 'move-tree-backend' })
   local stream, a_count_after, b_count_after_move, b_count_after_settlement, child_transfer
   local st = fibers.try_run(function()
-    stream = fibers.perform(
-      Stream.open_backend_in_op(a:raw_region(), backend, { name = 'move-tree-stream' })
-    )
+    stream = fibers.perform(Stream.open_backend_in_op(a:raw_region(), backend, { name = 'move-tree-stream' }))
     fibers.perform(a:move_op(stream, b))
     a_count_after = fibers.perform(a:inspect_op()).owned_count
     b_count_after_move = fibers.perform(b:inspect_op()).owned_count
@@ -119,10 +106,7 @@ do
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(a_count_after, 0, 'move should move whole subtree from source')
-  assert_truthy(
-    b_count_after_move and b_count_after_move >= 7,
-    'move should move whole subtree to target'
-  )
+  assert_truthy(b_count_after_move and b_count_after_move >= 7, 'move should move whole subtree to target')
   assert_eq(child_transfer, 'blocked', 'contained children should not be moved directly')
   assert_eq(b_count_after_settlement, 0, 'settlement should release handed-off subtree')
 end

@@ -63,13 +63,7 @@ end
 
 local function assert_eq(actual, expected, msg)
   if actual ~= expected then
-    fail(
-      (msg or 'assert_eq failed')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual)
-    )
+    fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
 
@@ -668,14 +662,10 @@ add('scope', 'custody offer', 30, function(n)
     local ok = false
     local r = fibers.try_run(function(root)
       local rt = fibers.current_runtime()
-      local request = Scope.new(
-        'bench-request-' .. tostring(i),
-        { runtime = rt, parent = root, policy = root.policy }
-      )
-      local supervisor = Scope.new(
-        'bench-supervisor-' .. tostring(i),
-        { runtime = rt, parent = root, policy = root.policy }
-      )
+      local request =
+        Scope.new('bench-request-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
+      local supervisor =
+        Scope.new('bench-supervisor-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
       local resume = Rendezvous.new('bench-resume-' .. tostring(i))
       local task
       request:run(function(req)
@@ -945,17 +935,7 @@ else
       .. tostring(repeats)
       .. (filter ~= '' and (' filter=' .. filter) or '')
   )
-  print(
-    string.format(
-      '%-12s  %-36s %8s %8s %12s %12s',
-      'group',
-      'case',
-      'iters',
-      'ops',
-      'median s',
-      'us/op'
-    )
-  )
+  print(string.format('%-12s  %-36s %8s %8s %12s %12s', 'group', 'case', 'iters', 'ops', 'median s', 'us/op'))
   print(string.rep('-', 96))
   for _, r in ipairs(results) do
     print(

@@ -24,11 +24,7 @@ end
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
     error(
-      (message or 'values differ')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual),
+      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
       2
     )
   end
@@ -47,10 +43,7 @@ local function drain(rt)
   until status.tag ~= 'found'
   if status.tag ~= 'idle' and status.tag ~= 'quiescent' then
     error(
-      'runtime did not drain: '
-        .. tostring(status.tag)
-        .. '/'
-        .. tostring(status.kind or status.reason),
+      'runtime did not drain: ' .. tostring(status.tag) .. '/' .. tostring(status.kind or status.reason),
       2
     )
   end

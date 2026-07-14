@@ -27,8 +27,7 @@ fibers.run(function()
     end
   elseif mode == 'tensor' then
     for _ = 1, n do
-      local rows =
-        fibers.perform(Op.tensor({ inlet:write_op('abcdefgh'), outlet:read_exactly_op(8) }))
+      local rows = fibers.perform(Op.tensor({ inlet:write_op('abcdefgh'), outlet:read_exactly_op(8) }))
       total = total + rows[1][1] + #rows[2][1]
     end
   elseif mode == 'fill' then

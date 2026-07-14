@@ -96,11 +96,7 @@ function Supervisor:result(scope, state, account)
       end)(),
       scope:_make_report(nil, {}, account.fields)
     )
-  elseif
-    self.child_failure == 'ignore'
-    and account.body_ok
-    and #account.settlement_failures == 0
-  then
+  elseif self.child_failure == 'ignore' and account.body_ok and #account.settlement_failures == 0 then
     local values = { n = math.max((account.body_results.n or #account.body_results) - 1, 0) }
     for i = 1, values.n do
       values[i] = account.body_results[i + 1]

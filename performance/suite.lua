@@ -313,23 +313,12 @@ for _, case in ipairs(cases) do
       median_retained_kb = median(retained),
       diagnostic_seconds = diagnostic_run and diagnostic_run.elapsed or nil,
       diagnostics = diag,
-      search_calls_per_plan = (counters.plans or 0) > 0
-          and (counters.search_calls or 0) / counters.plans
+      search_calls_per_plan = (counters.plans or 0) > 0 and (counters.search_calls or 0) / counters.plans
         or 0,
-      branches_per_plan = (counters.plans or 0) > 0 and (counters.branches or 0) / counters.plans
-        or 0,
-      p50_search_steps_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_steps_per_plan,
-        0.50
-      ),
-      p95_search_steps_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_steps_per_plan,
-        0.95
-      ),
-      p99_search_steps_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_steps_per_plan,
-        0.99
-      ),
+      branches_per_plan = (counters.plans or 0) > 0 and (counters.branches or 0) / counters.plans or 0,
+      p50_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_plan, 0.50),
+      p95_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_plan, 0.95),
+      p99_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_plan, 0.99),
       p95_search_cpu_us_upper = histogram_quantile_upper(
         diag and diag.histograms.search_cpu_us_per_plan,
         0.95
@@ -349,9 +338,7 @@ for _, case in ipairs(cases) do
         or 0,
       forced_exchanges = counters.forced_exchanges or 0,
       forced_claims = counters.forced_claims or 0,
-      dynamic_request_fraction = request_total > 0
-          and (counters.requests_dynamic or 0) / request_total
-        or 0,
+      dynamic_request_fraction = request_total > 0 and (counters.requests_dynamic or 0) / request_total or 0,
     }
   end
 end

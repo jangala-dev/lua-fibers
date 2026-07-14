@@ -50,11 +50,13 @@ fibers.run(function()
 
   result = perform(choice(
     all({
-      safety:expect_op('clear'),
-      power:take_op(1),
-    }):and_then(function()
-      return call_op(robot, 'inspection')
-    end):or_else(always('dispatch unavailable')),
+        safety:expect_op('clear'),
+        power:take_op(1),
+      })
+      :and_then(function()
+        return call_op(robot, 'inspection')
+      end)
+      :or_else(always('dispatch unavailable')),
 
     stop:get_op():map(function(reason)
       return 'stopped: ' .. reason

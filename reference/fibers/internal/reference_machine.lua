@@ -39,9 +39,7 @@ end
 
 local function intent_activation_label(intent)
   local program = intent.program or {}
-  return Activation.label(intent.activation)
-    .. '@'
-    .. object_version_label(program.location or program.group)
+  return Activation.label(intent.activation) .. '@' .. object_version_label(program.location or program.group)
 end
 
 local function copy_array(xs)
@@ -273,16 +271,10 @@ local function finish_group_lane(state, task, frame, outcome)
   for i = 1, group.count do
     activation_parts[i] = Activation.label(group.lane_outcomes[i].activation)
   end
-  parent.activation = Activation.child(
-    group.activation,
-    'product:result:' .. table.concat(activation_parts, ',')
-  )
+  parent.activation =
+    Activation.child(group.activation, 'product:result:' .. table.concat(activation_parts, ','))
   parent.status = 'active'
-  return complete_task(
-    state,
-    parent,
-    new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes))
-  )
+  return complete_task(state, parent, new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes)))
 end
 
 local function verify_continuation_dependencies(state, frame, next_op)
@@ -338,21 +330,15 @@ complete_task = function(state, task, outcome)
           state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
         )
       else
-        local next_op = state.runtime:_call_in_phase(
-          'and_then',
-          'callback_error',
-          frame.fn,
-          unpack_pack(outcome.pack)
-        )
+        local next_op =
+          state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
         if not Op.is_op(next_op) then
           error('and_then callback must return an Op', 0)
         end
         verify_continuation_dependencies(state, frame, next_op)
         task.expr = next_op
-        task.activation = Activation.child(
-          frame.activation,
-          'and_then:result:' .. Activation.label(outcome.activation)
-        )
+        task.activation =
+          Activation.child(frame.activation, 'and_then:result:' .. Activation.label(outcome.activation))
       end
       add_active(state, task.id)
       return true
@@ -729,8 +715,7 @@ local function match_intents(state, left_id, right_id)
 end
 
 local function is_machine_wait(x)
-  return x == require('fibers.scalar').Wait
-    or (type(x) == 'table' and x._fibers_scalar_wait == true)
+  return x == require('fibers.scalar').Wait or (type(x) == 'table' and x._fibers_scalar_wait == true)
 end
 
 local function is_machine_ready(x)
@@ -849,15 +834,8 @@ local function resolve_machine_transitions(state, selected)
   end
   remove_intent_ids(state, ids)
   for i = 1, #resolved do
-    resolved[i].task.activation = Activation.child(
-      resolved[i].task.activation,
-      activation_fact
-    )
-    if not complete_task(
-      state,
-      resolved[i].task,
-      new_outcome(resolved[i].task, resolved[i].result)
-    ) then
+    resolved[i].task.activation = Activation.child(resolved[i].task.activation, activation_fact)
+    if not complete_task(state, resolved[i].task, new_outcome(resolved[i].task, resolved[i].result)) then
       return false
     end
   end
@@ -935,14 +913,8 @@ local function witness_cursor(state, intent)
   local function ready(value)
     return IR.witness_ready(program, value, program.payload or {}, {})
   end
-  local value = Store.project_machine(
-    state,
-    task,
-    program.location,
-    ready,
-    program.supply or 'interacting',
-    state.trail
-  )
+  local value =
+    Store.project_machine(state, task, program.location, ready, program.supply or 'interacting', state.trail)
   return IR.open_witness_cursor(program, value, program.payload or {}, {})
 end
 
@@ -980,10 +952,7 @@ local function resolve_witness(state, intent_id, alt, alternative_index)
   end
   task.activation = Activation.child(
     task.activation,
-    'witness:'
-      .. intent_activation_label(intent)
-      .. ':'
-      .. tostring(alternative_index or 1)
+    'witness:' .. intent_activation_label(intent) .. ':' .. tostring(alternative_index or 1)
   )
   local packed = alt.result
   if not (type(packed) == 'table' and packed._fibers_pack == true) then
@@ -1008,11 +977,7 @@ local function resolve_claim_set(state, group, ids)
   for i = 1, #(group.ids or {}) do
     local id = group.ids[i]
     local intent = state.intent_by_id[id]
-    if
-      intent
-      and intent.kind == 'machine_transition'
-      and intent.program.transition.mode == 'update'
-    then
+    if intent and intent.kind == 'machine_transition' and intent.program.transition.mode == 'update' then
       selected[id] = true
     end
   end
@@ -1075,8 +1040,7 @@ local function final_candidate(state)
     epoch = state.runtime.epoch,
     pending_generation = state.runtime.pending_generation,
     negative_checks = #state.negative_checks > 0 and copy_array(state.negative_checks) or nil,
-    fallback_interests = #state.fallback_interests > 0 and copy_array(state.fallback_interests)
-      or nil,
+    fallback_interests = #state.fallback_interests > 0 and copy_array(state.fallback_interests) or nil,
     search_steps = state.search_steps,
   }
 
@@ -1233,8 +1197,7 @@ local function has_supplier(state, intents)
   if signature and SearchCache.get_no_supplier(cache, signature) then
     return false
   end
-  local found =
-    state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
+  local found = state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
   if not found and signature then
     SearchCache.put_no_supplier(cache, signature)
   end
@@ -1250,12 +1213,8 @@ local function supplier_rows(state)
   if signature and SearchCache.get_no_supplier(cache, signature) then
     return {}, true
   end
-  local rows = state.runtime:_supplier_request_rows(
-    state.intents,
-    state.roots,
-    state.excluded_roots,
-    state.requests
-  )
+  local rows =
+    state.runtime:_supplier_request_rows(state.intents, state.roots, state.excluded_roots, state.requests)
   if #rows == 0 and signature then
     SearchCache.put_no_supplier(cache, signature)
   end
@@ -1554,10 +1513,8 @@ dfs_impl = function(state)
           end
           local ft = fallback.tasks[task.id]
           ft.expr = expr.q
-          ft.activation = Activation.child(
-            task.activation,
-            'or_else:fallback:' .. refutation_activation_label(pref)
-          )
+          ft.activation =
+            Activation.child(task.activation, 'or_else:fallback:' .. refutation_activation_label(pref))
           add_active(fallback, ft.id)
           local fallback_found, fref, funknown = dfs(fallback)
           if fallback_found then
@@ -1581,16 +1538,13 @@ dfs_impl = function(state)
       end
       local refutation
 
-      local frontier =
-        Frontier.analyse(state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
+      local frontier = Frontier.analyse(state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
       local exchange = frontier.exchange
       if profile_plan then
         profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans
         profile_plan.compatible_pairs = profile_plan.compatible_pairs + exchange.compatible
-        profile_plan.exchange_domains = profile_plan.exchange_domains
-          + (exchange.selected and 1 or 0)
-        profile_plan.zero_exchange_domains = profile_plan.zero_exchange_domains
-          + exchange.zero_domains
+        profile_plan.exchange_domains = profile_plan.exchange_domains + (exchange.selected and 1 or 0)
+        profile_plan.zero_exchange_domains = profile_plan.zero_exchange_domains + exchange.zero_domains
         profile_plan.max_exchange_domain =
           math.max(profile_plan.max_exchange_domain or 0, exchange.selected_degree or 0)
         profile_plan.symmetry_exchange_pruned = profile_plan.symmetry_exchange_pruned
@@ -1604,8 +1558,7 @@ dfs_impl = function(state)
       then
         if not has_supplier(state, { exchange.selected }) then
           if profile_plan then
-            profile_plan.forced_exchange_opportunities = profile_plan.forced_exchange_opportunities
-              + 1
+            profile_plan.forced_exchange_opportunities = profile_plan.forced_exchange_opportunities + 1
             profile_plan.forced_exchanges = profile_plan.forced_exchanges + 1
             profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
           end
@@ -1663,11 +1616,7 @@ dfs_impl = function(state)
 
         if all_machine and machine_supply_none then
           local forced = false
-          if
-            state.runtime.normalise_search ~= false
-            and #groups == 1
-            and #group.ids == #state.intents
-          then
+          if state.runtime.normalise_search ~= false and #groups == 1 and #group.ids == #state.intents then
             local group_intents = {}
             for ii = 1, #group.ids do
               group_intents[ii] = state.intent_by_id[group.ids[ii]]
@@ -1846,15 +1795,11 @@ function M.search(runtime, requests, focus_id, search_limit, component)
     search_limit = search_limit or runtime.search_limit,
     profile_plan = profile_plan,
     state_memoization_possible = state_memoization_possible or nil,
-    state_memoization_min_steps = state_memoization_possible
-        and runtime.state_memoization_min_steps
-      or nil,
+    state_memoization_min_steps = state_memoization_possible and runtime.state_memoization_min_steps or nil,
     refutation_cache_possible = refutation_cache_possible or nil,
-    refutation_cache_min_steps = refutation_cache_possible and runtime.refutation_cache_min_steps
-      or nil,
+    refutation_cache_min_steps = refutation_cache_possible and runtime.refutation_cache_min_steps or nil,
     component = (state_memoization_possible or refutation_cache_possible) and component or nil,
-    plan_id = (state_memoization_possible or refutation_cache_possible) and runtime.stats.plans
-      or nil,
+    plan_id = (state_memoization_possible or refutation_cache_possible) and runtime.stats.plans or nil,
   }
   add_root(state, focus_id)
   local candidate, refutation, unknown = dfs(state)
@@ -1873,10 +1818,7 @@ function M.search(runtime, requests, focus_id, search_limit, component)
       profile_plan.writes = map_count(candidate.writes)
       profile_plan.effects = #(candidate.effects or {})
     end
-    instrumentation:finish_plan(
-      profile_plan,
-      candidate and 'found' or (unknown and 'unknown' or 'retry')
-    )
+    instrumentation:finish_plan(profile_plan, candidate and 'found' or (unknown and 'unknown' or 'retry'))
   end
   return candidate, refutation, unknown
 end

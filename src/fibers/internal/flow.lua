@@ -81,8 +81,7 @@ local function copy_state(s, clone_rope)
     output_open = s.output_open ~= false,
     input_error = s.input_error,
     output_error = s.output_error,
-    rope = clone_rope and (Rope.is(s.rope) and s.rope:clone() or Rope.new())
-      or (s.rope or Rope.new()),
+    rope = clone_rope and (Rope.is(s.rope) and s.rope:clone() or Rope.new()) or (s.rope or Rope.new()),
     lease_id = s.lease_id,
     lease_owner = s.lease_owner,
     lease_bytes = s.lease_bytes,
@@ -134,13 +133,7 @@ local function inspect_state(self, s)
   }
 end
 local function lease_handle(reservoir, s)
-  return Lease.new(
-    reservoir,
-    s.lease_id,
-    s.lease_owner,
-    s.lease_bytes or '',
-    { meta = s.lease_meta }
-  )
+  return Lease.new(reservoir, s.lease_id, s.lease_owner, s.lease_bytes or '', { meta = s.lease_meta })
 end
 local function clear_lease(s)
   s.lease_id, s.lease_owner, s.lease_bytes, s.lease_meta = nil, nil, nil, nil
@@ -769,10 +762,7 @@ function Reservoir:read_until_op(sep, opts)
   if limit ~= nil then
     limit = as_nonneg_int(limit, nil, 'flow read limit')
   end
-  return self:_op(
-    'read_until',
-    { sep = sep, limit = limit, include = opts.include == true, err = opts.err }
-  )
+  return self:_op('read_until', { sep = sep, limit = limit, include = opts.include == true, err = opts.err })
 end
 function Reservoir:drain_available_op()
   return self:_op('drain_available')

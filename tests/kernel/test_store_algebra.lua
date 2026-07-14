@@ -81,19 +81,13 @@ local up = S.constraint_projection(fm, {
 }, 'down')
 eq(#up.ops, 1)
 eq(up.ops[1].op, 'put', 'downward claims retain only upward constraints')
-local hand = S.merge_parallel(
-  fm,
-  px,
-  { kind = 'finite_map', ops = { { op = 'take', key = 'x' } } },
-  'interacting'
-)
+local hand =
+  S.merge_parallel(fm, px, { kind = 'finite_map', ops = { { op = 'take', key = 'x' } } }, 'interacting')
 eq(next(S.apply_patch_value(fm, {}, hand)), nil, 'put/take handoff should cancel')
 
 local overwrite = S.new_location({ merge = 'finite_map', value = {}, put_equal = true })
-local p1 =
-  { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 'a', policy = 'overwrite' } } }
-local p2 =
-  { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 'b', policy = 'overwrite' } } }
+local p1 = { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 'a', policy = 'overwrite' } } }
+local p2 = { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 'b', policy = 'overwrite' } } }
 local independent = S.merge_parallel(overwrite, p1, p2, 'independent')
 eq(independent, nil, 'independent conflicting overwrites must remain partial')
 local interacting = S.merge_parallel(overwrite, p1, p2, 'interacting')

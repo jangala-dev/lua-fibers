@@ -44,8 +44,7 @@ do
   local cal = Calendar.new({ { id = 1, start = 10, finish = 11, resources = { 'room', 'alice' } } })
   local result
   run(function()
-    result =
-      fibers.perform(cal:reserve_at_op({ 'alice', 'bob' }, 10, 11):or_else(Op.always('busy')))
+    result = fibers.perform(cal:reserve_at_op({ 'alice', 'bob' }, 10, 11):or_else(Op.always('busy')))
   end)
   assert(result == 'busy' and reservation_count(cal) == 1)
 end
@@ -102,8 +101,7 @@ do
   local result
   run(function()
     result = fibers.perform(
-      Op.all({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) })
-        :or_else(Op.always('fallback'))
+      Op.all({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }):or_else(Op.always('fallback'))
     )
   end)
   assert(result == 'fallback')
@@ -118,9 +116,7 @@ do
   })
   local r
   run(function()
-    r = fibers.perform(
-      cal:reserve_op({ resources = { 'room' }, earliest = 0, latest = 10, duration = 2 })
-    )
+    r = fibers.perform(cal:reserve_op({ resources = { 'room' }, earliest = 0, latest = 10, duration = 2 }))
   end)
   assert(r.start == 3 and r.finish == 5)
 end
@@ -130,9 +126,7 @@ do
   local cal = Calendar.new()
   local slot
   run(function()
-    slot = fibers.perform(
-      cal:find_op({ resources = { 'room' }, earliest = 4, latest = 12, duration = 3 })
-    )
+    slot = fibers.perform(cal:find_op({ resources = { 'room' }, earliest = 4, latest = 12, duration = 3 }))
   end)
   assert(slot.start == 4 and slot.finish == 7 and reservation_count(cal) == 0)
 end

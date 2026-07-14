@@ -187,12 +187,7 @@ do
   local ok, err = pcall(function()
     rt:run()
   end)
-  assert_error_kind(
-    ok,
-    err,
-    'effect_error',
-    'perform inside effect handler is fatal effect failure'
-  )
+  assert_error_kind(ok, err, 'effect_error', 'perform inside effect handler is fatal effect failure')
   assert_eq(err.committed, true, 'effect failure records that commit already happened')
   assert_eq(err.fatal, true, 'effect failure is fatal')
   assert_eq(rt:failed(), err, 'runtime stores fatal effect error')

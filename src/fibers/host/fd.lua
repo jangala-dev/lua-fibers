@@ -33,8 +33,7 @@ function Fd.available()
     else
       reason = mod
     end
-    out[#out + 1] =
-      { name = name, module = modname, supported = not not supported, reason = reason }
+    out[#out + 1] = { name = name, module = modname, supported = not not supported, reason = reason }
   end
   table.sort(out, function(a, b)
     return a.name < b.name
