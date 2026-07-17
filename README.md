@@ -282,6 +282,23 @@ Scalar also supports typed state-machine transitions for facilities whose rules 
 
 `fibers.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. All host-backed directions in one Runtime share one indexed poller and one lazily created reactor rather than allocating one task per direction.
 
+### Pipes
+
+Anonymous pipes are owned pairs of one-way Streams:
+
+```lua
+local file = require('fibers.file')
+local pipe = fibers.perform(file.pipe_op())
+
+fibers.perform(pipe:writer():write_op('hello'))
+fibers.perform(pipe:writer():close_op())
+local bytes = fibers.perform(pipe:reader():read_all_op({ max = 4096 }))
+```
+
+Pipe acquisition occurs only after `pipe_op` commits. Newly created host handles
+are covered immediately by temporary adoption records until their permanent
+Stream ownership has been admitted. See [`docs/guide/io.md`](docs/guide/io.md).
+
 ### Time
 
 ```lua
@@ -363,6 +380,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 ### Using Fibers
 
 - [Programming guide](docs/guide/getting-started.md)
+- [Pipes and sockets](docs/guide/io.md)
 - [Tutorial and embedding examples](examples/README.md)
 - [Facility recipes](examples/recipes/README.md)
 

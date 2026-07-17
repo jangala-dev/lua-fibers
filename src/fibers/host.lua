@@ -11,6 +11,12 @@ local function is_finite_number(x)
   return type(x) == 'number' and x == x and x ~= math.huge and x ~= -math.huge
 end
 
+function Host.supports(host, capability)
+  return type(host) == 'table'
+    and type(host.capabilities) == 'table'
+    and host.capabilities[capability] == true
+end
+
 function Host.earliest_deadline(waits)
   local best
   for i = 1, #(waits or {}) do
@@ -219,6 +225,7 @@ function Host.default(opts)
   return require('fibers.host.pure').new(opts)
 end
 
+Host.Error = require('fibers.host.error')
 Host.Handle = require('fibers.host.handle')
 Host.Poller = require('fibers.host.poller')
 Host.Reactor = require('fibers.host.reactor')

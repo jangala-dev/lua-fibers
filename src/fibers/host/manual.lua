@@ -6,6 +6,8 @@
 -- level-like: readiness remains set until clear_readiness is called.
 
 local Host = require('fibers.host')
+local Handle = require('fibers.host.handle')
+local HostError = require('fibers.host.error')
 
 local Manual = {}
 Manual.__index = Manual
@@ -33,13 +35,180 @@ function Manual.new(opts)
     on_wake = opts.on_wake,
     on_unsupported = opts.on_unsupported,
     _now = opts.now or 0,
+    pipe_factory = opts.pipe_factory,
+    enable_pipes = opts.pipes == true,
+    enable_sockets = opts.sockets == true,
+    socket_listeners = {},
+    next_ephemeral_port = opts.first_ephemeral_port or 40000,
   }, Manual)
 
   self.now = function(_rt)
     return self._now
   end
-  self.capabilities = { time = true, readiness = true, fd = false, pipe = false }
+  self.capabilities = {
+    time = true,
+    readiness = true,
+    fd = false,
+    pipe = self.pipe_factory ~= nil or self.enable_pipes,
+    socket = self.enable_sockets,
+  }
   return self
+end
+
+function Manual:create_pipe(opts)
+  opts = opts or {}
+  if self.pipe_factory then
+    return self.pipe_factory(self, opts)
+  end
+  if self.enable_pipes then
+    return require('fibers.host.handle').pipe_pair({ host = self, name = opts.name })
+  end
+  return nil, nil, require('fibers.host.error').unsupported('host', 'pipe', {
+    host = self.name,
+  })
+end
+
+local function socket_key(address)
+  if type(address) ~= 'table' then
+    return tostring(address)
+  end
+  if address.kind == 'unix' or address.family == 'unix' then
+    return 'unix:' .. tostring(address.path)
+  end
+  return 'inet:' .. tostring(address.host or '0.0.0.0') .. ':' .. tostring(address.port or 0)
+end
+
+local function connection_pair(host, name)
+  local c2s_reader, c2s_writer = Handle.pipe_pair({ host = host, name = name .. ':c2s' })
+  local s2c_reader, s2c_writer = Handle.pipe_pair({ host = host, name = name .. ':s2c' })
+  local client = Handle.duplex(s2c_reader, c2s_writer, {
+    host = host,
+    name = name .. ':client',
+  })
+  local server = Handle.duplex(c2s_reader, s2c_writer, {
+    host = host,
+    name = name .. ':server',
+  })
+  return client, server
+end
+
+function Manual:create_listener(address, opts)
+  opts = opts or {}
+  if not self.enable_sockets then
+    return nil, HostError.unsupported('host', 'listen', { host = self.name, address = address })
+  end
+  local actual = {}
+  for k, v in pairs(address or {}) do
+    actual[k] = v
+  end
+  if actual.kind ~= 'unix' and tonumber(actual.port) == 0 then
+    actual.port = self.next_ephemeral_port
+    self.next_ephemeral_port = self.next_ephemeral_port + 1
+  end
+  local key = socket_key(actual)
+  if self.socket_listeners[key] then
+    return nil, HostError.system('socket', 'listen', 'address already in use', 'EADDRINUSE')
+  end
+  local pending = {}
+  local listener
+  listener = Handle.new({
+    name = opts.name or ('manual-listener:' .. key),
+    key = 'manual-listener-readiness:' .. key,
+    host = self,
+    capabilities = {
+      read = false,
+      write = false,
+      shutdown_read = false,
+      shutdown_write = false,
+      close = true,
+      set_nonblocking = false,
+      readiness = true,
+    },
+    close = function(self_handle)
+      if listener.closed then
+        return true
+      end
+      listener.closed = true
+      self.socket_listeners[key] = nil
+      self_handle:mark_readable()
+      while #pending > 0 do
+        local item = table.remove(pending, 1)
+        if item.handle then
+          item.handle:close('listener closed before accept')
+        end
+      end
+      return true
+    end,
+  })
+  listener.address = actual
+  listener.pending = pending
+  listener.local_address = function()
+    return actual
+  end
+  listener.accept = function(self_listener)
+    if #pending == 0 then
+      if listener.closed then
+        return nil, nil, HostError.closed('socket', 'accept')
+      end
+      self_listener:clear_readable()
+      return nil, nil, HostError.would_block('socket', 'accept')
+    end
+    local item = table.remove(pending, 1)
+    if #pending == 0 then
+      self_listener:clear_readable()
+    end
+    return item.handle, item.peer
+  end
+  listener.enqueue = function(self_listener, handle, peer)
+    if listener.closed then
+      handle:close('listener closed')
+      return nil, HostError.closed('socket', 'connect')
+    end
+    pending[#pending + 1] = { handle = handle, peer = peer }
+    self_listener:mark_readable()
+    return true
+  end
+  self.socket_listeners[key] = listener
+  return listener
+end
+
+function Manual:dial_socket(address, opts)
+  opts = opts or {}
+  if not self.enable_sockets then
+    return nil, nil, HostError.unsupported('host', 'dial', { host = self.name, address = address })
+  end
+  local key = socket_key(address)
+  local listener = self.socket_listeners[key]
+  if not listener and type(address) == 'table' and address.kind ~= 'unix' then
+    listener = self.socket_listeners[socket_key({
+      kind = 'inet',
+      family = 'inet',
+      host = '0.0.0.0',
+      port = address.port,
+    })] or self.socket_listeners[socket_key({
+      kind = 'inet',
+      family = 'inet',
+      host = '::',
+      port = address.port,
+    })]
+  end
+  if not listener then
+    return nil, nil, HostError.system('socket', 'connect', 'connection refused', 'ECONNREFUSED')
+  end
+  local client, server = connection_pair(self, opts.name or ('manual-connection:' .. key))
+  local client_address = opts.local_address
+    or {
+      kind = 'inet',
+      family = 'inet',
+      host = '127.0.0.1',
+      port = 0,
+    }
+  local ok, err = listener:enqueue(server, client_address)
+  if not ok then
+    client:close('listener rejected connection')
+    return nil, nil, err
+  end
+  return client, listener:local_address()
 end
 
 function Manual:set_time(t)

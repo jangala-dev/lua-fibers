@@ -4,6 +4,7 @@
 
 local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
+local HostError = require('fibers.host.error')
 
 local function unsupported(reason)
   return {
@@ -190,7 +191,11 @@ function Fd.wrap(fd, opts)
   h.raw_fd = fd
   h.generation = next_generation
   if opts.nonblocking ~= false then
-    h:set_nonblocking(true)
+    local ok, err = h:set_nonblocking(true)
+    if not ok then
+      h:close('set_nonblocking failed')
+      return nil, err
+    end
   end
   return h
 end
@@ -201,18 +206,32 @@ function Fd.pipe(opts)
   opts = opts or {}
   local rd, wr, err, eno = unistd.pipe()
   if not rd then
-    return nil, nil, errno_msg('pipe failed', err, eno), eno
+    return nil, nil, HostError.system('pipe', 'create', errno_msg('pipe failed', err, eno), nil, eno), eno
   end
-  local r = Fd.wrap(rd, {
+  local r, rerr = Fd.wrap(rd, {
     host = opts.host,
     name = opts.name and (opts.name .. ':read') or nil,
     nonblocking = opts.nonblocking,
   })
-  local w = Fd.wrap(wr, {
+  if not r then
+    pcall(function()
+      unistd.close(wr)
+    end)
+    return nil, nil, rerr
+  end
+  local w, werr = Fd.wrap(wr, {
     host = opts.host,
     name = opts.name and (opts.name .. ':write') or nil,
     nonblocking = opts.nonblocking,
   })
+  if not w then
+    r:close('paired pipe wrap failed')
+    return nil, nil, werr
+  end
+  r.capabilities.write = false
+  r.capabilities.shutdown_write = false
+  w.capabilities.read = false
+  w.capabilities.shutdown_read = false
   return r, w
 end
 

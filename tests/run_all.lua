@@ -20,6 +20,7 @@ local order = {
   'resources',
   'lifetimes',
   'embedding',
+  'io',
   'kernel',
   'internal',
   'case_studies',

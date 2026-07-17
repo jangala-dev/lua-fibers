@@ -175,6 +175,14 @@ function Posix.new(opts)
   return self
 end
 
+function Posix:create_pipe(pipe_opts)
+  return self.fd.pipe({
+    host = self,
+    name = pipe_opts and pipe_opts.name,
+    nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
+  })
+end
+
 function Posix:sleep(seconds)
   return nanosleep(seconds)
 end

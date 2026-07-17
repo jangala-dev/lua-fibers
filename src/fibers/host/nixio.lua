@@ -158,6 +158,14 @@ function Nixio.new(opts)
   return self
 end
 
+function Nixio:create_pipe(pipe_opts)
+  return self.fd.pipe({
+    host = self,
+    name = pipe_opts and pipe_opts.name,
+    nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
+  })
+end
+
 function Nixio:sleep(seconds)
   return nanosleep(seconds)
 end

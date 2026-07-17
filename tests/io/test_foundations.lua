@@ -1,0 +1,123 @@
+package.path = table.concat({
+  './src/?.lua',
+  './src/?/init.lua',
+  './src/?/?.lua',
+  './reference/?.lua',
+  './reference/?/init.lua',
+  './reference/?/?.lua',
+  './?.lua',
+  './?/init.lua',
+  './?/?.lua',
+  package.path,
+}, ';')
+
+local fibers = require('fibers')
+local Host = require('fibers.host')
+local Handle = require('fibers.host.handle')
+local HostError = require('fibers.host.error')
+local Completion = require('fibers.internal.completion')
+local Adoption = require('fibers.internal.adoption')
+
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    error((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    error(msg or 'expected truthy', 2)
+  end
+end
+
+-- Declared capabilities, including explicit false values, are authoritative.
+do
+  local h = Handle.new({
+    name = 'capability-handle',
+    capabilities = { read = false, write = true, close = false, readiness = true },
+    read = function()
+      return 'should-not-run'
+    end,
+    write = function(_, bytes)
+      return #bytes
+    end,
+  })
+  assert_eq(h:supports('read'), false)
+  assert_eq(h:supports('write'), true)
+  local bytes, err = h:read(1)
+  assert_eq(bytes, nil)
+  assert_truthy(HostError.is_unsupported(err, 'read'))
+  local ok, close_err = h:close()
+  assert_eq(ok, nil)
+  assert_truthy(HostError.is_unsupported(close_err, 'close'))
+  local ok2, close_err2 = h:close()
+  assert_eq(ok2, nil)
+  assert_eq(close_err2, close_err, 'repeat close should preserve the original error')
+end
+
+-- Host errors are stable tagged values with useful predicates and text.
+do
+  local err = HostError.system('socket', 'connect', 'connection refused', 'ECONNREFUSED', 111)
+  assert_truthy(HostError.is(err, 'system'))
+  assert_eq(err.domain, 'socket')
+  assert_eq(err.action, 'connect')
+  assert_eq(tostring(err), 'connection refused')
+  assert_truthy(HostError.is_would_block(HostError.would_block('fd', 'read')))
+  assert_truthy(HostError.is_eof(HostError.eof('fd', 'read')))
+  assert_truthy(Host.supports(Host.manual({ pipes = true }), 'pipe'))
+end
+
+-- Completion publishes one terminal result and wakes result waiters.
+do
+  local completion = Completion.new('completion-test')
+  local observed, second
+  fibers.run(function()
+    fibers.spawn(function()
+      observed = { fibers.perform(completion:result_op()) }
+    end, 'completion-waiter')
+    fibers.perform(completion:publish_success_op('done'))
+    local changed, conflict = fibers.perform(completion:publish_failure_op('late'))
+    second = conflict and conflict.kind or changed
+  end)
+  assert_eq(observed[1], 'done')
+  assert_eq(second, 'completion_already_terminal')
+  assert_eq(completion:state_value().kind, 'succeeded')
+end
+
+-- An admitted adoption slot closes an acquired value during scope settlement.
+do
+  local closed = 0
+  fibers.run(function(scope)
+    local slot = Adoption.slot('settled-adoption')
+    fibers.perform(scope:admit_op(slot:owned()))
+    local value = { name = 'external' }
+    assert_eq(
+      slot:adopt(value, function(v, reason)
+        assert_eq(v, value)
+        assert_truthy(reason ~= nil)
+        closed = closed + 1
+        return true
+      end),
+      value
+    )
+  end)
+  assert_eq(closed, 1)
+end
+
+-- Releasing an adoption slot after permanent ownership prevents backup closure.
+do
+  local closed = 0
+  fibers.run(function(scope)
+    local slot = Adoption.slot('released-adoption')
+    fibers.perform(scope:admit_op(slot:owned()))
+    local value = {}
+    slot:adopt(value, function()
+      closed = closed + 1
+      return true
+    end)
+    assert_eq(slot:release(value), value)
+    fibers.perform(scope:raw_region():release_op(slot))
+  end)
+  assert_eq(closed, 0)
+end
+
+print('tests/io/test_foundations.lua: ok')

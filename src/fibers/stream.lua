@@ -112,8 +112,45 @@ function Duplex:read_all_op(opts)
   return require_reader(self):read_all_op(opts)
 end
 
-function Duplex:write_op(bytes)
-  return require_writer(self):write_op(bytes)
+-- Lua-file-style migration helper.  It still constructs an inert option.
+function Duplex:read_op(spec, opts)
+  if type(spec) == 'number' then
+    return self:read_some_op(spec)
+  end
+  if spec == '*l' then
+    opts = opts or {}
+    opts.keep_terminator = false
+    return self:read_line_op(opts)
+  end
+  if spec == '*L' then
+    opts = opts or {}
+    opts.keep_terminator = true
+    return self:read_line_op(opts)
+  end
+  if spec == '*a' then
+    return self:read_all_op(opts)
+  end
+  error("stream read_op expects a byte count, '*l', '*L' or '*a'", 2)
+end
+
+local function join_write_parts(...)
+  local n = select('#', ...)
+  if n == 0 then
+    return ''
+  end
+  local parts = {}
+  for i = 1, n do
+    local part = select(i, ...)
+    if type(part) ~= 'string' then
+      error('stream write expects string arguments', 3)
+    end
+    parts[i] = part
+  end
+  return table.concat(parts)
+end
+
+function Duplex:write_op(...)
+  return require_writer(self):write_op(join_write_parts(...))
 end
 
 function Duplex:write_some_op(bytes)
@@ -426,6 +463,7 @@ HostStream.read_exactly_op = Duplex.read_exactly_op
 HostStream.read_until_op = Duplex.read_until_op
 HostStream.read_line_op = Duplex.read_line_op
 HostStream.read_all_op = Duplex.read_all_op
+HostStream.read_op = Duplex.read_op
 HostStream.write_op = Duplex.write_op
 HostStream.write_some_op = Duplex.write_some_op
 HostStream.flush_op = Duplex.flush_op
@@ -436,5 +474,24 @@ HostStream.abort_write_op = Duplex.abort_write_op
 HostStream.close_op = Duplex.close_op
 HostStream.abort_op = Duplex.abort_op
 HostStream.closed_op = Duplex.closed_op
+
+-- Select one complete line from a named collection of Streams.
+function Stream.merge_lines_op(streams, opts)
+  local entries = {}
+  for name, stream in pairs(streams or {}) do
+    entries[#entries + 1] = {
+      name,
+      stream:read_line_op(opts):map(function(line, err)
+        return name, line, err
+      end),
+    }
+  end
+  if #entries == 0 then
+    return Op.never()
+  end
+  return Op.named_choice(entries):map(function(_selected, source, line, err)
+    return source, line, err
+  end)
+end
 
 return Stream

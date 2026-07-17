@@ -12,11 +12,11 @@ Backend.__index = Backend
 local next_id = 0
 
 local function ensure_handle(h)
-  if type(h) ~= 'table' then
-    error('handle backend expects a HostHandle table', 3)
+  if type(h) ~= 'table' or h._fibers_host_handle ~= true then
+    error('handle backend expects a HostHandle', 3)
   end
-  if type(h.read) ~= 'function' or type(h.write) ~= 'function' then
-    error('handle backend expects read/write methods', 3)
+  if type(h.supports) ~= 'function' then
+    error('HostHandle must expose supports(capability)', 3)
   end
   return h
 end
@@ -35,9 +35,9 @@ function Backend.new(handle, opts)
     name = opts.name or handle.name or ('handle-backend-' .. tostring(next_id)),
     key = opts.key or (handle.readiness_key and handle:readiness_key()) or handle.key,
     handle = handle,
-    read_supported = type(handle.read) == 'function',
-    write_supported = type(handle.write) == 'function',
-    close_supported = type(handle.close) == 'function',
+    read_supported = handle:supports('read') and handle:supports('readiness'),
+    write_supported = handle:supports('write') and handle:supports('readiness'),
+    close_supported = handle:supports('close'),
     runtime = nil,
     stream = nil,
   }, Backend)

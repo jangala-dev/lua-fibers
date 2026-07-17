@@ -14,6 +14,7 @@ local Signal = require('fibers.external.signal')
 local Poller = require('fibers.host.poller')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Errors = require('fibers.flow.errors')
+local HostError = require('fibers.host.error')
 local Ownership = require('fibers.internal.ownership')
 
 local Reactor = {}
@@ -30,12 +31,12 @@ local function backend_call(backend, name, ...)
   if type(f) == 'function' then
     return f(backend, ...)
   end
-  return nil, 'unsupported_' .. tostring(name)
+  return nil, HostError.unsupported('stream_backend', name)
 end
 
 local function optional_backend_call(backend, name, ...)
   local ok, err = backend_call(backend, name, ...)
-  if ok == nil and type(err) == 'string' and err:match('^unsupported_') then
+  if ok == nil and HostError.is_unsupported(err) then
     return true
   end
   return ok, err
@@ -474,7 +475,7 @@ function Reactor:_service_read(entry)
     return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
   end
 
-  if err == Errors.EOF then
+  if err == Errors.EOF or HostError.is_eof(err) then
     if bytes and #bytes > 0 then
       local n, commit_err = masked_perform(self.runtime, space:commit_op(bytes))
       if not n then
@@ -488,7 +489,7 @@ function Reactor:_service_read(entry)
     return self:_retire_entry(entry, Errors.EOF)
   end
 
-  if err == 'would_block' then
+  if HostError.is_would_block(err) then
     if bytes ~= nil and bytes ~= '' then
       masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
       return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
@@ -556,7 +557,7 @@ function Reactor:_service_write(entry)
     -- Lease handles are immutable snapshots.  Reacquire after every
     -- acknowledgement so a partial write observes the remaining suffix.
     entry.lease = nil
-  elseif err == 'would_block' or n == 0 then
+  elseif HostError.is_would_block(err) or n == 0 then
     -- Retain byte custody and rearm the one-shot readiness registration.
   else
     entry.lease = nil

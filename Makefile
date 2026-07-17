@@ -102,6 +102,10 @@ check-layout:
 	@test -f src/fibers/flow.lua
 	@test -f src/fibers/flow/space_lease.lua
 	@test -f src/fibers/host/reactor.lua
+	@test -f src/fibers/host/error.lua
+	@test -f src/fibers/internal/completion.lua
+	@test -f src/fibers/internal/adoption.lua
+	@test -f src/fibers/file.lua
 	@test ! -e src/fibers/internal/flow.lua
 	@test ! -e src/fibers/stream/pump.lua
 	@test -f src/fibers/internal/fifo.lua
@@ -112,6 +116,8 @@ check-layout:
 	@test -f examples/case_studies/petri/petri.lua
 	@test -f experiments/phase.lua
 	@test -f examples/tutorial/07_flow_tensor.lua
+	@test -f examples/tutorial/08_pipe.lua
+	@test -f docs/guide/io.md
 	@test ! -e experiments/scalar_flow.lua
 	@test -f reference/fibers/internal/reference_machine.lua
 	@test ! -e src/fibers/internal/reference_machine.lua

@@ -1,0 +1,216 @@
+package.path = table.concat({
+  './src/?.lua',
+  './src/?/init.lua',
+  './src/?/?.lua',
+  './reference/?.lua',
+  './reference/?/init.lua',
+  './reference/?/?.lua',
+  './?.lua',
+  './?/init.lua',
+  './?/?.lua',
+  package.path,
+}, ';')
+
+local fibers = require('fibers')
+local Host = require('fibers.host')
+local Handle = require('fibers.host.handle')
+local HostError = require('fibers.host.error')
+local file = require('fibers.file')
+
+local function assert_eq(a, b, msg)
+  if a ~= b then
+    error((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
+  end
+end
+local function assert_truthy(v, msg)
+  if not v then
+    error(msg or 'expected truthy', 2)
+  end
+end
+
+-- Losing pipe options perform no host acquisition.
+do
+  local acquisitions = 0
+  local host = Host.manual({
+    auto_advance_time = false,
+    pipe_factory = function(h, opts)
+      acquisitions = acquisitions + 1
+      return Handle.pipe_pair({ host = h, name = opts.name })
+    end,
+  })
+  fibers.run(function()
+    local result = fibers.perform(fibers.always('winner'):or_else(file.pipe_op({ name = 'loser' })))
+    assert_eq(result, 'winner')
+  end, { host = host })
+  assert_eq(acquisitions, 0)
+end
+
+-- A pipe provides independently shaped readable and writable Streams.
+do
+  local host = Host.manual({ pipes = true, auto_advance_time = false })
+  fibers.run(function()
+    local reader, writer, err = fibers.perform(file.pipe_op({ name = 'roundtrip', capacity = 32 }))
+    assert_truthy(reader, tostring(err))
+    assert_truthy(reader:is_readable())
+    assert_eq(reader:is_writable(), false)
+    assert_truthy(writer:is_writable())
+    assert_eq(writer:is_readable(), false)
+
+    assert_eq(fibers.perform(writer:write_op('hello')), 5)
+    assert_eq(fibers.perform(writer:close_op('writer complete')), true)
+    local bytes, read_err = fibers.perform(reader:read_all_op({ max = 64 }))
+    assert_eq(bytes, 'hello', tostring(read_err))
+    assert_eq(fibers.perform(reader:close_op('reader complete')), true)
+  end, { host = host })
+end
+
+-- Scope settlement closes both acquired handles when application code does not.
+do
+  local read_handle, write_handle
+  local host = Host.manual({
+    auto_advance_time = false,
+    pipe_factory = function(h, opts)
+      read_handle, write_handle = Handle.pipe_pair({ host = h, name = opts.name })
+      return read_handle, write_handle
+    end,
+  })
+  fibers.run(function()
+    local reader, writer = fibers.perform(file.pipe_op({ name = 'settled' }))
+    assert_truthy(reader)
+    fibers.perform(writer:write_op('x'))
+  end, { host = host })
+  assert_eq(read_handle.closed, true)
+  assert_eq(write_handle.closed, true)
+end
+
+-- Unsupported hosts return a structured expected error and leak no obligation.
+do
+  local reader, writer, err
+  fibers.run(
+    function()
+      reader, writer, err = fibers.perform(file.pipe_op({ name = 'unsupported' }))
+    end,
+    { host = Host.pure({
+      now = function()
+        return 0
+      end,
+      sleep = function()
+        return true
+      end,
+    }) }
+  )
+  assert_eq(reader, nil)
+  assert_truthy(HostError.is_unsupported(err, 'pipe'))
+end
+
+-- Partial acquisition closes the handle which was created before failure.
+do
+  local read_handle
+  local host = Host.manual({
+    auto_advance_time = false,
+    pipe_factory = function(h, opts)
+      read_handle = Handle.pipe_pair({ host = h, name = opts.name })
+      return read_handle, nil, HostError.system('pipe', 'create', 'writer creation failed')
+    end,
+  })
+  local reader, writer, err
+  fibers.run(function()
+    reader, writer, err = fibers.perform(file.pipe_op({ name = 'partial' }))
+  end, { host = host })
+  assert_eq(reader, nil)
+  assert_truthy(HostError.is(err, 'system'))
+  assert_eq(read_handle.closed, true)
+end
+
+-- Stream admission failure closes both immediately adopted handles.
+do
+  local bad_reader, writer
+  local host = Host.manual({
+    auto_advance_time = false,
+    pipe_factory = function(h, opts)
+      bad_reader = Handle.new({
+        name = opts.name .. ':bad-reader',
+        key = opts.name .. ':bad-reader',
+        host = h,
+        capabilities = { read = false, close = true, readiness = true },
+        close = function()
+          return true
+        end,
+      })
+      local _reader
+      _reader, writer = Handle.pipe_pair({ host = h, name = opts.name .. ':writer-source' })
+      _reader:close('unused')
+      return bad_reader, writer
+    end,
+  })
+  local reader, writer_out, err
+  fibers.run(function()
+    reader, writer_out, err = fibers.perform(file.pipe_op({ name = 'bad-stream' }))
+  end, { host = host })
+  assert_eq(reader, nil)
+  assert_truthy(err ~= nil)
+  assert_eq(bad_reader.closed, true)
+  assert_eq(writer.closed, true)
+end
+
+-- Directional close retains the familiar pipe semantics.
+do
+  local host = Host.manual({ pipes = true, auto_advance_time = false })
+  fibers.run(function()
+    local reader, writer = fibers.perform(file.pipe_op({ name = 'directional-close' }))
+    assert_eq(fibers.perform(writer:write_op('retained')), 8)
+    assert_eq(fibers.perform(writer:close_op('writer complete')), true)
+    assert_eq(fibers.perform(reader:read_all_op({ max = 32 })), 'retained')
+    assert_eq(fibers.perform(reader:close_op('reader complete')), true)
+  end, { host = host })
+end
+
+-- Endpoint closure preserves a structured close error.
+do
+  local reader_handle, writer_handle
+  local close_err = HostError.system('pipe', 'close', 'reader close failed', 'ECLOSE')
+  local host = Host.manual({
+    auto_advance_time = false,
+    pipe_factory = function(h, opts)
+      reader_handle, writer_handle = Handle.pipe_pair({ host = h, name = opts.name })
+      reader_handle._close = function()
+        return nil, close_err
+      end
+      return reader_handle, writer_handle
+    end,
+  })
+  local observed
+  local result = fibers.try_run(function()
+    local reader, writer = fibers.perform(file.pipe_op({ name = 'close-error' }))
+    fibers.perform(writer:close_op('done'))
+    local ok, err = fibers.perform(reader:close_op('test close error'))
+    assert_eq(ok, nil)
+    observed = err
+  end, { host = host })
+  assert_eq(observed, close_err)
+  assert_eq(result.ok, false, 'scope should retain the endpoint settlement failure')
+end
+
+-- The public Pipe facility also works through the available native Linux host.
+do
+  local ok_linux, LinuxHost = pcall(require, 'fibers.host.luajit_linux')
+  if ok_linux and LinuxHost.is_supported() then
+    local host = LinuxHost.new()
+    local result = fibers.try_run(function()
+      local reader, writer, err = fibers.perform(file.pipe_op({ name = 'native-pipe' }))
+      assert_truthy(reader, tostring(err))
+      local writer_task = fibers.spawn(function()
+        assert_eq(fibers.perform(writer:write_op('native')), 6)
+        assert_eq(fibers.perform(writer:close_op('writer complete')), true)
+      end, 'native-pipe-writer')
+      local bytes, read_err = fibers.perform(reader:read_all_op({ max = 64 }))
+      assert_eq(bytes, 'native', tostring(read_err))
+      assert_eq(fibers.perform(reader:close_op('reader complete')), true)
+      fibers.perform(writer_task:await_op())
+    end, { host = host })
+    host:close()
+    assert_truthy(result.ok, result:tostring())
+  end
+end
+
+print('tests/io/test_pipe.lua: ok')

@@ -6,6 +6,7 @@
 
 local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
+local HostError = require('fibers.host.error')
 
 local Common = {}
 
@@ -89,6 +90,16 @@ function Common.new(opts)
     return nullptr ~= nil and ptr == nullptr
   end
 
+  local function vararg_int(value)
+    if type(ffi.cast) == 'function' then
+      local ok, converted = pcall(ffi.cast, 'int', value)
+      if ok then
+        return converted
+      end
+    end
+    return value
+  end
+
   local function strerror(e)
     local ok, s = pcall(function()
       return C.strerror(e)
@@ -118,10 +129,10 @@ function Common.new(opts)
 
   local function set_nonblocking_fd(fd, value)
     local flags, e = retrying_syscall(function()
-      return C.fcntl(fd, F_GETFL, 0)
+      return C.fcntl(fd, F_GETFL, vararg_int(0))
     end)
     if not flags then
-      return nil, strerror(e), e
+      return nil, HostError.system('fd', 'set_nonblocking', strerror(e), nil, e), e
     end
     local new_flags
     if value ~= false then
@@ -130,10 +141,10 @@ function Common.new(opts)
       new_flags = bit.band(flags, bit.bnot(O_NONBLOCK))
     end
     local ok, e2 = retrying_syscall(function()
-      return C.fcntl(fd, F_SETFL, new_flags)
+      return C.fcntl(fd, F_SETFL, vararg_int(new_flags))
     end)
     if not ok then
-      return nil, strerror(e2), e2
+      return nil, HostError.system('fd', 'set_nonblocking', strerror(e2), nil, e2), e2
     end
     return true
   end
@@ -272,7 +283,11 @@ function Common.new(opts)
     h.generation = next_generation
     h.raw_fd = fd
     if wrap_opts.nonblocking ~= false then
-      h:set_nonblocking(true)
+      local ok, err = h:set_nonblocking(true)
+      if not ok then
+        h:close('set_nonblocking failed')
+        return nil, err
+      end
     end
     return h
   end
@@ -285,18 +300,32 @@ function Common.new(opts)
     local rc = tonumber_c(C.pipe(fds))
     if rc ~= 0 then
       local e = errno()
-      return nil, strerror(e), e
+      return nil, nil, HostError.system('pipe', 'create', strerror(e), nil, e), e
     end
-    local r = Fd.wrap(tonumber_c(fds[0]), {
+    local r, rerr = Fd.wrap(tonumber_c(fds[0]), {
       host = pipe_opts.host,
       name = pipe_opts.name and (pipe_opts.name .. ':read') or nil,
       nonblocking = pipe_opts.nonblocking,
     })
-    local w = Fd.wrap(tonumber_c(fds[1]), {
+    if not r then
+      pcall(function()
+        C.close(tonumber_c(fds[1]))
+      end)
+      return nil, nil, rerr
+    end
+    local w, werr = Fd.wrap(tonumber_c(fds[1]), {
       host = pipe_opts.host,
       name = pipe_opts.name and (pipe_opts.name .. ':write') or nil,
       nonblocking = pipe_opts.nonblocking,
     })
+    if not w then
+      r:close('paired pipe wrap failed')
+      return nil, nil, werr
+    end
+    r.capabilities.write = false
+    r.capabilities.shutdown_write = false
+    w.capabilities.read = false
+    w.capabilities.shutdown_read = false
     return r, w
   end
 

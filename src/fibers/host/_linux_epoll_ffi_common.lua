@@ -423,6 +423,14 @@ function Common.new(opts)
     return self
   end
 
+  function Linux:create_pipe(pipe_opts)
+    return self.fd.pipe({
+      host = self,
+      name = pipe_opts and pipe_opts.name,
+      nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
+    })
+  end
+
   function Linux:sleep(seconds)
     return sleep_seconds(seconds)
   end

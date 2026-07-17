@@ -10,6 +10,7 @@
 local Readiness = require('fibers.external.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Errors = require('fibers.flow.errors')
+local HostError = require('fibers.host.error')
 
 local Handle = {}
 Handle.__index = Handle
@@ -64,13 +65,29 @@ local function callback(self, name, ...)
   if type(hf) == 'function' then
     return hf(host, self, ..., self)
   end
-  return nil, 'unsupported_' .. tostring(name)
+  return nil, HostError.unsupported('handle', name, { handle = self.name })
 end
 
 function Handle.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('host-handle-' .. tostring(next_id))
+  local declared = opts.capabilities or {}
+  local function capability(name, fallback)
+    if declared[name] ~= nil then
+      return not not declared[name]
+    end
+    return not not fallback
+  end
+  local capabilities = {
+    read = capability('read', type(opts.read) == 'function'),
+    write = capability('write', type(opts.write) == 'function'),
+    shutdown_read = capability('shutdown_read', type(opts.shutdown_read) == 'function'),
+    shutdown_write = capability('shutdown_write', type(opts.shutdown_write) == 'function'),
+    close = capability('close', type(opts.close) == 'function'),
+    set_nonblocking = capability('set_nonblocking', type(opts.set_nonblocking) == 'function'),
+    readiness = capability('readiness', true),
+  }
   return setmetatable({
     name = opts.name or ('host-handle-' .. tostring(next_id)),
     key = key,
@@ -79,6 +96,7 @@ function Handle.new(opts)
     readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     close_on_gc = opts.close_on_gc,
+    capabilities = capabilities,
     _read = opts.read,
     _write = opts.write,
     _shutdown_read = opts.shutdown_read,
@@ -89,6 +107,25 @@ function Handle.new(opts)
     stream = nil,
     _fibers_host_handle = true,
   }, Handle)
+end
+
+function Handle:supports(capability)
+  return self.capabilities and self.capabilities[capability] == true
+end
+
+function Handle:capability_snapshot()
+  local out = {}
+  for key, value in pairs(self.capabilities or {}) do
+    out[key] = value
+  end
+  return out
+end
+
+local function require_capability(self, capability)
+  if not self:supports(capability) then
+    return nil, HostError.unsupported('handle', capability, { handle = self.name })
+  end
+  return true
 end
 
 function Handle:is_handle()
@@ -150,53 +187,117 @@ function Handle:clear_writable()
 end
 
 function Handle:set_nonblocking(value)
-  local ok, err = callback(self, 'set_nonblocking', value ~= false)
-  if ok == nil and err and tostring(err):match('^unsupported_') then
-    return true
+  if not self:supports('set_nonblocking') then
+    return nil, HostError.unsupported('handle', 'set_nonblocking', { handle = self.name })
   end
-  return ok, err
+  local ok, err, detail = callback(self, 'set_nonblocking', value ~= false)
+  if not ok then
+    return nil,
+      HostError.normalise(err, {
+        domain = 'handle',
+        action = 'set_nonblocking',
+        detail = detail,
+        handle = self.name,
+      })
+  end
+  return ok
 end
 
 function Handle:read(max)
-  local a, b, c = callback(self, 'read', max)
+  local ok, err = require_capability(self, 'read')
+  if not ok then
+    return nil, err
+  end
   clear_hint(self, 'read')
+  local a, b, c = callback(self, 'read', max)
+  if a == nil and b ~= nil then
+    return nil,
+      HostError.normalise(b, {
+        domain = 'handle',
+        action = 'read',
+        detail = c,
+        handle = self.name,
+      })
+  end
   return a, b, c
 end
 
 function Handle:write(bytes)
-  local a, b, c = callback(self, 'write', bytes)
+  local ok, err = require_capability(self, 'write')
+  if not ok then
+    return nil, err
+  end
   clear_hint(self, 'write')
+  local a, b, c = callback(self, 'write', bytes)
+  if a == nil and b ~= nil then
+    return nil,
+      HostError.normalise(b, {
+        domain = 'handle',
+        action = 'write',
+        detail = c,
+        handle = self.name,
+      })
+  end
   return a, b, c
 end
 
 function Handle:shutdown_read(reason)
-  local ok, err = callback(self, 'shutdown_read', reason)
-  if ok == nil and err and tostring(err):match('^unsupported_') then
+  if not self:supports('shutdown_read') then
     return true
   end
-  return ok, err
+  local ok, err, detail = callback(self, 'shutdown_read', reason)
+  if not ok then
+    return nil,
+      HostError.normalise(err, {
+        domain = 'handle',
+        action = 'shutdown_read',
+        detail = detail,
+        handle = self.name,
+      })
+  end
+  return ok
 end
 
 function Handle:shutdown_write(reason)
-  local ok, err = callback(self, 'shutdown_write', reason)
-  if ok == nil and err and tostring(err):match('^unsupported_') then
+  if not self:supports('shutdown_write') then
     return true
   end
-  return ok, err
+  local ok, err, detail = callback(self, 'shutdown_write', reason)
+  if not ok then
+    return nil,
+      HostError.normalise(err, {
+        domain = 'handle',
+        action = 'shutdown_write',
+        detail = detail,
+        handle = self.name,
+      })
+  end
+  return ok
 end
 
 function Handle:close(reason)
   if self.closed then
     return true
   end
-  self.closed = true
-  local ok, err = callback(self, 'close', reason)
-  if ok == nil and err and tostring(err):match('^unsupported_') then
-    self:shutdown_read(reason)
-    self:shutdown_write(reason)
-    return true
+  if self.close_error then
+    return nil, self.close_error
   end
-  return ok, err
+  if not self:supports('close') then
+    self.close_error = HostError.unsupported('handle', 'close', { handle = self.name })
+    return nil, self.close_error
+  end
+  local ok, err, detail = callback(self, 'close', reason)
+  if not ok then
+    self.close_error = HostError.normalise(err, {
+      domain = 'handle',
+      action = 'close',
+      detail = detail,
+      handle = self.name,
+    })
+    return nil, self.close_error
+  end
+  self.closed = true
+  return ok
 end
 
 -- Deterministic fake/manual handle.  This is a host-handle test double, not a
@@ -248,6 +349,15 @@ function Handle.fake(opts)
     host = opts.host,
     readiness = opts.readiness,
     feed = opts.feed,
+    capabilities = {
+      read = true,
+      write = true,
+      shutdown_read = true,
+      shutdown_write = true,
+      close = true,
+      set_nonblocking = false,
+      readiness = true,
+    },
   })
   setmetatable(self, Fake)
   self.input = {}
@@ -339,7 +449,7 @@ function Fake:read(max)
   max = max or 4096
   if self.read_blocked then
     clear_hint(self, 'read')
-    return nil, 'would_block'
+    return nil, HostError.would_block('handle', 'read', { handle = self.name })
   end
   if #self.input > 0 then
     local first = self.input[1]
@@ -363,10 +473,10 @@ function Fake:read(max)
   if self.eof then
     self.eof = false
     fake_update_read_ready(self)
-    return nil, Errors.EOF
+    return nil, HostError.eof('handle', 'read', { handle = self.name })
   end
   fake_update_read_ready(self)
-  return nil, 'would_block'
+  return nil, HostError.would_block('handle', 'read', { handle = self.name })
 end
 
 function Fake:write(bytes)
@@ -375,10 +485,10 @@ function Fake:write(bytes)
   end
   if self.write_blocked then
     clear_hint(self, 'write')
-    return nil, 'would_block'
+    return nil, HostError.would_block('handle', 'write', { handle = self.name })
   end
   if self.closed then
-    return nil, Errors.CLOSED
+    return nil, HostError.closed('handle', 'write', { handle = self.name })
   end
   local n = math.min(#bytes, self.write_chunk_size or #bytes)
   if n <= 0 then
@@ -413,6 +523,139 @@ function Fake:close(reason)
   return true
 end
 
+-- Deterministic linked one-way pipe handles.  This is used by ManualHost and
+-- by tests of acquisition and pipe semantics; native hosts provide real fds.
+function Handle.pipe_pair(opts)
+  opts = opts or {}
+  next_id = next_id + 1
+  local id = tostring(next_id)
+  local state = {
+    chunks = {},
+    bytes = 0,
+    read_closed = false,
+    write_closed = false,
+  }
+  local reader, writer
+
+  local function update()
+    if reader then
+      if not state.read_closed and (state.bytes > 0 or state.write_closed) then
+        reader:mark_readable()
+      else
+        reader:clear_readable()
+      end
+    end
+    if writer then
+      if state.read_closed or state.write_closed then
+        writer:clear_writable()
+      else
+        writer:mark_writable()
+      end
+    end
+  end
+
+  reader = Handle.new({
+    name = (opts.name or ('manual-pipe-' .. id)) .. ':read',
+    key = opts.read_key or ('manual-pipe-' .. id .. ':read'),
+    host = opts.host,
+    capabilities = {
+      read = true,
+      write = false,
+      shutdown_read = true,
+      shutdown_write = false,
+      close = true,
+      set_nonblocking = false,
+      readiness = true,
+    },
+    read = function(_self, max)
+      max = tonumber(max) or 4096
+      if state.read_closed then
+        return nil, HostError.closed('pipe', 'read')
+      end
+      if state.bytes == 0 then
+        if state.write_closed then
+          return nil, HostError.eof('pipe', 'read')
+        end
+        return nil, HostError.would_block('pipe', 'read')
+      end
+      local first = state.chunks[1]
+      local n = math.min(max, #first)
+      local out = string.sub(first, 1, n)
+      local rest = string.sub(first, n + 1)
+      state.bytes = state.bytes - n
+      if rest == '' then
+        table.remove(state.chunks, 1)
+      else
+        state.chunks[1] = rest
+      end
+      update()
+      return out
+    end,
+    shutdown_read = function()
+      state.read_closed = true
+      state.chunks = {}
+      state.bytes = 0
+      update()
+      return true
+    end,
+    close = function()
+      state.read_closed = true
+      state.chunks = {}
+      state.bytes = 0
+      update()
+      return true
+    end,
+  })
+
+  writer = Handle.new({
+    name = (opts.name or ('manual-pipe-' .. id)) .. ':write',
+    key = opts.write_key or ('manual-pipe-' .. id .. ':write'),
+    host = opts.host,
+    capabilities = {
+      read = false,
+      write = true,
+      shutdown_read = false,
+      shutdown_write = true,
+      close = true,
+      set_nonblocking = false,
+      readiness = true,
+    },
+    write = function(_self, bytes)
+      if state.write_closed then
+        return nil, HostError.closed('pipe', 'write')
+      end
+      if state.read_closed then
+        return nil,
+          HostError.new('broken_pipe', {
+            domain = 'pipe',
+            action = 'write',
+            message = 'pipe reader is closed',
+          })
+      end
+      if bytes == '' then
+        return 0
+      end
+      state.chunks[#state.chunks + 1] = bytes
+      state.bytes = state.bytes + #bytes
+      update()
+      return #bytes
+    end,
+    shutdown_write = function()
+      state.write_closed = true
+      update()
+      return true
+    end,
+    close = function()
+      state.write_closed = true
+      update()
+      return true
+    end,
+  })
+
+  update()
+  return reader, writer
+end
+
 -- A mode-split handle composes a read handle and a write handle into the
 -- duplex HostHandle shape expected by the Stream handle backend.  This is useful
 -- for pipe pairs and later subprocess stdio: readiness and I/O remain delegated
@@ -436,6 +679,15 @@ function Handle.duplex(read_handle, write_handle, opts)
     read_handle = read_handle,
     write_handle = write_handle,
     host = opts.host or read_handle.host or write_handle.host,
+    capabilities = {
+      read = type(read_handle.supports) == 'function' and read_handle:supports('read') or true,
+      write = type(write_handle.supports) == 'function' and write_handle:supports('write') or true,
+      shutdown_read = type(read_handle.supports) ~= 'function' or read_handle:supports('shutdown_read'),
+      shutdown_write = type(write_handle.supports) ~= 'function' or write_handle:supports('shutdown_write'),
+      close = true,
+      set_nonblocking = false,
+      readiness = true,
+    },
     runtime = nil,
     stream = nil,
     _fibers_host_handle = true,
@@ -443,6 +695,16 @@ function Handle.duplex(read_handle, write_handle, opts)
   return setmetatable(self, Duplex)
 end
 
+function Duplex:supports(capability)
+  return self.capabilities and self.capabilities[capability] == true
+end
+function Duplex:capability_snapshot()
+  local out = {}
+  for key, value in pairs(self.capabilities or {}) do
+    out[key] = value
+  end
+  return out
+end
 function Duplex:is_handle()
   return true
 end

@@ -533,3 +533,13 @@ do
 end
 
 print('tests/test_stream_memory.lua: ok')
+
+-- Migration helpers retain option semantics.
+do
+  fibers.run(function()
+    local a, b = Stream.memory_pair({ capacity = 64 })
+    fibers.perform(a:write_op('hello', ' ', 'world\n'))
+    local line = fibers.perform(b:read_op('*l'))
+    assert_eq(line, 'hello world')
+  end)
+end

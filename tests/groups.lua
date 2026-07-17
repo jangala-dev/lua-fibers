@@ -44,10 +44,16 @@ return {
     'tests/lifetimes/test_settlement_structure.lua',
     'tests/lifetimes/test_structured_policy.lua',
   },
+  io = {
+    'tests/io/test_foundations.lua',
+    'tests/io/test_pipe.lua',
+    'tests/io/test_socket.lua',
+  },
   embedding = {
     'tests/embedding/hosts/test_all.lua',
     'tests/embedding/test_host.lua',
     'tests/embedding/test_host_handle.lua',
+    'tests/embedding/test_fd_nixio_wrap.lua',
     'tests/embedding/test_host_linux.lua',
     'tests/embedding/test_host_poller.lua',
     'tests/embedding/test_readiness.lua',
