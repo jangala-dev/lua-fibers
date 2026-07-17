@@ -17,7 +17,7 @@ local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersStream = require('fibers.stream')
 local Stream = FibersStream
-local Fake = Stream.backend.Fake
+local Fake = require('fibers.stream.backend.fake')
 
 local function fail(msg)
   error(msg, 2)
@@ -78,7 +78,7 @@ do
   assert_eq(Inspect.data(b:reader().flow.reservoir), 'abc', 'bytes should be queued before peer close')
 
   rt:spawn_raw(function()
-    rt:perform(b:reader():shutdown_op('reader_closed'))
+    rt:perform(b:shutdown_read_op('reader_closed'))
   end, 'reader-close')
   drive_until(rt, function()
     return flush_err == 'reader_closed'
@@ -102,7 +102,7 @@ do
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
     assert_eq(fibers.perform(b:reader():read_exactly_op(3)), 'abc')
-    fibers.perform(b:reader():shutdown_op('reader_closed'))
+    fibers.perform(b:shutdown_read_op('reader_closed'))
     flushed, flush_err = fibers.perform(a:writer():flush_op())
     later_n, later_err = fibers.perform(a:writer():write_op('z'))
   end).runtime_status
@@ -119,7 +119,7 @@ do
   local one, two, err
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
-    fibers.perform(a:writer():shutdown_op())
+    fibers.perform(a:shutdown_write_op())
     one = fibers.perform(b:reader():read_some_op(10))
     two, err = fibers.perform(b:reader():read_some_op(10))
   end).runtime_status
@@ -129,19 +129,28 @@ do
   assert_eq(err, 'eof')
 end
 
--- Backend write failure settles an active write-pump lease and wakes flush with the backend error.
+-- Backend write failure settles an active reactor write lease and wakes flush with the backend error.
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('settle-backend-region')
-  local backend = Fake.new({ name = 'settle-backend', write_blocked = true })
+  local backend = Fake.new({
+    name = 'settle-backend',
+    readiness = 'manual',
+    initial_writable = false,
+    write_blocked = true,
+  })
   local stream, flushed, flush_err
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_backend_in_op(region, backend, { name = 'settle-backend-stream', write_capacity = 3 })
+      Stream.open_op(
+        backend,
+        { owner = region, read = true, write = true, name = 'settle-backend-stream', write_capacity = 3 }
+      )
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
   end, 'writer')
+  backend:mark_writable()
   for _ = 1, 20 do
     if stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) == 'abc' then
       break
@@ -151,7 +160,7 @@ do
   assert_eq(
     Inspect.first_lease_bytes(stream:writer().flow.reservoir),
     'abc',
-    'write pump should hold an active lease'
+    'write reaction should hold an active lease'
   )
   assert_nil(flushed, 'flush should wait while lease is retained')
 
@@ -185,7 +194,10 @@ do
   local stream, flushed, flush_err
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_backend_in_op(region, backend, { name = 'settle-protocol-stream', write_capacity = 3 })
+      Stream.open_op(
+        backend,
+        { owner = region, read = true, write = true, name = 'settle-protocol-stream', write_capacity = 3 }
+      )
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
@@ -204,6 +216,33 @@ do
     0,
     'protocol error should release leased capacity'
   )
+end
+
+-- Whole-Flow shutdown reaches true terminality even with queued bytes and both
+-- kinds of active lease.  No retained byte custody survives closed_op.
+do
+  local Flow = require('fibers.flow')
+  local flow = Flow.new({ name = 'terminal-flow', capacity = 8 })
+  local closed, close_err, inspect, stale_lease_err, stale_space_err
+  fibers.run(function()
+    fibers.perform(flow:inlet():write_op('abcd'))
+    local lease = fibers.perform(flow:outlet():lease_some_op(2, flow))
+    local space = fibers.perform(flow:inlet():reserve_some_op(2, flow))
+    fibers.perform(flow:abort_op('finished'))
+    closed, close_err = fibers.perform(flow:closed_op())
+    inspect = fibers.perform(flow:inspect_op())
+    local _ok
+    _ok, stale_lease_err = fibers.perform(lease:release_op())
+    _ok, stale_space_err = fibers.perform(space:release_op())
+  end)
+  assert_eq(closed, true, 'closed_op should observe terminal Flow shutdown')
+  assert_nil(close_err)
+  assert_eq(inspect.queued, 0)
+  assert_eq(inspect.leased, 0)
+  assert_eq(inspect.reserved, 0)
+  assert_eq(inspect.retained, 0)
+  assert_eq(stale_lease_err, 'no_lease')
+  assert_eq(stale_space_err, 'no_space_lease')
 end
 
 print('tests/test_flow_settlement.lua: ok')

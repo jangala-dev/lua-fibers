@@ -153,25 +153,35 @@ end
 
 function Settlement.flow()
   return Settlement.request_then_wait(function(_ctx, record, reason)
-    return record.item:shutdown_op(reason):map(function()
+    return record.item:abort_op(reason):map(function()
       return true
     end)
   end, function(_ctx, record)
-    return record.item:closed_op():map(function()
-      return true
+    return record.item:closed_op():and_then(function(ok, err)
+      if not ok then
+        error(err or 'flow settlement failed', 0)
+      end
+      return Op.always(true)
     end)
   end)
 end
 
 function Settlement.stream()
-  return Settlement.protocol({
-    name = 'stream',
-    discharge_op = function(_ctx, record, claim)
-      return record.item:shutdown_op(claim and claim.reason):map(function()
-        return true
-      end)
-    end,
-  })
+  return Settlement.request_then_wait(function(_ctx, record, reason)
+    return Op.tensor({
+      record.item:shutdown_read_op(reason),
+      record.item:abort_write_op(reason),
+    }):map(function()
+      return true
+    end)
+  end, function(_ctx, record)
+    return record.item:closed_op():and_then(function(ok, err)
+      if not ok then
+        error(err or 'stream settlement failed', 0)
+      end
+      return Op.always(true)
+    end)
+  end)
 end
 
 local function protocol_for(record)

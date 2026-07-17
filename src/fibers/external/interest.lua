@@ -93,6 +93,7 @@ function Interest.summarise(list)
         resource_key = interest.resource_key,
         readiness_key = interest.readiness_key or interest.resource_key,
         external_kind = interest.external_kind,
+        poller = interest.poller,
       }
     else
       out[#out + 1] = interest

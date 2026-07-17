@@ -1,6 +1,6 @@
 -- Readiness-backed host stream backend.
 --
--- This is the generic adapter from readiness-resource hints to host-pumped
+-- This is the generic adapter from readiness-resource hints to reactor-driven
 -- streams.  A Readiness resource means only that the host action is worth
 -- trying; the non-blocking read/write callbacks remain authoritative and may
 -- still return would_block, eof, or errors.
@@ -27,6 +27,9 @@ function Backend.new(opts)
     _shutdown_read = opts.shutdown_read,
     _shutdown_write = opts.shutdown_write,
     _close = opts.close,
+    read_supported = type(opts.read) == 'function',
+    write_supported = type(opts.write) == 'function',
+    close_supported = type(opts.close) == 'function',
     stream = nil,
     runtime = nil,
   }, Backend)
@@ -96,9 +99,7 @@ function Backend:close(reason)
   if self._close then
     return self._close(self, reason)
   end
-  self:shutdown_read(reason)
-  self:shutdown_write(reason)
-  return true
+  return nil, 'unsupported_close'
 end
 
 return Backend

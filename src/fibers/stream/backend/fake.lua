@@ -10,20 +10,26 @@
 local ReadinessBackend = require('fibers.stream.backend.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 
-local Errors = require('fibers.internal.flow.errors')
+local Errors = require('fibers.flow.errors')
 
 local Fake = {}
 Fake.__index = Fake
 
 local next_id = 0
 
-local function note_change(self) end
+local function note_change(self, mode)
+  local runtime = self.runtime
+  local poller = runtime and runtime.host_poller
+  if poller then
+    poller:hint(self.key, mode)
+  end
+end
 
 local function remember_ready(self, mode, value)
   value = value == nil and true or value
   if self.readiness then
     UnsafeExternalMutation.deliver(self.readiness, mode, value)
-    note_change(self)
+    note_change(self, mode)
     return self.readiness
   end
   self._pending_ready = self._pending_ready or {}
@@ -33,7 +39,6 @@ end
 local function remember_clear(self, mode)
   if self.readiness then
     UnsafeExternalMutation.clear(self.readiness, mode)
-    note_change(self)
     return self.readiness
   end
   self._pending_clear = self._pending_clear or {}
@@ -109,6 +114,10 @@ function Fake.new(opts)
     shutdown_read_reason = nil,
     shutdown_write_reason = nil,
     closed_reason = nil,
+    close_count = 0,
+    read_supported = true,
+    write_supported = true,
+    close_supported = true,
     _pending_ready = {},
     _pending_clear = {},
   }, Fake)
@@ -314,6 +323,7 @@ function Fake:shutdown_write(reason)
 end
 
 function Fake:close(reason)
+  self.close_count = self.close_count + 1
   self.closed_reason = reason or true
   self:shutdown_read(reason)
   self:shutdown_write(reason)

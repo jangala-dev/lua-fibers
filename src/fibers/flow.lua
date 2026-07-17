@@ -1,17 +1,24 @@
--- Optimised primitive Flow V3.
+-- Transactional byte flow.
 --
--- Flow is represented as one Scalar state machine.  Endpoint state, terminal
--- errors, retained bytes, and the single active lease live in that state, so
--- ordinary Flow options compile to one primitive transition rather than a
--- composition of endpoint gates plus a separate reservoir transition.
+-- A Flow has one stable producer Inlet and one stable consumer Outlet.  It
+-- provides bounded buffering, exact and delimiter-based reads, closure,
+-- producer-side capacity reservations, and consumer-side byte leases.  Every
+-- public `_op` method constructs an option; no bytes move until that option is
+-- selected by perform.
+--
+-- The implementation uses one Scalar state machine. Endpoint state, terminal
+-- errors, retained bytes, and the active data and space leases share that
+-- state, so ordinary Flow options compile to one primitive transition.
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
-local Rope = require('fibers.internal.flow.rope')
-local Lease = require('fibers.internal.flow.lease')
-local Errors = require('fibers.internal.flow.errors')
+local Rope = require('fibers.flow.rope')
+local Lease = require('fibers.flow.lease')
+local SpaceLease = require('fibers.flow.space_lease')
+local Errors = require('fibers.flow.errors')
 local Ownership = require('fibers.internal.ownership')
 local Settlement = require('fibers.internal.settlement')
+local FlowEffect = require('fibers.internal.flow_effect')
 
 local Flow = {}
 Flow.__index = Flow
@@ -27,6 +34,14 @@ local next_id = 0
 local INF = math.huge
 local Ready = Scalar.Ready
 local Wait = Scalar.Wait
+
+local function validate_options(opts, allowed, label)
+  for key in pairs(opts or {}) do
+    if not allowed[key] then
+      error((label or 'options') .. ' does not accept ' .. tostring(key), 3)
+    end
+  end
+end
 
 local function as_bytes(bytes)
   if type(bytes) ~= 'string' then
@@ -69,6 +84,11 @@ local function new_state()
     lease_bytes = nil,
     lease_meta = nil,
     next_lease = 0,
+    space_id = nil,
+    space_owner = nil,
+    space_capacity = 0,
+    space_meta = nil,
+    next_space = 0,
     settled_error = nil,
     settled_version = 0,
   }
@@ -87,6 +107,11 @@ local function copy_state(s, clone_rope)
     lease_bytes = s.lease_bytes,
     lease_meta = s.lease_meta,
     next_lease = s.next_lease or 0,
+    space_id = s.space_id,
+    space_owner = s.space_owner,
+    space_capacity = s.space_capacity or 0,
+    space_meta = s.space_meta,
+    next_space = s.next_space or 0,
     settled_error = s.settled_error,
     settled_version = s.settled_version or 0,
   }
@@ -101,8 +126,11 @@ end
 local function leased_length(s)
   return #(s and s.lease_bytes or '')
 end
+local function reserved_length(s)
+  return s and (s.space_capacity or 0) or 0
+end
 local function retained_length(s)
-  return (s.rope and s.rope:length() or 0) + leased_length(s)
+  return (s.rope and s.rope:length() or 0) + leased_length(s) + reserved_length(s)
 end
 local function free_for_capacity(capacity, s)
   if not capacity then
@@ -114,16 +142,19 @@ local function inspect_state(self, s)
   s = s or new_state()
   local queued = s.rope:length()
   local leased = leased_length(s)
-  local retained = queued + leased
+  local reserved = reserved_length(s)
+  local retained = queued + leased + reserved
   local cap = self.capacity or INF
   return {
     queued = queued,
     queued_length = queued,
     leased = leased,
     retained = retained,
+    reserved = reserved,
     capacity = self.capacity,
     free = cap == INF and INF or cap - retained,
     leases = s.lease_id and 1 or 0,
+    space_leases = s.space_id and 1 or 0,
     chunk_count = s.rope:chunk_count(),
     data = s.rope:tostring(),
     input_open = s.input_open ~= false,
@@ -138,19 +169,16 @@ end
 local function clear_lease(s)
   s.lease_id, s.lease_owner, s.lease_bytes, s.lease_meta = nil, nil, nil, nil
 end
+local function space_lease_handle(reservoir, s)
+  return SpaceLease.new(reservoir, s.space_id, s.space_owner, s.space_capacity or 0, { meta = s.space_meta })
+end
+local function clear_space_lease(s)
+  s.space_id, s.space_owner, s.space_capacity, s.space_meta = nil, nil, 0, nil
+end
 
 local function find_until(s, sep)
   local pos = s.rope:find(sep)
   return pos and (pos + #sep) or nil, pos
-end
-local function ends_with_separator_prefix(data, sep)
-  local max = math.min(#data, #sep - 1)
-  for n = max, 1, -1 do
-    if data:sub(#data - n + 1) == sep:sub(1, n) then
-      return true
-    end
-  end
-  return false
 end
 local function committed_input_closed(flow)
   local state = flow and flow.state and flow.state.value
@@ -201,13 +229,13 @@ local FlowTransitions = Scalar.kind({
       step = function(s, p)
         local bytes = p.bytes or ''
         if s.output_error then
-          return Ready.same(0, bytes, s.output_error)
+          return Ready.same(nil, bytes, s.output_error)
         end
         if not s.input_open then
-          return Ready.same(0, bytes, Errors.CLOSED)
+          return Ready.same(nil, bytes, Errors.CLOSED)
         end
         if not s.output_open then
-          return Ready.same(0, bytes, Errors.BROKEN_PIPE)
+          return Ready.same(nil, bytes, Errors.BROKEN_PIPE)
         end
         local free = free_for_capacity(p.capacity, s)
         if free <= 0 or #bytes == 0 then
@@ -278,8 +306,7 @@ local FlowTransitions = Scalar.kind({
           return true
         end
         if p.limit and s.rope:length() > p.limit then
-          local data = s.rope:tostring()
-          return not ends_with_separator_prefix(data, p.sep)
+          return not s.rope:ends_with_prefix(p.sep)
         end
         return false
       end,
@@ -300,8 +327,7 @@ local FlowTransitions = Scalar.kind({
           return next_s, out:sub(1, #out - #p.sep)
         end
         if p.limit and s.rope:length() > p.limit then
-          local data = s.rope:tostring()
-          if not ends_with_separator_prefix(data, p.sep) then
+          if not s.rope:ends_with_prefix(p.sep) then
             return Ready.same(nil, (p.err or Errors.TOO_LARGE))
           end
         end
@@ -320,8 +346,7 @@ local FlowTransitions = Scalar.kind({
           return true
         end
         if p.limit and s.rope:length() > p.limit then
-          local data = s.rope:tostring()
-          if not ends_with_separator_prefix(data, p.sep) then
+          if not s.rope:ends_with_prefix(p.sep) then
             return true
           end
         end
@@ -344,8 +369,7 @@ local FlowTransitions = Scalar.kind({
           return next_s, out:sub(1, #out - #p.sep)
         end
         if p.limit and s.rope:length() > p.limit then
-          local data = s.rope:tostring()
-          if not ends_with_separator_prefix(data, p.sep) then
+          if not s.rope:ends_with_prefix(p.sep) then
             return Ready.same(nil, (p.err or Errors.TOO_LARGE))
           end
         end
@@ -520,6 +544,93 @@ local FlowTransitions = Scalar.kind({
         return Wait
       end,
     },
+    reserve_space = {
+      mode = 'select',
+      order = 90,
+      ready = function(s, p)
+        if s.output_error or not s.input_open or not s.output_open then
+          return true
+        end
+        if s.space_id then
+          return true
+        end
+        return free_for_capacity(p.capacity, s) > 0
+      end,
+      step = function(s, p)
+        if s.output_error then
+          return Ready.same(nil, s.output_error)
+        end
+        if not s.input_open then
+          return Ready.same(nil, Errors.CLOSED)
+        end
+        if not s.output_open then
+          return Ready.same(nil, Errors.BROKEN_PIPE)
+        end
+        if s.space_id then
+          if p.owner ~= nil and s.space_owner == p.owner then
+            return Ready.same(space_lease_handle(p.reservoir, s))
+          end
+          return Ready.same(nil, Errors.SPACE_LEASE_ALREADY_ACTIVE)
+        end
+        local free = free_for_capacity(p.capacity, s)
+        if free <= 0 then
+          return Wait
+        end
+        local next_s = copy_metadata_state(s)
+        next_s.next_space = (next_s.next_space or 0) + 1
+        next_s.space_id = (p.flow_id or 'flow') .. ':space:' .. tostring(next_s.next_space)
+        next_s.space_owner = p.owner
+        next_s.space_capacity = math.min(p.n, free)
+        next_s.space_meta = p.meta
+        return next_s, space_lease_handle(p.reservoir, next_s)
+      end,
+    },
+    commit_space = {
+      mode = 'update',
+      order = 0,
+      step = function(s, p)
+        if not s.space_id or s.space_id ~= p.lease.id then
+          return Ready.same(nil, Errors.NO_SPACE_LEASE)
+        end
+        local bytes = p.bytes or ''
+        if #bytes > (s.space_capacity or 0) then
+          return Ready.same(nil, Errors.SPACE_COMMIT_TOO_LARGE)
+        end
+        local next_s = clone_state(s)
+        clear_space_lease(next_s)
+        if bytes ~= '' then
+          next_s.rope:append(bytes)
+        end
+        return next_s, #bytes
+      end,
+    },
+    release_space = {
+      mode = 'update',
+      order = 0,
+      step = function(s, p)
+        if not s.space_id or s.space_id ~= p.lease.id then
+          return Ready.same(false, Errors.NO_SPACE_LEASE)
+        end
+        local n = s.space_capacity or 0
+        local next_s = copy_metadata_state(s)
+        clear_space_lease(next_s)
+        return next_s, true, n
+      end,
+    },
+    fail_space = {
+      mode = 'update',
+      order = 0,
+      step = function(s, p)
+        if not s.space_id or s.space_id ~= p.lease.id then
+          return Ready.same(false, Errors.NO_SPACE_LEASE)
+        end
+        local next_s = copy_metadata_state(s)
+        clear_space_lease(next_s)
+        next_s.input_error = p.err or Errors.READ_ERROR
+        next_s.input_open = false
+        return next_s, true
+      end,
+    },
     capacity_some = {
       mode = 'query',
       order = 90,
@@ -546,6 +657,19 @@ local FlowTransitions = Scalar.kind({
         return Ready.same(s.rope:peek(p.n))
       end,
     },
+    flush = {
+      mode = 'query',
+      order = 100,
+      step = function(s)
+        if s.settled_error then
+          return Ready.same(nil, s.settled_error)
+        end
+        if retained_length(s) == 0 then
+          return Ready.same(true)
+        end
+        return Wait
+      end,
+    },
     settled_error = {
       mode = 'query',
       order = 100,
@@ -561,15 +685,55 @@ local FlowTransitions = Scalar.kind({
       order = 0,
       step = function(s, p)
         local retained = retained_length(s)
-        if retained == 0 then
+        local next_s = copy_metadata_state(s)
+        next_s.input_open = false
+        next_s.output_open = false
+        next_s.rope = Rope.new()
+        clear_lease(next_s)
+        clear_space_lease(next_s)
+        if retained > 0 then
+          next_s.settled_error = p.err or Errors.FLOW_ERROR
+          next_s.settled_version = (next_s.settled_version or 0) + 1
+        end
+        if retained == 0 and s.input_open == false and s.output_open == false then
+          return Ready.same(true)
+        end
+        return next_s, true
+      end,
+    },
+    shutdown_flow = {
+      mode = 'update',
+      order = 0,
+      step = function(s, p)
+        local retained = retained_length(s)
+        local already_terminal = s.input_open == false and s.output_open == false and retained == 0
+        if already_terminal then
           return Ready.same(true)
         end
         local next_s = copy_metadata_state(s)
+        next_s.input_open = false
+        next_s.output_open = false
         next_s.rope = Rope.new()
         clear_lease(next_s)
-        next_s.settled_error = p.err or Errors.FLOW_ERROR
-        next_s.settled_version = (next_s.settled_version or 0) + 1
+        clear_space_lease(next_s)
+        if retained > 0 and p.settle_error ~= nil then
+          next_s.settled_error = p.settle_error
+          next_s.settled_version = (next_s.settled_version or 0) + 1
+        end
         return next_s, true
+      end,
+    },
+    closed = {
+      mode = 'query',
+      order = 100,
+      step = function(s)
+        if s.input_open == false and s.output_open == false and retained_length(s) == 0 then
+          if s.settled_error then
+            return Ready.same(nil, s.settled_error)
+          end
+          return Ready.same(true)
+        end
+        return Wait
       end,
     },
     empty = {
@@ -678,6 +842,7 @@ local FlowTransitions = Scalar.kind({
         local retained = retained_length(s)
         next_s.rope = Rope.new()
         clear_lease(next_s)
+        clear_space_lease(next_s)
         if retained > 0 then
           next_s.settled_error = err
           next_s.settled_version = (next_s.settled_version or 0) + 1
@@ -691,11 +856,12 @@ local FlowTransitions = Scalar.kind({
       step = function(s, p)
         local err = p.err or Errors.BROKEN_PIPE
         local next_s = copy_metadata_state(s)
-        next_s.output_error = Errors.BROKEN_PIPE
+        next_s.output_error = s.output_error or Errors.BROKEN_PIPE
         next_s.output_open = false
         local retained = retained_length(s)
         next_s.rope = Rope.new()
         clear_lease(next_s)
+        clear_space_lease(next_s)
         if retained > 0 then
           next_s.settled_error = err
           next_s.settled_version = (next_s.settled_version or 0) + 1
@@ -712,7 +878,17 @@ local function transition_op(flow, name, payload)
   payload.flow = flow
   payload.reservoir = flow.reservoir
   payload.flow_id = flow._fibers_id
-  return flow.state:transition_op(FlowTransitions:transition(name), payload)
+  local transition = FlowTransitions:transition(name)
+  local option = flow.state:transition_op(transition, payload)
+  if transition.mode == 'query' then
+    return option
+  end
+  return option:and_then(function(...)
+    local values = Op._pack(...)
+    return Op.emit(FlowEffect.changed(flow)):map(function()
+      return Op._unpack(values, 1, values.n)
+    end)
+  end)
 end
 
 function Reservoir.new(flow, opts)
@@ -802,6 +978,29 @@ function Reservoir:fail_lease_op(lease, err)
   end
   return self:_op('fail_lease', { lease = lease, err = err })
 end
+function Reservoir:reserve_space_op(n, owner, meta)
+  n = as_pos_int(n, 1, 'flow space reservation size')
+  return self:_op('reserve_space', { n = n, owner = owner, meta = meta })
+end
+function Reservoir:commit_space_op(lease, bytes)
+  if not SpaceLease.is(lease) then
+    error('commit_space_op expects a flow space lease', 2)
+  end
+  bytes = as_bytes(bytes)
+  return self:_op('commit_space', { lease = lease, bytes = bytes })
+end
+function Reservoir:release_space_op(lease)
+  if not SpaceLease.is(lease) then
+    error('release_space_op expects a flow space lease', 2)
+  end
+  return self:_op('release_space', { lease = lease })
+end
+function Reservoir:fail_space_op(lease, err)
+  if not SpaceLease.is(lease) then
+    error('fail_space_op expects a flow space lease', 2)
+  end
+  return self:_op('fail_space', { lease = lease, err = err })
+end
 function Reservoir:settle_op(err)
   return self:_op('settle', { err = err })
 end
@@ -829,49 +1028,34 @@ function Inlet:write_op(bytes)
     return transition_op(self.flow, 'write', { bytes = bytes })
   end)
 end
-function Inlet:append_op(bytes)
-  return self:write_op(bytes)
-end
-function Inlet:append_some_op(bytes)
-  return self:write_some_op(bytes)
-end
+
 function Inlet:write_some_op(bytes)
   bytes = as_bytes(bytes)
   return live_or_retired_op(self, function()
     return transition_op(self.flow, 'write_some', { bytes = bytes })
   end)
 end
+
+function Inlet:reserve_some_op(n, owner, meta)
+  return live_or_retired_op(self, function()
+    return self.flow.reservoir:reserve_space_op(n, owner, meta)
+  end)
+end
+
+function Inlet:flush_op()
+  return transition_op(self.flow, 'flush')
+end
+
 function Inlet:close_op(_reason)
   return transition_op(self.flow, 'close_input')
 end
+
 function Inlet:closed_op()
   return transition_op(self.flow, 'input_closed')
 end
-function Inlet:error_op()
-  return transition_op(self.flow, 'input_error')
-end
+
 function Inlet:fail_op(reason)
   return transition_op(self.flow, 'set_input_error', { err = reason or Errors.READ_ERROR })
-end
-function Inlet:flush_op()
-  return self.flow.reservoir
-    :settled_error_op()
-    :and_then(function(err)
-      return Op.always(nil, err)
-    end)
-    :or_else(self.flow:drained_op())
-end
-function Inlet:drain_op()
-  return self.flow:drained_op()
-end
-function Inlet:drained_op()
-  return self.flow:drained_op()
-end
-function Inlet:shutdown_op(reason)
-  return self:close_op(reason)
-end
-function Inlet:exit_op()
-  return self.flow:closed_op()
 end
 
 function Outlet:read_some_op(n)
@@ -883,9 +1067,7 @@ function Outlet:read_some_op(n)
     return transition_op(self.flow, 'read_some', { n = n })
   end)
 end
-function Outlet:read_op(n)
-  return self:read_some_op(n)
-end
+
 function Outlet:read_exactly_op(n)
   n = as_nonneg_int(n, 0, 'flow exact read size')
   if n == 0 then
@@ -895,54 +1077,77 @@ function Outlet:read_exactly_op(n)
     return transition_op(self.flow, 'read_exactly', { n = n })
   end)
 end
-function Outlet:peek_op(n)
+
+function Outlet:peek_exactly_op(n)
   return live_or_retired_op(self, function()
     return self.flow.reservoir:peek_op(n)
   end)
 end
-function Outlet:peek_some_op(n)
-  return self:peek_op(n)
-end
-function Outlet:read_until_op(sep, opts)
+
+function Outlet:read_until_op(separator, opts)
   opts = opts or {}
-  if type(sep) ~= 'string' or sep == '' then
-    error('flow read_until separator must be non-empty string', 2)
+  validate_options(opts, { include = true, max = true }, 'read_until_op options')
+  if type(separator) ~= 'string' or separator == '' then
+    error('flow read_until separator must be a non-empty string', 2)
   end
-  local limit = opts.limit
-  if limit ~= nil then
-    limit = as_nonneg_int(limit, nil, 'flow read limit')
+  local max = opts.max
+  if max == nil then
+    max = 8192
   end
+  max = as_nonneg_int(max, nil, 'flow read_until max')
   return live_or_retired_op(self, function()
-    return transition_op(
-      self.flow,
-      'read_until_or_eof',
-      { sep = sep, limit = limit, include = opts.include == true, err = opts.err }
-    )
+    return transition_op(self.flow, 'read_until_or_eof', {
+      sep = separator,
+      limit = max,
+      include = opts.include == true,
+      err = Errors.TOO_LARGE,
+    })
   end)
 end
-function Outlet:read_including_op(sep, opts)
-  opts = opts or {}
-  opts.include = true
-  return self:read_until_op(sep, opts)
-end
+
 function Outlet:read_line_op(opts)
   opts = opts or {}
-  local sep = opts.sep or opts.terminator or '\n'
-  if type(sep) ~= 'string' or sep == '' then
-    error('flow read_until separator must be non-empty string', 2)
+  validate_options(opts, { terminator = true, keep_terminator = true, max = true }, 'read_line_op options')
+  local terminator = opts.terminator or '\n'
+  if type(terminator) ~= 'string' or terminator == '' then
+    error('flow line terminator must be a non-empty string', 2)
   end
-  local limit = opts.limit
-  if limit ~= nil then
-    limit = as_nonneg_int(limit, nil, 'flow read limit')
+  local max = opts.max
+  if max == nil then
+    max = 8192
   end
+  max = as_nonneg_int(max, nil, 'flow line max')
   return live_or_retired_op(self, function()
-    return transition_op(
-      self.flow,
-      'read_until_or_eof',
-      { sep = sep, limit = limit, err = Errors.LINE_TOO_LONG, line_mode = true }
-    )
+    return transition_op(self.flow, 'read_until_or_eof', {
+      sep = terminator,
+      limit = max,
+      include = opts.keep_terminator == true,
+      err = Errors.LINE_TOO_LONG,
+      line_mode = true,
+    })
   end)
 end
+
+function Outlet:read_all_op(opts)
+  opts = opts or {}
+  validate_options(opts, { max = true }, 'read_all_op options')
+  if opts.max == nil then
+    error('read_all_op expects opts.max', 2)
+  end
+  local max = as_nonneg_int(opts.max, nil, 'flow read_all max')
+  local read_opts = { max = max, unlimited = false }
+  return live_or_retired_op(self, function()
+    return self.flow.reservoir
+      :read_all_too_large_op(read_opts)
+      :and_then(function(err)
+        return Op.always(nil, err)
+      end)
+      :or_else(transition_op(self.flow, 'input_closed'):and_then(function()
+        return self.flow.reservoir:read_all_limited_op(read_opts)
+      end))
+  end)
+end
+
 function Outlet:drop_op(n)
   n = as_nonneg_int(n, 0, 'flow drop size')
   if n == 0 then
@@ -952,9 +1157,10 @@ function Outlet:drop_op(n)
     return transition_op(self.flow, 'drop_exactly', { n = n })
   end)
 end
-function Outlet:splice_to(inlet, n)
+
+function Outlet:splice_to_op(inlet, n)
   n = as_nonneg_int(n, 0, 'flow splice size')
-  return self:peek_op(n):and_then(function(bytes)
+  return self:peek_exactly_op(n):and_then(function(bytes)
     return inlet:write_op(bytes):and_then(function(written, err)
       if not written then
         if err == Errors.CAPACITY then
@@ -966,60 +1172,28 @@ function Outlet:splice_to(inlet, n)
     end)
   end)
 end
-function Outlet:read_all_op(opts)
-  opts = opts or {}
-  if opts.unlimited ~= true and opts.max == nil then
-    error('read_all_op expects opts.max or opts.unlimited = true', 2)
-  end
-  if opts.max ~= nil then
-    opts.max = as_nonneg_int(opts.max, nil, 'flow read_all max')
-  end
-  return live_or_retired_op(self, function()
-    return self.flow.reservoir
-      :read_all_too_large_op(opts)
-      :and_then(function(err)
-        return Op.always(nil, err)
-      end)
-      :or_else(transition_op(self.flow, 'input_closed'):and_then(function()
-        return self.flow.reservoir:read_all_limited_op(opts)
-      end))
-  end)
-end
-function Outlet:lease_op(n, owner, meta)
+
+function Outlet:lease_some_op(n, owner, meta)
   return live_or_retired_op(self, function()
     return self.flow.reservoir:lease_op(n, owner, meta)
   end)
 end
-function Outlet:lease_some_op(n, owner, meta)
-  return self:lease_op(n, owner, meta)
+
+function Outlet:close_op(reason)
+  return transition_op(self.flow, 'shutdown_output', { err = reason or Errors.CLOSED })
 end
-function Outlet:ack_lease_op(lease, n)
-  return self.flow.reservoir:ack_lease_op(lease, n)
-end
-function Outlet:return_lease_op(lease)
-  return self.flow.reservoir:return_lease_op(lease)
-end
-function Outlet:fail_write_op(err)
-  return transition_op(self.flow, 'fail_write', { err = err or Errors.WRITE_ERROR })
-end
-function Outlet:close_op(_reason)
-  return transition_op(self.flow, 'close_output')
-end
+
 function Outlet:closed_op()
   return transition_op(self.flow, 'output_closed')
 end
-function Outlet:error_op()
-  return transition_op(self.flow, 'output_error')
-end
-function Outlet:shutdown_op(reason)
-  return transition_op(self.flow, 'shutdown_output', { err = reason or Errors.BROKEN_PIPE })
-end
-function Outlet:exit_op()
-  return self.flow:closed_op()
+
+function Outlet:fail_op(err)
+  return transition_op(self.flow, 'fail_write', { err = err or Errors.WRITE_ERROR })
 end
 
 function Flow.new(opts)
   opts = opts or {}
+  validate_options(opts, { name = true, capacity = true }, 'Flow.new options')
   next_id = next_id + 1
   local name = opts.name or ('flow-' .. tostring(next_id))
   local self = Ownership.handle(name, { kind = 'flow' })
@@ -1039,40 +1213,97 @@ function Flow.new(opts)
   return self
 end
 
+function Flow:_read_serviceable()
+  local state = self.state.value
+  if not state or state.input_error or state.output_error then
+    return false
+  end
+  if state.input_open == false or state.output_open == false or state.space_id then
+    return false
+  end
+  return free_for_capacity(self.capacity, state) > 0
+end
+
+function Flow:_write_serviceable()
+  local state = self.state.value
+  if not state or state.output_error or state.output_open == false then
+    return false
+  end
+  if state.lease_id then
+    return true
+  end
+  return not state.rope:is_empty()
+end
+
+function Flow:_read_terminal_reason()
+  local state = self.state.value
+  if not state then
+    return nil
+  end
+  if state.output_open == false then
+    return 'reader_closed'
+  end
+  if state.input_error then
+    return state.input_error
+  end
+  if state.output_error then
+    return state.output_error
+  end
+  if state.input_open == false then
+    return Errors.EOF
+  end
+  return nil
+end
+
+function Flow:_write_terminal_reason(draining)
+  local state = self.state.value
+  if not state then
+    return nil
+  end
+  if state.output_error then
+    return state.output_error
+  end
+  if state.output_open == false then
+    return Errors.BROKEN_PIPE
+  end
+  if state.input_error then
+    return state.input_error
+  end
+  if state.input_open == false and not state.lease_id and state.rope:is_empty() then
+    return draining and Errors.CLOSED_AND_DRAINED or Errors.CLOSED
+  end
+  return nil
+end
+
 function Flow:inlet()
   return self.input
 end
+
 function Flow:outlet()
   return self.output
 end
+
 function Flow:inspect_op()
   return self.state:read_op():map(function(s)
     return inspect_state(self, s)
   end)
 end
-function Flow:close_op(reason)
-  return Op.tensor({ self.input:close_op(reason), self.output:close_op(reason) }):map(function()
-    return true
-  end)
-end
-function Flow:shutdown_op(reason)
-  return self:close_op(reason)
-end
-function Flow:closed_op()
-  return Op.all({ self.input:closed_op(), self.output:closed_op() }):map(function()
-    return true
-  end)
-end
-function Flow:exit_op()
-  return self:closed_op()
-end
-function Flow:drained_op()
-  return self.reservoir:empty_op()
+
+function Flow:abort_op(_reason)
+  return transition_op(self, 'shutdown_flow')
 end
 
-Flow.Inlet = Inlet
-Flow.Outlet = Outlet
-Flow.Reservoir = Reservoir
-Flow.Lease = Lease
-Flow.Errors = Errors
+function Flow:closed_op()
+  return transition_op(self, 'closed')
+end
+
+Flow.Error = {
+  EOF = Errors.EOF,
+  CLOSED = Errors.CLOSED,
+  BROKEN_PIPE = Errors.BROKEN_PIPE,
+  TOO_LARGE = Errors.TOO_LARGE,
+  LINE_TOO_LONG = Errors.LINE_TOO_LONG,
+  RETIRED = Errors.RETIRED,
+}
+
 return Flow

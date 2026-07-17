@@ -21,6 +21,11 @@ return {
   LEASE_OWNER_MISMATCH = 'lease_owner_mismatch',
   LEASE_CONFLICT = 'flow-lease-conflict',
 
+  NO_SPACE_LEASE = 'no_space_lease',
+  SPACE_LEASE_ALREADY_ACTIVE = 'space_lease_already_active',
+  SPACE_COMMIT_TOO_LARGE = 'space_commit_too_large',
+  SPACE_LEASE_CONFLICT = 'flow-space-lease-conflict',
+
   RESERVOIR_PARALLEL_CONFLICT = 'flow-reservoir-parallel-conflict',
   RESERVOIR_UNKNOWN_OP = 'unknown-flow-reservoir-op',
   ENDPOINT_OPEN_CONFLICT = 'flow-endpoint-open-conflict',

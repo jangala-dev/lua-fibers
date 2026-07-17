@@ -22,7 +22,7 @@ local Op = FibersOp
 local Runtime = FibersRuntime
 local Host = FibersHost
 local Stream = FibersStream
-local Fake = Stream.backend.Fake
+local Fake = require('fibers.stream.backend.fake')
 
 local function fail(msg)
   error(msg, 2)
@@ -139,7 +139,12 @@ do
   })
   local stream, read_val, read_err, n, write_err
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-authority-stream' }))
+    stream = rt:perform(
+      Stream.open_op(
+        backend,
+        { owner = region, read = true, write = true, name = 'readiness-authority-stream' }
+      )
+    )
     read_val, read_err = rt:perform(stream:reader():read_some_op(1))
     rt:perform(stream:writer():write_op('x'))
     n, write_err = rt:perform(stream:writer():flush_op())
@@ -183,9 +188,11 @@ do
   local region = FibersRegion.new('stale-readiness-region')
   local backend =
     Fake.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
-  local stream, got, err
+  local stream, got, err, snap
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'stale-readiness-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'stale-readiness-stream' })
+    )
     got, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
   assert_status(rt:run(), 'found')
@@ -198,6 +205,13 @@ do
   end
   assert_nil(got, 'stale readable hint should not append bytes')
   assert_nil(err, 'stale readable hint should not commit an error')
+  rt:spawn_raw(function()
+    snap = rt:perform(stream:reader().flow:inspect_op())
+  end, 'inspect-released-space')
+  drive_until(rt, function()
+    return snap ~= nil
+  end, 'stale read should release its Flow reservation')
+  assert_eq(snap.reserved, 0, 'would_block must release producer-side capacity')
   backend:feed_read('x')
   backend:mark_readable()
   drive_until(rt, function()
@@ -205,7 +219,7 @@ do
   end, 'later real input should be delivered')
 end
 
--- Write readiness drives the existing host-pumped write pump.
+-- Write readiness admits a reactor write reaction.
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('readiness-write-region')
@@ -217,26 +231,25 @@ do
   })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-write-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'readiness-write-stream' })
+    )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   for _ = 1, 20 do
-    if
-      stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
-    then
+    rt:run()
+    if stream and Inspect.data(stream:writer().flow.reservoir) == 'abc' then
       break
     end
-    rt:run()
   end
-  assert_truthy(
-    stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '',
-    'write pump should have leased bytes'
+  assert_truthy(stream, 'stream should open')
+  assert_eq(
+    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    nil,
+    'reactor should wait for writability before leasing bytes'
   )
+  assert_eq(Inspect.data(stream:writer().flow.reservoir), 'abc')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
   drive_until(rt, function()
@@ -245,37 +258,38 @@ do
   assert_eq(backend:written(), 'abc')
 end
 
--- Bounded stepping also resumes a readiness-backed write pump after readiness arrival.
+-- Bounded stepping also resumes a readiness-backed write reaction after readiness arrival.
 do
   local rt = Runtime.new()
-  local region = FibersRegion.new('bounded-ready-pump-region')
+  local region = FibersRegion.new('bounded-ready-reactor-region')
   local backend = Fake.new({
-    name = 'bounded-ready-pump-backend',
+    name = 'bounded-ready-reactor-backend',
     readiness = 'manual',
     initial_writable = false,
     write_blocked = true,
   })
   local stream, flushed
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'bounded-ready-pump-stream' }))
+    stream = rt:perform(
+      Stream.open_op(
+        backend,
+        { owner = region, read = true, write = true, name = 'bounded-ready-reactor-stream' }
+      )
+    )
     rt:perform(stream:writer():write_op('xy'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
   for _ = 1, 80 do
-    if
-      stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
-    then
+    rt:step({ max_work = 1 })
+    if stream and Inspect.data(stream:writer().flow.reservoir) == 'xy' then
       break
     end
-    rt:step({ max_work = 1 })
   end
-  assert_truthy(
-    stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '',
-    'bounded pump should reach in-flight lease'
+  assert_truthy(stream, 'bounded stream should open')
+  assert_eq(
+    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    nil,
+    'bounded reactor should not lease before writability'
   )
   backend:unblock_writes()
   drive_until(rt, function()

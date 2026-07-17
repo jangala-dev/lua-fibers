@@ -4,7 +4,7 @@ Examples are grouped by audience and stability.
 
 ## Tutorial
 
-`tutorial/` begins with the robot-dispatch example from the top-level README, then introduces channels, choice, tasks, Scalar state, scope policy and memory streams.
+`tutorial/` begins with the robot-dispatch example from the top-level README, then introduces channels, choice, tasks, Scalar state, scope policy, memory streams and Flow composition.
 
 ## Recipes
 
@@ -12,7 +12,7 @@ Examples are grouped by audience and stability.
 
 ## Embedding
 
-`embedding/` covers external resources, host-driven streams, readiness and host handles.
+`embedding/` covers external resources, the shared host reactor, readiness and host handles.
 
 ## Lifetimes
 

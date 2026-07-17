@@ -1,6 +1,6 @@
 -- Stream backend adapter for HostHandle values.
 --
--- This is the named contract boundary between host handles and pumped Streams.
+-- This is the named contract boundary between host handles and reactor-driven Streams.
 -- It deliberately mirrors the older socket-shaped backend, but it expects a
 -- first-class handle object rather than ad hoc callbacks.
 
@@ -35,6 +35,9 @@ function Backend.new(handle, opts)
     name = opts.name or handle.name or ('handle-backend-' .. tostring(next_id)),
     key = opts.key or (handle.readiness_key and handle:readiness_key()) or handle.key,
     handle = handle,
+    read_supported = type(handle.read) == 'function',
+    write_supported = type(handle.write) == 'function',
+    close_supported = type(handle.close) == 'function',
     runtime = nil,
     stream = nil,
   }, Backend)
@@ -92,9 +95,7 @@ function Backend:close(reason)
   if type(self.handle.close) == 'function' then
     return self.handle:close(reason)
   end
-  self:shutdown_read(reason)
-  self:shutdown_write(reason)
-  return true
+  return nil, 'unsupported_close'
 end
 
 return Backend

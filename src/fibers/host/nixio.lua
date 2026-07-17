@@ -78,6 +78,15 @@ end
 
 local function collect_readiness(waits)
   local fds, by_key, unsupported = {}, {}, false
+  local function ensure(poll_key)
+    local rec = by_key[poll_key]
+    if not rec then
+      rec = { key = poll_key, events = nil, waits = {}, poller = {} }
+      by_key[poll_key] = rec
+      fds[#fds + 1] = rec
+    end
+    return rec
+  end
   local readiness = Host.readiness_waits(waits)
   for i = 1, #readiness do
     local w = readiness[i]
@@ -86,12 +95,7 @@ local function collect_readiness(waits)
       unsupported = true
     else
       local poll_key = (type(key) == 'table' and (key.handle or key.nixio)) or key
-      local rec = by_key[poll_key]
-      if not rec then
-        rec = { key = poll_key, events = nil, waits = {} }
-        by_key[poll_key] = rec
-        fds[#fds + 1] = rec
-      end
+      local rec = ensure(poll_key)
       local mode = w.mode or 'read'
       if mode == 'write' or mode == 'wr' then
         rec.events = add_event(rec.events, 'out')
@@ -99,6 +103,27 @@ local function collect_readiness(waits)
         rec.events = add_event(rec.events, 'in')
       end
       rec.waits[#rec.waits + 1] = w
+    end
+  end
+  local poller_waits = Host.poller_waits(waits)
+  for i = 1, #poller_waits do
+    local wait = poller_waits[i]
+    local registrations = wait.poller:_host_active()
+    for j = 1, #registrations do
+      local registration = registrations[j]
+      local key = registration.key
+      if key == nil then
+        unsupported = true
+      else
+        local poll_key = (type(key) == 'table' and (key.handle or key.nixio)) or key
+        local rec = ensure(poll_key)
+        if registration.mode == 'write' then
+          rec.events = add_event(rec.events, 'out')
+        else
+          rec.events = add_event(rec.events, 'in')
+        end
+        rec.poller[#rec.poller + 1] = { wait = wait, registration = registration }
+      end
     end
   end
   return fds, by_key, unsupported
@@ -203,6 +228,15 @@ function Nixio:block(rt, waits, status, _opts)
               delivered = true
             elseif mode ~= 'write' and mode ~= 'wr' and rd then
               rt:deliver(w.feed, 'read', true)
+              delivered = true
+            end
+          end
+          for i = 1, #rec.poller do
+            local item = rec.poller[i]
+            local registration = item.registration
+            local ready = registration.mode == 'write' and wr or rd
+            if ready and item.wait.poller:_host_delivered(registration) then
+              Host.deliver_poller_ready(rt, item.wait, registration)
               delivered = true
             end
           end

@@ -16,9 +16,10 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersScalar = require('fibers.scalar')
-local FibersFlow = require('fibers.internal.flow')
+local FibersFlow = require('fibers.flow')
 local Op = FibersOp
 local Flow = FibersFlow
+local FlowErrors = require('fibers.flow.errors')
 local Runtime = require('fibers.runtime')
 
 local function fail(msg)
@@ -89,7 +90,7 @@ local function test_flow_sequential_write_read()
   local got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abc'))
-    got = fibers.perform(outlet:read_op(3))
+    got = fibers.perform(outlet:read_some_op(3))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'abc')
@@ -102,7 +103,7 @@ local function test_flow_tensor_write_read_handoff()
   local st = fibers.try_run(function()
     rows = fibers.perform(Op.tensor({
       inlet:write_op('abc'),
-      outlet:read_op(3),
+      outlet:read_some_op(3),
     }))
   end).runtime_status
   assert_status(st, 'found')
@@ -122,7 +123,7 @@ local function test_flow_all_write_does_not_supply_read()
   local st = fibers.try_run(function()
     rows = fibers.perform(Op.all({
       inlet:write_op('abc'),
-      outlet:read_op(3):or_else(Op.always('empty')),
+      outlet:read_some_op(3):or_else(Op.always('empty')),
     }))
   end).runtime_status
   assert_status(st, 'found')
@@ -130,7 +131,7 @@ local function test_flow_all_write_does_not_supply_read()
   assert_eq(rows[2][1], 'empty')
   local got
   fibers.run(function()
-    got = fibers.perform(outlet:read_op(3))
+    got = fibers.perform(outlet:read_some_op(3))
   end)
   assert_eq(got, 'abc')
 end
@@ -147,7 +148,7 @@ local function test_flow_close_constrains_write()
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(rows[2][1], nil)
-  assert_eq(rows[2][2], Flow.Errors.CLOSED)
+  assert_eq(rows[2][2], FlowErrors.CLOSED)
 end
 
 local function test_flow_capacity_and_write_some()
@@ -157,10 +158,10 @@ local function test_flow_capacity_and_write_some()
   fibers.run(function()
     ok, err = fibers.perform(inlet:write_op('abcd'))
     n, rest = fibers.perform(inlet:write_some_op('abcd'))
-    got = fibers.perform(outlet:read_op(10))
+    got = fibers.perform(outlet:read_some_op(10))
   end)
   assert_eq(ok, nil)
-  assert_eq(err, Flow.Errors.CAPACITY)
+  assert_eq(err, FlowErrors.CAPACITY)
   assert_eq(n, 3)
   assert_eq(rest, 'd')
   assert_eq(got, 'abc')
@@ -172,10 +173,10 @@ local function test_flow_lease_ack_and_return()
   local lease, ok, got
   fibers.run(function()
     fibers.perform(inlet:write_op('abcdef'))
-    lease = fibers.perform(outlet:lease_op(3, 'reader'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'reader'))
     ok = fibers.perform(lease:ack_op(1))
-    fibers.perform(lease:return_op())
-    got = fibers.perform(outlet:read_op(10))
+    fibers.perform(lease:release_op())
+    got = fibers.perform(outlet:read_some_op(10))
   end)
   assert_eq(lease:bytes(), 'abc')
   assert_eq(ok, true)

@@ -36,11 +36,18 @@ function Socket.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('socket-backend-' .. tostring(next_id))
+  local host = opts.host
+  local read_supported = type(opts.read) == 'function'
+    or type(host and (host.socket_read or host.read)) == 'function'
+  local write_supported = type(opts.write) == 'function'
+    or type(host and (host.socket_write or host.write)) == 'function'
+  local close_supported = type(opts.close) == 'function'
+    or type(host and (host.socket_close or host.close)) == 'function'
   return setmetatable({
     name = opts.name or ('socket-backend-' .. tostring(next_id)),
     key = key,
     handle = opts.handle or key,
-    host = opts.host,
+    host = host,
     readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     _read = opts.read,
@@ -48,6 +55,9 @@ function Socket.new(opts)
     _shutdown_read = opts.shutdown_read,
     _shutdown_write = opts.shutdown_write,
     _close = opts.close,
+    read_supported = read_supported,
+    write_supported = write_supported,
+    close_supported = close_supported,
     runtime = nil,
     stream = nil,
   }, Socket)
@@ -115,13 +125,7 @@ function Socket:shutdown_write(reason)
 end
 
 function Socket:close(reason)
-  local ok, err = callback(self, 'close', reason)
-  if ok == nil and err and tostring(err):match('^unsupported_') then
-    self:shutdown_read(reason)
-    self:shutdown_write(reason)
-    return true
-  end
-  return ok, err
+  return callback(self, 'close', reason)
 end
 
 return Socket

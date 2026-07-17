@@ -20,7 +20,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
-local FibersFlow = require('fibers.internal.flow')
+local FibersFlow = require('fibers.flow')
 local FibersTask = require('fibers.task')
 
 local function fail(msg)

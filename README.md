@@ -66,7 +66,7 @@ end)
 
 An option is inert. Constructing one does not send, receive, sleep or change state.
 
-The API calls this value `Op`: short for option. Methods ending in `_op` return options which may be combined before one is submitted to `perform`.
+The API calls this value `Op`: here **Op is short for option, not operation**. Methods ending in `_op` return options which may be combined before one is submitted to `perform`.
 
 ```lua
 local receive = inbox:get_op()
@@ -276,9 +276,11 @@ end))
 
 Scalar also supports typed state-machine transitions for facilities whose rules should be defined once and reused.
 
-### Notification, messaging and streams
+### Notification, messaging and byte flow
 
-`fibers.pulse` provides coalescing change notification. `fibers.mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies. `fibers.stream` provides supported bidirectional byte streams over memory or host backends.
+`fibers.pulse` provides coalescing change notification. `fibers.mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies.
+
+`fibers.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. All host-backed directions in one Runtime share one indexed poller and one lazily created reactor rather than allocating one task per direction.
 
 ### Time
 
@@ -368,6 +370,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 
 - [Option algebra](docs/advanced/option-algebra.md)
 - [Lifetimes, custody and settlement](docs/advanced/lifetimes-and-custody.md)
+- [Flows, streams and the host reactor](docs/advanced/flows-and-streams.md)
 - [Embedding and host integration](docs/advanced/embedding.md)
 - [Comparison with related systems](docs/design/comparison.md)
 - [Kernel design](docs/design/kernel.md)

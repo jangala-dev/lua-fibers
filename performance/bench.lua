@@ -39,7 +39,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Flow = require('fibers.internal.flow')
+local Flow = require('fibers.flow')
 local Policy = require('fibers.policy')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
@@ -728,7 +728,7 @@ add('flow', 'sequential write read small', 350, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(inlet:write_op('abcd'))
-      local bytes = rt:perform(outlet:read_op(4))
+      local bytes = rt:perform(outlet:read_some_op(4))
       total = total + #bytes
     end
   end, 'bench-flow-seq')
@@ -744,7 +744,7 @@ add('flow', 'tensor write read handoff', 220, function(n)
   local total = 0
   rt:spawn_raw(function()
     for _ = 1, n do
-      local rows = rt:perform(Op.tensor({ inlet:write_op('abcd'), outlet:read_op(4) }))
+      local rows = rt:perform(Op.tensor({ inlet:write_op('abcd'), outlet:read_some_op(4) }))
       total = total + rows[1][1] + #rows[2][1]
     end
   end, 'bench-flow-tensor')
@@ -761,11 +761,11 @@ add('flow', 'capacity release handoff', 180, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(inlet:write_op('abcd'))
-      local rows = rt:perform(Op.tensor({ outlet:read_op(4), inlet:write_op('wxyz') }))
+      local rows = rt:perform(Op.tensor({ outlet:read_some_op(4), inlet:write_op('wxyz') }))
       if rows[1][1] == 'abcd' and rows[2][1] == 4 then
         ok = ok + 1
       end
-      local tail = rt:perform(outlet:read_op(4))
+      local tail = rt:perform(outlet:read_some_op(4))
       assert_eq(tail, 'wxyz')
     end
   end, 'bench-flow-capacity')
@@ -782,10 +782,10 @@ add('flow', 'lease ack return', 220, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(inlet:write_op('abcdef'))
-      local lease = rt:perform(outlet:lease_op(4, 'owner'))
+      local lease = rt:perform(outlet:lease_some_op(4, 'owner'))
       rt:perform(lease:ack_op(1))
-      rt:perform(lease:return_op())
-      local bytes = rt:perform(outlet:read_op(10))
+      rt:perform(lease:release_op())
+      local bytes = rt:perform(outlet:read_some_op(10))
       total = total + #bytes
     end
   end, 'bench-flow-lease')
@@ -821,7 +821,7 @@ add('flow', 'peek then drop', 250, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(inlet:write_op('abcdef'))
-      local p = rt:perform(outlet:peek_op(3))
+      local p = rt:perform(outlet:peek_exactly_op(3))
       local d = rt:perform(outlet:drop_op(3))
       local r = rt:perform(outlet:read_exactly_op(3))
       total = total + #p + d + #r
@@ -840,7 +840,7 @@ add('flow', 'splice derived', 140, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(src:inlet():write_op('abcdef'))
-      local moved = rt:perform(src:outlet():splice_to(dst:inlet(), 3))
+      local moved = rt:perform(src:outlet():splice_to_op(dst:inlet(), 3))
       local left = rt:perform(src:outlet():read_exactly_op(3))
       local got = rt:perform(dst:outlet():read_exactly_op(3))
       total = total + moved + #left + #got

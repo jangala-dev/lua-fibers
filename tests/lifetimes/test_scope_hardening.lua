@@ -15,11 +15,11 @@ local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersScope = require('fibers.scope')
-local FibersFlow = require('fibers.internal.flow')
+local FibersFlow = require('fibers.flow')
 local FibersStream = require('fibers.stream')
 local FibersPolicy = require('fibers.policy')
 local Stream = FibersStream
-local Fake = Stream.backend.Fake
+local Fake = require('fibers.stream.backend.fake')
 
 local function fail(msg)
   error(msg, 2)
@@ -108,7 +108,8 @@ do
   local owner_was_root = false
   fibers.run(function(root)
     local backend = Fake.new({ name = 'safe-acquire-backend' })
-    local stream = fibers.perform(Stream.open_backend_op(backend, { name = 'safe-acquire-stream' }))
+    local stream =
+      fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'safe-acquire-stream' }))
     owner_was_root = stream.owner == root:raw_region()
   end)
   assert_eq(owner_was_root, true, 'safe stream acquisition should use current scope')
@@ -119,7 +120,7 @@ end
 do
   local backend = Fake.new({ name = 'no-current-scope-backend' })
   local ok, err = pcall(function()
-    Stream.open_backend_op(backend, { name = 'no-current-scope-stream' })
+    Stream.open_op(backend, { read = true, write = true, name = 'no-current-scope-stream' })
   end)
   assert_eq(ok, false, 'safe acquisition should require a current scope or opts.owner')
   assert_truthy(tostring(err):match('current Scope'), 'error should explain missing current Scope')
@@ -134,16 +135,18 @@ do
     root:run(function()
       fibers.scope(function()
         local backend = Fake.new({ name = 'retired-authority-backend', input = 'x' })
-        stream = fibers.perform(Stream.open_backend_op(backend, { name = 'retired-authority-stream' }))
+        stream = fibers.perform(
+          Stream.open_op(backend, { read = true, write = true, name = 'retired-authority-stream' })
+        )
       end)
-      local bytes, err = fibers.perform(stream:reader():read_op(1))
+      local bytes, err = fibers.perform(stream:reader():read_some_op(1))
       read_err = err or bytes
     end)
   end, 'retired-authority-root-fibre', root)
   drive(rt, 100)
   assert_eq(
     read_err,
-    FibersFlow.Errors.RETIRED,
+    FibersFlow.Error.RETIRED,
     'read after scope retirement should fail with retired authority'
   )
 end
@@ -189,15 +192,16 @@ do
   rt:run()
 end
 
--- Stream.open_backend_op constructs safe acquisition in the current scope.
+-- Stream.open_op constructs safe acquisition in the current scope.
 do
   local owner_was_root = false
   fibers.run(function(root)
     local backend = Fake.new({ name = 'friendly-stream-backend' })
-    local stream = fibers.perform(Stream.open_backend_op(backend, { name = 'friendly-stream' }))
+    local stream =
+      fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'friendly-stream' }))
     owner_was_root = stream.owner == root:raw_region()
   end)
-  assert_eq(owner_was_root, true, 'Stream.open_backend_op should bind to the current scope')
+  assert_eq(owner_was_root, true, 'Stream.open_op should bind to the current scope')
 end
 
 print('tests/test_scope_hardening.lua: ok')

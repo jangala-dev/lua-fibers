@@ -18,7 +18,7 @@ local Stream = require('fibers.stream')
 
 local rt = Runtime.new()
 local region = Region.new('readiness-example')
-local backend = Stream.backend.Fake.new({
+local backend = require('fibers.stream.backend.fake').new({
   name = 'readiness-example-backend',
   readiness = 'manual',
   initial_writable = false,
@@ -28,13 +28,15 @@ local backend = Stream.backend.Fake.new({
 local stream, line, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'readiness-example-stream' }))
+  stream = rt:perform(
+    Stream.open_op(backend, { owner = region, read = true, write = true, name = 'readiness-example-stream' })
+  )
   rt:perform(stream:writer():write_op('ping\n'))
   flushed = rt:perform(stream:writer():flush_op())
   line = rt:perform(stream:reader():read_line_op())
 end, 'root')
 
--- Opening commits stream ownership and pump tasks, but write readiness has not
+-- Opening commits stream ownership and reactor registrations, but write readiness has not
 -- arrived yet, so nothing has reached the backend.
 rt:run()
 assert(backend:written() == '')

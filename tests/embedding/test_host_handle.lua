@@ -24,6 +24,7 @@ local Runner = FibersRunner
 local Region = FibersRegion
 local Stream = FibersStream
 local Handle = require('fibers.host.handle')
+local HandleBackend = require('fibers.stream.backend.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -61,7 +62,7 @@ local function drive_until(rt, host, pred, label, iters)
   fail(label or 'runtime did not reach expected state')
 end
 
--- A fake HostHandle opens through Stream.open_handle_op and drives the read pump.
+-- A fake HostHandle opens through the handle backend and Stream.open_op and drives the read reaction.
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
@@ -70,7 +71,12 @@ do
   local stream, got
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_handle_in_op(region, handle, { name = 'handle-read-stream' }))
+    stream = rt:perform(
+      Stream.open_op(
+        HandleBackend.new(handle, { name = 'handle-read-stream' }),
+        { owner = region, name = 'handle-read-stream', read = true, write = false }
+      )
+    )
     got = rt:perform(stream:reader():read_exactly_op(4))
   end, 'handle-reader')
 
@@ -84,7 +90,7 @@ do
   assert_eq(got, 'ping')
 end
 
--- A fake HostHandle drives the write pump; blocking and later writability are
+-- A fake HostHandle drives the write reaction; blocking and later writability are
 -- host facts rather than stream facts.
 do
   local host = Host.manual({ auto_advance_time = false })
@@ -94,17 +100,25 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_handle_in_op(region, handle, { name = 'handle-write-stream' }))
+    stream = rt:perform(
+      Stream.open_op(
+        HandleBackend.new(handle, { name = 'handle-write-stream' }),
+        { owner = region, name = 'handle-write-stream', read = false, write = true }
+      )
+    )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'handle-writer')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(
-    stream and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil,
-    'write pump should hold a lease while host write is blocked'
+  assert_truthy(stream, 'stream should open before waiting for writability')
+  assert_eq(
+    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    nil,
+    'reactor should not lease bytes before a writable hint'
   )
+  assert_eq(Inspect.data(stream:writer().flow.reservoir), 'hello')
   assert_eq(handle:written(), '')
   handle:unblock_writes()
   drive_until(rt, host, function()

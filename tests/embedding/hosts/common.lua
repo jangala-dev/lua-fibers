@@ -189,6 +189,7 @@ end
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
   local Handle = require('fibers.host.handle')
+  local HandleBackend = require('fibers.stream.backend.handle')
   local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
   local handle = Handle.duplex(r, w, { host = host, name = name .. ':duplex' })
@@ -197,17 +198,20 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   local got, flushed, stream
 
   rt:spawn_raw(function()
-    stream = rt:perform(
-      FibersStream.open_handle_in_op(
-        region,
-        handle,
-        { name = name .. ':stream', capacity = 64, chunk_size = 16 }
-      )
-    )
+    stream = rt:perform(FibersStream.open_op(HandleBackend.new(handle, { name = name .. ':stream' }), {
+      owner = region,
+      name = name .. ':stream',
+      read = true,
+      write = true,
+      read_capacity = 64,
+      write_capacity = 64,
+      read_chunk_size = 16,
+      write_chunk_size = 16,
+    }))
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
     got = rt:perform(stream:reader():read_exactly_op(5))
-    rt:perform(stream:shutdown_op('test complete'))
+    rt:perform(stream:abort_op('test complete'))
   end, name .. ':flow')
 
   local st = Runner.run(rt, { host = host, max_iterations = 200 })

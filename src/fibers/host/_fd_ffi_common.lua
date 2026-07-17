@@ -5,7 +5,7 @@
 -- ffi provider.
 
 local Handle = require('fibers.host.handle')
-local Errors = require('fibers.internal.flow.errors')
+local Errors = require('fibers.flow.errors')
 
 local Common = {}
 

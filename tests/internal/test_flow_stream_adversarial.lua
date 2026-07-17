@@ -13,10 +13,11 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
-local FibersFlow = require('fibers.internal.flow')
+local FibersFlow = require('fibers.flow')
 local FibersStream = require('fibers.stream')
 local Op = FibersOp
 local Flow = FibersFlow
+local FlowErrors = require('fibers.flow.errors')
 local Stream = FibersStream
 local Runtime = require('fibers.runtime')
 
@@ -51,12 +52,12 @@ local function test_parallel_lease_and_read_do_not_duplicate_bytes()
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
     rows = fibers.perform(Op.tensor({
-      outlet:lease_op(3, 'owner'),
-      outlet:read_op(3),
+      outlet:lease_some_op(3, 'owner'),
+      outlet:read_some_op(3),
     }))
     inspect = fibers.perform(flow:inspect_op())
-    fibers.perform(rows[1][1]:return_op())
-    got = fibers.perform(outlet:read_op(10))
+    fibers.perform(rows[1][1]:release_op())
+    got = fibers.perform(outlet:read_some_op(10))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(rows[1][1]:bytes(), 'abc', 'lease should take first bytes')
@@ -72,12 +73,12 @@ local function test_parallel_ack_then_return_returns_only_unacked_tail()
   local lease, rows, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
-    lease = fibers.perform(outlet:lease_op(3, 'owner'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'owner'))
     rows = fibers.perform(Op.tensor({
       lease:ack_op(1),
-      lease:return_op(),
+      lease:release_op(),
     }))
-    got = fibers.perform(outlet:read_op(10))
+    got = fibers.perform(outlet:read_some_op(10))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(lease:bytes(), 'abc')
@@ -91,18 +92,18 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   local eof, eof_err
   local st = fibers.try_run(function()
     fibers.perform(empty:inlet():close_op())
-    eof, eof_err = fibers.perform(empty:outlet():read_op(1))
+    eof, eof_err = fibers.perform(empty:outlet():read_some_op(1))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(eof, nil)
-  assert_eq(eof_err, Flow.Errors.EOF)
+  assert_eq(eof_err, FlowErrors.EOF)
 
   local same_world = Flow.new({ name = 'adv-same-world-close' })
   local same_rows
   local st_same = fibers.try_run(function()
     same_rows = fibers.perform(Op.tensor({
       same_world:inlet():close_op(),
-      same_world:outlet():read_op(1):or_else(Op.always('not-yet-eof')),
+      same_world:outlet():read_some_op(1):or_else(Op.always('not-yet-eof')),
     }))
   end).runtime_status
   assert_status(st_same, 'found')
@@ -113,13 +114,13 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   local st2 = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc'))
     fibers.perform(flow:inlet():close_op())
-    data = fibers.perform(flow:outlet():read_op(10))
-    eof, eof_err = fibers.perform(flow:outlet():read_op(1))
+    data = fibers.perform(flow:outlet():read_some_op(10))
+    eof, eof_err = fibers.perform(flow:outlet():read_some_op(1))
   end).runtime_status
   assert_status(st2, 'found')
   assert_eq(data, 'abc')
   assert_eq(eof, nil)
-  assert_eq(eof_err, Flow.Errors.EOF)
+  assert_eq(eof_err, FlowErrors.EOF)
 end
 
 local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
@@ -128,8 +129,8 @@ local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
   local lease, inspect, ack_ok, ack_err
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
-    lease = fibers.perform(outlet:lease_op(3, 'owner'))
-    fibers.perform(outlet:shutdown_op('stop'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'owner'))
+    fibers.perform(outlet:close_op('stop'))
     inspect = fibers.perform(flow:inspect_op())
     ack_ok, ack_err = fibers.perform(lease:ack_op(1))
   end).runtime_status
@@ -138,7 +139,7 @@ local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
   assert_eq(inspect.leased, 0)
   assert_eq(inspect.queued, 0)
   assert_eq(ack_ok, false, 'old lease should no longer be live')
-  assert_eq(ack_err, Flow.Errors.NO_LEASE)
+  assert_eq(ack_err, FlowErrors.NO_LEASE)
 end
 
 local function test_capacity_release_handoff_tensor_but_not_all()
@@ -147,12 +148,12 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   local lease, rows, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abc'))
-    lease = fibers.perform(outlet:lease_op(3, 'owner'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'owner'))
     rows = fibers.perform(Op.all({
       lease:ack_op(3),
       inlet:write_op('def'):or_else(Op.always('blocked')),
     }))
-    got = fibers.perform(outlet:read_op(10):or_else(Op.always('empty')))
+    got = fibers.perform(outlet:read_some_op(10):or_else(Op.always('empty')))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(rows[1][1], true)
@@ -164,12 +165,12 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   local lease2, rows2, got2
   local st2 = fibers.try_run(function()
     fibers.perform(inlet2:write_op('abc'))
-    lease2 = fibers.perform(outlet2:lease_op(3, 'owner'))
+    lease2 = fibers.perform(outlet2:lease_some_op(3, 'owner'))
     rows2 = fibers.perform(Op.tensor({
       lease2:ack_op(3),
       inlet2:write_op('def'),
     }))
-    got2 = fibers.perform(outlet2:read_op(10))
+    got2 = fibers.perform(outlet2:read_some_op(10))
   end).runtime_status
   assert_status(st2, 'found')
   assert_eq(rows2[1][1], true)
@@ -197,7 +198,7 @@ local function test_stream_memory_backpressure_with_small_capacity()
   assert_nil(second)
 
   rt:spawn_raw(function()
-    read = rt:perform(reader:read_op(3))
+    read = rt:perform(reader:read_some_op(3))
   end, 'reader')
   assert_status(rt:run(), 'found')
   assert_eq(read, 'abc')

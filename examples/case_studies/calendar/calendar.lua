@@ -14,7 +14,6 @@ local function copy_array(xs)
   end
   return out
 end
-
 local function copy_resources(xs)
   local out = copy_array(xs)
   table.sort(out, function(a, b)
@@ -22,7 +21,6 @@ local function copy_resources(xs)
   end)
   return out
 end
-
 local function clone_record(r)
   return r
       and {
@@ -34,11 +32,9 @@ local function clone_record(r)
       }
     or nil
 end
-
 local function overlaps(a0, a1, b0, b1)
   return a0 < b1 and b0 < a1
 end
-
 local function resource_set(xs)
   local out = {}
   for i = 1, #xs do
@@ -46,7 +42,6 @@ local function resource_set(xs)
   end
   return out
 end
-
 local function shares(wanted, xs)
   for i = 1, #xs do
     if wanted[xs[i]] then
@@ -58,11 +53,9 @@ end
 
 -- Persistent id map used only for cancellation lookup.
 local TOMBSTONE = {}
-
 local function map_new(parent)
   return { parent = parent, delta = {}, depth = parent and parent.depth + 1 or 0 }
 end
-
 local function map_get(m, key)
   while m do
     local v = m.delta[key]
@@ -72,7 +65,6 @@ local function map_get(m, key)
     m = m.parent
   end
 end
-
 local function map_set(parent, key, value)
   if parent and parent.depth > 24 then
     local flat, chain = {}, {}
@@ -97,11 +89,9 @@ end
 local function priority(id)
   return (id * 1103515245 + 12345) % 2147483647
 end
-
 local function max3(a, b, c)
   return math.max(a or -math.huge, b or -math.huge, c or -math.huge)
 end
-
 local function make_node(record, left, right)
   return {
     record = record,
@@ -113,21 +103,17 @@ local function make_node(record, left, right)
     max_finish = max3(record.finish, left and left.max_finish, right and right.max_finish),
   }
 end
-
 local function before(a_start, a_id, b_start, b_id)
   return a_start < b_start or (a_start == b_start and a_id < b_id)
 end
-
 local function rotate_right(n)
   local l = n.left
   return make_node(l.record, l.left, make_node(n.record, l.right, n.right))
 end
-
 local function rotate_left(n)
   local r = n.right
   return make_node(r.record, make_node(n.record, n.left, r.left), r.right)
 end
-
 local function insert(root, record)
   if not root then
     return make_node(record)
@@ -146,7 +132,6 @@ local function insert(root, record)
   end
   return out
 end
-
 local function merge_trees(a, b)
   if not a then
     return b
@@ -158,7 +143,6 @@ local function merge_trees(a, b)
   end
   return make_node(b.record, merge_trees(a, b.left), b.right)
 end
-
 local function remove(root, start, id)
   if not root then
     return nil
@@ -171,7 +155,6 @@ local function remove(root, start, id)
   end
   return make_node(root.record, root.left, remove(root.right, start, id))
 end
-
 local function each(root, fn)
   if root then
     each(root.left, fn)
@@ -201,11 +184,9 @@ local function conflict_node(root, wanted, start, finish, ignore_id)
   end
   return conflict_node(root.right, wanted, start, finish, ignore_id)
 end
-
 local function conflict(state, resources, start, finish, ignore_id)
   return conflict_node(state.root, resource_set(resources), start, finish, ignore_id)
 end
-
 local function slot_candidates(state, spec)
   local starts, seen = {}, {}
   local function add(x)
@@ -291,7 +272,6 @@ local function validate_spec(spec)
   )
   assert(spec.earliest + spec.duration <= spec.latest, 'calendar reservation window is too small')
 end
-
 local function slot_cursor(state, spec, writes)
   local starts, i = slot_candidates(state, spec), 0
   return {
@@ -326,7 +306,6 @@ local function slot_cursor(state, spec, writes)
     end,
   }
 end
-
 local function frozen_spec(spec)
   return {
     resources = copy_resources(spec.resources),
@@ -338,7 +317,6 @@ local function frozen_spec(spec)
     payload = spec.payload,
   }
 end
-
 function Calendar:reserve_op(spec)
   validate_spec(spec)
   local frozen = frozen_spec(spec)
@@ -355,7 +333,6 @@ function Calendar:reserve_op(spec)
     })
   )
 end
-
 function Calendar:find_op(spec)
   validate_spec(spec)
   local frozen = frozen_spec(spec)
@@ -372,7 +349,6 @@ function Calendar:find_op(spec)
     })
   )
 end
-
 function Calendar:reserve_at_op(resources, start, finish, payload)
   return self:reserve_op({
     resources = resources,
@@ -383,7 +359,6 @@ function Calendar:reserve_at_op(resources, start, finish, payload)
     payload = payload,
   })
 end
-
 function Calendar:cancel_op(id)
   return Op._resource(
     self,
@@ -416,7 +391,6 @@ function Calendar:cancel_op(id)
     })
   )
 end
-
 function Calendar:snapshot_op()
   return Op._resource(
     self,
@@ -443,7 +417,6 @@ function Calendar:snapshot_op()
     })
   )
 end
-
 function Calendar:snapshot()
   local out = {}
   each(self._state.root, function(r)
@@ -451,7 +424,5 @@ function Calendar:snapshot()
   end)
   return out
 end
-
 Calendar.Kind = Kind
-
 return Calendar

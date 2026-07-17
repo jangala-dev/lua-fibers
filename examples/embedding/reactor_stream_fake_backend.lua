@@ -16,7 +16,7 @@ local Runtime = require('fibers.runtime')
 local Region = require('fibers.lifetime.region')
 local Stream = require('fibers.stream')
 
-local Fake = Stream.backend.Fake
+local Fake = require('fibers.stream.backend.fake')
 
 local rt = Runtime.new()
 local region = Region.new('fake-host-region')
@@ -24,8 +24,11 @@ local backend = Fake.new({ name = 'fake-host', write_chunk_size = 2 })
 local stream, line, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_backend_in_op(region, backend, {
+  stream = rt:perform(Stream.open_op(backend, {
+    owner = region,
     name = 'fake-host-stream',
+    read = true,
+    write = true,
     read_capacity = 16,
     write_capacity = 16,
   }))
@@ -33,10 +36,10 @@ rt:spawn_raw(function()
   line = rt:perform(stream:reader():read_line_op())
   rt:perform(stream:writer():write_op('echo:' .. line .. '\n'))
   flushed = rt:perform(stream:writer():flush_op())
-  rt:perform(stream:writer():shutdown_op())
+  rt:perform(stream:shutdown_write_op())
 end, 'root')
 
--- Start the root and pump tasks.  The reader is now waiting for host input.
+-- Start the root and the runtime-owned reactor.  The reader is now waiting for host input.
 rt:run()
 backend:feed_read('hello\n')
 
@@ -52,4 +55,4 @@ assert(flushed == true)
 assert(backend:written() == 'echo:hello\n')
 assert(backend.shutdown_write_reason ~= nil)
 
-print('examples/embedding/pumped_stream_fake_backend.lua: ok')
+print('examples/embedding/reactor_stream_fake_backend.lua: ok')

@@ -247,9 +247,9 @@ end)
 
 There is no host readiness query during transaction search. External truth enters through feeds so that validation remains meaningful.
 
-## HostHandle and streams
+## HostHandle, streams and the reactor
 
-`host.Handle` provides the boundary between non-blocking host I/O and transactional stream pumps.
+`host.Handle` provides the boundary between non-blocking host I/O and the runtime-owned HostPoller and HostReactor.
 
 A handle supplies:
 
@@ -264,7 +264,17 @@ handle:shutdown_write(reason)
 handle:close(reason)
 ```
 
-The irreversible `read` and `write` calls occur in pump fibre bodies only after the matching readiness option commits. They must not run during proof search.
+Every configured host-backed direction in one Runtime registers with the same
+indexed HostPoller and lazily created HostReactor. Committed Flow changes arm or
+disarm registrations; the host delivers only ready registration identities.
+Linux epoll events carry a fresh registration epoch rather than a raw
+descriptor. The host validates that epoch before delivering the reaction id and
+generation. The reactor then performs one bounded authoritative `read` or
+`write` call in fibre phase.
+
+The read side reserves Flow capacity before calling the host. The write side leases a committed byte prefix before calling the host. These space and data leases preserve backpressure and exact byte custody across irreversible calls.
+
+Readiness remains a hint. A host call may still return `would_block`; the reactor then releases the read-space reservation or retains the write-data lease as appropriate and waits for refreshed readiness.
 
 A deterministic fake handle is available:
 
@@ -272,9 +282,16 @@ A deterministic fake handle is available:
 local host = host.manual({ auto_advance_time = false })
 local handle = host.Handle.fake({ host = host, key = 'demo' })
 
-local stream = fibers.perform(
-  Stream.open_handle_in_op(scope:raw_region(), handle)
-)
+local HandleBackend = require('fibers.stream.backend.handle')
+
+local stream = fibers.perform(Stream.open_op(
+  HandleBackend.new(handle),
+  {
+    owner = scope,
+    read = true,
+    write = true,
+  }
+))
 ```
 
 Useful controls include:
@@ -296,9 +313,12 @@ backend:read(max)
 backend:write(bytes)
 backend:shutdown_read(reason)
 backend:shutdown_write(reason)
+backend:close(reason)
 ```
 
-Flow state remains transactional; host I/O remains owned by pump tasks.
+Opening a Stream commits its ownership and both reactor-registration effects together. If the option loses, no backend is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases settle, the backend closes exactly once, and `closed_op` observes complete Flow and registration closure.
+
+See [`flows-and-streams.md`](flows-and-streams.md) for the Flow lease contracts and reactor service model.
 
 ## Effects and host callbacks
 

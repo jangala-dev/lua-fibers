@@ -1,15 +1,15 @@
 -- Generic host handle contract.
 --
--- A HostHandle is the host-side half of pumped byte streams.  Readiness says
+-- A HostHandle is the host-side half of reactor-driven byte streams.  Readiness says
 -- that trying I/O may be useful; read/write remain authoritative.
 --
--- The core runtime does not know about HostHandle.  Streams use handles via the
+-- The core runtime does not know about HostHandle.  The runtime HostReactor uses handles via the
 -- handle stream backend, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
 local Readiness = require('fibers.external.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
-local Errors = require('fibers.internal.flow.errors')
+local Errors = require('fibers.flow.errors')
 
 local Handle = {}
 Handle.__index = Handle
@@ -46,6 +46,11 @@ local function mark_hint(self, mode)
   local host = self.host
   if host and type(host.set_readiness) == 'function' then
     host:set_readiness(self.key, mode, true)
+  end
+  local runtime = self.runtime
+  local poller = runtime and runtime.host_poller
+  if poller then
+    poller:hint(self.key, mode)
   end
 end
 
@@ -409,7 +414,7 @@ function Fake:close(reason)
 end
 
 -- A mode-split handle composes a read handle and a write handle into the
--- duplex HostHandle shape expected by Stream.open_handle_op.  This is useful
+-- duplex HostHandle shape expected by the Stream handle backend.  This is useful
 -- for pipe pairs and later subprocess stdio: readiness and I/O remain delegated
 -- to the true underlying end for each direction.
 local Duplex = {}

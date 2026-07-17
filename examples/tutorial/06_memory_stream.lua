@@ -20,7 +20,7 @@ local line, eof, eof_err
 fibers.run(function()
   fibers.spawn(function()
     fibers.perform(a:writer():write_op('hello stream\n'))
-    fibers.perform(a:writer():shutdown_op())
+    fibers.perform(a:shutdown_write_op())
   end, 'writer')
 
   line = fibers.perform(b:reader():read_line_op())

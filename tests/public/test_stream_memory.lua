@@ -51,7 +51,7 @@ end
 
 local Op = FibersOp
 local Stream = FibersStream
-local Flow = require('fibers.internal.flow')
+local Flow = require('fibers.flow')
 
 -- Primitive flow: inlet writes bytes, outlet reads bytes, handles are stable.
 do
@@ -172,7 +172,7 @@ do
   local one, two, err
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
-    fibers.perform(a:writer():shutdown_op())
+    fibers.perform(a:shutdown_write_op())
     one = fibers.perform(b:reader():read_some_op(10))
     two, err = fibers.perform(b:reader():read_some_op(10))
   end).runtime_status
@@ -187,7 +187,7 @@ do
   local a, b = Stream.memory_pair({ name = 'broken-pipe' })
   local n, err
   local st = fibers.try_run(function()
-    fibers.perform(b:reader():shutdown_op())
+    fibers.perform(b:shutdown_read_op())
     n, err = fibers.perform(a:writer():write_op('x'))
   end).runtime_status
   assert_status(st, 'found')
@@ -258,7 +258,7 @@ do
     rest = fibers.perform(b:reader():read_exactly_op(4))
 
     fibers.perform(a:writer():write_op('tail'))
-    fibers.perform(a:writer():shutdown_op())
+    fibers.perform(a:shutdown_write_op())
     tail = fibers.perform(b:reader():read_line_op())
     eof, eof_err = fibers.perform(b:reader():read_some_op(1))
   end).runtime_status
@@ -272,7 +272,7 @@ do
   local c, d = Stream.memory_pair({ name = 'line-limit' })
   st = fibers.try_run(function()
     fibers.perform(c:writer():write_op('abcdef'))
-    limited, limit_err = fibers.perform(d:reader():read_line_op({ limit = 3 }))
+    limited, limit_err = fibers.perform(d:reader():read_line_op({ max = 3 }))
     after_limit = fibers.perform(d:reader():read_exactly_op(6))
   end).runtime_status
   assert_status(st, 'found')
@@ -283,7 +283,7 @@ do
   local e, f = Stream.memory_pair({ name = 'exact-eof' })
   st = fibers.try_run(function()
     fibers.perform(e:writer():write_op('ab'))
-    fibers.perform(e:writer():shutdown_op())
+    fibers.perform(e:shutdown_write_op())
     exact, exact_err, partial = fibers.perform(f:reader():read_exactly_op(4))
   end).runtime_status
   assert_status(st, 'found')
@@ -301,7 +301,7 @@ do
   local to = Scope.new('to')
   local st = fibers.try_run(function()
     fibers.perform(from:raw_region():admit_op(a))
-    fibers.perform(a:transfer_op(from, to))
+    fibers.perform(from:raw_region():move_op(a, to:raw_region()))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(a.owner, to:raw_region())
@@ -370,7 +370,7 @@ do
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('partial'))
     line_choice = fibers.perform(b:reader()
-      :read_line_op({ limit = 64 })
+      :read_line_op({ max = 64 })
       :map(function()
         return 'line'
       end)
@@ -400,7 +400,7 @@ do
   local line
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
-    line = rt:perform(b:reader():read_line_op({ limit = 16 }))
+    line = rt:perform(b:reader():read_line_op({ max = 16 }))
   end, 'line-reader')
   assert_status(rt:run(), 'quiescent')
   rt:spawn_raw(function()
@@ -439,7 +439,7 @@ do
   assert_status(rt:run(), 'found')
   assert_nil(all, 'read_all_op should still wait before EOF')
   rt:spawn_raw(function()
-    rt:perform(a:writer():shutdown_op())
+    rt:perform(a:shutdown_write_op())
   end, 'eof')
   assert_status(rt:run(), 'found')
   assert_eq(all, 'abcd')
@@ -473,8 +473,8 @@ do
   local out
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('xyz'))
-    fibers.perform(a:writer():shutdown_op())
-    out = fibers.perform(b:reader():read_all_op({ unlimited = true }))
+    fibers.perform(a:shutdown_write_op())
+    out = fibers.perform(b:reader():read_all_op({ max = math.huge }))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(out, 'xyz')
@@ -498,11 +498,11 @@ do
   end)
   assert_eq(ok, false, 'negative read size should be rejected')
   ok = pcall(function()
-    b:reader():read_line_op({ sep = '' })
+    b:reader():read_line_op({ terminator = '' })
   end)
   assert_eq(ok, false, 'empty line separator should be rejected')
   ok = pcall(function()
-    b:reader():read_line_op({ limit = -1 })
+    b:reader():read_line_op({ max = -1 })
   end)
   assert_eq(ok, false, 'negative line limit should be rejected')
   ok = pcall(function()
@@ -524,8 +524,12 @@ do
   assert_eq(line, 'abc')
   assert_eq(tail, 'def')
   assert_nil(flow.reservoir.find_line_op, 'reservoir should not expose line-aware byte methods')
-  assert_truthy(Flow.Lease, 'Lease should be the public name for retained byte ownership')
-  assert_nil(Flow.Claim, 'pump Claim should not be part of the public Flow facility')
+  assert_nil(Flow.Lease, 'lease implementation classes are not public')
+  assert_nil(Flow.SpaceLease, 'space lease implementation classes are not public')
+  assert_nil(Flow.Reservoir, 'reservoir implementation is not public')
+  assert_nil(Flow.Errors, 'internal error vocabulary is not public')
+  assert_eq(Flow.Error.EOF, 'eof')
+  assert_nil(Flow.Claim, 'the retired Claim type should not be part of the public Flow facility')
 end
 
 print('tests/test_stream_memory.lua: ok')

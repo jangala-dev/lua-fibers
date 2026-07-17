@@ -4,6 +4,7 @@ return {
   public = {
     'tests/public/test_contracts.lua',
     'tests/public/test_documented_examples.lua',
+    'tests/public/test_flow.lua',
     'tests/public/test_op.lua',
     'tests/public/test_policy.lua',
     'tests/public/test_public_surface.lua',
@@ -48,10 +49,11 @@ return {
     'tests/embedding/test_host.lua',
     'tests/embedding/test_host_handle.lua',
     'tests/embedding/test_host_linux.lua',
+    'tests/embedding/test_host_poller.lua',
     'tests/embedding/test_readiness.lua',
     'tests/embedding/test_runtime.lua',
     'tests/embedding/test_runtime_lifecycle.lua',
-    'tests/embedding/test_stream_pumped.lua',
+    'tests/embedding/test_stream_reactor.lua',
     'tests/embedding/test_stream_socket_backend.lua',
   },
   kernel = {

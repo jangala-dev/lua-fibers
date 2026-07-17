@@ -8,9 +8,10 @@ src/fibers/             installed version 1 library
   resource/             supported transactional resource toolkit
   external/             externally observed facts and runtime-bound feeds
   lifetime/             custody, borrowing, effects and task exits
-  internal/             closed kernel, current Flow engine and other internals
-  host/                 host adapters
-  stream/               supported Stream implementation and backends
+  flow.lua and flow/    supported transactional byte facility
+  internal/             closed kernel and other implementation details
+  host/                 host adapters and the runtime-owned reactor
+  stream/               supported capability-shaped Stream and backends
 
 examples/tutorial/      ordinary application use
 examples/recipes/       tested facilities built from supported modules

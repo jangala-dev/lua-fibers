@@ -22,14 +22,8 @@ end
 function Lease:bytes()
   return self._bytes or ''
 end
-function Lease:bytes_value()
-  return self:bytes()
-end
 function Lease:length()
   return self._length or #(self._bytes or '')
-end
-function Lease:length_value()
-  return self:length()
 end
 function Lease:inspect()
   return {
@@ -43,7 +37,7 @@ end
 function Lease:ack_op(n)
   return self.reservoir:ack_lease_op(self, n)
 end
-function Lease:return_op()
+function Lease:release_op()
   return self.reservoir:return_lease_op(self)
 end
 function Lease:fail_op(err)

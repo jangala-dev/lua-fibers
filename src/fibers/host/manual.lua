@@ -101,7 +101,21 @@ function Manual:block(rt, waits, status, opts)
   local delivered = Host.deliver_ready(rt, waits, function(key, mode)
     return self:is_ready(key, mode)
   end)
-  if delivered and delivered > 0 then
+  local poller_delivered = 0
+  local poller_waits = Host.poller_waits(waits)
+  for i = 1, #poller_waits do
+    local wait = poller_waits[i]
+    local registrations = wait.poller:_host_active()
+    for j = 1, #registrations do
+      local registration = registrations[j]
+      if self:is_ready(registration.key, registration.mode) and wait.poller:_host_delivered(registration) then
+        Host.deliver_poller_ready(rt, wait, registration)
+        poller_delivered = poller_delivered + 1
+      end
+    end
+  end
+  delivered = (delivered or 0) + poller_delivered
+  if delivered > 0 then
     if self.on_wake then
       self.on_wake('readiness', waits, status)
     end
@@ -128,7 +142,7 @@ function Manual:block(rt, waits, status, opts)
   if self.on_unsupported then
     self.on_unsupported(waits, status)
   end
-  if Host.has_readiness_waits(waits) then
+  if Host.has_readiness_waits(waits) or Host.has_poller_waits(waits) then
     return nil, 'readiness-not-ready'
   end
   return nil, 'unsupported-waits'

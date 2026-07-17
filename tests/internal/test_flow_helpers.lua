@@ -15,8 +15,9 @@ local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local Op = FibersOp
-local Flow = require('fibers.internal.flow')
-local Errors = require('fibers.internal.flow.errors')
+local Flow = require('fibers.flow')
+local Rope = require('fibers.flow.rope')
+local Errors = require('fibers.flow.errors')
 
 local function fail(msg)
   error(msg, 2)
@@ -43,7 +44,7 @@ do
   local p, later
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
-    p = fibers.perform(flow:outlet():peek_op(3))
+    p = fibers.perform(flow:outlet():peek_exactly_op(3))
     later = fibers.perform(flow:outlet():read_exactly_op(6))
   end).runtime_status
   assert_status(st, 'found')
@@ -59,7 +60,7 @@ do
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc--def--tail'))
     before = fibers.perform(flow:outlet():read_until_op('--'))
-    including = fibers.perform(flow:outlet():read_including_op('--'))
+    including = fibers.perform(flow:outlet():read_until_op('--', { include = true }))
     tail = fibers.perform(flow:outlet():read_exactly_op(4))
   end).runtime_status
   assert_status(st, 'found')
@@ -74,7 +75,7 @@ do
   local got, err, partial, after_err
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('unterminated'))
-    fibers.perform(flow:inlet():shutdown_op())
+    fibers.perform(flow:inlet():close_op())
     got, err, partial = fibers.perform(flow:outlet():read_until_op('\n'))
     local again
     again, after_err = fibers.perform(flow:outlet():read_some_op(1))
@@ -92,7 +93,7 @@ do
   local line, eof, eof_err
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('tail'))
-    fibers.perform(flow:inlet():shutdown_op())
+    fibers.perform(flow:inlet():close_op())
     line = fibers.perform(flow:outlet():read_line_op())
     eof, eof_err = fibers.perform(flow:outlet():read_line_op())
   end).runtime_status
@@ -127,11 +128,11 @@ do
     choice =
       fibers.perform(Op.choice(
         Op.always('winner'),
-        src:outlet():splice_to(dst:inlet(), 3):map(function()
+        src:outlet():splice_to_op(dst:inlet(), 3):map(function()
           return 'loser'
         end)
       ))
-    moved = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
+    moved = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_got = fibers.perform(dst:outlet():read_exactly_op(3))
   end, { choice_seed = 1 }).runtime_status
@@ -150,7 +151,7 @@ do
   local moved, err, src_left, dst_snap
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
-    moved, err = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
+    moved, err = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_snap = fibers.perform(dst:inspect_op())
   end).runtime_status
@@ -169,8 +170,8 @@ do
   local moved, err, src_left, dst_snap
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
-    fibers.perform(dst:inlet():shutdown_op())
-    moved, err = fibers.perform(src:outlet():splice_to(dst:inlet(), 3))
+    fibers.perform(dst:inlet():close_op())
+    moved, err = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
     dst_snap = fibers.perform(dst:inspect_op())
   end).runtime_status
@@ -193,7 +194,7 @@ do
   end, 'seed')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function()
-    got, err = rt:perform(flow:outlet():read_until_op('\r\n', { limit = 3 }))
+    got, err = rt:perform(flow:outlet():read_until_op('\r\n', { max = 3 }))
   end, 'reader')
   local st = rt:run()
   assert_status(st, 'quiescent', 'terminator prefix at limit should have no external wake interest')
@@ -215,7 +216,7 @@ do
   local got, err, left
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcd'))
-    got, err = fibers.perform(flow:outlet():read_until_op('\r\n', { limit = 3 }))
+    got, err = fibers.perform(flow:outlet():read_until_op('\r\n', { max = 3 }))
     left = fibers.perform(flow:outlet():read_exactly_op(4))
   end).runtime_status
   assert_status(st, 'found')
@@ -229,14 +230,108 @@ do
   local flow = Flow.new({ name = 'aliases-flow', capacity = 16 })
   local n, drained, got
   local st = fibers.try_run(function()
-    n = fibers.perform(flow:inlet():append_op('xy'))
+    n = fibers.perform(flow:inlet():write_op('xy'))
     got = fibers.perform(flow:outlet():read_exactly_op(2))
-    drained = fibers.perform(flow:inlet():drain_op())
+    drained = fibers.perform(flow:inlet():flush_op())
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(n, 2)
   assert_eq(got, 'xy')
   assert_eq(drained, true)
+end
+
+-- Flow mutations notify the host reactor through a committed, deduplicated
+-- effect.  Blocked or losing mutations do not produce a notification, and Flow
+-- no longer patches Scalar's private location apply function.
+do
+  local flow = Flow.new({ name = 'flow-change-effect', capacity = 8 })
+  assert_nil(flow._state_observers)
+  assert_nil(flow._subscribe_state)
+  local notified = 0
+  local rt = FibersRuntime.new()
+  rt.host_reactor = {
+    _notify_flow_changed = function(_, changed)
+      assert_eq(changed, flow)
+      notified = notified + 1
+    end,
+  }
+  rt:spawn_raw(function()
+    rt:perform(flow:inlet():write_op('x'))
+  end, 'flow-change')
+  assert_status(rt:run(), 'found')
+  assert_eq(notified, 1, 'committed Flow mutation should discharge one notification')
+end
+
+do
+  local flow = Flow.new({ name = 'losing-flow-change-effect', capacity = 0 })
+  local notified = 0
+  local rt = FibersRuntime.new()
+  rt.host_reactor = {
+    _notify_flow_changed = function()
+      notified = notified + 1
+    end,
+  }
+  local winner
+  rt:spawn_raw(function()
+    winner = rt:perform(Op.choice(
+      flow:inlet():write_op('blocked'):map(function()
+        return 'write'
+      end),
+      Op.always('fallback')
+    ))
+  end, 'losing-flow-change')
+  assert_status(rt:run(), 'found')
+  assert_eq(winner, 'fallback')
+  assert_eq(notified, 0, 'unselected Flow mutation must not notify the reactor')
+end
+
+-- Rope delimiter search is persistent and incremental.  Once a pattern has
+-- scanned retained bytes, appending a new chunk advances only across that
+-- chunk, including matches split across chunk boundaries.
+do
+  local prefix = string.rep('a', 8192)
+  local rope = Rope.new(prefix)
+  assert_nil(rope:find('\r\n'))
+  local first = rope:_search_debug('\r\n')
+  assert_eq(first.scanned, #prefix)
+  assert_eq(first.matched, 0)
+
+  local with_cr = rope:clone()
+  with_cr:append('\r')
+  local second = with_cr:_search_debug('\r\n')
+  assert_eq(second.scanned, #prefix + 1)
+  assert_eq(second.matched, 1)
+  assert_nil(second.match)
+
+  local complete = with_cr:clone()
+  complete:append('\n')
+  assert_eq(complete:find('\r\n'), #prefix)
+  local third = complete:_search_debug('\r\n')
+  assert_eq(third.scanned, #prefix + 2)
+end
+
+-- Delimiter reads no longer flatten the retained Rope.  This guards against a
+-- return to tostring-and-rescan behaviour on each partial append.
+do
+  local original_tostring = Rope.tostring
+  Rope.tostring = function()
+    error('delimiter search must not flatten the Rope', 0)
+  end
+  local ok, err = pcall(function()
+    local flow = Flow.new({ name = 'incremental-delimiter-flow', capacity = 32 })
+    local got
+    local st = fibers.try_run(function()
+      fibers.perform(flow:inlet():write_op('header\r'))
+      fibers.perform(flow:inlet():write_op('\nbody'))
+      got = fibers.perform(flow:outlet():read_until_op('\r\n'))
+    end).runtime_status
+    assert_status(st, 'found')
+    assert_eq(got, 'header')
+  end)
+  Rope.tostring = original_tostring
+  if not ok then
+    error(err, 0)
+  end
 end
 
 print('tests/test_flow_helpers.lua: ok')

@@ -265,12 +265,12 @@ function Common.new(opts)
     return fd
   end
 
-  local function epoll_ctl(epfd, op, fd, mask)
+  local function epoll_ctl(epfd, op, fd, mask, token)
     local ev = nil
     if op ~= EPOLL_CTL_DEL then
       ev = ffi.new('struct epoll_event')
       set_event(ev, mask)
-      set_data(ev, fd)
+      set_data(ev, assert(token, 'epoll registration token required'))
     end
     return wrap_error(C.epoll_ctl(epfd, op, fd, ev))
   end
@@ -288,8 +288,10 @@ function Common.new(opts)
     end
     local out = {}
     for i = 0, n - 1 do
-      local fd = assert(tonumber_c(get_data(events[i])))
-      out[fd] = assert(tonumber_c(get_event(events[i])))
+      out[#out + 1] = {
+        token = assert(tonumber_c(get_data(events[i]))),
+        mask = assert(tonumber_c(get_event(events[i]))),
+      }
     end
     return out, nil, nil
   end
@@ -397,7 +399,13 @@ function Common.new(opts)
       epfd = epfd,
       maxevents = maxevents,
       active = {},
+      epoll_by_token = {},
+      next_epoll_token = 0,
       unpollable = {},
+      poller_registrations = {},
+      poller_by_fd = {},
+      transient_fds = {},
+      needs_rearm = {},
       on_wait = new_opts.on_wait,
       on_wake = new_opts.on_wake,
       on_unsupported = new_opts.on_unsupported,
@@ -420,12 +428,14 @@ function Common.new(opts)
   end
 
   function Linux:_delete(fd)
-    if not self.active[fd] then
+    local active = self.active[fd]
+    if not active then
       self.unpollable[fd] = nil
       return true
     end
     local ok, err, eno = epoll_ctl(self.epfd, EPOLL_CTL_DEL, fd)
     self.active[fd] = nil
+    self.epoll_by_token[active.token] = nil
     self.unpollable[fd] = nil
     if ok or eno == ENOENT or eno == EBADF then
       return true
@@ -468,23 +478,41 @@ function Common.new(opts)
       return true
     end
 
-    local ok, err, eno = epoll_ctl(self.epfd, EPOLL_CTL_MOD, fd, mask)
+    self.next_epoll_token = self.next_epoll_token + 1
+    local token = self.next_epoll_token
+    local previous = self.active[fd]
+
+    local ok, err, eno = epoll_ctl(self.epfd, EPOLL_CTL_MOD, fd, mask, token)
     if ok then
-      self.active[fd] = mask
+      if previous then
+        self.epoll_by_token[previous.token] = nil
+      end
+      self.active[fd] = { mask = mask, token = token }
+      self.epoll_by_token[token] = { fd = fd, token = token }
       return true
     end
     if eno == EPERM then
+      if previous then
+        self.epoll_by_token[previous.token] = nil
+      end
       self.unpollable[fd] = true
       self.active[fd] = nil
       return true, 'unpollable'
     end
 
-    local ok2, err2, eno2 = epoll_ctl(self.epfd, EPOLL_CTL_ADD, fd, mask)
+    local ok2, err2, eno2 = epoll_ctl(self.epfd, EPOLL_CTL_ADD, fd, mask, token)
     if ok2 then
-      self.active[fd] = mask
+      if previous then
+        self.epoll_by_token[previous.token] = nil
+      end
+      self.active[fd] = { mask = mask, token = token }
+      self.epoll_by_token[token] = { fd = fd, token = token }
       return true
     end
     if eno2 == EPERM then
+      if previous then
+        self.epoll_by_token[previous.token] = nil
+      end
       self.unpollable[fd] = true
       self.active[fd] = nil
       return true, 'unpollable'
@@ -493,25 +521,153 @@ function Common.new(opts)
     return nil, err2 or err or ('epoll_ctl failed for fd ' .. tostring(fd))
   end
 
+  local function add_poller_registration(self, wait, change, affected)
+    local fd = fd_of(change.key)
+    if not fd then
+      return nil, 'unsupported-readiness-key'
+    end
+    local existing = self.poller_registrations[change.id]
+    if existing then
+      local old_fd = existing.fd
+      local old_rec = self.poller_by_fd[old_fd]
+      if old_rec then
+        old_rec[change.id] = nil
+        if next(old_rec) == nil then
+          self.poller_by_fd[old_fd] = nil
+        end
+      end
+      affected[old_fd] = true
+    end
+    local registration = {
+      id = change.id,
+      generation = change.generation,
+      key = change.key,
+      mode = change.mode,
+      fd = fd,
+      poller = wait.poller,
+    }
+    self.poller_registrations[change.id] = registration
+    local rec = self.poller_by_fd[fd]
+    if not rec then
+      rec = {}
+      self.poller_by_fd[fd] = rec
+    end
+    rec[change.id] = registration
+    affected[fd] = true
+    return true
+  end
+
+  local function remove_poller_registration(self, change, affected)
+    local existing = self.poller_registrations[change.id]
+    if not existing or existing.generation ~= change.generation then
+      return true
+    end
+    self.poller_registrations[change.id] = nil
+    local rec = self.poller_by_fd[existing.fd]
+    if rec then
+      rec[change.id] = nil
+      if next(rec) == nil then
+        self.poller_by_fd[existing.fd] = nil
+      end
+    end
+    affected[existing.fd] = true
+    return true
+  end
+
+  local function apply_poller_changes(self, waits, affected)
+    local poller_waits = Host.poller_waits(waits)
+    local waits_by_poller = {}
+    for i = 1, #poller_waits do
+      local wait = poller_waits[i]
+      waits_by_poller[wait.poller] = wait
+      local changes = wait.poller:_host_changes(self)
+      for j = 1, #changes do
+        local change = changes[j]
+        if change.action == 'reset' then
+          local remove = {}
+          for id, registration in pairs(self.poller_registrations) do
+            if registration.poller == wait.poller then
+              remove[#remove + 1] = {
+                id = id,
+                generation = registration.generation,
+              }
+            end
+          end
+          for k = 1, #remove do
+            remove_poller_registration(self, remove[k], affected)
+          end
+        elseif change.action == 'arm' then
+          local ok, err = add_poller_registration(self, wait, change, affected)
+          if not ok then
+            return nil, err
+          end
+        elseif change.action == 'disarm' or change.action == 'retire' then
+          remove_poller_registration(self, change, affected)
+        end
+      end
+    end
+    return waits_by_poller
+  end
+
+  local function desired_modes(self, fd, transient)
+    local modes = {}
+    local rec = transient[fd]
+    if rec then
+      modes.read = rec.modes.read or nil
+      modes.write = rec.modes.write or nil
+    end
+    local poller = self.poller_by_fd[fd]
+    if poller then
+      for _, registration in pairs(poller) do
+        modes[registration.mode] = true
+      end
+    end
+    return modes
+  end
+
   function Linux:block(rt, waits, status, _opts)
     if not self.epfd then
       error(prefix .. ': host is closed', 2)
     end
     waits = waits or {}
     local deadline = Host.earliest_deadline(waits)
-    local by_fd, unsupported = collect_readiness(waits)
+    local transient, unsupported = collect_readiness(waits)
+    local affected = {}
 
-    local ok_del, err_del = self:_delete_withdrawn(by_fd)
-    if not ok_del then
-      error(err_del, 2)
+    for fd in pairs(self.transient_fds) do
+      affected[fd] = true
     end
+    local next_transient = {}
+    for fd in pairs(transient) do
+      affected[fd] = true
+      next_transient[fd] = true
+    end
+    self.transient_fds = next_transient
 
-    local have_fd = false
-    for fd, rec in pairs(by_fd) do
-      have_fd = true
-      local ok, err = self:_register(fd, rec.modes)
-      if not ok then
-        error(err, 2)
+    local waits_by_poller, poller_err = apply_poller_changes(self, waits, affected)
+    if not waits_by_poller then
+      unsupported = true
+    end
+    for fd in pairs(self.needs_rearm) do
+      affected[fd] = true
+    end
+    self.needs_rearm = {}
+
+    for fd in pairs(affected) do
+      local modes = desired_modes(self, fd, transient)
+      if not modes.read and not modes.write then
+        local ok, err = self:_delete(fd)
+        if not ok then
+          error(err, 2)
+        end
+      else
+        local ok, err, class = self:_register(fd, modes)
+        if not ok then
+          error(err, 2)
+        end
+        if (class == 'unpollable' or err == 'unpollable') and self.poller_by_fd[fd] then
+          unsupported = true
+        end
       end
     end
 
@@ -519,10 +675,25 @@ function Common.new(opts)
       if self.on_unsupported then
         self.on_unsupported(waits, status)
       end
-      return nil, 'unsupported-readiness-key'
+      return nil, poller_err or 'unsupported-readiness-key'
     end
 
-    if not have_fd then
+    -- Linux reports EPERM when regular files and certain other descriptors are
+    -- added to epoll.  Preserve the direct-readiness contract by treating such
+    -- transient waits as immediately serviceable: the subsequent authoritative
+    -- host operation is responsible for reporting EOF or an error.  Indexed
+    -- poller registrations remain unsupported for these handles because they
+    -- are intended for genuinely non-blocking readiness-driven resources.
+    local synthetic = {}
+    for fd, rec in pairs(transient) do
+      if self.unpollable[fd] and not self.poller_by_fd[fd] then
+        synthetic[fd] = bit.band(mask_for(rec.modes), bit.bnot(EPOLLONESHOT))
+      end
+    end
+
+    local have_fd = next(self.active) ~= nil
+    local have_synthetic = next(synthetic) ~= nil
+    if not have_fd and not have_synthetic then
       if deadline ~= nil then
         local delay = Host.delay_until(rt, deadline) or 0
         if delay > 0 then
@@ -545,34 +716,39 @@ function Common.new(opts)
       return nil, 'unsupported-waits'
     end
 
-    local synthetic = {}
-    for fd, rec in pairs(by_fd) do
-      if self.unpollable[fd] then
-        synthetic[fd] = bit.band(mask_for(rec.modes), bit.bnot(EPOLLONESHOT))
-      end
-    end
-
     local timeout = Host.timeout_ms(rt, deadline)
-    for _ in pairs(synthetic) do
+    if have_synthetic then
       timeout = 0
-      break
     end
 
     local evmap = synthetic
-    local polled, err = epoll_wait(self.epfd, timeout, self.maxevents)
-    if not polled then
-      error(err or 'epoll_wait failed', 2)
+    local polled = {}
+    if have_fd then
+      local err
+      polled, err = epoll_wait(self.epfd, timeout, self.maxevents)
+      if not polled then
+        error(err or 'epoll_wait failed', 2)
+      end
     end
-    for fd, mask in pairs(polled) do
-      evmap[fd] = bit.bor(evmap[fd] or 0, mask)
+    for i = 1, #polled do
+      local event = polled[i]
+      local token_record = self.epoll_by_token[event.token]
+      if token_record then
+        local active = self.active[token_record.fd]
+        if active and active.token == event.token then
+          local fd = token_record.fd
+          evmap[fd] = bit.bor(evmap[fd] or 0, event.mask)
+          self.needs_rearm[fd] = true
+        end
+      end
     end
 
     local delivered = false
     for fd, mask in pairs(evmap) do
-      local rec = by_fd[fd]
+      local rd = bit.band(mask, bit.bor(RD, ERR)) ~= 0
+      local wr = bit.band(mask, bit.bor(WR, ERR)) ~= 0
+      local rec = transient[fd]
       if rec then
-        local rd = bit.band(mask, bit.bor(RD, ERR)) ~= 0
-        local wr = bit.band(mask, bit.bor(WR, ERR)) ~= 0
         for i = 1, #rec.waits do
           local w = rec.waits[i]
           local mode = w.mode or 'read'
@@ -581,6 +757,17 @@ function Common.new(opts)
             delivered = true
           elseif mode ~= 'write' and mode ~= 'wr' and rd then
             rt:deliver(w.feed, 'read', true)
+            delivered = true
+          end
+        end
+      end
+      local poller = self.poller_by_fd[fd]
+      if poller then
+        for _, registration in pairs(poller) do
+          local ready = registration.mode == 'write' and wr or rd
+          local wait = waits_by_poller and waits_by_poller[registration.poller]
+          if ready and wait and registration.poller:_host_delivered(registration) then
+            Host.deliver_poller_ready(rt, wait, registration)
             delivered = true
           end
         end

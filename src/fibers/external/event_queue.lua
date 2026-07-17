@@ -32,13 +32,15 @@ local function clear(q)
   touch(q, { head = 1, values = {} })
 end
 
-function EventQueue.new(name)
+function EventQueue.new(name, opts)
+  opts = opts or {}
   next_id = next_id + 1
   local q = setmetatable({
     name = name or ('events-' .. tostring(next_id)),
     _fibers_id = 'events-' .. tostring(next_id),
     _fibers_kind = Kind,
     version = 0,
+    _interest_factory = opts.interest,
   }, EventQueue)
   q._location = Substrate.new_location({
     name = q.name .. ':queue',
@@ -89,6 +91,9 @@ local function op_for(q, drain)
     transition = transition,
     order = transition.order or 0,
     interest = function(rt)
+      if type(q._interest_factory) == 'function' then
+        return q._interest_factory(rt, q, ExternalFeed.for_resource(rt, q))
+      end
       return Interest.external(q, 'next', {
         external_kind = 'events',
         feed = ExternalFeed.for_resource(rt, q),

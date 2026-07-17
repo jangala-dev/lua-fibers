@@ -202,26 +202,38 @@ fibers.perform(tx:send_op('message'))
 assert(fibers.perform(rx:recv_op()) == 'message')
 ```
 
-## Streams
+## Flows and streams
 
-`Stream` is the supported bidirectional byte facility. The current flow implementation is private and may change without altering the Stream contract.
+`Flow` is the supported transactional byte-building block. It provides stable producer and consumer endpoints, backpressure, exact byte reads, closure and retained-byte leases.
+
+```lua
+local Flow = require('fibers.flow')
+local flow = Flow.new({ capacity = 4096 })
+
+fibers.perform(flow:inlet():write_op('hello\n'))
+assert(fibers.perform(flow:outlet():read_line_op()) == 'hello')
+```
+
+`Stream` is the familiar readable, writable or duplex facility built from one or two Flows:
 
 ```lua
 local a, b = Stream.memory_pair({ capacity = 4096 })
 
-fibers.perform(a:writer():write_op('hello\n'))
-assert(fibers.perform(b:reader():read_line_op()) == 'hello')
+fibers.perform(a:write_op('hello\n'))
+assert(fibers.perform(b:read_line_op()) == 'hello')
 ```
 
 Host-backed streams are opened transactionally:
 
 ```lua
-local stream = fibers.perform(Stream.open_backend_op(backend, {
+local stream = fibers.perform(Stream.open_op(backend, {
   name = 'connection',
+  read = true,
+  write = true,
 }))
 ```
 
-If the open option loses, no pump starts. See `../advanced/embedding.md` for backend and host-handle contracts.
+All host-backed stream directions in one Runtime share one lazily created reactor. If the open option loses, no registration is discharged and no reactor starts. See `../advanced/flows-and-streams.md` and `../advanced/embedding.md`.
 
 ## Time
 
@@ -279,12 +291,13 @@ fibers.external.readiness
 
 See `../advanced/facility-authoring.md` and `../../examples/recipes/` for complete facilities built only from supported interfaces.
 
-Petri and Calendar are trusted kernel case studies under `examples/case_studies/`. They are not installed modules or version 1 API commitments. Phase and the current scalar Flow work remain under `experiments/`.
+Petri and Calendar are trusted kernel case studies under `examples/case_studies/`. They are not installed modules or version 1 API commitments. Phase remains under `experiments/`.
 
 ## Further reading
 
 - `../advanced/option-algebra.md` — option semantics and laws
 - `../advanced/lifetimes-and-custody.md` — custody, borrowing, claims and policy
+- `../advanced/flows-and-streams.md` — Flow leases, Streams and the shared reactor
 - `../advanced/embedding.md` — direct runtime driving and hosts
 - `../advanced/facility-authoring.md` — composing supported public facilities
 - `../contributing/trusted-resource-programmes.md` — closed kernel resource programmes

@@ -48,6 +48,29 @@ function Host.has_readiness_waits(waits)
   return #Host.readiness_waits(waits) > 0
 end
 
+function Host.poller_waits(waits)
+  local out = {}
+  for i = 1, #(waits or {}) do
+    local w = waits[i]
+    if w and w.kind == 'external' and w.external_kind == 'poller' and w.poller and w.feed then
+      out[#out + 1] = w
+    end
+  end
+  return out
+end
+
+function Host.has_poller_waits(waits)
+  return #Host.poller_waits(waits) > 0
+end
+
+function Host.deliver_poller_ready(rt, wait, registration)
+  if not wait or not wait.feed or not registration then
+    return false
+  end
+  rt:deliver(wait.feed, registration.id, registration.generation, registration.mode, registration.key)
+  return true
+end
+
 function Host.normalise_readiness_mode(mode)
   mode = mode or 'read'
   if mode == 'wr' then
@@ -197,5 +220,7 @@ function Host.default(opts)
 end
 
 Host.Handle = require('fibers.host.handle')
+Host.Poller = require('fibers.host.poller')
+Host.Reactor = require('fibers.host.reactor')
 
 return Host

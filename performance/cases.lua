@@ -1,5 +1,5 @@
 local fibers = require('fibers')
-local Flow = require('fibers.internal.flow')
+local Flow = require('fibers.flow')
 local Policy = require('fibers.policy')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')

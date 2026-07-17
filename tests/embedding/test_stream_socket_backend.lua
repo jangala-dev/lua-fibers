@@ -24,7 +24,7 @@ local Host = FibersHost
 local Runtime = FibersRuntime
 local Region = FibersRegion
 local Stream = FibersStream
-local SocketBackend = Stream.backend.Socket
+local SocketBackend = require('fibers.stream.backend.socket')
 
 local function fail(msg)
   error(msg, 2)
@@ -223,7 +223,7 @@ do
   assert_eq(mode, 'read')
 end
 
--- A socket-shaped backend uses host readiness to drive the existing read pump.
+-- A socket-shaped backend uses host readiness to drive the existing read reaction.
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
@@ -233,7 +233,9 @@ do
   local stream, got
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-read-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-read-stream' })
+    )
     got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'socket-reader')
 
@@ -247,7 +249,7 @@ do
   assert_eq(got, 'abc')
 end
 
--- Write readiness drives the write pump, and host writes remain authoritative.
+-- Write readiness drives the write reaction, and host writes remain authoritative.
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
@@ -258,19 +260,22 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-write-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-write-stream' })
+    )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-writer')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
-  assert_truthy(
-    stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '',
-    'write pump should lease committed bytes'
+  assert_truthy(stream, 'stream should open')
+  assert_eq(
+    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    nil,
+    'reactor should not lease before host writability'
   )
+  assert_eq(Inspect.data(stream:writer().flow.reservoir), 'hello')
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)
@@ -293,7 +298,9 @@ do
   local stream, flushed
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-partial-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-partial-stream' })
+    )
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'socket-partial-writer')
@@ -315,7 +322,9 @@ do
   local stream, first, second, err
 
   rt:spawn_raw(function()
-    stream = rt:perform(Stream.open_backend_in_op(region, backend, { name = 'socket-eof-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-eof-stream' })
+    )
     first = rt:perform(stream:reader():read_some_op(8))
     second, err = rt:perform(stream:reader():read_some_op(8))
   end, 'socket-eof-reader')

@@ -17,7 +17,7 @@ local FibersRegion = require('fibers.lifetime.region')
 local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local Stream = FibersStream
-local Fake = Stream.backend.Fake
+local Fake = require('fibers.stream.backend.fake')
 local Settlement = require('fibers.internal.settlement')
 
 local function fail(msg)
@@ -68,7 +68,9 @@ do
   local stream, direct_release, settled_status
   local st
   st = fibers.try_run(function()
-    stream = fibers.perform(Stream.open_backend_in_op(life:raw_region(), backend, { name = 'tree-stream' }))
+    stream = fibers.perform(
+      Stream.open_op(backend, { owner = life:raw_region(), read = true, write = true, name = 'tree-stream' })
+    )
     direct_release = fibers.perform(life
       :raw_region()
       :release_op(stream)
@@ -91,7 +93,12 @@ do
   local backend = Fake.new({ name = 'move-tree-backend' })
   local stream, a_count_after, b_count_after_move, b_count_after_settlement, child_transfer
   local st = fibers.try_run(function()
-    stream = fibers.perform(Stream.open_backend_in_op(a:raw_region(), backend, { name = 'move-tree-stream' }))
+    stream = fibers.perform(
+      Stream.open_op(
+        backend,
+        { owner = a:raw_region(), read = true, write = true, name = 'move-tree-stream' }
+      )
+    )
     fibers.perform(a:move_op(stream, b))
     a_count_after = fibers.perform(a:inspect_op()).owned_count
     b_count_after_move = fibers.perform(b:inspect_op()).owned_count

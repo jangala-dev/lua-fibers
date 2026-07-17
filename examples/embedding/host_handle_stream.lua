@@ -15,6 +15,7 @@ local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Region = require('fibers.lifetime.region')
 local Stream = require('fibers.stream')
+local HandleBackend = require('fibers.stream.backend.handle')
 local Runner = require('fibers.runner')
 local Host = require('fibers.host')
 local host = Host.manual({ auto_advance_time = false })
@@ -25,7 +26,12 @@ local handle = Host.Handle.fake({ host = host, key = 'example-handle' })
 local stream, got, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_handle_in_op(region, handle, { name = 'example-handle-stream' }))
+  stream = rt:perform(
+    Stream.open_op(
+      HandleBackend.new(handle, { name = 'example-handle-stream' }),
+      { owner = region, name = 'example-handle-stream', read = true, write = true }
+    )
+  )
   got = rt:perform(stream:reader():read_exactly_op(5))
   rt:perform(stream:writer():write_op('pong'))
   flushed = rt:perform(stream:writer():flush_op())

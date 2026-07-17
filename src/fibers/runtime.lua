@@ -1683,7 +1683,7 @@ function Runtime:_step_impl(opts)
   -- Bounded stepping must not pin itself to the oldest blocked request. Try
   -- each pending focus in round-robin order until one commit is found. This is
   -- the single-step counterpart of Runtime:run's all-focus pass and allows
-  -- background pumps and policy monitors to progress behind a blocked root.
+  -- background services and policy monitors to progress behind a blocked root.
   local count = #self.pending
   local start = ((self._step_cursor or 0) % count) + 1
   local refs = reuse_table(self, '_driver_refs')
