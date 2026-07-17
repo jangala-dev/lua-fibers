@@ -29,9 +29,9 @@ local bytes = reader:read_all({ max = 4096 })
 reader:close('complete')
 ```
 
-Internally, a hidden Pipe root coordinates acquisition and settlement. Public
-callers receive the two Streams directly, matching the successful surface of the
-pre-version-1 library.
+Internally, pre-admitted adoption records cover both handles until their
+Streams take ownership. Public callers receive the two Streams directly,
+matching the successful surface of the pre-version-1 library.
 
 ## Stream migration helpers
 
@@ -60,7 +60,10 @@ stream:read_op('*a', { max = 1024 * 1024 })
 
 ## Listeners and connections
 
-Socket acquisition is split into familiar resource types:
+Socket acquisition is split into familiar resource types. Address and option
+tables are snapshotted when an option is constructed, so later caller mutation
+does not change the meaning of an inert option.
+
 
 ```text
 Listener   accepts connected Streams
@@ -80,7 +83,14 @@ local connection, accept_err = listener:accept()
 assert(connection, accept_err)
 ```
 
-Accepted connections expose the ordinary Stream surface directly.
+Accepted connections expose the ordinary Stream surface directly. Before
+acceptance they remain owned by the Listener's driver scope. `accept_op`
+dequeues a connection and moves its complete Stream subtree into the accepting
+scope in the same commit. If the option loses a choice, neither action occurs.
+Queued input has certified priority over terminal listener closure. When a
+transfer option will be stored or performed by another fibre, pass its target
+Scope or Region explicitly; an omitted target is the current scope at option
+construction.
 
 Outbound connection establishment is deliberately two-stage:
 
@@ -95,8 +105,32 @@ local selected, selected_err = fibers.perform(selected_dial:result_op())
 
 The split allows the eventual connection result to participate correctly in
 `choice`, timeouts and future Happy Eyeballs races. `dial:connected_op()` is a
-success-only option and becomes refutable after terminal failure;
-`dial:result_op()` returns either the connection or its structured error.
+success-only option and becomes refutable after terminal failure or closure. A
+successful but unclaimed connection remains owned by the Dial driver's scope;
+claiming it moves the complete Stream subtree into the caller's scope. As with
+`accept_op`, pass an explicit target when a result option is intended for a
+different fibre or scope.
+`dial:result_op()` returns either the transferred connection or its structured
+error. `dial:closed_op()` observes driver termination and completed custody
+disposition.
+
+Listener and Dial lifecycle state is explicit transactional state rather than a
+collection of completion flags and mutable booleans. The principal states are:
+
+```text
+Listener: starting -> active -> stopping -> stopped
+Dial:     starting -> connected -> claimed
+          |             |
+          +-> failed    +-> closing -> closed
+          +----------------^
+```
+
+A close option commits the lifecycle transition and the driver's interrupt
+effect in the same world. Host closure then occurs in participant-local
+post-commit code. A Dial claim commits its `connected -> claimed` transition and
+the Stream custody move together, so neither can occur without the other.
+Expected host failures are stored in lifecycle state as values; adapter defects
+and close failures are marked fatal and remain visible during scope settlement.
 
 Convenience address constructors and option forms are available for internet
 and Unix-domain sockets:
@@ -124,8 +158,10 @@ Source binding fields from the earlier API remain accepted by
 ## Ownership and host support
 
 Newly acquired handles are covered by pre-admitted adoption records before any
-fibre can yield. Streams, listeners and dials are then settled by their owning
-scope.
+fibre can yield. Accepted and dialled Streams remain in driver scopes until a
+caller commits their custody transfer. Listener and Dial drivers are structural children of their resource roots.
+Resource settlement therefore cancels and joins them before releasing the root,
+while readiness and bounded-queue waits remain cancellable.
 
 The deterministic `ManualHost` implements pipes and virtual sockets for tests,
 examples and embedding work. Native pipe support is present in the available

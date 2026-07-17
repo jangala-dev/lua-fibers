@@ -7,7 +7,7 @@ REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./reference/?.lua;./
 export LUA_PATH := $(REPO_LUA_PATH)
 
 .PHONY: test test-reference test-public test-composition test-resources \
-	test-lifetimes test-embedding test-kernel test-internal test-case-studies \
+	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
 	test-experiments test-performance test-matrix test-lua51 test-lua52 \
 	test-lua53 test-lua54 test-lua55 test-luajit test-luajit-interpreter \
 	examples bench performance check-format check-layout
@@ -29,6 +29,9 @@ test-resources:
 
 test-lifetimes:
 	$(LUA) tests/run_group.lua lifetimes
+
+test-io:
+	$(LUA) tests/run_group.lua io
 
 test-embedding:
 	$(LUA) tests/run_group.lua embedding
@@ -106,6 +109,15 @@ check-layout:
 	@test -f src/fibers/internal/completion.lua
 	@test -f src/fibers/internal/adoption.lua
 	@test -f src/fibers/file.lua
+	@test -f src/fibers/socket.lua
+	@test -f src/fibers/socket/address.lua
+	@test -f src/fibers/socket/listener.lua
+	@test -f src/fibers/socket/dial.lua
+	@test -f src/fibers/internal/io.lua
+	@test -f src/fibers/internal/socket/lifecycle.lua
+	@test -f src/fibers/internal/socket/listener_lifecycle.lua
+	@test -f src/fibers/internal/socket/dial_lifecycle.lua
+	@test ! -e src/fibers/internal/socket_lifecycle.lua
 	@test ! -e src/fibers/internal/flow.lua
 	@test ! -e src/fibers/stream/pump.lua
 	@test -f src/fibers/internal/fifo.lua

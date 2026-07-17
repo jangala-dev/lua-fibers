@@ -86,6 +86,15 @@ function Completion:terminal_op()
   end)
 end
 
+function Completion:pending_op()
+  return self.state:read_op():and_then(function(state)
+    if state.kind == 'pending' then
+      return Op.always(true)
+    end
+    return Op.never()
+  end)
+end
+
 function Completion:result_op()
   return self:terminal_op():map(function(state)
     if state.kind == 'succeeded' then

@@ -120,4 +120,16 @@ do
   assert_eq(closed, 0)
 end
 
+
+-- Completion can expose pending as an option for single-winner protocols.
+do
+  local Completion = require('fibers.internal.completion')
+  local completion = Completion.new('pending-completion')
+  fibers.run(function()
+    assert_eq(fibers.perform(completion:pending_op()), true)
+    fibers.perform(completion:publish_success_op('done'))
+    assert_eq(fibers.perform(completion:pending_op():or_else(fibers.always(false))), false)
+  end)
+end
+
 print('tests/io/test_foundations.lua: ok')

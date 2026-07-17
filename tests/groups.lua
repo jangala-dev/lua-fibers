@@ -49,6 +49,8 @@ return {
     'tests/io/test_foundations.lua',
     'tests/io/test_pipe.lua',
     'tests/io/test_socket.lua',
+    'tests/io/test_socket_hardening.lua',
+    'tests/io/test_socket_lifecycle.lua',
   },
   embedding = {
     'tests/embedding/hosts/test_all.lua',

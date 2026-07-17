@@ -316,11 +316,12 @@ Anonymous pipes are owned pairs of one-way Streams:
 
 ```lua
 local file = require('fibers.file')
-local pipe = fibers.perform(file.pipe_op())
+local reader, writer, err = fibers.perform(file.pipe_op())
+assert(reader, err)
 
-fibers.perform(pipe:writer():write_op('hello'))
-fibers.perform(pipe:writer():close_op())
-local bytes = fibers.perform(pipe:reader():read_all_op({ max = 4096 }))
+fibers.perform(writer:write_op('hello'))
+fibers.perform(writer:close_op())
+local bytes = fibers.perform(reader:read_all_op({ max = 4096 }))
 ```
 
 Pipe acquisition occurs only after `pipe_op` commits. Newly created host handles
