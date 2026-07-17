@@ -1,6 +1,6 @@
 # Programming guide
 
-Fibers presents a small application-facing concurrency language. Options describe possible actions; `perform` is the single execution boundary.
+Fibers presents a small application-facing concurrency language. Direct methods provide a gentle sequential surface; `_op` methods expose the same actions as inert options for composition.
 
 ```lua
 local fibers = require('fibers')
@@ -23,7 +23,7 @@ fibers.run(function(scope)
     return 'done'
   end, 'worker')
 
-  assert(fibers.perform(task:await_op()) == 'done')
+  assert(task:await() == 'done')
 end)
 ```
 
@@ -34,7 +34,7 @@ fibers.run(function()
   local task = fibers.spawn(function()
     return 7
   end)
-  assert(fibers.perform(task:await_op()) == 7)
+  assert(task:await() == 7)
 end)
 ```
 
@@ -51,6 +51,24 @@ else
   print(outcome:tostring())
 end
 ```
+
+## Direct methods and options
+
+Selected everyday facilities expose both forms:
+
+```lua
+local message = inbox:get()
+```
+
+is exactly:
+
+```lua
+local message = fibers.perform(inbox:get_op())
+```
+
+Use direct methods for ordinary sequential code. Use `_op` when an action must
+participate in `choice`, `or_else`, `and_then`, `all` or `tensor`. The detailed
+policy is in [`direct-and-options.md`](direct-and-options.md).
 
 ## Options
 
@@ -143,10 +161,10 @@ Both forms expose `put_op` and `get_op`.
 ```lua
 fibers.run(function()
   fibers.spawn(function()
-    fibers.perform(inbox:put_op('hello'))
+    inbox:put('hello')
   end)
 
-  assert(fibers.perform(inbox:get_op()) == 'hello')
+  assert(inbox:get() == 'hello')
 end)
 ```
 
@@ -197,9 +215,9 @@ assert(next_value == 1)
 local pulse = Pulse.new()
 local tx, rx = Mailbox.new(16)
 
-fibers.perform(pulse:signal_op())
-fibers.perform(tx:send_op('message'))
-assert(fibers.perform(rx:recv_op()) == 'message')
+pulse:signal()
+tx:send('message')
+assert(rx:recv() == 'message')
 ```
 
 ## Flows and streams
@@ -210,8 +228,8 @@ assert(fibers.perform(rx:recv_op()) == 'message')
 local Flow = require('fibers.flow')
 local flow = Flow.new({ capacity = 4096 })
 
-fibers.perform(flow:inlet():write_op('hello\n'))
-assert(fibers.perform(flow:outlet():read_line_op()) == 'hello')
+flow:inlet():write('hello\n')
+assert(flow:outlet():read_line() == 'hello')
 ```
 
 `Stream` is the familiar readable, writable or duplex facility built from one or two Flows:
@@ -219,8 +237,8 @@ assert(fibers.perform(flow:outlet():read_line_op()) == 'hello')
 ```lua
 local a, b = Stream.memory_pair({ capacity = 4096 })
 
-fibers.perform(a:write_op('hello\n'))
-assert(fibers.perform(b:read_line_op()) == 'hello')
+a:write('hello\n')
+assert(b:read_line() == 'hello')
 ```
 
 Host-backed streams are opened transactionally:
@@ -237,11 +255,13 @@ All host-backed stream directions in one Runtime share one lazily created reacto
 
 ## Time
 
-Application code normally sleeps through options:
+Application code may use the direct form:
 
 ```lua
-fibers.perform(fibers.sleep_op(0.25))
+fibers.sleep(0.25)
 ```
+
+The composable form remains `fibers.sleep_op(0.25)`.
 
 The relative deadline is fixed once per perform attempt; validation restart does not slide it forwards.
 
@@ -295,6 +315,7 @@ Petri and Calendar are trusted kernel case studies under `examples/case_studies/
 
 ## Further reading
 
+- `direct-and-options.md` — direct methods and composable options
 - `../advanced/option-algebra.md` — option semantics and laws
 - `../advanced/lifetimes-and-custody.md` — custody, borrowing, claims and policy
 - `../advanced/flows-and-streams.md` — Flow leases, Streams and the shared reactor

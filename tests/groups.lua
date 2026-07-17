@@ -7,6 +7,7 @@ return {
     'tests/public/test_flow.lua',
     'tests/public/test_op.lua',
     'tests/public/test_policy.lua',
+    'tests/public/test_performing_conveniences.lua',
     'tests/public/test_public_surface.lua',
     'tests/public/test_sleep.lua',
     'tests/public/test_stream_memory.lua',

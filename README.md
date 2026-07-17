@@ -85,6 +85,34 @@ local message = fibers.perform(inbox:get_op())
 
 The option may commit immediately, wait for other participants, or compose several actions into one transaction. Application code uses the same boundary in each case.
 
+### Direct methods are the gentle on-ramp
+
+Selected everyday facilities also provide a direct performing method:
+
+```lua
+local message = inbox:get()
+```
+
+This is exactly:
+
+```lua
+local message = fibers.perform(inbox:get_op())
+```
+
+Use the direct form for ordinary sequential fibre code. Ask for an option when
+the action needs to join `choice`, `or_else`, sequencing or a product. The
+facility method and the explicit form share one implementation and return the
+same values and errors.
+
+```lua
+local message = fibers.perform(fibers.choice(
+  inbox:get_op(),
+  fibers.sleep_op(1):map(function()
+    return 'timeout'
+  end)
+))
+```
+
 ### Effects belong to committed worlds
 
 An effect is a typed runtime obligation selected with an option and discharged only if that world commits. Fibers uses effects for task spawning, interruption, scope notification and host wake-up.
@@ -380,6 +408,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 ### Using Fibers
 
 - [Programming guide](docs/guide/getting-started.md)
+- [Direct methods and options](docs/guide/direct-and-options.md)
 - [Pipes and sockets](docs/guide/io.md)
 - [Tutorial and embedding examples](examples/README.md)
 - [Facility recipes](examples/recipes/README.md)

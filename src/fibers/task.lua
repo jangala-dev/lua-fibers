@@ -7,6 +7,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local perform = require('fibers.perform')
 local Scalar = require('fibers.scalar')
 local Effect = require('fibers.lifetime.effect')
 local Interrupt = require('fibers.internal.interrupt')
@@ -224,6 +225,14 @@ function Task:state_op()
       }
     end)
   end, Op.dependencies(cancellation_read))
+end
+
+function Task:await()
+  return perform(self:await_op())
+end
+
+function Task:request_cancel(reason)
+  return perform(self:request_cancel_op(reason))
 end
 
 return Task

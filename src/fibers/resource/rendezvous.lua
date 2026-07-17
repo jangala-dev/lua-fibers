@@ -1,5 +1,6 @@
 local Op = require('fibers.op')
 local Rendezvous = {}
+local perform = require('fibers.perform')
 Rendezvous.__index = Rendezvous
 local Kind = { name = 'rendezvous' }
 local next_id = 0
@@ -24,4 +25,12 @@ function Rendezvous:put_op(value)
   return Op._compact_occurrence(self._put_descriptor, value)
 end
 Rendezvous.Kind = Kind
+function Rendezvous:get()
+  return perform(self:get_op())
+end
+
+function Rendezvous:put(value)
+  return perform(self:put_op(value))
+end
+
 return Rendezvous

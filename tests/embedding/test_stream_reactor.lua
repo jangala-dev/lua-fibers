@@ -111,9 +111,9 @@ end
 -- Flow surfaces are capability-specific; looping friendly methods and duplex byte ops are absent.
 do
   local a, _b = Stream.memory_pair({ name = 'no-friendly-stream' })
-  assert_nil(a.read, 'stream should not expose friendly read')
-  assert_nil(a.write, 'stream should not expose friendly write')
-  assert_nil(a.close, 'stream should not expose friendly close')
+  assert_eq(type(a.read), 'function', 'stream exposes direct performing read')
+  assert_eq(type(a.write), 'function', 'stream exposes direct performing write')
+  assert_eq(type(a.close), 'function', 'stream exposes direct performing close')
   assert_truthy(type(a.read_line_op) == 'function', 'duplex should forward reader options')
   assert_truthy(type(a.write_op) == 'function', 'duplex should forward writer options')
 end

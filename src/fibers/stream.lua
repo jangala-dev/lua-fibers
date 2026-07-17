@@ -11,6 +11,7 @@ local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
 local Flow = require('fibers.flow')
 local Runtime = require('fibers.runtime')
+local perform = require('fibers.perform')
 
 local Stream = {}
 local Duplex = {}
@@ -161,6 +162,42 @@ function Duplex:flush_op()
   return require_writer(self):flush_op()
 end
 
+function Duplex:read_some(n)
+  return perform(self:read_some_op(n))
+end
+
+function Duplex:read_exactly(n)
+  return perform(self:read_exactly_op(n))
+end
+
+function Duplex:read_until(separator, opts)
+  return perform(self:read_until_op(separator, opts))
+end
+
+function Duplex:read_line(opts)
+  return perform(self:read_line_op(opts))
+end
+
+function Duplex:read_all(opts)
+  return perform(self:read_all_op(opts))
+end
+
+function Duplex:read(spec, opts)
+  return perform(self:read_op(spec, opts))
+end
+
+function Duplex:write(...)
+  return perform(self:write_op(...))
+end
+
+function Duplex:write_some(bytes)
+  return perform(self:write_some_op(bytes))
+end
+
+function Duplex:flush()
+  return perform(self:flush_op())
+end
+
 function Duplex:inspect_op()
   local options = {}
   if self.read_flow then
@@ -286,6 +323,30 @@ function Duplex:closed_op()
     end
     return true
   end)
+end
+
+function Duplex:shutdown_read(reason)
+  return perform(self:shutdown_read_op(reason))
+end
+
+function Duplex:shutdown_write(reason)
+  return perform(self:shutdown_write_op(reason))
+end
+
+function Duplex:abort_write(reason)
+  return perform(self:abort_write_op(reason))
+end
+
+function Duplex:close(reason)
+  return perform(self:close_op(reason))
+end
+
+function Duplex:abort(reason)
+  return perform(self:abort_op(reason))
+end
+
+function Duplex:closed()
+  return perform(self:closed_op())
 end
 
 local function host_stream(opts)
@@ -474,6 +535,21 @@ HostStream.abort_write_op = Duplex.abort_write_op
 HostStream.close_op = Duplex.close_op
 HostStream.abort_op = Duplex.abort_op
 HostStream.closed_op = Duplex.closed_op
+HostStream.read_some = Duplex.read_some
+HostStream.read_exactly = Duplex.read_exactly
+HostStream.read_until = Duplex.read_until
+HostStream.read_line = Duplex.read_line
+HostStream.read_all = Duplex.read_all
+HostStream.read = Duplex.read
+HostStream.write = Duplex.write
+HostStream.write_some = Duplex.write_some
+HostStream.flush = Duplex.flush
+HostStream.shutdown_read = Duplex.shutdown_read
+HostStream.shutdown_write = Duplex.shutdown_write
+HostStream.abort_write = Duplex.abort_write
+HostStream.close = Duplex.close
+HostStream.abort = Duplex.abort
+HostStream.closed = Duplex.closed
 
 -- Select one complete line from a named collection of Streams.
 function Stream.merge_lines_op(streams, opts)
@@ -492,6 +568,10 @@ function Stream.merge_lines_op(streams, opts)
   return Op.named_choice(entries):map(function(_selected, source, line, err)
     return source, line, err
   end)
+end
+
+function Stream.merge_lines(streams, opts)
+  return perform(Stream.merge_lines_op(streams, opts))
 end
 
 return Stream

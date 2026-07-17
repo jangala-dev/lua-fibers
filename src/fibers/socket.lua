@@ -17,6 +17,7 @@ local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
 local Queue = require('fibers.internal.fifo')
 local Protected = require('fibers.internal.protected')
+local perform = require('fibers.perform')
 
 local Socket = {}
 local Listener = {}
@@ -161,10 +162,10 @@ end
 function Listener:close_op(reason)
   local listener = self
   return Op.always(true):wrap(function()
-    if listener.closed then
+    if listener._closed then
       return listener.close_error == nil, listener.close_error
     end
-    listener.closed = true
+    listener._closed = true
     local ok, err = true, nil
     if listener.host_listener then
       ok, err = close_value(listener.host_listener, reason)
@@ -210,12 +211,12 @@ local function listener_driver(listener, opts)
   local rt = Runtime.current()
   local owner = listener.scope_owner
   local region = listener.region
-  while not listener.closed do
+  while not listener._closed do
     local ready, ready_err = Protected.pcall(function()
       return masked_perform(rt, listener.host_listener:read_ready_op())
     end)
     if not ready then
-      if listener.closed then
+      if listener._closed then
         break
       end
       listener.close_error = HostError.normalise(ready_err, {
@@ -225,7 +226,7 @@ local function listener_driver(listener, opts)
       })
       break
     end
-    if listener.closed then
+    if listener._closed then
       break
     end
 
@@ -327,7 +328,7 @@ local function listen_op(addr, opts)
     adoption = Adoption.slot(name .. ':adoption'),
     host_listener = nil,
     driver = nil,
-    closed = false,
+    _closed = false,
     close_error = nil,
   })
   setmetatable(listener, Listener)
@@ -514,4 +515,56 @@ end
 Socket.Listener = Listener
 Socket.Dial = Dial
 Socket.Error = HostError
+function Listener:accept()
+  return perform(self:accept_op())
+end
+
+function Listener:close(reason)
+  return perform(self:close_op(reason))
+end
+
+function Listener:closed()
+  return perform(self:closed_op())
+end
+
+function Dial:connected()
+  return perform(self:connected_op())
+end
+
+function Dial:failed()
+  return perform(self:failed_op())
+end
+
+function Dial:result()
+  return perform(self:result_op())
+end
+
+function Dial:close(reason)
+  return perform(self:close_op(reason))
+end
+
+function Socket.listen(addr, opts)
+  return perform(Socket.listen_op(addr, opts))
+end
+
+function Socket.listen_inet(host, port, opts)
+  return perform(Socket.listen_inet_op(host, port, opts))
+end
+
+function Socket.listen_unix(path, opts)
+  return perform(Socket.listen_unix_op(path, opts))
+end
+
+function Socket.dial(addr, opts)
+  return perform(Socket.dial_op(addr, opts))
+end
+
+function Socket.dial_inet(host, port, opts)
+  return perform(Socket.dial_inet_op(host, port, opts))
+end
+
+function Socket.dial_unix(path, opts)
+  return perform(Socket.dial_unix_op(path, opts))
+end
+
 return Socket

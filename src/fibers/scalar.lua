@@ -1,4 +1,5 @@
 local Op = require('fibers.op')
+local perform = require('fibers.perform')
 local Substrate = require('fibers.internal.kernel.store')
 
 local Scalar = {}
@@ -196,4 +197,21 @@ function Scalar:transition_op(transition, payload)
 end
 
 Scalar.Kind = Kind
+
+function Scalar:read()
+  return perform(self:read_op())
+end
+
+function Scalar:changed(version)
+  return perform(self:changed_op(version))
+end
+
+function Scalar:expect(value)
+  return perform(self:expect_op(value))
+end
+
+function Scalar:write(value)
+  return perform(self:write_op(value))
+end
+
 return Scalar

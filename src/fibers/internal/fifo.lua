@@ -6,6 +6,7 @@
 local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
 local Counter = require('fibers.resource.counter')
+local perform = require('fibers.perform')
 
 local Queue = {}
 Queue.__index = Queue
@@ -65,6 +66,14 @@ function Queue:snapshot_op()
     end)
     return rows
   end)
+end
+
+function Queue:put(value)
+  return perform(self:put_op(value))
+end
+
+function Queue:get()
+  return perform(self:get_op())
 end
 
 return Queue

@@ -5,6 +5,7 @@
 -- Queue; capacity-zero mailboxes rendezvous directly.
 
 local Op = require('fibers.op')
+local perform = require('fibers.perform')
 local Scalar = require('fibers.scalar')
 local Queue = require('fibers.internal.fifo')
 local Rendezvous = require('fibers.resource.rendezvous')
@@ -368,4 +369,22 @@ end
 Mailbox.Tx = Tx
 Mailbox.Rx = Rx
 Mailbox.Meta = Meta
+function Tx:send(value)
+  return perform(self:send_op(value))
+end
+
+function Tx:clone()
+  return perform(self:clone_op())
+end
+
+function Tx:close(reason)
+  return perform(self:close_op(reason))
+end
+
+function Rx:recv()
+  return perform(self:recv_op())
+end
+
+Rx.receive = Rx.recv
+
 return Mailbox

@@ -6,6 +6,7 @@
 
 local Scalar = require('fibers.scalar')
 local Op = require('fibers.op')
+local perform = require('fibers.perform')
 
 local Pulse = {}
 Pulse.__index = Pulse
@@ -147,4 +148,20 @@ function Pulse:next_op()
 end
 
 Pulse.State = State
+function Pulse:signal()
+  return perform(self:signal_op())
+end
+
+function Pulse:close(reason)
+  return perform(self:close_op(reason))
+end
+
+function Pulse:changed(last_seen)
+  return perform(self:changed_op(last_seen))
+end
+
+function Pulse:next()
+  return perform(self:next_op())
+end
+
 return Pulse

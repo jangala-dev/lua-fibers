@@ -12,18 +12,21 @@ of directional Streams:
 ```lua
 local file = require('fibers.file')
 
-local reader, writer, err = fibers.perform(file.pipe_op())
+local reader, writer, err = file.pipe()
 assert(reader, err)
+
+-- Equivalent composable acquisition:
+-- local reader, writer, err = fibers.perform(file.pipe_op())
 ```
 
 The writer produces graceful EOF when closed:
 
 ```lua
-fibers.perform(writer:write_op('hello'))
-fibers.perform(writer:close_op('complete'))
+writer:write('hello')
+writer:close('complete')
 
-local bytes = fibers.perform(reader:read_all_op({ max = 4096 }))
-fibers.perform(reader:close_op('complete'))
+local bytes = reader:read_all({ max = 4096 })
+reader:close('complete')
 ```
 
 Internally, a hidden Pipe root coordinates acquisition and settlement. Public
@@ -70,12 +73,10 @@ Listening remains concise:
 ```lua
 local socket = require('fibers.socket')
 
-local listener, err = fibers.perform(
-  socket.listen_inet_op('127.0.0.1', 8080)
-)
+local listener, err = socket.listen_inet('127.0.0.1', 8080)
 assert(listener, err)
 
-local connection, accept_err = fibers.perform(listener:accept_op())
+local connection, accept_err = listener:accept()
 assert(connection, accept_err)
 ```
 
@@ -84,11 +85,12 @@ Accepted connections expose the ordinary Stream surface directly.
 Outbound connection establishment is deliberately two-stage:
 
 ```lua
-local dial = fibers.perform(
-  socket.dial_inet_op('127.0.0.1', 8080)
-)
+local dial = socket.dial_inet('127.0.0.1', 8080)
+local connection, err = dial:result()
 
-local connection, err = fibers.perform(dial:result_op())
+-- Explicit composable form:
+local selected_dial = fibers.perform(socket.dial_inet_op('127.0.0.1', 8080))
+local selected, selected_err = fibers.perform(selected_dial:result_op())
 ```
 
 The split allows the eventual connection result to participate correctly in

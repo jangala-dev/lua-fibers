@@ -11,6 +11,7 @@ local HostError = require('fibers.host.error')
 local Adoption = require('fibers.internal.adoption')
 local Completion = require('fibers.internal.completion')
 local Protected = require('fibers.internal.protected')
+local perform = require('fibers.perform')
 
 local File = {}
 local Pipe = {}
@@ -355,4 +356,8 @@ end
 -- Public callers receive the readable and writable Streams directly.
 File._Pipe = Pipe
 File.Error = HostError
+function File.pipe(opts)
+  return perform(File.pipe_op(opts))
+end
+
 return File

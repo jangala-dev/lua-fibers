@@ -8,6 +8,7 @@ local M = {}
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local perform = require('fibers.perform')
 local Effect = require('fibers.lifetime.effect')
 local Protected = require('fibers.internal.protected')
 local Policy = require('fibers.policy')
@@ -19,6 +20,8 @@ local ScopeResult = require('fibers.scope.result')
 
 M.sleep_op = Sleep.sleep_op
 M.sleep_until_op = Sleep.sleep_until_op
+M.sleep = Sleep.sleep
+M.sleep_until = Sleep.sleep_until
 
 M.always = Op.always
 M.never = Op.never
@@ -49,17 +52,7 @@ function M.current_scope()
   return current_scope()
 end
 
-function M.perform(op)
-  local rt = Runtime.current()
-  if not rt then
-    error('fibers.perform must be called from a running fiber', 2)
-  end
-  local scope = current_scope()
-  if scope and type(scope.perform) == 'function' then
-    return scope:perform(op)
-  end
-  return rt:perform(op)
-end
+M.perform = perform
 
 function M.spawn_raw(fn, name)
   local rt = Runtime.current()

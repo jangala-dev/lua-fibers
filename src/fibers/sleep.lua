@@ -6,6 +6,7 @@
 
 local Op = require('fibers.op')
 local Clock = require('fibers.external.clock')
+local perform = require('fibers.perform')
 
 local Sleep = {}
 
@@ -31,6 +32,14 @@ function Sleep.sleep_op(d)
     end
     return Sleep.sleep_until_op(ctx:now() + d)
   end)
+end
+
+function Sleep.sleep_until(t)
+  return perform(Sleep.sleep_until_op(t))
+end
+
+function Sleep.sleep(d)
+  return perform(Sleep.sleep_op(d))
 end
 
 return Sleep
