@@ -27,4 +27,5 @@ return Common.new({
   bit = bit,
   C = ffi.C,
   fd_module = 'fibers.host.fd_cffi',
+  resolver_enabled = true,
 })

@@ -94,6 +94,42 @@ function Error.system(domain, action, message, code, number, fields)
   )
 end
 
+function Error.invalid_argument(domain, action, fields)
+  return Error.new(
+    'invalid_argument',
+    copy_fields({
+      domain = domain or 'host',
+      action = action,
+      code = 'invalid_argument',
+      message = 'invalid host action argument',
+    }, fields)
+  )
+end
+
+function Error.message_too_large(domain, action, fields)
+  return Error.new(
+    'message_too_large',
+    copy_fields({
+      domain = domain or 'datagram',
+      action = action or 'send',
+      code = 'message_too_large',
+      message = 'datagram exceeds the supported message size',
+    }, fields)
+  )
+end
+
+function Error.truncated(domain, action, fields)
+  return Error.new(
+    'truncated',
+    copy_fields({
+      domain = domain or 'datagram',
+      action = action or 'receive',
+      code = 'truncated',
+      message = 'datagram was truncated',
+    }, fields)
+  )
+end
+
 function Error.protocol(domain, action, message, fields)
   return Error.new(
     'protocol',

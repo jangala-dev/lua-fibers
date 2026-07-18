@@ -215,6 +215,7 @@ function Reactor.new(runtime, opts)
     poller = opts.poller or Poller.for_runtime(runtime, opts.poller_options),
     read_quantum = opts.read_quantum or 64 * 1024,
     write_quantum = opts.write_quantum or 64 * 1024,
+    control_quantum = opts.control_quantum or 64,
     service_count = 0,
   }, Reactor)
 end
@@ -600,26 +601,55 @@ function Reactor:_handle_control(kind, entry, reason, mode)
   return true
 end
 
-function Reactor:_next_option()
-  local control = self.control:next_op():map(function(kind, entry, reason, mode)
-    return { kind = 'control', control = kind, entry = entry, reason = reason, mode = mode }
-  end)
+local function control_record(kind, entry, reason, mode)
+  return { kind = 'control', control = kind, entry = entry, reason = reason, mode = mode }
+end
+
+local function control_pending(control)
+  local state = control and control._location and control._location.value
+  return state ~= nil and #(state.values or {}) > 0
+end
+
+function Reactor:_wait_option()
+  local control = self.control:next_op():map(control_record)
   local ready = self.poller:next_op():map(function(id, generation, mode, key)
     return { kind = 'ready', id = id, generation = generation, mode = mode, key = key }
   end)
-  return control:or_else(ready)
+  -- Control arrivals and host readiness are temporal alternatives.  A host may
+  -- deliver readiness after this option has suspended, so certified fallback is
+  -- not the right relationship between them.  Bounded control draining below
+  -- provides priority without discarding the readiness wait.
+  return Op.choice(control, ready)
+end
+
+function Reactor:_drain_control(rt)
+  local handled = 0
+  while handled < self.control_quantum and control_pending(self.control) do
+    -- The control queue has one consumer: this reactor task.  Inspecting its
+    -- committed state before performing next_op avoids opening a second
+    -- certified-fallback session merely to implement a non-blocking dequeue.
+    local selected = masked_perform(rt, self.control:next_op():map(control_record))
+    self:_handle_control(selected.control, selected.entry, selected.reason, selected.mode)
+    handled = handled + 1
+  end
+  return handled
 end
 
 function Reactor:_run(rt)
   while true do
+    self:_drain_control(rt)
     if next(self.entries) == nil then
       self.running = false
       return true
     end
-    local selected = masked_perform(rt, self:_next_option())
+
+    local selected = masked_perform(rt, self:_wait_option())
     if selected.kind == 'control' then
       self:_handle_control(selected.control, selected.entry, selected.reason, selected.mode)
     else
+      -- A close or demand transition which arrived with readiness is applied
+      -- first.  The generation check in _service_ready then rejects stale work.
+      self:_drain_control(rt)
       self:_service_ready(selected.id, selected.generation)
     end
   end

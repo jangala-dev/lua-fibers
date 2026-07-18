@@ -8,15 +8,16 @@ export LUA_PATH := $(REPO_LUA_PATH)
 
 .PHONY: test test-reference test-public test-composition test-resources \
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
-	test-experiments test-performance test-matrix test-lua51 test-lua52 \
-	test-lua53 test-lua54 test-lua55 test-luajit test-luajit-interpreter \
-	examples bench performance check-format check-layout
+	test-experiments test-performance test-native test-stress test-full test-matrix \
+	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
+	test-luajit-interpreter examples bench bench-io performance check-format check-links \
+	check-layout check
 
 test:
 	$(LUA) tests/run_all.lua
 
 test-reference:
-	FIBERS_MACHINE=reference $(LUA) tests/run_all.lua
+	FIBERS_MACHINE=reference FIBERS_TEST_PROFILE=matrix $(LUA) tests/run_all.lua
 
 test-public:
 	$(LUA) tests/run_group.lua public
@@ -52,25 +53,35 @@ test-performance:
 	$(LUA) tests/run_group.lua performance
 
 test-lua51:
-	lua5.1 tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix lua5.1 tests/run_all.lua
 
 test-lua52:
-	lua5.2 tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix lua5.2 tests/run_all.lua
 
 test-lua53:
-	lua5.3 tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix lua5.3 tests/run_all.lua
 
 test-lua54:
-	lua5.4 tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix lua5.4 tests/run_all.lua
 
 test-lua55:
-	lua5.5 tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix lua5.5 tests/run_all.lua
 
 test-luajit:
-	$(LUAJIT) tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix $(LUAJIT) tests/run_all.lua
 
 test-luajit-interpreter:
-	$(LUAJIT) -joff tests/run_all.lua
+	FIBERS_TEST_PROFILE=matrix $(LUAJIT) -joff tests/run_all.lua
+
+
+test-native:
+	lua5.4 tests/run_group.lua native
+	$(LUAJIT) tests/run_group.lua native
+
+test-stress:
+	$(LUA) tests/run_group.lua stress
+
+test-full: test-matrix test-native test-stress test-reference examples
 
 test-matrix: test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 \
 	test-luajit test-luajit-interpreter
@@ -87,8 +98,19 @@ examples:
 bench:
 	$(LUAJIT) performance/bench.lua
 
+bench-io:
+	$(LUA) performance/io_baselines.lua
+
 performance:
 	$(LUAJIT) performance/suite.lua
+
+check:
+	$(MAKE) check-format
+	$(MAKE) check-links
+	$(MAKE) check-layout
+
+check-links:
+	$(LUA) scripts/check-links.lua .
 
 check-format:
 	./scripts/check-format.sh
@@ -113,6 +135,15 @@ check-layout:
 	@test -f src/fibers/socket/address.lua
 	@test -f src/fibers/socket/listener.lua
 	@test -f src/fibers/socket/dial.lua
+	@test -f src/fibers/socket/resolver.lua
+	@test -f src/fibers/socket/datagram.lua
+	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
+	@test -f src/fibers/internal/socket/datagram_send_state.lua
+	@test -f src/fibers/internal/socket/datagram_service.lua
+	@test -f src/fibers/host/datagram_luaposix.lua
+	@test -f src/fibers/host/datagram_nixio.lua
+	@test -f src/fibers/host/_socket_ffi_common.lua
+	@test -f src/fibers/host/_resolver_ffi_common.lua
 	@test -f src/fibers/internal/io.lua
 	@test -f src/fibers/internal/socket/lifecycle.lua
 	@test -f src/fibers/internal/socket/listener_lifecycle.lua
@@ -129,9 +160,28 @@ check-layout:
 	@test -f experiments/phase.lua
 	@test -f examples/tutorial/07_flow_tensor.lua
 	@test -f examples/tutorial/08_pipe.lua
+	@test -f examples/tutorial/09_socket.lua
+	@test -f examples/tutorial/10_direct_methods.lua
+	@test -f examples/tutorial/11_resolver.lua
+	@test -f examples/tutorial/12_datagram.lua
+	@test -f tests/io/test_socket_conformance.lua
+	@test -f tests/io/test_resolver.lua
+	@test -f tests/io/test_datagram.lua
+	@test -f tests/io/test_datagram_conformance.lua
+	@test -f tests/embedding/test_datagram_optional_providers.lua
+	@test -f tests/internal/test_adoption_completion.lua
+	@test -f tests/internal/test_datagram_service.lua
+	@test -f tests/stress/test_stream_reactor_stress.lua
+	@test -f tests/stress/test_socket_churn.lua
+	@test -f tests/stress/test_datagram_churn.lua
+	@test -f tests/native/test_datagram_native.lua
+	@test -f tests/profiles.lua
 	@test -f docs/guide/io.md
+	@test -f docs/guide/direct-and-options.md
+	@test -f scripts/check-links.lua
 	@test ! -e experiments/scalar_flow.lua
 	@test -f reference/fibers/internal/reference_machine.lua
 	@test ! -e src/fibers/internal/reference_machine.lua
 	@test -f performance/bench.lua
+	@test -f performance/io_baselines.lua
 	@test ! -e benchmarks

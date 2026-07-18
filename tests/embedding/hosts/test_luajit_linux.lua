@@ -30,9 +30,10 @@ if not ok_ffi or type(ffi) ~= 'table' then
   return Common.skip('tests/hosts/test_luajit_linux.lua', 'ffi module not available')
 end
 
-local bit = rawget(_G, 'bit')
+local BitOps = require('fibers.internal.bitops')
+local bit, bit_reason = BitOps.resolve()
 if not bit then
-  return Common.skip('tests/hosts/test_luajit_linux.lua', 'bit module not available')
+  return Common.skip('tests/hosts/test_luajit_linux.lua', bit_reason or 'bit operations unavailable')
 end
 
 -- Requiring FibersHost.luajit_linux has installed its epoll_event definition.
@@ -140,6 +141,30 @@ do
   local host = LinuxHost.new()
   host:close()
   host:close()
+end
+
+-- Real kernel readiness is validated with the production evaluator.  The
+-- reference evaluator remains the differential oracle for deterministic option
+-- semantics; combining it with wall-clock epoll races makes that suite
+-- needlessly nondeterministic.
+if os.getenv('FIBERS_MACHINE') ~= 'reference' then
+  local socket_host = LinuxHost.new()
+  if type(rawget(_G, 'jit')) ~= 'table' then
+    Common.assert_eq(
+      socket_host.capabilities.resolver,
+      false,
+      'compatibility ffi must not advertise unsafe getaddrinfo traversal'
+    )
+  end
+  Common.native_socket_smoke('luajit_linux', socket_host)
+  Common.native_datagram_smoke('luajit_linux', socket_host)
+  -- The texlua test environment exposes a compatibility ffi implementation
+  -- but not LuaJIT itself; its getaddrinfo pointer lifetime is unsafe. Exercise
+  -- the native resolver here only on the intended LuaJIT runtime.
+  if type(rawget(_G, 'jit')) == 'table' then
+    Common.native_resolver_smoke('luajit_linux', socket_host)
+  end
+  socket_host:close()
 end
 
 print('tests/hosts/test_luajit_linux.lua: ok')

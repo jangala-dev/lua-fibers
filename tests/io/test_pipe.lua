@@ -90,14 +90,16 @@ do
     function()
       reader, writer, err = fibers.perform(file.pipe_op({ name = 'unsupported' }))
     end,
-    { host = Host.pure({
-      now = function()
-        return 0
-      end,
-      sleep = function()
-        return true
-      end,
-    }) }
+    {
+      host = Host.pure({
+        now = function()
+          return 0
+        end,
+        sleep = function()
+          return true
+        end,
+      }),
+    }
   )
   assert_eq(reader, nil)
   assert_truthy(HostError.is_unsupported(err, 'pipe'))

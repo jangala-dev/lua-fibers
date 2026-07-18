@@ -112,4 +112,14 @@ do
   host:close()
 end
 
+-- Keep real kernel timing out of the semantic reference evaluator; the
+-- deterministic ManualHost socket and resolver contracts still run there.
+if os.getenv('FIBERS_MACHINE') ~= 'reference' then
+  local socket_host = LinuxHost.new()
+  Common.native_socket_smoke('cffi_linux', socket_host)
+  Common.native_datagram_smoke('cffi_linux', socket_host)
+  Common.native_resolver_smoke('cffi_linux', socket_host)
+  socket_host:close()
+end
+
 print('tests/hosts/test_cffi_linux.lua: ok')

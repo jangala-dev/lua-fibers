@@ -86,4 +86,12 @@ with_host_pipe('nixio:write-readiness', Common.write_readiness_smoke)
 with_host_pipe('nixio:readiness-beats-timeout', Common.readiness_beats_timeout_smoke)
 with_host_pipe('nixio:timeout-beats-unready', Common.timeout_beats_unready_smoke)
 
+if os.getenv('FIBERS_MACHINE') ~= 'reference' then
+  local datagram_host = NixioHost.new()
+  if datagram_host.capabilities.datagram then
+    Common.native_datagram_smoke('nixio', datagram_host)
+  end
+  datagram_host:close()
+end
+
 print('tests/hosts/test_nixio.lua: ok')

@@ -72,8 +72,11 @@ function Common.new(opts)
   local EINTR = 4
   local EAGAIN = 11
   local EWOULDBLOCK = 11
+  local F_GETFD = 1
+  local F_SETFD = 2
   local F_GETFL = 3
   local F_SETFL = 4
+  local FD_CLOEXEC = 1
   local O_NONBLOCK = 2048
   local SHUT_RD = 0
   local SHUT_WR = 1
@@ -125,6 +128,28 @@ function Common.new(opts)
         return nil, e
       end
     end
+  end
+
+  local function set_cloexec_fd(fd, value)
+    local flags, e = retrying_syscall(function()
+      return C.fcntl(fd, F_GETFD, vararg_int(0))
+    end)
+    if not flags then
+      return nil, HostError.system('fd', 'set_cloexec', strerror(e), nil, e), e
+    end
+    local new_flags
+    if value ~= false then
+      new_flags = bit.bor(flags, FD_CLOEXEC)
+    else
+      new_flags = bit.band(flags, bit.bnot(FD_CLOEXEC))
+    end
+    local ok, e2 = retrying_syscall(function()
+      return C.fcntl(fd, F_SETFD, vararg_int(new_flags))
+    end)
+    if not ok then
+      return nil, HostError.system('fd', 'set_cloexec', strerror(e2), nil, e2), e2
+    end
+    return true
   end
 
   local function set_nonblocking_fd(fd, value)
@@ -282,6 +307,13 @@ function Common.new(opts)
     h.fd = fd
     h.generation = next_generation
     h.raw_fd = fd
+    if wrap_opts.cloexec ~= false then
+      local ok, err = set_cloexec_fd(fd, true)
+      if not ok then
+        h:close('set_cloexec failed')
+        return nil, err
+      end
+    end
     if wrap_opts.nonblocking ~= false then
       local ok, err = h:set_nonblocking(true)
       if not ok then

@@ -461,11 +461,11 @@ local function open_in_op(owner, backend, opts)
       backend = backend,
       chunk_size = hs.read_chunk_size,
     })
-    owned_children[#owned_children + 1] = Owned.item(
-      hs.read_flow,
-      hs.read_flow._fibers_settle or Settlement.flow(),
-      { role = 'read_flow', settle_name = 'flow' }
-    )
+    -- The Stream root owns shutdown of its internal Flow.  Settling the Flow
+    -- again as an independent child would turn an intentional Stream abort
+    -- (for example normal scope retirement with unread bytes) into a duplicate
+    -- settlement failure.
+    owned_children[#owned_children + 1] = Owned.inert(hs.read_flow, { role = 'read_flow' })
     owned_children[#owned_children + 1] = Owned.inert(hs:reader(), { role = 'reader' })
     owned_children[#owned_children + 1] = Owned.inert(hs.read_registration, { role = 'read_reaction' })
     registrations[#registrations + 1] = { 'read_registration', hs.read_registration:register_op() }
@@ -479,11 +479,9 @@ local function open_in_op(owner, backend, opts)
       backend = backend,
       chunk_size = hs.write_chunk_size,
     })
-    owned_children[#owned_children + 1] = Owned.item(
-      hs.write_flow,
-      hs.write_flow._fibers_settle or Settlement.flow(),
-      { role = 'write_flow', settle_name = 'flow' }
-    )
+    -- As above, the Stream settlement protocol is the sole authority for
+    -- shutting down this internal Flow.
+    owned_children[#owned_children + 1] = Owned.inert(hs.write_flow, { role = 'write_flow' })
     owned_children[#owned_children + 1] = Owned.inert(hs:writer(), { role = 'writer' })
     owned_children[#owned_children + 1] = Owned.inert(hs.write_registration, { role = 'write_reaction' })
     registrations[#registrations + 1] = { 'write_registration', hs.write_registration:register_op() }

@@ -6,6 +6,7 @@
 -- block call.
 
 local Host = require('fibers.host')
+local DatagramProvider = require('fibers.host.datagram_luaposix')
 
 local ok_poll, poll_mod = pcall(require, 'posix.poll')
 local ok_time, ptime = pcall(require, 'posix.time')
@@ -170,8 +171,14 @@ function Posix.new(opts)
     return monotonic()
   end
   self.fd = require('fibers.host.fd_luaposix')
-  self.capabilities =
-    { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
+  self.capabilities = {
+    time = true,
+    readiness = true,
+    fd = self.fd.is_supported(),
+    pipe = self.fd.is_supported(),
+    datagram = DatagramProvider.is_supported(),
+    datagram_truncation = false,
+  }
   return self
 end
 
@@ -181,6 +188,10 @@ function Posix:create_pipe(pipe_opts)
     name = pipe_opts and pipe_opts.name,
     nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
   })
+end
+
+function Posix:create_datagram(address, datagram_opts)
+  return DatagramProvider.create_datagram(self, address, datagram_opts)
 end
 
 function Posix:sleep(seconds)

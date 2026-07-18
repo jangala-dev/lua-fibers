@@ -39,19 +39,16 @@ local function open_connection(rt, owner, handle, opts)
 end
 
 local function dial_settlement(dial)
-  return Settlement.request_then_wait(
-    function(_ctx, _record, reason)
-      return dial:close_op(reason or 'scope settlement')
-    end,
-    function()
-      return dial:closed_op():and_then(function(ok, err)
-        if not ok then
-          error(err or 'dial settlement failed', 0)
-        end
-        return Op.always(true)
-      end)
-    end
-  )
+  return Settlement.request_then_wait(function(_ctx, _record, reason)
+    return dial:close_op(reason or 'scope settlement')
+  end, function()
+    return dial:closed_op():and_then(function(ok, err)
+      if not ok then
+        error(err or 'dial settlement failed', 0)
+      end
+      return Op.always(true)
+    end)
+  end)
 end
 
 function Dial:owned(children)
@@ -132,14 +129,21 @@ local function driver(dial, driver_scope, opts)
     perform(driver_scope:admit_op(slot:owned({ role = 'dial_adoption' })))
 
     local host = opts.host or (rt and rt.host)
-    if not host or type(host.dial_socket) ~= 'function' then
+    local start_dial = host and host.start_dial
+    local legacy_dial = host and host.dial_socket
+    if type(start_dial) ~= 'function' and type(legacy_dial) ~= 'function' then
       local err = HostError.unsupported('host', 'dial', { address = dial.address })
       IO.release_owned(rt, driver_region, slot)
       IO.masked_perform(rt, dial.lifecycle:publish_failure_op(err))
       return
     end
 
-    local handle, peer, err = host:dial_socket(dial.address, opts)
+    local handle, peer, err
+    if type(start_dial) == 'function' then
+      handle, err = start_dial(host, dial.address, opts)
+    else
+      handle, peer, err = legacy_dial(host, dial.address, opts)
+    end
     if not handle then
       IO.release_owned(rt, driver_region, slot)
       err = HostError.normalise(err, {
@@ -157,6 +161,41 @@ local function driver(dial, driver_scope, opts)
       error(adoption_err, 0)
     end
 
+    if type(handle.bind_runtime) == 'function' then
+      handle:bind_runtime(rt)
+    end
+
+    if type(handle.finish_connect) == 'function' then
+      -- A non-blocking connect which returned EINPROGRESS must first become
+      -- writable before SO_ERROR is authoritative. Immediate connections skip
+      -- this wait through _connect_complete.
+      if handle._connect_pending and not handle._connect_complete then
+        perform(handle:write_ready_op())
+      end
+      while true do
+        local connected, connected_peer, finish_err = handle:finish_connect()
+        if connected then
+          handle = connected
+          peer = connected_peer or peer
+          break
+        end
+        if not HostError.is_would_block(finish_err) then
+          slot:close(finish_err)
+          IO.release_owned(rt, driver_region, slot)
+          IO.masked_perform(
+            rt,
+            dial.lifecycle:publish_failure_op(HostError.normalise(finish_err, {
+              domain = 'socket',
+              action = 'connect_finish',
+              address = dial.address,
+            }))
+          )
+          return
+        end
+        perform(handle:write_ready_op())
+      end
+    end
+
     local connection
     local opened, open_err = Protected.pcall(function()
       connection = open_connection(rt, driver_scope, handle, {
@@ -172,11 +211,14 @@ local function driver(dial, driver_scope, opts)
     if not opened then
       slot:close(open_err)
       IO.release_owned(rt, driver_region, slot)
-      error(HostError.normalise(open_err, {
-        domain = 'socket',
-        action = 'open_connection',
-        address = dial.address,
-      }), 0)
+      error(
+        HostError.normalise(open_err, {
+          domain = 'socket',
+          action = 'open_connection',
+          address = dial.address,
+        }),
+        0
+      )
     end
 
     connection.peer_address = peer or dial.address
@@ -188,18 +230,19 @@ local function driver(dial, driver_scope, opts)
     end
     IO.release_owned(rt, driver_region, slot)
 
-    local published, state = IO.masked_perform(
-      rt,
-      dial.lifecycle:publish_connected_op(connection, driver_region)
-    )
+    local published, state =
+      IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_region))
     if not published then
       if state.kind == 'closing' or state.kind == 'closed' then
         return
       end
-      error(HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connected Stream', {
-        address = dial.address,
-        state = state.kind,
-      }), 0)
+      error(
+        HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connected Stream', {
+          address = dial.address,
+          state = state.kind,
+        }),
+        0
+      )
     end
 
     -- Retain the child scope, and therefore the unclaimed connection, until

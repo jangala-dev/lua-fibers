@@ -8,6 +8,11 @@ local Scalar = require('fibers.scalar')
 
 local Completion = {}
 Completion.__index = Completion
+local unpack_ = table.unpack or unpack
+
+local function pack(...)
+  return { n = select('#', ...), ... }
+end
 
 local Ready = Scalar.Ready
 local next_id = 0
@@ -60,9 +65,9 @@ function Completion:state_value()
   return self.state.value
 end
 
-function Completion:publish_success_op(value)
+function Completion:publish_success_op(...)
   return self.state:transition_op(publish, {
-    state = { kind = 'succeeded', value = value },
+    state = { kind = 'succeeded', values = pack(...) },
   })
 end
 
@@ -98,7 +103,8 @@ end
 function Completion:result_op()
   return self:terminal_op():map(function(state)
     if state.kind == 'succeeded' then
-      return state.value
+      local values = state.values or pack(state.value)
+      return unpack_(values, 1, values.n)
     end
     if state.kind == 'failed' then
       return nil, state.error
@@ -110,7 +116,8 @@ end
 function Completion:success_op()
   return terminal_option(self, function(state)
     if state.kind == 'succeeded' then
-      return Op.always(state.value)
+      local values = state.values or pack(state.value)
+      return Op.always(unpack_(values, 1, values.n))
     elseif state.kind ~= 'pending' then
       return Op.never()
     end

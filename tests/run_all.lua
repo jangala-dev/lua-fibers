@@ -14,19 +14,12 @@ package.path = table.concat({
 local Harness = require('tests.support.harness')
 local groups = require('tests.groups')
 
-local order = {
-  'public',
-  'composition',
-  'resources',
-  'lifetimes',
-  'embedding',
-  'io',
-  'kernel',
-  'internal',
-  'case_studies',
-  'experiments',
-  'performance',
-}
+local profiles = require('tests.profiles')
+local profile_name = os.getenv('FIBERS_TEST_PROFILE') or 'default'
+local order = profiles[profile_name]
+if not order then
+  error('unknown FIBERS_TEST_PROFILE: ' .. tostring(profile_name), 0)
+end
 
 local tests = {}
 for i = 1, #order do
@@ -37,7 +30,7 @@ for i = 1, #order do
 end
 
 local opts = Harness.parse_args(arg, 'FIBERS_TEST')
-opts.label = 'tests/run_all.lua'
+opts.label = 'tests/run_all.lua[' .. profile_name .. ']'
 opts.command = 'lua tests/run_all.lua'
 
 return Harness.run(tests, opts)

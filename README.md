@@ -328,6 +328,60 @@ Pipe acquisition occurs only after `pipe_op` commits. Newly created host handles
 are covered immediately by temporary adoption records until their permanent
 Stream ownership has been admitted. See [`docs/guide/io.md`](docs/guide/io.md).
 
+### Sockets and name resolution
+
+Listeners accept duplex Streams, while an outbound `Dial` separates starting a
+connection attempt from observing or composing its eventual result:
+
+```lua
+local socket = require('fibers.socket')
+
+local listener = assert(socket.listen_ipv4('127.0.0.1', 8080))
+local dial = socket.dial_ipv4('127.0.0.1', 8080)
+local connection, err = dial:result()
+```
+
+IPv4, IPv6 and Unix addresses are explicit values. Host names are unresolved
+endpoints and pass through an owned resolver query:
+
+```lua
+local query = socket.resolve_name('example.org', 443)
+local addresses, resolve_err = query:result()
+assert(addresses, resolve_err)
+
+local dial = socket.dial(addresses[1])
+```
+
+Accepted and connected Streams remain owned by their Listener or Dial until a
+claim moves the complete Stream subtree into the caller's scope. Native Linux
+FFI hosts provide non-blocking IPv4, IPv6 and Unix stream sockets. Verified
+LuaJIT/cffi hosts may also expose a blocking `getaddrinfo` resolver and declare
+that limitation; compatibility FFI providers do not advertise it. See
+[`docs/guide/io.md`](docs/guide/io.md).
+
+### Datagrams
+
+UDP sockets preserve message boundaries and source addresses rather than
+pretending to be byte Streams:
+
+```lua
+local socket = require('fibers.socket')
+
+local udp = assert(socket.datagram_ipv4('0.0.0.0', 0))
+udp:send_to('hello', socket.ipv4_address('192.0.2.10', 9000))
+udp:flush()
+
+local packet, receive_err = udp:receive_from({ max_size = 4096 })
+```
+
+`send_to_op` admits one indivisible message to a bounded outbound queue.
+`flush_op` observes completion of messages admitted before it was constructed;
+it does not imply remote delivery. Incoming queues are bounded, and received
+records retain the peer address, truncation status and original size where the
+host can report it. Native Linux FFI hosts support IPv4 and IPv6 UDP; luaposix
+and Nixio providers use the same host contract when those modules are present.
+See [`docs/guide/io.md`](docs/guide/io.md).
+
 ### Time
 
 ```lua
@@ -429,3 +483,4 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 - [Trusted resource programmes](docs/contributing/trusted-resource-programmes.md)
 - [Repository layout](docs/contributing/repository-layout.md)
 - [Lua compatibility](docs/contributing/compatibility.md)
+- [Test profiles](docs/contributing/testing.md)

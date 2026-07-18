@@ -194,10 +194,13 @@ function Listener:start_result_op()
     if state.error ~= nil then
       return Op.always(nil, state.error)
     end
-    return Op.always(nil, HostError.closed('socket', 'listen', {
-      reason = state.reason or 'listener closed',
-      address = state.address,
-    }))
+    return Op.always(
+      nil,
+      HostError.closed('socket', 'listen', {
+        reason = state.reason or 'listener closed',
+        address = state.address,
+      })
+    )
   end)
 end
 

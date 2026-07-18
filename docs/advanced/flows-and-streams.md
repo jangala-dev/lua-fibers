@@ -378,11 +378,14 @@ generation are accepted.
 The reactor waits on compact control and readiness options:
 
 ```lua
-control_op:or_else(poller:next_op())
+choice(control_op, poller:next_op())
 ```
 
-Control work therefore has certified priority when present. The ready queue
-selects ordinary host work.
+The reactor drains a bounded control burst before waiting. Control and host
+readiness are then temporal alternatives, so `choice` keeps both waits live. If
+readiness wins, the reactor drains newly queued control before attempting the
+host action; retirement and demand changes therefore take effect first without
+misusing certified fallback for a temporal race.
 
 Flow demand reaches the reactor through an internal typed consequence. Every
 state-changing Flow option selects a deduplicated `flow_changed` effect in the

@@ -132,21 +132,59 @@ the Stream custody move together, so neither can occur without the other.
 Expected host failures are stored in lifecycle state as values; adapter defects
 and close failures are marked fatal and remain visible during scope settlement.
 
-Convenience address constructors and option forms are available for internet
-and Unix-domain sockets:
+Numeric address constructors are explicit:
 
 ```lua
-socket.inet_address(host, port)
-socket.unix_address(path)
-
-socket.listen_inet_op(host, port, opts)
-socket.listen_unix_op(path, opts)
-socket.dial_inet_op(host, port, opts)
-socket.dial_unix_op(path, opts)
+socket.ipv4_address('127.0.0.1', 8080)
+socket.ipv6_address('::1', 8080, { scope_id = 0 })
+socket.unix_address('/run/example.sock')
 ```
 
-Source binding fields from the earlier API remain accepted by
-`dial_inet_op`:
+`socket.inet_address` remains a convenience classifier. Numeric input produces
+an IPv4 or IPv6 address; a host name produces an unresolved name endpoint.
+Native socket creation accepts only numeric or Unix addresses.
+
+```lua
+local endpoint = socket.name_endpoint('example.org', 443)
+local query = socket.resolve(endpoint)
+local addresses, resolve_err = query:result()
+assert(addresses, resolve_err)
+
+local dial = socket.dial(addresses[1])
+local connection, dial_err = dial:result()
+```
+
+Resolution is deliberately two-stage. `socket.resolve_op` admits an owned query
+and starts its driver after commitment. `query:addresses_op()` is success-only
+and becomes refutable after terminal failure; `query:result_op()` combines it
+with the failure result through certified fallback. This shape leaves the query
+alive for future Happy Eyeballs coordination rather than hiding DNS inside one
+blocking dial call.
+
+The deterministic ManualHost provides configurable records and separate family
+filters. Verified LuaJIT/cffi Linux hosts may provide `getaddrinfo` as an
+initial blocking resolver capability and advertise `resolver_blocking = true`.
+Compatibility FFI providers which cannot safely traverse `getaddrinfo` results
+leave the resolver capability disabled. Embedders which cannot allow resolver
+calls on the runtime thread should replace it with a worker-backed or native
+asynchronous resolver.
+
+Explicit option forms include:
+
+```lua
+socket.listen_ipv4_op(host, port, opts)
+socket.listen_ipv6_op(host, port, opts)
+socket.listen_unix_op(path, opts)
+
+socket.dial_ipv4_op(host, port, opts)
+socket.dial_ipv6_op(host, port, opts)
+socket.dial_unix_op(path, opts)
+
+socket.resolve_name_op(host, service, opts)
+```
+
+Source binding fields from the earlier API remain accepted by the numeric dial
+helpers:
 
 ```lua
 {
@@ -154,6 +192,72 @@ Source binding fields from the earlier API remain accepted by
   bind_port = 0,
 }
 ```
+
+## Datagram sockets
+
+Datagram sockets are message-oriented resources, not Streams. Construction is
+inert until the option commits:
+
+```lua
+local socket = require('fibers.socket')
+
+local udp = socket.datagram_ipv4('0.0.0.0', 0, {
+  receive_capacity = 64,
+  send_capacity = 64,
+})
+
+-- Equivalent composable construction:
+-- local udp = fibers.perform(socket.datagram_ipv4_op('0.0.0.0', 0))
+```
+
+The ordinary surface is:
+
+```lua
+udp:send_to_op(payload, destination)
+udp:receive_from_op({ max_size = 4096 })
+udp:flush_op()
+udp:close_op(reason)
+udp:closed_op()
+```
+
+Each has the exact direct twin described in
+[`direct-and-options.md`](direct-and-options.md). A received value is a record:
+
+```lua
+{
+  data = bytes,
+  peer = source_address,
+  local_address = receiving_address,
+  truncated = false,
+  original_size = nil,
+  flags = {},
+}
+```
+
+`send_to_op` means that one complete datagram has been admitted to the socket's
+bounded outgoing queue. It does not claim remote delivery. `flush_op` captures
+a sequence watermark when it is constructed and waits until every preceding
+datagram has either been accepted by the host or failed. UDP messages are
+indivisible: a host which reports a partial send has violated the host contract.
+
+`receive_from_op` removes one complete message from a bounded incoming queue.
+When that queue is full the driver stops calling `recvfrom`, bounding user-space
+memory. A caller may supply a smaller `max_size`; Fibers then returns the prefix
+and marks the record as truncated. Linux FFI hosts use kernel truncation
+reporting and preserve the original wire size. The initial luaposix and Nixio
+adapters preserve datagram boundaries but declare that exact kernel truncation
+metadata is unavailable through their present APIs.
+
+The socket owns one driver task, its host handle, both bounded queues and its
+completion state. Host `sendto` and `recvfrom` calls occur only in driver fibre
+phase after construction has committed. Readiness remains a hint: an
+authoritative call may still return `would_block`. Closing retires pending sends,
+closes the host handle and joins the driver before `closed_op` succeeds.
+
+The deterministic ManualHost can deliver, drop and truncate packets without
+real timing. It is used by both semantic evaluators. Native conformance covers
+IPv4 and IPv6 loopback, zero-length messages, source addresses, truncation and
+repeated socket churn.
 
 ## Ownership and host support
 
@@ -163,12 +267,24 @@ caller commits their custody transfer. Listener and Dial drivers are structural 
 Resource settlement therefore cancels and joins them before releasing the root,
 while readiness and bounded-queue waits remain cancellable.
 
-The deterministic `ManualHost` implements pipes and virtual sockets for tests,
-examples and embedding work. Native pipe support is present in the available
-POSIX host families. Native listener and dial capabilities remain the next host
-adapter milestone; unsupported hosts return structured `unsupported` errors
-rather than failing by module load order.
+The deterministic `ManualHost` implements pipes, virtual sockets and resolver
+records for tests, examples and embedding work. Native pipes are available in
+the existing POSIX-oriented host families. The LuaJIT/cffi Linux host family now
+adds non-blocking IPv4, IPv6 and Unix stream sockets, including `accept4`
+fallback, `SO_ERROR` connect completion, close-on-exec descriptors and Unix-path
+cleanup. Optional native conformance tests run when those backends are available;
+unsupported hosts return structured `unsupported` errors rather than failing by
+module load order.
 
 Regular files and processes require additional host-job and supervision layers.
 They should not be implemented by treating regular descriptors as safely
 non-blocking readiness resources.
+
+
+### Datagram service fairness
+
+Datagram drivers use a bounded read/write service policy.
+`service_quantum` defaults to one, so continuously ready receive and send work
+alternate after each successful host action. A larger positive integer permits
+that many successful actions from the preferred direction before preference
+changes.

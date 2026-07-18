@@ -71,6 +71,39 @@ luajit -joff tests/run_all.lua
 These checks should be combined with environment-specific native-host tests.
 The reference solver is repository-only and is deliberately outside `src/`.
 
+## Native I/O capabilities
+
+Host support is capability-based rather than implied by interpreter support.
+The current Linux FFI host family provides:
+
+```text
+monotonic time and epoll readiness
+non-blocking numeric file descriptors and anonymous pipes
+non-blocking IPv4, IPv6 and Unix stream sockets
+message-oriented IPv4 and IPv6 datagram sockets
+```
+
+Verified LuaJIT/cffi providers may additionally expose blocking `getaddrinfo`
+name resolution and advertise `resolver_blocking = true`. Compatibility FFI
+providers leave that capability disabled when its pointer semantics are not
+safe. Embedders which cannot permit resolver calls on the runtime thread must
+replace it with a worker-backed or native asynchronous resolver. The
+deterministic ManualHost supplies virtual
+pipes, sockets and resolver records for semantic tests. Other optional host
+families may expose only a subset and must report unsupported capabilities as
+structured errors.
+
+Native socket conformance tests include loopback TCP, Unix sockets, repeated
+connection churn, readiness retirement and descriptor reuse paths. Datagram
+conformance adds IPv4 and IPv6 loopback, source-address and message-boundary
+preservation, zero-length messages, truncation and repeated open/close churn.
+The Linux FFI host reports exact truncation metadata. The luaposix and Nixio
+adapters implement the same datagram contract when installed, but currently
+advertise `datagram_truncation = false` because their exposed receive calls do
+not provide the original wire length. They run only when the corresponding
+provider is installed; a skipped optional host is not evidence that its native
+path has passed.
+
 ## Authoring rules
 
 Portable production code should:
@@ -86,3 +119,6 @@ keep bitwise syntax and FFI declarations inside optional backend modules
 
 Option and result code must preserve the exact number of return values. The
 kernel uses packed tables with an explicit `n` field for this reason.
+
+
+See [Test profiles](testing.md) for the semantic, native and stress split.

@@ -221,4 +221,150 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   handle:close('test')
 end
 
+function Common.socket_echo_smoke(name, host, address)
+  local socket = require('fibers.socket')
+  local report = fibers.try_run(function(scope)
+    local listener, listen_err = socket.listen(address, {
+      name = name .. ':listener',
+      unlink_existing = true,
+      unlink_on_close = true,
+    })
+    Common.assert_truthy(listener, name .. ' listen failed: ' .. tostring(listen_err))
+    local actual = listener:local_address()
+
+    local server = scope:spawn(function()
+      local connection, accept_err = listener:accept()
+      Common.assert_truthy(connection, name .. ' accept failed: ' .. tostring(accept_err))
+      local request, read_err = connection:read('*l')
+      Common.assert_eq(request, 'ping', name .. ' server read: ' .. tostring(read_err))
+      Common.assert_eq(connection:write('pong\n'), 5, name .. ' server write')
+      Common.assert_eq(connection:flush(), true, name .. ' server flush')
+      connection:close('server complete')
+    end, name .. ':server')
+
+    local dial = socket.dial(actual, { name = name .. ':dial' })
+    local connection, dial_err = dial:result()
+    Common.assert_truthy(connection, name .. ' dial failed: ' .. tostring(dial_err))
+    Common.assert_eq(connection:write('ping\n'), 5, name .. ' client write')
+    Common.assert_eq(connection:flush(), true, name .. ' client flush')
+    local response, response_err = connection:read('*l')
+    Common.assert_eq(response, 'pong', name .. ' client read: ' .. tostring(response_err))
+    connection:close('client complete')
+    server:await()
+    listener:close('socket smoke complete')
+  end, { host = host, max_iterations = 20000 })
+  Common.assert_truthy(report.ok, name .. ' socket smoke failed: ' .. tostring(report.primary))
+end
+
+function Common.socket_churn_smoke(name, host, count)
+  local socket = require('fibers.socket')
+  count = count or 8
+  local report = fibers.try_run(function(scope)
+    local listener = assert(socket.listen_ipv4('127.0.0.1', 0, {
+      name = name .. ':listener',
+      accept_capacity = 4,
+    }))
+    local address = listener:local_address()
+    local server = scope:spawn(function()
+      for i = 1, count do
+        local connection = assert(listener:accept())
+        local byte = assert(connection:read(1))
+        Common.assert_eq(byte, string.char(64 + i), name .. ' server byte')
+        connection:write(byte)
+        connection:flush()
+        connection:close('server churn complete')
+      end
+    end, name .. ':server')
+
+    for i = 1, count do
+      local dial = socket.dial_ipv4(address.host, address.port, {
+        name = name .. ':dial:' .. tostring(i),
+      })
+      local connection = assert(dial:result())
+      local byte = string.char(64 + i)
+      connection:write(byte)
+      connection:flush()
+      Common.assert_eq(connection:read(1), byte, name .. ' client byte')
+      connection:close('client churn complete')
+    end
+
+    server:await()
+    listener:close('native churn complete')
+  end, { host = host, max_iterations = 50000 })
+  Common.assert_truthy(report.ok, name .. ' socket churn failed: ' .. tostring(report.primary))
+end
+
+function Common.native_datagram_smoke(name, host)
+  if not (host.capabilities and host.capabilities.datagram) then
+    return false, 'host does not advertise datagram capability'
+  end
+  local socket = require('fibers.socket')
+  local report = fibers.try_run(function()
+    local left = assert(socket.datagram_ipv4('127.0.0.1', 0, { name = name .. ':udp-left' }))
+    local right = assert(socket.datagram_ipv4('127.0.0.1', 0, { name = name .. ':udp-right' }))
+    left:send_to('ping', right:local_address())
+    left:flush()
+    local packet = assert(right:receive_from())
+    Common.assert_eq(packet.data, 'ping', name .. ' datagram payload')
+    Common.assert_eq(packet.peer.port, left:local_address().port, name .. ' datagram source port')
+    right:send_to('pong', left:local_address())
+    right:flush()
+    Common.assert_eq(assert(left:receive_from()).data, 'pong', name .. ' datagram reply')
+    left:close('datagram smoke complete')
+    right:close('datagram smoke complete')
+    left:closed()
+    right:closed()
+  end, { host = host, max_iterations = 50000 })
+  Common.assert_truthy(report.ok, name .. ' datagram smoke failed: ' .. tostring(report.primary))
+  return true
+end
+
+function Common.native_resolver_smoke(name, host)
+  if not (host.capabilities and host.capabilities.resolver) then
+    return false, 'host does not advertise resolver capability'
+  end
+  local socket = require('fibers.socket')
+  local report = fibers.try_run(function()
+    local query = socket.resolve_name('localhost', 80, { family = 'inet4' })
+    local addresses, err = query:result()
+    Common.assert_truthy(addresses, name .. ' resolver failed: ' .. tostring(err))
+    Common.assert_truthy(#addresses >= 1, name .. ' resolver returned no addresses')
+    for i = 1, #addresses do
+      Common.assert_eq(addresses[i].kind, 'inet4', name .. ' resolver family filter')
+      Common.assert_eq(addresses[i].port, 80, name .. ' resolver service port')
+    end
+    query:close('resolver smoke complete')
+  end, { host = host, max_iterations = 2000 })
+  Common.assert_truthy(report.ok, name .. ' resolver smoke failed: ' .. tostring(report.primary))
+  return true
+end
+
+function Common.native_socket_smoke(name, host)
+  if not (host.capabilities and host.capabilities.socket) then
+    return false, 'host does not advertise socket capability'
+  end
+  Common.socket_echo_smoke(name .. ':tcp4', host, {
+    kind = 'inet4',
+    family = 'inet4',
+    host = '127.0.0.1',
+    port = 0,
+  })
+  Common.socket_echo_smoke(name .. ':tcp6', host, {
+    kind = 'inet6',
+    family = 'inet6',
+    host = '::1',
+    port = 0,
+  })
+  Common.socket_churn_smoke(name .. ':tcp4-churn', host, 8)
+  local path = os.tmpname() .. '.sock'
+  os.remove(path)
+  Common.socket_echo_smoke(name .. ':unix', host, {
+    kind = 'unix',
+    family = 'unix',
+    path = path,
+  })
+  os.remove(path)
+  return true
+end
+
 return Common

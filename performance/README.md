@@ -231,6 +231,23 @@ seed, and run the seed sweep as a separate job. Performance CI on shared hosts
 should use generous timing thresholds while keeping strict structural thresholds
 for search steps and branch counts.
 
+
+## External-resource baselines
+
+`io_baselines.lua` records focused, validating baselines for the I/O substrate:
+
+```sh
+lua performance/io_baselines.lua
+FIBERS_IO_BENCH_SCALE=2 FIBERS_IO_BENCH_REPEATS=5 \
+  lua performance/io_baselines.lua
+FIBERS_IO_BENCH_CASE=datagram lua performance/io_baselines.lua
+```
+
+It measures acquisition/adoption cost, memory Stream throughput, accepted
+connections, datagram throughput and idle reactor registration.  The default
+uses `ManualHost` so it is deterministic and available across the interpreter
+matrix.  Native provider throughput and leak tests remain separate stress jobs.
+
 ## Validating benchmark harness
 
 `bench.lua` is the broad, validating local-regression harness. Run it from the

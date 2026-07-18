@@ -27,4 +27,7 @@ return Common.new({
   bit = bit,
   C = ffi.C,
   fd_module = 'fibers.host.fd_luajit',
+  -- Some non-LuaJIT interpreters expose a compatibility `ffi` sufficient for
+  -- numeric descriptors but unsafe for getaddrinfo linked-list traversal.
+  resolver_enabled = type(rawget(_G, 'jit')) == 'table',
 })

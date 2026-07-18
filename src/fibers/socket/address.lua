@@ -1,33 +1,80 @@
--- Normalised socket address constructors.
+-- Immutable-by-convention socket address and endpoint constructors.
 --
--- Address values remain plain tables for host-adapter interoperability. The
--- constructor boundary centralises validation and family tagging.
+-- Numeric addresses are explicit IPv4, IPv6, or Unix values. Host names are
+-- unresolved endpoints and must pass through fibers.socket.resolve before a
+-- native listener or DialAttempt can use them.
 
 local Address = {}
 
+local function port_number(port, label)
+  port = tonumber(port)
+  if not port or port < 0 or port > 65535 or port ~= math.floor(port) then
+    error((label or 'socket address') .. ' expects a port from 0 to 65535', 3)
+  end
+  return port
+end
+
+local function nonempty(value, label)
+  if type(value) ~= 'string' or value == '' then
+    error((label or 'socket address') .. ' expects a non-empty string', 3)
+  end
+  return value
+end
+
 local function build(kind, fields)
-  local out = {
-    kind = kind,
-    family = kind == 'unix' and 'unix' or 'inet',
-  }
+  local out = { kind = kind, family = kind }
   for key, value in pairs(fields or {}) do
     out[key] = value
   end
   return out
 end
 
-function Address.inet(host, port)
-  return build('inet', {
-    host = host or '0.0.0.0',
-    port = port or 0,
+function Address.ipv4(host, port)
+  return build('inet4', {
+    host = nonempty(host or '0.0.0.0', 'socket.ipv4_address'),
+    port = port_number(port or 0, 'socket.ipv4_address'),
+  })
+end
+
+function Address.ipv6(host, port, opts)
+  opts = opts or {}
+  return build('inet6', {
+    host = nonempty(host or '::', 'socket.ipv6_address'),
+    port = port_number(port or 0, 'socket.ipv6_address'),
+    flowinfo = tonumber(opts.flowinfo) or 0,
+    scope_id = tonumber(opts.scope_id) or 0,
   })
 end
 
 function Address.unix(path)
-  if type(path) ~= 'string' or path == '' then
-    error('socket.unix_address expects a non-empty path', 2)
+  return build('unix', { path = nonempty(path, 'socket.unix_address') })
+end
+
+function Address.name(host, service, opts)
+  opts = opts or {}
+  if service == nil then
+    error('socket.name_endpoint expects a service or port', 2)
   end
-  return build('unix', { path = path })
+  return build('name', {
+    host = nonempty(host, 'socket.name_endpoint'),
+    service = service,
+    family_hint = opts.family_hint or (opts.family ~= 'name' and opts.family or nil),
+    socket_type = opts.socket_type or 'stream',
+  })
+end
+
+function Address.inet(host, port, opts)
+  host = host or '0.0.0.0'
+  if string.find(host, ':', 1, true) then
+    return Address.ipv6(host, port, opts)
+  end
+  if host:match('^%d+%.%d+%.%d+%.%d+$') then
+    return Address.ipv4(host, port)
+  end
+  if host == '*' then
+    return Address.ipv4('0.0.0.0', port)
+  end
+  return Address.name(host, port, opts)
 end
 
 function Address.copy(value)
@@ -38,11 +85,48 @@ function Address.copy(value)
   return out
 end
 
-function Address.validate(value, label)
-  if type(value) ~= 'table' then
-    error((label or 'socket address') .. ' expects an address value', 3)
+function Address.is_numeric(value)
+  return type(value) == 'table' and (value.kind == 'inet4' or value.kind == 'inet6' or value.kind == 'unix')
+end
+
+function Address.is_name(value)
+  return type(value) == 'table' and value.kind == 'name'
+end
+
+function Address.key(value)
+  value = Address.validate(value, 'socket address')
+  if value.kind == 'unix' then
+    return 'unix:' .. value.path
+  elseif value.kind == 'inet6' then
+    return 'inet6:[' .. value.host .. ']:' .. tostring(value.port) .. ':' .. tostring(value.scope_id or 0)
+  elseif value.kind == 'inet4' then
+    return 'inet4:' .. value.host .. ':' .. tostring(value.port)
   end
-  return Address.copy(value)
+  return 'name:' .. value.host .. ':' .. tostring(value.service)
+end
+
+function Address.validate(value, label)
+  label = label or 'socket address'
+  if type(value) ~= 'table' then
+    error(label .. ' expects an address value', 3)
+  end
+  if value.kind == 'inet4' or value.family == 'inet4' then
+    return Address.ipv4(value.host, value.port)
+  end
+  if value.kind == 'inet6' or value.family == 'inet6' then
+    return Address.ipv6(value.host, value.port, value)
+  end
+  if value.kind == 'unix' or value.family == 'unix' then
+    return Address.unix(value.path)
+  end
+  if value.kind == 'name' or value.family == 'name' then
+    return Address.name(value.host, value.service or value.port, value)
+  end
+  -- Compatibility with the pre-explicit `inet` table shape.
+  if value.kind == 'inet' or value.family == 'inet' then
+    return Address.inet(value.host, value.port, value)
+  end
+  error(label .. ' has unknown address kind ' .. tostring(value.kind or value.family), 3)
 end
 
 return Address

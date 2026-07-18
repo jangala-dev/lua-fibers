@@ -5,6 +5,7 @@
 -- is_supported() returns false and new() raises a clear error.
 
 local Host = require('fibers.host')
+local DatagramProvider = require('fibers.host.datagram_nixio')
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
@@ -153,8 +154,14 @@ function Nixio.new(opts)
     return monotonic()
   end
   self.fd = require('fibers.host.fd_nixio')
-  self.capabilities =
-    { time = true, readiness = true, fd = self.fd.is_supported(), pipe = self.fd.is_supported() }
+  self.capabilities = {
+    time = true,
+    readiness = true,
+    fd = self.fd.is_supported(),
+    pipe = self.fd.is_supported(),
+    datagram = DatagramProvider.is_supported(),
+    datagram_truncation = false,
+  }
   return self
 end
 
@@ -164,6 +171,10 @@ function Nixio:create_pipe(pipe_opts)
     name = pipe_opts and pipe_opts.name,
     nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
   })
+end
+
+function Nixio:create_datagram(address, datagram_opts)
+  return DatagramProvider.create_datagram(self, address, datagram_opts)
 end
 
 function Nixio:sleep(seconds)

@@ -4,7 +4,7 @@ Examples are grouped by audience and stability.
 
 ## Tutorial
 
-`tutorial/` begins with the robot-dispatch example from the top-level README, then introduces channels, choice, tasks, Scalar state, scope policy, memory streams, Flow composition, pipes, sockets and direct performing methods.
+`tutorial/` begins with the robot-dispatch example from the top-level README, then introduces channels, choice, tasks, Scalar state, scope policy, memory streams, Flow composition, pipes, sockets, direct performing methods, owned name resolution and datagrams.
 
 ## Recipes
 

@@ -4,6 +4,7 @@
 -- this module.  This module does not auto-select an ffi provider.
 
 local Host = require('fibers.host')
+local HostError = require('fibers.host.error')
 
 local Common = {}
 
@@ -63,6 +64,20 @@ function Common.new(opts)
   local C = opts.C or ffi.C
   local tonumber_c = opts.tonumber_c or make_tonumber(ffi)
   local fd_module = assert(opts.fd_module, 'paired fd module required')
+  local fd_provider = require(fd_module)
+  local socket_provider = require('fibers.host._socket_ffi_common').new({
+    error_prefix = prefix .. '.socket',
+    ffi = ffi,
+    C = C,
+    fd = fd_provider,
+    tonumber_c = tonumber_c,
+  })
+  local resolver_provider = require('fibers.host._resolver_ffi_common').new({
+    ffi = ffi,
+    C = C,
+    tonumber_c = tonumber_c,
+  })
+  local resolver_supported = opts.resolver_enabled ~= false and resolver_provider.is_supported()
 
   local ok_cdef, cdef_err = pcall(function()
     ffi.cdef([[
@@ -391,7 +406,7 @@ function Common.new(opts)
       maxevents = 1
     end
     local epfd = epoll_create()
-    local fd = require(fd_module)
+    local fd = fd_provider
     local self = setmetatable({
       kind = name,
       name = name,
@@ -415,6 +430,11 @@ function Common.new(opts)
         readiness = true,
         fd = fd.is_supported(),
         pipe = fd.is_supported(),
+        socket = socket_provider.is_supported(),
+        datagram = socket_provider.is_supported(),
+        datagram_truncation = socket_provider.is_supported(),
+        resolver = resolver_supported,
+        resolver_blocking = resolver_supported,
       },
     }, Linux)
     self.now = function(_rt)
@@ -429,6 +449,25 @@ function Common.new(opts)
       name = pipe_opts and pipe_opts.name,
       nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
     })
+  end
+
+  function Linux:create_listener(address, listener_opts)
+    return socket_provider.create_listener(self, address, listener_opts)
+  end
+
+  function Linux:start_dial(address, dial_opts)
+    return socket_provider.start_dial(self, address, dial_opts)
+  end
+
+  function Linux:create_datagram(address, datagram_opts)
+    return socket_provider.create_datagram(self, address, datagram_opts)
+  end
+
+  function Linux:resolve(endpoint, resolve_opts)
+    if not resolver_supported then
+      return nil, HostError.unsupported('host', 'resolve', { endpoint = endpoint })
+    end
+    return resolver_provider.resolve(self, endpoint, resolve_opts)
   end
 
   function Linux:sleep(seconds)

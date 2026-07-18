@@ -99,6 +99,7 @@ do
     'listen',
     'listen_inet',
     'listen_unix',
+    'datagram',
     'dial',
     'dial_inet',
     'dial_unix',
@@ -144,7 +145,7 @@ end
 
 -- Direct methods are exact performing conveniences over their _op forms.
 do
-  local host = Host.manual({ pipes = true, sockets = true, auto_advance_time = true })
+  local host = Host.manual({ pipes = true, sockets = true, datagrams = true, auto_advance_time = true })
   fibers.run(function()
     local inbox = channel.new()
     local sender = fibers.spawn(function()
@@ -189,6 +190,17 @@ do
     client_task:await()
     listener:close('done')
     assert_truthy(listener:closed())
+
+    local datagram_a = assert(socket.datagram_ipv4('127.0.0.1', 0))
+    local datagram_b = assert(socket.datagram_ipv4('127.0.0.1', 0))
+    assert_twins(datagram_a, { 'send_to', 'receive_from', 'flush', 'close', 'closed' }, 'datagram')
+    datagram_a:send_to('packet', datagram_b:local_address())
+    datagram_a:flush()
+    assert_eq(assert(datagram_b:receive_from()).data, 'packet')
+    datagram_a:close('done')
+    datagram_b:close('done')
+    assert_truthy(datagram_a:closed())
+    assert_truthy(datagram_b:closed())
 
     -- Explicit option composition remains the same underlying language.
     local timed = fibers.perform(fibers.choice(

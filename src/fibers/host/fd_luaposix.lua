@@ -78,6 +78,23 @@ local function set_nonblocking_fd(fd, value)
   return true
 end
 
+local function set_cloexec_fd(fd, value)
+  if fcntl.F_GETFD == nil or fcntl.F_SETFD == nil or fcntl.FD_CLOEXEC == nil then
+    return true
+  end
+  local flags, err, eno = fcntl.fcntl(fd, fcntl.F_GETFD)
+  if flags == nil then
+    return nil, errno_msg('fcntl(F_GETFD)', err, eno), eno
+  end
+  local new_flags = value ~= false and bit.bor(flags, fcntl.FD_CLOEXEC)
+    or bit.band(flags, bit.bnot(fcntl.FD_CLOEXEC))
+  local ok, err2, eno2 = fcntl.fcntl(fd, fcntl.F_SETFD, new_flags)
+  if ok == nil then
+    return nil, errno_msg('fcntl(F_SETFD)', err2, eno2), eno2
+  end
+  return true
+end
+
 local function fd_read(self, max)
   max = tonumber(max) or 4096
   if max <= 0 then
@@ -190,6 +207,13 @@ function Fd.wrap(fd, opts)
   h.fd = fd
   h.raw_fd = fd
   h.generation = next_generation
+  if opts.cloexec ~= false then
+    local ok, err = set_cloexec_fd(fd, true)
+    if not ok then
+      h:close('set_cloexec failed')
+      return nil, err
+    end
+  end
   if opts.nonblocking ~= false then
     local ok, err = h:set_nonblocking(true)
     if not ok then
