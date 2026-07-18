@@ -811,7 +811,7 @@ local function resolve_machine_transitions(state, selected)
     local task = state.tasks[intent.task_id]
     local value = Store.project_machine(state, task, program.location, function(v)
       return machine_probe(state, program, v)
-    end, program.transition.supply)
+    end, program.transition.accepts_supply)
     local r = run_machine_transition(state, program, value)
     if not r then
       return false
@@ -914,7 +914,7 @@ local function witness_cursor(state, intent)
     return IR.witness_ready(program, value, program.payload or {}, {})
   end
   local value =
-    Store.project_machine(state, task, program.location, ready, program.supply or 'interacting', state.trail)
+    Store.project_machine(state, task, program.location, ready, program.accepts_supply, state.trail)
   return IR.open_witness_cursor(program, value, program.payload or {}, {})
 end
 
@@ -1612,9 +1612,9 @@ dfs_impl = function(state)
       local groups = frontier.claims
       for gi = 1, #groups do
         local group = groups[gi]
-        local all_machine, machine_supply_none = group.all_machine, group.supply_none
+        local all_machine, machine_accepts_supply = group.all_machine, group.accepts_supply
 
-        if all_machine and machine_supply_none then
+        if all_machine and not machine_accepts_supply then
           local forced = false
           if state.runtime.normalise_search ~= false and #groups == 1 and #group.ids == #state.intents then
             local group_intents = {}

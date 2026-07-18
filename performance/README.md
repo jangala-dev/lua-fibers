@@ -78,6 +78,20 @@ FIBERS_PERF_ADVANCED          full or off; A/B the passes 8--10 defaults
 Use the same interpreter, host, CPU policy and environment when comparing two
 runs. The figures are local regression measurements, not cross-machine claims.
 
+## I/O-shaped proof profile
+
+External-resource drivers are used as forcing cases for the production lazy
+machine:
+
+```sh
+make profile-proof-io
+FIBERS_PROOF_SLOW=1 make profile-proof-io
+```
+
+The profile reports search, branch, claim-closure, rollback, trail, dependency
+shape and retained-session invalidation reasons per commit. The programme and current findings are recorded in
+[`docs/notes/performance/PROOF-ENGINE-PROGRAMME.md`](../docs/notes/performance/PROOF-ENGINE-PROGRAMME.md).
+
 ## Runtime instrumentation
 
 Instrumentation is opt-in:

@@ -592,7 +592,7 @@ end
 -- independent sibling, only a transition which invalidates an already-ready
 -- demand is visible; a transition which makes an unready demand ready is
 -- positive supply and is hidden.
-function M.project_machine(state, task, loc, succeeds, supply_policy, trail)
+function M.project_machine(state, task, loc, succeeds, accepts_supply, trail)
   local own = state.views[task.view_id]
   local value = M.read(own, loc, trail)
   local steps = {}
@@ -617,7 +617,7 @@ function M.project_machine(state, task, loc, succeeds, supply_policy, trail)
   end)
   for i = 1, #steps do
     local st = steps[i]
-    local supply_restricted = st.relation == 'independent' or supply_policy == 'none'
+    local supply_restricted = st.relation == 'independent' or not accepts_supply
     if supply_restricted then
       local before = succeeds and succeeds(value) or false
       local after = succeeds and succeeds(st.value) or false

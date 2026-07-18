@@ -149,6 +149,20 @@ orientation = 'up'    additions or presence supply readiness
 orientation = 'down'  removals or absence supply readiness
 ```
 
+Dependency footprints use one canonical supply set:
+
+```lua
+supplies = { up = true }
+supplies = { down = true }
+supplies = { up = true, down = true }
+supplies = { any = true }
+```
+
+The string forms `'none'`, `'up'`, `'down'` and `'any'` are accepted when
+constructing trusted transitions and are normalised immediately to that set.
+`any` is an explicit declaration for an unordered state algebra; omission is
+not treated as `any`.
+
 Under `all`, the supplying component of an independent sibling delta is hidden. Under `tensor`, compatible supply may be used.
 
 `IR.select` and `IR.admit` are internal convenience constructors for ordered finite-map selection and compatibility-checked insertion.
@@ -165,7 +179,8 @@ local Scalar = require('fibers.scalar')
 local transition = Scalar.transition {
   name = 'buffer.take',
   mode = 'select',
-  supply = 'interacting',
+  accepts_supply = true,
+  supplies = 'any',
   order = 10,
   validate = function(payload)
     assert(type(payload.n) == 'number' and payload.n > 0)
@@ -200,7 +215,23 @@ Scalar.Ready.write(successor_state, results...)
 
 The callback receives only explicit state, payload and a restricted context. It must be deterministic, non-yielding and free of irreversible effects.
 
-`order` defines the stable serial order for accepted steps on one machine location. `supply = 'none'` prevents same-world sibling or participant supply and requires explicit sequencing.
+`order` defines the stable serial order for accepted steps on one machine location.
+
+Every transition declares two independent properties:
+
+```text
+accepts_supply   whether same-world sibling or recruited state may make this
+                 transition ready
+
+supplies         which demand directions this transition may make ready for
+                 another participant: none, up, down, any, or an explicit set
+```
+
+For example, a read-only query normally declares `supplies = 'none'`; a partial
+consumer which may be enabled by a sibling producer declares
+`accepts_supply = true`.  A transition which requires explicit sequencing uses
+`accepts_supply = false`.  Missing declarations are errors for trusted
+programmes; there is no conservative compatibility default.
 
 Flow and Region are substantial examples of this form.
 
@@ -218,7 +249,8 @@ Provide a lazy cursor factory:
 local programme = IR.witness_transition {
   location = location,
   group = location,
-  supply = 'interacting',
+  accepts_supply = true,
+  supplies = 'any',
   cursor = function(state, payload, context)
     local iterator = make_iterator(state, payload)
     return {

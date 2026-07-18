@@ -1295,6 +1295,10 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
       return hit, refutation, unknown
     end
 
+    if instrumentation then
+      instrumentation:inc('search_session_invalidation_' .. tostring(invalid_reason or 'unknown'))
+    end
+
     if
       retained.kind == 'retry'
       and (invalid_reason == 'bucket' or invalid_reason == 'request')

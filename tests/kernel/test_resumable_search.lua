@@ -210,6 +210,8 @@ do
   })
   local opened, next_calls = 0, 0
   local program = IR.witness_transition({
+    accepts_supply = true,
+    supplies = 'any',
     location = location,
     cursor = function()
       opened = opened + 1

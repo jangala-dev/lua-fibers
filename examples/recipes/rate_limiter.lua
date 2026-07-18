@@ -52,6 +52,8 @@ local Bucket = Scalar.kind({
   transitions = {
     refill = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       step = function(state, payload, ctx)
         local next_state = refill_state(payload, state, ctx:now())
         return next_state, next_state.tokens, next_state.last
@@ -59,6 +61,8 @@ local Bucket = Scalar.kind({
     },
     try_acquire = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       validate = function(payload)
         finite_number(payload.n, 'rate limiter amount')
         if payload.n <= 0 then

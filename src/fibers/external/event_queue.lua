@@ -64,7 +64,8 @@ local function op_for(q, drain)
   local transition = Scalar.transition({
     name = q.name .. (drain and ':drain' or ':next'),
     mode = 'select',
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(state)
       local n = #state.values
       if n == 0 then

@@ -30,7 +30,46 @@ function Queue.new(opts, name)
       or nil,
     capacity = capacity,
   }, Queue)
+  local put_locations = {
+    [self.items._location] = {
+      read = true,
+      write = true,
+      wait = true,
+      supplies = { up = true },
+    },
+  }
+  local get_locations = {
+    [self.items._location] = {
+      read = true,
+      write = true,
+      wait = true,
+      supplies = { down = true },
+    },
+  }
+  if self.slots then
+    put_locations[self.slots._location] = {
+      read = true,
+      write = true,
+      wait = true,
+      supplies = { down = true },
+    }
+    get_locations[self.slots._location] = {
+      read = true,
+      write = true,
+      supplies = { up = true },
+    }
+  end
+  self._put_footprint = { locations = put_locations }
+  self._get_footprint = { locations = get_locations }
   return self
+end
+
+function Queue:put_footprint()
+  return self._put_footprint
+end
+
+function Queue:get_footprint()
+  return self._get_footprint
 end
 
 function Queue:put_op(value)
@@ -44,12 +83,13 @@ function Queue:put_op(value)
 end
 
 function Queue:get_op()
+  local footprint = self._get_footprint
   return self.items:pop_first_op():and_then(function(entry)
     local release = self.slots and self.slots:give_op(1) or Op.always(true)
     return release:map(function()
       return entry.value
     end)
-  end)
+  end, footprint)
 end
 
 function Queue:snapshot_op()

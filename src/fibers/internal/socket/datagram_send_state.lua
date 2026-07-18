@@ -11,7 +11,8 @@ SendState.__index = SendState
 local Allocate = Scalar.transition({
   name = 'socket.datagram.allocate_send',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current)
     if current.terminal_error ~= nil then
       return Ready.same(nil, current.terminal_error)
@@ -29,7 +30,8 @@ local Allocate = Scalar.transition({
 local Complete = Scalar.transition({
   name = 'socket.datagram.complete_send',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if payload.seq <= current.completed_seq then
       return Ready.same(true)
@@ -54,7 +56,8 @@ local Complete = Scalar.transition({
 local Fail = Scalar.transition({
   name = 'socket.datagram.fail_send',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.terminal_error ~= nil then
       return Ready.same(false, current)
@@ -70,6 +73,7 @@ local Fail = Scalar.transition({
 })
 
 local function wait_flush(state, target)
+  local footprint = Op.dependencies(state:snapshot_op(), state:changed_op(0))
   local function loop()
     return state:snapshot_op():and_then(function(snapshot)
       local value = snapshot.value
@@ -79,14 +83,14 @@ local function wait_flush(state, target)
       if value.terminal_error ~= nil and (value.failure_seq or 0) <= target then
         return Op.always(nil, value.terminal_error)
       end
-      return state:changed_op(snapshot.version):and_then(loop)
-    end)
+      return state:changed_op(snapshot.version):and_then(loop, footprint)
+    end, footprint)
   end
   return loop()
 end
 
 function SendState.new(name, capacity)
-  return setmetatable({
+  local self = setmetatable({
     name = name,
     state = Scalar.machine({
       next_seq = 0,
@@ -96,6 +100,17 @@ function SendState.new(name, capacity)
     }, name .. ':state'),
     queue = Queue.new({ capacity = capacity or 64, name = name .. ':queue' }),
   }, SendState)
+  self._admit_footprint = Op.dependencies(self.state:transition_op(Allocate), self.queue:put_footprint())
+  self._flush_footprint = Op.dependencies(self.state:read_op(), self.state:changed_op(0))
+  return self
+end
+
+function SendState:admit_footprint()
+  return self._admit_footprint
+end
+
+function SendState:flush_footprint()
+  return self._flush_footprint
 end
 
 function SendState:admit_op(data, address)
@@ -106,7 +121,7 @@ function SendState:admit_op(data, address)
     return self.queue:put_op({ seq = seq, data = data, address = address }):map(function()
       return true, seq
     end)
-  end)
+  end, self._admit_footprint)
 end
 
 function SendState:next_op()
@@ -129,7 +144,7 @@ function SendState:flush_op()
   local state = self.state
   return state:read_op():and_then(function(value)
     return wait_flush(state, value.next_seq)
-  end)
+  end, self._flush_footprint)
 end
 
 function SendState:state_value()

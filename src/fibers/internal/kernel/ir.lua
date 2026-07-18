@@ -5,6 +5,8 @@
 -- or commit.  This module also compiles immutable option graphs into cached
 -- dependency metadata used by recruitment, component isolation and diagnostics.
 
+local Supply = require('fibers.internal.kernel.supply')
+
 local M = {}
 
 local function programme(kind, fields)
@@ -96,16 +98,22 @@ end
 function M.machine_transition(opts)
   assert(opts and opts.location, 'machine transition requires location')
   assert(opts.transition, 'machine transition requires transition')
+  assert(opts.transition.supply == nil, 'machine transition no longer accepts supply')
+  assert(type(opts.transition.accepts_supply) == 'boolean', 'machine transition requires accepts_supply')
+  opts.transition.supplies = Supply.normalise(opts.transition.supplies, 'machine transition supplies', 2)
   opts.order = opts.transition.order or opts.order or 0
   return programme('machine_transition', opts)
 end
 
 function M.witness_transition(opts)
   assert(opts and opts.location, 'witness transition requires location')
+  assert(opts.supply == nil, 'witness transition no longer accepts supply')
   assert(
     type(opts.cursor) == 'function' or type(opts.enumerate) == 'function',
     'witness transition requires cursor or enumerate'
   )
+  assert(type(opts.accepts_supply) == 'boolean', 'witness transition requires accepts_supply')
+  opts.supplies = Supply.normalise(opts.supplies, 'witness transition supplies', 2)
   opts.order = opts.order or 0
   return programme('witness_transition', opts)
 end
@@ -168,7 +176,11 @@ local function mark_location(out, loc, fields)
     out.locations[loc] = access
   end
   for key, value in pairs(fields or {}) do
-    if value then
+    if key == 'supply' or key == 'supply_up' or key == 'supply_down' or key == 'supply_any' then
+      error('legacy location supply metadata is not supported; use supplies', 0)
+    elseif key == 'supplies' then
+      access.supplies = Supply.merge_into(access.supplies, value)
+    elseif value then
       access[key] = true
     end
   end
@@ -219,6 +231,66 @@ local function metadata_merge(dst, src)
   return dst
 end
 
+local function mark_patch_supply(access, patch)
+  if not patch then
+    return
+  end
+  local supplies = access.supplies or {}
+  access.supplies = supplies
+  if patch.kind == 'add' then
+    if (patch.delta or 0) > 0 then
+      supplies.up = true
+    elseif (patch.delta or 0) < 0 then
+      supplies.down = true
+    end
+    return
+  end
+  if patch.kind == 'presence' or patch.kind == 'finite_map' then
+    for i = 1, #(patch.ops or {}) do
+      local row = patch.ops[i]
+      if row.op == 'put' then
+        supplies.up = true
+      elseif row.op == 'remove' or row.op == 'take' then
+        supplies.down = true
+      else
+        supplies.any = true
+      end
+    end
+    return
+  end
+  -- Replacement and custom patches have no declared order relation.  They
+  -- explicitly supply any demand direction.
+  supplies.any = true
+end
+
+local function primitive_supply_access(program, kind)
+  local access = { read = true, write = true, supplies = {} }
+  if kind == 'patch' then
+    mark_patch_supply(access, program.patch)
+    if program.payload_patch == 'replace' then
+      access.supplies.any = true
+    end
+    return access
+  end
+
+  local transition = program.transition
+  if not transition and kind == 'conditional_claim' then
+    transition = { kind = 'static', patch = program.claim_patch }
+  end
+  if transition then
+    if transition.kind == 'static' then
+      mark_patch_supply(access, transition.patch)
+    elseif transition.kind == 'take_witness' then
+      access.supplies.down = true
+    elseif transition.kind == 'put' then
+      access.supplies.up = true
+    else
+      access.supplies.any = true
+    end
+  end
+  return access
+end
+
 local function primitive_metadata(op, out)
   local p = op.program
   local kind = p.program_kind or p.kind
@@ -242,29 +314,31 @@ local function primitive_metadata(op, out)
   if kind == 'read' then
     mark_location(out, p.location, { read = true })
   elseif kind == 'patch' then
-    mark_location(out, p.location, { read = true, write = true, supply = true })
+    mark_location(out, p.location, primitive_supply_access(p, kind))
   elseif kind == 'version_wait' then
     mark_location(out, p.location, { read = true, wait = true })
     out.external = true
   elseif kind == 'claim' or kind == 'conditional_claim' then
-    mark_location(out, p.location, { read = true, write = true, wait = true, supply = true })
+    local access = primitive_supply_access(p, kind)
+    access.wait = true
+    mark_location(out, p.location, access)
   elseif kind == 'machine_transition' then
-    local supply = p.transition and p.transition.supply or 'interacting'
+    local transition = assert(p.transition, 'machine transition metadata requires transition')
     mark_location(out, p.location, {
       read = true,
-      write = p.transition and p.transition.mode ~= 'query',
+      write = transition.mode ~= 'query',
       wait = true,
-      supply = supply ~= 'none',
+      supplies = transition.supplies,
     })
   elseif kind == 'witness_transition' then
     mark_location(out, p.location, {
       read = true,
       write = true,
       wait = true,
-      supply = (p.supply or 'interacting') ~= 'none',
+      supplies = p.supplies,
     })
   else
-    mark_location(out, p.location, { read = true, write = true, supply = true })
+    error('unknown trusted primitive programme kind ' .. tostring(kind), 0)
   end
   if p.interest ~= nil or p.absence_check ~= nil then
     out.external = true
@@ -318,10 +392,17 @@ local function metadata_from_hint(hint, seen)
   end
   for loc, access in pairs(hint.locations or {}) do
     if access == true then
-      mark_location(out, loc, { read = true, write = true, supply = true })
-    else
-      mark_location(out, loc, access)
+      error('location dependency hints must declare read/write/wait and supplies explicitly', 0)
     end
+    local fields = {}
+    for key, value in pairs(access or {}) do
+      if key == 'supplies' then
+        fields.supplies = Supply.normalise(value, 'location dependency supplies', 2)
+      else
+        fields[key] = value
+      end
+    end
+    mark_location(out, loc, fields)
   end
   for resource, access in pairs(hint.resources or {}) do
     if access == true then
@@ -415,11 +496,24 @@ function M.metadata_covers(declared, actual)
   for location, access in pairs(actual.locations or {}) do
     local allowed = declared.locations and declared.locations[location]
     if not allowed then
-      return false, 'location ' .. tostring(location)
+      return false, 'location ' .. tostring(location.name or location._fibers_id or location)
     end
     for mode, present in pairs(access) do
-      if present and not allowed[mode] then
-        return false, 'location mode ' .. tostring(mode)
+      if mode == 'supplies' then
+        for direction in pairs(present or {}) do
+          local allowed_supplies = allowed.supplies
+          if not (allowed_supplies and (allowed_supplies.any or allowed_supplies[direction])) then
+            return false,
+              'location supply direction ' .. tostring(direction) .. ' at ' .. tostring(
+                location.name or location._fibers_id or location
+              )
+          end
+        end
+      elseif present and not allowed[mode] then
+        return false,
+          'location mode ' .. tostring(mode) .. ' at ' .. tostring(
+            location.name or location._fibers_id or location
+          )
       end
     end
   end
@@ -470,10 +564,12 @@ function M.metadata_may_supply(metadata, intent)
     end
     return false, 'none'
   end
-  local loc = intent.program and (intent.program.location or intent.program.group)
+  local program = intent.program
+  local loc = program and (program.location or program.group)
   local access = loc and metadata.locations[loc]
-  if access and access.supply then
-    return true, 'location'
+  local demand = program and (program.orientation or program.demand_tag)
+  if access and Supply.may_supply(access.supplies, demand) then
+    return true, demand and ('location-' .. tostring(demand)) or 'location-any-demand'
   end
   return false, 'none'
 end

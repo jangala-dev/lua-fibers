@@ -190,6 +190,8 @@ local FlowTransitions = Scalar.kind({
   transitions = {
     write = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       ready = function(s, p)
         local bytes = p.bytes or ''
@@ -225,6 +227,8 @@ local FlowTransitions = Scalar.kind({
     },
     write_some = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       step = function(s, p)
         local bytes = p.bytes or ''
@@ -249,6 +253,8 @@ local FlowTransitions = Scalar.kind({
     },
     read_some = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 50,
       ready = function(s, p)
         return s.input_error ~= nil or s.rope:length() > 0 or committed_input_closed(p.flow)
@@ -270,6 +276,8 @@ local FlowTransitions = Scalar.kind({
     },
     read_exactly = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 50,
       ready = function(s, p)
         return s.input_error ~= nil or s.rope:length() >= p.n or committed_input_closed(p.flow)
@@ -296,6 +304,8 @@ local FlowTransitions = Scalar.kind({
     },
     read_until = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 50,
       ready = function(s, p)
         if s.input_error then
@@ -336,6 +346,8 @@ local FlowTransitions = Scalar.kind({
     },
     read_until_or_eof = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 50,
       ready = function(s, p)
         if s.input_error then
@@ -390,6 +402,8 @@ local FlowTransitions = Scalar.kind({
     },
     drain_available = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       step = function(s)
         local len = s.rope:length()
@@ -403,6 +417,8 @@ local FlowTransitions = Scalar.kind({
     },
     drain_all_limited = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       step = function(s, p)
         local len = s.rope:length()
@@ -419,6 +435,8 @@ local FlowTransitions = Scalar.kind({
     },
     read_all_too_large = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 90,
       step = function(s, p)
         if p.unlimited or not p.max or s.rope:length() <= p.max then
@@ -429,6 +447,8 @@ local FlowTransitions = Scalar.kind({
     },
     lease = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 50,
       ready = function(s, p)
         if s.lease_id then
@@ -461,6 +481,8 @@ local FlowTransitions = Scalar.kind({
     },
     ack_lease = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         if not s.lease_id or s.lease_id ~= p.lease.id then
@@ -482,6 +504,8 @@ local FlowTransitions = Scalar.kind({
     },
     return_lease = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         if not s.lease_id or s.lease_id ~= p.lease.id then
@@ -501,6 +525,8 @@ local FlowTransitions = Scalar.kind({
     },
     fail_lease = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         if not s.lease_id or s.lease_id ~= p.lease.id then
@@ -516,6 +542,8 @@ local FlowTransitions = Scalar.kind({
     },
     drop_exactly = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 50,
       ready = function(s, p)
         return s.input_error ~= nil or s.rope:length() >= p.n or committed_input_closed(p.flow)
@@ -546,6 +574,8 @@ local FlowTransitions = Scalar.kind({
     },
     reserve_space = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 90,
       ready = function(s, p)
         if s.output_error or not s.input_open or not s.output_open then
@@ -587,6 +617,8 @@ local FlowTransitions = Scalar.kind({
     },
     commit_space = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         if not s.space_id or s.space_id ~= p.lease.id then
@@ -606,6 +638,8 @@ local FlowTransitions = Scalar.kind({
     },
     release_space = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         if not s.space_id or s.space_id ~= p.lease.id then
@@ -619,6 +653,8 @@ local FlowTransitions = Scalar.kind({
     },
     fail_space = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         if not s.space_id or s.space_id ~= p.lease.id then
@@ -633,6 +669,8 @@ local FlowTransitions = Scalar.kind({
     },
     capacity_some = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 90,
       validate = function(p)
         if p.n == nil or p.n <= 0 then
@@ -649,6 +687,8 @@ local FlowTransitions = Scalar.kind({
     },
     peek = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s, p)
         if s.rope:length() < p.n then
@@ -659,6 +699,8 @@ local FlowTransitions = Scalar.kind({
     },
     flush = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s)
         if s.settled_error then
@@ -672,6 +714,8 @@ local FlowTransitions = Scalar.kind({
     },
     settled_error = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s)
         if not s.settled_error then
@@ -682,6 +726,8 @@ local FlowTransitions = Scalar.kind({
     },
     settle = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         local retained = retained_length(s)
@@ -703,6 +749,8 @@ local FlowTransitions = Scalar.kind({
     },
     shutdown_flow = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         local retained = retained_length(s)
@@ -725,6 +773,8 @@ local FlowTransitions = Scalar.kind({
     },
     closed = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s)
         if s.input_open == false and s.output_open == false and retained_length(s) == 0 then
@@ -738,6 +788,8 @@ local FlowTransitions = Scalar.kind({
     },
     empty = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s)
         if retained_length(s) ~= 0 then
@@ -748,6 +800,8 @@ local FlowTransitions = Scalar.kind({
     },
     close_input = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s)
         if s.input_open == false then
@@ -760,6 +814,8 @@ local FlowTransitions = Scalar.kind({
     },
     close_output = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s)
         if s.output_open == false then
@@ -772,6 +828,8 @@ local FlowTransitions = Scalar.kind({
     },
     input_closed = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(_s, p)
         if committed_input_closed(p.flow) then
@@ -782,6 +840,8 @@ local FlowTransitions = Scalar.kind({
     },
     output_closed = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(_s, p)
         local committed = p.flow and p.flow.state and p.flow.state.value
@@ -793,6 +853,8 @@ local FlowTransitions = Scalar.kind({
     },
     set_input_error = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         local next_s = copy_metadata_state(s)
@@ -803,6 +865,8 @@ local FlowTransitions = Scalar.kind({
     },
     set_output_error = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         local next_s = copy_metadata_state(s)
@@ -813,6 +877,8 @@ local FlowTransitions = Scalar.kind({
     },
     input_error = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s)
         if s.input_error == nil then
@@ -823,6 +889,8 @@ local FlowTransitions = Scalar.kind({
     },
     output_error = {
       mode = 'query',
+      accepts_supply = true,
+      supplies = 'none',
       order = 100,
       step = function(s)
         if s.output_error == nil then
@@ -833,6 +901,8 @@ local FlowTransitions = Scalar.kind({
     },
     fail_write = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         local err = p.err or Errors.WRITE_ERROR
@@ -852,6 +922,8 @@ local FlowTransitions = Scalar.kind({
     },
     shutdown_output = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(s, p)
         local err = p.err or Errors.BROKEN_PIPE

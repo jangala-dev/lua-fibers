@@ -102,7 +102,8 @@ function PollerQueue:next_op()
   local transition = Scalar.transition({
     name = self.name .. ':next',
     mode = 'select',
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(state)
       if (state.count or 0) == 0 then
         return Scalar.Wait

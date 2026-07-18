@@ -72,6 +72,8 @@ local Meta = Scalar.kind({
   transitions = {
     check_sendable = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(st, payload)
         st = copy_meta(st)
@@ -83,6 +85,8 @@ local Meta = Scalar.kind({
     },
     closed_or_inactive = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 10,
       step = function(st, payload)
         st = copy_meta(st)
@@ -94,6 +98,8 @@ local Meta = Scalar.kind({
     },
     closed = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 10,
       step = function(st)
         st = copy_meta(st)
@@ -105,6 +111,8 @@ local Meta = Scalar.kind({
     },
     clone_sender = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 20,
       step = function(st, payload)
         st = copy_meta(st)
@@ -125,6 +133,8 @@ local Meta = Scalar.kind({
     },
     close_sender = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 30,
       step = function(st, payload)
         st = copy_meta(st)
@@ -143,6 +153,8 @@ local Meta = Scalar.kind({
     },
     close_mailbox = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 30,
       step = function(st, payload)
         st = copy_meta(st)
@@ -155,6 +167,8 @@ local Meta = Scalar.kind({
     },
     drop = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 40,
       step = function(st)
         st = copy_meta(st)

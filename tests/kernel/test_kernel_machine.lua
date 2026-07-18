@@ -25,6 +25,8 @@ local Kind = { name = 'lazy-witness-test' }
 local loc = Store.new_location({ name = 'lazy-witness', merge = 'machine', domain = 'plain', value = 0 })
 local opened, next_calls = 0, 0
 local p = IR.witness_transition({
+  accepts_supply = true,
+  supplies = 'any',
   location = loc,
   cursor = function(state)
     opened = opened + 1

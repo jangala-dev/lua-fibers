@@ -31,6 +31,8 @@ Scope.__index = Scope
 local RequestCancellation = Scalar.transition({
   name = 'scope.request_cancel',
   mode = 'update',
+  accepts_supply = true,
+  supplies = 'any',
   step = function(state, payload)
     if type(state) == 'table' and (state.requested or state.cancelled) then
       return Scalar.Ready.same(false, state.reason)

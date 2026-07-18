@@ -45,6 +45,7 @@ function Service:next_op(handle, sends, pending)
   local read_op = read_event_op(handle)
   local write_op = write_event_op(handle, sends, pending)
 
+  local footprint = Op.dependencies(read_op, write_op)
   return Op.choice(read_op, write_op):and_then(function(event)
     local held = pending
     if event.kind == 'write' then
@@ -71,7 +72,7 @@ function Service:next_op(handle, sends, pending)
         return preferred_event, next_pending
       end)
       :or_else(Op.always(event, held))
-  end)
+  end, footprint)
 end
 
 function Service:progress(kind)

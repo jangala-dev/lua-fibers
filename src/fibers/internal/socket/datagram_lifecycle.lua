@@ -15,7 +15,8 @@ Lifecycle.__index = Lifecycle
 local Activate = Scalar.transition({
   name = 'socket.datagram.activate',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind ~= 'starting' then
       return Ready.same(false, current)
@@ -32,7 +33,8 @@ local Activate = Scalar.transition({
 local StartFailed = Scalar.transition({
   name = 'socket.datagram.start_failed',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind ~= 'starting' then
       return Ready.same(false, current)
@@ -51,7 +53,8 @@ local StartFailed = Scalar.transition({
 local RequestStop = Scalar.transition({
   name = 'socket.datagram.request_stop',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind == 'starting' or current.kind == 'active' then
       local next_state = {
@@ -91,7 +94,8 @@ local RequestStop = Scalar.transition({
 local RecordCloseError = Scalar.transition({
   name = 'socket.datagram.record_close_error',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind ~= 'stopping' and current.kind ~= 'stopped' then
       return Ready.same(false, current)
@@ -109,7 +113,8 @@ local RecordCloseError = Scalar.transition({
 local Stopped = Scalar.transition({
   name = 'socket.datagram.stopped',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind == 'stopped' then
       return Ready.same(false, current)

@@ -173,7 +173,12 @@ tensor
     compatible sibling supply is visible
 ```
 
-For monotone claims, supply is selected by orientation. For serial machine transitions, the store compares readiness before and after each sibling step. A transition may declare `supply = 'none'` where explicit sequencing is required.
+For monotone claims, supply is selected by orientation.  Every trusted
+programme exposes one canonical `supplies` set (`up`, `down`, or explicit
+`any`).  Serial machine and witnessed transitions separately declare
+`accepts_supply`: the store compares readiness before and after sibling steps
+only when same-world supply is permitted.  Missing declarations are rejected;
+there is no umbrella compatibility relation.
 
 ### Candidate collection and commit
 
@@ -189,7 +194,7 @@ The active store assumes the runtime driver enters serially; it is not a paralle
 
 Before general branching, the evaluator exhausts deterministic option work
 and applies two certified reductions: an unambiguous binary exchange with no
-possible unentered supplier, and a sole all-member non-supplying machine claim
+possible unentered supplier, and a sole all-member machine claim which does not accept supply
 with no possible unentered supplier.  Residual exchange branching uses the
 smallest positive partner domain; claim groups use the smallest domain first;
 participant recruitment prefers the request which can supply the greatest
@@ -280,7 +285,11 @@ A match remains provisional until both participant options and all continuations
 
 Claims are grouped by location and explored through the ordinary branch mechanism. Serial machine transitions are ordered by a search-assigned serial number and folded into the location's machine delta.
 
-A partial machine transition which cannot proceed becomes an intent. Tensor siblings or recruited roots may supply it unless the transition declares `supply = 'none'`.
+A partial machine transition which cannot proceed becomes an intent. Tensor
+siblings or recruited roots may make it ready only when its
+`accepts_supply` declaration permits that relationship.  Whether the same
+transition can make another intent ready is described independently by its
+`supplies` set.
 
 ### Lazy witness cursors
 

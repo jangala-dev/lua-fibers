@@ -10,7 +10,7 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
 	test-experiments test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
-	test-luajit-interpreter examples bench bench-io performance check-format check-links \
+	test-luajit-interpreter examples bench bench-io profile-proof-io performance check-format check-links \
 	check-layout check
 
 test:
@@ -101,6 +101,9 @@ bench:
 bench-io:
 	$(LUA) performance/io_baselines.lua
 
+profile-proof-io:
+	$(LUA) performance/proof_engine_io.lua
+
 performance:
 	$(LUAJIT) performance/suite.lua
 
@@ -124,6 +127,7 @@ check-layout:
 	@test ! -d src/fibers/kernel
 	@test -f src/fibers/runtime.lua
 	@test -d src/fibers/internal/kernel
+	@test -f src/fibers/internal/kernel/supply.lua
 	@test -f src/fibers/flow.lua
 	@test -f src/fibers/flow/space_lease.lua
 	@test -f src/fibers/host/reactor.lua
@@ -184,4 +188,9 @@ check-layout:
 	@test ! -e src/fibers/internal/reference_machine.lua
 	@test -f performance/bench.lua
 	@test -f performance/io_baselines.lua
+	@test -f performance/proof_engine_io.lua
+	@test -f docs/notes/performance/PROOF-ENGINE-PROGRAMME.md
 	@test ! -e benchmarks
+	@! grep -RInE '^[[:space:]]*supply[[:space:]]*=' src examples experiments reference --include='*.lua'
+	@! grep -RInE '^[[:space:]]*supply_(up|down|any)[[:space:]]*=' src examples experiments reference --include='*.lua'
+

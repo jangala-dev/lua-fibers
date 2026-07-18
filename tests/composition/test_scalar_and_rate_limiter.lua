@@ -55,6 +55,8 @@ local function test_scalar_transition_serialises_parallel_updates()
   local inc = Scalar.transition({
     name = 'test.scalar.inc',
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     step = function(v, payload)
       return v + payload.by, v + payload.by
     end,
@@ -137,6 +139,8 @@ local function test_scalar_transition_ordering_is_direct_and_deterministic()
   local first = Scalar.transition({
     name = 'test.order.first',
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     order = 0,
     step = function(v)
       return v .. 'b', 'first'
@@ -145,6 +149,8 @@ local function test_scalar_transition_ordering_is_direct_and_deterministic()
   local second = Scalar.transition({
     name = 'test.order.second',
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     order = 100,
     step = function(v)
       return v .. 'a', 'second'
@@ -166,6 +172,8 @@ local function test_scalar_transition_ordering_controls_select_handoff()
   local supply = Scalar.transition({
     name = 'test.order.supply',
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     order = 0,
     step = function(v)
       return v + 1, true
@@ -174,6 +182,8 @@ local function test_scalar_transition_ordering_controls_select_handoff()
   local take = Scalar.transition({
     name = 'test.order.take',
     mode = 'select',
+    accepts_supply = true,
+    supplies = 'any',
     order = 100,
     step = function(v)
       if v <= 0 then
@@ -198,6 +208,8 @@ local function test_scalar_transition_payload_validation()
   local checked = Scalar.transition({
     name = 'test.validation',
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     validate = function(payload)
       if type(payload.n) ~= 'number' or payload.n <= 0 then
         error('n must be positive', 2)

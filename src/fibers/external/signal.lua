@@ -61,7 +61,8 @@ function Signal:wait_op()
   local transition = Scalar.transition({
     name = self.name .. ':wait',
     mode = 'query',
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(state)
       if not state.ready then
         return Scalar.Wait

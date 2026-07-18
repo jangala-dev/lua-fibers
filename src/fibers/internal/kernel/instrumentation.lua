@@ -125,6 +125,14 @@ function Instrumentation:begin_plan(meta)
     component_dynamic = meta and meta.component_dynamic or 0,
     component_global = meta and meta.component_global == true or false,
     component_edge_visits = meta and meta.component_edge_visits or 0,
+    option_nodes = meta and meta.option_nodes or 0,
+    option_dynamic_roots = meta and meta.option_dynamic_roots or 0,
+    option_external_roots = meta and meta.option_external_roots or 0,
+    dependency_locations = meta and meta.dependency_locations or 0,
+    dependency_resources = meta and meta.dependency_resources or 0,
+    dependency_exchanges = meta and meta.dependency_exchanges or 0,
+    option_node_kinds = meta and copy_map(meta.option_node_kinds) or {},
+    request_summaries = meta and copy_array(meta.request_summaries) or nil,
     machine = meta and meta.machine,
     search_calls = 0,
     task_steps = 0,
@@ -132,6 +140,8 @@ function Instrumentation:begin_plan(meta)
     rollbacks = 0,
     rollback_entries = 0,
     trail_entries = 0,
+    trail_set_coalesced = 0,
+    trail_push_coalesced = 0,
     max_trail = 0,
     max_depth = 1,
     max_active = 0,
@@ -147,6 +157,9 @@ function Instrumentation:begin_plan(meta)
     witness_alternatives = 0,
     claim_branches = 0,
     claim_all_branches = 0,
+    claim_closure_branches = 0,
+    claim_closure_successes = 0,
+    claim_closure_failures = 0,
     claim_single_branches = 0,
     claim_groups_scanned = 0,
     machine_probes = 0,
@@ -238,6 +251,14 @@ local function insert_slow_plan(self, plan)
     component_dynamic = plan.component_dynamic,
     component_global = plan.component_global,
     component_edge_visits = plan.component_edge_visits,
+    option_nodes = plan.option_nodes,
+    option_dynamic_roots = plan.option_dynamic_roots,
+    option_external_roots = plan.option_external_roots,
+    dependency_locations = plan.dependency_locations,
+    dependency_resources = plan.dependency_resources,
+    dependency_exchanges = plan.dependency_exchanges,
+    option_node_kinds = copy_map(plan.option_node_kinds),
+    request_summaries = plan.request_summaries and copy_array(plan.request_summaries) or nil,
     outcome = plan.outcome,
     elapsed = plan.elapsed,
     search_steps = plan.search_steps,
@@ -254,6 +275,8 @@ local function insert_slow_plan(self, plan)
     branches = plan.branches,
     rollbacks = plan.rollbacks,
     trail_entries = plan.trail_entries,
+    trail_set_coalesced = plan.trail_set_coalesced,
+    trail_push_coalesced = plan.trail_push_coalesced,
     rollback_entries = plan.rollback_entries,
     intent_pairs_scanned = plan.intent_pairs_scanned,
     compatible_pairs = plan.compatible_pairs,
@@ -263,6 +286,9 @@ local function insert_slow_plan(self, plan)
     witness_alternatives = plan.witness_alternatives,
     claim_branches = plan.claim_branches,
     claim_all_branches = plan.claim_all_branches,
+    claim_closure_branches = plan.claim_closure_branches,
+    claim_closure_successes = plan.claim_closure_successes,
+    claim_closure_failures = plan.claim_closure_failures,
     claim_single_branches = plan.claim_single_branches,
     claim_groups_scanned = plan.claim_groups_scanned,
     machine_probes = plan.machine_probes,
@@ -327,6 +353,17 @@ function Instrumentation:finish_plan(plan, outcome)
   self:inc('rollbacks', plan.rollbacks)
   self:inc('rollback_entries', plan.rollback_entries)
   self:inc('trail_entries', plan.trail_entries)
+  self:inc('trail_set_coalesced', plan.trail_set_coalesced or 0)
+  self:inc('trail_push_coalesced', plan.trail_push_coalesced or 0)
+  self:inc('option_nodes', plan.option_nodes or 0)
+  self:inc('option_dynamic_roots', plan.option_dynamic_roots or 0)
+  self:inc('option_external_roots', plan.option_external_roots or 0)
+  self:inc('dependency_locations', plan.dependency_locations or 0)
+  self:inc('dependency_resources', plan.dependency_resources or 0)
+  self:inc('dependency_exchanges', plan.dependency_exchanges or 0)
+  for kind, count in pairs(plan.option_node_kinds or {}) do
+    self:inc('option_kind_' .. tostring(kind), count)
+  end
   self:inc('intent_pairs_scanned', plan.intent_pairs_scanned)
   self:inc('compatible_pairs', plan.compatible_pairs)
   self:inc('choice_branches', plan.choice_branches)
@@ -335,6 +372,9 @@ function Instrumentation:finish_plan(plan, outcome)
   self:inc('witness_alternatives', plan.witness_alternatives)
   self:inc('claim_branches', plan.claim_branches)
   self:inc('claim_all_branches', plan.claim_all_branches)
+  self:inc('claim_closure_branches', plan.claim_closure_branches or 0)
+  self:inc('claim_closure_successes', plan.claim_closure_successes or 0)
+  self:inc('claim_closure_failures', plan.claim_closure_failures or 0)
   self:inc('claim_single_branches', plan.claim_single_branches)
   self:inc('claim_groups_scanned', plan.claim_groups_scanned)
   self:inc('machine_probes', plan.machine_probes)
@@ -400,6 +440,10 @@ function Instrumentation:finish_plan(plan, outcome)
   self:observe('intents_per_plan', plan.max_intents or 0)
   self:observe('roots_per_plan', plan.max_roots or 0)
   self:observe('trail_entries_per_plan', plan.trail_entries or 0)
+  self:observe('option_nodes_per_plan', plan.option_nodes or 0)
+  self:observe('dependency_locations_per_plan', plan.dependency_locations or 0)
+  self:observe('dependency_resources_per_plan', plan.dependency_resources or 0)
+  self:observe('dependency_exchanges_per_plan', plan.dependency_exchanges or 0)
   self:observe('search_cpu_us_per_plan', (plan.elapsed or 0) * 1000000)
   insert_slow_plan(self, plan)
 end

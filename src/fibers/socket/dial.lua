@@ -96,14 +96,15 @@ end
 function Dial:close_op(reason)
   local dial = self
   reason = reason or 'dial closed'
+  local cancel = dial.driver and dial.driver:request_cancel_op(reason) or Op.always(true)
   return dial.lifecycle:request_close_op(reason):and_then(function(first)
     if first and dial.driver then
-      return dial.driver:request_cancel_op(reason):map(function()
+      return cancel:map(function()
         return true
       end)
     end
     return Op.always(true)
-  end, false)
+  end, cancel)
 end
 
 local function closed_result(state)
@@ -116,9 +117,10 @@ end
 function Dial:closed_op()
   local joined = self.driver and self.driver:exit_op() or Op.always(true)
   local lifecycle = self.lifecycle
+  local terminal = lifecycle:terminal_op()
   return joined:and_then(function()
-    return lifecycle:terminal_op():map(closed_result)
-  end)
+    return terminal:map(closed_result)
+  end, terminal)
 end
 
 local function driver(dial, driver_scope, opts)

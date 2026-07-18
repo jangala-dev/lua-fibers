@@ -20,7 +20,8 @@ local next_id = 0
 local publish = Scalar.transition({
   name = 'completion.publish',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind ~= 'pending' then
       return Ready.same(nil, {

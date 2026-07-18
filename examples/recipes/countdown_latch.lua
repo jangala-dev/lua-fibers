@@ -32,6 +32,8 @@ local State = Scalar.kind({
   transitions = {
     add = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       validate = function(payload)
         integer(payload.n, 'countdown_latch add amount', 3)
@@ -52,6 +54,8 @@ local State = Scalar.kind({
     },
     wait = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       step = function(st)
         st = copy_state(st)

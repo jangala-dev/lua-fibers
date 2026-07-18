@@ -28,6 +28,8 @@ Task.__index = Task
 local RequestCancel = Scalar.transition({
   name = 'task.request_cancel',
   mode = 'update',
+  accepts_supply = true,
+  supplies = 'any',
   step = function(state, payload)
     if type(state) == 'table' and (state.cancelled or state.requested) then
       return Scalar.Ready.same(false, state.reason)

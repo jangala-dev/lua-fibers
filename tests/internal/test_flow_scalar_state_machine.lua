@@ -43,6 +43,8 @@ local function test_scalar_select_tensor_supply_but_all_non_handoff()
   local supply = FibersScalar.transition({
     name = 'test.scalar.supply',
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     step = function(v)
       return v + 1, true
     end,
@@ -50,6 +52,8 @@ local function test_scalar_select_tensor_supply_but_all_non_handoff()
   local take = FibersScalar.transition({
     name = 'test.scalar.take',
     mode = 'select',
+    accepts_supply = true,
+    supplies = 'any',
     step = function(v)
       if v <= 0 then
         return nil

@@ -13,6 +13,8 @@ package.path = table.concat({
 
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
+local Op = require('fibers.op')
+local Scalar = require('fibers.scalar')
 
 local function truthy(value, message)
   if not value then
@@ -63,11 +65,44 @@ truthy((snap.maxima.pending_requests or 0) >= 1, 'pending request high-water mar
 truthy(#(snap.slow_plans or {}) > 0, 'slow-plan summaries missing')
 truthy((snap.slow_plans[1].search_steps or 0) > 0, 'slow-plan search steps missing')
 truthy(type(snap.histograms.search_steps_per_plan) == 'table', 'search histogram missing')
+if rt.machine_name == 'trail' then
+  truthy((snap.counters.option_nodes or 0) > 0, 'option graph shape was not recorded')
+  truthy(type(snap.histograms.option_nodes_per_plan) == 'table', 'option-node histogram missing')
+  truthy((snap.counters.dependency_exchanges or 0) > 0, 'exchange dependencies were not recorded')
+end
 
 rt:reset_instrumentation()
 local empty = rt:instrumentation_snapshot()
 eq(empty.counters.plans, nil, 'reset did not clear counters')
 eq(#empty.slow_plans, 0, 'reset did not clear slow plans')
+
+-- Independent non-supplying machine-transition groups have no semantic
+-- alternative. The one lazy machine should normalise them without introducing
+-- claim branch frames.
+local ForcedTransition = Scalar.transition({
+  name = 'instrumentation.forced_transition',
+  mode = 'update',
+  accepts_supply = false,
+  supplies = 'none',
+  step = function(_current, payload)
+    return Scalar.Ready.write(payload, true)
+  end,
+})
+local forced_rt = Runtime.new({ machine = 'trail', instrumentation = true })
+local forced_a = Scalar.machine(0, 'instrumentation-forced-a')
+local forced_b = Scalar.machine(0, 'instrumentation-forced-b')
+forced_rt:spawn_raw(function()
+  forced_rt:perform(Op.all({
+    forced_a:transition_op(ForcedTransition, 1),
+    forced_b:transition_op(ForcedTransition, 2),
+  }))
+end, 'forced-claims')
+eq(forced_rt:run().tag, 'found')
+eq(forced_a.value, 1)
+eq(forced_b.value, 2)
+local forced_snap = forced_rt:instrumentation_snapshot()
+truthy((forced_snap.counters.forced_claims or 0) >= 2, 'unavoidable claims were not normalised')
+eq(forced_snap.counters.claim_branches or 0, 0, 'unavoidable claims opened branch frames')
 
 -- Requests whose static footprints cannot satisfy the current intent must not
 -- be recruited merely to enumerate irrelevant include/exclude subsets.

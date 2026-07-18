@@ -193,6 +193,8 @@ For an ordered state machine, define a typed transition:
 local Increment = Scalar.transition({
   name = 'counter.increment',
   mode = 'update',
+  accepts_supply = true,
+  supplies = 'any',
   validate = function(payload)
     assert(type(payload.by) == 'number', 'by must be a number')
   end,

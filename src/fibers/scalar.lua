@@ -1,6 +1,7 @@
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
 local Substrate = require('fibers.internal.kernel.store')
+local Supply = require('fibers.internal.kernel.supply')
 
 local Scalar = {}
 Scalar.__index = Scalar
@@ -25,9 +26,19 @@ function Scalar.transition(spec)
   if type(spec.step) ~= 'function' and type(spec.apply) ~= 'function' then
     error('Scalar.transition requires step or apply', 2)
   end
+  if spec.supply ~= nil then
+    error('Scalar.transition no longer accepts supply; use accepts_supply and supplies', 2)
+  end
   local mode = spec.mode or 'update'
   if mode ~= 'update' and mode ~= 'select' and mode ~= 'query' then
     error('scalar transition mode must be update, select, or query', 2)
+  end
+  if type(spec.accepts_supply) ~= 'boolean' then
+    error('Scalar.transition requires accepts_supply = true or false', 2)
+  end
+  local supplies = Supply.normalise(spec.supplies, 'Scalar.transition supplies', 2)
+  if mode == 'query' and not Supply.is_empty(supplies) then
+    error('query transitions cannot declare supplied state', 2)
   end
   return {
     _fibers_scalar_transition = true,
@@ -37,7 +48,8 @@ function Scalar.transition(spec)
     ready = spec.ready,
     validate = spec.validate,
     order = spec.order or 0,
-    supply = spec.supply or 'interacting',
+    accepts_supply = spec.accepts_supply,
+    supplies = supplies,
   }
 end
 
@@ -125,7 +137,8 @@ function Scalar:expect_op(value)
   local t = Scalar.transition({
     name = self.name .. ':expect',
     mode = 'query',
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(current)
       if current ~= value then
         return Scalar.Wait
@@ -142,6 +155,8 @@ function Scalar:unsafe_update_op(fn)
   end
   local t = Scalar.transition({
     mode = 'update',
+    accepts_supply = true,
+    supplies = 'any',
     step = function(current)
       return fn(current)
     end,
@@ -155,6 +170,8 @@ function Scalar:unsafe_select_op(fn)
   end
   local t = Scalar.transition({
     mode = 'select',
+    accepts_supply = true,
+    supplies = 'any',
     step = function(current)
       return fn(current)
     end,
@@ -166,6 +183,8 @@ function Scalar:write_op(value)
   if self._location.merge == 'machine' then
     local transition = Scalar.transition({
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function()
         return value, true

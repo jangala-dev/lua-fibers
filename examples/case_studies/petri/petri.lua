@@ -160,6 +160,7 @@ end
 
 function Petri:transition(spec)
   assert(type(spec) == 'table', 'Petri transition expects a table')
+  assert(spec.supply == nil, 'Petri transition no longer accepts supply; use accepts_supply and supplies')
   local transition = {
     _petri_transition = true,
     net = self,
@@ -169,7 +170,8 @@ function Petri:transition(spec)
     produce = spec.produce,
     result = spec.result,
     order = spec.order or 0,
-    supply = spec.supply or 'interacting',
+    accepts_supply = spec.accepts_supply ~= false,
+    supplies = spec.supplies or 'any',
   }
   return transition
 end
@@ -270,7 +272,8 @@ function Petri:fire_op(transition, payload)
     location = self._location,
     group = self._location,
     order = transition.order,
-    supply = transition.supply,
+    accepts_supply = transition.accepts_supply,
+    supplies = transition.supplies,
     payload = payload or {},
     cursor = function(state, actual_payload)
       return binding_cursor(transition, state, actual_payload)
@@ -315,7 +318,8 @@ function Petri:marking_op()
     Kind,
     Program.witness_transition({
       location = self._location,
-      supply = 'none',
+      accepts_supply = false,
+      supplies = 'none',
       cursor = function(state)
         local done = false
         return {

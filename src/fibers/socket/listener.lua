@@ -118,16 +118,17 @@ end
 function Listener:close_op(reason)
   local listener = self
   reason = reason or 'listener closed'
+  local cancel = listener.driver and listener.driver:request_cancel_op(reason) or Op.always(true)
   return listener.lifecycle
     :request_stop_op(reason)
     :and_then(function(first, state)
       if first and listener.driver then
-        return listener.driver:request_cancel_op(reason):map(function()
+        return cancel:map(function()
           return first, state
         end)
       end
       return Op.always(first, state)
-    end, false)
+    end, cancel)
     :wrap(function(first, state)
       if first and state.handle then
         local ok, close_err = IO.safe_close('socket', state.handle, reason, {
@@ -149,9 +150,10 @@ end
 function Listener:closed_op()
   local joined = self.driver and self.driver:exit_op() or Op.always(true)
   local lifecycle = self.lifecycle
+  local terminal = lifecycle:terminal_op()
   return joined:and_then(function()
-    return lifecycle:terminal_op():map(listener_close_result)
-  end)
+    return terminal:map(listener_close_result)
+  end, terminal)
 end
 
 local function close_from_driver(listener, rt, reason, err, fatal)

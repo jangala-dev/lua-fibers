@@ -326,7 +326,8 @@ function Calendar:reserve_op(spec)
     IR.witness_transition({
       location = self._location,
       group = self._location,
-      supply = 'interacting',
+      accepts_supply = true,
+      supplies = 'any',
       cursor = function(state)
         return slot_cursor(state, frozen, true)
       end,
@@ -342,7 +343,8 @@ function Calendar:find_op(spec)
     IR.witness_transition({
       location = self._location,
       group = self._location,
-      supply = 'interacting',
+      accepts_supply = true,
+      supplies = 'any',
       cursor = function(state)
         return slot_cursor(state, frozen, false)
       end,
@@ -366,7 +368,8 @@ function Calendar:cancel_op(id)
     IR.witness_transition({
       location = self._location,
       group = self._location,
-      supply = 'interacting',
+      accepts_supply = true,
+      supplies = 'any',
       cursor = function(state)
         local done = false
         return {
@@ -397,7 +400,8 @@ function Calendar:snapshot_op()
     Kind,
     IR.witness_transition({
       location = self._location,
-      supply = 'none',
+      accepts_supply = false,
+      supplies = 'none',
       cursor = function(state)
         local done = false
         return {

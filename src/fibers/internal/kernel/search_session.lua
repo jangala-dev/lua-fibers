@@ -40,6 +40,73 @@ local function map_count(values)
   return n
 end
 
+local function profile_component_shape(requests, component)
+  local ids = component and component.ids
+  local option_nodes = 0
+  local dynamic_roots = 0
+  local external_roots = 0
+  local node_kinds = {}
+  local locations = {}
+  local resources = {}
+  local exchanges = {}
+  local request_summaries = {}
+
+  local function add_request(request)
+    local metadata = request and (request.metadata or request.footprint)
+    if not metadata then
+      return
+    end
+    request_summaries[#request_summaries + 1] = {
+      id = request.id,
+      name = request.name,
+      dynamic = metadata.dynamic == true,
+      external = metadata.external == true,
+      nodes = metadata.nodes or 0,
+      kinds = metadata.node_kinds,
+    }
+    option_nodes = option_nodes + (metadata.nodes or 0)
+    if metadata.dynamic then
+      dynamic_roots = dynamic_roots + 1
+    end
+    if metadata.external then
+      external_roots = external_roots + 1
+    end
+    for kind, count in pairs(metadata.node_kinds or {}) do
+      node_kinds[kind] = (node_kinds[kind] or 0) + count
+    end
+    for location in pairs(metadata.locations or {}) do
+      locations[location] = true
+    end
+    for resource in pairs(metadata.resources or {}) do
+      resources[resource] = true
+    end
+    for resource in pairs(metadata.exchanges or {}) do
+      exchanges[resource] = true
+    end
+  end
+
+  if ids then
+    for i = 1, #ids do
+      add_request(requests[ids[i]])
+    end
+  else
+    for _, request in pairs(requests) do
+      add_request(request)
+    end
+  end
+
+  return {
+    option_nodes = option_nodes,
+    option_dynamic_roots = dynamic_roots,
+    option_external_roots = external_roots,
+    dependency_locations = map_count(locations),
+    dependency_resources = map_count(resources),
+    dependency_exchanges = map_count(exchanges),
+    option_node_kinds = node_kinds,
+    request_summaries = request_summaries,
+  }
+end
+
 local native_table_clear = table.clear
 local function clear_table(values)
   if not values then
@@ -198,6 +265,7 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
   end
 
   local pending = instrumentation and map_count(requests) or 0
+  local shape = instrumentation and profile_component_shape(requests, component) or nil
   local profile_plan = instrumentation
       and instrumentation:begin_plan({
         focus = focus_id,
@@ -208,6 +276,14 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
         component_dynamic = component and component.dynamic or 0,
         component_global = component and component.global == true or false,
         component_edge_visits = component and component.edge_visits or 0,
+        option_nodes = shape.option_nodes,
+        option_dynamic_roots = shape.option_dynamic_roots,
+        option_external_roots = shape.option_external_roots,
+        dependency_locations = shape.dependency_locations,
+        dependency_resources = shape.dependency_resources,
+        dependency_exchanges = shape.dependency_exchanges,
+        option_node_kinds = shape.option_node_kinds,
+        request_summaries = shape.request_summaries,
       })
     or nil
 

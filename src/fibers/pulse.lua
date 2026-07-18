@@ -34,6 +34,8 @@ local State = Scalar.kind({
   transitions = {
     signal = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(st)
         st = copy_state(st)
@@ -46,6 +48,8 @@ local State = Scalar.kind({
     },
     close = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 10,
       step = function(st, payload)
         st = copy_state(st)
@@ -58,6 +62,8 @@ local State = Scalar.kind({
     },
     changed = {
       mode = 'select',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       validate = function(payload)
         non_negative_integer(payload.last_seen, 'pulse changed last_seen', 3)

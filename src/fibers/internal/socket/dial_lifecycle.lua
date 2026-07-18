@@ -15,7 +15,8 @@ Dial.__index = Dial
 local Connected = Scalar.transition({
   name = 'socket.dial.connected',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind ~= 'starting' then
       return Ready.same(false, current)
@@ -33,7 +34,8 @@ local Connected = Scalar.transition({
 local Failed = Scalar.transition({
   name = 'socket.dial.failed',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind == 'failed' or current.kind == 'claimed' or current.kind == 'closed' then
       return Ready.same(false, current)
@@ -63,7 +65,8 @@ local Failed = Scalar.transition({
 local Claim = Scalar.transition({
   name = 'socket.dial.claim',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current)
     if current.kind ~= 'connected' then
       return Scalar.Wait
@@ -79,7 +82,8 @@ local Claim = Scalar.transition({
 local RequestClose = Scalar.transition({
   name = 'socket.dial.request_close',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind == 'starting' or current.kind == 'connected' then
       local next_state = {
@@ -119,7 +123,8 @@ local RequestClose = Scalar.transition({
 local Closed = Scalar.transition({
   name = 'socket.dial.closed',
   mode = 'update',
-  supply = 'none',
+  accepts_supply = false,
+  supplies = 'none',
   step = function(current, payload)
     if current.kind == 'closed' or current.kind == 'claimed' or current.kind == 'failed' then
       return Ready.same(false, current)

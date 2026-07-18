@@ -70,6 +70,8 @@ local OpenTransitions = Scalar.kind({
   transitions = {
     check_open = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 100,
       step = function(open)
         if open == true then
@@ -80,6 +82,8 @@ local OpenTransitions = Scalar.kind({
     },
     close = {
       mode = 'update',
+      accepts_supply = true,
+      supplies = 'any',
       order = 0,
       step = function(_open)
         return false, true

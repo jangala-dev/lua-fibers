@@ -9,6 +9,7 @@ local Frontier = require('fibers.internal.kernel.frontier')
 local SearchCache = require('fibers.internal.kernel.adaptive_search')
 local SearchSession = require('fibers.internal.kernel.search_session')
 local Activation = require('fibers.internal.kernel.activation')
+local Supply = require('fibers.internal.kernel.supply')
 
 local M = {}
 
@@ -66,8 +67,11 @@ function Trail.new(stats, plan)
     targets = {},
     keys = {},
     olds = {},
+    old_marks = {},
     mark_ns = {},
     mark_parents = {},
+    set_marks = {},
+    push_marks = {},
     stats = stats,
     plan = plan,
     next_mark = 0,
@@ -84,10 +88,11 @@ function Trail:mark()
   return mark
 end
 
-local function add_entry(self, kind, target, key, old)
+local function add_entry(self, kind, target, key, old, old_mark)
   local n = self.n + 1
   self.n = n
   self.kinds[n], self.targets[n], self.keys[n], self.olds[n] = kind, target, key, old
+  self.old_marks[n] = old_mark or 0
   if self.stats then
     self.stats.trail_entries = (self.stats.trail_entries or 0) + 1
   end
@@ -107,20 +112,53 @@ function Trail:set(target, key, value)
   -- Mutations made before the first speculative checkpoint are the plan's
   -- base state.  They can never be reached by rollback, so journalling them is
   -- pure overhead on deterministic and forced paths.
-  if self.current_mark == 0 then
+  local mark = self.current_mark
+  if mark == 0 then
     target[key] = value
     return
   end
-  add_entry(self, 1, target, key, target[key])
+
+  -- A branch checkpoint only needs the value observed before its first write
+  -- to one field.  Subsequent writes to that field in the same branch are
+  -- restored by the same journal entry.  Nested marks retain their own first
+  -- write and restore the parent's stamp when rolled back.
+  local marks = self.set_marks[target]
+  if not marks then
+    marks = {}
+    self.set_marks[target] = marks
+  end
+  local old_mark = marks[key] or 0
+  if old_mark ~= mark then
+    add_entry(self, 1, target, key, target[key], old_mark)
+    marks[key] = mark
+  else
+    local plan = self.plan
+    if plan then
+      plan.trail_set_coalesced = (plan.trail_set_coalesced or 0) + 1
+    end
+  end
   target[key] = value
 end
 
 function Trail:push(target, value)
-  if self.current_mark == 0 then
+  local mark = self.current_mark
+  if mark == 0 then
     target[#target + 1] = value
     return
   end
-  add_entry(self, 2, target, nil, #target)
+
+  -- As with field writes, one length snapshot per array and checkpoint is
+  -- sufficient to undo any number of pushes made in that branch.
+  local old_mark = self.push_marks[target] or 0
+  if old_mark ~= mark then
+    add_entry(self, 2, target, nil, #target, old_mark)
+    self.push_marks[target] = mark
+  else
+    local plan = self.plan
+    if plan then
+      plan.trail_push_coalesced = (plan.trail_push_coalesced or 0) + 1
+    end
+  end
   target[#target + 1] = value
 end
 
@@ -129,16 +167,22 @@ function Trail:rollback(mark)
   local removed = self.n - mark_n
   for i = self.n, mark_n + 1, -1 do
     local kind, target, key, old = self.kinds[i], self.targets[i], self.keys[i], self.olds[i]
+    local old_mark = self.old_marks[i] or 0
     if kind == 1 then
       target[key] = old
+      local marks = self.set_marks[target]
+      if marks then
+        marks[key] = old_mark ~= 0 and old_mark or nil
+      end
     elseif kind == 2 then
       for j = #target, old + 1, -1 do
         target[j] = nil
       end
+      self.push_marks[target] = old_mark ~= 0 and old_mark or nil
     else
       error('unknown trail entry: ' .. tostring(kind), 0)
     end
-    self.kinds[i], self.targets[i], self.keys[i], self.olds[i] = nil, nil, nil, nil
+    self.kinds[i], self.targets[i], self.keys[i], self.olds[i], self.old_marks[i] = nil, nil, nil, nil, nil
   end
   self.n = mark_n
   self.current_mark = self.mark_parents[mark] or 0
@@ -163,13 +207,14 @@ end
 
 function Trail:reset(stats, plan)
   for i = self.n, 1, -1 do
-    self.kinds[i], self.targets[i], self.keys[i], self.olds[i] = nil, nil, nil, nil
+    self.kinds[i], self.targets[i], self.keys[i], self.olds[i], self.old_marks[i] = nil, nil, nil, nil, nil
   end
   self.n = 0
   for i = self.next_mark, 1, -1 do
     self.mark_ns[i], self.mark_parents[i] = nil, nil
   end
   self.next_mark, self.current_mark = 0, 0
+  self.set_marks, self.push_marks = {}, {}
   if stats ~= nil then
     self.stats = stats
   end
@@ -322,7 +367,7 @@ local function finish_group_lane(state, task, frame, outcome)
   )
 end
 
-local function verify_continuation_dependencies(state, frame, next_op)
+local function verify_continuation_dependencies(state, task, frame, next_op)
   if not state.runtime.verify_dependencies or frame.continuation_footprint == nil then
     return
   end
@@ -330,7 +375,20 @@ local function verify_continuation_dependencies(state, frame, next_op)
   local actual = IR.metadata(next_op)
   local ok, reason = IR.metadata_covers(declared, actual)
   if not ok then
-    error('continuation dependency declaration is incomplete: ' .. tostring(reason), 0)
+    local root = task and state.roots[task.root_id]
+    local request = root and root.request
+    error(
+      'continuation dependency declaration is incomplete'
+        .. ' in '
+        .. tostring(request and request.name or '<unnamed>')
+        .. ' ('
+        .. tostring(frame.phase or 'and_then')
+        .. ', activation='
+        .. Activation.label(frame.activation)
+        .. '): '
+        .. tostring(reason),
+      0
+    )
   end
 end
 
@@ -379,7 +437,7 @@ complete_task = function(state, task, outcome)
             if not Op.is_op(cached) then
               error('guard callback must return an Op', 0)
             end
-            verify_continuation_dependencies(state, frame, cached)
+            verify_continuation_dependencies(state, task, frame, cached)
             request.memo[frame.activation] = cached
           end
           setv(state, task, 'expr', cached)
@@ -390,7 +448,7 @@ complete_task = function(state, task, outcome)
           if not Op.is_op(next_op) then
             error('and_then callback must return an Op', 0)
           end
-          verify_continuation_dependencies(state, frame, next_op)
+          verify_continuation_dependencies(state, task, frame, next_op)
           setv(state, task, 'expr', next_op)
           setv(
             state,
@@ -695,7 +753,7 @@ local function resolve_machine_transitions(state, selected)
     ensure_task_view(state, task)
     local value = Store.project_machine(state, task, program.location, function(v)
       return machine_probe(state, program, v)
-    end, program.transition.supply, state.trail)
+    end, program.transition.accepts_supply, state.trail)
     local r = run_machine_transition(state, program, value)
     if not r then
       return false
@@ -765,31 +823,51 @@ local function resolve_claims(state, intent_ids)
   table.sort(proof_labels)
   local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
   local resolved = {}
-  for i = 1, #selected do
-    local intent = selected[i]
-    local program = intent.program
-    local loc = program.location
-    local task = state.tasks[intent.task_id]
-    ensure_task_view(state, task)
-    local value = Store.project(state, task, loc, program.orientation or program.demand_tag, state.trail)
-    if value == nil then
-      return false
+  local remaining = selected
+
+  -- A multi-claim branch represents one serial closure of a location domain.
+  -- At each step, select the first claim which is ready in the provisional
+  -- world built so far.  This discovers direct hand-offs (for example an
+  -- insertion making a selection ready) without guessing a fixed source or
+  -- request-id order.  Singleton claim alternatives remain in the frontier,
+  -- so other serialisations and their distinct results are still explored by
+  -- the same lazy machine if this closure later fails.
+  while #remaining > 0 do
+    local chosen_index, chosen_resolution, chosen_task
+    for i = 1, #remaining do
+      local intent = remaining[i]
+      local program = intent.program
+      local task = state.tasks[intent.task_id]
+      ensure_task_view(state, task)
+      local value =
+        Store.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
+      if value ~= nil then
+        local resolution = Store.evaluate_claim(program, value)
+        if resolution then
+          chosen_index, chosen_resolution, chosen_task = i, resolution, task
+          break
+        end
+      end
     end
-    local resolution = Store.evaluate_claim(program, value)
-    if not resolution then
+    if not chosen_index then
       return false
     end
 
-    -- Stage immediately, but do not complete the task yet. Later claims see
-    -- the mutation through the ordinary provenance rules.
-    if resolution.patch then
-      Store.stage(state.views[task.view_id], loc, resolution.patch, state.trail)
+    local intent = remaining[chosen_index]
+    if chosen_resolution.patch then
+      Store.stage(
+        state.views[chosen_task.view_id],
+        intent.program.location,
+        chosen_resolution.patch,
+        state.trail
+      )
     end
     resolved[#resolved + 1] = {
       intent = intent,
-      task = task,
-      result = resolution.result,
+      task = chosen_task,
+      result = chosen_resolution.result,
     }
+    table.remove(remaining, chosen_index)
   end
 
   remove_intent_ids(state, intent_ids)
@@ -811,7 +889,7 @@ local function witness_cursor(state, intent)
     return IR.witness_ready(program, value, program.payload or {}, {})
   end
   local value =
-    Store.project_machine(state, task, program.location, ready, program.supply or 'interacting', state.trail)
+    Store.project_machine(state, task, program.location, ready, program.accepts_supply, state.trail)
   return IR.open_witness_cursor(program, value, program.payload or {}, {})
 end
 
@@ -1527,9 +1605,38 @@ local function analyse_frontier(state)
       + (exchange.symmetry_pruned or 0)
     profile_plan.claim_groups_scanned = profile_plan.claim_groups_scanned + #frontier.claims
     for i = 1, #frontier.claims do
-      local size = #frontier.claims[i].ids
+      local group = frontier.claims[i]
+      local size = #group.ids
       if size > profile_plan.max_claim_group then
         profile_plan.max_claim_group = size
+      end
+      if state.runtime.instrumentation.trace then
+        local names, kinds, supply_sets, accepts, modes = {}, {}, {}, {}, {}
+        for j = 1, #group.intents do
+          local intent = group.intents[j]
+          local transition = intent.program and intent.program.transition
+          names[j] = (transition and transition.name) or intent.program.name or intent.kind
+          kinds[j] = intent.kind
+          local supplied = transition and transition.supplies or intent.program.supplies
+          local accepts_value = transition and transition.accepts_supply
+          if transition == nil then
+            accepts_value = intent.program.accepts_supply
+          end
+          supply_sets[j] = Supply.describe(supplied)
+          accepts[j] = tostring(accepts_value)
+          modes[j] = transition and transition.mode or intent.program.mode
+        end
+        state.runtime.instrumentation:event(profile_plan, 'claim_group', {
+          key = tostring(group.key and (group.key.name or group.key._fibers_id or group.key) or '<nil>'),
+          size = size,
+          all_machine = group.all_machine,
+          group_accepts_supply = group.accepts_supply,
+          names = table.concat(names, '|'),
+          kinds = table.concat(kinds, '|'),
+          supply_sets = table.concat(supply_sets, '|'),
+          accepts_supply = table.concat(accepts, '|'),
+          modes = table.concat(modes, '|'),
+        })
       end
     end
   end
@@ -1612,20 +1719,25 @@ local function apply_forced_frontier(state, frontier)
   end
 
   local groups = frontier.claims
-  if #groups == 1 then
-    local group = groups[1]
-    if group.all_machine and group.supply_none and #group.ids == #state.intents then
-      if not has_supplier(state, group.intents) then
-        if profile_plan then
-          profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1
-          profile_plan.forced_claims = profile_plan.forced_claims + 1
-          profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
-        end
-        if resolve_claim_set(state, group, group.ids) then
-          return true
-        end
-        return false, terminal_refutation(state)
+  for i = 1, #groups do
+    local group = groups[i]
+    -- A non-supplying machine-transition group has one semantic journal: all
+    -- currently entered transitions at that location in their declared serial
+    -- order.  Once no pending root can add a constraining participant to this
+    -- location, introducing a branch frame cannot reveal another world; it
+    -- merely delays the same unavoidable reduction.  Apply it in-place and let
+    -- the enclosing lazy search checkpoint provide any rollback required by a
+    -- later genuine alternative.
+    if group.all_machine and not group.accepts_supply and not has_supplier(state, group.intents) then
+      if profile_plan then
+        profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1
+        profile_plan.forced_claims = profile_plan.forced_claims + 1
+        profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
       end
+      if resolve_claim_set(state, group, group.ids) then
+        return true
+      end
+      return false, terminal_refutation(state)
     end
   end
   return nil
@@ -1716,9 +1828,9 @@ local function next_frontier_alternative(state, frame)
         frame.phase = 'supplier'
       else
         if frame.claim_phase == nil then
-          if group.all_machine and group.supply_none then
+          if group.all_machine and not group.accepts_supply then
             frame.claim_phase = 'all_only'
-          elseif group.all_machine and #group.ids > 1 then
+          elseif #group.ids > 1 then
             frame.claim_phase = 'whole'
           else
             frame.claim_phase = 'singles'
@@ -1731,7 +1843,7 @@ local function next_frontier_alternative(state, frame)
           return { kind = 'claim', group = group, ids = group.ids, claim_kind = 'all' }
         elseif frame.claim_phase == 'whole' then
           frame.claim_phase = 'singles'
-          return { kind = 'claim', group = group, ids = group.ids, claim_kind = 'all' }
+          return { kind = 'claim', group = group, ids = group.ids, claim_kind = 'closure' }
         elseif frame.claim_phase == 'singles' then
           local id = group.ids[frame.claim_single_index]
           if id then
@@ -1855,13 +1967,42 @@ local function prepare_alternative(state, frame, alt)
   elseif alt.kind == 'claim' then
     if profile_plan then
       profile_plan.claim_branches = profile_plan.claim_branches + 1
+      if state.runtime.instrumentation.trace then
+        local names = {}
+        for i = 1, #alt.ids do
+          local intent = state.intent_by_id[alt.ids[i]]
+          local transition = intent and intent.program and intent.program.transition
+          names[i] = (transition and transition.name)
+            or (intent and intent.program and intent.program.name)
+            or (intent and intent.kind)
+            or '<missing>'
+        end
+        state.runtime.instrumentation:event(profile_plan, 'claim_branch', {
+          claim_kind = alt.claim_kind,
+          size = #alt.ids,
+          names = table.concat(names, '|'),
+          group_key = tostring(
+            alt.group.key and (alt.group.key.name or alt.group.key._fibers_id or alt.group.key) or '<nil>'
+          ),
+        })
+      end
       if alt.claim_kind == 'all' then
         profile_plan.claim_all_branches = profile_plan.claim_all_branches + 1
+      elseif alt.claim_kind == 'closure' then
+        profile_plan.claim_closure_branches = profile_plan.claim_closure_branches + 1
       else
         profile_plan.claim_single_branches = profile_plan.claim_single_branches + 1
       end
     end
-    return resolve_claim_set(state, alt.group, alt.ids)
+    local resolved = resolve_claim_set(state, alt.group, alt.ids)
+    if profile_plan and alt.claim_kind == 'closure' then
+      if resolved then
+        profile_plan.claim_closure_successes = profile_plan.claim_closure_successes + 1
+      else
+        profile_plan.claim_closure_failures = profile_plan.claim_closure_failures + 1
+      end
+    end
+    return resolved
   elseif alt.kind == 'recruit' then
     local row = alt.row
     if profile_plan then
@@ -2141,5 +2282,7 @@ function M.search(runtime, requests, focus_id, search_limit, component)
   local candidate, refutation, unknown = session:advance(search_limit or runtime.search_limit)
   return candidate, refutation, unknown, session
 end
+
+M._Trail = Trail
 
 return M

@@ -94,7 +94,8 @@ function Readiness:readiness_op(selected)
   local transition = Scalar.transition({
     name = self.name .. ':' .. selected,
     mode = 'query',
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(state)
       if not state[selected] then
         return Scalar.Wait

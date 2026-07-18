@@ -520,7 +520,8 @@ local function query_transition(name, fn)
     name = name,
     mode = 'query',
     order = 10,
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(s, p)
       return Ready.same(fn(s, p))
     end,
@@ -532,7 +533,8 @@ local function select_transition(name, ready, step, order)
     name = name,
     mode = 'select',
     order = order or 50,
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     ready = ready,
     step = function(s, p)
       if not ready(s, p) then

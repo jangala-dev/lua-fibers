@@ -179,6 +179,26 @@ local function exchange_group(index, resource, create)
   return group
 end
 
+local function location_supplier_group(index, location, create)
+  local group = index.location_suppliers[location]
+  if not group and create then
+    group = {
+      up = new_bucket('location-supplier', location, 'up'),
+      down = new_bucket('location-supplier', location, 'down'),
+      any = new_bucket('location-supplier', location, 'any'),
+    }
+    index.location_suppliers[location] = group
+  end
+  return group
+end
+
+local function supplier_directions(access)
+  local supplies = access and access.supplies or nil
+  return supplies and supplies.up == true or false,
+    supplies and supplies.down == true or false,
+    supplies and supplies.any == true or false
+end
+
 function Index.new()
   return setmetatable({
     requests = {},
@@ -201,7 +221,7 @@ function Index:_ensure_metadata_buckets(metadata)
   end
   for location in pairs(metadata.locations or {}) do
     bucket(self.locations, location, 'location-all', true)
-    bucket(self.location_suppliers, location, 'location-supplier', true)
+    location_supplier_group(self, location, true)
   end
   for resource in pairs(metadata.resources or {}) do
     bucket(self.resource_all, resource, 'resource-all', true)
@@ -232,8 +252,18 @@ function Index:add(request)
   end
   for location, access in pairs(metadata.locations or {}) do
     bucket(self.locations, location, 'location-all', true):add(request.id)
-    if access.supply then
-      bucket(self.location_suppliers, location, 'location-supplier', true):add(request.id)
+    local up, down, any = supplier_directions(access)
+    if up or down or any then
+      local suppliers = location_supplier_group(self, location, true)
+      if up then
+        suppliers.up:add(request.id)
+      end
+      if down then
+        suppliers.down:add(request.id)
+      end
+      if any then
+        suppliers.any:add(request.id)
+      end
     end
   end
   for resource in pairs(metadata.resources or {}) do
@@ -289,14 +319,23 @@ function Index:remove(request)
     if all then
       all:remove(request.id)
     end
-    if access.supply then
-      local suppliers = self.location_suppliers[location]
-      if suppliers then
-        suppliers:remove(request.id)
+    local up, down, any = supplier_directions(access)
+    local suppliers = self.location_suppliers[location]
+    if suppliers then
+      if up then
+        suppliers.up:remove(request.id)
+      end
+      if down then
+        suppliers.down:remove(request.id)
+      end
+      if any then
+        suppliers.any:remove(request.id)
+      end
+      if suppliers.up.count == 0 and suppliers.down.count == 0 and suppliers.any.count == 0 then
+        self.location_suppliers[location] = nil
       end
     end
     retire_empty(self.locations, location)
-    retire_empty(self.location_suppliers, location)
   end
   for resource in pairs(metadata.resources or {}) do
     local all = self.resource_all[resource]
@@ -517,13 +556,26 @@ function Index:supplier_ids(intents, pending, entered, excluded, dependencies)
         possible[id] = true
       end)
     else
-      local location = intent.program and (intent.program.location or intent.program.group)
-      local suppliers = location and bucket(self.location_suppliers, location, 'location-supplier', true)
-      observe(suppliers)
+      local program = intent.program
+      local location = program and (program.location or program.group)
+      local suppliers = location and location_supplier_group(self, location, true)
       if suppliers then
-        suppliers:each(function(id)
-          possible[id] = true
-        end)
+        local orientation = program and (program.orientation or program.demand_tag)
+        local function add(values)
+          observe(values)
+          values:each(function(id)
+            possible[id] = true
+          end)
+        end
+        add(suppliers.any)
+        if orientation == 'up' then
+          add(suppliers.up)
+        elseif orientation == 'down' then
+          add(suppliers.down)
+        else
+          add(suppliers.up)
+          add(suppliers.down)
+        end
       end
     end
   end

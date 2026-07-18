@@ -262,10 +262,10 @@ local function accepts_participant_supply(intent)
     return true
   end
   if intent.kind == 'witness_transition' then
-    return intent.program.supply ~= 'none'
+    return intent.program.accepts_supply == true
   end
   if intent.kind == 'machine_transition' then
-    return intent.program.transition.supply ~= 'none'
+    return intent.program.transition.accepts_supply == true
   end
   return false
 end
@@ -287,7 +287,7 @@ local function claim_frontier(state, constrained)
           ids = {},
           intents = {},
           all_machine = true,
-          supply_none = true,
+          accepts_supply = false,
         }
         by_key[key] = group
         groups[#groups + 1] = group
@@ -296,9 +296,9 @@ local function claim_frontier(state, constrained)
       group.intents[#group.intents + 1] = intent
       if intent.kind ~= 'machine_transition' then
         group.all_machine = false
-        group.supply_none = false
-      elseif intent.program.transition.supply ~= 'none' then
-        group.supply_none = false
+        group.accepts_supply = true
+      elseif intent.program.transition.accepts_supply then
+        group.accepts_supply = true
       end
     end
   end

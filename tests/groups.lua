@@ -87,6 +87,8 @@ return {
     'tests/stress/test_datagram_churn.lua',
   },
   kernel = {
+    'tests/kernel/test_claim_closure.lua',
+    'tests/kernel/test_dependency_supply_direction.lua',
     'tests/kernel/test_defeat.lua',
     'tests/kernel/test_guard_activations.lua',
     'tests/kernel/test_instrumentation.lua',
@@ -103,6 +105,7 @@ return {
     'tests/kernel/test_slim_retention.lua',
     'tests/kernel/test_store_algebra.lua',
     'tests/kernel/test_store_rollback.lua',
+    'tests/kernel/test_trail_journal.lua',
     'tests/kernel/test_validation_paths.lua',
     'tests/kernel/test_witness_validation.lua',
   },

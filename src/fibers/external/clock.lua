@@ -29,7 +29,8 @@ function Clock:at_op(deadline)
   local transition = Scalar.transition({
     name = self.name .. ':at',
     mode = 'query',
-    supply = 'none',
+    accepts_supply = false,
+    supplies = 'none',
     step = function(_, _, ctx)
       local now = ctx.now()
       if now < deadline then

@@ -100,7 +100,7 @@ function Datagram:send_to_op(data, address)
       end
       return true
     end)
-  end)
+  end, self.sends:admit_footprint())
   return send:or_else(self.lifecycle:unavailable_op():map(function(state)
     return nil, terminal_error(state, 'send_to')
   end))
@@ -144,16 +144,17 @@ end
 function Datagram:close_op(reason)
   local socket = self
   reason = reason or 'datagram socket closed'
+  local cancel = socket.driver and socket.driver:request_cancel_op(reason) or Op.always(true)
   return socket.lifecycle
     :request_stop_op(reason)
     :and_then(function(first, state)
       if first and socket.driver then
-        return socket.driver:request_cancel_op(reason):map(function()
+        return cancel:map(function()
           return first, state
         end)
       end
       return Op.always(first, state)
-    end, false)
+    end, cancel)
     :wrap(function(first, state)
       if first and state.handle then
         local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
@@ -185,9 +186,10 @@ end
 function Datagram:closed_op()
   local joined = self.driver and self.driver:exit_op() or Op.always(true)
   local lifecycle = self.lifecycle
+  local terminal = lifecycle:terminal_op()
   return joined:and_then(function()
-    return lifecycle:terminal_op():map(close_result)
-  end)
+    return terminal:map(close_result)
+  end, terminal)
 end
 
 local function close_from_driver(socket, rt, reason, err, fatal)
