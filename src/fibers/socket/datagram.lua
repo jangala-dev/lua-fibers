@@ -10,6 +10,7 @@ local Address = require('fibers.socket.address')
 local HostError = require('fibers.host.error')
 local Adoption = require('fibers.internal.adoption')
 local IO = require('fibers.internal.io')
+local IOAudit = require('fibers.internal.io_audit')
 local Lifecycle = require('fibers.internal.socket.datagram_lifecycle')
 local SendState = require('fibers.internal.socket.datagram_send_state')
 local DatagramService = require('fibers.internal.socket.datagram_service')
@@ -429,6 +430,7 @@ function Module.datagram_op(address, opts)
         handle:bind_runtime(rt)
       end
       local local_address = type(handle.local_address) == 'function' and handle:local_address() or address
+      IOAudit.transfer(handle, socket, { kind = 'host_handle', role = 'datagram' })
       local released, release_err = socket.adoption:release(handle)
       if not released then
         close_handle(handle, release_err)

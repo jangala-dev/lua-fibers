@@ -40,6 +40,12 @@ function Socket.unix_address(path)
   return Address.unix(path)
 end
 
+Socket.address_key = Address.key
+Socket.address_equal = Address.equal
+Socket.format_address = Address.display
+Socket.address_is_wildcard = Address.is_wildcard
+Socket.address_with_port = Address.with_port
+
 function Socket.listen_op(address, opts)
   return ListenerModule.listen_op(Address.validate(address, 'socket.listen_op'), opts)
 end

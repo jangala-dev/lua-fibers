@@ -288,3 +288,59 @@ Datagram drivers use a bounded read/write service policy.
 alternate after each successful host action. A larger positive integer permits
 that many successful actions from the preferred direction before preference
 changes.
+
+## Connection metadata and address values
+
+Connected Streams expose stable endpoint metadata where the provider supplies
+it:
+
+```lua
+connection:local_address()
+connection:peer_address()
+```
+
+Address helpers support comparison, display and port replacement without
+provider-specific formatting:
+
+```lua
+socket.address_equal(a, b)
+socket.format_address(address)
+socket.address_is_wildcard(address)
+socket.address_with_port(address, port)
+```
+
+The host capability matrix is explicit:
+
+```lua
+host.capabilities.socket
+host.capabilities.socket_ipv4
+host.capabilities.socket_ipv6
+host.capabilities.socket_unix
+```
+
+A disabled family returns a structured `unsupported` error. A provider which
+enables a family is expected to pass the same listener, Dial, transfer, address
+metadata and settlement contract as `ManualHost`.
+
+## I/O qualification and diagnostics
+
+Resource qualification can assert that every handle and readiness registration
+has settled:
+
+```lua
+local result = fibers.try_run(main, { host = host })
+assert(result.ok, result:tostring())
+result.runtime:assert_io_quiescent('application shutdown')
+```
+
+For diagnostics:
+
+```lua
+local snapshot = fibers.current_runtime():io_audit_snapshot({
+  include_history = true,
+})
+```
+
+The audit reports live handle ownership, registration generations, close
+failures, stale readiness deliveries and lifecycle violations. See
+[`../advanced/io-invariants.md`](../advanced/io-invariants.md).

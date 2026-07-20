@@ -176,8 +176,14 @@ function Posix.new(opts)
     readiness = true,
     fd = self.fd.is_supported(),
     pipe = self.fd.is_supported(),
+    socket = false,
+    socket_ipv4 = false,
+    socket_ipv6 = false,
+    socket_unix = false,
     datagram = DatagramProvider.is_supported(),
     datagram_truncation = false,
+    resolver = false,
+    resolver_blocking = false,
   }
   return self
 end

@@ -11,6 +11,7 @@ local Readiness = require('fibers.external.readiness')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Errors = require('fibers.flow.errors')
 local HostError = require('fibers.host.error')
+local IOAudit = require('fibers.internal.io_audit')
 
 local Handle = {}
 Handle.__index = Handle
@@ -88,7 +89,7 @@ function Handle.new(opts)
     set_nonblocking = capability('set_nonblocking', type(opts.set_nonblocking) == 'function'),
     readiness = capability('readiness', true),
   }
-  return setmetatable({
+  local handle = setmetatable({
     name = opts.name or ('host-handle-' .. tostring(next_id)),
     key = key,
     handle = opts.handle or key,
@@ -107,6 +108,8 @@ function Handle.new(opts)
     stream = nil,
     _fibers_host_handle = true,
   }, Handle)
+  IOAudit.created(handle, { kind = 'host_handle' })
+  return handle
 end
 
 function Handle:supports(capability)
@@ -138,9 +141,11 @@ end
 
 function Handle:bind_runtime(rt)
   if self.runtime == rt and self.feed then
+    IOAudit.bind(self, rt)
     return self
   end
   self.runtime = rt
+  IOAudit.bind(self, rt)
   if not self.feed then
     local source, feed = rt:readiness(self.key, (self.name or tostring(self.key)) .. ':readiness')
     self.readiness = source
@@ -151,6 +156,7 @@ end
 
 function Handle:attach_stream(stream)
   self.stream = stream
+  IOAudit.transfer(self, stream, { kind = 'host_handle', role = 'stream_backend' })
   return self
 end
 
@@ -277,13 +283,19 @@ end
 
 function Handle:close(reason)
   if self.closed then
+    IOAudit.closing(self, reason)
+    IOAudit.closed(self, true, nil, reason)
     return true
   end
   if self.close_error then
+    IOAudit.closing(self, reason)
+    IOAudit.closed(self, false, self.close_error, reason)
     return nil, self.close_error
   end
+  IOAudit.closing(self, reason)
   if not self:supports('close') then
     self.close_error = HostError.unsupported('handle', 'close', { handle = self.name })
+    IOAudit.closed(self, false, self.close_error, reason)
     return nil, self.close_error
   end
   local ok, err, detail = callback(self, 'close', reason)
@@ -294,9 +306,11 @@ function Handle:close(reason)
       detail = detail,
       handle = self.name,
     })
+    IOAudit.closed(self, false, self.close_error, reason)
     return nil, self.close_error
   end
   self.closed = true
+  IOAudit.closed(self, true, nil, reason)
   return ok
 end
 
@@ -546,9 +560,12 @@ function Handle.pipe_pair(opts)
       end
     end
     if writer then
-      if state.read_closed or state.write_closed then
+      if state.write_closed then
         writer:clear_writable()
       else
+        -- A closed peer read side is error-ready: the next authoritative write
+        -- must run and report broken_pipe rather than waiting forever for a
+        -- readiness level which can never become successful.
         writer:mark_writable()
       end
     end
@@ -692,7 +709,9 @@ function Handle.duplex(read_handle, write_handle, opts)
     stream = nil,
     _fibers_host_handle = true,
   }
-  return setmetatable(self, Duplex)
+  setmetatable(self, Duplex)
+  IOAudit.created(self, { kind = 'duplex_host_handle' })
+  return self
 end
 
 function Duplex:supports(capability)
@@ -714,6 +733,7 @@ end
 
 function Duplex:bind_runtime(rt)
   self.runtime = rt
+  IOAudit.bind(self, rt)
   if self.read_handle and type(self.read_handle.bind_runtime) == 'function' then
     self.read_handle:bind_runtime(rt)
   end
@@ -725,6 +745,7 @@ end
 
 function Duplex:attach_stream(stream)
   self.stream = stream
+  IOAudit.transfer(self, stream, { kind = 'duplex_host_handle', role = 'stream_backend' })
   if self.read_handle and type(self.read_handle.attach_stream) == 'function' then
     self.read_handle:attach_stream(stream)
   end
@@ -767,8 +788,11 @@ function Duplex:shutdown_write(reason)
 end
 function Duplex:close(reason)
   if self.closed then
+    IOAudit.closing(self, reason)
+    IOAudit.closed(self, true, nil, reason)
     return true
   end
+  IOAudit.closing(self, reason)
   self.closed = true
   local ok1, err1 = true, nil
   local ok2, err2 = true, nil
@@ -783,11 +807,14 @@ function Duplex:close(reason)
     ok2, err2 = self.write_handle:close(reason)
   end
   if not ok1 then
+    IOAudit.closed(self, false, err1, reason)
     return nil, err1
   end
   if not ok2 then
+    IOAudit.closed(self, false, err2, reason)
     return nil, err2
   end
+  IOAudit.closed(self, true, nil, reason)
   return true
 end
 

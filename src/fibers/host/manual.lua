@@ -36,6 +36,8 @@ function Manual.new(opts)
     on_unsupported = opts.on_unsupported,
     _now = opts.now or 0,
     pipe_factory = opts.pipe_factory,
+    listener_factory = opts.listener_factory,
+    dial_factory = opts.dial_factory,
     enable_pipes = opts.pipes == true,
     enable_sockets = opts.sockets == true,
     enable_datagrams = opts.datagrams == true or opts.udp == true,
@@ -56,6 +58,9 @@ function Manual.new(opts)
     fd = false,
     pipe = self.pipe_factory ~= nil or self.enable_pipes,
     socket = self.enable_sockets,
+    socket_ipv4 = self.enable_sockets,
+    socket_ipv6 = self.enable_sockets,
+    socket_unix = self.enable_sockets,
     datagram = self.enable_datagrams,
     datagram_truncation = self.enable_datagrams,
     resolver = self.enable_resolver,
@@ -253,6 +258,9 @@ end
 
 function Manual:create_listener(address, opts)
   opts = opts or {}
+  if self.listener_factory then
+    return self.listener_factory(self, address, opts)
+  end
   if not self.enable_sockets then
     return nil, HostError.unsupported('host', 'listen', { host = self.name, address = address })
   end
@@ -357,11 +365,22 @@ function Manual:dial_socket(address, opts)
   local client, server = connection_pair(self, opts.name or ('manual-connection:' .. key))
   local client_address = opts.local_address
     or {
-      kind = 'inet4',
-      family = 'inet4',
-      host = '127.0.0.1',
+      kind = address.kind == 'inet6' and 'inet6' or 'inet4',
+      family = address.kind == 'inet6' and 'inet6' or 'inet4',
+      host = address.kind == 'inet6' and '::1' or '127.0.0.1',
       port = 0,
     }
+  client_address = copy_table(client_address)
+  if client_address.kind ~= 'unix' and tonumber(client_address.port) == 0 then
+    client_address.port = self.next_ephemeral_port
+    self.next_ephemeral_port = self.next_ephemeral_port + 1
+  end
+  client.local_address = function()
+    return copy_table(client_address)
+  end
+  client.peer_address_value = function()
+    return copy_table(listener:local_address())
+  end
   local ok, err = listener:enqueue(server, client_address)
   if not ok then
     client:close('listener rejected connection')
@@ -371,6 +390,9 @@ function Manual:dial_socket(address, opts)
 end
 
 function Manual:start_dial(address, opts)
+  if self.dial_factory then
+    return self.dial_factory(self, address, opts or {})
+  end
   local handle, peer, err = self:dial_socket(address, opts)
   if not handle then
     return nil, err

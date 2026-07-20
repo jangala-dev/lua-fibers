@@ -75,8 +75,12 @@ test-luajit-interpreter:
 
 
 test-native:
-	lua5.4 tests/run_group.lua native
-	$(LUAJIT) tests/run_group.lua native
+	$(LUA) tests/run_group.lua native
+	@if command -v "$(LUAJIT)" >/dev/null 2>&1; then \
+		$(LUAJIT) tests/run_group.lua native; \
+	else \
+		echo "skip native LuaJIT run: $(LUAJIT) is not available"; \
+	fi
 
 test-stress:
 	$(LUA) tests/run_group.lua stress
@@ -134,6 +138,7 @@ check-layout:
 	@test -f src/fibers/host/error.lua
 	@test -f src/fibers/internal/completion.lua
 	@test -f src/fibers/internal/adoption.lua
+	@test -f src/fibers/internal/io_audit.lua
 	@test -f src/fibers/file.lua
 	@test -f src/fibers/socket.lua
 	@test -f src/fibers/socket/address.lua
@@ -141,6 +146,11 @@ check-layout:
 	@test -f src/fibers/socket/dial.lua
 	@test -f src/fibers/socket/resolver.lua
 	@test -f src/fibers/socket/datagram.lua
+	@test -f docs/advanced/io-invariants.md
+	@test -f tests/internal/test_io_audit.lua
+	@test -f tests/io/test_socket_provider_matrix.lua
+	@test -f tests/io/test_socket_failure_matrix.lua
+	@test -f tests/support/socket_provider_contract.lua
 	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
 	@test -f src/fibers/internal/socket/datagram_send_state.lua
 	@test -f src/fibers/internal/socket/datagram_service.lua

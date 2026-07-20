@@ -80,10 +80,13 @@ do
   )
   rt:run()
   assert_eq(reads, 0, 'stale readiness must not invoke the backend')
+  local audit = rt:io_audit_snapshot()
+  assert_eq(audit.stats.stale_ready, 1, 'stale readiness should be observable')
   rt:spawn_raw(function()
     rt:perform(stream:abort_op('test complete'))
   end, 'close')
   rt:run()
+  rt:assert_io_quiescent('stale readiness test')
 end
 
 -- The poller hot queue is a persistent FIFO: large bursts retain order without

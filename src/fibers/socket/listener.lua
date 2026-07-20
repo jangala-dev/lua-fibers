@@ -8,6 +8,7 @@ local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
 local Adoption = require('fibers.internal.adoption')
 local IO = require('fibers.internal.io')
+local IOAudit = require('fibers.internal.io_audit')
 local ListenerLifecycle = require('fibers.internal.socket.listener_lifecycle')
 local Ownership = require('fibers.internal.ownership')
 local Owned = require('fibers.lifetime.region').Owned
@@ -235,8 +236,12 @@ local function driver(listener, driver_scope, opts)
           )
         end
 
-        connection.peer_address = peer
-        connection.local_address = listener:local_address()
+        if type(connection._set_addresses) == 'function' then
+          connection:_set_addresses(listener:local_address(), peer)
+        else
+          connection._local_address = listener:local_address()
+          connection._peer_address = peer
+        end
         local transferred, transfer_err = slot:release(handle)
         if not transferred then
           IO.masked_perform(rt, connection:abort_op(transfer_err))
@@ -342,6 +347,7 @@ function Module.listen_op(address, opts)
       local local_address = type(host_listener.local_address) == 'function' and host_listener:local_address()
         or address
 
+      IOAudit.transfer(host_listener, listener, { kind = 'host_handle', role = 'listener' })
       local released, release_err = listener.adoption:release(host_listener)
       if not released then
         close_socket(host_listener, release_err)

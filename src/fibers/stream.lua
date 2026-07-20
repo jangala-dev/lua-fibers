@@ -73,6 +73,30 @@ end
 function Duplex:is_duplex()
   return self.read_flow ~= nil and self.write_flow ~= nil
 end
+
+function Duplex:local_address()
+  return self._local_address
+end
+
+function Duplex:peer_address()
+  return self._peer_address
+end
+
+function Duplex:_set_addresses(local_address, peer_address)
+  self._local_address = local_address
+  self._peer_address = peer_address
+  return self
+end
+
+function Duplex:close_state()
+  return {
+    backend_closed = self._backend_closed == true,
+    reactor_live = self._reactor_live or 0,
+    close_error = self._close_error,
+    readable = self:is_readable(),
+    writable = self:is_writable(),
+  }
+end
 function Duplex:reader()
   return self.read_flow and self.read_flow:outlet() or nil
 end
@@ -214,6 +238,9 @@ function Duplex:inspect_op()
       mode = self.mode,
       readable = self:is_readable(),
       writable = self:is_writable(),
+      local_address = self._local_address,
+      peer_address = self._peer_address,
+      close = self:close_state(),
     }
   end)
 end
@@ -515,6 +542,10 @@ end
 HostStream.is_readable = Duplex.is_readable
 HostStream.is_writable = Duplex.is_writable
 HostStream.is_duplex = Duplex.is_duplex
+HostStream.local_address = Duplex.local_address
+HostStream.peer_address = Duplex.peer_address
+HostStream._set_addresses = Duplex._set_addresses
+HostStream.close_state = Duplex.close_state
 HostStream.reader = Duplex.reader
 HostStream.writer = Duplex.writer
 HostStream.read_some_op = Duplex.read_some_op

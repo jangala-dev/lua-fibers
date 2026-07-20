@@ -375,3 +375,28 @@ serial entry into the runtime driver boundary
 ```
 
 The host and readiness tests in `tests/` are the executable contract.
+
+## I/O lifecycle inspection
+
+Host adapters can inspect the runtime-owned reactor and the external-resource
+audit while diagnosing integration failures:
+
+```lua
+local reactor = rt.host_reactor and rt.host_reactor:snapshot()
+local audit = rt:io_audit_snapshot({ include_history = true })
+```
+
+After an owned I/O tree has settled, contract tests should call:
+
+```lua
+rt:assert_io_quiescent('embedding shutdown')
+```
+
+This verifies that no HostHandle remains live, no reactor registration remains
+indexed and no ownership violation was recorded. Stale readiness deliveries are
+ignored by generation and counted in `audit.stats.stale_ready`.
+
+Hosts must declare stream-socket family support separately through
+`socket_ipv4`, `socket_ipv6` and `socket_unix`. Unsupported capabilities should
+return structured errors; they should not be inferred from the presence of a
+poller or descriptor backend.

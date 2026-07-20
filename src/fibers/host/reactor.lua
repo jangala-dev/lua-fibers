@@ -16,6 +16,7 @@ local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation
 local Errors = require('fibers.flow.errors')
 local HostError = require('fibers.host.error')
 local Ownership = require('fibers.internal.ownership')
+local IOAudit = require('fibers.internal.io_audit')
 
 local Reactor = {}
 Reactor.__index = Reactor
@@ -175,6 +176,10 @@ function Entry.new(reactor, spec)
   entry.retire_error = nil
   entry.lease = nil
   entry.demand_queued = false
+  entry.service_count = 0
+  entry.would_block_count = 0
+  entry.last_service_sequence = nil
+  IOAudit.created(entry, { kind = 'reactor_registration' })
   return entry
 end
 
@@ -300,6 +305,7 @@ function Reactor:_register_committed(rt, entry)
   self:_attach_backend(rt, entry)
   entry.registered = true
   self.entries[entry._fibers_id] = entry
+  IOAudit.register(entry, rt, { mode = entry.mode, key = entry.key })
   self.poller:register({
     id = entry._fibers_id,
     generation = entry.generation,
@@ -431,6 +437,7 @@ function Reactor:_retire_entry(entry, reason)
   entry.retired = true
   entry.retire_error = retire_error
   self.entries[entry._fibers_id] = nil
+  IOAudit.retire(entry, retire_error, reason)
 
   local stream = entry.stream
   if stream then
@@ -491,6 +498,7 @@ function Reactor:_service_read(entry)
   end
 
   if HostError.is_would_block(err) then
+    entry.would_block_count = entry.would_block_count + 1
     if bytes ~= nil and bytes ~= '' then
       masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
       return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
@@ -559,6 +567,7 @@ function Reactor:_service_write(entry)
     -- acknowledgement so a partial write observes the remaining suffix.
     entry.lease = nil
   elseif HostError.is_would_block(err) or n == 0 then
+    entry.would_block_count = entry.would_block_count + 1
     -- Retain byte custody and rearm the one-shot readiness registration.
   else
     entry.lease = nil
@@ -572,9 +581,13 @@ end
 function Reactor:_service_ready(id, generation)
   local entry = self.entries[id]
   if not entry or entry.retired or entry.generation ~= generation then
+    IOAudit.stale_ready(self.runtime)
     return true
   end
   self.service_count = self.service_count + 1
+  entry.service_count = entry.service_count + 1
+  entry.last_service_sequence = self.service_count
+  IOAudit.service(entry)
   if entry.mode == 'read' then
     return self:_service_read(entry)
   elseif entry.mode == 'write' then
@@ -584,6 +597,7 @@ function Reactor:_service_ready(id, generation)
 end
 
 function Reactor:_handle_control(kind, entry, reason, mode)
+  IOAudit.control(self.runtime)
   if not entry or entry.retired then
     return true
   end
@@ -661,6 +675,58 @@ function Reactor:registration_count()
     n = n + 1
   end
   return n
+end
+
+function Entry:inspection()
+  return {
+    id = self._fibers_id,
+    name = self.name,
+    mode = self.mode,
+    key = self.key,
+    generation = self.generation,
+    registered = self.registered,
+    closing = self.closing,
+    retired = self.retired,
+    retire_mode = self.retire_mode,
+    retire_error = self.retire_error,
+    service_count = self.service_count,
+    would_block_count = self.would_block_count,
+    last_service_sequence = self.last_service_sequence,
+    has_lease = self.lease ~= nil,
+  }
+end
+
+function Reactor:snapshot()
+  local entries = {}
+  for _, entry in pairs(self.entries) do
+    entries[#entries + 1] = entry:inspection()
+  end
+  table.sort(entries, function(a, b)
+    return a.id < b.id
+  end)
+  return {
+    name = self.name,
+    running = self.running,
+    registration_count = #entries,
+    service_count = self.service_count,
+    read_quantum = self.read_quantum,
+    write_quantum = self.write_quantum,
+    control_quantum = self.control_quantum,
+    entries = entries,
+    audit = IOAudit.snapshot(self.runtime),
+  }
+end
+
+function Reactor:assert_quiescent(label)
+  local snapshot = self:snapshot()
+  if snapshot.registration_count ~= 0 then
+    local names = {}
+    for _, entry in ipairs(snapshot.entries) do
+      names[#names + 1] = entry.name .. ':' .. entry.mode
+    end
+    error((label or 'host reactor') .. ' still has registrations: ' .. table.concat(names, ', '), 2)
+  end
+  return true
 end
 
 Reactor.Entry = Entry

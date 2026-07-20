@@ -129,4 +129,49 @@ function Address.validate(value, label)
   error(label .. ' has unknown address kind ' .. tostring(value.kind or value.family), 3)
 end
 
+function Address.equal(a, b)
+  if type(a) ~= 'table' or type(b) ~= 'table' then
+    return false
+  end
+  local ok_a, aa = pcall(Address.validate, a, 'left socket address')
+  local ok_b, bb = pcall(Address.validate, b, 'right socket address')
+  if not ok_a or not ok_b then
+    return false
+  end
+  return Address.key(aa) == Address.key(bb)
+end
+
+function Address.display(value)
+  value = Address.validate(value, 'socket address')
+  if value.kind == 'unix' then
+    return value.path
+  elseif value.kind == 'inet6' then
+    local scope = tonumber(value.scope_id) or 0
+    local host = value.host .. (scope ~= 0 and ('%' .. tostring(scope)) or '')
+    return '[' .. host .. ']:' .. tostring(value.port)
+  elseif value.kind == 'inet4' then
+    return value.host .. ':' .. tostring(value.port)
+  end
+  return tostring(value.host) .. ':' .. tostring(value.service)
+end
+
+function Address.is_wildcard(value)
+  value = Address.validate(value, 'socket address')
+  return (value.kind == 'inet4' and value.host == '0.0.0.0') or (value.kind == 'inet6' and value.host == '::')
+end
+
+function Address.with_port(value, port)
+  value = Address.validate(value, 'socket address')
+  if value.kind == 'unix' then
+    error('Unix socket addresses do not have ports', 2)
+  end
+  local out = Address.copy(value)
+  if out.kind == 'name' then
+    out.service = port
+  else
+    out.port = port_number(port, 'socket address')
+  end
+  return Address.validate(out, 'socket address')
+end
+
 return Address

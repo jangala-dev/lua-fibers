@@ -1935,6 +1935,17 @@ function Runtime:run(opts)
   return driver_call(self, 'run', Runtime._run_impl, opts)
 end
 
+function Runtime:io_audit_snapshot(opts)
+  return require('fibers.internal.io_audit').snapshot(self, opts)
+end
+
+function Runtime:assert_io_quiescent(label)
+  if self.host_reactor then
+    self.host_reactor:assert_quiescent(label)
+  end
+  return require('fibers.internal.io_audit').assert_clean(self, { label = label })
+end
+
 function Runtime:_pump()
   self:_check_not_failed(2)
   self:_require_driver_call('pump', 2)

@@ -223,7 +223,23 @@ local function driver(dial, driver_scope, opts)
       )
     end
 
-    connection.peer_address = peer or dial.address
+    local local_address
+    if type(handle.local_address) == 'function' then
+      local_address = handle:local_address()
+    elseif handle.local_address_value ~= nil then
+      local_address = handle.local_address_value
+    end
+    if type(handle.peer_address_value) == 'function' then
+      peer = handle:peer_address_value() or peer
+    elseif handle.peer_address_value ~= nil then
+      peer = handle.peer_address_value
+    end
+    if type(connection._set_addresses) == 'function' then
+      connection:_set_addresses(local_address, peer or dial.address)
+    else
+      connection._local_address = local_address
+      connection._peer_address = peer or dial.address
+    end
     local released, release_err = slot:release(handle)
     if not released then
       IO.masked_perform(rt, connection:abort_op(release_err))

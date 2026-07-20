@@ -52,7 +52,9 @@ return {
     'tests/io/test_pipe.lua',
     'tests/io/test_socket.lua',
     'tests/io/test_socket_hardening.lua',
+    'tests/io/test_socket_failure_matrix.lua',
     'tests/io/test_socket_lifecycle.lua',
+    'tests/io/test_socket_provider_matrix.lua',
     'tests/io/test_socket_conformance.lua',
     'tests/io/test_resolver.lua',
   },
@@ -111,6 +113,7 @@ return {
   },
   internal = {
     'tests/internal/test_adoption_completion.lua',
+    'tests/internal/test_io_audit.lua',
     'tests/internal/test_bitops.lua',
     'tests/internal/test_datagram_service.lua',
     'tests/internal/test_flow_helpers.lua',

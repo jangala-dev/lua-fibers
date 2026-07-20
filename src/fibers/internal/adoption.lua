@@ -10,6 +10,7 @@ local HostError = require('fibers.host.error')
 local Ownership = require('fibers.internal.ownership')
 local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
+local IOAudit = require('fibers.internal.io_audit')
 
 local Adoption = {}
 local Slot = {}
@@ -80,6 +81,7 @@ function Bundle:adopt(name, value, close)
   end
   self.values[name] = { value = value, close = close }
   self.order[#self.order + 1] = name
+  IOAudit.adopt(value, self, { kind = 'host_handle', entry = name })
   return value
 end
 
@@ -111,6 +113,7 @@ function Bundle:adopt_many(entries)
         local rec = self.values[adopted_name]
         self.values[adopted_name] = nil
         if rec then
+          IOAudit.release(rec.value, self)
           close_value(rec.value, rec.close, 'bundle adoption rolled back')
         end
       end
@@ -132,6 +135,7 @@ function Bundle:release(name, expected)
   end
   self.values[name] = nil
   self.released[name] = true
+  IOAudit.release(rec.value, self)
   return rec.value
 end
 
@@ -144,6 +148,7 @@ function Bundle:release_all()
       out[name] = rec.value
       self.values[name] = nil
       self.released[name] = true
+      IOAudit.release(rec.value, self)
     end
   end
   return out
@@ -160,6 +165,7 @@ function Bundle:close(reason)
     local rec = self.values[name]
     self.values[name] = nil
     if rec then
+      IOAudit.release(rec.value, self)
       local ok, err = close_value(rec.value, rec.close, reason)
       if not ok then
         errors[#errors + 1] = { entry = name, error = err }
@@ -219,6 +225,7 @@ function Slot:adopt(value, close)
   end
   self.value = value
   self.close_value = close
+  IOAudit.adopt(value, self, { kind = 'host_handle' })
   return value
 end
 
@@ -233,6 +240,7 @@ function Slot:release(expected)
   self.value = nil
   self.close_value = nil
   self.released = true
+  IOAudit.release(value, self)
   return value
 end
 
@@ -246,6 +254,7 @@ function Slot:close(reason)
   if value == nil then
     return true
   end
+  IOAudit.release(value, self)
   return close_value(value, close, reason)
 end
 
