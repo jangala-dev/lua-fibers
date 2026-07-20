@@ -14,6 +14,7 @@ package.path = table.concat({
 local saved_preload = package.preload.nixio
 local saved_nixio = package.loaded.nixio
 local saved_fd = package.loaded['fibers.host.fd_nixio']
+local saved_error = package.loaded['fibers.host.nixio_error']
 
 local setblocking_arg
 local closed = false
@@ -37,6 +38,7 @@ package.preload.nixio = function()
 end
 package.loaded.nixio = nil
 package.loaded['fibers.host.fd_nixio'] = nil
+package.loaded['fibers.host.nixio_error'] = nil
 
 local ok, err = pcall(function()
   local Fd = require('fibers.host.fd_nixio')
@@ -77,6 +79,7 @@ end)
 package.preload.nixio = saved_preload
 package.loaded.nixio = saved_nixio
 package.loaded['fibers.host.fd_nixio'] = saved_fd
+package.loaded['fibers.host.nixio_error'] = saved_error
 
 assert(ok, err)
 print('tests/embedding/test_fd_nixio_wrap.lua: ok')

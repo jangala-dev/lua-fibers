@@ -275,74 +275,66 @@ if format == 'csv' then
 else
   print('Fibers proof-engine I/O profile (' .. Clock.name .. ')')
   for _, row in ipairs(rows) do
-    print(
-      string.format(
-        '%-22s %7.1f ms  plans=%-4d commits=%-4d search/commit=%6.1f branches/commit=%6.1f trail/commit=%7.1f',
-        row.case,
-        row.elapsed_ms,
-        row.plans,
-        row.commits,
-        row.search_per_commit,
-        row.branches_per_commit,
-        row.trail_per_commit
-      )
-    )
-    print(
-      string.format(
-        '  claims=%d closure=%d/%d/%d forced=%d rollbacks=%d coalesced=%d nodes=%d deps(loc=%d,res=%d,exchange=%d) max_component=%d',
-        row.claim_branches,
-        row.claim_closure_branches,
-        row.claim_closure_successes,
-        row.claim_closure_failures,
-        row.forced_claims,
-        row.rollbacks,
-        row.trail_coalesced,
-        row.option_nodes,
-        row.dependency_locations,
-        row.dependency_resources,
-        row.dependency_exchanges,
-        row.max_component
-      )
-    )
-    print(
-      string.format(
-        '  reuse(hit=%d invalid=%d resume=%d retry=%d reopen=%d) component(same=%d changed=%d frontier=%d) invalid(req=%d,bucket=%d,loc=%d,res=%d,ext=%d,epoch=%d,timer=%d)',
-        row.plan_reuse_hits,
-        row.plan_reuse_invalidations,
-        row.search_session_resumes,
-        row.search_session_retry_hits,
-        row.residual_seed_reopens,
-        row.plan_same_component,
-        row.plan_component_changed,
-        row.plan_frontier_changed,
-        row.invalid_request,
-        row.invalid_bucket,
-        row.invalid_location,
-        row.invalid_resource,
-        row.invalid_external,
-        row.invalid_epoch,
-        row.invalid_timer
-      )
-    )
+    print(string.format(
+      '%-22s %7.1f ms  plans=%-4d commits=%-4d search/commit=%6.1f branches/commit=%6.1f trail/commit=%7.1f',
+      row.case,
+      row.elapsed_ms,
+      row.plans,
+      row.commits,
+      row.search_per_commit,
+      row.branches_per_commit,
+      row.trail_per_commit
+    ))
+    print(string.format(
+      '  claims=%d closure=%d/%d/%d forced=%d rollbacks=%d coalesced=%d nodes=%d deps(loc=%d,res=%d,exchange=%d) max_component=%d',
+      row.claim_branches,
+      row.claim_closure_branches,
+      row.claim_closure_successes,
+      row.claim_closure_failures,
+      row.forced_claims,
+      row.rollbacks,
+      row.trail_coalesced,
+      row.option_nodes,
+      row.dependency_locations,
+      row.dependency_resources,
+      row.dependency_exchanges,
+      row.max_component
+    ))
+    print(string.format(
+      '  reuse(hit=%d invalid=%d resume=%d retry=%d reopen=%d) component(same=%d changed=%d frontier=%d) invalid(req=%d,bucket=%d,loc=%d,res=%d,ext=%d,epoch=%d,timer=%d)',
+      row.plan_reuse_hits,
+      row.plan_reuse_invalidations,
+      row.search_session_resumes,
+      row.search_session_retry_hits,
+      row.residual_seed_reopens,
+      row.plan_same_component,
+      row.plan_component_changed,
+      row.plan_frontier_changed,
+      row.invalid_request,
+      row.invalid_bucket,
+      row.invalid_location,
+      row.invalid_resource,
+      row.invalid_external,
+      row.invalid_epoch,
+      row.invalid_timer
+    ))
     if show_slow then
       for i, plan in ipairs(row.slow_plans or {}) do
-        print(
-          string.format(
-            '    slow[%d] steps=%d branches=%d claims=%d closure=%d/%d/%d forced=%d roots=%d nodes=%d dynamic=%d outcome=%s',
-            i,
-            plan.search_steps or 0,
-            plan.branches or 0,
-            plan.claim_branches or 0,
-            plan.claim_closure_branches or 0,
-            plan.claim_closure_successes or 0,
-            plan.claim_closure_failures or 0,
-            plan.forced_claims or 0,
-            plan.component_size or 0,
-            plan.option_nodes or 0,
-            plan.option_dynamic_roots or 0,
-            tostring(plan.outcome)
-          )
-        )
+        print(string.format(
+          '    slow[%d] steps=%d branches=%d claims=%d closure=%d/%d/%d forced=%d roots=%d nodes=%d dynamic=%d outcome=%s',
+          i,
+          plan.search_steps or 0,
+          plan.branches or 0,
+          plan.claim_branches or 0,
+          plan.claim_closure_branches or 0,
+          plan.claim_closure_successes or 0,
+          plan.claim_closure_failures or 0,
+          plan.forced_claims or 0,
+          plan.component_size or 0,
+          plan.option_nodes or 0,
+          plan.option_dynamic_roots or 0,
+          tostring(plan.outcome)
+        ))
         if trace and i == 1 then
           for _, request in ipairs(plan.request_summaries or {}) do
             local kinds = {}
@@ -350,36 +342,28 @@ else
               kinds[#kinds + 1] = tostring(kind) .. ':' .. tostring(count)
             end
             table.sort(kinds)
-            print(
-              string.format(
-                '      request id=%s name=%s dynamic=%s external=%s nodes=%s kinds=%s',
-                tostring(request.id),
-                tostring(request.name),
-                tostring(request.dynamic),
-                tostring(request.external),
-                tostring(request.nodes),
-                table.concat(kinds, '|')
-              )
-            )
+            print(string.format(
+              '      request id=%s name=%s dynamic=%s external=%s nodes=%s kinds=%s',
+              tostring(request.id), tostring(request.name), tostring(request.dynamic),
+              tostring(request.external), tostring(request.nodes), table.concat(kinds, '|')
+            ))
           end
           for _, event in ipairs(plan.events or {}) do
             if event.kind == 'claim_group' or event.kind == 'claim_branch' then
-              print(
-                string.format(
-                  '      %s key=%s size=%s kind=%s all_machine=%s group_accepts=%s'
-                    .. ' names=%s supply_sets=%s accepts=%s modes=%s',
-                  tostring(event.kind),
-                  tostring(event.group_key or event.key),
-                  tostring(event.size),
-                  tostring(event.claim_kind or ''),
-                  tostring(event.all_machine or ''),
-                  event.group_accepts_supply == nil and '' or tostring(event.group_accepts_supply),
-                  tostring(event.names or ''),
-                  tostring(event.supply_sets or ''),
-                  tostring(event.accepts_supply or ''),
-                  tostring(event.modes or '')
-                )
-              )
+              print(string.format(
+                '      %s key=%s size=%s kind=%s all_machine=%s group_accepts=%s'
+                  .. ' names=%s supply_sets=%s accepts=%s modes=%s',
+                tostring(event.kind),
+                tostring(event.group_key or event.key),
+                tostring(event.size),
+                tostring(event.claim_kind or ''),
+                tostring(event.all_machine or ''),
+                event.group_accepts_supply == nil and '' or tostring(event.group_accepts_supply),
+                tostring(event.names or ''),
+                tostring(event.supply_sets or ''),
+                tostring(event.accepts_supply or ''),
+                tostring(event.modes or '')
+              ))
             end
           end
         end

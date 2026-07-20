@@ -8,6 +8,7 @@ local ok_unistd, unistd = pcall(require, 'posix.unistd')
 local ok_errno, errno = pcall(require, 'posix.errno')
 
 local Provider = {}
+local PosixError = ok_errno and require('fibers.host.luaposix_error') or nil
 
 local function unsupported(reason)
   return nil, HostError.unsupported('datagram', 'open', { reason = reason })
@@ -35,7 +36,7 @@ local function error_value(action, message, number, fields)
   if errno.EMSGSIZE ~= nil and number == errno.EMSGSIZE then
     return HostError.message_too_large('datagram', action, fields)
   end
-  return HostError.system('datagram', action, message, nil, number, fields)
+  return PosixError.system('datagram', action, message, number, fields)
 end
 
 local function sockaddr(address)
@@ -59,18 +60,14 @@ local function address_from_sockaddr(sa, fallback_kind)
   end
   if sa.family == socket.AF_INET6 or fallback_kind == 'inet6' then
     return {
-      kind = 'inet6',
-      family = 'inet6',
-      host = sa.addr,
+      kind = 'inet6', family = 'inet6', host = sa.addr,
       port = tonumber(sa.port) or 0,
       flowinfo = tonumber(sa.flowinfo) or 0,
       scope_id = tonumber(sa.scope_id) or 0,
     }
   end
   return {
-    kind = 'inet4',
-    family = 'inet4',
-    host = sa.addr,
+    kind = 'inet4', family = 'inet4', host = sa.addr,
     port = tonumber(sa.port) or 0,
   }
 end

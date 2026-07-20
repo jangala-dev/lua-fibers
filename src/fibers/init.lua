@@ -107,6 +107,7 @@ function M.mask(fn, ...)
   return unpack_(r, 2, r.n)
 end
 
+
 function M.try_scope(opts, fn)
   if type(opts) == 'function' then
     fn, opts = opts, {}

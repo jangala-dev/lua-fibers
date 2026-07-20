@@ -62,6 +62,7 @@ local function drive_until(rt, host, pred, label, iters)
   fail(label or 'runtime did not reach expected state')
 end
 
+
 -- Readiness marked before runtime attachment survives bind_runtime.  Native
 -- providers may discover a level-ready descriptor while constructing it, before
 -- Stream.open_op attaches the handle to the runtime-owned reactor.
@@ -78,9 +79,7 @@ do
       written = written .. bytes
       return #bytes
     end,
-    close = function()
-      return true
-    end,
+    close = function() return true end,
   })
   handle:mark_writable()
   rt:spawn_raw(function()

@@ -217,20 +217,12 @@ end
 
 Scalar.Kind = Kind
 
-function Scalar:read()
-  return perform(self:read_op())
-end
+function Scalar:read() return perform(self:read_op()) end
 
-function Scalar:changed(version)
-  return perform(self:changed_op(version))
-end
+function Scalar:changed(version) return perform(self:changed_op(version)) end
 
-function Scalar:expect(value)
-  return perform(self:expect_op(value))
-end
+function Scalar:expect(value) return perform(self:expect_op(value)) end
 
-function Scalar:write(value)
-  return perform(self:write_op(value))
-end
+function Scalar:write(value) return perform(self:write_op(value)) end
 
 return Scalar

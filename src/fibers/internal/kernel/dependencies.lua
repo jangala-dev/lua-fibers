@@ -255,15 +255,9 @@ function Index:add(request)
     local up, down, any = supplier_directions(access)
     if up or down or any then
       local suppliers = location_supplier_group(self, location, true)
-      if up then
-        suppliers.up:add(request.id)
-      end
-      if down then
-        suppliers.down:add(request.id)
-      end
-      if any then
-        suppliers.any:add(request.id)
-      end
+      if up then suppliers.up:add(request.id) end
+      if down then suppliers.down:add(request.id) end
+      if any then suppliers.any:add(request.id) end
     end
   end
   for resource in pairs(metadata.resources or {}) do
@@ -322,15 +316,9 @@ function Index:remove(request)
     local up, down, any = supplier_directions(access)
     local suppliers = self.location_suppliers[location]
     if suppliers then
-      if up then
-        suppliers.up:remove(request.id)
-      end
-      if down then
-        suppliers.down:remove(request.id)
-      end
-      if any then
-        suppliers.any:remove(request.id)
-      end
+      if up then suppliers.up:remove(request.id) end
+      if down then suppliers.down:remove(request.id) end
+      if any then suppliers.any:remove(request.id) end
       if suppliers.up.count == 0 and suppliers.down.count == 0 and suppliers.any.count == 0 then
         self.location_suppliers[location] = nil
       end

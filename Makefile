@@ -138,6 +138,11 @@ check-layout:
 	@test -f src/fibers/flow/space_lease.lua
 	@test -f src/fibers/host/reactor.lua
 	@test -f src/fibers/host/error.lua
+	@test -f src/fibers/host/native_error.lua
+	@test -f src/fibers/host/nixio_error.lua
+	@test -f src/fibers/host/luaposix_error.lua
+	@test -f src/fibers/host/poll_plan.lua
+	@test -f src/fibers/host/nixio_poll.lua
 	@test -f src/fibers/internal/completion.lua
 	@test -f src/fibers/internal/adoption.lua
 	@test -f src/fibers/internal/io_audit.lua

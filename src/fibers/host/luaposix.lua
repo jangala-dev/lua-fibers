@@ -9,6 +9,7 @@ local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
 local Provider = require('fibers.host.provider')
 local HostWait = require('fibers.host.wait')
+local PollPlan = require('fibers.host.poll_plan')
 local DatagramProvider = require('fibers.host.datagram_luaposix')
 local SocketProvider = require('fibers.host.socket_luaposix')
 local ResolverProvider = require('fibers.host.resolver_luaposix')
@@ -26,11 +27,7 @@ if
   or not ok_errno
   or type(errno) ~= 'table'
 then
-  return Provider.unsupported(
-    'fibers.host.luaposix',
-    'requires posix.poll, posix.time and posix.errno',
-    { 'new' }
-  )
+  return Provider.unsupported('fibers.host.luaposix', 'requires posix.poll, posix.time and posix.errno', { 'new' })
 end
 
 local Posix = {}
@@ -99,56 +96,6 @@ local function fd_of(key)
   return tonumber(key)
 end
 
-local function collect_readiness(waits)
-  local fds, by_fd, unsupported = {}, {}, false
-  local function ensure(fd)
-    local rec = by_fd[fd]
-    if not rec then
-      rec = { fd = fd, events = {}, waits = {}, poller = {} }
-      by_fd[fd] = rec
-      fds[fd] = { events = rec.events }
-    end
-    return rec
-  end
-  local readiness = Host.readiness_waits(waits)
-  for i = 1, #readiness do
-    local w = readiness[i]
-    local fd = fd_of(w.readiness_key)
-    if not fd then
-      unsupported = true
-    else
-      local rec = ensure(fd)
-      local mode = w.mode or 'read'
-      if mode == 'write' or mode == 'wr' then
-        rec.events.OUT = true
-      else
-        rec.events.IN = true
-      end
-      rec.waits[#rec.waits + 1] = w
-    end
-  end
-  local poller_waits = Host.poller_waits(waits)
-  for i = 1, #poller_waits do
-    local wait = poller_waits[i]
-    local registrations = wait.poller:_host_active()
-    for j = 1, #registrations do
-      local registration = registrations[j]
-      local fd = fd_of(registration.key)
-      if not fd then
-        unsupported = true
-      else
-        local rec = ensure(fd)
-        if registration.mode == 'write' then
-          rec.events.OUT = true
-        else
-          rec.events.IN = true
-        end
-        rec.poller[#rec.poller + 1] = { wait = wait, registration = registration }
-      end
-    end
-  end
-  return fds, by_fd, unsupported
-end
 
 function Posix.is_supported()
   return type(poll_fn) == 'function'
@@ -233,74 +180,44 @@ end
 function Posix:block(rt, waits, status, _opts)
   waits = waits or {}
   local deadline = Host.earliest_deadline(waits)
-  local fds, by_fd, unsupported = collect_readiness(waits)
+  local plan = PollPlan.build(waits, { key_of = fd_of, fd_of = fd_of })
 
-  if unsupported then
-    if self.on_unsupported then
-      self.on_unsupported(waits, status)
-    end
+  if plan.unsupported then
+    if self.on_unsupported then self.on_unsupported(waits, status) end
     return nil, 'unsupported-readiness-key'
   end
-
-  local have_fd = false
-  for _ in pairs(by_fd) do
-    have_fd = true
-    break
-  end
-
-  if not have_fd then
+  if #plan.records == 0 then
     return HostWait.block_without_io(self, rt, waits, status, deadline)
   end
 
-  local timeout_ms = Host.timeout_ms(rt, deadline)
-  local nready, err, eno = poll_fn(fds, timeout_ms)
+  local fds = {}
+  for i = 1, #plan.records do
+    local record = plan.records[i]
+    local events = {}
+    if record.read then events.IN = true end
+    if record.write then events.OUT = true end
+    fds[record.fd] = { events = events }
+  end
+
+  local nready, err, eno = poll_fn(fds, Host.timeout_ms(rt, deadline))
   if nready == nil then
-    if eno == errno.EINTR then
-      return true, 'poll-interrupted'
-    end
+    if eno == errno.EINTR then return true, 'poll-interrupted' end
     error(tostring(err or eno or 'posix.poll failed'), 2)
   end
 
   local delivered = false
   if nready > 0 then
     for fd, info in pairs(fds) do
-      local re = info.revents
-      if re then
-        local rd = re.IN or re.HUP or re.ERR or re.NVAL
-        local wr = re.OUT or re.ERR or re.NVAL
-        local rec = by_fd[fd]
-        if rec then
-          for i = 1, #rec.waits do
-            local w = rec.waits[i]
-            local mode = w.mode or 'read'
-            if (mode == 'write' or mode == 'wr') and wr then
-              rt:deliver(w.feed, 'write', true)
-              delivered = true
-            elseif mode ~= 'write' and mode ~= 'wr' and rd then
-              rt:deliver(w.feed, 'read', true)
-              delivered = true
-            end
-          end
-          for i = 1, #rec.poller do
-            local item = rec.poller[i]
-            local registration = item.registration
-            local ready = registration.mode == 'write' and wr or rd
-            if ready and item.wait.poller:_host_delivered(registration) then
-              Host.deliver_poller_ready(rt, item.wait, registration)
-              delivered = true
-            end
-          end
-        end
+      local revents = info.revents
+      if revents then
+        local readable = revents.IN or revents.HUP or revents.ERR or revents.NVAL
+        local writable = revents.OUT or revents.ERR or revents.NVAL
+        if PollPlan.deliver(rt, plan.by_fd[fd], readable, writable) then delivered = true end
       end
     end
   end
-
-  if delivered then
-    return true, 'readiness'
-  end
-  if deadline ~= nil and rt:now() >= deadline then
-    return true, 'time'
-  end
+  if delivered then return true, 'readiness' end
+  if deadline ~= nil and rt:now() >= deadline then return true, 'time' end
   return true, 'poll'
 end
 

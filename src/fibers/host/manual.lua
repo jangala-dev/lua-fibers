@@ -16,6 +16,7 @@ local Protected = require('fibers.internal.protected')
 local Manual = {}
 Manual.__index = Manual
 
+
 local ManualProcess = {}
 ManualProcess.__index = ManualProcess
 
@@ -73,9 +74,7 @@ function ManualProcess:complete_op(status)
   end)
 end
 
-function ManualProcess:complete(status)
-  return perform(self:complete_op(status))
-end
+function ManualProcess:complete(status) return perform(self:complete_op(status)) end
 
 function ManualProcess:signal(signal, target)
   if self.reaped then
@@ -248,6 +247,8 @@ local function connection_pair(host, name)
   return client, server
 end
 
+
+
 function Manual:start_process(spec)
   spec = spec or {}
   if self.process_factory then
@@ -327,10 +328,9 @@ function Manual:create_datagram(address, opts)
   end
   local key = socket_key(actual)
   if self.datagram_sockets[key] then
-    return nil,
-      HostError.system('datagram', 'bind', 'address already in use', 'EADDRINUSE', nil, {
-        address = actual,
-      })
+    return nil, HostError.system('datagram', 'bind', 'address already in use', 'EADDRINUSE', nil, {
+      address = actual,
+    })
   end
 
   local incoming = {}
@@ -575,6 +575,7 @@ function Manual:dial_socket(address, opts)
   return client, listener:local_address()
 end
 
+
 function Manual:start_dial(address, opts)
   if self.dial_factory then
     return self.dial_factory(self, address, opts or {})
@@ -588,6 +589,7 @@ function Manual:start_dial(address, opts)
   end
   return handle
 end
+
 
 local function copy_address(value)
   local out = {}
@@ -630,10 +632,9 @@ function Manual:resolve(endpoint, opts)
   end
 
   if #out == 0 then
-    return nil,
-      HostError.system('resolver', 'resolve', 'name or service not known', 'EAI_NONAME', nil, {
-        endpoint = endpoint,
-      })
+    return nil, HostError.system('resolver', 'resolve', 'name or service not known', 'EAI_NONAME', nil, {
+      endpoint = endpoint,
+    })
   end
   return out
 end

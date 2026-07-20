@@ -26,16 +26,19 @@ local function close_socket(value, reason)
 end
 
 local function dial_settlement(dial)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return dial:close_op(reason or 'scope settlement')
-  end, function()
-    return dial:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'dial settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+  return Settlement.request_then_wait(
+    function(_ctx, _record, reason)
+      return dial:close_op(reason or 'scope settlement')
+    end,
+    function()
+      return dial:closed_op():and_then(function(ok, err)
+        if not ok then
+          error(err or 'dial settlement failed', 0)
+        end
+        return Op.always(true)
+      end)
+    end
+  )
 end
 
 function Dial:owned(children)
@@ -171,14 +174,11 @@ local function driver(dial, driver_scope, opts)
         if not HostError.is_would_block(finish_err) then
           slot:close(finish_err)
           IO.release_owned(rt, driver_region, slot)
-          IO.masked_perform(
-            rt,
-            dial.lifecycle:publish_failure_op(HostError.normalise(finish_err, {
-              domain = 'socket',
-              action = 'connect_finish',
-              address = dial.address,
-            }))
-          )
+          IO.masked_perform(rt, dial.lifecycle:publish_failure_op(HostError.normalise(finish_err, {
+            domain = 'socket',
+            action = 'connect_finish',
+            address = dial.address,
+          })))
           return
         end
         perform(handle:write_ready_op())
@@ -202,19 +202,18 @@ local function driver(dial, driver_scope, opts)
       error(connection_err, 0)
     end
 
-    local published, state =
-      IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_region))
+    local published, state = IO.masked_perform(
+      rt,
+      dial.lifecycle:publish_connected_op(connection, driver_region)
+    )
     if not published then
       if state.kind == 'closing' or state.kind == 'closed' then
         return
       end
-      error(
-        HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connected Stream', {
-          address = dial.address,
-          state = state.kind,
-        }),
-        0
-      )
+      error(HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connected Stream', {
+        address = dial.address,
+        state = state.kind,
+      }), 0)
     end
 
     -- Retain the child scope, and therefore the unclaimed connection, until
@@ -292,25 +291,15 @@ function Module.dial_op(address, opts)
     end)
 end
 
-function Dial:connected(target)
-  return perform(self:connected_op(target))
-end
+function Dial:connected(target) return perform(self:connected_op(target)) end
 
-function Dial:failed()
-  return perform(self:failed_op())
-end
+function Dial:failed() return perform(self:failed_op()) end
 
-function Dial:result(target)
-  return perform(self:result_op(target))
-end
+function Dial:result(target) return perform(self:result_op(target)) end
 
-function Dial:close(reason)
-  return perform(self:close_op(reason))
-end
+function Dial:close(reason) return perform(self:close_op(reason)) end
 
-function Dial:closed()
-  return perform(self:closed_op())
-end
+function Dial:closed() return perform(self:closed_op()) end
 
 Module.Dial = Dial
 return Module

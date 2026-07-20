@@ -42,8 +42,7 @@ local function composed_version()
       end))
     end, 'composed-worker')
 
-    local completed = jobs
-      :put_op('inspection')
+    local completed = jobs:put_op('inspection')
       :and_then(function()
         return replies:get_op()
       end)

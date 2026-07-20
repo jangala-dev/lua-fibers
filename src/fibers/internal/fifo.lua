@@ -32,30 +32,23 @@ function Queue.new(opts, name)
   }, Queue)
   local put_locations = {
     [self.items._location] = {
-      read = true,
-      write = true,
-      wait = true,
+      read = true, write = true, wait = true,
       supplies = { up = true },
     },
   }
   local get_locations = {
     [self.items._location] = {
-      read = true,
-      write = true,
-      wait = true,
+      read = true, write = true, wait = true,
       supplies = { down = true },
     },
   }
   if self.slots then
     put_locations[self.slots._location] = {
-      read = true,
-      write = true,
-      wait = true,
+      read = true, write = true, wait = true,
       supplies = { down = true },
     }
     get_locations[self.slots._location] = {
-      read = true,
-      write = true,
+      read = true, write = true,
       supplies = { up = true },
     }
   end
@@ -108,12 +101,8 @@ function Queue:snapshot_op()
   end)
 end
 
-function Queue:put(value)
-  return perform(self:put_op(value))
-end
+function Queue:put(value) return perform(self:put_op(value)) end
 
-function Queue:get()
-  return perform(self:get_op())
-end
+function Queue:get() return perform(self:get_op()) end
 
 return Queue

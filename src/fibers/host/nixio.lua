@@ -8,6 +8,8 @@ local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
 local Provider = require('fibers.host.provider')
 local HostWait = require('fibers.host.wait')
+local PollPlan = require('fibers.host.poll_plan')
+local NixioPoll = require('fibers.host.nixio_poll')
 local DatagramProvider = require('fibers.host.datagram_nixio')
 local SocketProvider = require('fibers.host.socket_nixio')
 local ResolverProvider = require('fibers.host.resolver_nixio')
@@ -65,90 +67,9 @@ local function nanosleep(seconds)
   end
 end
 
-local function poll_flags(...)
-  return nixio.poll_flags(...)
-end
-
-local function add_event(events, mode)
-  if events == nil then
-    return poll_flags(mode)
-  end
-  return poll_flags(events, mode)
-end
-
-local function descriptor_number(value)
-  if type(value) == 'number' then
-    return value
-  end
-  if value and type(value.fileno) == 'function' then
-    local ok, fd = pcall(value.fileno, value)
-    if ok then
-      return tonumber(fd)
-    end
-  end
-  return nil
-end
-
-local function collect_readiness(waits)
-  local fds, by_key, by_fd, unsupported = {}, {}, {}, false
-  local function ensure(poll_key)
-    local rec = by_key[poll_key]
-    if not rec then
-      rec = {
-        key = poll_key,
-        fd = descriptor_number(poll_key),
-        events = nil,
-        waits = {},
-        poller = {},
-      }
-      by_key[poll_key] = rec
-      if rec.fd ~= nil then
-        by_fd[rec.fd] = rec
-      end
-      fds[#fds + 1] = rec
-    end
-    return rec
-  end
-  local readiness = Host.readiness_waits(waits)
-  for i = 1, #readiness do
-    local w = readiness[i]
-    local key = w.readiness_key
-    if key == nil then
-      unsupported = true
-    else
-      local poll_key = (type(key) == 'table' and (key.handle or key.nixio)) or key
-      local rec = ensure(poll_key)
-      local mode = w.mode or 'read'
-      if mode == 'write' or mode == 'wr' then
-        rec.events = add_event(rec.events, 'out')
-      else
-        rec.events = add_event(rec.events, 'in')
-      end
-      rec.waits[#rec.waits + 1] = w
-    end
-  end
-  local poller_waits = Host.poller_waits(waits)
-  for i = 1, #poller_waits do
-    local wait = poller_waits[i]
-    local registrations = wait.poller:_host_active()
-    for j = 1, #registrations do
-      local registration = registrations[j]
-      local key = registration.key
-      if key == nil then
-        unsupported = true
-      else
-        local poll_key = (type(key) == 'table' and (key.handle or key.nixio)) or key
-        local rec = ensure(poll_key)
-        if registration.mode == 'write' then
-          rec.events = add_event(rec.events, 'out')
-        else
-          rec.events = add_event(rec.events, 'in')
-        end
-        rec.poller[#rec.poller + 1] = { wait = wait, registration = registration }
-      end
-    end
-  end
-  return fds, by_key, by_fd, unsupported
+local function poll_key(key)
+  if type(key) == 'table' then return key.handle or key.nixio or key end
+  return key
 end
 
 function Nixio.is_supported()
@@ -238,92 +159,29 @@ end
 function Nixio:block(rt, waits, status, _opts)
   waits = waits or {}
   local deadline = Host.earliest_deadline(waits)
-  local fd_recs, by_key, by_fd, unsupported = collect_readiness(waits)
+  local plan = PollPlan.build(waits, {
+    key_of = poll_key,
+    fd_of = NixioPoll.descriptor_number,
+  })
 
-  if unsupported then
-    if self.on_unsupported then
-      self.on_unsupported(waits, status)
-    end
+  if plan.unsupported then
+    if self.on_unsupported then self.on_unsupported(waits, status) end
     return nil, 'unsupported-readiness-key'
   end
-
-  if #fd_recs == 0 then
+  if #plan.records == 0 then
     return HostWait.block_without_io(self, rt, waits, status, deadline)
   end
 
-  local poll_fds = {}
-  for i = 1, #fd_recs do
-    local rec = fd_recs[i]
-    -- nixio.poll is specified to update this table in place.  The parallel
-    -- record remains authoritative; raw object and numeric-descriptor maps
-    -- cover builds which alter the fd field in the returned table.
-    poll_fds[i] = { fd = rec.key, events = rec.events, _fibers_record = rec }
-  end
-
-  local timeout_ms = Host.timeout_ms(rt, deadline)
-  local nready, ret = nixio.poll(poll_fds, timeout_ms)
-  if not nready then
-    -- Treat EINTR as a soft wake so that the runner can re-enter the runtime.
-    return true, 'poll-interrupted'
-  end
+  local ready = NixioPoll.run(nixio, plan, Host.timeout_ms(rt, deadline))
+  if not ready then return true, 'poll-interrupted' end
 
   local delivered = false
-  local observed = false
-
-  local function deliver_ready(ready_fds, positional)
-    for index, info in pairs(ready_fds) do
-      local revents = info.revents or 0
-      if revents ~= 0 then
-        observed = true
-        local flags = poll_flags(revents)
-        local rd = not not (flags['in'] or flags.hup or flags.err or flags.nval)
-        local wr = not not (flags.out or flags.err or flags.nval)
-        local info_fd = descriptor_number(info.fd)
-        local rec = info._fibers_record or by_key[info.fd] or (info_fd and by_fd[info_fd])
-        if not rec and positional and type(index) == 'number' then
-          rec = fd_recs[index]
-        end
-        if rec then
-          for i = 1, #rec.waits do
-            local w = rec.waits[i]
-            local mode = w.mode or 'read'
-            if (mode == 'write' or mode == 'wr') and wr then
-              rt:deliver(w.feed, 'write', true)
-              delivered = true
-            elseif mode ~= 'write' and mode ~= 'wr' and rd then
-              rt:deliver(w.feed, 'read', true)
-              delivered = true
-            end
-          end
-          for i = 1, #rec.poller do
-            local item = rec.poller[i]
-            local registration = item.registration
-            local ready = registration.mode == 'write' and wr or rd
-            if ready and item.wait.poller:_host_delivered(registration) then
-              Host.deliver_poller_ready(rt, item.wait, registration)
-              delivered = true
-            end
-          end
-        end
-      end
-    end
+  for i = 1, #ready do
+    local item = ready[i]
+    if PollPlan.deliver(rt, item.record, item.read, item.write) then delivered = true end
   end
-
-  if nready > 0 then
-    -- Prefer the documented in-place result.  Some older wrappers return a
-    -- separate table instead; consult it only when the input carries no event.
-    deliver_ready(poll_fds, true)
-    if not observed and type(ret) == 'table' and ret ~= poll_fds then
-      deliver_ready(ret, false)
-    end
-  end
-
-  if delivered then
-    return true, 'readiness'
-  end
-  if deadline ~= nil and rt:now() >= deadline then
-    return true, 'time'
-  end
+  if delivered then return true, 'readiness' end
+  if deadline ~= nil and rt:now() >= deadline then return true, 'time' end
   return true, 'poll'
 end
 

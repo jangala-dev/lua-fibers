@@ -6,10 +6,7 @@ local Contract = {}
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      3
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 3)
   end
 end
 
@@ -68,9 +65,7 @@ function Contract.exercise(name, host, address, opts)
 
     stage = 'dial'
     local dial_opts = { name = name .. ':dial' }
-    if opts.local_address then
-      dial_opts.local_address = opts.local_address
-    end
+    if opts.local_address then dial_opts.local_address = opts.local_address end
     local dial = socket.dial(bound, dial_opts)
     stage = 'dial result'
     local connection, dial_err = dial:result()
@@ -90,9 +85,7 @@ function Contract.exercise(name, host, address, opts)
     stage = 'listener close'
     assert_eq(listener:close('contract complete'), true, name .. ' listener close')
     assert_eq(listener:closed(), true, name .. ' listener closed')
-    if watchdog then
-      watchdog:request_cancel('provider contract complete')
-    end
+    if watchdog then watchdog:request_cancel('provider contract complete') end
   end, { host = host, max_iterations = opts.max_iterations or 20000 })
 
   assert_truthy(result.ok, name .. ' provider contract failed: ' .. tostring(result.primary or result))

@@ -1,14 +1,7 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './reference/?.lua', './reference/?/init.lua', './reference/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -18,10 +11,7 @@ local HostError = require('fibers.host.error')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -72,6 +62,7 @@ do
   end, { host = host })
 end
 
+
 -- A losing resolver option performs no host work. Query admission and the
 -- resolver driver effect occur only if the option commits.
 do
@@ -89,8 +80,9 @@ do
     return base_resolve(self, endpoint, opts)
   end
   fibers.run(function()
-    local winner =
-      fibers.perform(fibers.always('preferred'):or_else(socket.resolve_name_op('unused.test', 80)))
+    local winner = fibers.perform(
+      fibers.always('preferred'):or_else(socket.resolve_name_op('unused.test', 80))
+    )
     assert_eq(winner, 'preferred')
     assert_eq(calls, 0, 'losing resolver option must not call the host')
   end, { host = host })

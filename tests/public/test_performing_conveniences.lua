@@ -217,13 +217,9 @@ do
     assert_truthy(datagram_a:closed())
     assert_truthy(datagram_b:closed())
 
-    local child, child_err = process
-      .command({
-        'manual-child',
-        stdout = 'pipe',
-        stderr = 'pipe',
-      })
-      :start()
+    local child, child_err = process.command({
+      'manual-child', stdout = 'pipe', stderr = 'pipe',
+    }):start()
     assert(child, tostring(child_err))
     assert_twins(child, {
       'launch_succeeded',

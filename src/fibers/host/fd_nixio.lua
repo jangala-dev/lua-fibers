@@ -16,6 +16,8 @@ if not ok_nixio or type(nixio) ~= 'table' then
   return unsupported('nixio module not available')
 end
 
+local NixioError = require('fibers.host.nixio_error')
+
 local Fd = {}
 Fd.__index = Fd
 local next_generation = 0
@@ -24,35 +26,14 @@ local open_objects = setmetatable({}, { __mode = 'k' })
 local EAGAIN = nixio.const and (nixio.const.EAGAIN or nixio.const.EWOULDBLOCK) or 11
 local EWOULDBLOCK = nixio.const and (nixio.const.EWOULDBLOCK or nixio.const.EAGAIN) or EAGAIN
 
-local function norm_msg_eno(a, b)
-  if type(a) == 'number' then
-    return b, a
-  end
-  if type(b) == 'number' then
-    return a, b
-  end
-  return a or b, nil
-end
-
-local function errstr(prefix, msg, eno)
-  if msg and msg ~= '' then
-    return tostring(msg)
-  end
-  if eno then
-    local s = nixio.strerror and nixio.strerror(eno)
-    return tostring(prefix) .. ': ' .. tostring(s or ('errno ' .. tostring(eno)))
-  end
-  return tostring(prefix)
-end
-
 local function set_nonblocking_obj(obj, value)
   if obj and type(obj.setblocking) == 'function' then
     local ok, a, b = obj:setblocking(value == false)
     if ok ~= nil and ok ~= false then
       return true
     end
-    local msg, eno = norm_msg_eno(a, b)
-    return nil, errstr('setblocking failed', msg, eno), eno
+    local msg, eno = NixioError.split(a, b)
+    return nil, NixioError.message('setblocking failed', msg, eno), eno
   end
   return true
 end
@@ -69,15 +50,15 @@ local function fd_read(self, max)
     end
     return data
   end
-  local msg, eno = norm_msg_eno(a, b)
-  eno = eno or (nixio.errno and nixio.errno())
+  local msg, eno = NixioError.split(a, b)
+  eno = eno or NixioError.current_errno()
   if eno == EAGAIN or eno == EWOULDBLOCK then
     return nil, 'would_block', eno
   end
   if not eno or eno == 0 then
     return nil, Errors.EOF
   end
-  return nil, errstr('read failed', msg, eno), eno
+  return nil, NixioError.message('read failed', msg, eno), eno
 end
 
 local function fd_write(self, bytes)
@@ -101,12 +82,12 @@ local function fd_write(self, bytes)
   if n == true then
     return #bytes
   end
-  local msg, eno = norm_msg_eno(a, b)
-  eno = eno or (nixio.errno and nixio.errno())
+  local msg, eno = NixioError.split(a, b)
+  eno = eno or NixioError.current_errno()
   if eno == EAGAIN or eno == EWOULDBLOCK then
     return nil, 'would_block', eno
   end
-  return nil, errstr('write failed', msg, eno), eno
+  return nil, NixioError.message('write failed', msg, eno), eno
 end
 
 local function fd_shutdown_read(self, _reason)
@@ -132,14 +113,12 @@ local function fd_close(self, _reason)
     return true
   end
   self._closed = true
-  if self.obj then
-    open_objects[self.obj] = nil
-  end
+  if self.obj then open_objects[self.obj] = nil end
   if self.obj and type(self.obj.close) == 'function' then
     local ok, a, b = self.obj:close()
     if ok == nil or ok == false then
-      local msg, eno = norm_msg_eno(a, b)
-      return nil, errstr('close failed', msg, eno), eno
+      local msg, eno = NixioError.split(a, b)
+      return nil, NixioError.message('close failed', msg, eno), eno
     end
   end
   return true
@@ -223,11 +202,10 @@ function Fd.new(obj, opts)
   return h
 end
 
+
 function Fd.open_objects()
   local out = {}
-  for obj in pairs(open_objects) do
-    out[#out + 1] = obj
-  end
+  for obj in pairs(open_objects) do out[#out + 1] = obj end
   return out
 end
 

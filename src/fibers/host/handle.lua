@@ -31,9 +31,6 @@ end
 
 local function clear_hint(self, mode)
   mode = normalise_mode(mode)
-  if self._pending_readiness then
-    self._pending_readiness[mode] = false
-  end
   if self.readiness then
     UnsafeExternalMutation.clear(self.readiness, mode)
   end
@@ -45,9 +42,6 @@ end
 
 local function mark_hint(self, mode)
   mode = normalise_mode(mode)
-  if self._pending_readiness then
-    self._pending_readiness[mode] = true
-  end
   if self.readiness then
     UnsafeExternalMutation.deliver(self.readiness, mode, true)
   end
@@ -113,7 +107,6 @@ function Handle.new(opts)
     runtime = nil,
     stream = nil,
     _fibers_host_handle = true,
-    _pending_readiness = { read = false, write = false },
   }, Handle)
   IOAudit.created(handle, { kind = 'host_handle' })
   return handle
@@ -154,18 +147,7 @@ function Handle:bind_runtime(rt)
   self.runtime = rt
   IOAudit.bind(self, rt)
   if not self.feed then
-    local source, feed = rt:readiness(self.key, (self.name or tostring(self.key)) .. ':readiness')
-    self.readiness = source
-    self.feed = feed
-    local pending = self._pending_readiness
-    if pending then
-      if pending.read then
-        UnsafeExternalMutation.deliver(source, 'read', true)
-      end
-      if pending.write then
-        UnsafeExternalMutation.deliver(source, 'write', true)
-      end
-    end
+    self.feed = rt:external_feed(self.readiness)
   end
   return self
 end
@@ -724,7 +706,6 @@ function Handle.duplex(read_handle, write_handle, opts)
     runtime = nil,
     stream = nil,
     _fibers_host_handle = true,
-    _pending_readiness = { read = false, write = false },
   }
   setmetatable(self, Duplex)
   IOAudit.created(self, { kind = 'duplex_host_handle' })

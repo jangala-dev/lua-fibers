@@ -219,12 +219,8 @@ function Task:state_op()
   end, Op.dependencies(cancellation_read))
 end
 
-function Task:await()
-  return perform(self:await_op())
-end
+function Task:await() return perform(self:await_op()) end
 
-function Task:request_cancel(reason)
-  return perform(self:request_cancel_op(reason))
-end
+function Task:request_cancel(reason) return perform(self:request_cancel_op(reason)) end
 
 return Task

@@ -9,44 +9,28 @@ local HostError = require('fibers.host.error')
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 local Provider = {}
+local NixioError = ok_nixio and require('fibers.host.nixio_error') or nil
 
 local EAGAIN = ok_nixio and nixio.const and (nixio.const.EAGAIN or nixio.const.EWOULDBLOCK) or 11
 local EWOULDBLOCK = ok_nixio and nixio.const and (nixio.const.EWOULDBLOCK or nixio.const.EAGAIN) or EAGAIN
 local EMSGSIZE = ok_nixio and nixio.const and nixio.const.EMSGSIZE or 90
 
-local function normalise_error_values(a, b)
-  if type(a) == 'number' then
-    return b, a
-  end
-  if type(b) == 'number' then
-    return a, b
-  end
-  return a or b, ok_nixio and nixio.errno and nixio.errno() or nil
-end
-
 local function error_value(action, a, b, fields)
-  local message, number = normalise_error_values(a, b)
+  local message, number = NixioError.split(a, b)
   if number == EAGAIN or number == EWOULDBLOCK then
     return HostError.would_block('datagram', action, fields)
   end
   if number == EMSGSIZE then
     return HostError.message_too_large('datagram', action, fields)
   end
-  if message == nil and number ~= nil and nixio.strerror then
-    message = nixio.strerror(number)
-  end
-  return HostError.system(
-    'datagram',
-    action,
-    tostring(message or ('errno ' .. tostring(number))),
-    nil,
-    number,
-    fields
-  )
+  return NixioError.system('datagram', action, message, number, fields)
 end
 
 function Provider.is_supported()
-  return ok_nixio and type(nixio) == 'table' and type(nixio.socket) == 'function' and Fd.is_supported()
+  return ok_nixio
+    and type(nixio) == 'table'
+    and type(nixio.socket) == 'function'
+    and Fd.is_supported()
 end
 
 local function nixio_address(address)
@@ -54,12 +38,9 @@ local function nixio_address(address)
     return 'inet', address.host, address.port
   elseif address.kind == 'inet6' then
     if (tonumber(address.scope_id) or 0) ~= 0 or (tonumber(address.flowinfo) or 0) ~= 0 then
-      return nil,
-        nil,
-        nil,
-        HostError.unsupported('datagram', 'ipv6_scope_or_flowinfo', {
-          address = address,
-        })
+      return nil, nil, nil, HostError.unsupported('datagram', 'ipv6_scope_or_flowinfo', {
+        address = address,
+      })
     end
     return 'inet6', address.host, address.port
   end
@@ -69,12 +50,8 @@ end
 local function address_value(kind, host, port)
   if kind == 'inet6' then
     return {
-      kind = 'inet6',
-      family = 'inet6',
-      host = host,
-      port = tonumber(port) or 0,
-      flowinfo = 0,
-      scope_id = 0,
+      kind = 'inet6', family = 'inet6', host = host, port = tonumber(port) or 0,
+      flowinfo = 0, scope_id = 0,
     }
   end
   return { kind = 'inet4', family = 'inet4', host = host, port = tonumber(port) or 0 }
@@ -161,11 +138,10 @@ function Provider.create_datagram(host, address, opts)
       return nil, target_err
     end
     if target_family ~= family then
-      return nil,
-        HostError.protocol('datagram', 'send_to', 'source and destination address families differ', {
-          source = self.address,
-          destination = destination,
-        })
+      return nil, HostError.protocol('datagram', 'send_to', 'source and destination address families differ', {
+        source = self.address,
+        destination = destination,
+      })
     end
     local n, send_a, send_b = self.obj:sendto(data, target_host, target_port, 0, #data)
     if n == nil or n == false then

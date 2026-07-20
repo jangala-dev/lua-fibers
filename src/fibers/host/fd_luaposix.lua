@@ -32,6 +32,8 @@ if not bit then
   return unsupported(bit_error)
 end
 
+local PosixError = require('fibers.host.luaposix_error')
+
 local Fd = {}
 Fd.__index = Fd
 local next_generation = 0
@@ -39,29 +41,20 @@ local next_generation = 0
 local EAGAIN = errno.EAGAIN
 local EWOULDBLOCK = errno.EWOULDBLOCK or EAGAIN
 
-local function errno_msg(prefix, err, eno)
-  if err and err ~= '' then
-    return err
-  end
-  if eno then
-    return tostring(prefix) .. ' (errno ' .. tostring(eno) .. ')'
-  end
-  return tostring(prefix)
-end
-
 local function set_nonblocking_fd(fd, value)
   local flags, err, eno = fcntl.fcntl(fd, fcntl.F_GETFL)
   if flags == nil then
-    return nil, errno_msg('fcntl(F_GETFL)', err, eno), eno
+    return nil, PosixError.message('fcntl(F_GETFL)', err, eno), eno
   end
   local on = fcntl.O_NONBLOCK or 0
   local new_flags = value ~= false and bit.bor(flags, on) or bit.band(flags, bit.bnot(on))
   local ok, err2, eno2 = fcntl.fcntl(fd, fcntl.F_SETFL, new_flags)
   if ok == nil then
-    return nil, errno_msg('fcntl(F_SETFL)', err2, eno2), eno2
+    return nil, PosixError.message('fcntl(F_SETFL)', err2, eno2), eno2
   end
   return true
 end
+
 
 local function set_cloexec_fd(fd, value)
   if fcntl.F_GETFD == nil or fcntl.F_SETFD == nil or fcntl.FD_CLOEXEC == nil then
@@ -69,13 +62,13 @@ local function set_cloexec_fd(fd, value)
   end
   local flags, err, eno = fcntl.fcntl(fd, fcntl.F_GETFD)
   if flags == nil then
-    return nil, errno_msg('fcntl(F_GETFD)', err, eno), eno
+    return nil, PosixError.message('fcntl(F_GETFD)', err, eno), eno
   end
   local new_flags = value ~= false and bit.bor(flags, fcntl.FD_CLOEXEC)
     or bit.band(flags, bit.bnot(fcntl.FD_CLOEXEC))
   local ok, err2, eno2 = fcntl.fcntl(fd, fcntl.F_SETFD, new_flags)
   if ok == nil then
-    return nil, errno_msg('fcntl(F_SETFD)', err2, eno2), eno2
+    return nil, PosixError.message('fcntl(F_SETFD)', err2, eno2), eno2
   end
   return true
 end
@@ -90,7 +83,7 @@ local function fd_read(self, max)
     if eno == EAGAIN or eno == EWOULDBLOCK then
       return nil, 'would_block', eno
     end
-    return nil, errno_msg('read failed', err, eno), eno
+    return nil, PosixError.message('read failed', err, eno), eno
   end
   if s == '' then
     return nil, Errors.EOF
@@ -110,7 +103,7 @@ local function fd_write(self, bytes)
     if eno == EAGAIN or eno == EWOULDBLOCK then
       return nil, 'would_block', eno
     end
-    return nil, errno_msg('write failed', err, eno), eno
+    return nil, PosixError.message('write failed', err, eno), eno
   end
   return n
 end
@@ -140,7 +133,7 @@ local function fd_close(self, _reason)
   self._closed = true
   local ok, err, eno = unistd.close(self.fd)
   if ok == nil then
-    return nil, errno_msg('close failed', err, eno), eno
+    return nil, PosixError.message('close failed', err, eno), eno
   end
   return true
 end
@@ -209,11 +202,12 @@ function Fd.new(fd, opts)
   return h
 end
 
+
 function Fd.pipe(opts)
   opts = opts or {}
   local rd, wr, err, eno = unistd.pipe()
   if not rd then
-    return nil, nil, HostError.system('pipe', 'create', errno_msg('pipe failed', err, eno), nil, eno), eno
+    return nil, nil, HostError.system('pipe', 'create', PosixError.message('pipe failed', err, eno), nil, eno), eno
   end
   local r, rerr = Fd.new(rd, {
     host = opts.host,

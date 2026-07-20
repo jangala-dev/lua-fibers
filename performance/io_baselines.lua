@@ -216,15 +216,13 @@ for _, case in ipairs(cases) do
       elapsed[#elapsed + 1] = math.max(finished - started, 1e-9)
     end
     local seconds = median(elapsed)
-    print(
-      string.format(
-        '%-28s %12.0f %-13s %10.3f ms %12.0f/s',
-        case.name,
-        units,
-        case.units,
-        seconds * 1000,
-        units / seconds
-      )
-    )
+    print(string.format(
+      '%-28s %12.0f %-13s %10.3f ms %12.0f/s',
+      case.name,
+      units,
+      case.units,
+      seconds * 1000,
+      units / seconds
+    ))
   end
 end

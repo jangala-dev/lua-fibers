@@ -99,16 +99,14 @@ do
     function()
       listener, err = fibers.perform(socket.listen_inet_op('127.0.0.1', 0))
     end,
-    {
-      host = Host.pure({
-        now = function()
-          return 0
-        end,
-        sleep = function()
-          return true
-        end,
-      }),
-    }
+    { host = Host.pure({
+      now = function()
+        return 0
+      end,
+      sleep = function()
+        return true
+      end,
+    }) }
   )
   assert_eq(listener, nil)
   assert_truthy(HostError.is_unsupported(err, 'listen'))

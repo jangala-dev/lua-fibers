@@ -232,8 +232,6 @@ end
 
 File.Error = HostError
 
-function File.pipe(opts)
-  return perform(File.pipe_op(opts))
-end
+function File.pipe(opts) return perform(File.pipe_op(opts)) end
 
 return File

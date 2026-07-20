@@ -1,14 +1,7 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './reference/?.lua', './reference/?/init.lua', './reference/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Host = require('fibers.host')
@@ -17,10 +10,7 @@ local Contract = require('tests.support.socket_provider_contract')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -49,12 +39,10 @@ end
 do
   local host = Host.manual({ sockets = true, pipes = true })
   Contract.exercise('manual-ipv4', host, socket.ipv4_address('127.0.0.1', 0), {
-    require_client_local = true,
-    local_address = socket.ipv4_address('127.0.0.1', 0),
+    require_client_local = true, local_address = socket.ipv4_address('127.0.0.1', 0),
   })
   Contract.exercise('manual-ipv6', host, socket.ipv6_address('::1', 0), {
-    require_client_local = true,
-    local_address = socket.ipv6_address('::1', 0),
+    require_client_local = true, local_address = socket.ipv6_address('::1', 0),
   })
   Contract.exercise('manual-unix', host, socket.unix_address('/manual/provider-matrix'))
   Contract.close_host(host)
@@ -99,15 +87,13 @@ for _, spec in ipairs({
     else
       if host.capabilities.socket_ipv4 then
         Contract.exercise(spec.name .. '-ipv4', host, socket.ipv4_address('127.0.0.1', 0), {
-          require_client_local = true,
-          local_address = socket.ipv4_address('127.0.0.1', 0),
+          require_client_local = true, local_address = socket.ipv4_address('127.0.0.1', 0),
           watchdog_seconds = 10,
         })
       end
       if host.capabilities.socket_ipv6 then
         Contract.exercise(spec.name .. '-ipv6', host, socket.ipv6_address('::1', 0), {
-          require_client_local = true,
-          local_address = socket.ipv6_address('::1', 0),
+          require_client_local = true, local_address = socket.ipv6_address('::1', 0),
           watchdog_seconds = 10,
         })
       end

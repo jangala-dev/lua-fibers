@@ -186,13 +186,10 @@ function Lifecycle.define(spec)
       if state.error ~= nil then
         return Op.always(nil, state.error)
       end
-      return Op.always(
-        nil,
-        HostError.closed(spec.error_domain, spec.start_action, {
-          reason = state.reason or spec.closed_reason,
-          address = state.address,
-        })
-      )
+      return Op.always(nil, HostError.closed(spec.error_domain, spec.start_action, {
+        reason = state.reason or spec.closed_reason,
+        address = state.address,
+      }))
     end, { writable = true })
   end
 

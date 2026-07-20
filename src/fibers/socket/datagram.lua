@@ -31,24 +31,26 @@ local function close_handle(value, reason)
 end
 
 local function terminal_error(state, action)
-  return state.error
-    or HostError.closed('datagram', action, {
-      reason = state.reason or 'datagram socket closed',
-      address = state.address,
-    })
+  return state.error or HostError.closed('datagram', action, {
+    reason = state.reason or 'datagram socket closed',
+    address = state.address,
+  })
 end
 
 local function datagram_settlement(socket)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return socket:close_op(reason or 'scope settlement')
-  end, function()
-    return socket:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'datagram settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+  return Settlement.request_then_wait(
+    function(_ctx, _record, reason)
+      return socket:close_op(reason or 'scope settlement')
+    end,
+    function()
+      return socket:closed_op():and_then(function(ok, err)
+        if not ok then
+          error(err or 'datagram settlement failed', 0)
+        end
+        return Op.always(true)
+      end)
+    end
+  )
 end
 
 function Datagram:owned(children)
@@ -85,14 +87,11 @@ function Datagram:send_to_op(data, address)
   end
   local local_address = self:local_address()
   if local_address and local_address.kind ~= address.kind then
-    return Op.always(
-      nil,
-      HostError.invalid_argument('datagram', 'send_to', {
-        message = 'datagram source and destination address families differ',
-        source = local_address,
-        destination = address,
-      })
-    )
+    return Op.always(nil, HostError.invalid_argument('datagram', 'send_to', {
+      message = 'datagram source and destination address families differ',
+      source = local_address,
+      destination = address,
+    }))
   end
   local send = self.lifecycle:available_op():and_then(function()
     return self.sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
@@ -146,32 +145,29 @@ function Datagram:close_op(reason)
   local socket = self
   reason = reason or 'datagram socket closed'
   local cancel = socket.driver and socket.driver:request_cancel_op(reason) or Op.always(true)
-  return socket.lifecycle
-    :request_stop_op(reason)
-    :and_then(function(first, state)
-      if first and socket.driver then
-        return cancel:map(function()
-          return first, state
-        end)
-      end
-      return Op.always(first, state)
-    end, cancel)
-    :wrap(function(first, state)
-      if first and state.handle then
-        local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
-          domain = 'datagram',
-          action = 'close',
-          address = state.address,
-        })
-        if not ok then
-          local rt = Runtime.current()
-          if rt then
-            IO.masked_perform(rt, socket.lifecycle:record_close_error_op(close_err))
-          end
+  return socket.lifecycle:request_stop_op(reason):and_then(function(first, state)
+    if first and socket.driver then
+      return cancel:map(function()
+        return first, state
+      end)
+    end
+    return Op.always(first, state)
+  end, cancel):wrap(function(first, state)
+    if first and state.handle then
+      local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
+        domain = 'datagram',
+        action = 'close',
+        address = state.address,
+      })
+      if not ok then
+        local rt = Runtime.current()
+        if rt then
+          IO.masked_perform(rt, socket.lifecycle:record_close_error_op(close_err))
         end
       end
-      return true
-    end)
+    end
+    return true
+  end)
 end
 
 local function close_result(state)
@@ -195,11 +191,10 @@ end
 
 local function close_from_driver(socket, rt, reason, err, fatal)
   local first, state = IO.masked_perform(rt, socket.lifecycle:request_stop_op(reason, err, fatal))
-  local pending_error = err
-    or HostError.closed('datagram', 'send_to', {
-      reason = reason,
-      address = socket:local_address(),
-    })
+  local pending_error = err or HostError.closed('datagram', 'send_to', {
+    reason = reason,
+    address = socket:local_address(),
+  })
   IO.masked_perform(rt, socket.sends:close_op(pending_error))
   if first and state.handle then
     local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
@@ -221,10 +216,9 @@ local function normalise_packet(socket, packet)
   if packet.peer ~= nil then
     local ok, peer = pcall(Address.validate, packet.peer, 'received datagram peer')
     if not ok then
-      return nil,
-        HostError.protocol('datagram', 'receive_from', 'host returned an invalid peer address', {
-          cause = peer,
-        })
+      return nil, HostError.protocol('datagram', 'receive_from', 'host returned an invalid peer address', {
+        cause = peer,
+      })
     end
     packet.peer = peer
   end
@@ -250,14 +244,11 @@ local function service_receive(socket, handle)
   if HostError.is(err, 'closed') then
     return false, false
   end
-  error(
-    HostError.normalise(err, {
-      domain = 'datagram',
-      action = 'receive_from',
-      address = socket:local_address(),
-    }),
-    0
-  )
+  error(HostError.normalise(err, {
+    domain = 'datagram',
+    action = 'receive_from',
+    address = socket:local_address(),
+  }), 0)
 end
 
 local function service_send(socket, handle, record)
@@ -440,35 +431,24 @@ function Module.udp_op(address, opts)
       local activated = IO.masked_perform(rt, socket.lifecycle:activate_op(handle, local_address or address))
       if not activated then
         close_handle(handle, 'datagram lifecycle no longer accepts activation')
-        return nil,
-          HostError.closed('datagram', 'open', {
-            reason = 'datagram closed before activation',
-            address = address,
-          })
+        return nil, HostError.closed('datagram', 'open', {
+          reason = 'datagram closed before activation',
+          address = address,
+        })
       end
       return socket
     end)
 end
 
-function Datagram:send_to(data, address)
-  return perform(self:send_to_op(data, address))
-end
+function Datagram:send_to(data, address) return perform(self:send_to_op(data, address)) end
 
-function Datagram:receive_from(opts)
-  return perform(self:receive_from_op(opts))
-end
+function Datagram:receive_from(opts) return perform(self:receive_from_op(opts)) end
 
-function Datagram:flush()
-  return perform(self:flush_op())
-end
+function Datagram:flush() return perform(self:flush_op()) end
 
-function Datagram:close(reason)
-  return perform(self:close_op(reason))
-end
+function Datagram:close(reason) return perform(self:close_op(reason)) end
 
-function Datagram:closed()
-  return perform(self:closed_op())
-end
+function Datagram:closed() return perform(self:closed_op()) end
 
 Module.DatagramSocket = Datagram
 return Module
