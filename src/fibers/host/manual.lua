@@ -8,9 +8,125 @@
 local Host = require('fibers.host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
+local Completion = require('fibers.internal.completion')
+local IOAudit = require('fibers.internal.io_audit')
+local perform = require('fibers.perform')
+local Protected = require('fibers.internal.protected')
 
 local Manual = {}
 Manual.__index = Manual
+
+local ManualProcess = {}
+ManualProcess.__index = ManualProcess
+
+local function close_if_present(value, reason)
+  if value and type(value.close) == 'function' then
+    return value:close(reason)
+  end
+  return true
+end
+
+function ManualProcess:bind_runtime(rt)
+  self.runtime = rt
+  IOAudit.bind(self, rt)
+  for _, handle in pairs(self.child_endpoints or {}) do
+    if handle and type(handle.bind_runtime) == 'function' then
+      handle:bind_runtime(rt)
+    end
+  end
+  return self
+end
+
+function ManualProcess:pid()
+  return self._pid
+end
+
+function ManualProcess:wait_op()
+  return self.exit_completion:terminal_op()
+end
+
+function ManualProcess:reap()
+  local terminal = self.exit_completion:state_value()
+  if terminal.kind ~= 'succeeded' then
+    return nil, HostError.would_block('process', 'reap', { pid = self._pid })
+  end
+  if not self.reaped then
+    local values = terminal.values
+    self.status = values and values[1] or terminal.value
+    self.reaped = true
+  end
+  return self.status
+end
+
+function ManualProcess:complete_op(status)
+  status = status or { kind = 'exited', code = 0, success = true }
+  return self.exit_completion:publish_success_op(status):wrap(function(ok, err)
+    if not ok then
+      return nil, err
+    end
+    close_if_present(self.child_endpoints.stdin, 'manual process exit')
+    if self.child_endpoints.stderr and self.child_endpoints.stderr ~= self.child_endpoints.stdout then
+      close_if_present(self.child_endpoints.stderr, 'manual process exit')
+    end
+    close_if_present(self.child_endpoints.stdout, 'manual process exit')
+    return true
+  end)
+end
+
+function ManualProcess:complete(status)
+  return perform(self:complete_op(status))
+end
+
+function ManualProcess:signal(signal, target)
+  if self.reaped then
+    return nil, HostError.closed('process', 'signal', { pid = self._pid, signal = signal })
+  end
+  self.signals[#self.signals + 1] = { signal = signal, target = target }
+  if self.on_signal then
+    return self.on_signal(self, signal, target)
+  end
+  if signal == 'kill' or signal == 9 then
+    self:complete({ kind = 'signalled', signal = 9, signal_name = 'KILL', success = false })
+  elseif signal == 'term' or signal == 15 then
+    self:complete({ kind = 'signalled', signal = 15, signal_name = 'TERM', success = false })
+  end
+  return true
+end
+
+function ManualProcess:start()
+  if self.started then
+    return true
+  end
+  self.started = true
+  if self.on_start then
+    -- Host test and embedding hooks may perform Fibers work. Native pcall is
+    -- not yieldable on Lua 5.1, so use the runtime's coroutine-backed boundary.
+    local ok, err = Protected.pcall(self.on_start, self, self.child_endpoints, self.spec)
+    if not ok then
+      self:complete({ kind = 'exited', code = 127, success = false })
+      return nil, HostError.protocol('process', 'manual_start', tostring(err), { pid = self._pid })
+    end
+  end
+  return true
+end
+
+function ManualProcess:close(reason)
+  if self.closed then
+    IOAudit.closing(self, reason)
+    IOAudit.closed(self, true, nil, reason)
+    return true
+  end
+  self.closed = true
+  IOAudit.closing(self, reason)
+  for _, handle in pairs(self.child_endpoints or {}) do
+    close_if_present(handle, reason or 'manual process closed')
+  end
+  if self.host and self.host.processes then
+    self.host.processes[self._pid] = nil
+  end
+  IOAudit.closed(self, true, nil, reason)
+  return true
+end
 
 local function normalise_mode(mode)
   mode = mode or 'read'
@@ -47,6 +163,12 @@ function Manual.new(opts)
     next_ephemeral_port = opts.first_ephemeral_port or 40000,
     resolver_records = opts.resolver_records or opts.dns or {},
     enable_resolver = opts.resolver ~= false,
+    process_factory = opts.process_factory,
+    on_process_start = opts.on_process_start,
+    on_process_signal = opts.on_process_signal,
+    enable_processes = opts.processes == true or opts.exec == true or opts.process_factory ~= nil,
+    processes = {},
+    next_pid = opts.first_pid or 1000,
   }, Manual)
 
   self.now = function(_rt)
@@ -65,6 +187,7 @@ function Manual.new(opts)
     datagram_truncation = self.enable_datagrams,
     resolver = self.enable_resolver,
     resolver_blocking = false,
+    process = self.enable_processes,
   }
   return self
 end
@@ -123,6 +246,69 @@ local function connection_pair(host, name)
     name = name .. ':server',
   })
   return client, server
+end
+
+function Manual:start_process(spec)
+  spec = spec or {}
+  if self.process_factory then
+    return self.process_factory(self, spec)
+  end
+  if not self.enable_processes then
+    return nil, nil, HostError.unsupported('host', 'process', { host = self.name })
+  end
+
+  local pid = self.next_pid
+  self.next_pid = self.next_pid + 1
+  local endpoints = {}
+  local child = {}
+  local name = spec.name or ('manual-process-' .. tostring(pid))
+
+  if spec.stdin == 'pipe' then
+    local child_read, parent_write = Handle.pipe_pair({ host = self, name = name .. ':stdin' })
+    child.stdin, endpoints.stdin = child_read, parent_write
+  end
+  if spec.stdout == 'pipe' then
+    local parent_read, child_write = Handle.pipe_pair({ host = self, name = name .. ':stdout' })
+    endpoints.stdout, child.stdout = parent_read, child_write
+  end
+  if spec.stderr == 'pipe' then
+    local parent_read, child_write = Handle.pipe_pair({ host = self, name = name .. ':stderr' })
+    endpoints.stderr, child.stderr = parent_read, child_write
+  elseif spec.stderr == 'stdout' then
+    child.stderr = child.stdout
+  end
+
+  local proc = setmetatable({
+    name = name,
+    _pid = pid,
+    spec = spec,
+    host = self,
+    exit_completion = Completion.new(name .. ':exit'),
+    child_endpoints = child,
+    signals = {},
+    status = nil,
+    reaped = false,
+    started = false,
+    closed = false,
+    on_start = spec.on_start or self.on_process_start,
+    on_signal = spec.on_signal or self.on_process_signal,
+  }, ManualProcess)
+  IOAudit.created(proc, { kind = 'process_handle' })
+  for _, handle in pairs(child) do
+    if handle then
+      IOAudit.transfer(handle, proc, { kind = 'host_handle', role = 'child_stdio' })
+    end
+  end
+  self.processes[pid] = proc
+  return proc, endpoints
+end
+
+function Manual:complete_process(pid_or_process, status)
+  local proc = type(pid_or_process) == 'table' and pid_or_process or self.processes[pid_or_process]
+  if not proc then
+    return nil, HostError.invalid_argument('process', 'complete', { pid = pid_or_process })
+  end
+  return proc:complete(status)
 end
 
 function Manual:create_datagram(address, opts)

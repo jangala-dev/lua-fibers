@@ -78,6 +78,14 @@ function Common.new(opts)
     tonumber_c = tonumber_c,
   })
   local resolver_supported = opts.resolver_enabled ~= false and resolver_provider.is_supported()
+  local process_provider = require('fibers.host._process_ffi_common').new({
+    ffi = ffi,
+    C = C,
+    fd = fd_provider,
+    tonumber_c = tonumber_c,
+    error_prefix = prefix .. '.process',
+  })
+  local process_supported = process_provider.is_supported()
 
   local ok_cdef, cdef_err = pcall(function()
     ffi.cdef([[
@@ -438,6 +446,7 @@ function Common.new(opts)
         datagram_truncation = socket_provider.is_supported(),
         resolver = resolver_supported,
         resolver_blocking = resolver_supported,
+        process = process_supported,
       },
     }, Linux)
     self.now = function(_rt)
@@ -464,6 +473,13 @@ function Common.new(opts)
 
   function Linux:create_datagram(address, datagram_opts)
     return socket_provider.create_datagram(self, address, datagram_opts)
+  end
+
+  function Linux:start_process(spec)
+    if not process_supported then
+      return nil, nil, HostError.unsupported('host', 'process', { host = self.name })
+    end
+    return process_provider.start_process(self, spec)
   end
 
   function Linux:resolve(endpoint, resolve_opts)

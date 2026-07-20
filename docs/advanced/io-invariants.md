@@ -1,7 +1,7 @@
 # External-resource invariants
 
 This document specifies the trusted substrate shared by pipes, Streams, stream
-sockets, datagrams and future process and file facilities.
+sockets, datagrams, processes and future regular-file facilities.
 
 ## Host actions occur after commitment
 
@@ -76,6 +76,52 @@ retire queued work immediately.
 A peer read shutdown is error-ready for a writer: the next authoritative write
 must run and report `broken_pipe`, rather than waiting forever for successful
 writability.
+
+## Process ownership and reaping
+
+A Process is an owned external-resource tree:
+
+```text
+Process
+├── host process handle
+├── supervisor task
+├── launch adoption bundle
+├── generated standard Streams
+├── optional Stream bridge tasks
+└── cached terminal status
+```
+
+Process creation uses an exec-error handshake. A successful fork is not a
+successful `Command:start`; the child must complete working-directory,
+environment, session, process-group, descriptor and exec setup. Every failure
+path closes partial pipes and reaps the failed child before returning.
+
+The supervisor is the single authority for signal delivery, exit observation
+and reaping. These invariants apply:
+
+- every child handle is adopted before the acquiring driver may yield;
+- a returned Process has exactly one reap authority;
+- `result_op` becomes ready only after exactly-once reaping;
+- repeated result observations return the same tagged status;
+- scope settlement cannot finish successfully while it owns an unreaped child;
+- generated pipe Streams remain beneath the Process driver scope;
+- supplied Streams are borrowed and bridged rather than silently taken;
+- `closed_op` proves settlement of the host handle, Streams, bridges and driver.
+
+Native providers should use a stable process identity, such as a pidfd, where
+available. A fallback provider must serialise signal and reap decisions so a
+reused numeric PID cannot be targeted after the owned child has terminated.
+
+`communicate` is deliberately a direct post-commit procedure. External input
+must be delivered before child exit can be observed, so it cannot truthfully be
+represented as one speculative all-or-nothing option. Capture readers run
+concurrently, and a capture error requests Process closure before returning.
+
+`Command:launch_op` is different: a guard constructs a fresh Process during the
+current synchronisation attempt, while a committed supervisor-spawn effect
+performs the irreversible launch afterwards. The option means that ownership of
+a launch attempt has committed; `Process:launch_result_op` observes the later
+exec handshake.
 
 ## Runtime inspection
 

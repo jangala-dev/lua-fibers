@@ -17,6 +17,7 @@ local channel = require('fibers.channel')
 local file = require('fibers.file')
 local mailbox = require('fibers.mailbox')
 local Pulse = require('fibers.pulse')
+local process = require('fibers.process')
 local Scalar = require('fibers.scalar')
 local socket = require('fibers.socket')
 local Stream = require('fibers.stream')
@@ -95,6 +96,8 @@ do
     'closed',
   }, 'stream')
   assert_twins(file, { 'pipe' }, 'file')
+  assert_twins(process.command('true'), { 'launch' }, 'command')
+  assert_eq(process.command('true').start_op, nil, 'command:start is deliberately procedural')
   assert_twins(socket, {
     'listen',
     'listen_inet',
@@ -145,7 +148,18 @@ end
 
 -- Direct methods are exact performing conveniences over their _op forms.
 do
-  local host = Host.manual({ pipes = true, sockets = true, datagrams = true, auto_advance_time = true })
+  local host = Host.manual({
+    pipes = true,
+    sockets = true,
+    datagrams = true,
+    processes = true,
+    auto_advance_time = true,
+    on_process_start = function(proc)
+      fibers.spawn(function()
+        proc:complete({ kind = 'exited', code = 0, success = true })
+      end, 'direct-process-child')
+    end,
+  })
   fibers.run(function()
     local inbox = channel.new()
     local sender = fibers.spawn(function()
@@ -201,6 +215,34 @@ do
     datagram_b:close('done')
     assert_truthy(datagram_a:closed())
     assert_truthy(datagram_b:closed())
+
+    local child, child_err = process
+      .command({
+        'manual-child',
+        stdout = 'pipe',
+        stderr = 'pipe',
+      })
+      :start()
+    assert(child, tostring(child_err))
+    assert_twins(child, {
+      'launch_succeeded',
+      'launch_failed',
+      'launch_result',
+      'result',
+      'request_signal',
+      'request_terminate',
+      'request_kill',
+      'request_close',
+      'closed',
+      'inspect',
+    }, 'process')
+    assert_eq(child.communicate_op, nil, 'communicate is deliberately procedural')
+    assert_eq(child.close_op, nil, 'close is deliberately request plus wait')
+    assert_eq(child.signal_op, nil, 'host signalling is named as a request')
+    local captured = assert(child:communicate({ stdout_limit = 16, stderr_limit = 16 }))
+    assert_eq(captured.status.code, 0)
+    assert_truthy(child:close())
+    assert_truthy(child:closed())
 
     -- Explicit option composition remains the same underlying language.
     local timed = fibers.perform(fibers.choice(

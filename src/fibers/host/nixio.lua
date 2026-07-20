@@ -167,6 +167,7 @@ function Nixio.new(opts)
     datagram_truncation = false,
     resolver = false,
     resolver_blocking = false,
+    process = false,
   }
   return self
 end

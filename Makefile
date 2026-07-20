@@ -141,6 +141,9 @@ check-layout:
 	@test -f src/fibers/internal/io_audit.lua
 	@test -f src/fibers/file.lua
 	@test -f src/fibers/socket.lua
+	@test -f src/fibers/process.lua
+	@test -f src/fibers/internal/process/lifecycle.lua
+	@test -f src/fibers/host/_process_ffi_common.lua
 	@test -f src/fibers/socket/address.lua
 	@test -f src/fibers/socket/listener.lua
 	@test -f src/fibers/socket/dial.lua
@@ -150,6 +153,8 @@ check-layout:
 	@test -f tests/internal/test_io_audit.lua
 	@test -f tests/io/test_socket_provider_matrix.lua
 	@test -f tests/io/test_socket_failure_matrix.lua
+	@test -f tests/io/test_process.lua
+	@test -f tests/native/test_process_native.lua
 	@test -f tests/support/socket_provider_contract.lua
 	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
 	@test -f src/fibers/internal/socket/datagram_send_state.lua
@@ -178,6 +183,7 @@ check-layout:
 	@test -f examples/tutorial/10_direct_methods.lua
 	@test -f examples/tutorial/11_resolver.lua
 	@test -f examples/tutorial/12_datagram.lua
+	@test -f examples/tutorial/13_process.lua
 	@test -f tests/io/test_socket_conformance.lua
 	@test -f tests/io/test_resolver.lua
 	@test -f tests/io/test_datagram.lua

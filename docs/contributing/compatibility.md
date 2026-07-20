@@ -81,6 +81,7 @@ monotonic time and epoll readiness
 non-blocking numeric file descriptors and anonymous pipes
 non-blocking IPv4, IPv6 and Unix stream sockets
 message-oriented IPv4 and IPv6 datagram sockets
+fork/exec child processes with piped standard streams and exactly-once reaping
 ```
 
 Verified LuaJIT/cffi providers may additionally expose blocking `getaddrinfo`

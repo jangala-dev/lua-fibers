@@ -1,0 +1,1097 @@
+-- Structured child-process facility.
+--
+-- Command is an immutable specification. launch_op selects and admits a fresh
+-- Process at synchronisation time; its committed driver performs the irreversible
+-- host launch afterwards. start is the direct launch-plus-handshake convenience.
+-- Process observations remain ordinary options, and close settles the complete
+-- owned resource tree.
+
+local Op = require('fibers.op')
+local Runtime = require('fibers.runtime')
+local Scalar = require('fibers.scalar')
+local Stream = require('fibers.stream')
+local HostError = require('fibers.host.error')
+local FlowErrors = require('fibers.flow.errors')
+local Adoption = require('fibers.internal.adoption')
+local Completion = require('fibers.internal.completion')
+local Lifecycle = require('fibers.internal.process.lifecycle')
+local IO = require('fibers.internal.io')
+local IOAudit = require('fibers.internal.io_audit')
+local Ownership = require('fibers.internal.ownership')
+local Owned = require('fibers.lifetime.region').Owned
+local Settlement = require('fibers.internal.settlement')
+local Protected = require('fibers.internal.protected')
+local Sleep = require('fibers.sleep')
+local Exit = require('fibers.lifetime.exit')
+local perform = require('fibers.perform')
+
+local Module = {}
+local Command = {}
+local Process = {}
+Command.__index = Command
+Process.__index = Process
+
+local next_process = 0
+local function copy_table(value)
+  local out = {}
+  for key, item in pairs(value or {}) do
+    out[key] = item
+  end
+  return out
+end
+
+local function copy_list(value)
+  local out = {}
+  for i = 1, #(value or {}) do
+    out[i] = value[i]
+  end
+  return out
+end
+
+local function copy_spec(spec)
+  local out = copy_table(spec)
+  out.argv = copy_list(spec.argv)
+  out.env = copy_table(spec.env)
+  out.unset_env = copy_list(spec.unset_env)
+  out.shutdown = copy_table(spec.shutdown)
+  out.pass_fds = copy_list(spec.pass_fds)
+  return out
+end
+
+local function command_value(spec)
+  return setmetatable({ _spec = copy_spec(spec) }, Command)
+end
+
+local function is_stream(value)
+  return type(value) == 'table'
+    and (type(value.read_some_op) == 'function' or type(value.write_op) == 'function')
+end
+
+local function normalise_stdio(value, which)
+  if value == nil then
+    return 'inherit'
+  end
+  if is_stream(value) or (type(value) == 'table' and value._fibers_process_redirect) then
+    return value
+  end
+  if value == 'inherit' or value == 'null' or value == 'pipe' then
+    return value
+  end
+  if which == 'stderr' and value == 'stdout' then
+    return value
+  end
+  local extra = which == 'stderr' and ", 'stdout'" or ''
+  error(which .. " must be 'inherit', 'null', 'pipe'" .. extra .. ' or a Stream', 3)
+end
+
+local function normalise_shutdown(value)
+  value = copy_table(value)
+  if value.grace == nil then
+    value.grace = 1.0
+  end
+  if type(value.grace) ~= 'number' or value.grace < 0 then
+    error('shutdown.grace must be a non-negative number', 3)
+  end
+  value.signal = value.signal or 'term'
+  value.kill_signal = value.kill_signal or 'kill'
+  value.target = value.target or 'process'
+  if value.target ~= 'process' and value.target ~= 'group' then
+    error("shutdown.target must be 'process' or 'group'", 3)
+  end
+  return value
+end
+
+local function parse_command(...)
+  local n = select('#', ...)
+  if n == 1 and type((...)) == 'table' then
+    local input = (...)
+    local spec = copy_table(input)
+    local argv = input.argv and copy_list(input.argv) or {}
+    if #argv == 0 then
+      for i = 1, #input do
+        argv[i] = input[i]
+      end
+    end
+    if #argv == 0 then
+      error('process.command expects a non-empty argv', 3)
+    end
+    spec.argv = argv
+    spec.stdin = normalise_stdio(spec.stdin, 'stdin')
+    spec.stdout = normalise_stdio(spec.stdout, 'stdout')
+    spec.stderr = normalise_stdio(spec.stderr, 'stderr')
+    spec.env_mode = spec.env_mode or 'extend'
+    if spec.env_mode ~= 'extend' and spec.env_mode ~= 'replace' then
+      error("env_mode must be 'extend' or 'replace'", 3)
+    end
+    spec.env = copy_table(spec.env)
+    spec.unset_env = copy_list(spec.unset_env)
+    spec.shutdown = normalise_shutdown(spec.shutdown)
+    spec.close_fds = spec.close_fds ~= false
+    return spec
+  end
+  if n == 0 then
+    error('process.command expects argv', 3)
+  end
+  local argv = {}
+  for i = 1, n do
+    local value = select(i, ...)
+    if type(value) ~= 'string' then
+      error('process.command varargs must be strings', 3)
+    end
+    argv[i] = value
+  end
+  return parse_command({ argv = argv })
+end
+
+function Module.command(...)
+  return command_value(parse_command(...))
+end
+
+function Module.shell(script, opts)
+  if type(script) ~= 'string' then
+    error('process.shell expects a command string', 2)
+  end
+  opts = copy_table(opts)
+  local shell = opts.shell or '/bin/sh'
+  opts.shell = nil
+  local spec = copy_table(opts)
+  spec.argv = { shell, '-c', script }
+  return command_value(parse_command(spec))
+end
+
+function Module.redirect(stream, opts)
+  if not is_stream(stream) then
+    error('process.redirect expects a Stream', 2)
+  end
+  opts = copy_table(opts)
+  return {
+    _fibers_process_redirect = true,
+    stream = stream,
+    close = opts.close == true,
+    flush = opts.flush ~= false,
+  }
+end
+
+local function redirect_stream(value)
+  if type(value) == 'table' and value._fibers_process_redirect then
+    return value.stream, value
+  end
+  if is_stream(value) then
+    return value, { stream = value, close = false, flush = true }
+  end
+  return nil, nil
+end
+
+function Command:spec()
+  return copy_spec(self._spec)
+end
+
+function Command:argv()
+  return copy_list(self._spec.argv)
+end
+
+local function with_field(self, key, value)
+  local spec = copy_spec(self._spec)
+  spec[key] = value
+  return command_value(spec)
+end
+
+function Command:with_cwd(path)
+  if path ~= nil and type(path) ~= 'string' then
+    error('with_cwd expects a path string or nil', 2)
+  end
+  return with_field(self, 'cwd', path)
+end
+
+function Command:with_env(values, opts)
+  opts = opts or {}
+  local spec = copy_spec(self._spec)
+  spec.env = copy_table(values)
+  spec.env_mode = opts.mode or spec.env_mode or 'extend'
+  spec.unset_env = copy_list(opts.unset or spec.unset_env)
+  if spec.env_mode ~= 'extend' and spec.env_mode ~= 'replace' then
+    error("environment mode must be 'extend' or 'replace'", 2)
+  end
+  return command_value(spec)
+end
+
+function Command:with_stdin(value)
+  return with_field(self, 'stdin', normalise_stdio(value, 'stdin'))
+end
+function Command:with_stdout(value)
+  return with_field(self, 'stdout', normalise_stdio(value, 'stdout'))
+end
+function Command:with_stderr(value)
+  return with_field(self, 'stderr', normalise_stdio(value, 'stderr'))
+end
+function Command:with_shutdown(value)
+  return with_field(self, 'shutdown', normalise_shutdown(value))
+end
+function Command:with_process_group(value)
+  if value ~= nil and value ~= 'inherit' and value ~= 'new' and type(value) ~= 'number' then
+    error("process group must be nil, 'inherit', 'new' or a numeric group", 2)
+  end
+  return with_field(self, 'process_group', value)
+end
+
+local function close_host_process(value, reason)
+  return IO.close_value('process', value, reason)
+end
+
+local function close_process_endpoint(value, reason)
+  return IO.close_value('process_pipe', value, reason)
+end
+
+local function process_settlement(proc)
+  return Settlement.request_then_wait(function(_ctx, _record, reason)
+    return proc:request_close_op(reason or 'scope settlement')
+  end, function()
+    return proc:closed_op():and_then(function(ok, err)
+      if not ok then
+        error(err or 'process settlement failed', 0)
+      end
+      return Op.always(true)
+    end)
+  end)
+end
+
+function Process:owned(children)
+  return Owned.tree(self, self._fibers_settle, children or {}, {
+    role = 'process',
+    settle_name = 'process',
+  })
+end
+
+function Process:pid()
+  return self._pid
+end
+
+function Process:argv()
+  return copy_list(self.command._spec.argv)
+end
+
+function Process:state_value()
+  return self.lifecycle:state_value()
+end
+
+function Process:stdin()
+  return self.stdin_stream
+end
+function Process:stdout()
+  return self.stdout_stream
+end
+function Process:stderr()
+  return self.stderr_stream
+end
+
+function Process:launch_succeeded_op()
+  return self.launch_completion:success_op()
+end
+
+function Process:launch_failed_op()
+  return self.launch_completion:failure_op()
+end
+
+function Process:launch_result_op()
+  return self:launch_succeeded_op():or_else(self:launch_failed_op():map(function(err)
+    return nil, err
+  end))
+end
+
+function Process:result_op()
+  return self.exit_completion:result_op()
+end
+
+function Process:request_close_op(reason)
+  return self.lifecycle:request_close_op(reason)
+end
+
+function Process:closed_op()
+  return self.closed_completion:result_op()
+end
+
+local function process_not_running(proc, action)
+  local state = proc:state_value()
+  return HostError.closed('process', action, {
+    pid = proc._pid,
+    state = state and state.kind,
+  })
+end
+
+function Process:request_signal_op(signal, target)
+  target = target or self.command._spec.shutdown.target or 'process'
+  return self.lifecycle:state_op():and_then(function(state)
+    if state.kind ~= 'running' and state.kind ~= 'closing' then
+      return Op.always(nil, process_not_running(self, 'signal'))
+    end
+    return Op.always(true):wrap(function()
+      local handle = self.host_process
+      if not handle or type(handle.signal) ~= 'function' then
+        return nil, HostError.unsupported('host', 'process_signal', { pid = self._pid })
+      end
+      local ok, err = handle:signal(signal, target)
+      if not ok then
+        return nil,
+          HostError.normalise(err, {
+            domain = 'process',
+            action = 'signal',
+            pid = self._pid,
+            signal = signal,
+            target = target,
+          })
+      end
+      return true
+    end)
+  end)
+end
+
+function Process:request_terminate_op()
+  return self:request_signal_op(self.command._spec.shutdown.signal)
+end
+function Process:request_kill_op()
+  return self:request_signal_op(self.command._spec.shutdown.kill_signal)
+end
+
+function Process:communicate(opts)
+  opts = copy_table(opts)
+  local stdout_limit = opts.stdout_limit or 4 * 1024 * 1024
+  local stderr_limit = opts.stderr_limit or 4 * 1024 * 1024
+  if type(stdout_limit) ~= 'number' or stdout_limit < 0 then
+    error('stdout_limit must be a non-negative number', 2)
+  end
+  if type(stderr_limit) ~= 'number' or stderr_limit < 0 then
+    error('stderr_limit must be a non-negative number', 2)
+  end
+
+  -- Communicate is deliberately a direct, committed multi-phase procedure.
+  -- Input must reach the external child before exit can be observed. Host Streams
+  -- continue to drain into their Flows while input is written, so the concurrent
+  -- reads below cannot deadlock on ordinary pipe buffers.
+  local rt = Runtime.current()
+  local scope = Runtime.current_scope()
+  if not rt or not scope then
+    error('Process:communicate requires a current runtime scope', 2)
+  end
+  if self._communicating then
+    return nil,
+      HostError.invalid_argument('process', 'communicate', {
+        message = 'communicate may be used only once for a Process',
+      })
+  end
+  self._communicating = true
+
+  local function fail(reason, err)
+    Protected.pcall(function()
+      return self:close(reason)
+    end)
+    return nil, err
+  end
+
+  local stdin_stream = self:stdin()
+  if not stdin_stream then
+    if opts.input ~= nil and opts.input ~= '' then
+      return fail(
+        'communicate input unavailable',
+        HostError.invalid_argument('process', 'communicate', {
+          message = 'process stdin is not piped',
+        })
+      )
+    end
+  else
+    if opts.input ~= nil and opts.input ~= '' then
+      if type(opts.input) ~= 'string' then
+        return fail(
+          'invalid communicate input',
+          HostError.invalid_argument('process', 'communicate', {
+            message = 'communicate input must be a string',
+          })
+        )
+      end
+      local written, write_err = stdin_stream:write(opts.input)
+      if not written then
+        return fail('communicate input failed', write_err)
+      end
+      local flushed, flush_err = stdin_stream:flush()
+      if not flushed then
+        return fail('communicate input failed', flush_err)
+      end
+    end
+    local shut, shut_err = stdin_stream:shutdown_write('communicate input complete')
+    if not shut then
+      return fail('communicate input shutdown failed', shut_err)
+    end
+    local closed, close_err = stdin_stream:closed()
+    if not closed then
+      return fail('communicate input close failed', close_err)
+    end
+  end
+
+  local stdout_stream = self:stdout()
+  local stderr_stream = self:stderr()
+  if stderr_stream == stdout_stream then
+    stderr_stream = nil
+  end
+  local stdout_task = stdout_stream
+      and scope:spawn(function()
+        return stdout_stream:read_all({ max = stdout_limit })
+      end, { name = self.name .. ':communicate-stdout' })
+    or nil
+  local stderr_task = stderr_stream
+      and scope:spawn(function()
+        return stderr_stream:read_all({ max = stderr_limit })
+      end, { name = self.name .. ':communicate-stderr' })
+    or nil
+
+  local complete_op = Op.named_all({
+    stdout = stdout_task and stdout_task:exit_op() or Op.always(nil),
+    stderr = stderr_task and stderr_task:exit_op() or Op.always(nil),
+    status = self:result_op(),
+  }):map(function(parts)
+    return { kind = 'complete', parts = parts }
+  end)
+
+  local failure_options = {}
+  local function add_failure(name, task)
+    if not task then
+      return
+    end
+    failure_options[#failure_options + 1] = task:exit_op():and_then(function(exit)
+      local _, task_err = Exit.unwrap(exit)
+      if task_err ~= nil then
+        return Op.always({ kind = 'output_failure', stream = name, error = task_err })
+      end
+      return Op.never()
+    end)
+  end
+  add_failure('stdout', stdout_task)
+  add_failure('stderr', stderr_task)
+
+  local selected_op = complete_op
+  if #failure_options > 0 then
+    selected_op = Op.choice(complete_op, Op.choice(failure_options))
+  end
+  local selected = rt:_perform_current(selected_op, nil, true)
+  if selected.kind == 'output_failure' then
+    return fail('communicate ' .. selected.stream .. ' failed', selected.error)
+  end
+
+  local parts = selected.parts
+  local stdout, stdout_err
+  if stdout_task then
+    stdout, stdout_err = Exit.unwrap(parts.stdout)
+  end
+  if stdout_task and stdout == nil and stdout_err ~= nil then
+    return fail('communicate stdout failed', stdout_err)
+  end
+  local stderr, stderr_err
+  if stderr_task then
+    stderr, stderr_err = Exit.unwrap(parts.stderr)
+  end
+  if stderr_task and stderr == nil and stderr_err ~= nil then
+    return fail('communicate stderr failed', stderr_err)
+  end
+  local status_row = parts._rows and parts._rows.status
+  if status_row and status_row.n and status_row.n >= 2 and status_row[1] == nil then
+    return fail('communicate process result failed', status_row[2])
+  end
+  return { status = parts.status, stdout = stdout, stderr = stderr }
+end
+
+function Process:inspect_op()
+  local options = {
+    state = self.lifecycle:state_op(),
+  }
+  if self.stdin_stream then
+    options.stdin = self.stdin_stream:inspect_op()
+  end
+  if self.stdout_stream then
+    options.stdout = self.stdout_stream:inspect_op()
+  end
+  if self.stderr_stream and self.stderr_stream ~= self.stdout_stream then
+    options.stderr = self.stderr_stream:inspect_op()
+  end
+  return Op.named_all(options):map(function(parts)
+    return {
+      process = self,
+      pid = self._pid,
+      argv = self:argv(),
+      state = parts.state,
+      stdin = parts.stdin,
+      stdout = parts.stdout,
+      stderr = parts.stderr,
+      status = self._status,
+    }
+  end)
+end
+
+local function stream_bridge(source, destination, opts)
+  opts = opts or {}
+  local chunk_size = opts.chunk_size or 4096
+  while true do
+    local bytes, err = source:read_some(chunk_size)
+    if not bytes then
+      if err == FlowErrors.EOF or err == FlowErrors.CLOSED or err == FlowErrors.RETIRED then
+        break
+      end
+      return nil, err
+    end
+    local written, write_err = destination:write(bytes)
+    if not written then
+      return nil, write_err
+    end
+  end
+  if opts.flush ~= false then
+    local ok, err = destination:flush()
+    if not ok then
+      return nil, err
+    end
+  end
+  if opts.close_destination then
+    destination:shutdown_write('process redirect complete')
+  end
+  return true
+end
+
+local function endpoint_opts(spec, which)
+  local configured = spec[which]
+  local stream, redirect = redirect_stream(configured)
+  if stream then
+    return 'pipe', stream, redirect
+  end
+  return configured, nil, nil
+end
+
+local function open_parent_stream(rt, owner, handle, which, opts)
+  local read = which == 'stdout' or which == 'stderr'
+  return IO.open_handle_stream(rt, owner, handle, {
+    name = opts.name .. ':' .. which,
+    read = read,
+    write = not read,
+    capacity = opts.capacity,
+    read_capacity = opts.read_capacity,
+    write_capacity = opts.write_capacity,
+    chunk_size = opts.chunk_size,
+    read_chunk_size = opts.read_chunk_size,
+    write_chunk_size = opts.write_chunk_size,
+  })
+end
+
+local function publish_state(rt, proc, state)
+  return IO.masked_perform(rt, proc.lifecycle:set_state_op(state))
+end
+
+local function publish_launch_failure(rt, proc, err)
+  Protected.pcall(function()
+    if proc.stdin_pipe_stream then
+      proc.stdin_pipe_stream:abort(err)
+    end
+    if proc.stdout_pipe_stream then
+      proc.stdout_pipe_stream:abort(err)
+    end
+    if proc.stderr_pipe_stream and proc.stderr_pipe_stream ~= proc.stdout_pipe_stream then
+      proc.stderr_pipe_stream:abort(err)
+    end
+    if proc.adoption then
+      proc.adoption:close(err)
+    end
+    if proc.host_process then
+      proc.host_process:close(err)
+    end
+  end)
+  publish_state(rt, proc, { kind = 'failed', error = err })
+  IO.masked_perform(rt, proc.launch_completion:publish_failure_op(err))
+  IO.masked_perform(rt, proc.exit_completion:publish_failure_op(err))
+  IO.masked_perform(rt, proc.closed_completion:publish_success_op(true))
+end
+
+local function publish_exit(rt, proc, status)
+  proc._status = status
+  publish_state(rt, proc, { kind = 'exited', status = status, pid = proc._pid })
+  IO.masked_perform(rt, proc.exit_completion:publish_success_op(status))
+end
+
+local function run_reaper(proc, rt)
+  while true do
+    local ready, wait_err = perform(proc.host_process:wait_op())
+    if not ready and wait_err ~= nil then
+      local err = HostError.normalise(wait_err, {
+        domain = 'process',
+        action = 'wait',
+        pid = proc._pid,
+      })
+      IO.masked_perform(rt, proc.reap_completion:publish_failure_op(err))
+      return
+    end
+    local status, reap_err = proc.host_process:reap()
+    if status then
+      IO.masked_perform(rt, proc.reap_completion:publish_success_op(status))
+      return
+    end
+    if not HostError.is_would_block(reap_err) then
+      local err = HostError.normalise(reap_err, {
+        domain = 'process',
+        action = 'reap',
+        pid = proc._pid,
+      })
+      IO.masked_perform(rt, proc.reap_completion:publish_failure_op(err))
+      return
+    end
+  end
+end
+
+local function reap_event_op(proc)
+  return proc.reap_completion:result_op():map(function(status, err)
+    return { kind = 'exit', status = status, error = err }
+  end)
+end
+
+local function wait_reap_until(proc, deadline)
+  local event = perform(Op.choice(
+    reap_event_op(proc),
+    Sleep.sleep_until_op(deadline):map(function()
+      return { kind = 'timeout' }
+    end)
+  ))
+  if event.kind == 'timeout' then
+    return nil, 'timeout'
+  end
+  return event.status, event.error
+end
+
+local function close_stream(stream, reason, abort)
+  if not stream then
+    return true
+  end
+  if abort then
+    return stream:abort(reason)
+  end
+  return stream:close(reason)
+end
+
+local function finish_close(proc, reason)
+  local errors = {}
+  local function capture(label, fn)
+    local ok, a, b = Protected.pcall(fn)
+    if not ok or not a then
+      errors[#errors + 1] = { stage = label, error = ok and b or a }
+    end
+  end
+  capture('stdin', function()
+    return close_stream(proc.stdin_pipe_stream or proc.stdin_stream, reason, true)
+  end)
+  capture('stdout', function()
+    return close_stream(proc.stdout_pipe_stream or proc.stdout_stream, reason, true)
+  end)
+  local stderr_to_close = proc.stderr_pipe_stream or proc.stderr_stream
+  local stdout_to_close = proc.stdout_pipe_stream or proc.stdout_stream
+  if stderr_to_close and stderr_to_close ~= stdout_to_close then
+    capture('stderr', function()
+      return close_stream(stderr_to_close, reason, true)
+    end)
+  end
+  capture('host_process', function()
+    return proc.host_process and proc.host_process:close(reason) or true
+  end)
+  if #errors > 0 then
+    return nil,
+      HostError.protocol('process', 'close', 'one or more process resources failed to close', {
+        pid = proc._pid,
+        errors = errors,
+      })
+  end
+  return true
+end
+
+local function supervise(proc, driver_scope, opts)
+  local rt = Runtime.current()
+  local bundle = proc.adoption
+  local spec = copy_spec(proc.command._spec)
+  local stdin_mode, stdin_source, stdin_redirect = endpoint_opts(spec, 'stdin')
+  local stdout_mode, stdout_destination, stdout_redirect = endpoint_opts(spec, 'stdout')
+  local stderr_mode, stderr_destination, stderr_redirect = endpoint_opts(spec, 'stderr')
+  spec.stdin, spec.stdout, spec.stderr = stdin_mode, stdout_mode, stderr_mode
+  spec.runtime = rt
+  spec.name = proc.name
+
+  publish_state(rt, proc, { kind = 'launching' })
+  local host = opts.host or rt.host
+  if not host or type(host.start_process) ~= 'function' then
+    local err = HostError.unsupported('host', 'process', { host = host and host.name or nil })
+    publish_launch_failure(rt, proc, err)
+    return
+  end
+
+  local host_process, endpoints, start_err = host:start_process(spec)
+  if not host_process then
+    publish_launch_failure(
+      rt,
+      proc,
+      HostError.normalise(start_err or endpoints, {
+        domain = 'process',
+        action = 'start',
+        argv = spec.argv,
+      })
+    )
+    return
+  end
+  endpoints = endpoints or {}
+
+  local entries = {
+    { name = 'process', value = host_process, close = close_host_process },
+  }
+  for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
+    if endpoints[which] then
+      entries[#entries + 1] = { name = which, value = endpoints[which], close = close_process_endpoint }
+    end
+  end
+  local adopted, adopt_err = bundle:adopt_many(entries)
+  if not adopted then
+    publish_launch_failure(rt, proc, adopt_err)
+    return
+  end
+
+  if type(host_process.bind_runtime) == 'function' then
+    host_process:bind_runtime(rt)
+  else
+    IOAudit.bind(host_process, rt)
+  end
+  proc.host_process = host_process
+  proc._pid = type(host_process.pid) == 'function' and host_process:pid() or host_process.pid
+  IOAudit.transfer(host_process, proc, { kind = 'process_handle', role = 'process' })
+  bundle:release('process', host_process)
+
+  for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
+    local handle = endpoints[which]
+    if handle then
+      if type(handle.bind_runtime) == 'function' then
+        handle:bind_runtime(rt)
+      end
+      local ok, stream_or_err = Protected.pcall(open_parent_stream, rt, driver_scope, handle, which, {
+        name = proc.name,
+        capacity = opts.capacity,
+        read_capacity = opts.read_capacity,
+        write_capacity = opts.write_capacity,
+        chunk_size = opts.chunk_size,
+        read_chunk_size = opts.read_chunk_size,
+        write_chunk_size = opts.write_chunk_size,
+      })
+      if not ok then
+        publish_launch_failure(
+          rt,
+          proc,
+          HostError.normalise(stream_or_err, {
+            domain = 'process',
+            action = 'open_' .. which,
+            pid = proc._pid,
+          })
+        )
+        return
+      end
+      proc[which .. '_pipe_stream'] = stream_or_err
+      bundle:release(which, handle)
+    end
+  end
+
+  if stdin_source then
+    driver_scope:spawn(function()
+      return stream_bridge(stdin_source, proc.stdin_pipe_stream, {
+        flush = stdin_redirect.flush,
+        close_destination = true,
+      })
+    end, { name = proc.name .. ':stdin-bridge' })
+    proc.stdin_stream = nil
+  else
+    proc.stdin_stream = proc.stdin_pipe_stream
+  end
+  if stdout_destination then
+    driver_scope:spawn(function()
+      return stream_bridge(proc.stdout_pipe_stream, stdout_destination, {
+        flush = stdout_redirect.flush,
+        close_destination = stdout_redirect.close,
+      })
+    end, { name = proc.name .. ':stdout-bridge' })
+    proc.stdout_stream = nil
+  else
+    proc.stdout_stream = proc.stdout_pipe_stream
+  end
+  if stderr_destination then
+    driver_scope:spawn(function()
+      return stream_bridge(proc.stderr_pipe_stream, stderr_destination, {
+        flush = stderr_redirect.flush,
+        close_destination = stderr_redirect.close,
+      })
+    end, { name = proc.name .. ':stderr-bridge' })
+    proc.stderr_stream = nil
+  elseif stderr_mode == 'stdout' then
+    proc.stderr_stream = proc.stdout_stream
+  else
+    proc.stderr_stream = proc.stderr_pipe_stream
+  end
+
+  if type(host_process.start) == 'function' then
+    local ok, err = host_process:start()
+    if not ok then
+      publish_launch_failure(
+        rt,
+        proc,
+        HostError.normalise(err, {
+          domain = 'process',
+          action = 'start_driver',
+          pid = proc._pid,
+        })
+      )
+      return
+    end
+  end
+
+  proc.reaper = driver_scope:spawn(function()
+    return run_reaper(proc, rt)
+  end, { name = proc.name .. ':reaper' })
+
+  publish_state(rt, proc, { kind = 'running', pid = proc._pid })
+  IO.masked_perform(rt, proc.launch_completion:publish_success_op(proc))
+
+  local status
+  while not status and not proc.lifecycle:is_close_requested() do
+    local event = perform(Op.choice(
+      reap_event_op(proc),
+      proc.lifecycle:close_requested_op():map(function()
+        return { kind = 'close' }
+      end)
+    ))
+    if event.kind == 'exit' then
+      status = event.status
+      if not status then
+        IO.masked_perform(rt, proc.exit_completion:publish_failure_op(event.error))
+        break
+      end
+    end
+  end
+
+  if not status and proc.lifecycle:is_close_requested() then
+    local reason = proc.lifecycle:close_reason() or 'process closed'
+    publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason })
+    if proc.stdin_pipe_stream then
+      Protected.pcall(function()
+        proc.stdin_pipe_stream:abort(reason)
+      end)
+    end
+    local signal_ok, signal_err = host_process:signal(spec.shutdown.signal, spec.shutdown.target)
+    if not signal_ok and not HostError.is(signal_err, 'closed') then
+      proc._close_error = HostError.normalise(signal_err, {
+        domain = 'process',
+        action = 'terminate',
+        pid = proc._pid,
+      })
+    end
+    local deadline = rt:now() + spec.shutdown.grace
+    local reap_err
+    status, reap_err = wait_reap_until(proc, deadline)
+    if not status and reap_err == 'timeout' then
+      host_process:signal(spec.shutdown.kill_signal, spec.shutdown.target)
+      status, reap_err = perform(proc.reap_completion:result_op())
+    end
+    if not status then
+      IO.masked_perform(rt, proc.exit_completion:publish_failure_op(reap_err))
+      proc._close_error = proc._close_error or reap_err
+    end
+  end
+
+  if status then
+    publish_exit(rt, proc, status)
+  end
+
+  if not proc.lifecycle:is_close_requested() then
+    perform(proc.lifecycle:close_requested_op())
+  end
+  local reason = proc.lifecycle:close_reason() or 'process closed'
+  publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason, status = status })
+  if proc.reaper then
+    local _, reaper_err = proc.reaper:await()
+    if reaper_err ~= nil then
+      proc._close_error = proc._close_error or reaper_err
+    end
+  end
+  local closed, close_err = finish_close(proc, reason)
+  proc._close_error = proc._close_error or close_err
+  if closed and not proc._close_error then
+    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status })
+    IO.masked_perform(rt, proc.closed_completion:publish_success_op(true))
+  else
+    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status, error = proc._close_error })
+    IO.masked_perform(rt, proc.closed_completion:publish_failure_op(proc._close_error))
+  end
+end
+
+local function driver_body(proc, driver_scope, opts)
+  local ok, err = Protected.pcall(supervise, proc, driver_scope, opts)
+  if ok then
+    return
+  end
+  local rt = Runtime.current()
+  local failure = HostError.is(err) and err
+    or IO.protocol_error('process', 'supervisor', err, {
+      pid = proc._pid,
+      argv = proc.command._spec.argv,
+    })
+  if proc.launch_completion:is_pending() then
+    publish_launch_failure(rt, proc, failure)
+  elseif proc.exit_completion:is_pending() then
+    IO.masked_perform(rt, proc.exit_completion:publish_failure_op(failure))
+  end
+  proc._close_error = failure
+  if proc.closed_completion:is_pending() then
+    IO.masked_perform(rt, proc.closed_completion:publish_failure_op(failure))
+  end
+end
+
+function Command:launch_op(opts)
+  opts = copy_table(opts)
+  local command = self
+  local spec = command._spec
+  if
+    spec.shutdown.target == 'group'
+    and spec.process_group ~= 'new'
+    and type(spec.process_group) ~= 'number'
+    and not spec.new_session
+  then
+    error("group shutdown requires process_group = 'new', a numeric group, or new_session", 2)
+  end
+
+  -- Ownership is part of the surrounding fibre context and is captured when the
+  -- option is constructed. The Process itself is fresh per guard activation.
+  local owner = IO.current_owner(opts, 'Command:launch_op')
+  local driver_parent = IO.scope_for_owner(owner, 'Command:launch_op')
+
+  -- A launch option constructs a fresh Process for each synchronisation attempt.
+  -- The guard is speculative and pure: no host action occurs until admission and
+  -- the supervisor spawn effect have committed.
+  return Op.guard(function()
+    next_process = next_process + 1
+    local name = opts.name or ('process-' .. tostring(next_process))
+    local proc = Ownership.handle(name, {
+      kind = 'process',
+      command = command,
+      lifecycle = Lifecycle.new(name),
+      launch_completion = Completion.new(name .. ':launch'),
+      exit_completion = Completion.new(name .. ':exit'),
+      reap_completion = Completion.new(name .. ':reap'),
+      closed_completion = Completion.new(name .. ':closed'),
+      _communicating = false,
+      adoption = Adoption.bundle(name .. ':adoption'),
+      driver = nil,
+      host_process = nil,
+      stdin_stream = nil,
+      stdout_stream = nil,
+      stderr_stream = nil,
+      _pid = nil,
+      _status = nil,
+      _close_error = nil,
+    })
+    setmetatable(proc, Process)
+    proc._fibers_settle = process_settlement(proc)
+    proc._fibers_settle_name = 'process'
+
+    proc.driver = IO.new_driver_task(driver_parent, name .. ':supervisor', function(driver_scope)
+      return driver_body(proc, driver_scope, opts)
+    end)
+
+    return owner
+      :admit_op(proc:owned({ proc.adoption:owned({ role = 'process_adoption' }), proc.driver:owned() }))
+      :and_then(function()
+        return proc.driver:spawn_effect_op()
+      end, false)
+      :map(function()
+        return proc
+      end)
+  end)
+end
+
+function Command:launch(opts)
+  return perform(self:launch_op(opts))
+end
+
+function Command:start(opts)
+  local proc, launch_err = self:launch(opts)
+  if not proc then
+    return nil, launch_err
+  end
+  local launched, err = proc:launch_result()
+  if not launched then
+    -- A launch failure path has already closed all partial host resources and
+    -- published completed closure. Waiting here preserves that postcondition.
+    proc:closed()
+    return nil, err
+  end
+  return proc
+end
+
+function Process:launch_succeeded()
+  return perform(self:launch_succeeded_op())
+end
+function Process:launch_failed()
+  return perform(self:launch_failed_op())
+end
+function Process:launch_result()
+  return perform(self:launch_result_op())
+end
+function Process:result()
+  return perform(self:result_op())
+end
+function Process:request_signal(signal, target)
+  return perform(self:request_signal_op(signal, target))
+end
+function Process:signal(signal, target)
+  return self:request_signal(signal, target)
+end
+function Process:request_terminate()
+  return perform(self:request_terminate_op())
+end
+function Process:terminate()
+  return self:request_terminate()
+end
+function Process:request_kill()
+  return perform(self:request_kill_op())
+end
+function Process:kill()
+  return self:request_kill()
+end
+function Process:request_close(reason)
+  return perform(self:request_close_op(reason))
+end
+function Process:close(reason)
+  local ok, err = self:request_close(reason)
+  if not ok then
+    return nil, err
+  end
+  return self:closed()
+end
+function Process:closed()
+  return perform(self:closed_op())
+end
+function Process:inspect()
+  return perform(self:inspect_op())
+end
+
+function Module.succeeded(status)
+  return type(status) == 'table' and status.kind == 'exited' and status.code == 0
+end
+
+function Module.describe_status(status)
+  if type(status) ~= 'table' then
+    return tostring(status)
+  end
+  if status.kind == 'exited' then
+    return 'exited with code ' .. tostring(status.code)
+  end
+  if status.kind == 'signalled' then
+    return 'terminated by signal ' .. tostring(status.signal_name or status.signal)
+  end
+  return tostring(status.kind or 'process status')
+end
+
+Module.Command = Command
+Module.Process = Process
+Module.Error = HostError
+
+return Module

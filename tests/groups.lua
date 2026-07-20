@@ -50,6 +50,7 @@ return {
     'tests/io/test_datagram_conformance.lua',
     'tests/io/test_foundations.lua',
     'tests/io/test_pipe.lua',
+    'tests/io/test_process.lua',
     'tests/io/test_socket.lua',
     'tests/io/test_socket_hardening.lua',
     'tests/io/test_socket_failure_matrix.lua',
@@ -82,6 +83,7 @@ return {
     'tests/embedding/hosts/test_fd_luaposix.lua',
     'tests/embedding/hosts/test_fd_nixio.lua',
     'tests/native/test_datagram_native.lua',
+    'tests/native/test_process_native.lua',
   },
   stress = {
     'tests/stress/test_stream_reactor_stress.lua',

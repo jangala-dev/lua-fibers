@@ -58,6 +58,7 @@ function Pure.new(opts)
     datagram = false,
     resolver = false,
     resolver_blocking = false,
+    process = false,
   }
   return self
 end

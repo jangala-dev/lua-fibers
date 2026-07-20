@@ -320,6 +320,38 @@ Opening a Stream commits its ownership and both reactor-registration effects tog
 
 See [`flows-and-streams.md`](flows-and-streams.md) for the Flow lease contracts and reactor service model.
 
+## Process capability
+
+A host which advertises `capabilities.process = true` supplies one launch and
+process-handle contract:
+
+```text
+host:start_process(spec) -> host_process, parent_endpoints | nil, nil, error
+
+host_process:pid()
+host_process:wait_op()
+host_process:reap()
+host_process:signal(signal, target)
+host_process:close(reason)
+```
+
+`start_process` must complete an exec-error handshake. Returning a process after
+fork alone is insufficient: working-directory, environment, process-group,
+standard-stream and exec setup must either succeed or produce a structured
+launch error. Partial child processes must be killed and reaped before the
+failed call returns.
+
+Parent pipe endpoints are non-blocking HostHandles and enter the normal adoption,
+Stream and reactor path. The process handle itself is also audited. Exactly one
+supervisor owns signal decisions and reaping; `reap` returns `would_block` until
+a terminal status is authoritative and returns the same cached status after
+successful reaping.
+
+The Linux FFI family uses pidfds where available and timer-polled `waitpid`
+otherwise. ManualHost provides deterministic process completion and signalling
+for semantic tests. A host without this contract must advertise
+`capabilities.process = false` and return `unsupported`.
+
 ## Effects and host callbacks
 
 Hosts may receive post-commit callbacks such as wake or scope notifications:

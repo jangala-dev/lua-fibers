@@ -1,4 +1,4 @@
-# Pipes and sockets
+# Pipes, processes and sockets
 
 Fibers restores the practical shape of the earlier I/O layer while retaining
 version 1 ownership and option semantics.
@@ -57,6 +57,179 @@ stream:read_op('*a', { max = 1024 * 1024 })
 ```
 
 `*a` remains bounded deliberately.
+
+## Processes
+
+`fibers.process` separates an immutable command specification from the owned
+running Process:
+
+```lua
+local process = require('fibers.process')
+
+local command = process.command({
+  'sh', '-c', 'printf hello',
+  stdin = 'null',
+  stdout = 'pipe',
+  stderr = 'pipe',
+})
+
+local proc, start_err = command:start()
+assert(proc, start_err)
+local result, communicate_err = proc:communicate({
+  stdout_limit = 1024 * 1024,
+  stderr_limit = 1024 * 1024,
+})
+assert(result, communicate_err)
+```
+
+A Command is pure and reusable. Builder methods return new values:
+
+```lua
+local base = process.command('worker', '--once')
+local captured = base
+  :with_stdout('pipe')
+  :with_stderr('pipe')
+  :with_env({ MODE = 'capture' })
+```
+
+Starting is deliberately divided into launch admission, launch observation,
+and eventual process result. `launch_op()` is a true option: a guard constructs
+a fresh Process at synchronisation time, admission and the supervisor spawn
+effect commit together, and the option returns without claiming that `exec` has
+finished. If the launch branch loses, no child is created.
+
+```lua
+local proc = fibers.perform(command:launch_op())
+
+local launched, launch_err = fibers.perform(fibers.choice(
+  proc:launch_result_op(),
+  fibers.sleep_op(1):map(function()
+    return nil, { kind = 'timeout', phase = 'launch' }
+  end)
+))
+
+if not launched then
+  proc:close('launch timeout')
+end
+```
+
+`start()` is the ordinary direct convenience. It launches, waits for the exec
+handshake, and returns only a successfully launched Process or a structured
+error:
+
+```lua
+local proc, err = command:start()
+```
+
+There is deliberately no `start_op()`. An option cannot both initiate an
+irreversible child and keep the launch handshake in transactional competition.
+The split makes two different choices explicit:
+
+```text
+choice(command:launch_op(), shutdown_op)
+    whether a launch should exist
+
+choice(proc:launch_result_op(), timeout_op)
+    how long to wait for that owned launch
+```
+
+A timeout is caller policy; it is not confused with child-process failure.
+`result_op()` becomes ready only after the child has reached a terminal state
+and has been reaped exactly once. Normal outcomes are tagged values:
+
+```lua
+{ kind = 'exited', code = 0, success = true }
+{ kind = 'exited', code = 7, success = false }
+{ kind = 'signalled', signal = 15, signal_name = 'TERM', success = false }
+```
+
+Generated standard streams are ordinary Fibers Streams:
+
+```lua
+local proc = assert(process.command({
+  'filter',
+  stdin = 'pipe',
+  stdout = 'pipe',
+  stderr = 'pipe',
+}):start())
+
+proc:stdin():write('input')
+proc:stdin():close('input complete')
+local output = proc:stdout():read_all({ max = 1024 * 1024 })
+local status = proc:result()
+```
+
+The accepted standard-stream forms are:
+
+```text
+stdin:   inherit | null | pipe | Stream
+stdout:  inherit | null | pipe | Stream
+stderr:  inherit | null | pipe | stdout | Stream
+```
+
+A supplied Stream is bridged through a Process-owned pipe. It need not expose a
+file descriptor, and it remains owned by its caller. `process.redirect` can
+request flushing or closure of the destination after the bridge finishes.
+
+`communicate()` is a committed, single-use procedure rather than an option. It
+writes and closes stdin, drains stdout and stderr concurrently, waits for the
+reaped status, and enforces explicit capture limits. Capture failure begins
+structural Process closure so a child cannot remain blocked on unconsumed
+output.
+
+```lua
+local result = proc:communicate({
+  input = request,
+  stdout_limit = 4 * 1024 * 1024,
+  stderr_limit = 1024 * 1024,
+})
+```
+
+Process requests and completed settlement are distinct:
+
+```lua
+proc:request_terminate_op() -- commit the configured graceful signal request
+proc:request_kill_op()      -- commit the configured forceful signal request
+proc:request_close_op(reason)
+proc:closed_op()
+```
+
+The direct `terminate()`, `kill()` and `signal()` methods perform their request
+options. `close(reason)` performs `request_close_op(reason)` and then waits for
+`closed_op()`. The supervisor closes stdin, waits for the grace interval,
+escalates where necessary, reaps the child, and settles its Streams and driver
+task. Scope settlement invokes the same protocol, and inability to signal, reap
+or close remains visible in the scope report.
+
+Commands which may create descendants should normally request a new process
+group and target that group during shutdown:
+
+```lua
+process.command({
+  'sh', '-c', script,
+  process_group = 'new',
+  shutdown = { target = 'group', grace = 1.0 },
+})
+```
+
+The deterministic ManualHost and Linux FFI host implement the version 1 process
+contract. Other hosts currently advertise `capabilities.process = false` and
+return a structured `unsupported` result rather than silently weakening the
+semantics.
+
+Commands which may create descendants should normally request a new process
+group and target that group during shutdown:
+
+```lua
+process.command({
+  'sh', '-c', script,
+  process_group = 'new',
+  shutdown = { target = 'group', grace = 1.0 },
+})
+```
+
+Fibers does not create a new process group silently because terminal and job-control
+semantics may depend on the inherited group.
 
 ## Listeners and connections
 

@@ -12,6 +12,7 @@ src/fibers/             installed version 1 library
   internal/             closed kernel and other implementation details
   host/                 host adapters and the runtime-owned reactor
   socket.lua and socket/ public socket facade, addresses, Listener and Dial
+  process.lua           immutable Command and owned Process facility
   stream/               supported capability-shaped Stream and backends
 
 examples/tutorial/      ordinary application use

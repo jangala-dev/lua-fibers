@@ -328,6 +328,40 @@ Pipe acquisition occurs only after `pipe_op` commits. Newly created host handles
 are covered immediately by temporary adoption records until their permanent
 Stream ownership has been admitted. See [`docs/guide/io.md`](docs/guide/io.md).
 
+### Processes
+
+Commands are immutable descriptions; starting one creates an owned Process with
+ordinary Fibers Streams for configured standard input and output:
+
+```lua
+local process = require('fibers.process')
+
+local proc = assert(process.command({
+  'sh', '-c', 'printf hello',
+  stdin = 'null',
+  stdout = 'pipe',
+  stderr = 'pipe',
+}):start())
+
+local result = assert(proc:communicate({
+  stdout_limit = 1024,
+  stderr_limit = 1024,
+}))
+
+assert(result.stdout == 'hello')
+assert(process.succeeded(result.status))
+proc:close('complete')
+```
+
+Launch admission, launch completion and process exit are separate phases.
+`launch_op()` uses a guard to construct a fresh Process at synchronisation time;
+its committed supervisor effect performs the irreversible host launch.
+`start()` is the direct launch-plus-handshake convenience. `result_op()` can then
+participate in choice and becomes ready only after the child has been reaped.
+Scope settlement closes stdin, requests graceful termination, escalates where
+required, and retains signal, reap or close failure. See
+[`docs/guide/io.md`](docs/guide/io.md).
+
 ### Sockets and name resolution
 
 Listeners accept duplex Streams, while an outbound `Dial` separates starting a
