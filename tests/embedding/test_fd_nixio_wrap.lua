@@ -64,7 +64,8 @@ local ok, err = pcall(function()
     return true
   end
 
-  local handle, wrap_err = Fd.wrap(object, { name = 'fake-nixio-handle' })
+  assert(Fd.wrap == nil, 'new has no wrap alias')
+  local handle, wrap_err = Fd.new(object, { name = 'fake-nixio-handle' })
   assert(handle, tostring(wrap_err))
   assert(handle.obj == object)
   assert(handle.fd == 42)

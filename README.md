@@ -6,46 +6,70 @@ Fibers lets a programme describe possible concurrent actions, combine those desc
 
 Fibers version 1 is an advanced work in progress. Its public surface is being reduced and settled before the first release.
 
-## One concurrent decision
+## Begin with sequential fibre code
 
-Here is the central option from a small robot dispatcher:
+Fibres run ordinary Lua functions. Everyday facilities provide direct methods for the common case, so each fibre can be read from top to bottom:
 
 ```lua
-local result = perform(choice(
-  all({
-    safety:expect_op('clear'),
-    power:take_op(1),
-  }):and_then(function()
-    return call_op(robot, 'inspection')
-  end):or_else(always('dispatch unavailable')),
+local fibers = require('fibers')
+local channel = require('fibers.channel')
 
-  stop:get_op():map(function(reason)
+local jobs = channel.new()
+local replies = channel.new()
+
+fibers.run(function()
+  fibers.spawn(function()
+    local job = jobs:get()
+    replies:put('completed ' .. job)
+  end, 'worker')
+
+  jobs:put('inspection')
+  print(replies:get())
+end)
+```
+
+`spawn` starts the worker in the current scope. The direct `get` and `put` methods perform their actions in place, suspending only when another participant is required.
+
+## Compose the same actions when needed
+
+Each direct method has an inert `_op` form. Asking for the `Op` lets the same actions be combined before one coherent result is performed:
+
+```lua
+local jobs = channel.new()
+local replies = channel.new()
+local stop = channel.new()
+
+fibers.run(function()
+  fibers.spawn(function()
+    fibers.perform(jobs:get_op():and_then(function(job)
+      return replies:put_op('completed ' .. job)
+    end))
+  end, 'worker')
+
+  local completed = jobs:put_op('inspection')
+    :and_then(function()
+      return replies:get_op()
+    end)
+    :map(function(reply)
+      return 'worker: ' .. reply
+    end)
+
+  local stopped = stop:get_op():map(function(reason)
     return 'stopped: ' .. reason
   end)
-):wrap(report))
+
+  local outcome = fibers.perform(fibers.choice(completed, stopped))
+  print(outcome)
+end)
 ```
 
-Read it as follows:
+This can be read directly:
 
-> Either accept an operator stop, or require clear safety state and one unit of power, then complete an inspection call. Report `dispatch unavailable` only when that whole preferred protocol is proved unable to commit. Report the result after the decision has committed.
+> Either send the inspection job and then receive its reply, or receive a reason to stop.
 
-The call itself is a request-and-reply protocol:
+Both sides describe the complete exchange, so the sends, receives and sequencing remain provisional until `perform` selects one coherent outcome. The same vocabulary extends to time, state, task lifetimes and host resources.
 
-```lua
-local function call_op(robot, command)
-  return robot.online:expect_op(true):and_then(function()
-    return robot.requests:put_op(command):and_then(function()
-      return robot.replies:get_op()
-    end)
-  end)
-end
-```
-
-The first send may initially have no local result. That does not make the call absent. Fibers may recruit the robot fibre, match the request, continue to the reply, and commit the whole chain. While that coherent world exists, the fallback is not eligible.
-
-If the managed facts instead prove that the complete dispatch cannot commit, `or_else` admits the fallback. Fibers calls this **certified present absence**.
-
-The complete runnable example is [`examples/tutorial/00_robot_dispatch.lua`](examples/tutorial/00_robot_dispatch.lua).
+The complete runnable example is [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua).
 
 ## The model
 
@@ -66,7 +90,7 @@ end)
 
 An option is inert. Constructing one does not send, receive, sleep or change state.
 
-The API calls this value `Op`: here **Op is short for option, not operation**. Methods ending in `_op` return options which may be combined before one is submitted to `perform`.
+An `Op` can be thought of as an option: an inert description which may be combined before it is submitted to `perform`. Methods ending in `_op` return these descriptions.
 
 ```lua
 local receive = inbox:get_op()
@@ -401,7 +425,7 @@ pretending to be byte Streams:
 ```lua
 local socket = require('fibers.socket')
 
-local udp = assert(socket.datagram_ipv4('0.0.0.0', 0))
+local udp = assert(socket.udp_ipv4('0.0.0.0', 0))
 udp:send_to('hello', socket.ipv4_address('192.0.2.10', 9000))
 udp:flush()
 
@@ -484,7 +508,7 @@ make examples
 Run the opening example directly with an available Lua interpreter:
 
 ```sh
-lua5.4 examples/tutorial/00_robot_dispatch.lua
+lua5.4 examples/tutorial/00_getting_started.lua
 ```
 
 Until the first packaged release, add `src` to the Lua module path or vendor `src/fibers` with the application. The programming guide begins with the public surface and ordinary facilities:

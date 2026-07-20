@@ -107,7 +107,6 @@ function M.mask(fn, ...)
   return unpack_(r, 2, r.n)
 end
 
-M.uninterruptible = M.mask
 
 function M.try_scope(opts, fn)
   if type(opts) == 'function' then
@@ -182,14 +181,6 @@ function M.try_run(fn, opts)
       host_options = opts.host_options,
       max_iterations = opts.max_iterations,
     })
-    if not result and runner_status and runner_status.tag == 'found' then
-      runner_status = Runner.run(rt, {
-        host = host,
-        run = opts.run,
-        host_options = opts.host_options,
-        max_iterations = opts.max_iterations,
-      })
-    end
   end)
   if ok and result then
     result.runtime_status = runner_status

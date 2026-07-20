@@ -237,14 +237,13 @@ function Op.never()
   return op('choice', { choices = {} })
 end
 
-function Op.consequence(effect)
+function Op.emit(effect)
   if not EffectKind.is_effect(effect) then
-    error('consequence expects a typed effect obligation', 2)
+    error('emit expects a typed effect obligation', 2)
   end
   return op('consequence', { effect = effect })
 end
 
-Op.emit = Op.consequence
 
 function Op.dependencies(...)
   local parts = {}

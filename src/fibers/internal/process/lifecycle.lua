@@ -6,6 +6,7 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
+local ScalarWait = require('fibers.internal.scalar_wait')
 
 local Lifecycle = {}
 Lifecycle.__index = Lifecycle
@@ -26,16 +27,7 @@ local request_close = Scalar.transition({
 })
 
 local function wait_for(scalar, predicate)
-  local function loop()
-    return scalar:snapshot_op():and_then(function(snapshot)
-      local ready, a, b, c = predicate(snapshot.value)
-      if ready then
-        return Op.always(a, b, c)
-      end
-      return scalar:changed_op(snapshot.version):and_then(loop)
-    end)
-  end
-  return loop()
+  return ScalarWait.until_op(scalar, predicate)
 end
 
 function Lifecycle.new(name)

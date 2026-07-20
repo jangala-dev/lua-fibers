@@ -5,25 +5,10 @@
 local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
 local HostError = require('fibers.host.error')
+local Provider = require('fibers.host.provider')
 
 local function unsupported(reason)
-  return {
-    is_supported = function()
-      return false, reason
-    end,
-    support_reason = function()
-      return reason
-    end,
-    new = function()
-      error('fibers.host.fd_luaposix: ' .. tostring(reason), 2)
-    end,
-    wrap = function()
-      error('fibers.host.fd_luaposix: ' .. tostring(reason), 2)
-    end,
-    pipe = function()
-      error('fibers.host.fd_luaposix: ' .. tostring(reason), 2)
-    end,
-  }
+  return Provider.unsupported('fibers.host.fd_luaposix', reason, { 'new', 'wrap', 'pipe' })
 end
 
 local ok_unistd, unistd = pcall(require, 'posix.unistd')
@@ -77,6 +62,7 @@ local function set_nonblocking_fd(fd, value)
   end
   return true
 end
+
 
 local function set_cloexec_fd(fd, value)
   if fcntl.F_GETFD == nil or fcntl.F_SETFD == nil or fcntl.FD_CLOEXEC == nil then
@@ -174,7 +160,7 @@ function Fd.support_reason()
   return 'required luaposix fd functions unavailable'
 end
 
-function Fd.wrap(fd, opts)
+function Fd.new(fd, opts)
   opts = opts or {}
   fd = assert(tonumber(fd), 'fd must be numeric')
   next_generation = next_generation + 1
@@ -224,7 +210,6 @@ function Fd.wrap(fd, opts)
   return h
 end
 
-Fd.new = Fd.wrap
 
 function Fd.pipe(opts)
   opts = opts or {}
@@ -232,7 +217,7 @@ function Fd.pipe(opts)
   if not rd then
     return nil, nil, HostError.system('pipe', 'create', errno_msg('pipe failed', err, eno), nil, eno), eno
   end
-  local r, rerr = Fd.wrap(rd, {
+  local r, rerr = Fd.new(rd, {
     host = opts.host,
     name = opts.name and (opts.name .. ':read') or nil,
     nonblocking = opts.nonblocking,
@@ -243,7 +228,7 @@ function Fd.pipe(opts)
     end)
     return nil, nil, rerr
   end
-  local w, werr = Fd.wrap(wr, {
+  local w, werr = Fd.new(wr, {
     host = opts.host,
     name = opts.name and (opts.name .. ':write') or nil,
     nonblocking = opts.nonblocking,

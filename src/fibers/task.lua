@@ -16,6 +16,7 @@ local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
 local Protected = require('fibers.internal.protected')
 local Exit = require('fibers.lifetime.exit')
+local ScalarWait = require('fibers.internal.scalar_wait')
 
 local unpack_ = table.unpack or unpack
 local function pack(...)
@@ -46,18 +47,7 @@ local function is_pending(v)
 end
 
 local function wait_for_scalar(scalar, pred)
-  local dependencies = Op.dependencies(scalar:snapshot_op(), scalar:changed_op(0))
-  local function loop()
-    return scalar:snapshot_op():and_then(function(s)
-      if pred(s.value) then
-        return Op.always(s.value)
-      end
-      return scalar:changed_op(s.version):and_then(function()
-        return loop()
-      end, dependencies)
-    end, dependencies)
-  end
-  return loop()
+  return ScalarWait.value_op(scalar, pred)
 end
 
 function Task.new(fn, name, scope)
@@ -229,12 +219,8 @@ function Task:state_op()
   end, Op.dependencies(cancellation_read))
 end
 
-function Task:await()
-  return perform(self:await_op())
-end
+function Task:await() return perform(self:await_op()) end
 
-function Task:request_cancel(reason)
-  return perform(self:request_cancel_op(reason))
-end
+function Task:request_cancel(reason) return perform(self:request_cancel_op(reason)) end
 
 return Task

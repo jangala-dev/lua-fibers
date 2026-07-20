@@ -135,6 +135,8 @@ end
 do
   local flow = Flow.new({ name = 'public-flow-surface', capacity = 8 })
   local inlet, outlet = flow:inlet(), flow:outlet()
+  assert_nil(flow.reservoir.append_op, 'Reservoir should not expose append_op')
+  assert_nil(flow.reservoir.append_some_op, 'Reservoir should not expose append_some_op')
 
   for _, name in ipairs({
     'append_op',

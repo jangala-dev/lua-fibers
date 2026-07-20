@@ -221,6 +221,7 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   handle:close('test')
 end
 
+
 function Common.socket_echo_smoke(name, host, address)
   local socket = require('fibers.socket')
   local report = fibers.try_run(function(scope)
@@ -300,8 +301,8 @@ function Common.native_datagram_smoke(name, host)
   end
   local socket = require('fibers.socket')
   local report = fibers.try_run(function()
-    local left = assert(socket.datagram_ipv4('127.0.0.1', 0, { name = name .. ':udp-left' }))
-    local right = assert(socket.datagram_ipv4('127.0.0.1', 0, { name = name .. ':udp-right' }))
+    local left = assert(socket.udp_ipv4('127.0.0.1', 0, { name = name .. ':udp-left' }))
+    local right = assert(socket.udp_ipv4('127.0.0.1', 0, { name = name .. ':udp-right' }))
     left:send_to('ping', right:local_address())
     left:flush()
     local packet = assert(right:receive_from())
@@ -344,24 +345,16 @@ function Common.native_socket_smoke(name, host)
     return false, 'host does not advertise socket capability'
   end
   Common.socket_echo_smoke(name .. ':tcp4', host, {
-    kind = 'inet4',
-    family = 'inet4',
-    host = '127.0.0.1',
-    port = 0,
+    kind = 'inet4', family = 'inet4', host = '127.0.0.1', port = 0,
   })
   Common.socket_echo_smoke(name .. ':tcp6', host, {
-    kind = 'inet6',
-    family = 'inet6',
-    host = '::1',
-    port = 0,
+    kind = 'inet6', family = 'inet6', host = '::1', port = 0,
   })
   Common.socket_churn_smoke(name .. ':tcp4-churn', host, 8)
   local path = os.tmpname() .. '.sock'
   os.remove(path)
   Common.socket_echo_smoke(name .. ':unix', host, {
-    kind = 'unix',
-    family = 'unix',
-    path = path,
+    kind = 'unix', family = 'unix', path = path,
   })
   os.remove(path)
   return true

@@ -5,21 +5,13 @@
 
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
+local Provider = require('fibers.host.provider')
+local HostWait = require('fibers.host.wait')
 
 local Common = {}
 
 local function make_unsupported(prefix, reason)
-  return {
-    is_supported = function()
-      return false, reason
-    end,
-    support_reason = function()
-      return reason
-    end,
-    new = function()
-      error(prefix .. ': ' .. tostring(reason), 2)
-    end,
-  }
+  return Provider.unsupported(prefix, reason, { 'new' })
 end
 
 local function make_tonumber(ffi)
@@ -760,26 +752,7 @@ function Common.new(opts)
     local have_fd = next(self.active) ~= nil
     local have_synthetic = next(synthetic) ~= nil
     if not have_fd and not have_synthetic then
-      if deadline ~= nil then
-        local delay = Host.delay_until(rt, deadline) or 0
-        if delay > 0 then
-          if self.on_wait then
-            self.on_wait(deadline, delay, waits, status)
-          end
-          local ok, err = self:sleep(delay)
-          if not ok then
-            error(err, 2)
-          end
-          if self.on_wake then
-            self.on_wake(deadline, waits, status)
-          end
-        end
-        return true, 'time'
-      end
-      if self.on_unsupported then
-        self.on_unsupported(waits, status)
-      end
-      return nil, 'unsupported-waits'
+      return HostWait.block_without_io(self, rt, waits, status, deadline)
     end
 
     local timeout = Host.timeout_ms(rt, deadline)

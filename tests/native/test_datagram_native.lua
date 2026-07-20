@@ -1,14 +1,7 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './reference/?.lua', './reference/?/init.lua', './reference/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -28,11 +21,11 @@ local function exchange(host, family)
     local left
     local right
     if family == 'inet6' then
-      left = assert(socket.datagram_ipv6('::1', 0))
-      right = assert(socket.datagram_ipv6('::1', 0))
+      left = assert(socket.udp_ipv6('::1', 0))
+      right = assert(socket.udp_ipv6('::1', 0))
     else
-      left = assert(socket.datagram_ipv4('127.0.0.1', 0))
-      right = assert(socket.datagram_ipv4('127.0.0.1', 0))
+      left = assert(socket.udp_ipv4('127.0.0.1', 0))
+      right = assert(socket.udp_ipv4('127.0.0.1', 0))
     end
     left:send_to('abcdef', right:local_address())
     left:flush()

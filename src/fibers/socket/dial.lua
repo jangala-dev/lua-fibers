@@ -9,6 +9,7 @@ local HostError = require('fibers.host.error')
 local Adoption = require('fibers.internal.adoption')
 local IO = require('fibers.internal.io')
 local DialLifecycle = require('fibers.internal.socket.dial_lifecycle')
+local Connection = require('fibers.internal.socket.connection')
 local Ownership = require('fibers.internal.ownership')
 local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
@@ -24,31 +25,20 @@ local function close_socket(value, reason)
   return IO.close_value('socket', value, reason)
 end
 
-local function open_connection(rt, owner, handle, opts)
-  return IO.open_handle_stream(rt, owner, handle, {
-    name = opts.name,
-    read = true,
-    write = true,
-    capacity = opts.capacity,
-    read_capacity = opts.read_capacity,
-    write_capacity = opts.write_capacity,
-    chunk_size = opts.chunk_size,
-    read_chunk_size = opts.read_chunk_size,
-    write_chunk_size = opts.write_chunk_size,
-  })
-end
-
 local function dial_settlement(dial)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return dial:close_op(reason or 'scope settlement')
-  end, function()
-    return dial:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'dial settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+  return Settlement.request_then_wait(
+    function(_ctx, _record, reason)
+      return dial:close_op(reason or 'scope settlement')
+    end,
+    function()
+      return dial:closed_op():and_then(function(ok, err)
+        if not ok then
+          error(err or 'dial settlement failed', 0)
+        end
+        return Op.always(true)
+      end)
+    end
+  )
 end
 
 function Dial:owned(children)
@@ -184,83 +174,46 @@ local function driver(dial, driver_scope, opts)
         if not HostError.is_would_block(finish_err) then
           slot:close(finish_err)
           IO.release_owned(rt, driver_region, slot)
-          IO.masked_perform(
-            rt,
-            dial.lifecycle:publish_failure_op(HostError.normalise(finish_err, {
-              domain = 'socket',
-              action = 'connect_finish',
-              address = dial.address,
-            }))
-          )
+          IO.masked_perform(rt, dial.lifecycle:publish_failure_op(HostError.normalise(finish_err, {
+            domain = 'socket',
+            action = 'connect_finish',
+            address = dial.address,
+          })))
           return
         end
         perform(handle:write_ready_op())
       end
     end
 
-    local connection
-    local opened, open_err = Protected.pcall(function()
-      connection = open_connection(rt, driver_scope, handle, {
-        name = dial.name .. ':connection',
-        capacity = opts.capacity,
-        read_capacity = opts.read_capacity,
-        write_capacity = opts.write_capacity,
-        chunk_size = opts.chunk_size,
-        read_chunk_size = opts.read_chunk_size,
-        write_chunk_size = opts.write_chunk_size,
-      })
-    end)
-    if not opened then
-      slot:close(open_err)
-      IO.release_owned(rt, driver_region, slot)
-      error(
-        HostError.normalise(open_err, {
-          domain = 'socket',
-          action = 'open_connection',
-          address = dial.address,
-        }),
-        0
-      )
+    local connection, connection_err = Connection.adopt(rt, driver_scope, driver_region, slot, handle, {
+      name = dial.name .. ':connection',
+      capacity = opts.capacity,
+      read_capacity = opts.read_capacity,
+      write_capacity = opts.write_capacity,
+      chunk_size = opts.chunk_size,
+      read_chunk_size = opts.read_chunk_size,
+      write_chunk_size = opts.write_chunk_size,
+      action = 'open_connection',
+      address = dial.address,
+      peer_address = peer,
+      default_peer = dial.address,
+    })
+    if not connection then
+      error(connection_err, 0)
     end
 
-    local local_address
-    if type(handle.local_address) == 'function' then
-      local_address = handle:local_address()
-    elseif handle.local_address_value ~= nil then
-      local_address = handle.local_address_value
-    end
-    if type(handle.peer_address_value) == 'function' then
-      peer = handle:peer_address_value() or peer
-    elseif handle.peer_address_value ~= nil then
-      peer = handle.peer_address_value
-    end
-    if type(connection._set_addresses) == 'function' then
-      connection:_set_addresses(local_address, peer or dial.address)
-    else
-      connection._local_address = local_address
-      connection._peer_address = peer or dial.address
-    end
-    local released, release_err = slot:release(handle)
-    if not released then
-      IO.masked_perform(rt, connection:abort_op(release_err))
-      IO.release_owned(rt, driver_region, slot)
-      error(release_err, 0)
-    end
-    IO.release_owned(rt, driver_region, slot)
-
-    local published, state =
-      IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_region))
+    local published, state = IO.masked_perform(
+      rt,
+      dial.lifecycle:publish_connected_op(connection, driver_region)
+    )
     if not published then
       if state.kind == 'closing' or state.kind == 'closed' then
         return
       end
-      error(
-        HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connected Stream', {
-          address = dial.address,
-          state = state.kind,
-        }),
-        0
-      )
+      error(HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connected Stream', {
+        address = dial.address,
+        state = state.kind,
+      }), 0)
     end
 
     -- Retain the child scope, and therefore the unclaimed connection, until
@@ -338,25 +291,15 @@ function Module.dial_op(address, opts)
     end)
 end
 
-function Dial:connected(target)
-  return perform(self:connected_op(target))
-end
+function Dial:connected(target) return perform(self:connected_op(target)) end
 
-function Dial:failed()
-  return perform(self:failed_op())
-end
+function Dial:failed() return perform(self:failed_op()) end
 
-function Dial:result(target)
-  return perform(self:result_op(target))
-end
+function Dial:result(target) return perform(self:result_op(target)) end
 
-function Dial:close(reason)
-  return perform(self:close_op(reason))
-end
+function Dial:close(reason) return perform(self:close_op(reason)) end
 
-function Dial:closed()
-  return perform(self:closed_op())
-end
+function Dial:closed() return perform(self:closed_op()) end
 
 Module.Dial = Dial
 return Module

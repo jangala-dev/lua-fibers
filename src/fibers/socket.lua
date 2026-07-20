@@ -70,16 +70,16 @@ function Socket.listen_unix_op(path, opts)
   return ListenerModule.listen_op(Address.unix(path), opts)
 end
 
-function Socket.datagram_op(address, opts)
-  return DatagramModule.datagram_op(Address.validate(address, 'socket.datagram_op'), opts)
+function Socket.udp_op(address, opts)
+  return DatagramModule.udp_op(Address.validate(address, 'socket.udp_op'), opts)
 end
 
-function Socket.datagram_ipv4_op(host, port, opts)
-  return DatagramModule.datagram_op(Address.ipv4(host, port), opts)
+function Socket.udp_ipv4_op(host, port, opts)
+  return DatagramModule.udp_op(Address.ipv4(host, port), opts)
 end
 
-function Socket.datagram_ipv6_op(host, port, opts)
-  return DatagramModule.datagram_op(Address.ipv6(host, port, opts), opts)
+function Socket.udp_ipv6_op(host, port, opts)
+  return DatagramModule.udp_op(Address.ipv6(host, port, opts), opts)
 end
 
 function Socket.resolve_op(endpoint, opts)
@@ -126,67 +126,35 @@ function Socket.dial_unix_op(path, opts)
   return DialModule.dial_op(Address.unix(path), opts)
 end
 
-function Socket.listen(address, opts)
-  return perform(Socket.listen_op(address, opts))
-end
+function Socket.listen(address, opts) return perform(Socket.listen_op(address, opts)) end
 
-function Socket.listen_ipv4(host, port, opts)
-  return perform(Socket.listen_ipv4_op(host, port, opts))
-end
+function Socket.listen_ipv4(host, port, opts) return perform(Socket.listen_ipv4_op(host, port, opts)) end
 
-function Socket.listen_ipv6(host, port, opts)
-  return perform(Socket.listen_ipv6_op(host, port, opts))
-end
+function Socket.listen_ipv6(host, port, opts) return perform(Socket.listen_ipv6_op(host, port, opts)) end
 
-function Socket.listen_inet(host, port, opts)
-  return perform(Socket.listen_inet_op(host, port, opts))
-end
+function Socket.listen_inet(host, port, opts) return perform(Socket.listen_inet_op(host, port, opts)) end
 
-function Socket.listen_unix(path, opts)
-  return perform(Socket.listen_unix_op(path, opts))
-end
+function Socket.listen_unix(path, opts) return perform(Socket.listen_unix_op(path, opts)) end
 
-function Socket.datagram(address, opts)
-  return perform(Socket.datagram_op(address, opts))
-end
+function Socket.udp(address, opts) return perform(Socket.udp_op(address, opts)) end
 
-function Socket.datagram_ipv4(host, port, opts)
-  return perform(Socket.datagram_ipv4_op(host, port, opts))
-end
+function Socket.udp_ipv4(host, port, opts) return perform(Socket.udp_ipv4_op(host, port, opts)) end
 
-function Socket.datagram_ipv6(host, port, opts)
-  return perform(Socket.datagram_ipv6_op(host, port, opts))
-end
+function Socket.udp_ipv6(host, port, opts) return perform(Socket.udp_ipv6_op(host, port, opts)) end
 
-Socket.udp_op = Socket.datagram_op
-Socket.udp = Socket.datagram
 
-function Socket.resolve(endpoint, opts)
-  return perform(Socket.resolve_op(endpoint, opts))
-end
+function Socket.resolve(endpoint, opts) return perform(Socket.resolve_op(endpoint, opts)) end
 
-function Socket.resolve_name(host, service, opts)
-  return perform(Socket.resolve_name_op(host, service, opts))
-end
+function Socket.resolve_name(host, service, opts) return perform(Socket.resolve_name_op(host, service, opts)) end
 
-function Socket.dial(address, opts)
-  return perform(Socket.dial_op(address, opts))
-end
+function Socket.dial(address, opts) return perform(Socket.dial_op(address, opts)) end
 
-function Socket.dial_ipv4(host, port, opts)
-  return perform(Socket.dial_ipv4_op(host, port, opts))
-end
+function Socket.dial_ipv4(host, port, opts) return perform(Socket.dial_ipv4_op(host, port, opts)) end
 
-function Socket.dial_ipv6(host, port, opts)
-  return perform(Socket.dial_ipv6_op(host, port, opts))
-end
+function Socket.dial_ipv6(host, port, opts) return perform(Socket.dial_ipv6_op(host, port, opts)) end
 
-function Socket.dial_inet(host, port, opts)
-  return perform(Socket.dial_inet_op(host, port, opts))
-end
+function Socket.dial_inet(host, port, opts) return perform(Socket.dial_inet_op(host, port, opts)) end
 
-function Socket.dial_unix(path, opts)
-  return perform(Socket.dial_unix_op(path, opts))
-end
+function Socket.dial_unix(path, opts) return perform(Socket.dial_unix_op(path, opts)) end
 
 return Socket

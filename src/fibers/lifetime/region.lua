@@ -286,7 +286,7 @@ local function with_event(op, event)
   end
   return op:and_then(function(...)
     local values = Op._pack(...)
-    return Op.consequence(event_of(event)):map(function()
+    return Op.emit(event_of(event)):map(function()
       return unpack_(values, 1, values.n)
     end)
   end, false)
@@ -730,7 +730,7 @@ local function valid_claim(s, region, claim)
   return subtree
 end
 
-function Region:resolve_claim_op(claim, resolution)
+function Region:resolve_op(claim, resolution)
   resolution = resolution or { kind = 'discharge' }
   local t = select_transition('region.resolve_claim', function(s)
     return valid_claim(s, self, claim) ~= nil
@@ -775,16 +775,13 @@ function Region:resolve_claim_op(claim, resolution)
   return op_transition(t)
 end
 function Region:discharge_claim_op(claim)
-  return self:resolve_claim_op(claim, { kind = 'discharge' })
+  return self:resolve_op(claim, { kind = 'discharge' })
 end
 function Region:fail_claim_op(claim, err)
-  return self:resolve_claim_op(claim, { kind = 'fail', error = err })
+  return self:resolve_op(claim, { kind = 'fail', error = err })
 end
 function Region:restore_claim_op(claim)
-  return self:resolve_claim_op(claim, { kind = 'restore' })
-end
-function Region:resolve_op(claim, resolution)
-  return self:resolve_claim_op(claim, resolution)
+  return self:resolve_op(claim, { kind = 'restore' })
 end
 
 function Region:seal_op()

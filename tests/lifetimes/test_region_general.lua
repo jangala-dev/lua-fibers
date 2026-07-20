@@ -215,12 +215,12 @@ do
     }
 
     forged_result = fibers.perform(region
-      :resolve_claim_op(fake, { kind = 'discharge' })
+      :resolve_op(fake, { kind = 'discharge' })
       :map(function()
         return 'forged-settled'
       end)
       :or_else(fibers.always('blocked')))
-    settled = fibers.perform(region:resolve_claim_op(claim, { kind = 'discharge' }))
+    settled = fibers.perform(region:resolve_op(claim, { kind = 'discharge' }))
   end).runtime_status
 
   assert_status(st, 'found')

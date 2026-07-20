@@ -523,7 +523,7 @@ add('external', 'queue preloaded consume', 1000, function(n)
   local q = EventQueue.new('bench-external-events')
   local feed = rt:external_feed(q)
   for i = 1, n do
-    feed:deliver(i)
+    feed:set(i)
   end
   local sum = 0
   rt:spawn_raw(function()
@@ -548,7 +548,7 @@ add('external', 'external arrival driver loop', 250, function(n)
   end, 'bench-external-driver-consumer')
   assert_status(rt:run(), 'pending')
   for i = 1, n do
-    feed:deliver(i)
+    feed:set(i)
     assert_status(rt:run(), 'found')
     if i < n then
       assert_status(rt:run(), 'pending')

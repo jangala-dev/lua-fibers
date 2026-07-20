@@ -177,7 +177,7 @@ Producer or host code uses the bound feed:
 
 ```lua
 signal_feed:set('requested')
-event_feed:push({ kind = 'message', value = 1 })
+event_feed:set({ kind = 'message', value = 1 })
 readiness_feed:readable()
 readiness_feed:writable()
 readiness_feed:clear('read')

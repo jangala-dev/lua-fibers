@@ -5,25 +5,10 @@
 local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
 local HostError = require('fibers.host.error')
+local Provider = require('fibers.host.provider')
 
 local function unsupported(reason)
-  return {
-    is_supported = function()
-      return false, reason
-    end,
-    support_reason = function()
-      return reason
-    end,
-    new = function()
-      error('fibers.host.fd_nixio: ' .. tostring(reason), 2)
-    end,
-    wrap = function()
-      error('fibers.host.fd_nixio: ' .. tostring(reason), 2)
-    end,
-    pipe = function()
-      error('fibers.host.fd_nixio: ' .. tostring(reason), 2)
-    end,
-  }
+  return Provider.unsupported('fibers.host.fd_nixio', reason, { 'new', 'wrap', 'pipe' })
 end
 
 local ok_nixio, nixio = pcall(require, 'nixio')
@@ -187,7 +172,7 @@ function Fd.support_reason()
   return 'nixio.pipe unavailable'
 end
 
-function Fd.wrap(obj, opts)
+function Fd.new(obj, opts)
   opts = opts or {}
   assert(obj ~= nil, 'nixio handle object required')
   next_generation = next_generation + 1
@@ -233,7 +218,6 @@ function Fd.wrap(obj, opts)
   return h
 end
 
-Fd.new = Fd.wrap
 
 function Fd.pipe(opts)
   opts = opts or {}
@@ -241,7 +225,7 @@ function Fd.pipe(opts)
   if not r or not w then
     return nil, nil, HostError.system('pipe', 'create', 'nixio.pipe failed')
   end
-  local rh, rerr = Fd.wrap(r, {
+  local rh, rerr = Fd.new(r, {
     host = opts.host,
     name = opts.name and (opts.name .. ':read') or nil,
     nonblocking = opts.nonblocking,
@@ -252,7 +236,7 @@ function Fd.pipe(opts)
     end)
     return nil, nil, rerr
   end
-  local wh, werr = Fd.wrap(w, {
+  local wh, werr = Fd.new(w, {
     host = opts.host,
     name = opts.name and (opts.name .. ':write') or nil,
     nonblocking = opts.nonblocking,

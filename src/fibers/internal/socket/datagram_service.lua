@@ -63,15 +63,13 @@ function Service:next_op(handle, sends, pending)
       preferred_op = write_event_op(handle, sends, held)
     end
 
-    return preferred_op
-      :map(function(preferred_event)
-        local next_pending = held
-        if preferred_event.kind == 'write' then
-          next_pending = preferred_event.record
-        end
-        return preferred_event, next_pending
-      end)
-      :or_else(Op.always(event, held))
+    return preferred_op:map(function(preferred_event)
+      local next_pending = held
+      if preferred_event.kind == 'write' then
+        next_pending = preferred_event.record
+      end
+      return preferred_event, next_pending
+    end):or_else(Op.always(event, held))
   end, footprint)
 end
 

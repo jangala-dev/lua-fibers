@@ -7,18 +7,12 @@
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Sleep = require('fibers.sleep')
+local Provider = require('fibers.host.provider')
 
 local Common = {}
 
 local function unsupported(reason)
-  return {
-    is_supported = function()
-      return false, reason
-    end,
-    support_reason = function()
-      return reason
-    end,
-  }
+  return Provider.unsupported('fibers.host.process_ffi', reason)
 end
 
 local function make_tonumber(ffi)
@@ -69,7 +63,6 @@ function Common.new(opts)
   end
 
   local EINTR = 4
-  local EAGAIN = 11
   local EINVAL = 22
   local ENOSYS = 38
   local F_GETFD = 1
@@ -79,22 +72,11 @@ function Common.new(opts)
   local FD_CLOEXEC = 1
   local O_RDONLY = 0
   local O_WRONLY = 1
-  local O_RDWR = 2
   local O_NONBLOCK = 2048
   local WNOHANG = 1
   local SIG_NUMBERS = {
-    hup = 1,
-    int = 2,
-    quit = 3,
-    kill = 9,
-    usr1 = 10,
-    usr2 = 12,
-    pipe = 13,
-    alrm = 14,
-    term = 15,
-    chld = 17,
-    cont = 18,
-    stop = 19,
+    hup = 1, int = 2, quit = 3, kill = 9, usr1 = 10, usr2 = 12,
+    pipe = 13, alrm = 14, term = 15, chld = 17, cont = 18, stop = 19,
   }
   local SYS_pidfd_open = opts.sys_pidfd_open or 434
   local SYS_close_range = opts.sys_close_range or 436
@@ -125,9 +107,7 @@ function Common.new(opts)
   local function vararg_int(value)
     if type(ffi.cast) == 'function' then
       local ok, converted = pcall(ffi.cast, 'int', value)
-      if ok then
-        return converted
-      end
+      if ok then return converted end
     end
     return value
   end
@@ -333,12 +313,9 @@ function Common.new(opts)
       return C.kill(pid, number)
     end)
     if rc == nil then
-      return nil,
-        HostError.system('process', 'signal', strerror(e), nil, e, {
-          pid = self._pid,
-          signal = number,
-          target = target,
-        })
+      return nil, HostError.system('process', 'signal', strerror(e), nil, e, {
+        pid = self._pid, signal = number, target = target,
+      })
     end
     return true
   end
@@ -361,9 +338,11 @@ function Common.new(opts)
 
   local function pidfd_open(pid)
     local ok, result = pcall(function()
-      return tonumber_c(
-        C.syscall(ffi.cast('long', SYS_pidfd_open), ffi.cast('int', pid), ffi.cast('unsigned int', 0))
-      )
+      return tonumber_c(C.syscall(
+        ffi.cast('long', SYS_pidfd_open),
+        ffi.cast('int', pid),
+        ffi.cast('unsigned int', 0)
+      ))
     end)
     if not ok or result == -1 then
       return nil, ok and errno() or ENOSYS
@@ -407,9 +386,7 @@ function Common.new(opts)
       end
       if fd >= 3 then
         local ok = set_cloexec(fd, false)
-        if not ok then
-          return nil
-        end
+        if not ok then return nil end
       end
     end
     if spec.close_fds == false then
@@ -418,36 +395,26 @@ function Common.new(opts)
 
     table.sort(ordered)
     local max_fd = tonumber_c(C.sysconf(SC_OPEN_MAX))
-    if not max_fd or max_fd < 4 then
-      max_fd = 1024
-    end
+    if not max_fd or max_fd < 4 then max_fd = 1024 end
 
     local function close_interval(first, last)
-      if first > last then
-        return true
-      end
+      if first > last then return true end
       local ok, rc = pcall(function()
-        return tonumber_c(
-          C.syscall(
-            ffi.cast('long', SYS_close_range),
-            ffi.cast('unsigned int', first),
-            ffi.cast('unsigned int', last),
-            ffi.cast('unsigned int', 0)
-          )
-        )
+        return tonumber_c(C.syscall(
+          ffi.cast('long', SYS_close_range),
+          ffi.cast('unsigned int', first),
+          ffi.cast('unsigned int', last),
+          ffi.cast('unsigned int', 0)
+        ))
       end)
-      if ok and rc == 0 then
-        return true
-      end
+      if ok and rc == 0 then return true end
       local e = ok and errno() or ENOSYS
       if e ~= ENOSYS and e ~= EINVAL then
         -- Seccomp and compatibility layers may reject close_range while plain
         -- close remains available. Fall back rather than weakening close_fds.
       end
       for fd = first, last do
-        if not keep[fd] then
-          C.close(fd)
-        end
+        if not keep[fd] then C.close(fd) end
       end
       return true
     end
@@ -456,9 +423,7 @@ function Common.new(opts)
     for i = 1, #ordered do
       local fd = ordered[i]
       if fd >= first then
-        if not close_interval(first, fd - 1) then
-          return nil
-        end
+        if not close_interval(first, fd - 1) then return nil end
         first = fd + 1
       end
     end
@@ -548,18 +513,14 @@ function Common.new(opts)
     for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
       local ok, e = make_stdio(which, spec[which] or 'inherit')
       if not ok then
-        for _, fd in pairs(stdio.all_fds) do
-          close_fd(fd)
-        end
+        for _, fd in pairs(stdio.all_fds) do close_fd(fd) end
         return nil, nil, HostError.system('process', 'pipe', strerror(e), nil, e, { stream = which })
       end
     end
 
     local error_read, error_write, pipe_errno = raw_pipe()
     if not error_read then
-      for _, fd in pairs(stdio.all_fds) do
-        close_fd(fd)
-      end
+      for _, fd in pairs(stdio.all_fds) do close_fd(fd) end
       return nil, nil, HostError.system('process', 'exec_pipe', strerror(pipe_errno), nil, pipe_errno)
     end
 
@@ -568,11 +529,8 @@ function Common.new(opts)
     local pid = tonumber_c(C.fork())
     if pid == -1 then
       local e = errno()
-      close_fd(error_read)
-      close_fd(error_write)
-      for _, fd in pairs(stdio.all_fds) do
-        close_fd(fd)
-      end
+      close_fd(error_read); close_fd(error_write)
+      for _, fd in pairs(stdio.all_fds) do close_fd(fd) end
       return nil, nil, HostError.system('process', 'fork', strerror(e), nil, e)
     end
 
@@ -585,19 +543,11 @@ function Common.new(opts)
       if stage == 0 and spec.new_session and tonumber_c(C.setsid()) == -1 then
         stage = 2
       end
-      if
-        stage == 0
-        and not spec.new_session
-        and spec.process_group == 'new'
-        and tonumber_c(C.setpgid(0, 0)) ~= 0
-      then
+      if stage == 0 and not spec.new_session and spec.process_group == 'new'
+          and tonumber_c(C.setpgid(0, 0)) ~= 0 then
         stage = 3
-      elseif
-        stage == 0
-        and not spec.new_session
-        and type(spec.process_group) == 'number'
-        and tonumber_c(C.setpgid(0, spec.process_group)) ~= 0
-      then
+      elseif stage == 0 and not spec.new_session and type(spec.process_group) == 'number'
+          and tonumber_c(C.setpgid(0, spec.process_group)) ~= 0 then
         stage = 3
       end
       if stage == 0 and not setup_environment_child(spec) then
@@ -640,9 +590,7 @@ function Common.new(opts)
         read_errno = e
         break
       end
-      if n == 0 then
-        break
-      end
+      if n == 0 then break end
       total = total + n
     end
     close_fd(error_read)
@@ -650,75 +598,52 @@ function Common.new(opts)
       C.kill(pid, 9)
       local status = ffi.new('int[1]')
       C.waitpid(pid, status, 0)
-      for _, fd in pairs(parent_fds) do
-        close_fd(fd)
-      end
+      for _, fd in pairs(parent_fds) do close_fd(fd) end
       return nil, nil, HostError.system('process', 'exec_handshake', strerror(read_errno), nil, read_errno)
     end
     if total > 0 then
       local stage = tonumber_c(error_value[0])
       local e = tonumber_c(error_value[1])
       local actions = {
-        [1] = 'chdir',
-        [2] = 'setsid',
-        [3] = 'setpgid',
-        [4] = 'environment',
-        [5] = 'stdio',
-        [6] = 'close_fds',
-        [7] = 'exec',
+        [1] = 'chdir', [2] = 'setsid', [3] = 'setpgid', [4] = 'environment',
+        [5] = 'stdio', [6] = 'close_fds', [7] = 'exec',
       }
       local action = actions[stage] or 'exec_handshake'
       local status = ffi.new('int[1]')
       C.waitpid(pid, status, 0)
-      for _, fd in pairs(parent_fds) do
-        close_fd(fd)
-      end
+      for _, fd in pairs(parent_fds) do close_fd(fd) end
       if total ~= error_size then
-        return nil,
-          nil,
-          HostError.protocol('process', 'exec_handshake', 'truncated child setup failure', {
-            argv = spec.argv,
-            bytes = total,
-            expected = error_size,
-          })
-      end
-      return nil,
-        nil,
-        HostError.system('process', action, strerror(e), nil, e, {
-          argv = spec.argv,
+        return nil, nil, HostError.protocol('process', 'exec_handshake', 'truncated child setup failure', {
+          argv = spec.argv, bytes = total, expected = error_size,
         })
+      end
+      return nil, nil, HostError.system('process', action, strerror(e), nil, e, {
+        argv = spec.argv,
+      })
     end
 
     local endpoints = {}
     for which, fd in pairs(parent_fds) do
       local ok_nb, nb_errno = set_nonblocking(fd, true)
       if not ok_nb then
-        for _, other in pairs(parent_fds) do
-          close_fd(other)
-        end
+        for _, other in pairs(parent_fds) do close_fd(other) end
         C.kill(pid, 9)
         local status = ffi.new('int[1]')
         C.waitpid(pid, status, 0)
-        return nil,
-          nil,
-          HostError.system('process', 'set_nonblocking', strerror(nb_errno), nil, nb_errno, {
-            stream = which,
-          })
+        return nil, nil, HostError.system('process', 'set_nonblocking', strerror(nb_errno), nil, nb_errno, {
+          stream = which,
+        })
       end
-      local handle, wrap_err = fd_provider.wrap(fd, {
+      local handle, wrap_err = fd_provider.new(fd, {
         host = host,
         name = (spec.name or ('process-' .. tostring(pid))) .. ':' .. which,
         nonblocking = false,
         cloexec = true,
       })
       if not handle then
-        for _, endpoint in pairs(endpoints) do
-          endpoint:close('process endpoint wrap failed')
-        end
+        for _, endpoint in pairs(endpoints) do endpoint:close('process endpoint wrap failed') end
         for other_which, other_fd in pairs(parent_fds) do
-          if other_which ~= which and not endpoints[other_which] then
-            close_fd(other_fd)
-          end
+          if other_which ~= which and not endpoints[other_which] then close_fd(other_fd) end
         end
         C.kill(pid, 9)
         local status = ffi.new('int[1]')
@@ -738,7 +663,7 @@ function Common.new(opts)
     local pidfd
     local pidfd_fd = pidfd_open(pid)
     if pidfd_fd then
-      pidfd = fd_provider.wrap(pidfd_fd, {
+      pidfd = fd_provider.new(pidfd_fd, {
         host = host,
         name = (spec.name or ('process-' .. tostring(pid))) .. ':pidfd',
         nonblocking = true,

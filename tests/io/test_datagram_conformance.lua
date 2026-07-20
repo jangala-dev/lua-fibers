@@ -1,14 +1,7 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './reference/?.lua', './reference/?/init.lua', './reference/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -17,10 +10,7 @@ local ManualHost = require('fibers.host.manual')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -52,11 +42,11 @@ local function run_exchange(label, host, family)
     local left
     local right
     if family == 'inet6' then
-      left = assert(socket.datagram_ipv6('::1', 0, { name = label .. ':left' }))
-      right = assert(socket.datagram_ipv6('::1', 0, { name = label .. ':right' }))
+      left = assert(socket.udp_ipv6('::1', 0, { name = label .. ':left' }))
+      right = assert(socket.udp_ipv6('::1', 0, { name = label .. ':right' }))
     else
-      left = assert(socket.datagram_ipv4('127.0.0.1', 0, { name = label .. ':left' }))
-      right = assert(socket.datagram_ipv4('127.0.0.1', 0, { name = label .. ':right' }))
+      left = assert(socket.udp_ipv4('127.0.0.1', 0, { name = label .. ':left' }))
+      right = assert(socket.udp_ipv4('127.0.0.1', 0, { name = label .. ':right' }))
     end
 
     assert(left:send_to('', right:local_address()))

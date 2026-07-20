@@ -109,7 +109,7 @@ add('simple', 'external', 'preloaded event queue', 1200, function(ctx, n)
   local queue = EventQueue.new('perf-events')
   local feed = rt:external_feed(queue)
   for i = 1, n do
-    feed:deliver(i)
+    feed:set(i)
   end
   local total = 0
   rt:spawn_raw(function()

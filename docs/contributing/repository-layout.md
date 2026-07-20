@@ -8,11 +8,12 @@ src/fibers/             installed version 1 library
   resource/             supported transactional resource toolkit
   external/             externally observed facts and runtime-bound feeds
   lifetime/             custody, borrowing, effects and task exits
-  flow.lua and flow/    supported transactional byte facility
-  internal/             closed kernel and other implementation details
-  host/                 host adapters and the runtime-owned reactor
-  socket.lua and socket/ public socket facade, addresses, Listener and Dial
-  process.lua           immutable Command and owned Process facility
+  flow.lua and flow/    supported transactional byte facade and value types
+  internal/flow_machine.lua transactional byte state machine
+  internal/             closed kernel, shared waits, lifecycle and adoption machinery
+  host/                 host adapters, provider registry and runtime-owned reactor
+  socket.lua and socket/ public socket facade, addresses, Listener, Dial and UDP
+  process.lua and process/ owned Process facility and immutable Command builder
   stream/               supported capability-shaped Stream and backends
 
 examples/tutorial/      ordinary application use

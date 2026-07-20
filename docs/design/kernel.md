@@ -305,7 +305,6 @@ local cursor = {
 
 Each `next()` result is one candidate successor and packed result. The machine owns progression, rollback and exhaustion. Petri token bindings and Calendar slot choices use lazy cursors.
 
-The older eager `enumerate` callback is adapted to a cursor for source compatibility; it should not be used for large search spaces.
 
 ### Refutation and `or_else`
 

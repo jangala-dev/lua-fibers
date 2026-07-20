@@ -10,6 +10,7 @@ local Adoption = require('fibers.internal.adoption')
 local IO = require('fibers.internal.io')
 local IOAudit = require('fibers.internal.io_audit')
 local ListenerLifecycle = require('fibers.internal.socket.listener_lifecycle')
+local Connection = require('fibers.internal.socket.connection')
 local Ownership = require('fibers.internal.ownership')
 local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
@@ -26,31 +27,20 @@ local function close_socket(value, reason)
   return IO.close_value('socket', value, reason)
 end
 
-local function open_connection(rt, owner, handle, opts)
-  return IO.open_handle_stream(rt, owner, handle, {
-    name = opts.name,
-    read = true,
-    write = true,
-    capacity = opts.capacity,
-    read_capacity = opts.read_capacity,
-    write_capacity = opts.write_capacity,
-    chunk_size = opts.chunk_size,
-    read_chunk_size = opts.read_chunk_size,
-    write_chunk_size = opts.write_chunk_size,
-  })
-end
-
 local function listener_settlement(listener)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return listener:close_op(reason or 'scope settlement')
-  end, function()
-    return listener:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'listener settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+  return Settlement.request_then_wait(
+    function(_ctx, _record, reason)
+      return listener:close_op(reason or 'scope settlement')
+    end,
+    function()
+      return listener:closed_op():and_then(function(ok, err)
+        if not ok then
+          error(err or 'listener settlement failed', 0)
+        end
+        return Op.always(true)
+      end)
+    end
+  )
 end
 
 function Listener:owned(children)
@@ -81,11 +71,10 @@ local function terminal_accept(state)
   if state.error then
     return nil, state.error
   end
-  return nil,
-    HostError.closed('socket', 'accept', {
-      reason = state.reason,
-      address = state.address,
-    })
+  return nil, HostError.closed('socket', 'accept', {
+    reason = state.reason,
+    address = state.address,
+  })
 end
 
 function Listener:accept_op(target)
@@ -120,32 +109,29 @@ function Listener:close_op(reason)
   local listener = self
   reason = reason or 'listener closed'
   local cancel = listener.driver and listener.driver:request_cancel_op(reason) or Op.always(true)
-  return listener.lifecycle
-    :request_stop_op(reason)
-    :and_then(function(first, state)
-      if first and listener.driver then
-        return cancel:map(function()
-          return first, state
-        end)
-      end
-      return Op.always(first, state)
-    end, cancel)
-    :wrap(function(first, state)
-      if first and state.handle then
-        local ok, close_err = IO.safe_close('socket', state.handle, reason, {
-          domain = 'socket',
-          action = 'close_listener',
-          address = state.address,
-        })
-        if not ok then
-          local rt = Runtime.current()
-          if rt then
-            IO.masked_perform(rt, listener.lifecycle:record_close_error_op(close_err))
-          end
+  return listener.lifecycle:request_stop_op(reason):and_then(function(first, state)
+    if first and listener.driver then
+      return cancel:map(function()
+        return first, state
+      end)
+    end
+    return Op.always(first, state)
+  end, cancel):wrap(function(first, state)
+    if first and state.handle then
+      local ok, close_err = IO.safe_close('socket', state.handle, reason, {
+        domain = 'socket',
+        action = 'close_listener',
+        address = state.address,
+      })
+      if not ok then
+        local rt = Runtime.current()
+        if rt then
+          IO.masked_perform(rt, listener.lifecycle:record_close_error_op(close_err))
         end
       end
-      return listener_close_result(listener.lifecycle:state_value())
-    end)
+    end
+    return listener_close_result(listener.lifecycle:state_value())
+  end)
 end
 
 function Listener:closed_op()
@@ -195,14 +181,11 @@ local function driver(listener, driver_scope, opts)
         elseif HostError.is(accept_err, 'closed') then
           break
         else
-          error(
-            HostError.normalise(accept_err, {
-              domain = 'socket',
-              action = 'accept',
-              address = listener:local_address(),
-            }),
-            0
-          )
+          error(HostError.normalise(accept_err, {
+            domain = 'socket',
+            action = 'accept',
+            address = listener:local_address(),
+          }), 0)
         end
       else
         local adopted, adoption_err = slot:adopt(handle, close_socket)
@@ -211,44 +194,22 @@ local function driver(listener, driver_scope, opts)
           error(adoption_err, 0)
         end
 
-        local connection
-        local opened, open_err = Protected.pcall(function()
-          connection = open_connection(rt, driver_scope, handle, {
-            name = listener.name .. ':connection',
-            capacity = opts.capacity,
-            read_capacity = opts.read_capacity,
-            write_capacity = opts.write_capacity,
-            chunk_size = opts.chunk_size,
-            read_chunk_size = opts.read_chunk_size,
-            write_chunk_size = opts.write_chunk_size,
-          })
-        end)
-        if not opened then
-          slot:close(open_err)
-          IO.release_owned(rt, driver_region, slot)
-          error(
-            HostError.normalise(open_err, {
-              domain = 'socket',
-              action = 'open_accepted_stream',
-              address = listener:local_address(),
-            }),
-            0
-          )
+        local connection, connection_err = Connection.adopt(rt, driver_scope, driver_region, slot, handle, {
+          name = listener.name .. ':connection',
+          capacity = opts.capacity,
+          read_capacity = opts.read_capacity,
+          write_capacity = opts.write_capacity,
+          chunk_size = opts.chunk_size,
+          read_chunk_size = opts.read_chunk_size,
+          write_chunk_size = opts.write_chunk_size,
+          action = 'open_accepted_stream',
+          address = listener:local_address(),
+          local_address = listener:local_address(),
+          peer_address = peer,
+        })
+        if not connection then
+          error(connection_err, 0)
         end
-
-        if type(connection._set_addresses) == 'function' then
-          connection:_set_addresses(listener:local_address(), peer)
-        else
-          connection._local_address = listener:local_address()
-          connection._peer_address = peer
-        end
-        local transferred, transfer_err = slot:release(handle)
-        if not transferred then
-          IO.masked_perform(rt, connection:abort_op(transfer_err))
-          IO.release_owned(rt, driver_region, slot)
-          error(transfer_err, 0)
-        end
-        IO.release_owned(rt, driver_region, slot)
 
         -- Queue-space waits remain cancellable; the connection is already
         -- covered by driver-scope custody.
@@ -344,7 +305,8 @@ function Module.listen_op(address, opts)
       if type(host_listener.bind_runtime) == 'function' then
         host_listener:bind_runtime(rt)
       end
-      local local_address = type(host_listener.local_address) == 'function' and host_listener:local_address()
+      local local_address = type(host_listener.local_address) == 'function'
+          and host_listener:local_address()
         or address
 
       IOAudit.transfer(host_listener, listener, { kind = 'host_handle', role = 'listener' })
@@ -355,31 +317,26 @@ function Module.listen_op(address, opts)
         return nil, release_err
       end
 
-      local activated =
-        IO.masked_perform(rt, listener.lifecycle:activate_op(host_listener, local_address or address))
+      local activated = IO.masked_perform(
+        rt,
+        listener.lifecycle:activate_op(host_listener, local_address or address)
+      )
       if not activated then
         close_socket(host_listener, 'listener lifecycle no longer accepts activation')
-        return nil,
-          HostError.closed('socket', 'listen', {
-            reason = 'listener closed before activation',
-            address = address,
-          })
+        return nil, HostError.closed('socket', 'listen', {
+          reason = 'listener closed before activation',
+          address = address,
+        })
       end
       return listener
     end)
 end
 
-function Listener:accept(target)
-  return perform(self:accept_op(target))
-end
+function Listener:accept(target) return perform(self:accept_op(target)) end
 
-function Listener:close(reason)
-  return perform(self:close_op(reason))
-end
+function Listener:close(reason) return perform(self:close_op(reason)) end
 
-function Listener:closed()
-  return perform(self:closed_op())
-end
+function Listener:closed() return perform(self:closed_op()) end
 
 Module.Listener = Listener
 return Module

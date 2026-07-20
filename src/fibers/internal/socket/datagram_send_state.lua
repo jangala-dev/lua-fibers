@@ -3,6 +3,7 @@
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
 local Queue = require('fibers.internal.fifo')
+local ScalarWait = require('fibers.internal.scalar_wait')
 
 local Ready = Scalar.Ready
 local SendState = {}
@@ -73,20 +74,14 @@ local Fail = Scalar.transition({
 })
 
 local function wait_flush(state, target)
-  local footprint = Op.dependencies(state:snapshot_op(), state:changed_op(0))
-  local function loop()
-    return state:snapshot_op():and_then(function(snapshot)
-      local value = snapshot.value
-      if value.completed_seq >= target then
-        return Op.always(true)
-      end
-      if value.terminal_error ~= nil and (value.failure_seq or 0) <= target then
-        return Op.always(nil, value.terminal_error)
-      end
-      return state:changed_op(snapshot.version):and_then(loop, footprint)
-    end, footprint)
-  end
-  return loop()
+  return ScalarWait.select_op(state, function(value)
+    if value.completed_seq >= target then
+      return Op.always(true)
+    end
+    if value.terminal_error ~= nil and (value.failure_seq or 0) <= target then
+      return Op.always(nil, value.terminal_error)
+    end
+  end)
 end
 
 function SendState.new(name, capacity)
@@ -100,7 +95,10 @@ function SendState.new(name, capacity)
     }, name .. ':state'),
     queue = Queue.new({ capacity = capacity or 64, name = name .. ':queue' }),
   }, SendState)
-  self._admit_footprint = Op.dependencies(self.state:transition_op(Allocate), self.queue:put_footprint())
+  self._admit_footprint = Op.dependencies(
+    self.state:transition_op(Allocate),
+    self.queue:put_footprint()
+  )
   self._flush_footprint = Op.dependencies(self.state:read_op(), self.state:changed_op(0))
   return self
 end

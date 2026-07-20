@@ -197,7 +197,7 @@ do
       :or_else(fibers.always('blocked')))
     settle_without_claim = rt:perform(life
       :raw_region()
-      :resolve_claim_op(parent, { kind = 'discharge' })
+      :resolve_op(parent, { kind = 'discharge' })
       :map(function()
         return 'settled-tree'
       end)

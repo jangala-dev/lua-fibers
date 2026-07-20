@@ -74,7 +74,7 @@ policy is in [`direct-and-options.md`](direct-and-options.md).
 
 An option is an inert transaction description. Constructing one does not perform it.
 
-The API type is named `Op`, short for **option**, and resource methods ending in `_op` construct options. The suffix does not mean operation.
+An `Op` can be thought of as an option: an inert transaction description. Resource methods ending in `_op` construct these values.
 
 ```lua
 local op = fibers.always(42)

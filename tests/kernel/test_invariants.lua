@@ -90,7 +90,7 @@ end
 do
   local rt = Runtime.new({ choice_seed = 2 })
   local q, feed = rt:events('journalled-source-events')
-  feed:push('event-1')
+  feed:set('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()
     choice_result = rt:perform(fibers.choice(
@@ -174,7 +174,8 @@ end
 do
   local r = FibersRegion.new('claim-surface')
   assert_eq(type(r.claim_op), 'function', 'Region should expose generic claim_op')
-  assert_eq(type(r.resolve_claim_op), 'function', 'Region should expose generic resolve_claim_op')
+  assert_eq(type(r.resolve_op), 'function', 'Region should expose generic resolve_op')
+  assert_eq(r.resolve_claim_op, nil, 'Region should not expose a longer resolution alias')
   assert_eq(type(r.discharge_claim_op), 'function', 'Region should expose explicit discharge_claim_op')
   assert_eq(type(r.fail_claim_op), 'function', 'Region should expose explicit fail_claim_op')
   assert_eq(type(r.move_op), 'function', 'Region should expose explicit move_op')

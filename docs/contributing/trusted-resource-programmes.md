@@ -280,7 +280,6 @@ The machine treats each witness as an ordinary global branch. If another lane la
 
 The cursor factory and cursor must be deterministic and non-yielding. They must enumerate every intended witness before returning nil. Returning nil is a local exhaustion claim; global Retry is still established only by the machine after all enclosing alternatives are exhausted.
 
-The older eager `enumerate` callback is adapted to a cursor for source compatibility. Do not use it for significant search spaces.
 
 Petri and Calendar are the principal examples.
 

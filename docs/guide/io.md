@@ -188,8 +188,8 @@ local result = proc:communicate({
 Process requests and completed settlement are distinct:
 
 ```lua
-proc:request_terminate_op() -- commit the configured graceful signal request
-proc:request_kill_op()      -- commit the configured forceful signal request
+proc:terminate_op() -- commit the configured graceful signal request
+proc:kill_op()      -- commit the configured forceful signal request
 proc:request_close_op(reason)
 proc:closed_op()
 ```
@@ -374,13 +374,13 @@ inert until the option commits:
 ```lua
 local socket = require('fibers.socket')
 
-local udp = socket.datagram_ipv4('0.0.0.0', 0, {
+local udp = socket.udp_ipv4('0.0.0.0', 0, {
   receive_capacity = 64,
   send_capacity = 64,
 })
 
 -- Equivalent composable construction:
--- local udp = fibers.perform(socket.datagram_ipv4_op('0.0.0.0', 0))
+-- local udp = fibers.perform(socket.udp_ipv4_op('0.0.0.0', 0))
 ```
 
 The ordinary surface is:

@@ -38,14 +38,6 @@ local function new_outcome(state, packed, wrap, task)
   return outcome
 end
 
-local function copy_array(xs)
-  local out = {}
-  for i = 1, #(xs or {}) do
-    out[i] = xs[i]
-  end
-  return out
-end
-
 local function extend_scope_path(parent, group_id, mode, lane)
   return {
     _fibers_scope_path = true,
@@ -648,7 +640,7 @@ local function match_intents(state, left_id, right_id)
 end
 
 local function is_machine_wait(x)
-  return x == require('fibers.scalar').Wait or (type(x) == 'table' and x._fibers_scalar_wait == true)
+  return type(x) == 'table' and x._fibers_scalar_wait == true
 end
 
 local function is_machine_ready(x)
@@ -839,8 +831,13 @@ local function resolve_claims(state, intent_ids)
       local program = intent.program
       local task = state.tasks[intent.task_id]
       ensure_task_view(state, task)
-      local value =
-        Store.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
+      local value = Store.project(
+        state,
+        task,
+        program.location,
+        program.orientation or program.demand_tag,
+        state.trail
+      )
       if value ~= nil then
         local resolution = Store.evaluate_claim(program, value)
         if resolution then
@@ -1982,7 +1979,9 @@ local function prepare_alternative(state, frame, alt)
           size = #alt.ids,
           names = table.concat(names, '|'),
           group_key = tostring(
-            alt.group.key and (alt.group.key.name or alt.group.key._fibers_id or alt.group.key) or '<nil>'
+            alt.group.key
+              and (alt.group.key.name or alt.group.key._fibers_id or alt.group.key)
+              or '<nil>'
           ),
         })
       end

@@ -71,4 +71,22 @@ do
   assert(result == 'primary')
 end
 
+
+-- Trusted witness programmes have one cursor form; eager enumerate is not accepted.
+do
+  local IR = require('fibers.internal.kernel.ir')
+  local ok, err = pcall(function()
+    IR.witness_transition({
+      location = {},
+      accepts_supply = false,
+      supplies = 'none',
+      enumerate = function()
+        return {}
+      end,
+    })
+  end)
+  assert(ok == false)
+  assert(tostring(err):find('requires cursor', 1, true))
+end
+
 print('tests/test_witness_validation.lua: ok')

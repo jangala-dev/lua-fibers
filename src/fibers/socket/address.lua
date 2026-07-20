@@ -86,7 +86,8 @@ function Address.copy(value)
 end
 
 function Address.is_numeric(value)
-  return type(value) == 'table' and (value.kind == 'inet4' or value.kind == 'inet6' or value.kind == 'unix')
+  return type(value) == 'table'
+    and (value.kind == 'inet4' or value.kind == 'inet6' or value.kind == 'unix')
 end
 
 function Address.is_name(value)
@@ -122,10 +123,6 @@ function Address.validate(value, label)
   if value.kind == 'name' or value.family == 'name' then
     return Address.name(value.host, value.service or value.port, value)
   end
-  -- Compatibility with the pre-explicit `inet` table shape.
-  if value.kind == 'inet' or value.family == 'inet' then
-    return Address.inet(value.host, value.port, value)
-  end
   error(label .. ' has unknown address kind ' .. tostring(value.kind or value.family), 3)
 end
 
@@ -157,7 +154,8 @@ end
 
 function Address.is_wildcard(value)
   value = Address.validate(value, 'socket address')
-  return (value.kind == 'inet4' and value.host == '0.0.0.0') or (value.kind == 'inet6' and value.host == '::')
+  return (value.kind == 'inet4' and value.host == '0.0.0.0')
+    or (value.kind == 'inet6' and value.host == '::')
 end
 
 function Address.with_port(value, port)

@@ -16,7 +16,7 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 
 local function deliver(rt, resource, ...)
-  return rt:external_feed(resource):deliver(...)
+  return rt:external_feed(resource):set(...)
 end
 local Signal = require('fibers.external.signal')
 local EventQueue = require('fibers.external.event_queue')
@@ -284,6 +284,8 @@ do
     end,
   }
   local feed = ExternalFeed.for_resource(rt, resource)
+  assert_eq(feed.deliver, nil, 'ExternalFeed should not expose deliver alias')
+  assert_eq(feed.push, nil, 'ExternalFeed should not expose push alias')
   feed:set('value')
   assert_eq(resource.value, 'value')
   feed:clear()

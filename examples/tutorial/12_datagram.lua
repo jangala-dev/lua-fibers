@@ -15,8 +15,8 @@ local Host = require('fibers.host')
 local host = Host.manual({ datagrams = true })
 
 fibers.run(function()
-  local client = assert(socket.datagram_ipv4('127.0.0.1', 0))
-  local server = assert(socket.datagram_ipv4('127.0.0.1', 0))
+  local client = assert(socket.udp_ipv4('127.0.0.1', 0))
+  local server = assert(socket.udp_ipv4('127.0.0.1', 0))
 
   client:send_to('status?', server:local_address())
   client:flush()

@@ -6,6 +6,8 @@
 -- block call.
 
 local Host = require('fibers.host')
+local Provider = require('fibers.host.provider')
+local HostWait = require('fibers.host.wait')
 local DatagramProvider = require('fibers.host.datagram_luaposix')
 
 local ok_poll, poll_mod = pcall(require, 'posix.poll')
@@ -20,14 +22,7 @@ if
   or not ok_errno
   or type(errno) ~= 'table'
 then
-  return {
-    is_supported = function()
-      return false
-    end,
-    new = function()
-      error('fibers.host.luaposix requires posix.poll, posix.time and posix.errno', 2)
-    end,
-  }
+  return Provider.unsupported('fibers.host.luaposix', 'requires posix.poll, posix.time and posix.errno', { 'new' })
 end
 
 local Posix = {}
@@ -224,26 +219,7 @@ function Posix:block(rt, waits, status, _opts)
   end
 
   if not have_fd then
-    if deadline ~= nil then
-      local delay = Host.delay_until(rt, deadline) or 0
-      if delay > 0 then
-        if self.on_wait then
-          self.on_wait(deadline, delay, waits, status)
-        end
-        local ok, err = self:sleep(delay)
-        if not ok then
-          error(err, 2)
-        end
-        if self.on_wake then
-          self.on_wake(deadline, waits, status)
-        end
-      end
-      return true, 'time'
-    end
-    if self.on_unsupported then
-      self.on_unsupported(waits, status)
-    end
-    return nil, 'unsupported-waits'
+    return HostWait.block_without_io(self, rt, waits, status, deadline)
   end
 
   local timeout_ms = Host.timeout_ms(rt, deadline)

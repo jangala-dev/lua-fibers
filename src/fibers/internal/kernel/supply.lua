@@ -75,15 +75,9 @@ end
 
 function M.describe(value)
   local parts = {}
-  if value and value.any then
-    parts[#parts + 1] = 'any'
-  end
-  if value and value.up then
-    parts[#parts + 1] = 'up'
-  end
-  if value and value.down then
-    parts[#parts + 1] = 'down'
-  end
+  if value and value.any then parts[#parts + 1] = 'any' end
+  if value and value.up then parts[#parts + 1] = 'up' end
+  if value and value.down then parts[#parts + 1] = 'down' end
   if #parts == 0 then
     return 'none'
   end

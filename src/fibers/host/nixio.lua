@@ -5,18 +5,13 @@
 -- is_supported() returns false and new() raises a clear error.
 
 local Host = require('fibers.host')
+local Provider = require('fibers.host.provider')
+local HostWait = require('fibers.host.wait')
 local DatagramProvider = require('fibers.host.datagram_nixio')
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
-  return {
-    is_supported = function()
-      return false
-    end,
-    new = function()
-      error('fibers.host.nixio requires nixio', 2)
-    end,
-  }
+  return Provider.unsupported('fibers.host.nixio', 'requires nixio', { 'new' })
 end
 
 local Nixio = {}
@@ -201,26 +196,7 @@ function Nixio:block(rt, waits, status, _opts)
   end
 
   if #fd_recs == 0 then
-    if deadline ~= nil then
-      local delay = Host.delay_until(rt, deadline) or 0
-      if delay > 0 then
-        if self.on_wait then
-          self.on_wait(deadline, delay, waits, status)
-        end
-        local ok, err = self:sleep(delay)
-        if not ok then
-          error(err, 2)
-        end
-        if self.on_wake then
-          self.on_wake(deadline, waits, status)
-        end
-      end
-      return true, 'time'
-    end
-    if self.on_unsupported then
-      self.on_unsupported(waits, status)
-    end
-    return nil, 'unsupported-waits'
+    return HostWait.block_without_io(self, rt, waits, status, deadline)
   end
 
   local poll_fds = {}

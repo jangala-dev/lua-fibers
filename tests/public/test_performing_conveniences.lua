@@ -78,6 +78,7 @@ do
   assert_twins(pulse, { 'signal', 'close', 'changed', 'next' }, 'pulse')
   assert_twins(tx, { 'send', 'clone', 'close' }, 'mailbox sender')
   assert_twins(rx, { 'recv' }, 'mailbox receiver')
+  assert_eq(rx.receive, nil, 'recv has no long alias')
   assert_twins(a, {
     'read_some',
     'read_exactly',
@@ -102,7 +103,7 @@ do
     'listen',
     'listen_inet',
     'listen_unix',
-    'datagram',
+    'udp',
     'dial',
     'dial_inet',
     'dial_unix',
@@ -205,8 +206,8 @@ do
     listener:close('done')
     assert_truthy(listener:closed())
 
-    local datagram_a = assert(socket.datagram_ipv4('127.0.0.1', 0))
-    local datagram_b = assert(socket.datagram_ipv4('127.0.0.1', 0))
+    local datagram_a = assert(socket.udp_ipv4('127.0.0.1', 0))
+    local datagram_b = assert(socket.udp_ipv4('127.0.0.1', 0))
     assert_twins(datagram_a, { 'send_to', 'receive_from', 'flush', 'close', 'closed' }, 'datagram')
     datagram_a:send_to('packet', datagram_b:local_address())
     datagram_a:flush()
@@ -216,29 +217,30 @@ do
     assert_truthy(datagram_a:closed())
     assert_truthy(datagram_b:closed())
 
-    local child, child_err = process
-      .command({
-        'manual-child',
-        stdout = 'pipe',
-        stderr = 'pipe',
-      })
-      :start()
+    local child, child_err = process.command({
+      'manual-child', stdout = 'pipe', stderr = 'pipe',
+    }):start()
     assert(child, tostring(child_err))
     assert_twins(child, {
       'launch_succeeded',
       'launch_failed',
       'launch_result',
       'result',
-      'request_signal',
-      'request_terminate',
-      'request_kill',
+      'signal',
+      'terminate',
+      'kill',
       'request_close',
       'closed',
       'inspect',
     }, 'process')
     assert_eq(child.communicate_op, nil, 'communicate is deliberately procedural')
     assert_eq(child.close_op, nil, 'close is deliberately request plus wait')
-    assert_eq(child.signal_op, nil, 'host signalling is named as a request')
+    assert_eq(child.request_signal_op, nil, 'long signal option alias is absent')
+    assert_eq(child.request_signal, nil, 'long signal direct alias is absent')
+    assert_eq(child.request_terminate_op, nil, 'long terminate option alias is absent')
+    assert_eq(child.request_terminate, nil, 'long terminate direct alias is absent')
+    assert_eq(child.request_kill_op, nil, 'long kill option alias is absent')
+    assert_eq(child.request_kill, nil, 'long kill direct alias is absent')
     local captured = assert(child:communicate({ stdout_limit = 16, stderr_limit = 16 }))
     assert_eq(captured.status.code, 0)
     assert_truthy(child:close())

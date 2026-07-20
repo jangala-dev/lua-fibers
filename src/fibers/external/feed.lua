@@ -53,7 +53,7 @@ function ExternalFeed:_clear(...)
   return self.clear_apply(self.resource, ...)
 end
 
-function ExternalFeed:deliver(...)
+function ExternalFeed:set(...)
   return self.runtime:deliver(self, ...)
 end
 
@@ -61,19 +61,17 @@ function ExternalFeed:clear(...)
   return self.runtime:clear_external(self, ...)
 end
 
-ExternalFeed.set = ExternalFeed.deliver
-ExternalFeed.push = ExternalFeed.deliver
 
 function ExternalFeed:ready(mode, value)
-  return self:deliver(mode, value == nil and true or value)
+  return self:set(mode, value == nil and true or value)
 end
 
 function ExternalFeed:readable(value)
-  return self:deliver('read', value == nil and true or value)
+  return self:set('read', value == nil and true or value)
 end
 
 function ExternalFeed:writable(value)
-  return self:deliver('write', value == nil and true or value)
+  return self:set('write', value == nil and true or value)
 end
 
 return ExternalFeed

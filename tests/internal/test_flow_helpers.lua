@@ -225,9 +225,9 @@ do
   assert_eq(left, 'abcd', 'too-large delimiter failure should not consume bytes')
 end
 
--- append and drain are flow-language aliases for write and flush.
+-- Direct writes and flushes use the canonical Flow vocabulary.
 do
-  local flow = Flow.new({ name = 'aliases-flow', capacity = 16 })
+  local flow = Flow.new({ name = 'canonical-flow', capacity = 16 })
   local n, drained, got
   local st = fibers.try_run(function()
     n = fibers.perform(flow:inlet():write_op('xy'))

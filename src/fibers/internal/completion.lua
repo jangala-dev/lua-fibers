@@ -5,6 +5,7 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
+local ScalarWait = require('fibers.internal.scalar_wait')
 
 local Completion = {}
 Completion.__index = Completion
@@ -35,17 +36,7 @@ local publish = Scalar.transition({
 })
 
 local function terminal_option(self, selector)
-  local function loop()
-    return self.state:snapshot_op():and_then(function(snapshot)
-      local state = snapshot.value
-      local option = selector(state)
-      if option then
-        return option
-      end
-      return self.state:changed_op(snapshot.version):and_then(loop)
-    end)
-  end
-  return loop()
+  return ScalarWait.select_op(self.state, selector)
 end
 
 function Completion.new(name)

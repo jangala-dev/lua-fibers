@@ -6,6 +6,7 @@
 -- those waits may have changed.
 
 local Host = {}
+local Provider = require('fibers.host.provider')
 
 local function is_finite_number(x)
   return type(x) == 'number' and x == x and x ~= math.huge and x ~= -math.huge
@@ -174,55 +175,26 @@ function Host.cffi_linux(opts)
   return require('fibers.host.cffi_linux').new(opts)
 end
 
-local host_names = {
+local providers = Provider.registry('host', {
   pure = 'fibers.host.pure',
   manual = 'fibers.host.manual',
   luajit_linux = 'fibers.host.luajit_linux',
   cffi_linux = 'fibers.host.cffi_linux',
   luaposix = 'fibers.host.luaposix',
   nixio = 'fibers.host.nixio',
-}
+})
 
 function Host.select(name, opts)
-  local modname = host_names[name]
-  if not modname then
-    error('unknown host backend ' .. tostring(name), 2)
-  end
-  return require(modname).new(opts)
+  return providers:new(name, opts)
 end
 
 function Host.available()
-  local out = {}
-  for name, modname in pairs(host_names) do
-    local ok, mod = pcall(require, modname)
-    local supported, reason = false, 'not loadable'
-    if ok and mod and type(mod.is_supported) == 'function' then
-      supported, reason = mod.is_supported()
-    elseif ok then
-      supported = true
-    else
-      reason = mod
-    end
-    out[#out + 1] = { name = name, module = modname, supported = not not supported, reason = reason }
-  end
-  table.sort(out, function(a, b)
-    return a.name < b.name
-  end)
-  return out
+  return providers:available()
 end
 
 function Host.default(opts)
-  local order = { 'luajit_linux', 'cffi_linux', 'luaposix', 'nixio', 'pure' }
-  for i = 1, #order do
-    local name = order[i]
-    local ok, mod = pcall(require, host_names[name])
-    if ok and mod and type(mod.is_supported) == 'function' and mod.is_supported() then
-      return mod.new(opts)
-    elseif ok and name == 'pure' then
-      return mod.new(opts)
-    end
-  end
-  return require('fibers.host.pure').new(opts)
+  return providers:first({ 'luajit_linux', 'cffi_linux', 'luaposix', 'nixio', 'pure' }, opts)
+    or require('fibers.host.pure').new(opts)
 end
 
 Host.Error = require('fibers.host.error')

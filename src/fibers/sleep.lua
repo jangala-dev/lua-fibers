@@ -34,12 +34,8 @@ function Sleep.sleep_op(d)
   end)
 end
 
-function Sleep.sleep_until(t)
-  return perform(Sleep.sleep_until_op(t))
-end
+function Sleep.sleep_until(t) return perform(Sleep.sleep_until_op(t)) end
 
-function Sleep.sleep(d)
-  return perform(Sleep.sleep_op(d))
-end
+function Sleep.sleep(d) return perform(Sleep.sleep_op(d)) end
 
 return Sleep

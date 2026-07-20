@@ -7,27 +7,12 @@
 local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
 local HostError = require('fibers.host.error')
+local Provider = require('fibers.host.provider')
 
 local Common = {}
 
 local function make_unsupported(prefix, reason)
-  return {
-    is_supported = function()
-      return false, reason
-    end,
-    support_reason = function()
-      return reason
-    end,
-    new = function()
-      error(prefix .. ': ' .. tostring(reason), 2)
-    end,
-    wrap = function()
-      error(prefix .. ': ' .. tostring(reason), 2)
-    end,
-    pipe = function()
-      error(prefix .. ': ' .. tostring(reason), 2)
-    end,
-  }
+  return Provider.unsupported(prefix, reason, { 'new', 'wrap', 'pipe' })
 end
 
 local function make_tonumber(ffi)
@@ -274,7 +259,7 @@ function Common.new(opts)
     return opts._cdef_err or (name .. ' C read/write/pipe/fcntl functions unavailable')
   end
 
-  function Fd.wrap(fd, wrap_opts)
+  function Fd.new(fd, wrap_opts)
     wrap_opts = wrap_opts or {}
     fd = assert(tonumber(fd), 'fd must be numeric')
     next_generation = next_generation + 1
@@ -324,7 +309,6 @@ function Common.new(opts)
     return h
   end
 
-  Fd.new = Fd.wrap
 
   function Fd.pipe(pipe_opts)
     pipe_opts = pipe_opts or {}
@@ -334,7 +318,7 @@ function Common.new(opts)
       local e = errno()
       return nil, nil, HostError.system('pipe', 'create', strerror(e), nil, e), e
     end
-    local r, rerr = Fd.wrap(tonumber_c(fds[0]), {
+    local r, rerr = Fd.new(tonumber_c(fds[0]), {
       host = pipe_opts.host,
       name = pipe_opts.name and (pipe_opts.name .. ':read') or nil,
       nonblocking = pipe_opts.nonblocking,
@@ -345,7 +329,7 @@ function Common.new(opts)
       end)
       return nil, nil, rerr
     end
-    local w, werr = Fd.wrap(tonumber_c(fds[1]), {
+    local w, werr = Fd.new(tonumber_c(fds[1]), {
       host = pipe_opts.host,
       name = pipe_opts.name and (pipe_opts.name .. ':write') or nil,
       nonblocking = pipe_opts.nonblocking,

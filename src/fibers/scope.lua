@@ -18,6 +18,7 @@ local ScopeReport = require('fibers.scope.report')
 local ScopeResult = require('fibers.scope.result')
 local Interrupt = require('fibers.internal.interrupt')
 local Settlement = require('fibers.internal.settlement')
+local ScalarWait = require('fibers.internal.scalar_wait')
 local ScopePolicy = require('fibers.scope.policy')
 
 local unpack_ = table.unpack or unpack
@@ -102,18 +103,7 @@ local function new_offers(name)
 end
 
 local function wait_state(scalar, pred)
-  local dependencies = Op.dependencies(scalar:snapshot_op(), scalar:changed_op(0))
-  local function loop()
-    return scalar:snapshot_op():and_then(function(s)
-      if pred(s.value) then
-        return Op.always(s.value)
-      end
-      return scalar:changed_op(s.version):and_then(function()
-        return loop()
-      end, dependencies)
-    end, dependencies)
-  end
-  return loop()
+  return ScalarWait.value_op(scalar, pred)
 end
 
 function Scope.new(name, opts)
@@ -397,7 +387,7 @@ function Scope:resolve_op(claim, resolution)
   if resolution == nil then
     error('Scope:resolve_op requires a resolution', 2)
   end
-  return self.region:resolve_claim_op(claim, resolution)
+  return self.region:resolve_op(claim, resolution)
 end
 
 function Scope:request_cancel_op(reason)

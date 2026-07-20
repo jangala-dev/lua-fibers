@@ -59,18 +59,14 @@ local function address_from_sockaddr(sa, fallback_kind)
   end
   if sa.family == socket.AF_INET6 or fallback_kind == 'inet6' then
     return {
-      kind = 'inet6',
-      family = 'inet6',
-      host = sa.addr,
+      kind = 'inet6', family = 'inet6', host = sa.addr,
       port = tonumber(sa.port) or 0,
       flowinfo = tonumber(sa.flowinfo) or 0,
       scope_id = tonumber(sa.scope_id) or 0,
     }
   end
   return {
-    kind = 'inet4',
-    family = 'inet4',
-    host = sa.addr,
+    kind = 'inet4', family = 'inet4', host = sa.addr,
     port = tonumber(sa.port) or 0,
   }
 end
@@ -103,7 +99,7 @@ function Provider.create_datagram(host, address, opts)
     close_raw()
     return nil, error_value('bind', bind_message, bind_number, { address = address })
   end
-  local handle, wrap_err = HandleFd.wrap(fd, {
+  local handle, wrap_err = HandleFd.new(fd, {
     host = host,
     name = opts.name or 'luaposix-datagram',
     nonblocking = true,

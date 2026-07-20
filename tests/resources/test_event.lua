@@ -17,7 +17,7 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 
 local function deliver(rt, resource, ...)
-  return rt:external_feed(resource):deliver(...)
+  return rt:external_feed(resource):set(...)
 end
 local Signal = require('fibers.external.signal')
 local Rendezvous = require('fibers.resource.rendezvous')

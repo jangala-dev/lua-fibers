@@ -6,7 +6,7 @@ This document states the semantic model implemented by `fibers`. It is not a com
 
 An option is inert. It denotes possible committed worlds rather than performing an action immediately.
 
-`Op` is the compact API name for an **option**, not an operation. An `_op` method constructs one of these inert alternatives.
+`Op` can be thought of as an **option**: an inert alternative constructed by an `_op` method and combined before `perform`.
 
 ```text
 option  ≈ a search problem for compatible committed worlds
@@ -52,7 +52,7 @@ map(option, f) = and_then(option, values -> always(f(values)))
 guard(f)       = activation-local delayed construction
 all(lanes)     = product(independent, lanes)
 tensor(lanes)  = product(interacting, lanes)
-emit(effect)   = consequence(effect)
+emit(effect)   selects a typed post-commit consequence
 ```
 
 `wrap` and `on_defeat` annotate dynamic occurrences. They do not add new candidate-world constructors.

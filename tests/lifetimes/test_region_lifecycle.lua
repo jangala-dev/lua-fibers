@@ -13,6 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRegion = require('fibers.lifetime.region')
+assert(FibersRegion.resolve_claim_op == nil, 'resolve_claim_op should be absent')
 
 local function fail(msg)
   error(msg, 2)
@@ -40,11 +41,11 @@ do
 
     local c1 = fibers.perform(region:claim_op(h, { type = 'test', reason = 'claim-restore' }))
     phases[#phases + 1] = fibers.perform(region:record_op(h)).phase
-    fibers.perform(region:resolve_claim_op(c1, { kind = 'restore' }))
+    fibers.perform(region:resolve_op(c1, { kind = 'restore' }))
     phases[#phases + 1] = fibers.perform(region:record_op(h)).phase
 
     local c2 = fibers.perform(region:claim_op(h, { type = 'test', reason = 'claim-fail' }))
-    fibers.perform(region:resolve_claim_op(c2, { kind = 'fail', error = 'boom' }))
+    fibers.perform(region:resolve_op(c2, { kind = 'fail', error = 'boom' }))
     local failed = fibers.perform(region:record_op(h))
     phases[#phases + 1] = failed.phase
     assert_truthy(failed.settlement_failed, 'failed resolution should mark settlement_failed')
@@ -53,11 +54,11 @@ do
       'failed resolution should retain error message'
     )
 
-    fibers.perform(region:resolve_claim_op(c2, { kind = 'restore' }))
+    fibers.perform(region:resolve_op(c2, { kind = 'restore' }))
     phases[#phases + 1] = fibers.perform(region:record_op(h)).phase
 
     local c3 = fibers.perform(region:claim_op(h, { type = 'test', reason = 'claim-discharge' }))
-    fibers.perform(region:resolve_claim_op(c3, { kind = 'discharge' }))
+    fibers.perform(region:resolve_op(c3, { kind = 'discharge' }))
     owner_after_discharge = h.owner
     assert_eq(fibers.perform(region:record_op(h)), nil, 'discharged record should be absent')
   end)
@@ -69,13 +70,13 @@ do
   assert_eq(owner_after_discharge, nil, 'discharge should release ownership')
 end
 
--- Compatibility aliases still resolve through the explicit lifecycle verbs.
+-- Movement and ownership remain explicit lifecycle operations.
 do
-  local region = FibersRegion.new('lifecycle-alias-region')
-  local h = FibersRegion.handle('lifecycle-alias-owned')
+  local region = FibersRegion.new('lifecycle-move-region')
+  local h = FibersRegion.handle('lifecycle-move-owned')
   local moved, owned_by_to
   fibers.run(function()
-    local to = FibersRegion.new('lifecycle-alias-target')
+    local to = FibersRegion.new('lifecycle-move-target')
     fibers.perform(region:admit_op(h))
     fibers.perform(region:move_op(h, to))
     moved = h.owner == to
