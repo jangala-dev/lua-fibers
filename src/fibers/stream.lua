@@ -186,23 +186,41 @@ function Duplex:flush_op()
   return require_writer(self):flush_op()
 end
 
-function Duplex:read_some(n) return perform(self:read_some_op(n)) end
+function Duplex:read_some(n)
+  return perform(self:read_some_op(n))
+end
 
-function Duplex:read_exactly(n) return perform(self:read_exactly_op(n)) end
+function Duplex:read_exactly(n)
+  return perform(self:read_exactly_op(n))
+end
 
-function Duplex:read_until(separator, opts) return perform(self:read_until_op(separator, opts)) end
+function Duplex:read_until(separator, opts)
+  return perform(self:read_until_op(separator, opts))
+end
 
-function Duplex:read_line(opts) return perform(self:read_line_op(opts)) end
+function Duplex:read_line(opts)
+  return perform(self:read_line_op(opts))
+end
 
-function Duplex:read_all(opts) return perform(self:read_all_op(opts)) end
+function Duplex:read_all(opts)
+  return perform(self:read_all_op(opts))
+end
 
-function Duplex:read(spec, opts) return perform(self:read_op(spec, opts)) end
+function Duplex:read(spec, opts)
+  return perform(self:read_op(spec, opts))
+end
 
-function Duplex:write(...) return perform(self:write_op(...)) end
+function Duplex:write(...)
+  return perform(self:write_op(...))
+end
 
-function Duplex:write_some(bytes) return perform(self:write_some_op(bytes)) end
+function Duplex:write_some(bytes)
+  return perform(self:write_some_op(bytes))
+end
 
-function Duplex:flush() return perform(self:flush_op()) end
+function Duplex:flush()
+  return perform(self:flush_op())
+end
 
 function Duplex:inspect_op()
   local options = {}
@@ -334,17 +352,29 @@ function Duplex:closed_op()
   end)
 end
 
-function Duplex:shutdown_read(reason) return perform(self:shutdown_read_op(reason)) end
+function Duplex:shutdown_read(reason)
+  return perform(self:shutdown_read_op(reason))
+end
 
-function Duplex:shutdown_write(reason) return perform(self:shutdown_write_op(reason)) end
+function Duplex:shutdown_write(reason)
+  return perform(self:shutdown_write_op(reason))
+end
 
-function Duplex:abort_write(reason) return perform(self:abort_write_op(reason)) end
+function Duplex:abort_write(reason)
+  return perform(self:abort_write_op(reason))
+end
 
-function Duplex:close(reason) return perform(self:close_op(reason)) end
+function Duplex:close(reason)
+  return perform(self:close_op(reason))
+end
 
-function Duplex:abort(reason) return perform(self:abort_op(reason)) end
+function Duplex:abort(reason)
+  return perform(self:abort_op(reason))
+end
 
-function Duplex:closed() return perform(self:closed_op()) end
+function Duplex:closed()
+  return perform(self:closed_op())
+end
 
 local function host_stream(opts)
   opts = opts or {}
@@ -569,6 +599,8 @@ function Stream.merge_lines_op(streams, opts)
   end)
 end
 
-function Stream.merge_lines(streams, opts) return perform(Stream.merge_lines_op(streams, opts)) end
+function Stream.merge_lines(streams, opts)
+  return perform(Stream.merge_lines_op(streams, opts))
+end
 
 return Stream

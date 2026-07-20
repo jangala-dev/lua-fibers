@@ -30,6 +30,15 @@ if type(nixio.pipe) ~= 'function' then
   return Common.skip('tests/hosts/test_nixio.lua', 'nixio.pipe unavailable')
 end
 
+local capability_host = NixioHost.new()
+if capability_host.capabilities.process then
+  assert(capability_host.capabilities.process_exec_proof == false)
+  assert(capability_host.capabilities.process_pass_fds == false)
+  assert(capability_host.capabilities.process_close_fds == 'known')
+  assert(capability_host.capabilities.process_groups == 'session')
+end
+capability_host:close()
+
 local function make_pipe()
   local r, w = nixio.pipe()
   Common.assert_truthy(r and w, 'nixio.pipe should return read and write descriptors')
@@ -90,6 +99,9 @@ if os.getenv('FIBERS_MACHINE') ~= 'reference' then
   local datagram_host = NixioHost.new()
   if datagram_host.capabilities.datagram then
     Common.native_datagram_smoke('nixio', datagram_host)
+  end
+  if datagram_host.capabilities.resolver then
+    require('tests.support.resolver_provider_contract').exercise('nixio', datagram_host)
   end
   datagram_host:close()
 end

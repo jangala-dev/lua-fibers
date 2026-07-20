@@ -63,7 +63,6 @@ local function set_nonblocking_fd(fd, value)
   return true
 end
 
-
 local function set_cloexec_fd(fd, value)
   if fcntl.F_GETFD == nil or fcntl.F_SETFD == nil or fcntl.FD_CLOEXEC == nil then
     return true
@@ -209,7 +208,6 @@ function Fd.new(fd, opts)
   end
   return h
 end
-
 
 function Fd.pipe(opts)
   opts = opts or {}

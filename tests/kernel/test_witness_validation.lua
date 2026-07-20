@@ -71,7 +71,6 @@ do
   assert(result == 'primary')
 end
 
-
 -- Trusted witness programmes have one cursor form; eager enumerate is not accepted.
 do
   local IR = require('fibers.internal.kernel.ir')

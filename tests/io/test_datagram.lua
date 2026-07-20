@@ -1,7 +1,14 @@
 package.path = table.concat({
-  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
-  './reference/?.lua', './reference/?/init.lua', './reference/?/?.lua',
-  './?.lua', './?/init.lua', './?/?.lua', package.path,
+  './src/?.lua',
+  './src/?/init.lua',
+  './src/?/?.lua',
+  './reference/?.lua',
+  './reference/?/init.lua',
+  './reference/?/?.lua',
+  './?.lua',
+  './?/init.lua',
+  './?/?.lua',
+  package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -11,7 +18,10 @@ local HostError = require('fibers.host.error')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
+    error(
+      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
+      2
+    )
   end
 end
 
@@ -24,9 +34,7 @@ losing_host.create_datagram = function(self, ...)
   return create(self, ...)
 end
 fibers.run(function()
-  local value = fibers.perform(fibers.always('winner'):or_else(
-    socket.udp_ipv4_op('127.0.0.1', 0)
-  ))
+  local value = fibers.perform(fibers.always('winner'):or_else(socket.udp_ipv4_op('127.0.0.1', 0)))
   assert_eq(value, 'winner')
 end, { host = losing_host })
 assert_eq(acquisitions, 0, 'losing datagram option must remain inert')
@@ -53,10 +61,8 @@ local report = fibers.try_run(function()
   assert_eq(second.original_size, 6)
   assert(sender:flush())
 
-  local mismatch_ok, mismatch_err = sender:send_to(
-    'wrong family',
-    socket.ipv6_address('::1', receiver:local_address().port)
-  )
+  local mismatch_ok, mismatch_err =
+    sender:send_to('wrong family', socket.ipv6_address('::1', receiver:local_address().port))
   assert(mismatch_ok == nil)
   assert(HostError.is(mismatch_err, 'invalid_argument'))
 

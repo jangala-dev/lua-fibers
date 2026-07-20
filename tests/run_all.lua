@@ -30,7 +30,7 @@ for i = 1, #order do
 end
 
 local opts = Harness.parse_args(arg, 'FIBERS_TEST')
-opts.label = 'tests/run_all.lua[' .. profile_name .. ']' 
+opts.label = 'tests/run_all.lua[' .. profile_name .. ']'
 opts.command = 'lua tests/run_all.lua'
 
 return Harness.run(tests, opts)

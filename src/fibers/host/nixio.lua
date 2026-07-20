@@ -5,9 +5,13 @@
 -- is_supported() returns false and new() raises a clear error.
 
 local Host = require('fibers.host')
+local HostError = require('fibers.host.error')
 local Provider = require('fibers.host.provider')
 local HostWait = require('fibers.host.wait')
 local DatagramProvider = require('fibers.host.datagram_nixio')
+local SocketProvider = require('fibers.host.socket_nixio')
+local ResolverProvider = require('fibers.host.resolver_nixio')
+local ProcessProvider = require('fibers.host.process_nixio')
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
@@ -72,13 +76,35 @@ local function add_event(events, mode)
   return poll_flags(events, mode)
 end
 
+local function descriptor_number(value)
+  if type(value) == 'number' then
+    return value
+  end
+  if value and type(value.fileno) == 'function' then
+    local ok, fd = pcall(value.fileno, value)
+    if ok then
+      return tonumber(fd)
+    end
+  end
+  return nil
+end
+
 local function collect_readiness(waits)
-  local fds, by_key, unsupported = {}, {}, false
+  local fds, by_key, by_fd, unsupported = {}, {}, {}, false
   local function ensure(poll_key)
     local rec = by_key[poll_key]
     if not rec then
-      rec = { key = poll_key, events = nil, waits = {}, poller = {} }
+      rec = {
+        key = poll_key,
+        fd = descriptor_number(poll_key),
+        events = nil,
+        waits = {},
+        poller = {},
+      }
       by_key[poll_key] = rec
+      if rec.fd ~= nil then
+        by_fd[rec.fd] = rec
+      end
       fds[#fds + 1] = rec
     end
     return rec
@@ -122,7 +148,7 @@ local function collect_readiness(waits)
       end
     end
   end
-  return fds, by_key, unsupported
+  return fds, by_key, by_fd, unsupported
 end
 
 function Nixio.is_supported()
@@ -154,15 +180,19 @@ function Nixio.new(opts)
     readiness = true,
     fd = self.fd.is_supported(),
     pipe = self.fd.is_supported(),
-    socket = false,
-    socket_ipv4 = false,
-    socket_ipv6 = false,
-    socket_unix = false,
+    socket = SocketProvider.is_supported(),
+    socket_ipv4 = SocketProvider.supports_ipv4(),
+    socket_ipv6 = SocketProvider.supports_ipv6(),
+    socket_unix = SocketProvider.supports_unix(),
     datagram = DatagramProvider.is_supported(),
     datagram_truncation = false,
-    resolver = false,
-    resolver_blocking = false,
-    process = false,
+    resolver = ResolverProvider.is_supported(),
+    resolver_blocking = ResolverProvider.is_supported(),
+    process = ProcessProvider.is_supported(),
+    process_exec_proof = false,
+    process_pass_fds = false,
+    process_close_fds = 'known',
+    process_groups = 'session',
   }
   return self
 end
@@ -175,8 +205,30 @@ function Nixio:create_pipe(pipe_opts)
   })
 end
 
+function Nixio:create_listener(address, listener_opts)
+  return SocketProvider.create_listener(self, address, listener_opts)
+end
+
+function Nixio:start_dial(address, dial_opts)
+  return SocketProvider.start_dial(self, address, dial_opts)
+end
+
 function Nixio:create_datagram(address, datagram_opts)
   return DatagramProvider.create_datagram(self, address, datagram_opts)
+end
+
+function Nixio:start_process(spec)
+  if not ProcessProvider.is_supported() then
+    return nil, nil, HostError.unsupported('host', 'process', { host = self.name })
+  end
+  return ProcessProvider.start_process(self, spec)
+end
+
+function Nixio:resolve(endpoint, resolve_opts)
+  if not ResolverProvider.is_supported() then
+    return nil, HostError.unsupported('host', 'resolve', { endpoint = endpoint })
+  end
+  return ResolverProvider.resolve(self, endpoint, resolve_opts)
 end
 
 function Nixio:sleep(seconds)
@@ -186,7 +238,7 @@ end
 function Nixio:block(rt, waits, status, _opts)
   waits = waits or {}
   local deadline = Host.earliest_deadline(waits)
-  local fd_recs, _by_key, unsupported = collect_readiness(waits)
+  local fd_recs, by_key, by_fd, unsupported = collect_readiness(waits)
 
   if unsupported then
     if self.on_unsupported then
@@ -202,7 +254,10 @@ function Nixio:block(rt, waits, status, _opts)
   local poll_fds = {}
   for i = 1, #fd_recs do
     local rec = fd_recs[i]
-    poll_fds[i] = { fd = rec.key, events = rec.events }
+    -- nixio.poll is specified to update this table in place.  The parallel
+    -- record remains authoritative; raw object and numeric-descriptor maps
+    -- cover builds which alter the fd field in the returned table.
+    poll_fds[i] = { fd = rec.key, events = rec.events, _fibers_record = rec }
   end
 
   local timeout_ms = Host.timeout_ms(rt, deadline)
@@ -213,14 +268,21 @@ function Nixio:block(rt, waits, status, _opts)
   end
 
   local delivered = false
-  if nready > 0 and type(ret) == 'table' then
-    for _, info in pairs(ret) do
+  local observed = false
+
+  local function deliver_ready(ready_fds, positional)
+    for index, info in pairs(ready_fds) do
       local revents = info.revents or 0
       if revents ~= 0 then
+        observed = true
         local flags = poll_flags(revents)
         local rd = not not (flags['in'] or flags.hup or flags.err or flags.nval)
         local wr = not not (flags.out or flags.err or flags.nval)
-        local rec = _by_key[info.fd]
+        local info_fd = descriptor_number(info.fd)
+        local rec = info._fibers_record or by_key[info.fd] or (info_fd and by_fd[info_fd])
+        if not rec and positional and type(index) == 'number' then
+          rec = fd_recs[index]
+        end
         if rec then
           for i = 1, #rec.waits do
             local w = rec.waits[i]
@@ -244,6 +306,15 @@ function Nixio:block(rt, waits, status, _opts)
           end
         end
       end
+    end
+  end
+
+  if nready > 0 then
+    -- Prefer the documented in-place result.  Some older wrappers return a
+    -- separate table instead; consult it only when the input carries no event.
+    deliver_ready(poll_fds, true)
+    if not observed and type(ret) == 'table' and ret ~= poll_fds then
+      deliver_ready(ret, false)
     end
   end
 

@@ -59,14 +59,18 @@ local function address_from_sockaddr(sa, fallback_kind)
   end
   if sa.family == socket.AF_INET6 or fallback_kind == 'inet6' then
     return {
-      kind = 'inet6', family = 'inet6', host = sa.addr,
+      kind = 'inet6',
+      family = 'inet6',
+      host = sa.addr,
       port = tonumber(sa.port) or 0,
       flowinfo = tonumber(sa.flowinfo) or 0,
       scope_id = tonumber(sa.scope_id) or 0,
     }
   end
   return {
-    kind = 'inet4', family = 'inet4', host = sa.addr,
+    kind = 'inet4',
+    family = 'inet4',
+    host = sa.addr,
     port = tonumber(sa.port) or 0,
   }
 end
@@ -88,7 +92,7 @@ function Provider.create_datagram(host, address, opts)
     pcall(unistd.close, fd)
   end
   if opts.reuse_address == true and socket.SOL_SOCKET and socket.SO_REUSEADDR then
-    local ok, set_message, set_number = socket.setsockopt(fd, socket.SOL_SOCKET, socket.SO_REUSEADDR, true)
+    local ok, set_message, set_number = socket.setsockopt(fd, socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if ok == nil then
       close_raw()
       return nil, error_value('setsockopt_reuseaddr', set_message, set_number, { address = address })

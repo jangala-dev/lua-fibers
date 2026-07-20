@@ -18,7 +18,10 @@ local DialLifecycle = require('fibers.internal.socket.dial_lifecycle')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error((message or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
+    error(
+      (message or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
+      2
+    )
   end
 end
 
@@ -122,11 +125,9 @@ do
     local second = fibers.perform(closing:request_close_op('second close'))
     assert_eq(second, false)
     assert_eq(select(2, fibers.perform(closing:closed_op('driver stopped'))).kind, 'closed')
-    local connection, err = fibers.perform(
-      closing:claim_op():or_else(closing:failure_op():map(function(e)
-        return nil, e
-      end))
-    )
+    local connection, err = fibers.perform(closing:claim_op():or_else(closing:failure_op():map(function(e)
+      return nil, e
+    end)))
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'closed'))
 

@@ -61,7 +61,6 @@ function ExternalFeed:clear(...)
   return self.runtime:clear_external(self, ...)
 end
 
-
 function ExternalFeed:ready(mode, value)
   return self:set(mode, value == nil and true or value)
 end

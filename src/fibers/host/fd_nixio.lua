@@ -19,6 +19,7 @@ end
 local Fd = {}
 Fd.__index = Fd
 local next_generation = 0
+local open_objects = setmetatable({}, { __mode = 'k' })
 
 local EAGAIN = nixio.const and (nixio.const.EAGAIN or nixio.const.EWOULDBLOCK) or 11
 local EWOULDBLOCK = nixio.const and (nixio.const.EWOULDBLOCK or nixio.const.EAGAIN) or EAGAIN
@@ -131,6 +132,9 @@ local function fd_close(self, _reason)
     return true
   end
   self._closed = true
+  if self.obj then
+    open_objects[self.obj] = nil
+  end
   if self.obj and type(self.obj.close) == 'function' then
     local ok, a, b = self.obj:close()
     if ok == nil or ok == false then
@@ -205,6 +209,7 @@ function Fd.new(obj, opts)
   })
   h.family = 'nixio'
   h.obj = obj
+  open_objects[obj] = true
   h.fd = fd
   h.raw_fd = fd
   h.generation = next_generation
@@ -218,6 +223,13 @@ function Fd.new(obj, opts)
   return h
 end
 
+function Fd.open_objects()
+  local out = {}
+  for obj in pairs(open_objects) do
+    out[#out + 1] = obj
+  end
+  return out
+end
 
 function Fd.pipe(opts)
   opts = opts or {}

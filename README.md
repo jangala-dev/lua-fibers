@@ -412,10 +412,12 @@ local dial = socket.dial(addresses[1])
 
 Accepted and connected Streams remain owned by their Listener or Dial until a
 claim moves the complete Stream subtree into the caller's scope. Native Linux
-FFI hosts provide non-blocking IPv4, IPv6 and Unix stream sockets. Verified
-LuaJIT/cffi hosts may also expose a blocking `getaddrinfo` resolver and declare
-that limitation; compatibility FFI providers do not advertise it. See
-[`docs/guide/io.md`](docs/guide/io.md).
+FFI, luaposix and Nixio hosts provide non-blocking IPv4, IPv6 and Unix stream
+sockets where the platform supports each family. Verified LuaJIT/cffi,
+luaposix and Nixio hosts may expose a blocking `getaddrinfo` resolver and
+advertise that limitation. Nixio also provides evented child processes through
+a reaper process, with explicit capability limits for exec proof and descriptor
+inheritance. See [`docs/guide/io.md`](docs/guide/io.md).
 
 ### Datagrams
 

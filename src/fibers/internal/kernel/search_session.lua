@@ -40,7 +40,6 @@ local function map_count(values)
   return n
 end
 
-
 local function profile_component_shape(requests, component)
   local ids = component and component.ids
   local option_nodes = 0
@@ -122,7 +121,6 @@ local function clear_table(values)
   end
   return values
 end
-
 
 local function record_pool_name(kind)
   return '_record_pool_' .. kind

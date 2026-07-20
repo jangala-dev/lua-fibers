@@ -244,7 +244,6 @@ function Op.emit(effect)
   return op('consequence', { effect = effect })
 end
 
-
 function Op.dependencies(...)
   local parts = {}
   for i = 1, select('#', ...) do

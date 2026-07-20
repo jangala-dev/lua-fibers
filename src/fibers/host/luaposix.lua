@@ -6,9 +6,13 @@
 -- block call.
 
 local Host = require('fibers.host')
+local HostError = require('fibers.host.error')
 local Provider = require('fibers.host.provider')
 local HostWait = require('fibers.host.wait')
 local DatagramProvider = require('fibers.host.datagram_luaposix')
+local SocketProvider = require('fibers.host.socket_luaposix')
+local ResolverProvider = require('fibers.host.resolver_luaposix')
+local ProcessProvider = require('fibers.host.process_luaposix')
 
 local ok_poll, poll_mod = pcall(require, 'posix.poll')
 local ok_time, ptime = pcall(require, 'posix.time')
@@ -22,7 +26,11 @@ if
   or not ok_errno
   or type(errno) ~= 'table'
 then
-  return Provider.unsupported('fibers.host.luaposix', 'requires posix.poll, posix.time and posix.errno', { 'new' })
+  return Provider.unsupported(
+    'fibers.host.luaposix',
+    'requires posix.poll, posix.time and posix.errno',
+    { 'new' }
+  )
 end
 
 local Posix = {}
@@ -171,15 +179,15 @@ function Posix.new(opts)
     readiness = true,
     fd = self.fd.is_supported(),
     pipe = self.fd.is_supported(),
-    socket = false,
-    socket_ipv4 = false,
-    socket_ipv6 = false,
-    socket_unix = false,
+    socket = SocketProvider.is_supported(),
+    socket_ipv4 = SocketProvider.supports_ipv4(),
+    socket_ipv6 = SocketProvider.supports_ipv6(),
+    socket_unix = SocketProvider.supports_unix(),
     datagram = DatagramProvider.is_supported(),
     datagram_truncation = false,
-    resolver = false,
-    resolver_blocking = false,
-    process = false,
+    resolver = ResolverProvider.is_supported(),
+    resolver_blocking = ResolverProvider.is_supported(),
+    process = ProcessProvider.is_supported(),
   }
   return self
 end
@@ -192,8 +200,30 @@ function Posix:create_pipe(pipe_opts)
   })
 end
 
+function Posix:create_listener(address, listener_opts)
+  return SocketProvider.create_listener(self, address, listener_opts)
+end
+
+function Posix:start_dial(address, dial_opts)
+  return SocketProvider.start_dial(self, address, dial_opts)
+end
+
 function Posix:create_datagram(address, datagram_opts)
   return DatagramProvider.create_datagram(self, address, datagram_opts)
+end
+
+function Posix:resolve(endpoint, resolve_opts)
+  if not ResolverProvider.is_supported() then
+    return nil, HostError.unsupported('host', 'resolve', { endpoint = endpoint })
+  end
+  return ResolverProvider.resolve(self, endpoint, resolve_opts)
+end
+
+function Posix:start_process(spec)
+  if not ProcessProvider.is_supported() then
+    return nil, nil, HostError.unsupported('host', 'process', { host = self.name })
+  end
+  return ProcessProvider.start_process(self, spec)
 end
 
 function Posix:sleep(seconds)

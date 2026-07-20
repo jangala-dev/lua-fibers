@@ -168,19 +168,14 @@ do
   local backend = Fake.new({ name = 'capacity-read-backend' })
   local stream, first, second
   rt:spawn_raw(function()
-    stream = rt:perform(
-      Stream.open_op(
-        backend,
-        {
-          owner = region,
-          read = true,
-          write = true,
-          name = 'capacity-read-stream',
-          read_capacity = 2,
-          read_chunk_size = 4,
-        }
-      )
-    )
+    stream = rt:perform(Stream.open_op(backend, {
+      owner = region,
+      read = true,
+      write = true,
+      name = 'capacity-read-stream',
+      read_capacity = 2,
+      read_chunk_size = 4,
+    }))
     first = rt:perform(stream:reader():read_exactly_op(2))
     second = rt:perform(stream:reader():read_exactly_op(2))
   end, 'root')

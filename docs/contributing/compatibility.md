@@ -74,25 +74,37 @@ The reference solver is repository-only and is deliberately outside `src/`.
 ## Native I/O capabilities
 
 Host support is capability-based rather than implied by interpreter support.
-The current Linux FFI host family provides:
+The Linux FFI host family provides epoll readiness, numeric descriptors,
+pipes, IPv4/IPv6/Unix stream sockets, IPv4/IPv6 datagrams and process-honest
+fork/exec. The luaposix host provides the same stream-socket and process
+contracts over `poll`, plus a blocking `getaddrinfo` resolver.
+
+The Nixio host provides stream sockets, a blocking resolver and evented child
+processes through a per-command reaper and status pipe. It supports piped and
+null standard streams, environment replacement, working directories, new
+sessions, group-directed shutdown and exactly-once child reaping. Nixio does
+not expose close-on-exec or arbitrary process-group assignment, so the host
+reports the narrower guarantees explicitly:
 
 ```text
-monotonic time and epoll readiness
-non-blocking numeric file descriptors and anonymous pipes
-non-blocking IPv4, IPv6 and Unix stream sockets
-message-oriented IPv4 and IPv6 datagram sockets
-fork/exec child processes with piped standard streams and exactly-once reaping
+process_exec_proof = false
+process_pass_fds = false
+process_close_fds = "known"
+process_groups = "session"
 ```
 
-Verified LuaJIT/cffi providers may additionally expose blocking `getaddrinfo`
-name resolution and advertise `resolver_blocking = true`. Compatibility FFI
-providers leave that capability disabled when its pointer semantics are not
-safe. Embedders which cannot permit resolver calls on the runtime thread must
-replace it with a worker-backed or native asynchronous resolver. The
-deterministic ManualHost supplies virtual
-pipes, sockets and resolver records for semantic tests. Other optional host
-families may expose only a subset and must report unsupported capabilities as
-structured errors.
+Executable and working-directory failures are preflighted, and child setup
+failures are reported before the process becomes visible. A final exec race
+cannot be proved without close-on-exec support. Only Fibers-created descriptors
+are closed in the child; arbitrary inherited descriptors and numeric process
+groups remain unsupported.
+
+Hosts with synchronous `getaddrinfo` advertise `resolver_blocking = true`.
+Embedders which cannot permit resolver calls on the runtime thread must replace
+that provider with a worker-backed or native asynchronous resolver. The
+deterministic ManualHost supplies virtual pipes, sockets and resolver records
+for semantic tests. Optional hosts advertise only capabilities whose provider
+contracts pass and return structured unsupported errors for the remainder.
 
 Native socket conformance tests include loopback TCP, Unix sockets, repeated
 connection churn, readiness retirement and descriptor reuse paths. Datagram

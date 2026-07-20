@@ -53,6 +53,9 @@ if os.getenv('FIBERS_MACHINE') ~= 'reference' then
   if datagram_host.capabilities.datagram then
     Common.native_datagram_smoke('luaposix', datagram_host)
   end
+  if datagram_host.capabilities.resolver then
+    require('tests.support.resolver_provider_contract').exercise('luaposix', datagram_host)
+  end
   datagram_host:close()
 end
 

@@ -229,9 +229,11 @@ function Common.new(opts)
       local addr = ffi.new('struct in6_addr[1]')
       local rc = tonumber_c(C.inet_pton(AF_INET6, host, addr))
       if rc ~= 1 then
-        return nil, nil, HostError.system('socket', 'address', 'invalid numeric IPv6 address', 'EINVAL', EINVAL, {
-          address = address,
-        })
+        return nil,
+          nil,
+          HostError.system('socket', 'address', 'invalid numeric IPv6 address', 'EINVAL', EINVAL, {
+            address = address,
+          })
       end
       sa[0].sin6_addr = addr[0]
       return ffi.cast('struct sockaddr *', sa), ffi.sizeof('struct sockaddr_in6'), nil, sa, AF_INET6
@@ -243,9 +245,11 @@ function Common.new(opts)
     local addr = ffi.new('struct in_addr[1]')
     local rc = tonumber_c(C.inet_pton(AF_INET, host, addr))
     if rc ~= 1 then
-      return nil, nil, HostError.system('socket', 'address', 'invalid numeric IPv4 address', 'EINVAL', EINVAL, {
-        address = address,
-      })
+      return nil,
+        nil,
+        HostError.system('socket', 'address', 'invalid numeric IPv4 address', 'EINVAL', EINVAL, {
+          address = address,
+        })
     end
     sa[0].sin_addr = addr[0]
     return ffi.cast('struct sockaddr *', sa), ffi.sizeof('struct sockaddr_in'), nil, sa, AF_INET
@@ -481,11 +485,7 @@ function Common.new(opts)
       end
       if accepted == nil then
         while true do
-          accepted = tonumber_c(C.accept(
-            self.fd,
-            ffi.cast('struct sockaddr *', peer_storage),
-            peer_length
-          ))
+          accepted = tonumber_c(C.accept(self.fd, ffi.cast('struct sockaddr *', peer_storage), peer_length))
           if accepted >= 0 then
             break
           end
@@ -510,13 +510,7 @@ function Common.new(opts)
         return nil, nil, child_err
       end
       if listener_opts.nodelay ~= false and tonumber_c(peer_storage[0].ss_family) ~= AF_UNIX then
-        local ok, nodelay_err = set_int_option(
-          accepted,
-          IPPROTO_TCP,
-          TCP_NODELAY,
-          true,
-          'setsockopt_nodelay'
-        )
+        local ok, nodelay_err = set_int_option(accepted, IPPROTO_TCP, TCP_NODELAY, true, 'setsockopt_nodelay')
         if not ok then
           child:close('TCP_NODELAY failed')
           return nil, nil, nodelay_err
@@ -617,7 +611,6 @@ function Common.new(opts)
     return handle
   end
 
-
   function Socket.create_datagram(host, address, datagram_opts)
     datagram_opts = datagram_opts or {}
     local sockaddr, length, addr_err, _storage, family = sockaddr_for(address)
@@ -666,14 +659,16 @@ function Common.new(opts)
       local peer_storage = ffi.new('struct sockaddr_storage[1]')
       local peer_length = ffi.new('unsigned int[1]', ffi.sizeof('struct sockaddr_storage'))
       while true do
-        local n = tonumber_c(C.recvfrom(
-          self.fd,
-          buffer,
-          max_size,
-          MSG_TRUNC,
-          ffi.cast('struct sockaddr *', peer_storage),
-          peer_length
-        ))
+        local n = tonumber_c(
+          C.recvfrom(
+            self.fd,
+            buffer,
+            max_size,
+            MSG_TRUNC,
+            ffi.cast('struct sockaddr *', peer_storage),
+            peer_length
+          )
+        )
         if n and n >= 0 then
           local copied = math.min(n, max_size)
           local data = copied > 0 and ffi.string(buffer, copied) or ''

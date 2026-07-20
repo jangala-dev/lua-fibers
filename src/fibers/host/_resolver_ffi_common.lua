@@ -125,9 +125,10 @@ function Common.new(opts)
       if not null(p) then
         message = ffi.string(p)
       end
-      return nil, HostError.system('resolver', 'resolve', message, 'EAI_' .. tostring(rc), rc, {
-        endpoint = endpoint,
-      })
+      return nil,
+        HostError.system('resolver', 'resolve', message, 'EAI_' .. tostring(rc), rc, {
+          endpoint = endpoint,
+        })
     end
 
     local out = {}
@@ -136,7 +137,13 @@ function Common.new(opts)
     while not null(ai) do
       local address = address_from(ai[0], endpoint.service)
       if address then
-        local key = address.kind .. ':' .. address.host .. ':' .. tostring(address.port) .. ':' .. tostring(address.scope_id or 0)
+        local key = address.kind
+          .. ':'
+          .. address.host
+          .. ':'
+          .. tostring(address.port)
+          .. ':'
+          .. tostring(address.scope_id or 0)
         if not seen[key] then
           seen[key] = true
           out[#out + 1] = address
@@ -147,9 +154,17 @@ function Common.new(opts)
     C.freeaddrinfo(result[0])
 
     if #out == 0 then
-      return nil, HostError.system('resolver', 'resolve', 'name resolved to no usable stream addresses', 'EAI_NONAME', nil, {
-        endpoint = endpoint,
-      })
+      return nil,
+        HostError.system(
+          'resolver',
+          'resolve',
+          'name resolved to no usable stream addresses',
+          'EAI_NONAME',
+          nil,
+          {
+            endpoint = endpoint,
+          }
+        )
     end
     return out
   end

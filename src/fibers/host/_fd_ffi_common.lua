@@ -309,7 +309,6 @@ function Common.new(opts)
     return h
   end
 
-
   function Fd.pipe(pipe_opts)
     pipe_opts = pipe_opts or {}
     local fds = ffi.new('int[2]')

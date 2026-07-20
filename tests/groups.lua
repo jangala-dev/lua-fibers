@@ -63,6 +63,8 @@ return {
     'tests/embedding/test_host.lua',
     'tests/embedding/test_host_handle.lua',
     'tests/embedding/test_fd_nixio_wrap.lua',
+    'tests/embedding/test_process_nixio_provider.lua',
+    'tests/embedding/test_socket_resolver_optional_providers.lua',
     'tests/embedding/test_datagram_optional_providers.lua',
     'tests/embedding/test_host_linux.lua',
     'tests/embedding/test_host_poller.lua',

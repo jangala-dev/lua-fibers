@@ -32,7 +32,6 @@ local function close_value(value, close, reason)
   return nil, HostError.unsupported('adoption', 'close')
 end
 
-
 function Adoption.bundle(name)
   next_id = next_id + 1
   local id = 'adoption-bundle-' .. tostring(next_id)
@@ -77,7 +76,8 @@ function Bundle:adopt(name, value, close)
   end
   if self.closed or self.values[name] ~= nil or self.released[name] then
     close_value(value, close, 'adoption refused')
-    return nil, HostError.protocol('adoption', 'adopt_bundle', 'bundle entry is unavailable', { entry = name })
+    return nil,
+      HostError.protocol('adoption', 'adopt_bundle', 'bundle entry is unavailable', { entry = name })
   end
   self.values[name] = { value = value, close = close }
   self.order[#self.order + 1] = name
@@ -94,9 +94,10 @@ function Bundle:adopt_many(entries)
   for index = 1, #entries do
     local entry = entries[index]
     if type(entry) ~= 'table' then
-      return nil, HostError.protocol('adoption', 'adopt_many', 'entry must be a table', {
-        index = index,
-      })
+      return nil,
+        HostError.protocol('adoption', 'adopt_many', 'entry must be a table', {
+          index = index,
+        })
     end
 
     local name = entry.name or entry[1]
@@ -129,7 +130,8 @@ function Bundle:release(name, expected)
     return nil, HostError.protocol('adoption', 'release_bundle', 'bundle entry is empty', { entry = name })
   end
   if expected ~= nil and rec.value ~= expected then
-    return nil, HostError.protocol('adoption', 'release_bundle', 'bundle entry value mismatch', { entry = name })
+    return nil,
+      HostError.protocol('adoption', 'release_bundle', 'bundle entry value mismatch', { entry = name })
   end
   self.values[name] = nil
   self.released[name] = true
@@ -171,9 +173,10 @@ function Bundle:close(reason)
     end
   end
   if #errors > 0 then
-    return nil, HostError.protocol('adoption', 'close_bundle', 'one or more adopted values failed to close', {
-      errors = errors,
-    })
+    return nil,
+      HostError.protocol('adoption', 'close_bundle', 'one or more adopted values failed to close', {
+        errors = errors,
+      })
   end
   return true
 end

@@ -212,21 +212,25 @@ process.command({
 })
 ```
 
-The deterministic ManualHost and Linux FFI host implement the version 1 process
-contract. Other hosts currently advertise `capabilities.process = false` and
-return a structured `unsupported` result rather than silently weakening the
-semantics.
+The deterministic ManualHost, Linux FFI hosts and luaposix host implement the
+full version 1 process contract. Nixio supplies evented child processes through
+a per-command reaper and status pipe. It supports ordinary stdio, environment,
+working-directory, session, signalling and reaping behaviour, but advertises
+four narrower guarantees:
 
-Commands which may create descendants should normally request a new process
-group and target that group during shutdown:
-
-```lua
-process.command({
-  'sh', '-c', script,
-  process_group = 'new',
-  shutdown = { target = 'group', grace = 1.0 },
-})
+```text
+process_exec_proof = false
+process_pass_fds = false
+process_close_fds = "known"
+process_groups = "session"
 ```
+
+Nixio preflights executable and working-directory failures and reports child
+setup failures before returning a Process. It cannot prove the final exec
+transition without close-on-exec, cannot retain arbitrary passed descriptors,
+and implements `process_group = "new"` by creating a new session. Requests for
+numeric process groups or non-empty `pass_fds` return structured `unsupported`
+errors.
 
 Fibers does not create a new process group silently because terminal and job-control
 semantics may depend on the inherited group.
@@ -335,12 +339,12 @@ alive for future Happy Eyeballs coordination rather than hiding DNS inside one
 blocking dial call.
 
 The deterministic ManualHost provides configurable records and separate family
-filters. Verified LuaJIT/cffi Linux hosts may provide `getaddrinfo` as an
-initial blocking resolver capability and advertise `resolver_blocking = true`.
-Compatibility FFI providers which cannot safely traverse `getaddrinfo` results
-leave the resolver capability disabled. Embedders which cannot allow resolver
-calls on the runtime thread should replace it with a worker-backed or native
-asynchronous resolver.
+filters. Verified LuaJIT/cffi Linux, luaposix and Nixio hosts may provide
+`getaddrinfo` as a blocking resolver capability and advertise
+`resolver_blocking = true`. Providers which cannot safely expose resolution
+leave the capability disabled. Embedders which cannot allow resolver calls on
+the runtime thread should replace it with a worker-backed or native asynchronous
+resolver.
 
 Explicit option forms include:
 

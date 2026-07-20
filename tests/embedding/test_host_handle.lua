@@ -62,6 +62,43 @@ local function drive_until(rt, host, pred, label, iters)
   fail(label or 'runtime did not reach expected state')
 end
 
+-- Readiness marked before runtime attachment survives bind_runtime.  Native
+-- providers may discover a level-ready descriptor while constructing it, before
+-- Stream.open_op attaches the handle to the runtime-owned reactor.
+do
+  local host = Host.manual({ auto_advance_time = false })
+  local rt = Runtime.new({ host = host })
+  local region = Region.new('prebind-ready-region')
+  local written, flushed = '', false
+  local handle = Handle.new({
+    host = host,
+    key = 'prebind-ready-handle',
+    name = 'prebind-ready-handle',
+    write = function(_, bytes)
+      written = written .. bytes
+      return #bytes
+    end,
+    close = function()
+      return true
+    end,
+  })
+  handle:mark_writable()
+  rt:spawn_raw(function()
+    local stream = rt:perform(
+      Stream.open_op(
+        HandleBackend.new(handle, { name = 'prebind-ready-stream' }),
+        { owner = region, name = 'prebind-ready-stream', read = false, write = true }
+      )
+    )
+    rt:perform(stream:writer():write_op('ready'))
+    flushed = rt:perform(stream:writer():flush_op())
+  end, 'prebind-ready-writer')
+  drive_until(rt, host, function()
+    return flushed == true
+  end, 'pre-bind writable hint should drive the first reactor write')
+  assert_eq(written, 'ready')
+end
+
 -- A fake HostHandle opens through the handle backend and Stream.open_op and drives the read reaction.
 do
   local host = Host.manual({ auto_advance_time = false })

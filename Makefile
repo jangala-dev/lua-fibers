@@ -147,6 +147,12 @@ check-layout:
 	@test -f src/fibers/process/command.lua
 	@test -f src/fibers/internal/process/lifecycle.lua
 	@test -f src/fibers/host/_process_ffi_common.lua
+	@test -f src/fibers/host/process_luaposix.lua
+	@test -f src/fibers/host/process_nixio.lua
+	@test -f src/fibers/host/socket_luaposix.lua
+	@test -f src/fibers/host/socket_nixio.lua
+	@test -f src/fibers/host/resolver_luaposix.lua
+	@test -f src/fibers/host/resolver_nixio.lua
 	@test -f src/fibers/socket/address.lua
 	@test -f src/fibers/socket/listener.lua
 	@test -f src/fibers/socket/dial.lua
@@ -159,6 +165,8 @@ check-layout:
 	@test -f tests/io/test_process.lua
 	@test -f tests/native/test_process_native.lua
 	@test -f tests/support/socket_provider_contract.lua
+	@test -f tests/support/resolver_provider_contract.lua
+	@test -f tests/support/process_provider_contract.lua
 	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
 	@test -f src/fibers/internal/socket/datagram_send_state.lua
 	@test -f src/fibers/internal/socket/datagram_service.lua
@@ -195,6 +203,7 @@ check-layout:
 	@test -f tests/io/test_datagram.lua
 	@test -f tests/io/test_datagram_conformance.lua
 	@test -f tests/embedding/test_datagram_optional_providers.lua
+	@test -f tests/embedding/test_socket_resolver_optional_providers.lua
 	@test -f tests/internal/test_adoption_completion.lua
 	@test -f tests/internal/test_datagram_service.lua
 	@test -f tests/stress/test_stream_reactor_stress.lua

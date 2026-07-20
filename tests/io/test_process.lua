@@ -21,14 +21,14 @@ do
   assert_eq(shell:argv()[2], '-c')
   assert_eq(shell:argv()[3], 'printf hello')
   local invalid_group = process.command({
-    'worker', shutdown = { target = 'group' },
+    'worker',
+    shutdown = { target = 'group' },
   })
   local ok = pcall(function()
     return invalid_group:launch_op()
   end)
   assert_eq(ok, false, 'group shutdown requires explicit group ownership')
 end
-
 
 -- launch_op is synchronisation-local and admits a fresh Process without waiting
 -- for the external launch handshake. start is the direct launch-plus-handshake
@@ -135,18 +135,24 @@ do
   })
 
   fibers.run(function()
-    local proc = assert(process.command({
-      'echo-child', stdin = 'pipe', stdout = 'pipe', stderr = 'pipe',
-    }):start())
+    local proc = assert(process
+      .command({
+        'echo-child',
+        stdin = 'pipe',
+        stdout = 'pipe',
+        stderr = 'pipe',
+      })
+      :start())
     local captured = assert(proc:communicate({
-      input = 'request', stdout_limit = 128, stderr_limit = 128,
+      input = 'request',
+      stdout_limit = 128,
+      stderr_limit = 128,
     }))
     assert_eq(captured.stdout, 'request')
     assert_eq(captured.stderr, '')
     assert(proc:close())
   end, { host = host })
 end
-
 
 -- stderr may be merged into stdout without creating a second public Stream.
 do
@@ -163,9 +169,13 @@ do
   })
 
   fibers.run(function()
-    local proc = assert(process.command({
-      'combined-output', stdout = 'pipe', stderr = 'stdout',
-    }):start())
+    local proc = assert(process
+      .command({
+        'combined-output',
+        stdout = 'pipe',
+        stderr = 'stdout',
+      })
+      :start())
     assert(proc:stderr() == proc:stdout())
     local captured = assert(proc:communicate({ stdout_limit = 128 }))
     assert_eq(captured.stdout, 'outerr')
@@ -189,9 +199,13 @@ do
 
   fibers.run(function()
     local destination, reader = Stream.memory_pair({ name = 'process-redirect' })
-    local proc = assert(process.command({
-      'redirect-child', stdout = destination, stderr = 'null',
-    }):start())
+    local proc = assert(process
+      .command({
+        'redirect-child',
+        stdout = destination,
+        stderr = 'null',
+      })
+      :start())
     assert(proc:stdout() == nil)
     assert(proc:result())
     local text = assert(reader:read_exactly(#'redirected'))
@@ -206,12 +220,21 @@ end
 do
   local host = Host.manual({ processes = true, pipes = true })
   fibers.run(function()
-    local proc = assert(process.command({
-      'long-running', stdout = 'pipe', stderr = 'pipe', shutdown = { grace = 0 },
-    }):start())
+    local proc = assert(process
+      .command({
+        'long-running',
+        stdout = 'pipe',
+        stderr = 'pipe',
+        shutdown = { grace = 0 },
+      })
+      :start())
     local value = fibers.perform(fibers.choice(
-      proc:result_op():map(function() return 'process' end),
-      fibers.sleep_op(0.01):map(function() return 'timeout' end)
+      proc:result_op():map(function()
+        return 'process'
+      end),
+      fibers.sleep_op(0.01):map(function()
+        return 'timeout'
+      end)
     ))
     assert_eq(value, 'timeout')
     assert(proc:close('timeout'))
@@ -219,7 +242,6 @@ do
     assert_eq(status.kind, 'signalled')
   end, { host = host })
 end
-
 
 -- Capture limits close the process rather than waiting indefinitely for exit.
 do
@@ -235,9 +257,14 @@ do
   })
 
   fibers.run(function()
-    local proc = assert(process.command({
-      'large-output', stdout = 'pipe', stderr = 'pipe', shutdown = { grace = 0 },
-    }):start())
+    local proc = assert(process
+      .command({
+        'large-output',
+        stdout = 'pipe',
+        stderr = 'pipe',
+        shutdown = { grace = 0 },
+      })
+      :start())
     local result, err = proc:communicate({ stdout_limit = 8, stderr_limit = 8 })
     assert(result == nil)
     assert(err ~= nil)

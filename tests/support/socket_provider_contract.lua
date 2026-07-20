@@ -6,7 +6,10 @@ local Contract = {}
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
-    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 3)
+    error(
+      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
+      3
+    )
   end
 end
 
@@ -25,7 +28,17 @@ end
 function Contract.exercise(name, host, address, opts)
   opts = opts or {}
   local accepted_local, accepted_peer, client_local, client_peer
+  local stage = 'starting'
   local result = fibers.try_run(function(scope)
+    local watchdog
+    if opts.watchdog_seconds then
+      watchdog = scope:spawn(function()
+        fibers.sleep(opts.watchdog_seconds)
+        error(name .. ' provider contract timed out during ' .. stage, 0)
+      end, name .. ':watchdog')
+    end
+
+    stage = 'listen'
     local listener, listen_err = socket.listen(address, {
       name = name .. ':listener',
       accept_capacity = 2,
@@ -35,31 +48,51 @@ function Contract.exercise(name, host, address, opts)
     assert_truthy(listener, name .. ' listen failed: ' .. tostring(listen_err))
     local bound = listener:local_address()
 
+    stage = 'spawn server'
     local server = scope:spawn(function()
+      stage = 'accept'
       local connection, accept_err = listener:accept()
       assert_truthy(connection, name .. ' accept failed: ' .. tostring(accept_err))
       accepted_local = connection:local_address()
       accepted_peer = connection:peer_address()
+      stage = 'server read'
       local byte, read_err = connection:read(1)
       assert_eq(byte, 'x', name .. ' accepted read: ' .. tostring(read_err))
+      stage = 'server write'
       assert_eq(connection:write('y'), 1, name .. ' accepted write')
+      stage = 'server flush'
       assert_eq(connection:flush(), true, name .. ' accepted flush')
+      stage = 'server close'
       assert_eq(connection:close('server complete'), true, name .. ' accepted close')
     end, name .. ':server')
 
-    local dial = socket.dial(bound, { name = name .. ':dial' })
+    stage = 'dial'
+    local dial_opts = { name = name .. ':dial' }
+    if opts.local_address then
+      dial_opts.local_address = opts.local_address
+    end
+    local dial = socket.dial(bound, dial_opts)
+    stage = 'dial result'
     local connection, dial_err = dial:result()
     assert_truthy(connection, name .. ' dial failed: ' .. tostring(dial_err))
     client_local = connection:local_address()
     client_peer = connection:peer_address()
+    stage = 'client write'
     assert_eq(connection:write('x'), 1, name .. ' client write')
+    stage = 'client flush'
     assert_eq(connection:flush(), true, name .. ' client flush')
+    stage = 'client read'
     local byte, read_err = connection:read(1)
     assert_eq(byte, 'y', name .. ' client read: ' .. tostring(read_err))
     assert_eq(connection:close('client complete'), true, name .. ' client close')
+    stage = 'server completion'
     server:await()
+    stage = 'listener close'
     assert_eq(listener:close('contract complete'), true, name .. ' listener close')
     assert_eq(listener:closed(), true, name .. ' listener closed')
+    if watchdog then
+      watchdog:request_cancel('provider contract complete')
+    end
   end, { host = host, max_iterations = opts.max_iterations or 20000 })
 
   assert_truthy(result.ok, name .. ' provider contract failed: ' .. tostring(result.primary or result))

@@ -100,11 +100,7 @@ function M.machine_transition(opts)
   assert(opts.transition, 'machine transition requires transition')
   assert(opts.transition.supply == nil, 'machine transition no longer accepts supply')
   assert(type(opts.transition.accepts_supply) == 'boolean', 'machine transition requires accepts_supply')
-  opts.transition.supplies = Supply.normalise(
-    opts.transition.supplies,
-    'machine transition supplies',
-    2
-  )
+  opts.transition.supplies = Supply.normalise(opts.transition.supplies, 'machine transition supplies', 2)
   opts.order = opts.transition.order or opts.order or 0
   return programme('machine_transition', opts)
 end
@@ -383,10 +379,7 @@ local function metadata_from_hint(hint, seen)
   end
   for loc, access in pairs(hint.locations or {}) do
     if access == true then
-      error(
-        'location dependency hints must declare read/write/wait and supplies explicitly',
-        0
-      )
+      error('location dependency hints must declare read/write/wait and supplies explicitly', 0)
     end
     local fields = {}
     for key, value in pairs(access or {}) do
@@ -498,18 +491,16 @@ function M.metadata_covers(declared, actual)
           local allowed_supplies = allowed.supplies
           if not (allowed_supplies and (allowed_supplies.any or allowed_supplies[direction])) then
             return false,
-              'location supply direction '
-                .. tostring(direction)
-                .. ' at '
-                .. tostring(location.name or location._fibers_id or location)
+              'location supply direction ' .. tostring(direction) .. ' at ' .. tostring(
+                location.name or location._fibers_id or location
+              )
           end
         end
       elseif present and not allowed[mode] then
         return false,
-          'location mode '
-            .. tostring(mode)
-            .. ' at '
-            .. tostring(location.name or location._fibers_id or location)
+          'location mode ' .. tostring(mode) .. ' at ' .. tostring(
+            location.name or location._fibers_id or location
+          )
       end
     end
   end

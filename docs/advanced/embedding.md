@@ -335,11 +335,18 @@ host_process:signal(signal, target)
 host_process:close(reason)
 ```
 
-`start_process` must complete an exec-error handshake. Returning a process after
-fork alone is insufficient: working-directory, environment, process-group,
-standard-stream and exec setup must either succeed or produce a structured
-launch error. Partial child processes must be killed and reaped before the
-failed call returns.
+A fully process-honest `start_process` completes an exec-error handshake.
+Returning a process after fork alone is insufficient: working-directory,
+environment, process-group, standard-stream and exec setup must either succeed
+or produce a structured launch error. Partial child processes must be killed
+and reaped before the failed call returns.
+
+A compatibility host may expose a narrower, explicit process contract when its
+native API lacks a required primitive. Such a host must describe the missing
+guarantees through capability fields and reject unsupported command options
+rather than silently approximating them. The Nixio host, for example, reports
+`process_exec_proof = false`, `process_pass_fds = false`,
+`process_close_fds = "known"` and `process_groups = "session"`.
 
 Parent pipe endpoints are non-blocking HostHandles and enter the normal adoption,
 Stream and reactor path. The process handle itself is also audited. Exactly one
@@ -349,7 +356,7 @@ successful reaping.
 
 The Linux FFI family uses pidfds where available and timer-polled `waitpid`
 otherwise. ManualHost provides deterministic process completion and signalling
-for semantic tests. A host without this contract must advertise
+for semantic tests. A host with no usable process contract must advertise
 `capabilities.process = false` and return `unsupported`.
 
 ## Effects and host callbacks
