@@ -17,7 +17,7 @@ local take = counter:take_op(1)
 local give = counter:give_op(1)
 local take_meta = IR.metadata(take)
 local give_meta = IR.metadata(give)
-local take_intent = { kind = 'transition', program = take.program }
+local take_intent = { kind = 'transition', program = take.descriptor }
 assert(not IR.metadata_may_supply(take_meta, take_intent))
 assert(IR.metadata_may_supply(give_meta, take_intent))
 
@@ -26,8 +26,8 @@ local put = index:append_op('value')
 local pop = index:pop_first_op()
 local put_meta = IR.metadata(put)
 local pop_meta = IR.metadata(pop)
-local pop_intent = { kind = 'transition', program = pop.program }
-local put_intent = { kind = 'transition', program = put.program }
+local pop_intent = { kind = 'transition', program = pop.descriptor }
+local put_intent = { kind = 'transition', program = put.descriptor }
 assert(IR.metadata_may_supply(put_meta, pop_intent))
 assert(not IR.metadata_may_supply(pop_meta, pop_intent))
 assert(IR.metadata_may_supply(pop_meta, put_intent))
@@ -35,6 +35,7 @@ assert(not IR.metadata_may_supply(put_meta, put_intent))
 
 local Scalar = require('fibers.scalar')
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local Runtime = require('fibers.runtime')
 
 local function rejected(fn, fragment)
@@ -129,7 +130,7 @@ assert(access.supply_any == nil)
 local Store = require('fibers.internal.kernel.ledger')
 local location = Store.new_location({ name = 'canonical-witness', algebra = 'machine', value = 0 })
 rejected(function()
-  IR.witness_transition({
+  Facility.witness({
     location = location,
     supplies = 'any',
     cursor = function()
@@ -143,7 +144,7 @@ rejected(function()
 end, 'requires accepts_supply')
 
 rejected(function()
-  IR.witness_transition({
+  Facility.witness({
     location = location,
     supply = 'interacting',
     accepts_supply = true,

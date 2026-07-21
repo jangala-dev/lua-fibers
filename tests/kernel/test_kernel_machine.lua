@@ -14,6 +14,7 @@ local Runtime = require('fibers.runtime')
 local IR = require('fibers.internal.kernel.ir')
 local Store = require('fibers.internal.kernel.ledger')
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local Scalar = require('fibers.scalar')
 
 local function eq(a, b, m)
@@ -24,7 +25,7 @@ end
 local Kind = { name = 'lazy-witness-test' }
 local loc = Store.new_location({ name = 'lazy-witness', algebra = 'machine', domain = 'plain', value = 0 })
 local opened, next_calls = 0, 0
-local p = IR.witness_transition({
+local p = Facility.witness({
   accepts_supply = true,
   supplies = 'any',
   location = loc,
@@ -50,7 +51,7 @@ local resource = { _fibers_kind = Kind }
 local rt = Runtime.new()
 local got
 rt:spawn_raw(function()
-  got = rt:perform(Op._resource(resource, Kind, p))
+  got = rt:perform(Facility.op(resource, Kind, p))
 end)
 eq(rt:run().tag, 'found')
 eq(got, 'first')

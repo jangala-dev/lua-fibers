@@ -1,177 +1,116 @@
-local Op = require('fibers.op')
-local Substrate = require('fibers.internal.kernel.ledger')
-local Algebra = require('fibers.internal.kernel.algebra')
-local Program = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
+local Keyspace = require('fibers.internal.facility_keyspace')
 
 local Keyed = {}
-Keyed.__index = Keyed
-local Kind = { name = 'keyed' }
-local next_id = 0
-local ABSENT = Algebra.ABSENT
+Keyed.__index = function(self, key)
+  if key == 'version' then
+    return self._space.version
+  end
+  return Keyed[key]
+end
+local Kind = Facility.kind('keyed')
+local ABSENT = Keyspace.ABSENT
 local NIL = {}
-local function enc(v)
-  return v == nil and NIL or v
+local function enc(value)
+  return value == nil and NIL or value
 end
 
 function Keyed.new(entries, name)
-  next_id = next_id + 1
-  local map = setmetatable({
-    entries = {},
-    versions = {},
-    version = 0,
-    name = name or ('keyed-' .. tostring(next_id)),
-    _fibers_id = 'keyed-' .. tostring(next_id),
-    _fibers_kind = Kind,
-    _locations = {},
-    _nil_sentinel = NIL,
-  }, Keyed)
-  for k, v in pairs(entries or {}) do
-    map.entries[k] = enc(v)
-    map.versions[k] = 0
+  local map = Facility.identity(setmetatable({ _nil_sentinel = NIL }, Keyed), Kind, name)
+  local values, versions = {}, {}
+  for key, value in pairs(entries or {}) do
+    values[key], versions[key] = enc(value), 0
   end
-  return map
-end
-
-function Keyed:_location(key)
-  local loc = self._locations[key]
-  if loc then
-    return loc
-  end
-  local initial = self.entries[key]
-  if initial == nil then
-    initial = ABSENT
-  end
-  loc = Substrate.new_location({
-    name = self.name .. ':' .. tostring(key),
+  map._space = Keyspace.new(map, {
+    values = values,
+    versions = versions,
     algebra = 'presence',
     domain = 'presence',
-    value = initial,
-    owner = self,
-    key = key,
-    apply = function(v, applied)
-      if v == ABSENT then
-        self.entries[key] = nil
-      else
-        self.entries[key] = v
-      end
-      self.versions[key] = applied.version
-      self.version = self.version + 1
-    end,
+    absent = ABSENT,
   })
-  self._locations[key] = loc
-  return loc
+  map.entries, map.versions, map._locations = values, versions, map._space.locations
+  return map
+end
+function Keyed:_location(key)
+  return self._space:location(key)
 end
 
-local function result_opts(map)
-  return { nil_sentinel = map._nil_sentinel }
+local function required(key, operation)
+  if key == nil then
+    error('keyed ' .. operation .. ' requires key', 3)
+  end
 end
 function Keyed:get_op(key)
-  if key == nil then
-    error('keyed get requires key', 2)
-  end
-  local loc = self:_location(key)
-  return Op._resource(
+  required(key, 'get')
+  return Facility.op(
     self,
     Kind,
-    Program.claim({
-      location = loc,
-      group = self,
-      orientation = 'up',
-      predicate = 'present',
-      result_kind = 'presence_value',
-      nil_sentinel = self._nil_sentinel,
+    Facility.claim({
+      location = self:_location(key),
+      demand = 'up',
+      query = { kind = 'predicate', predicate = 'present' },
+      result = Facility.result.presence(NIL),
     })
   )
 end
 function Keyed:peek_op(key)
-  if key == nil then
-    error('keyed peek requires key', 2)
-  end
-  return Op._resource(self, Kind, Program.read(self:_location(key), 'presence_value', result_opts(self)))
+  required(key, 'peek')
+  return Facility.op(self, Kind, Facility.read(self:_location(key), Facility.result.presence(NIL)))
 end
 function Keyed:contains_op(key)
-  if key == nil then
-    error('keyed contains requires key', 2)
-  end
-  return Op._resource(self, Kind, Program.read(self:_location(key), 'presence_bool'))
+  required(key, 'contains')
+  return Facility.op(self, Kind, Facility.read(self:_location(key), Facility.result.present))
 end
 function Keyed:put_op(key, value)
-  if key == nil then
-    error('keyed put requires key', 2)
-  end
-  return Op._resource(
-    self,
-    Kind,
-    Program.patch(
-      self:_location(key),
-      { kind = 'presence', ops = { { op = 'put', value = enc(value) } } },
-      'constant',
-      true
-    )
-  )
+  required(key, 'put')
+  return Facility.op(self, Kind, Facility.write(self:_location(key), Facility.change.put(enc(value))))
 end
 function Keyed:put_absent_op(key, value)
-  if key == nil then
-    error('keyed put_absent requires key', 2)
-  end
-  local loc = self:_location(key)
-  return Op._resource(
+  required(key, 'put_absent')
+  return Facility.op(
     self,
     Kind,
-    Program.claim({
-      location = loc,
-      group = self,
-      orientation = 'down',
-      predicate = 'absent',
-      patch = { kind = 'presence', ops = { { op = 'put', value = enc(value) } } },
-      result_kind = 'constant',
-      result_value = true,
+    Facility.claim({
+      location = self:_location(key),
+      demand = 'down',
+      query = { kind = 'predicate', predicate = 'absent' },
+      change = Facility.change.put(enc(value)),
+      result = Facility.result.boolean,
     })
   )
 end
 function Keyed:remove_op(key)
-  if key == nil then
-    error('keyed remove requires key', 2)
-  end
-  local loc = self:_location(key)
-  return Op._resource(
+  required(key, 'remove')
+  return Facility.op(
     self,
     Kind,
-    Program.conditional_claim({
-      location = loc,
-      group = self,
-      orientation = 'up',
+    Facility.conditional({
+      location = self:_location(key),
+      demand = 'up',
       predicate = 'present',
-      immediate_patch = { kind = 'presence', ops = { { op = 'remove' } } },
-      claim_patch = { kind = 'presence', ops = { { op = 'take' } } },
-      result_kind = 'constant',
-      result_value = true,
+      immediate = Facility.change.remove(),
+      change = Facility.change.take(),
+      result = Facility.result.boolean,
     })
   )
 end
 function Keyed:remove_present_op(key)
-  if key == nil then
-    error('keyed remove_present requires key', 2)
-  end
-  local loc = self:_location(key)
-  return Op._resource(
+  required(key, 'remove_present')
+  return Facility.op(
     self,
     Kind,
-    Program.claim({
-      location = loc,
-      group = self,
-      orientation = 'up',
-      predicate = 'present',
-      patch = { kind = 'presence', ops = { { op = 'take' } } },
-      result_kind = 'presence_value',
-      nil_sentinel = self._nil_sentinel,
+    Facility.claim({
+      location = self:_location(key),
+      demand = 'up',
+      query = { kind = 'predicate', predicate = 'present' },
+      change = Facility.change.take(),
+      result = Facility.result.presence(NIL),
     })
   )
 end
 function Keyed:snapshot_op()
-  return Op._resource(self, Kind, Program.snapshot(self, 'keyed'))
+  return Facility.op(self, Kind, Facility.snapshot(self, 'keyed'))
 end
 
-Keyed.Kind = Kind
-Keyed.ABSENT = ABSENT
+Keyed.Kind, Keyed.ABSENT = Kind, ABSENT
 return Keyed

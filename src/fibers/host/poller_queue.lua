@@ -6,17 +6,20 @@
 -- readiness ticket.
 
 local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local Substrate = require('fibers.internal.kernel.ledger')
 
 local PollerQueue = {}
-PollerQueue.__index = PollerQueue
+PollerQueue.__index = function(self, key)
+  if key == 'version' then
+    return self._location.version
+  end
+  return PollerQueue[key]
+end
 
-local Kind = { name = 'poller_ready_queue' }
-local next_id = 0
+local Kind = Facility.kind('poller_ready_queue')
 local unpack_ = table.unpack or unpack
 
 local function clone_state(state)
@@ -49,7 +52,6 @@ local function touch(queue, state)
   local location = queue._location
   location.value = state
   location.version = location.version + 1
-  queue.version = location.version
 end
 
 local function deliver(queue, ...)
@@ -68,26 +70,20 @@ end
 
 function PollerQueue.new(name, opts)
   opts = opts or {}
-  next_id = next_id + 1
-  local id = 'poller-ready-' .. tostring(next_id)
-  local queue = setmetatable({
-    name = name or id,
-    _fibers_id = id,
-    _fibers_kind = Kind,
-    version = 0,
-    _interest_factory = opts.interest,
-  }, PollerQueue)
+  local queue = Facility.identity(
+    setmetatable({
+      _interest_factory = opts.interest,
+    }, PollerQueue),
+    Kind,
+    name
+  )
 
-  queue._location = Substrate.new_location({
-    name = queue.name .. ':queue',
+  queue._location = Facility.location(queue, 'queue', {
     algebra = 'machine',
     domain = 'external',
     value = { front = nil, back = nil, count = 0 },
-    owner = queue,
     clone_value = clone_state,
-    apply = function(_value, location)
-      queue.version = location.version
-    end,
+    apply = function(_value, location) end,
   })
   queue._fibers_external_deliver = deliver
   queue._fibers_external_clear = clear
@@ -118,15 +114,10 @@ function PollerQueue:next_op()
     end,
   })
 
-  self._next_op = Op._compact_resource(
+  self._next_op = Facility.op(
     self,
     Kind,
-    'transition',
-    IR.machine_transition({
-      location = self._location,
-      resource = self,
-      transition = transition,
-      order = transition.order or 0,
+    Facility.machine(self._location, transition, {}, self, {
       interest = function(runtime)
         if type(self._interest_factory) == 'function' then
           return self._interest_factory(runtime, self, ExternalFeed.for_resource(runtime, self))

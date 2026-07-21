@@ -1,14 +1,17 @@
 local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local Substrate = require('fibers.internal.kernel.ledger')
 
 local Readiness = {}
-Readiness.__index = Readiness
-local Kind = { name = 'readiness' }
-local next_id = 0
+Readiness.__index = function(self, key)
+  if key == 'version' then
+    return self._location.version
+  end
+  return Readiness[key]
+end
+local Kind = Facility.kind('readiness')
 
 local function mode(x, level)
   x = x or 'read'
@@ -28,7 +31,6 @@ local function touch(r, state)
   local loc = r._location
   loc.value = state
   loc.version = loc.version + 1
-  r.version = loc.version
 end
 local function deliver(r, ...)
   local n, first = select('#', ...), ...
@@ -59,25 +61,20 @@ local function clear(r, selected)
 end
 
 function Readiness.new(key, initial_mode, name)
-  next_id = next_id + 1
-  local r = setmetatable({
-    key = key,
-    mode = mode(initial_mode or 'read', 3),
-    name = name or ('readiness-' .. tostring(next_id)),
-    _fibers_id = 'readiness-' .. tostring(next_id),
-    _fibers_kind = Kind,
-    version = 0,
-  }, Readiness)
-  r._location = Substrate.new_location({
-    name = r.name .. ':state',
+  local r = Facility.identity(
+    setmetatable({
+      key = key,
+      mode = mode(initial_mode or 'read', 3),
+    }, Readiness),
+    Kind,
+    name
+  )
+  r._location = Facility.location(r, 'state', {
     algebra = 'machine',
     domain = 'external',
     value = { read = false, write = false },
-    owner = r,
     clone_value = clone_state,
-    apply = function(v, loc)
-      r.version = loc.version
-    end,
+    apply = function(v, loc) end,
   })
   r._fibers_external_deliver = deliver
   r._fibers_external_clear = clear
@@ -104,15 +101,10 @@ function Readiness:readiness_op(selected)
       return Scalar.Ready.same(true, key, selected)
     end,
   })
-  local option = Op._compact_resource(
+  local option = Facility.op(
     self,
     Kind,
-    'transition',
-    IR.machine_transition({
-      location = self._location,
-      resource = self,
-      transition = transition,
-      order = transition.order or 0,
+    Facility.machine(self._location, transition, {}, self, {
       interest = function(rt)
         return Interest.external(r, selected .. ':' .. tostring(key), {
           external_kind = 'readiness',

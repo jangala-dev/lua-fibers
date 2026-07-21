@@ -810,70 +810,18 @@ local function execute_program(state, task, program, occurrence)
     return true
   end
 
-  if kind == 'snapshot' then
+  if kind == 'observe' then
     local resource = program.resource
     local segment = ensure_task_segment(state, task)
-    if program.snapshot_kind == 'keyed' then
-      local entries, keys = {}, {}
-      for k in pairs(resource.entries) do
-        keys[k] = true
-      end
-      for k in pairs(resource._locations) do
-        keys[k] = true
-      end
-      for k in pairs(keys) do
-        local value = Ledger.read(segment, resource:_location(k), state.trail)
-        if value ~= Ledger.ABSENT then
-          if resource._nil_sentinel and value == resource._nil_sentinel then
-            entries[k] = nil
-          else
-            entries[k] = value
-          end
-        end
-      end
-      advance_activation(state, task, 'primitive:snapshot:keyed:' .. object_version_label(resource))
-      return complete_task(
-        state,
-        task,
-        new_outcome(state, packv(state, { entries = entries, version = resource.version }), nil, task)
-      )
-    elseif program.snapshot_kind == 'index' then
-      local value = Ledger.read(segment, resource._location, state.trail)
-      local entries = {}
-      for k, e in pairs(value or {}) do
-        entries[k] = { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
-      end
-      advance_activation(state, task, 'primitive:snapshot:index:' .. object_version_label(resource))
-      return complete_task(
-        state,
-        task,
-        new_outcome(state, packv(state, { entries = entries, version = resource.version }), nil, task)
-      )
-    elseif program.snapshot_kind == 'lease' then
-      local holders = {}
-      local subjects = {}
-      for s in pairs(resource.holders or {}) do
-        subjects[s] = true
-      end
-      for s in pairs(resource._locations or {}) do
-        subjects[s] = true
-      end
-      for subject in pairs(subjects) do
-        local loc = resource:_location(subject)
-        local hs = Ledger.read(segment, loc, state.trail)
-        holders[subject] = {}
-        for owner, mode in pairs(hs or {}) do
-          holders[subject][owner] = mode
-        end
-      end
-      advance_activation(state, task, 'primitive:snapshot:lease:' .. object_version_label(resource))
-      return complete_task(
-        state,
-        task,
-        new_outcome(state, packv(state, { holders = holders, version = resource.version }), nil, task)
-      )
-    end
-    error('unknown snapshot kind', 0)
+    local value = program.observation.collect(resource, function(location)
+      return Ledger.read(segment, location, state.trail)
+    end)
+    advance_activation(state, task, 'primitive:observe:' .. object_version_label(resource))
+    return complete_task(
+      state,
+      task,
+      new_outcome(state, IR.result_pack(program, value, state.session), nil, task)
+    )
   end
 
   local segment = nil
@@ -1094,7 +1042,7 @@ local function drain_active(state)
           return 'retry', terminal_certificate(state)
         end
       elseif kind == 'primitive' then
-        if not execute_program(state, task, expr.program, expr) then
+        if not execute_program(state, task, expr.descriptor, expr) then
           return 'retry', terminal_certificate(state)
         end
       elseif kind == 'product' then
@@ -1169,12 +1117,11 @@ local function analyse_domain(state)
         for j = 1, #group.intents do
           local intent = group.intents[j]
           local rule = IR.rule(intent.program)
-          local transition = rule.transition
-          names[j] = (transition and transition.name) or rule.name or intent.kind
+          names[j] = rule.name or intent.kind
           kinds[j] = rule.type
           supply_sets[j] = Supply.describe(rule.supplies)
           accepts[j] = tostring(rule.accepts_supply)
-          modes[j] = transition and transition.mode or rule.type
+          modes[j] = rule.mode or rule.type
         end
         state.runtime.instrumentation:event(profile_plan, 'claim_group', {
           key = tostring(group.key and (group.key.name or group.key._fibers_id or group.key) or '<nil>'),
@@ -1200,12 +1147,8 @@ local function raw_exchange_program(op)
   if not op or op.kind ~= 'primitive' then
     return nil
   end
-  local program = op.program
-  if
-    not program
-    or programme_kind(program) ~= 'exchange'
-    or not (program._fibers_compact_descriptor or program == op)
-  then
+  local program = op.descriptor
+  if not program or programme_kind(program) ~= 'exchange' then
     return nil
   end
   return program

@@ -1,64 +1,49 @@
-local Op = require('fibers.op')
-local Substrate = require('fibers.internal.kernel.ledger')
-local Program = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
 
 local Index = {}
-Index.__index = Index
-local Kind = { name = 'index' }
-local next_id, next_append_id = 0, 0
-
-local function copy_entry(e)
-  if not e then
-    return nil
+Index.__index = function(self, key)
+  if key == 'entries' then
+    return self._location and self._location.value or self._initial_entries
   end
-  return { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
+  if key == 'version' then
+    return self._location and self._location.version or 0
+  end
+  return Index[key]
+end
+local Kind = Facility.kind('index')
+local next_append_id = 0
+
+local function copy_entry(entry)
+  return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq } or nil
 end
 
 function Index.new(entries, name)
-  next_id = next_id + 1
-  local index = setmetatable({
-    name = name or ('index-' .. tostring(next_id)),
-    _fibers_id = 'index-' .. tostring(next_id),
-    _fibers_kind = Kind,
-    entries = {},
-    version = 0,
-  }, Index)
+  local index = Facility.identity(setmetatable({ _initial_entries = {} }, Index), Kind, name)
   for i = 1, #(entries or {}) do
-    local e = entries[i]
-    local key = e.key or i
-    index.entries[key] = { key = key, rank = e.rank or i, value = e.value, seq = e.seq or i }
+    local entry, key = entries[i], entries[i].key or i
+    index._initial_entries[key] =
+      { key = key, rank = entry.rank or i, value = entry.value, seq = entry.seq or i }
   end
-  index._location = Substrate.new_location({
-    name = index.name .. ':entries',
+  index._location = Facility.location(index, 'entries', {
     algebra = 'finite_map',
     domain = 'finite_map',
-    value = index.entries,
-    owner = index,
+    value = index._initial_entries,
     clone_value = copy_entry,
     put_equal = false,
     remove_idempotent = true,
-    apply = function(v, loc)
-      index.entries = v
-      index.version = loc.version
-    end,
   })
+  index._initial_entries = nil
   return index
 end
 
 local function insert_program(index, key, rank, value, seq)
   local entry = { key = key, rank = rank, value = value, seq = seq or 0 }
-  return Program.claim({
+  return Facility.claim({
     location = index._location,
-    group = index._location,
-    orientation = 'down', -- absence is improved by deletion, not insertion
-    predicate = 'map_absent',
-    key = key,
-    patch = {
-      kind = 'finite_map',
-      ops = { { op = 'put', key = key, value = entry, policy = 'insert' } },
-    },
-    result_kind = 'constant',
-    result_value = true,
+    demand = 'down',
+    query = { kind = 'predicate', predicate = 'map_absent', key = key },
+    change = Facility.change.map_put(key, entry, 'insert'),
+    result = Facility.result.boolean,
   })
 end
 
@@ -69,76 +54,45 @@ function Index:insert_op(key, rank, value)
   if rank == nil then
     error('index insert requires a rank', 2)
   end
-  return Op._resource(self, Kind, insert_program(self, key, rank, value, 0))
+  return Facility.op(self, Kind, insert_program(self, key, rank, value, 0))
 end
-
 function Index:insert_auto_op(rank, value)
   if rank == nil then
     error('index insert_auto requires a rank', 2)
   end
   next_append_id = next_append_id + 1
-  local seq = next_append_id
-  local key = (self._fibers_id or 'index') .. ':auto:' .. tostring(seq)
-  return Op._resource(self, Kind, insert_program(self, key, rank, value, seq))
+  local key = self._fibers_id .. ':auto:' .. tostring(next_append_id)
+  return Facility.op(self, Kind, insert_program(self, key, rank, value, next_append_id))
 end
-
 function Index:append_op(value)
   next_append_id = next_append_id + 1
-  local seq = next_append_id
-  local key = (self._fibers_id or 'index') .. ':append:' .. tostring(seq)
-  return Op._resource(self, Kind, insert_program(self, key, math.huge, value, seq))
+  local key = self._fibers_id .. ':append:' .. tostring(next_append_id)
+  return Facility.op(self, Kind, insert_program(self, key, math.huge, value, next_append_id))
 end
-
 function Index:remove_op(key)
   if key == nil then
     error('index remove requires a key', 2)
   end
-  return Op._resource(
+  return Facility.op(
     self,
     Kind,
-    Program.claim({
+    Facility.claim({
       location = self._location,
-      group = self._location,
-      orientation = 'up',
-      predicate = 'map_present',
-      key = key,
-      patch = { kind = 'finite_map', ops = { { op = 'remove', key = key } } },
-      result_kind = 'constant',
-      result_value = true,
+      demand = 'up',
+      query = { kind = 'predicate', predicate = 'map_present', key = key },
+      change = Facility.change.map_remove(key),
+      result = Facility.result.boolean,
     })
   )
 end
-
 function Index:pop_first_op()
-  return Op._resource(
-    self,
-    Kind,
-    Program.select({
-      location = self._location,
-      group = self._location,
-      order = 'min',
-      orientation = 'up',
-      result_kind = 'index_entry',
-    })
-  )
+  return Facility.op(self, Kind, Facility.select({ location = self._location, order = 'min' }))
 end
-
 function Index:pop_last_op()
-  return Op._resource(
-    self,
-    Kind,
-    Program.select({
-      location = self._location,
-      group = self._location,
-      order = 'max',
-      orientation = 'up',
-      result_kind = 'index_entry',
-    })
-  )
+  return Facility.op(self, Kind, Facility.select({ location = self._location, order = 'max' }))
 end
-
 function Index:snapshot_op()
-  return Op._resource(self, Kind, Program.snapshot(self, 'index'))
+  return Facility.op(self, Kind, Facility.snapshot(self, 'index'))
 end
 
 Index.Kind = Kind

@@ -1,4 +1,5 @@
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local Program = require('fibers.internal.kernel.ir')
 local Substrate = require('fibers.internal.kernel.ledger')
 
@@ -268,7 +269,7 @@ function Petri:fire_op(transition, payload)
   if type(transition) ~= 'table' or transition._petri_transition ~= true or transition.net ~= self then
     error('Petri fire expects a transition belonging to this net', 2)
   end
-  local program = Program.witness_transition({
+  local program = Facility.witness({
     location = self._location,
     group = self._location,
     order = transition.order,
@@ -279,7 +280,7 @@ function Petri:fire_op(transition, payload)
       return binding_cursor(transition, state, actual_payload)
     end,
   })
-  return Op._resource(self, Kind, program)
+  return Facility.op(self, Kind, program)
 end
 
 function Petri:put_op(place, value)
@@ -313,10 +314,10 @@ function Petri:take_op(place, predicate)
 end
 
 function Petri:marking_op()
-  return Op._resource(
+  return Facility.op(
     self,
     Kind,
-    Program.witness_transition({
+    Facility.witness({
       location = self._location,
       accepts_supply = false,
       supplies = 'none',

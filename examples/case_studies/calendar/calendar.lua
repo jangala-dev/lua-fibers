@@ -1,4 +1,5 @@
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local IR = require('fibers.internal.kernel.ir')
 local Store = require('fibers.internal.kernel.ledger')
 
@@ -320,10 +321,10 @@ end
 function Calendar:reserve_op(spec)
   validate_spec(spec)
   local frozen = frozen_spec(spec)
-  return Op._resource(
+  return Facility.op(
     self,
     Kind,
-    IR.witness_transition({
+    Facility.witness({
       location = self._location,
       group = self._location,
       accepts_supply = true,
@@ -337,10 +338,10 @@ end
 function Calendar:find_op(spec)
   validate_spec(spec)
   local frozen = frozen_spec(spec)
-  return Op._resource(
+  return Facility.op(
     self,
     Kind,
-    IR.witness_transition({
+    Facility.witness({
       location = self._location,
       group = self._location,
       accepts_supply = true,
@@ -362,10 +363,10 @@ function Calendar:reserve_at_op(resources, start, finish, payload)
   })
 end
 function Calendar:cancel_op(id)
-  return Op._resource(
+  return Facility.op(
     self,
     Kind,
-    IR.witness_transition({
+    Facility.witness({
       location = self._location,
       group = self._location,
       accepts_supply = true,
@@ -395,10 +396,10 @@ function Calendar:cancel_op(id)
   )
 end
 function Calendar:snapshot_op()
-  return Op._resource(
+  return Facility.op(
     self,
     Kind,
-    IR.witness_transition({
+    Facility.witness({
       location = self._location,
       accepts_supply = false,
       supplies = 'none',

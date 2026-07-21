@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 
@@ -205,7 +206,7 @@ do
     value = 0,
   })
   local opened, next_calls = 0, 0
-  local program = IR.witness_transition({
+  local program = Facility.witness({
     accepts_supply = true,
     supplies = 'any',
     location = location,
@@ -228,7 +229,7 @@ do
   local rt = Runtime.new({ plan_reuse = false })
   local result
   rt:spawn_raw(function()
-    result = rt:perform(Op._resource(resource, Kind, program))
+    result = rt:perform(Facility.op(resource, Kind, program))
   end, 'resumable-witness')
 
   local found = false

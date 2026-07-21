@@ -482,47 +482,7 @@ local function remove_intent_ids(state, ids)
 end
 
 local function result_pack(program, value)
-  local kind = program.result_kind or 'constant'
-  if kind == 'constant' then
-    return pack_(program.result_value)
-  end
-  if kind == 'identity' then
-    return pack_(value)
-  end
-  if kind == 'presence_bool' then
-    return pack_(value ~= Store.ABSENT)
-  end
-  if kind == 'presence_value' then
-    if value == Store.ABSENT then
-      return pack_(nil)
-    end
-    if program.nil_sentinel and value == program.nil_sentinel then
-      return pack_(nil)
-    end
-    return pack_(value)
-  end
-  if kind == 'index_entry' then
-    if value == nil then
-      return pack_(nil)
-    end
-    return pack_({ key = value.key, rank = value.rank, value = value.value, seq = value.seq })
-  end
-  if kind == 'map_value' then
-    return pack_(value)
-  end
-  if kind == 'scalar_snapshot' then
-    return pack_({ value = value, version = program.location.version })
-  end
-  if kind == 'counter_state' then
-    local owner = program.owner
-    return pack_({
-      value = value,
-      min = owner.min,
-      max = owner.max,
-      version = program.location.version,
-    })
-  end
-  error('unknown programme result kind: ' .. tostring(kind), 0)
+  return IR.result_pack(program, value)
 end
 
 local function block_intent(state, task, program, occurrence)
@@ -833,70 +793,14 @@ local function execute_program(state, task, program, occurrence)
     return true
   end
 
-  if kind == 'snapshot' then
+  if kind == 'observe' then
     local resource = program.resource
     local view = state.segments[task.segment_id]
-    if program.snapshot_kind == 'keyed' then
-      local entries, keys = {}, {}
-      for k in pairs(resource.entries) do
-        keys[k] = true
-      end
-      for k in pairs(resource._locations) do
-        keys[k] = true
-      end
-      for k in pairs(keys) do
-        local value = Store.read(view, resource:_location(k))
-        if value ~= Store.ABSENT then
-          if resource._nil_sentinel and value == resource._nil_sentinel then
-            entries[k] = nil
-          else
-            entries[k] = value
-          end
-        end
-      end
-      advance_activation(task, 'primitive:snapshot:keyed:' .. object_version_label(resource))
-      return complete_task(
-        state,
-        task,
-        new_outcome(task, pack_({ entries = entries, version = resource.version }))
-      )
-    elseif program.snapshot_kind == 'index' then
-      local value = Store.read(view, resource._location)
-      local entries = {}
-      for k, e in pairs(value or {}) do
-        entries[k] = { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
-      end
-      advance_activation(task, 'primitive:snapshot:index:' .. object_version_label(resource))
-      return complete_task(
-        state,
-        task,
-        new_outcome(task, pack_({ entries = entries, version = resource.version }))
-      )
-    elseif program.snapshot_kind == 'lease' then
-      local holders = {}
-      local subjects = {}
-      for s in pairs(resource.holders or {}) do
-        subjects[s] = true
-      end
-      for s in pairs(resource._locations or {}) do
-        subjects[s] = true
-      end
-      for subject in pairs(subjects) do
-        local loc = resource:_location(subject)
-        local hs = Store.read(view, loc)
-        holders[subject] = {}
-        for owner, mode in pairs(hs or {}) do
-          holders[subject][owner] = mode
-        end
-      end
-      advance_activation(task, 'primitive:snapshot:lease:' .. object_version_label(resource))
-      return complete_task(
-        state,
-        task,
-        new_outcome(task, pack_({ holders = holders, version = resource.version }))
-      )
-    end
-    error('unknown snapshot kind', 0)
+    local value = program.observation.collect(resource, function(location)
+      return Store.read(view, location)
+    end)
+    advance_activation(task, 'primitive:observe:' .. object_version_label(resource))
+    return complete_task(state, task, new_outcome(task, IR.result_pack(program, value)))
   end
 
   local view = state.segments[task.segment_id]
@@ -1075,7 +979,7 @@ dfs = function(state)
             return nil, terminal_refutation(state), false
           end
         elseif kind == 'primitive' then
-          if not execute_program(state, task, expr.program, expr) then
+          if not execute_program(state, task, expr.descriptor, expr) then
             return nil, terminal_refutation(state), false
           end
         elseif kind == 'product' then

@@ -10,6 +10,7 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
+local Facility = require('fibers.internal.facility')
 local S = require('fibers.internal.kernel.ledger')
 local A = require('fibers.internal.kernel.algebra')
 local IR = require('fibers.internal.kernel.ir')
@@ -160,23 +161,23 @@ local extreme_value = {
   d = { rank = 2, seq = 1, value = 'd' },
 }
 local minimum = IR.evaluate_claim(
-  IR.select({
+  Facility.select({
     location = fm,
     order = 'min',
     rank_field = 'rank',
     seq_field = 'seq',
-    result_kind = 'identity',
+    result = Facility.result.value,
   }),
   extreme_value
 )
 eq(minimum.result[1].value, 'b', 'minimum selection order changed')
 local maximum = IR.evaluate_claim(
-  IR.select({
+  Facility.select({
     location = fm,
     order = 'max',
     rank_field = 'rank',
     seq_field = 'seq',
-    result_kind = 'identity',
+    result = Facility.result.value,
   }),
   extreme_value
 )

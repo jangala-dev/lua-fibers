@@ -11,6 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local Runtime = require('fibers.runtime')
 local Petri = require('examples.case_studies.petri.petri')
 local Calendar = require('examples.case_studies.calendar.calendar')
@@ -75,7 +76,7 @@ end
 do
   local IR = require('fibers.internal.kernel.ir')
   local ok, err = pcall(function()
-    IR.witness_transition({
+    Facility.witness({
       location = {},
       accepts_supply = false,
       supplies = 'none',

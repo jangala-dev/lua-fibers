@@ -1,14 +1,17 @@
 local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local Substrate = require('fibers.internal.kernel.ledger')
 
 local EventQueue = {}
-EventQueue.__index = EventQueue
-local Kind = { name = 'event_queue' }
-local next_id = 0
+EventQueue.__index = function(self, key)
+  if key == 'version' then
+    return self._location.version
+  end
+  return EventQueue[key]
+end
+local Kind = Facility.kind('event_queue')
 local unpack_ = table.unpack or unpack
 
 local function clone_state(s)
@@ -22,7 +25,6 @@ local function touch(q, state)
   local loc = q._location
   loc.value = state
   loc.version = loc.version + 1
-  q.version = loc.version
 end
 local function deliver(q, ...)
   local state = clone_state(q._location.value)
@@ -35,24 +37,19 @@ end
 
 function EventQueue.new(name, opts)
   opts = opts or {}
-  next_id = next_id + 1
-  local q = setmetatable({
-    name = name or ('events-' .. tostring(next_id)),
-    _fibers_id = 'events-' .. tostring(next_id),
-    _fibers_kind = Kind,
-    version = 0,
-    _interest_factory = opts.interest,
-  }, EventQueue)
-  q._location = Substrate.new_location({
-    name = q.name .. ':queue',
+  local q = Facility.identity(
+    setmetatable({
+      _interest_factory = opts.interest,
+    }, EventQueue),
+    Kind,
+    name
+  )
+  q._location = Facility.location(q, 'queue', {
     algebra = 'machine',
     domain = 'external',
     value = { head = 1, values = {} },
-    owner = q,
     clone_value = clone_state,
-    apply = function(v, loc)
-      q.version = loc.version
-    end,
+    apply = function(v, loc) end,
   })
   q._fibers_external_deliver = deliver
   q._fibers_external_clear = clear
@@ -87,15 +84,10 @@ local function op_for(q, drain)
       return Scalar.Ready.write(next_state, unpack_(packed, 1, packed.n))
     end,
   })
-  return Op._compact_resource(
+  return Facility.op(
     q,
     Kind,
-    'transition',
-    IR.machine_transition({
-      location = q._location,
-      resource = q,
-      transition = transition,
-      order = transition.order or 0,
+    Facility.machine(q._location, transition, {}, q, {
       interest = function(rt)
         if type(q._interest_factory) == 'function' then
           return q._interest_factory(rt, q, ExternalFeed.for_resource(rt, q))

@@ -50,7 +50,10 @@ do
   local scalar = Scalar.new(0, 'minimal-cached-scalar')
   eq(scalar:read_op(), scalar:read_op(), 'scalar read option should be cached')
   eq(scalar:snapshot_op(), scalar:snapshot_op(), 'scalar snapshot option should be cached')
-  truthy(scalar:read_op()._fibers_program, 'cached scalar read should use compact primitive programme')
+  truthy(
+    scalar:read_op().descriptor and scalar:read_op().descriptor._fibers_program,
+    'cached scalar read should use a primitive descriptor'
+  )
 
   local counter = Counter.new(0, 'minimal-cached-counter')
   eq(counter:read_op(), counter:read_op(), 'counter read option should be cached')

@@ -401,53 +401,23 @@ function Op._symmetry_key(value)
   return is_op(value) and value.kind == 'annotated' and value.symmetry_key or nil
 end
 
--- Compact trusted primitive used by high-frequency facilities.  The option
--- node itself carries the immutable programme fields, avoiding a second table
--- between the option and the evaluator.  General facilities may continue to
--- use _resource with a separate IR programme record.
-function Op._compact_resource(resource, kind, primitive_kind, fields)
-  fields = fields or {}
-  fields.primitive = 'resource'
-  fields.resource = resource
-  fields.resource_kind = kind
-  fields.primitive_kind = primitive_kind
-  fields._fibers_program = true
-  local compact = op('primitive', fields)
-  compact.program = compact
-  return compact
-end
-
--- Shared immutable programme descriptor for value-bearing compact
--- primitives.  Each dynamic occurrence then carries only this descriptor and
--- its payload; dependency metadata is cached on the descriptor rather than on
--- every occurrence.
-function Op._compact_descriptor(resource, kind, primitive_kind, fields)
-  fields = fields or {}
-  fields.primitive = 'resource'
-  fields.resource = resource
-  fields.resource_kind = kind
-  fields.primitive_kind = primitive_kind
-  fields._fibers_program = true
-  fields._fibers_compact_descriptor = true
-  return fields
-end
-
-function Op._compact_occurrence(descriptor, payload)
-  if not (descriptor and descriptor._fibers_compact_descriptor) then
-    error('compact occurrence requires a compact descriptor', 2)
+-- Trusted primitive occurrence.  Descriptors are immutable and shared;
+-- dynamic calls carry only an optional payload.  Payload-free descriptors
+-- cache their reusable Op node.
+function Op._primitive(descriptor, payload)
+  if not (type(descriptor) == 'table' and descriptor._fibers_program == true) then
+    error('primitive requires a trusted descriptor', 2)
   end
-  return op('primitive', { program = descriptor, payload = payload })
-end
-
--- Primitive constructor used by trusted facilities.
-function Op._resource(resource, kind, payload)
-  return op('primitive', {
-    primitive = 'resource',
-    resource = resource,
-    resource_kind = kind,
-    payload = payload,
-    program = payload,
-  })
+  if payload == nil then
+    local cached = descriptor._op
+    if cached then
+      return cached
+    end
+    cached = op('primitive', { descriptor = descriptor })
+    descriptor._op = cached
+    return cached
+  end
+  return op('primitive', { descriptor = descriptor, payload = payload })
 end
 
 Op.is_op = is_op

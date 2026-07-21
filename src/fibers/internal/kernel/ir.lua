@@ -8,6 +8,7 @@
 local Op = require('fibers.op')
 local Supply = require('fibers.internal.kernel.supply')
 local Algebra = require('fibers.internal.kernel.algebra')
+local Result = require('fibers.internal.facility_result')
 
 local M = {}
 
@@ -18,186 +19,26 @@ local function programme(kind, fields)
   return fields
 end
 
-function M.read(location, result_kind, opts)
-  opts = opts or {}
-  opts.location = location
-  opts.result_kind = result_kind or 'identity'
-  return programme('read', opts)
+function M.read(location, result)
+  return programme('read', { location = location, result = result })
 end
 
-function M.patch(location, patch, result_kind, result_value)
-  return programme('patch', {
-    location = location,
-    patch = patch,
-    result_kind = result_kind or 'constant',
-    result_value = result_value,
-  })
+function M.patch(location, patch, result)
+  return programme('patch', { location = location, patch = patch, result = result })
 end
 
-local function transition_program(opts, rule)
-  opts.rule = rule
+function M.observe(resource, observation, result)
+  return programme('observe', { resource = resource, observation = observation, result = result })
+end
+
+function M.transition(opts)
+  assert(opts and opts.location, 'transition requires location')
+  assert(type(opts.rule) == 'table', 'transition requires a rule')
   return programme('transition', opts)
-end
-
-local function action_supplies(location, action)
-  if not action then
-    return {}
-  end
-  if action.kind == 'static' then
-    return Algebra.supplies(location, action.patch)
-  end
-  if action.kind == 'take_witness' then
-    return { down = true }
-  end
-  if action.kind == 'put' then
-    return { up = true }
-  end
-  return { any = true }
-end
-
-local function claim_rule(opts, eager_patch)
-  local query = opts.query
-  if not query then
-    assert(opts.predicate, 'claim requires predicate or query')
-    query = {
-      kind = 'predicate',
-      predicate = opts.predicate,
-      threshold = opts.threshold,
-      key = opts.key,
-    }
-  end
-  local action = opts.transition
-  if not action and opts.patch then
-    action = { kind = 'static', patch = opts.patch }
-  end
-  return {
-    type = 'claim',
-    serial = false,
-    enumerable = false,
-    eager = eager_patch ~= nil,
-    total = false,
-    order = opts.order or 0,
-    accepts_supply = true,
-    supplies = action_supplies(opts.location, action),
-    writes = action ~= nil or eager_patch ~= nil,
-    query = query,
-    action = action,
-    eager_patch = eager_patch,
-  }
-end
-
-function M.claim(opts)
-  assert(opts and opts.location, 'claim requires location')
-  local rule = claim_rule(opts)
-  opts.query, opts.transition, opts.patch = nil, nil, nil
-  return transition_program(opts, rule)
-end
-
-function M.conditional_claim(opts)
-  assert(opts and opts.location, 'conditional claim requires location')
-  assert(opts.predicate, 'conditional claim requires predicate')
-  assert(opts.immediate_patch, 'conditional claim requires immediate patch')
-  assert(opts.claim_patch, 'conditional claim requires claim patch')
-  opts.query = {
-    kind = 'predicate',
-    predicate = opts.predicate,
-    threshold = opts.threshold,
-    key = opts.key,
-  }
-  opts.transition = { kind = 'static', patch = opts.claim_patch }
-  local rule = claim_rule(opts, opts.immediate_patch)
-  opts.predicate, opts.threshold, opts.key = nil, nil, nil
-  opts.query, opts.transition, opts.immediate_patch, opts.claim_patch = nil, nil, nil, nil
-  return transition_program(opts, rule)
-end
-
-function M.select(opts)
-  assert(opts and opts.location, 'select requires location')
-  assert(opts.order == 'min' or opts.order == 'max', 'select requires min or max order')
-  opts.orientation = opts.orientation or 'up'
-  opts.query = {
-    kind = 'extreme',
-    order = opts.order,
-    rank_field = opts.rank_field or 'rank',
-    seq_field = opts.seq_field or 'seq',
-  }
-  opts.transition = { kind = 'take_witness' }
-  return M.claim(opts)
-end
-
-function M.admit(opts)
-  assert(opts and opts.location, 'admit requires location')
-  assert(opts.key ~= nil, 'admit requires key')
-  assert(opts.value ~= nil, 'admit requires value')
-  opts.orientation = opts.orientation or 'down'
-  opts.query = {
-    kind = 'compatible_insert',
-    key = opts.key,
-    value = opts.value,
-    compatibility = opts.compatibility,
-  }
-  opts.transition = {
-    kind = 'put',
-    key = opts.key,
-    value = opts.value,
-    policy = 'overwrite',
-  }
-  return M.claim(opts)
-end
-
-function M.snapshot(resource, snapshot_kind)
-  return programme('snapshot', { resource = resource, snapshot_kind = snapshot_kind })
-end
-
-function M.machine_transition(opts)
-  assert(opts and opts.location, 'machine transition requires location')
-  local transition = assert(opts.transition, 'machine transition requires transition')
-  assert(transition.supply == nil, 'machine transition no longer accepts supply')
-  assert(type(transition.accepts_supply) == 'boolean', 'machine transition requires accepts_supply')
-  transition.supplies = Supply.normalise(transition.supplies, 'machine transition supplies', 2)
-  local rule = {
-    type = 'machine',
-    serial = true,
-    enumerable = false,
-    eager = false,
-    total = transition.mode == 'update',
-    order = transition.order or opts.order or 0,
-    accepts_supply = transition.accepts_supply,
-    supplies = transition.supplies,
-    writes = transition.mode ~= 'query',
-    transition = transition,
-  }
-  opts.transition, opts.order = nil, nil
-  return transition_program(opts, rule)
-end
-
-function M.witness_transition(opts)
-  assert(opts and opts.location, 'witness transition requires location')
-  assert(opts.supply == nil, 'witness transition no longer accepts supply')
-  assert(type(opts.cursor) == 'function', 'witness transition requires cursor')
-  assert(type(opts.accepts_supply) == 'boolean', 'witness transition requires accepts_supply')
-  local rule = {
-    type = 'witness',
-    serial = false,
-    enumerable = true,
-    eager = false,
-    total = false,
-    order = opts.order or 0,
-    accepts_supply = opts.accepts_supply,
-    supplies = Supply.normalise(opts.supplies, 'witness transition supplies', 2),
-    writes = true,
-    cursor_factory = opts.cursor,
-  }
-  opts.cursor, opts.accepts_supply, opts.supplies, opts.order = nil, nil, nil, nil
-  return transition_program(opts, rule)
 end
 
 function M.version_wait(location, version)
   return programme('version_wait', { location = location, version = version })
-end
-
-function M.exchange(resource, role, value)
-  return programme('exchange', { resource = resource, role = role, value = value })
 end
 
 -- Cached option metadata -------------------------------------------------
@@ -296,7 +137,7 @@ local function primitive_supply_access(program)
 end
 
 local function primitive_metadata(op, out)
-  local p = op.program
+  local p = op.descriptor
   local kind = M.kind(p)
   if kind == 'exchange' then
     local roles = out.exchanges[p.resource]
@@ -307,7 +148,7 @@ local function primitive_metadata(op, out)
     roles[p.role] = true
     return
   end
-  if kind == 'snapshot' then
+  if kind == 'observe' then
     mark_resource(out, p.resource or op.resource, { observe = true })
     return
   end
@@ -411,7 +252,7 @@ describe = function(op, seen)
   if not op then
     return empty_metadata()
   end
-  local cache_key = op.program and op.program._fibers_compact_descriptor and op.program or op
+  local cache_key = op.descriptor or op
   local cached = metadata_cache[cache_key]
   if cached then
     return cached
@@ -638,7 +479,7 @@ local function is_ready(value)
 end
 
 local function machine_outcome(program, value, context)
-  local transition, payload = M.rule(program).transition, program.payload or {}
+  local transition, payload = M.rule(program), program.payload or {}
   local packed = Op._pack(transition.step(value, payload, context))
   local first = packed[1]
   if packed.n == 1 and is_wait(first) then
@@ -678,38 +519,8 @@ local function machine_outcome(program, value, context)
   return { machine = true, writes = false, result = packed }
 end
 
-local pack = Op._pack
 function M.result_pack(program, value, session)
-  local result = session and function(...)
-    return session:pack(...)
-  end or pack
-  local kind = program.result_kind or 'constant'
-  if kind == 'constant' then
-    return result(program.result_value)
-  end
-  if kind == 'identity' or kind == 'map_value' then
-    return result(value)
-  end
-  if kind == 'presence_bool' then
-    return result(value ~= Algebra.ABSENT)
-  end
-  if kind == 'presence_value' then
-    if value == Algebra.ABSENT or (program.nil_sentinel and value == program.nil_sentinel) then
-      return result(nil)
-    end
-    return result(value)
-  end
-  if kind == 'index_entry' then
-    return result(value and { key = value.key, rank = value.rank, value = value.value, seq = value.seq })
-  end
-  if kind == 'scalar_snapshot' then
-    return result({ value = value, version = program.location.version })
-  end
-  if kind == 'counter_state' then
-    local owner = program.owner
-    return result({ value = value, min = owner.min, max = owner.max, version = program.location.version })
-  end
-  error('unknown programme result kind: ' .. tostring(kind), 2)
+  return Result.encode(program.result, program, value, session)
 end
 
 function M.predicate_holds(program, value)
@@ -878,8 +689,8 @@ end
 
 function M.transition_ready(program, value, context)
   local rule = M.rule(program)
-  if rule.type == 'machine' and type(rule.transition.ready) == 'function' then
-    local result = rule.transition.ready(value, program.payload or {}, context or {})
+  if rule.type == 'machine' and type(rule.ready) == 'function' then
+    local result = rule.ready(value, program.payload or {}, context or {})
     return result ~= nil and result ~= false and not is_wait(result)
   end
   return M.transition_cursor(program, value, context, 'probe'):next() ~= nil

@@ -1,27 +1,17 @@
-local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
-local Substrate = require('fibers.internal.kernel.ledger')
 
 local Clock = {}
 Clock.__index = Clock
-local Kind = { name = 'clock' }
-local next_id = 0
+local Kind = Facility.kind('clock')
 
 function Clock.new(name)
-  next_id = next_id + 1
-  local c = setmetatable({
-    name = name or ('clock-' .. tostring(next_id)),
-    _fibers_id = 'clock-' .. tostring(next_id),
-    _fibers_kind = Kind,
-  }, Clock)
-  c._location = Substrate.new_location({
-    name = c.name .. ':observation',
+  local c = Facility.identity(setmetatable({}, Clock), Kind, name)
+  c._location = Facility.location(c, 'observation', {
     algebra = 'machine',
     domain = 'external-clock',
     value = false,
-    owner = c,
   })
   return c
 end
@@ -40,15 +30,10 @@ function Clock:at_op(deadline)
       return Scalar.Ready.same(true, now)
     end,
   })
-  return Op._compact_resource(
+  return Facility.op(
     self,
     Kind,
-    'transition',
-    IR.machine_transition({
-      location = self._location,
-      resource = self,
-      transition = transition,
-      order = transition.order or 0,
+    Facility.machine(self._location, transition, {}, self, {
       interest = Interest.timer(deadline, self),
       absence_check = function(rt)
         return rt:now() < deadline

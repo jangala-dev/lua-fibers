@@ -1,11 +1,17 @@
+local Facility = require('fibers.internal.facility')
 local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
-local Substrate = require('fibers.internal.kernel.ledger')
 
 local Counter = {}
-Counter.__index = Counter
-local Kind = { name = 'counter' }
-local next_id = 0
+Counter.__index = function(self, key)
+  if key == 'value' then
+    return self._location.value
+  end
+  if key == 'version' then
+    return self._location.version
+  end
+  return Counter[key]
+end
+local Kind = Facility.kind('counter')
 
 local function opt_number(opts, a, b)
   if type(opts) == 'number' then
@@ -25,47 +31,24 @@ function Counter.new(opts, name)
   local initial, min, max
   if type(opts) == 'table' then
     initial = opt_number(opts, 'initial', 'value')
-    min = opts.min
-    max = opts.max
-    name = opts.name or name
+    min, max, name = opts.min, opts.max, opts.name or name
   else
     initial = opts
   end
-  if initial == nil then
-    initial = 0
-  end
-  if min == nil then
-    min = 0
-  end
-  next_id = next_id + 1
-  local counter = setmetatable({
-    value = initial,
-    min = min,
-    max = max,
-    version = 0,
-    name = name or ('counter-' .. tostring(next_id)),
-    _fibers_id = 'counter-' .. tostring(next_id),
-    _fibers_kind = Kind,
-  }, Counter)
-  counter._location = Substrate.new_location({
-    name = counter.name .. ':stock',
+  initial, min = initial == nil and 0 or initial, min == nil and 0 or min
+  local counter = Facility.identity(setmetatable({ min = min, max = max }, Counter), Kind, name)
+  counter._location = Facility.location(counter, 'stock', {
     algebra = 'add',
     domain = 'counter',
     value = initial,
-    owner = counter,
-    apply = function(v, loc)
-      counter.value = v
-      counter.version = loc.version
-    end,
   })
-  counter._read_op = Op._compact_resource(counter, Kind, 'read', {
+  counter._read_op = Facility.static(counter, Kind, 'read', {
     location = counter._location,
-    result_kind = 'identity',
+    result = Facility.result.value,
   })
-  counter._state_op = Op._compact_resource(counter, Kind, 'read', {
+  counter._state_op = Facility.static(counter, Kind, 'read', {
     location = counter._location,
-    result_kind = 'counter_state',
-    owner = counter,
+    result = Facility.result.counter_state,
   })
   return counter
 end
@@ -74,11 +57,10 @@ function Counter:adjust_op(n)
   if n == nil then
     error('counter adjust requires an amount', 2)
   end
-  return Op._compact_resource(self, Kind, 'patch', {
+  return Facility.static(self, Kind, 'patch', {
     location = self._location,
-    patch = { kind = 'add', delta = n },
-    result_kind = 'constant',
-    result_value = true,
+    patch = Facility.change.add(n),
+    result = Facility.result.boolean,
   })
 end
 function Counter:add_op(n)
@@ -105,21 +87,15 @@ function Counter:take_op(n)
   if n == 0 then
     return Op.always(true)
   end
-  local loc = self._location
-  return Op._compact_resource(
+  return Facility.op(
     self,
     Kind,
-    'transition',
-    IR.claim({
-      location = loc,
-      group = self,
-      orientation = 'up',
-      predicate = 'ge',
-      threshold = (self.min or 0) + n,
+    Facility.claim({
+      location = self._location,
+      demand = 'up',
       query = { kind = 'predicate', predicate = 'ge', threshold = (self.min or 0) + n },
-      transition = { kind = 'static', patch = { kind = 'add', delta = -n } },
-      result_kind = 'constant',
-      result_value = true,
+      change = Facility.change.add(-n),
+      result = Facility.result.boolean,
     })
   )
 end

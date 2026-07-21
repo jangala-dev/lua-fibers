@@ -1,15 +1,19 @@
 local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
-local perform = require('fibers.perform')
-local Substrate = require('fibers.internal.kernel.ledger')
+local Facility = require('fibers.internal.facility')
 local Algebra = require('fibers.internal.kernel.algebra')
-local Supply = require('fibers.internal.kernel.supply')
 
 local Scalar = {}
-Scalar.__index = Scalar
+Scalar.__index = function(self, key)
+  if key == 'value' then
+    return self._location.value
+  end
+  if key == 'version' then
+    return self._location.version
+  end
+  return Scalar[key]
+end
 
-local Kind = { name = 'scalar' }
-local next_id = 0
+local Kind = Facility.kind('scalar')
 local WAIT = { _fibers_scalar_wait = true }
 local Ready = {}
 function Ready.write(value, ...)
@@ -38,12 +42,18 @@ function Scalar.transition(spec)
   if type(spec.accepts_supply) ~= 'boolean' then
     error('Scalar.transition requires accepts_supply = true or false', 2)
   end
-  local supplies = Supply.normalise(spec.supplies, 'Scalar.transition supplies', 2)
-  if mode == 'query' and not Supply.is_empty(supplies) then
+  local supplies = Facility.normalise_supply(spec.supplies, 'Scalar.transition supplies', 2)
+  if mode == 'query' and not Facility.supply_empty(supplies) then
     error('query transitions cannot declare supplied state', 2)
   end
   return {
-    _fibers_scalar_transition = true,
+    _fibers_transition_rule = true,
+    type = 'machine',
+    serial = true,
+    enumerable = false,
+    eager = false,
+    total = mode == 'update',
+    writes = mode ~= 'query',
     name = spec.name,
     mode = mode,
     step = spec.step or spec.apply,
@@ -79,38 +89,24 @@ function Scalar.kind(spec)
 end
 
 local function new_scalar(value, name, merge)
-  next_id = next_id + 1
-  local scalar = setmetatable({
-    value = value,
-    version = 0,
-    name = name or ('scalar-' .. tostring(next_id)),
-    _fibers_id = 'scalar-' .. tostring(next_id),
-    _fibers_kind = Kind,
-  }, Scalar)
-  scalar._location = Substrate.new_location({
-    name = scalar.name .. ':value',
+  local scalar = Facility.identity(setmetatable({}, Scalar), Kind, name)
+  scalar._location = Facility.location(scalar, 'value', {
     algebra = merge or 'replace',
     domain = 'plain',
     value = value,
-    owner = scalar,
-    apply = function(v, loc)
-      scalar.value = v
-      scalar.version = loc.version
-    end,
   })
-  scalar._read_op = Op._compact_resource(scalar, Kind, 'read', {
+  scalar._read_op = Facility.static(scalar, Kind, 'read', {
     location = scalar._location,
-    result_kind = 'identity',
+    result = Facility.result.value,
   })
-  scalar._snapshot_op = Op._compact_resource(scalar, Kind, 'read', {
+  scalar._snapshot_op = Facility.static(scalar, Kind, 'read', {
     location = scalar._location,
-    result_kind = 'scalar_snapshot',
+    result = Facility.result.scalar_snapshot,
   })
-  scalar._write_descriptor = Op._compact_descriptor(scalar, Kind, 'patch', {
+  scalar._write_descriptor = Facility.descriptor(scalar, Kind, 'patch', {
     location = scalar._location,
     payload_patch = 'replace',
-    result_kind = 'constant',
-    result_value = true,
+    result = Facility.result.boolean,
   })
   return scalar
 end
@@ -131,7 +127,7 @@ function Scalar:snapshot_op()
 end
 
 function Scalar:changed_op(version)
-  return Op._compact_resource(self, Kind, 'version_wait', { location = self._location, version = version })
+  return Facility.static(self, Kind, 'version_wait', { location = self._location, version = version })
 end
 
 function Scalar:expect_op(value)
@@ -194,11 +190,11 @@ function Scalar:write_op(value)
     })
     return self:transition_op(transition, {})
   end
-  return Op._compact_occurrence(self._write_descriptor, value)
+  return Facility.occurrence(self._write_descriptor, value)
 end
 
 function Scalar:transition_op(transition, payload)
-  if type(transition) ~= 'table' or transition._fibers_scalar_transition ~= true then
+  if type(transition) ~= 'table' or transition._fibers_transition_rule ~= true then
     error('scalar transition expected', 2)
   end
   payload = payload or {}
@@ -208,36 +204,11 @@ function Scalar:transition_op(transition, payload)
   if transition.validate then
     transition.validate(payload)
   end
-  return Op._compact_resource(
-    self,
-    Kind,
-    'transition',
-    IR.machine_transition({
-      location = self._location,
-      transition = transition,
-      payload = payload,
-      resource = self,
-      order = transition.order or 0,
-    })
-  )
+  return Facility.op(self, Kind, Facility.machine(self._location, transition, payload, self))
 end
 
 Scalar.Kind = Kind
 
-function Scalar:read()
-  return perform(self:read_op())
-end
-
-function Scalar:changed(version)
-  return perform(self:changed_op(version))
-end
-
-function Scalar:expect(value)
-  return perform(self:expect_op(value))
-end
-
-function Scalar:write(value)
-  return perform(self:write_op(value))
-end
+Facility.performing(Scalar, { 'read', 'changed', 'expect', 'write' })
 
 return Scalar

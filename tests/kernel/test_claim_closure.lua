@@ -14,6 +14,7 @@ package.path = table.concat({
 local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local Op = require('fibers.op')
+local Facility = require('fibers.internal.facility')
 local Program = require('fibers.internal.kernel.ir')
 local Runtime = require('fibers.runtime')
 
@@ -59,16 +60,15 @@ end
 -- different valid order.
 local backtrack_rt = Runtime.new({ instrumentation = true })
 local counter = Counter.new({ initial = 1, min = 0 }, 'claim-closure-counter')
-local observe_positive = Op._resource(
+local observe_positive = Facility.op(
   counter,
   Counter.Kind,
-  Program.claim({
+  Facility.claim({
     location = counter._location,
     group = counter,
-    orientation = 'up',
+    demand = 'up',
     query = { kind = 'predicate', predicate = 'ge', threshold = 1 },
-    result_kind = 'constant',
-    result_value = true,
+    result = Facility.result.boolean,
   })
 )
 local backtrack_rows

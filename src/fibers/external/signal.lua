@@ -1,13 +1,17 @@
 local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.internal.facility')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
 
 local Signal = {}
-Signal.__index = Signal
-local Kind = { name = 'signal' }
-local next_id = 0
+Signal.__index = function(self, key)
+  if key == 'version' then
+    return self._location.version
+  end
+  return Signal[key]
+end
+local Kind = Facility.kind('signal')
 local unpack_ = table.unpack or unpack
 
 local function clone_state(s)
@@ -18,7 +22,6 @@ local function touch(signal, state)
   local loc = signal._location
   loc.value = state
   loc.version = loc.version + 1
-  signal.version = loc.version
 end
 
 local function deliver(signal, ...)
@@ -30,23 +33,13 @@ local function clear(signal)
 end
 
 function Signal.new(name)
-  next_id = next_id + 1
-  local signal = setmetatable({
-    name = name or ('signal-' .. tostring(next_id)),
-    _fibers_id = 'signal-' .. tostring(next_id),
-    _fibers_kind = Kind,
-    version = 0,
-  }, Signal)
-  signal._location = require('fibers.internal.kernel.ledger').new_location({
-    name = signal.name .. ':state',
+  local signal = Facility.identity(setmetatable({}, Signal), Kind, name)
+  signal._location = Facility.location(signal, 'state', {
     algebra = 'machine',
     domain = 'external',
     value = { ready = false, pack = nil },
-    owner = signal,
     clone_value = clone_state,
-    apply = function(v, loc)
-      signal.version = loc.version
-    end,
+    apply = function(v, loc) end,
   })
   signal._fibers_external_deliver = deliver
   signal._fibers_external_clear = clear
@@ -71,15 +64,10 @@ function Signal:wait_op()
       return Scalar.Ready.same(unpack_(state.pack, 1, state.pack.n))
     end,
   })
-  self._wait_op = Op._compact_resource(
+  self._wait_op = Facility.op(
     self,
     Kind,
-    'transition',
-    IR.machine_transition({
-      location = self._location,
-      resource = self,
-      transition = transition,
-      order = transition.order or 0,
+    Facility.machine(self._location, transition, {}, self, {
       interest = function(rt)
         return Interest.external(signal, 'ready', {
           external_kind = 'signal',
