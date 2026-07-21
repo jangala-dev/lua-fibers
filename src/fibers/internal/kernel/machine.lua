@@ -831,13 +831,8 @@ local function resolve_claims(state, intent_ids)
       local program = intent.program
       local task = state.tasks[intent.task_id]
       ensure_task_view(state, task)
-      local value = Store.project(
-        state,
-        task,
-        program.location,
-        program.orientation or program.demand_tag,
-        state.trail
-      )
+      local value =
+        Store.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
       if value ~= nil then
         local resolution = Store.evaluate_claim(program, value)
         if resolution then
@@ -1979,9 +1974,7 @@ local function prepare_alternative(state, frame, alt)
           size = #alt.ids,
           names = table.concat(names, '|'),
           group_key = tostring(
-            alt.group.key
-              and (alt.group.key.name or alt.group.key._fibers_id or alt.group.key)
-              or '<nil>'
+            alt.group.key and (alt.group.key.name or alt.group.key._fibers_id or alt.group.key) or '<nil>'
           ),
         })
       end

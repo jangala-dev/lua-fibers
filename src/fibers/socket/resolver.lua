@@ -23,14 +23,11 @@ Query.__index = Query
 local next_query = 0
 
 local function query_settlement(query)
-  return Settlement.request_then_wait(
-    function(_ctx, _record, reason)
-      return query:close_op(reason or 'resolver query settlement')
-    end,
-    function()
-      return query:closed_op()
-    end
-  )
+  return Settlement.request_then_wait(function(_ctx, _record, reason)
+    return query:close_op(reason or 'resolver query settlement')
+  end, function()
+    return query:closed_op()
+  end)
 end
 
 function Query:owned(children)
@@ -61,14 +58,16 @@ end
 function Query:close_op(reason)
   reason = reason or 'resolver query closed'
   local cancel = self.driver and self.driver:request_cancel_op(reason) or Op.always(true)
-  return cancel:and_then(function()
-    return self.completion:publish_cancelled_op(HostError.closed('resolver', 'resolve', {
-      reason = reason,
-      endpoint = self.endpoint,
-    }))
-  end, false):map(function()
-    return true
-  end)
+  return cancel
+    :and_then(function()
+      return self.completion:publish_cancelled_op(HostError.closed('resolver', 'resolve', {
+        reason = reason,
+        endpoint = self.endpoint,
+      }))
+    end, false)
+    :map(function()
+      return true
+    end)
 end
 
 function Query:closed_op()
@@ -82,26 +81,29 @@ end
 
 local function normalise_addresses(values, endpoint)
   if type(values) ~= 'table' then
-    return nil, HostError.protocol('resolver', 'resolve', 'host resolver must return an address list', {
-      endpoint = endpoint,
-    })
+    return nil,
+      HostError.protocol('resolver', 'resolve', 'host resolver must return an address list', {
+        endpoint = endpoint,
+      })
   end
   local out = {}
   local seen = {}
   for i = 1, #values do
     local ok, address_or_err = Protected.pcall(Address.validate, values[i], 'resolver result')
     if not ok then
-      return nil, HostError.protocol('resolver', 'resolve', tostring(address_or_err), {
-        endpoint = endpoint,
-        index = i,
-      })
+      return nil,
+        HostError.protocol('resolver', 'resolve', tostring(address_or_err), {
+          endpoint = endpoint,
+          index = i,
+        })
     end
     local address = address_or_err
     if not Address.is_numeric(address) then
-      return nil, HostError.protocol('resolver', 'resolve', 'resolver returned an unresolved endpoint', {
-        endpoint = endpoint,
-        index = i,
-      })
+      return nil,
+        HostError.protocol('resolver', 'resolve', 'resolver returned an unresolved endpoint', {
+          endpoint = endpoint,
+          index = i,
+        })
     end
     local key = Address.key(address)
     if not seen[key] then
@@ -110,9 +112,10 @@ local function normalise_addresses(values, endpoint)
     end
   end
   if #out == 0 then
-    return nil, HostError.system('resolver', 'resolve', 'name resolved to no usable addresses', 'EAI_NONAME', nil, {
-      endpoint = endpoint,
-    })
+    return nil,
+      HostError.system('resolver', 'resolve', 'name resolved to no usable addresses', 'EAI_NONAME', nil, {
+        endpoint = endpoint,
+      })
   end
   return out
 end
@@ -121,9 +124,12 @@ local function drive(query, opts)
   local rt = Runtime.current()
   local host = opts.host or (rt and rt.host)
   if not host or type(host.resolve) ~= 'function' then
-    IO.masked_perform(rt, query.completion:publish_failure_op(HostError.unsupported('host', 'resolve', {
-      endpoint = query.endpoint,
-    })))
+    IO.masked_perform(
+      rt,
+      query.completion:publish_failure_op(HostError.unsupported('host', 'resolve', {
+        endpoint = query.endpoint,
+      }))
+    )
     return
   end
 
@@ -136,11 +142,14 @@ local function drive(query, opts)
     error(failure, 0)
   end
   if not addresses then
-    IO.masked_perform(rt, query.completion:publish_failure_op(HostError.normalise(err, {
-      domain = 'resolver',
-      action = 'resolve',
-      endpoint = query.endpoint,
-    })))
+    IO.masked_perform(
+      rt,
+      query.completion:publish_failure_op(HostError.normalise(err, {
+        domain = 'resolver',
+        action = 'resolve',
+        endpoint = query.endpoint,
+      }))
+    )
     return
   end
   local normalised, normalise_err = normalise_addresses(addresses, query.endpoint)
@@ -179,10 +188,13 @@ function Module.resolve_op(endpoint, opts)
     if Runtime.is_cancelled(err) then
       local rt = Runtime.current()
       if query.completion:is_pending() then
-        IO.masked_perform(rt, query.completion:publish_cancelled_op(HostError.closed('resolver', 'resolve', {
-          reason = err.reason or 'resolver query cancelled',
-          endpoint = endpoint,
-        })))
+        IO.masked_perform(
+          rt,
+          query.completion:publish_cancelled_op(HostError.closed('resolver', 'resolve', {
+            reason = err.reason or 'resolver query cancelled',
+            endpoint = endpoint,
+          }))
+        )
       end
       return
     end
@@ -199,15 +211,25 @@ function Module.resolve_op(endpoint, opts)
     end)
 end
 
-function Query:addresses() return perform(self:addresses_op()) end
+function Query:addresses()
+  return perform(self:addresses_op())
+end
 
-function Query:failed() return perform(self:failed_op()) end
+function Query:failed()
+  return perform(self:failed_op())
+end
 
-function Query:result() return perform(self:result_op()) end
+function Query:result()
+  return perform(self:result_op())
+end
 
-function Query:close(reason) return perform(self:close_op(reason)) end
+function Query:close(reason)
+  return perform(self:close_op(reason))
+end
 
-function Query:closed() return perform(self:closed_op()) end
+function Query:closed()
+  return perform(self:closed_op())
+end
 
 Module.Query = Query
 return Module

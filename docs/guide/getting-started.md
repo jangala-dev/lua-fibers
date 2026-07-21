@@ -246,7 +246,7 @@ assert(b:read_line() == 'hello')
 Host-backed streams are opened transactionally:
 
 ```lua
-local stream = fibers.perform(Stream.open_op(backend, {
+local stream = fibers.perform(Stream.open_op(handle, {
   name = 'connection',
   read = true,
   write = true,

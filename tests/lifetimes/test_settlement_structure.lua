@@ -17,7 +17,7 @@ local FibersRegion = require('fibers.lifetime.region')
 local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local Stream = FibersStream
-local Fake = require('fibers.stream.backend.fake')
+local HostHandle = require('fibers.host.handle')
 local Settlement = require('fibers.internal.settlement')
 
 local function fail(msg)
@@ -64,7 +64,7 @@ end
 -- the subtree atomically.
 do
   local life = FibersScope.new('tree-life')
-  local backend = Fake.new({ name = 'tree-backend' })
+  local backend = HostHandle.fake({ name = 'tree-backend' })
   local stream, direct_release, settled_status
   local st
   st = fibers.try_run(function()
@@ -90,7 +90,7 @@ end
 do
   local a = FibersScope.new('move-tree-a')
   local b = FibersScope.new('move-tree-b')
-  local backend = Fake.new({ name = 'move-tree-backend' })
+  local backend = HostHandle.fake({ name = 'move-tree-backend' })
   local stream, a_count_after, b_count_after_move, b_count_after_settlement, child_transfer
   local st = fibers.try_run(function()
     stream = fibers.perform(

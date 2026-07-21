@@ -107,7 +107,6 @@ function M.mask(fn, ...)
   return unpack_(r, 2, r.n)
 end
 
-
 function M.try_scope(opts, fn)
   if type(opts) == 'function' then
     fn, opts = opts, {}
@@ -182,6 +181,12 @@ function M.try_run(fn, opts)
       max_iterations = opts.max_iterations,
     })
   end)
+  local finalised, finalise_err = Protected.pcall(function()
+    return rt:_finalize()
+  end)
+  if ok and not finalised then
+    ok, err = false, finalise_err
+  end
   if ok and result then
     result.runtime_status = runner_status
     result.runtime = rt

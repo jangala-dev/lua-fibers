@@ -26,8 +26,6 @@ local Inlet = {}
 Inlet.__index = Inlet
 local Outlet = {}
 Outlet.__index = Outlet
-local Reservoir = {}
-Reservoir.__index = Reservoir
 
 local next_id = 0
 local function validate_options(opts, allowed, label)
@@ -72,120 +70,6 @@ local inspect_state = Machine.inspect
 local free_for_capacity = Machine.free
 local transition_op = Machine.transition_op
 
-function Reservoir.new(flow, opts)
-  opts = opts or {}
-  local r = setmetatable(
-    { flow = flow, capacity = as_capacity(opts.capacity), limit = as_capacity(opts.capacity) },
-    Reservoir
-  )
-  return r
-end
-function Reservoir:_op(name, payload)
-  return transition_op(self.flow, name, payload)
-end
-function Reservoir:inspect_op()
-  return self.flow:inspect_op()
-end
-function Reservoir:read_some_op(n)
-  n = as_pos_int(n, 1, 'flow read size')
-  return self:_op('read_some', { n = n })
-end
-function Reservoir:peek_op(n)
-  n = as_nonneg_int(n, 1, 'flow peek size')
-  if n == 0 then
-    return Op.always('')
-  end
-  return self:_op('peek', { n = n })
-end
-function Reservoir:read_exactly_op(n)
-  n = as_nonneg_int(n, 0, 'flow exact read size')
-  if n == 0 then
-    return Op.always('')
-  end
-  return self:_op('read_exactly', { n = n })
-end
-function Reservoir:read_until_op(sep, opts)
-  opts = opts or {}
-  if type(sep) ~= 'string' or sep == '' then
-    error('flow read_until separator must be non-empty string', 2)
-  end
-  local limit = opts.limit
-  if limit ~= nil then
-    limit = as_nonneg_int(limit, nil, 'flow read limit')
-  end
-  return self:_op('read_until', { sep = sep, limit = limit, include = opts.include == true, err = opts.err })
-end
-function Reservoir:drain_available_op()
-  return self:_op('drain_available')
-end
-function Reservoir:read_all_limited_op(opts)
-  opts = opts or {}
-  return self:_op('drain_all_limited', { max = opts.max, unlimited = opts.unlimited == true })
-end
-function Reservoir:read_all_too_large_op(opts)
-  opts = opts or {}
-  return self:_op('read_all_too_large', { max = opts.max, unlimited = opts.unlimited == true })
-end
-function Reservoir:capacity_some_op(n)
-  n = as_pos_int(n, 1, 'flow capacity count')
-  return self:_op('capacity_some', { n = n })
-end
-function Reservoir:lease_op(n, owner, meta)
-  n = as_pos_int(n, 1, 'flow lease size')
-  return self:_op('lease', { n = n, owner = owner, meta = meta })
-end
-function Reservoir:ack_lease_op(lease, n)
-  if not Lease.is(lease) then
-    error('ack_lease_op expects a flow lease', 2)
-  end
-  n = as_nonneg_int(n, lease:length(), 'flow lease ack count')
-  return self:_op('ack_lease', { lease = lease, n = n })
-end
-function Reservoir:return_lease_op(lease)
-  if not Lease.is(lease) then
-    error('return_lease_op expects a flow lease', 2)
-  end
-  return self:_op('return_lease', { lease = lease })
-end
-function Reservoir:fail_lease_op(lease, err)
-  if not Lease.is(lease) then
-    error('fail_lease_op expects a flow lease', 2)
-  end
-  return self:_op('fail_lease', { lease = lease, err = err })
-end
-function Reservoir:reserve_space_op(n, owner, meta)
-  n = as_pos_int(n, 1, 'flow space reservation size')
-  return self:_op('reserve_space', { n = n, owner = owner, meta = meta })
-end
-function Reservoir:commit_space_op(lease, bytes)
-  if not SpaceLease.is(lease) then
-    error('commit_space_op expects a flow space lease', 2)
-  end
-  bytes = as_bytes(bytes)
-  return self:_op('commit_space', { lease = lease, bytes = bytes })
-end
-function Reservoir:release_space_op(lease)
-  if not SpaceLease.is(lease) then
-    error('release_space_op expects a flow space lease', 2)
-  end
-  return self:_op('release_space', { lease = lease })
-end
-function Reservoir:fail_space_op(lease, err)
-  if not SpaceLease.is(lease) then
-    error('fail_space_op expects a flow space lease', 2)
-  end
-  return self:_op('fail_space', { lease = lease, err = err })
-end
-function Reservoir:settle_op(err)
-  return self:_op('settle', { err = err })
-end
-function Reservoir:settled_error_op()
-  return self:_op('settled_error')
-end
-function Reservoir:empty_op()
-  return self:_op('empty')
-end
-
 local function live_or_retired_op(handle, body)
   local flow = handle and handle.flow or handle
   if (handle and handle._fibers_retired) or (flow and flow._fibers_retired) then
@@ -213,7 +97,8 @@ end
 
 function Inlet:reserve_some_op(n, owner, meta)
   return live_or_retired_op(self, function()
-    return self.flow.reservoir:reserve_space_op(n, owner, meta)
+    n = as_pos_int(n, 1, 'flow space reservation size')
+    return transition_op(self.flow, 'reserve_space', { n = n, owner = owner, meta = meta })
   end)
 end
 
@@ -255,7 +140,11 @@ end
 
 function Outlet:peek_exactly_op(n)
   return live_or_retired_op(self, function()
-    return self.flow.reservoir:peek_op(n)
+    n = as_nonneg_int(n, 1, 'flow peek size')
+    if n == 0 then
+      return Op.always('')
+    end
+    return transition_op(self.flow, 'peek', { n = n })
   end)
 end
 
@@ -312,13 +201,12 @@ function Outlet:read_all_op(opts)
   local max = as_nonneg_int(opts.max, nil, 'flow read_all max')
   local read_opts = { max = max, unlimited = false }
   return live_or_retired_op(self, function()
-    return self.flow.reservoir
-      :read_all_too_large_op(read_opts)
+    return transition_op(self.flow, 'read_all_too_large', read_opts)
       :and_then(function(err)
         return Op.always(nil, err)
       end)
       :or_else(transition_op(self.flow, 'input_closed'):and_then(function()
-        return self.flow.reservoir:read_all_limited_op(read_opts)
+        return transition_op(self.flow, 'drain_all_limited', read_opts)
       end))
   end)
 end
@@ -350,7 +238,8 @@ end
 
 function Outlet:lease_some_op(n, owner, meta)
   return live_or_retired_op(self, function()
-    return self.flow.reservoir:lease_op(n, owner, meta)
+    n = as_pos_int(n, 1, 'flow lease size')
+    return transition_op(self.flow, 'lease', { n = n, owner = owner, meta = meta })
   end)
 end
 
@@ -366,6 +255,44 @@ function Outlet:fail_op(err)
   return transition_op(self.flow, 'fail_write', { err = err or Errors.WRITE_ERROR })
 end
 
+function Flow:_ack_lease_op(lease, n)
+  if not Lease.is(lease) then
+    error('ack_lease_op expects a flow lease', 2)
+  end
+  n = as_nonneg_int(n, lease:length(), 'flow lease ack count')
+  return transition_op(self, 'ack_lease', { lease = lease, n = n })
+end
+function Flow:_return_lease_op(lease)
+  if not Lease.is(lease) then
+    error('return_lease_op expects a flow lease', 2)
+  end
+  return transition_op(self, 'return_lease', { lease = lease })
+end
+function Flow:_fail_lease_op(lease, err)
+  if not Lease.is(lease) then
+    error('fail_lease_op expects a flow lease', 2)
+  end
+  return transition_op(self, 'fail_lease', { lease = lease, err = err })
+end
+function Flow:_commit_space_op(lease, bytes)
+  if not SpaceLease.is(lease) then
+    error('commit_space_op expects a flow space lease', 2)
+  end
+  return transition_op(self, 'commit_space', { lease = lease, bytes = as_bytes(bytes) })
+end
+function Flow:_release_space_op(lease)
+  if not SpaceLease.is(lease) then
+    error('release_space_op expects a flow space lease', 2)
+  end
+  return transition_op(self, 'release_space', { lease = lease })
+end
+function Flow:_fail_space_op(lease, err)
+  if not SpaceLease.is(lease) then
+    error('fail_space_op expects a flow space lease', 2)
+  end
+  return transition_op(self, 'fail_space', { lease = lease, err = err })
+end
+
 function Flow.new(opts)
   opts = opts or {}
   validate_options(opts, { name = true, capacity = true }, 'Flow.new options')
@@ -375,10 +302,7 @@ function Flow.new(opts)
   setmetatable(self, Flow)
   self.name = name
   self.capacity = as_capacity(opts.capacity)
-  self.limit = self.capacity
   self.state = Scalar.machine(new_state(), name .. ':state')
-  self.reservoir = Reservoir.new(self, opts)
-  self.reservoir.state = self.state
   self._fibers_settle = Settlement.flow()
   self._fibers_settle_name = 'flow'
   self.input = Ownership.handle(name .. ':inlet', { kind = 'flow_inlet', flow = self })

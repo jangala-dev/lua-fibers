@@ -49,7 +49,7 @@ end
 do
   local rt = Runtime.new()
   local region = Region.new('poller-generation-region')
-  local backend = require('fibers.stream.backend.fake').new({
+  local backend = require('fibers.host.handle').fake({
     name = 'poller-generation-backend',
     readiness = 'manual',
     initial_readable = false,
@@ -113,7 +113,6 @@ do
   assert_eq(q:length(), 0)
 end
 
-
 -- Stateless hosts share one plan for readiness resources and indexed poller registrations.
 do
   local PollPlan = require('fibers.host.poll_plan')
@@ -121,16 +120,27 @@ do
   local readiness_feed, poller_feed = {}, {}
   local registration = { id = 'shared', generation = 1, key = key, mode = 'write' }
   local poller = {
-    _host_active = function() return { registration } end,
-    _host_delivered = function(_, current) return current == registration end,
+    _host_active = function()
+      return { registration }
+    end,
+    _host_delivered = function(_, current)
+      return current == registration
+    end,
   }
   local plan = PollPlan.build({
     {
-      kind = 'external', external_kind = 'readiness', resource = {}, feed = readiness_feed,
-      readiness_key = key, mode = 'read',
+      kind = 'external',
+      external_kind = 'readiness',
+      resource = {},
+      feed = readiness_feed,
+      readiness_key = key,
+      mode = 'read',
     },
     {
-      kind = 'external', external_kind = 'poller', poller = poller, feed = poller_feed,
+      kind = 'external',
+      external_kind = 'poller',
+      poller = poller,
+      feed = poller_feed,
     },
   })
   assert_eq(#plan.records, 1)
@@ -138,7 +148,9 @@ do
 
   local delivered = {}
   local rt = {
-    deliver = function(_, feed, ...) delivered[#delivered + 1] = { feed = feed, values = { ... } } end,
+    deliver = function(_, feed, ...)
+      delivered[#delivered + 1] = { feed = feed, values = { ... } }
+    end,
   }
   assert_truthy(PollPlan.deliver(rt, plan.records[1], true, true))
   assert_eq(#delivered, 2)
@@ -170,19 +182,31 @@ do
 
   local polled_mode = 'in-place'
   local descriptor_read, descriptor_write = {}, {}
-  function descriptor_read:fileno() return 77 end
-  function descriptor_write:fileno() return 88 end
+  function descriptor_read:fileno()
+    return 77
+  end
+  function descriptor_write:fileno()
+    return 88
+  end
 
   package.preload.nixio = function()
     return {
-      gettime = function() return 0 end,
-      nanosleep = function() return true end,
-      pipe = function() return {}, {} end,
+      gettime = function()
+        return 0
+      end,
+      nanosleep = function()
+        return true
+      end,
+      pipe = function()
+        return {}, {}
+      end,
       poll_flags = function(first, second)
         if type(first) == 'number' then
           return { ['in'] = first == 1 or first == 3, out = first == 2 or first == 3 }
         end
-        if first == 'in' and second == 'out' or first == 'out' and second == 'in' then return 3 end
+        if first == 'in' and second == 'out' or first == 'out' and second == 'in' then
+          return 3
+        end
         return first == 'out' and 2 or 1
       end,
       poll = function(fds)
@@ -202,24 +226,48 @@ do
   end
 
   package.preload['fibers.host.fd_nixio'] = function()
-    return { is_supported = function() return true end }
+    return {
+      is_supported = function()
+        return true
+      end,
+    }
   end
   package.preload['fibers.host.datagram_nixio'] = function()
-    return { is_supported = function() return false end }
+    return {
+      is_supported = function()
+        return false
+      end,
+    }
   end
   package.preload['fibers.host.socket_nixio'] = function()
     return {
-      is_supported = function() return false end,
-      supports_ipv4 = function() return false end,
-      supports_ipv6 = function() return false end,
-      supports_unix = function() return false end,
+      is_supported = function()
+        return false
+      end,
+      supports_ipv4 = function()
+        return false
+      end,
+      supports_ipv6 = function()
+        return false
+      end,
+      supports_unix = function()
+        return false
+      end,
     }
   end
   package.preload['fibers.host.resolver_nixio'] = function()
-    return { is_supported = function() return false end }
+    return {
+      is_supported = function()
+        return false
+      end,
+    }
   end
   package.preload['fibers.host.process_nixio'] = function()
-    return { is_supported = function() return false end }
+    return {
+      is_supported = function()
+        return false
+      end,
+    }
   end
 
   local ok, err = pcall(function()
@@ -227,7 +275,9 @@ do
     local host = NixioHost.new()
     local delivered = {}
     local rt = {
-      now = function() return 0 end,
+      now = function()
+        return 0
+      end,
       deliver = function(_, feed, mode, value)
         delivered[#delivered + 1] = { feed = feed, mode = mode, value = value }
       end,
@@ -235,13 +285,17 @@ do
     local read_feed, write_feed = {}, {}
     local waits = {
       {
-        kind = 'external', external_kind = 'readiness', resource = {},
+        kind = 'external',
+        external_kind = 'readiness',
+        resource = {},
         feed = read_feed,
         readiness_key = { family = 'nixio', handle = descriptor_read },
         mode = 'read',
       },
       {
-        kind = 'external', external_kind = 'readiness', resource = {},
+        kind = 'external',
+        external_kind = 'readiness',
+        resource = {},
         feed = write_feed,
         readiness_key = { family = 'nixio', handle = descriptor_write },
         mode = 'write',
@@ -253,7 +307,9 @@ do
     assert_eq(reason, 'readiness')
     assert_eq(#delivered, 2)
     local modes = {}
-    for i = 1, #delivered do modes[delivered[i].feed] = delivered[i].mode end
+    for i = 1, #delivered do
+      modes[delivered[i].feed] = delivered[i].mode
+    end
     assert_eq(modes[read_feed], 'read')
     assert_eq(modes[write_feed], 'write')
 
@@ -264,7 +320,9 @@ do
     assert_eq(reason, 'readiness')
     assert_eq(#delivered, 2)
     local modes = {}
-    for i = 1, #delivered do modes[delivered[i].feed] = delivered[i].mode end
+    for i = 1, #delivered do
+      modes[delivered[i].feed] = delivered[i].mode
+    end
     assert_eq(modes[read_feed], 'read')
     assert_eq(modes[write_feed], 'write')
   end)

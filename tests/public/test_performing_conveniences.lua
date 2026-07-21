@@ -96,7 +96,7 @@ do
     'abort',
     'closed',
   }, 'stream')
-  assert_twins(file, { 'pipe' }, 'file')
+  assert_twins(file, { 'pipe', 'tmpfile' }, 'file')
   assert_twins(process.command('true'), { 'launch' }, 'command')
   assert_eq(process.command('true').start_op, nil, 'command:start is deliberately procedural')
   assert_twins(socket, {
@@ -217,9 +217,13 @@ do
     assert_truthy(datagram_a:closed())
     assert_truthy(datagram_b:closed())
 
-    local child, child_err = process.command({
-      'manual-child', stdout = 'pipe', stderr = 'pipe',
-    }):start()
+    local child, child_err = process
+      .command({
+        'manual-child',
+        stdout = 'pipe',
+        stderr = 'pipe',
+      })
+      :start()
     assert(child, tostring(child_err))
     assert_twins(child, {
       'launch_succeeded',

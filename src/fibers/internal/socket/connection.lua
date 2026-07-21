@@ -44,11 +44,12 @@ function Connection.adopt(rt, owner, region, slot, handle, opts)
   if not opened then
     slot:close(open_err)
     IO.release_owned(rt, region, slot)
-    return nil, HostError.normalise(open_err, {
-      domain = 'socket',
-      action = opts.action or 'open_connection',
-      address = opts.address,
-    })
+    return nil,
+      HostError.normalise(open_err, {
+        domain = 'socket',
+        action = opts.action or 'open_connection',
+        address = opts.address,
+      })
   end
 
   local local_address = opts.local_address

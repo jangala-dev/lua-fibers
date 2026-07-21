@@ -68,7 +68,9 @@ local function nanosleep(seconds)
 end
 
 local function poll_key(key)
-  if type(key) == 'table' then return key.handle or key.nixio or key end
+  if type(key) == 'table' then
+    return key.handle or key.nixio or key
+  end
   return key
 end
 
@@ -110,6 +112,10 @@ function Nixio.new(opts)
     resolver = ResolverProvider.is_supported(),
     resolver_blocking = ResolverProvider.is_supported(),
     process = ProcessProvider.is_supported(),
+    file = ProcessProvider.is_supported(),
+    file_backend = ProcessProvider.is_supported() and 'worker' or nil,
+    file_io_uring = false,
+    file_aio_detected = false,
     process_exec_proof = false,
     process_pass_fds = false,
     process_close_fds = 'known',
@@ -165,7 +171,9 @@ function Nixio:block(rt, waits, status, _opts)
   })
 
   if plan.unsupported then
-    if self.on_unsupported then self.on_unsupported(waits, status) end
+    if self.on_unsupported then
+      self.on_unsupported(waits, status)
+    end
     return nil, 'unsupported-readiness-key'
   end
   if #plan.records == 0 then
@@ -173,15 +181,23 @@ function Nixio:block(rt, waits, status, _opts)
   end
 
   local ready = NixioPoll.run(nixio, plan, Host.timeout_ms(rt, deadline))
-  if not ready then return true, 'poll-interrupted' end
+  if not ready then
+    return true, 'poll-interrupted'
+  end
 
   local delivered = false
   for i = 1, #ready do
     local item = ready[i]
-    if PollPlan.deliver(rt, item.record, item.read, item.write) then delivered = true end
+    if PollPlan.deliver(rt, item.record, item.read, item.write) then
+      delivered = true
+    end
   end
-  if delivered then return true, 'readiness' end
-  if deadline ~= nil and rt:now() >= deadline then return true, 'time' end
+  if delivered then
+    return true, 'readiness'
+  end
+  if deadline ~= nil and rt:now() >= deadline then
+    return true, 'time'
+  end
   return true, 'poll'
 end
 

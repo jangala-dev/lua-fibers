@@ -184,7 +184,7 @@ Flow.Error.LINE_TOO_LONG
 Flow.Error.RETIRED
 ```
 
-The reservoir, transition vocabulary and concrete lease classes are
+The retained-byte state, transition vocabulary and concrete lease classes are
 implementation details and are not module exports.
 
 ## Data leases
@@ -276,7 +276,7 @@ assert(perform(b:read_line_op()) == 'hello')
 A host-backed Stream has one constructor:
 
 ```lua
-local stream = perform(Stream.open_op(backend, {
+local stream = perform(Stream.open_op(handle, {
   owner = scope, -- defaults to the current Scope
   name = 'connection',
 
@@ -291,7 +291,7 @@ local stream = perform(Stream.open_op(backend, {
 ```
 
 `read` and `write` are required booleans. At least one direction must be
-enabled. A raw backend must provide `close`, and must provide `read` or `write`
+enabled. A `HostHandle` must provide `close`, and must provide `read` or `write`
 for each enabled direction.
 
 Ordinary socket, file and process users will normally receive Streams from those
@@ -351,13 +351,13 @@ host half-shutdown and retires the write reaction.
 writability.
 
 `close_op` is graceful user closure: it abandons reading, drains writing, closes
-the backend and waits for completed settlement.
+the HostHandle and waits for completed settlement.
 
 `abort_op` abandons both directions, discards queued output and waits for prompt
 completed settlement. Scope cancellation and failure settlement use the abortive
 form.
 
-`closed_op` observes completed direction retirement, backend closure and any
+`closed_op` observes completed direction retirement, HostHandle closure and any
 close error.
 
 Ownership movement uses the general lifetime API. Stream provides no transfer
@@ -399,15 +399,15 @@ For reads, the reactor reserves Flow capacity before performing the authoritativ
 host call. For writes, it leases committed bytes before the call. `would_block`
 releases read capacity or retains write custody as appropriate.
 
-The backend contract is:
+The `HostHandle` contract is:
 
 ```text
-backend.key or backend:readiness_key()
-backend:read(maximum)           -- required for readable Streams
-backend:write(bytes)            -- required for writable Streams
-backend:shutdown_read(reason)   -- optional
-backend:shutdown_write(reason)  -- optional
-backend:close(reason)           -- mandatory
+handle.key or handle:readiness_key()
+handle:read(maximum)           -- required for readable Streams
+handle:write(bytes)            -- required for writable Streams
+handle:shutdown_read(reason)   -- optional
+handle:shutdown_write(reason)  -- optional
+handle:close(reason)           -- mandatory
 ```
 
 `read` and `write` must be non-blocking. Readiness is only a hint. The reactor
@@ -422,7 +422,7 @@ nil or empty string, would_block
 nil, another error          terminal read failure
 ```
 
-Ambiguous or oversized results fail the direction with a backend protocol error.
+Ambiguous or oversized results fail the direction with a HostHandle protocol error.
 
 Regular files may block despite appearing ready. They should use an asynchronous
 host job service while retaining Flow leases as their byte boundary.

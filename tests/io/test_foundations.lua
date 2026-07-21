@@ -120,7 +120,6 @@ do
   assert_eq(closed, 0)
 end
 
-
 -- Completion can expose pending as an option for single-winner protocols.
 do
   local Completion = require('fibers.internal.completion')

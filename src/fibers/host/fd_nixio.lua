@@ -113,7 +113,9 @@ local function fd_close(self, _reason)
     return true
   end
   self._closed = true
-  if self.obj then open_objects[self.obj] = nil end
+  if self.obj then
+    open_objects[self.obj] = nil
+  end
   if self.obj and type(self.obj.close) == 'function' then
     local ok, a, b = self.obj:close()
     if ok == nil or ok == false then
@@ -202,10 +204,11 @@ function Fd.new(obj, opts)
   return h
 end
 
-
 function Fd.open_objects()
   local out = {}
-  for obj in pairs(open_objects) do out[#out + 1] = obj end
+  for obj in pairs(open_objects) do
+    out[#out + 1] = obj
+  end
   return out
 end
 

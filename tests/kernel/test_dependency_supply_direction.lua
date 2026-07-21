@@ -1,6 +1,11 @@
 package.path = table.concat({
-  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
-  './?.lua', './?/init.lua', './?/?.lua', package.path,
+  './src/?.lua',
+  './src/?/init.lua',
+  './src/?/?.lua',
+  './?.lua',
+  './?/init.lua',
+  './?/?.lua',
+  package.path,
 }, ';')
 
 local Counter = require('fibers.resource.counter')
@@ -27,7 +32,6 @@ assert(IR.metadata_may_supply(put_meta, pop_intent))
 assert(not IR.metadata_may_supply(pop_meta, pop_intent))
 assert(IR.metadata_may_supply(pop_meta, put_intent))
 assert(not IR.metadata_may_supply(put_meta, put_intent))
-
 
 local Scalar = require('fibers.scalar')
 local Op = require('fibers.op')
@@ -129,7 +133,11 @@ rejected(function()
     location = location,
     supplies = 'any',
     cursor = function()
-      return { next = function() return nil end }
+      return {
+        next = function()
+          return nil
+        end,
+      }
     end,
   })
 end, 'requires accepts_supply')
@@ -141,7 +149,11 @@ rejected(function()
     accepts_supply = true,
     supplies = 'any',
     cursor = function()
-      return { next = function() return nil end }
+      return {
+        next = function()
+          return nil
+        end,
+      }
     end,
   })
 end, 'no longer accepts supply')

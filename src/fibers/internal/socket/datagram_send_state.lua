@@ -95,10 +95,7 @@ function SendState.new(name, capacity)
     }, name .. ':state'),
     queue = Queue.new({ capacity = capacity or 64, name = name .. ':queue' }),
   }, SendState)
-  self._admit_footprint = Op.dependencies(
-    self.state:transition_op(Allocate),
-    self.queue:put_footprint()
-  )
+  self._admit_footprint = Op.dependencies(self.state:transition_op(Allocate), self.queue:put_footprint())
   self._flush_footprint = Op.dependencies(self.state:read_op(), self.state:changed_op(0))
   return self
 end

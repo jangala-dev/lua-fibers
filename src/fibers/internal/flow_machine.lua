@@ -104,17 +104,38 @@ local function inspect_state(self, s)
     settled_version = s.settled_version or 0,
   }
 end
-local function lease_handle(reservoir, s)
-  return Lease.new(reservoir, s.lease_id, s.lease_owner, s.lease_bytes or '', { meta = s.lease_meta })
+local function lease_handle(flow, s)
+  return Lease.new(flow, s.lease_id, s.lease_owner, s.lease_bytes or '', { meta = s.lease_meta })
 end
 local function clear_lease(s)
   s.lease_id, s.lease_owner, s.lease_bytes, s.lease_meta = nil, nil, nil, nil
 end
-local function space_lease_handle(reservoir, s)
-  return SpaceLease.new(reservoir, s.space_id, s.space_owner, s.space_capacity or 0, { meta = s.space_meta })
+local function space_lease_handle(flow, s)
+  return SpaceLease.new(flow, s.space_id, s.space_owner, s.space_capacity or 0, { meta = s.space_meta })
 end
 local function clear_space_lease(s)
   s.space_id, s.space_owner, s.space_capacity, s.space_meta = nil, nil, 0, nil
+end
+local function close_endpoint(s, endpoint)
+  s[endpoint .. '_open'] = false
+end
+local function fail_endpoint(s, endpoint, err)
+  s[endpoint .. '_error'] = err
+  close_endpoint(s, endpoint)
+end
+local function clear_retained(s)
+  s.rope = Rope.new()
+  clear_lease(s)
+  clear_space_lease(s)
+end
+local function close_flow(s)
+  close_endpoint(s, 'input')
+  close_endpoint(s, 'output')
+  clear_retained(s)
+end
+local function record_settled_error(s, err)
+  s.settled_error = err
+  s.settled_version = (s.settled_version or 0) + 1
 end
 
 local function find_until(s, sep)
@@ -126,14 +147,18 @@ local function committed_input_closed(flow)
   return state and state.input_open == false
 end
 
+local function transition(mode, supplies, order, spec)
+  spec.mode = mode
+  spec.accepts_supply = true
+  spec.supplies = supplies
+  spec.order = order
+  return spec
+end
+
 local FlowTransitions = Scalar.kind({
   name = 'flow.v3',
   transitions = {
-    write = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 100,
+    write = transition('select', 'any', 100, {
       ready = function(s, p)
         local bytes = p.bytes or ''
         if s.output_error or not s.input_open or not s.output_open then
@@ -165,12 +190,8 @@ local FlowTransitions = Scalar.kind({
         next_s.rope:append(bytes)
         return next_s, #bytes
       end,
-    },
-    write_some = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 100,
+    }),
+    write_some = transition('update', 'any', 100, {
       step = function(s, p)
         local bytes = p.bytes or ''
         if s.output_error then
@@ -191,12 +212,8 @@ local FlowTransitions = Scalar.kind({
         next_s.rope:append(bytes:sub(1, n))
         return next_s, n, bytes:sub(n + 1)
       end,
-    },
-    read_some = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 50,
+    }),
+    read_some = transition('select', 'any', 50, {
       ready = function(s, p)
         return s.input_error ~= nil or s.rope:length() > 0 or committed_input_closed(p.flow)
       end,
@@ -214,12 +231,8 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    read_exactly = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 50,
+    }),
+    read_exactly = transition('select', 'any', 50, {
       ready = function(s, p)
         return s.input_error ~= nil or s.rope:length() >= p.n or committed_input_closed(p.flow)
       end,
@@ -242,12 +255,8 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    read_until = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 50,
+    }),
+    read_until = transition('select', 'any', 50, {
       ready = function(s, p)
         if s.input_error then
           return true
@@ -284,12 +293,8 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    read_until_or_eof = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 50,
+    }),
+    read_until_or_eof = transition('select', 'any', 50, {
       ready = function(s, p)
         if s.input_error then
           return true
@@ -340,12 +345,8 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    drain_available = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 100,
+    }),
+    drain_available = transition('update', 'any', 100, {
       step = function(s)
         local len = s.rope:length()
         if len == 0 then
@@ -355,12 +356,8 @@ local FlowTransitions = Scalar.kind({
         local data = next_s.rope:take(len)
         return next_s, data
       end,
-    },
-    drain_all_limited = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 100,
+    }),
+    drain_all_limited = transition('update', 'any', 100, {
       step = function(s, p)
         local len = s.rope:length()
         if not p.unlimited and p.max and len > p.max then
@@ -373,24 +370,16 @@ local FlowTransitions = Scalar.kind({
         local data = next_s.rope:take(len)
         return next_s, data
       end,
-    },
-    read_all_too_large = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 90,
+    }),
+    read_all_too_large = transition('query', 'none', 90, {
       step = function(s, p)
         if p.unlimited or not p.max or s.rope:length() <= p.max then
           return Wait
         end
         return Ready.same(Errors.TOO_LARGE)
       end,
-    },
-    lease = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 50,
+    }),
+    lease = transition('select', 'any', 50, {
       ready = function(s, p)
         if s.lease_id then
           return true
@@ -400,7 +389,7 @@ local FlowTransitions = Scalar.kind({
       step = function(s, p)
         if s.lease_id then
           if p.owner ~= nil and s.lease_owner == p.owner then
-            return Ready.same(lease_handle(p.reservoir, s))
+            return Ready.same(lease_handle(p.flow, s))
           end
           return Ready.same(nil, Errors.LEASE_ALREADY_ACTIVE)
         end
@@ -417,14 +406,10 @@ local FlowTransitions = Scalar.kind({
         next_s.lease_owner = p.owner
         next_s.lease_bytes = bytes
         next_s.lease_meta = p.meta
-        return next_s, lease_handle(p.reservoir, next_s)
+        return next_s, lease_handle(p.flow, next_s)
       end,
-    },
-    ack_lease = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    ack_lease = transition('update', 'any', 0, {
       step = function(s, p)
         if not s.lease_id or s.lease_id ~= p.lease.id then
           return Ready.same(false, Errors.NO_LEASE)
@@ -442,12 +427,8 @@ local FlowTransitions = Scalar.kind({
         end
         return next_s, true, p.n
       end,
-    },
-    return_lease = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    return_lease = transition('update', 'any', 0, {
       step = function(s, p)
         if not s.lease_id or s.lease_id ~= p.lease.id then
           return Ready.same(false, Errors.NO_LEASE)
@@ -463,12 +444,8 @@ local FlowTransitions = Scalar.kind({
         clear_lease(next_s)
         return next_s, true, #bytes
       end,
-    },
-    fail_lease = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    fail_lease = transition('update', 'any', 0, {
       step = function(s, p)
         if not s.lease_id or s.lease_id ~= p.lease.id then
           return Ready.same(false, Errors.NO_LEASE)
@@ -476,16 +453,11 @@ local FlowTransitions = Scalar.kind({
         local next_s = copy_metadata_state(s)
         local n = #(next_s.lease_bytes or '')
         clear_lease(next_s)
-        next_s.settled_error = p.err or Errors.FLOW_ERROR
-        next_s.settled_version = (next_s.settled_version or 0) + 1
+        record_settled_error(next_s, p.err or Errors.FLOW_ERROR)
         return next_s, true, n
       end,
-    },
-    drop_exactly = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 50,
+    }),
+    drop_exactly = transition('select', 'any', 50, {
       ready = function(s, p)
         return s.input_error ~= nil or s.rope:length() >= p.n or committed_input_closed(p.flow)
       end,
@@ -512,12 +484,8 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    reserve_space = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 90,
+    }),
+    reserve_space = transition('select', 'any', 90, {
       ready = function(s, p)
         if s.output_error or not s.input_open or not s.output_open then
           return true
@@ -539,7 +507,7 @@ local FlowTransitions = Scalar.kind({
         end
         if s.space_id then
           if p.owner ~= nil and s.space_owner == p.owner then
-            return Ready.same(space_lease_handle(p.reservoir, s))
+            return Ready.same(space_lease_handle(p.flow, s))
           end
           return Ready.same(nil, Errors.SPACE_LEASE_ALREADY_ACTIVE)
         end
@@ -553,14 +521,10 @@ local FlowTransitions = Scalar.kind({
         next_s.space_owner = p.owner
         next_s.space_capacity = math.min(p.n, free)
         next_s.space_meta = p.meta
-        return next_s, space_lease_handle(p.reservoir, next_s)
+        return next_s, space_lease_handle(p.flow, next_s)
       end,
-    },
-    commit_space = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    commit_space = transition('update', 'any', 0, {
       step = function(s, p)
         if not s.space_id or s.space_id ~= p.lease.id then
           return Ready.same(nil, Errors.NO_SPACE_LEASE)
@@ -576,12 +540,8 @@ local FlowTransitions = Scalar.kind({
         end
         return next_s, #bytes
       end,
-    },
-    release_space = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    release_space = transition('update', 'any', 0, {
       step = function(s, p)
         if not s.space_id or s.space_id ~= p.lease.id then
           return Ready.same(false, Errors.NO_SPACE_LEASE)
@@ -591,28 +551,19 @@ local FlowTransitions = Scalar.kind({
         clear_space_lease(next_s)
         return next_s, true, n
       end,
-    },
-    fail_space = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    fail_space = transition('update', 'any', 0, {
       step = function(s, p)
         if not s.space_id or s.space_id ~= p.lease.id then
           return Ready.same(false, Errors.NO_SPACE_LEASE)
         end
         local next_s = copy_metadata_state(s)
         clear_space_lease(next_s)
-        next_s.input_error = p.err or Errors.READ_ERROR
-        next_s.input_open = false
+        fail_endpoint(next_s, 'input', p.err or Errors.READ_ERROR)
         return next_s, true
       end,
-    },
-    capacity_some = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 90,
+    }),
+    capacity_some = transition('query', 'none', 90, {
       validate = function(p)
         if p.n == nil or p.n <= 0 then
           error('flow capacity count must be positive', 2)
@@ -625,24 +576,16 @@ local FlowTransitions = Scalar.kind({
         end
         return Ready.same(math.min(p.n, free))
       end,
-    },
-    peek = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    peek = transition('query', 'none', 100, {
       step = function(s, p)
         if s.rope:length() < p.n then
           return Wait
         end
         return Ready.same(s.rope:peek(p.n))
       end,
-    },
-    flush = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    flush = transition('query', 'none', 100, {
       step = function(s)
         if s.settled_error then
           return Ready.same(nil, s.settled_error)
@@ -652,47 +595,30 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    settled_error = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    settled_error = transition('query', 'none', 100, {
       step = function(s)
         if not s.settled_error then
           return Wait
         end
         return Ready.same(s.settled_error)
       end,
-    },
-    settle = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    settle = transition('update', 'any', 0, {
       step = function(s, p)
         local retained = retained_length(s)
         local next_s = copy_metadata_state(s)
-        next_s.input_open = false
-        next_s.output_open = false
-        next_s.rope = Rope.new()
-        clear_lease(next_s)
-        clear_space_lease(next_s)
+        close_flow(next_s)
         if retained > 0 then
-          next_s.settled_error = p.err or Errors.FLOW_ERROR
-          next_s.settled_version = (next_s.settled_version or 0) + 1
+          record_settled_error(next_s, p.err or Errors.FLOW_ERROR)
         end
         if retained == 0 and s.input_open == false and s.output_open == false then
           return Ready.same(true)
         end
         return next_s, true
       end,
-    },
-    shutdown_flow = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    shutdown_flow = transition('update', 'any', 0, {
       step = function(s, p)
         local retained = retained_length(s)
         local already_terminal = s.input_open == false and s.output_open == false and retained == 0
@@ -700,23 +626,14 @@ local FlowTransitions = Scalar.kind({
           return Ready.same(true)
         end
         local next_s = copy_metadata_state(s)
-        next_s.input_open = false
-        next_s.output_open = false
-        next_s.rope = Rope.new()
-        clear_lease(next_s)
-        clear_space_lease(next_s)
+        close_flow(next_s)
         if retained > 0 and p.settle_error ~= nil then
-          next_s.settled_error = p.settle_error
-          next_s.settled_version = (next_s.settled_version or 0) + 1
+          record_settled_error(next_s, p.settle_error)
         end
         return next_s, true
       end,
-    },
-    closed = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    closed = transition('query', 'none', 100, {
       step = function(s)
         if s.input_open == false and s.output_open == false and retained_length(s) == 0 then
           if s.settled_error then
@@ -726,64 +643,44 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    empty = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    empty = transition('query', 'none', 100, {
       step = function(s)
         if retained_length(s) ~= 0 then
           return Wait
         end
         return Ready.same(true)
       end,
-    },
-    close_input = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    close_input = transition('update', 'any', 0, {
       step = function(s)
         if s.input_open == false then
           return Ready.same(true)
         end
         local next_s = copy_metadata_state(s)
-        next_s.input_open = false
+        close_endpoint(next_s, 'input')
         return next_s, true
       end,
-    },
-    close_output = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    close_output = transition('update', 'any', 0, {
       step = function(s)
         if s.output_open == false then
           return Ready.same(true)
         end
         local next_s = copy_metadata_state(s)
-        next_s.output_open = false
+        close_endpoint(next_s, 'output')
         return next_s, true
       end,
-    },
-    input_closed = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    input_closed = transition('query', 'none', 100, {
       step = function(_s, p)
         if committed_input_closed(p.flow) then
           return Ready.same(true)
         end
         return Wait
       end,
-    },
-    output_closed = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    output_closed = transition('query', 'none', 100, {
       step = function(_s, p)
         local committed = p.flow and p.flow.state and p.flow.state.value
         if committed and committed.output_open == false then
@@ -791,97 +688,63 @@ local FlowTransitions = Scalar.kind({
         end
         return Wait
       end,
-    },
-    set_input_error = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    set_input_error = transition('update', 'any', 0, {
       step = function(s, p)
         local next_s = copy_metadata_state(s)
-        next_s.input_error = p.err or Errors.READ_ERROR
-        next_s.input_open = false
+        fail_endpoint(next_s, 'input', p.err or Errors.READ_ERROR)
         return next_s, true
       end,
-    },
-    set_output_error = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    set_output_error = transition('update', 'any', 0, {
       step = function(s, p)
         local next_s = copy_metadata_state(s)
-        next_s.output_error = p.err or Errors.WRITE_ERROR
-        next_s.output_open = false
+        fail_endpoint(next_s, 'output', p.err or Errors.WRITE_ERROR)
         return next_s, true
       end,
-    },
-    input_error = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    input_error = transition('query', 'none', 100, {
       step = function(s)
         if s.input_error == nil then
           return Wait
         end
         return Ready.same(s.input_error)
       end,
-    },
-    output_error = {
-      mode = 'query',
-      accepts_supply = true,
-      supplies = 'none',
-      order = 100,
+    }),
+    output_error = transition('query', 'none', 100, {
       step = function(s)
         if s.output_error == nil then
           return Wait
         end
         return Ready.same(s.output_error)
       end,
-    },
-    fail_write = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    fail_write = transition('update', 'any', 0, {
       step = function(s, p)
         local err = p.err or Errors.WRITE_ERROR
         local next_s = copy_metadata_state(s)
-        next_s.output_error = err
-        next_s.output_open = false
+        fail_endpoint(next_s, 'output', err)
         local retained = retained_length(s)
-        next_s.rope = Rope.new()
-        clear_lease(next_s)
-        clear_space_lease(next_s)
+        clear_retained(next_s)
         if retained > 0 then
-          next_s.settled_error = err
-          next_s.settled_version = (next_s.settled_version or 0) + 1
+          record_settled_error(next_s, err)
         end
         return next_s, false, err
       end,
-    },
-    shutdown_output = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
+    }),
+    shutdown_output = transition('update', 'any', 0, {
       step = function(s, p)
         local err = p.err or Errors.BROKEN_PIPE
         local next_s = copy_metadata_state(s)
-        next_s.output_error = s.output_error or Errors.BROKEN_PIPE
-        next_s.output_open = false
+        fail_endpoint(next_s, 'output', s.output_error or Errors.BROKEN_PIPE)
         local retained = retained_length(s)
-        next_s.rope = Rope.new()
-        clear_lease(next_s)
-        clear_space_lease(next_s)
+        clear_retained(next_s)
         if retained > 0 then
-          next_s.settled_error = err
-          next_s.settled_version = (next_s.settled_version or 0) + 1
+          record_settled_error(next_s, err)
         end
         return next_s, true
       end,
-    },
+    }),
   },
 })
 
@@ -889,7 +752,6 @@ local function transition_op(flow, name, payload)
   payload = payload or {}
   payload.capacity = flow.capacity
   payload.flow = flow
-  payload.reservoir = flow.reservoir
   payload.flow_id = flow._fibers_id
   local transition = FlowTransitions:transition(name)
   local option = flow.state:transition_op(transition, payload)

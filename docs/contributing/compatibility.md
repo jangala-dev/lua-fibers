@@ -106,6 +106,26 @@ deterministic ManualHost supplies virtual pipes, sockets and resolver records
 for semantic tests. Optional hosts advertise only capabilities whose provider
 contracts pass and return structured unsupported errors for the remainder.
 
+## Evented file capabilities
+
+`capabilities.file` means the public regular-file surface can run without
+issuing filesystem calls on the runtime thread. `file_backend` identifies the
+selected complete mechanism:
+
+```text
+io_uring   Linux FFI ring operations
+worker     persistent and one-shot helper processes over evented pipes
+memory     deterministic ManualHost storage
+```
+
+Linux FFI hosts probe `io_uring` at construction. `file_io_uring` reports a
+usable ring and `file_aio_detected` reports the presence of the POSIX AIO symbol set; it does not report selection of an AIO backend.
+AIO availability is informational at present: it cannot by itself provide
+evented open, final close and path mutation, so a host without `io_uring` uses
+the complete worker backend rather than performing those calls synchronously.
+Luaposix and Nixio use the worker backend when their process capability is
+available. PureHost reports files as unsupported.
+
 Native socket conformance tests include loopback TCP, Unix sockets, repeated
 connection churn, readiness retirement and descriptor reuse paths. Datagram
 conformance adds IPv4 and IPv6 loopback, source-address and message-boundary

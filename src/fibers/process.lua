@@ -97,11 +97,9 @@ function Process:launch_failed_op()
 end
 
 function Process:launch_result_op()
-  return self:launch_succeeded_op():or_else(
-    self:launch_failed_op():map(function(err)
-      return nil, err
-    end)
-  )
+  return self:launch_succeeded_op():or_else(self:launch_failed_op():map(function(err)
+    return nil, err
+  end))
 end
 
 function Process:result_op()
@@ -137,13 +135,14 @@ function Process:signal_op(signal, target)
       end
       local ok, err = handle:signal(signal, target)
       if not ok then
-        return nil, HostError.normalise(err, {
-          domain = 'process',
-          action = 'signal',
-          pid = self._pid,
-          signal = signal,
-          target = target,
-        })
+        return nil,
+          HostError.normalise(err, {
+            domain = 'process',
+            action = 'signal',
+            pid = self._pid,
+            signal = signal,
+            target = target,
+          })
       end
       return true
     end)
@@ -172,104 +171,135 @@ function Process:communicate(opts)
   -- Input must reach the external child before exit can be observed. Host Streams
   -- continue to drain into their Flows while input is written, so the concurrent
   -- reads below cannot deadlock on ordinary pipe buffers.
-    local rt = Runtime.current()
-    local scope = Runtime.current_scope()
-    if not rt or not scope then
-      error('Process:communicate requires a current runtime scope', 2)
-    end
-    if self._communicating then
-      return nil, HostError.invalid_argument('process', 'communicate', {
+  local rt = Runtime.current()
+  local scope = Runtime.current_scope()
+  if not rt or not scope then
+    error('Process:communicate requires a current runtime scope', 2)
+  end
+  if self._communicating then
+    return nil,
+      HostError.invalid_argument('process', 'communicate', {
         message = 'communicate may be used only once for a Process',
       })
-    end
-    self._communicating = true
-
-    local function fail(reason, err)
-      Protected.pcall(function()
-        return self:close(reason)
-      end)
-      return nil, err
-    end
-
-    local stdin_stream = self:stdin()
-    if not stdin_stream then
-      if opts.input ~= nil and opts.input ~= '' then
-        return fail('communicate input unavailable', HostError.invalid_argument('process', 'communicate', {
-          message = 'process stdin is not piped',
-        }))
-      end
-    else
-      if opts.input ~= nil and opts.input ~= '' then
-        if type(opts.input) ~= 'string' then
-          return fail('invalid communicate input', HostError.invalid_argument('process', 'communicate', {
-            message = 'communicate input must be a string',
-          }))
-        end
-        local written, write_err = stdin_stream:write(opts.input)
-        if not written then return fail('communicate input failed', write_err) end
-        local flushed, flush_err = stdin_stream:flush()
-        if not flushed then return fail('communicate input failed', flush_err) end
-      end
-      local shut, shut_err = stdin_stream:shutdown_write('communicate input complete')
-      if not shut then return fail('communicate input shutdown failed', shut_err) end
-      local closed, close_err = stdin_stream:closed()
-      if not closed then return fail('communicate input close failed', close_err) end
-    end
-
-    local stdout_stream = self:stdout()
-    local stderr_stream = self:stderr()
-    if stderr_stream == stdout_stream then stderr_stream = nil end
-    local stdout_task = stdout_stream and scope:spawn(function()
-      return stdout_stream:read_all({ max = stdout_limit })
-    end, { name = self.name .. ':communicate-stdout' }) or nil
-    local stderr_task = stderr_stream and scope:spawn(function()
-      return stderr_stream:read_all({ max = stderr_limit })
-    end, { name = self.name .. ':communicate-stderr' }) or nil
-
-    local complete_op = Op.named_all({
-      stdout = stdout_task and stdout_task:exit_op() or Op.always(nil),
-      stderr = stderr_task and stderr_task:exit_op() or Op.always(nil),
-      status = self:result_op(),
-    }):map(function(parts)
-      return { kind = 'complete', parts = parts }
-    end)
-
-    local failure_options = {}
-    local function add_failure(name, task)
-      if not task then return end
-      failure_options[#failure_options + 1] = task:exit_op():and_then(function(exit)
-        local _, task_err = Exit.unwrap(exit)
-        if task_err ~= nil then
-          return Op.always({ kind = 'output_failure', stream = name, error = task_err })
-        end
-        return Op.never()
-      end)
-    end
-    add_failure('stdout', stdout_task)
-    add_failure('stderr', stderr_task)
-
-    local selected_op = complete_op
-    if #failure_options > 0 then
-      selected_op = Op.choice(complete_op, Op.choice(failure_options))
-    end
-    local selected = rt:_perform_current(selected_op, nil, true)
-    if selected.kind == 'output_failure' then
-      return fail('communicate ' .. selected.stream .. ' failed', selected.error)
-    end
-
-    local parts = selected.parts
-    local stdout, stdout_err
-    if stdout_task then stdout, stdout_err = Exit.unwrap(parts.stdout) end
-    if stdout_task and stdout == nil and stdout_err ~= nil then return fail('communicate stdout failed', stdout_err) end
-    local stderr, stderr_err
-    if stderr_task then stderr, stderr_err = Exit.unwrap(parts.stderr) end
-    if stderr_task and stderr == nil and stderr_err ~= nil then return fail('communicate stderr failed', stderr_err) end
-    local status_row = parts._rows and parts._rows.status
-    if status_row and status_row.n and status_row.n >= 2 and status_row[1] == nil then
-      return fail('communicate process result failed', status_row[2])
-    end
-    return { status = parts.status, stdout = stdout, stderr = stderr }
   end
+  self._communicating = true
+
+  local function fail(reason, err)
+    Protected.pcall(function()
+      return self:close(reason)
+    end)
+    return nil, err
+  end
+
+  local stdin_stream = self:stdin()
+  if not stdin_stream then
+    if opts.input ~= nil and opts.input ~= '' then
+      return fail(
+        'communicate input unavailable',
+        HostError.invalid_argument('process', 'communicate', {
+          message = 'process stdin is not piped',
+        })
+      )
+    end
+  else
+    if opts.input ~= nil and opts.input ~= '' then
+      if type(opts.input) ~= 'string' then
+        return fail(
+          'invalid communicate input',
+          HostError.invalid_argument('process', 'communicate', {
+            message = 'communicate input must be a string',
+          })
+        )
+      end
+      local written, write_err = stdin_stream:write(opts.input)
+      if not written then
+        return fail('communicate input failed', write_err)
+      end
+      local flushed, flush_err = stdin_stream:flush()
+      if not flushed then
+        return fail('communicate input failed', flush_err)
+      end
+    end
+    local shut, shut_err = stdin_stream:shutdown_write('communicate input complete')
+    if not shut then
+      return fail('communicate input shutdown failed', shut_err)
+    end
+    local closed, close_err = stdin_stream:closed()
+    if not closed then
+      return fail('communicate input close failed', close_err)
+    end
+  end
+
+  local stdout_stream = self:stdout()
+  local stderr_stream = self:stderr()
+  if stderr_stream == stdout_stream then
+    stderr_stream = nil
+  end
+  local stdout_task = stdout_stream
+      and scope:spawn(function()
+        return stdout_stream:read_all({ max = stdout_limit })
+      end, { name = self.name .. ':communicate-stdout' })
+    or nil
+  local stderr_task = stderr_stream
+      and scope:spawn(function()
+        return stderr_stream:read_all({ max = stderr_limit })
+      end, { name = self.name .. ':communicate-stderr' })
+    or nil
+
+  local complete_op = Op.named_all({
+    stdout = stdout_task and stdout_task:exit_op() or Op.always(nil),
+    stderr = stderr_task and stderr_task:exit_op() or Op.always(nil),
+    status = self:result_op(),
+  }):map(function(parts)
+    return { kind = 'complete', parts = parts }
+  end)
+
+  local failure_options = {}
+  local function add_failure(name, task)
+    if not task then
+      return
+    end
+    failure_options[#failure_options + 1] = task:exit_op():and_then(function(exit)
+      local _, task_err = Exit.unwrap(exit)
+      if task_err ~= nil then
+        return Op.always({ kind = 'output_failure', stream = name, error = task_err })
+      end
+      return Op.never()
+    end)
+  end
+  add_failure('stdout', stdout_task)
+  add_failure('stderr', stderr_task)
+
+  local selected_op = complete_op
+  if #failure_options > 0 then
+    selected_op = Op.choice(complete_op, Op.choice(failure_options))
+  end
+  local selected = rt:_perform_current(selected_op, nil, true)
+  if selected.kind == 'output_failure' then
+    return fail('communicate ' .. selected.stream .. ' failed', selected.error)
+  end
+
+  local parts = selected.parts
+  local stdout, stdout_err
+  if stdout_task then
+    stdout, stdout_err = Exit.unwrap(parts.stdout)
+  end
+  if stdout_task and stdout == nil and stdout_err ~= nil then
+    return fail('communicate stdout failed', stdout_err)
+  end
+  local stderr, stderr_err
+  if stderr_task then
+    stderr, stderr_err = Exit.unwrap(parts.stderr)
+  end
+  if stderr_task and stderr == nil and stderr_err ~= nil then
+    return fail('communicate stderr failed', stderr_err)
+  end
+  local status_row = parts._rows and parts._rows.status
+  if status_row and status_row.n and status_row.n >= 2 and status_row[1] == nil then
+    return fail('communicate process result failed', status_row[2])
+  end
+  return { status = parts.status, stdout = stdout, stderr = stderr }
+end
 
 function Process:inspect_op()
   local options = {
@@ -356,13 +386,21 @@ end
 
 local function publish_launch_failure(rt, proc, err)
   Protected.pcall(function()
-    if proc.stdin_pipe_stream then proc.stdin_pipe_stream:abort(err) end
-    if proc.stdout_pipe_stream then proc.stdout_pipe_stream:abort(err) end
+    if proc.stdin_pipe_stream then
+      proc.stdin_pipe_stream:abort(err)
+    end
+    if proc.stdout_pipe_stream then
+      proc.stdout_pipe_stream:abort(err)
+    end
     if proc.stderr_pipe_stream and proc.stderr_pipe_stream ~= proc.stdout_pipe_stream then
       proc.stderr_pipe_stream:abort(err)
     end
-    if proc.adoption then proc.adoption:close(err) end
-    if proc.host_process then proc.host_process:close(err) end
+    if proc.adoption then
+      proc.adoption:close(err)
+    end
+    if proc.host_process then
+      proc.host_process:close(err)
+    end
   end)
   publish_state(rt, proc, { kind = 'failed', error = err })
   IO.masked_perform(rt, proc.launch_completion:publish_failure_op(err))
@@ -381,7 +419,9 @@ local function run_reaper(proc, rt)
     local ready, wait_err = perform(proc.host_process:wait_op())
     if not ready and wait_err ~= nil then
       local err = HostError.normalise(wait_err, {
-        domain = 'process', action = 'wait', pid = proc._pid,
+        domain = 'process',
+        action = 'wait',
+        pid = proc._pid,
       })
       IO.masked_perform(rt, proc.reap_completion:publish_failure_op(err))
       return
@@ -393,7 +433,9 @@ local function run_reaper(proc, rt)
     end
     if not HostError.is_would_block(reap_err) then
       local err = HostError.normalise(reap_err, {
-        domain = 'process', action = 'reap', pid = proc._pid,
+        domain = 'process',
+        action = 'reap',
+        pid = proc._pid,
       })
       IO.masked_perform(rt, proc.reap_completion:publish_failure_op(err))
       return
@@ -455,10 +497,11 @@ local function finish_close(proc, reason)
     return proc.host_process and proc.host_process:close(reason) or true
   end)
   if #errors > 0 then
-    return nil, HostError.protocol('process', 'close', 'one or more process resources failed to close', {
-      pid = proc._pid,
-      errors = errors,
-    })
+    return nil,
+      HostError.protocol('process', 'close', 'one or more process resources failed to close', {
+        pid = proc._pid,
+        errors = errors,
+      })
   end
   return true
 end
@@ -484,11 +527,15 @@ local function supervise(proc, driver_scope, opts)
 
   local host_process, endpoints, start_err = host:start_process(spec)
   if not host_process then
-    publish_launch_failure(rt, proc, HostError.normalise(start_err or endpoints, {
-      domain = 'process',
-      action = 'start',
-      argv = spec.argv,
-    }))
+    publish_launch_failure(
+      rt,
+      proc,
+      HostError.normalise(start_err or endpoints, {
+        domain = 'process',
+        action = 'start',
+        argv = spec.argv,
+      })
+    )
     return
   end
   endpoints = endpoints or {}
@@ -533,9 +580,15 @@ local function supervise(proc, driver_scope, opts)
         write_chunk_size = opts.write_chunk_size,
       })
       if not ok then
-        publish_launch_failure(rt, proc, HostError.normalise(stream_or_err, {
-          domain = 'process', action = 'open_' .. which, pid = proc._pid,
-        }))
+        publish_launch_failure(
+          rt,
+          proc,
+          HostError.normalise(stream_or_err, {
+            domain = 'process',
+            action = 'open_' .. which,
+            pid = proc._pid,
+          })
+        )
         return
       end
       proc[which .. '_pipe_stream'] = stream_or_err
@@ -582,9 +635,15 @@ local function supervise(proc, driver_scope, opts)
   if type(host_process.start) == 'function' then
     local ok, err = host_process:start()
     if not ok then
-      publish_launch_failure(rt, proc, HostError.normalise(err, {
-        domain = 'process', action = 'start_driver', pid = proc._pid,
-      }))
+      publish_launch_failure(
+        rt,
+        proc,
+        HostError.normalise(err, {
+          domain = 'process',
+          action = 'start_driver',
+          pid = proc._pid,
+        })
+      )
       return
     end
   end
@@ -624,7 +683,9 @@ local function supervise(proc, driver_scope, opts)
     local signal_ok, signal_err = host_process:signal(spec.shutdown.signal, spec.shutdown.target)
     if not signal_ok and not HostError.is(signal_err, 'closed') then
       proc._close_error = HostError.normalise(signal_err, {
-        domain = 'process', action = 'terminate', pid = proc._pid,
+        domain = 'process',
+        action = 'terminate',
+        pid = proc._pid,
       })
     end
     local deadline = rt:now() + spec.shutdown.grace
@@ -672,10 +733,11 @@ local function driver_body(proc, driver_scope, opts)
     return
   end
   local rt = Runtime.current()
-  local failure = HostError.is(err) and err or IO.protocol_error('process', 'supervisor', err, {
-    pid = proc._pid,
-    argv = proc.command._spec.argv,
-  })
+  local failure = HostError.is(err) and err
+    or IO.protocol_error('process', 'supervisor', err, {
+      pid = proc._pid,
+      argv = proc.command._spec.argv,
+    })
   if proc.launch_completion:is_pending() then
     publish_launch_failure(rt, proc, failure)
   elseif proc.exit_completion:is_pending() then
@@ -691,10 +753,12 @@ function Command:launch_op(opts)
   opts = copy_table(opts)
   local command = self
   local spec = command._spec
-  if spec.shutdown.target == 'group'
-      and spec.process_group ~= 'new'
-      and type(spec.process_group) ~= 'number'
-      and not spec.new_session then
+  if
+    spec.shutdown.target == 'group'
+    and spec.process_group ~= 'new'
+    and type(spec.process_group) ~= 'number'
+    and not spec.new_session
+  then
     error("group shutdown requires process_group = 'new', a numeric group, or new_session", 2)
   end
 
@@ -747,7 +811,9 @@ function Command:launch_op(opts)
   end)
 end
 
-function Command:launch(opts) return perform(self:launch_op(opts)) end
+function Command:launch(opts)
+  return perform(self:launch_op(opts))
+end
 
 function Command:start(opts)
   local proc, launch_err = self:launch(opts)
@@ -764,14 +830,30 @@ function Command:start(opts)
   return proc
 end
 
-function Process:launch_succeeded() return perform(self:launch_succeeded_op()) end
-function Process:launch_failed() return perform(self:launch_failed_op()) end
-function Process:launch_result() return perform(self:launch_result_op()) end
-function Process:result() return perform(self:result_op()) end
-function Process:signal(signal, target) return perform(self:signal_op(signal, target)) end
-function Process:terminate() return perform(self:terminate_op()) end
-function Process:kill() return perform(self:kill_op()) end
-function Process:request_close(reason) return perform(self:request_close_op(reason)) end
+function Process:launch_succeeded()
+  return perform(self:launch_succeeded_op())
+end
+function Process:launch_failed()
+  return perform(self:launch_failed_op())
+end
+function Process:launch_result()
+  return perform(self:launch_result_op())
+end
+function Process:result()
+  return perform(self:result_op())
+end
+function Process:signal(signal, target)
+  return perform(self:signal_op(signal, target))
+end
+function Process:terminate()
+  return perform(self:terminate_op())
+end
+function Process:kill()
+  return perform(self:kill_op())
+end
+function Process:request_close(reason)
+  return perform(self:request_close_op(reason))
+end
 function Process:close(reason)
   local ok, err = self:request_close(reason)
   if not ok then
@@ -779,8 +861,12 @@ function Process:close(reason)
   end
   return self:closed()
 end
-function Process:closed() return perform(self:closed_op()) end
-function Process:inspect() return perform(self:inspect_op()) end
+function Process:closed()
+  return perform(self:closed_op())
+end
+function Process:inspect()
+  return perform(self:inspect_op())
+end
 
 function Module.succeeded(status)
   return type(status) == 'table' and status.kind == 'exited' and status.code == 0

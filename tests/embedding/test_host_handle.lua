@@ -24,7 +24,6 @@ local Runner = FibersRunner
 local Region = FibersRegion
 local Stream = FibersStream
 local Handle = require('fibers.host.handle')
-local HandleBackend = require('fibers.stream.backend.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -62,7 +61,6 @@ local function drive_until(rt, host, pred, label, iters)
   fail(label or 'runtime did not reach expected state')
 end
 
-
 -- Readiness marked before runtime attachment survives bind_runtime.  Native
 -- providers may discover a level-ready descriptor while constructing it, before
 -- Stream.open_op attaches the handle to the runtime-owned reactor.
@@ -79,15 +77,14 @@ do
       written = written .. bytes
       return #bytes
     end,
-    close = function() return true end,
+    close = function()
+      return true
+    end,
   })
   handle:mark_writable()
   rt:spawn_raw(function()
     local stream = rt:perform(
-      Stream.open_op(
-        HandleBackend.new(handle, { name = 'prebind-ready-stream' }),
-        { owner = region, name = 'prebind-ready-stream', read = false, write = true }
-      )
+      Stream.open_op(handle, { owner = region, name = 'prebind-ready-stream', read = false, write = true })
     )
     rt:perform(stream:writer():write_op('ready'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -108,10 +105,7 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(
-        HandleBackend.new(handle, { name = 'handle-read-stream' }),
-        { owner = region, name = 'handle-read-stream', read = true, write = false }
-      )
+      Stream.open_op(handle, { owner = region, name = 'handle-read-stream', read = true, write = false })
     )
     got = rt:perform(stream:reader():read_exactly_op(4))
   end, 'handle-reader')
@@ -137,10 +131,7 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(
-        HandleBackend.new(handle, { name = 'handle-write-stream' }),
-        { owner = region, name = 'handle-write-stream', read = false, write = true }
-      )
+      Stream.open_op(handle, { owner = region, name = 'handle-write-stream', read = false, write = true })
     )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -150,11 +141,11 @@ do
   assert_status(st, 'pending')
   assert_truthy(stream, 'stream should open before waiting for writability')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    Inspect.first_lease_bytes(stream:writer().flow),
     nil,
     'reactor should not lease bytes before a writable hint'
   )
-  assert_eq(Inspect.data(stream:writer().flow.reservoir), 'hello')
+  assert_eq(Inspect.data(stream:writer().flow), 'hello')
   assert_eq(handle:written(), '')
   handle:unblock_writes()
   drive_until(rt, host, function()

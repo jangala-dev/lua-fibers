@@ -279,19 +279,15 @@ Readiness remains a hint. A host call may still return `would_block`; the reacto
 A deterministic fake handle is available:
 
 ```lua
-local host = host.manual({ auto_advance_time = false })
-local handle = host.Handle.fake({ host = host, key = 'demo' })
+local Host = require('fibers.host')
+local host = Host.manual({ auto_advance_time = false })
+local handle = Host.Handle.fake({ host = host, key = 'demo' })
 
-local HandleBackend = require('fibers.stream.backend.handle')
-
-local stream = fibers.perform(Stream.open_op(
-  HandleBackend.new(handle),
-  {
-    owner = scope,
-    read = true,
-    write = true,
-  }
-))
+local stream = fibers.perform(Stream.open_op(handle, {
+  owner = scope,
+  read = true,
+  write = true,
+}))
 ```
 
 Useful controls include:
@@ -304,19 +300,18 @@ handle:unblock_writes()
 handle:written()
 ```
 
-A stream backend may instead implement:
+A custom `HostHandle` supplies:
 
 ```text
-backend:read_ready_op()
-backend:write_ready_op()
-backend:read(max)
-backend:write(bytes)
-backend:shutdown_read(reason)
-backend:shutdown_write(reason)
-backend:close(reason)
+handle:readiness_key()
+handle:read(max)
+handle:write(bytes)
+handle:shutdown_read(reason)
+handle:shutdown_write(reason)
+handle:close(reason)
 ```
 
-Opening a Stream commits its ownership and both reactor-registration effects together. If the option loses, no backend is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases settle, the backend closes exactly once, and `closed_op` observes complete Flow and registration closure.
+Opening a Stream commits its ownership and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases settle, the handle closes exactly once, and `closed_op` observes complete Flow and registration closure.
 
 See [`flows-and-streams.md`](flows-and-streams.md) for the Flow lease contracts and reactor service model.
 
@@ -358,6 +353,37 @@ The Linux FFI family uses pidfds where available and timer-polled `waitpid`
 otherwise. ManualHost provides deterministic process completion and signalling
 for semantic tests. A host with no usable process contract must advertise
 `capabilities.process = false` and return `unsupported`.
+
+## File capability
+
+A host which advertises `capabilities.file = true` must provide a complete
+evented file path. The standard provider selector first asks the host for:
+
+```text
+host:file_provider(runtime, opts) -> provider | nil
+```
+
+A provider implements `open`, `rename`, `unlink`, `mkdir` and optionally
+`mkdir_p`. `open` must honour `exclusive` and `permissions` when supplied. Open
+returns a backend implementing `read`, `read_line`, `write`, `seek`, `flush`,
+`sync` and `close`. These methods may suspend their Fibers driver, but must not
+execute potentially blocking filesystem calls on the runtime thread.
+
+Linux FFI hosts return a shared `io_uring` provider when the ring probe passes.
+If a host has process support and supplies no native provider, Fibers selects
+the helper-process provider. ManualHost supplies an in-memory provider. There
+is no synchronous bootstrap fallback.
+
+Capability detail fields are:
+
+```text
+file_backend    "io_uring", "worker", "memory" or nil
+file_io_uring   a usable ring was detected
+file_aio_detected  the POSIX AIO symbol set was detected
+```
+
+`file_aio_detected` does not imply that AIO is the selected complete backend; path and
+lifetime operations still require `io_uring` or worker isolation.
 
 ## Effects and host callbacks
 

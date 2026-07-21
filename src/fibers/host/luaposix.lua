@@ -27,7 +27,11 @@ if
   or not ok_errno
   or type(errno) ~= 'table'
 then
-  return Provider.unsupported('fibers.host.luaposix', 'requires posix.poll, posix.time and posix.errno', { 'new' })
+  return Provider.unsupported(
+    'fibers.host.luaposix',
+    'requires posix.poll, posix.time and posix.errno',
+    { 'new' }
+  )
 end
 
 local Posix = {}
@@ -96,7 +100,6 @@ local function fd_of(key)
   return tonumber(key)
 end
 
-
 function Posix.is_supported()
   return type(poll_fn) == 'function'
     and type(ptime.clock_gettime) == 'function'
@@ -135,6 +138,10 @@ function Posix.new(opts)
     resolver = ResolverProvider.is_supported(),
     resolver_blocking = ResolverProvider.is_supported(),
     process = ProcessProvider.is_supported(),
+    file = ProcessProvider.is_supported(),
+    file_backend = ProcessProvider.is_supported() and 'worker' or nil,
+    file_io_uring = false,
+    file_aio_detected = false,
   }
   return self
 end
@@ -183,7 +190,9 @@ function Posix:block(rt, waits, status, _opts)
   local plan = PollPlan.build(waits, { key_of = fd_of, fd_of = fd_of })
 
   if plan.unsupported then
-    if self.on_unsupported then self.on_unsupported(waits, status) end
+    if self.on_unsupported then
+      self.on_unsupported(waits, status)
+    end
     return nil, 'unsupported-readiness-key'
   end
   if #plan.records == 0 then
@@ -194,14 +203,20 @@ function Posix:block(rt, waits, status, _opts)
   for i = 1, #plan.records do
     local record = plan.records[i]
     local events = {}
-    if record.read then events.IN = true end
-    if record.write then events.OUT = true end
+    if record.read then
+      events.IN = true
+    end
+    if record.write then
+      events.OUT = true
+    end
     fds[record.fd] = { events = events }
   end
 
   local nready, err, eno = poll_fn(fds, Host.timeout_ms(rt, deadline))
   if nready == nil then
-    if eno == errno.EINTR then return true, 'poll-interrupted' end
+    if eno == errno.EINTR then
+      return true, 'poll-interrupted'
+    end
     error(tostring(err or eno or 'posix.poll failed'), 2)
   end
 
@@ -212,12 +227,18 @@ function Posix:block(rt, waits, status, _opts)
       if revents then
         local readable = revents.IN or revents.HUP or revents.ERR or revents.NVAL
         local writable = revents.OUT or revents.ERR or revents.NVAL
-        if PollPlan.deliver(rt, plan.by_fd[fd], readable, writable) then delivered = true end
+        if PollPlan.deliver(rt, plan.by_fd[fd], readable, writable) then
+          delivered = true
+        end
       end
     end
   end
-  if delivered then return true, 'readiness' end
-  if deadline ~= nil and rt:now() >= deadline then return true, 'time' end
+  if delivered then
+    return true, 'readiness'
+  end
+  if deadline ~= nil and rt:now() >= deadline then
+    return true, 'time'
+  end
   return true, 'poll'
 end
 

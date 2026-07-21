@@ -7,19 +7,31 @@ local HostError = require('fibers.host.error')
 local Provider = require('fibers.host.provider')
 
 local function unsupported(reason)
-  local value = Provider.unsupported('fibers.host.socket_luaposix', reason, { 'create_listener', 'start_dial' })
-  value.supports_ipv4 = function() return false end
-  value.supports_ipv6 = function() return false end
-  value.supports_unix = function() return false end
+  local value =
+    Provider.unsupported('fibers.host.socket_luaposix', reason, { 'create_listener', 'start_dial' })
+  value.supports_ipv4 = function()
+    return false
+  end
+  value.supports_ipv6 = function()
+    return false
+  end
+  value.supports_unix = function()
+    return false
+  end
   return value
 end
 
 local ok_socket, socket = pcall(require, 'posix.sys.socket')
 local ok_unistd, unistd = pcall(require, 'posix.unistd')
 local ok_errno, errno = pcall(require, 'posix.errno')
-if not ok_socket or type(socket) ~= 'table'
-    or not ok_unistd or type(unistd) ~= 'table'
-    or not ok_errno or type(errno) ~= 'table' then
+if
+  not ok_socket
+  or type(socket) ~= 'table'
+  or not ok_unistd
+  or type(unistd) ~= 'table'
+  or not ok_errno
+  or type(errno) ~= 'table'
+then
   return unsupported('requires posix.sys.socket, posix.unistd and posix.errno')
 end
 
@@ -59,36 +71,54 @@ end
 local function sockaddr_for(address)
   local kind = address_kind(address)
   if kind == 'inet4' then
-    if AF_INET == nil then return nil, HostError.unsupported('socket', 'ipv4', { address = address }) end
+    if AF_INET == nil then
+      return nil, HostError.unsupported('socket', 'ipv4', { address = address })
+    end
     return { family = AF_INET, addr = address.host, port = tonumber(address.port) }, AF_INET
   end
   if kind == 'inet6' then
-    if AF_INET6 == nil then return nil, HostError.unsupported('socket', 'ipv6', { address = address }) end
+    if AF_INET6 == nil then
+      return nil, HostError.unsupported('socket', 'ipv6', { address = address })
+    end
     return {
       family = AF_INET6,
       addr = address.host,
       port = tonumber(address.port),
       flowinfo = tonumber(address.flowinfo) or 0,
       scope_id = tonumber(address.scope_id) or 0,
-    }, AF_INET6
+    },
+      AF_INET6
   end
   if kind == 'unix' then
-    if AF_UNIX == nil then return nil, HostError.unsupported('socket', 'unix', { address = address }) end
+    if AF_UNIX == nil then
+      return nil, HostError.unsupported('socket', 'unix', { address = address })
+    end
     return { family = AF_UNIX, path = address.path }, AF_UNIX
   end
   return nil, HostError.invalid_argument('socket', 'address', { address = address })
 end
 
 local function address_from(value, family_hint)
-  if type(value) ~= 'table' then return nil end
+  if type(value) ~= 'table' then
+    return nil
+  end
   local family = value.family or family_hint
   if family == AF_INET or family == 'inet' or family == 'inet4' then
-    return { kind = 'inet4', family = 'inet4', host = value.addr or value.host, port = tonumber(value.port) or 0 }
+    return {
+      kind = 'inet4',
+      family = 'inet4',
+      host = value.addr or value.host,
+      port = tonumber(value.port) or 0,
+    }
   end
   if family == AF_INET6 or family == 'inet6' then
     return {
-      kind = 'inet6', family = 'inet6', host = value.addr or value.host, port = tonumber(value.port) or 0,
-      flowinfo = tonumber(value.flowinfo) or 0, scope_id = tonumber(value.scope_id) or 0,
+      kind = 'inet6',
+      family = 'inet6',
+      host = value.addr or value.host,
+      port = tonumber(value.port) or 0,
+      flowinfo = tonumber(value.flowinfo) or 0,
+      scope_id = tonumber(value.scope_id) or 0,
     }
   end
   if family == AF_UNIX or family == 'unix' then
@@ -108,21 +138,31 @@ local function set_option(fd, level, option, value, action, fields)
   end
   value = PosixError.option(value)
   local ok, err, eno = socket.setsockopt(fd, level, option, value)
-  if ok == nil then return nil, system_error(action, err, eno, fields) end
+  if ok == nil then
+    return nil, system_error(action, err, eno, fields)
+  end
   return true
 end
 
 local function close_raw(fd)
-  if fd ~= nil then pcall(unistd.close, fd) end
+  if fd ~= nil then
+    pcall(unistd.close, fd)
+  end
 end
 
 local function wrap_socket(fd, host, name, family)
   local handle, err = Fd.new(fd, { host = host, name = name, nonblocking = true, cloexec = true })
-  if not handle then return nil, HostError.normalise(err, { domain = 'socket', action = 'wrap' }) end
+  if not handle then
+    return nil, HostError.normalise(err, { domain = 'socket', action = 'wrap' })
+  end
   handle.family = 'numeric-socket'
   handle.socket_family = family
-  handle.local_address = function(self) return query_address(self.fd, false, family) end
-  handle.peer_address_value = function(self) return query_address(self.fd, true, family) end
+  handle.local_address = function(self)
+    return query_address(self.fd, false, family)
+  end
+  handle.peer_address_value = function(self)
+    return query_address(self.fd, true, family)
+  end
   return handle
 end
 
@@ -141,37 +181,63 @@ end
 
 local support_cache = {}
 local function family_supported(family)
-  if family == nil or not socket_api_supported() then return false end
+  if family == nil or not socket_api_supported() then
+    return false
+  end
   if support_cache[family] == nil then
     local fd = socket.socket(family, SOCK_STREAM, 0)
     support_cache[family] = fd ~= nil
-    if fd ~= nil then close_raw(fd) end
+    if fd ~= nil then
+      close_raw(fd)
+    end
   end
   return support_cache[family]
 end
 
-function Socket.supports_ipv4() return family_supported(AF_INET) end
-function Socket.supports_ipv6() return family_supported(AF_INET6) end
-function Socket.supports_unix() return family_supported(AF_UNIX) and type(unistd.unlink) == 'function' end
-function Socket.is_supported() return Socket.supports_ipv4() or Socket.supports_ipv6() or Socket.supports_unix() end
-function Socket.support_reason() return Socket.is_supported() and nil or 'required luaposix stream socket functions unavailable' end
+function Socket.supports_ipv4()
+  return family_supported(AF_INET)
+end
+function Socket.supports_ipv6()
+  return family_supported(AF_INET6)
+end
+function Socket.supports_unix()
+  return family_supported(AF_UNIX) and type(unistd.unlink) == 'function'
+end
+function Socket.is_supported()
+  return Socket.supports_ipv4() or Socket.supports_ipv6() or Socket.supports_unix()
+end
+function Socket.support_reason()
+  return Socket.is_supported() and nil or 'required luaposix stream socket functions unavailable'
+end
 
 function Socket.create_listener(host, address, opts)
   opts = opts or {}
   local sockaddr, family_or_err = sockaddr_for(address)
-  if not sockaddr then return nil, family_or_err end
+  if not sockaddr then
+    return nil, family_or_err
+  end
   local family = family_or_err
   local fd, err, eno = socket.socket(family, SOCK_STREAM, 0)
-  if fd == nil then return nil, system_error('socket', err, eno, { address = address }) end
+  if fd == nil then
+    return nil, system_error('socket', err, eno, { address = address })
+  end
 
   local handle, wrap_err = wrap_socket(fd, host, opts.name or 'luaposix-listener', family)
-  if not handle then return nil, wrap_err end
+  if not handle then
+    return nil, wrap_err
+  end
 
   if family ~= AF_UNIX and opts.reuse_address ~= false then
-    local ok, option_err = set_option(fd, SOL_SOCKET, SO_REUSEADDR, true, 'setsockopt_reuseaddr', { address = address })
-    if not ok then handle:close(option_err); return nil, option_err end
+    local ok, option_err =
+      set_option(fd, SOL_SOCKET, SO_REUSEADDR, true, 'setsockopt_reuseaddr', { address = address })
+    if not ok then
+      handle:close(option_err)
+      return nil, option_err
+    end
   end
-  if family == AF_UNIX and opts.unlink_existing == true then pcall(unistd.unlink, address.path) end
+  if family == AF_UNIX and opts.unlink_existing == true then
+    pcall(unistd.unlink, address.path)
+  end
 
   local ok, bind_err, bind_eno = socket.bind(fd, sockaddr)
   if ok == nil then
@@ -190,25 +256,37 @@ function Socket.create_listener(host, address, opts)
   local unix_path = family == AF_UNIX and address.path or nil
   handle._close = function(self, reason)
     local closed, close_err, detail = raw_close(self, reason)
-    if unix_path and opts.unlink_on_close ~= false then pcall(unistd.unlink, unix_path) end
+    if unix_path and opts.unlink_on_close ~= false then
+      pcall(unistd.unlink, unix_path)
+    end
     return closed, close_err, detail
   end
   handle.address = query_address(fd, false, family) or address
-  handle.local_address = function(self) return self.address end
+  handle.local_address = function(self)
+    return self.address
+  end
   handle.accept = function(self)
     self:clear_readable()
     while true do
       local accepted, peer_or_err, accept_eno = socket.accept(self.fd)
       if accepted ~= nil then
-        local child, child_err = wrap_socket(
-          accepted, host, (opts.name or 'listener') .. ':accepted', family
-        )
-        if not child then return nil, nil, child_err end
+        local child, child_err = wrap_socket(accepted, host, (opts.name or 'listener') .. ':accepted', family)
+        if not child then
+          return nil, nil, child_err
+        end
         if family ~= AF_UNIX and opts.nodelay ~= false then
           local set, nodelay_err = set_option(
-            accepted, IPPROTO_TCP, TCP_NODELAY, true, 'setsockopt_nodelay', { address = self.address }
+            accepted,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            true,
+            'setsockopt_nodelay',
+            { address = self.address }
           )
-          if not set then child:close(nodelay_err); return nil, nil, nodelay_err end
+          if not set then
+            child:close(nodelay_err)
+            return nil, nil, nodelay_err
+          end
         end
         local peer = address_from(peer_or_err, family) or query_address(accepted, true, family)
         child.peer_address = peer
@@ -230,20 +308,30 @@ end
 function Socket.start_dial(host, address, opts)
   opts = opts or {}
   local sockaddr, family_or_err = sockaddr_for(address)
-  if not sockaddr then return nil, family_or_err end
+  if not sockaddr then
+    return nil, family_or_err
+  end
   local family = family_or_err
   local fd, err, eno = socket.socket(family, SOCK_STREAM, 0)
-  if fd == nil then return nil, system_error('socket', err, eno, { address = address }) end
+  if fd == nil then
+    return nil, system_error('socket', err, eno, { address = address })
+  end
 
   local handle, wrap_err = wrap_socket(fd, host, opts.name or 'luaposix-dial', family)
-  if not handle then return nil, wrap_err end
+  if not handle then
+    return nil, wrap_err
+  end
 
   if opts.local_address then
     local local_sa, local_family_or_err = sockaddr_for(opts.local_address)
-    if not local_sa then handle:close(local_family_or_err); return nil, local_family_or_err end
+    if not local_sa then
+      handle:close(local_family_or_err)
+      return nil, local_family_or_err
+    end
     if local_family_or_err ~= family then
       local failure = HostError.invalid_argument('socket', 'bind', {
-        address = opts.local_address, message = 'local and peer address families differ',
+        address = opts.local_address,
+        message = 'local and peer address families differ',
       })
       handle:close(failure)
       return nil, failure
@@ -256,8 +344,12 @@ function Socket.start_dial(host, address, opts)
     end
   end
   if family ~= AF_UNIX and opts.nodelay ~= false then
-    local ok, option_err = set_option(fd, IPPROTO_TCP, TCP_NODELAY, true, 'setsockopt_nodelay', { address = address })
-    if not ok then handle:close(option_err); return nil, option_err end
+    local ok, option_err =
+      set_option(fd, IPPROTO_TCP, TCP_NODELAY, true, 'setsockopt_nodelay', { address = address })
+    if not ok then
+      handle:close(option_err)
+      return nil, option_err
+    end
   end
 
   handle.target_address = address
@@ -266,8 +358,12 @@ function Socket.start_dial(host, address, opts)
   local connected, connect_err, connect_eno = socket.connect(fd, sockaddr)
   if connected ~= nil then
     handle._connect_complete = true
-  elseif connect_eno == EINPROGRESS or connect_eno == EALREADY
-      or connect_eno == EAGAIN or connect_eno == EWOULDBLOCK then
+  elseif
+    connect_eno == EINPROGRESS
+    or connect_eno == EALREADY
+    or connect_eno == EAGAIN
+    or connect_eno == EWOULDBLOCK
+  then
     handle._connect_pending = true
   elseif connect_eno == EISCONN then
     handle._connect_complete = true
@@ -278,7 +374,9 @@ function Socket.start_dial(host, address, opts)
   end
 
   handle.finish_connect = function(self)
-    if self._connect_complete then return self, query_address(self.fd, true, family) or address end
+    if self._connect_complete then
+      return self, query_address(self.fd, true, family) or address
+    end
     self:clear_writable()
     local value, get_err, get_eno = socket.getsockopt(self.fd, SOL_SOCKET, SO_ERROR)
     if value == nil then

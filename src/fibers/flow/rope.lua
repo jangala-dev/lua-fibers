@@ -1,4 +1,4 @@
--- Persistent measured byte deque for Flow reservoirs.
+-- Persistent measured byte deque for Flow buffers.
 --
 -- Rope objects are mutable cursors over immutable chunk nodes.  clone() is
 -- constant-time and speculative branches share all byte storage.  A bounded

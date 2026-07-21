@@ -26,8 +26,6 @@ return {
   SPACE_COMMIT_TOO_LARGE = 'space_commit_too_large',
   SPACE_LEASE_CONFLICT = 'flow-space-lease-conflict',
 
-  RESERVOIR_PARALLEL_CONFLICT = 'flow-reservoir-parallel-conflict',
-  RESERVOIR_UNKNOWN_OP = 'unknown-flow-reservoir-op',
   ENDPOINT_OPEN_CONFLICT = 'flow-endpoint-open-conflict',
   ENDPOINT_ERROR_CONFLICT = 'flow-endpoint-error-conflict',
   FLOW_ERROR = 'flow_error',

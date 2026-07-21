@@ -4,7 +4,9 @@ local Host = require('fibers.host')
 
 local PollPlan = {}
 
-local function identity(value) return value end
+local function identity(value)
+  return value
+end
 
 function PollPlan.build(waits, opts)
   opts = opts or {}
@@ -20,7 +22,9 @@ function PollPlan.build(waits, opts)
       return nil
     end
     local record = by_key[key]
-    if record then return record end
+    if record then
+      return record
+    end
     record = {
       key = key,
       fd = fd_of and fd_of(key) or nil,
@@ -30,7 +34,9 @@ function PollPlan.build(waits, opts)
       poller = {},
     }
     by_key[key] = record
-    if record.fd ~= nil then by_fd[record.fd] = record end
+    if record.fd ~= nil then
+      by_fd[record.fd] = record
+    end
     records[#records + 1] = record
     return record
   end
@@ -70,7 +76,9 @@ function PollPlan.build(waits, opts)
 end
 
 function PollPlan.deliver(rt, record, readable, writable)
-  if not record then return false end
+  if not record then
+    return false
+  end
   local delivered = false
   for i = 1, #record.waits do
     local wait = record.waits[i]

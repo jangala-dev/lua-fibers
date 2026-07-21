@@ -3,10 +3,10 @@
 local Lease = {}
 Lease.__index = Lease
 
-function Lease.new(reservoir, id, owner, bytes, opts)
+function Lease.new(flow, id, owner, bytes, opts)
   opts = opts or {}
   return setmetatable({
-    reservoir = reservoir,
+    flow = flow,
     id = id,
     owner = owner,
     _bytes = bytes or '',
@@ -31,17 +31,17 @@ function Lease:inspect()
     bytes = self:bytes(),
     length = self:length(),
     owner = self.owner,
-    reservoir = self.reservoir,
+    flow = self.flow,
   }
 end
 function Lease:ack_op(n)
-  return self.reservoir:ack_lease_op(self, n)
+  return self.flow:_ack_lease_op(self, n)
 end
 function Lease:release_op()
-  return self.reservoir:return_lease_op(self)
+  return self.flow:_return_lease_op(self)
 end
 function Lease:fail_op(err)
-  return self.reservoir:fail_lease_op(self, err)
+  return self.flow:_fail_lease_op(self, err)
 end
 
 return Lease

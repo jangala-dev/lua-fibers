@@ -3,8 +3,8 @@
 -- A HostHandle is the host-side half of reactor-driven byte streams.  Readiness says
 -- that trying I/O may be useful; read/write remain authoritative.
 --
--- The core runtime does not know about HostHandle.  The runtime HostReactor uses handles via the
--- handle stream backend, and hosts use the readiness key exposed by the handle
+-- The core runtime does not know about HostHandle. The runtime HostReactor uses
+-- handles directly, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
 local Readiness = require('fibers.external.readiness')
@@ -29,14 +29,21 @@ local function normalise_mode(mode)
   return mode
 end
 
-local function clear_hint(self, mode)
+local function clear_local_hint(self, mode)
   mode = normalise_mode(mode)
   if self.readiness then
     UnsafeExternalMutation.clear(self.readiness, mode)
   end
+end
+
+local function clear_hint(self, mode)
+  mode = normalise_mode(mode)
+  clear_local_hint(self, mode)
   local host = self.host
   if host and type(host.clear_readiness) == 'function' then
     host:clear_readiness(self.key, mode)
+  elseif host and type(host.set_readiness) == 'function' then
+    host:set_readiness(self.key, mode, false)
   end
 end
 
@@ -154,7 +161,7 @@ end
 
 function Handle:attach_stream(stream)
   self.stream = stream
-  IOAudit.transfer(self, stream, { kind = 'host_handle', role = 'stream_backend' })
+  IOAudit.transfer(self, stream, { kind = 'host_handle', role = 'stream_handle' })
   return self
 end
 
@@ -212,7 +219,7 @@ function Handle:read(max)
   if not ok then
     return nil, err
   end
-  clear_hint(self, 'read')
+  clear_local_hint(self, 'read')
   local a, b, c = callback(self, 'read', max)
   if a == nil and b ~= nil then
     return nil,
@@ -231,7 +238,7 @@ function Handle:write(bytes)
   if not ok then
     return nil, err
   end
-  clear_hint(self, 'write')
+  clear_local_hint(self, 'write')
   local a, b, c = callback(self, 'write', bytes)
   if a == nil and b ~= nil then
     return nil,
@@ -313,7 +320,7 @@ function Handle:close(reason)
 end
 
 -- Deterministic fake/manual handle.  This is a host-handle test double, not a
--- stream reservoir.  It simulates non-blocking host I/O and uses the ManualHost
+-- stream buffer.  It simulates non-blocking host I/O and uses the ManualHost
 -- readiness table when a host is supplied.
 local Fake = {}
 Fake.__index = Fake
@@ -327,6 +334,12 @@ end
 
 local function fake_auto(self)
   return self.readiness_mode ~= 'manual'
+end
+
+local function fake_clear_manual(self, mode)
+  if not fake_auto(self) then
+    clear_hint(self, mode)
+  end
 end
 
 local function fake_update_read_ready(self)
@@ -344,7 +357,7 @@ local function fake_update_write_ready(self)
   if not fake_auto(self) then
     return
   end
-  if self.write_blocked or self.write_error or self.closed then
+  if self.write_blocked or self.closed then
     clear_hint(self, 'write')
   else
     mark_hint(self, 'write')
@@ -359,7 +372,7 @@ function Handle.fake(opts)
     name = opts.name or key,
     key = key,
     host = opts.host,
-    readiness = opts.readiness,
+    readiness = type(opts.readiness) == 'table' and opts.readiness or nil,
     feed = opts.feed,
     capabilities = {
       read = true,
@@ -386,6 +399,7 @@ function Handle.fake(opts)
   self.shutdown_read_reason = nil
   self.shutdown_write_reason = nil
   self.closed_reason = nil
+  self.close_count = 0
   if opts.input then
     self:feed_read(opts.input)
   end
@@ -394,6 +408,9 @@ function Handle.fake(opts)
   end
   if opts.read_error then
     self:feed_read_error(opts.read_error)
+  end
+  if opts.initial_readable then
+    self:mark_readable()
   end
   if opts.initial_writable ~= false then
     fake_update_write_ready(self)
@@ -440,12 +457,20 @@ end
 
 function Fake:block_writes()
   self.write_blocked = true
-  fake_update_write_ready(self)
+  if fake_auto(self) then
+    fake_update_write_ready(self)
+  else
+    self:clear_writable()
+  end
 end
 
 function Fake:unblock_writes()
   self.write_blocked = false
-  fake_update_write_ready(self)
+  if fake_auto(self) then
+    fake_update_write_ready(self)
+  else
+    self:mark_writable()
+  end
 end
 
 function Fake:set_write_chunk_size(n)
@@ -460,7 +485,7 @@ end
 function Fake:read(max)
   max = max or 4096
   if self.read_blocked then
-    clear_hint(self, 'read')
+    fake_clear_manual(self, 'read')
     return nil, HostError.would_block('handle', 'read', { handle = self.name })
   end
   if #self.input > 0 then
@@ -474,20 +499,26 @@ function Fake:read(max)
       self.input[1] = rest
     end
     fake_update_read_ready(self)
+    if #self.input == 0 and not self.eof and not self.read_error then
+      fake_clear_manual(self, 'read')
+    end
     return out
   end
   if self.read_error then
     local err = self.read_error
     self.read_error = nil
     fake_update_read_ready(self)
+    fake_clear_manual(self, 'read')
     return nil, err
   end
   if self.eof then
     self.eof = false
     fake_update_read_ready(self)
+    fake_clear_manual(self, 'read')
     return nil, HostError.eof('handle', 'read', { handle = self.name })
   end
   fake_update_read_ready(self)
+  fake_clear_manual(self, 'read')
   return nil, HostError.would_block('handle', 'read', { handle = self.name })
 end
 
@@ -526,12 +557,20 @@ function Fake:shutdown_write(reason)
 end
 
 function Fake:close(reason)
+  if self.closed then
+    IOAudit.closing(self, reason)
+    IOAudit.closed(self, true, nil, reason)
+    return true
+  end
+  IOAudit.closing(self, reason)
+  self.close_count = self.close_count + 1
   self.closed = true
   self.closed_reason = reason or true
   self:shutdown_read(reason)
   self:shutdown_write(reason)
   fake_update_read_ready(self)
   fake_update_write_ready(self)
+  IOAudit.closed(self, true, nil, reason)
   return true
 end
 
@@ -672,7 +711,7 @@ function Handle.pipe_pair(opts)
 end
 
 -- A mode-split handle composes a read handle and a write handle into the
--- duplex HostHandle shape expected by the Stream handle backend.  This is useful
+-- duplex HostHandle shape expected by Stream.  This is useful
 -- for pipe pairs and later subprocess stdio: readiness and I/O remain delegated
 -- to the true underlying end for each direction.
 local Duplex = {}
@@ -743,7 +782,7 @@ end
 
 function Duplex:attach_stream(stream)
   self.stream = stream
-  IOAudit.transfer(self, stream, { kind = 'duplex_host_handle', role = 'stream_backend' })
+  IOAudit.transfer(self, stream, { kind = 'duplex_host_handle', role = 'stream_handle' })
   if self.read_handle and type(self.read_handle.attach_stream) == 'function' then
     self.read_handle:attach_stream(stream)
   end

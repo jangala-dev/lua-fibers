@@ -189,7 +189,6 @@ end
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
   local Handle = require('fibers.host.handle')
-  local HandleBackend = require('fibers.stream.backend.handle')
   local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
   local handle = Handle.duplex(r, w, { host = host, name = name .. ':duplex' })
@@ -198,7 +197,7 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   local got, flushed, stream
 
   rt:spawn_raw(function()
-    stream = rt:perform(FibersStream.open_op(HandleBackend.new(handle, { name = name .. ':stream' }), {
+    stream = rt:perform(FibersStream.open_op(handle, {
       owner = region,
       name = name .. ':stream',
       read = true,
@@ -220,7 +219,6 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   Common.assert_eq(got, 'hello', name .. ' stream should loop bytes through pipe')
   handle:close('test')
 end
-
 
 function Common.socket_echo_smoke(name, host, address)
   local socket = require('fibers.socket')
@@ -345,16 +343,24 @@ function Common.native_socket_smoke(name, host)
     return false, 'host does not advertise socket capability'
   end
   Common.socket_echo_smoke(name .. ':tcp4', host, {
-    kind = 'inet4', family = 'inet4', host = '127.0.0.1', port = 0,
+    kind = 'inet4',
+    family = 'inet4',
+    host = '127.0.0.1',
+    port = 0,
   })
   Common.socket_echo_smoke(name .. ':tcp6', host, {
-    kind = 'inet6', family = 'inet6', host = '::1', port = 0,
+    kind = 'inet6',
+    family = 'inet6',
+    host = '::1',
+    port = 0,
   })
   Common.socket_churn_smoke(name .. ':tcp4-churn', host, 8)
   local path = os.tmpname() .. '.sock'
   os.remove(path)
   Common.socket_echo_smoke(name .. ':unix', host, {
-    kind = 'unix', family = 'unix', path = path,
+    kind = 'unix',
+    family = 'unix',
+    path = path,
   })
   os.remove(path)
   return true

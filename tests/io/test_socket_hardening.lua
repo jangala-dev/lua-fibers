@@ -57,12 +57,18 @@ do
     fibers.scope({ name = 'connection-handler' }, function(handler)
       accepted = listener:accept()
       assert_eq(accepted.owner, handler:raw_region(), 'accepted Stream should move into handler scope')
-      assert_truthy(accepted:reader().owner == handler:raw_region(), 'reader child should move with Stream subtree')
-      assert_truthy(accepted:writer().owner == handler:raw_region(), 'writer child should move with Stream subtree')
+      assert_truthy(
+        accepted:reader().owner == handler:raw_region(),
+        'reader child should move with Stream subtree'
+      )
+      assert_truthy(
+        accepted:writer().owner == handler:raw_region(),
+        'writer child should move with Stream subtree'
+      )
     end)
 
     assert_eq(accepted.owner, nil, 'handler settlement should release the accepted Stream')
-    assert_truthy(accepted.backend.handle.closed, 'handler settlement should close the accepted host handle')
+    assert_truthy(accepted.handle.closed, 'handler settlement should close the accepted host handle')
     client:close('ownership test complete')
     listener:close('ownership test complete')
     listener:closed()
@@ -145,7 +151,7 @@ do
 
     assert_eq(listener:close('queue-full shutdown'), true)
     assert_eq(listener:closed(), true)
-    assert_truthy(rows[1].value.backend.handle.closed, 'queued connection should close with driver scope')
+    assert_truthy(rows[1].value.handle.closed, 'queued connection should close with driver scope')
 
     c1:close('queue-full test complete')
     c2:close('queue-full test complete')
@@ -193,7 +199,7 @@ do
     end)
 
     assert_eq(connection_ref.owner, nil, 'Dial settlement should release unclaimed connection ownership')
-    assert_truthy(connection_ref.backend.handle.closed, 'Dial settlement should close unclaimed connection')
+    assert_truthy(connection_ref.handle.closed, 'Dial settlement should close unclaimed connection')
     listener:close('unclaimed test complete')
     listener:closed()
   end, { host = host })
@@ -295,7 +301,7 @@ do
   end, { host = host })
 
   assert_truthy(listener_ref:host_handle().closed, 'scope settlement should close listener handle')
-  assert_truthy(queued_ref.backend.handle.closed, 'scope settlement should close queued connection')
+  assert_truthy(queued_ref.handle.closed, 'scope settlement should close queued connection')
 end
 
 -- Listener closure remains idempotent.
@@ -348,9 +354,11 @@ do
   end, { host = host })
 
   assert_eq(result.ok, false, 'adapter defect should fail scope settlement')
-  assert_truthy(tostring(result):match('injected dial adapter defect'), 'scope report should retain adapter defect')
+  assert_truthy(
+    tostring(result):match('injected dial adapter defect'),
+    'scope report should retain adapter defect'
+  )
 end
-
 
 -- A host close implementation which throws is a protocol defect. It is
 -- converted to a terminal lifecycle error and retained by settlement.
@@ -394,7 +402,6 @@ do
   assert_eq(result.ok, false, 'listen adapter defect should fail the scope')
   assert_truthy(tostring(result):match('injected listen adapter defect'))
 end
-
 
 -- Socket option constructors snapshot caller-owned address and option tables.
 do

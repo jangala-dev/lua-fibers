@@ -19,7 +19,7 @@ local FibersFlow = require('fibers.flow')
 local FibersStream = require('fibers.stream')
 local FibersPolicy = require('fibers.policy')
 local Stream = FibersStream
-local Fake = require('fibers.stream.backend.fake')
+local HostHandle = require('fibers.host.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -107,7 +107,7 @@ end
 do
   local owner_was_root = false
   fibers.run(function(root)
-    local backend = Fake.new({ name = 'safe-acquire-backend' })
+    local backend = HostHandle.fake({ name = 'safe-acquire-backend' })
     local stream =
       fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'safe-acquire-stream' }))
     owner_was_root = stream.owner == root:raw_region()
@@ -118,7 +118,7 @@ end
 -- Safe acquisition without a current scope is rejected; owner-first low-level
 -- acquisition is explicit through the _in_op form.
 do
-  local backend = Fake.new({ name = 'no-current-scope-backend' })
+  local backend = HostHandle.fake({ name = 'no-current-scope-backend' })
   local ok, err = pcall(function()
     Stream.open_op(backend, { read = true, write = true, name = 'no-current-scope-stream' })
   end)
@@ -134,7 +134,7 @@ do
   rt:spawn_raw(function()
     root:run(function()
       fibers.scope(function()
-        local backend = Fake.new({ name = 'retired-authority-backend', input = 'x' })
+        local backend = HostHandle.fake({ name = 'retired-authority-backend', input = 'x' })
         stream = fibers.perform(
           Stream.open_op(backend, { read = true, write = true, name = 'retired-authority-stream' })
         )
@@ -196,7 +196,7 @@ end
 do
   local owner_was_root = false
   fibers.run(function(root)
-    local backend = Fake.new({ name = 'friendly-stream-backend' })
+    local backend = HostHandle.fake({ name = 'friendly-stream-backend' })
     local stream =
       fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'friendly-stream' }))
     owner_was_root = stream.owner == root:raw_region()

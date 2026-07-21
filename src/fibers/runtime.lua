@@ -325,6 +325,8 @@ function Runtime.new(opts)
     _plan_observations = {},
     _component_coordinators = setmetatable({}, { __mode = 'v' }),
     _external_feeds = setmetatable({}, { __mode = 'kv' }),
+    _finalizers = {},
+    _finalized = false,
     machine = machine,
     machine_name = machine_name,
     instrumentation = instrumentation,
@@ -341,6 +343,40 @@ function Runtime.new(opts)
       rollbacks = 0,
     },
   }, Runtime)
+end
+
+function Runtime:_add_finalizer(fn)
+  if type(fn) ~= 'function' then
+    error('runtime finalizer must be a function', 2)
+  end
+  if self._finalized then
+    error('runtime is already finalised', 2)
+  end
+  self._finalizers[#self._finalizers + 1] = fn
+  return fn
+end
+
+function Runtime:_finalize()
+  if self._finalized then
+    return true
+  end
+  self._finalized = true
+  local first_err
+  for i = #self._finalizers, 1, -1 do
+    local called, ok, err = pcall(self._finalizers[i])
+    if first_err == nil then
+      if not called then
+        first_err = ok
+      elseif ok == nil or ok == false then
+        first_err = err or 'runtime finalizer failed'
+      end
+    end
+    self._finalizers[i] = nil
+  end
+  if first_err ~= nil then
+    error(first_err, 0)
+  end
+  return true
 end
 
 function Runtime:instrumentation_snapshot()

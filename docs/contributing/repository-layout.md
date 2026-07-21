@@ -14,7 +14,8 @@ src/fibers/             installed version 1 library
   host/                 host adapters, provider registry and runtime-owned reactor
   socket.lua and socket/ public socket facade, addresses, Listener, Dial and UDP
   process.lua and process/ owned Process facility and immutable Command builder
-  stream/               supported capability-shaped Stream and backends
+  file.lua and file/     evented pipes, regular files and provider implementations
+  stream.lua            supported capability-shaped Stream facade
 
 examples/tutorial/      ordinary application use
 examples/recipes/       tested facilities built from supported modules

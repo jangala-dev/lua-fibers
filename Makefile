@@ -147,6 +147,16 @@ check-layout:
 	@test -f src/fibers/internal/adoption.lua
 	@test -f src/fibers/internal/io_audit.lua
 	@test -f src/fibers/file.lua
+	@test -d src/fibers/file
+	@test -f src/fibers/file/regular.lua
+	@test -f src/fibers/file/algorithms.lua
+	@test -f src/fibers/file/provider.lua
+	@test -f src/fibers/file/worker_provider.lua
+	@test -f src/fibers/file/worker_command.lua
+	@test -f src/fibers/file/memory_provider.lua
+	@test -f src/fibers/file/worker_main.lua
+	@test -f src/fibers/file/uring_provider.lua
+	@test -f src/fibers/file/aio_probe.lua
 	@test -f src/fibers/socket.lua
 	@test -f src/fibers/process.lua
 	@test -f src/fibers/process/command.lua
@@ -167,6 +177,8 @@ check-layout:
 	@test -f tests/internal/test_io_audit.lua
 	@test -f tests/io/test_socket_provider_matrix.lua
 	@test -f tests/io/test_socket_failure_matrix.lua
+	@test -f tests/io/test_file.lua
+	@test -f tests/support/file_worker_delayed.lua
 	@test -f tests/io/test_process.lua
 	@test -f tests/native/test_process_native.lua
 	@test -f tests/support/socket_provider_contract.lua

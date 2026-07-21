@@ -15,27 +15,28 @@ local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Region = require('fibers.lifetime.region')
 local Stream = require('fibers.stream')
+local HostHandle = require('fibers.host.handle')
 local Runner = require('fibers.runner')
 local Host = require('fibers.host')
 
 -- This example is not a real socket implementation.  It shows the socket-shaped
--- contract: host readiness wakes the runtime reactor, and the backend read/write callbacks
+-- contract: host readiness wakes the runtime reactor, and the handle read/write callbacks
 -- remain authoritative.
 
 local host = Host.manual({ auto_advance_time = false })
 
-local handle = {
+local socket = {
   key = 'example-socket',
   input = {},
   output = {},
 }
 
-function handle:feed(bytes)
+function socket:feed(bytes)
   self.input[#self.input + 1] = bytes
   host:readable(self.key)
 end
 
-function handle:read(max)
+function socket:read(max)
   if #self.input == 0 then
     host:clear_readiness(self.key, 'read')
     return nil, 'would_block'
@@ -55,24 +56,24 @@ function handle:read(max)
   return out
 end
 
-function handle:write(bytes)
+function socket:write(bytes)
   self.output[#self.output + 1] = bytes
   return #bytes
 end
 
-function handle:written()
+function socket:written()
   return table.concat(self.output)
 end
 
-local backend = require('fibers.stream.backend.socket').new({
-  name = 'example-socket-backend',
-  key = handle.key,
+local handle = HostHandle.new({
+  name = 'example-socket-handle',
+  key = socket.key,
   host = host,
-  read = function(_backend, max)
-    return handle:read(max)
+  read = function(_handle, max)
+    return socket:read(max)
   end,
-  write = function(_backend, bytes)
-    return handle:write(bytes)
+  write = function(_handle, bytes)
+    return socket:write(bytes)
   end,
   close = function()
     return true
@@ -85,7 +86,7 @@ local stream, got, flushed
 
 rt:spawn_raw(function()
   stream = rt:perform(
-    Stream.open_op(backend, { owner = region, read = true, write = true, name = 'example-socket-stream' })
+    Stream.open_op(handle, { owner = region, read = true, write = true, name = 'example-socket-stream' })
   )
   got = rt:perform(stream:reader():read_exactly_op(4))
   rt:perform(stream:writer():write_op('pong'))
@@ -97,12 +98,12 @@ Runner.run(rt, { host = host, max_iterations = 20 })
 assert(stream ~= nil)
 assert(got == nil)
 
-handle:feed('ping')
-host:writable(handle.key)
+socket:feed('ping')
+host:writable(socket.key)
 Runner.run(rt, { host = host, max_iterations = 120 })
 
 assert(got == 'ping')
 assert(flushed == true)
-assert(handle:written() == 'pong')
+assert(socket:written() == 'pong')
 
-print('examples/embedding/socket_backend_contract.lua: ok')
+print('examples/embedding/host_handle_socket.lua: ok')

@@ -19,7 +19,7 @@ local FibersRegion = require('fibers.lifetime.region')
 local FibersStream = require('fibers.stream')
 local Op = FibersOp
 local Stream = FibersStream
-local Fake = require('fibers.stream.backend.fake')
+local HostHandle = require('fibers.host.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -68,7 +68,7 @@ end
 
 -- Opening a backend stream is transactional. A losing open starts no reactor fibre.
 do
-  local backend = Fake.new({ name = 'losing-open-backend' })
+  local backend = HostHandle.fake({ name = 'losing-open-backend' })
   local region = FibersRegion.new('losing-open-region')
   local got
   local st = fibers.try_run(function()
@@ -88,11 +88,11 @@ do
   assert_nil(backend.stream, 'losing open should not attach backend to an uncommitted stream')
 end
 
--- Host backend streams expose stable reader and writer capabilities.
+-- HostHandle Streams expose stable reader and writer capabilities.
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('compound-region')
-  local backend = Fake.new({ name = 'compound-backend' })
+  local backend = HostHandle.fake({ name = 'compound-backend' })
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -101,6 +101,7 @@ do
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_truthy(stream, 'open_op should return a stream')
+  assert_eq(stream.handle, backend, 'HostStream should retain its HostHandle')
   assert_truthy(stream:reader() and stream:writer(), 'stream should expose reader and writer handles')
   assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
   assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
@@ -122,8 +123,8 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('shared-reactor-region')
-  local backend_a = Fake.new({ name = 'shared-reactor-a' })
-  local backend_b = Fake.new({ name = 'shared-reactor-b' })
+  local backend_a = HostHandle.fake({ name = 'shared-reactor-a' })
+  local backend_b = HostHandle.fake({ name = 'shared-reactor-b' })
   local stream_a, stream_b
   rt:spawn_raw(function()
     stream_a =
@@ -141,11 +142,11 @@ do
 end
 
 -- Host input enters the stream only through the read reaction committing bytes into
--- the incoming Flow reservoir.
+-- the incoming Flow buffer.
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('read-region')
-  local backend = Fake.new({ name = 'read-backend' })
+  local backend = HostHandle.fake({ name = 'read-backend' })
   local stream, got
   rt:spawn_raw(function()
     stream =
@@ -161,26 +162,21 @@ do
   assert_eq(got, 'abc')
 end
 
--- The read reaction honours input Flow reservoir capacity.
+-- The read reaction honours input Flow buffer capacity.
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('capacity-read-region')
-  local backend = Fake.new({ name = 'capacity-read-backend' })
+  local backend = HostHandle.fake({ name = 'capacity-read-backend' })
   local stream, first, second
   rt:spawn_raw(function()
-    stream = rt:perform(
-      Stream.open_op(
-        backend,
-        {
-          owner = region,
-          read = true,
-          write = true,
-          name = 'capacity-read-stream',
-          read_capacity = 2,
-          read_chunk_size = 4,
-        }
-      )
-    )
+    stream = rt:perform(Stream.open_op(backend, {
+      owner = region,
+      read = true,
+      write = true,
+      name = 'capacity-read-stream',
+      read_capacity = 2,
+      read_chunk_size = 4,
+    }))
     first = rt:perform(stream:reader():read_exactly_op(2))
     second = rt:perform(stream:reader():read_exactly_op(2))
   end, 'root')
@@ -200,7 +196,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('write-region')
-  local backend = Fake.new({ name = 'write-backend' })
+  local backend = HostHandle.fake({ name = 'write-backend' })
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -219,7 +215,7 @@ end
 do
   local rt = FibersRuntime.new({ choice_seed = 3 })
   local region = FibersRegion.new('losing-write-region')
-  local backend = Fake.new({ name = 'losing-write-backend' })
+  local backend = HostHandle.fake({ name = 'losing-write-backend' })
   local stream, got
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -242,7 +238,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('partial-write-region')
-  local backend = Fake.new({ name = 'partial-write-backend', write_chunk_size = 2 })
+  local backend = HostHandle.fake({ name = 'partial-write-backend', write_chunk_size = 2 })
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -264,7 +260,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('would-block-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = 'would-block-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -284,8 +280,8 @@ do
   for _ = 1, 10 do
     if
       stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= ''
     then
       break
     end
@@ -293,8 +289,8 @@ do
   end
   assert_truthy(
     stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= '',
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= '',
     'write reaction should hold an in-flight lease while blocked'
   )
   assert_nil(flushed, 'flush should wait while bytes are in flight')
@@ -310,7 +306,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('eof-region')
-  local backend = Fake.new({ name = 'eof-backend' })
+  local backend = HostHandle.fake({ name = 'eof-backend' })
   local stream, first, second, err
   rt:spawn_raw(function()
     stream =
@@ -333,7 +329,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('shutdown-write-region')
-  local backend = Fake.new({ name = 'shutdown-write-backend', write_blocked = true })
+  local backend = HostHandle.fake({ name = 'shutdown-write-backend', write_blocked = true })
   local stream, done
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -346,8 +342,8 @@ do
   for _ = 1, 10 do
     if
       stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= ''
     then
       break
     end
@@ -365,7 +361,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('write-error-region')
-  local backend = Fake.new({ name = 'write-error-backend' })
+  local backend = HostHandle.fake({ name = 'write-error-backend' })
   backend:fail_writes('connection_reset')
   local stream, flushed, flush_err, n, err
   rt:spawn_raw(function()
@@ -389,7 +385,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('lease-capacity-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = 'lease-capacity-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -410,22 +406,22 @@ do
   for _ = 1, 10 do
     if
       stream
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow.reservoir) ~= ''
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer().flow) ~= ''
     then
       break
     end
     rt:run()
   end
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    Inspect.first_lease_bytes(stream:writer().flow),
     'abc',
     'reactor should have leased the first write'
   )
   assert_eq(
     (
-      stream:writer().flow.reservoir.limit
-      - (#(stream:writer().flow.reservoir.data or '') + Inspect.leased_bytes(stream:writer().flow.reservoir))
+      stream:writer().flow.capacity
+      - (#(stream:writer().flow.data or '') + Inspect.leased_bytes(stream:writer().flow))
     ),
     0,
     'leased bytes should still reserve capacity'
@@ -447,7 +443,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('blocked-read-close-region')
-  local backend = Fake.new({ name = 'blocked-read-close-backend', read_blocked = true })
+  local backend = HostHandle.fake({ name = 'blocked-read-close-backend', read_blocked = true })
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -472,7 +468,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('reactor-retirement-region')
-  local backend = Fake.new({ name = 'reactor-retirement-backend', read_blocked = true })
+  local backend = HostHandle.fake({ name = 'reactor-retirement-backend', read_blocked = true })
   local stream, closed
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -498,8 +494,8 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('directional-region')
-  local read_backend = Fake.new({ name = 'directional-reader' })
-  local write_backend = Fake.new({ name = 'directional-writer' })
+  local read_backend = HostHandle.fake({ name = 'directional-reader' })
+  local write_backend = HostHandle.fake({ name = 'directional-writer' })
   local reader, writer
   rt:spawn_raw(function()
     reader = rt:perform(Stream.open_op(read_backend, {
@@ -536,7 +532,7 @@ end
 
 -- Nested scope settlement waits for completed Stream closure before returning.
 do
-  local backend = Fake.new({ name = 'nested-settlement-backend' })
+  local backend = HostHandle.fake({ name = 'nested-settlement-backend' })
   fibers.run(function()
     fibers.scope(function()
       fibers.perform(
@@ -551,7 +547,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('direction-errors-region')
-  local backend = Fake.new({ name = 'direction-errors-backend' })
+  local backend = HostHandle.fake({ name = 'direction-errors-backend' })
   local reader
   rt:spawn_raw(function()
     reader = rt:perform(Stream.open_op(backend, {
@@ -579,7 +575,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('close-error-region')
-  local backend = Fake.new({ name = 'close-error-backend' })
+  local backend = HostHandle.fake({ name = 'close-error-backend' })
   function backend:close(reason)
     self.close_count = self.close_count + 1
     self.closed_reason = reason
@@ -608,7 +604,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('abort-write-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = 'abort-write-backend',
     write_blocked = true,
     initial_writable = false,
@@ -638,30 +634,36 @@ end
 do
   local region = FibersRegion.new('backend-contract-region')
   local ok, err = pcall(function()
-    Stream.open_op({
-      name = 'missing-close',
-      key = 'missing-close-key',
-      read = function()
-        return nil, 'would_block'
-      end,
-    }, { owner = region, read = true, write = false })
+    Stream.open_op(
+      require('fibers.host.handle').new({
+        name = 'missing-close',
+        key = 'missing-close-key',
+        read = function()
+          return nil, 'would_block'
+        end,
+      }),
+      { owner = region, read = true, write = false }
+    )
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('requires close', 1, true))
 
   ok, err = pcall(function()
-    Stream.open_op({
-      name = 'missing-read',
-      key = 'missing-read-key',
-      close = function()
-        return true
-      end,
-    }, { owner = region, read = true, write = false })
+    Stream.open_op(
+      require('fibers.host.handle').new({
+        name = 'missing-read',
+        key = 'missing-read-key',
+        close = function()
+          return true
+        end,
+      }),
+      { owner = region, read = true, write = false }
+    )
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('requires read', 1, true))
 
-  local wrapped = require('fibers.stream.backend.readiness').new({
+  local wrapped = require('fibers.host.handle').new({
     name = 'wrapped-missing-close',
     key = 'wrapped-missing-close-key',
     read = function()
@@ -679,11 +681,9 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('direction-key-region')
-  local backend = {
+  local backend = require('fibers.host.handle').new({
     name = 'direction-key-backend',
-    readiness_key = function()
-      return { read = 'direction-read-key', write = 'direction-write-key' }
-    end,
+    key = { read = 'direction-read-key', write = 'direction-write-key' },
     read = function()
       return nil, 'would_block'
     end,
@@ -693,7 +693,7 @@ do
     close = function()
       return true
     end,
-  }
+  })
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_op(backend, {
@@ -718,7 +718,7 @@ end
 local function run_read_contract_case(name, read_result, expected_bytes, expected_err)
   local rt = FibersRuntime.new()
   local region = FibersRegion.new(name .. '-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = name .. '-backend',
     readiness = 'manual',
     initial_readable = true,
@@ -818,7 +818,7 @@ end
 -- Host Stream construction requires explicit capabilities and rejects legacy
 -- option spellings.
 do
-  local backend = Fake.new({ name = 'explicit-stream-options' })
+  local backend = HostHandle.fake({ name = 'explicit-stream-options' })
   local region = FibersRegion.new('explicit-stream-options-region')
   local ok, err = pcall(function()
     Stream.open_op(backend, { owner = region, name = 'missing-directions' })

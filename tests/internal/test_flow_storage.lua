@@ -51,8 +51,8 @@ do
   assert_eq(info.bytes, 'abc', 'lease:inspect should report bytes')
 end
 
--- The current reservoir algebra intentionally permits only one active lease per
--- reservoir.  A second owner cannot acquire a lease until the first is acked,
+-- The current Flow storage algebra intentionally permits only one active lease per
+-- Flow.  A second owner cannot acquire a lease until the first is acked,
 -- returned, failed, or settled.
 do
   local flow = require('fibers.flow').new({ name = 'single-active-lease-flow', capacity = 10 })
@@ -86,9 +86,9 @@ do
     got = fibers.perform(flow:outlet():read_exactly_op(6))
   end).runtime_status
   assert_status(st, 'found')
-  assert_truthy(snap.chunk_count >= 3, 'rope-backed reservoir should retain append chunks')
+  assert_truthy(snap.chunk_count >= 3, 'rope-backed Flow should retain append chunks')
   assert_eq(snap.data, 'abcdef', 'inspection should materialise the byte stream')
   assert_eq(got, 'abcdef', 'reads should preserve stream order')
 end
 
-print('tests/test_flow_reservoir.lua: ok')
+print('tests/test_flow_storage.lua: ok')

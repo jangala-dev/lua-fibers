@@ -12,7 +12,9 @@ function NativeError.new(opts)
   local Error = {}
 
   function Error.current_errno()
-    if type(current_errno) ~= 'function' then return nil end
+    if type(current_errno) ~= 'function' then
+      return nil
+    end
     local ok, value = pcall(current_errno)
     return ok and tonumber(value) or nil
   end
@@ -36,25 +38,39 @@ function NativeError.new(opts)
 
   function Error.message(prefix, a, b)
     local message, number = Error.split(a, b)
-    if message ~= nil and message ~= '' then return tostring(message), number end
+    if message ~= nil and message ~= '' then
+      return tostring(message), number
+    end
     local detail
     if number ~= nil and type(strerror) == 'function' then
       local ok, value = pcall(strerror, number)
-      if ok and value ~= nil and value ~= '' then detail = tostring(value) end
+      if ok and value ~= nil and value ~= '' then
+        detail = tostring(value)
+      end
     end
-    if detail then return tostring(prefix) .. ': ' .. detail, number end
-    if number ~= nil then return tostring(prefix) .. ' (errno ' .. tostring(number) .. ')', number end
+    if detail then
+      return tostring(prefix) .. ': ' .. detail, number
+    end
+    if number ~= nil then
+      return tostring(prefix) .. ' (errno ' .. tostring(number) .. ')', number
+    end
     return tostring(prefix), nil
   end
 
   function Error.detail(prefix, a, b)
     local message, number = Error.split(a, b)
-    if message ~= nil and message ~= '' then return tostring(message), number end
+    if message ~= nil and message ~= '' then
+      return tostring(message), number
+    end
     if number ~= nil and type(strerror) == 'function' then
       local ok, value = pcall(strerror, number)
-      if ok and value ~= nil and value ~= '' then return tostring(value), number end
+      if ok and value ~= nil and value ~= '' then
+        return tostring(value), number
+      end
     end
-    if number ~= nil then return tostring(prefix) .. ' (errno ' .. tostring(number) .. ')', number end
+    if number ~= nil then
+      return tostring(prefix) .. ' (errno ' .. tostring(number) .. ')', number
+    end
     return tostring(prefix), nil
   end
 
@@ -64,7 +80,9 @@ function NativeError.new(opts)
   end
 
   function Error.option(value)
-    if type(value) == 'boolean' then return value and 1 or 0 end
+    if type(value) == 'boolean' then
+      return value and 1 or 0
+    end
     return value
   end
 

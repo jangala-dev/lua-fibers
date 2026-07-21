@@ -78,6 +78,17 @@ function Common.new(opts)
     error_prefix = prefix .. '.process',
   })
   local process_supported = process_provider.is_supported()
+  local UringProvider = require('fibers.file.uring_provider')
+  local AioProbe = require('fibers.file.aio_probe')
+  local uring_supported = select(
+    1,
+    UringProvider.probe({
+      ffi = ffi,
+      C = C,
+      arch = opts.arch or ffi.arch or (rawget(_G, 'jit') and jit.arch),
+    })
+  )
+  local aio_supported = AioProbe.available(ffi, C)
 
   local ok_cdef, cdef_err = pcall(function()
     ffi.cdef([[
@@ -439,12 +450,30 @@ function Common.new(opts)
         resolver = resolver_supported,
         resolver_blocking = resolver_supported,
         process = process_supported,
+        file = uring_supported or process_supported,
+        file_backend = uring_supported and 'io_uring' or (process_supported and 'worker' or nil),
+        file_io_uring = uring_supported,
+        file_aio_detected = aio_supported,
       },
     }, Linux)
     self.now = function(_rt)
       return read_monotonic()
     end
     return self
+  end
+
+  function Linux:file_provider(runtime, provider_opts)
+    if not uring_supported then
+      return nil
+    end
+    local provider = UringProvider.new(runtime, {
+      ffi = ffi,
+      C = C,
+      fd = fd_provider,
+      arch = opts.arch or ffi.arch or (rawget(_G, 'jit') and jit.arch),
+      entries = provider_opts and provider_opts.ring_entries,
+    })
+    return provider
   end
 
   function Linux:create_pipe(pipe_opts)
@@ -539,6 +568,14 @@ function Common.new(opts)
     self.next_epoll_token = self.next_epoll_token + 1
     local token = self.next_epoll_token
     local previous = self.active[fd]
+    local function forget_closed()
+      if previous then
+        self.epoll_by_token[previous.token] = nil
+      end
+      self.active[fd] = nil
+      self.unpollable[fd] = nil
+      return true, 'closed'
+    end
 
     local ok, err, eno = epoll_ctl(self.epfd, EPOLL_CTL_MOD, fd, mask, token)
     if ok then
@@ -548,6 +585,9 @@ function Common.new(opts)
       self.active[fd] = { mask = mask, token = token }
       self.epoll_by_token[token] = { fd = fd, token = token }
       return true
+    end
+    if eno == EBADF then
+      return forget_closed()
     end
     if eno == EPERM then
       if previous then
@@ -566,6 +606,9 @@ function Common.new(opts)
       self.active[fd] = { mask = mask, token = token }
       self.epoll_by_token[token] = { fd = fd, token = token }
       return true
+    end
+    if eno2 == EBADF then
+      return forget_closed()
     end
     if eno2 == EPERM then
       if previous then
@@ -691,6 +734,7 @@ function Common.new(opts)
     local deadline = Host.earliest_deadline(waits)
     local transient, unsupported = collect_readiness(waits)
     local affected = {}
+    local stale = {}
 
     for fd in pairs(self.transient_fds) do
       affected[fd] = true
@@ -723,7 +767,9 @@ function Common.new(opts)
         if not ok then
           error(err, 2)
         end
-        if (class == 'unpollable' or err == 'unpollable') and self.poller_by_fd[fd] then
+        if class == 'closed' or err == 'closed' then
+          stale[fd] = bit.band(mask_for(modes), bit.bnot(EPOLLONESHOT))
+        elseif (class == 'unpollable' or err == 'unpollable') and self.poller_by_fd[fd] then
           unsupported = true
         end
       end
@@ -742,7 +788,7 @@ function Common.new(opts)
     -- host operation is responsible for reporting EOF or an error.  Indexed
     -- poller registrations remain unsupported for these handles because they
     -- are intended for genuinely non-blocking readiness-driven resources.
-    local synthetic = {}
+    local synthetic = stale
     for fd, rec in pairs(transient) do
       if self.unpollable[fd] and not self.poller_by_fd[fd] then
         synthetic[fd] = bit.band(mask_for(rec.modes), bit.bnot(EPOLLONESHOT))

@@ -1,7 +1,7 @@
 -- File and pipe facilities.
 --
--- Version 1 begins with anonymous pipes. Regular files will use a separate
--- host-job path because readiness does not make regular-file calls non-blocking.
+-- Anonymous pipes use readiness-backed Streams. Regular files use the
+-- runtime-only evented job service exported by fibers.file.regular.
 
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
@@ -9,6 +9,7 @@ local Adoption = require('fibers.internal.adoption')
 local IO = require('fibers.internal.io')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
+local Regular = require('fibers.file.regular')
 
 local File = {}
 local next_pipe = 0
@@ -93,10 +94,42 @@ local function fail_start(rt, start, err)
   return nil, nil, err
 end
 
+local function finish_endpoint(rt, start, which, handle, opts)
+  local ok, stream = Protected.pcall(function()
+    return open_endpoint(rt, start.owner, handle, which, opts)
+  end)
+  if not ok then
+    return nil,
+      HostError.normalise(stream, {
+        domain = 'pipe',
+        action = 'open_' .. which .. '_stream',
+      })
+  end
+  start[which .. '_stream'] = stream
+
+  local transferred, transfer_err = start[which .. '_slot']:release(handle)
+  if not transferred then
+    return nil,
+      HostError.normalise(transfer_err, {
+        domain = 'pipe',
+        action = 'transfer_' .. which .. '_adoption',
+      })
+  end
+  local released, release_err = release_slot(rt, start, which)
+  if not released then
+    return nil,
+      HostError.normalise(release_err, {
+        domain = 'pipe',
+        action = 'release_' .. which .. '_adoption',
+      })
+  end
+  return stream
+end
+
 local function start_pipe(rt, start, opts)
-  local read_handle, write_handle, acquire_err = acquire_handles(rt, opts)
+  local read_handle, write_handle, err = acquire_handles(rt, opts)
   if not read_handle then
-    return fail_start(rt, start, acquire_err)
+    return fail_start(rt, start, err)
   end
 
   local adopted, adopt_err =
@@ -105,85 +138,15 @@ local function start_pipe(rt, start, opts)
     return fail_start(rt, start, adopt_err)
   end
 
-  local ok_read, read_stream_or_err = Protected.pcall(function()
-    return open_endpoint(rt, start.owner, read_handle, 'read', opts)
-  end)
-  if not ok_read then
-    return fail_start(
-      rt,
-      start,
-      HostError.normalise(read_stream_or_err, {
-        domain = 'pipe',
-        action = 'open_read_stream',
-      })
-    )
+  local read_stream, read_err = finish_endpoint(rt, start, 'read', read_handle, opts)
+  if not read_stream then
+    return fail_start(rt, start, read_err)
   end
-  start.read_stream = read_stream_or_err
-
-  local transferred, transfer_err = start.read_slot:release(read_handle)
-  if not transferred then
-    return fail_start(
-      rt,
-      start,
-      HostError.normalise(transfer_err, {
-        domain = 'pipe',
-        action = 'transfer_read_adoption',
-      })
-    )
+  local write_stream, write_err = finish_endpoint(rt, start, 'write', write_handle, opts)
+  if not write_stream then
+    return fail_start(rt, start, write_err)
   end
-
-  local released, release_err = release_slot(rt, start, 'read')
-  if not released then
-    return fail_start(
-      rt,
-      start,
-      HostError.normalise(release_err, {
-        domain = 'pipe',
-        action = 'release_read_adoption',
-      })
-    )
-  end
-
-  local ok_write, write_stream_or_err = Protected.pcall(function()
-    return open_endpoint(rt, start.owner, write_handle, 'write', opts)
-  end)
-  if not ok_write then
-    return fail_start(
-      rt,
-      start,
-      HostError.normalise(write_stream_or_err, {
-        domain = 'pipe',
-        action = 'open_write_stream',
-      })
-    )
-  end
-  start.write_stream = write_stream_or_err
-
-  transferred, transfer_err = start.write_slot:release(write_handle)
-  if not transferred then
-    return fail_start(
-      rt,
-      start,
-      HostError.normalise(transfer_err, {
-        domain = 'pipe',
-        action = 'transfer_write_adoption',
-      })
-    )
-  end
-
-  released, release_err = release_slot(rt, start, 'write')
-  if not released then
-    return fail_start(
-      rt,
-      start,
-      HostError.normalise(release_err, {
-        domain = 'pipe',
-        action = 'release_write_adoption',
-      })
-    )
-  end
-
-  return start.read_stream, start.write_stream
+  return read_stream, write_stream
 end
 
 function File.pipe_op(opts)
@@ -231,7 +194,36 @@ function File.pipe_op(opts)
 end
 
 File.Error = HostError
+File.RegularFile = Regular.RegularFile
+File.Request = Regular.Request
+File.Job = Regular.Job
+File.submit_open_op = Regular.submit_open_op
+File.open_op = Regular.open_op
+File.open = Regular.open
+File.submit_tmpfile_op = Regular.submit_tmpfile_op
+File.tmpfile_op = Regular.tmpfile_op
+File.tmpfile = Regular.tmpfile
+File.submit_read_all_op = Regular.submit_read_all_op
+File.read_all_op = Regular.read_all_op
+File.read_all = Regular.read_all
+File.submit_write_all_op = Regular.submit_write_all_op
+File.write_all_op = Regular.write_all_op
+File.write_all = Regular.write_all
+File.submit_rename_op = Regular.submit_rename_op
+File.rename_op = Regular.rename_op
+File.rename = Regular.rename
+File.submit_unlink_op = Regular.submit_unlink_op
+File.unlink_op = Regular.unlink_op
+File.unlink = Regular.unlink
+File.submit_mkdir_op = Regular.submit_mkdir_op
+File.mkdir_op = Regular.mkdir_op
+File.mkdir = Regular.mkdir
+File.submit_mkdir_p_op = Regular.submit_mkdir_p_op
+File.mkdir_p_op = Regular.mkdir_p_op
+File.mkdir_p = Regular.mkdir_p
 
-function File.pipe(opts) return perform(File.pipe_op(opts)) end
+function File.pipe(opts)
+  return perform(File.pipe_op(opts))
+end
 
 return File

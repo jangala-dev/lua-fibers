@@ -7,7 +7,6 @@
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 local Task = require('fibers.task')
-local HandleBackend = require('fibers.stream.backend.handle')
 local HostError = require('fibers.host.error')
 local Protected = require('fibers.internal.protected')
 
@@ -101,12 +100,9 @@ function IO.release_owned(rt, region, record)
 end
 
 function IO.open_handle_stream(rt, owner, handle, opts)
-  local backend = HandleBackend.new(handle, {
-    name = opts.backend_name or (opts.name .. ':backend'),
-  })
   return IO.masked_perform(
     rt,
-    Stream.open_op(backend, {
+    Stream.open_op(handle, {
       owner = owner,
       name = opts.name,
       read = opts.read == true,

@@ -4,7 +4,9 @@ local socket = require('fibers.socket')
 local Contract = {}
 
 local function assert_truthy(value, message)
-  if not value then error(message or 'expected truthy value', 3) end
+  if not value then
+    error(message or 'expected truthy value', 3)
+  end
   return value
 end
 

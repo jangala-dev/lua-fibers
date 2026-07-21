@@ -1,7 +1,90 @@
-# Pipes, processes and sockets
+# Files, pipes, processes and sockets
 
 Fibers restores the practical shape of the earlier I/O layer while retaining
 version 1 ownership and option semantics.
+
+## Evented regular files
+
+Regular files are not readiness-driven: polling a regular descriptor does not
+prove that storage or filesystem work will complete without waiting. Fibers
+therefore executes every regular-file and path operation through an asynchronous
+provider and exposes no synchronous bootstrap file API.
+
+File operations require an active runtime:
+
+```lua
+local fibers = require('fibers')
+local file = require('fibers.file')
+local Host = require('fibers.host')
+
+fibers.run(function()
+  local resolv_conf, err = file.read_all('/etc/resolv.conf', {
+    max = 64 * 1024,
+  })
+  assert(resolv_conf, err)
+end, { host = Host.default() })
+```
+
+Direct methods perform their corresponding `_op`; ordinary `_op` calls yield the
+operation's final value, as elsewhere in Fibers:
+
+```lua
+local contents, err = fibers.perform(
+  file.read_all_op('/etc/resolv.conf', { max = 65536 })
+)
+```
+
+Callers that need detached ordered admission can use the explicit `submit_*_op`
+forms. These return an owned `File.Job` or `File.Request` whose completion remains
+selectable through `result_op()`:
+
+```lua
+local job = fibers.perform(file.submit_read_all_op('/etc/resolv.conf', { max = 65536 }))
+local contents, err = fibers.perform(job:result_op())
+```
+
+`file.open()` returns an owned regular file. Operations on one file are
+serialised in submission order:
+
+```lua
+local f = assert(file.open('/tmp/example', 'w+b'))
+assert(f:write('data'))
+assert(f:seek('set', 0) == 0)
+assert(f:read_exactly(4) == 'data')
+assert(f:flush())
+assert(f:sync())
+assert(f:close())
+```
+
+The surface includes bounded `read_all`, `write_all`, `open`, `tmpfile`,
+`rename`, `unlink`, `mkdir` and `mkdir_p`. Open files support `read`,
+`read_exactly`, `read_line`, bounded `read_all`, `write`, `seek`, `flush`,
+`sync`, `rename`, `filename` and `close`.
+
+`flush` drains provider or language-level buffering. `sync` requests storage
+synchronisation and may use `fdatasync` when `data_only = true`:
+
+```lua
+assert(f:sync({ data_only = true }))
+```
+
+Temporary files are created with exclusive naming and default permissions of
+`0600`. They are unlinked automatically when closed. Renaming one publishes it
+and disables automatic unlinking:
+
+```lua
+local temporary = assert(file.tmpfile({ directory='/tmp', prefix='result-' }))
+assert(temporary:write('complete'))
+assert(temporary:rename('/tmp/result.txt'))
+assert(temporary:close())
+```
+
+On Linux FFI hosts Fibers probes `io_uring` and uses it when the complete ring
+can be established. POSIX AIO availability is also reported, but POSIX AIO
+cannot by itself make `open`, path mutation and `close` asynchronous; when
+`io_uring` is unavailable the complete fallback is an evented helper-process
+provider. Luaposix and Nixio use the same helper protocol over their evented
+process pipes.
 
 ## Pipes
 

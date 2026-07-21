@@ -1,4 +1,4 @@
--- Test-only inspection helpers for flow reservoirs.
+-- Test-only inspection helpers for Flow state.
 -- These are deliberately outside the library surface so the kernel/facilities do
 -- not expose diagnostic methods in normal use.
 local M = {}

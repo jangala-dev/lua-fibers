@@ -22,7 +22,7 @@ local Op = FibersOp
 local Runtime = FibersRuntime
 local Host = FibersHost
 local Stream = FibersStream
-local Fake = require('fibers.stream.backend.fake')
+local HostHandle = require('fibers.host.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -132,7 +132,7 @@ end
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('readiness-authority-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = 'readiness-authority-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -187,7 +187,7 @@ do
   local rt = Runtime.new()
   local region = FibersRegion.new('stale-readiness-region')
   local backend =
-    Fake.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
+    HostHandle.fake({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err, snap
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -223,7 +223,7 @@ end
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('readiness-write-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = 'readiness-write-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -239,17 +239,17 @@ do
   end, 'root')
   for _ = 1, 20 do
     rt:run()
-    if stream and Inspect.data(stream:writer().flow.reservoir) == 'abc' then
+    if stream and Inspect.data(stream:writer().flow) == 'abc' then
       break
     end
   end
   assert_truthy(stream, 'stream should open')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    Inspect.first_lease_bytes(stream:writer().flow),
     nil,
     'reactor should wait for writability before leasing bytes'
   )
-  assert_eq(Inspect.data(stream:writer().flow.reservoir), 'abc')
+  assert_eq(Inspect.data(stream:writer().flow), 'abc')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
   drive_until(rt, function()
@@ -262,7 +262,7 @@ end
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('bounded-ready-reactor-region')
-  local backend = Fake.new({
+  local backend = HostHandle.fake({
     name = 'bounded-ready-reactor-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -281,13 +281,13 @@ do
   end, 'root')
   for _ = 1, 80 do
     rt:step({ max_work = 1 })
-    if stream and Inspect.data(stream:writer().flow.reservoir) == 'xy' then
+    if stream and Inspect.data(stream:writer().flow) == 'xy' then
       break
     end
   end
   assert_truthy(stream, 'bounded stream should open')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    Inspect.first_lease_bytes(stream:writer().flow),
     nil,
     'bounded reactor should not lease before writability'
   )

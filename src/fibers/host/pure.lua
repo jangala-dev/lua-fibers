@@ -47,9 +47,21 @@ function Pure.new(opts)
   end
 
   self.capabilities = {
-    time = true, readiness = false, fd = false, pipe = false,
-    socket = false, socket_ipv4 = false, socket_ipv6 = false, socket_unix = false,
-    datagram = false, resolver = false, resolver_blocking = false,
+    time = true,
+    readiness = false,
+    fd = false,
+    pipe = false,
+    socket = false,
+    socket_ipv4 = false,
+    socket_ipv6 = false,
+    socket_unix = false,
+    datagram = false,
+    resolver = false,
+    resolver_blocking = false,
+    file = false,
+    file_backend = nil,
+    file_io_uring = false,
+    file_aio_detected = false,
     process = false,
   }
   return self

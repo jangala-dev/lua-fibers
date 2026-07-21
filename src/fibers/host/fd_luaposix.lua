@@ -55,7 +55,6 @@ local function set_nonblocking_fd(fd, value)
   return true
 end
 
-
 local function set_cloexec_fd(fd, value)
   if fcntl.F_GETFD == nil or fcntl.F_SETFD == nil or fcntl.FD_CLOEXEC == nil then
     return true
@@ -202,12 +201,14 @@ function Fd.new(fd, opts)
   return h
 end
 
-
 function Fd.pipe(opts)
   opts = opts or {}
   local rd, wr, err, eno = unistd.pipe()
   if not rd then
-    return nil, nil, HostError.system('pipe', 'create', PosixError.message('pipe failed', err, eno), nil, eno), eno
+    return nil,
+      nil,
+      HostError.system('pipe', 'create', PosixError.message('pipe failed', err, eno), nil, eno),
+      eno
   end
   local r, rerr = Fd.new(rd, {
     host = opts.host,

@@ -3,23 +3,33 @@
 local NixioPoll = {}
 
 local function descriptor_number(value)
-  if type(value) == 'number' then return value end
+  if type(value) == 'number' then
+    return value
+  end
   if value and type(value.fileno) == 'function' then
     local ok, fd = pcall(value.fileno, value)
-    if ok then return tonumber(fd) end
+    if ok then
+      return tonumber(fd)
+    end
   end
   return nil
 end
 
 local function add_event(nixio, events, mode)
-  if events == nil then return nixio.poll_flags(mode) end
+  if events == nil then
+    return nixio.poll_flags(mode)
+  end
   return nixio.poll_flags(events, mode)
 end
 
 local function native_events(nixio, record)
   local events
-  if record.read then events = add_event(nixio, events, 'in') end
-  if record.write then events = add_event(nixio, events, 'out') end
+  if record.read then
+    events = add_event(nixio, events, 'in')
+  end
+  if record.write then
+    events = add_event(nixio, events, 'out')
+  end
   return events
 end
 
@@ -36,7 +46,9 @@ local function collect(nixio, plan, source, positional, ready, merged)
       observed = true
       local fd = descriptor_number(info.fd)
       local record = info._fibers_record or plan.by_key[info.fd] or (fd and plan.by_fd[fd])
-      if not record and positional and type(index) == 'number' then record = plan.records[index] end
+      if not record and positional and type(index) == 'number' then
+        record = plan.records[index]
+      end
       if record then
         local readable, writable = decoded_events(nixio, info.revents)
         local item = merged[record]
@@ -69,7 +81,9 @@ function NixioPoll.run(nixio, plan, timeout_ms)
   end
 
   local nready, returned = nixio.poll(poll_fds, timeout_ms)
-  if nready == nil or nready == false then return nil, 'interrupted' end
+  if nready == nil or nready == false then
+    return nil, 'interrupted'
+  end
 
   local ready, merged = {}, {}
   if nready > 0 then

@@ -352,6 +352,38 @@ Pipe acquisition occurs only after `pipe_op` commits. Newly created host handles
 are covered immediately by temporary adoption records until their permanent
 Stream ownership has been admitted. See [`docs/guide/io.md`](docs/guide/io.md).
 
+### Files
+
+Regular-file and path operations are runtime-only and evented:
+
+```lua
+local fibers = require('fibers')
+local file = require('fibers.file')
+local Host = require('fibers.host')
+
+fibers.run(function()
+  local contents = assert(file.read_all('/etc/resolv.conf', {
+    max = 64 * 1024,
+  }))
+
+  local output = assert(file.open('/tmp/example', 'w+b'))
+  assert(output:write(contents))
+  assert(output:flush())
+  assert(output:sync())
+  assert(output:close())
+end, { host = Host.default() })
+```
+
+Each direct method performs a corresponding `_op`, and ordinary `_op` calls yield
+their final value. Explicit `submit_*_op` forms return an owned `File.Job` or
+`File.Request` with a selectable `result_op()`. Open files support exact reads
+and separate `flush` from durable `sync`. `file.tmpfile()`
+creates an exclusively named owned file which is unlinked on close unless it is
+renamed. Linux FFI hosts use `io_uring` when available. Other native hosts, and
+Linux systems without a usable ring, use helper processes over evented pipes.
+There is no synchronous pre-runtime file API. See
+[`docs/guide/io.md`](docs/guide/io.md).
+
 ### Processes
 
 Commands are immutable descriptions; starting one creates an owned Process with

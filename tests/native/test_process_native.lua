@@ -17,11 +17,15 @@ for _, spec in ipairs({
     local host = host_module.new()
     if host.capabilities.process then
       local contract_ok, contract_err = pcall(Contract.exercise, spec.name, host)
-      if type(host.close) == 'function' then host:close() end
+      if type(host.close) == 'function' then
+        host:close()
+      end
       assert(contract_ok, contract_err)
       exercised = exercised + 1
     else
-      if type(host.close) == 'function' then host:close() end
+      if type(host.close) == 'function' then
+        host:close()
+      end
       reasons[#reasons + 1] = spec.name .. ': process capability unavailable'
     end
   else

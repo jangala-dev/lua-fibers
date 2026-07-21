@@ -27,62 +27,32 @@ local by_runtime = setmetatable({}, { __mode = 'k' })
 local next_reactor = 0
 local next_entry = 0
 
-local function backend_call(backend, name, ...)
-  local f = backend and backend[name]
+local function handle_call(handle, name, ...)
+  local f = handle and handle[name]
   if type(f) == 'function' then
-    return f(backend, ...)
+    return f(handle, ...)
   end
-  return nil, HostError.unsupported('stream_backend', name)
+  return nil, HostError.unsupported('host_handle', name)
 end
 
-local function optional_backend_call(backend, name, ...)
-  local ok, err = backend_call(backend, name, ...)
+local function optional_handle_call(handle, name, ...)
+  local ok, err = handle_call(handle, name, ...)
   if ok == nil and HostError.is_unsupported(err) then
     return true
   end
   return ok, err
 end
 
-local function backend_key(backend, mode)
-  if type(backend) ~= 'table' then
-    return nil
+local function handle_key(handle, mode)
+  local key = handle:readiness_key()
+  if type(key) == 'table' and (key.read ~= nil or key.write ~= nil) then
+    return key[mode]
   end
-  if backend.key ~= nil then
-    if type(backend.key) == 'table' and (backend.key.read ~= nil or backend.key.write ~= nil) then
-      return backend.key[mode]
-    end
-    return backend.key
-  end
-  local handle = backend.handle
-  if handle then
-    if type(handle.readiness_key) == 'function' then
-      local key = handle:readiness_key()
-      if type(key) == 'table' and (key.read ~= nil or key.write ~= nil) then
-        return key[mode]
-      end
-      return key
-    end
-    return handle.key or handle.handle
-  end
-  if type(backend.readiness_key) == 'function' then
-    local key = backend:readiness_key()
-    if type(key) == 'table' and (key.read ~= nil or key.write ~= nil) then
-      return key[mode]
-    end
-    return key
-  end
-  return nil
+  return key
 end
 
-local function backend_hint_ready(entry)
-  local backend = entry.backend
-  local readiness = backend and backend.readiness
-  if not readiness and backend and backend._backend then
-    readiness = backend._backend.readiness
-  end
-  if not readiness and backend and backend.handle then
-    readiness = backend.handle.readiness
-  end
+local function handle_hint_ready(entry)
+  local readiness = entry.handle and entry.handle.readiness
   local state = readiness and readiness._location and readiness._location.value
   return not not (state and state[entry.mode])
 end
@@ -149,7 +119,7 @@ function Entry.new(reactor, spec)
   spec = spec or {}
   next_entry = next_entry + 1
   local id = 'reaction-' .. tostring(next_entry)
-  local key = backend_key(spec.backend, spec.mode)
+  local key = handle_key(spec.handle, spec.mode)
   if key == nil then
     error('reactor-backed direction requires a readiness key', 3)
   end
@@ -158,7 +128,7 @@ function Entry.new(reactor, spec)
     mode = spec.mode,
     stream = spec.stream,
     flow = spec.flow,
-    backend = spec.backend,
+    handle = spec.handle,
     reactor = reactor,
     chunk_size = spec.chunk_size or 4096,
     generation = spec.generation or next_entry,
@@ -278,20 +248,20 @@ function Reactor:_ensure_running(rt)
   end, self.name, nil)
 end
 
-function Reactor:_attach_backend(rt, entry)
-  local backend = entry.backend
+function Reactor:_attach_handle(rt, entry)
+  local handle = entry.handle
   local stream = entry.stream
-  if stream and stream._reactor_backend_attached then
+  if stream and stream._reactor_handle_attached then
     return
   end
-  if backend and type(backend.attach_stream) == 'function' then
-    backend:attach_stream(stream)
+  if handle and type(handle.attach_stream) == 'function' then
+    handle:attach_stream(stream)
   end
-  if backend and type(backend.bind_runtime) == 'function' then
-    backend:bind_runtime(rt)
+  if handle and type(handle.bind_runtime) == 'function' then
+    handle:bind_runtime(rt)
   end
   if stream then
-    stream._reactor_backend_attached = true
+    stream._reactor_handle_attached = true
   end
 end
 
@@ -302,7 +272,7 @@ function Reactor:_register_committed(rt, entry)
   if entry.registered then
     return entry
   end
-  self:_attach_backend(rt, entry)
+  self:_attach_handle(rt, entry)
   entry.registered = true
   self.entries[entry._fibers_id] = entry
   IOAudit.register(entry, rt, { mode = entry.mode, key = entry.key })
@@ -337,7 +307,7 @@ end
 
 function Reactor:_arm(entry)
   local armed = self.poller:arm(entry._fibers_id, entry.generation)
-  if armed and backend_hint_ready(entry) then
+  if armed and handle_hint_ready(entry) then
     self.poller:hint(entry.key, entry.mode)
   end
   return armed
@@ -420,13 +390,13 @@ function Reactor:_retire_entry(entry, reason)
   end
 
   if entry.mode == 'read' then
-    local ok, err = optional_backend_call(entry.backend, 'shutdown_read', reason)
+    local ok, err = optional_handle_call(entry.handle, 'shutdown_read', reason)
     if not ok then
       retire_error = combine_error(retire_error, err or Errors.READ_ERROR)
     end
     masked_perform(self.runtime, entry.flow:inlet():close_op(reason))
   elseif entry.mode == 'write' then
-    local ok, err = optional_backend_call(entry.backend, 'shutdown_write', reason)
+    local ok, err = optional_handle_call(entry.handle, 'shutdown_write', reason)
     if not ok then
       retire_error = combine_error(retire_error, err or Errors.WRITE_ERROR)
     end
@@ -445,9 +415,9 @@ function Reactor:_retire_entry(entry, reason)
     if retire_error then
       stream._close_error = combine_error(stream._close_error, retire_error)
     end
-    if stream._reactor_live == 0 and not stream._backend_closed then
-      stream._backend_closed = true
-      local ok, err = backend_call(stream.backend, 'close', reason)
+    if stream._reactor_live == 0 and not stream._handle_closed then
+      stream._handle_closed = true
+      local ok, err = handle_call(stream.handle, 'close', reason)
       if not ok then
         stream._close_error = combine_error(stream._close_error, err or Errors.FLOW_ERROR)
       end
@@ -473,7 +443,7 @@ function Reactor:_service_read(entry)
     return true
   end
 
-  local bytes, err = backend_call(entry.backend, 'read', space:capacity())
+  local bytes, err = handle_call(entry.handle, 'read', space:capacity())
   if bytes ~= nil and type(bytes) ~= 'string' then
     masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
     return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
@@ -555,7 +525,7 @@ function Reactor:_service_write(entry)
   end
 
   local bytes = lease:bytes()
-  local n, err = backend_call(entry.backend, 'write', bytes)
+  local n, err = handle_call(entry.handle, 'write', bytes)
   if n and n > 0 then
     local ok, ack_err = masked_perform(self.runtime, lease:ack_op(n))
     if not ok then

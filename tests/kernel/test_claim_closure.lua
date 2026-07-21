@@ -20,11 +20,7 @@ local Runtime = require('fibers.runtime')
 local function eq(actual, expected, message)
   if actual ~= expected then
     error(
-      (message or 'values differ')
-        .. ': expected '
-        .. tostring(expected)
-        .. ', got '
-        .. tostring(actual),
+      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
       2
     )
   end

@@ -16,15 +16,15 @@ local Runtime = require('fibers.runtime')
 local Region = require('fibers.lifetime.region')
 local Stream = require('fibers.stream')
 
-local Fake = require('fibers.stream.backend.fake')
+local HostHandle = require('fibers.host.handle')
 
 local rt = Runtime.new()
 local region = Region.new('fake-host-region')
-local backend = Fake.new({ name = 'fake-host', write_chunk_size = 2 })
+local handle = HostHandle.fake({ name = 'fake-host', write_chunk_size = 2 })
 local stream, line, flushed
 
 rt:spawn_raw(function()
-  stream = rt:perform(Stream.open_op(backend, {
+  stream = rt:perform(Stream.open_op(handle, {
     owner = region,
     name = 'fake-host-stream',
     read = true,
@@ -41,10 +41,10 @@ end, 'root')
 
 -- Start the root and the runtime-owned reactor.  The reader is now waiting for host input.
 rt:run()
-backend:feed_read('hello\n')
+handle:feed_read('hello\n')
 
 for _ = 1, 100 do
-  if flushed and backend.shutdown_write_reason then
+  if flushed and handle.shutdown_write_reason then
     break
   end
   rt:run()
@@ -52,7 +52,7 @@ end
 
 assert(line == 'hello')
 assert(flushed == true)
-assert(backend:written() == 'echo:hello\n')
-assert(backend.shutdown_write_reason ~= nil)
+assert(handle:written() == 'echo:hello\n')
+assert(handle.shutdown_write_reason ~= nil)
 
-print('examples/embedding/reactor_stream_fake_backend.lua: ok')
+print('examples/embedding/host_handle_fake.lua: ok')

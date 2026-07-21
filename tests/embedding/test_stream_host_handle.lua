@@ -24,7 +24,7 @@ local Host = FibersHost
 local Runtime = FibersRuntime
 local Region = FibersRegion
 local Stream = FibersStream
-local SocketBackend = require('fibers.stream.backend.socket')
+local HostHandle = require('fibers.host.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -67,7 +67,7 @@ local function drive_until(rt, host, pred, label, iters)
   fail(label or 'runtime did not reach expected state')
 end
 
-local function make_handle(host, key)
+local function make_socket(host, key)
   local h = {
     key = key,
     input = {},
@@ -175,24 +175,24 @@ local function make_handle(host, key)
   return h
 end
 
-local function make_backend(host, h)
-  return SocketBackend.new({
-    name = h.key .. '-backend',
+local function wrap_handle(host, h)
+  return HostHandle.new({
+    name = h.key .. '-handle',
     key = h.key,
     host = host,
-    read = function(_backend, max)
+    read = function(_handle, max)
       return h:read(max)
     end,
-    write = function(_backend, bytes)
+    write = function(_handle, bytes)
       return h:write(bytes)
     end,
-    shutdown_read = function(_backend, reason)
+    shutdown_read = function(_handle, reason)
       return h:shutdown_read(reason)
     end,
-    shutdown_write = function(_backend, reason)
+    shutdown_write = function(_handle, reason)
       return h:shutdown_write(reason)
     end,
-    close = function(_backend, reason)
+    close = function(_handle, reason)
       return h:close(reason)
     end,
   })
@@ -228,13 +228,16 @@ do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local region = Region.new('socket-read-region')
-  local handle = make_handle(host, 'socket-read')
-  local backend = make_backend(host, handle)
+  local handle = make_socket(host, 'socket-read')
+  local stream_handle = wrap_handle(host, handle)
   local stream, got
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-read-stream' })
+      Stream.open_op(
+        stream_handle,
+        { owner = region, read = true, write = true, name = 'socket-read-stream' }
+      )
     )
     got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'socket-reader')
@@ -254,14 +257,17 @@ do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local region = Region.new('socket-write-region')
-  local handle = make_handle(host, 'socket-write')
+  local handle = make_socket(host, 'socket-write')
   handle.write_blocked = true
-  local backend = make_backend(host, handle)
+  local stream_handle = wrap_handle(host, handle)
   local stream, flushed
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-write-stream' })
+      Stream.open_op(
+        stream_handle,
+        { owner = region, read = true, write = true, name = 'socket-write-stream' }
+      )
     )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -271,11 +277,11 @@ do
   assert_status(st, 'pending')
   assert_truthy(stream, 'stream should open')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow.reservoir),
+    Inspect.first_lease_bytes(stream:writer().flow),
     nil,
     'reactor should not lease before host writability'
   )
-  assert_eq(Inspect.data(stream:writer().flow.reservoir), 'hello')
+  assert_eq(Inspect.data(stream:writer().flow), 'hello')
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)
@@ -291,15 +297,18 @@ do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local region = Region.new('socket-partial-region')
-  local handle = make_handle(host, 'socket-partial')
+  local handle = make_socket(host, 'socket-partial')
   handle.write_chunk_size = 2
   host:writable(handle.key)
-  local backend = make_backend(host, handle)
+  local stream_handle = wrap_handle(host, handle)
   local stream, flushed
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-partial-stream' })
+      Stream.open_op(
+        stream_handle,
+        { owner = region, read = true, write = true, name = 'socket-partial-stream' }
+      )
     )
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -312,18 +321,18 @@ do
   assert_eq(handle:written(), 'abcdef')
 end
 
--- EOF and read errors arrive through backend read, not readiness payloads.
+-- EOF and read errors arrive through handle read, not readiness payloads.
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local region = Region.new('socket-eof-region')
-  local handle = make_handle(host, 'socket-eof')
-  local backend = make_backend(host, handle)
+  local handle = make_socket(host, 'socket-eof')
+  local stream_handle = wrap_handle(host, handle)
   local stream, first, second, err
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'socket-eof-stream' })
+      Stream.open_op(stream_handle, { owner = region, read = true, write = true, name = 'socket-eof-stream' })
     )
     first = rt:perform(stream:reader():read_some_op(8))
     second, err = rt:perform(stream:reader():read_some_op(8))
@@ -340,4 +349,4 @@ do
   assert_eq(err, 'eof')
 end
 
-print('tests/test_stream_socket_backend.lua: ok')
+print('tests/test_stream_host_handle.lua: ok')

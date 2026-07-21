@@ -7,10 +7,10 @@
 local SpaceLease = {}
 SpaceLease.__index = SpaceLease
 
-function SpaceLease.new(reservoir, id, owner, capacity, opts)
+function SpaceLease.new(flow, id, owner, capacity, opts)
   opts = opts or {}
   return setmetatable({
-    reservoir = reservoir,
+    flow = flow,
     id = id,
     owner = owner,
     _capacity = capacity or 0,
@@ -32,21 +32,21 @@ function SpaceLease:inspect()
     id = self.id,
     capacity = self:capacity(),
     owner = self.owner,
-    reservoir = self.reservoir,
+    flow = self.flow,
     meta = self.meta,
   }
 end
 
 function SpaceLease:commit_op(bytes)
-  return self.reservoir:commit_space_op(self, bytes)
+  return self.flow:_commit_space_op(self, bytes)
 end
 
 function SpaceLease:release_op()
-  return self.reservoir:release_space_op(self)
+  return self.flow:_release_space_op(self)
 end
 
 function SpaceLease:fail_op(err)
-  return self.reservoir:fail_space_op(self, err)
+  return self.flow:_fail_space_op(self, err)
 end
 
 return SpaceLease
