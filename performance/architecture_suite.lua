@@ -39,7 +39,7 @@ local repeats = math.max(1, math.floor(env_number('FIBERS_ARCH_REPEATS', 2)))
 local format = env('FIBERS_ARCH_FORMAT', 'text')
 local output = env('FIBERS_ARCH_OUTPUT', '')
 local case_filter = env('FIBERS_ARCH_CASE', '')
-local machines_text = env('FIBERS_ARCH_MACHINES', 'trail,reference')
+local machines_text = env('FIBERS_ARCH_MACHINES', 'ledger,reference')
 local include_fanout8 = env_number('FIBERS_ARCH_FANOUT8', 0) ~= 0
 
 local machines = {}
@@ -91,7 +91,7 @@ local function runtime(profile, machine, extra)
     profile.options,
     copy_options(extra, {
       machine = machine,
-      instrumentation = { clock = Clock.now, state_hash = true, slow_plan_limit = 3 },
+      instrumentation = { clock = Clock.now, slow_plan_limit = 3 },
     })
   ))
 end
@@ -247,7 +247,7 @@ local function nursery_case(fanout)
       name = 'arch-nursery-' .. tostring(fanout),
       machine = machine,
       choice_seed = 1,
-      instrumentation = { clock = Clock.now, state_hash = true, slow_plan_limit = 3 },
+      instrumentation = { clock = Clock.now, slow_plan_limit = 3 },
       policy = Policy.nursery({ name = 'arch-nursery-policy' }),
     })
     local result = fibers.try_run(function()
@@ -319,8 +319,6 @@ for _, scenario in ipairs(scenarios) do
           forced_claims = c.forced_claims or 0,
           dynamic = c.requests_dynamic or 0,
           analysable = c.requests_analysable or 0,
-          states = c.states_observed or 0,
-          duplicates = c.state_duplicates or 0,
           pair_scans = c.intent_pairs_scanned or 0,
           footprint_checks = c.footprint_checks or 0,
         }
@@ -342,7 +340,7 @@ local function render_csv()
   local lines = {
     'case,profile,machine,median_seconds,digest,plans,search_calls,branches,'
       .. 'max_search_steps,component_fraction,component_roots_excluded,forced_exchanges,'
-      .. 'forced_claims,requests_analysable,requests_dynamic,states_observed,state_duplicates,'
+      .. 'forced_claims,requests_analysable,requests_dynamic,'
       .. 'intent_pairs_scanned,footprint_checks',
   }
   for _, r in ipairs(rows) do
@@ -362,8 +360,6 @@ local function render_csv()
       r.forced_claims,
       r.analysable,
       r.dynamic,
-      r.states,
-      r.duplicates,
       r.pair_scans,
       r.footprint_checks,
     }
@@ -386,7 +382,7 @@ local function render_text()
       Clock.name
     ),
     string.format(
-      '%-34s %-12s %-9s %9s %9s %9s %8s %7s %7s %7s',
+      '%-34s %-12s %-9s %9s %9s %9s %8s %7s %7s',
       'case',
       'profile',
       'machine',
@@ -395,14 +391,13 @@ local function render_text()
       'branches',
       'comp%',
       'forced',
-      'dynamic',
-      'dupes'
+      'dynamic'
     ),
-    string.rep('-', 124),
+    string.rep('-', 115),
   }
   for _, r in ipairs(rows) do
     lines[#lines + 1] = string.format(
-      '%-34s %-12s %-9s %9.3f %9d %9d %7.1f%% %7d %7d %7d',
+      '%-34s %-12s %-9s %9.3f %9d %9d %7.1f%% %7d %7d',
       r.case,
       r.profile,
       r.machine,
@@ -411,8 +406,7 @@ local function render_text()
       r.branches,
       r.component_fraction * 100,
       r.forced_exchanges + r.forced_claims,
-      r.dynamic,
-      r.duplicates
+      r.dynamic
     )
   end
   lines[#lines + 1] = ''

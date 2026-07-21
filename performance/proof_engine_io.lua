@@ -237,11 +237,6 @@ for _, case in ipairs(cases) do
       plan_reuse_hits = counters.plan_reuse_hits or 0,
       plan_reuse_invalidations = counters.plan_reuse_invalidations or 0,
       search_session_resumes = counters.search_session_resumes or 0,
-      search_session_retry_hits = counters.search_session_retry_hits or 0,
-      residual_seed_reopens = counters.residual_seed_reopens or 0,
-      plan_same_component = counters.plan_same_component or 0,
-      plan_component_changed = counters.plan_component_changed or 0,
-      plan_frontier_changed = counters.plan_frontier_changed or 0,
       invalid_request = counters.search_session_invalidation_request or 0,
       invalid_bucket = counters.search_session_invalidation_bucket or 0,
       invalid_location = counters.search_session_invalidation_location or 0,
@@ -306,15 +301,10 @@ else
     )
     print(
       string.format(
-        '  reuse(hit=%d invalid=%d resume=%d retry=%d reopen=%d) component(same=%d changed=%d frontier=%d) invalid(req=%d,bucket=%d,loc=%d,res=%d,ext=%d,epoch=%d,timer=%d)',
+        '  reuse(hit=%d invalid=%d resume=%d) invalid(req=%d,bucket=%d,loc=%d,res=%d,ext=%d,epoch=%d,timer=%d)',
         row.plan_reuse_hits,
         row.plan_reuse_invalidations,
         row.search_session_resumes,
-        row.search_session_retry_hits,
-        row.residual_seed_reopens,
-        row.plan_same_component,
-        row.plan_component_changed,
-        row.plan_frontier_changed,
         row.invalid_request,
         row.invalid_bucket,
         row.invalid_location,

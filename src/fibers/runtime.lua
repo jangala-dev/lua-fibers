@@ -1,7 +1,7 @@
 -- Open-world fibre scheduler and commit driver.
 
 local Op = require('fibers.op')
-local Store = require('fibers.internal.kernel.store')
+local Ledger = require('fibers.internal.kernel.ledger')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
 local Protected = require('fibers.internal.protected')
@@ -10,11 +10,8 @@ local IR = require('fibers.internal.kernel.ir')
 local Instrumentation = require('fibers.internal.kernel.instrumentation')
 local Dependencies = require('fibers.internal.kernel.dependencies')
 local DependencyIndex = Dependencies.Index
-local DependencyVector = Dependencies.Vector
-local ComponentCoordinator = Dependencies.Coordinator
-local SearchCache = require('fibers.internal.kernel.adaptive_search')
-local Activation = require('fibers.internal.kernel.activation')
-local SearchPolicy = SearchCache.Policy
+local Certificate = require('fibers.internal.kernel.certificate')
+local Path = require('fibers.internal.kernel.path')
 
 local Runtime = {}
 local EMPTY_ARRAY = {}
@@ -41,8 +38,7 @@ local function clear_pending_fields(fiber)
   fiber.symmetry_key = nil
   fiber.interrupt = nil
   fiber.metadata = nil
-  fiber.footprint = nil
-  fiber._dependency_indexed = nil
+  fiber._dependency_plan = nil
   fiber.activation_root = nil
   if fiber.memo then
     clear_table(fiber.memo)
@@ -75,7 +71,10 @@ local function select_machine(opts)
     end
     return reference, 'reference'
   end
-  return Machine, 'trail'
+  if requested ~= nil and requested ~= 'ledger' then
+    error('unknown fibers machine: ' .. tostring(requested), 3)
+  end
+  return Machine, 'ledger'
 end
 Runtime.__index = Runtime
 local CURRENT_RUNTIME = nil
@@ -267,10 +266,6 @@ function Runtime.new(opts)
   if opts.instrumentation then
     instrumentation = Instrumentation.new(opts.instrumentation)
   end
-  local record_pool = opts.record_pool
-  if record_pool == nil then
-    record_pool = table.clear ~= nil
-  end
   return setmetatable({
     opts = opts,
     host = opts.host or {},
@@ -291,28 +286,20 @@ function Runtime.new(opts)
     component_search = opts.component_search ~= false,
     normalise_search = opts.normalise_search ~= false,
     branch_policy = opts.branch_policy or 'constrained',
-    refutation_cache = opts.refutation_cache ~= false,
-    state_memoization = opts.state_memoization ~= false,
     certified_symmetry = opts.certified_symmetry ~= false,
     plan_reuse = opts.plan_reuse ~= false,
     resumable_search = opts.resumable_search ~= false,
     plan_reuse_threshold = math.max(1, math.floor(opts.plan_reuse_threshold or 16)),
-    state_memoization_min_steps = math.max(0, math.floor(opts.state_memoization_min_steps or 48)),
-    state_memoization_min_intents = math.max(0, math.floor(opts.state_memoization_min_intents or 0)),
-    refutation_cache_min_steps = math.max(0, math.floor(opts.refutation_cache_min_steps or 48)),
-    search_policy = SearchPolicy.new(opts),
     _search_sessions = {},
     _search_session_size = 0,
     _search_session_pool = {},
     _component_context_scratch = {},
     _driver_ids = {},
     _driver_refs = {},
-    _driver_skipped = {},
     _driver_fallback_candidates = {},
     _driver_fallback_focuses = {},
     _driver_fallback_indices = {},
     search_session_pool = opts.search_session_pool ~= false,
-    record_pool = record_pool,
     search_session_pool_limit = math.max(0, math.floor(opts.search_session_pool_limit or 64)),
     _frontier_growing = false,
     verify_dependencies = opts.verify_dependencies == true,
@@ -322,13 +309,12 @@ function Runtime.new(opts)
     epoch = 0,
     external_generation = 0,
     _last_search_steps = 0,
-    _plan_observations = {},
-    _component_coordinators = setmetatable({}, { __mode = 'v' }),
     _external_feeds = setmetatable({}, { __mode = 'kv' }),
     _finalizers = {},
     _finalized = false,
     machine = machine,
     machine_name = machine_name,
+    activation = machine.path or Path,
     instrumentation = instrumentation,
     stats = {
       plans = 0,
@@ -390,7 +376,6 @@ function Runtime:reset_instrumentation()
   if self.instrumentation then
     self.instrumentation:reset()
   end
-  self._plan_observations = {}
   return self
 end
 
@@ -613,13 +598,12 @@ function Runtime:perform(op, opts)
 end
 
 function Runtime:_index_request(request)
-  if not self.dependency_index or not request or request._dependency_indexed then
+  if not self.dependency_index or not request or request._dependency_plan then
     return request
   end
-  local metadata = request.metadata or request.footprint or IR.metadata(request.op)
-  request.metadata, request.footprint = metadata, metadata
+  local metadata = request.metadata or IR.metadata(request.op)
+  request.metadata = metadata
   self.dependency_index:add(request)
-  request._dependency_indexed = true
   return request
 end
 
@@ -637,7 +621,7 @@ function Runtime:_add_pending(fiber, op, interrupt)
   local request = fiber
   clear_table(request.memo)
   request.id = self.next_request
-  request.activation_root = Activation.new_request(request.id)
+  request.activation_root = self.activation.new_request(request.id)
   request.op = op
   request.symmetry_key = Op._symmetry_key(op)
   request.interrupt = interrupt
@@ -655,7 +639,7 @@ function Runtime:_add_pending(fiber, op, interrupt)
   local metadata
   if instrumentation then
     metadata = request.metadata or IR.metadata(op)
-    request.metadata, request.footprint = metadata, metadata
+    request.metadata = metadata
     instrumentation:inc('perform_yields')
     instrumentation:max('pending_requests', #self.pending)
     if metadata.dynamic then
@@ -740,9 +724,6 @@ function Runtime:_take_search_session(focus_id)
     return nil
   end
   self._search_sessions[focus_id] = nil
-  if row.coordinator then
-    row.coordinator:remove(focus_id)
-  end
   self._search_session_size = math.max(0, (self._search_session_size or 1) - 1)
   return row
 end
@@ -760,30 +741,19 @@ function Runtime:_clear_search_session(focus_id, reason)
   end
 end
 
-function Runtime:_store_search_session(focus_id, kind, session, dependencies, refutation, component)
+function Runtime:_store_search_session(focus_id, kind, session, certificate)
   if not self._search_sessions[focus_id] then
     self._search_session_size = (self._search_session_size or 0) + 1
   end
-  local previous = self._search_sessions[focus_id]
-  if previous and previous.coordinator then
-    previous.coordinator:remove(focus_id)
-  end
   local row = {
     kind = kind,
-    dependencies = dependencies,
     session = session,
-    refutation = refutation and SearchCache.copy_refutation(refutation) or nil,
+    certificate = Certificate.copy(certificate),
   }
   self._search_sessions[focus_id] = row
-  local coordinator = component and self:_ensure_component_coordinator(component)
-  if coordinator then
-    coordinator:store(focus_id, row)
-  end
   local instrumentation = self.instrumentation
   if instrumentation then
-    if kind == 'retry' then
-      instrumentation:inc('search_session_retry_stores')
-    elseif kind == 'refutation' then
+    if kind == 'certificate' then
       instrumentation:inc('plan_reuse_stores')
     else
       instrumentation:inc('search_session_stores')
@@ -798,7 +768,7 @@ function Runtime:_remove_pending_small(count, id1, id2)
     local request = self.pending[read]
     local selected = request.id == id1 or (count == 2 and request.id == id2)
     if selected then
-      if self.dependency_index and request._dependency_indexed then
+      if self.dependency_index and request._dependency_plan then
         self.dependency_index:remove(request)
       end
       self.pending_by_id[request.id] = nil
@@ -844,7 +814,7 @@ function Runtime:_remove_pending(ids)
   for read = 1, total do
     local request = self.pending[read]
     if selected(request.id) then
-      if self.dependency_index and request._dependency_indexed then
+      if self.dependency_index and request._dependency_plan then
         self.dependency_index:remove(request)
       end
       self.pending_by_id[request.id] = nil
@@ -866,35 +836,13 @@ function Runtime:_remove_pending(ids)
   end
 end
 
-function Runtime:_existing_component_coordinator(component)
-  if not component then
-    return nil
-  end
-  return self._component_coordinators[component.signature or '']
-end
-
-function Runtime:_ensure_component_coordinator(component)
-  if not component then
-    return nil
-  end
-  local signature = component.signature or ''
-  local coordinator = self._component_coordinators[signature]
-  if not coordinator then
-    coordinator = ComponentCoordinator.new(self, component)
-    self._component_coordinators[signature] = coordinator
-  else
-    coordinator:update(component)
-  end
-  return coordinator
-end
-
 function Runtime:_component_requests(focus_id)
   local focus = self.pending_by_id[focus_id]
   if not focus then
     return {}, self.instrumentation and { total = 0, size = 0 } or nil
   end
 
-  if self.dependency_index and not focus._dependency_indexed then
+  if self.dependency_index and not focus._dependency_plan then
     local promote = self.dependency_index.size > 0
       or #self.pending >= self.dependency_index_threshold
       or self._search_session_size > 0
@@ -905,7 +853,7 @@ function Runtime:_component_requests(focus_id)
       local kind = focus.op and focus.op.kind
       if kind == 'choice' or kind == 'or_else' or kind == 'product' then
         local metadata = focus.metadata or IR.metadata(focus.op)
-        focus.metadata, focus.footprint = metadata, metadata
+        focus.metadata = metadata
         needs_choice_generation = (metadata.node_kinds or {}).choice ~= nil
         promote = needs_choice_generation and #self.pending > 1
       end
@@ -926,10 +874,6 @@ function Runtime:_component_requests(focus_id)
       ids[#ids + 1] = id
     end
     table.sort(ids)
-    local parts = {}
-    for i = 1, #ids do
-      parts[i] = tostring(ids[i])
-    end
     return self.pending_by_id,
       {
         total = total,
@@ -937,12 +881,11 @@ function Runtime:_component_requests(focus_id)
         global = true,
         disabled = true,
         ids = ids,
-        signature = table.concat(parts, ','),
         order_generation = self.pending_generation,
       }
   end
 
-  if not focus._dependency_indexed then
+  if not focus._dependency_plan then
     -- Small, unretained frontiers use the request map directly.  A component
     -- record is allocated only when diagnostics, choice ordering or retained
     -- work actually need one; Retry capture may promote and return an indexed
@@ -968,7 +911,7 @@ function Runtime:_component_requests(focus_id)
       ids[#ids + 1] = id
     end
     table.sort(ids)
-    component.ids, component.signature = ids, table.concat(ids, ',')
+    component.ids = ids
     return self.pending_by_id, component
   end
 
@@ -977,17 +920,25 @@ function Runtime:_component_requests(focus_id)
   return requests, component
 end
 
+local function better_supplier(id, score, best)
+  return not best or score > best.score or score == best.score and id < best.id
+end
+
 function Runtime:_has_supplier(intents, entered, excluded, requests)
   requests = requests or self.pending_by_id
   if self.dependency_index and self.dependency_index.size == #self.pending then
-    return self.dependency_index:supplier_ids(intents, requests, entered, excluded)[1] ~= nil
+    local found = false
+    self.dependency_index:each_supplier(intents, requests, entered, excluded, function()
+      found = true
+      return false
+    end)
+    return found
   end
   for id, request in pairs(requests) do
     if not (entered and entered[id]) and not (excluded and excluded[id]) then
-      local metadata = request.metadata or request.footprint or IR.metadata(request.op)
-      request.metadata, request.footprint = metadata, metadata
-      local can_supply = IR.footprint_may_supply(metadata, intents)
-      if can_supply then
+      local metadata = request.metadata or IR.metadata(request.op)
+      request.metadata = metadata
+      if IR.metadata_may_supply_any(metadata, intents) then
         return true
       end
     end
@@ -995,67 +946,54 @@ function Runtime:_has_supplier(intents, entered, excluded, requests)
   return false
 end
 
-function Runtime:_supplier_request_rows(intents, entered, excluded, requests)
+function Runtime:_supplier_request(intents, entered, excluded, requests)
   requests = requests or self.pending_by_id
-  local rows
+  local best, candidate_count = nil, 0
+  local function consider(id, score, reason, request)
+    candidate_count = candidate_count + 1
+    local symmetry = self.certified_symmetry and request.symmetry_key or nil
+    if better_supplier(id, score, best) then
+      best = { id = id, score = score, reason = reason, symmetry_key = symmetry }
+      if symmetry ~= nil then
+        best.equivalent_ids = { id }
+      end
+    elseif
+      best
+      and symmetry ~= nil
+      and best.symmetry_key ~= nil
+      and type(symmetry) == type(best.symmetry_key)
+      and symmetry == best.symmetry_key
+      and score == best.score
+      and reason == best.reason
+    then
+      best.equivalent_ids[#best.equivalent_ids + 1] = id
+    end
+  end
+
   if self.dependency_index and self.dependency_index.size == #self.pending then
-    rows = self.dependency_index:supplier_ids(intents, requests, entered, excluded)
+    self.dependency_index:each_supplier(intents, requests, entered, excluded, consider)
   else
-    rows = {}
     for id, request in pairs(requests) do
       if not (entered and entered[id]) and not (excluded and excluded[id]) then
-        local metadata = request.metadata or request.footprint or IR.metadata(request.op)
-        request.metadata, request.footprint = metadata, metadata
+        local metadata = request.metadata or IR.metadata(request.op)
+        request.metadata = metadata
         local score, reason = IR.supply_score(metadata, intents)
         if score > 0 then
-          rows[#rows + 1] = { id = id, score = score, reason = reason }
+          consider(id, score, reason, request)
         end
       end
     end
-    table.sort(rows, function(a, b)
-      if a.score ~= b.score then
-        return a.score > b.score
-      end
-      return a.id < b.id
-    end)
   end
-  if self.certified_symmetry then
-    local seen, kept, pruned = {}, {}, 0
-    for i = 1, #rows do
-      local row = rows[i]
-      local request = requests[row.id]
-      local key = request and request.symmetry_key
-      if key == nil then
-        kept[#kept + 1] = row
-      else
-        local signature = type(key)
-          .. ':'
-          .. tostring(key)
-          .. ':'
-          .. tostring(row.score)
-          .. ':'
-          .. tostring(row.reason)
-        local representative = seen[signature]
-        if representative then
-          representative.equivalent_ids = representative.equivalent_ids or { representative.id }
-          representative.equivalent_ids[#representative.equivalent_ids + 1] = row.id
-          pruned = pruned + 1
-        else
-          seen[signature] = row
-          row.equivalent_ids = { row.id }
-          kept[#kept + 1] = row
-        end
-      end
-    end
-    if pruned > 0 and self.instrumentation then
-      self.instrumentation:inc('symmetry_supplier_pruned', pruned)
-    end
-    rows = kept
+  if best and best.equivalent_ids and #best.equivalent_ids > 1 and self.instrumentation then
+    self.instrumentation:inc('symmetry_supplier_pruned', #best.equivalent_ids - 1)
   end
-  return rows
+  if best then
+    best.symmetry_key = nil
+  end
+  return best, candidate_count
 end
 
-function Runtime:_search_session_dependencies(requests, component, focus_id, session, refutation)
+function Runtime:_search_session_certificate(requests, component, focus_id, session, certificate)
   if self._frontier_growing then
     return nil, 'frontier-growing'
   end
@@ -1063,7 +1001,7 @@ function Runtime:_search_session_dependencies(requests, component, focus_id, ses
     self.dependency_index
     and focus_id
     and self.pending_by_id[focus_id]
-    and not self.pending_by_id[focus_id]._dependency_indexed
+    and not self.pending_by_id[focus_id]._dependency_plan
   then
     self:_index_pending_frontier()
     local indexed_requests, indexed_component = self:_component_requests(focus_id)
@@ -1079,12 +1017,12 @@ function Runtime:_search_session_dependencies(requests, component, focus_id, ses
       component = indexed_component or component
     end
   end
-  local vector, reason =
-    DependencyVector.capture(self, requests, component, refutation or (session and session.result_refutation))
-  if vector and self.instrumentation then
-    self.instrumentation:inc('dependency_vectors')
+  local certificate, reason =
+    Certificate.capture(self, requests, component, certificate or (session and session.result_certificate))
+  if certificate and self.instrumentation then
+    self.instrumentation:inc('certificates')
   end
-  return vector, reason, component
+  return certificate, reason, component
 end
 
 local function component_request_ids(requests, component)
@@ -1098,141 +1036,22 @@ local function component_request_ids(requests, component)
   return ids
 end
 
-function Runtime:_retry_retention_eligible(session, requests, component)
-  if self._frontier_growing then
-    return false, 'frontier-growing'
-  end
-  if not self.resumable_search or not self.plan_reuse then
-    return false, 'disabled'
-  end
-  if not session or not session:should_retain_retry(component) then
-    return false, 'cheap'
-  end
-  if component and component.dynamic and component.dynamic > 0 then
-    return false, 'dynamic'
-  end
-  local ids = component_request_ids(requests, component)
-  for i = 1, #ids do
-    local request = requests[ids[i]]
-    if request then
-      local metadata = request.metadata or request.footprint or IR.metadata(request.op)
-      request.metadata, request.footprint = metadata, metadata
-      if metadata.dynamic then
-        return false, 'dynamic'
-      end
-    end
-  end
-  return true
-end
-
-function Runtime:_retry_session_dependencies(session, requests, component, focus_id)
-  local eligible, reason = self:_retry_retention_eligible(session, requests, component)
-  if not eligible then
-    if self.instrumentation then
-      self.instrumentation:inc('dependency_vector_skips_' .. tostring(reason or 'unknown'))
-    end
-    return nil, reason
-  end
-  return self:_search_session_dependencies(requests, component, focus_id, session)
-end
-
 function Runtime:_component_context(focus_id)
   local requests, component = self:_component_requests(focus_id)
   local context = self._component_context_scratch
   context.focus_id = focus_id
   context.requests = requests
   context.component = component
-  context.coordinator = nil
   return context
 end
 
-function Runtime:_component_retry(focus_id)
-  local context = self:_component_context(focus_id)
-  local component = context.component
-  local coordinator = self:_existing_component_coordinator(component)
-  if not coordinator then
-    return nil, component, context
-  end
-  coordinator:update(component)
-  context.coordinator = coordinator
-  local refutation = coordinator:cached_retry()
-  if refutation and self.instrumentation then
-    self.instrumentation:inc('component_retry_hits')
-    self.instrumentation:inc('component_retry_focuses_skipped', #(component.ids or {}))
-    self.instrumentation:inc('plan_reuse_hits')
-    self.instrumentation:inc('plan_reuse_refutation_hits')
-  end
-  return refutation, component, context
-end
-
-local function mark_component_ids(skip, component)
-  for i = 1, #((component and component.ids) or {}) do
-    skip[component.ids[i]] = true
-  end
-end
-
-function Runtime:_observe_plan_component(focus_id, component)
+function Runtime:_store_lightweight_certificate(focus_id, requests, component, certificate)
   local instrumentation = self.instrumentation
-  if not instrumentation then
-    return component
-  end
-  component = component or { total = #self.pending, size = #self.pending, global = true }
-  local previous = self._plan_observations[focus_id]
-  if previous then
-    instrumentation:inc('plan_revisits')
-    if previous.signature == component.signature then
-      instrumentation:inc('plan_same_component')
-    else
-      instrumentation:inc('plan_component_changed')
-    end
-    if previous.epoch == self.epoch then
-      instrumentation:inc('plan_same_epoch')
-    else
-      instrumentation:inc('plan_epoch_changed')
-    end
-    if previous.pending_generation == self.pending_generation then
-      instrumentation:inc('plan_same_frontier')
-    else
-      instrumentation:inc('plan_frontier_changed')
-    end
-    if
-      previous.signature == component.signature
-      and previous.epoch == self.epoch
-      and previous.pending_generation == self.pending_generation
-    then
-      instrumentation:inc('plan_reuse_eligible')
-    end
-    local intersection = 0
-    local prior_ids = previous.ids or {}
-    local current = {}
-    for i = 1, #(component.ids or {}) do
-      current[component.ids[i]] = true
-    end
-    for i = 1, #prior_ids do
-      if current[prior_ids[i]] then
-        intersection = intersection + 1
-      end
-    end
-    local union = #prior_ids + #(component.ids or {}) - intersection
-    instrumentation:observe('component_overlap_percent', union > 0 and intersection * 100 / union or 100)
-  end
-  self._plan_observations[focus_id] = {
-    signature = component.signature,
-    ids = component.ids,
-    epoch = self.epoch,
-    pending_generation = self.pending_generation,
-  }
-  return component
-end
-
-function Runtime:_store_lightweight_refutation(focus_id, requests, component, refutation)
-  local policy, instrumentation = self.search_policy, self.instrumentation
   if
     self._frontier_growing
     or not self.plan_reuse
     or (component and component.dynamic and component.dynamic > 0)
-    or (policy and not policy:plan_cache_candidate(#self.pending))
-    or (not policy and #self.pending < self.plan_reuse_threshold)
+    or #self.pending < self.plan_reuse_threshold
   then
     if instrumentation and component and component.dynamic and component.dynamic > 0 then
       instrumentation:inc('plan_reuse_ineligible')
@@ -1244,28 +1063,28 @@ function Runtime:_store_lightweight_refutation(focus_id, requests, component, re
   for i = 1, #ids do
     local request = requests[ids[i]]
     if request then
-      local metadata = request.metadata or request.footprint or IR.metadata(request.op)
-      request.metadata, request.footprint = metadata, metadata
-      if metadata.dynamic or metadata.external then
+      local metadata = request.metadata or IR.metadata(request.op)
+      request.metadata = metadata
+      if metadata.dynamic then
         if instrumentation then
           instrumentation:inc('plan_reuse_ineligible')
-          instrumentation:inc('plan_reuse_ineligible_' .. (metadata.dynamic and 'dynamic' or 'external'))
+          instrumentation:inc('plan_reuse_ineligible_dynamic')
         end
         return false, component
       end
     end
   end
-  local dependencies, reason, retained_component =
-    self:_search_session_dependencies(requests, component, focus_id, nil, refutation)
+  local certificate, reason, retained_component =
+    self:_search_session_certificate(requests, component, focus_id, nil, certificate)
   component = retained_component or component
-  if not dependencies then
+  if not certificate then
     if instrumentation then
       instrumentation:inc('plan_reuse_ineligible')
       instrumentation:inc('plan_reuse_ineligible_' .. tostring(reason or 'unknown'))
     end
     return false, component
   end
-  self:_store_search_session(focus_id, 'refutation', nil, dependencies, refutation, component)
+  self:_store_search_session(focus_id, 'certificate', nil, certificate)
   return true, component
 end
 
@@ -1283,137 +1102,63 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
     requests, component = self:_component_requests(focus_id)
   end
   local instrumentation = self.instrumentation
-  component = self:_observe_plan_component(focus_id, component)
 
-  local session_dependencies
   local retained = self.resumable_search and self._search_sessions[focus_id] or nil
-  local hit, refutation, unknown, session
+  local hit, certificate, unknown, session
   if retained then
-    local valid, invalid_reason = DependencyVector.valid(retained.dependencies, self)
+    local valid, invalid_reason = Certificate.valid(retained.certificate, self)
     if valid then
-      if retained.kind == 'retry' or retained.kind == 'refutation' then
+      if retained.kind == 'certificate' then
         if instrumentation then
-          if retained.kind == 'retry' then
-            instrumentation:inc('search_session_retry_hits')
-          end
           instrumentation:inc('plan_reuse_hits')
           instrumentation:inc('plan_reuse_refutation_hits')
         end
-        return nil, SearchCache.copy_refutation(retained.refutation), false
+        return nil, Certificate.copy(retained.certificate), false
       end
       if instrumentation then
         instrumentation:inc('search_session_resumes')
       end
-      hit, refutation, unknown = retained.session:advance(search_limit or self.search_limit)
+      hit, certificate, unknown = retained.session:advance(search_limit or self.search_limit)
       session = retained.session
       if not unknown then
         self:_take_search_session(focus_id)
-        if hit == nil and self.plan_reuse then
-          local retained_component
-          session_dependencies, _, retained_component =
-            self:_retry_session_dependencies(session, requests, component, focus_id)
-          component = retained_component or component
-          if session_dependencies then
-            self:_store_search_session(
-              focus_id,
-              'retry',
-              session,
-              session_dependencies,
-              refutation,
-              component
-            )
-          else
-            session:discard('unretained-retry')
-            self:_store_lightweight_refutation(focus_id, requests, component, refutation)
-          end
+        if hit == nil then
+          session:discard('completed-retry')
+          self:_store_lightweight_certificate(focus_id, requests, component, certificate)
         end
       end
-      return hit, refutation, unknown
+      return hit, certificate, unknown
     end
-
     if instrumentation then
       instrumentation:inc('search_session_invalidation_' .. tostring(invalid_reason or 'unknown'))
-    end
-
-    if
-      retained.kind == 'retry'
-      and (invalid_reason == 'bucket' or invalid_reason == 'request')
-      and retained.session:reopen_retry({
-        requests = requests,
-        component = component,
-        search_limit = search_limit or self.search_limit,
-      })
-    then
-      if instrumentation then
+      if retained.kind == 'certificate' then
         instrumentation:inc('plan_reuse_invalidations')
-        instrumentation:inc('residual_seed_invalidations')
       end
-      self:_take_search_session(focus_id)
-      session = retained.session
-      hit, refutation, unknown = session:advance(search_limit or self.search_limit)
-      if unknown then
-        local retained_component
-        session_dependencies, _, retained_component =
-          self:_search_session_dependencies(requests, component, focus_id, session)
-        component = retained_component or component
-        if session_dependencies then
-          self:_store_search_session(focus_id, 'active', session, session_dependencies, nil, component)
-        else
-          session:discard('unretained')
-        end
-      elseif hit == nil and self.plan_reuse then
-        local retained_component
-        session_dependencies, _, retained_component =
-          self:_retry_session_dependencies(session, requests, component, focus_id)
-        component = retained_component or component
-        if session_dependencies then
-          self:_store_search_session(focus_id, 'retry', session, session_dependencies, refutation, component)
-        else
-          session:discard('unretained-retry')
-          self:_store_lightweight_refutation(focus_id, requests, component, refutation)
-        end
-      elseif hit == nil then
-        session:discard('unretained-retry')
-      end
-      return hit, refutation, unknown
-    end
-
-    if instrumentation and (retained.kind == 'retry' or retained.kind == 'refutation') then
-      instrumentation:inc('plan_reuse_invalidations')
     end
     self:_clear_search_session(focus_id, 'invalidated')
   end
 
-  hit, refutation, unknown, session = self.machine.search(self, requests, focus_id, search_limit, component)
+  hit, certificate, unknown, session = self.machine.search(self, requests, focus_id, search_limit, component)
   if unknown and session then
     if not self.resumable_search then
       session:discard('unretained')
     else
-      local retained_component
-      session_dependencies, _, retained_component =
-        self:_search_session_dependencies(requests, component, focus_id, session)
+      local session_certificate, _, retained_component =
+        self:_search_session_certificate(requests, component, focus_id, session)
       component = retained_component or component
-      if session_dependencies then
-        self:_store_search_session(focus_id, 'active', session, session_dependencies, nil, component)
+      if session_certificate then
+        self:_store_search_session(focus_id, 'active', session, session_certificate)
       else
         session:discard('unretained')
       end
     end
-  elseif hit == nil and session and self.resumable_search and self.plan_reuse then
-    local retained_component
-    session_dependencies, _, retained_component =
-      self:_retry_session_dependencies(session, requests, component, focus_id)
-    component = retained_component or component
-    if session_dependencies then
-      self:_store_search_session(focus_id, 'retry', session, session_dependencies, refutation, component)
-    else
-      session:discard('unretained-retry')
-      self:_store_lightweight_refutation(focus_id, requests, component, refutation)
+  elseif hit == nil then
+    if session then
+      session:discard('completed-retry')
     end
-  elseif hit == nil and not unknown then
-    self:_store_lightweight_refutation(focus_id, requests, component, refutation)
+    self:_store_lightweight_certificate(focus_id, requests, component, certificate)
   end
-  return hit, refutation, unknown
+  return hit, certificate, unknown
 end
 
 function Runtime:_find_candidate(focus_id, search_limit, context)
@@ -1452,12 +1197,7 @@ function Runtime:_validate_hit(hit)
       return false, 'participant-changed'
     end
   end
-  local valid, validity_err
-  if hit.store_view then
-    valid, validity_err = Store.validate_view(hit.store_view)
-  else
-    valid, validity_err = Store.validate(hit.observations)
-  end
+  local valid, validity_err = Ledger.validate(hit.observations)
   if not valid then
     return false, validity_err
   end
@@ -1557,11 +1297,7 @@ function Runtime:_commit_hit(hit)
     end
   end
 
-  if hit.store_view then
-    Store.commit_view(hit.store_view)
-  else
-    Store.commit(hit.writes)
-  end
+  Ledger.commit(hit.writes)
   self.epoch = self.epoch + 1
   self.stats.commits = self.stats.commits + 1
   if hit.negative_guard then
@@ -1615,26 +1351,13 @@ function Runtime:_commit_hit(hit)
   return true
 end
 
-local function merge_runtime_refutations(refs)
-  local out = { interests = {}, checks = {} }
-  local seen = {}
-  for i = 1, #(refs or {}) do
-    local ref = refs[i]
-    for j = 1, #((ref and ref.interests) or {}) do
-      local x = ref.interests[j]
-      local id = x.id or tostring(x)
-      if not seen[id] then
-        seen[id] = true
-        out.interests[#out.interests + 1] = x
-      end
-    end
-  end
-  return out
+local function merge_runtime_certificates(refs)
+  return Certificate.merge_all(refs)
 end
 
 function Runtime:_pending_status(refs, unknown)
-  local ref = merge_runtime_refutations(refs)
-  local waits = Interest.summarise(Interest.merge(ref.interests))
+  local certificate = merge_runtime_certificates(refs)
+  local waits = Interest.summarise(Interest.merge(Certificate.values(certificate, 'interest')))
   if unknown then
     return {
       tag = 'pending',
@@ -1727,40 +1450,34 @@ function Runtime:_step_impl(opts)
   local count = #self.pending
   local start = ((self._step_cursor or 0) % count) + 1
   local refs = reuse_table(self, '_driver_refs')
-  local skipped = reuse_table(self, '_driver_skipped')
   local any_unknown = false
   for offset = 0, count - 1 do
     local idx = ((start + offset - 1) % count) + 1
     local request = self.pending[idx]
     local focus = request and request.id
-    if focus and self.pending_by_id[focus] and not skipped[focus] then
-      local component_ref, component, context = self:_component_retry(focus)
-      if component_ref then
-        refs[#refs + 1] = component_ref
-        mark_component_ids(skipped, component)
-      else
-        local candidate, ref, unknown = self:_find_candidate(focus, search_limit, context)
-        refs[#refs + 1] = ref
-        any_unknown = any_unknown or unknown == true
-        if candidate then
-          local ok = self:_commit_hit(candidate)
-          if not ok and self.pending_by_id[focus] then
-            self.stats.refreshes = self.stats.refreshes + 1
-            if self.instrumentation then
-              self.instrumentation:inc('refreshes')
-            end
-            candidate, ref, unknown = self:_find_candidate(focus, search_limit)
-            refs[#refs + 1] = ref
-            any_unknown = any_unknown or unknown == true
-            if candidate then
-              ok = self:_commit_hit(candidate)
-            end
+    if focus and self.pending_by_id[focus] then
+      local context = self:_component_context(focus)
+      local candidate, ref, unknown = self:_find_candidate(focus, search_limit, context)
+      refs[#refs + 1] = ref
+      any_unknown = any_unknown or unknown == true
+      if candidate then
+        local ok = self:_commit_hit(candidate)
+        if not ok and self.pending_by_id[focus] then
+          self.stats.refreshes = self.stats.refreshes + 1
+          if self.instrumentation then
+            self.instrumentation:inc('refreshes')
           end
-          if ok then
-            self._step_cursor = idx
-            self._bounded_credit = 0
-            return { tag = 'found', kind = 'commit', value = true }
+          candidate, ref, unknown = self:_find_candidate(focus, search_limit)
+          refs[#refs + 1] = ref
+          any_unknown = any_unknown or unknown == true
+          if candidate then
+            ok = self:_commit_hit(candidate)
           end
+        end
+        if ok then
+          self._step_cursor = idx
+          self._bounded_credit = 0
+          return { tag = 'found', kind = 'commit', value = true }
         end
       end
     end
@@ -1781,13 +1498,12 @@ end
 function Runtime:_clear_driver_scratch(keep_candidate)
   discard_candidates(self._driver_fallback_candidates, keep_candidate)
   clear_table(self._driver_refs)
-  clear_table(self._driver_skipped)
   clear_table(self._driver_fallback_candidates)
   clear_table(self._driver_fallback_focuses)
   clear_table(self._driver_fallback_indices)
   local context = self._component_context_scratch
   if context then
-    context.focus_id, context.requests, context.component, context.coordinator = nil, nil, nil, nil
+    context.focus_id, context.requests, context.component = nil, nil, nil
   end
 end
 
@@ -1840,7 +1556,6 @@ function Runtime:_run_impl(opts)
 
     local progressed = false
     local refs = reuse_table(self, '_driver_refs')
-    local skipped = reuse_table(self, '_driver_skipped')
     local fallback_candidates = reuse_table(self, '_driver_fallback_candidates')
     local fallback_focuses = reuse_table(self, '_driver_fallback_focuses')
     local fallback_indices = reuse_table(self, '_driver_fallback_indices')
@@ -1849,46 +1564,39 @@ function Runtime:_run_impl(opts)
     for offset = 0, #ids - 1 do
       local i = ((start + offset - 1) % #ids) + 1
       local focus = ids[i]
-      if self.pending_by_id[focus] and not skipped[focus] then
-        local component_ref, component, context = self:_component_retry(focus)
-        if component_ref then
-          refs[#refs + 1] = component_ref
-          mark_component_ids(skipped, component)
-        else
-          local candidate, ref, unknown = self:_find_candidate(focus, nil, context)
-          refs[#refs + 1] = ref
-          any_unknown = any_unknown or unknown == true
-          if candidate and candidate.negative_guard then
-            -- A certified fallback is valid only after every currently eligible
-            -- focus has failed to produce positive work.  Remember the first one
-            -- but continue the lazy scan; this preserves the established rule that
-            -- a concurrent admission, writer or task start commits before absence.
-            local n = #fallback_candidates + 1
-            fallback_candidates[n], fallback_focuses[n], fallback_indices[n] = candidate, focus, i
-          elseif candidate then
-            local ok = self:_commit_hit(candidate)
-            if not ok and self.pending_by_id[focus] then
-              self.stats.refreshes = self.stats.refreshes + 1
-              if self.instrumentation then
-                self.instrumentation:inc('refreshes')
-              end
-              candidate, ref, unknown = self:_find_candidate(focus)
-              refs[#refs + 1] = ref
-              any_unknown = any_unknown or unknown == true
-              if candidate and not candidate.negative_guard then
-                ok = self:_commit_hit(candidate)
-              end
+      if self.pending_by_id[focus] then
+        local context = self:_component_context(focus)
+        local component = context.component
+        local candidate, ref, unknown = self:_find_candidate(focus, nil, context)
+        refs[#refs + 1] = ref
+        any_unknown = any_unknown or unknown == true
+        if candidate and candidate.negative_guard then
+          -- A certified fallback is valid only after every currently eligible
+          -- focus has failed to produce positive work.  Remember the first one
+          -- but continue the lazy scan; this preserves the established rule that
+          -- a concurrent admission, writer or task start commits before absence.
+          local n = #fallback_candidates + 1
+          fallback_candidates[n], fallback_focuses[n], fallback_indices[n] = candidate, focus, i
+        elseif candidate then
+          local ok = self:_commit_hit(candidate)
+          if not ok and self.pending_by_id[focus] then
+            self.stats.refreshes = self.stats.refreshes + 1
+            if self.instrumentation then
+              self.instrumentation:inc('refreshes')
             end
-            if ok then
-              committed, progressed = true, true
-              self._run_cursor = i
-              if component and component.coordinator then
-                component.coordinator:advance_cursor(focus)
-              end
-              discard_candidates(fallback_candidates)
-              clear_table(fallback_candidates)
-              break
+            candidate, ref, unknown = self:_find_candidate(focus)
+            refs[#refs + 1] = ref
+            any_unknown = any_unknown or unknown == true
+            if candidate and not candidate.negative_guard then
+              ok = self:_commit_hit(candidate)
             end
+          end
+          if ok then
+            committed, progressed = true, true
+            self._run_cursor = i
+            discard_candidates(fallback_candidates)
+            clear_table(fallback_candidates)
+            break
           end
         end
       end

@@ -1,8 +1,9 @@
 local Op = require('fibers.op')
+local IR = require('fibers.internal.kernel.ir')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 
 local EventQueue = {}
 EventQueue.__index = EventQueue
@@ -44,7 +45,7 @@ function EventQueue.new(name, opts)
   }, EventQueue)
   q._location = Substrate.new_location({
     name = q.name .. ':queue',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'external',
     value = { head = 1, values = {} },
     owner = q,
@@ -86,24 +87,29 @@ local function op_for(q, drain)
       return Scalar.Ready.write(next_state, unpack_(packed, 1, packed.n))
     end,
   })
-  return Op._compact_resource(q, Kind, 'machine_transition', {
-    location = q._location,
-    resource = q,
-    transition = transition,
-    order = transition.order or 0,
-    interest = function(rt)
-      if type(q._interest_factory) == 'function' then
-        return q._interest_factory(rt, q, ExternalFeed.for_resource(rt, q))
-      end
-      return Interest.external(q, 'next', {
-        external_kind = 'events',
-        feed = ExternalFeed.for_resource(rt, q),
-      })
-    end,
-    absence_check = function()
-      return #q._location.value.values == 0
-    end,
-  })
+  return Op._compact_resource(
+    q,
+    Kind,
+    'transition',
+    IR.machine_transition({
+      location = q._location,
+      resource = q,
+      transition = transition,
+      order = transition.order or 0,
+      interest = function(rt)
+        if type(q._interest_factory) == 'function' then
+          return q._interest_factory(rt, q, ExternalFeed.for_resource(rt, q))
+        end
+        return Interest.external(q, 'next', {
+          external_kind = 'events',
+          feed = ExternalFeed.for_resource(rt, q),
+        })
+      end,
+      absence_check = function()
+        return #q._location.value.values == 0
+      end,
+    })
+  )
 end
 function EventQueue:next_op()
   if self._next_op == false then

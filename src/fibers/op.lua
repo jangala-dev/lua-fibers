@@ -405,12 +405,12 @@ end
 -- node itself carries the immutable programme fields, avoiding a second table
 -- between the option and the evaluator.  General facilities may continue to
 -- use _resource with a separate IR programme record.
-function Op._compact_resource(resource, kind, program_kind, fields)
+function Op._compact_resource(resource, kind, primitive_kind, fields)
   fields = fields or {}
   fields.primitive = 'resource'
   fields.resource = resource
   fields.resource_kind = kind
-  fields.program_kind = program_kind
+  fields.primitive_kind = primitive_kind
   fields._fibers_program = true
   local compact = op('primitive', fields)
   compact.program = compact
@@ -421,12 +421,12 @@ end
 -- primitives.  Each dynamic occurrence then carries only this descriptor and
 -- its payload; dependency metadata is cached on the descriptor rather than on
 -- every occurrence.
-function Op._compact_descriptor(resource, kind, program_kind, fields)
+function Op._compact_descriptor(resource, kind, primitive_kind, fields)
   fields = fields or {}
   fields.primitive = 'resource'
   fields.resource = resource
   fields.resource_kind = kind
-  fields.program_kind = program_kind
+  fields.primitive_kind = primitive_kind
   fields._fibers_program = true
   fields._fibers_compact_descriptor = true
   return fields

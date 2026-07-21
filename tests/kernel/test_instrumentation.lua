@@ -50,7 +50,7 @@ eq(got, 'ok')
 local snap = rt:instrumentation_snapshot()
 truthy(snap and snap.counters, 'missing instrumentation snapshot')
 truthy((snap.counters.plans or 0) > 0, 'plans were not recorded')
-if rt.machine_name == 'trail' then
+if rt.machine_name ~= 'reference' then
   truthy(
     (snap.counters.search_sessions or 0) == (snap.counters.plans or -1),
     'each production plan should own one search session'
@@ -65,7 +65,7 @@ truthy((snap.maxima.pending_requests or 0) >= 1, 'pending request high-water mar
 truthy(#(snap.slow_plans or {}) > 0, 'slow-plan summaries missing')
 truthy((snap.slow_plans[1].search_steps or 0) > 0, 'slow-plan search steps missing')
 truthy(type(snap.histograms.search_steps_per_plan) == 'table', 'search histogram missing')
-if rt.machine_name == 'trail' then
+if rt.machine_name ~= 'reference' then
   truthy((snap.counters.option_nodes or 0) > 0, 'option graph shape was not recorded')
   truthy(type(snap.histograms.option_nodes_per_plan) == 'table', 'option-node histogram missing')
   truthy((snap.counters.dependency_exchanges or 0) > 0, 'exchange dependencies were not recorded')
@@ -88,7 +88,7 @@ local ForcedTransition = Scalar.transition({
     return Scalar.Ready.write(payload, true)
   end,
 })
-local forced_rt = Runtime.new({ machine = 'trail', instrumentation = true })
+local forced_rt = Runtime.new({ machine = 'ledger', instrumentation = true })
 local forced_a = Scalar.machine(0, 'instrumentation-forced-a')
 local forced_b = Scalar.machine(0, 'instrumentation-forced-b')
 forced_rt:spawn_raw(function()
@@ -106,7 +106,7 @@ eq(forced_snap.counters.claim_branches or 0, 0, 'unavoidable claims opened branc
 
 -- Requests whose static footprints cannot satisfy the current intent must not
 -- be recruited merely to enumerate irrelevant include/exclude subsets.
-local pruned = Runtime.new({ machine = 'trail', instrumentation = true })
+local pruned = Runtime.new({ machine = 'ledger', instrumentation = true })
 for i = 1, 20 do
   local unrelated = Rendezvous.new('instrumentation-unrelated-' .. tostring(i))
   pruned:spawn_raw(function()
@@ -124,7 +124,7 @@ truthy((pruned_snap.maxima.component_size or 20) < 20, 'unrelated requests were 
 
 -- With component isolation disabled, the older footprint filter remains a
 -- separately testable and supported safety net.
-local legacy_pruned = Runtime.new({ machine = 'trail', component_search = false, instrumentation = true })
+local legacy_pruned = Runtime.new({ machine = 'ledger', component_search = false, instrumentation = true })
 for i = 1, 5 do
   local unrelated = Rendezvous.new('instrumentation-legacy-unrelated-' .. tostring(i))
   legacy_pruned:spawn_raw(function()

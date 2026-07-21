@@ -572,6 +572,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 ### Extending and contributing
 
 - [Facility authoring](docs/advanced/facility-authoring.md)
+- [Parallel ledger kernel](docs/design/ledger-kernel.md)
 - [Trusted resource programmes](docs/contributing/trusted-resource-programmes.md)
 - [Repository layout](docs/contributing/repository-layout.md)
 - [Lua compatibility](docs/contributing/compatibility.md)

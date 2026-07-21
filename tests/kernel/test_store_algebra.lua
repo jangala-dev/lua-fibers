@@ -10,7 +10,9 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
-local S = require('fibers.internal.kernel.store')
+local S = require('fibers.internal.kernel.ledger')
+local A = require('fibers.internal.kernel.algebra')
+local IR = require('fibers.internal.kernel.ir')
 
 local function fail(msg)
   error(msg, 2)
@@ -38,32 +40,28 @@ local function map_eq(a, b, msg)
   end
 end
 
-local add = S.new_location({ merge = 'add', value = 0 })
+local add = S.new_location({ algebra = 'add', value = 0 })
 local a = { kind = 'add', delta = 2 }
 local b = { kind = 'add', delta = -1 }
 local c = { kind = 'add', delta = 4 }
-local ab = S.merge_parallel(add, a, b, 'independent')
-local ba = S.merge_parallel(add, b, a, 'independent')
+local ab = A.join(add, a, b, 'independent')
+local ba = A.join(add, b, a, 'independent')
 eq(ab.delta, ba.delta, 'add parallel composition should commute')
-local abc1 = S.merge_parallel(add, ab, c, 'independent')
-local bc = S.merge_parallel(add, b, c, 'independent')
-local abc2 = S.merge_parallel(add, a, bc, 'independent')
+local abc1 = A.join(add, ab, c, 'independent')
+local bc = A.join(add, b, c, 'independent')
+local abc2 = A.join(add, a, bc, 'independent')
 eq(abc1.delta, abc2.delta, 'add parallel composition should associate')
-eq(S.constraint_projection(add, a, 'up'), nil, 'upward add is supply for upward claim')
-eq(S.constraint_projection(add, b, 'up').delta, -1, 'downward add constrains upward claim')
+eq(A.constraint(add, a, 'up'), nil, 'upward add is supply for upward claim')
+eq(A.constraint(add, b, 'up').delta, -1, 'downward add constrains upward claim')
 
-local fm = S.new_location({ merge = 'finite_map', value = {}, put_equal = true })
+local fm = S.new_location({ algebra = 'finite_map', value = {}, put_equal = true })
 local px = { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 1 } } }
 local py = { kind = 'finite_map', ops = { { op = 'put', key = 'y', value = 2 } } }
 local rm = { kind = 'finite_map', ops = { { op = 'remove', key = 'z' } } }
-local xy = S.merge_parallel(fm, px, py, 'independent')
-local yx = S.merge_parallel(fm, py, px, 'independent')
-map_eq(
-  S.apply_patch_value(fm, {}, xy),
-  S.apply_patch_value(fm, {}, yx),
-  'disjoint finite-map edits should commute'
-)
-local down = S.constraint_projection(fm, {
+local xy = A.join(fm, px, py, 'independent')
+local yx = A.join(fm, py, px, 'independent')
+map_eq(A.apply(fm, {}, xy), A.apply(fm, {}, yx), 'disjoint finite-map edits should commute')
+local down = A.constraint(fm, {
   kind = 'finite_map',
   ops = {
     { op = 'put', key = 'x', value = 1 },
@@ -72,7 +70,7 @@ local down = S.constraint_projection(fm, {
 }, 'up')
 eq(#down.ops, 1)
 eq(down.ops[1].op, 'remove', 'upward claims retain only downward constraints')
-local up = S.constraint_projection(fm, {
+local up = A.constraint(fm, {
   kind = 'finite_map',
   ops = {
     { op = 'put', key = 'x', value = 1 },
@@ -81,16 +79,107 @@ local up = S.constraint_projection(fm, {
 }, 'down')
 eq(#up.ops, 1)
 eq(up.ops[1].op, 'put', 'downward claims retain only upward constraints')
-local hand =
-  S.merge_parallel(fm, px, { kind = 'finite_map', ops = { { op = 'take', key = 'x' } } }, 'interacting')
-eq(next(S.apply_patch_value(fm, {}, hand)), nil, 'put/take handoff should cancel')
+local hand = A.join(fm, px, { kind = 'finite_map', ops = { { op = 'take', key = 'x' } } }, 'interacting')
+eq(next(A.apply(fm, {}, hand)), nil, 'put/take handoff should cancel')
 
-local overwrite = S.new_location({ merge = 'finite_map', value = {}, put_equal = true })
+local overwrite = S.new_location({ algebra = 'finite_map', value = {}, put_equal = true })
 local p1 = { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 'a', policy = 'overwrite' } } }
 local p2 = { kind = 'finite_map', ops = { { op = 'put', key = 'x', value = 'b', policy = 'overwrite' } } }
-local independent = S.merge_parallel(overwrite, p1, p2, 'independent')
+local independent = A.join(overwrite, p1, p2, 'independent')
 eq(independent, nil, 'independent conflicting overwrites must remain partial')
-local interacting = S.merge_parallel(overwrite, p1, p2, 'interacting')
-eq(S.apply_patch_value(overwrite, {}, interacting).x, 'b', 'interacting overwrite is ordered')
+local interacting = A.join(overwrite, p1, p2, 'interacting')
+eq(A.apply(overwrite, {}, interacting).x, 'b', 'interacting overwrite is ordered')
+
+local lazy_writer_location = S.new_location({ algebra = 'replace', value = 0 })
+local lazy_writer_view = S.new_segment(1, {}, nil, 1)
+local lazy_writers = {}
+S.stage(lazy_writer_view, lazy_writer_location, { kind = 'replace', value = 1 }, nil, lazy_writers)
+assert(next(lazy_writers) == nil, 'ordinary writes should not activate the projection index')
+
+local projection_location = S.new_location({ algebra = 'finite_map', value = {}, put_equal = true })
+local projection_task = { root_id = 3, segment_id = 3, scope_path = {} }
+local projection_state = {
+  segments = {
+    [2] = {
+      id = 2,
+      root_id = 2,
+      scope_path = {},
+      values = {},
+      delta = { [projection_location] = p2 },
+      retired = false,
+    },
+    [3] = {
+      id = 3,
+      root_id = 3,
+      scope_path = {},
+      values = {},
+      delta = {},
+      retired = false,
+    },
+    [1] = {
+      id = 1,
+      root_id = 1,
+      scope_path = {},
+      values = {},
+      delta = { [projection_location] = p1 },
+      retired = false,
+    },
+    [99] = {
+      id = 99,
+      root_id = 99,
+      scope_path = {},
+      values = {},
+      delta = setmetatable({}, {
+        __index = function()
+          error('projection scanned an unrelated segment')
+        end,
+      }),
+      retired = false,
+    },
+  },
+}
+local projected = S.project(projection_state, projection_task, projection_location)
+eq(projected.x, 'b', 'external projection must follow deterministic view order')
+
+local machine = S.new_location({ algebra = 'machine', value = 0 })
+local machine_merged = A.join(machine, {
+  kind = 'machine',
+  steps = { { serial = 1, value = 1 }, { serial = 3, value = 3 } },
+}, {
+  kind = 'machine',
+  steps = { { serial = 2, value = 2 }, { serial = 4, value = 4 } },
+}, 'interacting')
+for i = 1, 4 do
+  eq(machine_merged.steps[i].serial, i, 'machine merge must retain serial order')
+end
+
+local extreme_value = {
+  a = { rank = 1, seq = 2, value = 'a' },
+  b = { rank = 1, seq = 1, value = 'b' },
+  c = { rank = 2, seq = 1, value = 'c' },
+  d = { rank = 2, seq = 1, value = 'd' },
+}
+local minimum = IR.evaluate_claim(
+  IR.select({
+    location = fm,
+    order = 'min',
+    rank_field = 'rank',
+    seq_field = 'seq',
+    result_kind = 'identity',
+  }),
+  extreme_value
+)
+eq(minimum.result[1].value, 'b', 'minimum selection order changed')
+local maximum = IR.evaluate_claim(
+  IR.select({
+    location = fm,
+    order = 'max',
+    rank_field = 'rank',
+    seq_field = 'seq',
+    result_kind = 'identity',
+  }),
+  extreme_value
+)
+eq(maximum.result[1].value, 'd', 'maximum selection order changed')
 
 print('tests/test_store_algebra.lua: ok')

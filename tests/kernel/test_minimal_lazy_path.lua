@@ -72,7 +72,7 @@ end
 -- outstanding request directly on the fibre.  No per-perform hand-off object
 -- or response record is retained.
 do
-  local rt = Runtime.new({ machine = 'trail', instrumentation = true })
+  local rt = Runtime.new({ machine = 'ledger', instrumentation = true })
   local total = 0
   local fiber = rt:spawn_raw(function()
     for i = 1, 20 do
@@ -88,38 +88,10 @@ do
   eq(rt._handoff_pool, nil, 'runtime should not allocate a perform hand-off pool')
 end
 
--- Exact state keys appear only after a cheap fingerprint repeats.  The filter
--- cannot justify a memo hit by itself; the existing exact signature remains the
--- proof of equality.
-do
-  local rt = Runtime.new({
-    machine = 'trail',
-    instrumentation = true,
-    plan_reuse = false,
-    state_memoization = true,
-    refutation_cache = false,
-    state_memoization_min_steps = 0,
-    state_memoization_min_intents = 0,
-  })
-  local blocked = Rendezvous.new('minimal-fingerprint'):get_op()
-  local alternatives = {}
-  for i = 1, 32 do
-    alternatives[i] = blocked
-  end
-  rt:spawn_raw(function()
-    rt:perform(Op.choice(alternatives))
-  end, 'minimal-fingerprint')
-  eq(rt:run().tag, 'quiescent')
-  local counters = rt:instrumentation_snapshot().counters
-  truthy((counters.state_fingerprint_probes or 0) > 0, 'state fingerprints were not probed')
-  truthy((counters.state_fingerprint_repeats or 0) > 0, 'repeated state fingerprint was not observed')
-  truthy((counters.state_memo_hits or 0) > 0, 'exact memoisation did not activate after repetition')
-end
-
 -- Precise external dependencies survive unrelated deliveries, while the
 -- resource actually named by the retained refutation invalidates it.
 do
-  local rt = Runtime.new({ machine = 'trail', instrumentation = true, plan_reuse_threshold = 1 })
+  local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
   local awaited = Signal.new('minimal-awaited-signal')
   local unrelated = Signal.new('minimal-unrelated-signal')
   local value
@@ -144,7 +116,7 @@ end
 do
   local host = Host.manual({ now = 0 })
   local rt = Runtime.new({
-    machine = 'trail',
+    machine = 'ledger',
     host = host,
     instrumentation = true,
     plan_reuse_threshold = 1,

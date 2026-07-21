@@ -35,10 +35,8 @@ The suite records both ordinary throughput and solver shape:
 - branches, rollbacks, trail pressure and intent-pair scans;
 - forced exchanges and claims;
 - opaque versus analysable pending requests;
-- repeated diagnostic search states;
 - retained Lua heap after collection;
-- no-supplier and state-memo hit rates;
-- plan-cache hits, invalidations and ineligibility reasons; and
+- certificate-reuse hits, invalidations and ineligibility reasons; and
 - certified symmetry reductions.
 
 A change which improves the median while materially worsening p99 or maximum

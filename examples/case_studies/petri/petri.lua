@@ -1,6 +1,6 @@
 local Op = require('fibers.op')
 local Program = require('fibers.internal.kernel.ir')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 
 local Petri = {}
 Petri.__index = Petri
@@ -146,7 +146,7 @@ function Petri.new(marking, name)
   }, Petri)
   net._location = Substrate.new_location({
     name = net.name .. ':marking',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'plain',
     value = state,
     owner = net,

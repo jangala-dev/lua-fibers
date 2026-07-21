@@ -31,8 +31,8 @@ eq(
   'requiring Runtime must not load the reference evaluator'
 )
 
-local trail = Runtime.new({ machine = 'trail' })
-eq(trail.machine_name, 'trail')
+local ledger = Runtime.new({ machine = 'ledger' })
+eq(ledger.machine_name, 'ledger')
 eq(
   package.loaded['fibers.internal.reference_machine'],
   nil,

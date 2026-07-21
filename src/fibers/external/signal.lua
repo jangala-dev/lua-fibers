@@ -1,4 +1,5 @@
 local Op = require('fibers.op')
+local IR = require('fibers.internal.kernel.ir')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
@@ -36,9 +37,9 @@ function Signal.new(name)
     _fibers_kind = Kind,
     version = 0,
   }, Signal)
-  signal._location = require('fibers.internal.kernel.store').new_location({
+  signal._location = require('fibers.internal.kernel.ledger').new_location({
     name = signal.name .. ':state',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'external',
     value = { ready = false, pack = nil },
     owner = signal,
@@ -70,21 +71,26 @@ function Signal:wait_op()
       return Scalar.Ready.same(unpack_(state.pack, 1, state.pack.n))
     end,
   })
-  self._wait_op = Op._compact_resource(self, Kind, 'machine_transition', {
-    location = self._location,
-    resource = self,
-    transition = transition,
-    order = transition.order or 0,
-    interest = function(rt)
-      return Interest.external(signal, 'ready', {
-        external_kind = 'signal',
-        feed = ExternalFeed.for_resource(rt, signal),
-      })
-    end,
-    absence_check = function()
-      return not signal._location.value.ready
-    end,
-  })
+  self._wait_op = Op._compact_resource(
+    self,
+    Kind,
+    'transition',
+    IR.machine_transition({
+      location = self._location,
+      resource = self,
+      transition = transition,
+      order = transition.order or 0,
+      interest = function(rt)
+        return Interest.external(signal, 'ready', {
+          external_kind = 'signal',
+          feed = ExternalFeed.for_resource(rt, signal),
+        })
+      end,
+      absence_check = function()
+        return not signal._location.value.ready
+      end,
+    })
+  )
   return self._wait_op
 end
 

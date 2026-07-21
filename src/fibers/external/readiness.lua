@@ -1,8 +1,9 @@
 local Op = require('fibers.op')
+local IR = require('fibers.internal.kernel.ir')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 
 local Readiness = {}
 Readiness.__index = Readiness
@@ -69,7 +70,7 @@ function Readiness.new(key, initial_mode, name)
   }, Readiness)
   r._location = Substrate.new_location({
     name = r.name .. ':state',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'external',
     value = { read = false, write = false },
     owner = r,
@@ -103,25 +104,30 @@ function Readiness:readiness_op(selected)
       return Scalar.Ready.same(true, key, selected)
     end,
   })
-  local option = Op._compact_resource(self, Kind, 'machine_transition', {
-    location = self._location,
-    resource = self,
-    transition = transition,
-    order = transition.order or 0,
-    interest = function(rt)
-      return Interest.external(r, selected .. ':' .. tostring(key), {
-        external_kind = 'readiness',
-        key = key,
-        resource_key = key,
-        readiness_key = key,
-        mode = selected,
-        feed = ExternalFeed.for_resource(rt, r),
-      })
-    end,
-    absence_check = function()
-      return not r._location.value[selected]
-    end,
-  })
+  local option = Op._compact_resource(
+    self,
+    Kind,
+    'transition',
+    IR.machine_transition({
+      location = self._location,
+      resource = self,
+      transition = transition,
+      order = transition.order or 0,
+      interest = function(rt)
+        return Interest.external(r, selected .. ':' .. tostring(key), {
+          external_kind = 'readiness',
+          key = key,
+          resource_key = key,
+          readiness_key = key,
+          mode = selected,
+          feed = ExternalFeed.for_resource(rt, r),
+        })
+      end,
+      absence_check = function()
+        return not r._location.value[selected]
+      end,
+    })
+  )
   self[field] = option
   return option
 end

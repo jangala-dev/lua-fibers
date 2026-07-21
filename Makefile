@@ -6,15 +6,18 @@ LUAJIT ?= luajit
 REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./reference/?.lua;./reference/?/init.lua;./reference/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;;
 export LUA_PATH := $(REPO_LUA_PATH)
 
-.PHONY: test test-reference test-public test-composition test-resources \
+.PHONY: test test-ledger test-reference test-public test-composition test-resources \
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
 	test-experiments test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
-	test-luajit-interpreter examples bench bench-io profile-proof-io performance check-format check-links \
+	test-luajit-interpreter examples bench bench-ledger bench-io profile-proof-io performance check-format check-links \
 	check-layout check
 
 test:
 	$(LUA) tests/run_all.lua
+
+test-ledger:
+	FIBERS_MACHINE=ledger $(LUA) tests/run_all.lua
 
 test-reference:
 	FIBERS_MACHINE=reference FIBERS_TEST_PROFILE=matrix $(LUA) tests/run_all.lua
@@ -102,6 +105,9 @@ examples:
 bench:
 	$(LUAJIT) performance/bench.lua
 
+bench-ledger:
+	FIBERS_MACHINE=ledger $(LUAJIT) performance/bench.lua
+
 bench-io:
 	$(LUA) performance/io_baselines.lua
 
@@ -132,6 +138,19 @@ check-layout:
 	@test -f src/fibers/runtime.lua
 	@test -d src/fibers/internal/kernel
 	@test -f src/fibers/internal/kernel/supply.lua
+	@test ! -f src/fibers/internal/kernel/engine.lua
+	@test -f src/fibers/internal/kernel/machine.lua
+	@test -f src/fibers/internal/kernel/ledger.lua
+	@test -f src/fibers/internal/kernel/algebra.lua
+	@test -f src/fibers/internal/kernel/domain.lua
+	@test -f src/fibers/internal/kernel/certificate.lua
+	@test -f src/fibers/internal/kernel/path.lua
+	@test -f src/fibers/internal/kernel/trail.lua
+	@test -f src/fibers/internal/kernel/ir.lua
+	@test ! -d src/fibers/internal/ledger_kernel
+	@test ! -f src/fibers/internal/kernel/store.lua
+	@test ! -f src/fibers/internal/kernel/frontier.lua
+	@test ! -f src/fibers/internal/kernel/activation.lua
 	@test -f src/fibers/flow.lua
 	@test -f src/fibers/internal/flow_machine.lua
 	@test -f src/fibers/internal/scalar_wait.lua

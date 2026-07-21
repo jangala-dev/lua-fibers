@@ -1,6 +1,8 @@
 local Op = require('fibers.op')
+local IR = require('fibers.internal.kernel.ir')
 local perform = require('fibers.perform')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
+local Algebra = require('fibers.internal.kernel.algebra')
 local Supply = require('fibers.internal.kernel.supply')
 
 local Scalar = {}
@@ -87,7 +89,7 @@ local function new_scalar(value, name, merge)
   }, Scalar)
   scalar._location = Substrate.new_location({
     name = scalar.name .. ':value',
-    merge = merge or 'replace',
+    algebra = merge or 'replace',
     domain = 'plain',
     value = value,
     owner = scalar,
@@ -180,7 +182,7 @@ function Scalar:unsafe_select_op(fn)
 end
 
 function Scalar:write_op(value)
-  if self._location.merge == 'machine' then
+  if self._location.algebra.name == 'machine' then
     local transition = Scalar.transition({
       mode = 'update',
       accepts_supply = true,
@@ -200,19 +202,24 @@ function Scalar:transition_op(transition, payload)
     error('scalar transition expected', 2)
   end
   payload = payload or {}
-  if self._location.merge == 'replace' then
-    self._location.merge = 'machine'
+  if self._location.algebra.name == 'replace' then
+    self._location.algebra = Algebra.get('machine')
   end
   if transition.validate then
     transition.validate(payload)
   end
-  return Op._compact_resource(self, Kind, 'machine_transition', {
-    location = self._location,
-    transition = transition,
-    payload = payload,
-    resource = self,
-    order = transition.order or 0,
-  })
+  return Op._compact_resource(
+    self,
+    Kind,
+    'transition',
+    IR.machine_transition({
+      location = self._location,
+      transition = transition,
+      payload = payload,
+      resource = self,
+      order = transition.order or 0,
+    })
+  )
 end
 
 Scalar.Kind = Kind

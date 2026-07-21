@@ -17,7 +17,7 @@ atomic commit
 
 Those are fixed kernel responsibilities.
 
-> This is a contributor interface, not a public extension protocol. The IR and store live under `fibers.internal.kernel`, may change before or after version 1, and must not be used by installed application facilities.
+> This is a contributor interface, not a public extension protocol. The IR, ledger and algebra live under `fibers.internal.kernel`, may change before or after version 1, and must not be used by installed application facilities.
 
 Ordinary facilities should instead follow `../advanced/facility-authoring.md` and depend only on supported public modules.
 
@@ -53,14 +53,14 @@ return Op._resource(public_facility, facility_kind, programme)
 
 ## Versioned locations
 
-Create a location with `Store.new_location`:
+Create a location with `Ledger.new_location`:
 
 ```lua
-local Store = require('fibers.internal.kernel.store')
+local Ledger = require('fibers.internal.kernel.ledger')
 
-local location = Store.new_location {
+local location = Ledger.new_location {
   name = 'box:value',
-  merge = 'replace',
+  algebra = 'replace',
   domain = 'plain',
   value = initial,
   owner = box,
@@ -75,7 +75,7 @@ Supported fields include:
 
 ```text
 name                diagnostic name
-merge               replace | add | presence | finite_map | machine
+algebra             replace | add | presence | finite_map | machine
 domain              diagnostic/domain marker
 value               committed value
 version             initial version, normally zero
@@ -86,7 +86,7 @@ put_equal            permit equal parallel finite-map puts
 remove_idempotent    permit duplicate finite-map removals; default true
 ```
 
-A new merge algebra belongs in the store only when it has clear sequential, independent-parallel and interacting-parallel laws and is shared by materially different facilities.
+A new location algebra belongs in `algebra.lua` only when it has clear sequential, independent-parallel and interacting-parallel laws and is shared by materially different facilities.
 
 ## Reads and fixed patches
 

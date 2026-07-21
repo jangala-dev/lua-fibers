@@ -1,5 +1,5 @@
 local Op = require('fibers.op')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 local Program = require('fibers.internal.kernel.ir')
 
 local Index = {}
@@ -30,7 +30,7 @@ function Index.new(entries, name)
   end
   index._location = Substrate.new_location({
     name = index.name .. ':entries',
-    merge = 'finite_map',
+    algebra = 'finite_map',
     domain = 'finite_map',
     value = index.entries,
     owner = index,

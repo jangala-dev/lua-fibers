@@ -1,22 +1,24 @@
--- Production trail-based proof-search evaluator.
--- The copy-on-branch oracle lives in reference/fibers/internal/reference_machine.lua.
+-- Lazy proof-search machine backed by hierarchical ledger segments.
 
 local Op = require('fibers.op')
-local Store = require('fibers.internal.kernel.store')
+local Ledger = require('fibers.internal.kernel.ledger')
+local Algebra = require('fibers.internal.kernel.algebra')
 local IR = require('fibers.internal.kernel.ir')
 local ChoiceOrder = require('fibers.internal.kernel.choice_order')
-local Frontier = require('fibers.internal.kernel.frontier')
-local SearchCache = require('fibers.internal.kernel.adaptive_search')
+local Domain = require('fibers.internal.kernel.domain')
 local SearchSession = require('fibers.internal.kernel.search_session')
-local Activation = require('fibers.internal.kernel.activation')
+local Path = require('fibers.internal.kernel.path')
 local Supply = require('fibers.internal.kernel.supply')
+local Certificate = require('fibers.internal.kernel.certificate')
+local Trail = require('fibers.internal.kernel.trail')
+local extend_scope_path = Path.scope_child
 
 local M = {}
 
 local unpack_ = table.unpack or unpack
 local pack_ = Op._pack
 local function programme_kind(program)
-  return program.program_kind or program.kind
+  return IR.kind(program)
 end
 local PACK_TRUE = pack_(true)
 
@@ -38,183 +40,6 @@ local function new_outcome(state, packed, wrap, task)
   return outcome
 end
 
-local function extend_scope_path(parent, group_id, mode, lane)
-  return {
-    _fibers_scope_path = true,
-    parent = parent,
-    depth = parent and (parent.depth + 1) or 1,
-    group_id = group_id,
-    mode = mode,
-    lane = lane,
-  }
-end
-
-local Trail = {}
-Trail.__index = Trail
-
-function Trail.new(stats, plan)
-  return setmetatable({
-    n = 0,
-    kinds = {},
-    targets = {},
-    keys = {},
-    olds = {},
-    old_marks = {},
-    mark_ns = {},
-    mark_parents = {},
-    set_marks = {},
-    push_marks = {},
-    stats = stats,
-    plan = plan,
-    next_mark = 0,
-    current_mark = 0,
-  }, Trail)
-end
-
-function Trail:mark()
-  local mark = self.next_mark + 1
-  self.next_mark = mark
-  self.mark_ns[mark] = self.n
-  self.mark_parents[mark] = self.current_mark
-  self.current_mark = mark
-  return mark
-end
-
-local function add_entry(self, kind, target, key, old, old_mark)
-  local n = self.n + 1
-  self.n = n
-  self.kinds[n], self.targets[n], self.keys[n], self.olds[n] = kind, target, key, old
-  self.old_marks[n] = old_mark or 0
-  if self.stats then
-    self.stats.trail_entries = (self.stats.trail_entries or 0) + 1
-  end
-  local plan = self.plan
-  if plan then
-    plan.trail_entries = plan.trail_entries + 1
-    if n > plan.max_trail then
-      plan.max_trail = n
-    end
-  end
-end
-
-function Trail:set(target, key, value)
-  if target[key] == value then
-    return
-  end
-  -- Mutations made before the first speculative checkpoint are the plan's
-  -- base state.  They can never be reached by rollback, so journalling them is
-  -- pure overhead on deterministic and forced paths.
-  local mark = self.current_mark
-  if mark == 0 then
-    target[key] = value
-    return
-  end
-
-  -- A branch checkpoint only needs the value observed before its first write
-  -- to one field.  Subsequent writes to that field in the same branch are
-  -- restored by the same journal entry.  Nested marks retain their own first
-  -- write and restore the parent's stamp when rolled back.
-  local marks = self.set_marks[target]
-  if not marks then
-    marks = {}
-    self.set_marks[target] = marks
-  end
-  local old_mark = marks[key] or 0
-  if old_mark ~= mark then
-    add_entry(self, 1, target, key, target[key], old_mark)
-    marks[key] = mark
-  else
-    local plan = self.plan
-    if plan then
-      plan.trail_set_coalesced = (plan.trail_set_coalesced or 0) + 1
-    end
-  end
-  target[key] = value
-end
-
-function Trail:push(target, value)
-  local mark = self.current_mark
-  if mark == 0 then
-    target[#target + 1] = value
-    return
-  end
-
-  -- As with field writes, one length snapshot per array and checkpoint is
-  -- sufficient to undo any number of pushes made in that branch.
-  local old_mark = self.push_marks[target] or 0
-  if old_mark ~= mark then
-    add_entry(self, 2, target, nil, #target, old_mark)
-    self.push_marks[target] = mark
-  else
-    local plan = self.plan
-    if plan then
-      plan.trail_push_coalesced = (plan.trail_push_coalesced or 0) + 1
-    end
-  end
-  target[#target + 1] = value
-end
-
-function Trail:rollback(mark)
-  local mark_n = self.mark_ns[mark]
-  local removed = self.n - mark_n
-  for i = self.n, mark_n + 1, -1 do
-    local kind, target, key, old = self.kinds[i], self.targets[i], self.keys[i], self.olds[i]
-    local old_mark = self.old_marks[i] or 0
-    if kind == 1 then
-      target[key] = old
-      local marks = self.set_marks[target]
-      if marks then
-        marks[key] = old_mark ~= 0 and old_mark or nil
-      end
-    elseif kind == 2 then
-      for j = #target, old + 1, -1 do
-        target[j] = nil
-      end
-      self.push_marks[target] = old_mark ~= 0 and old_mark or nil
-    else
-      error('unknown trail entry: ' .. tostring(kind), 0)
-    end
-    self.kinds[i], self.targets[i], self.keys[i], self.olds[i], self.old_marks[i] = nil, nil, nil, nil, nil
-  end
-  self.n = mark_n
-  self.current_mark = self.mark_parents[mark] or 0
-  self.mark_ns[mark], self.mark_parents[mark] = nil, nil
-  if self.stats then
-    self.stats.rollbacks = (self.stats.rollbacks or 0) + 1
-  end
-  local plan = self.plan
-  if plan then
-    plan.rollbacks = plan.rollbacks + 1
-    plan.rollback_entries = plan.rollback_entries + removed
-  end
-end
-
-function Trail:begin(stats, plan)
-  if self.n ~= 0 or self.current_mark ~= 0 then
-    error('cannot begin a search with a non-empty trail', 2)
-  end
-  self.stats = stats
-  self.plan = plan
-end
-
-function Trail:reset(stats, plan)
-  for i = self.n, 1, -1 do
-    self.kinds[i], self.targets[i], self.keys[i], self.olds[i], self.old_marks[i] = nil, nil, nil, nil, nil
-  end
-  self.n = 0
-  for i = self.next_mark, 1, -1 do
-    self.mark_ns[i], self.mark_parents[i] = nil, nil
-  end
-  self.next_mark, self.current_mark = 0, 0
-  self.set_marks, self.push_marks = {}, {}
-  if stats ~= nil then
-    self.stats = stats
-  end
-  if plan ~= nil or self.plan ~= nil then
-    self.plan = plan
-  end
-end
-
 local function setv(state, target, key, value)
   state.trail:set(target, key, value)
 end
@@ -230,12 +55,12 @@ local function object_version_label(value)
 end
 
 local function advance_activation(state, task, fact)
-  setv(state, task, 'activation', Activation.child(task.activation, fact))
+  setv(state, task, 'activation', Path.child(task.activation, fact))
 end
 
 local function intent_activation_label(intent)
   local program = intent.program or {}
-  return Activation.label(intent.activation) .. '@' .. object_version_label(program.location or program.group)
+  return Path.label(intent.activation) .. '@' .. object_version_label(program.location or program.group)
 end
 
 local function map_count(xs)
@@ -246,40 +71,40 @@ local function map_count(xs)
   return n
 end
 
-local function new_view(state, root_id, scope_path, source_view_id)
-  state.next_view = state.next_view + 1
-  local id = state.next_view
-  local source = source_view_id and state.views[source_view_id] or nil
-  local view = state.session:acquire_record('view')
-  setv(state, state.views, id, Store.new_view(root_id, scope_path, source, id, view))
+local function new_segment(state, root_id, scope_path, source_segment_id)
+  state.next_segment = state.next_segment + 1
+  local id = state.next_segment
+  local source = source_segment_id and state.segments[source_segment_id] or nil
+  local segment = state.session:acquire_record('segment')
+  setv(state, state.segments, id, Ledger.new_segment(root_id, scope_path, source, id, segment, state))
   local profile_plan = state.profile_plan
-  if profile_plan and state.next_view > profile_plan.max_views then
-    profile_plan.max_views = state.next_view
+  if profile_plan and state.next_segment > profile_plan.max_segments then
+    profile_plan.max_segments = state.next_segment
   end
   return id
 end
 
-local function ensure_task_view(state, task)
-  local view_id = task.view_id
-  if view_id then
-    return state.views[view_id], view_id
+local function ensure_task_segment(state, task)
+  local segment_id = task.segment_id
+  if segment_id then
+    return state.segments[segment_id], segment_id
   end
-  view_id = new_view(state, task.root_id, task.scope_path or {})
-  setv(state, task, 'view_id', view_id)
+  segment_id = new_segment(state, task.root_id, task.scope_path or {})
+  setv(state, task, 'segment_id', segment_id)
   local root = state.roots[task.root_id]
-  if root and root.task_id == task.id and root.view_id == nil then
-    setv(state, root, 'view_id', view_id)
+  if root and root.task_id == task.id and root.segment_id == nil then
+    setv(state, root, 'segment_id', segment_id)
   end
-  return state.views[view_id], view_id
+  return state.segments[segment_id], segment_id
 end
 
-local function merge_group_views(state, group)
-  local parent = state.views[group.parent_view]
-  local children = state.session:reuse_array('_arena_merge_children')
+local function join_group_segments(state, group)
+  local parent = state.segments[group.parent_segment]
+  local children = state.session:reuse_array('_arena_join_children')
   for i = 1, group.count do
-    children[i] = state.views[group.lane_views[i]]
+    children[i] = state.segments[group.lane_segments[i]]
   end
-  return Store.merge_views(parent, children, group.mode, state.trail)
+  return Ledger.join_segments(parent, children, group.mode, state.trail)
 end
 
 local function compose_wrap(inner, fn)
@@ -330,7 +155,7 @@ local function finish_group_lane(state, task, frame, outcome)
   if group.completed < group.count then
     return true
   end
-  if not merge_group_views(state, group) then
+  if not join_group_segments(state, group) then
     return false
   end
 
@@ -343,13 +168,13 @@ local function finish_group_lane(state, task, frame, outcome)
   local parent = state.tasks[group.parent_task]
   local activation_parts = {}
   for i = 1, group.count do
-    activation_parts[i] = Activation.label(group.lane_outcomes[i].activation)
+    activation_parts[i] = Path.label(group.lane_outcomes[i].activation)
   end
   setv(
     state,
     parent,
     'activation',
-    Activation.child(group.activation, 'product:result:' .. table.concat(activation_parts, ','))
+    Path.child(group.activation, 'product:result:' .. table.concat(activation_parts, ','))
   )
   setv(state, parent, 'status', 'active')
   return complete_task(
@@ -376,7 +201,7 @@ local function verify_continuation_dependencies(state, task, frame, next_op)
         .. ' ('
         .. tostring(frame.phase or 'and_then')
         .. ', activation='
-        .. Activation.label(frame.activation)
+        .. Path.label(frame.activation)
         .. '): '
         .. tostring(reason),
       0
@@ -433,7 +258,7 @@ complete_task = function(state, task, outcome)
             request.memo[frame.activation] = cached
           end
           setv(state, task, 'expr', cached)
-          setv(state, task, 'activation', Activation.child(frame.activation, 'guard:result'))
+          setv(state, task, 'activation', Path.child(frame.activation, 'guard:result'))
         else
           local next_op =
             state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
@@ -446,7 +271,7 @@ complete_task = function(state, task, outcome)
             state,
             task,
             'activation',
-            Activation.child(frame.activation, 'and_then:result:' .. Activation.label(outcome.activation))
+            Path.child(frame.activation, 'and_then:result:' .. Path.label(outcome.activation))
           )
         end
         add_active(state, task.id)
@@ -473,7 +298,7 @@ local function add_root(state, root_id)
     return
   end
   if not request.activation_root then
-    request.activation_root = Activation.new_request(request.id or root_id)
+    request.activation_root = Path.new_request(request.id or root_id)
   end
 
   state.next_task = state.next_task + 1
@@ -484,7 +309,7 @@ local function add_root(state, root_id)
   local task = state.session:acquire_record('task')
   task.id, task.root_id, task.expr = task_id, root_id, request.op
   task.activation = request.activation_root
-  task.view_id, task.scope_path, task.status = nil, nil, 'active'
+  task.segment_id, task.scope_path, task.status = nil, nil, 'active'
   task.choice_serial, task.symmetry_key = 0, nil
   task.request, task.task_id, task.done, task.outcome = request, task_id, false, nil
   setv(state, state.tasks, task_id, task)
@@ -516,8 +341,8 @@ local function start_product(state, task, op)
   state.next_group = state.next_group + 1
   local group_id = state.next_group
   local group = state.session:acquire_record('group')
-  local _, parent_view_id = ensure_task_view(state, task)
-  group.id, group.parent_task, group.parent_view = group_id, task.id, parent_view_id
+  local _, parent_segment_id = ensure_task_segment(state, task)
+  group.id, group.parent_task, group.parent_segment = group_id, task.id, parent_segment_id
   group.activation = task.activation
   group.mode, group.count, group.completed = op.mode, #op.lanes, 0
   setv(state, state.groups, group_id, group)
@@ -529,15 +354,15 @@ local function start_product(state, task, op)
   end
   for i = 1, #op.lanes do
     local path = extend_scope_path(task.scope_path, group_id, op.mode, i)
-    local view_id = new_view(state, task.root_id, path, parent_view_id)
-    setv(state, group.lane_views, i, view_id)
+    local segment_id = new_segment(state, task.root_id, path, parent_segment_id)
+    setv(state, group.lane_segments, i, segment_id)
     state.next_task = state.next_task + 1
     local child_id = state.next_task
     local child = state.session:acquire_record('task')
     child.id, child.root_id, child.expr = child_id, task.root_id, op.lanes[i]
-    child.activation = Activation.child(task.activation, 'product:lane:' .. tostring(i))
+    child.activation = Path.child(task.activation, 'product:lane:' .. tostring(i))
     child.frames[1] = { kind = 'group_lane', group_id = group_id, lane = i }
-    child.view_id, child.scope_path, child.status = view_id, path, 'active'
+    child.segment_id, child.scope_path, child.status = segment_id, path, 'active'
     child.choice_serial, child.symmetry_key = 0, task.symmetry_key
     setv(state, state.tasks, child_id, child)
     pushv(state, state.active, child_id)
@@ -554,7 +379,7 @@ local function start_product(state, task, op)
 end
 
 local function same_root_compatible(a, b)
-  return Store.path_relation(a.root_id, a.scope_path, b.root_id, b.scope_path) == 'interacting'
+  return Path.relation(a.root_id, a.scope_path, b.root_id, b.scope_path) == 'interacting'
 end
 
 local function intents_compatible(a, b)
@@ -576,8 +401,13 @@ end
 local function remove_intent_ids(state, ids)
   local remove = {}
   for i = 1, #ids do
-    remove[ids[i]] = true
-    setv(state, state.intent_by_id, ids[i], nil)
+    local id = ids[i]
+    local intent = state.intent_by_id[id]
+    remove[id] = true
+    if intent and state.demand_index then
+      Domain.remove(state.demand_index, intent, state.trail)
+    end
+    setv(state, state.intent_by_id, id, nil)
   end
   local kept = {}
   for i = 1, #state.intents do
@@ -603,13 +433,23 @@ local function block_intent(state, task, program, occurrence)
   intent.absence_check = program.absence_check
   pushv(state, state.intents, intent)
   setv(state, state.intent_by_id, intent.id, intent)
+  local demand_index = state.demand_index
+  if demand_index then
+    Domain.add(demand_index, intent, state.trail)
+  elseif #state.intents > Domain.SMALL_LIMIT then
+    demand_index = Domain.new(state.runtime)
+    setv(state, state, 'demand_index', demand_index)
+    for i = 1, #state.intents do
+      Domain.add(demand_index, state.intents[i], state.trail)
+    end
+  end
   local profile_plan = state.profile_plan
   if profile_plan then
     if #state.intents > profile_plan.max_intents then
       profile_plan.max_intents = #state.intents
     end
     state.runtime.instrumentation:event(profile_plan, 'intent', {
-      program_kind = program.kind,
+      primitive_kind = IR.kind(program),
       role = program.role,
       resource = tostring(program.resource or program.group),
     })
@@ -625,11 +465,11 @@ local function match_intents(state, left_id, right_id)
   local get = a.role == 'get' and a or b
   local put_task = state.tasks[put.task_id]
   local get_task = state.tasks[get.task_id]
-  local labels = { Activation.label(a.activation), Activation.label(b.activation) }
+  local labels = { Path.label(a.activation), Path.label(b.activation) }
   table.sort(labels)
   local fact = 'exchange:' .. table.concat(labels, '+')
-  setv(state, put_task, 'activation', Activation.child(put_task.activation, fact))
-  setv(state, get_task, 'activation', Activation.child(get_task.activation, fact))
+  setv(state, put_task, 'activation', Path.child(put_task.activation, fact))
+  setv(state, get_task, 'activation', Path.child(get_task.activation, fact))
   if not complete_task(state, put_task, new_outcome(state, PACK_TRUE, nil, put_task)) then
     return false
   end
@@ -639,204 +479,141 @@ local function match_intents(state, left_id, right_id)
   return true
 end
 
-local function is_machine_wait(x)
-  return type(x) == 'table' and x._fibers_scalar_wait == true
-end
-
-local function is_machine_ready(x)
-  return type(x) == 'table' and x._fibers_scalar_ready == true
-end
-
-local function machine_context(state)
-  return {
-    runtime = state.runtime,
-    now = function()
-      return state.runtime:now()
-    end,
-  }
-end
-
-local function machine_probe(state, program, value)
-  local profile_plan = state.profile_plan
-  if profile_plan then
-    profile_plan.machine_probes = profile_plan.machine_probes + 1
-  end
-  local t, payload = program.transition, program.payload or {}
-  if type(t.ready) == 'function' then
-    local out = t.ready(value, payload, machine_context(state))
-    return out ~= nil and out ~= false and not is_machine_wait(out)
-  end
-  local packed = packv(state, t.step(value, payload, machine_context(state)))
-  local first = packed[1]
-  if packed.n == 1 and is_machine_wait(first) then
-    return false
-  end
-  if is_machine_ready(first) then
-    return true
-  end
-  if t.mode == 'update' then
-    return packed.n > 0
-  end
-  return packed.n > 0 and packed[1] ~= nil
-end
-
-local function run_machine_transition(state, program, value)
-  local profile_plan = state.profile_plan
-  if profile_plan then
-    profile_plan.machine_steps = profile_plan.machine_steps + 1
-  end
-  local t, payload = program.transition, program.payload or {}
-  local packed = packv(state, t.step(value, payload, machine_context(state)))
-  local first = packed[1]
-  if packed.n == 1 and is_machine_wait(first) then
-    return nil
-  end
-  if is_machine_ready(first) then
-    if t.mode == 'query' and first.writes then
-      return nil
-    end
-    return {
-      writes = first.writes == true,
-      value = first.value,
-      result = first.pack or packv(state),
+local function transition_context(state)
+  local context = state.transition_context
+  if not context then
+    context = {
+      runtime = state.runtime,
+      now = function()
+        return state.runtime:now()
+      end,
     }
+    state.transition_context = context
   end
-  if t.mode == 'update' then
-    if packed.n == 0 then
-      return nil
-    end
-    local out = { n = packed.n - 1 }
-    for i = 2, packed.n do
-      out[i - 1] = packed[i]
-    end
-    out._fibers_pack = true
-    return { writes = true, value = packed[1], result = out }
-  end
-  if packed.n == 0 or packed[1] == nil then
-    return nil
-  end
-  if t.mode == 'select' then
-    local out = { n = packed.n - 1, _fibers_pack = true }
-    for i = 2, packed.n do
-      out[i - 1] = packed[i]
-    end
-    return { writes = true, value = packed[1], result = out }
-  end
-  return { writes = false, result = packed }
+  return context
 end
 
-local function resolve_machine_transitions(state, selected)
-  table.sort(selected, function(a, b)
-    local ao = (a.program.order or 0) + ((a.id or 0) / 1000000)
-    local bo = (b.program.order or 0) + ((b.id or 0) / 1000000)
-    return ao < bo
-  end)
-  local proof_labels = {}
-  for i = 1, #selected do
-    proof_labels[i] = intent_activation_label(selected[i])
+local function transition_ready(state, program, value)
+  local plan = state.profile_plan
+  if plan then
+    plan.machine_probes = plan.machine_probes + 1
   end
-  table.sort(proof_labels)
-  local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
-  local resolved = {}
-  for i = 1, #selected do
-    local intent = selected[i]
-    local program = intent.program
-    local task = state.tasks[intent.task_id]
-    ensure_task_view(state, task)
-    local value = Store.project_machine(state, task, program.location, function(v)
-      return machine_probe(state, program, v)
-    end, program.transition.accepts_supply, state.trail)
-    local r = run_machine_transition(state, program, value)
-    if not r then
-      return false
-    end
-    if r.writes then
+  return IR.transition_ready(program, value, transition_context(state))
+end
+
+local function transition_outcome(state, program, value, phase)
+  local plan = state.profile_plan
+  if plan and IR.rule(program).serial then
+    plan.machine_steps = plan.machine_steps + 1
+  end
+  return IR.transition_cursor(program, value, transition_context(state), phase):next()
+end
+
+local function stage_outcome(state, task, program, outcome)
+  local patch
+  if outcome.writes then
+    if outcome.machine then
       state.next_machine_serial = state.next_machine_serial + 1
-      Store.stage(state.views[task.view_id], program.location, {
-        kind = 'machine',
-        steps = { { serial = state.next_machine_serial, value = r.value } },
-      }, state.trail)
-    else
-      -- Ensure the location version is part of the observation set.
-      Store.cell(state.views[task.view_id], program.location, state.trail)
     end
-    resolved[#resolved + 1] = { intent = intent, task = task, result = r.result }
+    patch = IR.transition_patch(program, outcome, state.next_machine_serial)
   end
-  local ids = {}
+  if patch then
+    Ledger.stage(state.segments[task.segment_id], program.location, patch, state.trail)
+  else
+    Ledger.observe(state.segments[task.segment_id], program.location, state.trail)
+  end
+end
+
+local function activation_fact(selected)
+  local labels = {}
+  for i = 1, #selected do
+    labels[i] = intent_activation_label(selected[i])
+  end
+  table.sort(labels)
+  return 'transition:' .. table.concat(labels, '+')
+end
+
+local function finish_transitions(state, selected, resolved)
+  local ids, fact = {}, activation_fact(selected)
   for i = 1, #selected do
     ids[i] = selected[i].id
   end
   remove_intent_ids(state, ids)
   for i = 1, #resolved do
-    setv(
-      state,
-      resolved[i].task,
-      'activation',
-      Activation.child(resolved[i].task.activation, activation_fact)
-    )
-    if
-      not complete_task(
-        state,
-        resolved[i].task,
-        new_outcome(state, resolved[i].result, nil, resolved[i].task)
-      )
-    then
+    local row = resolved[i]
+    setv(state, row.task, 'activation', Path.child(row.task.activation, fact))
+    if not complete_task(state, row.task, new_outcome(state, row.result, nil, row.task)) then
       return false
     end
   end
   return true
 end
 
-local function resolve_claims(state, intent_ids)
-  local selected, by_id = {}, {}
-  for i = 1, #intent_ids do
-    by_id[intent_ids[i]] = true
+local function resolve_serial_transitions(state, selected)
+  table.sort(selected, function(left, right)
+    local a, b = IR.rule(left.program).order, IR.rule(right.program).order
+    return a ~= b and a < b or a == b and (left.id or 0) < (right.id or 0)
+  end)
+  local resolved = {}
+  for i = 1, #selected do
+    local intent, program = selected[i], selected[i].program
+    local task, rule = state.tasks[intent.task_id], IR.rule(program)
+    ensure_task_segment(state, task)
+    local value = Ledger.project_machine(state, task, program.location, function(candidate)
+      return transition_ready(state, program, candidate)
+    end, rule.accepts_supply, state.trail)
+    local outcome = transition_outcome(state, program, value)
+    if not outcome then
+      return false
+    end
+    stage_outcome(state, task, program, outcome)
+    resolved[#resolved + 1] = { task = task, result = outcome.result }
+  end
+  return finish_transitions(state, selected, resolved)
+end
+
+local function selected_intents(state, ids)
+  local wanted, selected = {}, {}
+  for i = 1, #ids do
+    wanted[ids[i]] = true
   end
   for i = 1, #state.intents do
     local intent = state.intents[i]
-    if by_id[intent.id] then
+    if wanted[intent.id] then
       selected[#selected + 1] = intent
     end
   end
   table.sort(selected, function(a, b)
     return a.id < b.id
   end)
+  return selected
+end
+
+local function resolve_transitions(state, intent_ids)
+  local selected = selected_intents(state, intent_ids)
   if #selected == 0 then
     return false
   end
-  if selected[1].kind == 'machine_transition' then
-    return resolve_machine_transitions(state, selected)
+  if IR.rule(selected[1].program).serial then
+    return resolve_serial_transitions(state, selected)
   end
 
-  local proof_labels = {}
+  local resolved, remaining = {}, {}
   for i = 1, #selected do
-    proof_labels[i] = intent_activation_label(selected[i])
+    remaining[i] = selected[i]
   end
-  table.sort(proof_labels)
-  local activation_fact = 'claim:' .. table.concat(proof_labels, '+')
-  local resolved = {}
-  local remaining = selected
-
-  -- A multi-claim branch represents one serial closure of a location domain.
-  -- At each step, select the first claim which is ready in the provisional
-  -- world built so far.  This discovers direct hand-offs (for example an
-  -- insertion making a selection ready) without guessing a fixed source or
-  -- request-id order.  Singleton claim alternatives remain in the frontier,
-  -- so other serialisations and their distinct results are still explored by
-  -- the same lazy machine if this closure later fails.
   while #remaining > 0 do
-    local chosen_index, chosen_resolution, chosen_task
+    local chosen_index, chosen_outcome, chosen_task
     for i = 1, #remaining do
-      local intent = remaining[i]
-      local program = intent.program
+      local intent, program = remaining[i], remaining[i].program
       local task = state.tasks[intent.task_id]
-      ensure_task_view(state, task)
+      ensure_task_segment(state, task)
       local value =
-        Store.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
+        Ledger.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
       if value ~= nil then
-        local resolution = Store.evaluate_claim(program, value)
-        if resolution then
-          chosen_index, chosen_resolution, chosen_task = i, resolution, task
+        local outcome = transition_outcome(state, program, value)
+        if outcome then
+          chosen_index, chosen_outcome, chosen_task = i, outcome, task
           break
         end
       end
@@ -844,89 +621,41 @@ local function resolve_claims(state, intent_ids)
     if not chosen_index then
       return false
     end
-
     local intent = remaining[chosen_index]
-    if chosen_resolution.patch then
-      Store.stage(
-        state.views[chosen_task.view_id],
-        intent.program.location,
-        chosen_resolution.patch,
-        state.trail
-      )
-    end
-    resolved[#resolved + 1] = {
-      intent = intent,
-      task = chosen_task,
-      result = chosen_resolution.result,
-    }
+    stage_outcome(state, chosen_task, intent.program, chosen_outcome)
+    resolved[#resolved + 1] = { task = chosen_task, result = chosen_outcome.result }
     table.remove(remaining, chosen_index)
   end
-
-  remove_intent_ids(state, intent_ids)
-  for i = 1, #resolved do
-    local r = resolved[i]
-    setv(state, r.task, 'activation', Activation.child(r.task.activation, activation_fact))
-    if not complete_task(state, r.task, new_outcome(state, r.result, nil, r.task)) then
-      return false
-    end
-  end
-  return true
+  return finish_transitions(state, selected, resolved)
 end
 
 local function witness_cursor(state, intent)
-  local program = intent.program
-  local task = state.tasks[intent.task_id]
-  ensure_task_view(state, task)
-  local function ready(value)
-    return IR.witness_ready(program, value, program.payload or {}, {})
-  end
-  local value =
-    Store.project_machine(state, task, program.location, ready, program.accepts_supply, state.trail)
-  return IR.open_witness_cursor(program, value, program.payload or {}, {})
+  local program, task, rule = intent.program, state.tasks[intent.task_id], IR.rule(intent.program)
+  ensure_task_segment(state, task)
+  local value = Ledger.project_machine(state, task, program.location, function(candidate)
+    return transition_ready(state, program, candidate)
+  end, rule.accepts_supply, state.trail)
+  return IR.transition_cursor(program, value, transition_context(state))
 end
 
-local function resolve_witness(state, intent_id, alt, alternative_index)
-  local intent, intent_pos
-  for i = 1, #state.intents do
-    if state.intents[i].id == intent_id then
-      intent, intent_pos = state.intents[i], i
-      break
-    end
-  end
-  if not intent or not alt then
+local function resolve_witness(state, intent_id, outcome, alternative_index)
+  local intent = state.intent_by_id[intent_id]
+  if not intent or not outcome then
     return false
   end
   local task = state.tasks[intent.task_id]
-  if alt.writes ~= false then
-    state.next_machine_serial = state.next_machine_serial + 1
-    Store.stage(state.views[task.view_id], intent.program.location, {
-      kind = 'machine',
-      steps = { { serial = state.next_machine_serial, value = alt.value } },
-    }, state.trail)
-  else
-    Store.cell(state.views[task.view_id], intent.program.location, state.trail)
-  end
-  local kept = {}
-  for i = 1, #state.intents do
-    if i ~= intent_pos then
-      kept[#kept + 1] = state.intents[i]
-    end
-  end
-  if state.trail then
-    state.trail:set(state, 'intents', kept)
-  else
-    state.intents = kept
-  end
+  stage_outcome(state, task, intent.program, outcome)
+  remove_intent_ids(state, { intent_id })
   setv(
     state,
     task,
     'activation',
-    Activation.child(
+    Path.child(
       task.activation,
       'witness:' .. intent_activation_label(intent) .. ':' .. tostring(alternative_index or 1)
     )
   )
-  local packed = alt.result
+  local packed = outcome.result
   if not (type(packed) == 'table' and packed._fibers_pack == true) then
     if type(packed) == 'table' and packed.n ~= nil then
       packed._fibers_pack = true
@@ -937,19 +666,15 @@ local function resolve_witness(state, intent_id, alt, alternative_index)
   return complete_task(state, task, new_outcome(state, packed, nil, task))
 end
 
-local function resolve_claim_set(state, group, ids)
-  -- Total machine updates on a location are unavoidable members of the
-  -- current world.  Include them whenever resolving another transition on
-  -- that location so a constraining sibling cannot be bypassed by resolving
-  -- a partial subset first.
+local function resolve_transition_set(state, group, ids)
   local selected = {}
   for i = 1, #ids do
     selected[ids[i]] = true
   end
   for i = 1, #(group.ids or {}) do
-    local id = group.ids[i]
-    local intent = state.intent_by_id[id]
-    if intent and intent.kind == 'machine_transition' and intent.program.transition.mode == 'update' then
+    local id, intent = group.ids[i], state.intent_by_id[group.ids[i]]
+    local rule = intent and IR.rule(intent.program)
+    if rule and rule.serial and rule.total then
       selected[id] = true
     end
   end
@@ -958,18 +683,24 @@ local function resolve_claim_set(state, group, ids)
     expanded[#expanded + 1] = id
   end
   table.sort(expanded)
-  return resolve_claims(state, expanded)
+  return resolve_transitions(state, expanded)
 end
 
 local function final_candidate(state)
   local root_count = state.root_count or 0
+  local root_ids
   if root_count <= 2 then
     if (state.root_1 and not state.root_1.done) or (state.root_2 and not state.root_2.done) then
       return nil
     end
   else
-    for _, root in pairs(state.roots) do
-      if not root.done then
+    root_ids = state.session:reuse_array('_arena_root_ids')
+    for id in pairs(state.roots) do
+      root_ids[#root_ids + 1] = id
+    end
+    table.sort(root_ids)
+    for i = 1, #root_ids do
+      if not state.roots[root_ids[i]].done then
         return nil
       end
     end
@@ -978,40 +709,34 @@ local function final_candidate(state)
     return nil
   end
 
-  local root_views = state.session:reuse_array('_arena_root_views')
-  local only_root = root_count == 1 and state.root_1 or nil
+  local root_segments = state.session:reuse_array('_arena_root_segments')
   if root_count <= 2 then
     local root = state.root_1
-    if root and root.view_id then
-      root_views[#root_views + 1] = state.views[root.view_id]
+    if root and root.segment_id then
+      root_segments[#root_segments + 1] = state.segments[root.segment_id]
     end
     root = state.root_2
-    if root and root.view_id then
-      root_views[#root_views + 1] = state.views[root.view_id]
+    if root and root.segment_id then
+      root_segments[#root_segments + 1] = state.segments[root.segment_id]
     end
   else
-    for _, root in pairs(state.roots) do
-      if root.view_id then
-        root_views[#root_views + 1] = state.views[root.view_id]
+    for i = 1, #root_ids do
+      local root = state.roots[root_ids[i]]
+      if root.segment_id then
+        root_segments[#root_segments + 1] = state.segments[root.segment_id]
       end
     end
   end
-  local store_view, observations, writes
-  if root_count == 1 and only_root.view_id then
-    store_view = state.views[only_root.view_id]
-  else
-    local collect_err
-    observations, writes, collect_err = Store.collect_candidate(root_views)
-    if collect_err then
-      return nil
-    end
+  local observations, writes, collect_err = Ledger.collect_candidate(root_segments)
+  if collect_err then
+    return nil
   end
 
   -- Domain constraints are fixed substrate rules, not resource callbacks.
-  local domain_writes = store_view and store_view.delta or writes
+  local domain_writes = writes
   for loc, patch in pairs(domain_writes or {}) do
     if loc.domain == 'counter' then
-      local final = Store.apply_patch_value(loc, loc.value, patch)
+      local final = Algebra.apply(loc, loc.value, patch)
       local owner = loc.owner
       if owner.min ~= nil and final < owner.min then
         return nil
@@ -1027,24 +752,10 @@ local function final_candidate(state)
   local participant_2 = state.root_2 and state.root_2.root_id or nil
   local participants = nil
   if root_count > 2 then
-    participant_count, participant_1, participant_2 = 0, nil, nil
-    for id in pairs(state.roots) do
-      participant_count = participant_count + 1
-      if participant_count == 1 then
-        participant_1 = id
-      elseif participant_count == 2 then
-        participant_2 = id
-      else
-        if not participants then
-          participants = state.session:reuse_array('_arena_participants')
-          participants[1], participants[2] = participant_1, participant_2
-        end
-        participants[participant_count] = id
-      end
+    participants = state.session:reuse_array('_arena_participants')
+    for i = 1, #root_ids do
+      participants[i] = root_ids[i]
     end
-  end
-  if participants then
-    table.sort(participants)
     participant_1, participant_2 = nil, nil
   elseif participant_count == 2 and participant_2 < participant_1 then
     participant_1, participant_2 = participant_2, participant_1
@@ -1058,7 +769,6 @@ local function final_candidate(state)
     participant_1,
     participant_2,
     participants,
-    store_view,
     observations,
     writes,
     #state.effects > 0 and state.effects or nil,
@@ -1082,8 +792,8 @@ local function final_candidate(state)
   local plan = state.profile_plan
   if plan then
     plan.participants = participant_count
-    plan.observations = map_count(store_view and store_view.cells or observations)
-    plan.writes = map_count(store_view and store_view.delta or writes)
+    plan.observations = map_count(observations)
+    plan.writes = map_count(writes)
     plan.effects = #(candidate.effects or {})
   end
   return candidate
@@ -1102,7 +812,7 @@ local function execute_program(state, task, program, occurrence)
 
   if kind == 'snapshot' then
     local resource = program.resource
-    local view = ensure_task_view(state, task)
+    local segment = ensure_task_segment(state, task)
     if program.snapshot_kind == 'keyed' then
       local entries, keys = {}, {}
       for k in pairs(resource.entries) do
@@ -1112,8 +822,8 @@ local function execute_program(state, task, program, occurrence)
         keys[k] = true
       end
       for k in pairs(keys) do
-        local value = Store.read(view, resource:_location(k), state.trail)
-        if value ~= Store.ABSENT then
+        local value = Ledger.read(segment, resource:_location(k), state.trail)
+        if value ~= Ledger.ABSENT then
           if resource._nil_sentinel and value == resource._nil_sentinel then
             entries[k] = nil
           else
@@ -1128,7 +838,7 @@ local function execute_program(state, task, program, occurrence)
         new_outcome(state, packv(state, { entries = entries, version = resource.version }), nil, task)
       )
     elseif program.snapshot_kind == 'index' then
-      local value = Store.read(view, resource._location, state.trail)
+      local value = Ledger.read(segment, resource._location, state.trail)
       local entries = {}
       for k, e in pairs(value or {}) do
         entries[k] = { key = e.key, rank = e.rank, value = e.value, seq = e.seq }
@@ -1150,7 +860,7 @@ local function execute_program(state, task, program, occurrence)
       end
       for subject in pairs(subjects) do
         local loc = resource:_location(subject)
-        local hs = Store.read(view, loc, state.trail)
+        local hs = Ledger.read(segment, loc, state.trail)
         holders[subject] = {}
         for owner, mode in pairs(hs or {}) do
           holders[subject][owner] = mode
@@ -1166,18 +876,18 @@ local function execute_program(state, task, program, occurrence)
     error('unknown snapshot kind', 0)
   end
 
-  local view = nil
+  local segment = nil
   local loc = program.location
 
   if kind == 'version_wait' then
-    view = ensure_task_view(state, task)
+    segment = ensure_task_segment(state, task)
     if loc.version ~= program.version then
-      Store.cell(view, loc, state.trail)
+      Ledger.observe(segment, loc, state.trail)
       advance_activation(state, task, 'primitive:version_wait:' .. object_version_label(loc))
       return complete_task(
         state,
         task,
-        new_outcome(state, packv(state, Store.read(view, loc, state.trail), loc.version), nil, task)
+        new_outcome(state, packv(state, Ledger.read(segment, loc, state.trail), loc.version), nil, task)
       )
     end
     program.observed_version = loc.version
@@ -1186,14 +896,14 @@ local function execute_program(state, task, program, occurrence)
   end
 
   if kind == 'read' then
-    view = ensure_task_view(state, task)
+    segment = ensure_task_segment(state, task)
     advance_activation(state, task, 'primitive:read:' .. object_version_label(loc))
     return complete_task(
       state,
       task,
       new_outcome(
         state,
-        Store.result_pack(program, Store.read(view, loc, state.trail), state.session),
+        IR.result_pack(program, Ledger.read(segment, loc, state.trail), state.session),
         nil,
         task
       )
@@ -1201,41 +911,36 @@ local function execute_program(state, task, program, occurrence)
   end
 
   if kind == 'patch' then
-    view = ensure_task_view(state, task)
+    segment = ensure_task_segment(state, task)
     local patch = program.patch
     if program.payload_patch == 'replace' then
       patch = { kind = 'replace', value = occurrence.payload }
     end
-    Store.stage(view, loc, patch, state.trail)
+    Ledger.stage(segment, loc, patch, state.trail)
     advance_activation(state, task, 'primitive:patch:' .. object_version_label(loc))
     return complete_task(
       state,
       task,
       new_outcome(
         state,
-        Store.result_pack(program, Store.read(view, loc, state.trail), state.session),
+        IR.result_pack(program, Ledger.read(segment, loc, state.trail), state.session),
         nil,
         task
       )
     )
   end
 
-  if kind == 'claim' or kind == 'machine_transition' or kind == 'witness_transition' then
-    block_intent(state, task, program)
-    return true
-  end
-
-  if kind == 'conditional_claim' then
-    view = ensure_task_view(state, task)
-    local value = Store.read(view, loc, state.trail)
-    if Store.predicate_holds(program, value) then
-      Store.stage(view, loc, program.immediate_patch, state.trail)
-      advance_activation(state, task, 'primitive:conditional_claim:' .. object_version_label(loc))
-      return complete_task(
-        state,
-        task,
-        new_outcome(state, Store.result_pack(program, value, state.session), nil, task)
-      )
+  if kind == 'transition' then
+    local rule = IR.rule(program)
+    if rule.eager then
+      segment = ensure_task_segment(state, task)
+      local value = Ledger.read(segment, loc, state.trail)
+      local outcome = transition_outcome(state, program, value, 'eager')
+      if outcome then
+        stage_outcome(state, task, program, outcome)
+        advance_activation(state, task, 'primitive:transition:' .. object_version_label(loc))
+        return complete_task(state, task, new_outcome(state, outcome.result, nil, task))
+      end
     end
     block_intent(state, task, program)
     return true
@@ -1244,134 +949,16 @@ local function execute_program(state, task, program, occurrence)
   error('unknown programme kind: ' .. tostring(kind), 0)
 end
 
-local function search_work_steps(state)
-  return state.search_work and state.search_work.steps or state.search_steps or 0
-end
-
-local function search_cache(state)
-  return SearchCache.ensure(state)
-end
-
 local function has_supplier(state, intents)
-  local enabled = state.refutation_cache_possible
-    and search_work_steps(state) >= (state.refutation_cache_min_steps or 0)
-    and SearchCache.supplier_enabled(search_cache(state), state)
-  local signature = enabled and SearchCache.supplier_signature(state, intents) or nil
-  local cache = signature and search_cache(state) or nil
-  if signature and SearchCache.get_no_supplier(cache, signature) then
-    return false
-  end
-  local found = state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
-  if not found and signature then
-    SearchCache.put_no_supplier(cache, signature)
-  end
-  return found
+  return state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
 end
 
-local function supplier_rows(state)
-  local enabled = state.refutation_cache_possible
-    and search_work_steps(state) >= (state.refutation_cache_min_steps or 0)
-    and SearchCache.supplier_enabled(search_cache(state), state)
-  local signature = enabled and SearchCache.supplier_signature(state, state.intents) or nil
-  local cache = signature and search_cache(state) or nil
-  if signature and SearchCache.get_no_supplier(cache, signature) then
-    return {}, true
-  end
-  local rows =
-    state.runtime:_supplier_request_rows(state.intents, state.roots, state.excluded_roots, state.requests)
-  if #rows == 0 and signature then
-    SearchCache.put_no_supplier(cache, signature)
-  end
-  return rows, false
+local function supplier_candidate(state)
+  return state.runtime:_supplier_request(state.intents, state.roots, state.excluded_roots, state.requests)
 end
 
-local function merge_refutation(dst, src)
-  if not src then
-    return dst
-  end
-  dst = dst or { interests = {}, checks = {}, activation_keys = {} }
-  dst.activation_keys = dst.activation_keys or {}
-  local seen_i, seen_c, seen_a = {}, {}, {}
-  for i = 1, #dst.interests do
-    seen_i[dst.interests[i].id or tostring(dst.interests[i])] = true
-  end
-  for i = 1, #dst.checks do
-    seen_c[dst.checks[i].id or tostring(dst.checks[i])] = true
-  end
-  for i = 1, #dst.activation_keys do
-    seen_a[dst.activation_keys[i]] = true
-  end
-  for i = 1, #(src.interests or {}) do
-    local x = src.interests[i]
-    local id = x.id or tostring(x)
-    if not seen_i[id] then
-      seen_i[id] = true
-      dst.interests[#dst.interests + 1] = x
-    end
-  end
-  for i = 1, #(src.checks or {}) do
-    local x = src.checks[i]
-    local id = x.id or tostring(x)
-    if not seen_c[id] then
-      seen_c[id] = true
-      dst.checks[#dst.checks + 1] = x
-    end
-  end
-  for i = 1, #(src.activation_keys or {}) do
-    local key = src.activation_keys[i]
-    if not seen_a[key] then
-      seen_a[key] = true
-      dst.activation_keys[#dst.activation_keys + 1] = key
-    end
-  end
-  return dst
-end
-
-local function refutation_activation_label(refutation)
-  local keys = {}
-  for i = 1, #((refutation and refutation.activation_keys) or {}) do
-    keys[i] = refutation.activation_keys[i]
-  end
-  table.sort(keys)
-  return #keys > 0 and table.concat(keys, '|') or '-'
-end
-
-local function terminal_refutation(state)
-  local out = { interests = {}, checks = {}, activation_keys = {} }
-  for i = 1, #state.intents do
-    local intent = state.intents[i]
-    if intent.interest then
-      out.interests[#out.interests + 1] = intent.interest
-    end
-    if intent.absence_check then
-      local check = intent.absence_check
-      if type(check) == 'function' then
-        check = { validate = check, id = 'absence:' .. tostring(intent.id) }
-      end
-      out.checks[#out.checks + 1] = check
-    elseif intent.program and intent.program.location then
-      local loc = intent.program.location
-      local observed_version = intent.program.observed_version or loc.version
-      out.checks[#out.checks + 1] = {
-        id = 'location:' .. tostring(loc.id) .. ':' .. tostring(observed_version),
-        validate = function()
-          return loc.version == observed_version
-        end,
-      }
-    end
-  end
-  local facts = {}
-  for i = 1, #out.interests do
-    local interest = out.interests[i]
-    facts[#facts + 1] = 'i:' .. tostring(interest.id or interest)
-  end
-  for i = 1, #out.checks do
-    local check = out.checks[i]
-    facts[#facts + 1] = 'c:' .. tostring(check.id or check)
-  end
-  table.sort(facts)
-  out.activation_keys[1] = #facts > 0 and table.concat(facts, ',') or '-'
-  return out
+local function terminal_certificate(state)
+  return Certificate.from_intents(state.intents)
 end
 
 local function collect_defeat_effects(expr, out)
@@ -1427,23 +1014,6 @@ local function attach_candidate_effects(runtime, candidate, extra)
   return candidate
 end
 
-local function memo_enter(state, node)
-  if
-    state.state_memoization_possible
-    and search_work_steps(state) >= (state.state_memoization_min_steps or 0)
-    and #(state.intents or {}) >= (state.state_memoization_min_intents or 0)
-  then
-    local cache = search_cache(state)
-    local signature = SearchCache.probe_state(cache, state)
-    local cached = signature and SearchCache.get_state(cache, signature)
-    if cached then
-      return cached
-    end
-    node.memo_signature = signature
-  end
-  return nil
-end
-
 local function begin_search_round(state)
   local session = state.session
   if session and session.work_remaining ~= nil then
@@ -1471,7 +1041,7 @@ local function begin_search_round(state)
   return true
 end
 
--- Drain deterministic task work until the evaluator reaches a blocked frontier
+-- Drain deterministic task work until the evaluator reaches a blocked domain
 -- or one of the two option-level branch forms.  Branch control is represented
 -- explicitly; no Lua call frame is used to remember an alternative.
 local function drain_active(state)
@@ -1492,7 +1062,7 @@ local function drain_active(state)
       end
       if kind == 'always' then
         if not complete_task(state, task, new_outcome(state, expr.vals, nil, task)) then
-          return 'retry', terminal_refutation(state)
+          return 'retry', terminal_certificate(state)
         end
       elseif kind == 'and_then' then
         local parent_activation = task.activation
@@ -1504,7 +1074,7 @@ local function drain_active(state)
           continuation_footprint = expr.continuation_footprint,
         })
         setv(state, task, 'expr', expr.p)
-        setv(state, task, 'activation', Activation.child(parent_activation, 'and_then:prefix'))
+        setv(state, task, 'activation', Path.child(parent_activation, 'and_then:prefix'))
         add_active(state, task.id)
       elseif kind == 'annotated' then
         local parent_activation = task.activation
@@ -1516,16 +1086,16 @@ local function drain_active(state)
           setv(state, task, 'symmetry_key', expr.symmetry_key)
         end
         setv(state, task, 'expr', expr.p)
-        setv(state, task, 'activation', Activation.child(parent_activation, 'annotated:body'))
+        setv(state, task, 'activation', Path.child(parent_activation, 'annotated:body'))
         add_active(state, task.id)
       elseif kind == 'consequence' then
         pushv(state, state.effects, expr.effect)
         if not complete_task(state, task, new_outcome(state, pack_(), nil, task)) then
-          return 'retry', terminal_refutation(state)
+          return 'retry', terminal_certificate(state)
         end
       elseif kind == 'primitive' then
         if not execute_program(state, task, expr.program, expr) then
-          return 'retry', terminal_refutation(state)
+          return 'retry', terminal_certificate(state)
         end
       elseif kind == 'product' then
         start_product(state, task, expr)
@@ -1553,7 +1123,7 @@ local function drain_active(state)
               state.choice_generation
             ),
             next_index = 1,
-            refutation = nil,
+            certificate = nil,
           }
       elseif kind == 'or_else' then
         return 'branch',
@@ -1563,8 +1133,8 @@ local function drain_active(state)
             expr = expr,
             activation = task.activation,
             phase = 'preferred',
-            refutation = nil,
-            preferred_refutation = nil,
+            certificate = nil,
+            preferred_certificate = nil,
           }
       else
         error('unsupported Op kind: ' .. tostring(kind), 0)
@@ -1574,18 +1144,11 @@ local function drain_active(state)
   return 'blocked'
 end
 
-local function analyse_frontier(state)
+local function analyse_domain(state)
   local profile_plan = state.profile_plan
-  if profile_plan and state.runtime.instrumentation.state_hash then
-    state.runtime.instrumentation:observe_state(profile_plan, SearchCache.signature(state, false), false)
-  end
-  local frontier = Frontier.analyse(
-    state,
-    intents_compatible,
-    state.runtime.branch_policy ~= 'legacy',
-    state.session:frontier_scratch()
-  )
-  local exchange = frontier.exchange
+  local domain =
+    Domain.open(state.demand_index, state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
+  local exchange = domain.exchange
   if profile_plan then
     profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans
     profile_plan.compatible_pairs = profile_plan.compatible_pairs + exchange.compatible
@@ -1595,9 +1158,8 @@ local function analyse_frontier(state)
       math.max(profile_plan.max_exchange_domain or 0, exchange.selected_degree or 0)
     profile_plan.symmetry_exchange_pruned = profile_plan.symmetry_exchange_pruned
       + (exchange.symmetry_pruned or 0)
-    profile_plan.claim_groups_scanned = profile_plan.claim_groups_scanned + #frontier.claims
-    for i = 1, #frontier.claims do
-      local group = frontier.claims[i]
+    Domain.each_group(domain, function(group)
+      profile_plan.claim_groups_scanned = profile_plan.claim_groups_scanned + 1
       local size = #group.ids
       if size > profile_plan.max_claim_group then
         profile_plan.max_claim_group = size
@@ -1606,22 +1168,18 @@ local function analyse_frontier(state)
         local names, kinds, supply_sets, accepts, modes = {}, {}, {}, {}, {}
         for j = 1, #group.intents do
           local intent = group.intents[j]
-          local transition = intent.program and intent.program.transition
-          names[j] = (transition and transition.name) or intent.program.name or intent.kind
-          kinds[j] = intent.kind
-          local supplied = transition and transition.supplies or intent.program.supplies
-          local accepts_value = transition and transition.accepts_supply
-          if transition == nil then
-            accepts_value = intent.program.accepts_supply
-          end
-          supply_sets[j] = Supply.describe(supplied)
-          accepts[j] = tostring(accepts_value)
-          modes[j] = transition and transition.mode or intent.program.mode
+          local rule = IR.rule(intent.program)
+          local transition = rule.transition
+          names[j] = (transition and transition.name) or rule.name or intent.kind
+          kinds[j] = rule.type
+          supply_sets[j] = Supply.describe(rule.supplies)
+          accepts[j] = tostring(rule.accepts_supply)
+          modes[j] = transition and transition.mode or rule.type
         end
         state.runtime.instrumentation:event(profile_plan, 'claim_group', {
           key = tostring(group.key and (group.key.name or group.key._fibers_id or group.key) or '<nil>'),
           size = size,
-          all_machine = group.all_machine,
+          serial_only = group.serial_only,
           group_accepts_supply = group.accepts_supply,
           names = table.concat(names, '|'),
           kinds = table.concat(kinds, '|'),
@@ -1630,13 +1188,13 @@ local function analyse_frontier(state)
           modes = table.concat(modes, '|'),
         })
       end
-    end
+    end)
   end
-  return frontier
+  return domain
 end
 
 -- Apply only the two reductions already certified by the previous machine.
--- The return value is true for progress, false plus a refutation for a failed
+-- The return value is true for progress, false plus a certificate for a failed
 -- forced action, and nil when genuine branching remains.
 local function raw_exchange_program(op)
   if not op or op.kind ~= 'primitive' then
@@ -1654,7 +1212,7 @@ local function raw_exchange_program(op)
 end
 
 local function recruit_forced_raw_exchange(state, exchange)
-  if #state.intents ~= 1 or #exchange.pairs ~= 0 or state.session.stack ~= nil then
+  if #state.intents ~= 1 or exchange.compatible ~= 0 or state.session.stack ~= nil then
     return false
   end
   local intent = state.intents[1]
@@ -1663,11 +1221,10 @@ local function recruit_forced_raw_exchange(state, exchange)
   if not current or current ~= intent.program then
     return false
   end
-  local rows = supplier_rows(state)
-  if #rows ~= 1 then
+  local row, count = supplier_candidate(state)
+  if count ~= 1 then
     return false
   end
-  local row = rows[1]
   local request = state.requests[row.id]
   local supplier = raw_exchange_program(request and request.op)
   if not supplier or supplier.resource ~= current.resource or supplier.role == current.role then
@@ -1682,192 +1239,94 @@ local function recruit_forced_raw_exchange(state, exchange)
   return true
 end
 
-local function apply_forced_frontier(state, frontier)
+local function apply_forced_domain(state, domain)
   if state.runtime.normalise_search == false then
     return nil
   end
   local profile_plan = state.profile_plan
-  local exchange = frontier.exchange
+  local exchange = domain.exchange
   if recruit_forced_raw_exchange(state, exchange) then
     return true
   end
-  if #state.intents == 2 and exchange.selected_degree == 1 and #exchange.pairs == 1 then
+  if #state.intents == 2 and exchange.selected_degree == 1 and exchange.compatible == 1 then
     if not has_supplier(state, { exchange.selected }) then
       if profile_plan then
         profile_plan.forced_exchange_opportunities = profile_plan.forced_exchange_opportunities + 1
         profile_plan.forced_exchanges = profile_plan.forced_exchanges + 1
         profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
       end
-      local pair = exchange.pairs[1]
-      if match_intents(state, pair.left, pair.right) then
+      local pair = Domain.unique_exchange(domain)
+      if pair and match_intents(state, pair.left, pair.right) then
         return true
       end
-      local terminal = terminal_refutation(state)
-      if profile_plan and state.runtime.instrumentation.state_hash then
-        state.runtime.instrumentation:observe_state(profile_plan, SearchCache.signature(state, true), true)
-      end
+      local terminal = terminal_certificate(state)
       return false, terminal
     end
   end
 
-  local groups = frontier.claims
-  for i = 1, #groups do
-    local group = groups[i]
-    -- A non-supplying machine-transition group has one semantic journal: all
-    -- currently entered transitions at that location in their declared serial
-    -- order.  Once no pending root can add a constraining participant to this
-    -- location, introducing a branch frame cannot reveal another world; it
-    -- merely delays the same unavoidable reduction.  Apply it in-place and let
-    -- the enclosing lazy search checkpoint provide any rollback required by a
-    -- later genuine alternative.
-    if group.all_machine and not group.accepts_supply and not has_supplier(state, group.intents) then
-      if profile_plan then
-        profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1
-        profile_plan.forced_claims = profile_plan.forced_claims + 1
-        profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
-      end
-      if resolve_claim_set(state, group, group.ids) then
-        return true
-      end
-      return false, terminal_refutation(state)
+  local forced_group
+  Domain.each_group(domain, function(group)
+    if
+      not forced_group
+      and group.serial_only
+      and not group.accepts_supply
+      and not has_supplier(state, group.intents)
+    then
+      forced_group = group
     end
+  end)
+  if forced_group then
+    if profile_plan then
+      profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1
+      profile_plan.forced_claims = profile_plan.forced_claims + 1
+      profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
+    end
+    if resolve_transition_set(state, forced_group, forced_group.ids) then
+      return true
+    end
+    return false, terminal_certificate(state)
   end
   return nil
 end
 
-local function new_frontier_frame(frontier)
-  frontier = Frontier.detach(frontier)
-  return {
-    kind = 'frontier',
-    frontier = frontier,
-    phase = 'exchange',
-    pair_index = 1,
-    witness_index = 1,
-    witness_cursor = nil,
-    claim_index = 1,
-    claim_phase = nil,
-    claim_single_index = 1,
-    supplier_ready = false,
-    supplier_row = nil,
-    supplier_phase = 1,
-    refutation = nil,
-  }
+local function new_domain_frame(domain)
+  return { kind = 'domain', domain = domain, cursor = Domain.cursor(domain), certificate = nil }
 end
 
-local function observe_supplier_rows(state, frame)
+local function observe_supplier(state, frame)
   if frame.supplier_ready then
     return
   end
   frame.supplier_ready = true
-  local frontier = frame.frontier
-  local suppliers, supplier_refutation_hit = {}, false
-  if frontier.accepts_participant_supply then
-    suppliers, supplier_refutation_hit = supplier_rows(state)
+  local row, count = nil, 0
+  if frame.domain.accepts_participant_supply then
+    row, count = supplier_candidate(state)
   end
   local profile_plan = state.profile_plan
   if profile_plan then
-    if not supplier_refutation_hit then
-      profile_plan.footprint_checks = profile_plan.footprint_checks
-        + math.max(0, map_count(state.requests) - map_count(state.roots))
-    end
-    profile_plan.recruitment_candidates = profile_plan.recruitment_candidates + #suppliers
-    if suppliers[1] then
-      profile_plan.recruitment_best_score =
-        math.max(profile_plan.recruitment_best_score or 0, suppliers[1].score or 0)
-      profile_plan.footprint_matches = profile_plan.footprint_matches + #suppliers
-      local key = 'footprint_' .. tostring(suppliers[1].reason or 'unknown') .. '_matches'
+    profile_plan.footprint_checks = profile_plan.footprint_checks
+      + math.max(0, map_count(state.requests) - map_count(state.roots))
+    profile_plan.recruitment_candidates = profile_plan.recruitment_candidates + count
+    if row then
+      profile_plan.recruitment_best_score = math.max(profile_plan.recruitment_best_score or 0, row.score or 0)
+      profile_plan.footprint_matches = profile_plan.footprint_matches + count
+      local key = 'footprint_' .. tostring(row.reason or 'unknown') .. '_matches'
       profile_plan[key] = (profile_plan[key] or 0) + 1
     end
   end
-  frame.supplier_row = suppliers[1]
+  frame.supplier_row = row
 end
 
 local function next_frontier_alternative(state, frame)
-  local frontier = frame.frontier
-  while true do
-    if frame.phase == 'exchange' then
-      local pair = frontier.exchange.pairs[frame.pair_index]
-      if pair then
-        frame.pair_index = frame.pair_index + 1
-        return { kind = 'exchange', pair = pair, domain = frontier.exchange.selected_degree }
-      end
-      frame.phase = 'witness'
-    elseif frame.phase == 'witness' then
-      local intent = frontier.witnesses[frame.witness_index]
-      if not intent then
-        frame.phase = 'claim'
-      else
-        if not frame.witness_cursor then
-          frame.witness_cursor = witness_cursor(state, intent)
-        end
-        local alt = frame.witness_cursor:next()
-        if alt ~= nil then
-          frame.witness_alternative_index = (frame.witness_alternative_index or 0) + 1
-          return {
-            kind = 'witness',
-            intent_id = intent.id,
-            alternative = alt,
-            alternative_index = frame.witness_alternative_index,
-          }
-        end
-        frame.witness_alternative_index = 0
-        frame.witness_cursor = nil
-        frame.witness_index = frame.witness_index + 1
-      end
-    elseif frame.phase == 'claim' then
-      local group = frontier.claims[frame.claim_index]
-      if not group then
-        frame.phase = 'supplier'
-      else
-        if frame.claim_phase == nil then
-          if group.all_machine and not group.accepts_supply then
-            frame.claim_phase = 'all_only'
-          elseif #group.ids > 1 then
-            frame.claim_phase = 'whole'
-          else
-            frame.claim_phase = 'singles'
-          end
-          frame.claim_single_index = 1
-        end
-
-        if frame.claim_phase == 'all_only' then
-          frame.claim_phase = 'done'
-          return { kind = 'claim', group = group, ids = group.ids, claim_kind = 'all' }
-        elseif frame.claim_phase == 'whole' then
-          frame.claim_phase = 'singles'
-          return { kind = 'claim', group = group, ids = group.ids, claim_kind = 'closure' }
-        elseif frame.claim_phase == 'singles' then
-          local id = group.ids[frame.claim_single_index]
-          if id then
-            frame.claim_single_index = frame.claim_single_index + 1
-            return { kind = 'claim', group = group, ids = { id }, claim_kind = 'single' }
-          end
-          frame.claim_phase = 'done'
-        end
-
-        if frame.claim_phase == 'done' then
-          frame.claim_index = frame.claim_index + 1
-          frame.claim_phase = nil
-        end
-      end
-    elseif frame.phase == 'supplier' then
-      observe_supplier_rows(state, frame)
-      local row = frame.supplier_row
-      if not row then
-        frame.phase = 'done'
-      elseif frame.supplier_phase == 1 then
-        frame.supplier_phase = 2
-        return { kind = 'recruit', row = row }
-      elseif frame.supplier_phase == 2 then
-        frame.supplier_phase = 3
-        return { kind = 'exclude', row = row }
-      else
-        frame.phase = 'done'
-      end
-    else
-      return nil
-    end
-  end
+  return Domain.next(frame.cursor, {
+    witness_cursor = function(intent)
+      return witness_cursor(state, intent)
+    end,
+    supplier = function()
+      observe_supplier(state, frame)
+      return frame.supplier_row
+    end,
+  })
 end
 
 local function next_branch_alternative(state, frame)
@@ -1887,7 +1346,7 @@ local function next_branch_alternative(state, frame)
       return { kind = 'or_else_fallback' }
     end
     return nil
-  elseif frame.kind == 'frontier' then
+  elseif frame.kind == 'domain' then
     return next_frontier_alternative(state, frame)
   end
   error('unknown search branch frame: ' .. tostring(frame.kind), 0)
@@ -1901,12 +1360,7 @@ local function prepare_alternative(state, frame, alt)
     end
     local task = state.tasks[frame.task_id]
     setv(state, task, 'expr', frame.expr.choices[alt.choice_index])
-    setv(
-      state,
-      task,
-      'activation',
-      Activation.child(frame.activation, 'choice:' .. tostring(alt.choice_index))
-    )
+    setv(state, task, 'activation', Path.child(frame.activation, 'choice:' .. tostring(alt.choice_index)))
     add_active(state, task.id)
     return true
   elseif alt.kind == 'or_else_preferred' then
@@ -1916,7 +1370,7 @@ local function prepare_alternative(state, frame, alt)
     end
     local task = state.tasks[frame.task_id]
     setv(state, task, 'expr', frame.expr.p)
-    setv(state, task, 'activation', Activation.child(frame.activation, 'or_else:preferred'))
+    setv(state, task, 'activation', Path.child(frame.activation, 'or_else:preferred'))
     add_active(state, task.id)
     return true
   elseif alt.kind == 'or_else_fallback' then
@@ -1925,20 +1379,20 @@ local function prepare_alternative(state, frame, alt)
       state.runtime.instrumentation:event(profile_plan, 'or_else_fallback')
     end
     setv(state, state, 'used_fallback', true)
-    local pref = frame.preferred_refutation
-    for i = 1, #((pref and pref.checks) or {}) do
-      pushv(state, state.negative_checks, pref.checks[i])
-    end
-    for i = 1, #((pref and pref.interests) or {}) do
-      pushv(state, state.fallback_interests, pref.interests[i])
-    end
+    local pref = frame.preferred_certificate
+    Certificate.each(pref, 'check', function(check)
+      pushv(state, state.negative_checks, check)
+    end)
+    Certificate.each(pref, 'interest', function(interest)
+      pushv(state, state.fallback_interests, interest)
+    end)
     local task = state.tasks[frame.task_id]
     setv(state, task, 'expr', frame.expr.q)
     setv(
       state,
       task,
       'activation',
-      Activation.child(frame.activation, 'or_else:fallback:' .. refutation_activation_label(pref))
+      Path.child(frame.activation, 'or_else:fallback:' .. Certificate.activation_label(pref))
     )
     add_active(state, task.id)
     return true
@@ -1956,7 +1410,7 @@ local function prepare_alternative(state, frame, alt)
       profile_plan.witness_alternatives = profile_plan.witness_alternatives + 1
     end
     return resolve_witness(state, alt.intent_id, alt.alternative, alt.alternative_index)
-  elseif alt.kind == 'claim' then
+  elseif alt.kind == 'transition' then
     if profile_plan then
       profile_plan.claim_branches = profile_plan.claim_branches + 1
       if state.runtime.instrumentation.trace then
@@ -1970,7 +1424,7 @@ local function prepare_alternative(state, frame, alt)
             or '<missing>'
         end
         state.runtime.instrumentation:event(profile_plan, 'claim_branch', {
-          claim_kind = alt.claim_kind,
+          transition_kind = alt.transition_kind,
           size = #alt.ids,
           names = table.concat(names, '|'),
           group_key = tostring(
@@ -1978,16 +1432,16 @@ local function prepare_alternative(state, frame, alt)
           ),
         })
       end
-      if alt.claim_kind == 'all' then
+      if alt.transition_kind == 'all' then
         profile_plan.claim_all_branches = profile_plan.claim_all_branches + 1
-      elseif alt.claim_kind == 'closure' then
+      elseif alt.transition_kind == 'closure' then
         profile_plan.claim_closure_branches = profile_plan.claim_closure_branches + 1
       else
         profile_plan.claim_single_branches = profile_plan.claim_single_branches + 1
       end
     end
-    local resolved = resolve_claim_set(state, alt.group, alt.ids)
-    if profile_plan and alt.claim_kind == 'closure' then
+    local resolved = resolve_transition_set(state, alt.group, alt.ids)
+    if profile_plan and alt.transition_kind == 'closure' then
       if resolved then
         profile_plan.claim_closure_successes = profile_plan.claim_closure_successes + 1
       else
@@ -2018,7 +1472,7 @@ local function prepare_alternative(state, frame, alt)
   error('unknown search alternative: ' .. tostring(alt.kind), 0)
 end
 
-local function branch_child_result(state, frame, outcome, candidate, refutation)
+local function branch_child_result(state, frame, outcome, candidate, certificate)
   if frame.kind == 'choice' then
     if outcome == 'hit' then
       local chosen = frame.order[frame.next_index - 1]
@@ -2034,23 +1488,23 @@ local function branch_child_result(state, frame, outcome, candidate, refutation)
       end
       return 'continue'
     end
-    frame.refutation = merge_refutation(frame.refutation, refutation)
+    frame.certificate = Certificate.merge(frame.certificate, certificate)
     return 'continue'
   elseif frame.kind == 'or_else' then
     if outcome == 'hit' then
       return 'done', 'hit', candidate, nil
     end
     if frame.phase == 'preferred_running' then
-      frame.preferred_refutation = refutation
+      frame.preferred_certificate = certificate
       frame.phase = 'fallback'
       return 'continue'
     end
-    return 'done', 'retry', nil, refutation or { interests = {}, checks = {} }
-  elseif frame.kind == 'frontier' then
+    return 'done', 'retry', nil, certificate or Certificate.new()
+  elseif frame.kind == 'domain' then
     if outcome == 'hit' then
       return 'done', 'hit', candidate, nil
     end
-    frame.refutation = merge_refutation(frame.refutation, refutation)
+    frame.certificate = Certificate.merge(frame.certificate, certificate)
     return 'continue'
   end
   error('unknown branch result frame: ' .. tostring(frame.kind), 0)
@@ -2058,34 +1512,24 @@ end
 
 local function exhausted_branch_result(state, frame)
   if frame.kind == 'choice' then
-    return frame.refutation or terminal_refutation(state)
+    return frame.certificate or terminal_certificate(state)
   elseif frame.kind == 'or_else' then
     -- Both phases normally complete directly from branch_child_result.  This
     -- fallback protects malformed frames without changing user-visible facts.
-    return frame.preferred_refutation or { interests = {}, checks = {} }
-  elseif frame.kind == 'frontier' then
-    if state.profile_plan and state.runtime.instrumentation.state_hash then
-      state.runtime.instrumentation:observe_state(
-        state.profile_plan,
-        SearchCache.signature(state, true),
-        true
-      )
-    end
-    return merge_refutation(frame.refutation, terminal_refutation(state))
+    return frame.preferred_certificate or Certificate.new()
+  elseif frame.kind == 'domain' then
+    return Certificate.merge(frame.certificate, terminal_certificate(state))
   end
   error('unknown exhausted branch frame: ' .. tostring(frame.kind), 0)
 end
 
-local function finish_node(session, outcome, candidate, refutation)
+local function finish_node(session, outcome, candidate, certificate)
   local state, stack = session.state, session.stack
   while true do
     if not stack then
-      if outcome == 'retry' and session.memo_signature then
-        SearchCache.put_state(search_cache(state), session.memo_signature, refutation)
-      end
       session.result_kind = outcome
       session.result_candidate = candidate
-      session.result_refutation = refutation
+      session.result_certificate = certificate
       return true
     end
 
@@ -2094,16 +1538,13 @@ local function finish_node(session, outcome, candidate, refutation)
       error('search stack lost its node frame', 0)
     end
     stack[#stack] = nil
-    if outcome == 'retry' and node.memo_signature then
-      SearchCache.put_state(search_cache(state), node.memo_signature, refutation)
-    end
 
     local branch = stack[#stack]
     if not branch then
       session.stack = nil
       session.result_kind = outcome
       session.result_candidate = candidate
-      session.result_refutation = refutation
+      session.result_certificate = certificate
       return true
     end
     if branch.kind == 'node' or not branch.waiting then
@@ -2120,8 +1561,8 @@ local function finish_node(session, outcome, candidate, refutation)
       state.trail:rollback(mark)
     end
 
-    local action, next_outcome, next_candidate, next_refutation =
-      branch_child_result(state, branch, outcome, candidate, refutation)
+    local action, next_outcome, next_candidate, next_certificate =
+      branch_child_result(state, branch, outcome, candidate, certificate)
     if action == 'continue' then
       if outcome == 'hit' then
         state.trail:rollback(mark)
@@ -2134,7 +1575,7 @@ local function finish_node(session, outcome, candidate, refutation)
     branch.mark, branch.waiting = nil, false
     state.search_depth = math.max(1, state.search_depth - 1)
     stack[#stack] = nil
-    outcome, candidate, refutation = next_outcome, next_candidate, next_refutation
+    outcome, candidate, certificate = next_outcome, next_candidate, next_certificate
   end
 end
 
@@ -2170,10 +1611,10 @@ local function push_branch(session, branch)
   if not session.stack then
     local stack = session.stack_arena or {}
     session.stack_arena = stack
-    stack[1] = { kind = 'node', phase = 'waiting', memo_signature = session.memo_signature }
+    stack[1] = { kind = 'node', phase = 'waiting' }
     stack[2] = branch
     session.stack = stack
-    session.phase, session.memo_signature = nil, nil
+    session.phase = nil
   else
     local node = session.stack[#session.stack]
     node.phase = 'waiting'
@@ -2185,7 +1626,7 @@ local function advance_search(session)
   local state = session.state
   while true do
     if session.result_kind then
-      return session.result_candidate, session.result_refutation, false
+      return session.result_candidate, session.result_certificate, false
     end
 
     local stack = session.stack
@@ -2197,26 +1638,19 @@ local function advance_search(session)
         error('waiting branch has no child node', 0)
       end
       if start_branch_alternative(session, frame) and session.result_kind then
-        return session.result_candidate, session.result_refutation, false
+        return session.result_candidate, session.result_certificate, false
       end
     elseif frame.phase == 'enter' then
-      local cached = memo_enter(state, frame)
-      if cached then
-        if finish_node(session, 'retry', nil, cached) and session.result_kind then
-          return session.result_candidate, session.result_refutation, false
-        end
-      else
-        frame.phase = 'reduce'
-      end
+      frame.phase = 'reduce'
     elseif frame.phase == 'reduce' then
       if not begin_search_round(state) then
-        return nil, { interests = {}, checks = {} }, true
+        return nil, Certificate.new(), true
       end
 
       local action, payload = drain_active(state)
       if action == 'retry' then
         if finish_node(session, 'retry', nil, payload) and session.result_kind then
-          return session.result_candidate, session.result_refutation, false
+          return session.result_candidate, session.result_certificate, false
         end
       elseif action == 'branch' then
         push_branch(session, payload)
@@ -2224,19 +1658,19 @@ local function advance_search(session)
         local candidate = final_candidate(state)
         if candidate then
           if finish_node(session, 'hit', candidate, nil) and session.result_kind then
-            return session.result_candidate, session.result_refutation, false
+            return session.result_candidate, session.result_certificate, false
           end
         else
-          local frontier = analyse_frontier(state)
-          local progressed, forced_refutation = apply_forced_frontier(state, frontier)
+          local domain = analyse_domain(state)
+          local progressed, forced_certificate = apply_forced_domain(state, domain)
           if progressed == true then
             -- Continue the fixed point in the inline or stacked node.
           elseif progressed == false then
-            if finish_node(session, 'retry', nil, forced_refutation) and session.result_kind then
-              return session.result_candidate, session.result_refutation, false
+            if finish_node(session, 'retry', nil, forced_certificate) and session.result_kind then
+              return session.result_candidate, session.result_certificate, false
             end
           else
-            push_branch(session, new_frontier_frame(frontier))
+            push_branch(session, new_domain_frame(domain))
           end
         end
       end
@@ -2257,11 +1691,15 @@ function M.new_session(runtime, requests, focus_id, component)
   end
   session.machine = M
   local state = session.state
+  state.demand_index = nil
+  Ledger.begin_state(state)
   if not state.trail then
     state.trail = Trail.new(runtime.stats, session.profile_plan)
   else
     state.trail:begin(runtime.stats, session.profile_plan)
   end
+  state.trail.on_rollback = Ledger.invalidate
+  state.trail.rollback_context = state
   add_root(state, focus_id)
   return session
 end
@@ -2271,10 +1709,11 @@ function M.search(runtime, requests, focus_id, search_limit, component)
   if not session then
     return nil
   end
-  local candidate, refutation, unknown = session:advance(search_limit or runtime.search_limit)
-  return candidate, refutation, unknown, session
+  local candidate, certificate, unknown = session:advance(search_limit or runtime.search_limit)
+  return candidate, certificate, unknown, session
 end
 
 M._Trail = Trail
+M.path = Path
 
 return M

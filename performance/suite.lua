@@ -54,18 +54,15 @@ local tiers_text = env('FIBERS_PERF_TIERS', 'simple,moderate')
 local case_filter = env('FIBERS_PERF_CASE', arg and arg[1] or '')
 local format = env('FIBERS_PERF_FORMAT', 'text')
 local output_path = env('FIBERS_PERF_OUTPUT', '')
-local machine = env('FIBERS_PERF_MACHINE', 'trail')
+local machine = env('FIBERS_PERF_MACHINE', 'ledger')
 local choice_seed = math.floor(env_number('FIBERS_PERF_SEED', 1))
 local diagnostics = env_number('FIBERS_PERF_DIAGNOSTICS', 1) ~= 0
 local trace = env_number('FIBERS_PERF_TRACE', 0) ~= 0
-local state_hash = env_number('FIBERS_PERF_STATE_HASH', 1) ~= 0
 local slow_plan_limit = math.max(1, math.floor(env_number('FIBERS_PERF_SLOW_PLANS', 8)))
 local advanced_profile = env('FIBERS_PERF_ADVANCED', 'full')
 
 local function apply_advanced_profile(opts)
   if advanced_profile == 'off' or advanced_profile == 'baseline' then
-    opts.refutation_cache = false
-    opts.state_memoization = false
     opts.certified_symmetry = false
     opts.plan_reuse = false
   elseif advanced_profile ~= 'full' then
@@ -174,7 +171,6 @@ function Context:instrumentation_options()
     trace_limit = 512,
     slow_plan_limit = slow_plan_limit,
     clock = Clock.now,
-    state_hash = state_hash,
   }
 end
 
@@ -333,9 +329,6 @@ for _, case in ipairs(cases) do
       component_fraction = (counters.frontier_roots_total or 0) > 0
           and (counters.component_roots_total or 0) / counters.frontier_roots_total
         or 1,
-      state_duplicate_fraction = (counters.states_observed or 0) > 0
-          and (counters.state_duplicates or 0) / counters.states_observed
-        or 0,
       forced_exchanges = counters.forced_exchanges or 0,
       forced_claims = counters.forced_claims or 0,
       dynamic_request_fraction = request_total > 0 and (counters.requests_dynamic or 0) / request_total or 0,
@@ -499,7 +492,7 @@ local function render_csv()
       .. 'p95_search_steps_upper,p99_search_steps_upper,p95_search_cpu_us_upper,'
       .. 'p99_search_cpu_us_upper,max_search_steps,max_search_depth,max_pending,'
       .. 'claim_branches,recruit_branches,footprint_checks,footprint_matches,'
-      .. 'component_fraction,state_duplicate_fraction,forced_exchanges,forced_claims,'
+      .. 'component_fraction,forced_exchanges,forced_claims,'
       .. 'requests_analysable,requests_dynamic,dynamic_request_fraction,'
       .. 'component_roots_excluded,plan_reuse_eligible',
   }
@@ -534,7 +527,6 @@ local function render_csv()
       c.footprint_checks or 0,
       c.footprint_matches or 0,
       string.format('%.6f', r.component_fraction),
-      string.format('%.6f', r.state_duplicate_fraction),
       r.forced_exchanges,
       r.forced_claims,
       c.requests_analysable or 0,

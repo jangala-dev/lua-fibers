@@ -1,5 +1,4 @@
--- Structural benchmark suite for refutation caching, state memoisation,
--- certified symmetry and cross-cycle plan reuse.
+-- Structural benchmark suite for certified symmetry and cross-cycle certificate reuse.
 
 package.path = table.concat({
   './src/?.lua',
@@ -33,45 +32,25 @@ end
 local repeats = math.max(1, math.floor(env_number('FIBERS_ADV_REPEATS', 3)))
 local format = env('FIBERS_ADV_FORMAT', 'text')
 local output = env('FIBERS_ADV_OUTPUT', '')
-local machine = env('FIBERS_ADV_MACHINE', 'trail')
+local machine = env('FIBERS_ADV_MACHINE', 'ledger')
 local case_filter = env('FIBERS_ADV_CASE', '')
 
 local profiles = {
   {
     name = 'baseline',
-    opts = {
-      refutation_cache = false,
-      state_memoization = false,
-      certified_symmetry = false,
-      plan_reuse = false,
-    },
+    opts = { certified_symmetry = false, plan_reuse = false },
   },
   {
-    name = 'refutation',
-    opts = {
-      refutation_cache = true,
-      state_memoization = false,
-      certified_symmetry = false,
-      plan_reuse = false,
-    },
+    name = 'symmetry',
+    opts = { certified_symmetry = true, plan_reuse = false },
   },
   {
-    name = 'memo',
-    opts = {
-      refutation_cache = true,
-      state_memoization = true,
-      certified_symmetry = false,
-      plan_reuse = false,
-    },
+    name = 'reuse',
+    opts = { certified_symmetry = false, plan_reuse = true, plan_reuse_threshold = 1 },
   },
   {
     name = 'full',
-    opts = {
-      refutation_cache = true,
-      state_memoization = true,
-      certified_symmetry = true,
-      plan_reuse = true,
-    },
+    opts = { certified_symmetry = true, plan_reuse = true, plan_reuse_threshold = 1 },
   },
 }
 
@@ -91,7 +70,7 @@ local function runtime(profile, extra)
     profile.opts,
     copy(extra, {
       machine = machine,
-      instrumentation = { clock = Clock.now, state_hash = true, slow_plan_limit = 3 },
+      instrumentation = { clock = Clock.now, slow_plan_limit = 3 },
     })
   ))
 end
@@ -255,14 +234,10 @@ for _, scenario in ipairs(scenarios) do
         calls = c.search_calls or 0,
         branches = c.branches or 0,
         max_steps = m.search_steps_per_plan or 0,
-        ref_hits = c.refutation_cache_hits or 0,
-        supplier_hits = c.supplier_refutation_hits or 0,
-        memo_hits = c.state_memo_hits or 0,
         footprint_checks = c.footprint_checks or 0,
         symmetry = (c.symmetry_supplier_pruned or 0) + (c.symmetry_exchange_pruned or 0),
         reuse = c.plan_reuse_hits or 0,
         invalidations = c.plan_reuse_invalidations or 0,
-        cache_entries = m.plan_cache_entries or 0,
       }
     end
   end
@@ -279,9 +254,8 @@ end
 local function csv()
   local lines = {
     'case,profile,machine,median_seconds,digest,plans,search_calls,branches,'
-      .. 'max_search_steps,footprint_checks,refutation_hits,supplier_refutation_hits,'
-      .. 'state_memo_hits,symmetry_pruned,plan_reuse_hits,plan_reuse_invalidations,'
-      .. 'max_plan_cache_entries',
+      .. 'max_search_steps,footprint_checks,symmetry_pruned,plan_reuse_hits,'
+      .. 'plan_reuse_invalidations',
   }
   for _, row in ipairs(rows) do
     local values = {
@@ -295,13 +269,9 @@ local function csv()
       row.branches,
       row.max_steps,
       row.footprint_checks,
-      row.ref_hits,
-      row.supplier_hits,
-      row.memo_hits,
       row.symmetry,
       row.reuse,
       row.invalidations,
-      row.cache_entries,
     }
     for i = 1, #values do
       values[i] = quote(values[i])
@@ -316,31 +286,27 @@ local function text()
     'fibers advanced performance suite',
     string.format('lua=%s machine=%s repeats=%d clock=%s', tostring(_VERSION), machine, repeats, Clock.name),
     string.format(
-      '%-34s %-11s %9s %9s %9s %9s %8s %8s %8s %8s',
+      '%-34s %-11s %9s %9s %9s %9s %8s %8s',
       'case',
       'profile',
       'median ms',
       'calls',
       'branches',
       'fp checks',
-      'ref hit',
-      'memo',
       'sym',
       'reuse'
     ),
-    string.rep('-', 122),
+    string.rep('-', 104),
   }
   for _, row in ipairs(rows) do
     lines[#lines + 1] = string.format(
-      '%-34s %-11s %9.3f %9d %9d %9d %8d %8d %8d %8d',
+      '%-34s %-11s %9.3f %9d %9d %9d %8d %8d',
       row.case,
       row.profile,
       row.seconds * 1000,
       row.calls,
       row.branches,
       row.footprint_checks,
-      row.ref_hits,
-      row.memo_hits,
       row.symmetry,
       row.reuse
     )

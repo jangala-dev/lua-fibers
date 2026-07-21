@@ -52,7 +52,7 @@ local function run(machine, op, opts)
   return result, rt
 end
 
-for _, machine in ipairs({ 'trail', 'reference' }) do
+for _, machine in ipairs({ 'ledger', 'reference' }) do
   -- Host-language sharing of an immutable guard value must not merge two
   -- tensor operands into one dynamic activation.
   do
@@ -97,11 +97,7 @@ for _, machine in ipairs({ 'trail', 'reference' }) do
       end
       return Op.always('second activation')
     end)
-    local result = run(machine, Op.choice(guarded, guarded), {
-      state_memoization = true,
-      state_memoization_min_steps = 0,
-      state_memoization_min_intents = 0,
-    })
+    local result = run(machine, Op.choice(guarded, guarded))
     eq(result[1], 'second activation', machine .. ': second guard activation should be searched')
     eq(calls, 2, machine .. ': choice positions must not share a guard expansion')
   end

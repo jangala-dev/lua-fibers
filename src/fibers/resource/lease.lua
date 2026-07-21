@@ -1,5 +1,5 @@
 local Op = require('fibers.op')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 local Program = require('fibers.internal.kernel.ir')
 
 local Lease = {}
@@ -43,7 +43,7 @@ function Lease:_location(subject)
   end
   loc = Substrate.new_location({
     name = self.name .. ':' .. tostring(subject),
-    merge = 'finite_map',
+    algebra = 'finite_map',
     domain = 'finite_map',
     value = initial,
     owner = self,

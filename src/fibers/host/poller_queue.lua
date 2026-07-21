@@ -6,10 +6,11 @@
 -- readiness ticket.
 
 local Op = require('fibers.op')
+local IR = require('fibers.internal.kernel.ir')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 
 local PollerQueue = {}
 PollerQueue.__index = PollerQueue
@@ -79,7 +80,7 @@ function PollerQueue.new(name, opts)
 
   queue._location = Substrate.new_location({
     name = queue.name .. ':queue',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'external',
     value = { front = nil, back = nil, count = 0 },
     owner = queue,
@@ -117,24 +118,29 @@ function PollerQueue:next_op()
     end,
   })
 
-  self._next_op = Op._compact_resource(self, Kind, 'machine_transition', {
-    location = self._location,
-    resource = self,
-    transition = transition,
-    order = transition.order or 0,
-    interest = function(runtime)
-      if type(self._interest_factory) == 'function' then
-        return self._interest_factory(runtime, self, ExternalFeed.for_resource(runtime, self))
-      end
-      return Interest.external(self, 'next', {
-        external_kind = 'poller',
-        feed = ExternalFeed.for_resource(runtime, self),
-      })
-    end,
-    absence_check = function()
-      return (self._location.value.count or 0) == 0
-    end,
-  })
+  self._next_op = Op._compact_resource(
+    self,
+    Kind,
+    'transition',
+    IR.machine_transition({
+      location = self._location,
+      resource = self,
+      transition = transition,
+      order = transition.order or 0,
+      interest = function(runtime)
+        if type(self._interest_factory) == 'function' then
+          return self._interest_factory(runtime, self, ExternalFeed.for_resource(runtime, self))
+        end
+        return Interest.external(self, 'next', {
+          external_kind = 'poller',
+          feed = ExternalFeed.for_resource(runtime, self),
+        })
+      end,
+      absence_check = function()
+        return (self._location.value.count or 0) == 0
+      end,
+    })
+  )
   return self._next_op
 end
 

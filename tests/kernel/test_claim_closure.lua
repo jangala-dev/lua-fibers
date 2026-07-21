@@ -49,7 +49,7 @@ eq(rows[1][1].value, 'value')
 eq(rows[2][1], true)
 
 local snap = rt:instrumentation_snapshot()
-if rt.machine_name == 'trail' then
+if rt.machine_name == 'ledger' then
   truthy((snap.counters.claim_closure_branches or 0) > 0, 'closure branch was not offered')
   truthy((snap.counters.claim_closure_successes or 0) > 0, 'closure did not discover the hand-off')
 end
@@ -85,7 +85,7 @@ eq(backtrack_rows[2][1], true)
 eq(counter.value, 0)
 
 local backtrack_snap = backtrack_rt:instrumentation_snapshot()
-if backtrack_rt.machine_name == 'trail' then
+if backtrack_rt.machine_name == 'ledger' then
   truthy((backtrack_snap.counters.claim_closure_failures or 0) > 0, 'failed closure was not observed')
   truthy((backtrack_snap.counters.claim_single_branches or 0) > 0, 'singleton alternatives were not retained')
 end

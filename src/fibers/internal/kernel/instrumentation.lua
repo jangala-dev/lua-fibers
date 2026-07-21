@@ -83,7 +83,6 @@ function Instrumentation.new(opts)
     slow_plan_limit = math.max(0, math.floor(opts.slow_plan_limit or 16)),
     trace = opts.trace == true,
     trace_limit = math.max(0, math.floor(opts.trace_limit or 512)),
-    state_hash = opts.state_hash == true,
     plan_serial = 0,
   }, Instrumentation)
 end
@@ -148,7 +147,7 @@ function Instrumentation:begin_plan(meta)
     max_intents = 0,
     max_roots = 0,
     max_tasks = 0,
-    max_views = 0,
+    max_segments = 0,
     intent_pairs_scanned = 0,
     compatible_pairs = 0,
     choice_branches = 0,
@@ -182,20 +181,7 @@ function Instrumentation:begin_plan(meta)
     deterministic_steps = 0,
     recruitment_candidates = 0,
     recruitment_best_score = 0,
-    states_observed = 0,
-    state_duplicates = 0,
-    terminal_states_observed = 0,
-    terminal_state_duplicates = 0,
-    refutation_cache_hits = 0,
-    refutation_cache_stores = 0,
-    supplier_refutation_hits = 0,
-    supplier_refutation_stores = 0,
-    state_memo_hits = 0,
-    state_memo_stores = 0,
-    state_fingerprint_probes = 0,
-    state_fingerprint_repeats = 0,
     symmetry_exchange_pruned = 0,
-    state_seen = self.state_hash and {} or nil,
     events = self.trace and {} or nil,
   }
   self:inc('plans')
@@ -215,26 +201,6 @@ function Instrumentation:event(plan, kind, fields)
     event[k] = v
   end
   plan.events[#plan.events + 1] = event
-end
-
-function Instrumentation:observe_state(plan, signature, terminal)
-  if not self.state_hash or not plan or not plan.state_seen or not signature then
-    return false
-  end
-  plan.states_observed = plan.states_observed + 1
-  if terminal then
-    plan.terminal_states_observed = plan.terminal_states_observed + 1
-  end
-  local old = plan.state_seen[signature]
-  if old then
-    plan.state_duplicates = plan.state_duplicates + 1
-    if terminal then
-      plan.terminal_state_duplicates = plan.terminal_state_duplicates + 1
-    end
-    return true
-  end
-  plan.state_seen[signature] = terminal and 'terminal' or 'branch'
-  return false
 end
 
 local function insert_slow_plan(self, plan)
@@ -270,7 +236,7 @@ local function insert_slow_plan(self, plan)
     max_intents = plan.max_intents,
     max_roots = plan.max_roots,
     max_tasks = plan.max_tasks,
-    max_views = plan.max_views,
+    max_segments = plan.max_segments,
     max_trail = plan.max_trail,
     branches = plan.branches,
     rollbacks = plan.rollbacks,
@@ -311,18 +277,6 @@ local function insert_slow_plan(self, plan)
     deterministic_steps = plan.deterministic_steps,
     recruitment_candidates = plan.recruitment_candidates,
     recruitment_best_score = plan.recruitment_best_score,
-    states_observed = plan.states_observed,
-    state_duplicates = plan.state_duplicates,
-    terminal_states_observed = plan.terminal_states_observed,
-    terminal_state_duplicates = plan.terminal_state_duplicates,
-    refutation_cache_hits = plan.refutation_cache_hits,
-    refutation_cache_stores = plan.refutation_cache_stores,
-    supplier_refutation_hits = plan.supplier_refutation_hits,
-    supplier_refutation_stores = plan.supplier_refutation_stores,
-    state_memo_hits = plan.state_memo_hits,
-    state_memo_stores = plan.state_memo_stores,
-    state_fingerprint_probes = plan.state_fingerprint_probes,
-    state_fingerprint_repeats = plan.state_fingerprint_repeats,
     symmetry_exchange_pruned = plan.symmetry_exchange_pruned,
     trace_truncated = plan.trace_truncated,
     events = plan.events and copy_array(plan.events) or nil,
@@ -397,18 +351,6 @@ function Instrumentation:finish_plan(plan, outcome)
   self:inc('deterministic_steps', plan.deterministic_steps)
   self:inc('recruitment_candidates', plan.recruitment_candidates)
   self:max('recruitment_best_score', plan.recruitment_best_score or 0)
-  self:inc('states_observed', plan.states_observed)
-  self:inc('state_duplicates', plan.state_duplicates)
-  self:inc('terminal_states_observed', plan.terminal_states_observed)
-  self:inc('terminal_state_duplicates', plan.terminal_state_duplicates)
-  self:inc('refutation_cache_hits', plan.refutation_cache_hits)
-  self:inc('refutation_cache_stores', plan.refutation_cache_stores)
-  self:inc('supplier_refutation_hits', plan.supplier_refutation_hits)
-  self:inc('supplier_refutation_stores', plan.supplier_refutation_stores)
-  self:inc('state_memo_hits', plan.state_memo_hits)
-  self:inc('state_memo_stores', plan.state_memo_stores)
-  self:inc('state_fingerprint_probes', plan.state_fingerprint_probes)
-  self:inc('state_fingerprint_repeats', plan.state_fingerprint_repeats)
   self:inc('symmetry_exchange_pruned', plan.symmetry_exchange_pruned)
   self:inc('component_roots_total', plan.component_size or 0)
   self:inc('frontier_roots_total', plan.total_pending or plan.pending or 0)
@@ -432,7 +374,7 @@ function Instrumentation:finish_plan(plan, outcome)
   self:max('intents', plan.max_intents or 0)
   self:max('roots', plan.max_roots or 0)
   self:max('tasks', plan.max_tasks or 0)
-  self:max('views', plan.max_views or 0)
+  self:max('segments', plan.max_segments or 0)
   self:max('trail_entries_live', plan.max_trail or 0)
 
   self:observe('search_steps_per_plan', plan.search_steps or 0)

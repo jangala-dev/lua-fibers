@@ -3,6 +3,8 @@
 -- cursors.  It records the current domains and leaves semantic actions to the
 -- machine which owns the state.
 
+local IR = require('fibers.internal.kernel.ir')
+
 local M = {}
 
 local function clear_array(values)
@@ -254,31 +256,29 @@ function M.order_claim_groups(groups, constrained)
   return groups
 end
 
+local function transition_rule(intent)
+  if intent and intent.kind == 'transition' then
+    return IR.rule(intent.program)
+  end
+end
+
 local function accepts_participant_supply(intent)
   if not intent then
     return false
   end
-  if intent.kind == 'exchange' or intent.kind == 'claim' or intent.kind == 'conditional_claim' then
+  if intent.kind == 'exchange' then
     return true
   end
-  if intent.kind == 'witness_transition' then
-    return intent.program.accepts_supply == true
-  end
-  if intent.kind == 'machine_transition' then
-    return intent.program.transition.accepts_supply == true
-  end
-  return false
+  local rule = transition_rule(intent)
+  return rule and rule.accepts_supply == true or false
 end
 
 local function claim_frontier(state, constrained)
   local by_key, groups = {}, {}
   for i = 1, #(state.intents or {}) do
     local intent = state.intents[i]
-    if
-      intent.kind == 'claim'
-      or intent.kind == 'conditional_claim'
-      or intent.kind == 'machine_transition'
-    then
+    local rule = transition_rule(intent)
+    if rule and not rule.enumerable then
       local key = intent.program.group or intent.program.location
       local group = by_key[key]
       if not group then
@@ -294,10 +294,10 @@ local function claim_frontier(state, constrained)
       end
       group.ids[#group.ids + 1] = intent.id
       group.intents[#group.intents + 1] = intent
-      if intent.kind ~= 'machine_transition' then
+      if not rule.serial then
         group.all_machine = false
         group.accepts_supply = true
-      elseif intent.program.transition.accepts_supply then
+      elseif rule.accepts_supply then
         group.accepts_supply = true
       end
     end
@@ -316,7 +316,8 @@ function M.analyse(state, compatible, constrained, scratch)
   local accepts_supply = false
   for i = 1, #(state.intents or {}) do
     local intent = state.intents[i]
-    if intent.kind == 'witness_transition' then
+    local rule = transition_rule(intent)
+    if rule and rule.enumerable then
       witnesses[#witnesses + 1] = intent
     end
     if accepts_participant_supply(intent) then

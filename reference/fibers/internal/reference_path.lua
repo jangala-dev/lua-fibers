@@ -14,7 +14,6 @@ local function new_token(context)
   return {
     context = context,
     id = context.next_id,
-    children = {},
   }
 end
 
@@ -31,13 +30,20 @@ function M.child(parent, fact)
   if not parent then
     error('activation child requires a parent token', 2)
   end
-  fact = tostring(fact)
-  local child = parent.children[fact]
+  if type(fact) ~= 'string' then
+    error('activation fact must be a string', 2)
+  end
+  local children = parent.children
+  if not children then
+    children = {}
+    parent.children = children
+  end
+  local child = children[fact]
   if child then
     return child
   end
   child = new_token(parent.context)
-  parent.children[fact] = child
+  children[fact] = child
   return child
 end
 
@@ -45,7 +51,12 @@ function M.label(token)
   if not token then
     return '-'
   end
-  return tostring(token.context.request_id) .. ':' .. tostring(token.id)
+  local label = token.label
+  if not label then
+    label = tostring(token.context.request_id) .. ':' .. tostring(token.id)
+    token.label = label
+  end
+  return label
 end
 
 return M

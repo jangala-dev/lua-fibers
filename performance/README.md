@@ -66,11 +66,10 @@ FIBERS_PERF_TIERS             simple, moderate, complex, or all
 FIBERS_PERF_CASE              literal substring filter
 FIBERS_PERF_FORMAT            text, csv, or json
 FIBERS_PERF_OUTPUT            optional output file
-FIBERS_PERF_MACHINE           trail or reference
+FIBERS_PERF_MACHINE           ledger or reference
 FIBERS_PERF_SEED              deterministic choice seed
 FIBERS_PERF_DIAGNOSTICS       0 disables the separate diagnostic pass
 FIBERS_PERF_TRACE             1 retains capped events for the slowest plans
-FIBERS_PERF_STATE_HASH        0 disables diagnostic duplicate-state hashing
 FIBERS_PERF_SLOW_PLANS        number of slow-plan summaries to retain
 FIBERS_PERF_ADVANCED          full or off; A/B the passes 8--10 defaults
 ```
@@ -153,7 +152,7 @@ suite stays compact.
 The acceptance rules are recorded in `performance/INVARIANTS.md`.
 
 
-## Advanced cache and symmetry suite
+## Advanced symmetry and certificate-reuse suite
 
 The remaining architectural passes have a separate validating comparison:
 
@@ -166,16 +165,15 @@ FIBERS_ADV_FORMAT=csv FIBERS_ADV_OUTPUT=advanced.csv \
 
 It runs four profiles over the same validating scenarios:
 
-- `baseline`: all remaining mechanisms disabled;
-- `refutation`: narrow supplier no-goods only;
-- `memo`: refutation caching plus adaptive per-plan state memoisation; and
-- `full`: refutation caching, state memoisation, certified symmetry and
-  cross-cycle plan reuse.
+- `baseline`: symmetry and certificate reuse disabled;
+- `symmetry`: certified symmetry only;
+- `reuse`: cross-cycle certificate reuse only; and
+- `full`: certified symmetry and cross-cycle certificate reuse.
 
-The cases cover repeated blocked alternatives, repeated supplier refutations,
+The cases cover repeated blocked alternatives, repeated no-supplier worlds,
 certified homogeneous suppliers, unchanged blocked driver cycles, ordinary
-binary rendezvous and the triple-swap stress case.  CSV output includes search
-calls, branches, footprint checks, cache hits, symmetry pruning and plan reuse.
+binary rendezvous and the triple-swap stress case. CSV output includes search
+calls, branches, footprint checks, symmetry pruning and certificate reuse.
 
 Controls are:
 
@@ -183,17 +181,17 @@ Controls are:
 FIBERS_ADV_REPEATS        timed samples; median is reported
 FIBERS_ADV_FORMAT         text or csv
 FIBERS_ADV_OUTPUT         optional output file
-FIBERS_ADV_MACHINE        trail or reference
+FIBERS_ADV_MACHINE        ledger or reference
 FIBERS_ADV_CASE           literal substring filter
 ```
 
 The safety model and current measurements are recorded in
 `docs/notes/performance/PERFORMANCE-PASSES-8-10.md`.
 
-## Sparse store-view suite
+## Sparse ledger-segment suite
 
-Product lanes use sparse parent-linked speculative views.  The focused store
-benchmark first observes a configurable number of locations in a parent view,
+Product lanes use sparse parent-linked ledger segments. The focused store
+benchmark first observes a configurable number of locations in a parent segment,
 then forks a configurable product.  It reports both elapsed time and
 GC-disabled transient allocation per round:
 
@@ -204,7 +202,7 @@ FIBERS_STORE_CELLS=32 FIBERS_STORE_LANES=16 FIBERS_STORE_ROUNDS=500 \
 ```
 
 The benchmark validates its result.  It is intended to detect regressions in
-view forking, copy-on-write promotion and product merging rather than general
+segment forking, sparse summary staging and product joining rather than general
 proof-search changes.
 
 ## Seed sweep

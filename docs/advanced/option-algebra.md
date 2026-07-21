@@ -89,7 +89,7 @@ validation conflict is not Retry
 one exhausted primitive query is not necessarily Retry
 ```
 
-The production trail machine retains its explicit alternative stack when a bounded search returns `Unknown`. A later bounded call resumes the same proof while its pending frontier, committed observations and external epoch remain unchanged. The copy-on-branch reference evaluator deliberately restarts and remains the semantic oracle.
+The production ledger machine retains its explicit alternative stack when a bounded search returns `Unknown`. A later bounded call resumes the same proof while its pending frontier, committed observations and external epoch remain unchanged. The copy-on-branch reference evaluator deliberately restarts and remains the semantic oracle.
 
 ## 4. Candidate proof and commit
 
@@ -546,7 +546,7 @@ runtime transactions are not durable transactions
 
 ## 20. Implementation obligations
 
-The current trail machine and copy-on-branch reference machine consume the same option IR and store. The test suite exercises:
+The current ledger machine and copy-on-branch reference machine consume the same option IR while maintaining independent speculative-state representations. The test suite exercises:
 
 ```text
 global exchange and witness backtracking

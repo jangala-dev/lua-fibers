@@ -17,7 +17,7 @@ local take = counter:take_op(1)
 local give = counter:give_op(1)
 local take_meta = IR.metadata(take)
 local give_meta = IR.metadata(give)
-local take_intent = { kind = 'claim', program = take.program }
+local take_intent = { kind = 'transition', program = take.program }
 assert(not IR.metadata_may_supply(take_meta, take_intent))
 assert(IR.metadata_may_supply(give_meta, take_intent))
 
@@ -26,8 +26,8 @@ local put = index:append_op('value')
 local pop = index:pop_first_op()
 local put_meta = IR.metadata(put)
 local pop_meta = IR.metadata(pop)
-local pop_intent = { kind = 'claim', program = pop.program }
-local put_intent = { kind = 'claim', program = put.program }
+local pop_intent = { kind = 'transition', program = pop.program }
+local put_intent = { kind = 'transition', program = put.program }
 assert(IR.metadata_may_supply(put_meta, pop_intent))
 assert(not IR.metadata_may_supply(pop_meta, pop_intent))
 assert(IR.metadata_may_supply(pop_meta, put_intent))
@@ -126,8 +126,8 @@ assert(access.supply_up == nil)
 assert(access.supply_down == nil)
 assert(access.supply_any == nil)
 
-local Store = require('fibers.internal.kernel.store')
-local location = Store.new_location({ name = 'canonical-witness', merge = 'machine', value = 0 })
+local Store = require('fibers.internal.kernel.ledger')
+local location = Store.new_location({ name = 'canonical-witness', algebra = 'machine', value = 0 })
 rejected(function()
   IR.witness_transition({
     location = location,
@@ -192,5 +192,36 @@ local declared_up = IR.metadata_hint({
 local arbitrary_write = IR.metadata(Scalar.new(0, 'arbitrary-write'):write_op(1))
 local covers_arbitrary = IR.metadata_covers(declared_up, arbitrary_write)
 assert(not covers_arbitrary, 'directional declaration must not cover explicit any supply')
+
+-- Read-only dependency queries reuse interned atoms and do not create
+-- additional membership records.
+local Dependencies = require('fibers.internal.kernel.dependencies')
+local dependency_index = Dependencies.Index.new()
+local exchange_resource = {}
+local put_atom = dependency_index:atom('exchange', exchange_resource, 'put')
+local dependency_request = {
+  id = 1,
+  metadata = {
+    exchanges = { [exchange_resource] = { put = true } },
+    locations = {},
+    resources = {},
+  },
+}
+dependency_index:add(dependency_request)
+assert(put_atom:contains(1))
+dependency_index:remove(dependency_request)
+assert(put_atom.count == 0)
+local before_generation = put_atom.generation
+dependency_index:each_supplier({
+  { kind = 'exchange', resource = exchange_resource, role = 'get' },
+}, {}, {}, {}, function() end)
+assert(put_atom.generation == before_generation)
+
+-- Atoms are interned and use the dense Bucket implementation shared with
+-- blocked-domain indexing.
+local same_put_atom = dependency_index:atom('exchange', exchange_resource, 'put')
+assert(put_atom == same_put_atom, 'dependency atoms must be interned')
+assert(put_atom:add(11) and put_atom:add(12) and not put_atom:add(11))
+assert(put_atom:remove(11) and put_atom:contains(12) and put_atom.count == 1)
 
 return true

@@ -1,12 +1,13 @@
 local Op = require('fibers.op')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
+local Algebra = require('fibers.internal.kernel.algebra')
 local Program = require('fibers.internal.kernel.ir')
 
 local Keyed = {}
 Keyed.__index = Keyed
 local Kind = { name = 'keyed' }
 local next_id = 0
-local ABSENT = Substrate.ABSENT
+local ABSENT = Algebra.ABSENT
 local NIL = {}
 local function enc(v)
   return v == nil and NIL or v
@@ -42,7 +43,7 @@ function Keyed:_location(key)
   end
   loc = Substrate.new_location({
     name = self.name .. ':' .. tostring(key),
-    merge = 'presence',
+    algebra = 'presence',
     domain = 'presence',
     value = initial,
     owner = self,

@@ -16,7 +16,7 @@ local IR = require('fibers.internal.kernel.ir')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.scalar')
-local BranchPolicy = require('fibers.internal.kernel.frontier')
+local BranchPolicy = require('fibers.internal.kernel.domain')
 local fibers = require('fibers')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 
@@ -81,65 +81,62 @@ local verified_value = fibers.run(function()
 end, { verify_dependencies = true })
 eq(verified_value, 17, 'valid structured dependency declarations were rejected')
 
--- Dependency buckets stay inline for the ordinary singleton case and promote
--- only when contention requires a larger representation.
+-- Pending requests and blocked demands use the same interned atom and dense
+-- sparse-set bucket representation.  Membership updates advance one generation
+-- without changing atom identity.
 do
-  local DependencyIndex = require('fibers.internal.kernel.dependencies').Index
-  local bucket = DependencyIndex.Bucket
-  local index = DependencyIndex.new()
-  local resource = Rendezvous.new('promoted-bucket')
+  local Dependencies = require('fibers.internal.kernel.dependencies')
+  local index = Dependencies.Index.new()
+  local resource = Rendezvous.new('atom-bucket')
   local requests = {}
+  local role = index:atom('exchange', resource, 'get')
   for i = 1, 6 do
     local request = { id = i, op = resource:get_op() }
     request.metadata = IR.metadata(request.op)
     requests[i] = request
     index:add(request)
-    local role = index.exchanges[resource].get
-    eq(role.count, i, 'dependency bucket count')
-    if i == 1 then
-      eq(role.one, 1, 'singleton bucket should remain inline')
-      eq(role.small, nil, 'singleton bucket should not allocate an array')
-      eq(role.set, nil, 'singleton bucket should not allocate a set')
-    elseif i <= 4 then
-      truthy(role.small ~= nil, 'small dependency bucket did not promote to dense array')
-      eq(role.set, nil, 'small dependency bucket promoted too early')
-    elseif i == 5 then
-      truthy(role.set ~= nil, 'large dependency bucket did not promote to a set')
-    end
+    eq(role.count, i, 'dependency atom membership count')
+    eq(role.items[role.positions[i]], i, 'dense dependency membership position')
   end
-  local generation = index.exchanges[resource].get.generation
+  local generation = role.generation
   index:remove(requests[6])
-  truthy(
-    index.exchanges[resource].get.generation > generation,
-    'dependency bucket removal did not advance its generation'
-  )
+  truthy(role.generation > generation, 'dependency atom removal did not advance its generation')
+  eq(role.count, 5, 'dependency atom removal count')
   for i = 5, 1, -1 do
     index:remove(requests[i])
   end
-  eq(index.exchanges[resource], nil, 'empty exchange bucket group was retained')
-  eq(index.resource_all[resource], nil, 'empty resource bucket was retained')
-  eq(index.resource_wide[resource], nil, 'empty resource-wide bucket was retained')
+  eq(role.count, 0, 'empty dependency atom retained request membership')
+  eq(index:atom('exchange', resource, 'get'), role, 'dependency atom identity was not interned')
 end
 
--- Empty location and supplier buckets must not retain short-lived resource
--- keys after their final pending request is removed.
+-- Location touch and directional-supply memberships are compiled into atoms and
+-- retire their request membership when the request leaves the pending index.
 do
-  local DependencyIndex = require('fibers.internal.kernel.dependencies').Index
-  local index = DependencyIndex.new()
-  local scalar = Scalar.machine(0, 'retired-location-bucket')
+  local Dependencies = require('fibers.internal.kernel.dependencies')
+  local index = Dependencies.Index.new()
+  local scalar = Scalar.machine(0, 'retired-location-atom')
   local request = { id = 1, op = scalar:write_op(1) }
   request.metadata = IR.metadata(request.op)
   index:add(request)
-  local location
-  for value in pairs(request.metadata.locations) do
-    location = value
+  local location, access
+  for value, modes in pairs(request.metadata.locations) do
+    location, access = value, modes
     break
   end
-  truthy(index.locations[location] ~= nil, 'location bucket was not created')
-  truthy(index.location_suppliers[location] ~= nil, 'supplier bucket was not created')
+  local touch = index:atom('location', location, 'touch')
+  eq(touch.count, 1, 'location touch atom was not populated')
+  local supply_atoms = {}
+  for direction in pairs((access and access.supplies) or {}) do
+    local atom = index:atom('supply', location, direction)
+    supply_atoms[#supply_atoms + 1] = atom
+    eq(atom.count, 1, 'directional supply atom was not populated')
+  end
   index:remove(request)
-  eq(index.locations[location], nil, 'empty location bucket was retained')
-  eq(index.location_suppliers[location], nil, 'empty supplier bucket was retained')
+  eq(touch.count, 0, 'location touch atom retained request membership')
+  for i = 1, #supply_atoms do
+    eq(supply_atoms[i].count, 0, 'directional supply atom retained request membership')
+  end
+  eq(request._dependency_plan, nil, 'retired request retained its dependency plan')
 end
 
 -- Independent static requests are isolated before proof search.
@@ -206,7 +203,7 @@ local function independent_components(machine)
   return status.tag
 end
 eq(
-  independent_components('trail'),
+  independent_components('ledger'),
   independent_components('reference'),
   'evaluators disagree on independent component completion'
 )
@@ -224,22 +221,15 @@ do
   rt:_index_pending_frontier()
   local focus = rt.pending[1].id
   local _, before = rt:_component_requests(focus)
-  rt:_ensure_component_coordinator(before)
 
   rt:spawn_raw(function()
     rt:perform(unrelated:get_op())
   end)
   rt:_start_one()
   local _, after_unrelated = rt:_component_requests(focus)
-  rt:_ensure_component_coordinator(after_unrelated)
   eq(
-    after_unrelated.choice_generation.epoch,
-    before.choice_generation.epoch,
-    'unrelated admission changed component-local choice epoch'
-  )
-  eq(
-    after_unrelated.choice_generation.pending,
-    before.choice_generation.pending,
+    after_unrelated.order_generation,
+    before.order_generation,
     'unrelated admission changed component-local choice generation'
   )
 
@@ -248,10 +238,8 @@ do
   end)
   rt:_start_one()
   local _, after_related = rt:_component_requests(focus)
-  rt:_ensure_component_coordinator(after_related)
   truthy(
-    after_related.choice_generation.pending ~= before.choice_generation.pending
-      or after_related.choice_generation.epoch ~= before.choice_generation.epoch,
+    after_related.order_generation ~= before.order_generation,
     'possible partner did not change component-local choice generation'
   )
 end
@@ -274,7 +262,7 @@ truthy((binary_snap.counters.forced_exchanges or 0) > 0, 'binary exchange reduct
 -- Empty transactional collections are shared rather than allocated afresh for
 -- a rendezvous which neither observes nor writes committed state.
 do
-  local Store = require('fibers.internal.kernel.store')
+  local Store = require('fibers.internal.kernel.ledger')
   local rt = Runtime.new()
   local c = Rendezvous.new('empty-candidate-state')
   rt:spawn_raw(function()
@@ -285,7 +273,7 @@ do
   end)
   rt:_pump()
   local candidate = assert(rt:_find_candidate(rt.pending[1].id))
-  if rt.machine_name == 'trail' then
+  if rt.machine_name == 'ledger' then
     truthy(candidate._fibers_session_hit == true, 'production hit was copied into a detached candidate')
   end
   eq(candidate.observations, nil, 'empty observations should remain absent')
@@ -309,13 +297,13 @@ do
   end
   eq(values[1], 1, 'first pooled session result')
   eq(values[2], 2, 'second pooled session result')
-  if rt.machine_name == 'trail' then
+  if rt.machine_name == 'ledger' then
     local counters = rt:instrumentation_snapshot().counters
     truthy((counters.search_session_reuses or 0) > 0, 'search-session arena was not reused')
     truthy(#rt._search_session_pool > 0, 'cleared session was not returned to the pool')
     local pooled = rt._search_session_pool[#rt._search_session_pool]
     eq(next(pooled.state.tasks), nil, 'pooled task arena retained a task')
-    eq(next(pooled.state.views), nil, 'pooled view arena retained a view')
+    eq(next(pooled.state.segments), nil, 'pooled segment arena retained a segment')
     eq(next(pooled.state.intents), nil, 'pooled intent arena retained an intent')
   end
 end
@@ -342,23 +330,28 @@ local intents = {
   { id = 5, kind = 'exchange', resource = r2, role = 'put' },
   { id = 6, kind = 'exchange', resource = r2, role = 'get' },
 }
-local by_id = {}
+local demand_runtime = { certified_symmetry = false }
+local demand_index = BranchPolicy.new(demand_runtime)
 for i = 1, #intents do
-  by_id[intents[i].id] = intents[i]
+  BranchPolicy.add(demand_index, intents[i])
 end
-local frontier = BranchPolicy.exchange_frontier({
+local domain = BranchPolicy.open(demand_index, {
+  runtime = demand_runtime,
   intents = intents,
-  intent_by_id = by_id,
-  exchange_resources = { r1, r2 },
-  exchange_index = {
-    [r1] = { put = { 1, 2 }, get = { 3, 4 } },
-    [r2] = { put = { 5 }, get = { 6 } },
-  },
 }, function()
   return true
 end, true)
-eq(frontier.selected.id, 5, 'most-constrained exchange was not selected')
-eq(#frontier.pairs, 1, 'selected domain should contain one pair')
+eq(domain.exchange.selected.id, 5, 'most-constrained exchange was not selected')
+local alternative = BranchPolicy.next(BranchPolicy.cursor(domain), {
+  witness_cursor = function()
+    error('unexpected witness')
+  end,
+  supplier = function()
+    return nil
+  end,
+})
+eq(alternative.pair.left, 5, 'selected exchange pair changed')
+eq(alternative.pair.right, 6, 'selected exchange pair changed')
 
 -- Production and reference evaluators retain the same committed result.
 local function scenario(machine)
@@ -374,55 +367,12 @@ local function scenario(machine)
   local status = rt:run()
   return status.tag, value
 end
-local at, av = scenario('trail')
+local at, av = scenario('ledger')
 local bt, bv = scenario('reference')
 eq(at, bt, 'machines disagree on status')
 eq(av, bv, 'machines disagree on value')
 
 print('tests/test_performance_architecture.lua: ok')
-
--- Narrow no-supplier refutation caching is useful when several alternatives
--- reach the same blocked requirements.  It is independent of full state memoisation.
-local function duplicate_choice(machine, state_memoization, refutation_cache)
-  local rt = Runtime.new({
-    machine = machine,
-    instrumentation = true,
-    plan_reuse = false,
-    state_memoization = state_memoization,
-    refutation_cache = refutation_cache,
-    state_memoization_min_steps = 0,
-    state_memoization_min_intents = 0,
-    refutation_cache_min_steps = 0,
-  })
-  local blocked = Rendezvous.new('duplicate-choice-' .. machine):get_op()
-  local alternatives = {}
-  for i = 1, 32 do
-    alternatives[i] = blocked
-  end
-  rt:spawn_raw(function()
-    rt:perform(Op.choice(alternatives))
-  end)
-  eq(rt:run().tag, 'quiescent')
-  return rt:instrumentation_snapshot().counters
-end
-
-for _, machine in ipairs({ 'trail', 'reference' }) do
-  local uncached = duplicate_choice(machine, false, false)
-  local refcached = duplicate_choice(machine, false, true)
-  truthy((refcached.supplier_refutation_hits or 0) > 0, 'supplier refutation cache did not hit')
-  eq(
-    refcached.search_calls,
-    uncached.search_calls,
-    'narrow refutation caching should not alter search semantics'
-  )
-
-  local memoised = duplicate_choice(machine, true, true)
-  truthy((memoised.state_memo_hits or 0) > 0, 'state memoisation did not hit')
-  truthy(
-    (memoised.search_calls or math.huge) < (uncached.search_calls or 0) / 4,
-    'state memoisation did not eliminate repeated evaluator work'
-  )
-end
 
 -- Symmetry is never inferred.  Explicit certificates allow a failed
 -- representative supplier to exclude the remaining interchangeable suppliers.
@@ -432,8 +382,6 @@ local function symmetric_failure(machine, enabled)
     instrumentation = true,
     certified_symmetry = enabled,
     plan_reuse = false,
-    state_memoization = false,
-    refutation_cache = false,
     dependency_index_threshold = 1,
   })
   local channel = Rendezvous.new('certified-symmetry-' .. machine)
@@ -450,7 +398,7 @@ local function symmetric_failure(machine, enabled)
   return rt:instrumentation_snapshot().counters
 end
 
-for _, machine in ipairs({ 'trail', 'reference' }) do
+for _, machine in ipairs({ 'ledger', 'reference' }) do
   local ordinary = symmetric_failure(machine, false)
   local certified = symmetric_failure(machine, true)
   truthy((certified.symmetry_supplier_pruned or 0) > 0, 'certified supplier symmetry was not used')
@@ -482,7 +430,7 @@ local function repeated_blocked_run(machine, reuse)
   return first, counters.search_calls or 0, counters
 end
 
-for _, machine in ipairs({ 'trail', 'reference' }) do
+for _, machine in ipairs({ 'ledger', 'reference' }) do
   local off_first, off_second = repeated_blocked_run(machine, false)
   local on_first, on_second, counters = repeated_blocked_run(machine, true)
   truthy(off_second > off_first, 'control run did not repeat planning')
@@ -504,45 +452,35 @@ local invalidation_status
 repeat
   invalidation_status = invalidation:run()
 until invalidation_status.tag ~= 'found'
-truthy(observed, 'relevant location change did not invalidate a cached refutation')
+truthy(observed, 'relevant location change did not invalidate a cached certificate')
 
--- A coordinator validates one unchanged component-level Retry proof rather
--- than revisiting every focus in the component on each driver cycle.
+-- Per-focus certificates avoid repeated proof search without retaining complete
+-- sessions or a component coordinator.
 do
-  local rt = Runtime.new({ machine = 'trail', instrumentation = true, plan_reuse_threshold = 1 })
-  local scalar = Scalar.machine(0, 'component-coordinator-retry')
+  local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
+  local scalar = Scalar.machine(0, 'per-focus-certificate-retry')
   for i = 1, 8 do
     rt:spawn_raw(function()
       rt:perform(scalar:expect_op(1))
-    end, 'component-coordinator-' .. tostring(i))
+    end, 'per-focus-certificate-' .. tostring(i))
   end
   eq(rt:run().tag, 'quiescent')
   local first = rt:instrumentation_snapshot().counters.search_calls or 0
   eq(rt:run().tag, 'quiescent')
   local counters = rt:instrumentation_snapshot().counters
-  eq(counters.search_calls or 0, first, 'unchanged component coordinator repeated focus search')
-  truthy(
-    (counters.component_retry_hits or 0) > 0,
-    'component coordinator did not reuse its combined Retry proof'
-  )
-  truthy(
-    (counters.component_retry_focuses_skipped or 0) >= 8,
-    'component coordinator did not skip the component focus agenda'
-  )
+  eq(counters.search_calls or 0, first, 'unchanged certificates repeated focus search')
+  truthy((counters.plan_reuse_refutation_hits or 0) >= 8, 'per-focus certificates were not reused')
 end
 
 print('tests/test_performance_architecture.lua: remaining performance passes ok')
 
--- Exact caches and cross-cycle reuse are deliberately unavailable when an
--- opaque continuation or external dependency can change without a versioned
--- dependency stamp.
-for _, machine in ipairs({ 'trail', 'reference' }) do
+-- Cross-cycle reuse is deliberately unavailable when an opaque continuation
+-- can change without a versioned dependency stamp.
+for _, machine in ipairs({ 'ledger', 'reference' }) do
   local rt = Runtime.new({
     machine = machine,
     instrumentation = true,
     plan_reuse_threshold = 1,
-    state_memoization_min_steps = 0,
-    refutation_cache_min_steps = 0,
   })
   local channel = Rendezvous.new('opaque-cache-' .. machine)
   local opaque = channel:get_op():and_then(function(value)
@@ -557,8 +495,6 @@ for _, machine in ipairs({ 'trail', 'reference' }) do
   end)
   eq(rt:run().tag, 'quiescent')
   local counters = rt:instrumentation_snapshot().counters
-  eq(counters.state_memo_hits or 0, 0, 'opaque continuation entered state memoisation')
-  eq(counters.supplier_refutation_hits or 0, 0, 'opaque continuation entered refutation cache')
   eq(counters.plan_reuse_stores or 0, 0, 'opaque continuation entered cross-cycle plan cache')
   truthy(
     (counters.plan_reuse_ineligible_dynamic or 0) > 0,
@@ -569,7 +505,7 @@ end
 -- The lazy driver no longer stores positive candidates merely to survive the
 -- gap between fibre admission and the ordinary focus pass.  A binary exchange
 -- is proved only after both attempts are visible and is committed immediately.
-for _, machine in ipairs({ 'trail', 'reference' }) do
+for _, machine in ipairs({ 'ledger', 'reference' }) do
   local rt = Runtime.new({ machine = machine, instrumentation = true, plan_reuse_threshold = 1 })
   local channel = Rendezvous.new('lazy-positive-' .. machine)
   local value
@@ -588,7 +524,7 @@ end
 
 -- A new matching participant changes the component stamp and invalidates a
 -- previously reusable blocked refutation.
-for _, machine in ipairs({ 'trail', 'reference' }) do
+for _, machine in ipairs({ 'ledger', 'reference' }) do
   local rt = Runtime.new({ machine = machine, instrumentation = true, plan_reuse_threshold = 1 })
   local channel = Rendezvous.new('frontier-invalidation-' .. machine)
   local value
@@ -603,7 +539,7 @@ for _, machine in ipairs({ 'trail', 'reference' }) do
   eq(value, 11)
   truthy(
     (rt:instrumentation_snapshot().counters.plan_reuse_invalidations or 0) > 0,
-    'frontier change did not invalidate the cached refutation'
+    'frontier change did not invalidate the cached certificate'
   )
 end
 

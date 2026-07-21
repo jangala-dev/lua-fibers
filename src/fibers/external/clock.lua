@@ -1,7 +1,8 @@
 local Op = require('fibers.op')
+local IR = require('fibers.internal.kernel.ir')
 local Scalar = require('fibers.scalar')
 local Interest = require('fibers.external.interest')
-local Substrate = require('fibers.internal.kernel.store')
+local Substrate = require('fibers.internal.kernel.ledger')
 
 local Clock = {}
 Clock.__index = Clock
@@ -17,7 +18,7 @@ function Clock.new(name)
   }, Clock)
   c._location = Substrate.new_location({
     name = c.name .. ':observation',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'external-clock',
     value = false,
     owner = c,
@@ -39,16 +40,21 @@ function Clock:at_op(deadline)
       return Scalar.Ready.same(true, now)
     end,
   })
-  return Op._compact_resource(self, Kind, 'machine_transition', {
-    location = self._location,
-    resource = self,
-    transition = transition,
-    order = transition.order or 0,
-    interest = Interest.timer(deadline, self),
-    absence_check = function(rt)
-      return rt:now() < deadline
-    end,
-  })
+  return Op._compact_resource(
+    self,
+    Kind,
+    'transition',
+    IR.machine_transition({
+      location = self._location,
+      resource = self,
+      transition = transition,
+      order = transition.order or 0,
+      interest = Interest.timer(deadline, self),
+      absence_check = function(rt)
+        return rt:now() < deadline
+      end,
+    })
+  )
 end
 Clock.Kind = Kind
 return Clock

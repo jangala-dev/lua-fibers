@@ -1,6 +1,6 @@
 local Op = require('fibers.op')
 local IR = require('fibers.internal.kernel.ir')
-local Store = require('fibers.internal.kernel.store')
+local Store = require('fibers.internal.kernel.ledger')
 
 local Calendar = {}
 Calendar.__index = Calendar
@@ -248,7 +248,7 @@ function Calendar.new(initial, name)
   }, Calendar)
   calendar._location = Store.new_location({
     name = calendar.name .. ':schedule',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'plain',
     value = state,
     owner = calendar,

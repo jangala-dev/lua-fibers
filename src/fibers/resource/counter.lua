@@ -1,5 +1,6 @@
 local Op = require('fibers.op')
-local Substrate = require('fibers.internal.kernel.store')
+local IR = require('fibers.internal.kernel.ir')
+local Substrate = require('fibers.internal.kernel.ledger')
 
 local Counter = {}
 Counter.__index = Counter
@@ -48,7 +49,7 @@ function Counter.new(opts, name)
   }, Counter)
   counter._location = Substrate.new_location({
     name = counter.name .. ':stock',
-    merge = 'add',
+    algebra = 'add',
     domain = 'counter',
     value = initial,
     owner = counter,
@@ -105,17 +106,22 @@ function Counter:take_op(n)
     return Op.always(true)
   end
   local loc = self._location
-  return Op._compact_resource(self, Kind, 'claim', {
-    location = loc,
-    group = self,
-    orientation = 'up',
-    predicate = 'ge',
-    threshold = (self.min or 0) + n,
-    query = { kind = 'predicate', predicate = 'ge', threshold = (self.min or 0) + n },
-    transition = { kind = 'static', patch = { kind = 'add', delta = -n } },
-    result_kind = 'constant',
-    result_value = true,
-  })
+  return Op._compact_resource(
+    self,
+    Kind,
+    'transition',
+    IR.claim({
+      location = loc,
+      group = self,
+      orientation = 'up',
+      predicate = 'ge',
+      threshold = (self.min or 0) + n,
+      query = { kind = 'predicate', predicate = 'ge', threshold = (self.min or 0) + n },
+      transition = { kind = 'static', patch = { kind = 'add', delta = -n } },
+      result_kind = 'constant',
+      result_value = true,
+    })
+  )
 end
 function Counter:read_op()
   return self._read_op

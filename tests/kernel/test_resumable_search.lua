@@ -60,7 +60,7 @@ do
   assert_eq(result, 'fallback')
   assert_eq(preferred_calls, 1, 'preferred guard must not be replayed after suspension')
   assert_eq(fallback_calls, 1, 'fallback guard must be entered once')
-  if rt.machine_name == 'trail' then
+  if rt.machine_name == 'ledger' then
     assert_eq(rt.stats.plans, 1, 'one proof session should survive all bounded advances')
   end
 end
@@ -91,7 +91,7 @@ do
   rt:run()
   assert_eq(got, 'value')
   assert_eq(sent, true)
-  if rt.machine_name == 'trail' then
+  if rt.machine_name == 'ledger' then
     assert_eq(rt.stats.plans, 2, 'bounded rendezvous should retain one session per focus rather than restart')
   end
 end
@@ -123,7 +123,7 @@ do
   rt:run()
   assert_eq(got, 'new')
   assert(rt.stats.plans > plans_before, 'frontier change should require a new proof')
-  if rt.machine_name == 'trail' then
+  if rt.machine_name == 'ledger' then
     local snapshot = rt:instrumentation_snapshot()
     assert(
       (snapshot.counters.search_session_invalidations or 0) >= 1,
@@ -135,7 +135,7 @@ end
 -- Session dependency vectors ignore unrelated dependency buckets but reject a
 -- change which can alter the suspended frontier.
 do
-  local rt = Runtime.new({ machine = 'trail', plan_reuse = false, instrumentation = true })
+  local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
   local primary = Rendezvous.new('precise-session-primary')
   local unrelated = Rendezvous.new('precise-session-unrelated')
   local alternatives = {}
@@ -167,11 +167,10 @@ do
   assert(rt.stats.plans > plans, 'a possible partner should invalidate the suspended session')
 end
 
--- A stable blocked primitive becomes a residual seed.  Admission of a matching
--- participant reopens that frontier without constructing another production
--- search session or replaying the primitive prefix.
+-- A stable blocked primitive retains a lightweight certificate.  Admission of
+-- a matching participant invalidates it and starts a fresh production search.
 do
-  local rt = Runtime.new({ machine = 'trail', instrumentation = true, plan_reuse_threshold = 1 })
+  local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
   local channel = Rendezvous.new('residual-seed-rendezvous')
   local got
   rt:spawn_raw(function()
@@ -185,14 +184,11 @@ do
   end, 'seed-sender')
   assert_eq(rt:run().tag, 'found')
   assert_eq(got, 'seeded')
-  if rt.machine_name == 'trail' then
-    assert_eq(
-      rt.stats.search_sessions,
-      sessions,
-      'matching admission should reopen the residual seed rather than construct a session'
+  if rt.machine_name == 'ledger' then
+    assert(
+      rt.stats.search_sessions > sessions,
+      'matching admission should invalidate the certificate and start a fresh search'
     )
-    local counters = rt:instrumentation_snapshot().counters
-    assert((counters.residual_seed_reopens or 0) > 0, 'residual seed reopen was not recorded')
   end
 end
 
@@ -200,11 +196,11 @@ end
 -- reopened after each budget boundary.
 do
   local IR = require('fibers.internal.kernel.ir')
-  local Store = require('fibers.internal.kernel.store')
+  local Store = require('fibers.internal.kernel.ledger')
   local Kind = { name = 'resumable-witness' }
   local location = Store.new_location({
     name = 'resumable-witness-location',
-    merge = 'machine',
+    algebra = 'machine',
     domain = 'plain',
     value = 0,
   })
@@ -246,7 +242,7 @@ do
   assert(found, 'bounded witness search should commit')
   rt:run()
   assert_eq(result, 'witness')
-  if rt.machine_name == 'trail' then
+  if rt.machine_name == 'ledger' then
     assert_eq(opened, 1, 'witness cursor should be opened once across suspension')
     assert_eq(next_calls, 1, 'witness cursor should retain its current alternative')
   end

@@ -5,7 +5,9 @@
 -- or commit.  This module also compiles immutable option graphs into cached
 -- dependency metadata used by recruitment, component isolation and diagnostics.
 
+local Op = require('fibers.op')
 local Supply = require('fibers.internal.kernel.supply')
+local Algebra = require('fibers.internal.kernel.algebra')
 
 local M = {}
 
@@ -32,21 +34,63 @@ function M.patch(location, patch, result_kind, result_value)
   })
 end
 
-function M.claim(opts)
-  assert(opts and opts.location, 'claim requires location')
-  if not opts.query then
+local function transition_program(opts, rule)
+  opts.rule = rule
+  return programme('transition', opts)
+end
+
+local function action_supplies(location, action)
+  if not action then
+    return {}
+  end
+  if action.kind == 'static' then
+    return Algebra.supplies(location, action.patch)
+  end
+  if action.kind == 'take_witness' then
+    return { down = true }
+  end
+  if action.kind == 'put' then
+    return { up = true }
+  end
+  return { any = true }
+end
+
+local function claim_rule(opts, eager_patch)
+  local query = opts.query
+  if not query then
     assert(opts.predicate, 'claim requires predicate or query')
-    opts.query = {
+    query = {
       kind = 'predicate',
       predicate = opts.predicate,
       threshold = opts.threshold,
       key = opts.key,
     }
   end
-  if not opts.transition and opts.patch then
-    opts.transition = { kind = 'static', patch = opts.patch }
+  local action = opts.transition
+  if not action and opts.patch then
+    action = { kind = 'static', patch = opts.patch }
   end
-  return programme('claim', opts)
+  return {
+    type = 'claim',
+    serial = false,
+    enumerable = false,
+    eager = eager_patch ~= nil,
+    total = false,
+    order = opts.order or 0,
+    accepts_supply = true,
+    supplies = action_supplies(opts.location, action),
+    writes = action ~= nil or eager_patch ~= nil,
+    query = query,
+    action = action,
+    eager_patch = eager_patch,
+  }
+end
+
+function M.claim(opts)
+  assert(opts and opts.location, 'claim requires location')
+  local rule = claim_rule(opts)
+  opts.query, opts.transition, opts.patch = nil, nil, nil
+  return transition_program(opts, rule)
 end
 
 function M.conditional_claim(opts)
@@ -54,7 +98,17 @@ function M.conditional_claim(opts)
   assert(opts.predicate, 'conditional claim requires predicate')
   assert(opts.immediate_patch, 'conditional claim requires immediate patch')
   assert(opts.claim_patch, 'conditional claim requires claim patch')
-  return programme('conditional_claim', opts)
+  opts.query = {
+    kind = 'predicate',
+    predicate = opts.predicate,
+    threshold = opts.threshold,
+    key = opts.key,
+  }
+  opts.transition = { kind = 'static', patch = opts.claim_patch }
+  local rule = claim_rule(opts, opts.immediate_patch)
+  opts.predicate, opts.threshold, opts.key = nil, nil, nil
+  opts.query, opts.transition, opts.immediate_patch, opts.claim_patch = nil, nil, nil, nil
+  return transition_program(opts, rule)
 end
 
 function M.select(opts)
@@ -68,7 +122,7 @@ function M.select(opts)
     seq_field = opts.seq_field or 'seq',
   }
   opts.transition = { kind = 'take_witness' }
-  return programme('claim', opts)
+  return M.claim(opts)
 end
 
 function M.admit(opts)
@@ -88,7 +142,7 @@ function M.admit(opts)
     value = opts.value,
     policy = 'overwrite',
   }
-  return programme('claim', opts)
+  return M.claim(opts)
 end
 
 function M.snapshot(resource, snapshot_kind)
@@ -97,12 +151,24 @@ end
 
 function M.machine_transition(opts)
   assert(opts and opts.location, 'machine transition requires location')
-  assert(opts.transition, 'machine transition requires transition')
-  assert(opts.transition.supply == nil, 'machine transition no longer accepts supply')
-  assert(type(opts.transition.accepts_supply) == 'boolean', 'machine transition requires accepts_supply')
-  opts.transition.supplies = Supply.normalise(opts.transition.supplies, 'machine transition supplies', 2)
-  opts.order = opts.transition.order or opts.order or 0
-  return programme('machine_transition', opts)
+  local transition = assert(opts.transition, 'machine transition requires transition')
+  assert(transition.supply == nil, 'machine transition no longer accepts supply')
+  assert(type(transition.accepts_supply) == 'boolean', 'machine transition requires accepts_supply')
+  transition.supplies = Supply.normalise(transition.supplies, 'machine transition supplies', 2)
+  local rule = {
+    type = 'machine',
+    serial = true,
+    enumerable = false,
+    eager = false,
+    total = transition.mode == 'update',
+    order = transition.order or opts.order or 0,
+    accepts_supply = transition.accepts_supply,
+    supplies = transition.supplies,
+    writes = transition.mode ~= 'query',
+    transition = transition,
+  }
+  opts.transition, opts.order = nil, nil
+  return transition_program(opts, rule)
 end
 
 function M.witness_transition(opts)
@@ -110,9 +176,20 @@ function M.witness_transition(opts)
   assert(opts.supply == nil, 'witness transition no longer accepts supply')
   assert(type(opts.cursor) == 'function', 'witness transition requires cursor')
   assert(type(opts.accepts_supply) == 'boolean', 'witness transition requires accepts_supply')
-  opts.supplies = Supply.normalise(opts.supplies, 'witness transition supplies', 2)
-  opts.order = opts.order or 0
-  return programme('witness_transition', opts)
+  local rule = {
+    type = 'witness',
+    serial = false,
+    enumerable = true,
+    eager = false,
+    total = false,
+    order = opts.order or 0,
+    accepts_supply = opts.accepts_supply,
+    supplies = Supply.normalise(opts.supplies, 'witness transition supplies', 2),
+    writes = true,
+    cursor_factory = opts.cursor,
+  }
+  opts.cursor, opts.accepts_supply, opts.supplies, opts.order = nil, nil, nil, nil
+  return transition_program(opts, rule)
 end
 
 function M.version_wait(location, version)
@@ -121,19 +198,6 @@ end
 
 function M.exchange(resource, role, value)
   return programme('exchange', { resource = resource, role = role, value = value })
-end
-
-function M.open_witness_cursor(program, state, payload, context)
-  local cursor = program.cursor(state, payload or {}, context or {})
-  assert(
-    type(cursor) == 'table' and type(cursor.next) == 'function',
-    'witness cursor factory must return { next = function }'
-  )
-  return cursor
-end
-
-function M.witness_ready(program, state, payload, context)
-  return M.open_witness_cursor(program, state, payload, context):next() ~= nil
 end
 
 -- Cached option metadata -------------------------------------------------
@@ -218,69 +282,22 @@ local function metadata_merge(dst, src)
   return dst
 end
 
-local function mark_patch_supply(access, patch)
-  if not patch then
-    return
-  end
-  local supplies = access.supplies or {}
-  access.supplies = supplies
-  if patch.kind == 'add' then
-    if (patch.delta or 0) > 0 then
-      supplies.up = true
-    elseif (patch.delta or 0) < 0 then
-      supplies.down = true
-    end
-    return
-  end
-  if patch.kind == 'presence' or patch.kind == 'finite_map' then
-    for i = 1, #(patch.ops or {}) do
-      local row = patch.ops[i]
-      if row.op == 'put' then
-        supplies.up = true
-      elseif row.op == 'remove' or row.op == 'take' then
-        supplies.down = true
-      else
-        supplies.any = true
-      end
-    end
-    return
-  end
-  -- Replacement and custom patches have no declared order relation.  They
-  -- explicitly supply any demand direction.
-  supplies.any = true
+local function mark_patch_supply(access, location, patch)
+  access.supplies = Supply.merge_into(access.supplies, Algebra.supplies(location, patch))
 end
 
-local function primitive_supply_access(program, kind)
+local function primitive_supply_access(program)
   local access = { read = true, write = true, supplies = {} }
-  if kind == 'patch' then
-    mark_patch_supply(access, program.patch)
-    if program.payload_patch == 'replace' then
-      access.supplies.any = true
-    end
-    return access
-  end
-
-  local transition = program.transition
-  if not transition and kind == 'conditional_claim' then
-    transition = { kind = 'static', patch = program.claim_patch }
-  end
-  if transition then
-    if transition.kind == 'static' then
-      mark_patch_supply(access, transition.patch)
-    elseif transition.kind == 'take_witness' then
-      access.supplies.down = true
-    elseif transition.kind == 'put' then
-      access.supplies.up = true
-    else
-      access.supplies.any = true
-    end
+  mark_patch_supply(access, program.location, program.patch)
+  if program.payload_patch == 'replace' then
+    access.supplies.any = true
   end
   return access
 end
 
 local function primitive_metadata(op, out)
   local p = op.program
-  local kind = p.program_kind or p.kind
+  local kind = M.kind(p)
   if kind == 'exchange' then
     local roles = out.exchanges[p.resource]
     if not roles then
@@ -301,28 +318,17 @@ local function primitive_metadata(op, out)
   if kind == 'read' then
     mark_location(out, p.location, { read = true })
   elseif kind == 'patch' then
-    mark_location(out, p.location, primitive_supply_access(p, kind))
+    mark_location(out, p.location, primitive_supply_access(p))
   elseif kind == 'version_wait' then
     mark_location(out, p.location, { read = true, wait = true })
     out.external = true
-  elseif kind == 'claim' or kind == 'conditional_claim' then
-    local access = primitive_supply_access(p, kind)
-    access.wait = true
-    mark_location(out, p.location, access)
-  elseif kind == 'machine_transition' then
-    local transition = assert(p.transition, 'machine transition metadata requires transition')
+  elseif kind == 'transition' then
+    local rule = M.rule(p)
     mark_location(out, p.location, {
       read = true,
-      write = transition.mode ~= 'query',
+      write = rule.writes,
       wait = true,
-      supplies = transition.supplies,
-    })
-  elseif kind == 'witness_transition' then
-    mark_location(out, p.location, {
-      read = true,
-      write = true,
-      wait = true,
-      supplies = p.supplies,
+      supplies = rule.supplies,
     })
   else
     error('unknown trusted primitive programme kind ' .. tostring(kind), 0)
@@ -521,9 +527,6 @@ end
 function M.metadata(op)
   return describe(op)
 end
-function M.footprint(op)
-  return describe(op)
-end
 
 local function opposite_role(role)
   if role == 'put' then
@@ -561,7 +564,7 @@ function M.metadata_may_supply(metadata, intent)
   return false, 'none'
 end
 
-function M.footprint_may_supply(metadata, intents)
+function M.metadata_may_supply_any(metadata, intents)
   if metadata and metadata.dynamic then
     return true, 'dynamic'
   end
@@ -601,6 +604,294 @@ function M.metadata_counts(metadata)
     resources = resources + 1
   end
   return exchanges, locations, resources
+end
+
+-- Canonical transition rules ---------------------------------------------
+
+local function one(value)
+  local done = false
+  return {
+    next = function()
+      if done then
+        return nil
+      end
+      done = true
+      return value
+    end,
+  }
+end
+
+local function none()
+  return {
+    next = function()
+      return nil
+    end,
+  }
+end
+
+local function is_wait(value)
+  return type(value) == 'table' and value._fibers_scalar_wait == true
+end
+
+local function is_ready(value)
+  return type(value) == 'table' and value._fibers_scalar_ready == true
+end
+
+local function machine_outcome(program, value, context)
+  local transition, payload = M.rule(program).transition, program.payload or {}
+  local packed = Op._pack(transition.step(value, payload, context))
+  local first = packed[1]
+  if packed.n == 1 and is_wait(first) then
+    return nil
+  end
+  if is_ready(first) then
+    if transition.mode == 'query' and first.writes then
+      return nil
+    end
+    return {
+      machine = true,
+      writes = first.writes == true,
+      value = first.value,
+      result = first.pack or Op._pack(),
+    }
+  end
+  if transition.mode == 'update' then
+    if packed.n == 0 then
+      return nil
+    end
+    local result = { n = packed.n - 1, _fibers_pack = true }
+    for i = 2, packed.n do
+      result[i - 1] = packed[i]
+    end
+    return { machine = true, writes = true, value = packed[1], result = result }
+  end
+  if packed.n == 0 or packed[1] == nil then
+    return nil
+  end
+  if transition.mode == 'select' then
+    local result = { n = packed.n - 1, _fibers_pack = true }
+    for i = 2, packed.n do
+      result[i - 1] = packed[i]
+    end
+    return { machine = true, writes = true, value = packed[1], result = result }
+  end
+  return { machine = true, writes = false, result = packed }
+end
+
+local pack = Op._pack
+function M.result_pack(program, value, session)
+  local result = session and function(...)
+    return session:pack(...)
+  end or pack
+  local kind = program.result_kind or 'constant'
+  if kind == 'constant' then
+    return result(program.result_value)
+  end
+  if kind == 'identity' or kind == 'map_value' then
+    return result(value)
+  end
+  if kind == 'presence_bool' then
+    return result(value ~= Algebra.ABSENT)
+  end
+  if kind == 'presence_value' then
+    if value == Algebra.ABSENT or (program.nil_sentinel and value == program.nil_sentinel) then
+      return result(nil)
+    end
+    return result(value)
+  end
+  if kind == 'index_entry' then
+    return result(value and { key = value.key, rank = value.rank, value = value.value, seq = value.seq })
+  end
+  if kind == 'scalar_snapshot' then
+    return result({ value = value, version = program.location.version })
+  end
+  if kind == 'counter_state' then
+    local owner = program.owner
+    return result({ value = value, min = owner.min, max = owner.max, version = program.location.version })
+  end
+  error('unknown programme result kind: ' .. tostring(kind), 2)
+end
+
+function M.predicate_holds(program, value)
+  local predicate = program.predicate
+  if predicate == 'present' then
+    return value ~= Algebra.ABSENT
+  end
+  if predicate == 'absent' then
+    return value == Algebra.ABSENT
+  end
+  if predicate == 'ge' then
+    return value >= program.threshold
+  end
+  if predicate == 'map_present' then
+    return value[program.key] ~= nil
+  end
+  if predicate == 'map_absent' then
+    return value[program.key] == nil
+  end
+  error('unknown claim predicate: ' .. tostring(predicate), 2)
+end
+
+local function select_extreme(query, value)
+  local best, rank_field, seq_field = nil, query.rank_field or 'rank', query.seq_field or 'seq'
+  local maximum = query.order == 'max'
+  for key, entry in pairs(value or {}) do
+    if not best then
+      best = { key = key, entry = entry }
+    else
+      local rank, best_rank = entry[rank_field], best.entry[rank_field]
+      local better
+      if rank ~= best_rank then
+        better = maximum and rank > best_rank or not maximum and rank < best_rank
+      else
+        local seq, best_seq = entry[seq_field] or 0, best.entry[seq_field] or 0
+        if seq ~= best_seq then
+          better = maximum and seq > best_seq or not maximum and seq < best_seq
+        else
+          local text, best_text = tostring(key), tostring(best.key)
+          better = maximum and text > best_text or not maximum and text < best_text
+        end
+      end
+      if better then
+        best = { key = key, entry = entry }
+      end
+    end
+  end
+  return best
+end
+
+local function compatible(matrix, left, right)
+  return left == right or matrix and matrix[left] and matrix[left][right] == true
+end
+
+function M.evaluate_claim(program, value)
+  local rule = M.rule(program)
+  local query = rule.query
+  if not query then
+    error('transition rule is missing query', 2)
+  end
+  local witness = value
+  if query.kind == 'predicate' then
+    if not M.predicate_holds(query, value) then
+      return nil
+    end
+  elseif query.kind == 'extreme' then
+    witness = select_extreme(query, value)
+    if not witness then
+      return nil
+    end
+  elseif query.kind == 'compatible_insert' then
+    for owner, mode in pairs(value or {}) do
+      if
+        owner ~= query.key
+        and not (
+          compatible(query.compatibility, query.value, mode)
+          and compatible(query.compatibility, mode, query.value)
+        )
+      then
+        return nil
+      end
+    end
+  else
+    error('unknown transition query: ' .. tostring(query.kind), 2)
+  end
+  local action, patch = rule.action, nil
+  if action then
+    if action.kind == 'static' then
+      patch = action.patch
+    elseif action.kind == 'take_witness' then
+      patch = { kind = 'finite_map', ops = { { op = 'take', key = witness.key } } }
+    elseif action.kind == 'put' then
+      patch = {
+        kind = 'finite_map',
+        ops = {
+          {
+            op = 'put',
+            key = action.key,
+            value = action.value,
+            policy = action.policy,
+          },
+        },
+      }
+    else
+      error('unknown transition action: ' .. tostring(action.kind), 2)
+    end
+  end
+  local result = query.kind == 'extreme' and witness.entry or witness
+  return { patch = patch, result = M.result_pack(program, result) }
+end
+
+function M.kind(program)
+  return program and (program.primitive_kind or program.kind)
+end
+
+function M.rule(program)
+  if M.kind(program) ~= 'transition' or type(program.rule) ~= 'table' then
+    error('programme is not a transition rule', 2)
+  end
+  return program.rule
+end
+
+local function witness_cursor(program, rule, value, context)
+  local source = rule.cursor_factory(value, program.payload or {}, context)
+  assert(
+    type(source) == 'table' and type(source.next) == 'function',
+    'witness cursor factory must return { next = function }'
+  )
+  return {
+    next = function()
+      local outcome = source:next()
+      if outcome == nil then
+        return nil
+      end
+      return {
+        machine = true,
+        writes = outcome.writes ~= false,
+        value = outcome.value,
+        result = outcome.result,
+      }
+    end,
+  }
+end
+
+function M.transition_cursor(program, value, context, phase)
+  local rule = M.rule(program)
+  context, phase = context or {}, phase or 'domain'
+  if rule.type == 'claim' then
+    if phase == 'eager' then
+      if not rule.eager_patch or not M.predicate_holds(rule.query, value) then
+        return none()
+      end
+      return one({ patch = rule.eager_patch, writes = true, result = M.result_pack(program, value) })
+    end
+    local outcome = M.evaluate_claim(program, value)
+    return outcome and one({ patch = outcome.patch, writes = outcome.patch ~= nil, result = outcome.result })
+      or none()
+  elseif rule.type == 'machine' then
+    local outcome = machine_outcome(program, value, context)
+    return outcome and one(outcome) or none()
+  elseif rule.type == 'witness' then
+    return witness_cursor(program, rule, value, context)
+  end
+  error('unknown transition rule type ' .. tostring(rule.type), 2)
+end
+
+function M.transition_ready(program, value, context)
+  local rule = M.rule(program)
+  if rule.type == 'machine' and type(rule.transition.ready) == 'function' then
+    local result = rule.transition.ready(value, program.payload or {}, context or {})
+    return result ~= nil and result ~= false and not is_wait(result)
+  end
+  return M.transition_cursor(program, value, context, 'probe'):next() ~= nil
+end
+
+function M.transition_patch(program, outcome, serial)
+  if outcome.patch then
+    return outcome.patch
+  end
+  if outcome.writes and outcome.machine then
+    return Algebra.machine_change(program.location, serial, outcome.value)
+  end
 end
 
 return M

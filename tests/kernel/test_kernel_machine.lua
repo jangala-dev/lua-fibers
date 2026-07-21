@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 local Runtime = require('fibers.runtime')
 local IR = require('fibers.internal.kernel.ir')
-local Store = require('fibers.internal.kernel.store')
+local Store = require('fibers.internal.kernel.ledger')
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
 
@@ -22,7 +22,7 @@ local function eq(a, b, m)
   end
 end
 local Kind = { name = 'lazy-witness-test' }
-local loc = Store.new_location({ name = 'lazy-witness', merge = 'machine', domain = 'plain', value = 0 })
+local loc = Store.new_location({ name = 'lazy-witness', algebra = 'machine', domain = 'plain', value = 0 })
 local opened, next_calls = 0, 0
 local p = IR.witness_transition({
   accepts_supply = true,
@@ -60,7 +60,7 @@ if next_calls > 2 then
   error('witness cursor was eagerly exhausted: ' .. next_calls, 2)
 end
 
--- The trail machine and reference machine must agree on a backtracking world.
+-- The ledger machine and reference machine must agree on a backtracking world.
 local function scenario(machine)
   local r = Runtime.new({ machine = machine })
   local s = Scalar.new(0)
@@ -74,7 +74,7 @@ local function scenario(machine)
   local st = r:run()
   return st.tag, s.value, out and out[1] and out[1][1]
 end
-local a, b, c = scenario('trail')
+local a, b, c = scenario('ledger')
 local x, y, z = scenario('reference')
 eq(a, x)
 eq(b, y)

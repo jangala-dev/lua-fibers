@@ -38,18 +38,13 @@ local iterations = math.max(1, math.floor(env_number('FIBERS_MINIMAL_ITERATIONS'
 local repeats = math.max(1, math.floor(env_number('FIBERS_MINIMAL_REPEATS', 5)))
 local format = os.getenv('FIBERS_MINIMAL_FORMAT') or 'text'
 local output = os.getenv('FIBERS_MINIMAL_OUTPUT') or ''
-local machine = os.getenv('FIBERS_MINIMAL_MACHINE') or 'trail'
-local record_pool_env = os.getenv('FIBERS_MINIMAL_RECORD_POOL')
-
+local machine = os.getenv('FIBERS_MINIMAL_MACHINE') or 'ledger'
 local function runtime(instrumented)
   local opts = {
     machine = machine,
     instrumentation = instrumented and { clock = Clock.now } or nil,
     search_session_pool = env_number('FIBERS_MINIMAL_SESSION_POOL', 1) ~= 0,
   }
-  if record_pool_env ~= nil then
-    opts.record_pool = tonumber(record_pool_env) ~= 0
-  end
   return Runtime.new(opts)
 end
 
