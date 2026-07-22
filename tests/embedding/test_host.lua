@@ -100,7 +100,7 @@ do
   assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
 end
 
--- Host selection returns complete families; fd selection remains low-level.
+-- Host selection returns complete, indivisible families.
 do
   local manual = Host.manual({ now = 0 })
   assert_eq(manual.name, 'manual')
@@ -124,8 +124,7 @@ do
   local available = Host.available()
   assert_truthy(type(available) == 'table' and #available > 0, 'host.available should list selectable hosts')
 
-  local fd_registry = require('fibers.host.fd')
-  assert_truthy(type(fd_registry.select) == 'function', 'host.fd should be a registry/selector')
+  assert_truthy(type(manual.create_pipe) == 'function', 'selected family should own its pipe capability')
 end
 
 print('tests/test_host.lua: ok')

@@ -209,21 +209,18 @@ function Provider.new(runtime, opts)
   if not setup_nr then
     return nil, 'unsupported io_uring architecture'
   end
-  local self = setmetatable(
-    {
-      runtime = runtime,
-      ffi = ffi,
-      C = C,
-      fd_provider = assert(opts.fd),
-      setup_nr = setup_nr,
-      enter_nr = enter_nr,
-      pending = {},
-      next_id = 0,
-      closed = false,
-      name = 'io_uring',
-    },
-    Provider
-  )
+  local self = setmetatable({
+    runtime = runtime,
+    ffi = ffi,
+    C = C,
+    fd_provider = assert(opts.fd),
+    setup_nr = setup_nr,
+    enter_nr = enter_nr,
+    pending = {},
+    next_id = 0,
+    closed = false,
+    name = 'io_uring',
+  }, Provider)
   local params = ffi.new('struct fibers_io_uring_params[1]')
   local entries = opts.entries or 64
   local fd = setup_ring(ffi, C, setup_nr, entries, params)

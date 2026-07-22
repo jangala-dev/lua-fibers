@@ -6,32 +6,20 @@
 
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.internal.io_audit')
-local Sleep = require('fibers.sleep')
-local Provider = require('fibers.host.provider')
+local ProcessCore = require('fibers.host.process_core')
+local ProcessIO = require('fibers.host.process_io_core')
+local FfiNative = require('fibers.host.ffi_native')
 
 local Common = {}
 
-local function unsupported(reason)
-  return Provider.unsupported('fibers.host.process_ffi', reason)
-end
-
-local function make_tonumber(ffi)
-  local toint = rawget(ffi, 'tonumber') or tonumber
-  return function(value)
-    return toint(value) or tonumber(value)
-  end
-end
-
 function Common.new(opts)
   opts = opts or {}
-  local ffi = assert(opts.ffi, 'ffi provider required')
-  local C = opts.C or ffi.C
+  local native = opts.native or FfiNative.new(opts)
+  local ffi, C, tonumber_c = native.ffi, native.C, native.number
   local fd_provider = assert(opts.fd, 'fd provider required')
-  local tonumber_c = opts.tonumber_c or make_tonumber(ffi)
   local prefix = opts.error_prefix or 'fibers.host.process_ffi'
 
-  local ok_cdef, cdef_err = pcall(function()
-    ffi.cdef([[
+  local ok_cdef, cdef_err = native.cdef([[
       typedef long ssize_t;
       typedef unsigned long size_t;
       typedef int pid_t;
@@ -57,7 +45,6 @@ function Common.new(opts)
       int clearenv(void);
       long sysconf(int name);
     ]])
-  end)
   if not ok_cdef then
     opts._cdef_err = cdef_err
   end
@@ -65,14 +52,8 @@ function Common.new(opts)
   local EINTR = 4
   local EINVAL = 22
   local ENOSYS = 38
-  local F_GETFD = 1
-  local F_SETFD = 2
-  local F_GETFL = 3
-  local F_SETFL = 4
-  local FD_CLOEXEC = 1
   local O_RDONLY = 0
   local O_WRONLY = 1
-  local O_NONBLOCK = 2048
   local WNOHANG = 1
   local SIG_NUMBERS = {
     hup = 1,
@@ -92,103 +73,15 @@ function Common.new(opts)
   local SYS_close_range = opts.sys_close_range or 436
   local SC_OPEN_MAX = opts.sc_open_max or 4
 
-  local function errno()
-    return ffi.errno()
-  end
+  local errno = native.errno
+  local strerror = native.strerror
+  local retry = native.retry
 
-  local function is_null(value)
-    if value == nil then
-      return true
-    end
-    local nullptr = rawget(ffi, 'nullptr')
-    return nullptr ~= nil and value == nullptr
-  end
-
-  local function strerror(number)
-    local ok, value = pcall(function()
-      return C.strerror(number)
-    end)
-    if not ok or is_null(value) then
-      return 'errno ' .. tostring(number)
-    end
-    return ffi.string(value)
-  end
-
-  local function vararg_int(value)
-    if type(ffi.cast) == 'function' then
-      local ok, converted = pcall(ffi.cast, 'int', value)
-      if ok then
-        return converted
-      end
-    end
-    return value
-  end
-
-  local function retry(fn)
-    while true do
-      local result = tonumber_c(fn())
-      if result ~= -1 then
-        return result
-      end
-      local e = errno()
-      if e ~= EINTR then
-        return nil, e
-      end
-    end
-  end
-
-  local function set_flag(fd, get_cmd, set_cmd, flag, enabled)
-    local current, e = retry(function()
-      return C.fcntl(fd, get_cmd, vararg_int(0))
-    end)
-    if current == nil then
-      return nil, e
-    end
-    local BitOps = require('fibers.internal.bitops')
-    local bit = assert(BitOps.resolve())
-    local value = enabled and bit.bor(current, flag) or bit.band(current, bit.bnot(flag))
-    local ok, e2 = retry(function()
-      return C.fcntl(fd, set_cmd, vararg_int(value))
-    end)
-    if ok == nil then
-      return nil, e2
-    end
-    return true
-  end
-
-  local function set_cloexec(fd, enabled)
-    return set_flag(fd, F_GETFD, F_SETFD, FD_CLOEXEC, enabled ~= false)
-  end
-
-  local function set_nonblocking(fd, enabled)
-    return set_flag(fd, F_GETFL, F_SETFL, O_NONBLOCK, enabled ~= false)
-  end
-
-  local function close_fd(fd)
-    if fd == nil or fd < 0 then
-      return true
-    end
-    local ok, e = retry(function()
-      return C.close(fd)
-    end)
-    return ok ~= nil, e
-  end
-
+  local set_cloexec = native.set_cloexec
+  local set_nonblocking = native.set_nonblocking
+  local close_fd = native.close_fd
   local function raw_pipe()
-    local fds = ffi.new('int[2]')
-    if tonumber_c(C.pipe(fds)) ~= 0 then
-      local e = errno()
-      return nil, nil, e
-    end
-    local r, w = tonumber_c(fds[0]), tonumber_c(fds[1])
-    local ok1, e1 = set_cloexec(r, true)
-    local ok2, e2 = set_cloexec(w, true)
-    if not ok1 or not ok2 then
-      close_fd(r)
-      close_fd(w)
-      return nil, nil, e1 or e2
-    end
-    return r, w
+    return native.pipe(true)
   end
 
   local function c_string(value)
@@ -229,64 +122,30 @@ function Common.new(opts)
     return true
   end
 
-  local function normalise_signal(signal)
-    if type(signal) == 'number' then
-      return math.floor(signal)
-    end
-    local number = SIG_NUMBERS[string.lower(tostring(signal))]
-    if not number then
-      return nil, HostError.invalid_argument('process', 'signal', { signal = signal })
-    end
-    return number
-  end
+  local signals = ProcessCore.signals(SIG_NUMBERS)
 
   local function decode_status(raw)
     local low = raw % 256
     local signal = low % 128
     if signal == 0 then
-      local code = math.floor(raw / 256) % 256
-      return { kind = 'exited', code = code, success = code == 0 }
+      return ProcessCore.exited(math.floor(raw / 256) % 256)
     end
     if signal ~= 127 then
-      local names = { [1] = 'HUP', [2] = 'INT', [3] = 'QUIT', [9] = 'KILL', [15] = 'TERM' }
-      return {
-        kind = 'signalled',
-        signal = signal,
-        signal_name = names[signal],
-        core_dumped = low >= 128,
-        success = false,
-      }
+      return ProcessCore.signalled(signals, signal, low >= 128)
     end
-    return nil
   end
 
-  local HostProcess = {}
-  HostProcess.__index = HostProcess
-
-  function HostProcess:bind_runtime(rt)
-    self.runtime = rt
-    IOAudit.bind(self, rt)
-    if self.pidfd and type(self.pidfd.bind_runtime) == 'function' then
-      self.pidfd:bind_runtime(rt)
-    end
-    return self
-  end
-
-  function HostProcess:pid()
-    return self._pid
-  end
-
-  function HostProcess:wait_op()
+  local function wait_process(self)
     if self.status then
       return require('fibers.op').always(true)
     end
     if self.pidfd then
       return self.pidfd:read_ready_op()
     end
-    return Sleep.sleep_op(self.poll_interval)
+    return require('fibers.sleep').sleep_op(self.poll_interval)
   end
 
-  function HostProcess:reap()
+  local function reap_process(self)
     if self.status then
       return self.status
     end
@@ -304,23 +163,12 @@ function Common.new(opts)
     if not decoded then
       return nil, HostError.would_block('process', 'reap', { pid = self._pid })
     end
-    self.status = decoded
-    self.reaped = true
+    self.status, self.reaped = decoded, true
     return decoded
   end
 
-  function HostProcess:signal(signal, target)
-    if self.reaped then
-      return nil, HostError.closed('process', 'signal', { pid = self._pid })
-    end
-    local number, signal_err = normalise_signal(signal)
-    if not number then
-      return nil, signal_err
-    end
-    local pid = self._pid
-    if target == 'group' then
-      pid = -math.abs(self.group_id or self._pid)
-    end
+  local function signal_process(self, number, target)
+    local pid = target == 'group' and -math.abs(self.group_id or self._pid) or self._pid
     local rc, e = retry(function()
       return C.kill(pid, number)
     end)
@@ -335,21 +183,26 @@ function Common.new(opts)
     return true
   end
 
-  function HostProcess:close(reason)
-    if self.closed then
-      IOAudit.closing(self, reason)
-      IOAudit.closed(self, true, nil, reason)
-      return true
-    end
-    self.closed = true
-    IOAudit.closing(self, reason)
+  local function close_process(self, reason)
     if self.pidfd then
       self.pidfd:close(reason)
       self.pidfd = nil
     end
-    IOAudit.closed(self, true, nil, reason)
     return true
   end
+
+  local HostProcess = ProcessCore.class({
+    signals = signals,
+    bind = function(self, rt)
+      if self.pidfd and type(self.pidfd.bind_runtime) == 'function' then
+        self.pidfd:bind_runtime(rt)
+      end
+    end,
+    wait = wait_process,
+    reap = reap_process,
+    signal = signal_process,
+    close = close_process,
+  })
 
   local function pidfd_open(pid)
     local ok, result = pcall(function()
@@ -458,51 +311,29 @@ function Common.new(opts)
   end
 
   local function setup_stdio_child(stdio, error_write)
-    local opened_null = {}
-    local function install(which, target_fd)
-      local mode = stdio[which]
-      if mode == 'inherit' or mode == nil then
-        return true
-      end
-      if mode == 'stdout' and which == 'stderr' then
-        if tonumber_c(C.dup2(1, 2)) == -1 then
+    return ProcessIO.install_child(stdio, {
+      targets = { stdin = 0, stdout = 1, stderr = 2 },
+      stdout = 1,
+      same = function(a, b)
+        return a == b
+      end,
+      duplicate = function(source, target)
+        if tonumber_c(C.dup2(source, target)) == -1 then
           return nil
         end
         return true
-      end
-      local source
-      if mode == 'pipe' then
-        source = stdio[which .. '_child']
-      elseif mode == 'null' then
-        local flags = which == 'stdin' and O_RDONLY or O_WRONLY
-        source = tonumber_c(C.open('/dev/null', flags))
-        if source == -1 then
-          return nil
-        end
-        opened_null[#opened_null + 1] = source
-      end
-      if source and source ~= target_fd then
-        if tonumber_c(C.dup2(source, target_fd)) == -1 then
-          return nil
-        end
-      end
-      return true
-    end
-    if not install('stdin', 0) or not install('stdout', 1) or not install('stderr', 2) then
-      return nil
-    end
-    for _, fd in pairs(stdio.all_fds) do
-      if fd ~= 0 and fd ~= 1 and fd ~= 2 and fd ~= error_write then
+      end,
+      open_null = function(which)
+        local fd = tonumber_c(C.open('/dev/null', which == 'stdin' and O_RDONLY or O_WRONLY))
+        return fd == -1 and nil or fd
+      end,
+      keep = function(fd)
+        return fd == 0 or fd == 1 or fd == 2 or fd == error_write
+      end,
+      close = function(fd)
         C.close(fd)
-      end
-    end
-    for i = 1, #opened_null do
-      local fd = opened_null[i]
-      if fd ~= 0 and fd ~= 1 and fd ~= 2 then
-        C.close(fd)
-      end
-    end
-    return true
+      end,
+    })
   end
 
   function Provider.start_process(host, spec)
@@ -511,45 +342,20 @@ function Common.new(opts)
       return nil, nil, HostError.unsupported('host', 'process', { host = host.name, reason = reason })
     end
 
-    local stdio = { all_fds = {} }
-    local parent_fds = {}
-    local function add_fd(fd)
-      stdio.all_fds[#stdio.all_fds + 1] = fd
-    end
-    local function make_stdio(which, mode)
-      stdio[which] = mode
-      if mode ~= 'pipe' then
-        return true
-      end
+    local stdio, parent_fds, stdio_errno = ProcessIO.open(spec, function()
       local r, w, e = raw_pipe()
       if not r then
-        return nil, e
+        return nil, nil, e
       end
-      add_fd(r)
-      add_fd(w)
-      if which == 'stdin' then
-        stdio.stdin_child = r
-        parent_fds.stdin = w
-      else
-        parent_fds[which] = r
-        stdio[which .. '_child'] = w
-      end
-      return true
-    end
-
-    for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
-      local ok, e = make_stdio(which, spec[which] or 'inherit')
-      if not ok then
-        for _, fd in pairs(stdio.all_fds) do
-          close_fd(fd)
-        end
-        return nil, nil, HostError.system('process', 'pipe', strerror(e), nil, e, { stream = which })
-      end
+      return r, w
+    end, close_fd)
+    if not stdio then
+      return nil, nil, HostError.system('process', 'pipe', strerror(stdio_errno), nil, stdio_errno)
     end
 
     local error_read, error_write, pipe_errno = raw_pipe()
     if not error_read then
-      for _, fd in pairs(stdio.all_fds) do
+      for _, fd in pairs(stdio.all) do
         close_fd(fd)
       end
       return nil, nil, HostError.system('process', 'exec_pipe', strerror(pipe_errno), nil, pipe_errno)
@@ -562,7 +368,7 @@ function Common.new(opts)
       local e = errno()
       close_fd(error_read)
       close_fd(error_write)
-      for _, fd in pairs(stdio.all_fds) do
+      for _, fd in pairs(stdio.all) do
         close_fd(fd)
       end
       return nil, nil, HostError.system('process', 'fork', strerror(e), nil, e)
@@ -615,10 +421,7 @@ function Common.new(opts)
     -- Keep argv/environment buffers alive until after fork.
     local _keep = argv_buffers
     close_fd(error_write)
-    for which, fd in pairs(parent_fds) do
-      local child_fd = which == 'stdin' and stdio.stdin_child or stdio[which .. '_child']
-      close_fd(child_fd)
-    end
+    ProcessIO.close_child_ends(stdio, parent_fds, close_fd)
 
     local error_value = ffi.new('int[2]')
     local error_size = ffi.sizeof('int') * 2
@@ -681,50 +484,29 @@ function Common.new(opts)
         })
     end
 
-    local endpoints = {}
-    for which, fd in pairs(parent_fds) do
-      local ok_nb, nb_errno = set_nonblocking(fd, true)
-      if not ok_nb then
-        for _, other in pairs(parent_fds) do
-          close_fd(other)
+    local endpoints, wrap_err = ProcessIO.wrap({
+      host = host,
+      name = spec.name,
+      pid = pid,
+      parents = parent_fds,
+      wrap = function(fd, wrap_opts)
+        local ok_nb, nb_errno = set_nonblocking(fd, true)
+        if not ok_nb then
+          return nil, HostError.system('process', 'set_nonblocking', strerror(nb_errno), nil, nb_errno)
         end
+        wrap_opts.nonblocking = false
+        return fd_provider.new(fd, wrap_opts)
+      end,
+      close_raw = close_fd,
+      cloexec = true,
+      abort = function()
         C.kill(pid, 9)
         local status = ffi.new('int[1]')
         C.waitpid(pid, status, 0)
-        return nil,
-          nil,
-          HostError.system('process', 'set_nonblocking', strerror(nb_errno), nil, nb_errno, {
-            stream = which,
-          })
-      end
-      local handle, wrap_err = fd_provider.new(fd, {
-        host = host,
-        name = (spec.name or ('process-' .. tostring(pid))) .. ':' .. which,
-        nonblocking = false,
-        cloexec = true,
-      })
-      if not handle then
-        for _, endpoint in pairs(endpoints) do
-          endpoint:close('process endpoint wrap failed')
-        end
-        for other_which, other_fd in pairs(parent_fds) do
-          if other_which ~= which and not endpoints[other_which] then
-            close_fd(other_fd)
-          end
-        end
-        C.kill(pid, 9)
-        local status = ffi.new('int[1]')
-        C.waitpid(pid, status, 0)
-        return nil, nil, wrap_err
-      end
-      if which == 'stdin' then
-        handle.capabilities.read = false
-        handle.capabilities.shutdown_read = false
-      else
-        handle.capabilities.write = false
-        handle.capabilities.shutdown_write = false
-      end
-      endpoints[which] = handle
+      end,
+    })
+    if not endpoints then
+      return nil, nil, wrap_err
     end
 
     local pidfd
@@ -765,5 +547,4 @@ function Common.new(opts)
   return Provider
 end
 
-Common.unsupported = unsupported
 return Common

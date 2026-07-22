@@ -13,6 +13,7 @@ package.path = table.concat({
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
+local FakeHandle = require('tests.support.fake_handle')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
@@ -68,7 +69,7 @@ end
 
 -- Opening a backend stream is transactional. A losing open starts no reactor fibre.
 do
-  local backend = HostHandle.fake({ name = 'losing-open-backend' })
+  local backend = FakeHandle.new({ name = 'losing-open-backend' })
   local region = FibersRegion.new('losing-open-region')
   local got
   local st = fibers.try_run(function()
@@ -92,7 +93,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('compound-region')
-  local backend = HostHandle.fake({ name = 'compound-backend' })
+  local backend = FakeHandle.new({ name = 'compound-backend' })
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -123,8 +124,8 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('shared-reactor-region')
-  local backend_a = HostHandle.fake({ name = 'shared-reactor-a' })
-  local backend_b = HostHandle.fake({ name = 'shared-reactor-b' })
+  local backend_a = FakeHandle.new({ name = 'shared-reactor-a' })
+  local backend_b = FakeHandle.new({ name = 'shared-reactor-b' })
   local stream_a, stream_b
   rt:spawn_raw(function()
     stream_a =
@@ -146,7 +147,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('read-region')
-  local backend = HostHandle.fake({ name = 'read-backend' })
+  local backend = FakeHandle.new({ name = 'read-backend' })
   local stream, got
   rt:spawn_raw(function()
     stream =
@@ -166,7 +167,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('capacity-read-region')
-  local backend = HostHandle.fake({ name = 'capacity-read-backend' })
+  local backend = FakeHandle.new({ name = 'capacity-read-backend' })
   local stream, first, second
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_op(backend, {
@@ -196,7 +197,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('write-region')
-  local backend = HostHandle.fake({ name = 'write-backend' })
+  local backend = FakeHandle.new({ name = 'write-backend' })
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -215,7 +216,7 @@ end
 do
   local rt = FibersRuntime.new({ choice_seed = 3 })
   local region = FibersRegion.new('losing-write-region')
-  local backend = HostHandle.fake({ name = 'losing-write-backend' })
+  local backend = FakeHandle.new({ name = 'losing-write-backend' })
   local stream, got
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -238,7 +239,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('partial-write-region')
-  local backend = HostHandle.fake({ name = 'partial-write-backend', write_chunk_size = 2 })
+  local backend = FakeHandle.new({ name = 'partial-write-backend', write_chunk_size = 2 })
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -260,7 +261,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('would-block-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'would-block-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -306,7 +307,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('eof-region')
-  local backend = HostHandle.fake({ name = 'eof-backend' })
+  local backend = FakeHandle.new({ name = 'eof-backend' })
   local stream, first, second, err
   rt:spawn_raw(function()
     stream =
@@ -329,7 +330,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('shutdown-write-region')
-  local backend = HostHandle.fake({ name = 'shutdown-write-backend', write_blocked = true })
+  local backend = FakeHandle.new({ name = 'shutdown-write-backend', write_blocked = true })
   local stream, done
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -361,7 +362,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('write-error-region')
-  local backend = HostHandle.fake({ name = 'write-error-backend' })
+  local backend = FakeHandle.new({ name = 'write-error-backend' })
   backend:fail_writes('connection_reset')
   local stream, flushed, flush_err, n, err
   rt:spawn_raw(function()
@@ -385,7 +386,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('lease-capacity-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'lease-capacity-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -443,7 +444,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('blocked-read-close-region')
-  local backend = HostHandle.fake({ name = 'blocked-read-close-backend', read_blocked = true })
+  local backend = FakeHandle.new({ name = 'blocked-read-close-backend', read_blocked = true })
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -468,7 +469,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('reactor-retirement-region')
-  local backend = HostHandle.fake({ name = 'reactor-retirement-backend', read_blocked = true })
+  local backend = FakeHandle.new({ name = 'reactor-retirement-backend', read_blocked = true })
   local stream, closed
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -494,8 +495,8 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('directional-region')
-  local read_backend = HostHandle.fake({ name = 'directional-reader' })
-  local write_backend = HostHandle.fake({ name = 'directional-writer' })
+  local read_backend = FakeHandle.new({ name = 'directional-reader' })
+  local write_backend = FakeHandle.new({ name = 'directional-writer' })
   local reader, writer
   rt:spawn_raw(function()
     reader = rt:perform(Stream.open_op(read_backend, {
@@ -532,7 +533,7 @@ end
 
 -- Nested scope settlement waits for completed Stream closure before returning.
 do
-  local backend = HostHandle.fake({ name = 'nested-settlement-backend' })
+  local backend = FakeHandle.new({ name = 'nested-settlement-backend' })
   fibers.run(function()
     fibers.scope(function()
       fibers.perform(
@@ -547,7 +548,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('direction-errors-region')
-  local backend = HostHandle.fake({ name = 'direction-errors-backend' })
+  local backend = FakeHandle.new({ name = 'direction-errors-backend' })
   local reader
   rt:spawn_raw(function()
     reader = rt:perform(Stream.open_op(backend, {
@@ -575,7 +576,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('close-error-region')
-  local backend = HostHandle.fake({ name = 'close-error-backend' })
+  local backend = FakeHandle.new({ name = 'close-error-backend' })
   function backend:close(reason)
     self.close_count = self.close_count + 1
     self.closed_reason = reason
@@ -604,7 +605,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('abort-write-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'abort-write-backend',
     write_blocked = true,
     initial_writable = false,
@@ -718,7 +719,7 @@ end
 local function run_read_contract_case(name, read_result, expected_bytes, expected_err)
   local rt = FibersRuntime.new()
   local region = FibersRegion.new(name .. '-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = name .. '-backend',
     readiness = 'manual',
     initial_readable = true,
@@ -818,7 +819,7 @@ end
 -- Host Stream construction requires explicit capabilities and rejects legacy
 -- option spellings.
 do
-  local backend = HostHandle.fake({ name = 'explicit-stream-options' })
+  local backend = FakeHandle.new({ name = 'explicit-stream-options' })
   local region = FibersRegion.new('explicit-stream-options-region')
   local ok, err = pcall(function()
     Stream.open_op(backend, { owner = region, name = 'missing-directions' })

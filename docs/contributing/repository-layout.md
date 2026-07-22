@@ -11,7 +11,7 @@ src/fibers/             installed version 1 library
   flow.lua and flow/    supported transactional byte facade and value types
   internal/flow_machine.lua transactional byte state machine
   internal/             closed kernel, shared waits, lifecycle and adoption machinery
-  host/                 host adapters, provider registry and runtime-owned reactor
+  host/                 atomic host families, native adapters and runtime-owned reactor
   socket.lua and socket/ public socket facade, addresses, Listener, Dial and UDP
   process.lua and process/ owned Process facility and immutable Command builder
   file.lua and file/     evented pipes, regular files and provider implementations

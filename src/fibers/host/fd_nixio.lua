@@ -1,44 +1,34 @@
--- nixio fd HostHandle implementation.
---
--- Optional.  Uses nixio File/Socket objects directly as readiness keys.
+-- Native-object descriptor family for nixio.
 
-local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
+local Family = require('fibers.host.family')
+local FdClass = require('fibers.host.fd_class')
 local HostError = require('fibers.host.error')
-local Provider = require('fibers.host.provider')
-
-local function unsupported(reason)
-  return Provider.unsupported('fibers.host.fd_nixio', reason, { 'new', 'wrap', 'pipe' })
-end
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
-  return unsupported('nixio module not available')
+  return Family.unsupported('fibers.host.fd_nixio', 'nixio module not available')
 end
 
 local NixioError = require('fibers.host.nixio_error')
-
-local Fd = {}
-Fd.__index = Fd
-local next_generation = 0
 local open_objects = setmetatable({}, { __mode = 'k' })
-
 local EAGAIN = nixio.const and (nixio.const.EAGAIN or nixio.const.EWOULDBLOCK) or 11
 local EWOULDBLOCK = nixio.const and (nixio.const.EWOULDBLOCK or nixio.const.EAGAIN) or EAGAIN
 
-local function set_nonblocking_obj(obj, value)
-  if obj and type(obj.setblocking) == 'function' then
-    local ok, a, b = obj:setblocking(value == false)
-    if ok ~= nil and ok ~= false then
-      return true
-    end
-    local msg, eno = NixioError.split(a, b)
-    return nil, NixioError.message('setblocking failed', msg, eno), eno
+local function fileno(object)
+  if type(object) == 'number' then
+    return object
   end
-  return true
+  if object and type(object.fileno) == 'function' then
+    local ok, fd = pcall(object.fileno, object)
+    if ok then
+      return tonumber(fd)
+    end
+  end
 end
 
-local function fd_read(self, max)
+local operations = {}
+function operations.read(self, max)
   max = tonumber(max) or 4096
   if max <= 0 then
     return ''
@@ -50,65 +40,60 @@ local function fd_read(self, max)
     end
     return data
   end
-  local msg, eno = NixioError.split(a, b)
-  eno = eno or NixioError.current_errno()
+  if data == false then
+    local _, eno = NixioError.split(a, b)
+    return nil, 'would_block', eno
+  end
+  local no_error, message, eno = NixioError.no_error(a, b)
+  if no_error then
+    return nil, Errors.EOF
+  end
   if eno == EAGAIN or eno == EWOULDBLOCK then
     return nil, 'would_block', eno
   end
-  if not eno or eno == 0 then
-    return nil, Errors.EOF
-  end
-  return nil, NixioError.message('read failed', msg, eno), eno
+  return nil, NixioError.message('read failed', message, eno), eno
 end
-
-local function fd_write(self, bytes)
+function operations.write(self, bytes)
   if type(bytes) ~= 'string' then
     error('fd write expects bytes', 2)
   end
-  if #bytes == 0 then
+  if bytes == '' then
     return 0
   end
-  local n, a, b
+  local count, a, b
   if type(self.obj.write) == 'function' then
-    n, a, b = self.obj:write(bytes, 0, #bytes)
+    count, a, b = self.obj:write(bytes, 0, #bytes)
   elseif type(self.obj.send) == 'function' then
-    n, a, b = self.obj:send(bytes)
+    count, a, b = self.obj:send(bytes)
   else
     return nil, 'write unsupported'
   end
-  if type(n) == 'number' then
-    return n
+  if type(count) == 'number' then
+    return count
   end
-  if n == true then
+  if count == true then
     return #bytes
   end
-  local msg, eno = NixioError.split(a, b)
+  local message, eno = NixioError.split(a, b)
   eno = eno or NixioError.current_errno()
   if eno == EAGAIN or eno == EWOULDBLOCK then
     return nil, 'would_block', eno
   end
-  return nil, NixioError.message('write failed', msg, eno), eno
+  return nil, NixioError.message('write failed', message, eno), eno
 end
-
-local function fd_shutdown_read(self, _reason)
+function operations.shutdown_read(self)
   if self.obj and type(self.obj.shutdown) == 'function' then
-    pcall(function()
-      self.obj:shutdown('rd')
-    end)
+    pcall(self.obj.shutdown, self.obj, 'rd')
   end
   return true
 end
-
-local function fd_shutdown_write(self, _reason)
+function operations.shutdown_write(self)
   if self.obj and type(self.obj.shutdown) == 'function' then
-    pcall(function()
-      self.obj:shutdown('wr')
-    end)
+    pcall(self.obj.shutdown, self.obj, 'wr')
   end
   return true
 end
-
-local function fd_close(self, _reason)
+function operations.close(self)
   if self._closed then
     return true
   end
@@ -119,130 +104,74 @@ local function fd_close(self, _reason)
   if self.obj and type(self.obj.close) == 'function' then
     local ok, a, b = self.obj:close()
     if ok == nil or ok == false then
-      local msg, eno = NixioError.split(a, b)
-      return nil, NixioError.message('close failed', msg, eno), eno
+      local message, eno = NixioError.split(a, b)
+      return nil, NixioError.message('close failed', message, eno), eno
     end
   end
   return true
 end
-
-local function fileno(obj)
-  if type(obj) == 'number' then
-    return obj
+function operations.set_nonblocking(self, value)
+  if self.obj and type(self.obj.setblocking) == 'function' then
+    local ok, a, b = self.obj:setblocking(value == false)
+    if ok ~= nil and ok ~= false then
+      return true
+    end
+    local message, eno = NixioError.split(a, b)
+    return nil, NixioError.message('setblocking failed', message, eno), eno
   end
-  if type(obj) == 'table' or type(obj) == 'userdata' then
-    if type(obj.fileno) == 'function' then
-      local ok, fd = pcall(function()
-        return obj:fileno()
-      end)
-      if ok and fd then
-        return tonumber(fd)
+  return true
+end
+
+return FdClass.define({
+  family = 'nixio',
+  operations = operations,
+  is_supported = function()
+    return type(nixio.pipe) == 'function'
+  end,
+  support_reason = function()
+    return 'nixio.pipe unavailable'
+  end,
+  validate = function(object)
+    return assert(object, 'nixio handle object required')
+  end,
+  describe = function(object, generation)
+    local fd = fileno(object)
+    return {
+      fd = fd,
+      name = fd and ('nixio-fd-' .. tostring(fd)) or ('nixio-handle-' .. tostring(generation)),
+      key = { family = 'nixio', handle = object, generation = generation },
+    }
+  end,
+  decorate = function(handle, object, detail)
+    handle.obj = object
+    handle.fd, handle.raw_fd = detail.fd, detail.fd
+    open_objects[object] = true
+  end,
+  configure = function(handle, opts)
+    if opts.nonblocking ~= false then
+      return handle:set_nonblocking(true)
+    end
+    return true
+  end,
+  pipe = function()
+    local reader, writer = nixio.pipe()
+    if not reader or not writer then
+      return nil, nil, HostError.system('pipe', 'create', 'nixio.pipe failed')
+    end
+    return reader, writer
+  end,
+  close_raw = function(object)
+    if object and type(object.close) == 'function' then
+      pcall(object.close, object)
+    end
+  end,
+  extend = function(Fd)
+    function Fd.open_objects()
+      local out = {}
+      for object in pairs(open_objects) do
+        out[#out + 1] = object
       end
+      return out
     end
-    if type(obj.fd) == 'number' then
-      return obj.fd
-    end
-  end
-  return nil
-end
-
-function Fd.is_supported()
-  return type(nixio.pipe) == 'function'
-end
-
-function Fd.support_reason()
-  if Fd.is_supported() then
-    return nil
-  end
-  return 'nixio.pipe unavailable'
-end
-
-function Fd.new(obj, opts)
-  opts = opts or {}
-  assert(obj ~= nil, 'nixio handle object required')
-  next_generation = next_generation + 1
-  local fd = fileno(obj)
-  local key = opts.key or { family = 'nixio', handle = obj, generation = next_generation }
-  local h = Handle.new({
-    name = opts.name
-      or (fd and ('nixio-fd-' .. tostring(fd)) or ('nixio-handle-' .. tostring(next_generation))),
-    key = key,
-    handle = obj,
-    host = opts.host,
-    read = function(self, max)
-      return fd_read(self, max)
-    end,
-    write = function(self, bytes)
-      return fd_write(self, bytes)
-    end,
-    shutdown_read = function(self, reason)
-      return fd_shutdown_read(self, reason)
-    end,
-    shutdown_write = function(self, reason)
-      return fd_shutdown_write(self, reason)
-    end,
-    close = function(self, reason)
-      return fd_close(self, reason)
-    end,
-    set_nonblocking = function(_self, value)
-      return set_nonblocking_obj(obj, value ~= false)
-    end,
-  })
-  h.family = 'nixio'
-  h.obj = obj
-  open_objects[obj] = true
-  h.fd = fd
-  h.raw_fd = fd
-  h.generation = next_generation
-  if opts.nonblocking ~= false then
-    local ok, err, eno = h:set_nonblocking(true)
-    if not ok then
-      h:close('set_nonblocking failed')
-      return nil, err, eno
-    end
-  end
-  return h
-end
-
-function Fd.open_objects()
-  local out = {}
-  for obj in pairs(open_objects) do
-    out[#out + 1] = obj
-  end
-  return out
-end
-
-function Fd.pipe(opts)
-  opts = opts or {}
-  local r, w = nixio.pipe()
-  if not r or not w then
-    return nil, nil, HostError.system('pipe', 'create', 'nixio.pipe failed')
-  end
-  local rh, rerr = Fd.new(r, {
-    host = opts.host,
-    name = opts.name and (opts.name .. ':read') or nil,
-    nonblocking = opts.nonblocking,
-  })
-  if not rh then
-    pcall(function()
-      w:close()
-    end)
-    return nil, nil, rerr
-  end
-  local wh, werr = Fd.new(w, {
-    host = opts.host,
-    name = opts.name and (opts.name .. ':write') or nil,
-    nonblocking = opts.nonblocking,
-  })
-  if not wh then
-    rh:close('paired pipe wrap failed')
-    return nil, nil, werr
-  end
-  rh.capabilities.write = false
-  rh.capabilities.shutdown_write = false
-  wh.capabilities.read = false
-  wh.capabilities.shutdown_read = false
-  return rh, wh
-end
-
-return Fd
+  end,
+})

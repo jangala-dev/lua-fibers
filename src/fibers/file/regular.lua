@@ -507,23 +507,20 @@ local function new_file_op(path, mode, opts, label, temporary)
   next_file = next_file + 1
   local name = opts.name or ('file-' .. tostring(next_file))
   local tx, rx = Mailbox.new(opts.queue_limit or 32, { name = name .. ':requests' })
-  local file = Ownership.handle(
-    name,
-    {
-      kind = 'regular_file',
-      path = path,
-      mode = mode,
-      tx = tx,
-      rx = rx,
-      ready_completion = Completion.new(name .. ':ready'),
-      closed_completion = Completion.new(name .. ':closed'),
-      backend = nil,
-      driver = nil,
-      provider_opts = opts,
-      temporary = temporary == true,
-      auto_unlink = false,
-    }
-  )
+  local file = Ownership.handle(name, {
+    kind = 'regular_file',
+    path = path,
+    mode = mode,
+    tx = tx,
+    rx = rx,
+    ready_completion = Completion.new(name .. ':ready'),
+    closed_completion = Completion.new(name .. ':closed'),
+    backend = nil,
+    driver = nil,
+    provider_opts = opts,
+    temporary = temporary == true,
+    auto_unlink = false,
+  })
   setmetatable(file, RegularFile)
   file._fibers_settle = file_settlement(file)
   file._fibers_settle_name = 'regular_file'

@@ -11,6 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
 local Poller = require('fibers.host.poller')
 local Stream = require('fibers.stream')
@@ -49,7 +50,7 @@ end
 do
   local rt = Runtime.new()
   local region = Region.new('poller-generation-region')
-  local backend = require('fibers.host.handle').fake({
+  local backend = FakeHandle.new({
     name = 'poller-generation-backend',
     readiness = 'manual',
     initial_readable = false,

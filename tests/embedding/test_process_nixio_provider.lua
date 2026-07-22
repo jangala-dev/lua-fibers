@@ -195,6 +195,12 @@ local ok, err = pcall(function()
     end,
   }
   assert(Provider._test.read_chunk(eof, 64) == '')
+  local success_eof = {
+    read = function()
+      return nil, 'Success'
+    end,
+  }
+  assert(Provider._test.read_chunk(success_eof, 64) == '')
   local blocked = {
     read = function()
       return false, nil, 11

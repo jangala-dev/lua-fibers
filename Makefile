@@ -206,7 +206,6 @@ check-layout:
 	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
 	@test -f src/fibers/internal/socket/datagram_send_state.lua
 	@test -f src/fibers/internal/socket/datagram_service.lua
-	@test -f src/fibers/host/provider.lua
 	@test -f src/fibers/host/wait.lua
 	@test -f src/fibers/host/datagram_luaposix.lua
 	@test -f src/fibers/host/datagram_nixio.lua

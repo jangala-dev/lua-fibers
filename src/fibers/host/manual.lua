@@ -8,16 +8,17 @@
 local Host = require('fibers.host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
+local PollPlan = require('fibers.host.poll_plan')
 local Completion = require('fibers.internal.completion')
 local IOAudit = require('fibers.internal.io_audit')
 local perform = require('fibers.perform')
 local Protected = require('fibers.internal.protected')
+local ProcessCore = require('fibers.host.process_core')
 
 local Manual = {}
 Manual.__index = Manual
 
-local ManualProcess = {}
-ManualProcess.__index = ManualProcess
+local READY_CLOSE_CAPABILITIES = { close = true, readiness = true }
 
 local function close_if_present(value, reason)
   if value and type(value.close) == 'function' then
@@ -26,40 +27,54 @@ local function close_if_present(value, reason)
   return true
 end
 
-function ManualProcess:bind_runtime(rt)
-  self.runtime = rt
-  IOAudit.bind(self, rt)
-  for _, handle in pairs(self.child_endpoints or {}) do
-    if handle and type(handle.bind_runtime) == 'function' then
-      handle:bind_runtime(rt)
+local signals = ProcessCore.signals()
+local ManualProcess = ProcessCore.class({
+  signals = signals,
+  bind = function(self, rt)
+    for _, handle in pairs(self.child_endpoints or {}) do
+      if handle and type(handle.bind_runtime) == 'function' then
+        handle:bind_runtime(rt)
+      end
     end
-  end
-  return self
-end
-
-function ManualProcess:pid()
-  return self._pid
-end
-
-function ManualProcess:wait_op()
-  return self.exit_completion:terminal_op()
-end
-
-function ManualProcess:reap()
-  local terminal = self.exit_completion:state_value()
-  if terminal.kind ~= 'succeeded' then
-    return nil, HostError.would_block('process', 'reap', { pid = self._pid })
-  end
-  if not self.reaped then
-    local values = terminal.values
-    self.status = values and values[1] or terminal.value
-    self.reaped = true
-  end
-  return self.status
-end
+  end,
+  wait = function(self)
+    return self.exit_completion:terminal_op()
+  end,
+  reap = function(self)
+    local terminal = self.exit_completion:state_value()
+    if terminal.kind ~= 'succeeded' then
+      return nil, HostError.would_block('process', 'reap', { pid = self._pid })
+    end
+    if not self.reaped then
+      local values = terminal.values
+      self.status = values and values[1] or terminal.value
+      self.reaped = true
+    end
+    return self.status
+  end,
+  signal = function(self, number, target)
+    self.signals[#self.signals + 1] = { signal = number, target = target }
+    if self.on_signal then
+      return self.on_signal(self, number, target)
+    end
+    if number == signals.numbers.kill or number == signals.numbers.term then
+      self:complete(ProcessCore.signalled(signals, number))
+    end
+    return true
+  end,
+  close = function(self, reason)
+    for _, handle in pairs(self.child_endpoints or {}) do
+      close_if_present(handle, reason or 'manual process closed')
+    end
+    if self.host and self.host.processes then
+      self.host.processes[self._pid] = nil
+    end
+    return true
+  end,
+})
 
 function ManualProcess:complete_op(status)
-  status = status or { kind = 'exited', code = 0, success = true }
+  status = status or ProcessCore.exited(0)
   return self.exit_completion:publish_success_op(status):wrap(function(ok, err)
     if not ok then
       return nil, err
@@ -77,66 +92,19 @@ function ManualProcess:complete(status)
   return perform(self:complete_op(status))
 end
 
-function ManualProcess:signal(signal, target)
-  if self.reaped then
-    return nil, HostError.closed('process', 'signal', { pid = self._pid, signal = signal })
-  end
-  self.signals[#self.signals + 1] = { signal = signal, target = target }
-  if self.on_signal then
-    return self.on_signal(self, signal, target)
-  end
-  if signal == 'kill' or signal == 9 then
-    self:complete({ kind = 'signalled', signal = 9, signal_name = 'KILL', success = false })
-  elseif signal == 'term' or signal == 15 then
-    self:complete({ kind = 'signalled', signal = 15, signal_name = 'TERM', success = false })
-  end
-  return true
-end
-
 function ManualProcess:start()
   if self.started then
     return true
   end
   self.started = true
   if self.on_start then
-    -- Host test and embedding hooks may perform Fibers work. Native pcall is
-    -- not yieldable on Lua 5.1, so use the runtime's coroutine-backed boundary.
     local ok, err = Protected.pcall(self.on_start, self, self.child_endpoints, self.spec)
     if not ok then
-      self:complete({ kind = 'exited', code = 127, success = false })
+      self:complete(ProcessCore.exited(127))
       return nil, HostError.protocol('process', 'manual_start', tostring(err), { pid = self._pid })
     end
   end
   return true
-end
-
-function ManualProcess:close(reason)
-  if self.closed then
-    IOAudit.closing(self, reason)
-    IOAudit.closed(self, true, nil, reason)
-    return true
-  end
-  self.closed = true
-  IOAudit.closing(self, reason)
-  for _, handle in pairs(self.child_endpoints or {}) do
-    close_if_present(handle, reason or 'manual process closed')
-  end
-  if self.host and self.host.processes then
-    self.host.processes[self._pid] = nil
-  end
-  IOAudit.closed(self, true, nil, reason)
-  return true
-end
-
-local function normalise_mode(mode)
-  mode = mode or 'read'
-  if mode == 'wr' then
-    mode = 'write'
-  end
-  if mode ~= 'read' and mode ~= 'write' then
-    error('readiness mode must be read or write', 3)
-  end
-  return mode
 end
 
 function Manual.new(opts)
@@ -351,15 +319,7 @@ function Manual:create_datagram(address, opts)
     name = opts.name or ('manual-datagram:' .. key),
     key = 'manual-datagram-readiness:' .. key,
     host = self,
-    capabilities = {
-      read = false,
-      write = false,
-      shutdown_read = false,
-      shutdown_write = false,
-      close = true,
-      set_nonblocking = false,
-      readiness = true,
-    },
+    capabilities = READY_CLOSE_CAPABILITIES,
     close = function(self_handle)
       if handle.closed then
         return true
@@ -462,10 +422,7 @@ function Manual:create_listener(address, opts)
   if not self.enable_sockets then
     return nil, HostError.unsupported('host', 'listen', { host = self.name, address = address })
   end
-  local actual = {}
-  for k, v in pairs(address or {}) do
-    actual[k] = v
-  end
+  local actual = copy_table(address)
   if actual.kind ~= 'unix' and tonumber(actual.port) == 0 then
     actual.port = self.next_ephemeral_port
     self.next_ephemeral_port = self.next_ephemeral_port + 1
@@ -480,15 +437,7 @@ function Manual:create_listener(address, opts)
     name = opts.name or ('manual-listener:' .. key),
     key = 'manual-listener-readiness:' .. key,
     host = self,
-    capabilities = {
-      read = false,
-      write = false,
-      shutdown_read = false,
-      shutdown_write = false,
-      close = true,
-      set_nonblocking = false,
-      readiness = true,
-    },
+    capabilities = READY_CLOSE_CAPABILITIES,
     close = function(self_handle)
       if listener.closed then
         return true
@@ -601,14 +550,6 @@ function Manual:start_dial(address, opts)
   return handle
 end
 
-local function copy_address(value)
-  local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = item
-  end
-  return out
-end
-
 function Manual:resolve(endpoint, opts)
   opts = opts or {}
   if not self.enable_resolver then
@@ -622,7 +563,7 @@ function Manual:resolve(endpoint, opts)
 
   local function add(address)
     if family == nil or family == 'unspec' or address.kind == family or address.family == family then
-      local copied = copy_address(address)
+      local copied = copy_table(address)
       copied.port = copied.port or tonumber(service) or service
       out[#out + 1] = copied
     end
@@ -661,7 +602,7 @@ function Manual:advance(dt)
 end
 
 function Manual:set_readiness(key, mode, value)
-  mode = normalise_mode(mode)
+  mode = Host.normalise_readiness_mode(mode)
   local k = tostring(key)
   self.ready[k] = self.ready[k] or {}
   if value == false or value == nil then
@@ -692,38 +633,29 @@ function Manual:clear_readiness(key, mode)
   if mode == nil then
     self.ready[k] = nil
   else
-    self.ready[k][normalise_mode(mode)] = nil
+    self.ready[k][Host.normalise_readiness_mode(mode)] = nil
   end
   return true
 end
 
 function Manual:is_ready(key, mode)
   local rec = self.ready[tostring(key)]
-  return not not (rec and rec[normalise_mode(mode)])
+  return not not (rec and rec[Host.normalise_readiness_mode(mode)])
 end
 
 function Manual:block(rt, waits, status, opts)
   opts = opts or {}
   waits = waits or {}
 
-  local delivered = Host.deliver_ready(rt, waits, function(key, mode)
-    return self:is_ready(key, mode)
-  end)
-  local poller_delivered = 0
-  local poller_waits = Host.poller_waits(waits)
-  for i = 1, #poller_waits do
-    local wait = poller_waits[i]
-    local registrations = wait.poller:_host_active()
-    for j = 1, #registrations do
-      local registration = registrations[j]
-      if self:is_ready(registration.key, registration.mode) and wait.poller:_host_delivered(registration) then
-        Host.deliver_poller_ready(rt, wait, registration)
-        poller_delivered = poller_delivered + 1
-      end
+  local plan, delivered = PollPlan.build(waits), false
+  for i = 1, #plan.records do
+    local record = plan.records[i]
+    local read, write = self:is_ready(record.key, 'read'), self:is_ready(record.key, 'write')
+    if PollPlan.deliver(rt, record, read, write) then
+      delivered = true
     end
   end
-  delivered = (delivered or 0) + poller_delivered
-  if delivered > 0 then
+  if delivered then
     if self.on_wake then
       self.on_wake('readiness', waits, status)
     end
@@ -750,7 +682,7 @@ function Manual:block(rt, waits, status, opts)
   if self.on_unsupported then
     self.on_unsupported(waits, status)
   end
-  if Host.has_readiness_waits(waits) or Host.has_poller_waits(waits) then
+  if #plan.records > 0 then
     return nil, 'readiness-not-ready'
   end
   return nil, 'unsupported-waits'

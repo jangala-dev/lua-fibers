@@ -11,36 +11,34 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local fibers = require('fibers')
-local Runtime = require('fibers.runtime')
-local Region = require('fibers.lifetime.region')
-local Stream = require('fibers.stream')
-local Runner = require('fibers.runner')
 local Host = require('fibers.host')
+local Region = require('fibers.lifetime.region')
+local Runner = require('fibers.runner')
+local Runtime = require('fibers.runtime')
+local Stream = require('fibers.stream')
+
 local host = Host.manual({ auto_advance_time = false })
-local rt = Runtime.new({ host = host })
+local input, input_writer = Host.Handle.pipe_pair({ host = host, name = 'example-input' })
+local output_reader, output = Host.Handle.pipe_pair({ host = host, name = 'example-output' })
+local handle = Host.Handle.duplex(input, output, { host = host, name = 'example-duplex' })
+local runtime = Runtime.new({ host = host })
 local region = Region.new('handle-example-region')
-local handle = Host.Handle.fake({ host = host, key = 'example-handle' })
+local got, flushed
 
-local stream, got, flushed
-
-rt:spawn_raw(function()
-  stream = rt:perform(
-    Stream.open_op(handle, { owner = region, name = 'example-handle-stream', read = true, write = true })
-  )
-  got = rt:perform(stream:reader():read_exactly_op(5))
-  rt:perform(stream:writer():write_op('pong'))
-  flushed = rt:perform(stream:writer():flush_op())
+runtime:spawn_raw(function()
+  local stream = runtime:perform(Stream.open_op(handle, {
+    owner = region,
+    name = 'example-handle-stream',
+    read = true,
+    write = true,
+  }))
+  got = runtime:perform(stream:reader():read_exactly_op(5))
+  runtime:perform(stream:writer():write_op('pong'))
+  flushed = runtime:perform(stream:writer():flush_op())
 end, 'example-user')
 
--- The stream opens and then waits for the host handle to become readable.
-Runner.run(rt, { host = host, max_iterations = 80 })
-handle:feed_read('hello')
-
-Runner.run(rt, { host = host, max_iterations = 80 })
-
-assert(got == 'hello')
-assert(flushed == true)
-assert(handle:written() == 'pong')
-
+assert(input_writer:write('hello') == 5)
+Runner.run(runtime, { host = host, max_iterations = 80 })
+assert(got == 'hello' and flushed == true)
+assert(output_reader:read(4) == 'pong')
 print('examples/embedding/host_handle_stream.lua: ok')

@@ -276,29 +276,7 @@ The read side reserves Flow capacity before calling the host. The write side lea
 
 Readiness remains a hint. A host call may still return `would_block`; the reactor then releases the read-space reservation or retains the write-data lease as appropriate and waits for refreshed readiness.
 
-A deterministic fake handle is available:
-
-```lua
-local Host = require('fibers.host')
-local host = Host.manual({ auto_advance_time = false })
-local handle = Host.Handle.fake({ host = host, key = 'demo' })
-
-local stream = fibers.perform(Stream.open_op(handle, {
-  owner = scope,
-  read = true,
-  write = true,
-}))
-```
-
-Useful controls include:
-
-```lua
-handle:feed_read(bytes)
-handle:feed_eof()
-handle:block_writes()
-handle:unblock_writes()
-handle:written()
-```
+The deterministic manual host provides in-memory pipe handles for embedding and tests.
 
 A custom `HostHandle` supplies:
 

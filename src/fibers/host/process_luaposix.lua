@@ -5,12 +5,13 @@
 -- streams, escalation and structured settlement.
 
 local HostError = require('fibers.host.error')
+local ProcessCore = require('fibers.host.process_core')
+local ProcessIO = require('fibers.host.process_io_core')
 local IOAudit = require('fibers.internal.io_audit')
-local ProviderModule = require('fibers.host.provider')
-local Sleep = require('fibers.sleep')
+local Family = require('fibers.host.family')
 
 local function unsupported(reason)
-  return ProviderModule.unsupported('fibers.host.process_luaposix', reason, {
+  return Family.unsupported('fibers.host.process_luaposix', reason, {
     'start_process',
   })
 end
@@ -139,62 +140,22 @@ local function setup_environment_child(spec)
   return true
 end
 
-local signal_numbers = {
-  hup = signal.SIGHUP or 1,
-  int = signal.SIGINT or 2,
-  quit = signal.SIGQUIT or 3,
-  kill = signal.SIGKILL or 9,
-  usr1 = signal.SIGUSR1 or 10,
-  usr2 = signal.SIGUSR2 or 12,
-  pipe = signal.SIGPIPE or 13,
-  alrm = signal.SIGALRM or 14,
-  term = signal.SIGTERM or 15,
-  chld = signal.SIGCHLD or 17,
-  cont = signal.SIGCONT or 18,
-  stop = signal.SIGSTOP or 19,
-}
+local signals = ProcessCore.signals({
+  hup = signal.SIGHUP,
+  int = signal.SIGINT,
+  quit = signal.SIGQUIT,
+  kill = signal.SIGKILL,
+  usr1 = signal.SIGUSR1,
+  usr2 = signal.SIGUSR2,
+  pipe = signal.SIGPIPE,
+  alrm = signal.SIGALRM,
+  term = signal.SIGTERM,
+  chld = signal.SIGCHLD,
+  cont = signal.SIGCONT,
+  stop = signal.SIGSTOP,
+})
 
-local function normalise_signal(value)
-  if type(value) == 'number' and value > 0 and value == math.floor(value) then
-    return value
-  end
-  if type(value) == 'string' then
-    local key = value:lower():gsub('^sig', '')
-    if signal_numbers[key] then
-      return signal_numbers[key]
-    end
-  end
-  return nil, HostError.invalid_argument('process', 'signal', { signal = value })
-end
-
-local signal_names = {
-  [signal_numbers.hup] = 'HUP',
-  [signal_numbers.int] = 'INT',
-  [signal_numbers.quit] = 'QUIT',
-  [signal_numbers.kill] = 'KILL',
-  [signal_numbers.term] = 'TERM',
-}
-
-local HostProcess = {}
-HostProcess.__index = HostProcess
-
-function HostProcess:bind_runtime(rt)
-  self.runtime = rt
-  IOAudit.bind(self, rt)
-  return self
-end
-
-function HostProcess:pid()
-  return self._pid
-end
-function HostProcess:wait_op()
-  if self.status then
-    return require('fibers.op').always(true)
-  end
-  return Sleep.sleep_op(self.poll_interval)
-end
-
-function HostProcess:reap()
+local function reap_process(self)
   if self.status then
     return self.status
   end
@@ -211,17 +172,9 @@ function HostProcess:reap()
   end
   local status
   if how == 'exited' then
-    local code = tonumber(value) or 0
-    status = { kind = 'exited', code = code, success = code == 0 }
+    status = ProcessCore.exited(value)
   elseif how == 'killed' or how == 'signaled' or how == 'signalled' then
-    local number = tonumber(value) or 0
-    status = {
-      kind = 'signalled',
-      signal = number,
-      signal_name = signal_names[number],
-      core_dumped = false,
-      success = false,
-    }
+    status = ProcessCore.signalled(signals, value)
   else
     return nil,
       HostError.protocol('process', 'reap', 'unexpected wait status', {
@@ -230,19 +183,11 @@ function HostProcess:reap()
         value = value,
       })
   end
-  self.status = status
-  self.reaped = true
+  self.status, self.reaped = status, true
   return status
 end
 
-function HostProcess:signal(signal_value, target)
-  if self.reaped then
-    return nil, HostError.closed('process', 'signal', { pid = self._pid })
-  end
-  local number, signal_err = normalise_signal(signal_value)
-  if not number then
-    return nil, signal_err
-  end
+local function signal_process(self, number, target)
   local ok, err, eno
   if target == 'group' and type(signal.killpg) == 'function' then
     ok, err, eno = signal.killpg(math.abs(self.group_id or self._pid), number)
@@ -261,17 +206,7 @@ function HostProcess:signal(signal_value, target)
   return true
 end
 
-function HostProcess:close(reason)
-  if self.closed then
-    IOAudit.closing(self, reason)
-    IOAudit.closed(self, true, nil, reason)
-    return true
-  end
-  self.closed = true
-  IOAudit.closing(self, reason)
-  IOAudit.closed(self, true, nil, reason)
-  return true
-end
+local HostProcess = ProcessCore.class({ signals = signals, reap = reap_process, signal = signal_process })
 
 local function support_probe()
   local required = {
@@ -356,54 +291,24 @@ local function close_child_fds(spec, error_write)
 end
 
 local function setup_stdio_child(stdio, error_write)
-  local opened = {}
-  local function install(which, target)
-    local mode = stdio[which]
-    if mode == nil or mode == 'inherit' then
-      return true
-    end
-    if which == 'stderr' and mode == 'stdout' then
-      local ok, err, eno = unistd.dup2(1, 2)
-      return ok ~= nil, err, eno
-    end
-    local source
-    if mode == 'pipe' then
-      source = stdio[which .. '_child']
-    elseif mode == 'null' then
-      local open_err, open_eno
-      source, open_err, open_eno =
-        fcntl.open('/dev/null', which == 'stdin' and fcntl.O_RDONLY or fcntl.O_WRONLY, 0)
-      if source == nil then
-        return nil, open_err or 'open /dev/null failed', open_eno
-      end
-      opened[#opened + 1] = source
-    end
-    if source ~= nil and source ~= target then
+  return ProcessIO.install_child(stdio, {
+    targets = { stdin = 0, stdout = 1, stderr = 2 },
+    stdout = 1,
+    same = function(a, b)
+      return a == b
+    end,
+    duplicate = function(source, target)
       local ok, err, eno = unistd.dup2(source, target)
-      if ok == nil then
-        return nil, err, eno
-      end
-    end
-    return true
-  end
-  for _, item in ipairs({ { 'stdin', 0 }, { 'stdout', 1 }, { 'stderr', 2 } }) do
-    local ok, err, eno = install(item[1], item[2])
-    if not ok then
-      return nil, err, eno
-    end
-  end
-  for _, fd in ipairs(stdio.all_fds) do
-    if fd ~= 0 and fd ~= 1 and fd ~= 2 and fd ~= error_write then
-      unistd.close(fd)
-    end
-  end
-  for i = 1, #opened do
-    local fd = opened[i]
-    if fd ~= 0 and fd ~= 1 and fd ~= 2 then
-      unistd.close(fd)
-    end
-  end
-  return true
+      return ok ~= nil, err, eno
+    end,
+    open_null = function(which)
+      return fcntl.open('/dev/null', which == 'stdin' and fcntl.O_RDONLY or fcntl.O_WRONLY, 0)
+    end,
+    keep = function(fd)
+      return fd == 0 or fd == 1 or fd == 2 or fd == error_write
+    end,
+    close = unistd.close,
+  })
 end
 
 local function build_argt(argv)
@@ -447,48 +352,24 @@ function Provider.start_process(host, spec)
     return nil, nil, HostError.unsupported('host', 'process', { host = host.name })
   end
 
-  local stdio = { all_fds = {} }
-  local parent_fds = {}
-  local function add(fd)
-    stdio.all_fds[#stdio.all_fds + 1] = fd
-  end
-  local function make_stdio(which, mode)
-    stdio[which] = mode
-    if mode ~= 'pipe' then
-      return true
-    end
+  local stdio, parent_fds, stdio_err = ProcessIO.open(spec, function(which)
     local r, w, err, eno = raw_pipe()
     if not r then
       return nil,
+        nil,
         HostError.system('process', 'pipe', err_message('pipe failed', err, eno), nil, eno, {
           stream = which,
         })
     end
-    add(r)
-    add(w)
-    if which == 'stdin' then
-      stdio.stdin_child = r
-      parent_fds.stdin = w
-    else
-      parent_fds[which] = r
-      stdio[which .. '_child'] = w
-    end
-    return true
-  end
-
-  for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
-    local ok, err = make_stdio(which, spec[which] or 'inherit')
-    if not ok then
-      for _, fd in ipairs(stdio.all_fds) do
-        close_fd(fd)
-      end
-      return nil, nil, err
-    end
+    return r, w
+  end, close_fd)
+  if not stdio then
+    return nil, nil, stdio_err
   end
 
   local error_read, error_write, pipe_err, pipe_eno = raw_pipe()
   if not error_read then
-    for _, fd in ipairs(stdio.all_fds) do
+    for _, fd in ipairs(stdio.all) do
       close_fd(fd)
     end
     return nil,
@@ -500,7 +381,7 @@ function Provider.start_process(host, spec)
   if pid == nil then
     close_fd(error_read)
     close_fd(error_write)
-    for _, fd in ipairs(stdio.all_fds) do
+    for _, fd in ipairs(stdio.all) do
       close_fd(fd)
     end
     return nil,
@@ -549,9 +430,7 @@ function Provider.start_process(host, spec)
   end
 
   close_fd(error_write)
-  for which, fd in pairs(parent_fds) do
-    close_fd(which == 'stdin' and stdio.stdin_child or stdio[which .. '_child'])
-  end
+  ProcessIO.close_child_ends(stdio, parent_fds, close_fd)
 
   local handshake = ''
   while true do
@@ -606,34 +485,20 @@ function Provider.start_process(host, spec)
       })
   end
 
-  local endpoints = {}
-  for which, fd in pairs(parent_fds) do
-    local handle, wrap_err = Fd.new(fd, {
-      host = host,
-      name = (spec.name or ('process-' .. tostring(pid))) .. ':' .. which,
-      nonblocking = true,
-      cloexec = true,
-    })
-    if not handle then
-      for _, endpoint in pairs(endpoints) do
-        endpoint:close('process endpoint wrap failed')
-      end
-      for other_which, other_fd in pairs(parent_fds) do
-        if other_which ~= which and not endpoints[other_which] then
-          close_fd(other_fd)
-        end
-      end
+  local endpoints, wrap_err = ProcessIO.wrap({
+    host = host,
+    name = spec.name,
+    pid = pid,
+    parents = parent_fds,
+    wrap = Fd.new,
+    close_raw = close_fd,
+    cloexec = true,
+    abort = function()
       kill_and_reap(pid)
-      return nil, nil, HostError.normalise(wrap_err, { domain = 'process', action = 'wrap_' .. which })
-    end
-    if which == 'stdin' then
-      handle.capabilities.read = false
-      handle.capabilities.shutdown_read = false
-    else
-      handle.capabilities.write = false
-      handle.capabilities.shutdown_write = false
-    end
-    endpoints[which] = handle
+    end,
+  })
+  if not endpoints then
+    return nil, nil, wrap_err
   end
 
   local process = setmetatable({

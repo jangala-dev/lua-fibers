@@ -5,24 +5,16 @@
 
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
-local Provider = require('fibers.host.provider')
+local Family = require('fibers.host.family')
 local HostWait = require('fibers.host.wait')
+local PollPlan = require('fibers.host.poll_plan')
+local FfiNative = require('fibers.host.ffi_native')
+local FdCommon = require('fibers.host._fd_ffi_common')
 
 local Common = {}
 
 local function make_unsupported(prefix, reason)
-  return Provider.unsupported(prefix, reason, { 'new' })
-end
-
-local function make_tonumber(ffi)
-  local toint = rawget(ffi, 'tonumber') or tonumber
-  return function(v)
-    local n = toint(v)
-    if n == nil then
-      n = tonumber(v)
-    end
-    return n
-  end
+  return Family.unsupported(prefix, reason, { 'new' })
 end
 
 local function fd_of(key)
@@ -51,30 +43,22 @@ function Common.new(opts)
   opts = opts or {}
   local name = opts.name or 'ffi_linux'
   local prefix = opts.error_prefix or ('fibers.host.' .. name)
-  local ffi = assert(opts.ffi, 'ffi provider required')
-  local bit = assert(opts.bit, 'bit operations required')
-  local C = opts.C or ffi.C
-  local tonumber_c = opts.tonumber_c or make_tonumber(ffi)
-  local fd_module = assert(opts.fd_module, 'paired fd module required')
-  local fd_provider = require(fd_module)
+  local native = FfiNative.new(opts)
+  local ffi, C, tonumber_c = native.ffi, native.C, native.number
+  local bit = assert(native.bit, 'bit operations required')
+  local fd_provider = FdCommon.new({ name = name .. '_fd', error_prefix = prefix .. '.fd', native = native })
   local socket_provider = require('fibers.host._socket_ffi_common').new({
     error_prefix = prefix .. '.socket',
-    ffi = ffi,
-    C = C,
+    native = native,
     fd = fd_provider,
-    tonumber_c = tonumber_c,
   })
   local resolver_provider = require('fibers.host._resolver_ffi_common').new({
-    ffi = ffi,
-    C = C,
-    tonumber_c = tonumber_c,
+    native = native,
   })
   local resolver_supported = opts.resolver_enabled ~= false and resolver_provider.is_supported()
   local process_provider = require('fibers.host._process_ffi_common').new({
-    ffi = ffi,
-    C = C,
+    native = native,
     fd = fd_provider,
-    tonumber_c = tonumber_c,
     error_prefix = prefix .. '.process',
   })
   local process_supported = process_provider.is_supported()
@@ -90,8 +74,7 @@ function Common.new(opts)
   )
   local aio_supported = AioProbe.available(ffi, C)
 
-  local ok_cdef, cdef_err = pcall(function()
-    ffi.cdef([[
+  local ok_cdef, cdef_err = native.cdef([[
       typedef long time_t;
       struct timespec { time_t tv_sec; long tv_nsec; };
 
@@ -109,7 +92,6 @@ function Common.new(opts)
       int close(int fd);
       char *strerror(int errnum);
     ]])
-  end)
   if not ok_cdef then
     opts._cdef_err = cdef_err
   end
@@ -181,27 +163,8 @@ function Common.new(opts)
     end
   end
 
-  local function errno()
-    return ffi.errno()
-  end
-
-  local function is_null(ptr)
-    if ptr == nil then
-      return true
-    end
-    local nullptr = rawget(ffi, 'nullptr')
-    return nullptr ~= nil and ptr == nullptr
-  end
-
-  local function strerror(e)
-    local ok, s = pcall(function()
-      return C.strerror(e)
-    end)
-    if not ok or is_null(s) then
-      return 'errno ' .. tostring(e)
-    end
-    return ffi.string(s)
-  end
+  local errno = native.errno
+  local strerror = native.strerror
 
   local function wrap_error(ret)
     local n = tonumber_c(ret)
@@ -336,33 +299,6 @@ function Common.new(opts)
     return mask
   end
 
-  local function collect_readiness(waits)
-    local by_fd = {}
-    local unsupported = false
-    local readiness = Host.readiness_waits(waits)
-    for i = 1, #readiness do
-      local w = readiness[i]
-      local fd = fd_of(w.readiness_key)
-      if not fd then
-        unsupported = true
-      else
-        local rec = by_fd[fd]
-        if not rec then
-          rec = { fd = fd, modes = {}, waits = {} }
-          by_fd[fd] = rec
-        end
-        local mode = w.mode or 'read'
-        if mode == 'write' or mode == 'wr' then
-          rec.modes.write = true
-        else
-          rec.modes.read = true
-        end
-        rec.waits[#rec.waits + 1] = w
-      end
-    end
-    return by_fd, unsupported
-  end
-
   local function support_probe()
     if opts._cdef_err then
       return nil, opts._cdef_err
@@ -387,42 +323,14 @@ function Common.new(opts)
     return true
   end
 
-  local Linux = {}
-  Linux.__index = Linux
-
-  function Linux.is_supported()
-    local ok, reason = support_probe()
-    if ok then
-      return true
-    end
-    return false, reason
-  end
-
-  function Linux.support_reason()
-    local ok, reason = support_probe()
-    if ok then
-      return nil
-    end
-    return reason
-  end
-
-  function Linux.new(new_opts)
-    new_opts = new_opts or {}
+  local function create_host(new_opts)
     local ok_abi, abi_err = validate_epoll_event_abi()
     if not ok_abi then
       error(prefix .. ': ' .. tostring(abi_err), 2)
     end
-    local maxevents = math.floor(tonumber(new_opts.maxevents) or 64)
-    if maxevents < 1 then
-      maxevents = 1
-    end
-    local epfd = epoll_create()
-    local fd = fd_provider
-    local self = setmetatable({
-      kind = name,
-      name = name,
-      family = 'numeric-fd',
-      epfd = epfd,
+    local maxevents = math.max(1, math.floor(tonumber(new_opts.maxevents) or 64))
+    return {
+      epfd = epoll_create(),
       maxevents = maxevents,
       active = {},
       epoll_by_token = {},
@@ -432,89 +340,51 @@ function Common.new(opts)
       poller_by_fd = {},
       transient_fds = {},
       needs_rearm = {},
-      on_wait = new_opts.on_wait,
-      on_wake = new_opts.on_wake,
-      on_unsupported = new_opts.on_unsupported,
-      fd = fd,
-      capabilities = {
-        time = true,
-        readiness = true,
-        fd = fd.is_supported(),
-        pipe = fd.is_supported(),
-        socket = socket_provider.is_supported(),
-        socket_ipv4 = socket_provider.is_supported(),
-        socket_ipv6 = socket_provider.is_supported(),
-        socket_unix = socket_provider.is_supported(),
-        datagram = socket_provider.is_supported(),
-        datagram_truncation = socket_provider.is_supported(),
-        resolver = resolver_supported,
-        resolver_blocking = resolver_supported,
-        process = process_supported,
-        file = uring_supported or process_supported,
-        file_backend = uring_supported and 'io_uring' or (process_supported and 'worker' or nil),
-        file_io_uring = uring_supported,
-        file_aio_detected = aio_supported,
-      },
-    }, Linux)
-    self.now = function(_rt)
-      return read_monotonic()
+    }
+  end
+
+  local function capabilities()
+    local sockets = socket_provider.is_supported()
+    return {
+      time = true,
+      readiness = true,
+      fd = fd_provider.is_supported(),
+      pipe = fd_provider.is_supported(),
+      socket = sockets,
+      socket_ipv4 = sockets,
+      socket_ipv6 = sockets,
+      socket_unix = sockets,
+      datagram = sockets,
+      datagram_truncation = sockets,
+      resolver = resolver_supported,
+      resolver_blocking = resolver_supported,
+      process = process_supported,
+      file = uring_supported or process_supported,
+      file_backend = uring_supported and 'io_uring' or (process_supported and 'worker' or nil),
+      file_io_uring = uring_supported,
+      file_aio_detected = aio_supported,
+    }
+  end
+
+  local function file_provider(_self, runtime, provider_opts)
+    if uring_supported then
+      local provider = UringProvider.new(runtime, {
+        ffi = ffi,
+        C = C,
+        fd = fd_provider,
+        arch = opts.arch or ffi.arch or (rawget(_G, 'jit') and jit.arch),
+        entries = provider_opts and provider_opts.ring_entries,
+      })
+      if provider and (type(provider.is_supported) ~= 'function' or provider:is_supported()) then
+        return provider
+      end
     end
-    return self
-  end
-
-  function Linux:file_provider(runtime, provider_opts)
-    if not uring_supported then
-      return nil
+    if process_supported then
+      return require('fibers.file.worker_provider').new(runtime, provider_opts)
     end
-    local provider = UringProvider.new(runtime, {
-      ffi = ffi,
-      C = C,
-      fd = fd_provider,
-      arch = opts.arch or ffi.arch or (rawget(_G, 'jit') and jit.arch),
-      entries = provider_opts and provider_opts.ring_entries,
-    })
-    return provider
   end
 
-  function Linux:create_pipe(pipe_opts)
-    return self.fd.pipe({
-      host = self,
-      name = pipe_opts and pipe_opts.name,
-      nonblocking = pipe_opts == nil or pipe_opts.nonblocking ~= false,
-    })
-  end
-
-  function Linux:create_listener(address, listener_opts)
-    return socket_provider.create_listener(self, address, listener_opts)
-  end
-
-  function Linux:start_dial(address, dial_opts)
-    return socket_provider.start_dial(self, address, dial_opts)
-  end
-
-  function Linux:create_datagram(address, datagram_opts)
-    return socket_provider.create_datagram(self, address, datagram_opts)
-  end
-
-  function Linux:start_process(spec)
-    if not process_supported then
-      return nil, nil, HostError.unsupported('host', 'process', { host = self.name })
-    end
-    return process_provider.start_process(self, spec)
-  end
-
-  function Linux:resolve(endpoint, resolve_opts)
-    if not resolver_supported then
-      return nil, HostError.unsupported('host', 'resolve', { endpoint = endpoint })
-    end
-    return resolver_provider.resolve(self, endpoint, resolve_opts)
-  end
-
-  function Linux:sleep(seconds)
-    return sleep_seconds(seconds)
-  end
-
-  function Linux:_delete(fd)
+  local function delete_fd(self, fd)
     local active = self.active[fd]
     if not active then
       self.unpollable[fd] = nil
@@ -530,7 +400,7 @@ function Common.new(opts)
     return nil, err or ('epoll_ctl DEL failed for fd ' .. tostring(fd))
   end
 
-  function Linux:_delete_withdrawn(by_fd)
+  local function delete_withdrawn(self, by_fd)
     local active_to_delete = {}
     for fd in pairs(self.active) do
       if not by_fd[fd] then
@@ -538,7 +408,7 @@ function Common.new(opts)
       end
     end
     for i = 1, #active_to_delete do
-      local ok, err = self:_delete(active_to_delete[i])
+      local ok, err = delete_fd(self, active_to_delete[i])
       if not ok then
         return nil, err
       end
@@ -556,7 +426,7 @@ function Common.new(opts)
     return true
   end
 
-  function Linux:_register(fd, modes)
+  local function register_fd(self, fd, modes)
     if self.unpollable[fd] then
       return true, 'unpollable'
     end
@@ -714,8 +584,8 @@ function Common.new(opts)
     local modes = {}
     local rec = transient[fd]
     if rec then
-      modes.read = rec.modes.read or nil
-      modes.write = rec.modes.write or nil
+      modes.read = rec.read or nil
+      modes.write = rec.write or nil
     end
     local poller = self.poller_by_fd[fd]
     if poller then
@@ -726,13 +596,14 @@ function Common.new(opts)
     return modes
   end
 
-  function Linux:block(rt, waits, status, _opts)
+  local function block(self, rt, waits, status, _opts)
     if not self.epfd then
       error(prefix .. ': host is closed', 2)
     end
     waits = waits or {}
     local deadline = Host.earliest_deadline(waits)
-    local transient, unsupported = collect_readiness(waits)
+    local transient_plan = PollPlan.readiness(waits, { key_of = fd_of })
+    local transient, unsupported = transient_plan.by_key, transient_plan.unsupported
     local affected = {}
     local stale = {}
 
@@ -758,12 +629,12 @@ function Common.new(opts)
     for fd in pairs(affected) do
       local modes = desired_modes(self, fd, transient)
       if not modes.read and not modes.write then
-        local ok, err = self:_delete(fd)
+        local ok, err = delete_fd(self, fd)
         if not ok then
           error(err, 2)
         end
       else
-        local ok, err, class = self:_register(fd, modes)
+        local ok, err, class = register_fd(self, fd, modes)
         if not ok then
           error(err, 2)
         end
@@ -791,7 +662,7 @@ function Common.new(opts)
     local synthetic = stale
     for fd, rec in pairs(transient) do
       if self.unpollable[fd] and not self.poller_by_fd[fd] then
-        synthetic[fd] = bit.band(mask_for(rec.modes), bit.bnot(EPOLLONESHOT))
+        synthetic[fd] = bit.band(mask_for(rec), bit.bnot(EPOLLONESHOT))
       end
     end
 
@@ -832,19 +703,8 @@ function Common.new(opts)
     for fd, mask in pairs(evmap) do
       local rd = bit.band(mask, bit.bor(RD, ERR)) ~= 0
       local wr = bit.band(mask, bit.bor(WR, ERR)) ~= 0
-      local rec = transient[fd]
-      if rec then
-        for i = 1, #rec.waits do
-          local w = rec.waits[i]
-          local mode = w.mode or 'read'
-          if (mode == 'write' or mode == 'wr') and wr then
-            rt:deliver(w.feed, 'write', true)
-            delivered = true
-          elseif mode ~= 'write' and mode ~= 'wr' and rd then
-            rt:deliver(w.feed, 'read', true)
-            delivered = true
-          end
-        end
+      if PollPlan.deliver_waits(rt, transient[fd], rd, wr) then
+        delivered = true
       end
       local poller = self.poller_by_fd[fd]
       if poller then
@@ -868,18 +728,42 @@ function Common.new(opts)
     return true, 'poll'
   end
 
-  function Linux:close()
+  local function close_host(self)
     if self.epfd then
       C.close(self.epfd)
       self.epfd = nil
     end
   end
 
-  return Linux
+  return Family.define({
+    name = name,
+    prefix = prefix,
+    family = 'numeric-fd',
+    fd = fd_provider,
+    socket = socket_provider,
+    datagram = socket_provider,
+    resolver = resolver_supported and resolver_provider or nil,
+    process = process_supported and process_provider or nil,
+    is_supported = support_probe,
+    support_reason = function()
+      local _, reason = support_probe()
+      return reason
+    end,
+    capability_builder = capabilities,
+    create = create_host,
+    now = read_monotonic,
+    sleep = sleep_seconds,
+    file_provider = file_provider,
+    block = block,
+    close = close_host,
+    methods = {
+      _delete = delete_fd,
+      _delete_withdrawn = delete_withdrawn,
+      _register = register_fd,
+    },
+  })
 end
 
 Common.unsupported = make_unsupported
-Common.make_tonumber = make_tonumber
-Common.fd_of = fd_of
 
 return Common

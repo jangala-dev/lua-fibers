@@ -14,7 +14,6 @@ local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation
 local Poller = {}
 Poller.__index = Poller
 
-local by_runtime = setmetatable({}, { __mode = 'k' })
 local next_poller = 0
 
 local function key_id(key)
@@ -41,11 +40,9 @@ function Poller.new(runtime, opts)
     _fibers_id = id,
     registrations = {},
     by_key = {},
-    generation = 0,
     changes = {},
-    compacted_generation = 0,
     change_limit = opts.change_limit or 256,
-    host_cursors = setmetatable({}, { __mode = 'k' }),
+    reset_pending = true,
   }, Poller)
   self.ready = PollerQueue.new(id .. ':ready', {
     interest = function(_rt, queue, feed)
@@ -64,19 +61,19 @@ function Poller.for_runtime(runtime, opts)
   if not runtime then
     error('HostPoller.for_runtime requires a runtime', 2)
   end
-  local poller = by_runtime[runtime]
+  local poller = runtime.host_poller
   if not poller then
     poller = Poller.new(runtime, opts)
-    by_runtime[runtime] = poller
     runtime.host_poller = poller
   end
   return poller
 end
 
 function Poller:_record(action, registration)
-  self.generation = self.generation + 1
+  if self.reset_pending then
+    return
+  end
   self.changes[#self.changes + 1] = {
-    sequence = self.generation,
     action = action,
     id = registration.id,
     generation = registration.generation,
@@ -85,7 +82,7 @@ function Poller:_record(action, registration)
   }
   if #self.changes > self.change_limit then
     self.changes = {}
-    self.compacted_generation = self.generation
+    self.reset_pending = true
   end
 end
 
@@ -199,16 +196,14 @@ function Poller:_host_delivered(registration)
   return true
 end
 
-function Poller:_host_changes(host)
-  local cursor = self.host_cursors[host]
-  local out = {}
-  if cursor == nil or cursor < self.compacted_generation then
-    out[1] = { action = 'reset', sequence = self.generation }
+function Poller:_host_changes(_host)
+  local out = self.changes
+  if self.reset_pending then
+    out = { { action = 'reset' } }
     for _, registration in pairs(self.registrations) do
       if registration.armed and not registration.retired then
         out[#out + 1] = {
           action = 'arm',
-          sequence = self.generation,
           id = registration.id,
           generation = registration.generation,
           key = registration.key,
@@ -216,26 +211,8 @@ function Poller:_host_changes(host)
         }
       end
     end
-  else
-    for i = 1, #self.changes do
-      local change = self.changes[i]
-      if change.sequence > cursor then
-        out[#out + 1] = change
-      end
-    end
   end
-  self.host_cursors[host] = self.generation
-  local all_current = true
-  for _, seen in pairs(self.host_cursors) do
-    if seen < self.generation then
-      all_current = false
-      break
-    end
-  end
-  if all_current then
-    self.changes = {}
-    self.compacted_generation = self.generation
-  end
+  self.changes, self.reset_pending = {}, false
   return out
 end
 

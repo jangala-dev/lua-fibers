@@ -23,20 +23,11 @@ Reactor.__index = Reactor
 local Entry = {}
 Entry.__index = Entry
 
-local by_runtime = setmetatable({}, { __mode = 'k' })
 local next_reactor = 0
 local next_entry = 0
 
-local function handle_call(handle, name, ...)
-  local f = handle and handle[name]
-  if type(f) == 'function' then
-    return f(handle, ...)
-  end
-  return nil, HostError.unsupported('host_handle', name)
-end
-
-local function optional_handle_call(handle, name, ...)
-  local ok, err = handle_call(handle, name, ...)
+local function optional_shutdown(handle, name, reason)
+  local ok, err = handle[name](handle, reason)
   if ok == nil and HostError.is_unsupported(err) then
     return true
   end
@@ -200,10 +191,9 @@ function Reactor.for_runtime(runtime, opts)
   if not runtime then
     error('HostReactor.for_runtime requires a runtime', 2)
   end
-  local reactor = by_runtime[runtime]
+  local reactor = runtime.host_reactor
   if not reactor then
     reactor = Reactor.new(runtime, opts)
-    by_runtime[runtime] = reactor
     runtime.host_reactor = reactor
   end
   return reactor
@@ -254,12 +244,8 @@ function Reactor:_attach_handle(rt, entry)
   if stream and stream._reactor_handle_attached then
     return
   end
-  if handle and type(handle.attach_stream) == 'function' then
-    handle:attach_stream(stream)
-  end
-  if handle and type(handle.bind_runtime) == 'function' then
-    handle:bind_runtime(rt)
-  end
+  handle:attach_stream(stream)
+  handle:bind_runtime(rt)
   if stream then
     stream._reactor_handle_attached = true
   end
@@ -390,13 +376,13 @@ function Reactor:_retire_entry(entry, reason)
   end
 
   if entry.mode == 'read' then
-    local ok, err = optional_handle_call(entry.handle, 'shutdown_read', reason)
+    local ok, err = optional_shutdown(entry.handle, 'shutdown_read', reason)
     if not ok then
       retire_error = combine_error(retire_error, err or Errors.READ_ERROR)
     end
     masked_perform(self.runtime, entry.flow:inlet():close_op(reason))
   elseif entry.mode == 'write' then
-    local ok, err = optional_handle_call(entry.handle, 'shutdown_write', reason)
+    local ok, err = optional_shutdown(entry.handle, 'shutdown_write', reason)
     if not ok then
       retire_error = combine_error(retire_error, err or Errors.WRITE_ERROR)
     end
@@ -417,7 +403,7 @@ function Reactor:_retire_entry(entry, reason)
     end
     if stream._reactor_live == 0 and not stream._handle_closed then
       stream._handle_closed = true
-      local ok, err = handle_call(stream.handle, 'close', reason)
+      local ok, err = stream.handle:close(reason)
       if not ok then
         stream._close_error = combine_error(stream._close_error, err or Errors.FLOW_ERROR)
       end
@@ -443,7 +429,7 @@ function Reactor:_service_read(entry)
     return true
   end
 
-  local bytes, err = handle_call(entry.handle, 'read', space:capacity())
+  local bytes, err = entry.handle:read(space:capacity())
   if bytes ~= nil and type(bytes) ~= 'string' then
     masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
     return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
@@ -525,7 +511,7 @@ function Reactor:_service_write(entry)
   end
 
   local bytes = lease:bytes()
-  local n, err = handle_call(entry.handle, 'write', bytes)
+  local n, err = entry.handle:write(bytes)
   if n and n > 0 then
     local ok, ack_err = masked_perform(self.runtime, lease:ack_op(n))
     if not ok then
@@ -647,53 +633,13 @@ function Reactor:registration_count()
   return n
 end
 
-function Entry:inspection()
-  return {
-    id = self._fibers_id,
-    name = self.name,
-    mode = self.mode,
-    key = self.key,
-    generation = self.generation,
-    registered = self.registered,
-    closing = self.closing,
-    retired = self.retired,
-    retire_mode = self.retire_mode,
-    retire_error = self.retire_error,
-    service_count = self.service_count,
-    would_block_count = self.would_block_count,
-    last_service_sequence = self.last_service_sequence,
-    has_lease = self.lease ~= nil,
-  }
-end
-
-function Reactor:snapshot()
-  local entries = {}
-  for _, entry in pairs(self.entries) do
-    entries[#entries + 1] = entry:inspection()
-  end
-  table.sort(entries, function(a, b)
-    return a.id < b.id
-  end)
-  return {
-    name = self.name,
-    running = self.running,
-    registration_count = #entries,
-    service_count = self.service_count,
-    read_quantum = self.read_quantum,
-    write_quantum = self.write_quantum,
-    control_quantum = self.control_quantum,
-    entries = entries,
-    audit = IOAudit.snapshot(self.runtime),
-  }
-end
-
 function Reactor:assert_quiescent(label)
-  local snapshot = self:snapshot()
-  if snapshot.registration_count ~= 0 then
-    local names = {}
-    for _, entry in ipairs(snapshot.entries) do
-      names[#names + 1] = entry.name .. ':' .. entry.mode
-    end
+  local names = {}
+  for _, entry in pairs(self.entries) do
+    names[#names + 1] = entry.name .. ':' .. entry.mode
+  end
+  if #names > 0 then
+    table.sort(names)
     error((label or 'host reactor') .. ' still has registrations: ' .. table.concat(names, ', '), 2)
   end
   return true

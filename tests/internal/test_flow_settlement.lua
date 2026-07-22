@@ -13,6 +13,7 @@ package.path = table.concat({
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
+local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersStream = require('fibers.stream')
@@ -129,7 +130,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('settle-backend-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'settle-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -176,7 +177,7 @@ end
 do
   local rt = FibersRuntime.new()
   local region = FibersRegion.new('settle-protocol-region')
-  local backend = HostHandle.fake({ name = 'settle-protocol-backend' })
+  local backend = FakeHandle.new({ name = 'settle-protocol-backend' })
   function backend:write(bytes)
     return #bytes + 1
   end

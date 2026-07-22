@@ -228,6 +228,9 @@ do
     end
     function self:accept()
       local child = object(self.family)
+      if self.family == 'unix' then
+        return child
+      end
       child.peer_host, child.peer_port = self.family == 'inet6' and '::1' or '127.0.0.1', 44090
       return child, child.peer_host, child.peer_port
     end
@@ -306,6 +309,13 @@ do
     assert(
       accepted.readable and accepted.writable,
       'Nixio accepted socket should receive initial readiness hints'
+    )
+    local unix_listener =
+      assert(Socket.create_listener({}, { kind = 'unix', path = '/tmp/fibers-nixio.sock' }, {}))
+    local unix_accepted, unix_peer = unix_listener:accept()
+    assert(
+      unix_accepted and unix_peer and unix_peer.kind == 'unix',
+      'Nixio anonymous Unix peer should retain address identity'
     )
     local dial = assert(Socket.start_dial({}, { kind = 'inet4', host = '127.0.0.1', port = 80 }, {
       local_address = { kind = 'inet4', host = '127.0.0.1', port = 0 },

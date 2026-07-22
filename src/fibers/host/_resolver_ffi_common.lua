@@ -5,17 +5,16 @@
 -- native asynchronous resolver.
 
 local HostError = require('fibers.host.error')
+local FfiNative = require('fibers.host.ffi_native')
 
 local Common = {}
 
 function Common.new(opts)
   opts = opts or {}
-  local ffi = assert(opts.ffi, 'ffi provider required')
-  local C = opts.C or ffi.C
-  local tonumber_c = opts.tonumber_c or rawget(ffi, 'tonumber') or tonumber
+  local native = opts.native or FfiNative.new(opts)
+  local ffi, C, tonumber_c = native.ffi, native.C, native.number
 
-  local ok_cdef, cdef_err = pcall(function()
-    ffi.cdef([[
+  local ok_cdef, cdef_err = native.cdef([[
       struct addrinfo {
         int ai_flags;
         int ai_family;
@@ -32,20 +31,13 @@ function Common.new(opts)
       void freeaddrinfo(struct addrinfo *res);
       const char *gai_strerror(int errcode);
     ]])
-  end)
 
   local AF_UNSPEC = 0
   local AF_INET = 2
   local AF_INET6 = 10
   local SOCK_STREAM = 1
 
-  local function null(ptr)
-    if ptr == nil then
-      return true
-    end
-    local nullptr = rawget(ffi, 'nullptr')
-    return nullptr ~= nil and ptr == nullptr
-  end
+  local null = native.null
 
   local function address_from(ai, service)
     local port = tonumber(service)

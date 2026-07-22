@@ -29,10 +29,10 @@ package.preload.nixio = function()
       EWOULDBLOCK = 11,
     },
     errno = function()
-      return 0
+      return 5 -- deliberately stale: explicit "Success" must still mean no error
     end,
     strerror = function(errno)
-      return 'errno ' .. tostring(errno)
+      return errno == 0 and 'Success' or ('errno ' .. tostring(errno))
     end,
   }
 end
@@ -54,7 +54,7 @@ local ok, err = pcall(function()
   end
 
   function object:read(_max)
-    return nil, nil, 0
+    return nil, 'Success'
   end
 
   function object:write(bytes)
@@ -72,6 +72,9 @@ local ok, err = pcall(function()
   assert(handle.obj == object)
   assert(handle.fd == 42)
   assert(setblocking_arg == false, 'Nixio handles should be placed in non-blocking mode')
+  local data, read_err = handle:read(1)
+  local HostError = require('fibers.host.error')
+  assert(data == nil and HostError.is_eof(read_err), 'Nixio Success return should be EOF')
   assert(handle:close())
   assert(closed)
 end)

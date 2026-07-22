@@ -4,50 +4,20 @@
 -- a separate host capability and never occurs implicitly in socket creation.
 
 local HostError = require('fibers.host.error')
+local SocketCore = require('fibers.host.socket_core')
+local DatagramCore = require('fibers.host.datagram_core')
+local FfiNative = require('fibers.host.ffi_native')
 
 local Common = {}
-
-local function make_unsupported(prefix, reason)
-  return {
-    is_supported = function()
-      return false, reason
-    end,
-    support_reason = function()
-      return reason
-    end,
-    create_listener = function()
-      return nil, HostError.unsupported('socket', 'listen', { reason = reason })
-    end,
-    start_dial = function()
-      return nil, HostError.unsupported('socket', 'dial', { reason = reason })
-    end,
-    create_datagram = function()
-      return nil, HostError.unsupported('datagram', 'open', { reason = reason })
-    end,
-  }
-end
-
-local function make_tonumber(ffi)
-  local toint = rawget(ffi, 'tonumber') or tonumber
-  return function(value)
-    local n = toint(value)
-    if n == nil then
-      n = tonumber(value)
-    end
-    return n
-  end
-end
 
 function Common.new(opts)
   opts = opts or {}
   local prefix = opts.error_prefix or 'fibers.host.socket_ffi'
-  local ffi = assert(opts.ffi, 'ffi provider required')
-  local C = opts.C or ffi.C
+  local native = opts.native or FfiNative.new(opts)
+  local ffi, C, tonumber_c = native.ffi, native.C, native.number
   local Fd = assert(opts.fd, 'numeric fd module required')
-  local tonumber_c = opts.tonumber_c or make_tonumber(ffi)
 
-  local ok_cdef, cdef_err = pcall(function()
-    ffi.cdef([[
+  local ok_cdef, cdef_err = native.cdef([[
       struct sockaddr {
         unsigned short sa_family;
         char sa_data[14];
@@ -97,7 +67,6 @@ function Common.new(opts)
       unsigned short ntohs(unsigned short netshort);
       int unlink(const char *pathname);
     ]])
-  end)
   if not ok_cdef then
     opts._cdef_err = cdef_err
   end
@@ -126,27 +95,9 @@ function Common.new(opts)
   local EALREADY = 114
   local EISCONN = 106
 
-  local function errno()
-    return ffi.errno()
-  end
-
-  local function is_null(ptr)
-    if ptr == nil then
-      return true
-    end
-    local nullptr = rawget(ffi, 'nullptr')
-    return nullptr ~= nil and ptr == nullptr
-  end
-
-  local function strerror(e)
-    local ok, s = pcall(function()
-      return C.strerror(e)
-    end)
-    if not ok or is_null(s) then
-      return 'errno ' .. tostring(e)
-    end
-    return ffi.string(s)
-  end
+  local errno = native.errno
+  local is_null = native.null
+  local strerror = native.strerror
 
   local errno_names = {
     [EAGAIN] = 'EAGAIN',
@@ -350,332 +301,209 @@ function Common.new(opts)
     return address_from_storage(storage, tonumber_c(length[0]))
   end
 
-  local Socket = {}
-
-  function Socket.is_supported()
-    local ok, reason = pcall(function()
+  local function stream_supported()
+    local ok = pcall(function()
       ffi.typeof('struct sockaddr_in')
       ffi.typeof('struct sockaddr_in6')
       ffi.typeof('struct sockaddr_un')
       return C.socket, C.bind, C.listen, C.connect, C.accept, C.getsockopt, C.inet_pton
     end)
-    if not ok then
-      return false, reason or cdef_err
-    end
-    return Fd.is_supported()
+    return ok and Fd.is_supported()
   end
 
-  function Socket.support_reason()
-    local ok, reason = Socket.is_supported()
-    if ok then
-      return nil
-    end
-    return reason or (prefix .. ': socket functions unavailable')
-  end
-
-  local function wrap_socket(fd, wrap_opts)
-    local handle, err = Fd.new(fd, wrap_opts)
-    if not handle then
+  local function encode(address)
+    local pointer, length, err, storage, family = sockaddr_for(address)
+    if not pointer then
       return nil, err
     end
-    handle.family = 'numeric-socket'
-    handle.local_address = function(self)
-      return query_address(self.fd, false)
-    end
-    handle.peer_address_value = function(self)
-      return query_address(self.fd, true)
-    end
-    return handle
+    return { family = family, native = pointer, length = length, storage = storage }
   end
 
-  function Socket.create_listener(host, address, listener_opts)
-    listener_opts = listener_opts or {}
-    local sockaddr, length, addr_err, storage, family = sockaddr_for(address)
-    if not sockaddr then
-      return nil, addr_err
-    end
-    local fd, socket_errno = socket_fd(family, SOCK_STREAM)
-    if not fd then
-      return nil, system_error('socket', socket_errno, { address = address })
-    end
+  local function wrap(fd, host, name)
+    return Fd.new(fd, { host = host, name = name, nonblocking = true })
+  end
 
-    if listener_opts.reuse_address ~= false and family ~= AF_UNIX then
-      local ok, option_err = set_int_option(fd, SOL_SOCKET, SO_REUSEADDR, true, 'setsockopt_reuseaddr')
-      if not ok then
-        close_raw(fd)
-        return nil, option_err
+  local Stream = SocketCore.define({
+    prefix = prefix,
+    name = 'native',
+    handle_family = 'numeric-socket',
+    support_reason = prefix .. ': socket functions unavailable',
+    supports = function()
+      return stream_supported()
+    end,
+    encode = encode,
+    is_unix = function(family)
+      return family == AF_UNIX
+    end,
+    unlink = function(path)
+      if path then
+        pcall(C.unlink, path)
       end
-    end
-    if family == AF_UNIX and listener_opts.unlink_existing == true then
-      C.unlink(address.path)
-    end
-
-    local rc = tonumber_c(C.bind(fd, sockaddr, length))
-    if rc ~= 0 then
-      local e = errno()
-      close_raw(fd)
-      return nil, system_error('bind', e, { address = address })
-    end
-    rc = tonumber_c(C.listen(fd, tonumber(listener_opts.backlog) or 128))
-    if rc ~= 0 then
-      local e = errno()
-      close_raw(fd)
-      return nil, system_error('listen', e, { address = address })
-    end
-
-    local handle, wrap_err = wrap_socket(fd, {
-      host = host,
-      name = listener_opts.name or 'native-listener',
-      nonblocking = true,
-    })
-    if not handle then
-      return nil, wrap_err
-    end
-    local raw_close = handle._close
-    local unix_path = family == AF_UNIX and address.path or nil
-    handle._close = function(self, reason)
-      local ok, err, detail = raw_close(self, reason)
-      if unix_path and listener_opts.unlink_on_close ~= false then
-        pcall(function()
-          C.unlink(unix_path)
-        end)
+    end,
+    open = function(family)
+      local fd, e = socket_fd(family, SOCK_STREAM)
+      if not fd then
+        return nil, system_error('socket', e)
       end
-      return ok, err, detail
-    end
-    handle.address = query_address(fd, false) or address
-    handle.local_address = function(self)
-      return self.address
-    end
-    handle.accept = function(self)
-      -- Readiness is level-like advice.  Consume the delivered hint before the
-      -- authoritative accept call so EAGAIN returns the driver to epoll.
-      self:clear_readable()
-      local peer_storage = ffi.new('struct sockaddr_storage[1]')
-      local peer_length = ffi.new('unsigned int[1]', ffi.sizeof('struct sockaddr_storage'))
-      local accepted
+      return fd
+    end,
+    close_raw = close_raw,
+    wrap = wrap,
+    query = function(fd, peer)
+      return query_address(fd, peer)
+    end,
+    decode_peer = function(value)
+      return value
+    end,
+    set_reuse = function(fd, value, address)
+      local ok, err = set_int_option(fd, SOL_SOCKET, SO_REUSEADDR, value, 'setsockopt_reuseaddr')
+      if not ok and type(err) == 'table' then
+        err.address = address
+      end
+      return ok, err
+    end,
+    set_nodelay = function(fd, value, address)
+      local ok, err = set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, value, 'setsockopt_nodelay')
+      if not ok and type(err) == 'table' then
+        err.address = address
+      end
+      return ok, err
+    end,
+    bind = function(fd, endpoint, address)
+      if tonumber_c(C.bind(fd, endpoint.native, endpoint.length)) ~= 0 then
+        return nil, system_error('bind', errno(), { address = address })
+      end
+      return true
+    end,
+    listen = function(fd, backlog, address)
+      if tonumber_c(C.listen(fd, backlog)) ~= 0 then
+        return nil, system_error('listen', errno(), { address = address })
+      end
+      return true
+    end,
+    accept = function(fd, address)
+      local storage = ffi.new('struct sockaddr_storage[1]')
+      local length = ffi.new('unsigned int[1]', ffi.sizeof('struct sockaddr_storage'))
       while true do
-        local ok_accept4, result = pcall(function()
-          return C.accept4(
-            self.fd,
-            ffi.cast('struct sockaddr *', peer_storage),
-            peer_length,
-            SOCK_NONBLOCK + SOCK_CLOEXEC
-          )
+        local accepted
+        local ok4, result = pcall(function()
+          return C.accept4(fd, ffi.cast('struct sockaddr *', storage), length, SOCK_NONBLOCK + SOCK_CLOEXEC)
         end)
-        if ok_accept4 then
+        if ok4 then
           accepted = tonumber_c(result)
           if accepted >= 0 then
-            break
+            return accepted, address_from_storage(storage, tonumber_c(length[0]))
           end
           local e = errno()
           if e == EINTR then
-            -- retry
-          elseif e == ENOSYS or e == EINVAL then
-            accepted = nil
-            break
-          elseif e == EAGAIN or e == EWOULDBLOCK then
-            return nil, nil, would_block('accept', { address = self.address })
+          elseif e ~= ENOSYS and e ~= EINVAL then
+            if e == EAGAIN or e == EWOULDBLOCK then
+              return nil, nil, would_block('accept', { address = address })
+            end
+            return nil, nil, system_error('accept', e, { address = address })
           else
-            return nil, nil, system_error('accept', e, { address = self.address })
+            break
           end
         else
-          accepted = nil
           break
         end
       end
-      if accepted == nil then
-        while true do
-          accepted = tonumber_c(C.accept(self.fd, ffi.cast('struct sockaddr *', peer_storage), peer_length))
-          if accepted >= 0 then
-            break
-          end
-          local e = errno()
-          if e == EINTR then
-            -- retry
-          elseif e == EAGAIN or e == EWOULDBLOCK then
-            return nil, nil, would_block('accept', { address = self.address })
-          else
-            return nil, nil, system_error('accept', e, { address = self.address })
-          end
+      while true do
+        local accepted = tonumber_c(C.accept(fd, ffi.cast('struct sockaddr *', storage), length))
+        if accepted >= 0 then
+          return accepted, address_from_storage(storage, tonumber_c(length[0]))
         end
-      end
-      local child, child_err = wrap_socket(accepted, {
-        host = host,
-        name = (listener_opts.name or 'listener') .. ':accepted',
-        nonblocking = true,
-      })
-      if not child then
-        -- Fd.new closes the descriptor when its setup fails. Closing it again
-        -- here could affect an unrelated descriptor if the number is reused.
-        return nil, nil, child_err
-      end
-      if listener_opts.nodelay ~= false and tonumber_c(peer_storage[0].ss_family) ~= AF_UNIX then
-        local ok, nodelay_err = set_int_option(accepted, IPPROTO_TCP, TCP_NODELAY, true, 'setsockopt_nodelay')
-        if not ok then
-          child:close('TCP_NODELAY failed')
-          return nil, nil, nodelay_err
-        end
-      end
-      local peer = address_from_storage(peer_storage, tonumber_c(peer_length[0]))
-      child.peer_address = peer
-      child.local_address_value = query_address(accepted, false)
-      return child, peer
-    end
-    return handle
-  end
-
-  function Socket.start_dial(host, address, dial_opts)
-    dial_opts = dial_opts or {}
-    local sockaddr, length, addr_err, storage, family = sockaddr_for(address)
-    if not sockaddr then
-      return nil, addr_err
-    end
-    local fd, socket_errno = socket_fd(family, SOCK_STREAM)
-    if not fd then
-      return nil, system_error('socket', socket_errno, { address = address })
-    end
-
-    if dial_opts.local_address then
-      local local_sa, local_length, local_err = sockaddr_for(dial_opts.local_address)
-      if not local_sa then
-        close_raw(fd)
-        return nil, local_err
-      end
-      local rc = tonumber_c(C.bind(fd, local_sa, local_length))
-      if rc ~= 0 then
         local e = errno()
-        close_raw(fd)
-        return nil, system_error('bind', e, { address = dial_opts.local_address })
+        if e == EINTR then
+        elseif e == EAGAIN or e == EWOULDBLOCK then
+          return nil, nil, would_block('accept', { address = address })
+        else
+          return nil, nil, system_error('accept', e, { address = address })
+        end
       end
-    end
-    if dial_opts.nodelay ~= false and family ~= AF_UNIX then
-      local ok, option_err = set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, true, 'setsockopt_nodelay')
-      if not ok then
-        close_raw(fd)
-        return nil, option_err
+    end,
+    connect = function(fd, endpoint, address)
+      if tonumber_c(C.connect(fd, endpoint.native, endpoint.length)) == 0 then
+        return 'connected'
       end
-    end
-
-    local handle, wrap_err = wrap_socket(fd, {
-      host = host,
-      name = dial_opts.name or 'native-dial',
-      nonblocking = true,
-    })
-    if not handle then
-      return nil, wrap_err
-    end
-    handle.target_address = address
-    handle._connect_complete = false
-    handle._connect_pending = false
-
-    local rc = tonumber_c(C.connect(fd, sockaddr, length))
-    if rc == 0 then
-      handle._connect_complete = true
-    else
       local e = errno()
+      if e == EISCONN then
+        return 'connected'
+      end
       if e == EINPROGRESS or e == EALREADY or e == EAGAIN or e == EWOULDBLOCK then
-        handle._connect_pending = true
-      elseif e == EISCONN then
-        handle._connect_complete = true
-      else
-        handle:close('connect failed')
-        return nil, system_error('connect', e, { address = address })
+        return 'pending'
       end
-    end
-
-    handle.finish_connect = function(self)
-      if self._connect_complete then
-        return self, query_address(self.fd, true) or address
-      end
-      -- A readiness notification may be stale.  Clear it before SO_ERROR so a
-      -- still-pending connection waits for a fresh writable event.
-      self:clear_writable()
+      return nil, system_error('connect', e, { address = address })
+    end,
+    finish_connect = function(fd, _endpoint, address)
       local value = ffi.new('int[1]')
-      local value_length = ffi.new('unsigned int[1]', ffi.sizeof('int'))
-      local got = tonumber_c(C.getsockopt(self.fd, SOL_SOCKET, SO_ERROR, value, value_length))
-      if got ~= 0 then
-        local e = errno()
-        return nil, nil, system_error('connect_finish', e, { address = address })
+      local length = ffi.new('unsigned int[1]', ffi.sizeof('int'))
+      if tonumber_c(C.getsockopt(fd, SOL_SOCKET, SO_ERROR, value, length)) ~= 0 then
+        return nil, system_error('connect_finish', errno(), { address = address })
       end
       local e = tonumber_c(value[0])
       if e == 0 or e == EISCONN then
-        self._connect_complete = true
-        self._connect_pending = false
-        return self, query_address(self.fd, true) or address
+        return 'connected'
       end
       if e == EINPROGRESS or e == EALREADY or e == EAGAIN or e == EWOULDBLOCK then
-        return nil, nil, would_block('connect_finish', { address = address })
+        return 'pending', would_block('connect_finish', { address = address })
       end
-      return nil, nil, system_error('connect_finish', e, { address = address })
-    end
-    return handle
-  end
+      return nil, system_error('connect_finish', e, { address = address })
+    end,
+  })
 
-  function Socket.create_datagram(host, address, datagram_opts)
-    datagram_opts = datagram_opts or {}
-    local sockaddr, length, addr_err, _storage, family = sockaddr_for(address)
-    if not sockaddr then
-      return nil, addr_err
-    end
-    if family == AF_UNIX then
-      return nil, HostError.unsupported('datagram', 'unix', { address = address })
-    end
-
-    local fd, socket_errno = socket_fd(family, SOCK_DGRAM)
-    if not fd then
-      return nil, datagram_system_error('socket', socket_errno, { address = address })
-    end
-    if datagram_opts.reuse_address == true then
-      local ok, option_err = set_int_option(fd, SOL_SOCKET, SO_REUSEADDR, true, 'setsockopt_reuseaddr')
-      if not ok then
-        close_raw(fd)
-        return nil, option_err
+  local Datagram = DatagramCore.define({
+    prefix = prefix,
+    name = 'native',
+    support_reason = prefix .. ': datagram functions unavailable',
+    is_supported = stream_supported,
+    encode = function(address)
+      local endpoint, err = encode(address)
+      if endpoint and endpoint.family == AF_UNIX then
+        return nil, HostError.unsupported('datagram', 'unix', { address = address })
       end
-    end
-    local rc = tonumber_c(C.bind(fd, sockaddr, length))
-    if rc ~= 0 then
-      local e = errno()
-      close_raw(fd)
-      return nil, datagram_system_error('bind', e, { address = address })
-    end
-
-    local handle, wrap_err = wrap_socket(fd, {
-      host = host,
-      name = datagram_opts.name or 'native-datagram',
-      nonblocking = true,
-    })
-    if not handle then
-      return nil, wrap_err
-    end
-    handle.address = query_address(fd, false) or address
-    handle.local_address = function(self)
-      return self.address
-    end
-
-    handle.recv_from = function(self, max_size)
-      self:clear_readable()
+      return endpoint, err
+    end,
+    open = function(family, address)
+      local fd, e = socket_fd(family, SOCK_DGRAM)
+      if not fd then
+        return nil, datagram_system_error('socket', e, { address = address })
+      end
+      return fd
+    end,
+    close_raw = close_raw,
+    set_reuse = function(fd, value, address)
+      local ok, err = set_int_option(fd, SOL_SOCKET, SO_REUSEADDR, value, 'setsockopt_reuseaddr')
+      if not ok and type(err) == 'table' then
+        err.address = address
+      end
+      return ok, err
+    end,
+    bind = function(fd, endpoint, address)
+      if tonumber_c(C.bind(fd, endpoint.native, endpoint.length)) ~= 0 then
+        return nil, datagram_system_error('bind', errno(), { address = address })
+      end
+      return true
+    end,
+    wrap = wrap,
+    query = function(fd)
+      return query_address(fd, false)
+    end,
+    receive = function(fd, max_size, _family, address)
       max_size = math.max(0, math.floor(tonumber(max_size) or 65535))
       local buffer = ffi.new('unsigned char[?]', math.max(1, max_size))
-      local peer_storage = ffi.new('struct sockaddr_storage[1]')
-      local peer_length = ffi.new('unsigned int[1]', ffi.sizeof('struct sockaddr_storage'))
+      local storage = ffi.new('struct sockaddr_storage[1]')
+      local length = ffi.new('unsigned int[1]', ffi.sizeof('struct sockaddr_storage'))
       while true do
         local n = tonumber_c(
-          C.recvfrom(
-            self.fd,
-            buffer,
-            max_size,
-            MSG_TRUNC,
-            ffi.cast('struct sockaddr *', peer_storage),
-            peer_length
-          )
+          C.recvfrom(fd, buffer, max_size, MSG_TRUNC, ffi.cast('struct sockaddr *', storage), length)
         )
         if n and n >= 0 then
           local copied = math.min(n, max_size)
-          local data = copied > 0 and ffi.string(buffer, copied) or ''
           return {
-            data = data,
-            peer = address_from_storage(peer_storage, tonumber_c(peer_length[0])),
-            local_address = self.address,
+            data = copied > 0 and ffi.string(buffer, copied) or '',
+            peer = address_from_storage(storage, tonumber_c(length[0])),
+            local_address = address,
             truncated = n > max_size,
             original_size = n > max_size and n or nil,
             flags = {},
@@ -683,42 +511,33 @@ function Common.new(opts)
         end
         local e = errno()
         if e == EINTR then
-          -- retry
         elseif e == EAGAIN or e == EWOULDBLOCK then
-          return nil, datagram_would_block('receive_from', { address = self.address })
+          return nil, datagram_would_block('receive_from', { address = address })
         else
-          return nil, datagram_system_error('receive_from', e, { address = self.address })
+          return nil, datagram_system_error('receive_from', e, { address = address })
         end
       end
-    end
-
-    handle.send_to = function(self, data, destination)
-      self:clear_writable()
-      local target, target_length, target_err = sockaddr_for(destination)
-      if not target then
-        return nil, target_err
-      end
+    end,
+    send = function(fd, data, endpoint, destination)
       while true do
-        local n = tonumber_c(C.sendto(self.fd, data, #data, 0, target, target_length))
+        local n = tonumber_c(C.sendto(fd, data, #data, 0, endpoint.native, endpoint.length))
         if n and n >= 0 then
           return n
         end
         local e = errno()
         if e == EINTR then
-          -- retry
         elseif e == EAGAIN or e == EWOULDBLOCK then
           return nil, datagram_would_block('send_to', { address = destination })
         else
           return nil, datagram_system_error('send_to', e, { address = destination })
         end
       end
-    end
-    return handle
-  end
+    end,
+  })
 
-  return Socket
+  Stream.create_datagram = Datagram.create_datagram
+
+  return Stream
 end
-
-Common.unsupported = make_unsupported
 
 return Common

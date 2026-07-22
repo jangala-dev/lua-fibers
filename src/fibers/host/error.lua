@@ -47,38 +47,23 @@ function Error.unsupported(domain, action, fields)
   )
 end
 
-function Error.would_block(domain, action, fields)
-  return Error.new(
-    'would_block',
-    copy_fields({
-      domain = domain or 'io',
-      action = action,
-      temporary = true,
-      message = 'host action would block',
-    }, fields)
-  )
-end
-
-function Error.eof(domain, action, fields)
-  return Error.new(
-    'eof',
-    copy_fields({
-      domain = domain or 'io',
-      action = action or 'read',
-      message = 'end of file',
-    }, fields)
-  )
-end
-
-function Error.closed(domain, action, fields)
-  return Error.new(
-    'closed',
-    copy_fields({
-      domain = domain or 'io',
-      action = action,
-      message = 'resource is closed',
-    }, fields)
-  )
+local SIMPLE = {
+  would_block = { domain = 'io', temporary = true, message = 'host action would block' },
+  eof = { domain = 'io', action = 'read', message = 'end of file' },
+  closed = { domain = 'io', message = 'resource is closed' },
+}
+for kind, defaults in pairs(SIMPLE) do
+  Error[kind] = function(domain, action, fields)
+    return Error.new(
+      kind,
+      copy_fields({
+        domain = domain or defaults.domain,
+        action = action or defaults.action,
+        temporary = defaults.temporary,
+        message = defaults.message,
+      }, fields)
+    )
+  end
 end
 
 function Error.system(domain, action, message, code, number, fields)
@@ -94,40 +79,37 @@ function Error.system(domain, action, message, code, number, fields)
   )
 end
 
-function Error.invalid_argument(domain, action, fields)
-  return Error.new(
-    'invalid_argument',
-    copy_fields({
-      domain = domain or 'host',
-      action = action,
-      code = 'invalid_argument',
-      message = 'invalid host action argument',
-    }, fields)
-  )
-end
-
-function Error.message_too_large(domain, action, fields)
-  return Error.new(
-    'message_too_large',
-    copy_fields({
-      domain = domain or 'datagram',
-      action = action or 'send',
-      code = 'message_too_large',
-      message = 'datagram exceeds the supported message size',
-    }, fields)
-  )
-end
-
-function Error.truncated(domain, action, fields)
-  return Error.new(
-    'truncated',
-    copy_fields({
-      domain = domain or 'datagram',
-      action = action or 'receive',
-      code = 'truncated',
-      message = 'datagram was truncated',
-    }, fields)
-  )
+local CODED = {
+  invalid_argument = {
+    domain = 'host',
+    code = 'invalid_argument',
+    message = 'invalid host action argument',
+  },
+  message_too_large = {
+    domain = 'datagram',
+    action = 'send',
+    code = 'message_too_large',
+    message = 'datagram exceeds the supported message size',
+  },
+  truncated = {
+    domain = 'datagram',
+    action = 'receive',
+    code = 'truncated',
+    message = 'datagram was truncated',
+  },
+}
+for kind, defaults in pairs(CODED) do
+  Error[kind] = function(domain, action, fields)
+    return Error.new(
+      kind,
+      copy_fields({
+        domain = domain or defaults.domain,
+        action = action or defaults.action,
+        code = defaults.code,
+        message = defaults.message,
+      }, fields)
+    )
+  end
 end
 
 function Error.protocol(domain, action, message, fields)

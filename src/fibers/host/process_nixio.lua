@@ -9,11 +9,13 @@
 
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.internal.io_audit')
-local ProviderModule = require('fibers.host.provider')
+local ProcessCore = require('fibers.host.process_core')
+local ProcessIO = require('fibers.host.process_io_core')
+local Family = require('fibers.host.family')
 local Sleep = require('fibers.sleep')
 
 local function unsupported(reason)
-  return ProviderModule.unsupported('fibers.host.process_nixio', reason, {
+  return Family.unsupported('fibers.host.process_nixio', reason, {
     'start_process',
   })
 end
@@ -30,28 +32,21 @@ local NixioError = require('fibers.host.nixio_error')
 local Provider = {}
 local const = nixio.const or {}
 
-local signal_numbers = {
-  hup = const.SIGHUP or 1,
-  int = const.SIGINT or 2,
-  quit = const.SIGQUIT or 3,
-  kill = const.SIGKILL or 9,
-  usr1 = const.SIGUSR1 or 10,
-  usr2 = const.SIGUSR2 or 12,
-  pipe = const.SIGPIPE or 13,
-  alrm = const.SIGALRM or 14,
-  term = const.SIGTERM or 15,
-  chld = const.SIGCHLD or 17,
-  cont = const.SIGCONT or 18,
-  stop = const.SIGSTOP or 19,
-}
-
-local signal_names = {
-  [signal_numbers.hup] = 'HUP',
-  [signal_numbers.int] = 'INT',
-  [signal_numbers.quit] = 'QUIT',
-  [signal_numbers.kill] = 'KILL',
-  [signal_numbers.term] = 'TERM',
-}
+local signals = ProcessCore.signals({
+  hup = const.SIGHUP,
+  int = const.SIGINT,
+  quit = const.SIGQUIT,
+  kill = const.SIGKILL,
+  usr1 = const.SIGUSR1,
+  usr2 = const.SIGUSR2,
+  pipe = const.SIGPIPE,
+  alrm = const.SIGALRM,
+  term = const.SIGTERM,
+  chld = const.SIGCHLD,
+  cont = const.SIGCONT,
+  stop = const.SIGSTOP,
+})
+local signal_numbers = signals.numbers
 
 local current_errno = NixioError.current_errno
 local error_message = NixioError.detail
@@ -104,31 +99,19 @@ local function read_chunk(obj, max)
   if type(data) == 'string' then
     return data
   end
-  local raw_msg, eno = NixioError.split(a, b)
-  if data == false or eno == const.EAGAIN or eno == const.EWOULDBLOCK then
+  if data == false then
+    local _, eno = NixioError.split(a, b)
     return nil, 'would_block', eno
   end
-  -- Nixio represents EOF on pipes as nil with no error (or errno zero) on
-  -- some Lua/ABI combinations.  strerror(0) is "Success" and must not be
-  -- promoted to a process failure.
-  if (eno == nil or eno == 0) and (raw_msg == nil or raw_msg == '') then
+  local no_error, raw_msg, eno = NixioError.no_error(a, b)
+  if no_error then
     return ''
+  end
+  if eno == const.EAGAIN or eno == const.EWOULDBLOCK then
+    return nil, 'would_block', eno
   end
   local msg = NixioError.detail('read failed', raw_msg, eno)
   return nil, msg, eno
-end
-
-local function normalise_signal(value)
-  if type(value) == 'number' and value > 0 and value == math.floor(value) then
-    return value
-  end
-  if type(value) == 'string' then
-    local key = value:lower():gsub('^sig', '')
-    if signal_numbers[key] then
-      return signal_numbers[key]
-    end
-  end
-  return nil, HostError.invalid_argument('process', 'signal', { signal = value })
 end
 
 local function copy_environment(spec)
@@ -256,53 +239,25 @@ local function child_fail(writer, stage, eno)
 end
 
 local function child_stdio_setup(stdio)
-  local function install(which, target)
-    local mode = stdio[which]
-    if mode == nil or mode == 'inherit' then
-      return true
-    end
-    if which == 'stderr' and mode == 'stdout' then
-      local ok, msg, eno = duplicate(nixio.stdout, nixio.stderr)
-      return ok, msg, eno
-    end
-    local source
-    if mode == 'pipe' then
-      source = stdio[which .. '_child']
-    elseif mode == 'null' then
-      local a, b
-      source, a, b = nixio.open('/dev/null', which == 'stdin' and 'r' or 'w')
-      if not source then
-        return nil, error_message('open /dev/null failed', a, b)
+  return ProcessIO.install_child(stdio, {
+    targets = { stdin = nixio.stdin, stdout = nixio.stdout, stderr = nixio.stderr },
+    stdout = nixio.stdout,
+    same = function(a, b)
+      return a == b
+    end,
+    duplicate = duplicate,
+    open_null = function(which)
+      local obj, a, b = nixio.open('/dev/null', which == 'stdin' and 'r' or 'w')
+      if obj then
+        return obj
       end
-      stdio.opened[#stdio.opened + 1] = source
-    end
-    if source then
-      local ok, msg, eno = duplicate(source, target)
-      if not ok then
-        return nil, msg, eno
-      end
-    end
-    return true
-  end
-
-  for _, item in ipairs({
-    { 'stdin', nixio.stdin },
-    { 'stdout', nixio.stdout },
-    { 'stderr', nixio.stderr },
-  }) do
-    local ok, msg, eno = install(item[1], item[2])
-    if not ok then
-      return nil, msg, eno
-    end
-  end
-
-  for _, obj in ipairs(stdio.all) do
-    close_obj(obj)
-  end
-  for _, obj in ipairs(stdio.opened) do
-    close_obj(obj)
-  end
-  return true
+      return nil, error_message('open /dev/null failed', a, b)
+    end,
+    keep = function()
+      return false
+    end,
+    close = close_obj,
+  })
 end
 
 local function build_exec_args(argv)
@@ -525,27 +480,8 @@ local function read_startup(status_r, spec)
   end
 end
 
-local HostProcess = {}
-HostProcess.__index = HostProcess
-
-function HostProcess:bind_runtime(rt)
-  self.runtime = rt
-  IOAudit.bind(self, rt)
-  if self.status_handle then
-    self.status_handle:bind_runtime(rt)
-  end
-  return self
-end
-
-function HostProcess:pid()
-  return self._pid
-end
-
-function HostProcess:wait_op()
-  if self.reaped then
-    return Op.always(true)
-  end
-  if self.buffer:find('\n', 1, true) then
+local function wait_process(self)
+  if self.reaped or self.buffer:find('\n', 1, true) then
     return Op.always(true)
   end
   if self.status or self.terminal_error then
@@ -566,20 +502,12 @@ local function parse_terminal(self)
     self.buffer = rest
     local code = line:match('^exited (%d+)$')
     if code then
-      code = tonumber(code) or 0
-      self.status = { kind = 'exited', code = code, success = code == 0 }
+      self.status = ProcessCore.exited(code)
       return
     end
     local number = line:match('^signalled (%d+)$')
     if number then
-      number = tonumber(number) or 0
-      self.status = {
-        kind = 'signalled',
-        signal = number,
-        signal_name = signal_names[number],
-        core_dumped = false,
-        success = false,
-      }
+      self.status = ProcessCore.signalled(signals, number)
       return
     end
     local stage, eno_text = line:match('^failed ([%w_]+) (%d+)$')
@@ -609,15 +537,9 @@ local function reap_reaper(self)
     return nil, HostError.would_block('process', 'reap', { pid = self._pid, reaper_pid = self.reaper_pid })
   end
   if got == nil then
-    local raw_msg, eno = NixioError.split(how, value)
-    -- Nixio's non-blocking wait may report "not ready" as nil with errno
-    -- zero.  Treat that like the explicit false/zero form, not as strerror(0).
-    if (eno == nil or eno == 0) and (raw_msg == nil or raw_msg == '') then
-      return nil,
-        HostError.would_block('process', 'reap', {
-          pid = self._pid,
-          reaper_pid = self.reaper_pid,
-        })
+    local no_error, raw_msg, eno = NixioError.no_error(how, value)
+    if no_error then
+      return nil, HostError.would_block('process', 'reap', { pid = self._pid, reaper_pid = self.reaper_pid })
     end
     local msg = NixioError.detail('waitpid reaper failed', raw_msg, eno)
     return nil,
@@ -630,7 +552,7 @@ local function reap_reaper(self)
   return true
 end
 
-function HostProcess:reap()
+local function reap_process(self)
   if self.reaped then
     return self.status
   end
@@ -657,10 +579,9 @@ function HostProcess:reap()
       return nil, HostError.normalise(err, { domain = 'process', action = 'reap', pid = self._pid })
     end
   end
-
-  local reaped, reap_err = reap_reaper(self)
+  local reaped, err = reap_reaper(self)
   if not reaped then
-    return nil, reap_err
+    return nil, err
   end
   if self.status_handle then
     self.status_handle:close('Nixio process reaped')
@@ -673,18 +594,8 @@ function HostProcess:reap()
   return self.status
 end
 
-function HostProcess:signal(value, target)
-  if self.reaped then
-    return nil, HostError.closed('process', 'signal', { pid = self._pid })
-  end
-  local number, signal_err = normalise_signal(value)
-  if not number then
-    return nil, signal_err
-  end
-  local destination = self._pid
-  if target == 'group' then
-    destination = -math.abs(self.group_id or self._pid)
-  end
+local function signal_process(self, number, target)
+  local destination = target == 'group' and -math.abs(self.group_id or self._pid) or self._pid
   local ok, a, b = nixio.kill(destination, number)
   if not ok then
     local msg, eno = error_message('kill failed', a, b)
@@ -698,13 +609,7 @@ function HostProcess:signal(value, target)
   return true
 end
 
-function HostProcess:close(reason)
-  if self.closed then
-    IOAudit.closing(self, reason)
-    IOAudit.closed(self, true, nil, reason)
-    return true
-  end
-  self.closed = true
+local function close_process(self, reason)
   if self.status_handle then
     self.status_handle:close(reason or 'Nixio process closed')
     self.status_handle = nil
@@ -712,10 +617,21 @@ function HostProcess:close(reason)
   if not self.reaper_reaped then
     pcall(nixio.waitpid, self.reaper_pid, 'nohang')
   end
-  IOAudit.closing(self, reason)
-  IOAudit.closed(self, true, nil, reason)
   return true
 end
+
+local HostProcess = ProcessCore.class({
+  signals = signals,
+  bind = function(self, rt)
+    if self.status_handle then
+      self.status_handle:bind_runtime(rt)
+    end
+  end,
+  wait = wait_process,
+  reap = reap_process,
+  signal = signal_process,
+  close = close_process,
+})
 
 local function support_probe()
   local required = {
@@ -786,39 +702,13 @@ function Provider.start_process(host, spec)
   end
 
   local inherited = spec.close_fds == false and {} or Fd.open_objects()
-  local stdio = { all = {}, opened = {} }
-  local parent_fds = {}
-  local function add(obj)
-    stdio.all[#stdio.all + 1] = obj
+  local stdio, parent_fds, stdio_err = ProcessIO.open(spec, function(which)
+    return make_pipe('pipe', { stream = which })
+  end, close_obj)
+  if not stdio then
+    return nil, nil, stdio_err
   end
-  local function make_stdio(which, mode)
-    stdio[which] = mode
-    if mode ~= 'pipe' then
-      return true
-    end
-    local r, w, pipe_err = make_pipe('pipe', { stream = which })
-    if not r then
-      return nil, pipe_err
-    end
-    add(r)
-    add(w)
-    if which == 'stdin' then
-      stdio.stdin_child = r
-      parent_fds.stdin = w
-    else
-      parent_fds[which] = r
-      stdio[which .. '_child'] = w
-    end
-    return true
-  end
-
-  for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
-    local ok, err = make_stdio(which, spec[which] or 'inherit')
-    if not ok then
-      close_many(stdio.all)
-      return nil, nil, err
-    end
-  end
+  stdio.opened = {}
 
   local status_r, status_w, status_err = make_pipe('status_pipe')
   if not status_r then
@@ -854,9 +744,7 @@ function Provider.start_process(host, spec)
     os.exit(127)
   end
 
-  for which, obj in pairs(parent_fds) do
-    close_obj(which == 'stdin' and stdio.stdin_child or stdio[which .. '_child'])
-  end
+  ProcessIO.close_child_ends(stdio, parent_fds, close_obj)
   close_obj(status_w)
 
   local pid, startup_buffer, startup_err = read_startup(status_r, spec)
@@ -882,36 +770,22 @@ function Provider.start_process(host, spec)
   status_handle.capabilities.write = false
   status_handle.capabilities.shutdown_write = false
 
-  local endpoints = {}
-  for which, obj in pairs(parent_fds) do
-    local handle, wrap_err = Fd.new(obj, {
-      host = host,
-      name = (spec.name or ('process-' .. tostring(pid))) .. ':' .. which,
-      nonblocking = true,
-    })
-    if not handle then
-      for _, endpoint in pairs(endpoints) do
-        endpoint:close('process endpoint wrap failed')
-      end
-      for other_which, other_obj in pairs(parent_fds) do
-        if other_which ~= which and not endpoints[other_which] then
-          close_obj(other_obj)
-        end
-      end
+  local endpoints, wrap_err = ProcessIO.wrap({
+    host = host,
+    name = spec.name,
+    pid = pid,
+    parents = parent_fds,
+    wrap = Fd.new,
+    close_raw = close_obj,
+    abort = function()
       status_handle:close('process endpoint wrap failed')
       local group_id = (spec.new_session or spec.process_group == 'new') and pid or nil
       kill_launched(pid, group_id)
       wait_reaper_blocking(reaper_pid)
-      return nil, nil, HostError.normalise(wrap_err, { domain = 'process', action = 'wrap_' .. which })
-    end
-    if which == 'stdin' then
-      handle.capabilities.read = false
-      handle.capabilities.shutdown_read = false
-    else
-      handle.capabilities.write = false
-      handle.capabilities.shutdown_write = false
-    end
-    endpoints[which] = handle
+    end,
+  })
+  if not endpoints then
+    return nil, nil, wrap_err
   end
 
   local process = setmetatable({

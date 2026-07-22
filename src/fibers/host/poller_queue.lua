@@ -83,7 +83,6 @@ function PollerQueue.new(name, opts)
     domain = 'external',
     value = { front = nil, back = nil, count = 0 },
     clone_value = clone_state,
-    apply = function(_value, location) end,
   })
   queue._fibers_external_deliver = deliver
   queue._fibers_external_clear = clear

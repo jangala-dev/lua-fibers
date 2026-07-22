@@ -86,21 +86,18 @@ end
 -- Unsupported hosts return a structured expected error and leak no obligation.
 do
   local reader, writer, err
-  fibers.run(
-    function()
-      reader, writer, err = fibers.perform(file.pipe_op({ name = 'unsupported' }))
-    end,
-    {
-      host = Host.pure({
-        now = function()
-          return 0
-        end,
-        sleep = function()
-          return true
-        end,
-      }),
-    }
-  )
+  fibers.run(function()
+    reader, writer, err = fibers.perform(file.pipe_op({ name = 'unsupported' }))
+  end, {
+    host = Host.pure({
+      now = function()
+        return 0
+      end,
+      sleep = function()
+        return true
+      end,
+    }),
+  })
   assert_eq(reader, nil)
   assert_truthy(HostError.is_unsupported(err, 'pipe'))
 end

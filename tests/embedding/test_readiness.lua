@@ -13,6 +13,7 @@ package.path = table.concat({
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
+local FakeHandle = require('tests.support.fake_handle')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
@@ -132,7 +133,7 @@ end
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('readiness-authority-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'readiness-authority-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -187,7 +188,7 @@ do
   local rt = Runtime.new()
   local region = FibersRegion.new('stale-readiness-region')
   local backend =
-    HostHandle.fake({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
+    FakeHandle.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err, snap
   rt:spawn_raw(function()
     stream = rt:perform(
@@ -223,7 +224,7 @@ end
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('readiness-write-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'readiness-write-backend',
     readiness = 'manual',
     initial_writable = false,
@@ -262,7 +263,7 @@ end
 do
   local rt = Runtime.new()
   local region = FibersRegion.new('bounded-ready-reactor-region')
-  local backend = HostHandle.fake({
+  local backend = FakeHandle.new({
     name = 'bounded-ready-reactor-backend',
     readiness = 'manual',
     initial_writable = false,

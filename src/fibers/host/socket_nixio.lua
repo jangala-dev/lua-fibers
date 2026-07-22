@@ -1,371 +1,222 @@
--- Nixio stream-socket provider.
---
--- Socket creation remains numeric-address only at the Fibers boundary. Nixio's
--- resolver is exposed separately through resolver_nixio.
+-- Nixio native stream-socket operations.
 
 local HostError = require('fibers.host.error')
-local Provider = require('fibers.host.provider')
-
-local function unsupported(reason)
-  local value = Provider.unsupported('fibers.host.socket_nixio', reason, { 'create_listener', 'start_dial' })
-  value.supports_ipv4 = function()
-    return false
-  end
-  value.supports_ipv6 = function()
-    return false
-  end
-  value.supports_unix = function()
-    return false
-  end
-  return value
-end
-
+local SocketCore = require('fibers.host.socket_core')
 local ok_nixio, nixio = pcall(require, 'nixio')
 if not ok_nixio or type(nixio) ~= 'table' then
-  return unsupported('requires nixio')
+  return SocketCore.define({
+    prefix = 'fibers.host.socket_nixio',
+    unavailable = 'nixio module not available',
+  })
 end
+
 local Fd = require('fibers.host.fd_nixio')
 local NixioError = require('fibers.host.nixio_error')
-local Socket = {}
-local const = nixio.const or {}
+local EAGAIN = nixio.const and (nixio.const.EAGAIN or nixio.const.EWOULDBLOCK) or 11
+local EWOULDBLOCK = nixio.const and (nixio.const.EWOULDBLOCK or nixio.const.EAGAIN) or EAGAIN
+local EINTR = nixio.const and nixio.const.EINTR or 4
+local pending = {
+  [nixio.const and nixio.const.EINPROGRESS or 115] = true,
+  [nixio.const and nixio.const.EALREADY or 114] = true,
+  [EAGAIN] = true,
+  [EWOULDBLOCK] = true,
+}
+local connected = { [nixio.const and nixio.const.EISCONN or 106] = true }
+local support_cache = {}
 
-local EAGAIN = const.EAGAIN or const.EWOULDBLOCK or 11
-local EWOULDBLOCK = const.EWOULDBLOCK or EAGAIN
-local EINTR = const.EINTR or 4
-local EINPROGRESS = const.EINPROGRESS or 115
-local EALREADY = const.EALREADY or 114
-local EISCONN = const.EISCONN or 106
-
+local function split(a, b)
+  return NixioError.split(a, b)
+end
 local function system_error(action, a, b, fields)
-  return NixioError.system('socket', action, a, b, fields)
+  local message, number = split(a, b)
+  return NixioError.system('socket', action, message, number, fields)
 end
-
-local norm_error = NixioError.split
-
-local function would_block(action, fields)
-  return HostError.would_block('socket', action, fields)
-end
-local function kind(address)
-  return address and (address.kind or address.family)
-end
-
-local function nixio_address(address)
-  local family = kind(address)
-  if family == 'inet4' then
-    return 'inet', address.host, tonumber(address.port)
+local function encode(address)
+  local kind = address and (address.kind or address.family)
+  if kind == 'inet4' then
+    return { family = 'inet', host = address.host, port = address.port }
   end
-  if family == 'inet6' then
-    if (tonumber(address.flowinfo) or 0) ~= 0 or (tonumber(address.scope_id) or 0) ~= 0 then
-      return nil, nil, nil, HostError.unsupported('socket', 'ipv6_scope', { address = address })
+  if kind == 'inet6' then
+    if (tonumber(address.scope_id) or 0) ~= 0 or (tonumber(address.flowinfo) or 0) ~= 0 then
+      return nil, HostError.unsupported('socket', 'ipv6_scope_or_flowinfo', { address = address })
     end
-    return 'inet6', address.host, tonumber(address.port)
+    return { family = 'inet6', host = address.host, port = address.port }
+  end
+  if kind == 'unix' then
+    return { family = 'unix', host = address.path }
+  end
+  return nil, HostError.invalid_argument('socket', 'address', { address = address })
+end
+local function decode(value, family, port)
+  if type(value) == 'table' then
+    family, port, value = value.family or family, value.port or port, value.addr or value.host or value.path
   end
   if family == 'unix' then
-    return 'unix', address.path, 0
-  end
-  return nil, nil, nil, HostError.invalid_argument('socket', 'address', { address = address })
-end
-
-local function address_from(family, host, port)
-  if family == 'inet' or family == 'inet4' then
-    return { kind = 'inet4', family = 'inet4', host = host, port = tonumber(port) or 0 }
+    return { kind = 'unix', family = 'unix', path = value }
   end
   if family == 'inet6' then
     return {
       kind = 'inet6',
       family = 'inet6',
-      host = host,
+      host = value,
       port = tonumber(port) or 0,
       flowinfo = 0,
       scope_id = 0,
     }
   end
-  if family == 'unix' then
-    return { kind = 'unix', family = 'unix', path = host }
-  end
-  return nil
+  return { kind = 'inet4', family = 'inet4', host = value, port = tonumber(port) or 0 }
 end
-
-local function query_address(obj, peer, family)
-  local fn = peer and obj.getpeername or obj.getsockname
-  if type(fn) ~= 'function' then
-    return nil
+local function query(obj, peer, family)
+  local a, b
+  if peer then
+    a, b = obj:getpeername()
+  else
+    a, b = obj:getsockname()
   end
-  local ok, host, port = pcall(fn, obj)
-  if not ok or host == nil then
-    return nil
-  end
-  return address_from(family, host, port)
+  return a and decode(a, family, b) or nil
 end
-
 local function set_option(obj, level, option, value, action, fields)
   if type(obj.setopt) ~= 'function' then
     return nil, HostError.unsupported('socket', action, fields)
   end
-  value = NixioError.option(value)
-  local ok, a, b = obj:setopt(level, option, value)
+  local ok, a, b = obj:setopt(level, option, NixioError.option(value))
   if ok == nil or ok == false then
     return nil, system_error(action, a, b, fields)
   end
   return true
 end
-
-local function wrap_socket(obj, host, name, family)
-  local handle, err = Fd.new(obj, { host = host, name = name, nonblocking = true })
-  if not handle then
-    return nil, HostError.normalise(err, { domain = 'socket', action = 'wrap' })
-  end
-  handle.family = 'nixio-socket'
-  handle.socket_family = family
-  handle.local_address = function(self)
-    return query_address(self.obj, false, family)
-  end
-  handle.peer_address_value = function(self)
-    return query_address(self.obj, true, family)
-  end
-  return handle
-end
-
-local function prime_connected(handle)
-  -- The original Nixio backend always attempted a non-blocking read/write
-  -- before waiting.  The v1 reactor is readiness-first, so seed one harmless
-  -- hint in each direction when a stream socket becomes connected.  The host
-  -- call remains authoritative: a read with no bytes simply reports
-  -- would_block and arms poll normally.
-  handle:mark_readable()
-  handle:mark_writable()
-  return handle
-end
-
-local function probe_family(family)
-  if type(nixio.socket) ~= 'function' or not Fd.is_supported() then
-    return false
-  end
-  local ok, obj = pcall(nixio.socket, family, 'stream')
-  if not ok or not obj then
-    return false
-  end
-  local supported = type(obj.bind) == 'function'
-    and type(obj.listen) == 'function'
-    and type(obj.accept) == 'function'
-    and type(obj.connect) == 'function'
-    and type(obj.getopt) == 'function'
-    and type(obj.getsockname) == 'function'
-    and type(obj.getpeername) == 'function'
-  pcall(function()
-    obj:close()
-  end)
-  return supported
-end
-
-local support_cache = {}
 local function supports(family)
   if support_cache[family] == nil then
-    support_cache[family] = probe_family(family)
+    local ok, obj = pcall(nixio.socket, family, 'stream')
+    support_cache[family] = ok
+        and obj
+        and type(obj.bind) == 'function'
+        and type(obj.listen) == 'function'
+        and type(obj.accept) == 'function'
+        and type(obj.connect) == 'function'
+        and Fd.is_supported()
+      or false
+    if obj then
+      pcall(obj.close, obj)
+    end
   end
   return support_cache[family]
 end
-
-function Socket.supports_ipv4()
-  return supports('inet')
-end
-function Socket.supports_ipv6()
-  return supports('inet6')
-end
-function Socket.supports_unix()
-  return supports('unix')
-end
-function Socket.is_supported()
-  return Socket.supports_ipv4() or Socket.supports_ipv6() or Socket.supports_unix()
-end
-function Socket.support_reason()
-  return Socket.is_supported() and nil or 'required Nixio stream socket functions unavailable'
+local function prime(handle)
+  handle:mark_readable()
+  handle:mark_writable()
 end
 
-function Socket.create_listener(host, address, opts)
-  opts = opts or {}
-  local family, bind_host, bind_port, address_err = nixio_address(address)
-  if not family then
-    return nil, address_err
-  end
-  if not supports(family) then
-    return nil, HostError.unsupported('socket', 'listen', { address = address })
-  end
-  local obj, a, b = nixio.socket(family, 'stream')
-  if not obj then
-    return nil, system_error('socket', a, b, { address = address })
-  end
-  local handle, wrap_err = wrap_socket(obj, host, opts.name or 'nixio-listener', family)
-  if not handle then
-    return nil, wrap_err
-  end
-
-  if family ~= 'unix' and opts.reuse_address ~= false then
-    local ok, option_err =
-      set_option(obj, 'socket', 'reuseaddr', true, 'setsockopt_reuseaddr', { address = address })
-    if not ok then
-      handle:close(option_err)
-      return nil, option_err
+return SocketCore.define({
+  prefix = 'fibers.host.socket_nixio',
+  name = 'nixio',
+  handle_family = 'nixio-socket',
+  raw = function(handle)
+    return handle.obj
+  end,
+  support_reason = 'required Nixio stream socket functions unavailable',
+  supports = function(kind)
+    return supports(({ inet4 = 'inet', inet6 = 'inet6', unix = 'unix' })[kind] or kind)
+  end,
+  encode = encode,
+  is_unix = function(family)
+    return family == 'unix'
+  end,
+  unlink = function(path)
+    if path then
+      os.remove(path)
     end
-  end
-  if family == 'unix' and opts.unlink_existing == true then
-    os.remove(address.path)
-  end
-  local ok, bind_a, bind_b = obj:bind(bind_host, bind_port)
-  if ok == nil or ok == false then
-    local failure = system_error('bind', bind_a, bind_b, { address = address })
-    handle:close(failure)
-    return nil, failure
-  end
-  ok, bind_a, bind_b = obj:listen(tonumber(opts.backlog) or 128)
-  if ok == nil or ok == false then
-    local failure = system_error('listen', bind_a, bind_b, { address = address })
-    handle:close(failure)
-    return nil, failure
-  end
-
-  local raw_close = handle._close
-  local unix_path = family == 'unix' and address.path or nil
-  handle._close = function(self, reason)
-    local closed, close_err, detail = raw_close(self, reason)
-    if unix_path and opts.unlink_on_close ~= false then
-      os.remove(unix_path)
+  end,
+  open = function(family)
+    local obj, a, b = nixio.socket(family, 'stream')
+    if not obj then
+      return nil, system_error('socket', a, b)
     end
-    return closed, close_err, detail
-  end
-  handle.address = query_address(obj, false, family) or address
-  handle.local_address = function(self)
-    return self.address
-  end
-  handle.accept = function(self)
-    self:clear_readable()
+    return obj
+  end,
+  close_raw = function(obj)
+    if obj then
+      pcall(obj.close, obj)
+    end
+  end,
+  wrap = function(obj, host, name)
+    return Fd.new(obj, { host = host, name = name, nonblocking = true })
+  end,
+  query = query,
+  decode_peer = function(value, family)
+    if type(value) == 'table' then
+      return decode(value, family)
+    end
+    -- Unbound Unix-domain clients are anonymous.  Nixio returns no peer
+    -- payload for them, but the accepted stream still has a Unix peer address
+    -- identity.  Preserve the pre-core representation instead of returning nil.
+    if family == 'unix' then
+      return decode(value, family)
+    end
+    return value and decode(value, family) or nil
+  end,
+  set_reuse = function(obj, value, address)
+    return set_option(obj, 'socket', 'reuseaddr', value, 'setsockopt_reuseaddr', { address = address })
+  end,
+  set_nodelay = function(obj, value, address)
+    return set_option(obj, 'tcp', 'nodelay', value, 'setsockopt_nodelay', { address = address })
+  end,
+  bind = function(obj, endpoint, address)
+    local ok, a, b = obj:bind(endpoint.host, endpoint.port)
+    if ok == nil or ok == false then
+      return nil, system_error('bind', a, b, { address = address })
+    end
+    return true
+  end,
+  listen = function(obj, backlog, address)
+    local ok, a, b = obj:listen(backlog)
+    if ok == nil or ok == false then
+      return nil, system_error('listen', a, b, { address = address })
+    end
+    return true
+  end,
+  accept = function(obj, address)
     while true do
-      local child_obj, peer_or_err, port_or_eno = self.obj:accept()
-      if child_obj then
-        local child, child_err =
-          wrap_socket(child_obj, host, (opts.name or 'listener') .. ':accepted', family)
-        if not child then
-          return nil, nil, child_err
-        end
-        if family ~= 'unix' and opts.nodelay ~= false then
-          local set, nodelay_err = set_option(child_obj, 'tcp', 'nodelay', true, 'setsockopt_nodelay', {
-            address = self.address,
-          })
-          if not set then
-            child:close(nodelay_err)
-            return nil, nil, nodelay_err
-          end
-        end
-        local peer = address_from(family, peer_or_err, port_or_eno) or query_address(child_obj, true, family)
-        child.peer_address = peer
-        child.local_address_value = query_address(child_obj, false, family)
-        prime_connected(child)
-        return child, peer
+      local child, a, b = obj:accept()
+      if child then
+        return child, a and { host = a, port = b } or nil
       end
-      local msg, eno = norm_error(peer_or_err, port_or_eno)
+      local message, eno = split(a, b)
       if eno == EINTR then
-        -- retry
       elseif eno == EAGAIN or eno == EWOULDBLOCK then
-        return nil, nil, would_block('accept', { address = self.address })
+        return nil, nil, HostError.would_block('socket', 'accept', { address = address })
       else
-        return nil, nil, system_error('accept', msg, eno, { address = self.address })
+        return nil, nil, system_error('accept', message, eno, { address = address })
       end
     end
-  end
-  return handle
-end
-
-function Socket.start_dial(host, address, opts)
-  opts = opts or {}
-  local family, peer_host, peer_port, address_err = nixio_address(address)
-  if not family then
-    return nil, address_err
-  end
-  if not supports(family) then
-    return nil, HostError.unsupported('socket', 'dial', { address = address })
-  end
-  local obj, a, b = nixio.socket(family, 'stream')
-  if not obj then
-    return nil, system_error('socket', a, b, { address = address })
-  end
-  local handle, wrap_err = wrap_socket(obj, host, opts.name or 'nixio-dial', family)
-  if not handle then
-    return nil, wrap_err
-  end
-
-  if opts.local_address then
-    local local_family, local_host, local_port, local_err = nixio_address(opts.local_address)
-    if not local_family then
-      handle:close(local_err)
-      return nil, local_err
+  end,
+  connect = function(obj, endpoint, address)
+    local ok, a, b = obj:connect(endpoint.host, endpoint.port)
+    if ok then
+      return 'connected'
     end
-    if local_family ~= family then
-      local failure = HostError.invalid_argument('socket', 'bind', {
-        address = opts.local_address,
-        message = 'local and peer address families differ',
-      })
-      handle:close(failure)
-      return nil, failure
+    local message, eno = split(a, b)
+    if connected[eno] then
+      return 'connected'
     end
-    local bound, bind_a, bind_b = obj:bind(local_host, local_port)
-    if bound == nil or bound == false then
-      local failure = system_error('bind', bind_a, bind_b, { address = opts.local_address })
-      handle:close(failure)
-      return nil, failure
+    if pending[eno] then
+      return 'pending'
     end
-  end
-  if family ~= 'unix' and opts.nodelay ~= false then
-    local ok, option_err =
-      set_option(obj, 'tcp', 'nodelay', true, 'setsockopt_nodelay', { address = address })
-    if not ok then
-      handle:close(option_err)
-      return nil, option_err
-    end
-  end
-
-  handle.target_address = address
-  handle._connect_complete = false
-  handle._connect_pending = false
-  local connected, connect_a, connect_b = obj:connect(peer_host, peer_port)
-  if connected then
-    handle._connect_complete = true
-    prime_connected(handle)
-  else
-    local msg, eno = norm_error(connect_a, connect_b)
-    if eno == EINPROGRESS or eno == EALREADY or eno == EAGAIN or eno == EWOULDBLOCK then
-      handle._connect_pending = true
-    elseif eno == EISCONN then
-      handle._connect_complete = true
-      prime_connected(handle)
-    else
-      local failure = system_error('connect', msg, eno, { address = address })
-      handle:close(failure)
-      return nil, failure
-    end
-  end
-
-  handle.finish_connect = function(self)
-    if self._connect_complete then
-      return self, query_address(self.obj, true, family) or address
-    end
-    self:clear_writable()
-    local value, get_a, get_b = self.obj:getopt('socket', 'error')
+    return nil, system_error('connect', message, eno, { address = address })
+  end,
+  finish_connect = function(obj, _endpoint, address)
+    local value, a, b = obj:getopt('socket', 'error')
     if value == nil then
-      return nil, nil, system_error('connect_finish', get_a, get_b, { address = address })
+      return nil, system_error('connect_finish', a, b, { address = address })
     end
-    local e = tonumber(value) or 0
-    if e == 0 or e == EISCONN then
-      self._connect_complete = true
-      self._connect_pending = false
-      prime_connected(self)
-      return self, query_address(self.obj, true, family) or address
+    local code = tonumber(value) or 0
+    if code == 0 or connected[code] then
+      return 'connected'
     end
-    if e == EINPROGRESS or e == EALREADY or e == EAGAIN or e == EWOULDBLOCK then
-      return nil, nil, would_block('connect_finish', { address = address })
+    if pending[code] then
+      return 'pending', HostError.would_block('socket', 'connect_finish', { address = address })
     end
-    return nil, nil, system_error('connect_finish', nil, e, { address = address })
-  end
-  return handle
-end
-
-return Socket
+    return nil, system_error('connect_finish', nil, code, { address = address })
+  end,
+  prime = prime,
+})

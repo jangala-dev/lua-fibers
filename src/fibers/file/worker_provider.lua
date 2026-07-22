@@ -116,7 +116,14 @@ function Provider:open(path, mode, opts)
     return nil, greet_err
   end
   return setmetatable(
-    { provider = self, process = proc, input = proc:stdin(), output = proc:stdout(), path = path, closed = false },
+    {
+      provider = self,
+      process = proc,
+      input = proc:stdin(),
+      output = proc:stdout(),
+      path = path,
+      closed = false,
+    },
     Backend
   )
 end

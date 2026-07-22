@@ -6,7 +6,6 @@
 -- those waits may have changed.
 
 local Host = {}
-local Provider = require('fibers.host.provider')
 
 local function is_finite_number(x)
   return type(x) == 'number' and x == x and x ~= math.huge and x ~= -math.huge
@@ -40,34 +39,22 @@ function Host.has_non_time_waits(waits)
   return false
 end
 
+local function external_waits(waits, kind, owner)
+  local out = {}
+  for i = 1, #(waits or {}) do
+    local wait = waits[i]
+    if wait and wait.kind == 'external' and wait.external_kind == kind and wait[owner] and wait.feed then
+      out[#out + 1] = wait
+    end
+  end
+  return out
+end
+
 function Host.readiness_waits(waits)
-  local out = {}
-  for i = 1, #(waits or {}) do
-    local w = waits[i]
-    if w and w.kind == 'external' and w.external_kind == 'readiness' and w.resource and w.feed then
-      out[#out + 1] = w
-    end
-  end
-  return out
+  return external_waits(waits, 'readiness', 'resource')
 end
-
-function Host.has_readiness_waits(waits)
-  return #Host.readiness_waits(waits) > 0
-end
-
 function Host.poller_waits(waits)
-  local out = {}
-  for i = 1, #(waits or {}) do
-    local w = waits[i]
-    if w and w.kind == 'external' and w.external_kind == 'poller' and w.poller and w.feed then
-      out[#out + 1] = w
-    end
-  end
-  return out
-end
-
-function Host.has_poller_waits(waits)
-  return #Host.poller_waits(waits) > 0
+  return external_waits(waits, 'poller', 'poller')
 end
 
 function Host.deliver_poller_ready(rt, wait, registration)
@@ -87,38 +74,6 @@ function Host.normalise_readiness_mode(mode)
     error('readiness mode must be read or write', 2)
   end
   return mode
-end
-
-function Host.deliver_readiness(rt, wait)
-  if
-    not (
-      wait
-      and wait.kind == 'external'
-      and wait.external_kind == 'readiness'
-      and wait.resource
-      and wait.feed
-    )
-  then
-    return false
-  end
-  rt:deliver(wait.feed, Host.normalise_readiness_mode(wait.mode), true)
-  return true
-end
-
-function Host.deliver_ready(rt, waits, is_ready)
-  local n = 0
-  for i = 1, #(waits or {}) do
-    local w = waits[i]
-    if w and w.kind == 'external' and w.external_kind == 'readiness' and w.resource and w.feed then
-      local mode = Host.normalise_readiness_mode(w.mode)
-      local key = w.readiness_key
-      if is_ready == nil or is_ready(key, mode, w) then
-        rt:deliver(w.feed, mode, true)
-        n = n + 1
-      end
-    end
-  end
-  return n
 end
 
 function Host.delay_until(rt, deadline)
@@ -151,50 +106,63 @@ function Host.block(host, rt, waits, status, opts)
   return nil, 'host-does-not-block'
 end
 
-function Host.pure(opts)
-  return require('fibers.host.pure').new(opts)
-end
-
-function Host.manual(opts)
-  return require('fibers.host.manual').new(opts)
-end
-
-function Host.luajit_linux(opts)
-  return require('fibers.host.luajit_linux').new(opts)
-end
-
-function Host.nixio(opts)
-  return require('fibers.host.nixio').new(opts)
-end
-
-function Host.luaposix(opts)
-  return require('fibers.host.luaposix').new(opts)
-end
-
-function Host.cffi_linux(opts)
-  return require('fibers.host.cffi_linux').new(opts)
-end
-
-local providers = Provider.registry('host', {
+local FAMILY_MODULES = {
   pure = 'fibers.host.pure',
   manual = 'fibers.host.manual',
   luajit_linux = 'fibers.host.luajit_linux',
   cffi_linux = 'fibers.host.cffi_linux',
   luaposix = 'fibers.host.luaposix',
   nixio = 'fibers.host.nixio',
-})
+}
+local DEFAULT_ORDER = { 'luajit_linux', 'cffi_linux', 'luaposix', 'nixio', 'pure' }
+
+for name, module_name in pairs(FAMILY_MODULES) do
+  local selected_name, selected_module = name, module_name
+  Host[selected_name] = function(opts)
+    return require(selected_module).new(opts)
+  end
+end
+
+local function family(name)
+  local module = FAMILY_MODULES[name]
+  if not module then
+    error('unknown host family ' .. tostring(name), 3)
+  end
+  return require(module)
+end
 
 function Host.select(name, opts)
-  return providers:new(name, opts)
+  return family(name).new(opts)
 end
 
 function Host.available()
-  return providers:available()
+  local out = {}
+  for name, module_name in pairs(FAMILY_MODULES) do
+    local ok, module = pcall(require, module_name)
+    local supported, reason = false, ok and nil or module
+    if ok and module then
+      if type(module.is_supported) == 'function' then
+        supported, reason = module.is_supported()
+      else
+        supported = true
+      end
+    end
+    out[#out + 1] = { name = name, module = module_name, supported = not not supported, reason = reason }
+  end
+  table.sort(out, function(a, b)
+    return a.name < b.name
+  end)
+  return out
 end
 
 function Host.default(opts)
-  return providers:first({ 'luajit_linux', 'cffi_linux', 'luaposix', 'nixio', 'pure' }, opts)
-    or require('fibers.host.pure').new(opts)
+  for i = 1, #DEFAULT_ORDER do
+    local ok, module = pcall(family, DEFAULT_ORDER[i])
+    if ok and module and (type(module.is_supported) ~= 'function' or module.is_supported()) then
+      return module.new(opts)
+    end
+  end
+  return require('fibers.host.pure').new(opts)
 end
 
 Host.Error = require('fibers.host.error')

@@ -13,6 +13,7 @@ package.path = table.concat({
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
+local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersStream = require('fibers.stream')
@@ -100,7 +101,7 @@ do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local region = Region.new('handle-read-region')
-  local handle = Handle.fake({ host = host, key = 'fake-read-handle' })
+  local handle = FakeHandle.new({ host = host, key = 'fake-read-handle' })
   local stream, got
 
   rt:spawn_raw(function()
@@ -126,7 +127,7 @@ do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local region = Region.new('handle-write-region')
-  local handle = Handle.fake({ host = host, key = 'fake-write-handle', write_blocked = true })
+  local handle = FakeHandle.new({ host = host, key = 'fake-write-handle', write_blocked = true })
   local stream, flushed
 
   rt:spawn_raw(function()
@@ -154,17 +155,5 @@ do
   assert_eq(handle:written(), 'hello')
 end
 
--- The fd module is a registry/selector; concrete fd options are exposed
--- through selected host families or explicit fd backend selection.
-do
-  local ok, Fd = pcall(require, 'fibers.host.fd')
-  assert_truthy(ok, 'fibers.host.fd should be require-able')
-  assert_truthy(type(Fd.select) == 'function', 'fd registry should expose select')
-  assert_truthy(type(Fd.available) == 'function', 'fd registry should expose available')
-  local ok_sel, backend = pcall(function()
-    return Fd.select('luajit')
-  end)
-  assert_truthy(ok_sel and backend, 'fd registry should select luajit backend')
-end
-
+-- Native descriptor implementations are private to their selected host family.
 print('tests/test_host_handle.lua: ok')

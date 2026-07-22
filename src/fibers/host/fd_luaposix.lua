@@ -1,23 +1,16 @@
--- luaposix fd HostHandle implementation.
---
--- Optional.  Provides wrap(fd) and pipe() over numeric POSIX file descriptors.
+-- Numeric descriptor family for luaposix.
 
-local Handle = require('fibers.host.handle')
 local Errors = require('fibers.flow.errors')
+local Family = require('fibers.host.family')
+local FdClass = require('fibers.host.fd_class')
 local HostError = require('fibers.host.error')
-local Provider = require('fibers.host.provider')
-
-local function unsupported(reason)
-  return Provider.unsupported('fibers.host.fd_luaposix', reason, { 'new', 'wrap', 'pipe' })
-end
+local BitOps = require('fibers.internal.bitops')
 
 local ok_unistd, unistd = pcall(require, 'posix.unistd')
 local ok_fcntl, fcntl = pcall(require, 'posix.fcntl')
 local ok_errno, errno = pcall(require, 'posix.errno')
-local ok_socket, socket_mod = pcall(require, 'posix.sys.socket')
-local BitOps = require('fibers.internal.bitops')
+local ok_socket, socket = pcall(require, 'posix.sys.socket')
 local bit, bit_error = BitOps.resolve()
-
 if
   not ok_unistd
   or type(unistd) ~= 'table'
@@ -26,106 +19,87 @@ if
   or not ok_errno
   or type(errno) ~= 'table'
 then
-  return unsupported('luaposix unistd/fcntl/errno not available')
+  return Family.unsupported('fibers.host.fd_luaposix', 'luaposix unistd/fcntl/errno not available')
 end
 if not bit then
-  return unsupported(bit_error)
+  return Family.unsupported('fibers.host.fd_luaposix', bit_error)
 end
 
 local PosixError = require('fibers.host.luaposix_error')
-
-local Fd = {}
-Fd.__index = Fd
-local next_generation = 0
-
 local EAGAIN = errno.EAGAIN
 local EWOULDBLOCK = errno.EWOULDBLOCK or EAGAIN
 
-local function set_nonblocking_fd(fd, value)
-  local flags, err, eno = fcntl.fcntl(fd, fcntl.F_GETFL)
+local function set_flag(fd, get, set, flag, value, label)
+  local flags, err, eno = fcntl.fcntl(fd, get)
   if flags == nil then
-    return nil, PosixError.message('fcntl(F_GETFL)', err, eno), eno
+    return nil, PosixError.message(label .. '(get)', err, eno), eno
   end
-  local on = fcntl.O_NONBLOCK or 0
-  local new_flags = value ~= false and bit.bor(flags, on) or bit.band(flags, bit.bnot(on))
-  local ok, err2, eno2 = fcntl.fcntl(fd, fcntl.F_SETFL, new_flags)
+  local next_flags = value ~= false and bit.bor(flags, flag) or bit.band(flags, bit.bnot(flag))
+  local ok, err2, eno2 = fcntl.fcntl(fd, set, next_flags)
   if ok == nil then
-    return nil, PosixError.message('fcntl(F_SETFL)', err2, eno2), eno2
+    return nil, PosixError.message(label .. '(set)', err2, eno2), eno2
   end
   return true
 end
 
-local function set_cloexec_fd(fd, value)
+local function set_nonblocking(fd, value)
+  return set_flag(fd, fcntl.F_GETFL, fcntl.F_SETFL, fcntl.O_NONBLOCK or 0, value, 'fcntl nonblocking')
+end
+
+local function set_cloexec(fd, value)
   if fcntl.F_GETFD == nil or fcntl.F_SETFD == nil or fcntl.FD_CLOEXEC == nil then
     return true
   end
-  local flags, err, eno = fcntl.fcntl(fd, fcntl.F_GETFD)
-  if flags == nil then
-    return nil, PosixError.message('fcntl(F_GETFD)', err, eno), eno
-  end
-  local new_flags = value ~= false and bit.bor(flags, fcntl.FD_CLOEXEC)
-    or bit.band(flags, bit.bnot(fcntl.FD_CLOEXEC))
-  local ok, err2, eno2 = fcntl.fcntl(fd, fcntl.F_SETFD, new_flags)
-  if ok == nil then
-    return nil, PosixError.message('fcntl(F_SETFD)', err2, eno2), eno2
-  end
-  return true
+  return set_flag(fd, fcntl.F_GETFD, fcntl.F_SETFD, fcntl.FD_CLOEXEC, value, 'fcntl cloexec')
 end
 
-local function fd_read(self, max)
+local operations = {}
+function operations.read(self, max)
   max = tonumber(max) or 4096
   if max <= 0 then
     return ''
   end
-  local s, err, eno = unistd.read(self.fd, max)
-  if s == nil then
+  local bytes, err, eno = unistd.read(self.fd, max)
+  if bytes == nil then
     if eno == EAGAIN or eno == EWOULDBLOCK then
       return nil, 'would_block', eno
     end
     return nil, PosixError.message('read failed', err, eno), eno
   end
-  if s == '' then
+  if bytes == '' then
     return nil, Errors.EOF
   end
-  return s
+  return bytes
 end
-
-local function fd_write(self, bytes)
+function operations.write(self, bytes)
   if type(bytes) ~= 'string' then
     error('fd write expects bytes', 2)
   end
-  if #bytes == 0 then
+  if bytes == '' then
     return 0
   end
-  local n, err, eno = unistd.write(self.fd, bytes)
-  if n == nil then
+  local count, err, eno = unistd.write(self.fd, bytes)
+  if count == nil then
     if eno == EAGAIN or eno == EWOULDBLOCK then
       return nil, 'would_block', eno
     end
     return nil, PosixError.message('write failed', err, eno), eno
   end
-  return n
+  return count
 end
-
-local function fd_shutdown_read(self, _reason)
-  if ok_socket and type(socket_mod) == 'table' and type(socket_mod.shutdown) == 'function' then
-    pcall(function()
-      socket_mod.shutdown(self.fd, socket_mod.SHUT_RD or 0)
-    end)
+function operations.shutdown_read(self)
+  if ok_socket and type(socket.shutdown) == 'function' then
+    pcall(socket.shutdown, self.fd, socket.SHUT_RD or 0)
   end
   return true
 end
-
-local function fd_shutdown_write(self, _reason)
-  if ok_socket and type(socket_mod) == 'table' and type(socket_mod.shutdown) == 'function' then
-    pcall(function()
-      socket_mod.shutdown(self.fd, socket_mod.SHUT_WR or 1)
-    end)
+function operations.shutdown_write(self)
+  if ok_socket and type(socket.shutdown) == 'function' then
+    pcall(socket.shutdown, self.fd, socket.SHUT_WR or 1)
   end
   return true
 end
-
-local function fd_close(self, _reason)
+function operations.close(self)
   if self._closed then
     return true
   end
@@ -136,105 +110,57 @@ local function fd_close(self, _reason)
   end
   return true
 end
-
-function Fd.is_supported()
-  return type(unistd.read) == 'function'
-    and type(unistd.write) == 'function'
-    and type(unistd.close) == 'function'
-    and type(unistd.pipe) == 'function'
+function operations.set_nonblocking(self, value)
+  return set_nonblocking(self.fd, value)
 end
 
-function Fd.support_reason()
-  if Fd.is_supported() then
-    return nil
-  end
-  return 'required luaposix fd functions unavailable'
-end
-
-function Fd.new(fd, opts)
-  opts = opts or {}
-  fd = assert(tonumber(fd), 'fd must be numeric')
-  next_generation = next_generation + 1
-  local key = opts.key or { family = 'numeric-fd', fd = fd, generation = next_generation }
-  local h = Handle.new({
-    name = opts.name or ('posix-fd-' .. tostring(fd)),
-    key = key,
-    handle = fd,
-    host = opts.host,
-    read = function(self, max)
-      return fd_read(self, max)
-    end,
-    write = function(self, bytes)
-      return fd_write(self, bytes)
-    end,
-    shutdown_read = function(self, reason)
-      return fd_shutdown_read(self, reason)
-    end,
-    shutdown_write = function(self, reason)
-      return fd_shutdown_write(self, reason)
-    end,
-    close = function(self, reason)
-      return fd_close(self, reason)
-    end,
-    set_nonblocking = function(_self, value)
-      return set_nonblocking_fd(fd, value ~= false)
-    end,
-  })
-  h.family = 'numeric-fd'
-  h.fd = fd
-  h.raw_fd = fd
-  h.generation = next_generation
-  if opts.cloexec ~= false then
-    local ok, err = set_cloexec_fd(fd, true)
-    if not ok then
-      h:close('set_cloexec failed')
-      return nil, err
+return FdClass.define({
+  family = 'numeric-fd',
+  operations = operations,
+  is_supported = function()
+    return type(unistd.read) == 'function'
+      and type(unistd.write) == 'function'
+      and type(unistd.close) == 'function'
+      and type(unistd.pipe) == 'function'
+  end,
+  support_reason = function()
+    return 'required luaposix fd functions unavailable'
+  end,
+  validate = function(fd)
+    return assert(tonumber(fd), 'fd must be numeric')
+  end,
+  describe = function(fd, generation)
+    return {
+      name = 'posix-fd-' .. tostring(fd),
+      key = { family = 'numeric-fd', fd = fd, generation = generation },
+    }
+  end,
+  decorate = function(handle, fd)
+    handle.fd, handle.raw_fd = fd, fd
+  end,
+  configure = function(handle, opts)
+    if opts.cloexec ~= false then
+      local ok, err, extra = set_cloexec(handle.fd, true)
+      if not ok then
+        return nil, err, extra
+      end
     end
-  end
-  if opts.nonblocking ~= false then
-    local ok, err = h:set_nonblocking(true)
-    if not ok then
-      h:close('set_nonblocking failed')
-      return nil, err
+    if opts.nonblocking ~= false then
+      return handle:set_nonblocking(true)
     end
-  end
-  return h
-end
-
-function Fd.pipe(opts)
-  opts = opts or {}
-  local rd, wr, err, eno = unistd.pipe()
-  if not rd then
-    return nil,
-      nil,
-      HostError.system('pipe', 'create', PosixError.message('pipe failed', err, eno), nil, eno),
-      eno
-  end
-  local r, rerr = Fd.new(rd, {
-    host = opts.host,
-    name = opts.name and (opts.name .. ':read') or nil,
-    nonblocking = opts.nonblocking,
-  })
-  if not r then
-    pcall(function()
-      unistd.close(wr)
-    end)
-    return nil, nil, rerr
-  end
-  local w, werr = Fd.new(wr, {
-    host = opts.host,
-    name = opts.name and (opts.name .. ':write') or nil,
-    nonblocking = opts.nonblocking,
-  })
-  if not w then
-    r:close('paired pipe wrap failed')
-    return nil, nil, werr
-  end
-  r.capabilities.write = false
-  r.capabilities.shutdown_write = false
-  w.capabilities.read = false
-  w.capabilities.shutdown_read = false
-  return r, w
-end
-
-return Fd
+    return true
+  end,
+  pipe = function()
+    local read_fd, write_fd, err, eno = unistd.pipe()
+    if not read_fd then
+      return nil,
+        nil,
+        HostError.system('pipe', 'create', PosixError.message('pipe failed', err, eno), nil, eno),
+        eno
+    end
+    return read_fd, write_fd
+  end,
+  close_raw = function(fd)
+    pcall(unistd.close, fd)
+  end,
+})
