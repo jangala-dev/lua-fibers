@@ -12,6 +12,10 @@ Counter.__index = function(self, key)
   return Counter[key]
 end
 local Kind = Facility.kind('counter')
+local STATE_RESULT = Facility.result.project(function(value, program)
+  local owner = program.resource
+  return { value = value, min = owner.min, max = owner.max, version = program.location.version }
+end)
 
 local function opt_number(opts, a, b)
   if type(opts) == 'number' then
@@ -48,7 +52,7 @@ function Counter.new(opts, name)
   })
   counter._state_op = Facility.static(counter, Kind, 'read', {
     location = counter._location,
-    result = Facility.result.counter_state,
+    result = STATE_RESULT,
   })
   return counter
 end

@@ -76,5 +76,29 @@ function Keyspace:keys()
   return keys
 end
 
+function Keyspace:observation(spec)
+  spec = spec or {}
+  local field = spec.field or 'entries'
+  local decode = spec.decode or function(value)
+    return value
+  end
+  local include = spec.include or function()
+    return true
+  end
+  local space = self
+  return {
+    collect = function(_, read)
+      local values = {}
+      for key in pairs(space:keys()) do
+        local value = read(space:location(key))
+        if include(value, key) then
+          values[key] = decode(value, key)
+        end
+      end
+      return { [field] = values, version = space.version }
+    end,
+  }
+end
+
 Keyspace.ABSENT = Algebra.ABSENT
 return Keyspace

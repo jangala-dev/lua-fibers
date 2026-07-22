@@ -424,6 +424,7 @@ local function block_intent(state, task, program, occurrence)
   local intent = state.session:acquire_record('intent')
   intent.id, intent.kind = state.next_intent, programme_kind(program)
   intent.task_id, intent.root_id, intent.program = task.id, task.root_id, program
+  intent.payload = occurrence and occurrence.payload or nil
   intent.activation = task.activation
   intent.resource, intent.role = program.resource or program.group, program.role
   intent.value = program.payload_field == 'value' and occurrence.payload or program.value
@@ -493,20 +494,20 @@ local function transition_context(state)
   return context
 end
 
-local function transition_ready(state, program, value)
+local function transition_ready(state, program, value, payload)
   local plan = state.profile_plan
   if plan then
     plan.machine_probes = plan.machine_probes + 1
   end
-  return IR.transition_ready(program, value, transition_context(state))
+  return IR.transition_ready(program, value, transition_context(state), payload)
 end
 
-local function transition_outcome(state, program, value, phase)
+local function transition_outcome(state, program, value, phase, payload)
   local plan = state.profile_plan
   if plan and IR.rule(program).serial then
     plan.machine_steps = plan.machine_steps + 1
   end
-  return IR.transition_cursor(program, value, transition_context(state), phase):next()
+  return IR.transition_cursor(program, value, transition_context(state), phase, payload):next()
 end
 
 local function stage_outcome(state, task, program, outcome)
@@ -560,9 +561,9 @@ local function resolve_serial_transitions(state, selected)
     local task, rule = state.tasks[intent.task_id], IR.rule(program)
     ensure_task_segment(state, task)
     local value = Ledger.project_machine(state, task, program.location, function(candidate)
-      return transition_ready(state, program, candidate)
+      return transition_ready(state, program, candidate, intent.payload)
     end, rule.accepts_supply, state.trail)
-    local outcome = transition_outcome(state, program, value)
+    local outcome = transition_outcome(state, program, value, nil, intent.payload)
     if not outcome then
       return false
     end
@@ -611,7 +612,7 @@ local function resolve_transitions(state, intent_ids)
       local value =
         Ledger.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
       if value ~= nil then
-        local outcome = transition_outcome(state, program, value)
+        local outcome = transition_outcome(state, program, value, nil, intent.payload)
         if outcome then
           chosen_index, chosen_outcome, chosen_task = i, outcome, task
           break
@@ -633,9 +634,9 @@ local function witness_cursor(state, intent)
   local program, task, rule = intent.program, state.tasks[intent.task_id], IR.rule(intent.program)
   ensure_task_segment(state, task)
   local value = Ledger.project_machine(state, task, program.location, function(candidate)
-    return transition_ready(state, program, candidate)
+    return transition_ready(state, program, candidate, intent.payload)
   end, rule.accepts_supply, state.trail)
-  return IR.transition_cursor(program, value, transition_context(state))
+  return IR.transition_cursor(program, value, transition_context(state), nil, intent.payload)
 end
 
 local function resolve_witness(state, intent_id, outcome, alternative_index)
@@ -829,7 +830,8 @@ local function execute_program(state, task, program, occurrence)
 
   if kind == 'version_wait' then
     segment = ensure_task_segment(state, task)
-    if loc.version ~= program.version then
+    local version = program.payload_version and occurrence.payload or program.version
+    if loc.version ~= version then
       Ledger.observe(segment, loc, state.trail)
       advance_activation(state, task, 'primitive:version_wait:' .. object_version_label(loc))
       return complete_task(
@@ -839,7 +841,7 @@ local function execute_program(state, task, program, occurrence)
       )
     end
     program.observed_version = loc.version
-    block_intent(state, task, program)
+    block_intent(state, task, program, occurrence)
     return true
   end
 
@@ -863,6 +865,8 @@ local function execute_program(state, task, program, occurrence)
     local patch = program.patch
     if program.payload_patch == 'replace' then
       patch = { kind = 'replace', value = occurrence.payload }
+    elseif program.payload_patch == 'presence_put' then
+      patch = { kind = 'presence', ops = { { op = 'put', value = occurrence.payload } } }
     end
     Ledger.stage(segment, loc, patch, state.trail)
     advance_activation(state, task, 'primitive:patch:' .. object_version_label(loc))
@@ -883,14 +887,14 @@ local function execute_program(state, task, program, occurrence)
     if rule.eager then
       segment = ensure_task_segment(state, task)
       local value = Ledger.read(segment, loc, state.trail)
-      local outcome = transition_outcome(state, program, value, 'eager')
+      local outcome = transition_outcome(state, program, value, 'eager', occurrence.payload)
       if outcome then
         stage_outcome(state, task, program, outcome)
         advance_activation(state, task, 'primitive:transition:' .. object_version_label(loc))
         return complete_task(state, task, new_outcome(state, outcome.result, nil, task))
       end
     end
-    block_intent(state, task, program)
+    block_intent(state, task, program, occurrence)
     return true
   end
 
@@ -1176,7 +1180,6 @@ local function recruit_forced_raw_exchange(state, exchange)
   add_root(state, row.id)
   local profile_plan = state.profile_plan
   if profile_plan then
-    profile_plan.forced_recruitments = (profile_plan.forced_recruitments or 0) + 1
     profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
   end
   return true

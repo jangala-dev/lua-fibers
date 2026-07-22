@@ -60,12 +60,12 @@ M.result = {
   value = { kind = 'value' },
   boolean = { kind = 'constant', value = true },
   present = { kind = 'present' },
-  index_entry = { kind = 'index_entry' },
-  scalar_snapshot = { kind = 'scalar_snapshot' },
-  counter_state = { kind = 'counter_state' },
 }
 function M.result.presence(nil_sentinel)
   return { kind = 'presence', nil_sentinel = nil_sentinel }
+end
+function M.result.project(fn)
+  return { kind = 'project', project = assert(fn, 'result projection required') }
 end
 
 function M.read(location, result)
@@ -148,7 +148,7 @@ function M.select(opts)
     copy[key] = value
   end
   copy.demand = copy.demand or 'up'
-  copy.result = copy.result or M.result.index_entry
+  copy.result = copy.result or M.result.value
   copy.query = {
     kind = 'extreme',
     order = assert(copy.order, 'select requires order'),
@@ -180,7 +180,7 @@ function M.machine(location, transition, payload, resource, extra)
   local opts = {
     location = location,
     transition = transition,
-    payload = payload or {},
+    payload = payload,
     resource = resource,
   }
   for key, value in pairs(extra or {}) do
@@ -211,62 +211,12 @@ function M.witness(opts)
   return transition_program(opts, rule)
 end
 
-local OBSERVATIONS = {
-  keyed = {
-    collect = function(resource, read)
-      local entries, keys = {}, {}
-      for key in pairs(resource.entries) do
-        keys[key] = true
-      end
-      for key in pairs(resource._locations) do
-        keys[key] = true
-      end
-      for key in pairs(keys) do
-        local value = read(resource:_location(key))
-        if value ~= M.ABSENT then
-          entries[key] = value == resource._nil_sentinel and nil or value
-        end
-      end
-      return { entries = entries, version = resource.version }
-    end,
-  },
-  index = {
-    collect = function(resource, read)
-      local entries = {}
-      for key, entry in pairs(read(resource._location) or {}) do
-        entries[key] = { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq }
-      end
-      return { entries = entries, version = resource.version }
-    end,
-  },
-  lease = {
-    collect = function(resource, read)
-      local holders, subjects = {}, {}
-      for subject in pairs(resource.holders or {}) do
-        subjects[subject] = true
-      end
-      for subject in pairs(resource._locations or {}) do
-        subjects[subject] = true
-      end
-      for subject in pairs(subjects) do
-        local row = {}
-        for owner, mode in pairs(read(resource:_location(subject)) or {}) do
-          row[owner] = mode
-        end
-        holders[subject] = row
-      end
-      return { holders = holders, version = resource.version }
-    end,
-  },
-}
-
-function M.snapshot(resource, kind)
-  return IR.observe(resource, assert(OBSERVATIONS[kind], 'unknown observation topology'), M.result.value)
+function M.snapshot(resource, observation)
+  return IR.observe(resource, assert(observation, 'observation topology required'), M.result.value)
 end
 
 local function descriptor(resource, kind, program)
   program.resource = program.resource or resource
-  program.resource_kind = program.resource_kind or kind
   return program
 end
 
@@ -288,6 +238,24 @@ end
 
 function M.occurrence(value, payload)
   return Op._primitive(value, payload)
+end
+
+function M.publish(location, value)
+  location.value = value
+  location.version = (location.version or 0) + 1
+  return value
+end
+
+function M.external_wait(resource, kind, location, transition, opts)
+  opts = opts or {}
+  return M.op(
+    resource,
+    kind,
+    M.machine(location, transition, opts.payload, resource, {
+      interest = opts.interest,
+      absence_check = opts.absence_check,
+    })
+  )
 end
 
 function M.performing(class, names)

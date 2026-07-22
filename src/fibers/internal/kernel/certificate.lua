@@ -103,15 +103,6 @@ function M.values(certificate, kind)
   return out
 end
 
-function M.has(certificate, kind)
-  for i = 1, #((certificate and certificate.facts) or {}) do
-    if certificate.facts[i].kind == kind then
-      return true
-    end
-  end
-  return false
-end
-
 function M.activation_label(certificate)
   local keys = M.values(certificate, 'activation')
   table.sort(keys)

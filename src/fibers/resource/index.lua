@@ -12,6 +12,9 @@ Index.__index = function(self, key)
 end
 local Kind = Facility.kind('index')
 local next_append_id = 0
+local ENTRY_RESULT = Facility.result.project(function(entry)
+  return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq }
+end)
 
 local function copy_entry(entry)
   return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq } or nil
@@ -33,6 +36,34 @@ function Index.new(entries, name)
     remove_idempotent = true,
   })
   index._initial_entries = nil
+  local observation = {
+    collect = function(_, read)
+      local entries = {}
+      for key, entry in pairs(read(index._location) or {}) do
+        entries[key] = copy_entry(entry)
+      end
+      return { entries = entries, version = index._location.version }
+    end,
+  }
+  index._pop_first_op = Facility.op(
+    index,
+    Kind,
+    Facility.select({
+      location = index._location,
+      order = 'min',
+      result = ENTRY_RESULT,
+    })
+  )
+  index._pop_last_op = Facility.op(
+    index,
+    Kind,
+    Facility.select({
+      location = index._location,
+      order = 'max',
+      result = ENTRY_RESULT,
+    })
+  )
+  index._snapshot_op = Facility.op(index, Kind, Facility.snapshot(index, observation))
   return index
 end
 
@@ -86,13 +117,13 @@ function Index:remove_op(key)
   )
 end
 function Index:pop_first_op()
-  return Facility.op(self, Kind, Facility.select({ location = self._location, order = 'min' }))
+  return self._pop_first_op
 end
 function Index:pop_last_op()
-  return Facility.op(self, Kind, Facility.select({ location = self._location, order = 'max' }))
+  return self._pop_last_op
 end
 function Index:snapshot_op()
-  return Facility.op(self, Kind, Facility.snapshot(self, 'index'))
+  return self._snapshot_op
 end
 
 Index.Kind = Kind

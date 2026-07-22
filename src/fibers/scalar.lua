@@ -14,6 +14,9 @@ Scalar.__index = function(self, key)
 end
 
 local Kind = Facility.kind('scalar')
+local SNAPSHOT_RESULT = Facility.result.project(function(value, program)
+  return { value = value, version = program.location.version }
+end)
 local WAIT = { _fibers_scalar_wait = true }
 local Ready = {}
 function Ready.write(value, ...)
@@ -24,6 +27,9 @@ function Ready.same(...)
 end
 Scalar.Wait = WAIT
 Scalar.Ready = Ready
+
+local WRITE_TRANSITION
+local EXPECT_TRANSITION
 
 function Scalar.transition(spec)
   if type(spec) ~= 'table' then
@@ -65,6 +71,28 @@ function Scalar.transition(spec)
   }
 end
 
+WRITE_TRANSITION = Scalar.transition({
+  name = 'scalar.write',
+  mode = 'update',
+  accepts_supply = true,
+  supplies = 'any',
+  step = function(_, value)
+    return Ready.write(value, true)
+  end,
+})
+EXPECT_TRANSITION = Scalar.transition({
+  name = 'scalar.expect',
+  mode = 'query',
+  accepts_supply = false,
+  supplies = 'none',
+  step = function(current, expected)
+    if current ~= expected then
+      return WAIT
+    end
+    return Ready.same(true)
+  end,
+})
+
 function Scalar.kind(spec)
   if type(spec) ~= 'table' then
     error('Scalar.kind expects a table', 2)
@@ -101,13 +129,22 @@ local function new_scalar(value, name, merge)
   })
   scalar._snapshot_op = Facility.static(scalar, Kind, 'read', {
     location = scalar._location,
-    result = Facility.result.scalar_snapshot,
+    result = SNAPSHOT_RESULT,
   })
   scalar._write_descriptor = Facility.descriptor(scalar, Kind, 'patch', {
     location = scalar._location,
     payload_patch = 'replace',
     result = Facility.result.boolean,
   })
+  scalar._changed_descriptor = Facility.descriptor(scalar, Kind, 'version_wait', {
+    location = scalar._location,
+    payload_version = true,
+  })
+  -- Descriptors retain their transition rule.  Weak keys alone rely on
+  -- ephemeron semantics, which Lua 5.1 and LuaJIT do not provide: the value
+  -- then keeps the key, and dynamic transition closures remain reachable.
+  -- Weak values make the cache advisory on every supported interpreter.
+  scalar._transition_descriptors = setmetatable({}, { __mode = 'kv' })
   return scalar
 end
 
@@ -127,24 +164,11 @@ function Scalar:snapshot_op()
 end
 
 function Scalar:changed_op(version)
-  return Facility.static(self, Kind, 'version_wait', { location = self._location, version = version })
+  return Facility.occurrence(self._changed_descriptor, version)
 end
 
 function Scalar:expect_op(value)
-  local scalar = self
-  local t = Scalar.transition({
-    name = self.name .. ':expect',
-    mode = 'query',
-    accepts_supply = false,
-    supplies = 'none',
-    step = function(current)
-      if current ~= value then
-        return Scalar.Wait
-      end
-      return Scalar.Ready.same(true)
-    end,
-  })
-  return scalar:transition_op(t, {})
+  return self:transition_op(EXPECT_TRANSITION, value)
 end
 
 function Scalar:unsafe_update_op(fn)
@@ -179,16 +203,7 @@ end
 
 function Scalar:write_op(value)
   if self._location.algebra.name == 'machine' then
-    local transition = Scalar.transition({
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
-      step = function()
-        return value, true
-      end,
-    })
-    return self:transition_op(transition, {})
+    return self:transition_op(WRITE_TRANSITION, value)
   end
   return Facility.occurrence(self._write_descriptor, value)
 end
@@ -197,14 +212,19 @@ function Scalar:transition_op(transition, payload)
   if type(transition) ~= 'table' or transition._fibers_transition_rule ~= true then
     error('scalar transition expected', 2)
   end
-  payload = payload or {}
   if self._location.algebra.name == 'replace' then
     self._location.algebra = Algebra.get('machine')
   end
   if transition.validate then
     transition.validate(payload)
   end
-  return Facility.op(self, Kind, Facility.machine(self._location, transition, payload, self))
+  local descriptor = self._transition_descriptors[transition]
+  if not descriptor then
+    descriptor =
+      Facility.descriptor(self, Kind, 'transition', Facility.machine(self._location, transition, nil, self))
+    self._transition_descriptors[transition] = descriptor
+  end
+  return Facility.occurrence(descriptor, payload)
 end
 
 Scalar.Kind = Kind

@@ -129,9 +129,13 @@ end
 
 local function primitive_supply_access(program)
   local access = { read = true, write = true, supplies = {} }
-  mark_patch_supply(access, program.location, program.patch)
+  if program.patch then
+    mark_patch_supply(access, program.location, program.patch)
+  end
   if program.payload_patch == 'replace' then
     access.supplies.any = true
+  elseif program.payload_patch == 'presence_put' then
+    access.supplies.up = true
   end
   return access
 end
@@ -478,8 +482,8 @@ local function is_ready(value)
   return type(value) == 'table' and value._fibers_scalar_ready == true
 end
 
-local function machine_outcome(program, value, context)
-  local transition, payload = M.rule(program), program.payload or {}
+local function machine_outcome(program, value, context, occurrence_payload)
+  local transition, payload = M.rule(program), occurrence_payload or program.payload or {}
   local packed = Op._pack(transition.step(value, payload, context))
   local first = packed[1]
   if packed.n == 1 and is_wait(first) then
@@ -633,7 +637,7 @@ function M.evaluate_claim(program, value)
 end
 
 function M.kind(program)
-  return program and (program.primitive_kind or program.kind)
+  return program and program.kind
 end
 
 function M.rule(program)
@@ -643,8 +647,8 @@ function M.rule(program)
   return program.rule
 end
 
-local function witness_cursor(program, rule, value, context)
-  local source = rule.cursor_factory(value, program.payload or {}, context)
+local function witness_cursor(program, rule, value, context, occurrence_payload)
+  local source = rule.cursor_factory(value, occurrence_payload or program.payload or {}, context)
   assert(
     type(source) == 'table' and type(source.next) == 'function',
     'witness cursor factory must return { next = function }'
@@ -665,7 +669,7 @@ local function witness_cursor(program, rule, value, context)
   }
 end
 
-function M.transition_cursor(program, value, context, phase)
+function M.transition_cursor(program, value, context, phase, occurrence_payload)
   local rule = M.rule(program)
   context, phase = context or {}, phase or 'domain'
   if rule.type == 'claim' then
@@ -679,21 +683,21 @@ function M.transition_cursor(program, value, context, phase)
     return outcome and one({ patch = outcome.patch, writes = outcome.patch ~= nil, result = outcome.result })
       or none()
   elseif rule.type == 'machine' then
-    local outcome = machine_outcome(program, value, context)
+    local outcome = machine_outcome(program, value, context, occurrence_payload)
     return outcome and one(outcome) or none()
   elseif rule.type == 'witness' then
-    return witness_cursor(program, rule, value, context)
+    return witness_cursor(program, rule, value, context, occurrence_payload)
   end
   error('unknown transition rule type ' .. tostring(rule.type), 2)
 end
 
-function M.transition_ready(program, value, context)
+function M.transition_ready(program, value, context, occurrence_payload)
   local rule = M.rule(program)
   if rule.type == 'machine' and type(rule.ready) == 'function' then
-    local result = rule.ready(value, program.payload or {}, context or {})
+    local result = rule.ready(value, occurrence_payload or program.payload or {}, context or {})
     return result ~= nil and result ~= false and not is_wait(result)
   end
-  return M.transition_cursor(program, value, context, 'probe'):next() ~= nil
+  return M.transition_cursor(program, value, context, 'probe', occurrence_payload):next() ~= nil
 end
 
 function M.transition_patch(program, outcome, serial)

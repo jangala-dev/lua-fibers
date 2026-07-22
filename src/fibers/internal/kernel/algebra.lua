@@ -363,47 +363,6 @@ function FiniteMap.constraint(_, patch, orientation)
 end
 FiniteMap.supplies = log_supplies
 
-local function key_operation(op, value_key)
-  return table.concat({
-    tostring(op.op or ''),
-    value_key(op.key),
-    value_key(op.value),
-    tostring(op.policy or ''),
-  }, ':')
-end
-
-function Replace.fingerprint(patch, mix, row)
-  return mix(mix(row, Replace.name), patch.value)
-end
-function Replace.key(patch, value_key)
-  return 'replace,' .. value_key(patch.value)
-end
-
-function Add.fingerprint(patch, mix, row)
-  return mix(mix(row, Add.name), patch.delta)
-end
-function Add.key(patch, value_key)
-  return 'add,' .. value_key(patch.delta)
-end
-
-function Machine.fingerprint(patch, mix, row)
-  row = mix(mix(row, Machine.name), #(patch.steps or {}))
-  local steps = patch.steps or {}
-  if #steps > 0 then
-    row = mix(row, steps[1].serial)
-    row = mix(row, steps[#steps].serial)
-    row = mix(row, steps[#steps].value)
-  end
-  return row
-end
-function Machine.key(patch, value_key)
-  local parts = { Machine.name }
-  for i = 1, #(patch.steps or {}) do
-    local step = patch.steps[i]
-    parts[#parts + 1] = tostring(step.serial or '') .. '=' .. value_key(step.value)
-  end
-  return table.concat(parts, ',')
-end
 function Machine.serialise(patch, relation, out)
   for i = 1, #(patch.steps or {}) do
     local step = patch.steps[i]
@@ -412,39 +371,6 @@ function Machine.serialise(patch, relation, out)
 end
 function Machine.change(serial, value)
   return { kind = Machine.name, steps = { { serial = serial, value = value } } }
-end
-
-local function log_fingerprint(name, patch, mix, row)
-  row = mix(mix(row, name), #(patch.ops or {}))
-  local ops = patch.ops or {}
-  if #ops > 0 then
-    local last = ops[#ops]
-    row = mix(row, last.op)
-    row = mix(row, last.key)
-    row = mix(row, last.value)
-  end
-  return row
-end
-
-local function log_key(name, patch, value_key)
-  local parts = { name }
-  for i = 1, #(patch.ops or {}) do
-    parts[#parts + 1] = key_operation(patch.ops[i], value_key)
-  end
-  return table.concat(parts, ',')
-end
-
-function Presence.fingerprint(patch, mix, row)
-  return log_fingerprint(Presence.name, patch, mix, row)
-end
-function Presence.key(patch, value_key)
-  return log_key(Presence.name, patch, value_key)
-end
-function FiniteMap.fingerprint(patch, mix, row)
-  return log_fingerprint(FiniteMap.name, patch, mix, row)
-end
-function FiniteMap.key(patch, value_key)
-  return log_key(FiniteMap.name, patch, value_key)
 end
 
 local BY_NAME = {
@@ -501,14 +427,6 @@ end
 
 function M.supplies(location, patch)
   return M.get(location).supplies(patch)
-end
-
-function M.fingerprint(location, summary, mix, row)
-  return M.get(location).fingerprint(summary, mix, row)
-end
-
-function M.key(location, summary, value_key)
-  return M.get(location).key(summary, value_key)
 end
 
 function M.serialise(location, summary, relation, out)

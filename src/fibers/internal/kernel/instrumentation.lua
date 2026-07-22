@@ -1,47 +1,162 @@
--- Optional low-overhead runtime and proof-search instrumentation.
+-- Optional proof-search instrumentation.
 --
--- Instrumentation is deliberately separate from Runtime.stats.  The latter is
--- a small compatibility counter set which remains available at all times;
--- this module is enabled explicitly with Runtime.new({ instrumentation = ... })
--- and records distributions and slow-plan summaries suitable for performance
--- work.  Ordinary runtimes pay only a nil check at the instrumentation sites.
+-- Metric declarations live in one place. Ordinary runtimes pay only the nil
+-- checks at call sites; component profiling and aggregation are owned here.
 
 local Instrumentation = {}
 Instrumentation.__index = Instrumentation
 
-local function copy_map(src)
+local ZERO_FIELDS = {
+  'search_calls',
+  'task_steps',
+  'branches',
+  'rollbacks',
+  'rollback_entries',
+  'trail_entries',
+  'trail_set_coalesced',
+  'trail_push_coalesced',
+  'max_trail',
+  'max_active',
+  'max_intents',
+  'max_roots',
+  'max_tasks',
+  'max_segments',
+  'intent_pairs_scanned',
+  'compatible_pairs',
+  'choice_branches',
+  'preferred_branches',
+  'fallback_branches',
+  'witness_alternatives',
+  'claim_branches',
+  'claim_all_branches',
+  'claim_closure_branches',
+  'claim_closure_successes',
+  'claim_closure_failures',
+  'claim_single_branches',
+  'claim_groups_scanned',
+  'machine_probes',
+  'machine_steps',
+  'max_claim_group',
+  'recruit_branches',
+  'exclude_branches',
+  'footprint_checks',
+  'footprint_matches',
+  'footprint_dynamic_matches',
+  'footprint_exchange_matches',
+  'footprint_location_matches',
+  'exchange_domains',
+  'zero_exchange_domains',
+  'forced_exchange_opportunities',
+  'forced_exchanges',
+  'forced_claim_opportunities',
+  'forced_claims',
+  'normalisation_rounds',
+  'deterministic_steps',
+  'recruitment_candidates',
+  'recruitment_best_score',
+  'symmetry_exchange_pruned',
+}
+
+local SUM_FIELDS = {
+  'search_calls',
+  'task_steps',
+  'branches',
+  'rollbacks',
+  'rollback_entries',
+  'trail_entries',
+  'trail_set_coalesced',
+  'trail_push_coalesced',
+  'option_nodes',
+  'option_dynamic_roots',
+  'option_external_roots',
+  'dependency_locations',
+  'dependency_resources',
+  'dependency_exchanges',
+  'intent_pairs_scanned',
+  'compatible_pairs',
+  'choice_branches',
+  'preferred_branches',
+  'fallback_branches',
+  'witness_alternatives',
+  'claim_branches',
+  'claim_all_branches',
+  'claim_closure_branches',
+  'claim_closure_successes',
+  'claim_closure_failures',
+  'claim_single_branches',
+  'claim_groups_scanned',
+  'machine_probes',
+  'machine_steps',
+  'recruit_branches',
+  'exclude_branches',
+  'footprint_checks',
+  'footprint_matches',
+  'footprint_dynamic_matches',
+  'footprint_exchange_matches',
+  'footprint_location_matches',
+  'exchange_domains',
+  'zero_exchange_domains',
+  'forced_exchange_opportunities',
+  'forced_exchanges',
+  'forced_claim_opportunities',
+  'forced_claims',
+  'normalisation_rounds',
+  'deterministic_steps',
+  'recruitment_candidates',
+  'symmetry_exchange_pruned',
+}
+
+local MAX_FIELDS = {
+  claim_group_size = 'max_claim_group',
+  recruitment_best_score = 'recruitment_best_score',
+  component_size = 'component_size',
+  search_steps_per_plan = 'search_steps',
+  search_cpu_seconds_per_plan = 'elapsed',
+  search_depth = 'max_depth',
+  active_tasks = 'max_active',
+  intents = 'max_intents',
+  roots = 'max_roots',
+  tasks = 'max_tasks',
+  segments = 'max_segments',
+  trail_entries_live = 'max_trail',
+}
+
+local HISTOGRAM_FIELDS = {
+  component_size_per_plan = 'component_size',
+  exchange_domain_size = 'max_exchange_domain',
+  search_steps_per_plan = 'search_steps',
+  participants_per_candidate = 'participants',
+  intents_per_plan = 'max_intents',
+  roots_per_plan = 'max_roots',
+  trail_entries_per_plan = 'trail_entries',
+  option_nodes_per_plan = 'option_nodes',
+  dependency_locations_per_plan = 'dependency_locations',
+  dependency_resources_per_plan = 'dependency_resources',
+  dependency_exchanges_per_plan = 'dependency_exchanges',
+}
+
+local function copy_map(source)
   local out = {}
-  for k, v in pairs(src or {}) do
-    out[k] = v
+  for key, value in pairs(source or {}) do
+    out[key] = value
   end
   return out
 end
 
-local function copy_array(src)
+local function copy_array(source)
   local out = {}
-  for i = 1, #(src or {}) do
-    local value = src[i]
-    if type(value) == 'table' then
-      local row = {}
-      for k, v in pairs(value) do
-        row[k] = v
-      end
-      out[i] = row
-    else
-      out[i] = value
-    end
+  for i = 1, #(source or {}) do
+    local value = source[i]
+    out[i] = type(value) == 'table' and copy_map(value) or value
   end
   return out
 end
 
 local function default_clock()
-  if os and type(os.clock) == 'function' then
-    return os.clock()
-  end
-  return 0
+  return os and type(os.clock) == 'function' and os.clock() or 0
 end
 
-local function bucket(value)
+local function histogram_bucket(value)
   if value == nil then
     return 'nil'
   end
@@ -58,38 +173,93 @@ local function bucket(value)
   return tostring(math.floor(upper / 2) + 1) .. '-' .. tostring(upper)
 end
 
-local function normalise_options(opts)
-  if opts == true then
-    return {}
+local function map_count(values)
+  local count = 0
+  for _ in pairs(values or {}) do
+    count = count + 1
   end
-  if type(opts) ~= 'table' then
-    return {}
-  end
-  return opts
+  return count
 end
 
-function Instrumentation.new(opts)
-  opts = normalise_options(opts)
-  local clock = opts.clock
-  if type(clock) ~= 'function' then
-    clock = default_clock
+local function component_shape(requests, component)
+  local shape = {
+    option_nodes = 0,
+    option_dynamic_roots = 0,
+    option_external_roots = 0,
+    option_node_kinds = {},
+    request_summaries = {},
+  }
+  local locations, resources, exchanges = {}, {}, {}
+  local function add(request)
+    local metadata = request and request.metadata
+    if not metadata then
+      return
+    end
+    shape.request_summaries[#shape.request_summaries + 1] = {
+      id = request.id,
+      name = request.name,
+      dynamic = metadata.dynamic == true,
+      external = metadata.external == true,
+      nodes = metadata.nodes or 0,
+      kinds = metadata.node_kinds,
+    }
+    shape.option_nodes = shape.option_nodes + (metadata.nodes or 0)
+    if metadata.dynamic then
+      shape.option_dynamic_roots = shape.option_dynamic_roots + 1
+    end
+    if metadata.external then
+      shape.option_external_roots = shape.option_external_roots + 1
+    end
+    for kind, count in pairs(metadata.node_kinds or {}) do
+      shape.option_node_kinds[kind] = (shape.option_node_kinds[kind] or 0) + count
+    end
+    for value in pairs(metadata.locations or {}) do
+      locations[value] = true
+    end
+    for value in pairs(metadata.resources or {}) do
+      resources[value] = true
+    end
+    for value in pairs(metadata.exchanges or {}) do
+      exchanges[value] = true
+    end
   end
+  local ids = component and component.ids
+  if ids then
+    for i = 1, #ids do
+      add(requests[ids[i]])
+    end
+  else
+    for _, request in pairs(requests) do
+      add(request)
+    end
+  end
+  shape.dependency_locations = map_count(locations)
+  shape.dependency_resources = map_count(resources)
+  shape.dependency_exchanges = map_count(exchanges)
+  return shape
+end
+
+local function normalise_options(options)
+  return options == true and {} or type(options) == 'table' and options or {}
+end
+
+function Instrumentation.new(options)
+  options = normalise_options(options)
   return setmetatable({
-    clock = clock,
+    clock = type(options.clock) == 'function' and options.clock or default_clock,
     counters = {},
     maxima = {},
     histograms = {},
     slow_plans = {},
-    slow_plan_limit = math.max(0, math.floor(opts.slow_plan_limit or 16)),
-    trace = opts.trace == true,
-    trace_limit = math.max(0, math.floor(opts.trace_limit or 512)),
+    slow_plan_limit = math.max(0, math.floor(options.slow_plan_limit or 16)),
+    trace = options.trace == true,
+    trace_limit = math.max(0, math.floor(options.trace_limit or 512)),
     plan_serial = 0,
   }, Instrumentation)
 end
 
 function Instrumentation:inc(name, amount)
-  amount = amount or 1
-  self.counters[name] = (self.counters[name] or 0) + amount
+  self.counters[name] = (self.counters[name] or 0) + (amount or 1)
   return self.counters[name]
 end
 
@@ -102,90 +272,60 @@ function Instrumentation:max(name, value)
 end
 
 function Instrumentation:observe(name, value)
-  local h = self.histograms[name]
-  if not h then
-    h = {}
-    self.histograms[name] = h
+  local histogram = self.histograms[name]
+  if not histogram then
+    histogram = {}
+    self.histograms[name] = histogram
   end
-  local key = bucket(value)
-  h[key] = (h[key] or 0) + 1
+  local key = histogram_bucket(value)
+  histogram[key] = (histogram[key] or 0) + 1
   return value
 end
 
 function Instrumentation:begin_plan(meta)
+  meta = meta or {}
   self.plan_serial = self.plan_serial + 1
   local plan = {
     id = self.plan_serial,
     started = self.clock(),
-    focus = meta and meta.focus,
-    pending = meta and meta.pending or 0,
-    total_pending = meta and (meta.total_pending or meta.pending) or 0,
-    component_size = meta and (meta.component_size or meta.pending) or 0,
-    component_dynamic = meta and meta.component_dynamic or 0,
-    component_global = meta and meta.component_global == true or false,
-    component_edge_visits = meta and meta.component_edge_visits or 0,
-    option_nodes = meta and meta.option_nodes or 0,
-    option_dynamic_roots = meta and meta.option_dynamic_roots or 0,
-    option_external_roots = meta and meta.option_external_roots or 0,
-    dependency_locations = meta and meta.dependency_locations or 0,
-    dependency_resources = meta and meta.dependency_resources or 0,
-    dependency_exchanges = meta and meta.dependency_exchanges or 0,
-    option_node_kinds = meta and copy_map(meta.option_node_kinds) or {},
-    request_summaries = meta and copy_array(meta.request_summaries) or nil,
-    machine = meta and meta.machine,
-    search_calls = 0,
-    task_steps = 0,
-    branches = 0,
-    rollbacks = 0,
-    rollback_entries = 0,
-    trail_entries = 0,
-    trail_set_coalesced = 0,
-    trail_push_coalesced = 0,
-    max_trail = 0,
+    focus = meta.focus,
+    pending = meta.pending or 0,
+    total_pending = meta.total_pending or meta.pending or 0,
+    component_size = meta.component_size or meta.pending or 0,
+    component_dynamic = meta.component_dynamic or 0,
+    component_global = meta.component_global == true,
+    component_edge_visits = meta.component_edge_visits or 0,
+    option_nodes = meta.option_nodes or 0,
+    option_dynamic_roots = meta.option_dynamic_roots or 0,
+    option_external_roots = meta.option_external_roots or 0,
+    dependency_locations = meta.dependency_locations or 0,
+    dependency_resources = meta.dependency_resources or 0,
+    dependency_exchanges = meta.dependency_exchanges or 0,
+    option_node_kinds = copy_map(meta.option_node_kinds),
+    request_summaries = meta.request_summaries and copy_array(meta.request_summaries) or nil,
+    machine = meta.machine,
     max_depth = 1,
-    max_active = 0,
-    max_intents = 0,
-    max_roots = 0,
-    max_tasks = 0,
-    max_segments = 0,
-    intent_pairs_scanned = 0,
-    compatible_pairs = 0,
-    choice_branches = 0,
-    preferred_branches = 0,
-    fallback_branches = 0,
-    witness_alternatives = 0,
-    claim_branches = 0,
-    claim_all_branches = 0,
-    claim_closure_branches = 0,
-    claim_closure_successes = 0,
-    claim_closure_failures = 0,
-    claim_single_branches = 0,
-    claim_groups_scanned = 0,
-    machine_probes = 0,
-    machine_steps = 0,
-    max_claim_group = 0,
-    recruit_branches = 0,
-    exclude_branches = 0,
-    footprint_checks = 0,
-    footprint_matches = 0,
-    footprint_dynamic_matches = 0,
-    footprint_exchange_matches = 0,
-    footprint_location_matches = 0,
-    exchange_domains = 0,
-    zero_exchange_domains = 0,
-    forced_exchange_opportunities = 0,
-    forced_exchanges = 0,
-    forced_claim_opportunities = 0,
-    forced_claims = 0,
-    normalisation_rounds = 0,
-    deterministic_steps = 0,
-    recruitment_candidates = 0,
-    recruitment_best_score = 0,
-    symmetry_exchange_pruned = 0,
     events = self.trace and {} or nil,
   }
+  for i = 1, #ZERO_FIELDS do
+    plan[ZERO_FIELDS[i]] = 0
+  end
   self:inc('plans')
   return plan
+end
+
+function Instrumentation:begin_search_plan(runtime, requests, focus, component)
+  local pending = map_count(requests)
+  local shape = component_shape(requests, component)
+  shape.focus = focus
+  shape.pending = pending
+  shape.machine = runtime.machine_name or 'ledger'
+  shape.total_pending = component and component.total or pending
+  shape.component_size = component and component.size or pending
+  shape.component_dynamic = component and component.dynamic or 0
+  shape.component_global = component and component.global == true or false
+  shape.component_edge_visits = component and component.edge_visits or 0
+  return self:begin_plan(shape)
 end
 
 function Instrumentation:event(plan, kind, fields)
@@ -197,100 +337,42 @@ function Instrumentation:event(plan, kind, fields)
     return
   end
   local event = { kind = kind }
-  for k, v in pairs(fields or {}) do
-    event[k] = v
+  for key, value in pairs(fields or {}) do
+    event[key] = value
   end
   plan.events[#plan.events + 1] = event
 end
 
-local function insert_slow_plan(self, plan)
+local function plan_copy(plan)
+  local row = {}
+  for key, value in pairs(plan) do
+    if key ~= 'started' then
+      if key == 'option_node_kinds' then
+        row[key] = copy_map(value)
+      elseif key == 'request_summaries' or key == 'events' then
+        row[key] = copy_array(value)
+      else
+        row[key] = value
+      end
+    end
+  end
+  return row
+end
+
+local function retain_slow_plan(self, plan)
   if self.slow_plan_limit <= 0 then
     return
   end
-  local row = {
-    id = plan.id,
-    machine = plan.machine,
-    focus = plan.focus,
-    pending = plan.pending,
-    total_pending = plan.total_pending,
-    component_size = plan.component_size,
-    component_dynamic = plan.component_dynamic,
-    component_global = plan.component_global,
-    component_edge_visits = plan.component_edge_visits,
-    option_nodes = plan.option_nodes,
-    option_dynamic_roots = plan.option_dynamic_roots,
-    option_external_roots = plan.option_external_roots,
-    dependency_locations = plan.dependency_locations,
-    dependency_resources = plan.dependency_resources,
-    dependency_exchanges = plan.dependency_exchanges,
-    option_node_kinds = copy_map(plan.option_node_kinds),
-    request_summaries = plan.request_summaries and copy_array(plan.request_summaries) or nil,
-    outcome = plan.outcome,
-    elapsed = plan.elapsed,
-    search_steps = plan.search_steps,
-    participants = plan.participants,
-    observations = plan.observations,
-    writes = plan.writes,
-    effects = plan.effects,
-    max_depth = plan.max_depth,
-    max_intents = plan.max_intents,
-    max_roots = plan.max_roots,
-    max_tasks = plan.max_tasks,
-    max_segments = plan.max_segments,
-    max_trail = plan.max_trail,
-    branches = plan.branches,
-    rollbacks = plan.rollbacks,
-    trail_entries = plan.trail_entries,
-    trail_set_coalesced = plan.trail_set_coalesced,
-    trail_push_coalesced = plan.trail_push_coalesced,
-    rollback_entries = plan.rollback_entries,
-    intent_pairs_scanned = plan.intent_pairs_scanned,
-    compatible_pairs = plan.compatible_pairs,
-    choice_branches = plan.choice_branches,
-    preferred_branches = plan.preferred_branches,
-    fallback_branches = plan.fallback_branches,
-    witness_alternatives = plan.witness_alternatives,
-    claim_branches = plan.claim_branches,
-    claim_all_branches = plan.claim_all_branches,
-    claim_closure_branches = plan.claim_closure_branches,
-    claim_closure_successes = plan.claim_closure_successes,
-    claim_closure_failures = plan.claim_closure_failures,
-    claim_single_branches = plan.claim_single_branches,
-    claim_groups_scanned = plan.claim_groups_scanned,
-    machine_probes = plan.machine_probes,
-    machine_steps = plan.machine_steps,
-    max_claim_group = plan.max_claim_group,
-    recruit_branches = plan.recruit_branches,
-    exclude_branches = plan.exclude_branches,
-    footprint_checks = plan.footprint_checks,
-    footprint_matches = plan.footprint_matches,
-    footprint_dynamic_matches = plan.footprint_dynamic_matches,
-    footprint_exchange_matches = plan.footprint_exchange_matches,
-    footprint_location_matches = plan.footprint_location_matches,
-    exchange_domains = plan.exchange_domains,
-    zero_exchange_domains = plan.zero_exchange_domains,
-    forced_exchange_opportunities = plan.forced_exchange_opportunities,
-    forced_exchanges = plan.forced_exchanges,
-    forced_claim_opportunities = plan.forced_claim_opportunities,
-    forced_claims = plan.forced_claims,
-    normalisation_rounds = plan.normalisation_rounds,
-    deterministic_steps = plan.deterministic_steps,
-    recruitment_candidates = plan.recruitment_candidates,
-    recruitment_best_score = plan.recruitment_best_score,
-    symmetry_exchange_pruned = plan.symmetry_exchange_pruned,
-    trace_truncated = plan.trace_truncated,
-    events = plan.events and copy_array(plan.events) or nil,
-  }
-  local xs = self.slow_plans
-  xs[#xs + 1] = row
-  table.sort(xs, function(a, b)
-    if a.search_steps ~= b.search_steps then
-      return a.search_steps > b.search_steps
+  local plans = self.slow_plans
+  plans[#plans + 1] = plan_copy(plan)
+  table.sort(plans, function(left, right)
+    if left.search_steps ~= right.search_steps then
+      return left.search_steps > right.search_steps
     end
-    return (a.elapsed or 0) > (b.elapsed or 0)
+    return (left.elapsed or 0) > (right.elapsed or 0)
   end)
-  while #xs > self.slow_plan_limit do
-    xs[#xs] = nil
+  while #plans > self.slow_plan_limit do
+    plans[#plans] = nil
   end
 end
 
@@ -301,93 +383,31 @@ function Instrumentation:finish_plan(plan, outcome)
   plan.outcome = outcome or 'retry'
   plan.elapsed = self.clock() - plan.started
   self:inc('plan_' .. plan.outcome)
-  self:inc('search_calls', plan.search_calls)
-  self:inc('task_steps', plan.task_steps)
-  self:inc('branches', plan.branches)
-  self:inc('rollbacks', plan.rollbacks)
-  self:inc('rollback_entries', plan.rollback_entries)
-  self:inc('trail_entries', plan.trail_entries)
-  self:inc('trail_set_coalesced', plan.trail_set_coalesced or 0)
-  self:inc('trail_push_coalesced', plan.trail_push_coalesced or 0)
-  self:inc('option_nodes', plan.option_nodes or 0)
-  self:inc('option_dynamic_roots', plan.option_dynamic_roots or 0)
-  self:inc('option_external_roots', plan.option_external_roots or 0)
-  self:inc('dependency_locations', plan.dependency_locations or 0)
-  self:inc('dependency_resources', plan.dependency_resources or 0)
-  self:inc('dependency_exchanges', plan.dependency_exchanges or 0)
+  for i = 1, #SUM_FIELDS do
+    local field = SUM_FIELDS[i]
+    self:inc(field, plan[field] or 0)
+  end
   for kind, count in pairs(plan.option_node_kinds or {}) do
     self:inc('option_kind_' .. tostring(kind), count)
   end
-  self:inc('intent_pairs_scanned', plan.intent_pairs_scanned)
-  self:inc('compatible_pairs', plan.compatible_pairs)
-  self:inc('choice_branches', plan.choice_branches)
-  self:inc('preferred_branches', plan.preferred_branches)
-  self:inc('fallback_branches', plan.fallback_branches)
-  self:inc('witness_alternatives', plan.witness_alternatives)
-  self:inc('claim_branches', plan.claim_branches)
-  self:inc('claim_all_branches', plan.claim_all_branches)
-  self:inc('claim_closure_branches', plan.claim_closure_branches or 0)
-  self:inc('claim_closure_successes', plan.claim_closure_successes or 0)
-  self:inc('claim_closure_failures', plan.claim_closure_failures or 0)
-  self:inc('claim_single_branches', plan.claim_single_branches)
-  self:inc('claim_groups_scanned', plan.claim_groups_scanned)
-  self:inc('machine_probes', plan.machine_probes)
-  self:inc('machine_steps', plan.machine_steps)
-  self:max('claim_group_size', plan.max_claim_group or 0)
-  self:inc('recruit_branches', plan.recruit_branches)
-  self:inc('exclude_branches', plan.exclude_branches)
-  self:inc('footprint_checks', plan.footprint_checks)
-  self:inc('footprint_matches', plan.footprint_matches)
-  self:inc('footprint_dynamic_matches', plan.footprint_dynamic_matches)
-  self:inc('footprint_exchange_matches', plan.footprint_exchange_matches)
-  self:inc('footprint_location_matches', plan.footprint_location_matches)
-  self:inc('exchange_domains', plan.exchange_domains)
-  self:inc('zero_exchange_domains', plan.zero_exchange_domains)
-  self:inc('forced_exchange_opportunities', plan.forced_exchange_opportunities)
-  self:inc('forced_exchanges', plan.forced_exchanges)
-  self:inc('forced_claim_opportunities', plan.forced_claim_opportunities)
-  self:inc('forced_claims', plan.forced_claims)
-  self:inc('normalisation_rounds', plan.normalisation_rounds)
-  self:inc('deterministic_steps', plan.deterministic_steps)
-  self:inc('recruitment_candidates', plan.recruitment_candidates)
-  self:max('recruitment_best_score', plan.recruitment_best_score or 0)
-  self:inc('symmetry_exchange_pruned', plan.symmetry_exchange_pruned)
+  for name, field in pairs(MAX_FIELDS) do
+    self:max(name, plan[field] or 0)
+  end
+  for name, field in pairs(HISTOGRAM_FIELDS) do
+    self:observe(name, plan[field] or 0)
+  end
+
+  local total = plan.total_pending or 0
   self:inc('component_roots_total', plan.component_size or 0)
-  self:inc('frontier_roots_total', plan.total_pending or plan.pending or 0)
-  self:inc('component_roots_excluded', math.max(0, (plan.total_pending or 0) - (plan.component_size or 0)))
+  self:inc('frontier_roots_total', total)
+  self:inc('component_roots_excluded', math.max(0, total - (plan.component_size or 0)))
   if plan.component_global then
     self:inc('component_global_plans')
   end
-  self:max('component_size', plan.component_size or 0)
-  self:observe('component_size_per_plan', plan.component_size or 0)
-  self:observe(
-    'component_fraction_percent',
-    (plan.total_pending or 0) > 0 and ((plan.component_size or 0) * 100 / plan.total_pending) or 0
-  )
-  self:observe('exchange_domain_size', plan.max_exchange_domain or 0)
+  self:observe('component_fraction_percent', total > 0 and (plan.component_size or 0) * 100 / total or 0)
   self:inc('search_cpu_ns', math.floor(plan.elapsed * 1000000000 + 0.5))
-
-  self:max('search_steps_per_plan', plan.search_steps or 0)
-  self:max('search_cpu_seconds_per_plan', plan.elapsed or 0)
-  self:max('search_depth', plan.max_depth or 1)
-  self:max('active_tasks', plan.max_active or 0)
-  self:max('intents', plan.max_intents or 0)
-  self:max('roots', plan.max_roots or 0)
-  self:max('tasks', plan.max_tasks or 0)
-  self:max('segments', plan.max_segments or 0)
-  self:max('trail_entries_live', plan.max_trail or 0)
-
-  self:observe('search_steps_per_plan', plan.search_steps or 0)
-  self:observe('participants_per_candidate', plan.participants or 0)
-  self:observe('intents_per_plan', plan.max_intents or 0)
-  self:observe('roots_per_plan', plan.max_roots or 0)
-  self:observe('trail_entries_per_plan', plan.trail_entries or 0)
-  self:observe('option_nodes_per_plan', plan.option_nodes or 0)
-  self:observe('dependency_locations_per_plan', plan.dependency_locations or 0)
-  self:observe('dependency_resources_per_plan', plan.dependency_resources or 0)
-  self:observe('dependency_exchanges_per_plan', plan.dependency_exchanges or 0)
-  self:observe('search_cpu_us_per_plan', (plan.elapsed or 0) * 1000000)
-  insert_slow_plan(self, plan)
+  self:observe('search_cpu_us_per_plan', plan.elapsed * 1000000)
+  retain_slow_plan(self, plan)
 end
 
 function Instrumentation:snapshot()
@@ -404,10 +424,7 @@ function Instrumentation:snapshot()
 end
 
 function Instrumentation:reset()
-  self.counters = {}
-  self.maxima = {}
-  self.histograms = {}
-  self.slow_plans = {}
+  self.counters, self.maxima, self.histograms, self.slow_plans = {}, {}, {}, {}
   self.plan_serial = 0
 end
 

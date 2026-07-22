@@ -30,16 +30,12 @@ function Clock:at_op(deadline)
       return Scalar.Ready.same(true, now)
     end,
   })
-  return Facility.op(
-    self,
-    Kind,
-    Facility.machine(self._location, transition, {}, self, {
-      interest = Interest.timer(deadline, self),
-      absence_check = function(rt)
-        return rt:now() < deadline
-      end,
-    })
-  )
+  return Facility.external_wait(self, Kind, self._location, transition, {
+    interest = Interest.timer(deadline, self),
+    absence_check = function(rt)
+      return rt:now() < deadline
+    end,
+  })
 end
 Clock.Kind = Kind
 return Clock

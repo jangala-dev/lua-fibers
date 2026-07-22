@@ -21,18 +21,13 @@ local function clone_state(s)
   end
   return out
 end
-local function touch(q, state)
-  local loc = q._location
-  loc.value = state
-  loc.version = loc.version + 1
-end
 local function deliver(q, ...)
   local state = clone_state(q._location.value)
   state.values[#state.values + 1] = Op._pack(...)
-  touch(q, state)
+  Facility.publish(q._location, state)
 end
 local function clear(q)
-  touch(q, { head = 1, values = {} })
+  Facility.publish(q._location, { head = 1, values = {} })
 end
 
 function EventQueue.new(name, opts)
@@ -49,7 +44,6 @@ function EventQueue.new(name, opts)
     domain = 'external',
     value = { head = 1, values = {} },
     clone_value = clone_state,
-    apply = function(v, loc) end,
   })
   q._fibers_external_deliver = deliver
   q._fibers_external_clear = clear
@@ -84,24 +78,20 @@ local function op_for(q, drain)
       return Scalar.Ready.write(next_state, unpack_(packed, 1, packed.n))
     end,
   })
-  return Facility.op(
-    q,
-    Kind,
-    Facility.machine(q._location, transition, {}, q, {
-      interest = function(rt)
-        if type(q._interest_factory) == 'function' then
-          return q._interest_factory(rt, q, ExternalFeed.for_resource(rt, q))
-        end
-        return Interest.external(q, 'next', {
-          external_kind = 'events',
-          feed = ExternalFeed.for_resource(rt, q),
-        })
-      end,
-      absence_check = function()
-        return #q._location.value.values == 0
-      end,
-    })
-  )
+  return Facility.external_wait(q, Kind, q._location, transition, {
+    interest = function(rt)
+      if type(q._interest_factory) == 'function' then
+        return q._interest_factory(rt, q, ExternalFeed.for_resource(rt, q))
+      end
+      return Interest.external(q, 'next', {
+        external_kind = 'events',
+        feed = ExternalFeed.for_resource(rt, q),
+      })
+    end,
+    absence_check = function()
+      return #q._location.value.values == 0
+    end,
+  })
 end
 function EventQueue:next_op()
   if self._next_op == false then

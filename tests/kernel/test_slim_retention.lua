@@ -73,25 +73,30 @@ end
 
 -- Retired ownership records must leave the module-global ledger entirely once
 -- a region becomes empty; otherwise short-lived scopes accumulate forever.
-do
+-- Build and retire the objects in a separate Lua frame. Lua 5.1 may keep dead
+-- temporary registers reachable until the current frame returns, which makes a
+-- same-frame weak-reference assertion depend on compiler register allocation.
+local function retired_ownership_refs()
   local weak = setmetatable({}, { __mode = 'v' })
-  do
-    local rt = Runtime.new()
-    local region = Region.new('temporary-region')
-    local item = Region.handle('temporary-item')
-    weak[1], weak[2] = region, item
-    rt:spawn_raw(function()
-      rt:perform(region:admit_op(Region.inert(item)))
-      rt:perform(region:release_op(item))
-    end, 'temporary-owner')
-    while true do
-      local st = rt:run()
-      if st.tag == 'idle' or st.tag == 'quiescent' then
-        break
-      end
+  local rt = Runtime.new()
+  local region = Region.new('temporary-region')
+  local item = Region.handle('temporary-item')
+  weak[1], weak[2] = region, item
+  rt:spawn_raw(function()
+    rt:perform(region:admit_op(Region.inert(item)))
+    rt:perform(region:release_op(item))
+  end, 'temporary-owner')
+  while true do
+    local st = rt:run()
+    if st.tag == 'idle' or st.tag == 'quiescent' then
+      break
     end
-    rt, region, item = nil, nil, nil
   end
+  return weak
+end
+
+do
+  local weak = retired_ownership_refs()
   collect()
   eq(weak[1], nil, 'empty ownership ledger should not retain a region')
   eq(weak[2], nil, 'retired ownership ledger should not retain an item')

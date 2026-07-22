@@ -494,6 +494,7 @@ local function block_intent(state, task, program, occurrence)
     task_id = task.id,
     root_id = task.root_id,
     program = program,
+    payload = occurrence and occurrence.payload or nil,
     activation = task.activation,
     resource = program.resource or program.group,
     role = program.role,
@@ -540,12 +541,12 @@ local function transition_context(state)
   }
 end
 
-local function transition_ready(state, program, value)
-  return IR.transition_ready(program, value, transition_context(state))
+local function transition_ready(state, program, value, payload)
+  return IR.transition_ready(program, value, transition_context(state), payload)
 end
 
-local function transition_outcome(state, program, value, phase)
-  return IR.transition_cursor(program, value, transition_context(state), phase):next()
+local function transition_outcome(state, program, value, phase, payload)
+  return IR.transition_cursor(program, value, transition_context(state), phase, payload):next()
 end
 
 local function stage_outcome(state, task, program, outcome)
@@ -615,9 +616,9 @@ local function resolve_serial_transitions(state, selected)
     local intent, program = selected[i], selected[i].program
     local task, rule = state.tasks[intent.task_id], IR.rule(program)
     local value = Store.project_machine(state, task, program.location, function(candidate)
-      return transition_ready(state, program, candidate)
+      return transition_ready(state, program, candidate, intent.payload)
     end, rule.accepts_supply)
-    local outcome = transition_outcome(state, program, value)
+    local outcome = transition_outcome(state, program, value, nil, intent.payload)
     if not outcome then
       return false
     end
@@ -643,7 +644,7 @@ local function resolve_transitions(state, intent_ids)
       local task = state.tasks[intent.task_id]
       local value = Store.project(state, task, program.location, program.orientation or program.demand_tag)
       if value ~= nil then
-        local outcome = transition_outcome(state, program, value)
+        local outcome = transition_outcome(state, program, value, nil, intent.payload)
         if outcome then
           chosen_index, chosen_outcome, chosen_task = i, outcome, task
           break
@@ -664,9 +665,9 @@ end
 local function witness_cursor(state, intent)
   local program, task, rule = intent.program, state.tasks[intent.task_id], IR.rule(intent.program)
   local value = Store.project_machine(state, task, program.location, function(candidate)
-    return transition_ready(state, program, candidate)
+    return transition_ready(state, program, candidate, intent.payload)
   end, rule.accepts_supply)
-  return IR.transition_cursor(program, value, transition_context(state))
+  return IR.transition_cursor(program, value, transition_context(state), nil, intent.payload)
 end
 
 local function resolve_witness(state, intent_id, outcome, alternative_index)
@@ -807,13 +808,14 @@ local function execute_program(state, task, program, occurrence)
   local loc = program.location
 
   if kind == 'version_wait' then
-    if loc.version ~= program.version then
+    local version = program.payload_version and occurrence.payload or program.version
+    if loc.version ~= version then
       Store.cell(view, loc)
       advance_activation(task, 'primitive:version_wait:' .. object_version_label(loc))
       return complete_task(state, task, new_outcome(task, pack_(Store.read(view, loc), loc.version)))
     end
     program.observed_version = loc.version
-    block_intent(state, task, program)
+    block_intent(state, task, program, occurrence)
     return true
   end
 
@@ -826,6 +828,8 @@ local function execute_program(state, task, program, occurrence)
     local patch = program.patch
     if program.payload_patch == 'replace' then
       patch = { kind = 'replace', value = occurrence.payload }
+    elseif program.payload_patch == 'presence_put' then
+      patch = { kind = 'presence', ops = { { op = 'put', value = occurrence.payload } } }
     end
     Store.stage(view, loc, patch)
     advance_activation(task, 'primitive:patch:' .. object_version_label(loc))
@@ -836,14 +840,14 @@ local function execute_program(state, task, program, occurrence)
     local rule = IR.rule(program)
     if rule.eager then
       local value = Store.read(view, loc)
-      local outcome = transition_outcome(state, program, value, 'eager')
+      local outcome = transition_outcome(state, program, value, 'eager', occurrence.payload)
       if outcome then
         stage_outcome(state, task, program, outcome)
         advance_activation(task, 'primitive:transition:' .. object_version_label(loc))
         return complete_task(state, task, new_outcome(task, outcome.result))
       end
     end
-    block_intent(state, task, program)
+    block_intent(state, task, program, occurrence)
     return true
   end
 

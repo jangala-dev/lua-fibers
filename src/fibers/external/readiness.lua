@@ -27,11 +27,6 @@ end
 local function clone_state(s)
   return { read = not not s.read, write = not not s.write }
 end
-local function touch(r, state)
-  local loc = r._location
-  loc.value = state
-  loc.version = loc.version + 1
-end
 local function deliver(r, ...)
   local n, first = select('#', ...), ...
   local selected, value
@@ -48,7 +43,7 @@ local function deliver(r, ...)
   end
   local state = clone_state(r._location.value)
   state[selected] = value ~= false and value ~= nil
-  touch(r, state)
+  Facility.publish(r._location, state)
 end
 local function clear(r, selected)
   local state = clone_state(r._location.value)
@@ -57,7 +52,7 @@ local function clear(r, selected)
   else
     state[mode(selected, 3)] = false
   end
-  touch(r, state)
+  Facility.publish(r._location, state)
 end
 
 function Readiness.new(key, initial_mode, name)
@@ -74,7 +69,6 @@ function Readiness.new(key, initial_mode, name)
     domain = 'external',
     value = { read = false, write = false },
     clone_value = clone_state,
-    apply = function(v, loc) end,
   })
   r._fibers_external_deliver = deliver
   r._fibers_external_clear = clear
@@ -101,25 +95,21 @@ function Readiness:readiness_op(selected)
       return Scalar.Ready.same(true, key, selected)
     end,
   })
-  local option = Facility.op(
-    self,
-    Kind,
-    Facility.machine(self._location, transition, {}, self, {
-      interest = function(rt)
-        return Interest.external(r, selected .. ':' .. tostring(key), {
-          external_kind = 'readiness',
-          key = key,
-          resource_key = key,
-          readiness_key = key,
-          mode = selected,
-          feed = ExternalFeed.for_resource(rt, r),
-        })
-      end,
-      absence_check = function()
-        return not r._location.value[selected]
-      end,
-    })
-  )
+  local option = Facility.external_wait(self, Kind, self._location, transition, {
+    interest = function(rt)
+      return Interest.external(r, selected .. ':' .. tostring(key), {
+        external_kind = 'readiness',
+        key = key,
+        resource_key = key,
+        readiness_key = key,
+        mode = selected,
+        feed = ExternalFeed.for_resource(rt, r),
+      })
+    end,
+    absence_check = function()
+      return not r._location.value[selected]
+    end,
+  })
   self[field] = option
   return option
 end

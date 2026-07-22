@@ -26,25 +26,8 @@ function M.encode(codec, program, value, session)
     end
     return pack(session, value)
   end
-  if kind == 'index_entry' then
-    return pack(session, value and {
-      key = value.key,
-      rank = value.rank,
-      value = value.value,
-      seq = value.seq,
-    })
-  end
-  if kind == 'scalar_snapshot' then
-    return pack(session, { value = value, version = program.location.version })
-  end
-  if kind == 'counter_state' then
-    local owner = program.resource
-    return pack(session, {
-      value = value,
-      min = owner.min,
-      max = owner.max,
-      version = program.location.version,
-    })
+  if kind == 'project' then
+    return pack(session, codec.project(value, program))
   end
   error('unknown facility result codec ' .. tostring(kind), 2)
 end
