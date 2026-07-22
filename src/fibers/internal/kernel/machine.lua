@@ -60,7 +60,7 @@ end
 
 local function intent_activation_label(intent)
   local program = intent.program or {}
-  return Path.label(intent.activation) .. '@' .. object_version_label(program.location or program.group)
+  return Path.label(intent.activation) .. '@' .. object_version_label(program.location)
 end
 
 local function map_count(xs)
@@ -418,16 +418,17 @@ local function remove_intent_ids(state, ids)
   setv(state, state, 'intents', kept)
 end
 
-local function block_intent(state, task, program, occurrence)
+local function block_intent(state, task, occurrence)
+  local program = occurrence.program
   state.next_intent = state.next_intent + 1
   setv(state, task, 'status', 'blocked')
   local intent = state.session:acquire_record('intent')
   intent.id, intent.kind = state.next_intent, programme_kind(program)
   intent.task_id, intent.root_id, intent.program = task.id, task.root_id, program
-  intent.payload = occurrence and occurrence.payload or nil
+  intent.payload = occurrence.payload
   intent.activation = task.activation
-  intent.resource, intent.role = program.resource or program.group, program.role
-  intent.value = program.payload_field == 'value' and occurrence.payload or program.value
+  intent.resource, intent.role = program.resource, program.role
+  intent.value = occurrence.value
   intent.symmetry_key, intent.scope_path = task.symmetry_key, task.scope_path
   intent.interest = type(program.interest) == 'function' and program.interest(state.runtime, program)
     or program.interest
@@ -452,7 +453,7 @@ local function block_intent(state, task, program, occurrence)
     state.runtime.instrumentation:event(profile_plan, 'intent', {
       primitive_kind = IR.kind(program),
       role = program.role,
-      resource = tostring(program.resource or program.group),
+      resource = tostring(program.resource),
     })
   end
 end
@@ -609,8 +610,7 @@ local function resolve_transitions(state, intent_ids)
       local intent, program = remaining[i], remaining[i].program
       local task = state.tasks[intent.task_id]
       ensure_task_segment(state, task)
-      local value =
-        Ledger.project(state, task, program.location, program.orientation or program.demand_tag, state.trail)
+      local value = Ledger.project(state, task, program.location, program.orientation, state.trail)
       if value ~= nil then
         local outcome = transition_outcome(state, program, value, nil, intent.payload)
         if outcome then
@@ -800,14 +800,15 @@ local function final_candidate(state)
   return candidate
 end
 
-local function execute_program(state, task, program, occurrence)
+local function execute_program(state, task, occurrence)
+  local program = occurrence.program
   if not program or program._fibers_program ~= true then
     error('primitive payload is not a kernel programme', 0)
   end
 
   local kind = programme_kind(program)
   if kind == 'exchange' then
-    block_intent(state, task, program, occurrence)
+    block_intent(state, task, occurrence)
     return true
   end
 
@@ -830,7 +831,7 @@ local function execute_program(state, task, program, occurrence)
 
   if kind == 'version_wait' then
     segment = ensure_task_segment(state, task)
-    local version = program.payload_version and occurrence.payload or program.version
+    local version = occurrence.version
     if loc.version ~= version then
       Ledger.observe(segment, loc, state.trail)
       advance_activation(state, task, 'primitive:version_wait:' .. object_version_label(loc))
@@ -841,7 +842,7 @@ local function execute_program(state, task, program, occurrence)
       )
     end
     program.observed_version = loc.version
-    block_intent(state, task, program, occurrence)
+    block_intent(state, task, occurrence)
     return true
   end
 
@@ -862,12 +863,7 @@ local function execute_program(state, task, program, occurrence)
 
   if kind == 'patch' then
     segment = ensure_task_segment(state, task)
-    local patch = program.patch
-    if program.payload_patch == 'replace' then
-      patch = { kind = 'replace', value = occurrence.payload }
-    elseif program.payload_patch == 'presence_put' then
-      patch = { kind = 'presence', ops = { { op = 'put', value = occurrence.payload } } }
-    end
+    local patch = occurrence.patch
     Ledger.stage(segment, loc, patch, state.trail)
     advance_activation(state, task, 'primitive:patch:' .. object_version_label(loc))
     return complete_task(
@@ -894,7 +890,7 @@ local function execute_program(state, task, program, occurrence)
         return complete_task(state, task, new_outcome(state, outcome.result, nil, task))
       end
     end
-    block_intent(state, task, program, occurrence)
+    block_intent(state, task, occurrence)
     return true
   end
 
@@ -1046,7 +1042,7 @@ local function drain_active(state)
           return 'retry', terminal_certificate(state)
         end
       elseif kind == 'primitive' then
-        if not execute_program(state, task, expr.descriptor, expr) then
+        if not execute_program(state, task, expr) then
           return 'retry', terminal_certificate(state)
         end
       elseif kind == 'product' then
@@ -1151,7 +1147,7 @@ local function raw_exchange_program(op)
   if not op or op.kind ~= 'primitive' then
     return nil
   end
-  local program = op.descriptor
+  local program = op.program
   if not program or programme_kind(program) ~= 'exchange' then
     return nil
   end
@@ -1363,8 +1359,8 @@ local function prepare_alternative(state, frame, alt)
         local names = {}
         for i = 1, #alt.ids do
           local intent = state.intent_by_id[alt.ids[i]]
-          local transition = intent and intent.program and intent.program.transition
-          names[i] = (transition and transition.name)
+          local rule = intent and intent.program and IR.rule(intent.program)
+          names[i] = (rule and rule.name)
             or (intent and intent.program and intent.program.name)
             or (intent and intent.kind)
             or '<missing>'

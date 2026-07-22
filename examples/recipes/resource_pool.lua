@@ -8,6 +8,7 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
+local Ready = Scalar.Ready
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
 local Lease = require('fibers.resource.lease')
@@ -75,9 +76,9 @@ local OpenTransitions = Scalar.kind({
       order = 100,
       step = function(open)
         if open == true then
-          return true, true
+          return Ready.write(true, true)
         end
-        return open, false
+        return Ready.write(open, false)
       end,
     },
     close = {
@@ -86,7 +87,7 @@ local OpenTransitions = Scalar.kind({
       supplies = 'any',
       order = 0,
       step = function(_open)
-        return false, true
+        return Ready.write(false, true)
       end,
     },
   },

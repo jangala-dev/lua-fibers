@@ -25,6 +25,7 @@ end
 function Ready.same(...)
   return { _fibers_scalar_ready = true, writes = false, pack = Op._pack(...) }
 end
+
 Scalar.Wait = WAIT
 Scalar.Ready = Ready
 
@@ -35,8 +36,8 @@ function Scalar.transition(spec)
   if type(spec) ~= 'table' then
     error('Scalar.transition expects a table', 2)
   end
-  if type(spec.step) ~= 'function' and type(spec.apply) ~= 'function' then
-    error('Scalar.transition requires step or apply', 2)
+  if type(spec.step) ~= 'function' then
+    error('Scalar.transition requires step', 2)
   end
   if spec.supply ~= nil then
     error('Scalar.transition no longer accepts supply; use accepts_supply and supplies', 2)
@@ -62,7 +63,7 @@ function Scalar.transition(spec)
     writes = mode ~= 'query',
     name = spec.name,
     mode = mode,
-    step = spec.step or spec.apply,
+    step = spec.step,
     ready = spec.ready,
     validate = spec.validate,
     order = spec.order or 0,
@@ -133,12 +134,12 @@ local function new_scalar(value, name, merge)
   })
   scalar._write_descriptor = Facility.descriptor(scalar, Kind, 'patch', {
     location = scalar._location,
-    payload_patch = 'replace',
+    bind = 'replace',
     result = Facility.result.boolean,
   })
   scalar._changed_descriptor = Facility.descriptor(scalar, Kind, 'version_wait', {
     location = scalar._location,
-    payload_version = true,
+    bind = 'version',
   })
   -- Descriptors retain their transition rule.  Weak keys alone rely on
   -- ephemeron semantics, which Lua 5.1 and LuaJIT do not provide: the value
@@ -169,36 +170,6 @@ end
 
 function Scalar:expect_op(value)
   return self:transition_op(EXPECT_TRANSITION, value)
-end
-
-function Scalar:unsafe_update_op(fn)
-  if type(fn) ~= 'function' then
-    error('scalar unsafe_update expects a function', 2)
-  end
-  local t = Scalar.transition({
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(current)
-      return fn(current)
-    end,
-  })
-  return self:transition_op(t, {})
-end
-
-function Scalar:unsafe_select_op(fn)
-  if type(fn) ~= 'function' then
-    error('scalar unsafe_select expects a function', 2)
-  end
-  local t = Scalar.transition({
-    mode = 'select',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(current)
-      return fn(current)
-    end,
-  })
-  return self:transition_op(t, {})
 end
 
 function Scalar:write_op(value)

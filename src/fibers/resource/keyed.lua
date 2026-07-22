@@ -71,7 +71,7 @@ local function operations(self, key)
     contains = Facility.op(self, Kind, Facility.read(location, Facility.result.present)),
     put = Facility.descriptor(self, Kind, 'patch', {
       location = location,
-      payload_patch = 'presence_put',
+      bind = 'presence_put',
       result = Facility.result.boolean,
     }),
     remove = Facility.op(

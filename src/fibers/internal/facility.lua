@@ -179,14 +179,17 @@ end
 function M.machine(location, transition, payload, resource, extra)
   local opts = {
     location = location,
-    transition = transition,
     payload = payload,
     resource = resource,
   }
   for key, value in pairs(extra or {}) do
     opts[key] = value
   end
-  return transition_program(opts, transition)
+  local program = transition_program(opts, transition)
+  if payload == nil then
+    program.bind = 'payload'
+  end
+  return program
 end
 
 function M.witness(opts)
@@ -221,7 +224,8 @@ local function descriptor(resource, kind, program)
 end
 
 function M.op(resource, kind, program, payload)
-  return Op._primitive(descriptor(resource, kind, program), payload)
+  local compiled = descriptor(resource, kind, program)
+  return Op._primitive(compiled, payload)
 end
 
 function M.static(resource, kind, primitive_kind, fields)

@@ -36,17 +36,7 @@ if not bit then
   return Common.skip('tests/hosts/test_luajit_linux.lua', bit_reason or 'bit operations unavailable')
 end
 
--- Requiring FibersHost.luajit_linux has installed its epoll_event definition.
--- The x86/x64 Linux ABI uses the packed 12-byte layout used by the adapter.
-do
-  local arch = ffi.arch or (rawget(_G, 'jit') and rawget(_G, 'jit').arch)
-  local size = ffi.sizeof('struct epoll_event')
-  if arch == 'x64' or arch == 'x86' then
-    Common.assert_eq(size, 12, 'epoll_event ABI size on ' .. tostring(arch))
-  else
-    Common.assert_truthy(size >= 12, 'epoll_event ABI size should be plausible')
-  end
-end
+-- The unified provider exposes POSIX mechanisms through the common host.
 
 local FfiSupport = require('tests.support.ffi_linux')
 if not FfiSupport.available then
@@ -78,48 +68,17 @@ with_host_pipe('luajit_linux:write-readiness', Common.write_readiness_smoke)
 with_host_pipe('luajit_linux:readiness-beats-timeout', Common.readiness_beats_timeout_smoke)
 with_host_pipe('luajit_linux:timeout-beats-unready', Common.timeout_beats_unready_smoke)
 
--- Regular files are not epollable.  The backend should preserve the old fibers
--- policy: treat EPERM/unpollable descriptors as requested readiness, not as an
--- separate error readiness mode.  The subsequent file operation is responsible for EOF/error.
+-- poll(2) reports regular files as immediately readable.
 do
   local host = LinuxHost.new()
   local file = make_regular_file()
   local ok, err = pcall(function()
     Common.ready_source_smoke('luajit_linux:unpollable-regular-file', host, file.read_key, 'read')
-    Common.assert_truthy(host.unpollable[file.read_key], 'regular file fd should be marked unpollable')
   end)
   Common.cleanup(host, file)
   if not ok then
     error(err, 0)
   end
-end
-
--- A descriptor that was registered in an earlier block call should be removed
--- when it is withdrawn from the current wait set.  This avoids stale epoll
--- interest and reduces fd-reuse hazards.
-do
-  local host = LinuxHost.new()
-  local pipe = make_pipe()
-  local ok, err = pcall(function()
-    Common.readiness_smoke('luajit_linux:active-delete-prime', host, pipe)
-    Common.assert_truthy(host.active[pipe.read_key] ~= nil, 'pipe read fd should have been registered')
-    local rt = FibersRuntime.new({ host = host })
-    local progressed, reason = host:block(rt, {}, { tag = 'pending' }, {})
-    Common.assert_eq(progressed, nil, 'empty wait set should not progress')
-    Common.assert_eq(reason, 'unsupported-waits', 'empty wait set should be unsupported')
-    Common.assert_eq(host.active[pipe.read_key], nil, 'withdrawn fd should be deleted from active epoll set')
-  end)
-  Common.cleanup(host, pipe)
-  if not ok then
-    error(err, 0)
-  end
-end
-
--- Constructor hardening: maxevents is clamped to at least one.
-do
-  local host = LinuxHost.new({ maxevents = 0 })
-  Common.assert_eq(host.maxevents, 1, 'maxevents should be clamped to at least one')
-  host:close()
 end
 
 -- Block-after-close should fail clearly rather than using a stale epoll fd.
@@ -145,7 +104,7 @@ end
 
 -- Real kernel readiness is validated with the production evaluator.  The
 -- reference evaluator remains the differential oracle for deterministic option
--- semantics; combining it with wall-clock epoll races makes that suite
+-- semantics; combining it with wall-clock readiness races makes that suite
 -- needlessly nondeterministic.
 if os.getenv('FIBERS_MACHINE') ~= 'reference' then
   local socket_host = LinuxHost.new()

@@ -39,7 +39,7 @@ end
 
 local function intent_activation_label(intent)
   local program = intent.program or {}
-  return Activation.label(intent.activation) .. '@' .. object_version_label(program.location or program.group)
+  return Activation.label(intent.activation) .. '@' .. object_version_label(program.location)
 end
 
 local function copy_array(xs)
@@ -485,7 +485,8 @@ local function result_pack(program, value)
   return IR.result_pack(program, value)
 end
 
-local function block_intent(state, task, program, occurrence)
+local function block_intent(state, task, occurrence)
+  local program = occurrence.program
   state.next_intent = state.next_intent + 1
   task.status = 'blocked'
   local intent = {
@@ -494,11 +495,11 @@ local function block_intent(state, task, program, occurrence)
     task_id = task.id,
     root_id = task.root_id,
     program = program,
-    payload = occurrence and occurrence.payload or nil,
+    payload = occurrence.payload,
     activation = task.activation,
-    resource = program.resource or program.group,
+    resource = program.resource,
     role = program.role,
-    value = program.payload_field == 'value' and occurrence.payload or program.value,
+    value = occurrence.value,
     symmetry_key = task.symmetry_key,
     scope_path = copy_scope_path(task.scope_path),
     interest = type(program.interest) == 'function' and program.interest(state.runtime, program)
@@ -642,7 +643,7 @@ local function resolve_transitions(state, intent_ids)
     for i = 1, #remaining do
       local intent, program = remaining[i], remaining[i].program
       local task = state.tasks[intent.task_id]
-      local value = Store.project(state, task, program.location, program.orientation or program.demand_tag)
+      local value = Store.project(state, task, program.location, program.orientation)
       if value ~= nil then
         local outcome = transition_outcome(state, program, value, nil, intent.payload)
         if outcome then
@@ -783,14 +784,15 @@ local function final_candidate(state)
   return candidate
 end
 
-local function execute_program(state, task, program, occurrence)
+local function execute_program(state, task, occurrence)
+  local program = occurrence.program
   if not program or program._fibers_program ~= true then
     error('primitive payload is not a kernel programme', 0)
   end
 
   local kind = programme_kind(program)
   if kind == 'exchange' then
-    block_intent(state, task, program, occurrence)
+    block_intent(state, task, occurrence)
     return true
   end
 
@@ -808,14 +810,14 @@ local function execute_program(state, task, program, occurrence)
   local loc = program.location
 
   if kind == 'version_wait' then
-    local version = program.payload_version and occurrence.payload or program.version
+    local version = occurrence.version
     if loc.version ~= version then
       Store.cell(view, loc)
       advance_activation(task, 'primitive:version_wait:' .. object_version_label(loc))
       return complete_task(state, task, new_outcome(task, pack_(Store.read(view, loc), loc.version)))
     end
     program.observed_version = loc.version
-    block_intent(state, task, program, occurrence)
+    block_intent(state, task, occurrence)
     return true
   end
 
@@ -825,12 +827,7 @@ local function execute_program(state, task, program, occurrence)
   end
 
   if kind == 'patch' then
-    local patch = program.patch
-    if program.payload_patch == 'replace' then
-      patch = { kind = 'replace', value = occurrence.payload }
-    elseif program.payload_patch == 'presence_put' then
-      patch = { kind = 'presence', ops = { { op = 'put', value = occurrence.payload } } }
-    end
+    local patch = occurrence.patch
     Store.stage(view, loc, patch)
     advance_activation(task, 'primitive:patch:' .. object_version_label(loc))
     return complete_task(state, task, new_outcome(task, result_pack(program, Store.read(view, loc))))
@@ -847,7 +844,7 @@ local function execute_program(state, task, program, occurrence)
         return complete_task(state, task, new_outcome(task, outcome.result))
       end
     end
-    block_intent(state, task, program, occurrence)
+    block_intent(state, task, occurrence)
     return true
   end
 
@@ -913,9 +910,9 @@ local function attach_candidate_effects(runtime, candidate, extra)
 end
 
 local function request_may_supply(request, intents)
-  local metadata = request.metadata or request.footprint or IR.metadata(request.op)
-  request.metadata, request.footprint = metadata, metadata
-  return IR.footprint_may_supply(metadata, intents)
+  local metadata = request.metadata or IR.metadata(request.op)
+  request.metadata = metadata
+  return IR.metadata_may_supply_any(metadata, intents)
 end
 
 local dfs
@@ -983,7 +980,7 @@ dfs = function(state)
             return nil, terminal_refutation(state), false
           end
         elseif kind == 'primitive' then
-          if not execute_program(state, task, expr.descriptor, expr) then
+          if not execute_program(state, task, expr) then
             return nil, terminal_refutation(state), false
           end
         elseif kind == 'product' then

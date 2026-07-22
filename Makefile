@@ -154,14 +154,27 @@ check-layout:
 	@test -f src/fibers/flow.lua
 	@test -f src/fibers/internal/flow_machine.lua
 	@test -f src/fibers/internal/scalar_wait.lua
-	@test -f src/fibers/flow/space_lease.lua
+	@test -f src/fibers/internal/flow_leases.lua
+	@test ! -e src/fibers/flow/lease.lua
+	@test ! -e src/fibers/flow/space_lease.lua
 	@test -f src/fibers/host/reactor.lua
+	@test -f src/fibers/host/adapter.lua
+	@test ! -e src/fibers/host/family.lua
+	@test ! -e src/fibers/host/socket_core.lua
+	@test ! -e src/fibers/host/datagram_core.lua
+	@test ! -e src/fibers/host/resolver.lua
+	@test ! -e src/fibers/host/process_core.lua
+	@test ! -e src/fibers/host/process_io_core.lua
 	@test -f src/fibers/host/error.lua
 	@test -f src/fibers/host/native_error.lua
-	@test -f src/fibers/host/nixio_error.lua
-	@test -f src/fibers/host/luaposix_error.lua
-	@test -f src/fibers/host/poll_plan.lua
-	@test -f src/fibers/host/nixio_poll.lua
+	@test -f src/fibers/host/provider/nixio.lua
+	@test -f src/fibers/host/provider/luaposix.lua
+	@test -f src/fibers/host/provider/ffi_linux.lua
+	@test -f src/fibers/host/wait_set.lua
+	@test ! -e src/fibers/host/poll_plan.lua
+	@test ! -e src/fibers/host/poller_queue.lua
+	@test ! -e src/fibers/host/poller.lua
+	@test ! -e src/fibers/host/nixio_poll.lua
 	@test -f src/fibers/internal/completion.lua
 	@test -f src/fibers/internal/adoption.lua
 	@test -f src/fibers/internal/io_audit.lua
@@ -180,13 +193,13 @@ check-layout:
 	@test -f src/fibers/process.lua
 	@test -f src/fibers/process/command.lua
 	@test -f src/fibers/internal/process/lifecycle.lua
-	@test -f src/fibers/host/_process_ffi_common.lua
-	@test -f src/fibers/host/process_luaposix.lua
-	@test -f src/fibers/host/process_nixio.lua
-	@test -f src/fibers/host/socket_luaposix.lua
-	@test -f src/fibers/host/socket_nixio.lua
-	@test -f src/fibers/host/resolver_luaposix.lua
-	@test -f src/fibers/host/resolver_nixio.lua
+	@test ! -e src/fibers/host/_process_ffi_common.lua
+	@test ! -e src/fibers/host/process_luaposix.lua
+	@test ! -e src/fibers/host/process_nixio.lua
+	@test ! -e src/fibers/host/socket_luaposix.lua
+	@test ! -e src/fibers/host/socket_nixio.lua
+	@test ! -e src/fibers/host/resolver_luaposix.lua
+	@test ! -e src/fibers/host/resolver_nixio.lua
 	@test -f src/fibers/socket/address.lua
 	@test -f src/fibers/socket/listener.lua
 	@test -f src/fibers/socket/dial.lua
@@ -206,11 +219,11 @@ check-layout:
 	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
 	@test -f src/fibers/internal/socket/datagram_send_state.lua
 	@test -f src/fibers/internal/socket/datagram_service.lua
-	@test -f src/fibers/host/wait.lua
-	@test -f src/fibers/host/datagram_luaposix.lua
-	@test -f src/fibers/host/datagram_nixio.lua
-	@test -f src/fibers/host/_socket_ffi_common.lua
-	@test -f src/fibers/host/_resolver_ffi_common.lua
+	@test ! -e src/fibers/host/wait.lua
+	@test ! -e src/fibers/host/datagram_luaposix.lua
+	@test ! -e src/fibers/host/datagram_nixio.lua
+	@test ! -e src/fibers/host/_socket_ffi_common.lua
+	@test ! -e src/fibers/host/_resolver_ffi_common.lua
 	@test -f src/fibers/internal/io.lua
 	@test -f src/fibers/internal/socket/lifecycle.lua
 	@test -f src/fibers/internal/socket/connection.lua

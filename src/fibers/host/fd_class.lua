@@ -44,7 +44,7 @@ function M.define(spec)
 
   function Fd.pipe(opts)
     opts = opts or {}
-    local read_raw, write_raw, err, extra = spec.pipe()
+    local read_raw, write_raw, err, extra = spec.pipe(opts)
     if not read_raw then
       return nil, nil, err, extra
     end

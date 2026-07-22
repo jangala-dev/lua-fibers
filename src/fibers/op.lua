@@ -401,23 +401,50 @@ function Op._symmetry_key(value)
   return is_op(value) and value.kind == 'annotated' and value.symmetry_key or nil
 end
 
--- Trusted primitive occurrence.  Descriptors are immutable and shared;
--- dynamic calls carry only an optional payload.  Payload-free descriptors
--- cache their reusable Op node.
-function Op._primitive(descriptor, payload)
-  if not (type(descriptor) == 'table' and descriptor._fibers_program == true) then
-    error('primitive requires a trusted descriptor', 2)
+-- Trusted primitive occurrence. Programmes are immutable and shared; payload
+-- binding happens exactly once here, producing the canonical fields consumed by
+-- both machines.
+function Op._primitive(program, payload)
+  if not (type(program) == 'table' and program._fibers_program == true) then
+    error('primitive requires a trusted programme', 2)
   end
-  if payload == nil then
-    local cached = descriptor._op
+
+  local binding = program.bind
+  if binding == nil then
+    local cached = program._op
     if cached then
       return cached
     end
-    cached = op('primitive', { descriptor = descriptor })
-    descriptor._op = cached
+    local occurrence = { program = program }
+    if program.kind == 'patch' then
+      occurrence.patch = program.patch
+    elseif program.kind == 'version_wait' then
+      occurrence.version = program.version
+    elseif program.kind == 'exchange' then
+      occurrence.value = program.value
+    elseif program.kind == 'transition' then
+      occurrence.payload = program.payload
+    end
+    cached = op('primitive', occurrence)
+    program._op = cached
     return cached
   end
-  return op('primitive', { descriptor = descriptor, payload = payload })
+
+  local occurrence = { program = program }
+  if binding == 'replace' then
+    occurrence.patch = { kind = 'replace', value = payload }
+  elseif binding == 'presence_put' then
+    occurrence.patch = { kind = 'presence', ops = { { op = 'put', value = payload } } }
+  elseif binding == 'version' then
+    occurrence.version = payload
+  elseif binding == 'value' then
+    occurrence.value = payload
+  elseif binding == 'payload' then
+    occurrence.payload = payload
+  else
+    error('unknown trusted programme binding ' .. tostring(binding), 2)
+  end
+  return op('primitive', occurrence)
 end
 
 Op.is_op = is_op

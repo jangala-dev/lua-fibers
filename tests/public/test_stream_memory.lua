@@ -539,3 +539,13 @@ do
     assert_eq(line, 'hello world')
   end)
 end
+
+-- A Stream is only a pairing of Flow capabilities: the same Flows remain
+-- directly composable through tensor, tees and other Flow-level protocols.
+do
+  local read_flow = Flow.new({ name = 'composed-read' })
+  local write_flow = Flow.new({ name = 'composed-write' })
+  local composed = Stream.compose(read_flow, write_flow, { name = 'composed-stream' })
+  assert(composed:reader() == read_flow:outlet())
+  assert(composed:writer() == write_flow:inlet())
+end

@@ -336,10 +336,10 @@ function Index:supplier_atoms(intent)
     add_unique(atoms, seen, self:atom('resource', intent.resource, 'wide'))
   else
     local program = intent.program
-    local location = program and (program.location or program.group)
+    local location = program and program.location
     if location then
       add_unique(atoms, seen, self:atom('supply', location, 'any'))
-      local orientation = program.orientation or program.demand_tag
+      local orientation = program.orientation
       if orientation == 'up' then
         add_unique(atoms, seen, self:atom('supply', location, 'up'))
       elseif orientation == 'down' then

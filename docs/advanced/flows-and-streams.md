@@ -13,7 +13,7 @@ Flow
 Stream
     an application-facing reader, writer or duplex byte facility
 
-HostPoller
+HostReactor readiness index
     indexed readiness registration and ready-event delivery
 
 HostReactor
@@ -262,6 +262,13 @@ data lease
 ```
 
 ## Stream
+
+A Stream contains no byte state. It is a thin pairing of an optional Flow Outlet
+and an optional Flow Inlet. Facility authors may compose existing Flows directly:
+
+```lua
+local stream = Stream.compose(read_flow, write_flow, { name = 'duplex' })
+```
 
 A memory pair is formed from two cross-connected Flows:
 

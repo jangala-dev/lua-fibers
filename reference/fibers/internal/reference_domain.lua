@@ -279,7 +279,7 @@ local function claim_frontier(state, constrained)
     local intent = state.intents[i]
     local rule = transition_rule(intent)
     if rule and not rule.enumerable then
-      local key = intent.program.group or intent.program.location
+      local key = intent.program.location
       local group = by_key[key]
       if not group then
         group = {

@@ -56,14 +56,14 @@ local function mark_hint(self, mode)
     host:set_readiness(self.key, mode, true)
   end
   local runtime = self.runtime
-  local poller = runtime and runtime.host_poller
-  if poller then
-    poller:hint(self.key, mode)
+  local reactor = runtime and runtime.host_reactor
+  if reactor then
+    reactor:hint(self.key, mode)
   end
 end
 
 local function callback(self, name, ...)
-  local f = self.operations and self.operations[name] or self['_' .. name]
+  local f = self.operations and self.operations[name]
   if type(f) == 'function' then
     return f(self, ...)
   end
@@ -74,7 +74,25 @@ function Handle.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('host-handle-' .. tostring(next_id))
-  local operations = opts.operations or {}
+  local operations = {}
+  for name, method in pairs(opts.operations or {}) do
+    operations[name] = method
+  end
+  for _, name in ipairs({
+    'read',
+    'write',
+    'shutdown_read',
+    'shutdown_write',
+    'close',
+    'set_nonblocking',
+    'bind_runtime',
+    'attach_stream',
+    'ready',
+  }) do
+    if operations[name] == nil and type(opts[name]) == 'function' then
+      operations[name] = opts[name]
+    end
+  end
   local declared = opts.capabilities or {}
   local function capability(name, fallback)
     if declared[name] ~= nil then
@@ -108,13 +126,7 @@ function Handle.new(opts)
     readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     capabilities = capabilities,
-    operations = next(operations) and operations or nil,
-    _read = opts.read,
-    _write = opts.write,
-    _shutdown_read = opts.shutdown_read,
-    _shutdown_write = opts.shutdown_write,
-    _close = opts.close,
-    _set_nonblocking = opts.set_nonblocking,
+    operations = operations,
     runtime = nil,
     stream = nil,
     _fibers_host_handle = true,
@@ -148,21 +160,30 @@ function Handle:bind_runtime(rt)
   if not self.feed then
     self.feed = rt:external_feed(self.readiness)
   end
+  local bind = self.operations.bind_runtime
+  if bind then
+    bind(self, rt)
+  end
   return self
 end
 
 function Handle:attach_stream(stream)
   self.stream = stream
   IOAudit.transfer(self, stream, { kind = 'host_handle', role = 'stream_handle' })
+  local attach = self.operations.attach_stream
+  if attach then
+    attach(self, stream)
+  end
   return self
 end
 
 function Handle:ready_op(mode)
   mode = normalise_mode(mode)
-  if mode == 'write' then
-    return self.readiness:writable_op()
+  local ready = self.operations.ready
+  if ready then
+    return ready(self, mode)
   end
-  return self.readiness:readable_op()
+  return mode == 'write' and self.readiness:writable_op() or self.readiness:readable_op()
 end
 
 function Handle:read_ready_op()
@@ -422,115 +443,70 @@ function Handle.pipe_pair(opts)
   return reader, writer
 end
 
--- A mode-split handle composes a read handle and a write handle into the
--- duplex HostHandle shape expected by Stream.  This is useful
--- for pipe pairs and later subprocess stdio: readiness and I/O remain delegated
--- to the true underlying end for each direction.
-local Duplex = {}
-Duplex.__index = Duplex
-setmetatable(Duplex, { __index = Handle })
-
+-- Pair independent read and write handles behind the ordinary HostHandle contract.
 function Handle.duplex(read_handle, write_handle, opts)
   opts = opts or {}
   if type(read_handle) ~= 'table' or type(write_handle) ~= 'table' then
     error('Handle.duplex expects read and write handles', 2)
   end
-  next_id = next_id + 1
-  local self = {
-    name = opts.name or ('duplex-handle-' .. tostring(next_id)),
+  local function each(method, value)
+    for _, handle in ipairs({ read_handle, write_handle }) do
+      if handle and type(handle[method]) == 'function' then
+        handle[method](handle, value)
+      end
+    end
+  end
+  local handle = Handle.new({
+    name = opts.name,
     key = opts.key or {
-      read = read_handle.readiness_key and read_handle:readiness_key() or read_handle.key,
-      write = write_handle.readiness_key and write_handle:readiness_key() or write_handle.key,
+      read = read_handle:readiness_key(),
+      write = write_handle:readiness_key(),
     },
-    read_handle = read_handle,
-    write_handle = write_handle,
     host = opts.host or read_handle.host or write_handle.host,
     capabilities = {
-      read = type(read_handle.supports) == 'function' and read_handle:supports('read') or true,
-      write = type(write_handle.supports) == 'function' and write_handle:supports('write') or true,
-      shutdown_read = type(read_handle.supports) ~= 'function' or read_handle:supports('shutdown_read'),
-      shutdown_write = type(write_handle.supports) ~= 'function' or write_handle:supports('shutdown_write'),
+      read = read_handle:supports('read'),
+      write = write_handle:supports('write'),
+      shutdown_read = read_handle:supports('shutdown_read'),
+      shutdown_write = write_handle:supports('shutdown_write'),
       close = true,
-      set_nonblocking = false,
       readiness = true,
     },
-    runtime = nil,
-    stream = nil,
-    _fibers_host_handle = true,
-  }
-  setmetatable(self, Duplex)
-  IOAudit.created(self, { kind = 'duplex_host_handle' })
-  return self
-end
-
-function Duplex:supports(capability)
-  return self.capabilities and self.capabilities[capability] == true
-end
-function Duplex:readiness_key()
-  return self.key
-end
-
-function Duplex:bind_runtime(rt)
-  self.runtime = rt
-  IOAudit.bind(self, rt)
-  for _, handle in ipairs({ self.read_handle, self.write_handle }) do
-    if handle and type(handle.bind_runtime) == 'function' then
-      handle:bind_runtime(rt)
-    end
-  end
-  return self
-end
-
-function Duplex:attach_stream(stream)
-  self.stream = stream
-  IOAudit.transfer(self, stream, { kind = 'duplex_host_handle', role = 'stream_handle' })
-  for _, handle in ipairs({ self.read_handle, self.write_handle }) do
-    if handle and type(handle.attach_stream) == 'function' then
-      handle:attach_stream(stream)
-    end
-  end
-  return self
-end
-
-function Duplex:ready_op(mode)
-  mode = normalise_mode(mode)
-  return mode == 'write' and self.write_handle:write_ready_op() or self.read_handle:read_ready_op()
-end
-function Duplex:read_ready_op()
-  return self:ready_op('read')
-end
-function Duplex:write_ready_op()
-  return self:ready_op('write')
-end
-function Duplex:read(max)
-  return self.read_handle:read(max)
-end
-function Duplex:write(bytes)
-  return self.write_handle:write(bytes)
-end
-function Duplex:shutdown_read(reason)
-  return type(self.read_handle.shutdown_read) == 'function' and self.read_handle:shutdown_read(reason) or true
-end
-function Duplex:shutdown_write(reason)
-  return type(self.write_handle.shutdown_write) == 'function' and self.write_handle:shutdown_write(reason)
-    or true
-end
-
-function Duplex:close(reason)
-  return close_once(self, reason, function()
-    local ok1, err1 = self.read_handle:close(reason)
-    local ok2, err2 = true, nil
-    if self.write_handle ~= self.read_handle then
-      ok2, err2 = self.write_handle:close(reason)
-    end
-    if not ok1 then
-      return nil, err1
-    end
-    if not ok2 then
-      return nil, err2
-    end
-    return true
-  end)
+    operations = {
+      read = function(_, maximum)
+        return read_handle:read(maximum)
+      end,
+      write = function(_, bytes)
+        return write_handle:write(bytes)
+      end,
+      shutdown_read = function(_, reason)
+        return read_handle:shutdown_read(reason)
+      end,
+      shutdown_write = function(_, reason)
+        return write_handle:shutdown_write(reason)
+      end,
+      ready = function(_, mode)
+        return mode == 'write' and write_handle:write_ready_op() or read_handle:read_ready_op()
+      end,
+      bind_runtime = function(_, runtime)
+        each('bind_runtime', runtime)
+      end,
+      attach_stream = function(_, stream)
+        each('attach_stream', stream)
+      end,
+      close = function(_, reason)
+        local ok, err = read_handle:close(reason)
+        if not ok then
+          return nil, err
+        end
+        if write_handle ~= read_handle then
+          return write_handle:close(reason)
+        end
+        return true
+      end,
+    },
+  })
+  handle.read_handle, handle.write_handle = read_handle, write_handle
+  return handle
 end
 
 return Handle

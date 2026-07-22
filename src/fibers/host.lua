@@ -7,97 +7,25 @@
 
 local Host = {}
 
-local function is_finite_number(x)
-  return type(x) == 'number' and x == x and x ~= math.huge and x ~= -math.huge
-end
-
 function Host.supports(host, capability)
   return type(host) == 'table'
     and type(host.capabilities) == 'table'
     and host.capabilities[capability] == true
 end
 
-function Host.earliest_deadline(waits)
-  local best
-  for i = 1, #(waits or {}) do
-    local w = waits[i]
-    local d = w and w.deadline
-    if w and w.kind == 'timer' and is_finite_number(d) and (best == nil or d < best) then
-      best = d
-    end
-  end
-  return best
-end
+local WaitSet = require('fibers.host.wait_set')
 
-function Host.has_non_time_waits(waits)
-  for i = 1, #(waits or {}) do
-    local w = waits[i]
-    if w and w.kind ~= 'timer' then
-      return true
-    end
-  end
-  return false
+Host.earliest_deadline = function(waits)
+  return WaitSet.build(waits).deadline
 end
-
-local function external_waits(waits, kind, owner)
-  local out = {}
-  for i = 1, #(waits or {}) do
-    local wait = waits[i]
-    if wait and wait.kind == 'external' and wait.external_kind == kind and wait[owner] and wait.feed then
-      out[#out + 1] = wait
-    end
-  end
-  return out
+Host.has_non_time_waits = function(waits)
+  return WaitSet.build(waits).has_non_time
 end
-
-function Host.readiness_waits(waits)
-  return external_waits(waits, 'readiness', 'resource')
-end
-function Host.poller_waits(waits)
-  return external_waits(waits, 'poller', 'poller')
-end
-
-function Host.deliver_poller_ready(rt, wait, registration)
-  if not wait or not wait.feed or not registration then
-    return false
-  end
-  rt:deliver(wait.feed, registration.id, registration.generation, registration.mode, registration.key)
-  return true
-end
-
-function Host.normalise_readiness_mode(mode)
-  mode = mode or 'read'
-  if mode == 'wr' then
-    mode = 'write'
-  end
-  if mode ~= 'read' and mode ~= 'write' then
-    error('readiness mode must be read or write', 2)
-  end
-  return mode
-end
-
-function Host.delay_until(rt, deadline)
-  if deadline == nil then
-    return nil
-  end
-  local delay = deadline - rt:now()
-  if delay < 0 then
-    delay = 0
-  end
-  return delay
-end
-
-function Host.timeout_ms(rt, deadline)
-  if deadline == nil then
-    return -1
-  end
-  local delay = Host.delay_until(rt, deadline) or 0
-  local ms = math.ceil(delay * 1000)
-  if ms < 0 then
-    ms = 0
-  end
-  return ms
-end
+Host.delay_until = WaitSet.delay_until
+Host.timeout_ms = WaitSet.timeout_ms
+Host.readiness_waits = WaitSet.readiness_waits
+Host.poller_waits = WaitSet.poller_waits
+Host.normalise_readiness_mode = WaitSet.normalise_mode
 
 function Host.block(host, rt, waits, status, opts)
   if host and type(host.block) == 'function' then
@@ -167,7 +95,6 @@ end
 
 Host.Error = require('fibers.host.error')
 Host.Handle = require('fibers.host.handle')
-Host.Poller = require('fibers.host.poller')
 Host.Reactor = require('fibers.host.reactor')
 
 return Host

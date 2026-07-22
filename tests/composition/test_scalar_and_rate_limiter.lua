@@ -58,7 +58,8 @@ local function test_scalar_transition_serialises_parallel_updates()
     accepts_supply = true,
     supplies = 'any',
     step = function(v, payload)
-      return v + payload.by, v + payload.by
+      local next_value = v + payload.by
+      return Scalar.Ready.write(next_value, next_value)
     end,
   })
   local rows
@@ -143,7 +144,7 @@ local function test_scalar_transition_ordering_is_direct_and_deterministic()
     supplies = 'any',
     order = 0,
     step = function(v)
-      return v .. 'b', 'first'
+      return Scalar.Ready.write(v .. 'b', 'first')
     end,
   })
   local second = Scalar.transition({
@@ -153,7 +154,7 @@ local function test_scalar_transition_ordering_is_direct_and_deterministic()
     supplies = 'any',
     order = 100,
     step = function(v)
-      return v .. 'a', 'second'
+      return Scalar.Ready.write(v .. 'a', 'second')
     end,
   })
   local rows
@@ -176,7 +177,7 @@ local function test_scalar_transition_ordering_controls_select_handoff()
     supplies = 'any',
     order = 0,
     step = function(v)
-      return v + 1, true
+      return Scalar.Ready.write(v + 1, true)
     end,
   })
   local take = Scalar.transition({
@@ -187,9 +188,9 @@ local function test_scalar_transition_ordering_controls_select_handoff()
     order = 100,
     step = function(v)
       if v <= 0 then
-        return nil
+        return Scalar.Wait
       end
-      return v - 1, v
+      return Scalar.Ready.write(v - 1, v)
     end,
   })
   local rows
@@ -216,7 +217,7 @@ local function test_scalar_transition_payload_validation()
       end
     end,
     step = function(v, payload)
-      return v + payload.n, true
+      return Scalar.Ready.write(v + payload.n, true)
     end,
   })
   local ok = pcall(function()

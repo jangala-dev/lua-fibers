@@ -130,6 +130,17 @@ shared by materially different facilities.
 
 ## Primitive IR and transition rules
 
+Facility code validates and binds each primitive once, before search. Both the
+production and reference evaluators consume the same canonical occurrence:
+
+```text
+program + patch | version | value | payload
+```
+
+The evaluators do not accept legacy field names, payload-binding flags or
+alternate transition-result forms. Compatibility belongs at the facility
+authoring boundary and is compiled to this representation.
+
 The immutable option graph contains constants, primitive programmes, choice,
 bind, products, fallback, consequences and annotations. Facilities initially
 construct familiar primitive descriptions such as reads, patches, claims,

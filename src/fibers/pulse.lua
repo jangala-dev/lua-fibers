@@ -5,6 +5,7 @@
 -- closed.  It is a facility over Scalar, not a scheduler-side wait list.
 
 local Scalar = require('fibers.scalar')
+local Ready, Wait = Scalar.Ready, Scalar.Wait
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
 
@@ -40,10 +41,10 @@ local State = Scalar.kind({
       step = function(st)
         st = copy_state(st)
         if st.closed then
-          return st, nil
+          return Ready.write(st, nil)
         end
         st.version = st.version + 1
-        return st, st.version
+        return Ready.write(st, st.version)
       end,
     },
     close = {
@@ -57,7 +58,7 @@ local State = Scalar.kind({
           st.reason = payload.reason
         end
         st.closed = true
-        return st, true
+        return Ready.write(st, true)
       end,
     },
     changed = {
@@ -71,12 +72,12 @@ local State = Scalar.kind({
       step = function(st, payload)
         st = copy_state(st)
         if st.version > payload.last_seen then
-          return st, st.version, nil
+          return Ready.write(st, st.version, nil)
         end
         if st.closed then
-          return st, nil, st.reason
+          return Ready.write(st, nil, st.reason)
         end
-        return nil
+        return Wait
       end,
     },
   },

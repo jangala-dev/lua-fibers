@@ -1,4 +1,3 @@
-return require('fibers.host.ffi_family').load('ffi', 'luajit_linux', {
-  -- Compatibility ffi modules may not safely traverse getaddrinfo lists.
+return require('fibers.host.provider.ffi_linux').load('ffi', 'luajit_linux', {
   resolver_enabled = type(rawget(_G, 'jit')) == 'table',
 })

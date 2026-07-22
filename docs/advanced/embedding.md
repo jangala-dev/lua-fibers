@@ -249,7 +249,7 @@ There is no host readiness query during transaction search. External truth enter
 
 ## HostHandle, streams and the reactor
 
-`host.Handle` provides the boundary between non-blocking host I/O and the runtime-owned HostPoller and HostReactor.
+`host.Handle` provides the boundary between non-blocking host I/O and the runtime-owned HostReactor readiness index and HostReactor.
 
 A handle supplies:
 
@@ -265,7 +265,7 @@ handle:close(reason)
 ```
 
 Every configured host-backed direction in one Runtime registers with the same
-indexed HostPoller and lazily created HostReactor. Committed Flow changes arm or
+indexed HostReactor readiness index and lazily created HostReactor. Committed Flow changes arm or
 disarm registrations; the host delivers only ready registration identities.
 Linux epoll events carry a fresh registration epoch rather than a raw
 descriptor. The host validates that epoch before delivering the reaction id and
@@ -400,6 +400,44 @@ effect preparation and discharge
 ```
 
 Only fibre-phase code may suspend through `perform`.
+
+## Host provider tables
+
+Every complete host family is assembled from one provider table. The provider
+exports native mechanisms and canonical raw results; `fibers.host.native` owns
+the Fibers-facing descriptor, readiness, socket, datagram, resolver and process
+semantics.
+
+```lua
+local Native = require('fibers.host.native')
+local provider = {
+  name = 'example',
+  family = 'example-handles',
+  errors = error_classification,
+  time = { now = monotonic_now, sleep = sleep },
+  fd = raw_descriptor_operations,
+  poll = raw_poll_operations,
+  net = raw_network_operations,
+  resolver = raw_resolver_operations,
+  process = raw_process_strategy,
+}
+
+return Native.define(provider)
+```
+
+Provider functions perform only native calls, address conversion and native
+error conversion. They return native values or `nil, errno, message`; they do
+not construct Fibers handles, Flows, host errors, sockets or process objects.
+The shared implementation owns cancellation, readiness delivery, handle
+lifecycle, connection policy, datagram policy, capability reporting and process
+endpoints.
+
+The deterministic ManualHost follows the same contract through
+`fibers.host.provider.manual`. Adding a host should therefore require one
+provider table rather than a family of facility-specific modules.
+
+Timer and readiness planning live in `fibers.host.wait_set`, so provider
+construction does not depend on the host selector.
 
 ## Host acceptance checklist
 

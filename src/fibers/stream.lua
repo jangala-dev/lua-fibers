@@ -1,27 +1,21 @@
--- Capability-shaped streams built from unidirectional byte flows.
+-- Streams are capability-shaped compositions of unidirectional byte Flows.
 --
--- Flow is the public transactional byte engine. A Stream may contain a read
--- Flow, a write Flow, or both. Host directions register with the runtime-owned
--- indexed HostPoller and shared HostReactor; no task is allocated per direction.
+-- A Stream adds no byte state of its own.  It pairs an optional Flow Outlet
+-- with an optional Flow Inlet, composes their lifecycle operations, and, for
+-- host handles, arranges reactor registrations around those same Flows.
 
 local Op = require('fibers.op')
+local Flow = require('fibers.flow')
 local Reactor = require('fibers.host.reactor')
 local Ownership = require('fibers.internal.ownership')
-local Owned = require('fibers.lifetime.region').Owned
 local Settlement = require('fibers.internal.settlement')
-local Flow = require('fibers.flow')
+local Owned = require('fibers.lifetime.region').Owned
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
 
-local Stream = {}
-local Duplex = {}
+local Stream, Duplex = {}, {}
 Duplex.__index = Duplex
-local HostStream = {}
-HostStream.__index = HostStream
-setmetatable(HostStream, { __index = Duplex })
-
-local next_duplex = 0
-local next_host_stream = 0
+local next_id = 0
 
 local function validate_options(opts, allowed, label)
   for key in pairs(opts or {}) do
@@ -31,64 +25,83 @@ local function validate_options(opts, allowed, label)
   end
 end
 
-local function region_of(x)
-  if x and x._fibers_scope and type(x.raw_region) == 'function' then
-    return x:raw_region()
+local function region_of(value)
+  if value and value._fibers_scope and type(value.raw_region) == 'function' then
+    return value:raw_region()
   end
-  if x and type(x.admit_op) == 'function' and type(x.move_op) == 'function' then
-    return x
+  if value and type(value.admit_op) == 'function' and type(value.move_op) == 'function' then
+    return value
   end
-  return nil
 end
 
-local function duplex(opts)
+local function compose(opts)
   opts = opts or {}
-  next_duplex = next_duplex + 1
-  local name = opts.name or ('duplex-' .. tostring(next_duplex))
-  local d = Ownership.handle(name, {
-    kind = opts.kind or 'duplex_stream',
-    mode = opts.mode or 'memory',
-    read_flow = opts.read_flow,
-    write_flow = opts.write_flow,
+  next_id = next_id + 1
+  local name = opts.name or ('stream-' .. tostring(next_id))
+  local stream = Ownership.handle(name, {
+    kind = opts.kind or 'stream',
+    mode = opts.mode or 'composed',
+    _reader = opts.reader,
+    _writer = opts.writer,
     handle = opts.handle,
     reactor = opts.reactor,
     read_registration = nil,
     write_registration = nil,
     _reactor_live = 0,
     _handle_closed = false,
-    _fibers_kind_name = opts.kind or 'duplex_stream',
-    _fibers_obligation_kind = opts.kind or 'duplex_stream',
+    _fibers_kind_name = opts.kind or 'stream',
+    _fibers_obligation_kind = opts.kind or 'stream',
     settle = opts.settle or Settlement.stream(),
     settle_name = opts.settle_name or 'stream',
   })
-  setmetatable(d, opts.metatable or Duplex)
-  return d
+  return setmetatable(stream, Duplex)
 end
 
+function Stream.compose(read_flow, write_flow, opts)
+  opts = opts or {}
+  if read_flow ~= nil and (type(read_flow) ~= 'table' or type(read_flow.outlet) ~= 'function') then
+    error('Stream.compose read_flow must be a Flow or nil', 2)
+  end
+  if write_flow ~= nil and (type(write_flow) ~= 'table' or type(write_flow.inlet) ~= 'function') then
+    error('Stream.compose write_flow must be a Flow or nil', 2)
+  end
+  if read_flow == nil and write_flow == nil then
+    error('Stream.compose requires a readable or writable Flow', 2)
+  end
+  return compose({
+    name = opts.name,
+    mode = opts.mode,
+    kind = opts.kind,
+    reader = read_flow and read_flow:outlet(),
+    writer = write_flow and write_flow:inlet(),
+  })
+end
+
+function Duplex:reader()
+  return self._reader
+end
+function Duplex:writer()
+  return self._writer
+end
 function Duplex:is_readable()
-  return self.read_flow ~= nil
+  return self._reader ~= nil
 end
 function Duplex:is_writable()
-  return self.write_flow ~= nil
+  return self._writer ~= nil
 end
 function Duplex:is_duplex()
-  return self.read_flow ~= nil and self.write_flow ~= nil
+  return self._reader ~= nil and self._writer ~= nil
 end
-
 function Duplex:local_address()
   return self._local_address
 end
-
 function Duplex:peer_address()
   return self._peer_address
 end
-
 function Duplex:_set_addresses(local_address, peer_address)
-  self._local_address = local_address
-  self._peer_address = peer_address
+  self._local_address, self._peer_address = local_address, peer_address
   return self
 end
-
 function Duplex:close_state()
   return {
     handle_closed = self._handle_closed == true,
@@ -98,74 +111,59 @@ function Duplex:close_state()
     writable = self:is_writable(),
   }
 end
-function Duplex:reader()
-  return self.read_flow and self.read_flow:outlet() or nil
-end
-function Duplex:writer()
-  return self.write_flow and self.write_flow:inlet() or nil
-end
-local function require_reader(self, level)
-  local reader = self:reader()
-  if not reader then
-    error('stream is not readable', level or 3)
+
+local function side_endpoint(self, side)
+  if side == 'read' then
+    return self._reader
   end
-  return reader
+  return self._writer
 end
-local function require_writer(self, level)
-  local writer = self:writer()
-  if not writer then
-    error('stream is not writable', level or 3)
+
+local function endpoint(self, side, level)
+  local value = side_endpoint(self, side)
+  if not value then
+    error('stream is not ' .. (side == 'read' and 'readable' or 'writable'), level or 3)
   end
-  return writer
-end
-function Duplex:read_some_op(n)
-  return require_reader(self):read_some_op(n)
+  return value
 end
 
-function Duplex:read_exactly_op(n)
-  return require_reader(self):read_exactly_op(n)
+for _, name in ipairs({ 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all' }) do
+  Duplex[name .. '_op'] = function(self, ...)
+    return endpoint(self, 'read')[name .. '_op'](endpoint(self, 'read'), ...)
+  end
+  Duplex[name] = function(self, ...)
+    return perform(self[name .. '_op'](self, ...))
+  end
 end
 
-function Duplex:read_until_op(separator, opts)
-  return require_reader(self):read_until_op(separator, opts)
-end
-
-function Duplex:read_line_op(opts)
-  return require_reader(self):read_line_op(opts)
-end
-
-function Duplex:read_all_op(opts)
-  return require_reader(self):read_all_op(opts)
-end
-
--- Lua-file-style migration helper.  It still constructs an inert option.
 function Duplex:read_op(spec, opts)
   if type(spec) == 'number' then
     return self:read_some_op(spec)
   end
-  if spec == '*l' then
-    opts = opts or {}
-    opts.keep_terminator = false
-    return self:read_line_op(opts)
-  end
-  if spec == '*L' then
-    opts = opts or {}
-    opts.keep_terminator = true
-    return self:read_line_op(opts)
+  if spec == '*l' or spec == '*L' then
+    local line_opts = {}
+    for key, value in pairs(opts or {}) do
+      line_opts[key] = value
+    end
+    line_opts.keep_terminator = spec == '*L'
+    return self:read_line_op(line_opts)
   end
   if spec == '*a' then
     return self:read_all_op(opts)
   end
   error("stream read_op expects a byte count, '*l', '*L' or '*a'", 2)
 end
+function Duplex:read(spec, opts)
+  return perform(self:read_op(spec, opts))
+end
 
-local function join_write_parts(...)
-  local n = select('#', ...)
-  if n == 0 then
+local function write_bytes(...)
+  local count = select('#', ...)
+  if count == 0 then
     return ''
   end
   local parts = {}
-  for i = 1, n do
+  for i = 1, count do
     local part = select(i, ...)
     if type(part) ~= 'string' then
       error('stream write expects string arguments', 3)
@@ -174,62 +172,32 @@ local function join_write_parts(...)
   end
   return table.concat(parts)
 end
-
 function Duplex:write_op(...)
-  return require_writer(self):write_op(join_write_parts(...))
+  return endpoint(self, 'write'):write_op(write_bytes(...))
 end
-
 function Duplex:write_some_op(bytes)
-  return require_writer(self):write_some_op(bytes)
+  return endpoint(self, 'write'):write_some_op(bytes)
 end
-
 function Duplex:flush_op()
-  return require_writer(self):flush_op()
+  return endpoint(self, 'write'):flush_op()
+end
+for _, name in ipairs({ 'write', 'write_some', 'flush' }) do
+  Duplex[name] = function(self, ...)
+    return perform(self[name .. '_op'](self, ...))
+  end
 end
 
-function Duplex:read_some(n)
-  return perform(self:read_some_op(n))
-end
-
-function Duplex:read_exactly(n)
-  return perform(self:read_exactly_op(n))
-end
-
-function Duplex:read_until(separator, opts)
-  return perform(self:read_until_op(separator, opts))
-end
-
-function Duplex:read_line(opts)
-  return perform(self:read_line_op(opts))
-end
-
-function Duplex:read_all(opts)
-  return perform(self:read_all_op(opts))
-end
-
-function Duplex:read(spec, opts)
-  return perform(self:read_op(spec, opts))
-end
-
-function Duplex:write(...)
-  return perform(self:write_op(...))
-end
-
-function Duplex:write_some(bytes)
-  return perform(self:write_some_op(bytes))
-end
-
-function Duplex:flush()
-  return perform(self:flush_op())
+local function flow_of(value)
+  return value and value.flow
 end
 
 function Duplex:inspect_op()
   local options = {}
-  if self.read_flow then
-    options[#options + 1] = { 'read', self.read_flow:inspect_op() }
+  if self._reader then
+    options[#options + 1] = { 'read', flow_of(self._reader):inspect_op() }
   end
-  if self.write_flow then
-    options[#options + 1] = { 'write', self.write_flow:inspect_op() }
+  if self._writer then
+    options[#options + 1] = { 'write', flow_of(self._writer):inspect_op() }
   end
   return Op.named_all(options):map(function(parts)
     return {
@@ -246,187 +214,138 @@ function Duplex:inspect_op()
   end)
 end
 
-local function wait_after_commit(self, request, before_closed)
+local function retire_direction(self, side, reason, policy, abort)
+  local ep = side_endpoint(self, side)
+  if not ep then
+    return Op.always(true)
+  end
+  local request = abort and flow_of(ep):abort_op(reason) or ep:close_op(reason)
+  local registration = self[side .. '_registration']
+  if registration then
+    request = Op.tensor({ request, registration:retire_op(reason, policy) }):map(function()
+      return true
+    end)
+  end
+  return request
+end
+function Duplex:shutdown_read_op(reason)
+  return retire_direction(self, 'read', reason, 'immediate', false)
+end
+function Duplex:shutdown_write_op(reason)
+  return retire_direction(self, 'write', reason, 'drain', false)
+end
+function Duplex:abort_write_op(reason)
+  return retire_direction(self, 'write', reason, 'abort', true)
+end
+
+local function close_request(self, reason, abort_write)
+  local operations = {}
+  if self._reader then
+    operations[#operations + 1] = self:shutdown_read_op(reason)
+  end
+  if self._writer then
+    operations[#operations + 1] = abort_write and self:abort_write_op(reason)
+      or self:shutdown_write_op(reason)
+  end
+  return #operations == 0 and Op.always(true) or Op.tensor(operations):map(function()
+    return true
+  end)
+end
+
+local function wait_after_commit(self, request, before_wait)
   return request:wrap(function()
-    local rt = Runtime.current()
-    if not rt then
+    local runtime = Runtime.current()
+    if not runtime then
       error('Stream closure requires a current runtime', 2)
     end
-    if before_closed then
-      local ok, err = before_closed(rt)
+    if before_wait then
+      local ok, err = before_wait(runtime)
       if not ok then
         return nil, err
       end
     end
-    return rt:_perform_current(self:closed_op(), nil, true)
+    return runtime:_perform_current(self:closed_op(), nil, true)
   end)
 end
-
-function Duplex:shutdown_read_op(reason)
-  if not self.read_flow then
-    return Op.always(true)
-  end
-  local options = { self.read_flow:outlet():close_op(reason) }
-  if self.read_registration then
-    options[#options + 1] = self.read_registration:retire_op(reason, 'immediate')
-  end
-  return Op.tensor(options):map(function()
-    return true
-  end)
-end
-
-function Duplex:shutdown_write_op(reason)
-  if not self.write_flow then
-    return Op.always(true)
-  end
-  local options = { self.write_flow:inlet():close_op(reason) }
-  if self.write_registration then
-    options[#options + 1] = self.write_registration:retire_op(reason, 'drain')
-  end
-  return Op.tensor(options):map(function()
-    return true
-  end)
-end
-
-function Duplex:abort_write_op(reason)
-  if not self.write_flow then
-    return Op.always(true)
-  end
-  local options = { self.write_flow:abort_op(reason) }
-  if self.write_registration then
-    options[#options + 1] = self.write_registration:retire_op(reason, 'abort')
-  end
-  return Op.tensor(options):map(function()
-    return true
-  end)
-end
-
-local function close_request(self, reason, abort_write)
-  local options = {}
-  if self.read_flow then
-    options[#options + 1] = self:shutdown_read_op(reason)
-  end
-  if self.write_flow then
-    options[#options + 1] = abort_write and self:abort_write_op(reason) or self:shutdown_write_op(reason)
-  end
-  if #options == 0 then
-    return Op.always(true)
-  end
-  return Op.tensor(options):map(function()
-    return true
-  end)
-end
-
 function Duplex:close_op(reason)
-  local request = close_request(self, reason, false)
-  return wait_after_commit(self, request, function(rt)
-    if self.write_flow then
-      return rt:_perform_current(self.write_flow:inlet():flush_op(), nil, true)
-    end
-    return true
+  return wait_after_commit(self, close_request(self, reason, false), function(runtime)
+    return self._writer and runtime:_perform_current(self._writer:flush_op(), nil, true) or true
   end)
 end
-
 function Duplex:abort_op(reason)
   return wait_after_commit(self, close_request(self, reason, true))
 end
-
 function Duplex:closed_op()
-  local options = {}
-  if self.read_flow then
-    options[#options + 1] = self.read_flow:outlet():closed_op()
+  local operations = {}
+  if self._reader then
+    operations[#operations + 1] = self._reader:closed_op()
   end
-  if self.write_flow then
-    options[#options + 1] = self.write_flow:inlet():closed_op()
+  if self._writer then
+    operations[#operations + 1] = self._writer:closed_op()
   end
   if self.read_registration then
-    options[#options + 1] = self.read_registration:retired_op()
+    operations[#operations + 1] = self.read_registration:retired_op()
   end
   if self.write_registration then
-    options[#options + 1] = self.write_registration:retired_op()
+    operations[#operations + 1] = self.write_registration:retired_op()
   end
-  return Op.all(options):map(function()
+  return Op.all(operations):map(function()
     if self._close_error then
       return nil, self._close_error
     end
     return true
   end)
 end
-
-function Duplex:shutdown_read(reason)
-  return perform(self:shutdown_read_op(reason))
-end
-
-function Duplex:shutdown_write(reason)
-  return perform(self:shutdown_write_op(reason))
-end
-
-function Duplex:abort_write(reason)
-  return perform(self:abort_write_op(reason))
-end
-
-function Duplex:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Duplex:abort(reason)
-  return perform(self:abort_op(reason))
-end
-
-function Duplex:closed()
-  return perform(self:closed_op())
-end
-
-local function host_stream(opts)
-  opts = opts or {}
-  next_host_stream = next_host_stream + 1
-  local name = opts.name or ('host-stream-' .. tostring(next_host_stream))
-  local readable = opts.read ~= false
-  local writable = opts.write ~= false
-  if not readable and not writable then
-    error('host stream requires a readable or writable direction', 3)
+for _, name in ipairs({ 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' }) do
+  Duplex[name] = function(self, ...)
+    return perform(self[name .. '_op'](self, ...))
   end
-  local rx = readable
-      and Flow.new({
-        name = name .. ':rx',
-        capacity = opts.read_capacity or opts.capacity,
-      })
-    or nil
-  local tx = writable
-      and Flow.new({
-        name = name .. ':tx',
-        capacity = opts.write_capacity or opts.capacity,
-      })
-    or nil
-  local h = duplex({
-    name = name,
-    kind = 'host_stream',
-    mode = readable and writable and 'duplex' or (readable and 'reader' or 'writer'),
-    read_flow = rx,
-    write_flow = tx,
-    handle = opts.handle,
-    reactor = opts.reactor,
-    metatable = HostStream,
-  })
-  h.read_chunk_size = opts.read_chunk_size or opts.chunk_size or 4096
-  h.write_chunk_size = opts.write_chunk_size or opts.chunk_size or 4096
-  h._close_error = nil
-  return h
 end
 
 function Stream.memory_pair(opts)
   opts = opts or {}
   validate_options(opts, { name = true, capacity = true }, 'Stream.memory_pair options')
   local name = opts.name or 'memory-flow'
-  local flow_ab = Flow.new({ name = name .. ':a->b', capacity = opts.capacity })
-  local flow_ba = Flow.new({ name = name .. ':b->a', capacity = opts.capacity })
-  local a = duplex({ name = name .. ':a', read_flow = flow_ba, write_flow = flow_ab, mode = 'memory' })
-  local b = duplex({ name = name .. ':b', read_flow = flow_ab, write_flow = flow_ba, mode = 'memory' })
-  return a, b
+  local ab = Flow.new({ name = name .. ':a->b', capacity = opts.capacity })
+  local ba = Flow.new({ name = name .. ':b->a', capacity = opts.capacity })
+  return Stream.compose(ba, ab, { name = name .. ':a', mode = 'memory' }),
+    Stream.compose(ab, ba, { name = name .. ':b', mode = 'memory' })
+end
+
+local function host_stream(name, opts)
+  local read_flow = opts.read and Flow.new({ name = name .. ':rx', capacity = opts.read_capacity }) or nil
+  local write_flow = opts.write and Flow.new({ name = name .. ':tx', capacity = opts.write_capacity }) or nil
+  local stream = Stream.compose(read_flow, write_flow, {
+    name = name,
+    mode = opts.read and opts.write and 'duplex' or (opts.read and 'reader' or 'writer'),
+    kind = 'host_stream',
+  })
+  stream.handle, stream.reactor = opts.handle, opts.reactor
+  stream.read_chunk_size, stream.write_chunk_size = opts.read_chunk_size, opts.write_chunk_size
+  return stream
+end
+
+local function attach_direction(stream, side, reactor, handle, registrations, children)
+  local ep = side_endpoint(stream, side)
+  if not ep then
+    return
+  end
+  local registration = reactor:direction({
+    name = stream.name .. ':' .. side,
+    mode = side,
+    stream = stream,
+    flow = flow_of(ep),
+    handle = handle,
+    chunk_size = side == 'read' and stream.read_chunk_size or stream.write_chunk_size,
+  })
+  stream[side .. '_registration'] = registration
+  children[#children + 1] = Owned.inert(flow_of(ep), { role = side .. '_flow' })
+  children[#children + 1] = Owned.inert(ep, { role = side == 'read' and 'reader' or 'writer' })
+  children[#children + 1] = Owned.inert(registration, { role = side .. '_reaction' })
+  registrations[#registrations + 1] = { side .. '_registration', registration:register_op() }
 end
 
 local function open_in_op(owner, handle, opts)
-  opts = opts or {}
   validate_options(opts, {
     owner = true,
     name = true,
@@ -438,7 +357,7 @@ local function open_in_op(owner, handle, opts)
     write_chunk_size = true,
   }, 'Stream.open_op options')
   local region = region_of(owner)
-  if not region or type(region.admit_op) ~= 'function' then
+  if not region then
     error('Stream.open_op opts.owner must be a Scope or Region', 3)
   end
   if type(handle) ~= 'table' or handle._fibers_host_handle ~= true then
@@ -447,90 +366,43 @@ local function open_in_op(owner, handle, opts)
   if type(opts.read) ~= 'boolean' or type(opts.write) ~= 'boolean' then
     error('Stream.open_op requires explicit boolean opts.read and opts.write', 3)
   end
-  local readable = opts.read
-  local writable = opts.write
-  if not readable and not writable then
-    error('Stream.open_op requires at least one enabled direction', 3)
+  if not opts.read and not opts.write then
+    error('Stream.open_op requires an enabled direction', 3)
   end
-  if readable and not handle:supports('read') then
-    error('readable Stream HostHandle requires read capability', 3)
+  for _, capability in ipairs({ opts.read and 'read', opts.write and 'write', 'readiness', 'close' }) do
+    if capability and not handle:supports(capability) then
+      error('Stream HostHandle requires ' .. capability .. ' capability', 3)
+    end
   end
-  if writable and not handle:supports('write') then
-    error('writable Stream HostHandle requires write capability', 3)
-  end
-  if not handle:supports('readiness') then
-    error('Stream HostHandle requires readiness capability', 3)
-  end
-  if not handle:supports('close') then
-    error('Stream HostHandle requires close capability', 3)
-  end
-  local name = opts.name or handle.name or 'host-stream'
-  local rt = Runtime.current()
-  if not rt then
+  local runtime = Runtime.current()
+  if not runtime then
     error('Stream.open_op requires a current runtime', 3)
   end
-  local reactor = Reactor.for_runtime(rt)
-  local hs = host_stream({
-    name = name,
+  local name = opts.name or handle.name or 'host-stream'
+  local reactor = Reactor.for_runtime(runtime)
+  local stream = host_stream(name, {
     handle = handle,
     reactor = reactor,
-    read = readable,
-    write = writable,
+    read = opts.read,
+    write = opts.write,
     read_capacity = opts.read_capacity,
     write_capacity = opts.write_capacity,
     read_chunk_size = opts.read_chunk_size or 4096,
     write_chunk_size = opts.write_chunk_size or 4096,
   })
-  local owned_children = {}
-  local registrations = {}
-  if hs.read_flow then
-    hs.read_registration = reactor:direction({
-      name = name .. ':read',
-      mode = 'read',
-      stream = hs,
-      flow = hs.read_flow,
-      handle = handle,
-      chunk_size = hs.read_chunk_size,
-    })
-    -- The Stream root owns shutdown of its internal Flow.  Settling the Flow
-    -- again as an independent child would turn an intentional Stream abort
-    -- (for example normal scope retirement with unread bytes) into a duplicate
-    -- settlement failure.
-    owned_children[#owned_children + 1] = Owned.inert(hs.read_flow, { role = 'read_flow' })
-    owned_children[#owned_children + 1] = Owned.inert(hs:reader(), { role = 'reader' })
-    owned_children[#owned_children + 1] = Owned.inert(hs.read_registration, { role = 'read_reaction' })
-    registrations[#registrations + 1] = { 'read_registration', hs.read_registration:register_op() }
-  end
-  if hs.write_flow then
-    hs.write_registration = reactor:direction({
-      name = name .. ':write',
-      mode = 'write',
-      stream = hs,
-      flow = hs.write_flow,
-      handle = handle,
-      chunk_size = hs.write_chunk_size,
-    })
-    -- As above, the Stream settlement protocol is the sole authority for
-    -- shutting down this internal Flow.
-    owned_children[#owned_children + 1] = Owned.inert(hs.write_flow, { role = 'write_flow' })
-    owned_children[#owned_children + 1] = Owned.inert(hs:writer(), { role = 'writer' })
-    owned_children[#owned_children + 1] = Owned.inert(hs.write_registration, { role = 'write_reaction' })
-    registrations[#registrations + 1] = { 'write_registration', hs.write_registration:register_op() }
-  end
-  hs._reactor_live = #registrations
-  local start_op = Op.named_all(registrations):map(function()
-    return hs
-  end)
-  local owned = Owned.tree(
-    hs,
-    hs._fibers_settle or Settlement.stream(),
-    owned_children,
-    { role = 'stream', settle_name = 'stream' }
-  )
-  local admit_op = owner._fibers_scope and type(owner.admit_op) == 'function' and owner:admit_op(owned)
-    or region:admit_op(owned)
-  return admit_op:and_then(function()
-    return start_op
+  local registrations, children = {}, {}
+  attach_direction(stream, 'read', reactor, handle, registrations, children)
+  attach_direction(stream, 'write', reactor, handle, registrations, children)
+  stream._reactor_live = #registrations
+  local owned = Owned.tree(stream, stream._fibers_settle or Settlement.stream(), children, {
+    role = 'stream',
+    settle_name = 'stream',
+  })
+  local admit = owner._fibers_scope and owner:admit_op(owned) or region:admit_op(owned)
+  return admit:and_then(function()
+    return Op.named_all(registrations):map(function()
+      return stream
+    end)
   end)
 end
 
@@ -543,25 +415,21 @@ function Stream.open_op(handle, opts)
   return open_in_op(owner, handle, opts)
 end
 
--- Select one complete line from a named collection of Streams.
 function Stream.merge_lines_op(streams, opts)
   local entries = {}
   for name, stream in pairs(streams or {}) do
-    entries[#entries + 1] = {
-      name,
-      stream:read_line_op(opts):map(function(line, err)
+    entries[#entries + 1] =
+      { name, stream:read_line_op(opts):map(function(line, err)
         return name, line, err
-      end),
-    }
+      end) }
   end
   if #entries == 0 then
     return Op.never()
   end
-  return Op.named_choice(entries):map(function(_selected, source, line, err)
+  return Op.named_choice(entries):map(function(_, source, line, err)
     return source, line, err
   end)
 end
-
 function Stream.merge_lines(streams, opts)
   return perform(Stream.merge_lines_op(streams, opts))
 end

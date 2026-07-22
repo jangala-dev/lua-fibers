@@ -17,7 +17,7 @@ local take = counter:take_op(1)
 local give = counter:give_op(1)
 local take_meta = IR.metadata(take)
 local give_meta = IR.metadata(give)
-local take_intent = { kind = 'transition', program = take.descriptor }
+local take_intent = { kind = 'transition', program = take.program }
 assert(not IR.metadata_may_supply(take_meta, take_intent))
 assert(IR.metadata_may_supply(give_meta, take_intent))
 
@@ -26,8 +26,8 @@ local put = index:append_op('value')
 local pop = index:pop_first_op()
 local put_meta = IR.metadata(put)
 local pop_meta = IR.metadata(pop)
-local pop_intent = { kind = 'transition', program = pop.descriptor }
-local put_intent = { kind = 'transition', program = put.descriptor }
+local pop_intent = { kind = 'transition', program = pop.program }
+local put_intent = { kind = 'transition', program = put.program }
 assert(IR.metadata_may_supply(put_meta, pop_intent))
 assert(not IR.metadata_may_supply(pop_meta, pop_intent))
 assert(IR.metadata_may_supply(pop_meta, put_intent))
@@ -50,7 +50,7 @@ rejected(function()
     mode = 'update',
     accepts_supply = true,
     step = function(value)
-      return value + 1, true
+      return Scalar.Ready.write(value + 1, true)
     end,
   })
 end, 'requires an explicit supplies declaration')
@@ -62,7 +62,7 @@ rejected(function()
     accepts_supply = true,
     supplies = 'any',
     step = function(value)
-      return value + 1, true
+      return Scalar.Ready.write(value + 1, true)
     end,
   })
 end, 'no longer accepts supply')
@@ -88,7 +88,7 @@ local producer = Scalar.transition({
   supplies = 'any',
   order = 0,
   step = function(value)
-    return value + 1, true
+    return Scalar.Ready.write(value + 1, true)
   end,
 })
 local observer = Scalar.transition({
@@ -165,7 +165,7 @@ rejected(function()
     accepts_supply = true,
     supplies = { any = true, up = true },
     step = function(value)
-      return value, true
+      return Scalar.Ready.write(value, true)
     end,
   })
 end, 'cannot combine any')

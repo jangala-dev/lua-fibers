@@ -593,7 +593,7 @@ function Region:admit_op(item_or_owned, from_owner)
       owner_set(ns, item, self)
     end
     bump(rs)
-    return ns, root
+    return Ready.write(ns, root)
   end, 40)
   return with_event(op_transition(t), {
     type = 'admitted',
@@ -624,7 +624,7 @@ function Region:release_op(item)
     record_set(ns, self, rs, item, nil)
     owner_set(ns, item, nil)
     bump(rs)
-    return ns, item
+    return Ready.write(ns, item)
   end)
   return with_event(op_transition(t), {
     type = 'released',
@@ -652,7 +652,7 @@ function Region:move_op(item, to_region)
     return true
   end, function(s)
     if to_region == self then
-      return clone_ledger(s), item
+      return Ready.write(clone_ledger(s), item)
     end
     local ns = clone_ledger(s)
     local from, to = ensure_region(ns, self), ensure_region(ns, to_region)
@@ -664,7 +664,7 @@ function Region:move_op(item, to_region)
     end
     bump(from)
     bump(to)
-    return ns, item
+    return Ready.write(ns, item)
   end)
   return with_event(op_transition(t), {
     type = 'moved',
@@ -707,7 +707,7 @@ function Region:claim_op(item, purpose)
       record_set(ns, self, rs, child, nr)
     end
     bump(rs)
-    return ns, claim
+    return Ready.write(ns, claim)
   end)
   return op_transition(t)
 end
@@ -770,7 +770,7 @@ function Region:resolve_op(claim, resolution)
       error('unknown claim resolution ' .. tostring(kind), 0)
     end
     bump(rs)
-    return ns, claim.root
+    return Ready.write(ns, claim.root)
   end)
   return op_transition(t)
 end
@@ -792,7 +792,7 @@ function Region:seal_op()
     local rs = ensure_region(ns, self)
     rs.sealed = true
     bump(rs)
-    return ns, true
+    return Ready.write(ns, true)
   end)
   return op_transition(t)
 end

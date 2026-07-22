@@ -1,3 +1,3 @@
-return require('fibers.host.ffi_family').load('cffi', 'cffi_linux', {
+return require('fibers.host.provider.ffi_linux').load('cffi', 'cffi_linux', {
   resolver_enabled = true,
 })

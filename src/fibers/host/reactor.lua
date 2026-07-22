@@ -11,7 +11,8 @@ local Runtime = require('fibers.runtime')
 local Effect = require('fibers.lifetime.effect')
 local EventQueue = require('fibers.external.event_queue')
 local Signal = require('fibers.external.signal')
-local Poller = require('fibers.host.poller')
+local Interest = require('fibers.external.interest')
+local ExternalFeed = require('fibers.external.feed')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
 local Errors = require('fibers.flow.errors')
 local HostError = require('fibers.host.error')
@@ -40,6 +41,10 @@ local function handle_key(handle, mode)
     return key[mode]
   end
   return key
+end
+
+local function key_id(key)
+  return type(key) .. ':' .. tostring(key)
 end
 
 local function handle_hint_ready(entry)
@@ -125,6 +130,8 @@ function Entry.new(reactor, spec)
     generation = spec.generation or next_entry,
     key = key,
     _fibers_id = id,
+    id = id,
+    armed = false,
   })
   setmetatable(entry, Entry)
   entry._fibers_id = id
@@ -170,20 +177,30 @@ function Reactor.new(runtime, opts)
   opts = opts or {}
   next_reactor = next_reactor + 1
   local id = 'host-reactor-' .. tostring(next_reactor)
-  return setmetatable({
+  local self = setmetatable({
     runtime = runtime,
     name = opts.name or id,
     _fibers_id = id,
     entries = {},
+    by_key = {},
     flow_entries = setmetatable({}, { __mode = 'k' }),
     running = false,
     control = EventQueue.new(id .. ':control'),
-    poller = opts.poller or Poller.for_runtime(runtime, opts.poller_options),
     read_quantum = opts.read_quantum or 64 * 1024,
     write_quantum = opts.write_quantum or 64 * 1024,
     control_quantum = opts.control_quantum or 64,
     service_count = 0,
   }, Reactor)
+  self.ready = EventQueue.new(id .. ':ready', {
+    interest = function(_runtime, queue, feed)
+      return Interest.external(queue, 'poll', {
+        external_kind = 'poller',
+        poller = self,
+        feed = feed,
+      })
+    end,
+  })
+  return self
 end
 
 function Reactor.for_runtime(runtime, opts)
@@ -262,12 +279,13 @@ function Reactor:_register_committed(rt, entry)
   entry.registered = true
   self.entries[entry._fibers_id] = entry
   IOAudit.register(entry, rt, { mode = entry.mode, key = entry.key })
-  self.poller:register({
-    id = entry._fibers_id,
-    generation = entry.generation,
-    key = entry.key,
-    mode = entry.mode,
-  })
+  local key = key_id(entry.key)
+  local registrations = self.by_key[key]
+  if not registrations then
+    registrations = {}
+    self.by_key[key] = registrations
+  end
+  registrations[entry.id] = entry
   local flow_entries = self.flow_entries[entry.flow]
   if not flow_entries then
     flow_entries = {}
@@ -292,15 +310,19 @@ function Reactor:_request_retire_committed(rt, entry, reason, mode)
 end
 
 function Reactor:_arm(entry)
-  local armed = self.poller:arm(entry._fibers_id, entry.generation)
-  if armed and handle_hint_ready(entry) then
-    self.poller:hint(entry.key, entry.mode)
+  if entry.retired then
+    return false
   end
-  return armed
+  entry.armed = true
+  if handle_hint_ready(entry) then
+    self:hint(entry.key, entry.mode)
+  end
+  return true
 end
 
 function Reactor:_disarm(entry)
-  return self.poller:disarm(entry._fibers_id, entry.generation)
+  entry.armed = false
+  return true
 end
 
 function Reactor:_refresh(entry)
@@ -357,7 +379,13 @@ function Reactor:_retire_entry(entry, reason)
     return entry.retire_error == nil, entry.retire_error
   end
   self:_disarm(entry)
-  self.poller:retire(entry._fibers_id, entry.generation)
+  local registrations = self.by_key[key_id(entry.key)]
+  if registrations then
+    registrations[entry.id] = nil
+    if next(registrations) == nil then
+      self.by_key[key_id(entry.key)] = nil
+    end
+  end
   local flow_entries = self.flow_entries[entry.flow]
   if flow_entries then
     flow_entries[entry._fibers_id] = nil
@@ -576,13 +604,12 @@ local function control_record(kind, entry, reason, mode)
 end
 
 local function control_pending(control)
-  local state = control and control._location and control._location.value
-  return state ~= nil and #(state.values or {}) > 0
+  return control ~= nil and control:length() > 0
 end
 
 function Reactor:_wait_option()
   local control = self.control:next_op():map(control_record)
-  local ready = self.poller:next_op():map(function(id, generation, mode, key)
+  local ready = self.ready:next_op():map(function(id, generation, mode, key)
     return { kind = 'ready', id = id, generation = generation, mode = mode, key = key }
   end)
   -- Control arrivals and host readiness are temporal alternatives.  A host may
@@ -623,6 +650,42 @@ function Reactor:_run(rt)
       self:_service_ready(selected.id, selected.generation)
     end
   end
+end
+
+function Reactor:hint(key, mode)
+  mode = mode == 'wr' and 'write' or (mode or 'read')
+  local registrations = self.by_key[key_id(key)]
+  if not registrations then
+    return false
+  end
+  local delivered = false
+  for _, entry in pairs(registrations) do
+    if entry.armed and not entry.retired and entry.mode == mode then
+      entry.armed = false
+      UnsafeExternalMutation.deliver(self.ready, entry.id, entry.generation, entry.mode, entry.key)
+      delivered = true
+    end
+  end
+  return delivered
+end
+
+function Reactor:_host_delivered(entry)
+  local current = self.entries[entry.id]
+  if current ~= entry or entry.retired or not entry.armed then
+    return false
+  end
+  entry.armed = false
+  return true
+end
+
+function Reactor:_host_active()
+  local out = {}
+  for _, entry in pairs(self.entries) do
+    if entry.armed and not entry.retired then
+      out[#out + 1] = entry
+    end
+  end
+  return out
 end
 
 function Reactor:registration_count()

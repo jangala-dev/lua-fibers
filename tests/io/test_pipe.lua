@@ -172,7 +172,7 @@ do
     auto_advance_time = false,
     pipe_factory = function(h, opts)
       reader_handle, writer_handle = Handle.pipe_pair({ host = h, name = opts.name })
-      reader_handle._close = function()
+      reader_handle.operations.close = function()
         return nil, close_err
       end
       return reader_handle, writer_handle

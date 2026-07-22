@@ -51,6 +51,7 @@ local SIMPLE = {
   would_block = { domain = 'io', temporary = true, message = 'host action would block' },
   eof = { domain = 'io', action = 'read', message = 'end of file' },
   closed = { domain = 'io', message = 'resource is closed' },
+  broken_pipe = { domain = 'io', action = 'write', message = 'pipe reader is closed' },
 }
 for kind, defaults in pairs(SIMPLE) do
   Error[kind] = function(domain, action, fields)
@@ -142,6 +143,9 @@ function Error.normalise(err, fields)
   end
   if err == 'eof' then
     return Error.eof(fields and fields.domain, fields and fields.action, fields)
+  end
+  if err == 'broken_pipe' then
+    return Error.broken_pipe(fields and fields.domain, fields and fields.action, fields)
   end
   if type(err) == 'string' then
     local action = string.match(err, '^unsupported_(.+)$')

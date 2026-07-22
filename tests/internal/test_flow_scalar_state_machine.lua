@@ -46,7 +46,7 @@ local function test_scalar_select_tensor_supply_but_all_non_handoff()
     accepts_supply = true,
     supplies = 'any',
     step = function(v)
-      return v + 1, true
+      return FibersScalar.Ready.write(v + 1, true)
     end,
   })
   local take = FibersScalar.transition({
@@ -56,9 +56,9 @@ local function test_scalar_select_tensor_supply_but_all_non_handoff()
     supplies = 'any',
     step = function(v)
       if v <= 0 then
-        return nil
+        return FibersScalar.Wait
       end
-      return v - 1, v
+      return FibersScalar.Ready.write(v - 1, v)
     end,
   })
   local s = FibersScalar.new(0, 'select-law')

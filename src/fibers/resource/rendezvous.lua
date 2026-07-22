@@ -9,7 +9,7 @@ function Rendezvous.new(name)
   self._get_op = Facility.static(self, Kind, 'exchange', { role = 'get' })
   self._put_descriptor = Facility.descriptor(self, Kind, 'exchange', {
     role = 'put',
-    payload_field = 'value',
+    bind = 'value',
   })
   return self
 end

@@ -13,8 +13,8 @@
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
 local Machine = require('fibers.internal.flow_machine')
-local Lease = require('fibers.flow.lease')
-local SpaceLease = require('fibers.flow.space_lease')
+local Leases = require('fibers.internal.flow_leases')
+local Lease, SpaceLease = Leases.Lease, Leases.SpaceLease
 local Errors = require('fibers.flow.errors')
 local Ownership = require('fibers.internal.ownership')
 local Settlement = require('fibers.internal.settlement')

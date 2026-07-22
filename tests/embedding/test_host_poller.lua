@@ -13,7 +13,6 @@ package.path = table.concat({
 
 local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
-local Poller = require('fibers.host.poller')
 local Stream = require('fibers.stream')
 local Region = require('fibers.lifetime.region')
 local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
@@ -30,20 +29,6 @@ local function assert_truthy(v, msg)
   if not v then
     fail(msg or 'expected truthy')
   end
-end
-
--- Registration churn is compacted rather than retaining an unbounded history.
-do
-  local rt = Runtime.new()
-  local poller = Poller.new(rt, { change_limit = 8 })
-  poller:register({ id = 'r', generation = 1, key = 'key', mode = 'read' })
-  for _ = 1, 100 do
-    poller:arm('r', 1)
-    poller:disarm('r', 1)
-  end
-  assert_truthy(#poller.changes <= 8, 'poller change history should remain bounded')
-  poller:retire('r', 1)
-  assert_eq(poller:registration_count(), 0)
 end
 
 -- Stale readiness for an earlier registration generation is ignored by the reactor.
@@ -73,7 +58,7 @@ do
   assert_eq(rt:run().tag, 'found')
   local entry = stream.read_registration
   UnsafeExternalMutation.deliver(
-    rt.host_poller.ready,
+    rt.host_reactor.ready,
     entry._fibers_id,
     entry.generation - 1,
     'read',
@@ -90,12 +75,11 @@ do
   rt:assert_io_quiescent('stale readiness test')
 end
 
--- The poller hot queue is a persistent FIFO: large bursts retain order without
--- the array-copying EventQueue path.
+-- The shared external event queue is the poller hot FIFO.
 do
-  local PollerQueue = require('fibers.host.poller_queue')
+  local EventQueue = require('fibers.external.event_queue')
   local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
-  local q = PollerQueue.new('poller-burst')
+  local q = EventQueue.new('poller-burst')
   local rt = Runtime.new()
   local consumed = 0
   for i = 1, 5000 do
@@ -112,11 +96,27 @@ do
   assert_eq(rt:run().tag, 'found')
   assert_eq(consumed, 5000)
   assert_eq(q:length(), 0)
+
+  -- A drain must include an existing front item and later arrivals held in the
+  -- persistent back list. This is the shape used by scope lifetime events.
+  UnsafeExternalMutation.deliver(q, 'first')
+  UnsafeExternalMutation.deliver(q, 'second')
+  UnsafeExternalMutation.deliver(q, 'third')
+  local drained
+  rt:spawn_raw(function()
+    drained = rt:perform(q:_drain_op())
+  end, 'poller-mixed-drain')
+  assert_eq(rt:run().tag, 'found')
+  assert_eq(#drained, 3)
+  assert_eq(drained[1][1], 'first')
+  assert_eq(drained[2][1], 'second')
+  assert_eq(drained[3][1], 'third')
+  assert_eq(q:length(), 0)
 end
 
 -- Stateless hosts share one plan for readiness resources and indexed poller registrations.
 do
-  local PollPlan = require('fibers.host.poll_plan')
+  local WaitSet = require('fibers.host.wait_set')
   local key = {}
   local readiness_feed, poller_feed = {}, {}
   local registration = { id = 'shared', generation = 1, key = key, mode = 'write' }
@@ -128,7 +128,7 @@ do
       return current == registration
     end,
   }
-  local plan = PollPlan.build({
+  local plan = WaitSet.build({
     {
       kind = 'external',
       external_kind = 'readiness',
@@ -153,7 +153,7 @@ do
       delivered[#delivered + 1] = { feed = feed, values = { ... } }
     end,
   }
-  assert_truthy(PollPlan.deliver(rt, plan.records[1], true, true))
+  assert_truthy(WaitSet.deliver(rt, plan.records[1], true, true))
   assert_eq(#delivered, 2)
   assert_eq(delivered[1].feed, readiness_feed)
   assert_eq(delivered[2].feed, poller_feed)
@@ -167,11 +167,7 @@ do
   local module_names = {
     'nixio',
     'fibers.host.nixio',
-    'fibers.host.fd_nixio',
-    'fibers.host.datagram_nixio',
-    'fibers.host.socket_nixio',
-    'fibers.host.resolver_nixio',
-    'fibers.host.process_nixio',
+    'fibers.host.provider.nixio',
   }
   local saved_loaded, saved_preload = {}, {}
   for i = 1, #module_names do
@@ -222,51 +218,6 @@ do
         -- Deliberately reverse and compress the returned records.  Correct
         -- delivery must use raw descriptor identity, never returned position.
         return 2, { { fd = 88, revents = 2 }, { fd = 77, revents = 1 } }
-      end,
-    }
-  end
-
-  package.preload['fibers.host.fd_nixio'] = function()
-    return {
-      is_supported = function()
-        return true
-      end,
-    }
-  end
-  package.preload['fibers.host.datagram_nixio'] = function()
-    return {
-      is_supported = function()
-        return false
-      end,
-    }
-  end
-  package.preload['fibers.host.socket_nixio'] = function()
-    return {
-      is_supported = function()
-        return false
-      end,
-      supports_ipv4 = function()
-        return false
-      end,
-      supports_ipv6 = function()
-        return false
-      end,
-      supports_unix = function()
-        return false
-      end,
-    }
-  end
-  package.preload['fibers.host.resolver_nixio'] = function()
-    return {
-      is_supported = function()
-        return false
-      end,
-    }
-  end
-  package.preload['fibers.host.process_nixio'] = function()
-    return {
-      is_supported = function()
-        return false
       end,
     }
   end

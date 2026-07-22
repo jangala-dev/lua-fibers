@@ -115,17 +115,14 @@ function Provider:open(path, mode, opts)
     proc:close('file worker open failed')
     return nil, greet_err
   end
-  return setmetatable(
-    {
-      provider = self,
-      process = proc,
-      input = proc:stdin(),
-      output = proc:stdout(),
-      path = path,
-      closed = false,
-    },
-    Backend
-  )
+  return setmetatable({
+    provider = self,
+    process = proc,
+    input = proc:stdin(),
+    output = proc:stdout(),
+    path = path,
+    closed = false,
+  }, Backend)
 end
 
 function Backend:_request(action, header, payload)

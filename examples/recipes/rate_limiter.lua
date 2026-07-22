@@ -5,6 +5,7 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
+local Ready = Scalar.Ready
 local Clock = require('fibers.external.clock')
 
 local RateLimiter = {}
@@ -56,7 +57,7 @@ local Bucket = Scalar.kind({
       supplies = 'any',
       step = function(state, payload, ctx)
         local next_state = refill_state(payload, state, ctx:now())
-        return next_state, next_state.tokens, next_state.last
+        return Ready.write(next_state, next_state.tokens, next_state.last)
       end,
     },
     try_acquire = {
@@ -78,11 +79,11 @@ local Bucket = Scalar.kind({
         local n = payload.n
         if next_state.tokens >= n then
           next_state = { tokens = next_state.tokens - n, last = next_state.last }
-          return next_state, true, nil, next_state.tokens
+          return Ready.write(next_state, true, nil, next_state.tokens)
         end
         local needed = n - next_state.tokens
         local deadline = now + needed / payload.rate
-        return next_state, false, deadline, next_state.tokens
+        return Ready.write(next_state, false, deadline, next_state.tokens)
       end,
     },
   },

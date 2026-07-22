@@ -3,8 +3,8 @@
 local Op = require('fibers.op')
 local Scalar = require('fibers.scalar')
 local Rope = require('fibers.flow.rope')
-local Lease = require('fibers.flow.lease')
-local SpaceLease = require('fibers.flow.space_lease')
+local Leases = require('fibers.internal.flow_leases')
+local Lease, SpaceLease = Leases.Lease, Leases.SpaceLease
 local Errors = require('fibers.flow.errors')
 local FlowEffect = require('fibers.internal.flow_effect')
 
@@ -188,7 +188,7 @@ local FlowTransitions = Scalar.kind({
         end
         local next_s = clone_state(s)
         next_s.rope:append(bytes)
-        return next_s, #bytes
+        return Ready.write(next_s, #bytes)
       end,
     }),
     write_some = transition('update', 'any', 100, {
@@ -210,7 +210,7 @@ local FlowTransitions = Scalar.kind({
         local n = math.min(#bytes, free)
         local next_s = clone_state(s)
         next_s.rope:append(bytes:sub(1, n))
-        return next_s, n, bytes:sub(n + 1)
+        return Ready.write(next_s, n, bytes:sub(n + 1))
       end,
     }),
     read_some = transition('select', 'any', 50, {
@@ -224,7 +224,7 @@ local FlowTransitions = Scalar.kind({
         local queued = s.rope:length()
         if queued > 0 then
           local next_s = clone_state(s)
-          return next_s, next_s.rope:take(math.min(p.n, queued))
+          return Ready.write(next_s, next_s.rope:take(math.min(p.n, queued)))
         end
         if committed_input_closed(p.flow) then
           return Ready.same(nil, Errors.EOF)
@@ -243,13 +243,13 @@ local FlowTransitions = Scalar.kind({
         local queued = s.rope:length()
         if queued >= p.n then
           local next_s = clone_state(s)
-          return next_s, next_s.rope:take(p.n)
+          return Ready.write(next_s, next_s.rope:take(p.n))
         end
         if committed_input_closed(p.flow) then
           if queued > 0 then
             local next_s = clone_state(s)
             local partial = next_s.rope:take(queued)
-            return next_s, nil, Errors.EOF, partial
+            return Ready.write(next_s, nil, Errors.EOF, partial)
           end
           return Ready.same(nil, Errors.EOF, '')
         end
@@ -282,9 +282,9 @@ local FlowTransitions = Scalar.kind({
           local next_s = clone_state(s)
           local out = next_s.rope:take(end_pos)
           if p.include then
-            return next_s, out
+            return Ready.write(next_s, out)
           end
-          return next_s, out:sub(1, #out - #p.sep)
+          return Ready.write(next_s, out:sub(1, #out - #p.sep))
         end
         if p.limit and s.rope:length() > p.limit then
           if not s.rope:ends_with_prefix(p.sep) then
@@ -322,9 +322,9 @@ local FlowTransitions = Scalar.kind({
           local next_s = clone_state(s)
           local out = next_s.rope:take(end_pos)
           if p.include then
-            return next_s, out
+            return Ready.write(next_s, out)
           end
-          return next_s, out:sub(1, #out - #p.sep)
+          return Ready.write(next_s, out:sub(1, #out - #p.sep))
         end
         if p.limit and s.rope:length() > p.limit then
           if not s.rope:ends_with_prefix(p.sep) then
@@ -337,9 +337,9 @@ local FlowTransitions = Scalar.kind({
             local next_s = clone_state(s)
             local partial = next_s.rope:take(queued)
             if p.line_mode then
-              return next_s, partial
+              return Ready.write(next_s, partial)
             end
-            return next_s, nil, Errors.EOF, partial
+            return Ready.write(next_s, nil, Errors.EOF, partial)
           end
           return Ready.same(nil, Errors.EOF)
         end
@@ -354,7 +354,7 @@ local FlowTransitions = Scalar.kind({
         end
         local next_s = clone_state(s)
         local data = next_s.rope:take(len)
-        return next_s, data
+        return Ready.write(next_s, data)
       end,
     }),
     drain_all_limited = transition('update', 'any', 100, {
@@ -368,7 +368,7 @@ local FlowTransitions = Scalar.kind({
         end
         local next_s = clone_state(s)
         local data = next_s.rope:take(len)
-        return next_s, data
+        return Ready.write(next_s, data)
       end,
     }),
     read_all_too_large = transition('query', 'none', 90, {
@@ -406,7 +406,7 @@ local FlowTransitions = Scalar.kind({
         next_s.lease_owner = p.owner
         next_s.lease_bytes = bytes
         next_s.lease_meta = p.meta
-        return next_s, lease_handle(p.flow, next_s)
+        return Ready.write(next_s, lease_handle(p.flow, next_s))
       end,
     }),
     ack_lease = transition('update', 'any', 0, {
@@ -425,7 +425,7 @@ local FlowTransitions = Scalar.kind({
         if next_s.lease_bytes == '' then
           clear_lease(next_s)
         end
-        return next_s, true, p.n
+        return Ready.write(next_s, true, p.n)
       end,
     }),
     return_lease = transition('update', 'any', 0, {
@@ -437,12 +437,12 @@ local FlowTransitions = Scalar.kind({
         if bytes == '' then
           local next_s = copy_metadata_state(s)
           clear_lease(next_s)
-          return next_s, true, 0
+          return Ready.write(next_s, true, 0)
         end
         local next_s = clone_state(s)
         next_s.rope:prepend(bytes)
         clear_lease(next_s)
-        return next_s, true, #bytes
+        return Ready.write(next_s, true, #bytes)
       end,
     }),
     fail_lease = transition('update', 'any', 0, {
@@ -454,7 +454,7 @@ local FlowTransitions = Scalar.kind({
         local n = #(next_s.lease_bytes or '')
         clear_lease(next_s)
         record_settled_error(next_s, p.err or Errors.FLOW_ERROR)
-        return next_s, true, n
+        return Ready.write(next_s, true, n)
       end,
     }),
     drop_exactly = transition('select', 'any', 50, {
@@ -472,13 +472,13 @@ local FlowTransitions = Scalar.kind({
           end
           local next_s = clone_state(s)
           next_s.rope:take(p.n)
-          return next_s, p.n
+          return Ready.write(next_s, p.n)
         end
         if committed_input_closed(p.flow) then
           if queued > 0 then
             local next_s = clone_state(s)
             next_s.rope:take(queued)
-            return next_s, nil, Errors.EOF, queued
+            return Ready.write(next_s, nil, Errors.EOF, queued)
           end
           return Ready.same(nil, Errors.EOF, 0)
         end
@@ -521,7 +521,7 @@ local FlowTransitions = Scalar.kind({
         next_s.space_owner = p.owner
         next_s.space_capacity = math.min(p.n, free)
         next_s.space_meta = p.meta
-        return next_s, space_lease_handle(p.flow, next_s)
+        return Ready.write(next_s, space_lease_handle(p.flow, next_s))
       end,
     }),
     commit_space = transition('update', 'any', 0, {
@@ -538,7 +538,7 @@ local FlowTransitions = Scalar.kind({
         if bytes ~= '' then
           next_s.rope:append(bytes)
         end
-        return next_s, #bytes
+        return Ready.write(next_s, #bytes)
       end,
     }),
     release_space = transition('update', 'any', 0, {
@@ -549,7 +549,7 @@ local FlowTransitions = Scalar.kind({
         local n = s.space_capacity or 0
         local next_s = copy_metadata_state(s)
         clear_space_lease(next_s)
-        return next_s, true, n
+        return Ready.write(next_s, true, n)
       end,
     }),
     fail_space = transition('update', 'any', 0, {
@@ -560,7 +560,7 @@ local FlowTransitions = Scalar.kind({
         local next_s = copy_metadata_state(s)
         clear_space_lease(next_s)
         fail_endpoint(next_s, 'input', p.err or Errors.READ_ERROR)
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     capacity_some = transition('query', 'none', 90, {
@@ -615,7 +615,7 @@ local FlowTransitions = Scalar.kind({
         if retained == 0 and s.input_open == false and s.output_open == false then
           return Ready.same(true)
         end
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     shutdown_flow = transition('update', 'any', 0, {
@@ -630,7 +630,7 @@ local FlowTransitions = Scalar.kind({
         if retained > 0 and p.settle_error ~= nil then
           record_settled_error(next_s, p.settle_error)
         end
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     closed = transition('query', 'none', 100, {
@@ -659,7 +659,7 @@ local FlowTransitions = Scalar.kind({
         end
         local next_s = copy_metadata_state(s)
         close_endpoint(next_s, 'input')
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     close_output = transition('update', 'any', 0, {
@@ -669,7 +669,7 @@ local FlowTransitions = Scalar.kind({
         end
         local next_s = copy_metadata_state(s)
         close_endpoint(next_s, 'output')
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     input_closed = transition('query', 'none', 100, {
@@ -693,14 +693,14 @@ local FlowTransitions = Scalar.kind({
       step = function(s, p)
         local next_s = copy_metadata_state(s)
         fail_endpoint(next_s, 'input', p.err or Errors.READ_ERROR)
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     set_output_error = transition('update', 'any', 0, {
       step = function(s, p)
         local next_s = copy_metadata_state(s)
         fail_endpoint(next_s, 'output', p.err or Errors.WRITE_ERROR)
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
     input_error = transition('query', 'none', 100, {
@@ -729,7 +729,7 @@ local FlowTransitions = Scalar.kind({
         if retained > 0 then
           record_settled_error(next_s, err)
         end
-        return next_s, false, err
+        return Ready.write(next_s, false, err)
       end,
     }),
     shutdown_output = transition('update', 'any', 0, {
@@ -742,7 +742,7 @@ local FlowTransitions = Scalar.kind({
         if retained > 0 then
           record_settled_error(next_s, err)
         end
-        return next_s, true
+        return Ready.write(next_s, true)
       end,
     }),
   },

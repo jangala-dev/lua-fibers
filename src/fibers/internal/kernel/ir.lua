@@ -68,9 +68,7 @@ local function mark_location(out, loc, fields)
     out.locations[loc] = access
   end
   for key, value in pairs(fields or {}) do
-    if key == 'supply' or key == 'supply_up' or key == 'supply_down' or key == 'supply_any' then
-      error('legacy location supply metadata is not supported; use supplies', 0)
-    elseif key == 'supplies' then
+    if key == 'supplies' then
       access.supplies = Supply.merge_into(access.supplies, value)
     elseif value then
       access[key] = true
@@ -132,16 +130,16 @@ local function primitive_supply_access(program)
   if program.patch then
     mark_patch_supply(access, program.location, program.patch)
   end
-  if program.payload_patch == 'replace' then
+  if program.bind == 'replace' then
     access.supplies.any = true
-  elseif program.payload_patch == 'presence_put' then
+  elseif program.bind == 'presence_put' then
     access.supplies.up = true
   end
   return access
 end
 
 local function primitive_metadata(op, out)
-  local p = op.descriptor
+  local p = op.program
   local kind = M.kind(p)
   if kind == 'exchange' then
     local roles = out.exchanges[p.resource]
@@ -153,7 +151,7 @@ local function primitive_metadata(op, out)
     return
   end
   if kind == 'observe' then
-    mark_resource(out, p.resource or op.resource, { observe = true })
+    mark_resource(out, p.resource, { observe = true })
     return
   end
   if not p.location then
@@ -209,13 +207,6 @@ local function metadata_from_hint(hint, seen)
     dependency_hint_cache[hint] = out
     return out
   end
-  if hint.footprint ~= nil then
-    return metadata_from_hint(hint.footprint, seen)
-  end
-  if hint.continuation ~= nil then
-    return metadata_from_hint(hint.continuation, seen)
-  end
-
   local out = empty_metadata()
   out.dynamic = hint.dynamic == true
   out.external = hint.external == true
@@ -256,7 +247,7 @@ describe = function(op, seen)
   if not op then
     return empty_metadata()
   end
-  local cache_key = op.descriptor or op
+  local cache_key = op.program or op
   local cached = metadata_cache[cache_key]
   if cached then
     return cached
@@ -400,9 +391,9 @@ function M.metadata_may_supply(metadata, intent)
     return false, 'none'
   end
   local program = intent.program
-  local loc = program and (program.location or program.group)
+  local loc = program and program.location
   local access = loc and metadata.locations[loc]
-  local demand = program and (program.orientation or program.demand_tag)
+  local demand = program and program.orientation
   if access and Supply.may_supply(access.supplies, demand) then
     return true, demand and ('location-' .. tostring(demand)) or 'location-any-demand'
   end
@@ -483,44 +474,30 @@ local function is_ready(value)
 end
 
 local function machine_outcome(program, value, context, occurrence_payload)
-  local transition, payload = M.rule(program), occurrence_payload or program.payload or {}
-  local packed = Op._pack(transition.step(value, payload, context))
-  local first = packed[1]
-  if packed.n == 1 and is_wait(first) then
+  local transition = M.rule(program)
+  local payload = occurrence_payload
+  if payload == nil then
+    payload = program.payload
+  end
+  if payload == nil then
+    payload = {}
+  end
+  local outcome = transition.step(value, payload, context)
+  if is_wait(outcome) then
     return nil
   end
-  if is_ready(first) then
-    if transition.mode == 'query' and first.writes then
-      return nil
-    end
-    return {
-      machine = true,
-      writes = first.writes == true,
-      value = first.value,
-      result = first.pack or Op._pack(),
-    }
+  if not is_ready(outcome) then
+    error('machine transition must return Scalar.Wait or Scalar.Ready', 2)
   end
-  if transition.mode == 'update' then
-    if packed.n == 0 then
-      return nil
-    end
-    local result = { n = packed.n - 1, _fibers_pack = true }
-    for i = 2, packed.n do
-      result[i - 1] = packed[i]
-    end
-    return { machine = true, writes = true, value = packed[1], result = result }
+  if transition.mode == 'query' and outcome.writes then
+    error('query transition cannot write', 2)
   end
-  if packed.n == 0 or packed[1] == nil then
-    return nil
-  end
-  if transition.mode == 'select' then
-    local result = { n = packed.n - 1, _fibers_pack = true }
-    for i = 2, packed.n do
-      result[i - 1] = packed[i]
-    end
-    return { machine = true, writes = true, value = packed[1], result = result }
-  end
-  return { machine = true, writes = false, result = packed }
+  return {
+    machine = true,
+    writes = outcome.writes == true,
+    value = outcome.value,
+    result = outcome.pack or Op._pack(),
+  }
 end
 
 function M.result_pack(program, value, session)

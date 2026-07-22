@@ -324,7 +324,7 @@ do
     if not handle then
       return nil, err
     end
-    handle._close = function()
+    handle.operations.close = function()
       return nil, HostError.system('socket', 'close_listener', 'injected close failure', 'EIO')
     end
     return handle
@@ -370,7 +370,7 @@ do
     if not handle then
       return nil, err
     end
-    handle._close = function()
+    handle.operations.close = function()
       error('injected throwing close defect')
     end
     return handle

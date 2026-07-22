@@ -51,7 +51,7 @@ do
   eq(scalar:read_op(), scalar:read_op(), 'scalar read option should be cached')
   eq(scalar:snapshot_op(), scalar:snapshot_op(), 'scalar snapshot option should be cached')
   truthy(
-    scalar:read_op().descriptor and scalar:read_op().descriptor._fibers_program,
+    scalar:read_op().program and scalar:read_op().program._fibers_program,
     'cached scalar read should use a primitive descriptor'
   )
 

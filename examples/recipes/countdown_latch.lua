@@ -6,6 +6,7 @@
 -- is not hidden from the zero predicate.
 
 local Scalar = require('fibers.scalar')
+local Ready, Wait = Scalar.Ready, Scalar.Wait
 
 local CountdownLatch = {}
 CountdownLatch.__index = CountdownLatch
@@ -43,13 +44,13 @@ local State = Scalar.kind({
         local n = payload.n
         local new_count = st.count + n
         if new_count < 0 then
-          return nil
+          return Wait
         end
         local generation = st.generation
         if st.count == 0 and new_count > 0 then
           generation = generation + 1
         end
-        return { count = new_count, generation = generation }, true, new_count, generation
+        return Ready.write({ count = new_count, generation = generation }, true, new_count, generation)
       end,
     },
     wait = {
@@ -60,9 +61,9 @@ local State = Scalar.kind({
       step = function(st)
         st = copy_state(st)
         if st.count == 0 then
-          return st, true, st.generation
+          return Ready.write(st, true, st.generation)
         end
-        return nil
+        return Wait
       end,
     },
   },

@@ -4,7 +4,7 @@
 -- host clock and os.execute("sleep N") to avoid busy-waiting.  It does not
 -- support file descriptor polling or arbitrary host events.
 
-local Host = require('fibers.host')
+local WaitSet = require('fibers.host.wait_set')
 
 local Pure = {}
 Pure.__index = Pure
@@ -72,27 +72,7 @@ function Pure:sleep(seconds)
 end
 
 function Pure:block(rt, waits, status, _opts)
-  waits = waits or {}
-  local deadline = Host.earliest_deadline(waits)
-  if deadline ~= nil then
-    local now = rt:now()
-    local delay = deadline - now
-    if delay > 0 then
-      if self.on_wait then
-        self.on_wait(deadline, delay, waits, status)
-      end
-      self:sleep(delay)
-      if self.on_wake then
-        self.on_wake(deadline, waits, status)
-      end
-    end
-    return true, 'time'
-  end
-
-  if self.on_unsupported then
-    self.on_unsupported(waits, status)
-  end
-  return nil, 'unsupported-waits'
+  return WaitSet.block_without_io(self, rt, WaitSet.build(waits), status)
 end
 
 return Pure

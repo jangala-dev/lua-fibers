@@ -55,7 +55,7 @@ function Index:bucket(atom)
 end
 
 local function transition_atom(index, intent, rule)
-  local location = intent.program and (intent.program.location or intent.program.group)
+  local location = intent.program and intent.program.location
   return index:atom('transition', location, rule.enumerable and 'witness' or 'group')
 end
 
@@ -365,7 +365,7 @@ local function small_domain(state, compatible, constrained)
       if rule.enumerable then
         witnesses[#witnesses + 1] = intent
       else
-        local location = intent.program.location or intent.program.group
+        local location = intent.program.location
         local group
         for j = 1, #groups do
           if groups[j].key == location then

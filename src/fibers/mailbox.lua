@@ -7,6 +7,7 @@
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
 local Scalar = require('fibers.scalar')
+local Ready, Wait = Scalar.Ready, Scalar.Wait
 local Queue = require('fibers.internal.fifo')
 local Rendezvous = require('fibers.resource.rendezvous')
 
@@ -78,9 +79,9 @@ local Meta = Scalar.kind({
       step = function(st, payload)
         st = copy_meta(st)
         if not st.closed and active_sender(st, payload.id) then
-          return st, true
+          return Ready.write(st, true)
         end
-        return nil
+        return Wait
       end,
     },
     closed_or_inactive = {
@@ -91,9 +92,9 @@ local Meta = Scalar.kind({
       step = function(st, payload)
         st = copy_meta(st)
         if st.closed or not active_sender(st, payload.id) then
-          return st, nil, st.reason
+          return Ready.write(st, nil, st.reason)
         end
-        return nil
+        return Wait
       end,
     },
     closed = {
@@ -104,9 +105,9 @@ local Meta = Scalar.kind({
       step = function(st)
         st = copy_meta(st)
         if st.closed then
-          return st, nil, st.reason
+          return Ready.write(st, nil, st.reason)
         end
-        return nil
+        return Wait
       end,
     },
     clone_sender = {
@@ -117,7 +118,7 @@ local Meta = Scalar.kind({
       step = function(st, payload)
         st = copy_meta(st)
         if st.closed or not active_sender(st, payload.id) then
-          return st, inert_tx(payload.mailbox)
+          return Ready.write(st, inert_tx(payload.mailbox))
         end
 
         local seq = (st.next_sender_seq or 0) + 1
@@ -128,7 +129,7 @@ local Meta = Scalar.kind({
         end
         st.next_sender_seq = seq
         st.senders[new_id] = true
-        return st, counted_tx(payload.mailbox, new_id)
+        return Ready.write(st, counted_tx(payload.mailbox, new_id))
       end,
     },
     close_sender = {
@@ -139,7 +140,7 @@ local Meta = Scalar.kind({
       step = function(st, payload)
         st = copy_meta(st)
         if not active_sender(st, payload.id) then
-          return st, true
+          return Ready.write(st, true)
         end
         if st.reason == nil and payload.reason ~= nil then
           st.reason = payload.reason
@@ -148,7 +149,7 @@ local Meta = Scalar.kind({
         if sender_count(st.senders) == 0 then
           st.closed = true
         end
-        return st, true
+        return Ready.write(st, true)
       end,
     },
     close_mailbox = {
@@ -162,7 +163,7 @@ local Meta = Scalar.kind({
           st.reason = payload.reason
         end
         st.closed = true
-        return st, true
+        return Ready.write(st, true)
       end,
     },
     drop = {
@@ -173,7 +174,7 @@ local Meta = Scalar.kind({
       step = function(st)
         st = copy_meta(st)
         st.dropped = (st.dropped or 0) + 1
-        return st, true, st.dropped
+        return Ready.write(st, true, st.dropped)
       end,
     },
   },
