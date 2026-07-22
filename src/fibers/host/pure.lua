@@ -1,8 +1,9 @@
 -- Deliberately small pure-Lua host adapter.
 --
 -- This adapter supports time waits only.  It uses os.time by default for the
--- host clock and os.execute("sleep N") to avoid busy-waiting.  It does not
--- support file descriptor polling or arbitrary host events.
+-- host clock and os.execute("sleep N") when the host exposes it.  Sandboxed
+-- runtimes such as the standalone Luau CLI must supply opts.sleep explicitly.
+-- It does not support file descriptor polling or arbitrary host events.
 
 local WaitSet = require('fibers.host.wait_set')
 
@@ -22,7 +23,11 @@ local function default_sleep(seconds)
   if whole <= 0 then
     return true
   end
-  return os.execute('sleep ' .. tostring(whole))
+  local execute = os and os.execute
+  if type(execute) ~= 'function' then
+    return nil, 'pure host cannot sleep: os.execute is unavailable; supply opts.sleep'
+  end
+  return execute('sleep ' .. tostring(whole))
 end
 
 function Pure.new(opts)

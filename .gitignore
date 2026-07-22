@@ -3,3 +3,4 @@ performance/*.csv
 performance/*.json
 performance/*.txt
 node_modules/
+build/

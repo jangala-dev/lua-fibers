@@ -30,6 +30,27 @@ local function assert_eq(a, b, msg)
   end
 end
 
+-- The LuaJIT host must not load a merely same-named `ffi` module on a
+-- non-LuaJIT VM (TexLua and LuaJITTeX may provide one).
+do
+  if type(rawget(_G, 'jit')) ~= 'table' then
+    local old_ffi, loaded = package.preload.ffi, false
+    package.loaded['fibers.host.luajit_linux'] = nil
+    package.loaded.ffi = nil
+    package.preload.ffi = function()
+      loaded = true
+      error('non-LuaJIT ffi must not be loaded')
+    end
+    local ok, module = pcall(require, 'fibers.host.luajit_linux')
+    package.preload.ffi = old_ffi
+    package.loaded.ffi = nil
+    assert_truthy(ok, 'luajit host should remain require-able outside LuaJIT')
+    assert_truthy(not loaded, 'luajit host should probe jit before requiring ffi')
+    local supported = module.is_supported()
+    assert_truthy(not supported, 'luajit host should report unsupported outside LuaJIT')
+  end
+end
+
 -- Optional Linux host modules must be require-able even when their platform
 -- dependencies are unavailable under the test interpreter.
 do

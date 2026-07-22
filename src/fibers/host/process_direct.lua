@@ -315,15 +315,12 @@ function Direct.new(spec)
     if spec.pidfd then
       local raw = spec.pidfd(pid)
       if raw then
-        pidfd = spec.Fd.new(
-          raw,
-          {
-            host = host,
-            name = (process_spec.name or ('process-' .. pid)) .. ':pidfd',
-            nonblocking = true,
-            cloexec = true,
-          }
-        )
+        pidfd = spec.Fd.new(raw, {
+          host = host,
+          name = (process_spec.name or ('process-' .. pid)) .. ':pidfd',
+          nonblocking = true,
+          cloexec = true,
+        })
         if pidfd then
           pidfd.capabilities.write = false
           pidfd.capabilities.shutdown_write = false

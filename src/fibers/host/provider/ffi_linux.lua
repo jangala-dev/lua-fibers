@@ -747,7 +747,7 @@ function M.new(opts)
           return C.getaddrinfo, C.freeaddrinfo, C.gai_strerror
         end)
       end,
-      query = function(endpoint, resolve_opts)
+      query = function(_host, endpoint, resolve_opts)
         local hints = ffi.new('struct addrinfo[1]')
         local requested = (resolve_opts or {}).family or endpoint.family_hint
         hints[0].ai_family = requested == 'inet4' and AF_INET

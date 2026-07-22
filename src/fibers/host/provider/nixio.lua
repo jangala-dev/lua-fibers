@@ -497,7 +497,7 @@ provider.resolver = {
     return type(nixio.getaddrinfo) == 'function'
   end,
   reason = 'Nixio getaddrinfo unavailable',
-  query = function(endpoint, opts)
+  query = function(_host, endpoint, opts)
     local requested = opts.family or endpoint.family_hint
     local family = requested == 'inet4' and 'inet' or requested == 'inet6' and 'inet6' or 'any'
     local records, a, b = nixio.getaddrinfo(endpoint.host, family, tostring(endpoint.service))

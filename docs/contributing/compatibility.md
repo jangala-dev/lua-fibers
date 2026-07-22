@@ -10,6 +10,7 @@ Lua 5.3
 Lua 5.4
 Lua 5.5
 LuaJIT v2.1
+TexLua (Lua 5.3-derived)
 Luau
 ```
 
@@ -38,7 +39,7 @@ LuaJIT commands are versioned explicitly:
 
 ```text
 lua5.1  lua5.2  lua5.3  lua5.4  lua5.5
-luajit  luau    luau-analyze
+luajit  texlua  luau  luau-analyze
 ```
 
 LuaRocks wrappers install native modules into separate ABI-specific prefixes:
@@ -63,7 +64,9 @@ From the repository root:
 
 ```sh
 make test-matrix
+make test-texlua
 make test-reference
+make test-luau
 lua5.1 tests/run_protected_fallback.lua
 luajit -joff tests/run_all.lua
 ```
@@ -155,3 +158,5 @@ kernel uses packed tables with an explicit `n` field for this reason.
 
 
 See [Test profiles](testing.md) for the semantic, native and stress split.
+
+See [Luau build programme](luau.md) for the generated portable target and matrix promotion gates.

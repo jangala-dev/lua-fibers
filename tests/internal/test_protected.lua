@@ -93,6 +93,29 @@ test('fibers.xpcall permits perform and handles errors', function()
   ok(tostring(handled):match('handled:.*xboom'), 'expected handled xboom, got: ' .. tostring(handled))
 end)
 
+test('fibers.xpcall handlers may perform while handling an error', function()
+  local protected_ok, handled
+  local st = fibers.try_run(function()
+    local ch = FibersRendezvous.new('protected-handler-rendezvous')
+    fibers.spawn(function()
+      fibers.perform(ch:put_op('handler-ok'))
+    end, 'handler-sender')
+
+    protected_ok, handled = fibers.xpcall(function()
+      error('handler-boom', 0)
+    end, function(err)
+      return fibers.perform(ch:get_op()) .. ':' .. tostring(err)
+    end)
+  end).runtime_status
+
+  eq(st.tag, 'found')
+  eq(protected_ok, false)
+  ok(
+    tostring(handled):match('handler%-ok:.*handler%-boom'),
+    'unexpected handler result: ' .. tostring(handled)
+  )
+end)
+
 test('task bodies may perform while protected for result reporting', function()
   local value
   local st = fibers.try_run(function()

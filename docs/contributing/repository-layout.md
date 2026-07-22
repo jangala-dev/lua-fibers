@@ -49,3 +49,14 @@ The default suite and the reference evaluator run remain:
 lua tests/run_all.lua
 FIBERS_MACHINE=reference lua tests/run_all.lua
 ```
+
+## Portable module shape
+
+Shared Lua and Luau modules use an unambiguous filesystem convention.  Leaf
+modules use `name.lua`.  A module that also contains child modules uses
+`name/init.lua`.  A source tree must not contain both `name.lua` and `name/`,
+or both `.lua` and `.luau` forms of the same module.
+
+This is a filesystem rule only; logical names such as `fibers.scope` and
+`fibers.scope.result` are unchanged.  The repository check
+`scripts/check-module-layout.py` enforces it.

@@ -440,7 +440,7 @@ provider.resolver = {
     return type(socket.getaddrinfo) == 'function' and socket.SOCK_STREAM ~= nil
   end,
   reason = 'luaposix getaddrinfo unavailable',
-  query = function(endpoint, opts)
+  query = function(_host, endpoint, opts)
     local requested = opts.family or endpoint.family_hint
     local family = requested == 'inet4' and socket.AF_INET
       or requested == 'inet6' and socket.AF_INET6

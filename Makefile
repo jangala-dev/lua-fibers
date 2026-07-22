@@ -2,6 +2,11 @@ SHELL := /bin/sh
 
 LUA ?= lua5.4
 LUAJIT ?= luajit
+TEXLUA ?= texlua
+LUAU ?= luau
+LUAU_ANALYZE ?= luau-analyze
+PYTHON ?= python3
+LUAU_BUILD_DIR ?= build/luau
 
 REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./reference/?.lua;./reference/?/init.lua;./reference/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;;
 export LUA_PATH := $(REPO_LUA_PATH)
@@ -10,7 +15,7 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
 	test-experiments test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
-	test-luajit-interpreter examples bench bench-ledger bench-io profile-proof-io performance check-format check-links \
+	test-luajit-interpreter test-texlua build-luau check-luau test-luau examples bench bench-ledger bench-io profile-proof-io performance check-format check-links \
 	check-layout check
 
 test:
@@ -76,6 +81,17 @@ test-luajit:
 test-luajit-interpreter:
 	FIBERS_TEST_PROFILE=matrix $(LUAJIT) -joff tests/run_all.lua
 
+test-texlua:
+	FIBERS_TEST_PROFILE=matrix $(TEXLUA) tests/run_all.lua
+
+build-luau:
+	$(PYTHON) scripts/build-luau.py --output "$(LUAU_BUILD_DIR)"
+
+check-luau: build-luau
+	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
+
+test-luau: check-luau
+	$(LUAU) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
 
 test-native:
 	$(LUA) tests/run_group.lua native
@@ -91,7 +107,7 @@ test-stress:
 test-full: test-matrix test-native test-stress test-reference examples
 
 test-matrix: test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 \
-	test-luajit test-luajit-interpreter
+	test-luajit test-luajit-interpreter test-texlua
 
 examples:
 	@set -e; for example in \
@@ -129,6 +145,7 @@ check-format:
 	./scripts/check-format.sh
 
 check-layout:
+	$(PYTHON) scripts/check-module-layout.py src
 	@test -f src/fibers/init.lua
 	@test ! -e src/fibers.lua
 	@test ! -e src/fibers/atoms.lua
@@ -151,7 +168,12 @@ check-layout:
 	@test ! -f src/fibers/internal/kernel/store.lua
 	@test ! -f src/fibers/internal/kernel/frontier.lua
 	@test ! -f src/fibers/internal/kernel/activation.lua
-	@test -f src/fibers/flow.lua
+	@test -f src/fibers/flow/init.lua
+	@test ! -e src/fibers/flow.lua
+	@test -f src/fibers/host/init.lua
+	@test ! -e src/fibers/host.lua
+	@test -f src/fibers/scope/init.lua
+	@test ! -e src/fibers/scope.lua
 	@test -f src/fibers/internal/flow_machine.lua
 	@test -f src/fibers/internal/scalar_wait.lua
 	@test -f src/fibers/internal/flow_leases.lua
@@ -178,7 +200,8 @@ check-layout:
 	@test -f src/fibers/internal/completion.lua
 	@test -f src/fibers/internal/adoption.lua
 	@test -f src/fibers/internal/io_audit.lua
-	@test -f src/fibers/file.lua
+	@test -f src/fibers/file/init.lua
+	@test ! -e src/fibers/file.lua
 	@test -d src/fibers/file
 	@test -f src/fibers/file/regular.lua
 	@test -f src/fibers/file/algorithms.lua
@@ -189,8 +212,10 @@ check-layout:
 	@test -f src/fibers/file/worker_main.lua
 	@test -f src/fibers/file/uring_provider.lua
 	@test -f src/fibers/file/aio_probe.lua
-	@test -f src/fibers/socket.lua
-	@test -f src/fibers/process.lua
+	@test -f src/fibers/socket/init.lua
+	@test ! -e src/fibers/socket.lua
+	@test -f src/fibers/process/init.lua
+	@test ! -e src/fibers/process.lua
 	@test -f src/fibers/process/command.lua
 	@test -f src/fibers/internal/process/lifecycle.lua
 	@test ! -e src/fibers/host/_process_ffi_common.lua
@@ -213,6 +238,12 @@ check-layout:
 	@test -f tests/support/file_worker_delayed.lua
 	@test -f tests/io/test_process.lua
 	@test -f tests/native/test_process_native.lua
+	@test -f scripts/build-luau.py
+	@test -f scripts/check-module-layout.py
+	@test -f tests/luau/smoke.lua
+	@test -f docs/contributing/luau.md
+	@test ! -e tests/embedding/hosts/test_all.lua
+	@test ! -e tests/embedding/hosts/test_nixio_linux.lua
 	@test -f tests/support/socket_provider_contract.lua
 	@test -f tests/support/resolver_provider_contract.lua
 	@test -f tests/support/process_provider_contract.lua

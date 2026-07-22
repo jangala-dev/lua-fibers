@@ -49,7 +49,7 @@ end
 
 -- One luaposix table supplies descriptors, sockets and resolution.
 do
-  local next_fd, local_address, peer_address = 40, {}, {}
+  local next_fd, local_address, peer_address, resolver_calls = 40, {}, {}, {}
   local socket = {
     AF_UNIX = 1,
     AF_INET = 2,
@@ -102,7 +102,8 @@ do
     peer_address[fd] = address
     return nil, 'in progress', 115
   end
-  function socket.getaddrinfo()
+  function socket.getaddrinfo(host, service, hints)
+    resolver_calls[#resolver_calls + 1] = { host = host, service = service, hints = hints }
     return {
       { family = 2, addr = '127.0.0.1', port = 80 },
       { family = 2, addr = '127.0.0.1', port = 80 },
@@ -192,6 +193,11 @@ do
     assert(dial:finish_connect() == dial)
     local addresses = assert(host:resolve({ host = 'localhost', service = 80 }, { family = 'inet4' }))
     assert(#addresses == 1 and addresses[1].host == '127.0.0.1')
+    assert(
+      resolver_calls[1].host == 'localhost'
+        and resolver_calls[1].service == '80'
+        and resolver_calls[1].hints.family == socket.AF_INET
+    )
     listener:close()
     child:close()
     dial:close()
@@ -202,7 +208,7 @@ end
 -- One Nixio object table supplies the same facilities.
 do
   local next_id = 100
-  local socket_options, socket_calls = {}, {}
+  local socket_options, socket_calls, resolver_calls = {}, {}, {}
   local function socket_object(family)
     next_id = next_id + 1
     local value = handle_methods({
@@ -273,7 +279,8 @@ do
     strerror = function(number)
       return 'errno ' .. tostring(number)
     end,
-    getaddrinfo = function()
+    getaddrinfo = function(host, family, service)
+      resolver_calls[#resolver_calls + 1] = { host = host, family = family, service = service }
       return {
         { family = 'inet', address = '127.0.0.1', port = 80 },
         { family = 'inet', address = '127.0.0.1', port = 80 },
@@ -308,7 +315,12 @@ do
       socket_options[#socket_options].level == 'tcp' and socket_options[#socket_options].option == 'nodelay'
     )
     local addresses = assert(host:resolve({ host = 'localhost', service = 80 }, { family = 'inet4' }))
-    assert(#addresses == 1)
+    assert(#addresses == 1 and addresses[1].port == 80)
+    assert(
+      resolver_calls[1].host == 'localhost'
+        and resolver_calls[1].family == 'inet'
+        and resolver_calls[1].service == '80'
+    )
     listener:close()
     child:close()
     dial:close()

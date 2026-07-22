@@ -32,11 +32,11 @@ BIT32_VERSION ?= 5.3.5.1-1
 STYLUA_VERSION ?= 2.5.2
 
 .PHONY: bootstrap validate-pins system lua lua51 lua52 lua53 lua54 lua55 \
-	luajit luau stylua luarocks wrappers rocks rocks-bit32 rocks-cffi \
-	rocks-luaposix rocks-nixio verify verify-lua verify-luajit verify-luau \
+	luajit luau texlua stylua luarocks wrappers rocks rocks-bit32 rocks-cffi \
+	rocks-luaposix rocks-nixio verify verify-lua verify-luajit verify-luau verify-texlua \
 	verify-tools verify-luarocks clean-build
 
-bootstrap: validate-pins system lua luajit luau stylua luarocks wrappers rocks verify clean-build
+bootstrap: validate-pins system lua luajit luau texlua stylua luarocks wrappers rocks verify clean-build
 
 validate-pins:
 	check_sha256() {
@@ -78,6 +78,7 @@ system:
 		patch \
 		pkg-config \
 		python3 \
+		texlive-binaries \
 		tar \
 		unzip \
 		xz-utils \
@@ -163,6 +164,10 @@ $(STAMP_ROOT)/luau-$(LUAU_REF): | system
 	ln -sfn "$$prefix/bin/luau" /usr/local/bin/luau
 	ln -sfn "$$prefix/bin/luau-analyze" /usr/local/bin/luau-analyze
 	touch "$@"
+
+
+texlua: | system
+	command -v texlua >/dev/null
 
 stylua: $(STAMP_ROOT)/stylua-$(STYLUA_VERSION)
 
@@ -250,13 +255,13 @@ rocks-nixio: wrappers lua luajit
 		"luarocks-$$runtime" install "$(NIXIO_ROCKSPEC)"
 	done
 
-verify: verify-lua verify-luajit verify-luau verify-tools verify-luarocks
+verify: verify-lua verify-luajit verify-luau verify-texlua verify-tools verify-luarocks
 
 verify-lua: rocks
 	for slot in 5.1 5.2 5.3 5.4 5.5; do
 		LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' "lua$$slot" -e "assert(_VERSION == 'Lua $$slot'); assert(require('cffi')); assert(require('nixio')); local h = require('fibers.host.nixio'); local ok, why = h.is_supported(); assert(ok, why)"
-		"lua$$slot" tests/hosts/test_nixio.lua
-		"lua$$slot" tests/hosts/test_fd_nixio.lua
+		"lua$$slot" tests/embedding/hosts/test_nixio.lua
+		"lua$$slot" tests/embedding/hosts/test_fd_nixio.lua
 	done
 	lua5.1 -e "assert(require('bit32')); assert(require('posix.sys.socket'))"
 	lua5.2 -e "assert(require('posix.sys.socket'))"
@@ -266,8 +271,8 @@ verify-lua: rocks
 
 verify-luajit: rocks
 	LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' luajit -e "assert(jit and jit.version); assert(require('ffi')); assert(require('posix.sys.socket')); assert(require('nixio')); local h = require('fibers.host.nixio'); local ok, why = h.is_supported(); assert(ok, why)"
-	luajit tests/hosts/test_nixio.lua
-	luajit tests/hosts/test_fd_nixio.lua
+	luajit tests/embedding/hosts/test_nixio.lua
+	luajit tests/embedding/hosts/test_fd_nixio.lua
 
 # Luau has no --version option. Execute and analyse a small typed programme
 # instead, which checks both installed CLI binaries.
@@ -280,6 +285,16 @@ verify-luau: luau
 		> "$$smoke"
 	luau "$$smoke"
 	luau-analyze "$$smoke" >/dev/null
+	rm -f "$$smoke"
+
+verify-texlua: texlua
+	smoke="$(BUILD_ROOT)/verify-texlua.lua"
+	printf '%s\n' \
+		"assert(_VERSION == 'Lua 5.3', _VERSION)" \
+		"assert(type(coroutine.create) == 'function')" \
+		"print('texlua ok')" \
+		> "$$smoke"
+	texlua "$$smoke"
 	rm -f "$$smoke"
 
 verify-tools: stylua
