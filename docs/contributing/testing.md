@@ -30,8 +30,12 @@ environment differ from stock Lua:
 ```sh
 make build-luau
 make check-luau
+make test-luau-smoke
+make test-luau-portable
 make test-luau
 ```
 
-Luau remains outside `make test-matrix` until the generated portable profile
-meets the gates in [Luau build programme](luau.md).
+The portable profile is declared in `tests/luau/profile.json`; every test file
+has an explicit portability classification. Luau remains outside
+`make test-matrix` until this profile passes reliably in the development
+container and CI. See [Luau build programme](luau.md).

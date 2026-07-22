@@ -15,7 +15,7 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
 	test-experiments test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
-	test-luajit-interpreter test-texlua build-luau check-luau test-luau examples bench bench-ledger bench-io profile-proof-io performance check-format check-links \
+	test-luajit-interpreter test-texlua build-luau check-luau test-luau test-luau-smoke test-luau-portable examples bench bench-ledger bench-io profile-proof-io performance check-format check-links \
 	check-layout check
 
 test:
@@ -89,9 +89,17 @@ build-luau:
 
 check-luau: build-luau
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
+	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/portable.luau"
+
+test-luau-smoke: check-luau
+	$(LUAU) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
+
+test-luau-portable: check-luau
+	$(LUAU) "$(LUAU_BUILD_DIR)/tests/portable.luau"
 
 test-luau: check-luau
 	$(LUAU) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
+	$(LUAU) "$(LUAU_BUILD_DIR)/tests/portable.luau"
 
 test-native:
 	$(LUA) tests/run_group.lua native
@@ -238,6 +246,7 @@ check-layout:
 	@test -f tests/support/file_worker_delayed.lua
 	@test -f tests/io/test_process.lua
 	@test -f tests/native/test_process_native.lua
+	@test -f tests/luau/profile.json
 	@test -f scripts/build-luau.py
 	@test -f scripts/check-module-layout.py
 	@test -f tests/luau/smoke.lua

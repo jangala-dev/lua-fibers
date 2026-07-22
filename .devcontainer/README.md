@@ -50,5 +50,6 @@ make check-luau
 make test-luau
 ```
 
-Luau currently has a separate portable smoke target and is not yet included in
-`make test-matrix`.  See `docs/contributing/luau.md` for the promotion gates.
+Luau currently has separate conformance-smoke and 79-test portable-profile
+targets and is not yet included in `make test-matrix`. See
+`docs/contributing/luau.md` for the promotion gates.

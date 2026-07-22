@@ -13,7 +13,8 @@ generates a target-specific tree under `build/luau/` by:
 3. rewriting `fibers` to the alias root `@fibers` and submodules such as
    `fibers.runtime` to `@fibers/runtime`;
 4. writing a `.luaurc` and deterministic manifest;
-5. generating the first Luau smoke programme.
+5. generating the Luau conformance smoke programme and the named portable
+   test profile.
 
 The initial build includes the kernel, runtime, scopes, lifetimes, flows,
 in-memory resources, ManualHost and PureHost.  Shared file and process
@@ -39,11 +40,16 @@ patterns, and Luau receives the same hierarchy without a target-specific move.
 ```sh
 make build-luau
 make check-luau
+make test-luau-smoke
+make test-luau-portable
 make test-luau
 ```
 
-`check-luau` runs `luau-analyze` over the generated smoke entry point.
-`test-luau` then runs the entry point with the standalone Luau CLI.
+`check-luau` runs `luau-analyze` over the generated smoke and portable-profile
+entry points.
+`test-luau` runs both with the standalone Luau CLI.  The narrower targets
+`test-luau-smoke` and `test-luau-portable` are available when diagnosing a
+failure.
 
 Luau is not yet part of `make test-matrix`.  Promotion requires the gates below
 to pass in the development container and CI.
@@ -66,13 +72,20 @@ are found.
 
 ### 2. Portable test profile
 
-Replace the single smoke programme with a generated Luau test manifest.  Start
-with public semantics, composition, resources, lifetimes, kernel, internal
-portable helpers and ManualHost embedding.  The runner must not depend on
-`package.path`, `dofile`, `io` or environment variables.
+`tests/luau/profile.json` classifies every `test_*.lua` file and defines the
+`portable` profile.  The initial profile contains 79 tests covering public
+semantics, composition, resources, lifetimes, ManualHost embedding, in-memory
+I/O, both semantic evaluators, kernel laws, internal portable helpers, case
+studies and performance architecture.
 
-A test must be marked explicitly as portable, host-specific or unavailable;
-tests must not disappear from the Luau run by accident.
+The builder generates each selected stock-Lua test as a Luau module.  It removes
+the test-only `package.path` prelude, rewrites logical imports to aliases and
+supplies a small `io.write` compatibility shim where required.  The generated
+runner itself uses no `package`, `dofile`, `io` or environment variables.
+
+The builder fails if a new `test_*.lua` file lacks a classification, if a
+profile includes a non-portable test, or if a classified path has gone stale.
+Tests therefore cannot disappear from the Luau run by accident.
 
 ### 3. Distribution shape
 

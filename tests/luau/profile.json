@@ -1,0 +1,680 @@
+{
+  "format": 1,
+  "profiles": {
+    "portable": {
+      "description": "Core semantics and facilities runnable in the standalone Luau CLI without native host access.",
+      "module_entries": [
+        "fibers.internal.reference_machine"
+      ],
+      "tests": [
+        "tests/public/test_contracts.lua",
+        "tests/public/test_documented_examples.lua",
+        "tests/public/test_flow.lua",
+        "tests/public/test_op.lua",
+        "tests/public/test_policy.lua",
+        "tests/public/test_performing_conveniences.lua",
+        "tests/public/test_public_surface.lua",
+        "tests/public/test_sleep.lua",
+        "tests/public/test_stream_memory.lua",
+        "tests/composition/test_messaging_and_countdown.lua",
+        "tests/composition/test_priority_queue_composition.lua",
+        "tests/composition/test_resources_and_pool.lua",
+        "tests/composition/test_scalar_and_rate_limiter.lua",
+        "tests/resources/test_counter_and_fifo.lua",
+        "tests/resources/test_event.lua",
+        "tests/resources/test_external_resources.lua",
+        "tests/resources/test_index.lua",
+        "tests/resources/test_index_lease_extended.lua",
+        "tests/resources/test_lease_laws.lua",
+        "tests/resources/test_scalar.lua",
+        "tests/resources/test_state_resource_laws.lua",
+        "tests/lifetimes/test_concurrent_task_settlement.lua",
+        "tests/lifetimes/test_effects.lua",
+        "tests/lifetimes/test_mixed_claim_exchange.lua",
+        "tests/lifetimes/test_region_general.lua",
+        "tests/lifetimes/test_region_laws.lua",
+        "tests/lifetimes/test_region_lifecycle.lua",
+        "tests/lifetimes/test_region_task_effects.lua",
+        "tests/lifetimes/test_scope.lua",
+        "tests/lifetimes/test_scope_authority_borrow.lua",
+        "tests/lifetimes/test_scope_hardening.lua",
+        "tests/lifetimes/test_scope_laws.lua",
+        "tests/lifetimes/test_scope_policy_mechanisms.lua",
+        "tests/lifetimes/test_scope_result_run.lua",
+        "tests/lifetimes/test_scope_structural.lua",
+        "tests/lifetimes/test_settlement_structure.lua",
+        "tests/lifetimes/test_structured_policy.lua",
+        "tests/embedding/test_host.lua",
+        "tests/embedding/test_host_handle.lua",
+        "tests/embedding/test_readiness.lua",
+        "tests/embedding/test_runtime.lua",
+        "tests/embedding/test_runtime_lifecycle.lua",
+        "tests/embedding/test_stream_host_handle.lua",
+        "tests/embedding/test_stream_reactor.lua",
+        "tests/kernel/test_claim_closure.lua",
+        "tests/kernel/test_defeat.lua",
+        "tests/kernel/test_dependency_supply_direction.lua",
+        "tests/kernel/test_guard_activations.lua",
+        "tests/kernel/test_instrumentation.lua",
+        "tests/kernel/test_invariants.lua",
+        "tests/kernel/test_kernel_machine.lua",
+        "tests/kernel/test_ledger_kernel.lua",
+        "tests/kernel/test_minimal_lazy_path.lua",
+        "tests/kernel/test_residual_or_else.lua",
+        "tests/kernel/test_resumable_search.lua",
+        "tests/kernel/test_retry_laws.lua",
+        "tests/kernel/test_retry_semantics.lua",
+        "tests/kernel/test_search_stack.lua",
+        "tests/kernel/test_slim_retention.lua",
+        "tests/kernel/test_store_algebra.lua",
+        "tests/kernel/test_store_rollback.lua",
+        "tests/kernel/test_trail_journal.lua",
+        "tests/kernel/test_validation_paths.lua",
+        "tests/kernel/test_witness_validation.lua",
+        "tests/internal/test_adoption_completion.lua",
+        "tests/internal/test_datagram_service.lua",
+        "tests/internal/test_flow_helpers.lua",
+        "tests/internal/test_flow_scalar_state_machine.lua",
+        "tests/internal/test_flow_settlement.lua",
+        "tests/internal/test_flow_storage.lua",
+        "tests/internal/test_flow_stream_adversarial.lua",
+        "tests/internal/test_flow_validation.lua",
+        "tests/internal/test_io_audit.lua",
+        "tests/internal/test_protected.lua",
+        "tests/case_studies/test_calendar.lua",
+        "tests/case_studies/test_calendar_completeness.lua",
+        "tests/case_studies/test_petri.lua",
+        "tests/experiments/test_phase.lua",
+        "tests/performance/test_performance_architecture.lua"
+      ]
+    }
+  },
+  "classifications": {
+    "portable": "Generated and executed by the standalone Luau CLI.",
+    "host_specific": "Requires native files, sockets, processes, provider modules, sustained host churn, or a richer embedder.",
+    "stock_lua_loader": "Depends on package.loaded, package.preload, dofile, or another stock-Lua loader facility.",
+    "aggregate_or_helper": "A stock-Lua aggregate or helper rather than an independent portable case."
+  },
+  "tests": [
+    {
+      "path": "tests/case_studies/test_calendar.lua",
+      "group": "case_studies",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/case_studies/test_calendar_completeness.lua",
+      "group": "case_studies",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/case_studies/test_petri.lua",
+      "group": "case_studies",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/composition/test_messaging_and_countdown.lua",
+      "group": "composition",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/composition/test_priority_queue_composition.lua",
+      "group": "composition",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/composition/test_resources_and_pool.lua",
+      "group": "composition",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/composition/test_scalar_and_rate_limiter.lua",
+      "group": "composition",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/hosts/test_cffi_linux.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_fd_cffi.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_fd_luajit.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_fd_luaposix.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_fd_nixio.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_luajit_linux.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_luaposix.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_nixio.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/hosts/test_pure.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_datagram_optional_providers.lua",
+      "group": "embedding",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_fd_nixio_wrap.lua",
+      "group": "embedding",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_host.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/test_host_handle.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/test_host_linux.lua",
+      "group": "embedding",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_host_poller.lua",
+      "group": "embedding",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_process_nixio_provider.lua",
+      "group": "embedding",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_readiness.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/test_runtime.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/test_runtime_lifecycle.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/test_socket_resolver_optional_providers.lua",
+      "group": "embedding",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/embedding/test_stream_host_handle.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/embedding/test_stream_reactor.lua",
+      "group": "embedding",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/experiments/test_phase.lua",
+      "group": "experiments",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_adoption_completion.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_bitops.lua",
+      "group": "internal",
+      "classification": "stock_lua_loader"
+    },
+    {
+      "path": "tests/internal/test_datagram_service.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_flow_helpers.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_flow_scalar_state_machine.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_flow_settlement.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_flow_storage.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_flow_stream_adversarial.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_flow_validation.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_io_audit.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_protected.lua",
+      "group": "internal",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/internal/test_reference_lazy.lua",
+      "group": "internal",
+      "classification": "stock_lua_loader"
+    },
+    {
+      "path": "tests/io/test_datagram.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_datagram_conformance.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_file.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_foundations.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_pipe.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_process.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_resolver.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_socket.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_socket_conformance.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_socket_failure_matrix.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_socket_hardening.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_socket_lifecycle.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/io/test_socket_provider_matrix.lua",
+      "group": "io",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/kernel/test_claim_closure.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_defeat.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_dependency_supply_direction.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_guard_activations.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_instrumentation.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_invariants.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_kernel_machine.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_ledger_kernel.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_minimal_lazy_path.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_residual_or_else.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_resumable_search.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_retry_laws.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_retry_semantics.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_search_stack.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_slim_retention.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_store_algebra.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_store_rollback.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_trail_journal.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_validation_paths.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_witness_validation.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_concurrent_task_settlement.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_effects.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_mixed_claim_exchange.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_region_general.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_region_laws.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_region_lifecycle.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_region_task_effects.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope_authority_borrow.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope_hardening.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope_laws.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope_policy_mechanisms.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope_result_run.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_scope_structural.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_settlement_structure.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/lifetimes/test_structured_policy.lua",
+      "group": "lifetimes",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/native/test_datagram_native.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/native/test_process_native.lua",
+      "group": "native",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/performance/test_performance_architecture.lua",
+      "group": "performance",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_contracts.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_documented_examples.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_flow.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_op.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_performing_conveniences.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_policy.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_public_surface.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_sleep.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/public/test_stream_memory.lua",
+      "group": "public",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_counter_and_fifo.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_event.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_external_resources.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_helpers.lua",
+      "group": "resources",
+      "classification": "aggregate_or_helper"
+    },
+    {
+      "path": "tests/resources/test_index.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_index_lease_extended.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_lease_laws.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_resources.lua",
+      "group": "resources",
+      "classification": "aggregate_or_helper"
+    },
+    {
+      "path": "tests/resources/test_scalar.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/resources/test_state_resource_laws.lua",
+      "group": "resources",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/stress/test_datagram_churn.lua",
+      "group": "stress",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/stress/test_socket_churn.lua",
+      "group": "stress",
+      "classification": "host_specific"
+    },
+    {
+      "path": "tests/stress/test_stream_reactor_stress.lua",
+      "group": "stress",
+      "classification": "host_specific"
+    }
+  ]
+}
