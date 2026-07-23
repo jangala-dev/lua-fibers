@@ -124,16 +124,70 @@ def portable_closure(modules: dict[str, Path], entries: set[str]) -> list[str]:
     return sorted(seen)
 
 
+def resolve_profile(profiles: dict[str, object], name: str, stack: tuple[str, ...] = ()) -> dict[str, object]:
+    if name in stack:
+        raise RuntimeError("cyclic Luau profile inheritance: " + " -> ".join((*stack, name)))
+    raw = profiles.get(name)
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"unknown or invalid Luau profile: {name}")
+
+    parent_name = raw.get("extends")
+    if parent_name is None:
+        resolved: dict[str, object] = {}
+    elif isinstance(parent_name, str):
+        resolved = resolve_profile(profiles, parent_name, (*stack, name))
+    else:
+        raise RuntimeError(f"invalid extends value for Luau profile {name}")
+
+    tests = list(resolved.get("tests", []))
+    if "tests" in raw:
+        raw_tests = raw.get("tests")
+        if not isinstance(raw_tests, list) or not all(isinstance(path, str) for path in raw_tests):
+            raise RuntimeError(f"Luau profile {name} has no valid test list")
+        tests = list(raw_tests)
+
+    excluded = raw.get("exclude", [])
+    included = raw.get("include", [])
+    if not isinstance(excluded, list) or not all(isinstance(path, str) for path in excluded):
+        raise RuntimeError(f"invalid exclude list for Luau profile {name}")
+    if not isinstance(included, list) or not all(isinstance(path, str) for path in included):
+        raise RuntimeError(f"invalid include list for Luau profile {name}")
+    unknown_exclusions = sorted(set(excluded) - set(tests))
+    if unknown_exclusions:
+        raise RuntimeError(
+            f"Luau profile {name} excludes tests not present in its parent: " + ", ".join(unknown_exclusions)
+        )
+    excluded_set = set(excluded)
+    tests = [path for path in tests if path not in excluded_set]
+    for path in included:
+        if path not in tests:
+            tests.append(path)
+
+    module_entries = list(resolved.get("module_entries", []))
+    raw_entries = raw.get("module_entries", [])
+    if not isinstance(raw_entries, list) or not all(isinstance(entry, str) for entry in raw_entries):
+        raise RuntimeError(f"invalid module_entries for Luau profile {name}")
+    for entry in raw_entries:
+        if entry not in module_entries:
+            module_entries.append(entry)
+
+    for key, value in raw.items():
+        if key not in {"extends", "tests", "exclude", "include", "module_entries"}:
+            resolved[key] = value
+    resolved["tests"] = tests
+    resolved["module_entries"] = module_entries
+    resolved["name"] = name
+    return resolved
+
+
 def load_profile(name: str) -> tuple[dict[str, object], dict[str, object]]:
     manifest = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
     if manifest.get("format") != 1:
         raise RuntimeError("unsupported Luau test-profile format")
     profiles = manifest.get("profiles")
-    if not isinstance(profiles, dict) or name not in profiles:
-        raise RuntimeError(f"unknown Luau profile: {name}")
-    profile = profiles[name]
-    if not isinstance(profile, dict):
-        raise RuntimeError(f"invalid Luau profile: {name}")
+    if not isinstance(profiles, dict):
+        raise RuntimeError("Luau profile manifest has no profiles")
+    profile = resolve_profile(profiles, name)
 
     records = manifest.get("tests")
     if not isinstance(records, list):
@@ -233,6 +287,18 @@ def transform(text: str) -> str:
     if re.search(r"\brequire\s*\(\s*['\"](?:fibers|tests|examples|experiments)(?:\.|['\"])", transformed):
         raise RuntimeError("unrewritten portable require remains")
     return transformed
+
+
+def transform_source(name: str, text: str, machine: str) -> str:
+    transformed = transform(text)
+    if name != "fibers.runtime":
+        return transformed
+
+    marker = "local requested = opts.machine"
+    replacement = f"local requested = opts.machine or {json.dumps(machine)}"
+    if transformed.count(marker) != 1:
+        raise RuntimeError("could not set the generated Luau runtime's default machine")
+    return transformed.replace(marker, replacement, 1)
 
 
 def strip_stock_lua_loader(text: str, path: str) -> str:
@@ -387,6 +453,9 @@ def main() -> int:
 
     classification_manifest, profile = load_profile(args.profile)
     test_paths = list(profile["tests"])
+    machine = profile.get("machine", "ledger")
+    if machine not in {"ledger", "reference"}:
+        raise RuntimeError(f"invalid machine for Luau profile {args.profile}: {machine}")
     source = source_modules()
     auxiliary = auxiliary_modules()
     test_source_entries, auxiliary_selected = profile_dependencies(test_paths, source, auxiliary)
@@ -401,7 +470,7 @@ def main() -> int:
         source_path = source[name]
         rel = generated_relative_path(source_path)
         generated = output / "src" / rel
-        text = transform(source_path.read_text(encoding="utf-8"))
+        text = transform_source(name, source_path.read_text(encoding="utf-8"), machine)
         record = record_generated(write_file(generated, text), generated, output, source_path)
         record["module"] = name
         manifest_files.append(record)
@@ -457,7 +526,8 @@ def main() -> int:
 This directory is generated by `scripts/build-luau.py`.  Do not edit it.
 
 The target contains the portable Fibers core, in-memory resources, ManualHost,
-PureHost, the reference evaluator and the `{args.profile}` Luau test profile.
+PureHost, the reference evaluator and the `{args.profile}` Luau test profile,
+using the `{machine}` evaluator by default.
 Native host providers are intentionally outside this build.
 
 Run `make test-luau` from the repository root.
@@ -468,6 +538,7 @@ Run `make test-luau` from the repository root.
         "format": 2,
         "kind": "fibers-portable-luau",
         "profile": args.profile,
+        "machine": machine,
         "entries": sorted(entries),
         "modules": selected,
         "auxiliary_modules": auxiliary_selected,

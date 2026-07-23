@@ -159,4 +159,5 @@ kernel uses packed tables with an explicit `n` field for this reason.
 
 See [Test profiles](testing.md) for the semantic, native and stress split.
 
-See [Luau build programme](luau.md) for the generated portable target and matrix promotion gates.
+See [Luau build programme](luau.md) for the generated portable and reference
+targets included in the development matrix.

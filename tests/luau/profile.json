@@ -86,6 +86,19 @@
         "tests/case_studies/test_petri.lua",
         "tests/experiments/test_phase.lua",
         "tests/performance/test_performance_architecture.lua"
+      ],
+      "machine": "ledger"
+    },
+    "reference": {
+      "description": "Portable semantic cross-check using the repository reference evaluator.",
+      "extends": "portable",
+      "machine": "reference",
+      "exclude": [
+        "tests/kernel/test_ledger_kernel.lua",
+        "tests/kernel/test_search_stack.lua",
+        "tests/kernel/test_slim_retention.lua",
+        "tests/kernel/test_trail_journal.lua",
+        "tests/performance/test_performance_architecture.lua"
       ]
     }
   },

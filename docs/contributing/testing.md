@@ -6,8 +6,8 @@ indiscriminately across every Lua interpreter.
 - `make test` runs the normal semantic suite plus native smoke tests available
   to the selected interpreter. It excludes sustained churn.
 - `make test-matrix` runs interpreter-sensitive semantics across supported Lua
-  versions, LuaJIT and TexLua. It excludes native provider integration and
-  stress loops.
+  versions, LuaJIT, TexLua and the generated Luau target. It excludes native
+  provider integration and stress loops.
 - `make test-native` runs provider and real-kernel integration under Lua 5.4
   and LuaJIT.
 - `make test-stress` runs registration, connection and descriptor churn.
@@ -29,13 +29,17 @@ environment differ from stock Lua:
 
 ```sh
 make build-luau
+make build-luau-reference
 make check-luau
 make test-luau-smoke
 make test-luau-portable
+make test-luau-reference
 make test-luau
 ```
 
 The portable profile is declared in `tests/luau/profile.json`; every test file
-has an explicit portability classification. Luau remains outside
-`make test-matrix` until this profile passes reliably in the development
-container and CI. See [Luau build programme](luau.md).
+has an explicit portability classification. The reference profile inherits
+the portable profile and reruns its semantic surface with the repository
+reference evaluator, excluding implementation-specific ledger and performance
+checks. `make test-luau` and `make test-matrix` run both profiles. See
+[Luau build programme](luau.md).

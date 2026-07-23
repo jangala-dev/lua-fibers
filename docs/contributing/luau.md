@@ -13,8 +13,8 @@ generates a target-specific tree under `build/luau/` by:
 3. rewriting `fibers` to the alias root `@fibers` and submodules such as
    `fibers.runtime` to `@fibers/runtime`;
 4. writing a `.luaurc` and deterministic manifest;
-5. generating the Luau conformance smoke programme and the named portable
-   test profile.
+5. generating the Luau conformance smoke programme and the named portable or
+   reference test profile.
 
 The initial build includes the kernel, runtime, scopes, lifetimes, flows,
 in-memory resources, ManualHost and PureHost.  Shared file and process
@@ -39,20 +39,24 @@ patterns, and Luau receives the same hierarchy without a target-specific move.
 
 ```sh
 make build-luau
+make build-luau-reference
 make check-luau
 make test-luau-smoke
 make test-luau-portable
+make test-luau-reference
 make test-luau
 ```
 
-`check-luau` runs `luau-analyze` over the generated smoke and portable-profile
-entry points.
-`test-luau` runs both with the standalone Luau CLI.  The narrower targets
-`test-luau-smoke` and `test-luau-portable` are available when diagnosing a
-failure.
+The portable build is written to `build/luau/`; the reference build is written
+to `build/luau-reference/`. Separate trees avoid module-cache coupling and make
+the selected default evaluator explicit in each manifest.
 
-Luau is not yet part of `make test-matrix`.  Promotion requires the gates below
-to pass in the development container and CI.
+`check-luau` runs `luau-analyze` over the generated smoke, portable and
+reference-profile entry points. `test-luau` runs all three with the standalone
+Luau CLI. The narrower targets are available when diagnosing a failure.
+
+Luau is part of `make test-matrix`. Native host integrations remain separate
+because the standalone CLI does not provide the relevant capabilities.
 
 ## Promotion gates
 
@@ -70,13 +74,19 @@ Add focused gates for coroutine identity, yieldable protected calls, weak
 tables, packed nil-bearing returns and deep operation graphs as incompatibilities
 are found.
 
-### 2. Portable test profile
+### 2. Portable and reference test profiles
 
 `tests/luau/profile.json` classifies every `test_*.lua` file and defines the
-`portable` profile.  The initial profile contains 79 tests covering public
+`portable` profile. The profile contains 79 tests covering public
 semantics, composition, resources, lifetimes, ManualHost embedding, in-memory
 I/O, both semantic evaluators, kernel laws, internal portable helpers, case
 studies and performance architecture.
+
+The `reference` profile inherits that list, selects the repository reference
+evaluator as the generated runtime default and excludes five checks concerned
+with ledger implementation structure or performance. It therefore reruns 74
+portable semantic tests as an independent cross-check. Explicit `machine`
+options in individual tests continue to override the profile default.
 
 The builder generates each selected stock-Lua test as a Luau module.  It removes
 the test-only `package.path` prelude, rewrites logical imports to aliases and
@@ -109,11 +119,11 @@ being implied by core Luau support.
 
 ### 5. Matrix inclusion
 
-Add Luau to the release matrix only when:
+The development matrix includes Luau through `make test-luau`. Release and CI
+jobs must therefore establish:
 
-- `make test-luau` passes from a clean checkout;
-- the portable profile has named coverage comparable to stock Lua's matrix
-  profile;
-- `luau-analyze` passes on the generated target;
+- the smoke, portable and reference profiles pass from a clean checkout;
+- `luau-analyze` passes on both generated targets;
 - the pinned Luau release or commit is recorded in CI output;
-- unsupported native capabilities are reported explicitly.
+- unsupported native capabilities remain outside the portable matrix and are
+  reported explicitly by any future host-specific jobs.

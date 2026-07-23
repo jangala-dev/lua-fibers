@@ -7,6 +7,7 @@ LUAU ?= luau
 LUAU_ANALYZE ?= luau-analyze
 PYTHON ?= python3
 LUAU_BUILD_DIR ?= build/luau
+LUAU_REFERENCE_BUILD_DIR ?= build/luau-reference
 
 REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./reference/?.lua;./reference/?/init.lua;./reference/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;;
 export LUA_PATH := $(REPO_LUA_PATH)
@@ -15,7 +16,10 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
 	test-experiments test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
-	test-luajit-interpreter test-texlua build-luau check-luau test-luau test-luau-smoke test-luau-portable examples bench bench-ledger bench-io profile-proof-io performance check-format check-links \
+	test-luajit-interpreter test-texlua build-luau build-luau-reference \
+	check-luau check-luau-portable check-luau-reference test-luau test-luau-smoke \
+	test-luau-portable test-luau-reference examples bench bench-ledger bench-io \
+	profile-proof-io performance check-format check-links \
 	check-layout check
 
 test:
@@ -87,19 +91,28 @@ test-texlua:
 build-luau:
 	$(PYTHON) scripts/build-luau.py --output "$(LUAU_BUILD_DIR)"
 
-check-luau: build-luau
+build-luau-reference:
+	$(PYTHON) scripts/build-luau.py --profile reference --output "$(LUAU_REFERENCE_BUILD_DIR)"
+
+check-luau-portable: build-luau
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/portable.luau"
 
-test-luau-smoke: check-luau
+check-luau-reference: build-luau-reference
+	$(LUAU_ANALYZE) "$(LUAU_REFERENCE_BUILD_DIR)/tests/reference.luau"
+
+check-luau: check-luau-portable check-luau-reference
+
+test-luau-smoke: check-luau-portable
 	$(LUAU) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
 
-test-luau-portable: check-luau
+test-luau-portable: check-luau-portable
 	$(LUAU) "$(LUAU_BUILD_DIR)/tests/portable.luau"
 
-test-luau: check-luau
-	$(LUAU) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
-	$(LUAU) "$(LUAU_BUILD_DIR)/tests/portable.luau"
+test-luau-reference: check-luau-reference
+	$(LUAU) "$(LUAU_REFERENCE_BUILD_DIR)/tests/reference.luau"
+
+test-luau: test-luau-smoke test-luau-portable test-luau-reference
 
 test-native:
 	$(LUA) tests/run_group.lua native
@@ -115,7 +128,7 @@ test-stress:
 test-full: test-matrix test-native test-stress test-reference examples
 
 test-matrix: test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 \
-	test-luajit test-luajit-interpreter test-texlua
+	test-luajit test-luajit-interpreter test-texlua test-luau
 
 examples:
 	@set -e; for example in \
