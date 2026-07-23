@@ -259,9 +259,30 @@ function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
   return finish_phase_call(self, old, name, kind, true, committed, pcall(fn, ...))
 end
 
+local function optional_positive_integer(value, name)
+  if value == nil then
+    return nil
+  end
+  if type(value) ~= 'number' or value ~= value or value == math.huge or value == -math.huge then
+    error(name .. ' must be a positive integer', 3)
+  end
+  value = math.floor(value)
+  if value < 1 then
+    error(name .. ' must be a positive integer', 3)
+  end
+  return value
+end
+
 function Runtime.new(opts)
   opts = opts or {}
   local machine, machine_name = select_machine(opts)
+  local search_total_limit = optional_positive_integer(opts.search_total_limit, 'search_total_limit')
+  local search_trail_limit = optional_positive_integer(opts.search_trail_limit, 'search_trail_limit')
+  local search_depth_limit = optional_positive_integer(opts.search_depth_limit, 'search_depth_limit')
+  local search_limits
+  if search_total_limit or search_trail_limit or search_depth_limit then
+    search_limits = { total = search_total_limit, trail = search_trail_limit, depth = search_depth_limit }
+  end
   local instrumentation = nil
   if opts.instrumentation then
     instrumentation = Instrumentation.new(opts.instrumentation)
@@ -274,6 +295,10 @@ function Runtime.new(opts)
     _failed = nil,
     quiet_deadlock = opts.quiet_deadlock == true,
     search_limit = opts.search_limit or 1000000,
+    search_total_limit = search_total_limit,
+    search_trail_limit = search_trail_limit,
+    search_depth_limit = search_depth_limit,
+    search_limits = search_limits,
     choice_seed = opts.choice_seed or 1,
     _ready_fibers = {},
     _ready_head = 1,
@@ -1120,7 +1145,14 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
       end
       hit, certificate, unknown = retained.session:advance(search_limit or self.search_limit)
       session = retained.session
-      if not unknown then
+      if unknown and session.hard_limit then
+        local unknown_reason = session.unknown_reason
+        self._last_search_unknown_reason = unknown_reason or 'search_quantum'
+        self:_take_search_session(focus_id)
+        session:discard(unknown_reason or 'hard-search-limit')
+      elseif unknown then
+        self._last_search_unknown_reason = session.unknown_reason or 'search_quantum'
+      else
         self:_take_search_session(focus_id)
         if hit == nil then
           session:discard('completed-retry')
@@ -1140,7 +1172,11 @@ function Runtime:_find_candidate_impl(focus_id, search_limit, context)
 
   hit, certificate, unknown, session = self.machine.search(self, requests, focus_id, search_limit, component)
   if unknown and session then
-    if not self.resumable_search then
+    local unknown_reason = session.unknown_reason
+    self._last_search_unknown_reason = unknown_reason or 'search_quantum'
+    if session.hard_limit then
+      session:discard(unknown_reason or 'hard-search-limit')
+    elseif not self.resumable_search then
       session:discard('unretained')
     else
       local session_certificate, _, retained_component =
@@ -1362,6 +1398,7 @@ function Runtime:_pending_status(refs, unknown)
     return {
       tag = 'pending',
       kind = 'budget',
+      reason = self._last_search_unknown_reason or 'search_quantum',
       interests_incomplete = true,
       waits = waits,
       interests = waits,
@@ -1400,6 +1437,7 @@ end
 
 function Runtime:_step_impl(opts)
   opts = opts or {}
+  self._last_search_unknown_reason = nil
   local search_limit
   if opts.max_work then
     local requested = math.max(1, opts.max_work)
@@ -1509,6 +1547,7 @@ end
 
 function Runtime:_run_impl(opts)
   opts = opts or {}
+  self._last_search_unknown_reason = nil
   if opts.max_work then
     return self:step(opts)
   end

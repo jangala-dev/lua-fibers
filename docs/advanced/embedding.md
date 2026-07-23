@@ -63,6 +63,28 @@ Fatal runtime errors are raised; they are not returned as a `failed` status tag.
 
 A budget-pending status is optional `Unknown`, not semantic `Retry`, and cannot enable `or_else`.
 
+### Search budgets and safety limits
+
+`search_limit` remains the resumable work quantum used by an unbounded driver call and defaults to one million reduction rounds. `Runtime:step({ max_work = n })` supplies a smaller quantum for that call. Exhausting a quantum returns:
+
+```lua
+{ tag = 'pending', kind = 'budget', reason = 'search_quantum', ... }
+```
+
+The production ledger machine also accepts three optional hard limits:
+
+```lua
+local rt = Runtime.new({
+  search_total_limit = 100000, -- reduction rounds in one proof session
+  search_depth_limit = 256,   -- live branch depth
+  search_trail_limit = 500000, -- live rollback-journal entries
+})
+```
+
+A hard limit returns the same budget status with `reason` set to `search_total_limit`, `search_depth_limit` or `search_trail_limit`. The incomplete session is discarded because repeating it with the same hard limit cannot make progress; a later driver call starts a fresh proof. These limits do not establish `Retry` and therefore cannot enable a fallback.
+
+The trail limit is checked between reduction rounds. One deterministic reduction may therefore take the live journal modestly beyond the configured value before the runtime reports the limit. Hard limits are disabled by default and currently apply to the production ledger machine, not the repository reference evaluator.
+
 ## Standalone runner
 
 `fibers.run` creates a runtime and uses `Runner`:

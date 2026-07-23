@@ -96,6 +96,7 @@ return {
   kernel = {
     'tests/kernel/test_claim_closure.lua',
     'tests/kernel/test_dependency_supply_direction.lua',
+    'tests/kernel/test_exchange_choice_propagation.lua',
     'tests/kernel/test_defeat.lua',
     'tests/kernel/test_guard_activations.lua',
     'tests/kernel/test_instrumentation.lua',
@@ -108,6 +109,7 @@ return {
     'tests/kernel/test_retry_laws.lua',
     'tests/kernel/test_retry_semantics.lua',
     'tests/kernel/test_search_stack.lua',
+    'tests/kernel/test_search_limits.lua',
     'tests/kernel/test_slim_retention.lua',
     'tests/kernel/test_store_algebra.lua',
     'tests/kernel/test_store_rollback.lua',

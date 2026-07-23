@@ -205,6 +205,21 @@ The benchmark validates its result.  It is intended to detect regressions in
 segment forking, sparse summary staging and product joining rather than general
 proof-search changes.
 
+## Application-shaped search diagnostics
+
+`performance/diagnostics/regular_search_spaces.lua` contains the atomic worker-dispatch, replicated-ring, priority-fallback, idle-service and decomposed control workloads used to check proof-search cliffs. Each invocation emits one CSV row and validates its result:
+
+```sh
+texlua performance/diagnostics/regular_search_spaces.lua \
+  --case batch-dispatch --size 16 --seed 1
+
+texlua performance/diagnostics/regular_search_spaces.lua \
+  --case replicated-ring --size 24 --seed 7 \
+  --search-total-limit 100000 --search-trail-limit 500000
+```
+
+Run several seeds for choice-bearing cases. Search-call counts are generally more reproducible than wall-clock timings.
+
 ## Seed sweep
 
 Choice ordering can expose or hide combinatorial search. Sweep the known

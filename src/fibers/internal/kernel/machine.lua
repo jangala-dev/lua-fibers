@@ -962,15 +962,40 @@ local function attach_candidate_effects(runtime, candidate, extra)
   return candidate
 end
 
+local function stop_search(state, reason, hard)
+  local session = state.session
+  if session then
+    session.unknown_reason = reason
+    session.hard_limit = hard == true
+  end
+  return false
+end
+
 local function begin_search_round(state)
   local session = state.session
+  local limits = state.search_limits
+  if limits then
+    if limits.total and state.search_steps >= limits.total then
+      return stop_search(state, 'search_total_limit', true)
+    end
+    if limits.depth and state.search_depth > limits.depth then
+      return stop_search(state, 'search_depth_limit', true)
+    end
+    if limits.trail and state.trail and state.trail.n > limits.trail then
+      return stop_search(state, 'search_trail_limit', true)
+    end
+  end
   if session and session.work_remaining ~= nil then
     if session.work_remaining <= 0 then
-      return false
+      return stop_search(state, 'search_quantum', false)
     end
     session.work_remaining = session.work_remaining - 1
   elseif state.search_steps >= state.search_limit then
-    return false
+    return stop_search(state, 'search_quantum', false)
+  end
+  if session then
+    session.unknown_reason = nil
+    session.hard_limit = false
   end
 
   state.runtime.stats.search_calls = state.runtime.stats.search_calls + 1
@@ -989,15 +1014,129 @@ local function begin_search_round(state)
   return true
 end
 
+-- Pick deterministic evaluator work ahead of unresolved search branches.  A
+-- selected choice commonly exposes a resource constraint which can prune the
+-- remaining choices; processing another syntactic choice first hides that
+-- information and constructs an avoidably broad Cartesian search.
+--
+-- The common path remains O(1): when the queue head is deterministic it is
+-- returned immediately.  We scan only when the head itself is a branch.
+local function metadata_has_exchange(metadata)
+  return metadata and next(metadata.exchanges or {}) ~= nil
+end
+
+local function exchange_domain_only(intents)
+  if #intents == 0 then
+    return false
+  end
+  for i = 1, #intents do
+    if intents[i].kind ~= 'exchange' then
+      return false
+    end
+  end
+  return true
+end
+
+local function has_compatible_exchange_pair(intents)
+  for i = 1, #intents - 1 do
+    for j = i + 1, #intents do
+      if intents_compatible(intents[i], intents[j]) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local function select_branch_index(state, head)
+  local first_branch = nil
+  local best_choice, best_choice_size = nil, nil
+  local best_supplier, best_supplier_score, best_supplier_size = nil, 0, nil
+  local exchange_only = exchange_domain_only(state.intents)
+  if exchange_only and has_compatible_exchange_pair(state.intents) then
+    return nil
+  end
+  local saw_or_else = false
+  for i = head, #state.active do
+    local task = state.tasks[state.active[i]]
+    if task and task.status == 'active' then
+      local expr = task.expr
+      local kind = expr and expr.kind
+      if kind ~= 'choice' and kind ~= 'or_else' then
+        -- Only exchange-bearing deterministic work is advanced through an
+        -- unresolved branch frontier. Serial transition facilities rely on
+        -- exposing their lanes in source order before normalisation.
+        if metadata_has_exchange(IR.metadata(expr)) then
+          return i
+        end
+      else
+        first_branch = first_branch or i
+        local size = kind == 'choice' and #(expr.choices or {}) or 2
+        if kind == 'or_else' then
+          saw_or_else = true
+        elseif best_choice_size == nil or size < best_choice_size then
+          best_choice, best_choice_size = i, size
+        end
+
+        if exchange_only then
+          local score = IR.supply_score(IR.metadata(expr), state.intents)
+          if
+            score > best_supplier_score
+            or (
+              score == best_supplier_score
+              and score > 0
+              and (best_supplier_size == nil or size < best_supplier_size)
+            )
+          then
+            best_supplier, best_supplier_score, best_supplier_size = i, score, size
+          end
+        end
+      end
+    end
+  end
+
+  -- A syntactic branch which can still supply an exposed exchange belongs to
+  -- the current exchange domain. Enter the most relevant such branch before
+  -- attempting to certify absence. If none can supply it, let rendezvous
+  -- propagation or external recruitment handle the exchange now.
+  if exchange_only then
+    return best_supplier
+  end
+
+  -- Preserve the previous active-queue order whenever an or_else is present.
+  -- Its preferred/fallback structure is semantically asymmetric. A frontier
+  -- containing only plain choices is unordered, so use a fail-first choice.
+  if saw_or_else then
+    return first_branch
+  end
+  return best_choice or first_branch or head
+end
+
 -- Drain deterministic task work until the evaluator reaches a blocked domain
 -- or one of the two option-level branch forms.  Branch control is represented
 -- explicitly; no Lua call frame is used to remember an alternative.
 local function drain_active(state)
   local profile_plan = state.profile_plan
   while state.active_head <= #state.active do
-    local task_id = state.active[state.active_head]
-    setv(state, state, 'active_head', state.active_head + 1)
+    local head = state.active_head
+    local task_id = state.active[head]
     local task = state.tasks[task_id]
+    local head_kind = task and task.status == 'active' and task.expr and task.expr.kind or nil
+    local selected = head
+    if head_kind == 'choice' or head_kind == 'or_else' then
+      selected = select_branch_index(state, head)
+      if selected == nil then
+        return 'blocked'
+      end
+    end
+    if selected ~= head then
+      local selected_id = state.active[selected]
+      setv(state, state.active, selected, task_id)
+      setv(state, state.active, head, selected_id)
+      task_id = selected_id
+      task = state.tasks[task_id]
+    end
+    setv(state, state, 'active_head', head + 1)
     if task and task.status == 'active' then
       if profile_plan then
         profile_plan.task_steps = profile_plan.task_steps + 1
@@ -1144,6 +1283,12 @@ end
 -- The return value is true for progress, false plus a certificate for a failed
 -- forced action, and nil when genuine branching remains.
 local function raw_exchange_program(op)
+  -- Outcome-only wrappers preserve the blocking shape of their body. Looking
+  -- through them is exact: map changes only the committed result, while
+  -- annotated nodes add post-commit work, defeat effects or symmetry metadata.
+  while op and (op.kind == 'annotated' or (op.kind == 'and_then' and op.derived_map)) do
+    op = op.p
+  end
   if not op or op.kind ~= 'primitive' then
     return nil
   end
@@ -1152,6 +1297,67 @@ local function raw_exchange_program(op)
     return nil
   end
   return program
+end
+
+local function raw_choice_exchange_demand(state, frame, choice_index)
+  local program = raw_exchange_program(frame.expr.choices[choice_index])
+  if not program then
+    return nil
+  end
+  local task = state.tasks[frame.task_id]
+  return {
+    id = 'choice:' .. tostring(frame.task_id) .. ':' .. tostring(choice_index),
+    kind = 'exchange',
+    task_id = frame.task_id,
+    root_id = task and task.root_id or nil,
+    program = program,
+    activation = frame.activation,
+    resource = program.resource,
+    role = program.role,
+    scope_path = task and task.scope_path or nil,
+    interest = type(program.interest) == 'function' and program.interest(state.runtime, program)
+      or program.interest,
+    absence_check = program.absence_check,
+  }
+end
+
+local function recruited_root_may_supply(state, demand)
+  for _, root in pairs(state.roots) do
+    if root and not root.done then
+      local request = root.request
+      local metadata = request and (request.metadata or IR.metadata(request.op)) or nil
+      if request then
+        request.metadata = metadata
+      end
+      if metadata and IR.metadata_may_supply(metadata, demand) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local function raw_choice_exchange_viable(state, frame, choice_index)
+  local demand = raw_choice_exchange_demand(state, frame, choice_index)
+  if not demand then
+    return true
+  end
+
+  for i = 1, #state.intents do
+    if intents_compatible(demand, state.intents[i]) then
+      return true
+    end
+  end
+  if recruited_root_may_supply(state, demand) or has_supplier(state, { demand }) then
+    return true
+  end
+
+  frame.certificate = Certificate.merge(frame.certificate, Certificate.from_intents({ demand }))
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.choice_alternatives_pruned = profile_plan.choice_alternatives_pruned + 1
+  end
+  return false
 end
 
 local function recruit_forced_raw_exchange(state, exchange)
@@ -1190,14 +1396,14 @@ local function apply_forced_domain(state, domain)
   if recruit_forced_raw_exchange(state, exchange) then
     return true
   end
-  if #state.intents == 2 and exchange.selected_degree == 1 and exchange.compatible == 1 then
+  if exchange.selected_degree == 1 and exchange.selected then
     if not has_supplier(state, { exchange.selected }) then
       if profile_plan then
         profile_plan.forced_exchange_opportunities = profile_plan.forced_exchange_opportunities + 1
         profile_plan.forced_exchanges = profile_plan.forced_exchanges + 1
         profile_plan.normalisation_rounds = profile_plan.normalisation_rounds + 1
       end
-      local pair = Domain.unique_exchange(domain)
+      local pair = Domain.selected_unique_exchange(domain)
       if pair and match_intents(state, pair.left, pair.right) then
         return true
       end
@@ -1271,14 +1477,44 @@ local function next_frontier_alternative(state, frame)
   })
 end
 
+local function prioritise_choice_supplier(state, frame)
+  if not exchange_domain_only(state.intents) then
+    return
+  end
+  local first = frame.next_index
+  local best, best_score = first, -1
+  for position = first, #frame.order do
+    local index = frame.order[position]
+    local alternative = frame.expr.choices[index]
+    local score = IR.supply_score(IR.metadata(alternative), state.intents)
+    if score > best_score then
+      best, best_score = position, score
+    end
+  end
+  if best ~= first then
+    frame.order[first], frame.order[best] = frame.order[best], frame.order[first]
+  end
+end
+
 local function next_branch_alternative(state, frame)
   if frame.kind == 'choice' then
-    local index = frame.order[frame.next_index]
-    if not index then
-      return nil
+    while true do
+      prioritise_choice_supplier(state, frame)
+      local index = frame.order[frame.next_index]
+      if not index then
+        return nil
+      end
+      frame.next_index = frame.next_index + 1
+      -- Do not perform unbounded pruning after the caller's work quantum has
+      -- been consumed. Entering the alternative creates a resumable child node
+      -- which will suspend before further reduction.
+      if
+        (state.session.work_remaining ~= nil and state.session.work_remaining <= 0)
+        or raw_choice_exchange_viable(state, frame, index)
+      then
+        return { kind = 'choice', choice_index = index }
+      end
     end
-    frame.next_index = frame.next_index + 1
-    return { kind = 'choice', choice_index = index }
   elseif frame.kind == 'or_else' then
     if frame.phase == 'preferred' then
       frame.phase = 'preferred_running'

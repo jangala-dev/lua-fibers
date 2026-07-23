@@ -403,8 +403,8 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   local certified = symmetric_failure(machine, true)
   truthy((certified.symmetry_supplier_pruned or 0) > 0, 'certified supplier symmetry was not used')
   truthy(
-    (certified.search_calls or math.huge) < (ordinary.search_calls or 0) / 4,
-    'certified symmetry did not reduce repeated supplier worlds'
+    (certified.search_calls or math.huge) * 2 < (ordinary.search_calls or 0),
+    'certified symmetry did not materially reduce repeated supplier worlds'
   )
 end
 

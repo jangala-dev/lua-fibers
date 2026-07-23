@@ -582,6 +582,13 @@ function M.unique_exchange(domain)
   return next_exchange({ domain = domain, partner = 1, left = 1, symmetry = {} })
 end
 
+function M.selected_unique_exchange(domain)
+  if domain.exchange.selected_degree ~= 1 or not domain.exchange.selected then
+    return nil
+  end
+  return next_exchange({ domain = domain, partner = 1, left = 1, symmetry = {} })
+end
+
 function M.cursor(domain)
   return {
     domain = domain,

@@ -117,6 +117,7 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
   state.next_task, state.next_group, state.next_segment, state.next_intent = 0, 0, 0, 0
   state.next_machine_serial, state.search_steps, state.search_depth = 0, 0, 1
   state.search_limit = search_limit or runtime.search_limit
+  state.search_limits = runtime.search_limits
   state.profile_plan = profile_plan
   state.component = component
 
@@ -135,6 +136,8 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
   session.active_elapsed = 0
   session.work_remaining = nil
   session.suspensions = nil
+  session.unknown_reason = nil
+  session.hard_limit = false
   session:clear_hit()
 
   state.session = session
@@ -272,7 +275,7 @@ function Session:advance(max_work)
     if self.instrumentation then
       self.instrumentation:inc('search_session_suspensions')
     end
-    return nil, certificate, true
+    return nil, certificate, true, self.unknown_reason
   end
   return self:_finish(candidate, certificate, candidate and 'found' or 'retry')
 end
@@ -326,6 +329,7 @@ function Session:discard(reason)
   end
   self.profile_plan, self.instrumentation, self.machine = nil, nil, nil
   self.active_elapsed, self.work_remaining = nil, nil
+  self.unknown_reason, self.hard_limit = nil, false
   if runtime then
     runtime:_release_search_session(self)
   end
