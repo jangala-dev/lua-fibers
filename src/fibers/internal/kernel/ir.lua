@@ -12,6 +12,10 @@ local Result = require('fibers.internal.facility_result')
 
 local M = {}
 
+M.SUPPLY_NONE = 0
+M.SUPPLY_OPAQUE = 1
+M.SUPPLY_EXACT = 2
+
 local function programme(kind, fields)
   fields = fields or {}
   fields._fibers_program = true
@@ -279,6 +283,12 @@ describe = function(op, seen)
     metadata_merge(out, describe(op.q, seen))
   elseif kind == 'annotated' then
     metadata_merge(out, describe(op.p, seen))
+  elseif kind == 'guard' then
+    if op.continuation_footprint ~= nil then
+      metadata_merge(out, metadata_from_hint(op.continuation_footprint, seen))
+    else
+      out.dynamic = true
+    end
   elseif kind == 'and_then' then
     metadata_merge(out, describe(op.p, seen))
     if not op.derived_map then
@@ -374,6 +384,45 @@ local function opposite_role(role)
   return nil
 end
 
+local function supply_reason(certainty, mechanism, orientation)
+  if certainty == M.SUPPLY_OPAQUE then
+    return 'dynamic'
+  end
+  if mechanism == 'exchange' then
+    return 'exchange'
+  end
+  if mechanism == 'location' then
+    return orientation and ('location-' .. tostring(orientation)) or 'location-any-demand'
+  end
+  return 'none'
+end
+
+function M.supply_relation(metadata, intent)
+  metadata = metadata or empty_metadata()
+  if metadata.dynamic then
+    return M.SUPPLY_OPAQUE, 'dynamic'
+  end
+  if not intent then
+    return M.SUPPLY_NONE
+  end
+  if intent.kind == 'exchange' then
+    local roles = metadata.exchanges[intent.resource]
+    local opposite = opposite_role(intent.role)
+    if roles and opposite and roles[opposite] then
+      return M.SUPPLY_EXACT, 'exchange'
+    end
+    return M.SUPPLY_NONE
+  end
+  local program = intent.program
+  local loc = program and program.location
+  local access = loc and metadata.locations[loc]
+  local demand = program and program.orientation
+  if access and Supply.may_supply(access.supplies, demand) then
+    return M.SUPPLY_EXACT, 'location', demand
+  end
+  return M.SUPPLY_NONE
+end
+
 function M.metadata_may_supply(metadata, intent)
   metadata = metadata or empty_metadata()
   if metadata.dynamic then
@@ -414,10 +463,10 @@ function M.metadata_may_supply_any(metadata, intents)
 end
 
 function M.supply_score(metadata, intents)
-  local score, first_reason = 0, nil
   if metadata and metadata.dynamic then
-    return math.max(1, #(intents or {})), 'dynamic'
+    return math.max(1, #(intents or {})), M.SUPPLY_OPAQUE, 'dynamic'
   end
+  local score, first_reason = 0, nil
   for i = 1, #(intents or {}) do
     local ok, reason = M.metadata_may_supply(metadata, intents[i])
     if ok then
@@ -425,7 +474,10 @@ function M.supply_score(metadata, intents)
       first_reason = first_reason or reason
     end
   end
-  return score, first_reason or 'none'
+  if score == 0 then
+    return 0, M.SUPPLY_NONE, 'none'
+  end
+  return score, M.SUPPLY_EXACT, first_reason
 end
 
 function M.metadata_counts(metadata)

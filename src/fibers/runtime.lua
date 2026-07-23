@@ -949,22 +949,29 @@ local function better_supplier(id, score, best)
   return not best or score > best.score or score == best.score and id < best.id
 end
 
-function Runtime:_has_supplier(intents, entered, excluded, requests)
+function Runtime:_has_supplier(intents, entered, excluded, requests, required_certainty)
   requests = requests or self.pending_by_id
   if self.dependency_index and self.dependency_index.size == #self.pending then
     local found = false
     self.dependency_index:each_supplier(intents, requests, entered, excluded, function()
       found = true
       return false
-    end)
+    end, required_certainty)
     return found
   end
   for id, request in pairs(requests) do
     if not (entered and entered[id]) and not (excluded and excluded[id]) then
       local metadata = request.metadata or IR.metadata(request.op)
       request.metadata = metadata
-      if IR.metadata_may_supply_any(metadata, intents) then
-        return true
+      if required_certainty == nil then
+        if IR.metadata_may_supply_any(metadata, intents) then
+          return true
+        end
+      else
+        local score, certainty = IR.supply_score(metadata, intents)
+        if score > 0 and certainty == required_certainty then
+          return true
+        end
       end
     end
   end
@@ -974,7 +981,7 @@ end
 function Runtime:_supplier_request(intents, entered, excluded, requests)
   requests = requests or self.pending_by_id
   local best, candidate_count = nil, 0
-  local function consider(id, score, reason, request)
+  local function consider(id, score, _certainty, reason, request)
     candidate_count = candidate_count + 1
     local symmetry = self.certified_symmetry and request.symmetry_key or nil
     if better_supplier(id, score, best) then
@@ -1002,9 +1009,9 @@ function Runtime:_supplier_request(intents, entered, excluded, requests)
       if not (entered and entered[id]) and not (excluded and excluded[id]) then
         local metadata = request.metadata or IR.metadata(request.op)
         request.metadata = metadata
-        local score, reason = IR.supply_score(metadata, intents)
+        local score, certainty, reason = IR.supply_score(metadata, intents)
         if score > 0 then
-          consider(id, score, reason, request)
+          consider(id, score, certainty, reason, request)
         end
       end
     end

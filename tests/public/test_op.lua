@@ -111,6 +111,13 @@ local function test_canonical_algebra_vocabulary()
     'and_then is the canonical sequencing term'
   )
   assert_eq(
+    Op.guard(function()
+      return Op.always()
+    end).kind,
+    'guard',
+    'guard is the canonical delayed-construction term'
+  )
+  assert_eq(
     Op.never():or_else(Op.always()).kind,
     'or_else',
     'or_else is the canonical residual fallback term'

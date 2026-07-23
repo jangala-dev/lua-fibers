@@ -353,7 +353,7 @@ function Index:supplier_atoms(intent)
   return atoms
 end
 
-function Index:each_supplier(intents, pending, entered, excluded, fn)
+function Index:each_supplier(intents, pending, entered, excluded, fn, required_certainty)
   local possible, observed = {}, {}
   local function collect(atom)
     if not atom or observed[atom] then
@@ -376,10 +376,10 @@ function Index:each_supplier(intents, pending, entered, excluded, fn)
   for id in pairs(possible) do
     local request = pending[id]
     if request and not (entered and entered[id]) and not (excluded and excluded[id]) then
-      local score, reason = IR.supply_score(request.metadata, intents)
-      if score > 0 then
+      local score, certainty, reason = IR.supply_score(request.metadata, intents)
+      if score > 0 and (required_certainty == nil or certainty == required_certainty) then
         count = count + 1
-        if fn(id, score, reason, request) == false then
+        if fn(id, score, certainty, reason, request) == false then
           return count
         end
       end

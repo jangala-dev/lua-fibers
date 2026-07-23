@@ -303,25 +303,7 @@ complete_task = function(state, task, outcome)
       if outcome.wrap then
         error('transactional continuation attempted to consume a wrapped result', 0)
       end
-      local request = state.roots[task.root_id].request
-      if frame.phase == 'guard' then
-        local cached = request.memo[frame.activation]
-        if not cached then
-          cached = state.runtime:_call_in_phase('guard', 'callback_error', frame.fn, {
-            runtime = state.runtime,
-            now = function()
-              return state.runtime:now()
-            end,
-          })
-          if not Op.is_op(cached) then
-            error('guard callback must return an Op', 0)
-          end
-          verify_continuation_dependencies(state, frame, cached)
-          request.memo[frame.activation] = cached
-        end
-        task.expr = cached
-        task.activation = Activation.child(frame.activation, 'guard:result')
-      elseif frame.phase == 'map' then
+      if frame.phase == 'map' then
         task.expr = Op.always(
           state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
         )
@@ -949,6 +931,30 @@ dfs = function(state)
           if not complete_task(state, task, new_outcome(task, expr.vals)) then
             return nil, terminal_refutation(state), false
           end
+        elseif kind == 'guard' then
+          local parent_activation = task.activation
+          local request = state.roots[task.root_id].request
+          local residual = request.memo[parent_activation]
+          if not residual then
+            residual = state.runtime:_call_in_phase('guard', 'callback_error', expr.fn, {
+              runtime = state.runtime,
+              now = function()
+                return state.runtime:now()
+              end,
+            })
+            if not Op.is_op(residual) then
+              error('guard callback must return an Op', 0)
+            end
+            verify_continuation_dependencies(state, {
+              phase = 'guard',
+              activation = parent_activation,
+              continuation_footprint = expr.continuation_footprint,
+            }, residual)
+            request.memo[parent_activation] = residual
+          end
+          task.expr = residual
+          task.activation = Activation.child(parent_activation, 'guard:result')
+          add_active(state, task.id)
         elseif kind == 'and_then' then
           local parent_activation = task.activation
           task.frames[#task.frames + 1] = {

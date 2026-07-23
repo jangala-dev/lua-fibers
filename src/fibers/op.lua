@@ -2,7 +2,7 @@
 -- Options are immutable syntax nodes; Runtime supplies the solver.
 --
 -- The canonical search grammar is deliberately small:
---   always | primitive | choose | and_then | product | or_else | consequence
+--   always | primitive | choice | guard | and_then | product | or_else | consequence
 -- Post-commit value transforms and typed defeat obligations are orthogonal
 -- annotations on dynamic option occurrences.
 
@@ -268,14 +268,12 @@ local function continuation_hint(opts)
   return opts.footprint or opts.continuation or opts
 end
 
--- Delayed construction is derived through and_then.  The evaluator memoises
--- each guard by its request-local speculative activation, rather than by Op
--- object identity.
+-- Delayed construction is a first-class node. The evaluator memoises each
+-- guard by its request-local speculative activation, rather than by Op object
+-- identity.
 function Op.guard(fn, opts)
-  return op('and_then', {
-    p = Op.always(),
+  return op('guard', {
     fn = fn,
-    callback_phase = 'guard',
     continuation_footprint = continuation_hint(opts),
   })
 end

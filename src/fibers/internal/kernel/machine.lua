@@ -209,6 +209,29 @@ local function verify_continuation_dependencies(state, task, frame, next_op)
   end
 end
 
+local function evaluate_guard_residual(state, task, fn, activation, continuation_footprint)
+  local request = state.roots[task.root_id].request
+  local cached = request.memo[activation]
+  if not cached then
+    cached = state.runtime:_call_in_phase('guard', 'callback_error', fn, {
+      runtime = state.runtime,
+      now = function()
+        return state.runtime:now()
+      end,
+    })
+    if not Op.is_op(cached) then
+      error('guard callback must return an Op', 0)
+    end
+    verify_continuation_dependencies(state, task, {
+      phase = 'guard',
+      activation = activation,
+      continuation_footprint = continuation_footprint,
+    }, cached)
+    request.memo[activation] = cached
+  end
+  return cached
+end
+
 complete_task = function(state, task, outcome)
   while true do
     local n = #task.frames
@@ -227,7 +250,6 @@ complete_task = function(state, task, outcome)
       if outcome.wrap then
         error('transactional continuation attempted to consume a wrapped result', 0)
       end
-      local request = state.roots[task.root_id].request
       if frame.phase == 'map' then
         -- A map callback has already produced the next completed value.  Keep
         -- unwinding this task directly instead of allocating Op.always and
@@ -242,38 +264,19 @@ complete_task = function(state, task, outcome)
           task
         )
       else
-        if frame.phase == 'guard' then
-          local cached = request.memo[frame.activation]
-          if not cached then
-            cached = state.runtime:_call_in_phase('guard', 'callback_error', frame.fn, {
-              runtime = state.runtime,
-              now = function()
-                return state.runtime:now()
-              end,
-            })
-            if not Op.is_op(cached) then
-              error('guard callback must return an Op', 0)
-            end
-            verify_continuation_dependencies(state, task, frame, cached)
-            request.memo[frame.activation] = cached
-          end
-          setv(state, task, 'expr', cached)
-          setv(state, task, 'activation', Path.child(frame.activation, 'guard:result'))
-        else
-          local next_op =
-            state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
-          if not Op.is_op(next_op) then
-            error('and_then callback must return an Op', 0)
-          end
-          verify_continuation_dependencies(state, task, frame, next_op)
-          setv(state, task, 'expr', next_op)
-          setv(
-            state,
-            task,
-            'activation',
-            Path.child(frame.activation, 'and_then:result:' .. Path.label(outcome.activation))
-          )
+        local next_op =
+          state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
+        if not Op.is_op(next_op) then
+          error('and_then callback must return an Op', 0)
         end
+        verify_continuation_dependencies(state, task, frame, next_op)
+        setv(state, task, 'expr', next_op)
+        setv(
+          state,
+          task,
+          'activation',
+          Path.child(frame.activation, 'and_then:result:' .. Path.label(outcome.activation))
+        )
         add_active(state, task.id)
         return true
       end
@@ -1025,6 +1028,160 @@ local function metadata_has_exchange(metadata)
   return metadata and next(metadata.exchanges or {}) ~= nil
 end
 
+local RESIDUAL_STATIC = 0
+local RESIDUAL_REVEALED = 1
+local RESIDUAL_UNOPENED = 2
+
+local function residual_child(activation, label)
+  return activation and Path.child(activation, label) or nil
+end
+
+-- Outcome-only wrappers preserve blocking shape. This is the sole traversal
+-- used by supplier analysis, guard scheduling and raw-exchange pruning.
+local function inspect_transparent_residual(state, task, activation, op)
+  while op do
+    if op.kind == 'guard' then
+      local root = state and task and state.roots[task.root_id] or nil
+      local request = root and root.request or nil
+      local cached = request and activation and request.memo[activation] or nil
+      if cached then
+        return cached, activation, RESIDUAL_REVEALED
+      end
+      return op, activation, RESIDUAL_UNOPENED, op
+    elseif op.kind == 'annotated' then
+      activation = residual_child(activation, 'annotated:body')
+      op = op.p
+    elseif op.kind == 'and_then' and op.derived_map then
+      activation = residual_child(activation, 'and_then:prefix')
+      op = op.p
+    else
+      return op, activation, RESIDUAL_STATIC
+    end
+  end
+  return nil, activation, RESIDUAL_STATIC
+end
+
+local function choice_candidate(task, expr, activation, choice_index)
+  return {
+    task_id = task.id,
+    expr = expr,
+    choice_index = choice_index,
+    activation = activation,
+  }
+end
+
+local function analyse_dynamic_choice_supply(state, task, expr, activation, intents)
+  local alternatives = {}
+  local analysis = {
+    task = task,
+    expr = expr,
+    activation = activation,
+    size = #(expr.choices or {}),
+    dynamic = true,
+    exact_score = 0,
+    opaque_score = 0,
+    exact_candidates = {},
+    has_revealed_guard = false,
+  }
+
+  for ai = 1, analysis.size do
+    local alternative = expr.choices[ai]
+    local alternative_activation = Path.child(activation, 'choice:' .. tostring(ai))
+    local residual, guard_activation, residual_state, guard =
+      inspect_transparent_residual(state, task, alternative_activation, alternative)
+    alternatives[ai] = {
+      metadata = IR.metadata(residual),
+      residual_state = residual_state,
+    }
+    if residual_state == RESIDUAL_UNOPENED and analysis.probe == nil then
+      analysis.probe = {
+        task = task,
+        guard = guard,
+        activation = guard_activation,
+      }
+    end
+  end
+
+  local exact_by_intent, opaque_by_intent = {}, {}
+  for ai = 1, analysis.size do
+    local row = alternatives[ai]
+    local supplies_exact = false
+    for ii = 1, #intents do
+      local certainty = IR.supply_relation(row.metadata, intents[ii])
+      if certainty == IR.SUPPLY_EXACT then
+        exact_by_intent[ii] = true
+        supplies_exact = true
+      elseif certainty == IR.SUPPLY_OPAQUE then
+        opaque_by_intent[ii] = true
+      end
+    end
+    if supplies_exact then
+      analysis.exact_candidates[#analysis.exact_candidates + 1] = choice_candidate(task, expr, activation, ai)
+      if row.residual_state == RESIDUAL_REVEALED then
+        analysis.has_revealed_guard = true
+      end
+    end
+  end
+
+  for ii = 1, #intents do
+    if exact_by_intent[ii] then
+      analysis.exact_score = analysis.exact_score + 1
+    elseif opaque_by_intent[ii] then
+      analysis.opaque_score = analysis.opaque_score + 1
+    end
+  end
+  if analysis.exact_score > 0 then
+    analysis.certainty = IR.SUPPLY_EXACT
+    analysis.score = analysis.exact_score
+  elseif analysis.opaque_score > 0 then
+    analysis.certainty = IR.SUPPLY_OPAQUE
+    analysis.score = analysis.opaque_score
+  else
+    analysis.certainty = IR.SUPPLY_NONE
+    analysis.score = 0
+  end
+  return analysis
+end
+
+local function analyse_choice_supply(state, task, expr, activation, intents)
+  local metadata = IR.metadata(expr)
+  if metadata.dynamic then
+    return analyse_dynamic_choice_supply(state, task, expr, activation, intents)
+  end
+  local score, certainty = IR.supply_score(metadata, intents)
+  return {
+    task = task,
+    expr = expr,
+    activation = activation,
+    size = #(expr.choices or {}),
+    dynamic = false,
+    score = score,
+    certainty = certainty,
+  }
+end
+
+local function append_static_choice_candidates(analysis, intents, candidates)
+  for ai = 1, analysis.size do
+    local alternative = analysis.expr.choices[ai]
+    local metadata = IR.metadata(alternative)
+    for ii = 1, #intents do
+      local certainty = IR.supply_relation(metadata, intents[ii])
+      if certainty == IR.SUPPLY_EXACT then
+        candidates[#candidates + 1] = choice_candidate(analysis.task, analysis.expr, analysis.activation, ai)
+        break
+      end
+    end
+  end
+end
+
+local function task_advances_guard(state, task)
+  if not task or task.status ~= 'active' then
+    return false
+  end
+  local _, _, residual_state = inspect_transparent_residual(state, task, task.activation, task.expr)
+  return residual_state ~= RESIDUAL_STATIC
+end
+
 local function exchange_domain_only(intents)
   if #intents == 0 then
     return false
@@ -1048,14 +1205,40 @@ local function has_compatible_exchange_pair(intents)
   return false
 end
 
-local function select_branch_index(state, head)
+local function better_frontier_supplier(score, size, best_score, best_size)
+  return score > best_score or (score == best_score and score > 0 and (best_size == nil or size < best_size))
+end
+
+local function reveal_supplier_guard(state, probe)
+  evaluate_guard_residual(
+    state,
+    probe.task,
+    probe.guard.fn,
+    probe.activation,
+    probe.guard.continuation_footprint
+  )
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.opaque_supplier_revelations = (profile_plan.opaque_supplier_revelations or 0) + 1
+  end
+end
+
+local function select_frontier_action(state, head)
   local first_branch = nil
+  local guard_progress = nil
+  local deterministic_progress = nil
   local best_choice, best_choice_size = nil, nil
-  local best_supplier, best_supplier_score, best_supplier_size = nil, 0, nil
+  local best_exact, best_exact_score, best_exact_size = nil, 0, nil
+  local best_opaque, best_opaque_score, best_opaque_size = nil, 0, nil
+  local choice_analyses = nil
+  local exact_candidates = nil
+  local has_revealed_guard = false
+  local first_probe = nil
   local exchange_only = exchange_domain_only(state.intents)
   if exchange_only and has_compatible_exchange_pair(state.intents) then
-    return nil
+    return 'blocked'
   end
+
   local saw_or_else = false
   for i = head, #state.active do
     local task = state.tasks[state.active[i]]
@@ -1063,11 +1246,14 @@ local function select_branch_index(state, head)
       local expr = task.expr
       local kind = expr and expr.kind
       if kind ~= 'choice' and kind ~= 'or_else' then
-        -- Only exchange-bearing deterministic work is advanced through an
-        -- unresolved branch frontier. Serial transition facilities rely on
-        -- exposing their lanes in source order before normalisation.
+        if task_advances_guard(state, task) then
+          guard_progress = guard_progress or i
+        end
+        if state.residual_propagation_required then
+          deterministic_progress = deterministic_progress or i
+        end
         if metadata_has_exchange(IR.metadata(expr)) then
-          return i
+          return 'advance', i
         end
       else
         first_branch = first_branch or i
@@ -1079,37 +1265,106 @@ local function select_branch_index(state, head)
         end
 
         if exchange_only then
-          local score = IR.supply_score(IR.metadata(expr), state.intents)
-          if
-            score > best_supplier_score
-            or (
-              score == best_supplier_score
-              and score > 0
-              and (best_supplier_size == nil or size < best_supplier_size)
-            )
-          then
-            best_supplier, best_supplier_score, best_supplier_size = i, score, size
+          local analysis
+          if kind == 'choice' then
+            analysis = analyse_choice_supply(state, task, expr, task.activation, state.intents)
+            analysis.index = i
+            choice_analyses = choice_analyses or {}
+            choice_analyses[#choice_analyses + 1] = analysis
+            if analysis.dynamic then
+              if #analysis.exact_candidates > 0 then
+                exact_candidates = exact_candidates or {}
+                for ci = 1, #analysis.exact_candidates do
+                  exact_candidates[#exact_candidates + 1] = analysis.exact_candidates[ci]
+                end
+              end
+              has_revealed_guard = has_revealed_guard or analysis.has_revealed_guard
+              if analysis.certainty == IR.SUPPLY_OPAQUE and first_probe == nil then
+                first_probe = analysis.probe
+              end
+            end
+          else
+            local metadata = IR.metadata(expr)
+            local score, certainty = IR.supply_score(metadata, state.intents)
+            analysis = {
+              index = i,
+              size = size,
+              dynamic = metadata.dynamic == true,
+              score = score,
+              certainty = certainty,
+            }
+          end
+
+          if analysis.certainty == IR.SUPPLY_OPAQUE then
+            if better_frontier_supplier(analysis.score, size, best_opaque_score, best_opaque_size) then
+              best_opaque, best_opaque_score, best_opaque_size = analysis, analysis.score, size
+            end
+          elseif analysis.certainty == IR.SUPPLY_EXACT then
+            if better_frontier_supplier(analysis.score, size, best_exact_score, best_exact_size) then
+              best_exact, best_exact_score, best_exact_size = analysis, analysis.score, size
+            end
           end
         end
       end
     end
   end
 
-  -- A syntactic branch which can still supply an exposed exchange belongs to
-  -- the current exchange domain. Enter the most relevant such branch before
-  -- attempting to certify absence. If none can supply it, let rendezvous
-  -- propagation or external recruitment handle the exchange now.
-  if exchange_only then
-    return best_supplier
+  if guard_progress then
+    return 'advance', guard_progress
+  end
+  if state.residual_propagation_required and deterministic_progress then
+    return 'advance', deterministic_progress
   end
 
-  -- Preserve the previous active-queue order whenever an or_else is present.
-  -- Its preferred/fallback structure is semantically asymmetric. A frontier
-  -- containing only plain choices is unordered, so use a fail-first choice.
-  if saw_or_else then
-    return first_branch
+  if exchange_only then
+    if
+      state.runtime:_has_supplier(
+        state.intents,
+        state.roots,
+        state.excluded_roots,
+        state.requests,
+        IR.SUPPLY_EXACT
+      )
+    then
+      return 'blocked'
+    end
+
+    if best_exact and best_exact.dynamic and has_revealed_guard and exact_candidates then
+      for i = 1, #(choice_analyses or {}) do
+        local analysis = choice_analyses[i]
+        if not analysis.dynamic and analysis.certainty == IR.SUPPLY_EXACT then
+          append_static_choice_candidates(analysis, state.intents, exact_candidates)
+        end
+      end
+      if #exact_candidates > 0 then
+        return 'branch',
+          {
+            kind = 'supplier_choice',
+            candidates = exact_candidates,
+            next_index = 1,
+            certificate = nil,
+          }
+      end
+    elseif best_exact then
+      return 'advance', best_exact.index
+    end
+
+    if best_opaque and first_probe then
+      reveal_supplier_guard(state, first_probe)
+      return 'progress'
+    end
+    local fallback = best_opaque or best_exact
+    return fallback and 'advance' or 'blocked', fallback and fallback.index or nil
   end
-  return best_choice or first_branch or head
+
+  if state.residual_propagation_required then
+    setv(state, state, 'residual_propagation_required', false)
+  end
+
+  if saw_or_else then
+    return 'advance', first_branch
+  end
+  return 'advance', best_choice or first_branch or head
 end
 
 -- Drain deterministic task work until the evaluator reaches a blocked domain
@@ -1124,9 +1379,17 @@ local function drain_active(state)
     local head_kind = task and task.status == 'active' and task.expr and task.expr.kind or nil
     local selected = head
     if head_kind == 'choice' or head_kind == 'or_else' then
-      selected = select_branch_index(state, head)
-      if selected == nil then
+      local action, payload = select_frontier_action(state, head)
+      if action == 'progress' then
+        return 'progress'
+      elseif action == 'branch' then
+        return 'branch', payload
+      elseif action == 'blocked' then
         return 'blocked'
+      elseif action == 'advance' then
+        selected = payload
+      else
+        error('unknown frontier action: ' .. tostring(action), 0)
       end
     end
     if selected ~= head then
@@ -1151,6 +1414,14 @@ local function drain_active(state)
         if not complete_task(state, task, new_outcome(state, expr.vals, nil, task)) then
           return 'retry', terminal_certificate(state)
         end
+      elseif kind == 'guard' then
+        local parent_activation = task.activation
+        local residual =
+          evaluate_guard_residual(state, task, expr.fn, parent_activation, expr.continuation_footprint)
+        setv(state, task, 'expr', residual)
+        setv(state, task, 'activation', Path.child(parent_activation, 'guard:result'))
+        setv(state, state, 'residual_propagation_required', true)
+        add_active(state, task.id)
       elseif kind == 'and_then' then
         local parent_activation = task.activation
         pushv(state, task.frames, {
@@ -1283,12 +1554,7 @@ end
 -- The return value is true for progress, false plus a certificate for a failed
 -- forced action, and nil when genuine branching remains.
 local function raw_exchange_program(op)
-  -- Outcome-only wrappers preserve the blocking shape of their body. Looking
-  -- through them is exact: map changes only the committed result, while
-  -- annotated nodes add post-commit work, defeat effects or symmetry metadata.
-  while op and (op.kind == 'annotated' or (op.kind == 'and_then' and op.derived_map)) do
-    op = op.p
-  end
+  op = inspect_transparent_residual(nil, nil, nil, op)
   if not op or op.kind ~= 'primitive' then
     return nil
   end
@@ -1300,18 +1566,21 @@ local function raw_exchange_program(op)
 end
 
 local function raw_choice_exchange_demand(state, frame, choice_index)
-  local program = raw_exchange_program(frame.expr.choices[choice_index])
+  local task = state.tasks[frame.task_id]
+  local alternative = frame.expr.choices[choice_index]
+  local alternative_activation = Path.child(frame.activation, 'choice:' .. tostring(choice_index))
+  local residual, activation = inspect_transparent_residual(state, task, alternative_activation, alternative)
+  local program = raw_exchange_program(residual)
   if not program then
     return nil
   end
-  local task = state.tasks[frame.task_id]
   return {
     id = 'choice:' .. tostring(frame.task_id) .. ':' .. tostring(choice_index),
     kind = 'exchange',
     task_id = frame.task_id,
     root_id = task and task.root_id or nil,
     program = program,
-    activation = frame.activation,
+    activation = activation,
     resource = program.resource,
     role = program.role,
     scope_path = task and task.scope_path or nil,
@@ -1485,8 +1754,11 @@ local function prioritise_choice_supplier(state, frame)
   local best, best_score = first, -1
   for position = first, #frame.order do
     local index = frame.order[position]
+    local task = state.tasks[frame.task_id]
     local alternative = frame.expr.choices[index]
-    local score = IR.supply_score(IR.metadata(alternative), state.intents)
+    local alternative_activation = Path.child(frame.activation, 'choice:' .. tostring(index))
+    local residual = inspect_transparent_residual(state, task, alternative_activation, alternative)
+    local score = IR.supply_score(IR.metadata(residual), state.intents)
     if score > best_score then
       best, best_score = position, score
     end
@@ -1512,9 +1784,30 @@ local function next_branch_alternative(state, frame)
         (state.session.work_remaining ~= nil and state.session.work_remaining <= 0)
         or raw_choice_exchange_viable(state, frame, index)
       then
-        return { kind = 'choice', choice_index = index }
+        return {
+          kind = 'choice',
+          task_id = frame.task_id,
+          expr = frame.expr,
+          choice_index = index,
+          activation = frame.activation,
+          supplier_domain = false,
+        }
       end
     end
+  elseif frame.kind == 'supplier_choice' then
+    local candidate = frame.candidates[frame.next_index]
+    if not candidate then
+      return nil
+    end
+    frame.next_index = frame.next_index + 1
+    return {
+      kind = 'choice',
+      task_id = candidate.task_id,
+      expr = candidate.expr,
+      choice_index = candidate.choice_index,
+      activation = candidate.activation,
+      supplier_domain = true,
+    }
   elseif frame.kind == 'or_else' then
     if frame.phase == 'preferred' then
       frame.phase = 'preferred_running'
@@ -1535,10 +1828,13 @@ local function prepare_alternative(state, frame, alt)
   if alt.kind == 'choice' then
     if profile_plan then
       profile_plan.choice_branches = profile_plan.choice_branches + 1
+      if alt.supplier_domain then
+        profile_plan.supplier_domain_branches = (profile_plan.supplier_domain_branches or 0) + 1
+      end
     end
-    local task = state.tasks[frame.task_id]
-    setv(state, task, 'expr', frame.expr.choices[alt.choice_index])
-    setv(state, task, 'activation', Path.child(frame.activation, 'choice:' .. tostring(alt.choice_index)))
+    local task = state.tasks[alt.task_id]
+    setv(state, task, 'expr', alt.expr.choices[alt.choice_index])
+    setv(state, task, 'activation', Path.child(alt.activation, 'choice:' .. tostring(alt.choice_index)))
     add_active(state, task.id)
     return true
   elseif alt.kind == 'or_else_preferred' then
@@ -1650,14 +1946,22 @@ local function prepare_alternative(state, frame, alt)
   error('unknown search alternative: ' .. tostring(alt.kind), 0)
 end
 
-local function branch_child_result(state, frame, outcome, candidate, certificate)
+local function selected_choice(frame)
   if frame.kind == 'choice' then
+    return frame.expr, frame.order[frame.next_index - 1]
+  end
+  local candidate = frame.candidates[frame.next_index - 1]
+  return candidate.expr, candidate.choice_index
+end
+
+local function branch_child_result(state, frame, outcome, candidate, certificate)
+  if frame.kind == 'choice' or frame.kind == 'supplier_choice' then
     if outcome == 'hit' then
-      local chosen = frame.order[frame.next_index - 1]
+      local expr, chosen = selected_choice(frame)
       local defeats = {}
-      for i = 1, #(frame.expr.choices or {}) do
+      for i = 1, #(expr.choices or {}) do
         if i ~= chosen then
-          collect_defeat_effects(frame.expr.choices[i], defeats)
+          collect_defeat_effects(expr.choices[i], defeats)
         end
       end
       candidate = attach_candidate_effects(state.runtime, candidate, defeats)
@@ -1689,7 +1993,7 @@ local function branch_child_result(state, frame, outcome, candidate, certificate
 end
 
 local function exhausted_branch_result(state, frame)
-  if frame.kind == 'choice' then
+  if frame.kind == 'choice' or frame.kind == 'supplier_choice' then
     return frame.certificate or terminal_certificate(state)
   elseif frame.kind == 'or_else' then
     -- Both phases normally complete directly from branch_child_result.  This
@@ -1832,6 +2136,10 @@ local function advance_search(session)
         end
       elseif action == 'branch' then
         push_branch(session, payload)
+      elseif action == 'progress' then
+        -- A demand-driven guard probe learned a residual without changing the
+        -- speculative ledger. Re-enter reduction so the refined metadata can
+        -- guide supplier selection within the normal work quantum.
       else
         local candidate = final_candidate(state)
         if candidate then
