@@ -13,7 +13,6 @@ return {
     'kernel',
     'internal',
     'case_studies',
-    'experiments',
     'performance',
   },
 
@@ -27,7 +26,6 @@ return {
     'kernel',
     'internal',
     'case_studies',
-    'experiments',
   },
 
   full = {
@@ -42,7 +40,6 @@ return {
     'kernel',
     'internal',
     'case_studies',
-    'experiments',
     'performance',
   },
 }

@@ -38,7 +38,6 @@ local EffectKind = (function()
       key = spec.key,
       merge = spec.merge,
       prepare = spec.prepare,
-      order = spec.order or 1000,
       failure = spec.failure or 'fatal',
       validate_payload = spec.validate_payload,
     }
@@ -122,7 +121,6 @@ end
 
 WakeKind = EffectKind.new({
   name = 'wake',
-  order = 50,
   key = wake_key,
   merge = function(a, _b)
     return shallow_copy(a)
@@ -160,7 +158,6 @@ end
 
 InterruptKind = EffectKind.new({
   name = 'interrupt',
-  order = 55,
   key = interrupt_key,
   merge = function(a, b)
     return { token = a.token, reason = a.reason ~= nil and a.reason or b.reason }
@@ -201,7 +198,6 @@ end
 
 ScopeKind = EffectKind.new({
   name = 'scope',
-  order = 60,
   key = scope_key,
   merge = function(a, _b)
     return shallow_copy(a)
@@ -264,7 +260,6 @@ end
 
 SpawnKind = EffectKind.new({
   name = 'spawn',
-  order = 100,
   key = spawn_key,
   merge = function()
     return nil, { kind = 'effect_conflict', message = 'duplicate spawn effect' }

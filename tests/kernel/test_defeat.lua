@@ -34,7 +34,6 @@ local fired = {}
 local DefeatKind
 DefeatKind = Effect.kind({
   name = 'test-defeat',
-  order = 40,
   key = function(payload)
     return payload.id
   end,

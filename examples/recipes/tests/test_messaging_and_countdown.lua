@@ -413,4 +413,4 @@ for i = 1, #tests do
   tests[i]()
 end
 
-print('tests/test_messaging_and_countdown.lua: ok')
+print('examples/recipes/tests/test_messaging_and_countdown.lua: ok')

@@ -365,4 +365,4 @@ for i = 1, #tests do
   tests[i]()
 end
 
-print('tests/test_keyed_lease_priority_pool.lua: ok')
+print('examples/recipes/tests/test_resources_and_pool.lua: ok')

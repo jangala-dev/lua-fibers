@@ -64,7 +64,6 @@ end
 
 ControlKind = Effect.kind({
   name = 'host_reactor_control',
-  order = 85,
   key = control_key,
   merge = function(a, b)
     if a.action == b.action then

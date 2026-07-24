@@ -14,7 +14,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRegion = require('fibers.region')
-local Phase = require('experiments.phase')
+local Phase = dofile('docs/notes/phase.lua')
 
 local function fail(msg)
   error(msg, 2)
@@ -134,4 +134,4 @@ do
   assert_eq(first ~= second, true, 'phase run should create a fresh interval after settlement')
 end
 
-print('tests/test_phase_prototype.lua: ok')
+print('docs/notes/test_phase.lua: ok')

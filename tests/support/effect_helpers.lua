@@ -4,7 +4,6 @@ local M = {}
 
 M.TagKind = Effect.kind({
   name = 'test.tag',
-  order = 900,
   key = function(payload)
     return payload.tag or payload.kind
   end,
@@ -35,7 +34,6 @@ M.TagKind = Effect.kind({
 
 M.ConflictKind = Effect.kind({
   name = 'test.conflict',
-  order = 901,
   key = function(_payload)
     return 'same'
   end,
@@ -54,7 +52,6 @@ M.ConflictKind = Effect.kind({
 
 M.PrepareRefuseKind = Effect.kind({
   name = 'test.prepare_refuse',
-  order = 902,
   key = function(_payload)
     return 'refuse'
   end,
@@ -68,7 +65,6 @@ M.PrepareRefuseKind = Effect.kind({
 
 M.DischargeFatalKind = Effect.kind({
   name = 'test.discharge_fatal',
-  order = 903,
   key = function(_payload)
     return 'fatal'
   end,

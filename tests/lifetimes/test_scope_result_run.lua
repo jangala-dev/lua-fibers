@@ -13,6 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRegion = require('fibers.region')
+local Settlement = require('fibers.region.settlement')
 
 local function fail(msg)
   error(msg, 2)
@@ -114,6 +115,13 @@ do
     tostring(r.report or r.primary):match('settlement failed'),
     'settlement failure should be reported'
   )
+  assert_truthy(
+    Settlement.is_failure(r.settlement_failure),
+    'checked result should retain recovery authority'
+  )
+  assert_eq(r.settlement_failures[1], r.settlement_failure)
+  assert_eq(r.report.settlement_failures[1], r.settlement_failure)
+  assert_eq(r.report.settlement_failure_count, 1)
 end
 
 print('tests/test_scope_result_run.lua: ok')

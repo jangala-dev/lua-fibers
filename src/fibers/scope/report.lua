@@ -34,6 +34,8 @@ function ScopeReport.new(scope, primary, secondaries, fields)
     child_exits = fields.child_exits or {},
     child_failures = fields.child_failures or {},
     body_exit = fields.body_exit,
+    settlement_failures = fields.settlement_failures or {},
+    settlement_failure_count = #(fields.settlement_failures or {}),
   }, ScopeReport)
 end
 

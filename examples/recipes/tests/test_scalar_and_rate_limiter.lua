@@ -243,4 +243,4 @@ local tests = {
 for i = 1, #tests do
   tests[i]()
 end
-print('tests/test_scalar_transitions_rate_limiter.lua: ok')
+print('examples/recipes/tests/test_scalar_and_rate_limiter.lua: ok')

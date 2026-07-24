@@ -96,7 +96,6 @@ end
 
 FlowChangedKind = Effect.kind({
   name = 'flow_changed',
-  order = 90,
   key = flow_key,
   merge = function(a, _b)
     return a

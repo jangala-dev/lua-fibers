@@ -188,7 +188,7 @@ Possible use:
 game frame stages, render extraction, embedded power modes, radio awake/sleep cycles
 ```
 
-The current `experiments.phase` module is a prototype.  It proves that phase can be
+The current `docs/notes/phase.lua` implementation is a prototype.  It proves that phase can be
 built over scope and now enforces declared custody, authority and fact
 crossings by explicit edge label.  It is still not a full phase language: it
 does not yet model emitted events, active-phase ordering or richer edge policy.

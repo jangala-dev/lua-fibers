@@ -281,6 +281,24 @@ A settlement failure occurs after the claim has committed. It cannot be rolled b
 
 The record remains owned in failed phase with diagnostic fields including the settlement error. Ordinary movement, release and duplicate claim remain blocked until policy explicitly restores or otherwise resolves it.
 
+A failing settlement protocol produces a `Settlement.Failure` value. Direct settlement raises it; checked scope boundaries retain it in their result and report. It is both a structured error and the exclusive recovery capability for the unresolved claim:
+
+```lua
+local Settlement = require('fibers.region.settlement')
+
+local result = fibers.try_scope(function(scope)
+  -- admit work whose settlement may fail
+end)
+
+local failure = result.settlement_failure
+if failure and Settlement.is_failure(failure) then
+  print(failure.item, failure.error)
+  fibers.perform(failure:restore_op())
+end
+```
+
+A failure exposes `item`, `region`, `claim`, `claim_id`, `purpose`, `reason`, `records` and the original `error`. It provides `resolve_op`, `restore_op` and `discharge_op`. The claim is intentionally absent from ordinary public Region records; possession of the failure value is what confers recovery authority. Checked scope results expose `settlement_failure` and `settlement_failures`, and their reports retain the same list.
+
 Central rule:
 
 > Failed settlement is an unresolved obligation, not an exception erased during unwinding.

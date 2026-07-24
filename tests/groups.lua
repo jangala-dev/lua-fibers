@@ -3,7 +3,7 @@
 return {
   public = {
     'tests/public/test_contracts.lua',
-    'tests/public/test_documented_examples.lua',
+    'examples/test_documented_examples.lua',
     'tests/public/test_flow.lua',
     'tests/public/test_op.lua',
     'tests/public/test_policy.lua',
@@ -13,10 +13,10 @@ return {
     'tests/public/test_stream_memory.lua',
   },
   composition = {
-    'tests/composition/test_messaging_and_countdown.lua',
-    'tests/composition/test_priority_queue_composition.lua',
-    'tests/composition/test_resources_and_pool.lua',
-    'tests/composition/test_scalar_and_rate_limiter.lua',
+    'examples/recipes/tests/test_messaging_and_countdown.lua',
+    'examples/recipes/tests/test_priority_queue_composition.lua',
+    'examples/recipes/tests/test_resources_and_pool.lua',
+    'examples/recipes/tests/test_scalar_and_rate_limiter.lua',
   },
   resources = {
     'tests/resources/test_counter_and_fifo.lua',
@@ -133,12 +133,9 @@ return {
     'tests/internal/test_reference_lazy.lua',
   },
   case_studies = {
-    'tests/case_studies/test_calendar.lua',
-    'tests/case_studies/test_calendar_completeness.lua',
-    'tests/case_studies/test_petri.lua',
-  },
-  experiments = {
-    'tests/experiments/test_phase.lua',
+    'examples/case_studies/calendar/test_calendar.lua',
+    'examples/case_studies/calendar/test_calendar_completeness.lua',
+    'examples/case_studies/petri/test_petri.lua',
   },
   performance = {
     'tests/performance/test_performance_architecture.lua',

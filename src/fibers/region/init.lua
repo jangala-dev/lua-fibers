@@ -588,10 +588,6 @@ local function select_transition(name, ready, step, order)
   })
 end
 
-function Region.handle(name, fields)
-  local h = Region.handle(name, fields)
-  return h
-end
 function Region.owned(item, settle, opts)
   return Owned.item(item, settle, opts)
 end

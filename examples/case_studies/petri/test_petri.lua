@@ -165,4 +165,4 @@ do
   assert(result == 'none' and count(net:snapshot(), 'p') == 2)
 end
 
-print('tests/test_petri.lua: ok')
+print('examples/case_studies/petri/test_petri.lua: ok')

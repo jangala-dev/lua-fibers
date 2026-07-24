@@ -11,6 +11,19 @@ local perform = require('fibers.perform')
 
 local M = { perform = perform }
 
+local function settlement_failures_from(err)
+  if type(err) ~= 'table' then
+    return {}
+  end
+  if err._fibers_settlement_failure == true then
+    return { err }
+  end
+  if type(err.cause) == 'table' and err.cause._fibers_settlement_failure == true then
+    return { err.cause }
+  end
+  return {}
+end
+
 local function runtime_options(opts, host)
   local runtime_opts = {}
   for key, value in pairs(opts or {}) do
@@ -73,10 +86,15 @@ function M.try_run(fn, opts)
     return result
   end
   if not ok then
+    local settlement_failures = settlement_failures_from(err)
     return ScopeResult.fail({
       reason = 'runtime_error',
       primary = err,
-      report = scope:_make_report(err, {}, { reason = 'runtime_error' }),
+      report = scope:_make_report(err, {}, {
+        reason = 'runtime_error',
+        settlement_failures = settlement_failures,
+      }),
+      settlement_failures = settlement_failures,
       runtime_status = runtime_status,
     })
   end

@@ -131,4 +131,4 @@ do
   assert(slot.start == 4 and slot.finish == 7 and reservation_count(cal) == 0)
 end
 
-print('tests/test_calendar.lua: ok')
+print('examples/case_studies/calendar/test_calendar.lua: ok')

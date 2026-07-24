@@ -328,6 +328,38 @@ local function report_for(scope, primary, secondaries, fields)
   return scope:_make_report(primary, secondaries or {}, fields or {})
 end
 
+local function append_settlement_failures(out, value, seen)
+  if type(value) ~= 'table' then
+    return
+  end
+  seen = seen or {}
+  if seen[value] then
+    return
+  end
+  seen[value] = true
+
+  if value._fibers_settlement_failure == true then
+    out[#out + 1] = value
+    return
+  end
+
+  local failures = value.settlement_failures
+  if type(failures) == 'table' then
+    for i = 1, #failures do
+      append_settlement_failures(out, failures[i], seen)
+    end
+  end
+  local secondaries = value.secondaries
+  if type(secondaries) == 'table' then
+    for i = 1, #secondaries do
+      append_settlement_failures(out, secondaries[i], seen)
+    end
+  end
+  append_settlement_failures(out, value.report, seen)
+  append_settlement_failures(out, value.primary, seen)
+  append_settlement_failures(out, value.cause, seen)
+end
+
 local function default_result(scope, policy, state, body_ok, body_results, settlement_failures, close_reason)
   local body_primary = body_results[2]
   local child_entry = state.first_child_failure
@@ -347,6 +379,14 @@ local function default_result(scope, policy, state, body_ok, body_results, settl
   end
 
   settlement_failures = filter_duplicate_cancellation(primary, settlement_failures)
+  local retained_settlement_failures = {}
+  local seen_settlement_failures = {}
+  append_settlement_failures(retained_settlement_failures, body_primary, seen_settlement_failures)
+  append_settlement_failures(retained_settlement_failures, child_primary, seen_settlement_failures)
+  for i = 1, #settlement_failures do
+    append_settlement_failures(retained_settlement_failures, settlement_failures[i], seen_settlement_failures)
+  end
+
   local secondaries = {}
   for i = 1, #state.child_failures do
     local entry = state.child_failures[i]
@@ -366,6 +406,7 @@ local function default_result(scope, policy, state, body_ok, body_results, settl
     child_failures = state.child_failures,
     cause = state.first_child_failure,
     body_exit = { ok = body_ok, primary = body_primary },
+    settlement_failures = retained_settlement_failures,
   }
 
   local custom = call_policy(policy, 'result', scope, state, {
@@ -374,7 +415,7 @@ local function default_result(scope, policy, state, body_ok, body_results, settl
     primary = primary,
     reason = reason,
     secondaries = secondaries,
-    settlement_failures = settlement_failures,
+    settlement_failures = retained_settlement_failures,
     close_reason = close_reason,
     fields = fields,
   })
@@ -387,6 +428,7 @@ local function default_result(scope, policy, state, body_ok, body_results, settl
       reason = reason,
       primary = primary,
       report = report_for(scope, primary, secondaries, fields),
+      settlement_failures = retained_settlement_failures,
     })
   end
   if #settlement_failures > 0 then
@@ -397,6 +439,7 @@ local function default_result(scope, policy, state, body_ok, body_results, settl
       reason = 'settlement_failed',
       primary = first,
       report = report_for(scope, first, secondaries, fields),
+      settlement_failures = retained_settlement_failures,
     })
   end
   return ScopeResult.ok(tail_pack(body_results), report_for(scope, nil, secondaries, fields))

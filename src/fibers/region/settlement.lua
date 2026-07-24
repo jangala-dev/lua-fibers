@@ -12,6 +12,64 @@ local Protected = require('fibers.internal.protected')
 
 local Settlement = {}
 
+local SettlementFailure = {}
+SettlementFailure.__index = SettlementFailure
+
+local function settlement_failure_message(item, err, mark_error)
+  local name = type(item) == 'table' and (item.name or item._fibers_id) or item
+  local message = 'settlement failed'
+  if name ~= nil then
+    message = message .. ' for ' .. tostring(name)
+  end
+  message = message .. ': ' .. tostring(err)
+  if mark_error ~= nil then
+    message = message .. ' (failed to record settlement failure: ' .. tostring(mark_error) .. ')'
+  end
+  return message
+end
+
+function SettlementFailure.new(claim, err, mark_error)
+  return setmetatable({
+    _fibers_settlement_failure = true,
+    _fibers_value = true,
+    kind = 'settlement_failure',
+    item = claim.root,
+    region = claim.region,
+    claim = claim,
+    claim_id = claim.id,
+    purpose = claim.purpose,
+    reason = claim.reason,
+    records = claim.records,
+    error = err,
+    mark_error = mark_error,
+    message = settlement_failure_message(claim.root, err, mark_error),
+  }, SettlementFailure)
+end
+
+function SettlementFailure.is(x)
+  return type(x) == 'table' and x._fibers_settlement_failure == true
+end
+
+function SettlementFailure:resolve_op(resolution)
+  return self.region:resolve_op(self.claim, resolution)
+end
+
+function SettlementFailure:discharge_op()
+  return self.region:discharge_claim_op(self.claim)
+end
+
+function SettlementFailure:restore_op()
+  return self.region:restore_claim_op(self.claim)
+end
+
+function SettlementFailure:tostring()
+  return self.message
+end
+
+SettlementFailure.__tostring = SettlementFailure.tostring
+Settlement.Failure = SettlementFailure
+Settlement.is_failure = SettlementFailure.is
+
 local function true_op()
   return Op.always(true)
 end
@@ -217,7 +275,7 @@ local function resolve_discharge_op(ctx, claim)
 end
 
 local function mark_failed(ctx, claim, err)
-  Protected.pcall(function()
+  return Protected.pcall(function()
     perform_masked(resolve_failed_op(ctx, claim, err))
   end)
 end
@@ -230,8 +288,9 @@ local function run_claim_inline(ctx, claim, after_settle)
     perform_masked(resolve_discharge_op(ctx, claim))
   end)
   if not ok then
-    mark_failed(ctx, claim, err)
-    error(err, 0)
+    local marked, mark_error = mark_failed(ctx, claim, err)
+    local failure = SettlementFailure.new(claim, err, marked and nil or mark_error)
+    error(failure, 0)
   end
   if after_settle then
     perform_masked(after_settle(ctx, claim))

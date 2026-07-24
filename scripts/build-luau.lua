@@ -170,7 +170,7 @@ local function resolve_profile(name, stack)
 end
 
 local function validate_profile(profile)
-  local actual = list_files("find tests -type f -name 'test_*.lua' -print")
+  local actual = list_files("find tests examples -type f -name 'test_*.lua' -print")
   local actual_set = {}
   for i = 1, #actual do
     actual_set[actual[i]] = true
@@ -201,7 +201,7 @@ end
 
 local function alias_name(name)
   local root, rest = name:match('^([^.]+)%.?(.*)$')
-  if root ~= 'fibers' and root ~= 'tests' and root ~= 'examples' and root ~= 'experiments' then
+  if root ~= 'fibers' and root ~= 'tests' and root ~= 'examples' then
     return name
   end
   if rest == '' then
@@ -430,7 +430,7 @@ end
 validate_profile(profile)
 
 local source = collect_modules({ 'src', 'reference' }, false)
-local auxiliary = collect_modules({ 'tests', 'examples', 'experiments' }, true)
+local auxiliary = collect_modules({ 'tests', 'examples' }, true)
 local test_entries, selected_aux = profile_dependencies(profile.tests, source, auxiliary)
 local entries = {}
 for j = 1, #profile_data.entries do
@@ -472,8 +472,7 @@ write_file(output .. '/.luaurc', [[{
   "aliases": {
     "fibers": "./src/fibers",
     "tests": "./src/tests",
-    "examples": "./src/examples",
-    "experiments": "./src/experiments"
+    "examples": "./src/examples"
   }
 }
 ]])

@@ -247,6 +247,11 @@ do
     return rt:run()
   end)
   assert_eq(ok, false, 'settlement protocol failure should fail the waiting task')
+  assert_truthy(Settlement.is_failure(err), 'settlement error should be a recovery capability')
+  assert_eq(err.item, h)
+  assert_eq(err.region, life:raw_region())
+  assert_eq(err.claim_id, err.claim.id)
+  assert_truthy(tostring(err.error):match('settlement boom'), 'original settlement error should be retained')
   assert_truthy(tostring(err):match('settlement boom'), 'settlement error should be propagated')
 
   local rec
@@ -256,6 +261,8 @@ do
   assert_truthy(rec, 'failed settlement record should remain visible')
   assert_eq(rec.phase, 'failed')
   assert_eq(rec.settlement_failed, true)
+  assert_eq(rec.claim, nil, 'public records must not expose recovery authority')
+  assert_eq(rec.claim_id, err.claim_id, 'diagnostic claim id should match the capability')
   assert_truthy(
     tostring(rec.settlement_error_message or ''):match('settlement boom'),
     'record should expose failure message'
@@ -263,8 +270,12 @@ do
   local failed_count
   fibers.run(function()
     failed_count = fibers.perform(life:inspect_op()).owned_count
+    fibers.perform(err:restore_op())
+    rec = fibers.perform(life:raw_region():record_op(h))
   end)
   assert_eq(failed_count, 1, 'failed settlement should not release ownership')
+  assert_eq(rec.phase, 'live', 'the returned capability should restore the unresolved claim')
+  assert_eq(rec.settlement_failed, nil)
 end
 
 print('tests/test_settlement_structure.lua: ok')

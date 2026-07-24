@@ -13,7 +13,7 @@ export LUA_PATH := $(REPO_LUA_PATH)
 
 .PHONY: test test-ledger test-reference test-public test-composition test-resources \
 	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
-	test-experiments test-performance test-native test-stress test-full test-matrix \
+	test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
 	test-luajit-interpreter test-texlua build-luau build-luau-reference \
 	check-luau-build check-luau check-luau-portable check-luau-reference \
@@ -57,9 +57,6 @@ test-internal:
 
 test-case-studies:
 	$(LUA) tests/run_group.lua case_studies
-
-test-experiments:
-	$(LUA) tests/run_group.lua experiments
 
 test-performance:
 	$(LUA) tests/run_group.lua performance
@@ -174,5 +171,5 @@ check-modules:
 
 check-scripts:
 	@for file in scripts/*.sh .devcontainer/*.sh; do sh -n "$$file"; done
-	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua tests/run_*.lua tests/luau/*.lua performance/*.lua experiments/*.lua
+	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua tests/run_*.lua tests/luau/*.lua performance/*.lua
 	$(MAKE) -f .devcontainer/Makefile validate-pins

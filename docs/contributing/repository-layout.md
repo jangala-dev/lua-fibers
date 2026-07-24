@@ -53,10 +53,10 @@ examples/embedding/        host and runtime integration
 examples/lifetimes/        advanced custody and settlement examples
 examples/case_studies/     trusted kernel programmes, not installed APIs
 
-experiments/               prototypes with no compatibility promise
+docs/notes/                design notes and work-in-progress prototypes
 reference/                 independent differential evaluator
 performance/               benchmarks and architectural invariants
-tests/                     tests grouped by public contract
+tests/                     core tests grouped by semantic contract
 ```
 
 ## Public imports
@@ -122,7 +122,9 @@ Op → resource primitives → Flow → Stream → File / Process / Socket
 ## Test groups
 
 `tests/groups.lua` defines convenient public, composition, resources, lifetimes,
-embedding, kernel, internal, case-study, experiment and performance runs. These
+embedding, kernel, internal, case-study and performance runs. Tests for recipes,
+documented examples and case studies live beside those examples and are included
+by the same groups. These
 lists organise targeted commands; semantic tests do not inspect repository
 layout. Run one group with:
 

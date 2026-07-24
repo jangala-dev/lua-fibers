@@ -21,7 +21,6 @@ local next_id = 0
 local RetireKind
 RetireKind = Effect.kind({
   name = 'pool.retire',
-  order = 850,
   key = function(payload)
     return (payload.pool_id or '') .. ':' .. tostring(payload.key)
   end,

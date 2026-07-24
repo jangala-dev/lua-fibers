@@ -134,7 +134,7 @@ local function unpack_pack(p)
 end
 
 local function merge_effects(effects)
-  local order, by_key = {}, {}
+  local first_occurrence_keys, by_key = {}, {}
   for i = 1, #effects do
     local effect = effects[i]
     local kind = effect.kind
@@ -149,12 +149,12 @@ local function merge_effects(effects)
     else
       local copy = { _fibers_effect = true, kind = kind, payload = effect.payload }
       by_key[key] = copy
-      order[#order + 1] = key
+      first_occurrence_keys[#first_occurrence_keys + 1] = key
     end
   end
   local out = {}
-  for i = 1, #order do
-    out[i] = by_key[order[i]]
+  for i = 1, #first_occurrence_keys do
+    out[i] = by_key[first_occurrence_keys[i]]
   end
   return out
 end
@@ -2054,10 +2054,13 @@ local function driver_call(self, action, fn, ...)
   self:_end_cycle_budget()
   if not result[1] then
     local err = result[2]
-    -- Structured scope reports are already the public failure object. Preserve
-    -- them across the driver boundary rather than obscuring them inside a
-    -- generic RuntimeError.
-    if type(err) == 'table' and (err._fibers_error or err._fibers_scope_report) then
+    -- Structured scope reports and settlement failures are already public
+    -- failure objects. Preserve them across the driver boundary rather than
+    -- obscuring them inside a generic RuntimeError.
+    if
+      type(err) == 'table'
+      and (err._fibers_error or err._fibers_scope_report or err._fibers_settlement_failure)
+    then
       error(err, 0)
     end
     return self:_fail('runtime_error', err, { phase = action, level = 0 })

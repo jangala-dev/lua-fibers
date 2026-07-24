@@ -6,4 +6,4 @@ if ! command -v stylua >/dev/null 2>&1; then
   exit 1
 fi
 
-stylua --check src reference examples experiments performance scripts tests
+stylua --check src reference examples performance scripts tests docs/notes/*.lua

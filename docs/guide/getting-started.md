@@ -315,7 +315,7 @@ fibers.host.readiness
 
 See `../advanced/facility-authoring.md` and `../../examples/recipes/` for complete facilities built only from supported interfaces.
 
-Petri and Calendar are trusted kernel case studies under `examples/case_studies/`. They are not installed modules or version 1 API commitments. Phase remains under `experiments/`.
+Petri and Calendar are trusted kernel case studies under `examples/case_studies/`. They are not installed modules or version 1 API commitments. Phase remains a work-in-progress prototype under `docs/notes/`.
 
 ## Further reading
 

@@ -33,7 +33,6 @@ local FibersReadiness = require('fibers.host.readiness')
 local FibersRegion = require('fibers.region')
 local FibersEffect = require('fibers.effect')
 local FibersTask = require('fibers.task')
-local FibersPhase = require('experiments.phase')
 local FibersPolicy = require('fibers.policy')
 
 local function fail(msg)
@@ -144,7 +143,6 @@ do
   assert_eq(require('fibers.effect'), FibersEffect, 'Effect describes committed obligations')
   assert_eq(FibersRegion._ledger, nil, 'Region does not export its shared ledger')
   assert_eq(FibersRegion._clone_ledger, nil, 'Region does not export ledger cloning')
-  assert_truthy(type(FibersPhase.new) == 'function', 'Phase remains available only as an experiment')
 end
 
 -- The root lifecycle preserves Lua multiple returns, including nil values.
@@ -272,6 +270,7 @@ do
       }
     end,
   })
+  assert_eq(Kind.order, nil, 'EffectKind has no global numeric ordering field')
   local effect = FibersEffect.of(Kind, { key = 'once' })
   local st = fibers.try_run(function()
     fibers.perform(Effect.after_commit(effect))

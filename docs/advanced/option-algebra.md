@@ -459,10 +459,11 @@ Laws:
 losing worlds discharge no effects
 all effects are prepared before state installation
 same-key effects merge according to their EffectKind or conflict
+distinct effects retain stable first-occurrence order
 prepared effects discharge after state installation
 ```
 
-Effects are in-process obligations, not a durable outbox.
+Effect kinds do not carry a global priority or numeric order. A facility which requires an inseparable discharge sequence should represent it as one compound effect. Effects are in-process obligations, not a durable outbox.
 
 ## 16. Ownership and settlement
 

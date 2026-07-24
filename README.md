@@ -34,7 +34,7 @@ end)
 
 ## Compose the same actions when needed
 
-Each direct method has an inert `_op` form. Asking for the `Op` lets the same actions be combined before one coherent result is performed:
+Each direct method has an inert `_op` form. Asking for the option form lets the same actions be combined before one coherent result is performed:
 
 ```lua
 local jobs = channel.new()
@@ -92,7 +92,7 @@ end)
 
 An option is inert. Constructing one does not send, receive, sleep or change state.
 
-An `Op` can be thought of as an option: an inert description which may be combined before it is submitted to `perform`. Methods ending in `_op` return these descriptions.
+In this documentation, an option is the concept; `Op` is the Lua type representing an option. An option is an inert description which may be combined before it is submitted to `perform`. Methods ending in `_op` return these descriptions.
 
 ```lua
 local receive = inbox:get_op()
@@ -253,6 +253,15 @@ Op.tensor({
 
 Both forms still commit as one coherent world. The distinction is whether sibling options may positively make one another possible.
 
+A practical guide is:
+
+| Situation | Use | Reason |
+|---|---|---|
+| Several requirements must each already be supportable | `all` | Siblings may constrain one another, but cannot supply missing readiness |
+| One sibling deliberately hands state or a value to another | `tensor` | Compatible positive supply is part of the intended transaction |
+| A put and take should rendezvous inside one decision | `tensor` | The producer is meant to make the consumer possible |
+| You are unsure whether sibling supply is intended | `all` | It is the more conservative conjunction |
+
 ## Committed work
 
 Concurrent programmes need a clear account of when callbacks run.
@@ -260,6 +269,8 @@ Concurrent programmes need a clear account of when callbacks run.
 ### During proof search
 
 `map`, `and_then`, guards and resource-transition callbacks calculate possible worlds. They may be replayed and must not perform irreversible work.
+
+A guard delays construction until one structural occurrence becomes relevant. Its result is stable within that speculative activation, but a later activation may call the builder again. Use it for private fresh values or attempt-local preparation; use `wrap` or a committed effect for observable work.
 
 ### After a participant commits
 
@@ -296,7 +307,7 @@ fibers.run(function()
 end)
 ```
 
-The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead.
+The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead. When settlement fails, the checked result retains a settlement-failure capability so policy can inspect the error and explicitly restore or discharge the unresolved claim.
 
 The lifetime model also supports cancellation, owned resources, transactional movement, borrowing, claims and settlement. These facilities are deliberately progressive: ordinary programmes can begin with tasks and scopes, while systems code can state stronger ownership protocols where required.
 

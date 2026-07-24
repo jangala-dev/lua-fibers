@@ -117,4 +117,4 @@ fibers.run(function()
   assert(fibers.perform(b:reader():read_line_op()) == 'hello')
 end)
 
-print('tests/test_documented_examples.lua: ok')
+print('examples/test_documented_examples.lua: ok')
