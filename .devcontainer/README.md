@@ -41,16 +41,18 @@ commit for release v0.4.1. It also supplies `<limits.h>` because upstream
 For reproducible CI or release images, override `LUAJIT_REF` with an exact tested
 commit rather than following the branch head.
 
-The repository-level targets exercise the additional runtimes:
+The repository-level targets exercise the additional runtimes and static
+repository contracts:
 
 ```sh
+make check
 make test-texlua
 make build-luau
 make check-luau
 make test-luau
 ```
 
-Luau has separate conformance-smoke, 79-test portable and 74-test reference
+Luau has separate conformance-smoke, 81-test portable and 76-test reference
 profiles. All are included in `make test-luau`, and Luau is part of
 `make test-matrix`. See `docs/contributing/luau.md` for the generated-build
 contract.

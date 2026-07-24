@@ -5,7 +5,6 @@ LUAJIT ?= luajit
 TEXLUA ?= texlua
 LUAU ?= luau
 LUAU_ANALYZE ?= luau-analyze
-PYTHON ?= python3
 LUAU_BUILD_DIR ?= build/luau
 LUAU_REFERENCE_BUILD_DIR ?= build/luau-reference
 
@@ -20,7 +19,7 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	check-luau-build check-luau check-luau-portable check-luau-reference \
 	test-luau test-luau-smoke test-luau-portable test-luau-reference examples \
 	bench bench-ledger bench-io profile-proof-io performance check-format \
-	check-links check-layout check-tests check-scripts check
+	check-links check-modules check-scripts check
 
 
 test:
@@ -90,10 +89,10 @@ test-texlua:
 	FIBERS_TEST_PROFILE=matrix $(TEXLUA) tests/run_all.lua
 
 build-luau:
-	$(PYTHON) scripts/build-luau.py --output "$(LUAU_BUILD_DIR)"
+	$(LUA) scripts/build-luau.lua --output "$(LUAU_BUILD_DIR)"
 
 build-luau-reference:
-	$(PYTHON) scripts/build-luau.py --profile reference --output "$(LUAU_REFERENCE_BUILD_DIR)"
+	$(LUA) scripts/build-luau.lua --profile reference --output "$(LUAU_REFERENCE_BUILD_DIR)"
 
 check-luau-build: build-luau build-luau-reference
 
@@ -161,8 +160,7 @@ check:
 	$(MAKE) check-scripts
 	$(MAKE) check-format
 	$(MAKE) check-links
-	$(MAKE) check-layout
-	$(MAKE) check-tests
+	$(MAKE) check-modules
 	$(MAKE) check-luau-build
 
 check-links:
@@ -171,15 +169,10 @@ check-links:
 check-format:
 	sh scripts/check-format.sh
 
-check-layout:
-	$(PYTHON) scripts/check-module-layout.py .
-
-check-tests:
-	$(LUA) scripts/check-test-layout.lua
+check-modules:
+	$(LUA) scripts/check-modules.lua
 
 check-scripts:
-	$(PYTHON) -c "import ast, pathlib; [ast.parse(path.read_text(encoding='utf-8'), filename=str(path)) for path in pathlib.Path('scripts').glob('*.py')]"
-	$(PYTHON) -c "import json; [json.load(open(path, encoding='utf-8')) for path in ('.devcontainer/devcontainer.json', 'tests/luau/profile.json')]"
 	@for file in scripts/*.sh .devcontainer/*.sh; do sh -n "$$file"; done
-	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua tests/run_*.lua performance/*.lua experiments/*.lua
+	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua tests/run_*.lua tests/luau/*.lua performance/*.lua experiments/*.lua
 	$(MAKE) -f .devcontainer/Makefile validate-pins

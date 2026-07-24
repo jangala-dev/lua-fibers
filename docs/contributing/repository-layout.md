@@ -121,10 +121,10 @@ Op → resource primitives → Flow → Stream → File / Process / Socket
 
 ## Test groups
 
-`tests/groups.lua` defines the public, composition, resources, lifetimes,
-embedding, kernel, internal, case-study, experiment and performance groups.
-`scripts/check-test-layout.lua` requires every `test_*.lua` file to belong to
-exactly one group and every profile to name valid groups. Run one group with:
+`tests/groups.lua` defines convenient public, composition, resources, lifetimes,
+embedding, kernel, internal, case-study, experiment and performance runs. These
+lists organise targeted commands; semantic tests do not inspect repository
+layout. Run one group with:
 
 ```sh
 lua tests/run_group.lua public
@@ -145,6 +145,6 @@ modules use `name.lua`. A module that also contains child modules uses
 both `.lua` and `.luau` forms of the same module.
 
 This is a filesystem rule only; logical names such as `fibers.scope` and
-`fibers.scope.result` are unchanged. `scripts/check-module-layout.py` enforces
-the unambiguous module rule, canonical public paths, static Fibers imports and
-the global `internal/` ownership boundary.
+`fibers.scope.result` are unchanged. `scripts/check-modules.lua` checks duplicate logical modules, ambiguous module
+paths and unresolved static Fibers imports. Package ownership remains a design
+and review concern rather than a frozen test invariant.

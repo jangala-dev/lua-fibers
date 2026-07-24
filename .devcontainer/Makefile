@@ -77,7 +77,6 @@ system:
 		ninja-build \
 		patch \
 		pkg-config \
-		python3 \
 		texlive-binaries \
 		tar \
 		unzip \

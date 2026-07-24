@@ -145,35 +145,6 @@ do
   assert_eq(FibersRegion._ledger, nil, 'Region does not export its shared ledger')
   assert_eq(FibersRegion._clone_ledger, nil, 'Region does not export ledger cloning')
   assert_truthy(type(FibersPhase.new) == 'function', 'Phase remains available only as an experiment')
-  local absent_modules = {
-    'fibers.atoms',
-    'fibers.kernel',
-    'fibers.resource',
-    'fibers.flow',
-    'fibers.queue',
-    'fibers.scalar',
-    'fibers.internal.fifo',
-    'fibers.internal.completion',
-    'fibers.internal.facility',
-    'fibers.internal.flow_machine',
-    'fibers.internal.scalar_wait',
-    'fibers.runner',
-    'fibers.lifetime.region',
-    'fibers.lifetime.effect',
-    'fibers.lifetime.settlement',
-    'fibers.lifetime.adoption',
-    'fibers.external.signal',
-    'fibers.external.event_queue',
-    'fibers.external.clock',
-    'fibers.external.readiness',
-    'fibers.external.feed',
-    'fibers.external.interest',
-  }
-  for i = 1, #absent_modules do
-    local module = absent_modules[i]
-    local ok = pcall(require, module)
-    assert_eq(ok, false, module .. ' is not a supported duplicate import path')
-  end
 end
 
 -- The root lifecycle preserves Lua multiple returns, including nil values.

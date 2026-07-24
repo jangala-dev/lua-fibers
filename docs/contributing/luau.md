@@ -12,7 +12,7 @@ generates a target-specific tree under `build/luau/` by:
 2. copying the canonical unambiguous module hierarchy as `.luau` files;
 3. rewriting `fibers` to the alias root `@fibers` and submodules such as
    `fibers.runtime` to `@fibers/runtime`;
-4. writing a `.luaurc` and deterministic manifest;
+4. writing a `.luaurc`;
 5. generating the Luau conformance smoke programme and the named portable or
    reference test profile.
 
@@ -34,7 +34,7 @@ For example, `fibers.scope` is stored at `src/fibers/scope/init.lua`, while
 `fibers.scope.result` is stored at `src/fibers/scope/result.lua`.  Stock Lua
 continues to load both through the normal `?.lua` and `?/init.lua` search
 patterns, and Luau receives the same hierarchy without a target-specific move.
-`make check-layout` enforces the rule.
+`make check-modules` checks the rule and resolves static Fibers imports.
 
 ## Current commands
 
@@ -50,7 +50,7 @@ make test-luau
 
 The portable build is written to `build/luau/`; the reference build is written
 to `build/luau-reference/`. Separate trees avoid module-cache coupling and make
-the selected default evaluator explicit in each manifest.
+the selected default evaluator explicit in each generated runtime.
 
 `check-luau` runs `luau-analyze` over the generated smoke, portable and
 reference-profile entry points. `test-luau` runs all three with the standalone
@@ -77,7 +77,7 @@ are found.
 
 ### 2. Portable and reference test profiles
 
-`tests/luau/profile.json` classifies every `test_*.lua` file and defines the
+`tests/luau/profile.lua` classifies every `test_*.lua` file and defines the
 `portable` profile. The profile contains 81 tests covering public
 semantics, composition, resources, Effect/Region/Scope lifetimes, ManualHost
 embedding, in-memory I/O, both semantic evaluators, kernel laws, portable
@@ -108,8 +108,7 @@ Once the portable suite passes, decide whether the supported artefact is:
 - both, with the source tree used for analysis and the bundle used for
   distribution.
 
-The build manifest should remain deterministic and record every source module
-and digest in either case.
+The generated source tree should remain deterministic and reproducible from the stock Lua sources.
 
 ### 4. Host integrations
 

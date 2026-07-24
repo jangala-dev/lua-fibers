@@ -37,7 +37,7 @@ make test-luau-reference
 make test-luau
 ```
 
-The portable profile is declared in `tests/luau/profile.json`; every test file
+The portable profile is declared in `tests/luau/profile.lua`; every test file
 has an explicit portability classification. The reference profile inherits
 the portable profile and reruns its semantic surface with the repository
 reference evaluator, excluding implementation-specific ledger and performance
@@ -47,11 +47,10 @@ checks. `make test-luau` and `make test-matrix` run both profiles. See
 
 `make check` runs the repository-wide static checks:
 
-- Python, shell and Lua script syntax;
+- shell and Lua script syntax;
 - StyLua formatting;
 - local Markdown links;
-- canonical module ownership and resolvable static Fibers imports;
-- complete, non-duplicated stock-Lua test grouping;
+- unambiguous modules and resolvable static Fibers imports;
 - portable and reference Luau generation, including full test classification.
 
 The build-only `make check-luau-build` target validates both generated Luau
