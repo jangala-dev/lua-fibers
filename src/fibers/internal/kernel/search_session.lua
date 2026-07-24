@@ -19,16 +19,17 @@ local STATE_ARENAS = {
   'intents',
   'intent_by_id',
   'effects',
-  'negative_checks',
-  'fallback_interests',
+  'preferred_states',
   'excluded_roots',
 }
 local SESSION_ARENAS = {
+  'stack_arena',
   '_arena_root_segments',
   '_arena_root_ids',
   '_arena_participants',
   '_arena_commit_requests',
   '_arena_commit_outcomes',
+  'support_eliminations',
 }
 
 local native_table_clear = table.clear
@@ -110,10 +111,9 @@ function Session.new(runtime, requests, focus_id, component, search_limit)
   state.intents = arena(state, 'intents')
   state.intent_by_id = arena(state, 'intent_by_id')
   state.effects = arena(state, 'effects')
-  state.negative_checks = arena(state, 'negative_checks')
-  state.fallback_interests = arena(state, 'fallback_interests')
   state.excluded_roots = arena(state, 'excluded_roots')
-  state.used_fallback = false
+  state.absence_gate = nil
+  state.dependency_frontier = nil
   state.next_task, state.next_group, state.next_segment, state.next_intent = 0, 0, 0, 0
   state.next_machine_serial, state.search_steps, state.search_depth = 0, 0, 1
   state.search_limit = search_limit or runtime.search_limit
@@ -168,11 +168,7 @@ function Session:set_hit(
   observations,
   writes,
   effects,
-  negative_guard,
-  epoch,
-  pending_generation,
-  negative_checks,
-  fallback_interests,
+  absence_gate,
   search_steps
 )
   self._fibers_session_hit = true
@@ -184,11 +180,7 @@ function Session:set_hit(
   self.observations = observations
   self.writes = writes
   self.effects = effects
-  self.negative_guard = negative_guard
-  self.epoch = epoch
-  self.pending_generation = pending_generation
-  self.negative_checks = negative_checks
-  self.fallback_interests = fallback_interests
+  self.absence_gate = absence_gate
   self.search_steps = search_steps
   self.prepared_effects = nil
   return self
@@ -237,11 +229,7 @@ function Session:clear_hit()
   self.observations = nil
   self.writes = nil
   self.effects = nil
-  self.negative_guard = nil
-  self.epoch = nil
-  self.pending_generation = nil
-  self.negative_checks = nil
-  self.fallback_interests = nil
+  self.absence_gate = nil
   self.search_steps = nil
   self.prepared_effects = nil
 end
@@ -295,9 +283,6 @@ function Session:discard(reason)
   self.finished = true
   self.disposed = true
   self.stack = nil
-  if self.stack_arena then
-    clear_table(self.stack_arena)
-  end
   self.result_candidate = nil
   self.result_certificate = nil
   self.result_kind = nil

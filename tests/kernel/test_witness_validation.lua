@@ -27,7 +27,7 @@ do
   rt:_resume_fiber(receiver)
   local receiver_id = rt.pending[1].id
   local fallback = assert(rt:_find_candidate(receiver_id))
-  assert(fallback.negative_guard == true)
+  assert(fallback.absence_gate ~= nil)
 
   local producer = rt:spawn_raw(function()
     rt:perform(net:put_op('p', 'primary'))
@@ -39,7 +39,7 @@ do
   assert(rt:_commit_hit(fallback) == false)
 
   local refreshed = assert(rt:_find_candidate(receiver_id))
-  assert(refreshed.negative_guard == false)
+  assert(refreshed.absence_gate == nil)
   assert(rt:_commit_hit(refreshed))
   assert(receiver_result == 'primary')
 end
@@ -56,7 +56,7 @@ do
   rt:_resume_fiber(reserver)
   local reserver_id = rt.pending[1].id
   local fallback = assert(rt:_find_candidate(reserver_id))
-  assert(fallback.negative_guard == true)
+  assert(fallback.absence_gate ~= nil)
 
   local canceller = rt:spawn_raw(function()
     rt:perform(cal:cancel_op(1))
@@ -67,9 +67,40 @@ do
   assert(rt:_commit_hit(fallback) == false)
 
   local refreshed = assert(rt:_find_candidate(reserver_id))
-  assert(refreshed.negative_guard == false)
+  assert(refreshed.absence_gate == nil)
   assert(rt:_commit_hit(refreshed))
   assert(result == 'primary')
+end
+
+-- Binary relation witnesses are centrally rechecked. Altering one relation
+-- in an odd-cycle witness removes the contradiction and must be rejected.
+do
+  local Domain = require('fibers.internal.kernel.domain')
+  local Rendezvous = require('fibers.resource.rendezvous')
+  local count, edges, requests, ids = 5, {}, {}, {}
+  for i = 1, count do
+    edges[i] = Rendezvous.new('binary-witness-edge-' .. tostring(i))
+  end
+  for i = 1, count do
+    local previous = ((i - 2) % count) + 1
+    requests[i] = {
+      id = i,
+      op = Op.choice(
+        Op.all({ edges[i]:put_op(i), edges[previous]:put_op(i) }),
+        Op.all({ edges[i]:get_op(), edges[previous]:get_op() })
+      ),
+    }
+    ids[i] = i
+  end
+  local component = { ids = ids }
+  local witness = assert(Domain.exact_binary_relation_failure(requests, component))
+  assert(Domain.verify_exact_binary_relation_failure(requests, component, witness))
+  local generic = assert(Domain.exact_negative_failure(requests, component))
+  assert(generic.kind == witness.kind)
+  assert(Domain.verify_exact_negative_failure(requests, component, generic))
+  assert(not Domain.verify_exact_negative_failure(requests, component, { kind = 'unknown' }))
+  witness.relations[1].parity = 1 - witness.relations[1].parity
+  assert(not Domain.verify_exact_binary_relation_failure(requests, component, witness))
 end
 
 -- Trusted witness programmes have one cursor form; eager enumerate is not accepted.

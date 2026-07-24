@@ -48,6 +48,8 @@ end
 -- Cached option metadata -------------------------------------------------
 
 local metadata_cache = setmetatable({}, { __mode = 'k' })
+local active_metadata_cache = setmetatable({}, { __mode = 'k' })
+local preferred_metadata_cache = setmetatable({}, { __mode = 'k' })
 local dependency_hint_cache = setmetatable({}, { __mode = 'k' })
 
 local function empty_metadata()
@@ -58,6 +60,7 @@ local function empty_metadata()
     node_kinds = {},
     nodes = 0,
     dynamic = false,
+    active_dynamic = false,
     external = false,
   }
 end
@@ -101,6 +104,7 @@ local function metadata_merge(dst, src)
     return dst
   end
   dst.dynamic = dst.dynamic or src.dynamic
+  dst.active_dynamic = dst.active_dynamic or src.active_dynamic
   dst.external = dst.external or src.external
   dst.nodes = (dst.nodes or 0) + (src.nodes or 0)
   for kind, count in pairs(src.node_kinds or {}) do
@@ -213,6 +217,7 @@ local function metadata_from_hint(hint, seen)
   end
   local out = empty_metadata()
   out.dynamic = hint.dynamic == true
+  out.active_dynamic = out.dynamic
   out.external = hint.external == true
   for resource, roles in pairs(hint.exchanges or {}) do
     local target = {}
@@ -247,12 +252,21 @@ local function metadata_from_hint(hint, seen)
   return out
 end
 
-describe = function(op, seen)
+local metadata_caches = {
+  full = metadata_cache,
+  active = active_metadata_cache,
+  preferred = preferred_metadata_cache,
+}
+
+local describe_mode
+
+describe_mode = function(op, seen, mode)
   if not op then
     return empty_metadata()
   end
+  local cache = metadata_caches[mode]
   local cache_key = op.program or op
-  local cached = metadata_cache[cache_key]
+  local cached = cache[cache_key]
   if cached then
     return cached
   end
@@ -260,6 +274,7 @@ describe = function(op, seen)
   if seen[op] then
     local recursive = empty_metadata()
     recursive.dynamic = true
+    recursive.active_dynamic = true
     return recursive
   end
   seen[op] = true
@@ -272,38 +287,65 @@ describe = function(op, seen)
     primitive_metadata(op, out)
   elseif kind == 'choice' then
     for i = 1, #(op.choices or {}) do
-      metadata_merge(out, describe(op.choices[i], seen))
+      metadata_merge(out, describe_mode(op.choices[i], seen, mode))
     end
   elseif kind == 'product' then
     for i = 1, #(op.lanes or {}) do
-      metadata_merge(out, describe(op.lanes[i], seen))
+      metadata_merge(out, describe_mode(op.lanes[i], seen, mode))
     end
   elseif kind == 'or_else' then
-    metadata_merge(out, describe(op.p, seen))
-    metadata_merge(out, describe(op.q, seen))
+    metadata_merge(out, describe_mode(op.p, seen, mode))
+    if mode ~= 'preferred' then
+      metadata_merge(out, describe_mode(op.q, seen, mode))
+    end
   elseif kind == 'annotated' then
-    metadata_merge(out, describe(op.p, seen))
+    metadata_merge(out, describe_mode(op.p, seen, mode))
   elseif kind == 'guard' then
     if op.continuation_footprint ~= nil then
       metadata_merge(out, metadata_from_hint(op.continuation_footprint, seen))
     else
       out.dynamic = true
+      out.active_dynamic = true
     end
   elseif kind == 'and_then' then
-    metadata_merge(out, describe(op.p, seen))
-    if not op.derived_map then
+    metadata_merge(out, describe_mode(op.p, seen, mode))
+    if mode == 'full' and not op.derived_map then
+      local prefix_active_dynamic = describe_mode(op.p, {}, 'active').dynamic == true
       if op.continuation_footprint ~= nil then
         metadata_merge(out, metadata_from_hint(op.continuation_footprint, seen))
       else
         out.dynamic = true
       end
+      -- The continuation belongs to the full declaration but is dormant until
+      -- the prefix yields.
+      out.active_dynamic = prefix_active_dynamic
     end
   end
 
   seen[op] = nil
   out.analysable = not out.dynamic
-  metadata_cache[cache_key] = out
+  cache[cache_key] = out
   return out
+end
+
+describe = function(op, seen)
+  return describe_mode(op, seen, 'full')
+end
+
+local function describe_active(op, seen)
+  return describe_mode(op, seen, 'active')
+end
+
+local function describe_preferred(op, seen)
+  return describe_mode(op, seen, 'preferred')
+end
+
+function M.preferred_metadata(op)
+  return describe_preferred(op, {})
+end
+
+function M.has_or_else(op)
+  return op and op._contains_or_else == true or false
 end
 
 function M.metadata_hint(hint)
@@ -315,7 +357,7 @@ function M.metadata_covers(declared, actual)
   if declared.dynamic then
     return true
   end
-  if actual.dynamic then
+  if M.active_dynamic(actual) then
     return false, 'dynamic continuation'
   end
   if actual.external and not declared.external then
@@ -371,7 +413,23 @@ function M.metadata_covers(declared, actual)
 end
 
 function M.metadata(op)
-  return describe(op)
+  local metadata = describe(op)
+  if metadata.active == nil then
+    metadata.active = describe_active(op, {})
+  end
+  return metadata
+end
+
+function M.active_metadata(value)
+  if value and value.kind then
+    return describe_active(value, {})
+  end
+  return value and value.active or value
+end
+
+function M.active_dynamic(metadata)
+  local active = M.active_metadata(metadata)
+  return active and active.dynamic == true
 end
 
 local function opposite_role(role)
@@ -399,7 +457,7 @@ end
 
 function M.supply_relation(metadata, intent)
   metadata = metadata or empty_metadata()
-  if metadata.dynamic then
+  if M.active_dynamic(metadata) then
     return M.SUPPLY_OPAQUE, 'dynamic'
   end
   if not intent then
@@ -425,7 +483,7 @@ end
 
 function M.metadata_may_supply(metadata, intent)
   metadata = metadata or empty_metadata()
-  if metadata.dynamic then
+  if M.active_dynamic(metadata) then
     return true, 'dynamic'
   end
   if not intent then
@@ -450,7 +508,7 @@ function M.metadata_may_supply(metadata, intent)
 end
 
 function M.metadata_may_supply_any(metadata, intents)
-  if metadata and metadata.dynamic then
+  if M.active_dynamic(metadata) then
     return true, 'dynamic'
   end
   for i = 1, #(intents or {}) do
@@ -463,7 +521,7 @@ function M.metadata_may_supply_any(metadata, intents)
 end
 
 function M.supply_score(metadata, intents)
-  if metadata and metadata.dynamic then
+  if M.active_dynamic(metadata) then
     return math.max(1, #(intents or {})), M.SUPPLY_OPAQUE, 'dynamic'
   end
   local score, first_reason = 0, nil

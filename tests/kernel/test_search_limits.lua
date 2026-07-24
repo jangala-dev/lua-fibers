@@ -34,8 +34,10 @@ end
 rejects({ search_total_limit = 0 }, 'search_total_limit')
 rejects({ search_trail_limit = -1 }, 'search_trail_limit')
 rejects({ search_depth_limit = 0 }, 'search_depth_limit')
+rejects({ cycle_work_limit = 0 }, 'cycle_work_limit')
+rejects({ cycle_focus_limit = 0 }, 'cycle_focus_limit')
 
-local machine = os.getenv('FIBERS_MACHINE') or 'ledger'
+local machine = Runtime.new().machine_name
 if machine == 'reference' then
   print('tests/kernel/test_search_limits.lua: ok')
   return
@@ -96,6 +98,37 @@ rt, status = atomic_dispatch({
 eq(status.tag, 'found', 'generous hard limits should not alter a valid search')
 eq(rt:run().tag, 'idle')
 
+-- Aggregate cycle work is shared across every focus attempted by one driver
+-- call. It is a soft resumable boundary, unlike the per-session hard limits.
+rt, status = atomic_dispatch({ cycle_work_limit = 5 }, 8)
+eq(status.tag, 'pending')
+eq(status.kind, 'budget')
+eq(status.reason, 'cycle_work_limit')
+if next(rt._search_sessions) == nil then
+  error('cycle work limit should retain resumable session state', 2)
+end
+for _ = 1, 100 do
+  status = rt:run()
+  if status.tag == 'found' then
+    break
+  end
+end
+eq(status.tag, 'found', 'cycle-limited search should resume across driver calls')
+
+-- A focus limit bounds broad all-focus scans even when each individual focus
+-- would otherwise begin its own proof session.
+local focus_rt = Runtime.new({ machine = 'ledger', cycle_focus_limit = 2, plan_reuse = false })
+for i = 1, 8 do
+  local blocked = Rendezvous.new('cycle-focus-' .. tostring(i))
+  focus_rt:spawn_raw(function()
+    focus_rt:perform(blocked:get_op())
+  end, 'cycle-focus-' .. tostring(i))
+end
+local focus_status = focus_rt:run()
+eq(focus_status.tag, 'pending')
+eq(focus_status.kind, 'budget')
+eq(focus_status.reason, 'cycle_focus_limit')
+
 -- Ordinary bounded stepping remains resumable and identifies the soft quantum
 -- rather than presenting it as a hard safety limit.
 local bounded = Runtime.new({ machine = 'ledger', plan_reuse = false })
@@ -116,6 +149,53 @@ end
 bounded:run()
 if result ~= 'a' and result ~= 'b' then
   error('bounded search did not resume to a valid result', 2)
+end
+
+-- A locally certified fallback must not commit while another eligible focus is
+-- still Unknown. The removed preferred-only driver phase formerly enforced
+-- this globally; the ordinary driver now applies the same rule when selecting
+-- negative candidates.
+do
+  local unknown_rt = Runtime.new({
+    machine = 'ledger',
+    search_limit = 10,
+    plan_reuse = false,
+    instrumentation = true,
+  })
+  local fallback_result
+  unknown_rt:spawn_raw(function()
+    fallback_result = unknown_rt:perform(Op.never():or_else(Op.always('fallback')))
+  end, 'unknown-blocks-fallback')
+
+  local worker_count, workers = 8, {}
+  for worker = 1, worker_count do
+    workers[worker] = Rendezvous.new('unknown-worker-' .. tostring(worker))
+    local index = worker
+    unknown_rt:spawn_raw(function()
+      unknown_rt:perform(workers[index]:get_op())
+    end, 'unknown-worker-' .. tostring(worker))
+  end
+  unknown_rt:spawn_raw(function()
+    local jobs = {}
+    for job = 1, worker_count do
+      local choices = {}
+      for worker = 1, worker_count do
+        choices[worker] = workers[worker]:put_op(job)
+      end
+      jobs[job] = Op.choice(choices)
+    end
+    unknown_rt:perform(Op.all(jobs))
+  end, 'unknown-positive-focus')
+
+  local unknown_status = unknown_rt:run()
+  eq(unknown_status.tag, 'pending')
+  eq(unknown_status.kind, 'budget')
+  eq(unknown_status.reason, 'search_quantum')
+  eq(fallback_result, nil, 'Unknown positive work must keep fallback uncommitted')
+  local snapshot = unknown_rt:instrumentation_snapshot()
+  if (snapshot.counters.fallback_transitions or 0) == 0 then
+    error('test did not construct a fallback candidate', 2)
+  end
 end
 
 print('tests/kernel/test_search_limits.lua: ok')

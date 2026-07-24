@@ -9,6 +9,12 @@ local IR = require('fibers.internal.kernel.ir')
 
 local M = {}
 
+local LOCAL = 'local-absence'
+local DURABLE = 'durable-retry'
+
+M.LOCAL = LOCAL
+M.DURABLE = DURABLE
+
 local function identity(fact)
   if fact.identity ~= nil then
     return fact.identity
@@ -44,8 +50,28 @@ local function add_unique(certificate, fact)
   return true
 end
 
-function M.new()
-  return { facts = {} }
+function M.new(scope)
+  scope = scope or LOCAL
+  if scope ~= LOCAL and scope ~= DURABLE then
+    error('unknown certificate scope: ' .. tostring(scope), 2)
+  end
+  return { scope = scope, facts = {} }
+end
+
+function M.local_absence()
+  return M.new(LOCAL)
+end
+
+function M.durable_retry()
+  return M.new(DURABLE)
+end
+
+function M.is_local(certificate)
+  return certificate ~= nil and (certificate.scope or LOCAL) == LOCAL
+end
+
+function M.is_durable(certificate)
+  return certificate ~= nil and certificate.scope == DURABLE
 end
 
 function M.add(certificate, kind, fields)
@@ -60,7 +86,8 @@ function M.copy(certificate)
   if not certificate then
     return nil
   end
-  local out = M.new()
+  local out = M.new(certificate.scope or LOCAL)
+  out.failure_task_id = certificate.failure_task_id
   for i = 1, #(certificate.facts or {}) do
     out.facts[i] = certificate.facts[i]
   end
@@ -71,7 +98,20 @@ function M.merge(dst, src)
   if not src then
     return dst
   end
-  dst = dst or M.new()
+  dst = dst or M.new(src.scope or LOCAL)
+  if (dst.scope or LOCAL) ~= (src.scope or LOCAL) then
+    -- A mixture of branch-local and durable facts is branch-local until the
+    -- runtime explicitly captures it against the managed world.
+    dst.scope = LOCAL
+  end
+  local failure_task_id = src.failure_task_id
+  if failure_task_id ~= nil then
+    if dst.failure_task_id == nil then
+      dst.failure_task_id = failure_task_id
+    elseif dst.failure_task_id ~= failure_task_id then
+      dst.failure_task_id = false
+    end
+  end
   for i = 1, #(src.facts or {}) do
     add_unique(dst, src.facts[i])
   end
@@ -103,14 +143,71 @@ function M.values(certificate, kind)
   return out
 end
 
-function M.activation_label(certificate)
+function M.mark_failure(certificate, task_id)
+  certificate = certificate or M.local_absence()
+  if certificate.failure_task_id == nil then
+    certificate.failure_task_id = task_id
+  elseif certificate.failure_task_id ~= task_id then
+    certificate.failure_task_id = false
+  end
+  return certificate
+end
+
+function M.local_failure_task(certificate)
+  local task_id = certificate and certificate.failure_task_id or nil
+  if not task_id then
+    return nil
+  end
+  for i = 1, #((certificate and certificate.facts) or {}) do
+    if certificate.facts[i].kind ~= 'activation' then
+      return nil
+    end
+  end
+  return task_id
+end
+
+function M.gate_epoch(certificate)
+  -- Gate identity is the canonical epoch of the atomic observations which
+  -- opened a fallback.  It is independent of fact order and certificate table
+  -- identity, but changes when a relevant negative observation changes.
   local keys = M.values(certificate, 'activation')
   table.sort(keys)
   return #keys > 0 and table.concat(keys, '|') or '-'
 end
 
+function M.new_absence_gate()
+  return { checks = {} }
+end
+
+function M.stamp_absence_gate(gate, runtime)
+  if gate then
+    gate.epoch = runtime.epoch
+    gate.pending_generation = runtime.pending_generation
+  end
+  return gate
+end
+
+function M.validate_absence_gate(gate, runtime)
+  if not gate then
+    return true
+  end
+  if runtime.epoch ~= gate.epoch then
+    return false, 'stale-negative-epoch'
+  end
+  if runtime.pending_generation ~= gate.pending_generation then
+    return false, 'stale-negative-frontier'
+  end
+  for i = 1, #(gate.checks or {}) do
+    local check = gate.checks[i]
+    if check and type(check.validate) == 'function' and not check.validate(runtime, check) then
+      return false, 'stale-negative-check'
+    end
+  end
+  return true
+end
+
 function M.from_intents(intents)
-  local certificate = M.new()
+  local certificate = M.local_absence()
   local activation = {}
   for i = 1, #(intents or {}) do
     local intent = intents[i]
@@ -164,7 +261,10 @@ function M.capture(runtime, requests, component, source)
     return nil, 'dependency-index-disabled'
   end
 
-  local certificate = M.copy(source) or M.new()
+  local certificate = M.durable_retry()
+  for i = 1, #((source and source.facts) or {}) do
+    add_unique(certificate, source.facts[i])
+  end
   M.add(certificate, 'policy', {
     machine = runtime.machine_name,
     branch = runtime.branch_policy,
@@ -259,6 +359,9 @@ end
 function M.valid(certificate, runtime)
   if not certificate then
     return false, 'missing'
+  end
+  if not M.is_durable(certificate) then
+    return false, 'local-absence'
   end
   local membership_reason
   for i = 1, #(certificate.facts or {}) do

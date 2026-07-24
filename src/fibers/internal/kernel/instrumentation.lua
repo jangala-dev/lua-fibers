@@ -26,9 +26,21 @@ local ZERO_FIELDS = {
   'choice_branches',
   'choice_alternatives_pruned',
   'opaque_supplier_revelations',
+  'dynamic_dependency_refinements',
+  'matching_feasibility_failures',
+  'binary_relation_failures',
+  'matching_guard_revelations',
+  'exact_negative_cache_hits',
+  'exchange_support_eliminations_learned',
+  'exchange_support_eliminations_pruned',
   'supplier_domain_branches',
-  'preferred_branches',
-  'fallback_branches',
+  'preferred_entries',
+  'preferred_states_opened',
+  'preferred_state_evidence',
+  'preferred_states_closed',
+  'fallback_transitions',
+  'fallback_dependency_transitions',
+  'product_support_closures',
   'witness_alternatives',
   'claim_branches',
   'claim_all_branches',
@@ -60,58 +72,6 @@ local ZERO_FIELDS = {
   'symmetry_exchange_pruned',
 }
 
-local SUM_FIELDS = {
-  'search_calls',
-  'task_steps',
-  'branches',
-  'rollbacks',
-  'rollback_entries',
-  'trail_entries',
-  'trail_set_coalesced',
-  'trail_push_coalesced',
-  'option_nodes',
-  'option_dynamic_roots',
-  'option_external_roots',
-  'dependency_locations',
-  'dependency_resources',
-  'dependency_exchanges',
-  'intent_pairs_scanned',
-  'compatible_pairs',
-  'choice_branches',
-  'choice_alternatives_pruned',
-  'opaque_supplier_revelations',
-  'supplier_domain_branches',
-  'preferred_branches',
-  'fallback_branches',
-  'witness_alternatives',
-  'claim_branches',
-  'claim_all_branches',
-  'claim_closure_branches',
-  'claim_closure_successes',
-  'claim_closure_failures',
-  'claim_single_branches',
-  'claim_groups_scanned',
-  'machine_probes',
-  'machine_steps',
-  'recruit_branches',
-  'exclude_branches',
-  'footprint_checks',
-  'footprint_matches',
-  'footprint_dynamic_matches',
-  'footprint_exchange_matches',
-  'footprint_location_matches',
-  'exchange_domains',
-  'zero_exchange_domains',
-  'forced_exchange_opportunities',
-  'forced_exchanges',
-  'forced_claim_opportunities',
-  'forced_claims',
-  'normalisation_rounds',
-  'deterministic_steps',
-  'recruitment_candidates',
-  'symmetry_exchange_pruned',
-}
-
 local MAX_FIELDS = {
   claim_group_size = 'max_claim_group',
   recruitment_best_score = 'recruitment_best_score',
@@ -126,6 +86,26 @@ local MAX_FIELDS = {
   segments = 'max_segments',
   trail_entries_live = 'max_trail',
 }
+
+local SUM_FIELDS = {
+  'option_nodes',
+  'option_dynamic_roots',
+  'option_external_roots',
+  'dependency_locations',
+  'dependency_resources',
+  'dependency_exchanges',
+}
+
+local NOT_SUMMED = {}
+for _, field in pairs(MAX_FIELDS) do
+  NOT_SUMMED[field] = true
+end
+for i = 1, #ZERO_FIELDS do
+  local field = ZERO_FIELDS[i]
+  if not NOT_SUMMED[field] then
+    SUM_FIELDS[#SUM_FIELDS + 1] = field
+  end
+end
 
 local HISTOGRAM_FIELDS = {
   component_size_per_plan = 'component_size',

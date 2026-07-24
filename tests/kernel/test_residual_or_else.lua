@@ -14,6 +14,7 @@ package.path = table.concat({
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local machine = Runtime.new().machine_name
 local Rendezvous = require('fibers.resource.rendezvous')
 local Signal = require('fibers.external.signal')
 
@@ -75,6 +76,35 @@ do
   assert_status(st, 'found')
   assert_eq(values[1], 'fallback')
   assert_eq(constructed, 1)
+end
+
+-- Promoted or_else occurrences retain one watched preferred state. Individual
+-- branch failures report evidence before final primary closure activates the
+-- fallback.
+if machine == 'ledger' then
+  local rt = Runtime.new({ instrumentation = true })
+  local got
+  rt:spawn_raw(function()
+    got = rt:perform(Op.choice(Op.never(), Op.never()):or_else(Op.always('fallback')))
+  end, 'watched-preferred-state')
+  assert_status(rt:run(), 'found')
+  assert_eq(got, 'fallback')
+  local counters = rt:instrumentation_snapshot().counters
+  assert_truthy((counters.preferred_states_opened or 0) >= 1, 'preferred state opened')
+  assert_truthy(
+    (counters.preferred_states_closed or 0) >= 1
+      and counters.preferred_states_closed <= counters.preferred_states_opened,
+    'preferred states close at most once per promoted occurrence'
+  )
+  assert_truthy(
+    (counters.preferred_state_evidence or 0) >= 3,
+    'choice failures and final closure reported into preferred state'
+  )
+  assert_eq(
+    counters.fallback_dependency_transitions or 0,
+    counters.preferred_states_closed or 0,
+    'each closed preferred occurrence performs one dependency transition to fallback'
+  )
 end
 
 -- Future waitability of primary does not suppress fallback, and primary wait is discarded.
@@ -170,6 +200,108 @@ do
   assert_status(st, 'found')
   assert_eq(got, 'payload')
   assert_eq(sent, true)
+end
+
+-- Batched fallbacks should prove preferred absence in phase-local components,
+-- then perform one normal fallback search.  Re-running the complete negative
+-- transaction once per fallback producer gives quadratic growth.
+-- Nested fallbacks are occurrence-local phases, not a Cartesian choice of
+-- fallback depths across product lanes. Once a preferred occurrence is closed,
+-- the fallback is installed in the parent proof node before another sibling
+-- fallback is opened.
+if machine == 'ledger' then
+  local count, levels = 12, 3
+  local runtime = Runtime.new({ machine = 'ledger', instrumentation = true })
+  local ready, values = {}, nil
+  runtime:spawn_raw(function()
+    local lanes = {}
+    for i = 1, count do
+      local operation
+      for level = 1, levels do
+        local absent = Rendezvous.new('nested-fallback-absent-' .. tostring(i) .. '-' .. tostring(level))
+        operation = operation and operation:or_else(absent:get_op()) or absent:get_op()
+      end
+      ready[i] = Rendezvous.new('nested-fallback-ready-' .. tostring(i))
+      lanes[i] = operation:or_else(ready[i]:get_op())
+    end
+    values = runtime:perform(Op.all(lanes))
+  end, 'nested-fallback-consumer')
+  for i = 1, count do
+    local value = i
+    runtime:spawn_raw(function()
+      runtime:perform(ready[value]:put_op(value))
+    end, 'nested-fallback-producer-' .. tostring(i))
+  end
+  assert_eq(runtime:run().tag, 'found')
+  assert_eq(runtime:run().tag, 'idle')
+  assert_truthy(values ~= nil, 'nested fallback did not complete')
+  local counters = runtime:instrumentation_snapshot().counters
+  assert_truthy(
+    (counters.search_calls or math.huge) < 300,
+    'nested fallback regressed to fallback-depth enumeration'
+  )
+end
+
+-- Interacting products must preserve sibling supply while allowing an exact
+-- preferred exchange with no admissible sibling or pending supplier to close
+-- locally.  Each closure is trailed independently so sibling fallback phases do
+-- not form a Cartesian search.
+if machine == 'ledger' then
+  local count, levels = 16, 2
+  local runtime = Runtime.new({ machine = 'ledger', instrumentation = true })
+  local values
+  runtime:spawn_raw(function()
+    local lanes = {}
+    for i = 1, count do
+      local operation
+      for level = 1, levels do
+        local absent = Rendezvous.new('tensor-fallback-absent-' .. tostring(i) .. '-' .. tostring(level))
+        operation = operation and operation:or_else(absent:get_op()) or absent:get_op()
+      end
+      local ready = Rendezvous.new('tensor-fallback-ready-' .. tostring(i))
+      lanes[#lanes + 1] = operation:or_else(ready:get_op())
+      lanes[#lanes + 1] = ready:put_op(i)
+    end
+    values = runtime:perform(Op.tensor(lanes))
+  end, 'tensor-fallback-root')
+  assert_eq(runtime:run().tag, 'found')
+  assert_eq(runtime:run().tag, 'idle')
+  assert_truthy(values ~= nil, 'interacting tensor fallback did not complete')
+  local counters = runtime:instrumentation_snapshot().counters
+  assert_truthy(
+    (counters.search_calls or math.huge) < 250,
+    'interacting tensor fallback regressed to sibling-phase enumeration'
+  )
+  assert_truthy(
+    (counters.product_support_closures or 0) >= count * levels,
+    'product support closures were not reported'
+  )
+end
+
+if machine == 'ledger' then
+  local count = 32
+  local runtime = Runtime.new({ machine = 'ledger', instrumentation = true })
+  local ready, values = {}, nil
+  runtime:spawn_raw(function()
+    local lanes = {}
+    for i = 1, count do
+      local absent = Rendezvous.new('batched-fallback-absent-' .. tostring(i))
+      ready[i] = Rendezvous.new('batched-fallback-ready-' .. tostring(i))
+      lanes[i] = absent:get_op():or_else(ready[i]:get_op())
+    end
+    values = runtime:perform(Op.all(lanes))
+  end, 'batched-fallback-consumer')
+  for i = 1, count do
+    local value = i
+    runtime:spawn_raw(function()
+      runtime:perform(ready[value]:put_op(value))
+    end, 'batched-fallback-producer-' .. tostring(i))
+  end
+  assert_eq(runtime:run().tag, 'found')
+  assert_eq(runtime:run().tag, 'idle')
+  assert_truthy(values ~= nil, 'batched fallback did not complete')
+  local counters = runtime:instrumentation_snapshot().counters
+  assert_truthy((counters.search_calls or math.huge) < 300, 'batched fallback regressed to repeated search')
 end
 
 print('tests/test_residual_or_else.lua: focused residual semantics ok')

@@ -198,13 +198,17 @@ local function annotated(inner, post, defeat, symmetry_key)
   if defeat then
     table.insert(defeats, 1, defeat)
   end
-  return op('annotated', {
+  local node = op('annotated', {
     p = base,
     post = post,
     defeats = #defeats > 0 and defeats or nil,
     symmetry_key = symmetry_key,
     _contains_wrap = post ~= nil or contains_wrap(base),
   })
+  if base._contains_or_else == true then
+    node._contains_or_else = true
+  end
+  return node
 end
 
 local EMPTY_ALWAYS, TRUE_ALWAYS, FALSE_ALWAYS
@@ -299,7 +303,14 @@ function Op.choice(...)
   if #xs == 1 then
     return xs[1]
   end
-  return op('choice', { choices = xs })
+  local node = op('choice', { choices = xs })
+  for i = 1, #xs do
+    if xs[i]._contains_or_else == true then
+      node._contains_or_else = true
+      break
+    end
+  end
+  return node
 end
 
 function Op.named_choice(entries)
@@ -321,7 +332,14 @@ local function product(xs, mode, label)
   if #xs == 0 then
     return Op.always(empty_rows())
   end
-  return op('product', { lanes = xs, mode = mode })
+  local node = op('product', { lanes = xs, mode = mode })
+  for i = 1, #xs do
+    if xs[i]._contains_or_else == true then
+      node._contains_or_else = true
+      break
+    end
+  end
+  return node
 end
 
 function Op.all(xs)
@@ -357,27 +375,37 @@ function Op:map(fn)
   -- Canonically and_then followed by always. Retaining the original callback as
   -- metadata lets the interpreter fuse that derived always without adding a
   -- separate grammar node or allocation.
-  return op('and_then', {
+  local node = op('and_then', {
     p = self,
     callback_phase = 'map',
     fn = fn,
     derived_map = true,
     continuation_footprint = false,
   })
+  if self._contains_or_else == true then
+    node._contains_or_else = true
+  end
+  return node
 end
 
 function Op:and_then(fn, opts)
   assert_not_wrapped(self, 'and_then')
-  return op('and_then', {
+  local node = op('and_then', {
     p = self,
     fn = fn,
     callback_phase = 'and_then',
     continuation_footprint = continuation_hint(opts),
   })
+  if self._contains_or_else == true then
+    node._contains_or_else = true
+  end
+  return node
 end
 
 function Op:or_else(q)
-  return op('or_else', { p = self, q = q })
+  local node = op('or_else', { p = self, q = q })
+  node._contains_or_else = true
+  return node
 end
 
 function Op:wrap(fn)

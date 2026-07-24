@@ -13,6 +13,8 @@ local Certificate = require('fibers.internal.kernel.certificate')
 local Trail = require('fibers.internal.kernel.trail')
 local extend_scope_path = Path.scope_child
 
+local FULL_SUPPLIER_OPTIONS = { restrict_requests = false, metadata_mode = 'full' }
+
 local M = {}
 
 local unpack_ = table.unpack or unpack
@@ -144,7 +146,22 @@ local function add_active(state, task_id)
   pushv(state, state.active, task_id)
 end
 
+local function add_active_next(state, task_id)
+  local task = state.tasks[task_id]
+  setv(state, task, 'status', 'active')
+  local position = #state.active + 1
+  pushv(state, state.active, task_id)
+  local head = state.active_head
+  if head < position then
+    local next_id = state.active[head]
+    setv(state, state.active, head, task_id)
+    setv(state, state.active, position, next_id)
+  end
+end
+
 local complete_task
+local eliminate_exchange_support
+local activate_or_else_fallback
 
 local function finish_group_lane(state, task, frame, outcome)
   local group = state.groups[frame.group_id]
@@ -209,27 +226,90 @@ local function verify_continuation_dependencies(state, task, frame, next_op)
   end
 end
 
-local function evaluate_guard_residual(state, task, fn, activation, continuation_footprint)
+local function evaluate_guard_residual(state, task, guard, activation)
   local request = state.roots[task.root_id].request
-  local cached = request.memo[activation]
-  if not cached then
-    cached = state.runtime:_call_in_phase('guard', 'callback_error', fn, {
-      runtime = state.runtime,
-      now = function()
-        return state.runtime:now()
-      end,
-    })
-    if not Op.is_op(cached) then
-      error('guard callback must return an Op', 0)
-    end
-    verify_continuation_dependencies(state, task, {
-      phase = 'guard',
-      activation = activation,
-      continuation_footprint = continuation_footprint,
-    }, cached)
-    request.memo[activation] = cached
+  return state.runtime:_guard_residual(request, guard, activation, true)
+end
+
+local function preferred_state_for(state, task, activation)
+  local key = tostring(task.root_id) .. '@' .. Path.label(activation)
+  local states = state.preferred_states
+  if not states then
+    states = {}
+    state.preferred_states = states
   end
-  return cached
+  local preferred = states[key]
+  if preferred then
+    return preferred
+  end
+
+  preferred = state.session:acquire_record('preferred_state')
+  preferred.phase = 'preferred'
+  preferred.evidence = Certificate.local_absence()
+  preferred.parent = task.preferred_state
+
+  setv(state, states, key, preferred)
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.preferred_states_opened = (profile_plan.preferred_states_opened or 0) + 1
+  end
+  return preferred
+end
+
+local function report_absence(state, preferred, certificate, source, closed)
+  if not preferred or not certificate then
+    return certificate
+  end
+  local merged = Certificate.merge(preferred.evidence, certificate)
+  preferred.evidence = merged
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.preferred_state_evidence = (profile_plan.preferred_state_evidence or 0) + 1
+    state.runtime.instrumentation:event(profile_plan, 'preferred_state_evidence', {
+      source = source or 'unspecified',
+      closed = closed == true,
+    })
+  end
+  if not closed or preferred.phase ~= 'preferred' then
+    return merged
+  end
+
+  preferred.phase = 'closed'
+  if profile_plan then
+    profile_plan.preferred_states_closed = (profile_plan.preferred_states_closed or 0) + 1
+  end
+  return merged
+end
+
+local function report_task_absence(state, task, certificate, source, closed)
+  return report_absence(state, task and task.preferred_state or nil, certificate, source, closed)
+end
+
+local function report_intent_absence(state, intents, certificate, source)
+  local seen = {}
+  for i = 1, #(intents or {}) do
+    local task = state.tasks[intents[i].task_id]
+    local preferred = task and task.preferred_state or nil
+    if preferred and not seen[preferred] then
+      seen[preferred] = true
+      report_absence(state, preferred, certificate, source, false)
+    end
+  end
+end
+
+local function close_preferred_occurrence(state, frame, certificate, source)
+  local closed =
+    report_absence(state, frame.preferred, certificate or Certificate.local_absence(), source, true)
+  activate_or_else_fallback(
+    state,
+    state.tasks[frame.task_id],
+    frame.expr,
+    frame.activation,
+    closed,
+    frame.preferred,
+    frame.parent_preferred
+  )
+  return closed
 end
 
 complete_task = function(state, task, outcome)
@@ -254,6 +334,7 @@ complete_task = function(state, task, outcome)
         -- A map callback has already produced the next completed value.  Keep
         -- unwinding this task directly instead of allocating Op.always and
         -- scheduling another deterministic evaluator step.
+        local exchange_support = outcome.exchange_support
         outcome = new_outcome(
           state,
           packv(
@@ -263,6 +344,7 @@ complete_task = function(state, task, outcome)
           nil,
           task
         )
+        outcome.exchange_support = exchange_support
       else
         local next_op =
           state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
@@ -270,6 +352,13 @@ complete_task = function(state, task, outcome)
           error('and_then callback must return an Op', 0)
         end
         verify_continuation_dependencies(state, task, frame, next_op)
+        if outcome.exchange_support then
+          setv(state, task, 'exchange_support_provenance', outcome.exchange_support)
+        end
+        if next_op.kind == 'choice' and #(next_op.choices or {}) == 0 then
+          local failure = Certificate.mark_failure(Certificate.local_absence(), task.id)
+          eliminate_exchange_support(state, failure)
+        end
         setv(state, task, 'expr', next_op)
         setv(
           state,
@@ -277,7 +366,12 @@ complete_task = function(state, task, outcome)
           'activation',
           Path.child(frame.activation, 'and_then:result:' .. Path.label(outcome.activation))
         )
-        add_active(state, task.id)
+        if task.exchange_support_provenance then
+          setv(state, state, 'residual_propagation_required', true)
+          add_active_next(state, task.id)
+        else
+          add_active(state, task.id)
+        end
         return true
       end
     elseif frame.kind == 'wrap' then
@@ -292,11 +386,34 @@ complete_task = function(state, task, outcome)
   end
 end
 
+local function enable_full_dependency_frontier(state)
+  local frontier = state.dependency_frontier
+  if not frontier then
+    frontier = { expanded = false }
+    setv(state, state, 'dependency_frontier', frontier)
+  end
+  return frontier
+end
+
+local function mark_dependency_frontier_expanded(state)
+  local frontier = state.dependency_frontier
+  if frontier and not frontier.expanded then
+    setv(state, frontier, 'expanded', true)
+  end
+end
+
 local function add_root(state, root_id)
   if state.roots[root_id] then
     return
   end
   local request = state.requests[root_id]
+  if not request then
+    request = state.runtime.pending_by_id[root_id]
+    if request then
+      setv(state, state.requests, root_id, request)
+      mark_dependency_frontier_expanded(state)
+    end
+  end
   if not request then
     return
   end
@@ -313,7 +430,7 @@ local function add_root(state, root_id)
   task.id, task.root_id, task.expr = task_id, root_id, request.op
   task.activation = request.activation_root
   task.segment_id, task.scope_path, task.status = nil, nil, 'active'
-  task.choice_serial, task.symmetry_key = 0, nil
+  task.choice_serial, task.symmetry_key, task.preferred_state = 0, nil, nil
   task.request, task.task_id, task.done, task.outcome = request, task_id, false, nil
   setv(state, state.tasks, task_id, task)
   setv(state, state.roots, root_id, task)
@@ -367,6 +484,7 @@ local function start_product(state, task, op)
     child.frames[1] = { kind = 'group_lane', group_id = group_id, lane = i }
     child.segment_id, child.scope_path, child.status = segment_id, path, 'active'
     child.choice_serial, child.symmetry_key = 0, task.symmetry_key
+    child.preferred_state = task.preferred_state
     setv(state, state.tasks, child_id, child)
     pushv(state, state.active, child_id)
   end
@@ -385,20 +503,76 @@ local function same_root_compatible(a, b)
   return Path.relation(a.root_id, a.scope_path, b.root_id, b.scope_path) == 'interacting'
 end
 
+local function exchange_support_key(a, b)
+  local left, right = Path.label(a.activation), Path.label(b.activation)
+  if right < left then
+    left, right = right, left
+  end
+  return 'exchange:' .. tostring(a.resource) .. ':' .. left .. '<->' .. right
+end
+
 local function intents_compatible(a, b)
   if a.kind ~= 'exchange' or b.kind ~= 'exchange' then
     return false
   end
-  if a.resource ~= b.resource then
+  if a.resource ~= b.resource or a.role == b.role then
     return false
   end
-  if a.role == b.role then
+  return a.root_id ~= b.root_id or same_root_compatible(a, b)
+end
+
+local function compatibility_fn(state)
+  local eliminated = state.session.support_eliminations
+  if not eliminated then
+    return intents_compatible
+  end
+  local fn = state._intents_compatible
+  if not fn then
+    fn = function(a, b)
+      if not intents_compatible(a, b) then
+        return false
+      end
+      if eliminated[exchange_support_key(a, b)] then
+        local profile_plan = state.profile_plan
+        if profile_plan then
+          profile_plan.exchange_support_eliminations_pruned = (
+            profile_plan.exchange_support_eliminations_pruned or 0
+          ) + 1
+        end
+        return false
+      end
+      return true
+    end
+    state._intents_compatible = fn
+  end
+  return fn
+end
+
+eliminate_exchange_support = function(state, certificate)
+  local task_id = Certificate.local_failure_task(certificate)
+  local task = task_id and state.tasks[task_id] or nil
+  local pair = task and task.exchange_support_provenance or nil
+  if not pair then
     return false
   end
-  if a.root_id ~= b.root_id then
-    return true
+  local eliminated = state.session.support_eliminations
+  if not eliminated then
+    eliminated = {}
+    state.session.support_eliminations = eliminated
   end
-  return same_root_compatible(a, b)
+  if eliminated[pair] then
+    return false
+  end
+  eliminated[pair] = true
+  report_task_absence(state, task, certificate, 'exchange_support', false)
+  state._intents_compatible = nil
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.exchange_support_eliminations_learned = (
+      profile_plan.exchange_support_eliminations_learned or 0
+    ) + 1
+  end
+  return true
 end
 
 local function remove_intent_ids(state, ids)
@@ -460,6 +634,18 @@ local function block_intent(state, task, occurrence)
     })
   end
 end
+local function task_has_transactional_continuation(task)
+  for i = #task.frames, 1, -1 do
+    local frame = task.frames[i]
+    if frame.kind == 'bind' then
+      return frame.phase ~= 'map'
+    elseif frame.kind == 'group_lane' then
+      return false
+    end
+  end
+  return false
+end
+
 local function match_intents(state, left_id, right_id)
   local a, b = state.intent_by_id[left_id], state.intent_by_id[right_id]
   if not a or not b then
@@ -470,6 +656,7 @@ local function match_intents(state, left_id, right_id)
   local get = a.role == 'get' and a or b
   local put_task = state.tasks[put.task_id]
   local get_task = state.tasks[get.task_id]
+  local support_key = task_has_transactional_continuation(get_task) and exchange_support_key(a, b) or nil
   local labels = { Path.label(a.activation), Path.label(b.activation) }
   table.sort(labels)
   local fact = 'exchange:' .. table.concat(labels, '+')
@@ -478,7 +665,11 @@ local function match_intents(state, left_id, right_id)
   if not complete_task(state, put_task, new_outcome(state, PACK_TRUE, nil, put_task)) then
     return false
   end
-  if not complete_task(state, get_task, new_outcome(state, packv(state, put.value), nil, get_task)) then
+  local get_outcome = new_outcome(state, packv(state, put.value), nil, get_task)
+  if support_key then
+    get_outcome.exchange_support = support_key
+  end
+  if not complete_task(state, get_task, get_outcome) then
     return false
   end
   return true
@@ -765,6 +956,8 @@ local function final_candidate(state)
     participant_1, participant_2 = participant_2, participant_1
   end
 
+  local absence_gate = Certificate.stamp_absence_gate(state.absence_gate, state.runtime)
+
   -- One- and two-party hits remain inline.  The general participant array is
   -- promoted only when a transaction actually contains more than two roots.
   local candidate = state.session:set_hit(
@@ -776,11 +969,7 @@ local function final_candidate(state)
     observations,
     writes,
     #state.effects > 0 and state.effects or nil,
-    state.used_fallback == true,
-    state.runtime.epoch,
-    state.runtime.pending_generation,
-    #state.negative_checks > 0 and state.negative_checks or nil,
-    #state.fallback_interests > 0 and state.fallback_interests or nil,
+    absence_gate,
     state.search_steps
   )
 
@@ -900,11 +1089,40 @@ local function execute_program(state, task, occurrence)
   error('unknown programme kind: ' .. tostring(kind), 0)
 end
 
-local function has_supplier(state, intents)
-  return state.runtime:_has_supplier(intents, state.roots, state.excluded_roots, state.requests)
+local function has_supplier(state, intents, required_certainty)
+  local frontier = state.dependency_frontier
+  if frontier then
+    mark_dependency_frontier_expanded(state)
+    return state.runtime:_has_supplier(
+      intents,
+      state.roots,
+      state.excluded_roots,
+      state.runtime.pending_by_id,
+      required_certainty,
+      FULL_SUPPLIER_OPTIONS
+    )
+  end
+  return state.runtime:_has_supplier(
+    intents,
+    state.roots,
+    state.excluded_roots,
+    state.requests,
+    required_certainty
+  )
 end
 
 local function supplier_candidate(state)
+  local frontier = state.dependency_frontier
+  if frontier then
+    mark_dependency_frontier_expanded(state)
+    return state.runtime:_supplier_request(
+      state.intents,
+      state.roots,
+      state.excluded_roots,
+      state.runtime.pending_by_id,
+      FULL_SUPPLIER_OPTIONS
+    )
+  end
   return state.runtime:_supplier_request(state.intents, state.roots, state.excluded_roots, state.requests)
 end
 
@@ -976,6 +1194,9 @@ end
 
 local function begin_search_round(state)
   local session = state.session
+  if state.runtime._cycle_budget and not state.runtime:_charge_cycle_work(1) then
+    return stop_search(state, 'cycle_work_limit', false)
+  end
   local limits = state.search_limits
   if limits then
     if limits.total and state.search_steps >= limits.total then
@@ -1090,7 +1311,7 @@ local function analyse_dynamic_choice_supply(state, task, expr, activation, inte
     local residual, guard_activation, residual_state, guard =
       inspect_transparent_residual(state, task, alternative_activation, alternative)
     alternatives[ai] = {
-      metadata = IR.metadata(residual),
+      metadata = IR.active_metadata(residual),
       residual_state = residual_state,
     }
     if residual_state == RESIDUAL_UNOPENED and analysis.probe == nil then
@@ -1144,7 +1365,7 @@ local function analyse_dynamic_choice_supply(state, task, expr, activation, inte
 end
 
 local function analyse_choice_supply(state, task, expr, activation, intents)
-  local metadata = IR.metadata(expr)
+  local metadata = IR.active_metadata(expr)
   if metadata.dynamic then
     return analyse_dynamic_choice_supply(state, task, expr, activation, intents)
   end
@@ -1163,7 +1384,7 @@ end
 local function append_static_choice_candidates(analysis, intents, candidates)
   for ai = 1, analysis.size do
     local alternative = analysis.expr.choices[ai]
-    local metadata = IR.metadata(alternative)
+    local metadata = IR.active_metadata(alternative)
     for ii = 1, #intents do
       local certainty = IR.supply_relation(metadata, intents[ii])
       if certainty == IR.SUPPLY_EXACT then
@@ -1194,10 +1415,11 @@ local function exchange_domain_only(intents)
   return true
 end
 
-local function has_compatible_exchange_pair(intents)
+local function has_compatible_exchange_pair(state, intents)
+  local compatible = compatibility_fn(state)
   for i = 1, #intents - 1 do
     for j = i + 1, #intents do
-      if intents_compatible(intents[i], intents[j]) then
+      if compatible(intents[i], intents[j]) then
         return true
       end
     end
@@ -1210,13 +1432,7 @@ local function better_frontier_supplier(score, size, best_score, best_size)
 end
 
 local function reveal_supplier_guard(state, probe)
-  evaluate_guard_residual(
-    state,
-    probe.task,
-    probe.guard.fn,
-    probe.activation,
-    probe.guard.continuation_footprint
-  )
+  evaluate_guard_residual(state, probe.task, probe.guard, probe.activation)
   local profile_plan = state.profile_plan
   if profile_plan then
     profile_plan.opaque_supplier_revelations = (profile_plan.opaque_supplier_revelations or 0) + 1
@@ -1235,7 +1451,7 @@ local function select_frontier_action(state, head)
   local has_revealed_guard = false
   local first_probe = nil
   local exchange_only = exchange_domain_only(state.intents)
-  if exchange_only and has_compatible_exchange_pair(state.intents) then
+  if exchange_only and has_compatible_exchange_pair(state, state.intents) then
     return 'blocked'
   end
 
@@ -1252,7 +1468,7 @@ local function select_frontier_action(state, head)
         if state.residual_propagation_required then
           deterministic_progress = deterministic_progress or i
         end
-        if metadata_has_exchange(IR.metadata(expr)) then
+        if metadata_has_exchange(IR.active_metadata(expr)) then
           return 'advance', i
         end
       else
@@ -1284,7 +1500,7 @@ local function select_frontier_action(state, head)
               end
             end
           else
-            local metadata = IR.metadata(expr)
+            local metadata = IR.active_metadata(expr)
             local score, certainty = IR.supply_score(metadata, state.intents)
             analysis = {
               index = i,
@@ -1317,15 +1533,7 @@ local function select_frontier_action(state, head)
   end
 
   if exchange_only then
-    if
-      state.runtime:_has_supplier(
-        state.intents,
-        state.roots,
-        state.excluded_roots,
-        state.requests,
-        IR.SUPPLY_EXACT
-      )
-    then
+    if has_supplier(state, state.intents, IR.SUPPLY_EXACT) then
       return 'blocked'
     end
 
@@ -1354,7 +1562,13 @@ local function select_frontier_action(state, head)
       return 'progress'
     end
     local fallback = best_opaque or best_exact
-    return fallback and 'advance' or 'blocked', fallback and fallback.index or nil
+    if fallback then
+      return 'advance', fallback.index
+    end
+    if saw_or_else then
+      return 'advance', first_branch
+    end
+    return 'blocked'
   end
 
   if state.residual_propagation_required then
@@ -1412,14 +1626,25 @@ local function drain_active(state)
       end
       if kind == 'always' then
         if not complete_task(state, task, new_outcome(state, expr.vals, nil, task)) then
-          return 'retry', terminal_certificate(state)
+          local terminal = terminal_certificate(state)
+          report_task_absence(state, task, terminal, 'terminal_completion', false)
+          return 'retry', terminal
         end
       elseif kind == 'guard' then
         local parent_activation = task.activation
-        local residual =
-          evaluate_guard_residual(state, task, expr.fn, parent_activation, expr.continuation_footprint)
+        local residual = evaluate_guard_residual(state, task, expr, parent_activation)
         setv(state, task, 'expr', residual)
         setv(state, task, 'activation', Path.child(parent_activation, 'guard:result'))
+        if
+          task.exchange_support_provenance
+          and residual.kind == 'choice'
+          and #(residual.choices or {}) == 0
+        then
+          local failure = Certificate.mark_failure(Certificate.local_absence(), task.id)
+          report_task_absence(state, task, failure, 'guard_continuation_rejection', false)
+          eliminate_exchange_support(state, failure)
+          return 'retry', failure
+        end
         setv(state, state, 'residual_propagation_required', true)
         add_active(state, task.id)
       elseif kind == 'and_then' then
@@ -1449,11 +1674,15 @@ local function drain_active(state)
       elseif kind == 'consequence' then
         pushv(state, state.effects, expr.effect)
         if not complete_task(state, task, new_outcome(state, pack_(), nil, task)) then
-          return 'retry', terminal_certificate(state)
+          local terminal = terminal_certificate(state)
+          report_task_absence(state, task, terminal, 'terminal_completion', false)
+          return 'retry', terminal
         end
       elseif kind == 'primitive' then
         if not execute_program(state, task, expr) then
-          return 'retry', terminal_certificate(state)
+          local terminal = terminal_certificate(state)
+          report_task_absence(state, task, terminal, 'primitive_failure', false)
+          return 'retry', terminal
         end
       elseif kind == 'product' then
         start_product(state, task, expr)
@@ -1484,16 +1713,28 @@ local function drain_active(state)
             certificate = nil,
           }
       elseif kind == 'or_else' then
-        return 'branch',
-          {
-            kind = 'or_else',
-            task_id = task.id,
-            expr = expr,
-            activation = task.activation,
-            phase = 'preferred',
-            certificate = nil,
-            preferred_certificate = nil,
-          }
+        local preferred = preferred_state_for(state, task, task.activation)
+        if preferred.phase ~= 'preferred' then
+          activate_or_else_fallback(
+            state,
+            task,
+            expr,
+            task.activation,
+            preferred.evidence,
+            preferred,
+            preferred.parent
+          )
+        else
+          return 'or_else',
+            {
+              kind = 'or_else_continuation',
+              task_id = task.id,
+              expr = expr,
+              activation = task.activation,
+              preferred = preferred,
+              parent_preferred = preferred.parent,
+            }
+        end
       else
         error('unsupported Op kind: ' .. tostring(kind), 0)
       end
@@ -1505,7 +1746,7 @@ end
 local function analyse_domain(state)
   local profile_plan = state.profile_plan
   local domain =
-    Domain.open(state.demand_index, state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
+    Domain.open(state.demand_index, state, compatibility_fn(state), state.runtime.branch_policy ~= 'legacy')
   local exchange = domain.exchange
   if profile_plan then
     profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans
@@ -1606,22 +1847,41 @@ local function recruited_root_may_supply(state, demand)
   return false
 end
 
+local function has_exchange_support(state, demand, domain)
+  if domain then
+    if Domain.has_exchange_partner(domain, demand) then
+      return true
+    end
+  else
+    local compatible = compatibility_fn(state)
+    for i = 1, #state.intents do
+      if compatible(demand, state.intents[i]) then
+        return true
+      end
+    end
+  end
+  if recruited_root_may_supply(state, demand) then
+    return true
+  end
+  if has_supplier(state, { demand }) then
+    return true
+  end
+  return nil
+end
+
 local function raw_choice_exchange_viable(state, frame, choice_index)
   local demand = raw_choice_exchange_demand(state, frame, choice_index)
   if not demand then
     return true
   end
 
-  for i = 1, #state.intents do
-    if intents_compatible(demand, state.intents[i]) then
-      return true
-    end
-  end
-  if recruited_root_may_supply(state, demand) or has_supplier(state, { demand }) then
+  if has_exchange_support(state, demand) then
     return true
   end
 
-  frame.certificate = Certificate.merge(frame.certificate, Certificate.from_intents({ demand }))
+  local certificate = Certificate.from_intents({ demand })
+  frame.certificate = Certificate.merge(frame.certificate, certificate)
+  report_task_absence(state, state.tasks[frame.task_id], certificate, 'no_supplier', false)
   local profile_plan = state.profile_plan
   if profile_plan then
     profile_plan.choice_alternatives_pruned = profile_plan.choice_alternatives_pruned + 1
@@ -1643,7 +1903,7 @@ local function recruit_forced_raw_exchange(state, exchange)
   if count ~= 1 then
     return false
   end
-  local request = state.requests[row.id]
+  local request = state.requests[row.id] or state.runtime.pending_by_id[row.id]
   local supplier = raw_exchange_program(request and request.op)
   if not supplier or supplier.resource ~= current.resource or supplier.role == current.role then
     return false
@@ -1656,9 +1916,106 @@ local function recruit_forced_raw_exchange(state, exchange)
   return true
 end
 
+local function current_or_else_continuation(state)
+  local stack = state.session and state.session.stack
+  local frame = stack and stack[#stack - 1] or nil
+  if frame and frame.kind == 'or_else_continuation' and frame.waiting then
+    return frame
+  end
+  return nil
+end
+
+-- Close the current preferred occurrence when its exact exchange demand has no
+-- admissible support in the fully reduced interacting product.  This is the
+-- smallest product-support proof: every active sibling intent is visible,
+-- pending suppliers are checked through the dependency index, and unresolved
+-- dynamic code would have prevented the node from reaching the domain fixed
+-- point.  More general Hall deficits remain ordinary search until a particular
+-- preferred occurrence can be justified under explicit sibling assumptions.
+local function close_unsupported_product_preferred(state, domain)
+  local frame = current_or_else_continuation(state)
+  if not frame or frame.preferred.phase ~= 'preferred' then
+    return nil
+  end
+  for i = state.active_head, #state.active do
+    local pending_task = state.tasks[state.active[i]]
+    if pending_task and pending_task.status == 'active' then
+      return nil
+    end
+  end
+
+  local demand
+  for i = 1, #state.intents do
+    local intent = state.intents[i]
+    local task = state.tasks[intent.task_id]
+    if
+      intent.kind == 'exchange'
+      and task
+      and task.preferred_state == frame.preferred
+      and task.id == frame.task_id
+    then
+      if demand then
+        return nil
+      end
+      demand = intent
+    end
+  end
+  if not demand then
+    return nil
+  end
+
+  if has_exchange_support(state, demand, domain) then
+    return nil
+  end
+
+  local task = state.tasks[frame.task_id]
+  if
+    not task
+    or #task.frames ~= (frame.task_frame_depth or #task.frames)
+    or not task.expr
+    or task.expr.kind ~= 'primitive'
+  then
+    return nil
+  end
+
+  local certificate = Certificate.from_intents({ demand })
+
+  -- This exact direct preferred has no speculative ledger contribution. Remove
+  -- only its blocked intent and continuation boundary, preserving fallback
+  -- transitions already established by sibling lanes in the same product.
+  remove_intent_ids(state, { demand.id })
+  setv(state, task, 'status', 'active')
+  close_preferred_occurrence(state, frame, certificate, 'product_support_absent')
+
+  local stack = state.session.stack
+  if not stack or stack[#stack - 1] ~= frame or not stack[#stack] or stack[#stack].kind ~= 'node' then
+    error('product support closure lost its or_else continuation', 0)
+  end
+  stack[#stack] = nil
+  stack[#stack] = nil
+  state.search_depth = math.max(1, state.search_depth - 1)
+  local parent = stack[#stack]
+  if parent and parent.kind == 'node' then
+    parent.phase = 'reduce'
+  else
+    state.session.stack = nil
+    state.session.phase = 'reduce'
+  end
+
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.product_support_closures = (profile_plan.product_support_closures or 0) + 1
+  end
+  return true
+end
+
 local function apply_forced_domain(state, domain)
   if state.runtime.normalise_search == false then
     return nil
+  end
+  local closed, closed_certificate = close_unsupported_product_preferred(state, domain)
+  if closed ~= nil then
+    return closed, closed_certificate
   end
   local profile_plan = state.profile_plan
   local exchange = domain.exchange
@@ -1677,6 +2034,7 @@ local function apply_forced_domain(state, domain)
         return true
       end
       local terminal = terminal_certificate(state)
+      report_intent_absence(state, state.intents, terminal, 'forced_exchange_failure')
       return false, terminal
     end
   end
@@ -1701,7 +2059,9 @@ local function apply_forced_domain(state, domain)
     if resolve_transition_set(state, forced_group, forced_group.ids) then
       return true
     end
-    return false, terminal_certificate(state)
+    local terminal = terminal_certificate(state)
+    report_intent_absence(state, forced_group.intents, terminal, 'forced_transition_failure')
+    return false, terminal
   end
   return nil
 end
@@ -1758,7 +2118,7 @@ local function prioritise_choice_supplier(state, frame)
     local alternative = frame.expr.choices[index]
     local alternative_activation = Path.child(frame.activation, 'choice:' .. tostring(index))
     local residual = inspect_transparent_residual(state, task, alternative_activation, alternative)
-    local score = IR.supply_score(IR.metadata(residual), state.intents)
+    local score = IR.supply_score(IR.active_metadata(residual), state.intents)
     if score > best_score then
       best, best_score = position, score
     end
@@ -1808,19 +2168,42 @@ local function next_branch_alternative(state, frame)
       activation = candidate.activation,
       supplier_domain = true,
     }
-  elseif frame.kind == 'or_else' then
-    if frame.phase == 'preferred' then
-      frame.phase = 'preferred_running'
-      return { kind = 'or_else_preferred' }
-    elseif frame.phase == 'fallback' then
-      frame.phase = 'fallback_running'
-      return { kind = 'or_else_fallback' }
-    end
-    return nil
   elseif frame.kind == 'domain' then
     return next_frontier_alternative(state, frame)
   end
   error('unknown search branch frame: ' .. tostring(frame.kind), 0)
+end
+
+activate_or_else_fallback = function(state, task, expr, activation, certificate, preferred, parent_preferred)
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.fallback_transitions = profile_plan.fallback_transitions + 1
+    state.runtime.instrumentation:event(profile_plan, 'or_else_fallback')
+  end
+  local gate = state.absence_gate
+  if not gate then
+    gate = Certificate.new_absence_gate()
+    setv(state, state, 'absence_gate', gate)
+  end
+  if preferred and preferred.phase ~= 'fallback' then
+    preferred.phase = 'fallback'
+    if profile_plan then
+      profile_plan.fallback_dependency_transitions = (profile_plan.fallback_dependency_transitions or 0) + 1
+    end
+  end
+  enable_full_dependency_frontier(state)
+  Certificate.each(certificate, 'check', function(check)
+    pushv(state, gate.checks, check)
+  end)
+  setv(state, task, 'preferred_state', parent_preferred)
+  setv(state, task, 'expr', expr.q)
+  setv(
+    state,
+    task,
+    'activation',
+    Path.child(activation, 'or_else:fallback:' .. Certificate.gate_epoch(certificate))
+  )
+  add_active_next(state, task.id)
 end
 
 local function prepare_alternative(state, frame, alt)
@@ -1835,39 +2218,6 @@ local function prepare_alternative(state, frame, alt)
     local task = state.tasks[alt.task_id]
     setv(state, task, 'expr', alt.expr.choices[alt.choice_index])
     setv(state, task, 'activation', Path.child(alt.activation, 'choice:' .. tostring(alt.choice_index)))
-    add_active(state, task.id)
-    return true
-  elseif alt.kind == 'or_else_preferred' then
-    if profile_plan then
-      profile_plan.preferred_branches = profile_plan.preferred_branches + 1
-      state.runtime.instrumentation:event(profile_plan, 'or_else_preferred')
-    end
-    local task = state.tasks[frame.task_id]
-    setv(state, task, 'expr', frame.expr.p)
-    setv(state, task, 'activation', Path.child(frame.activation, 'or_else:preferred'))
-    add_active(state, task.id)
-    return true
-  elseif alt.kind == 'or_else_fallback' then
-    if profile_plan then
-      profile_plan.fallback_branches = profile_plan.fallback_branches + 1
-      state.runtime.instrumentation:event(profile_plan, 'or_else_fallback')
-    end
-    setv(state, state, 'used_fallback', true)
-    local pref = frame.preferred_certificate
-    Certificate.each(pref, 'check', function(check)
-      pushv(state, state.negative_checks, check)
-    end)
-    Certificate.each(pref, 'interest', function(interest)
-      pushv(state, state.fallback_interests, interest)
-    end)
-    local task = state.tasks[frame.task_id]
-    setv(state, task, 'expr', frame.expr.q)
-    setv(
-      state,
-      task,
-      'activation',
-      Path.child(frame.activation, 'or_else:fallback:' .. Certificate.activation_label(pref))
-    )
     add_active(state, task.id)
     return true
   elseif alt.kind == 'exchange' then
@@ -1970,22 +2320,22 @@ local function branch_child_result(state, frame, outcome, candidate, certificate
       end
       return 'continue'
     end
+    report_task_absence(state, state.tasks[frame.task_id], certificate, 'choice_alternative', false)
+    eliminate_exchange_support(state, certificate)
     frame.certificate = Certificate.merge(frame.certificate, certificate)
     return 'continue'
-  elseif frame.kind == 'or_else' then
+  elseif frame.kind == 'or_else_continuation' then
     if outcome == 'hit' then
+      setv(state, state.tasks[frame.task_id], 'preferred_state', frame.parent_preferred)
       return 'done', 'hit', candidate, nil
     end
-    if frame.phase == 'preferred_running' then
-      frame.preferred_certificate = certificate
-      frame.phase = 'fallback'
-      return 'continue'
-    end
-    return 'done', 'retry', nil, certificate or Certificate.new()
+    close_preferred_occurrence(state, frame, certificate, 'primary_closure')
+    return 'resume'
   elseif frame.kind == 'domain' then
     if outcome == 'hit' then
       return 'done', 'hit', candidate, nil
     end
+    report_intent_absence(state, state.intents, certificate, 'domain_alternative')
     frame.certificate = Certificate.merge(frame.certificate, certificate)
     return 'continue'
   end
@@ -1994,13 +2344,16 @@ end
 
 local function exhausted_branch_result(state, frame)
   if frame.kind == 'choice' or frame.kind == 'supplier_choice' then
+    if frame.kind == 'choice' and #(frame.expr.choices or {}) == 0 then
+      local certificate = Certificate.mark_failure(Certificate.local_absence(), frame.task_id)
+      report_task_absence(state, state.tasks[frame.task_id], certificate, 'empty_choice', false)
+      return certificate
+    end
     return frame.certificate or terminal_certificate(state)
-  elseif frame.kind == 'or_else' then
-    -- Both phases normally complete directly from branch_child_result.  This
-    -- fallback protects malformed frames without changing user-visible facts.
-    return frame.preferred_certificate or Certificate.new()
   elseif frame.kind == 'domain' then
-    return Certificate.merge(frame.certificate, terminal_certificate(state))
+    local certificate = Certificate.merge(frame.certificate, terminal_certificate(state))
+    report_intent_absence(state, state.intents, certificate, 'domain_exhaustion')
+    return certificate
   end
   error('unknown exhausted branch frame: ' .. tostring(frame.kind), 0)
 end
@@ -2052,6 +2405,16 @@ local function finish_node(session, outcome, candidate, certificate)
       branch.mark, branch.waiting = nil, false
       state.search_depth = math.max(1, state.search_depth - 1)
       return false
+    elseif action == 'resume' then
+      branch.mark, branch.waiting = nil, false
+      state.search_depth = math.max(1, state.search_depth - 1)
+      stack[#stack] = nil
+      local parent = stack[#stack]
+      if not parent or parent.kind ~= 'node' then
+        error('or_else fallback lost its parent node', 0)
+      end
+      parent.phase = 'reduce'
+      return false
     end
 
     branch.mark, branch.waiting = nil, false
@@ -2067,7 +2430,13 @@ local function start_branch_alternative(session, frame)
     local alt = next_branch_alternative(state, frame)
     if not alt then
       session.stack[#session.stack] = nil
-      return finish_node(session, 'retry', nil, exhausted_branch_result(state, frame))
+      local certificate = exhausted_branch_result(state, frame)
+      local stack = session.stack
+      local parent_branch = stack and stack[#stack - 1] or nil
+      if not (parent_branch and parent_branch.kind == 'or_else_continuation') then
+        eliminate_exchange_support(state, certificate)
+      end
+      return finish_node(session, 'retry', nil, certificate)
     end
 
     local profile_plan = state.profile_plan
@@ -2104,6 +2473,42 @@ local function push_branch(session, branch)
   end
 end
 
+local function push_or_else_continuation(session, frame)
+  local state = session.state
+  local stack = session.stack
+  if not stack then
+    stack = session.stack_arena or {}
+    session.stack_arena = stack
+    stack[1] = { kind = 'node', phase = 'waiting' }
+    session.stack = stack
+    session.phase = nil
+  else
+    stack[#stack].phase = 'waiting'
+  end
+
+  frame.mark = state.trail:mark()
+  frame.waiting = true
+  stack[#stack + 1] = frame
+  state.search_depth = state.search_depth + 1
+
+  local profile_plan = state.profile_plan
+  if profile_plan then
+    profile_plan.preferred_entries = profile_plan.preferred_entries + 1
+    state.runtime.instrumentation:event(profile_plan, 'or_else_preferred')
+    if state.search_depth > profile_plan.max_depth then
+      profile_plan.max_depth = state.search_depth
+    end
+  end
+
+  local task = state.tasks[frame.task_id]
+  frame.task_frame_depth = #task.frames
+  setv(state, task, 'preferred_state', frame.preferred)
+  setv(state, task, 'expr', frame.expr.p)
+  setv(state, task, 'activation', Path.child(frame.activation, 'or_else:preferred'))
+  add_active_next(state, task.id)
+  stack[#stack + 1] = { kind = 'node', phase = 'enter' }
+end
+
 local function advance_search(session)
   local state = session.state
   while true do
@@ -2136,6 +2541,8 @@ local function advance_search(session)
         end
       elseif action == 'branch' then
         push_branch(session, payload)
+      elseif action == 'or_else' then
+        push_or_else_continuation(session, payload)
       elseif action == 'progress' then
         -- A demand-driven guard probe learned a residual without changing the
         -- speculative ledger. Re-enter reduction so the refined metadata can

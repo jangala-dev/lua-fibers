@@ -36,7 +36,7 @@ do
   local receiver_id = rt.pending[#rt.pending].id
 
   local fallback_plan = assert(rt:_find_candidate(receiver_id))
-  assert_eq(fallback_plan.negative_guard, true, 'initial plan should be fallback')
+  assert_eq(fallback_plan.absence_gate ~= nil, true, 'initial plan should be fallback')
 
   local sender = rt:spawn_raw(function()
     sender_result = rt:perform(ch:put_op('primary'))
@@ -48,7 +48,7 @@ do
   assert_eq(rt.stats.validation_failures, 1, 'negative-frontier validation failure recorded')
 
   local refreshed = assert(rt:_find_candidate(receiver_id))
-  assert_eq(refreshed.negative_guard, false, 'refreshed plan should use primary')
+  assert_eq(refreshed.absence_gate ~= nil, false, 'refreshed plan should use primary')
   assert(rt:_commit_hit(refreshed))
   assert_eq(receiver_result, 'primary')
   assert_eq(sender_result, true)
@@ -94,7 +94,7 @@ do
   assert_eq(rt:_commit_hit(second_plan), false, 'second snapshot plan should be stale')
 
   local refreshed = assert(rt:_find_candidate(second_id))
-  assert_eq(refreshed.negative_guard, false, 'stale primary refresh must remain primary')
+  assert_eq(refreshed.absence_gate ~= nil, false, 'stale primary refresh must remain primary')
   assert(rt:_commit_hit(refreshed))
 
   assert_eq(first_result, 1)

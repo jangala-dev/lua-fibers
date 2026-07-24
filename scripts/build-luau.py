@@ -309,6 +309,8 @@ def strip_stock_lua_loader(text: str, path: str) -> str:
         raise RuntimeError(f"stock-Lua file loader remains in portable test {path}")
     if "package.loaded" in stripped or "package.preload" in stripped:
         raise RuntimeError(f"stock-Lua module cache remains in portable test {path}")
+    if re.search(r"\bos\s*\.\s*getenv\s*\(", stripped):
+        raise RuntimeError(f"portable semantic test reads the process environment: {path}")
     return stripped
 
 

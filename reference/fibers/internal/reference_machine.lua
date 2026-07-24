@@ -7,7 +7,7 @@ local IR = require('fibers.internal.kernel.ir')
 local ChoiceOrder = require('fibers.internal.kernel.choice_order')
 local Frontier = require('fibers.internal.reference_domain')
 local Activation = require('fibers.internal.reference_path')
-local Refutation = require('fibers.internal.kernel.certificate')
+local Certificate = require('fibers.internal.kernel.certificate')
 
 local M = {}
 
@@ -48,6 +48,10 @@ local function copy_array(xs)
     out[i] = xs[i]
   end
   return out
+end
+
+local function copy_gate(gate)
+  return gate and { checks = copy_array(gate.checks) } or nil
 end
 
 local function copy_map(xs)
@@ -110,9 +114,7 @@ local function clone_state(s)
     intents = {},
     intent_by_id = {},
     effects = copy_array(s.effects),
-    used_fallback = s.used_fallback,
-    negative_checks = copy_array(s.negative_checks),
-    fallback_interests = copy_array(s.fallback_interests),
+    absence_gate = copy_gate(s.absence_gate),
     excluded_roots = copy_map(s.excluded_roots),
     next_task = s.next_task,
     next_group = s.next_group,
@@ -740,6 +742,7 @@ local function final_candidate(state)
     outcomes[id] = state.roots[id].outcome
   end
 
+  local absence_gate = Certificate.stamp_absence_gate(state.absence_gate, state.runtime)
   local candidate = {
     focus = state.focus,
     participants = participants,
@@ -747,11 +750,7 @@ local function final_candidate(state)
     observations = observations,
     writes = writes,
     effects = #state.effects > 0 and copy_array(state.effects) or nil,
-    negative_guard = state.used_fallback == true,
-    epoch = state.runtime.epoch,
-    pending_generation = state.runtime.pending_generation,
-    negative_checks = #state.negative_checks > 0 and copy_array(state.negative_checks) or nil,
-    fallback_interests = #state.fallback_interests > 0 and copy_array(state.fallback_interests) or nil,
+    absence_gate = absence_gate,
     search_steps = state.search_steps,
   }
 
@@ -842,7 +841,7 @@ local function supplier_candidate(state)
 end
 
 local function terminal_refutation(state)
-  return Refutation.from_intents(state.intents)
+  return Certificate.from_intents(state.intents)
 end
 
 local function collect_defeat_effects(expr, out)
@@ -908,7 +907,7 @@ dfs = function(state)
   state.search_work.steps = state.search_work.steps + 1
   state.search_steps = state.search_work.steps
   if state.search_steps > state.search_limit then
-    return nil, Refutation.new(), true
+    return nil, Certificate.new(), true
   end
 
   while true do
@@ -1021,7 +1020,7 @@ dfs = function(state)
                 return found
               end
             end
-            refutation = Refutation.merge(refutation, ref)
+            refutation = Certificate.merge(refutation, ref)
             if unknown then
               return nil, refutation, true
             end
@@ -1042,17 +1041,15 @@ dfs = function(state)
           end
 
           local fallback = clone_state(state)
-          fallback.used_fallback = true
-          Refutation.each(pref, 'check', function(check)
-            fallback.negative_checks[#fallback.negative_checks + 1] = check
-          end)
-          Refutation.each(pref, 'interest', function(interest)
-            fallback.fallback_interests[#fallback.fallback_interests + 1] = interest
+          local gate = fallback.absence_gate or Certificate.new_absence_gate()
+          fallback.absence_gate = gate
+          Certificate.each(pref, 'check', function(check)
+            gate.checks[#gate.checks + 1] = check
           end)
           local ft = fallback.tasks[task.id]
           ft.expr = expr.q
           ft.activation =
-            Activation.child(task.activation, 'or_else:fallback:' .. Refutation.activation_label(pref))
+            Activation.child(task.activation, 'or_else:fallback:' .. Certificate.gate_epoch(pref))
           add_active(fallback, ft.id)
           local fallback_found, fref, funknown = dfs(fallback)
           if fallback_found then
@@ -1064,7 +1061,7 @@ dfs = function(state)
           -- successful fallback candidate; retaining its interests after the
           -- fallback also retries would spuriously keep the whole expression
           -- pending.
-          return nil, fref or Refutation.new(), funknown
+          return nil, fref or Certificate.new(), funknown
         else
           error('unsupported Op kind: ' .. tostring(kind), 0)
         end
@@ -1116,7 +1113,7 @@ dfs = function(state)
           if found then
             return found
           end
-          refutation = Refutation.merge(refutation, ref)
+          refutation = Certificate.merge(refutation, ref)
           if unknown then
             return nil, refutation, true
           end
@@ -1138,7 +1135,7 @@ dfs = function(state)
               if found then
                 return found
               end
-              refutation = Refutation.merge(refutation, ref)
+              refutation = Certificate.merge(refutation, ref)
               if unknown then
                 return nil, refutation, true
               end
@@ -1175,7 +1172,7 @@ dfs = function(state)
             if found then
               return found
             end
-            refutation = Refutation.merge(refutation, ref)
+            refutation = Certificate.merge(refutation, ref)
             if unknown then
               return nil, refutation, true
             end
@@ -1195,7 +1192,7 @@ dfs = function(state)
               if found then
                 return found
               end
-              refutation = Refutation.merge(refutation, ref)
+              refutation = Certificate.merge(refutation, ref)
               if unknown then
                 return nil, refutation, true
               end
@@ -1213,7 +1210,7 @@ dfs = function(state)
               if found then
                 return found
               end
-              refutation = Refutation.merge(refutation, ref)
+              refutation = Certificate.merge(refutation, ref)
               if unknown then
                 return nil, refutation, true
               end
@@ -1245,7 +1242,7 @@ dfs = function(state)
         if found then
           return found
         end
-        refutation = Refutation.merge(refutation, ref)
+        refutation = Certificate.merge(refutation, ref)
         if unknown then
           return nil, refutation, true
         end
@@ -1259,14 +1256,14 @@ dfs = function(state)
         if found then
           return found
         end
-        refutation = Refutation.merge(refutation, ref)
+        refutation = Certificate.merge(refutation, ref)
         if unknown then
           return nil, refutation, true
         end
       end
 
       local terminal = terminal_refutation(state)
-      refutation = Refutation.merge(refutation, terminal)
+      refutation = Certificate.merge(refutation, terminal)
       return nil, refutation, false
     end
   end
@@ -1303,9 +1300,7 @@ function M.search(runtime, requests, focus_id, search_limit, component)
     intents = {},
     intent_by_id = {},
     effects = {},
-    used_fallback = false,
-    negative_checks = {},
-    fallback_interests = {},
+    absence_gate = nil,
     excluded_roots = {},
     next_task = 0,
     next_group = 0,

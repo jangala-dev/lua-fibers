@@ -37,6 +37,7 @@ local Scalar = require('fibers.scalar')
 local Op = require('fibers.op')
 local Facility = require('fibers.internal.facility')
 local Runtime = require('fibers.runtime')
+local machine = Runtime.new().machine_name
 
 local function rejected(fn, fragment)
   local ok, err = pcall(fn)
@@ -217,6 +218,46 @@ dependency_index:each_supplier({
   { kind = 'exchange', resource = exchange_resource, role = 'get' },
 }, {}, {}, {}, function() end)
 assert(put_atom.generation == before_generation)
+
+-- Dynamic continuations are future dependencies, not active suppliers before
+-- their prefix completes. The metadata remains conservatively dynamic for
+-- retained-proof eligibility while the dependency index keeps the request out
+-- of the opaque global component.
+local phase_channel = require('fibers.resource.rendezvous').new('phase-sensitive-and-then')
+local phase_op = phase_channel:get_op():and_then(function(value)
+  return Op.always(value)
+end)
+local phase_meta = IR.metadata(phase_op)
+assert(phase_meta.dynamic == true)
+assert(IR.active_dynamic(phase_meta) == false)
+assert(phase_meta.exchanges[phase_channel].get)
+local phase_index = Dependencies.Index.new()
+local phase_request = { id = 21, op = phase_op, metadata = phase_meta }
+phase_index:add(phase_request)
+assert(phase_index.opaque.count == 0, 'dormant continuation must not enter opaque bucket')
+phase_index:remove(phase_request)
+
+-- A revealed root guard is fixed for the pending activation and may replace its
+-- conservative opaque plan with the exact residual plan in the production
+-- runtime.
+if machine == 'ledger' then
+  local guard_channel = require('fibers.resource.rendezvous').new('phase-sensitive-guard')
+  local guard_rt = Runtime.new({
+    dependency_index_threshold = 1,
+    instrumentation = {},
+  })
+  guard_rt:spawn_raw(function()
+    guard_rt:perform(Op.guard(function()
+      return guard_channel:get_op()
+    end))
+  end, 'phase-sensitive-guard')
+  local guard_status = guard_rt:run()
+  assert(guard_status.tag == 'quiescent')
+  local guard_request = assert(guard_rt.pending[1])
+  assert(IR.active_dynamic(guard_request.metadata) == false)
+  assert(guard_request.metadata.exchanges[guard_channel].get)
+  assert(guard_rt:instrumentation_snapshot().counters.dynamic_dependency_refinements >= 1)
+end
 
 -- Atoms are interned and use the dense Bucket implementation shared with
 -- blocked-domain indexing.

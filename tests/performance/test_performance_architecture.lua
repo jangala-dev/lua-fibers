@@ -152,7 +152,9 @@ local isolated_snap = isolated:instrumentation_snapshot()
 truthy((isolated_snap.maxima.component_size or 20) < 20, 'unrelated roots were not isolated')
 truthy((isolated_snap.counters.component_roots_excluded or 0) > 0, 'component exclusion was not measured')
 
--- An opaque continuation deliberately joins the full pending frontier.
+-- An unopened guard begins conservatively, then its fixed root residual is
+-- reindexed to the exact dependency rather than permanently joining unrelated
+-- pending roots.
 local global = Runtime.new({ instrumentation = true, dependency_index_threshold = 1 })
 local a, b = Rendezvous.new('global-a'), Rendezvous.new('global-b')
 global:spawn_raw(function()
@@ -166,10 +168,10 @@ end)
 eq(global:run().tag, 'quiescent')
 local global_snap = global:instrumentation_snapshot()
 truthy(
-  (global_snap.counters.component_global_plans or 0) > 0,
-  'opaque continuation did not force conservative component'
+  (global_snap.counters.dynamic_dependency_refinements or 0) > 0,
+  'revealed guard did not refine its dependency plan'
 )
-eq(global_snap.maxima.component_size, 2, 'opaque continuation should join both roots')
+eq(global_snap.maxima.component_size, 1, 'revealed guard should not retain an unrelated root')
 
 -- With the index active, several independent committing components retain their
 -- own participants and all reach the same result under both evaluators.
@@ -279,7 +281,7 @@ do
   eq(candidate.observations, nil, 'empty observations should remain absent')
   eq(candidate.writes, nil, 'empty writes should remain absent')
   eq(candidate.effects, nil, 'empty effects were materialised')
-  eq(candidate.negative_checks, nil, 'empty negative checks were materialised')
+  eq(candidate.absence_gate, nil, 'empty absence gate was materialised')
   truthy(rt:_commit_hit(candidate), 'empty-state candidate did not commit')
 end
 

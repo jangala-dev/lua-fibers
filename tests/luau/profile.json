@@ -54,6 +54,7 @@
         "tests/kernel/test_claim_closure.lua",
         "tests/kernel/test_defeat.lua",
         "tests/kernel/test_dependency_supply_direction.lua",
+        "tests/kernel/test_exchange_choice_propagation.lua",
         "tests/kernel/test_guard_activations.lua",
         "tests/kernel/test_instrumentation.lua",
         "tests/kernel/test_invariants.lua",
@@ -64,6 +65,7 @@
         "tests/kernel/test_resumable_search.lua",
         "tests/kernel/test_retry_laws.lua",
         "tests/kernel/test_retry_semantics.lua",
+        "tests/kernel/test_search_limits.lua",
         "tests/kernel/test_search_stack.lua",
         "tests/kernel/test_slim_retention.lua",
         "tests/kernel/test_store_algebra.lua",
@@ -400,6 +402,11 @@
       "classification": "portable"
     },
     {
+      "path": "tests/kernel/test_exchange_choice_propagation.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
       "path": "tests/kernel/test_guard_activations.lua",
       "group": "kernel",
       "classification": "portable"
@@ -446,6 +453,11 @@
     },
     {
       "path": "tests/kernel/test_retry_semantics.lua",
+      "group": "kernel",
+      "classification": "portable"
+    },
+    {
+      "path": "tests/kernel/test_search_limits.lua",
       "group": "kernel",
       "classification": "portable"
     },

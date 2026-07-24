@@ -7,6 +7,7 @@
 
 local IR = require('fibers.internal.kernel.ir')
 local Dependencies = require('fibers.internal.kernel.dependencies')
+local Path = require('fibers.internal.kernel.path')
 
 local Bucket = Dependencies.Bucket
 local AtomPool = Dependencies.AtomPool
@@ -466,6 +467,45 @@ function M.open(index, state, compatible, constrained)
   }
 end
 
+function M.has_exchange_partner(domain, intent)
+  if not domain or not intent or intent.kind ~= 'exchange' then
+    return false
+  end
+  local compatible = domain.compatible_fn
+  local unique = domain.exchange and domain.exchange.unique_pair
+  if unique and (unique.left == intent.id or unique.right == intent.id) then
+    return true
+  end
+  local exchanges = domain.small_exchanges
+  if exchanges then
+    for i = 1, #exchanges do
+      local other = exchanges[i]
+      if other.id ~= intent.id and exchange_compatible(intent, other, compatible) then
+        return true
+      end
+    end
+    return false
+  end
+  local index = domain.index
+  if not index then
+    return false
+  end
+  local atom = index:atom('exchange', intent.resource, opposite(intent.role))
+  local bucket = index.buckets[atom]
+  local found = false
+  if bucket then
+    bucket:each(function(other_id)
+      if not found then
+        local other = active(index, other_id)
+        if other and other.id ~= intent.id and exchange_compatible(intent, other, compatible) then
+          found = true
+        end
+      end
+    end)
+  end
+  return found
+end
+
 function M.each_group(domain, fn)
   if domain.small_groups then
     for i = 1, #domain.small_groups do
@@ -690,6 +730,575 @@ function M.next(cursor, callbacks)
       return nil
     end
   end
+end
+
+-- Exact component feasibility ----------------------------------------------
+
+local function exact_exchange_program(op, request, activation, resolve_guard)
+  while op do
+    if op.kind == 'guard' then
+      if not resolve_guard then
+        return nil
+      end
+      op = resolve_guard(request, op, activation)
+      if not op then
+        return nil
+      end
+      activation = activation and Path.child(activation, 'guard:result') or nil
+    elseif op.kind == 'annotated' then
+      activation = activation and Path.child(activation, 'annotated:body') or nil
+      op = op.p
+    elseif op.kind == 'and_then' and op.derived_map then
+      activation = activation and Path.child(activation, 'and_then:prefix') or nil
+      op = op.p
+    else
+      break
+    end
+  end
+  if not op or op.kind ~= 'primitive' then
+    return nil
+  end
+  local program = op.program
+  if not program or IR.kind(program) ~= 'exchange' then
+    return nil
+  end
+  return program
+end
+
+local function collect_exact_exchange_fragment(op, request, fragment, activation, resolve_guard)
+  if not op then
+    return false
+  end
+  if op.kind == 'guard' then
+    if not resolve_guard then
+      return false
+    end
+    local residual = resolve_guard(request, op, activation)
+    if not residual then
+      return false
+    end
+    return collect_exact_exchange_fragment(
+      residual,
+      request,
+      fragment,
+      activation and Path.child(activation, 'guard:result') or nil,
+      resolve_guard
+    )
+  end
+  if op.kind == 'annotated' then
+    return collect_exact_exchange_fragment(
+      op.p,
+      request,
+      fragment,
+      activation and Path.child(activation, 'annotated:body') or nil,
+      resolve_guard
+    )
+  end
+  if op.kind == 'and_then' and op.derived_map then
+    return collect_exact_exchange_fragment(
+      op.p,
+      request,
+      fragment,
+      activation and Path.child(activation, 'and_then:prefix') or nil,
+      resolve_guard
+    )
+  end
+  if op.kind == 'always' or op.kind == 'consequence' then
+    return true
+  end
+  if op.kind == 'primitive' then
+    local program = exact_exchange_program(op, request, activation, resolve_guard)
+    if not program then
+      return false
+    end
+    fragment.primitives[#fragment.primitives + 1] = program
+    return true
+  end
+  if op.kind == 'product' then
+    for i = 1, #(op.lanes or {}) do
+      if
+        not collect_exact_exchange_fragment(
+          op.lanes[i],
+          request,
+          fragment,
+          activation and Path.child(activation, 'product:lane:' .. tostring(i)) or nil,
+          resolve_guard
+        )
+      then
+        return false
+      end
+    end
+    return true
+  end
+  if op.kind == 'choice' then
+    local domain, role = { alternatives = {} }, nil
+    for i = 1, #(op.choices or {}) do
+      local alternative_activation = activation and Path.child(activation, 'choice:' .. tostring(i)) or nil
+      local program = exact_exchange_program(op.choices[i], request, alternative_activation, resolve_guard)
+      if not program or role and role ~= program.role then
+        return false
+      end
+      role = program.role
+      domain.alternatives[#domain.alternatives + 1] = program
+    end
+    if #domain.alternatives == 0 then
+      return false
+    end
+    domain.role = role
+    fragment.domains[#fragment.domains + 1] = domain
+    return true
+  end
+  return false
+end
+
+local function matching_augment(domain_index, edges, matched, seen)
+  local row = edges[domain_index]
+  for i = 1, #row do
+    local supplier_index = row[i]
+    if not seen[supplier_index] then
+      seen[supplier_index] = true
+      local previous = matched[supplier_index]
+      if not previous or matching_augment(previous, edges, matched, seen) then
+        matched[supplier_index] = domain_index
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local function exact_exchange_graph(requests, component, resolve_guard)
+  local fragment = { domains = {}, primitives = {} }
+  local ids = component and component.ids
+  if not ids then
+    ids = {}
+    for id in pairs(requests or {}) do
+      ids[#ids + 1] = id
+    end
+    table.sort(ids)
+  end
+  for i = 1, #ids do
+    local request = requests[ids[i]]
+    if
+      not request
+      or not collect_exact_exchange_fragment(
+        request.op,
+        request,
+        fragment,
+        request.activation_root,
+        resolve_guard
+      )
+    then
+      return nil
+    end
+  end
+  if #fragment.domains < 2 then
+    return nil
+  end
+  local role = fragment.domains[1].role
+  for i = 2, #fragment.domains do
+    if fragment.domains[i].role ~= role then
+      return nil
+    end
+  end
+
+  local suppliers = {}
+  for i = 1, #fragment.primitives do
+    local program = fragment.primitives[i]
+    if program.role == role then
+      return nil
+    end
+    suppliers[#suppliers + 1] = program
+  end
+
+  local edges = {}
+  for di = 1, #fragment.domains do
+    local edge_row, seen = {}, {}
+    for ai = 1, #fragment.domains[di].alternatives do
+      local alternative = fragment.domains[di].alternatives[ai]
+      for si = 1, #suppliers do
+        local supplier = suppliers[si]
+        if
+          not seen[si]
+          and alternative.resource == supplier.resource
+          and alternative.role ~= supplier.role
+        then
+          seen[si] = true
+          edge_row[#edge_row + 1] = si
+        end
+      end
+    end
+    edges[di] = edge_row
+  end
+  return fragment, suppliers, edges
+end
+
+local function hall_witness(fragment, suppliers, edges, matched)
+  local domain_match = {}
+  for supplier_index, domain_index in pairs(matched) do
+    domain_match[domain_index] = supplier_index
+  end
+
+  local domain_seen, supplier_seen, queue, head = {}, {}, {}, 1
+  for di = 1, #fragment.domains do
+    if not domain_match[di] then
+      domain_seen[di] = true
+      queue[#queue + 1] = di
+    end
+  end
+  while head <= #queue do
+    local di = queue[head]
+    head = head + 1
+    local matched_supplier = domain_match[di]
+    for i = 1, #edges[di] do
+      local si = edges[di][i]
+      if si ~= matched_supplier and not supplier_seen[si] then
+        supplier_seen[si] = true
+        local next_domain = matched[si]
+        if next_domain and not domain_seen[next_domain] then
+          domain_seen[next_domain] = true
+          queue[#queue + 1] = next_domain
+        end
+      end
+    end
+  end
+
+  local domains, supplier_subset = {}, {}
+  for di = 1, #fragment.domains do
+    if domain_seen[di] then
+      domains[#domains + 1] = di
+    end
+  end
+  for si = 1, #suppliers do
+    if supplier_seen[si] then
+      supplier_subset[#supplier_subset + 1] = si
+    end
+  end
+  return domains, supplier_subset
+end
+
+-- Exact binary relation feasibility ---------------------------------------
+
+local function strip_binary_wrapper(op)
+  while op do
+    if op.kind == 'annotated' then
+      op = op.p
+    elseif op.kind == 'and_then' and op.derived_map then
+      op = op.p
+    else
+      break
+    end
+  end
+  return op
+end
+
+local function collect_binary_alternative(op, roles)
+  op = strip_binary_wrapper(op)
+  if not op then
+    return false
+  end
+  if op.kind == 'primitive' then
+    local program = op.program
+    if not program or IR.kind(program) ~= 'exchange' or roles[program.resource] then
+      return false
+    end
+    roles[program.resource] = program.role
+    return true
+  end
+  if op.kind == 'product' then
+    for i = 1, #(op.lanes or {}) do
+      if not collect_binary_alternative(op.lanes[i], roles) then
+        return false
+      end
+    end
+    return true
+  end
+  return false
+end
+
+local function exact_binary_relation_graph(requests, component)
+  local ids = component and component.ids
+  if not ids or #ids < 2 then
+    return nil
+  end
+  local variables, by_resource = {}, {}
+  for i = 1, #ids do
+    local request = requests[ids[i]]
+    local op = request and strip_binary_wrapper(request.op) or nil
+    if not op or op.kind ~= 'choice' or #(op.choices or {}) ~= 2 then
+      return nil
+    end
+    local alternatives = { {}, {} }
+    if
+      not collect_binary_alternative(op.choices[1], alternatives[1])
+      or not collect_binary_alternative(op.choices[2], alternatives[2])
+    then
+      return nil
+    end
+    local resource_count = 0
+    for resource, role in pairs(alternatives[1]) do
+      resource_count = resource_count + 1
+      local other = alternatives[2][resource]
+      if not other or other == role then
+        return nil
+      end
+      local rows = by_resource[resource]
+      if not rows then
+        rows = {}
+        by_resource[resource] = rows
+      end
+      rows[#rows + 1] = i
+    end
+    for resource in pairs(alternatives[2]) do
+      if alternatives[1][resource] == nil then
+        return nil
+      end
+    end
+    if resource_count == 0 then
+      return nil
+    end
+    variables[i] = { request_id = ids[i], alternatives = alternatives }
+  end
+
+  local relations = {}
+  for resource, rows in pairs(by_resource) do
+    if #rows ~= 2 then
+      return nil
+    end
+    local left, right = rows[1], rows[2]
+    local allowed = {}
+    for a = 1, 2 do
+      for b = 1, 2 do
+        if variables[left].alternatives[a][resource] ~= variables[right].alternatives[b][resource] then
+          allowed[#allowed + 1] = { a - 1, b - 1 }
+        end
+      end
+    end
+    local parity
+    if #allowed == 2 and allowed[1][1] == allowed[1][2] and allowed[2][1] == allowed[2][2] then
+      parity = 0
+    elseif #allowed == 2 and allowed[1][1] ~= allowed[1][2] and allowed[2][1] ~= allowed[2][2] then
+      parity = 1
+    else
+      return nil
+    end
+    relations[#relations + 1] = {
+      left = left,
+      right = right,
+      parity = parity,
+      resource = resource,
+    }
+  end
+  table.sort(relations, function(a, b)
+    if a.left ~= b.left then
+      return a.left < b.left
+    end
+    if a.right ~= b.right then
+      return a.right < b.right
+    end
+    return tostring(a.resource) < tostring(b.resource)
+  end)
+  return variables, relations
+end
+
+local function parity_find(parent, xor_to_parent, value)
+  local p = parent[value]
+  if p == value then
+    return value, 0
+  end
+  local root, parity = parity_find(parent, xor_to_parent, p)
+  xor_to_parent[value] = (xor_to_parent[value] + parity) % 2
+  parent[value] = root
+  return root, xor_to_parent[value]
+end
+
+local function parity_conflict(relations, count)
+  local parent, rank, xor_to_parent = {}, {}, {}
+  for i = 1, count do
+    parent[i], rank[i], xor_to_parent[i] = i, 0, 0
+  end
+  for i = 1, #relations do
+    local relation = relations[i]
+    local left_root, left_parity = parity_find(parent, xor_to_parent, relation.left)
+    local right_root, right_parity = parity_find(parent, xor_to_parent, relation.right)
+    if left_root == right_root then
+      if (left_parity + right_parity) % 2 ~= relation.parity then
+        return i
+      end
+    else
+      if rank[left_root] < rank[right_root] then
+        left_root, right_root = right_root, left_root
+        left_parity, right_parity = right_parity, left_parity
+      end
+      parent[right_root] = left_root
+      xor_to_parent[right_root] = (left_parity + right_parity + relation.parity) % 2
+      if rank[left_root] == rank[right_root] then
+        rank[left_root] = rank[left_root] + 1
+      end
+    end
+  end
+  return nil
+end
+
+function M.exact_binary_relation_failure(requests, component)
+  local variables, relations = exact_binary_relation_graph(requests, component)
+  if not variables then
+    return nil
+  end
+  local conflict = parity_conflict(relations, #variables)
+  if not conflict then
+    return nil
+  end
+  local witness_relations = {}
+  for i = 1, conflict do
+    local row = relations[i]
+    witness_relations[i] = {
+      left_request = variables[row.left].request_id,
+      right_request = variables[row.right].request_id,
+      parity = row.parity,
+      resource = row.resource,
+    }
+  end
+  return {
+    kind = 'exact_binary_relation_failure',
+    relations = witness_relations,
+  }
+end
+
+function M.verify_exact_binary_relation_failure(requests, component, witness)
+  if not witness or witness.kind ~= 'exact_binary_relation_failure' then
+    return false
+  end
+  local variables, relations = exact_binary_relation_graph(requests, component)
+  if not variables or type(witness.relations) ~= 'table' then
+    return false
+  end
+  local by_request = {}
+  for i = 1, #variables do
+    by_request[variables[i].request_id] = i
+  end
+  local available = {}
+  for i = 1, #relations do
+    local row = relations[i]
+    local key = table.concat({ row.left, row.right, row.parity, tostring(row.resource) }, ':')
+    available[key] = (available[key] or 0) + 1
+  end
+  local checked = {}
+  for i = 1, #witness.relations do
+    local row = witness.relations[i]
+    local left, right = by_request[row.left_request], by_request[row.right_request]
+    if not left or not right or (row.parity ~= 0 and row.parity ~= 1) then
+      return false
+    end
+    if right < left then
+      left, right = right, left
+    end
+    local key = table.concat({ left, right, row.parity, tostring(row.resource) }, ':')
+    if not available[key] or available[key] == 0 then
+      return false
+    end
+    available[key] = available[key] - 1
+    checked[#checked + 1] = {
+      left = left,
+      right = right,
+      parity = row.parity,
+      resource = row.resource,
+    }
+  end
+  return parity_conflict(checked, #variables) ~= nil
+end
+
+-- Return a Hall-style witness for a finite exact exchange fragment. Guards may
+-- be resolved by a caller-supplied activation-local resolver; fallback and
+-- general continuation-bearing fragments remain ineligible rather than
+-- under-approximated.
+function M.exact_exchange_matching_failure(requests, component, resolve_guard)
+  local fragment, suppliers, edges = exact_exchange_graph(requests, component, resolve_guard)
+  if not fragment then
+    return nil
+  end
+
+  local matched, count = {}, 0
+  for di = 1, #fragment.domains do
+    if matching_augment(di, edges, matched, {}) then
+      count = count + 1
+    end
+  end
+  if count == #fragment.domains then
+    return nil
+  end
+
+  local domains, supplier_subset = hall_witness(fragment, suppliers, edges, matched)
+  return {
+    kind = 'exact_exchange_matching_failure',
+    domain_indices = domains,
+    supplier_indices = supplier_subset,
+  }
+end
+
+-- Verify that every supplier edge of the cited demand subset is contained in a
+-- strictly smaller capacity-one supplier subset. This check does not trust the
+-- provider's matching traversal.
+function M.verify_exact_exchange_matching_failure(requests, component, witness, resolve_guard)
+  if not witness or witness.kind ~= 'exact_exchange_matching_failure' then
+    return false
+  end
+  local fragment, suppliers, edges = exact_exchange_graph(requests, component, resolve_guard)
+  if not fragment then
+    return false
+  end
+  local domains, supplier_subset = witness.domain_indices, witness.supplier_indices
+  if type(domains) ~= 'table' or type(supplier_subset) ~= 'table' or #domains <= #supplier_subset then
+    return false
+  end
+
+  local domain_seen, supplier_seen = {}, {}
+  for i = 1, #supplier_subset do
+    local si = supplier_subset[i]
+    if type(si) ~= 'number' or si % 1 ~= 0 or si < 1 or si > #suppliers or supplier_seen[si] then
+      return false
+    end
+    supplier_seen[si] = true
+  end
+  for i = 1, #domains do
+    local di = domains[i]
+    if type(di) ~= 'number' or di % 1 ~= 0 or di < 1 or di > #fragment.domains or domain_seen[di] then
+      return false
+    end
+    domain_seen[di] = true
+    for j = 1, #edges[di] do
+      if not supplier_seen[edges[di][j]] then
+        return false
+      end
+    end
+  end
+  return true
+end
+
+-- Exact negative proof providers -------------------------------------------
+
+-- Matching is attempted before binary relations because it can exactify a
+-- finite guarded fragment through resolve_guard. Both providers expose the
+-- same prove, verify and instrumentation interface to the runtime.
+function M.exact_negative_failure(requests, component, resolve_guard)
+  local witness = M.exact_exchange_matching_failure(requests, component)
+  if not witness and resolve_guard then
+    witness = M.exact_exchange_matching_failure(requests, component, resolve_guard)
+  end
+  return witness or M.exact_binary_relation_failure(requests, component)
+end
+
+function M.verify_exact_negative_failure(requests, component, witness, resolve_guard)
+  if not witness then
+    return false
+  end
+  if witness.kind == 'exact_exchange_matching_failure' then
+    return M.verify_exact_exchange_matching_failure(requests, component, witness, resolve_guard)
+  end
+  if witness.kind == 'exact_binary_relation_failure' then
+    return M.verify_exact_binary_relation_failure(requests, component, witness)
+  end
+  return false
 end
 
 return M

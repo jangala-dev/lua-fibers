@@ -157,7 +157,7 @@ function Index:_plan(metadata)
   local memberships, component_atoms, wide_pairs = {}, {}, {}
   local membership_seen, component_seen = {}, {}
   add_unique(memberships, membership_seen, self.all_requests)
-  if metadata.dynamic then
+  if IR.active_dynamic(metadata) then
     add_unique(memberships, membership_seen, self.opaque)
   end
 
@@ -198,13 +198,14 @@ function Index:_plan(metadata)
   return { memberships = memberships, component_atoms = component_atoms, wide_pairs = wide_pairs }
 end
 
-function Index:add(request)
+function Index:add(request, metadata)
   if request._dependency_plan then
     self:remove(request)
   end
-  local metadata = request.metadata or IR.metadata(request.op)
-  request.metadata = metadata
+  metadata = metadata or request.metadata or IR.metadata(request.op)
+  request.metadata = request.metadata or IR.metadata(request.op)
   local plan = self:_plan(metadata)
+  plan.metadata = metadata
   request._dependency_plan = plan
   self.size = self.size + 1
   for i = 1, #plan.memberships do
@@ -376,7 +377,7 @@ function Index:each_supplier(intents, pending, entered, excluded, fn, required_c
   for id in pairs(possible) do
     local request = pending[id]
     if request and not (entered and entered[id]) and not (excluded and excluded[id]) then
-      local score, certainty, reason = IR.supply_score(request.metadata, intents)
+      local score, certainty, reason = IR.supply_score(IR.active_metadata(request.metadata), intents)
       if score > 0 and (required_certainty == nil or certainty == required_certainty) then
         count = count + 1
         if fn(id, score, certainty, reason, request) == false then

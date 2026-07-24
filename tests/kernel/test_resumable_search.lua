@@ -249,4 +249,71 @@ do
   end
 end
 
+-- A continuation may reveal a dependency which was not part of the prefix
+-- component. Demand-directed expansion must recruit that supplier and preserve
+-- the bounded session across driver calls.
+do
+  local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
+  local prefix = Rendezvous.new('resumable-continuation-prefix')
+  local residual = Rendezvous.new('resumable-continuation-residual')
+  local got
+
+  rt:spawn_raw(function()
+    got = rt:perform(prefix:get_op():and_then(function()
+      return residual:get_op()
+    end))
+  end, 'resumable-continuation-consumer')
+  rt:spawn_raw(function()
+    rt:perform(prefix:put_op(true))
+  end, 'resumable-continuation-prefix-supplier')
+  rt:spawn_raw(function()
+    rt:perform(residual:put_op('continuation-value'))
+  end, 'resumable-continuation-residual-supplier')
+
+  local found = false
+  for _ = 1, 60 do
+    local status = rt:step({ max_work = 1 })
+    if status.tag == 'found' then
+      found = true
+      break
+    end
+  end
+  assert(found, 'revealed continuation dependency expansion should remain resumable')
+  rt:run()
+  assert_eq(got, 'continuation-value')
+end
+
+-- Fallback dependencies may connect requests which are deliberately absent
+-- from one another's preferred dependency components. Once either fallback is
+-- opened, demand-directed full-metadata recruitment must expand the retained
+-- proof session without restarting it at every bounded driver call.
+do
+  local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
+  local left_primary = Rendezvous.new('resumable-fallback-left-primary')
+  local right_primary = Rendezvous.new('resumable-fallback-right-primary')
+  local fallback_channel = Rendezvous.new('resumable-fallback-channel')
+  local got, sent
+
+  rt:spawn_raw(function()
+    got = rt:perform(left_primary:get_op():or_else(fallback_channel:get_op()))
+  end, 'resumable-fallback-consumer')
+  rt:spawn_raw(function()
+    sent = rt:perform(right_primary:get_op():or_else(fallback_channel:put_op('fallback-value')))
+  end, 'resumable-fallback-supplier')
+
+  local found = false
+  for _ = 1, 40 do
+    local status = rt:step({ max_work = 1 })
+    if status.tag == 'found' then
+      found = true
+      break
+    end
+  end
+  assert(found, 'demand-directed fallback dependency expansion should remain resumable')
+  rt:run()
+  assert_eq(got, 'fallback-value')
+  assert_eq(sent, true)
+  assert_eq(rt.stats.plans, 2, 'one retained session per focus should survive fallback expansion')
+end
+
 print('tests/test_resumable_search.lua: ok')
