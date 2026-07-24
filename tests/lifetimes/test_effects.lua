@@ -14,6 +14,7 @@ package.path = table.concat({
 }, ';')
 
 local Op = require('fibers.op')
+local Effect = require('fibers.effect')
 local Runtime = require('fibers.runtime')
 local Scalar = require('fibers.resource.scalar')
 local TC = require('tests.support.effect_helpers')
@@ -97,6 +98,74 @@ local function test_duplicate_obligations_merge_to_one_discharge()
   assert_eq(calls[1], 'dup')
 end
 
+local function test_effect_keys_preserve_lua_identity()
+  local calls = {}
+  local IdentityKind
+  IdentityKind = Effect.kind({
+    name = 'test.typed_identity',
+    key = function(payload)
+      if payload.nil_key then
+        return nil
+      end
+      return payload.key
+    end,
+    merge = function(_a, _b)
+      return nil, { kind = 'effect_conflict', message = 'distinct typed keys were merged' }
+    end,
+    prepare = function(_rt, payload)
+      return {
+        kind = IdentityKind,
+        key = payload.key,
+        payload = payload,
+        discharge = function()
+          calls[#calls + 1] = payload.id
+        end,
+      }
+    end,
+  })
+
+  local table_key_a, table_key_b = {}, {}
+  local effects = {
+    { id = 'number', key = 1 },
+    { id = 'string', key = '1' },
+    { id = 'boolean', key = false },
+    { id = 'boolean-string', key = 'false' },
+    { id = 'nil', nil_key = true },
+    { id = 'nil-string', key = 'nil' },
+    { id = 'table-a', key = table_key_a },
+    { id = 'table-b', key = table_key_b },
+  }
+  local lanes = {}
+  for i = 1, #effects do
+    lanes[i] = Op.emit(Effect.of(IdentityKind, effects[i]))
+  end
+
+  local st = one_perform(Op.all(lanes))
+  assert_eq(st.tag, 'found', 'typed effect keys should remain distinct')
+  assert_eq(#calls, #effects, 'all distinct typed keys should discharge')
+end
+
+local function test_nan_effect_key_rejects_candidate()
+  local NaNKind
+  NaNKind = Effect.kind({
+    name = 'test.nan_key',
+    key = function()
+      return 0 / 0
+    end,
+    merge = function(a, _b)
+      return a
+    end,
+    prepare = function(_rt, payload)
+      return { kind = NaNKind, payload = payload, discharge = function() end }
+    end,
+  })
+
+  local st, vals, rt = one_perform(Op.emit(Effect.of(NaNKind, {})), { quiet_deadlock = true })
+  assert_uncommitted(st, 'NaN cannot be used as an effect identity key')
+  assert_eq(vals.n, 0, 'participant does not resume for an invalid key')
+  assert_eq(rt:failed(), nil, 'invalid key rejects the candidate without corrupting the runtime')
+end
+
 local function test_conflicting_obligations_reject_candidate_world()
   local st, vals, rt = one_perform(
     Op.all({
@@ -108,6 +177,27 @@ local function test_conflicting_obligations_reject_candidate_world()
 
   assert_uncommitted(st, 'conflicting obligations must not commit')
   assert_eq(vals.n, 0, 'participant does not resume')
+end
+
+local function test_prepare_must_return_discharge_record()
+  local InvalidKind
+  InvalidKind = Effect.kind({
+    name = 'test.invalid_prepare_record',
+    key = function()
+      return 'invalid'
+    end,
+    merge = function(a, _b)
+      return a
+    end,
+    prepare = function()
+      return {}
+    end,
+  })
+
+  local st, vals, rt = one_perform(Op.emit(Effect.of(InvalidKind, {})), { quiet_deadlock = true })
+  assert_uncommitted(st, 'prepare must return a discharge record')
+  assert_eq(vals.n, 0, 'participant does not resume for an invalid prepared record')
+  assert_eq(rt:failed(), nil, 'invalid prepared record rejects the candidate')
 end
 
 local function test_prepare_refusal_is_candidate_rejection_not_runtime_failure()
@@ -199,7 +289,10 @@ end
 local tests = {
   test_emit_accepts_only_typed_effects,
   test_duplicate_obligations_merge_to_one_discharge,
+  test_effect_keys_preserve_lua_identity,
+  test_nan_effect_key_rejects_candidate,
   test_conflicting_obligations_reject_candidate_world,
+  test_prepare_must_return_discharge_record,
   test_prepare_refusal_is_candidate_rejection_not_runtime_failure,
   test_prepare_refusal_backtracks_to_other_worlds,
   test_discharge_failure_is_fatal_after_resource_commit,

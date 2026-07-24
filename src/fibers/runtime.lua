@@ -133,13 +133,43 @@ local function unpack_pack(p)
   return unpack_(p, 1, p.n or #p)
 end
 
+-- Effect identity is the pair (kind object, raw Lua key).  Do not stringify
+-- either half: 1 and "1", false and "false", and distinct table keys are
+-- different obligations.  A private sentinel preserves nil as a legitimate key.
+local NIL_EFFECT_KEY = {}
+
+local function normalise_effect_key(kind, payload)
+  local key = kind.key(payload)
+  if type(key) == 'number' and key ~= key then
+    return nil,
+      {
+        kind = 'invalid_effect_key',
+        message = 'effect kind ' .. tostring(kind.name) .. ' returned NaN as its key',
+      }
+  end
+  if key == nil then
+    return NIL_EFFECT_KEY
+  end
+  return key
+end
+
 local function merge_effects(effects)
-  local first_occurrence_keys, by_key = {}, {}
+  local by_kind, ordered = {}, {}
   for i = 1, #effects do
     local effect = effects[i]
     local kind = effect.kind
-    local key = tostring(kind._fibers_kind_id or kind.name) .. '\0' .. tostring(kind.key(effect.payload))
-    local old = by_key[key]
+    local key, key_err = normalise_effect_key(kind, effect.payload)
+    if key == nil then
+      return nil, key_err
+    end
+
+    local bucket = by_kind[kind]
+    if not bucket then
+      bucket = {}
+      by_kind[kind] = bucket
+    end
+
+    local old = bucket[key]
     if old then
       local payload, err = kind.merge(old.payload, effect.payload)
       if not payload then
@@ -148,15 +178,11 @@ local function merge_effects(effects)
       old.payload = payload
     else
       local copy = { _fibers_effect = true, kind = kind, payload = effect.payload }
-      by_key[key] = copy
-      first_occurrence_keys[#first_occurrence_keys + 1] = key
+      bucket[key] = copy
+      ordered[#ordered + 1] = copy
     end
   end
-  local out = {}
-  for i = 1, #first_occurrence_keys do
-    out[i] = by_key[first_occurrence_keys[i]]
-  end
-  return out
+  return ordered
 end
 
 local Cancellation = {}
@@ -1549,6 +1575,9 @@ function Runtime:_validate_hit(hit)
   return true
 end
 
+-- Preparation is a pure admissibility pass.  Search may call it repeatedly
+-- and may discard its result while backtracking.  Irreversible work belongs only
+-- in the prepared record's discharge callback, after Ledger.commit.
 function Runtime:_prepare_hit_effects(hit)
   local source = hit.effects
   if not source or #source == 0 then
@@ -1565,6 +1594,15 @@ function Runtime:_prepare_hit_effects(hit)
       self:_call_in_phase('effect_prepare', 'effect_error', effect.kind.prepare, self, effect.payload)
     if not p then
       return nil, err
+    end
+    if type(p) ~= 'table' or type(p.discharge) ~= 'function' then
+      return nil,
+        {
+          kind = 'invalid_prepared_effect',
+          message = 'effect kind '
+            .. tostring(effect.kind.name)
+            .. ' prepare must return a record with discharge',
+        }
     end
     prepared[#prepared + 1] = p
   end

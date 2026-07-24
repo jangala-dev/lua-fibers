@@ -71,7 +71,7 @@ This can be read directly:
 
 Both sides describe the complete exchange, so the sends, receives and sequencing remain provisional until `perform` selects one coherent outcome. The same vocabulary extends to time, state, task lifetimes and host resources.
 
-The complete runnable example is [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua).
+The runnable progression begins with [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua), introduces options in [`01_direct_methods_and_options.lua`](examples/tutorial/01_direct_methods_and_options.lua), `choice` in [`02_choice_and_timeout.lua`](examples/tutorial/02_choice_and_timeout.lua), named composition in [`03_named_composition.lua`](examples/tutorial/03_named_composition.lua), and transactional sequencing in [`04_transactional_and_then.lua`](examples/tutorial/04_transactional_and_then.lua). The [example index](examples/README.md) continues through task admission, cancellation, overload, proof-directed fallback, ownership, I/O, embedding and service supervision.
 
 ## The model
 
@@ -262,19 +262,19 @@ A practical guide is:
 | A put and take should rendezvous inside one decision | `tensor` | The producer is meant to make the consumer possible |
 | You are unsure whether sibling supply is intended | `all` | It is the more conservative conjunction |
 
-## Committed work
+## The three callback phases
 
-Concurrent programmes need a clear account of when callbacks run.
+Fibers has three normative callback phases. A callback must obey the rules of the phase in which it is registered.
 
-### During proof search
+| Phase | Callbacks | Contract |
+|---|---|---|
+| 1. Speculative search | `guard`, `map`, `and_then`, resource transitions, effect `key` and `merge` | May run zero, one or several times. Must be deterministic, non-yielding and free of observable or irreversible side effects. |
+| 2. Committed-world effect protocol | effect `prepare`, then `discharge` | `prepare` is pure and replayable. It may reject a candidate or return a discharge plan. `discharge` runs once, after state installation, and performs the committed host action. |
+| 3. Participant continuation | `wrap` | Runs once when the selected participant resumes. It may perform further options and ordinary application work, but cannot alter the world which has already committed. |
 
-`map`, `and_then`, guards and resource-transition callbacks calculate possible worlds. They may be replayed and must not perform irreversible work.
+A pure effect preparation must not reserve host capacity, mutate external state, deliver events, spawn, perform or yield. It may depend only on its payload, immutable runtime configuration and managed facts already represented by the candidate. Put irreversible work in `discharge`, not `prepare`.
 
-A guard delays construction until one structural occurrence becomes relevant. Its result is stable within that speculative activation, but a later activation may call the builder again. Use it for private fresh values or attempt-local preparation; use `wrap` or a committed effect for observable work.
-
-### After a participant commits
-
-`wrap` runs in the resumed fibre after its option has committed:
+A guard delays construction until one structural occurrence becomes relevant. Its result is stable within that speculative activation, but a later activation may call the builder again. Use it for private fresh values; use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
 
 ```lua
 local receive_and_report = inbox:get_op():wrap(function(message)
@@ -283,13 +283,9 @@ local receive_and_report = inbox:get_op():wrap(function(message)
 end)
 ```
 
-A wrap may perform further options because proof search has finished for the selected occurrence.
+Typed effect identity is the pair of the effect-kind object and its raw Lua key. Types and object identity are preserved: `1` is distinct from `"1"`, and two distinct table keys remain distinct. `nil` is supported; NaN is rejected.
 
-### As part of the committed world
-
-Typed effects represent obligations which belong to the selected world itself. They are prepared transactionally and discharged only after commitment. Task admission is an important example: a task whose admission option loses is never started.
-
-Advanced facilities can define effect kinds, but most users encounter effects through tasks, scopes, interruption and host-backed resources. See [`docs/advanced/option-algebra.md`](docs/advanced/option-algebra.md) for the complete distinction, including defeat obligations.
+Task admission is an important effect example: a task whose admission option loses is never started. Most users encounter effects through tasks, scopes, interruption and host-backed resources. See [`docs/advanced/option-algebra.md`](docs/advanced/option-algebra.md) for the complete rules, including defeat obligations.
 
 ## Structured lifetimes
 
@@ -579,6 +575,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 - [Lifetimes, custody and settlement](docs/advanced/lifetimes-and-custody.md)
 - [Flows, streams and the host reactor](docs/advanced/flows-and-streams.md)
 - [Embedding and host integration](docs/advanced/embedding.md)
+- [Port architectures: Rust, Embassy, WASM and Kotlin](docs/advanced/ports.lua)
 - [Comparison with related systems](docs/design/comparison.md)
 - [Kernel design](docs/design/kernel.md)
 

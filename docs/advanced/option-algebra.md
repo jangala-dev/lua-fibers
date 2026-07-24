@@ -318,7 +318,53 @@ The option returned for an activation remains fixed across local backtracking, b
 
 Guard evaluation is demand-driven. An unopened `or_else` fallback or an unentered choice branch need not evaluate its guards.
 
-## 11. Wraps
+## 11. Normative callback phases
+
+Every user or facility callback belongs to one of three phases. These are semantic requirements, not implementation advice.
+
+### Phase 1: speculative search
+
+This phase includes:
+
+```text
+guard builders
+map functions
+and_then continuations
+resource transition and witness callbacks
+effect key and merge functions
+```
+
+A phase-1 callback may run zero, one or several times as search branches, backtracks, suspends and resumes. It must be deterministic, non-yielding and replayable. It must not perform an option, spawn work, mutate external state, deliver an external fact or undertake work requiring compensation.
+
+### Phase 2: committed-world effects
+
+An effect kind has a pure `prepare` callback and a post-commit `discharge` callback.
+
+`prepare(runtime, payload)` may run several times and its result may be discarded. It must therefore be deterministic, non-yielding and free of observable mutation. It must not reserve host capacity, acquire an external resource, deliver an event, perform, spawn or yield. It may return:
+
+```text
+prepared_record
+nil, structured_refusal
+```
+
+A prepared record must contain a `discharge` function. Preparation may depend only on the payload, immutable runtime configuration and managed facts already represented in the candidate. In particular, refusal must not depend on unversioned volatile host state: such a refusal may reject the preferred side of `or_else`, so it must remain valid under the candidate's validation facts.
+
+All effects are merged and prepared before resource state is installed. Once the candidate commits, each prepared `discharge` runs once in stable first-occurrence order. Discharge may perform the irreversible host action represented by the effect, but it may not call `perform`; failure is fatal and post-commit.
+
+### Phase 3: participant continuation
+
+A `wrap` runs once after state installation and effect discharge, when the selected participant resumes. It may perform further options, spawn and interact with the outside world. It cannot change which world committed and its failure is a participant failure rather than a transaction rejection.
+
+The phase boundary may be summarised as:
+
+```text
+search constructs possible worlds
+effect preparation validates a possible committed obligation
+effect discharge installs its irreversible consequence
+wrap continues one participant after the committed world is complete
+```
+
+## 12. Wraps
 
 `wrap` transforms one participant's committed result:
 
@@ -344,7 +390,7 @@ wrap(wrap(op, f), g) ≈ wrap(op, g ∘ f)
 
 provided multiple return values and errors are preserved.
 
-## 12. Defeat obligations
+## 13. Defeat obligations
 
 `op:on_defeat(effect)` attaches a typed obligation to an entered occurrence which loses to a committed competitor.
 
@@ -360,7 +406,7 @@ an option which was never entered
 
 Defeat effects are prepared and discharged with the winning world's effect batch.
 
-## 13. Fixed primitive substrate
+## 14. Fixed primitive substrate
 
 Trusted facilities compile to fixed primitive programme forms:
 
@@ -429,7 +475,7 @@ Each witness is an ordinary global alternative. Petri token bindings and Calenda
 
 Rendezvous compiles to a one-use exchange intent. Matching remains provisional until both participants and their continuations close.
 
-## 14. External observations
+## 15. External observations
 
 Signal, EventQueue and Readiness use host-owned versioned locations updated through runtime-bound `ExternalFeed` capabilities. Clock options read host time and carry deadline checks.
 
@@ -449,23 +495,32 @@ Any delivery which could make a preferred option ready must invalidate a
 fallback proof before that fallback may commit.
 ```
 
-## 15. Effects
+## 16. Effects
 
-Effects are typed post-commit obligations. Built-in uses include spawn, interrupt, scope lifecycle notification and host wake.
+Effects are typed committed-world obligations. Built-in uses include spawn, interrupt, scope lifecycle notification and host wake.
+
+Identity is the ordered pair:
+
+```text
+(EffectKind object, raw key value)
+```
+
+The runtime does not stringify either component. Lua type and identity are preserved: numeric `1` differs from string `"1"`; false differs from `"false"`; two distinct tables remain distinct. `nil` is represented by a private sentinel. NaN is rejected because it cannot provide stable table-key identity.
 
 Laws:
 
 ```text
 losing worlds discharge no effects
-all effects are prepared before state installation
-same-key effects merge according to their EffectKind or conflict
+key, merge and prepare are pure and replayable
+all effects are merged and prepared before state installation
+only effects with the same kind object and raw key are merged
 distinct effects retain stable first-occurrence order
-prepared effects discharge after state installation
+prepared effects discharge once after state installation
 ```
 
 Effect kinds do not carry a global priority or numeric order. A facility which requires an inseparable discharge sequence should represent it as one compound effect. Effects are in-process obligations, not a durable outbox.
 
-## 16. Ownership and settlement
+## 17. Ownership and settlement
 
 Region options make custody part of the committed world:
 
@@ -490,7 +545,7 @@ scope completion requires policy accounting for retained roots
 
 Settlement protocols run after a claim commits and may themselves perform options.
 
-## 17. Host boundary
+## 18. Host boundary
 
 Hosts supply time, blocking and readiness delivery. They do not define transaction semantics.
 
@@ -505,7 +560,7 @@ clear or refresh readiness hints after would-block outcomes
 
 A host bug can invalidate assumptions about the external world, but cannot lawfully bypass feed validation.
 
-## 18. Runtime scope
+## 19. Runtime scope
 
 Transactions are coherent within one runtime commit. They are not:
 
@@ -518,7 +573,7 @@ persistent message queues
 
 External durability must be implemented through durable state and idempotent effects above this runtime.
 
-## 19. Expected laws and non-laws
+## 20. Expected laws and non-laws
 
 Expected laws, subject to callback purity and value packaging:
 
@@ -547,7 +602,7 @@ effects are not location writes
 runtime transactions are not durable transactions
 ```
 
-## 20. Implementation obligations
+## 21. Implementation obligations
 
 The current ledger machine and copy-on-branch reference machine consume the same option IR while maintaining independent speculative-state representations. The test suite exercises:
 
@@ -563,7 +618,7 @@ Flow and stream losing-branch safety
 
 Fairness and uniform probability between perpetually available alternatives are not currently promised. `choice_seed` makes traversal reproducible for the same programme, request sequence and external inputs. Search budgets are optional controls and must never alter fallback semantics.
 
-## 21. Summary
+## 22. Summary
 
 ```text
 option       proof search for a compatible committed world

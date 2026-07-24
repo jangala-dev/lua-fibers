@@ -40,9 +40,21 @@ end
 
 Use `_op` for methods which construct composable options. Reserve plain methods for immediate inspection or local construction which cannot suspend or commit transactional state.
 
-## Callback discipline
+## Normative callback discipline
 
-Callbacks executed during search must be deterministic, non-yielding and free of irreversible side effects. Put committed external work in a typed effect or in `wrap`, according to whether the work belongs to the committed world or to one resumed participant.
+Facilities must place each callback in one of three phases.
+
+| Phase | Facility callbacks | Requirements |
+|---|---|---|
+| Speculative search | guards, `map`, `and_then`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
+| Committed-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
+| Participant continuation | `wrap` | Runs after commit in the resumed fibre. It may perform, spawn and interact with the outside world. |
+
+`prepare` must not reserve host capacity or acquire an external resource. It may inspect only the effect payload, immutable runtime configuration and managed facts already represented by the candidate. A refusal based on untracked volatile host state is invalid because it could admit an `or_else` fallback without a revalidatable proof. Model such capacity or readiness as a managed resource, then put the irreversible host action in `discharge`.
+
+Effect identity is `(EffectKind, key)` using raw Lua identity. Do not stringify keys in an effect kind. Values of different types remain distinct; table and userdata keys use object identity; `nil` is supported; NaN is not. `merge` is called only for effects of the same kind with the same raw key.
+
+Use a typed effect when the work belongs to the committed world. Use `wrap` when it belongs to one resumed participant.
 
 ## Composition before new mechanisms
 

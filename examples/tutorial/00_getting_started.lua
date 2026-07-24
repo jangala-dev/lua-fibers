@@ -8,61 +8,25 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+-- Start with ordinary sequential code. Fibres suspend at direct operations, and
+-- the enclosing scope accounts for every child before it returns.
+
 local fibers = require('fibers')
-local Op = require('fibers.op')
 local channel = require('fibers.channel')
 
-local function direct_version()
-  local jobs = channel.new()
-  local replies = channel.new()
-  local outcome
+local jobs = channel.new()
+local replies = channel.new()
+local result
 
-  fibers.run(function()
-    fibers.spawn(function()
-      local job = jobs:get()
-      replies:put('completed ' .. job)
-    end, 'direct-worker')
+fibers.run(function(scope)
+  scope:spawn(function()
+    local job = jobs:get()
+    replies:put('completed ' .. job)
+  end, 'worker')
 
-    jobs:put('inspection')
-    outcome = replies:get()
-  end)
+  jobs:put('inspection')
+  result = replies:get()
+end)
 
-  return outcome
-end
-
-local function composed_version()
-  local jobs = channel.new()
-  local replies = channel.new()
-  local stop = channel.new()
-  local outcome
-
-  fibers.run(function()
-    fibers.spawn(function()
-      fibers.perform(jobs:get_op():and_then(function(job)
-        return replies:put_op('completed ' .. job)
-      end))
-    end, 'composed-worker')
-
-    local completed = jobs
-      :put_op('inspection')
-      :and_then(function()
-        return replies:get_op()
-      end)
-      :map(function(reply)
-        return 'worker: ' .. reply
-      end)
-
-    local stopped = stop:get_op():map(function(reason)
-      return 'stopped: ' .. reason
-    end)
-
-    outcome = fibers.perform(Op.choice(completed, stopped))
-  end)
-
-  return outcome
-end
-
-assert(direct_version() == 'completed inspection')
-assert(composed_version() == 'worker: completed inspection')
-
-print('examples/tutorial/00_getting_started.lua: ok')
+assert(result == 'completed inspection')
+print('result:', result)

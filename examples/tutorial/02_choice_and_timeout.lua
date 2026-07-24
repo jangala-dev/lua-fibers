@@ -2,47 +2,43 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
--- Choice: compose a timeout and a channel receive as ordinary operations.
+-- choice says that either coherent result is acceptable. Source order does not
+-- create priority.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
-local host = require('fibers.host')
+local Host = require('fibers.host')
 
-local my_chan = channel.new()
-local retval
-local eventual_message
+local inbox = channel.new()
+local result
 
-fibers.run(function()
-  fibers.spawn(function()
-    fibers.perform(Sleep.sleep_op(2):and_then(function()
-      return my_chan:put_op('hello')
-    end))
+fibers.run(function(scope)
+  scope:spawn(function()
+    Sleep.sleep(2)
+    inbox:put('late message')
   end, 'delayed-sender')
 
-  retval = fibers.perform(Op.choice(
-    Sleep.sleep_op(1):wrap(function()
+  result = fibers.perform(Op.choice(
+    inbox:get_op(),
+    Sleep.sleep_op(1):map(function()
       return 'timeout'
-    end),
-    my_chan:get_op()
+    end)
   ))
 
-  -- Drain the delayed sender so the enclosing scope can finish normally.
-  if retval == 'timeout' then
-    eventual_message = fibers.perform(my_chan:get_op())
+  -- The sender remains owned by the scope. Drain it so this example exits
+  -- normally rather than cancelling it at the boundary.
+  if result == 'timeout' then
+    assert(inbox:get() == 'late message')
   end
-end, { host = host.manual() })
+end, { host = Host.manual() })
 
-assert(retval == 'timeout')
-assert(eventual_message == 'hello')
-print('choice result:', retval)
+assert(result == 'timeout')
+print('choice result:', result)

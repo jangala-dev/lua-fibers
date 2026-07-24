@@ -973,9 +973,10 @@ local function final_candidate(state)
     state.search_steps
   )
 
-  -- Effect merge and preparation are part of world admissibility. A structured
-  -- refusal therefore rejects this derivation and lets ordinary search
-  -- backtrack to another choice, partner or fallback world.
+  -- Effect merge and pure preparation are part of world admissibility. Search
+  -- may repeat or discard preparation freely. A structured refusal rejects this
+  -- derivation and lets ordinary search backtrack to another world; irreversible
+  -- work is confined to discharge after state installation.
   local prepared = state.runtime:_prepare_hit_effects(candidate)
   if not prepared then
     candidate:clear_hit()

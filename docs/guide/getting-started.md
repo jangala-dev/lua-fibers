@@ -93,7 +93,7 @@ op:wrap(function(...) ... end)
 op:on_defeat(effect)
 ```
 
-`map`, `and_then` and resource transition callbacks execute during speculative proof search and may be replayed. They must be deterministic, non-yielding and free of irreversible side effects. `wrap` runs for the resumed participant after commit and may perform another option.
+Fibers has three callback phases. Search callbacks such as `guard`, `map`, `and_then`, resource transitions and effect keying are speculative and replayable. Effect `prepare` is also pure and replayable; it returns a discharge plan but must not reserve, mutate, spawn, perform or yield. Effect `discharge` runs after state commits. `wrap` then runs for the resumed participant and may perform another option. These rules are normative; see `../advanced/option-algebra.md`.
 
 ### Choice
 

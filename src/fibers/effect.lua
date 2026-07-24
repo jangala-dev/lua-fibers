@@ -1,15 +1,24 @@
--- Public typed after-commit effects.
+-- Public typed committed-world effects.
 --
--- Effects are the public form of transaction effects: runtime-owned
--- obligations that are discharged iff the selected world commits.  The built-in
--- effects are deliberately small: wake is a level-triggered nudge, and spawn
--- starts a fibre after its admission has committed.
-
--- Typed runtime obligations carried by committed candidate worlds.
+-- Effects are runtime-owned obligations carried by candidate worlds and
+-- discharged iff the selected world commits.  Effect callbacks obey a strict
+-- protocol:
 --
--- An effect kind owns the small algebra for one family of obligations:
--- construction, keying, duplicate merge, commit-time preparation and
--- post-resource discharge.
+--   * key and merge are speculative, deterministic and replayable;
+--   * prepare is pure, deterministic, non-yielding and replayable;
+--   * discharge runs only after resource state has committed and may perform the
+--     irreversible host action represented by the prepared record.
+--
+-- prepare must not reserve capacity, mutate host state, deliver external facts,
+-- spawn, perform, yield or otherwise require rollback.  It may return nil plus a
+-- structured reason to reject the candidate, or a prepared record containing a
+-- discharge function.  A refusal must depend only on the payload, immutable
+-- runtime configuration or managed facts already represented by the candidate.
+--
+-- Effect identity is the pair (EffectKind object, raw Lua key).  Lua types and
+-- object identity are preserved: 1 differs from "1", and distinct tables are
+-- distinct keys.  nil is supported; NaN is rejected because it has no stable
+-- table-key identity.
 
 local EffectKind = (function()
   local EffectKind = {}
