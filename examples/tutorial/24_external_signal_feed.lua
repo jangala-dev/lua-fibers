@@ -8,27 +8,27 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Embedders deliver outside facts through runtime-bound feeds. Delivery occurs
--- outside a fibre; it invalidates the relevant proof frontier and wakes the
--- Fibers runtime.
+-- Embedders deliver outside facts through runtime-bound feeds. A hardware
+-- interrupt or host callback invalidates the relevant proof frontier and wakes
+-- the Fibers runtime without running application logic re-entrantly.
 
 local Runtime = require('fibers.runtime')
 local Host = require('fibers.host')
 
 local runtime = Runtime.new({ host = Host.manual() })
-local signal, feed = runtime:signal('button')
+local signal, feed = runtime:signal('door-sensor')
 local result
 
 runtime:spawn_raw(function()
   result = runtime:perform(signal:wait_op())
-end, 'button-waiter')
+end, 'door-sensor-waiter')
 
 local initial = runtime:run()
 assert(initial.tag == 'pending')
 
-feed:set('pressed')
+feed:set('open')
 local resumed = runtime:run()
 
 assert(resumed.tag == 'found')
-assert(result == 'pressed')
-print('initial:', initial.tag, 'after feed:', resumed.tag, result)
+assert(result == 'open')
+print('initial:', initial.tag, 'after sensor feed:', resumed.tag, result)

@@ -101,6 +101,17 @@ end, {
 
 An embedding which already owns an event loop should normally drive `Runtime:run` or `Runtime:step` itself.
 
+The Roblox profile packages that pattern as a checked root application:
+
+```lua
+local app = require('fibers.roblox').prepare(root_fn)
+local status = app:advance({ horizon = host_now + turn_budget })
+```
+
+A host horizon is an outer scheduling boundary. Exhausting it retains runtime
+progress for a later call and does not establish Retry. `Roblox.attach` merely
+adds event- or phase-driven scheduling above the same non-blocking interface.
+
 ## Reproducible unordered choice
 
 `Runtime.new` accepts a `choice_seed`:
@@ -134,6 +145,7 @@ Built-in host constructors are:
 ```lua
 host.pure(opts)
 host.manual(opts)
+host.roblox(opts)       -- explicit embedded boundary; does not block
 host.luajit_linux(opts)
 host.cffi_linux(opts)
 host.luaposix(opts)
@@ -142,7 +154,7 @@ host.select(name, opts)
 host.default(opts)
 ```
 
-`pure` is portable and time-oriented. `manual` is deterministic and intended for tests and explicit event-loop integration. Native hosts are optional and expose support checks in their implementation modules.
+`pure` is portable and time-oriented. `manual` is deterministic and intended for tests and explicit event-loop integration. `roblox` is non-blocking and is used through `fibers.roblox.prepare` or `fibers.roblox.attach`; it is deliberately excluded from `Host.default`, which serves the standalone `Runtime:drive` path. Native hosts are optional and expose support checks in their implementation modules.
 
 Inspect availability with:
 

@@ -37,11 +37,14 @@ end
 local FAMILY_MODULES = {
   pure = 'fibers.host.pure',
   manual = 'fibers.host.manual',
+  roblox = 'fibers.host.roblox',
   luajit_linux = 'fibers.host.luajit_linux',
   cffi_linux = 'fibers.host.cffi_linux',
   luaposix = 'fibers.host.luaposix',
   nixio = 'fibers.host.nixio',
 }
+-- Roblox is an embedded, non-blocking host and is selected explicitly through
+-- fibers.roblox.prepare/attach rather than by the standalone Host.default path.
 local DEFAULT_ORDER = { 'luajit_linux', 'cffi_linux', 'luaposix', 'nixio', 'pure' }
 
 for name, module_name in pairs(FAMILY_MODULES) do

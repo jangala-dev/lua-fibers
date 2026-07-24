@@ -8,9 +8,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- A service owner can wait on a service exit and an administrative shutdown in
--- one decision. The losing service wait remains owned; shutdown then requests
--- cancellation and joins the service before the scope exits.
+-- An operations-centre owner can wait on dispatch-engine exit and administrative
+-- shutdown in one decision. Shutdown then cancels and joins the engine before
+-- returning.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
@@ -19,41 +19,41 @@ local Signal = require('fibers.resource.signal')
 local channel = require('fibers.channel')
 local Host = require('fibers.host')
 
-local selected, detail, service_exit
+local selected, detail, engine_exit
 
 fibers.run(function(scope)
-  local jobs = channel.new()
+  local dispatch_commands = channel.new()
   local shutdown = channel.new()
-  local blocked = Signal.new('service-blocked')
+  local idle = Signal.new('dispatch-engine-idle')
 
-  local service = scope:spawn(function()
+  local engine = scope:spawn(function()
     while true do
-      local job = fibers.perform(Op.choice(jobs:get_op(), blocked:wait_op()))
-      if job == 'stop' then
-        return 'stopped normally'
+      local command = fibers.perform(Op.choice(dispatch_commands:get_op(), idle:wait_op()))
+      if command == 'stop' then
+        return 'dispatch engine stopped normally'
       end
     end
-  end, 'service')
+  end, 'dispatch-engine')
 
   scope:spawn(function()
     Sleep.sleep(1)
-    shutdown:put('maintenance')
-  end, 'operator')
+    shutdown:put('operations-centre maintenance')
+  end, 'service-operator')
 
   selected, detail = fibers.perform(Op.named_choice({
-    service_exit = service:exit_op(),
+    engine_exit = engine:exit_op(),
     shutdown = shutdown:get_op(),
   }))
 
   if selected == 'shutdown' then
-    service:request_cancel(detail)
-    service_exit = fibers.perform(service:exit_op())
+    engine:request_cancel(detail)
+    engine_exit = fibers.perform(engine:exit_op())
   else
-    service_exit = detail
+    engine_exit = detail
   end
 end, { host = Host.manual() })
 
 assert(selected == 'shutdown')
-assert(detail == 'maintenance')
-assert(service_exit.tag == 'cancelled' or service_exit.tag == 'failed')
-print('selected:', selected, detail, 'service:', service_exit.tag)
+assert(detail == 'operations-centre maintenance')
+assert(engine_exit.tag == 'cancelled' or engine_exit.tag == 'failed')
+print('selected:', selected, detail, 'dispatch engine:', engine_exit.tag)

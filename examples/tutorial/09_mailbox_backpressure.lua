@@ -9,36 +9,37 @@ package.path = table.concat({
 }, ';')
 
 -- Mailbox adds bounded buffering, close semantics and explicit full policies.
--- reject_newest reports overload without disturbing the value already queued.
+-- A busy desktop event feed can reject a cosmetic cursor blink without
+-- disturbing the save request already waiting.
 
 local fibers = require('fibers')
 local Mailbox = require('fibers.mailbox')
 
-local first_ok, second_ok, second_reason
-local first, third, closed, close_reason, dropped
+local save_ok, blink_ok, blink_reason
+local first_event, final_event, closed, close_reason, dropped
 
 fibers.run(function()
-  local tx, rx = Mailbox.new({
+  local event_tx, event_rx = Mailbox.new({
     capacity = 1,
     full = 'reject_newest',
-    name = 'work-mailbox',
+    name = 'document-events',
   })
 
-  first_ok = tx:send('first')
-  second_ok, second_reason = tx:send('second')
-  first = rx:recv()
+  save_ok = event_tx:send('save requested')
+  blink_ok, blink_reason = event_tx:send('cursor blink')
+  first_event = event_rx:recv()
 
-  assert(tx:send('third'))
-  tx:close('producer finished')
+  assert(event_tx:send('autosave complete'))
+  event_tx:close('document closed')
 
-  third = rx:recv()
-  closed, close_reason = rx:recv()
-  dropped = fibers.perform(rx:dropped_op())
+  final_event = event_rx:recv()
+  closed, close_reason = event_rx:recv()
+  dropped = fibers.perform(event_rx:dropped_op())
 end)
 
-assert(first_ok == true)
-assert(second_ok == false and second_reason == 'full')
-assert(first == 'first' and third == 'third')
-assert(closed == nil and close_reason == 'producer finished')
+assert(save_ok == true)
+assert(blink_ok == false and blink_reason == 'full')
+assert(first_event == 'save requested' and final_event == 'autosave complete')
+assert(closed == nil and close_reason == 'document closed')
 assert(dropped == 1)
-print('received:', first, third, 'rejected:', dropped)
+print('desktop events:', first_event, 'then', final_event, 'rejected cosmetics:', dropped)

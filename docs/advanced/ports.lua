@@ -36,6 +36,58 @@ The three callback phases apply unchanged in every language:
 Capacity exhaustion in a bounded implementation is Unknown, never Retry. An
 implementation limit must not prove that a preferred option is absent.
 
+## Luau and Roblox profile
+
+The generated Luau target is the first language-port experiment and should
+remain source-compatible with the Lua semantic centre. Roblox adds an embedded
+host profile rather than a different concurrency model. The source tree now
+contains the first experimental slice: a bounded manual application driver,
+event- and phase-scheduling policies, queued signal delivery, owned
+subscriptions and bounded `BindToClose` settlement.
+
+```text
+Roblox task scheduler or Actor VM
+└── one Fibers runtime
+    ├── proof and commit engine
+    ├── lightweight internal Luau fibres
+    ├── Regions, scopes and settlement
+    └── RBXScriptSignal and engine-resource adapters
+```
+
+Roblox owns the scheduler and frame lifecycle. The canonical boundary is a
+non-blocking `Application:advance` call supplied with an absolute host time
+horizon and bounded proof quantum. Fibers owns transactional admission, child
+lifetimes, cancellation and settlement inside that turn. Reaching the host
+horizon retains exact progress and is not Retry.
+
+Ordinary engine callbacks publish queued external facts and request a later turn;
+they do not run the solver or arbitrary participant continuation directly.
+`Roblox.attach` supplies event-driven scheduling with one deferred wake and one
+earliest-deadline timer, or scheduling at a selected RunService phase. Manual
+engine loops may call `advance` themselves.
+
+The implemented and prospective layers are:
+
+```text
+Application:advance     implemented: bounded manual host horizon
+Event scheduling        implemented: coalesced defer plus earliest deadline
+RunService phases       implemented: selected bounded phase turns
+RBXScriptSignal         implemented: queued, latest or pulse subscription
+BindToClose             implemented: root shutdown and bounded settlement
+Players/characters      next: player-session and character helpers
+RemoteEvent             future: owned message streams and request lifetimes
+DataStore/HTTP          future: host completion plus explicit settlement
+Instance lifetime       future: custody and destruction observation
+```
+
+Parallel Luau Actors should initially contain separate Fibers worlds. Explicit
+Actor messages cross the boundary as host events. A single transaction spanning
+several Actors would require a distributed validation and commit protocol and is
+not part of the initial profile.
+
+The portable gameplay examples should serve as shared Lua, Luau, Roblox and
+browser demonstrations. See `docs/guide/roblox.md`.
+
 ## Rust family
 
 The Rust implementation should be layered rather than forced into one storage
@@ -326,11 +378,13 @@ A prudent sequence is:
 1. freeze the language-independent option, effect and Region contracts;
 2. build a portable conformance corpus from the Lua production and reference
    evaluators;
-3. implement Rust with alloc/std and differential tests;
-4. add browser and WASI hosts around the same core;
-5. design fixed-capacity storage and the Embassy root driver;
-6. add the strict no_std/no_alloc profile;
-7. implement Kotlin above its coroutine host.
+3. package the strict Luau target and implement the single-world Roblox host;
+4. validate scenes, player sessions and substantial game mechanics in Studio;
+5. implement Rust with alloc/std and differential tests;
+6. add browser and WASI hosts around the same Rust core;
+7. design fixed-capacity storage and the Embassy root driver;
+8. add the strict no_std/no_alloc profile;
+9. implement Kotlin above its coroutine host.
 
 The portable conformance corpus should compare possible committed worlds,
 resource writes, participant sets, effects, defeat obligations, Retry facts and
@@ -340,6 +394,8 @@ Unknown reasons. Matching returned values alone is insufficient.
 
 These projects describe the host mechanisms assumed by this note:
 
+* Roblox task scheduler: https://create.roblox.com/docs/reference/engine/libraries/task
+* Roblox Parallel Luau and Actors: https://create.roblox.com/docs/scripting/multithreading
 * Embassy executor and futures: https://docs.embassy.dev/
 * Rust and JavaScript future bridging:
   https://wasm-bindgen.github.io/wasm-bindgen/reference/js-promises-and-rust-futures.html
@@ -349,5 +405,5 @@ These projects describe the host mechanisms assumed by this note:
 return {
   status = 'design-note',
   normative = false,
-  targets = { 'rust-std', 'rust-no-std', 'embassy', 'browser-wasm', 'wasi', 'kotlin' },
+  targets = { 'luau', 'roblox', 'rust-std', 'rust-no-std', 'embassy', 'browser-wasm', 'wasi', 'kotlin' },
 }

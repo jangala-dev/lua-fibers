@@ -3,23 +3,24 @@
 Fibers supports two views of the same ordinary action.
 
 ```lua
-local message = inbox:get()
+local update = status_updates:get()
 ```
 
 performs the action immediately in the current fibre. The corresponding `_op`
 method constructs an inert **option**:
 
 ```lua
-local receive = inbox:get_op()
+local receive_update = status_updates:get_op()
 ```
 
 The option may be combined before it is submitted to `perform`:
 
 ```lua
-local message = perform(choice(
-  inbox:get_op(),
-  sleep_op(1):map(function()
-    return 'timeout'
+local outcome = perform(choice(
+  reply_ready:get_op(),
+  stop_requested:get_op(),
+  sleep_op(30):map(function()
+    return 'response deadline reached'
   end)
 ))
 ```
@@ -54,29 +55,29 @@ task:await_op()                 task:await()
 Use direct methods for straightforward sequential fibre code:
 
 ```lua
-local request = connection:read_line()
-connection:write('reply: ' .. request .. '\n')
-connection:flush()
+local command = commands:get()
+apply_command(command)
+acknowledgements:put('completed ' .. command)
 ```
 
 Use `_op` methods whenever an action must be composed:
 
 ```lua
-local request = perform(choice(
-  connection:read_line_op(),
-  stop:next_op():map(function()
-    return nil, 'stopped'
-  end)
-))
+local selected, detail = perform(named_choice({
+  completed = reply_ready:get_op(),
+  stopped = stop_requested:get_op(),
+  timed_out = deadline:get_op(),
+}))
 ```
 
 Options are also required for transactional sequencing, products and certified
 fallback:
 
 ```lua
-local result = perform(
-  primary:get_op()
-    :or_else(backup:get_op())
+local intention = perform(
+  attack_op(agent, target)
+    :or_else(take_cover_op(agent))
+    :or_else(return_to_patrol_op(agent))
 )
 ```
 

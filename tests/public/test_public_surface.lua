@@ -34,6 +34,9 @@ local FibersRegion = require('fibers.region')
 local FibersEffect = require('fibers.effect')
 local FibersTask = require('fibers.task')
 local FibersPolicy = require('fibers.policy')
+local FibersRoblox = require('fibers.roblox')
+local FibersRobloxHost = require('fibers.host.roblox')
+local FibersRobloxSubscription = require('fibers.roblox.subscription')
 
 local function fail(msg)
   error(msg, 2)
@@ -137,6 +140,17 @@ do
   assert_eq(FibersSocket.datagram_ipv6, nil, 'long IPv6 UDP direct alias is absent')
   assert_eq(fibers.uninterruptible, nil, 'mask has no long alias')
   assert_eq(FibersHost.Reactor, require('fibers.host.reactor'), 'Host exposes the reactor')
+  assert_eq(type(FibersHost.roblox), 'function', 'Host exposes the Roblox family constructor')
+  assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox integration exposes its host')
+  assert_eq(
+    FibersRoblox.Subscription,
+    FibersRobloxSubscription,
+    'Roblox integration exposes owned subscriptions'
+  )
+  assert_eq(type(FibersRoblox.events), 'function', 'Roblox integration exposes queued signal events')
+  assert_eq(type(FibersRoblox.latest), 'function', 'Roblox integration exposes latest-value signal events')
+  assert_eq(type(FibersRoblox.pulse), 'function', 'Roblox integration exposes coalesced signal pulses')
+  assert_eq(type(FibersRoblox.bind_to_close), 'function', 'Roblox integration exposes root shutdown binding')
   assert_eq(require('fibers.resource.rendezvous'), FibersRendezvous, 'Rendezvous is in the resource toolkit')
   assert_eq(require('fibers.resource.signal'), FibersSignal, 'Signal is an external-fed resource')
   assert_eq(require('fibers.region'), FibersRegion, 'Region owns custody')

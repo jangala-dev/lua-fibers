@@ -8,43 +8,46 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- A protocol decision can move custody in the same transaction as the state
--- changes and communication which justify the transfer.
+-- Camera mode, the protocol acknowledgement and transfer of custody move
+-- together. Gameplay cannot observe a half-completed cinematic hand-off.
 
 local fibers = require('fibers')
 local Scalar = require('fibers.resource.scalar')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
-local client, server = Stream.memory_pair({ name = 'protocol-stream', capacity = 128 })
-local negotiator = Scope.new('negotiator')
-local responder = Scope.new('responder')
-local protocol = Scalar.new('unknown', 'protocol')
-local reply
+local director_end, gameplay_end = Stream.memory_pair({
+  name = 'camera-control-link',
+  capacity = 128,
+})
+local cinematic = Scope.new('opening-cinematic')
+local gameplay = Scope.new('player-gameplay')
+local camera_mode = Scalar.new('cinematic', 'camera-mode')
+local acknowledgement
 
 local result = fibers.try_run(function()
-  fibers.perform(negotiator:raw_region():admit_op(server))
-  fibers.perform(client:writer():write_op('PING\n'))
+  fibers.perform(cinematic:raw_region():admit_op(gameplay_end))
+  fibers.perform(director_end:writer():write_op('RELEASE_CAMERA\n'))
 
-  fibers.perform(server:reader():read_line_op():and_then(function(line)
-    if line ~= 'PING' then
-      return server:close_op('unsupported protocol')
+  fibers.perform(gameplay_end:reader():read_line_op():and_then(function(message)
+    if message ~= 'RELEASE_CAMERA' then
+      return gameplay_end:close_op('unexpected camera protocol')
     end
-    return protocol
-      :write_op('ping')
+    return camera_mode
+      :write_op('player')
       :and_then(function()
-        return negotiator:move_op(server, responder)
+        return cinematic:move_op(gameplay_end, gameplay)
       end)
       :and_then(function()
-        return server:writer():write_op('PONG\n')
+        return gameplay_end:writer():write_op('CAMERA_READY\n')
       end)
   end))
 
-  reply = fibers.perform(client:reader():read_line_op())
+  acknowledgement = fibers.perform(director_end:reader():read_line_op())
 end)
 
 assert(result.ok)
-assert(protocol.value == 'ping')
-assert(reply == 'PONG')
-assert(server.owner == responder:raw_region())
-print('protocol:', protocol.value, 'reply:', reply, 'owner:', server.owner.name)
+assert(camera_mode.value == 'player')
+assert(acknowledgement == 'CAMERA_READY')
+assert(gameplay_end.owner == gameplay:raw_region())
+print('camera:', camera_mode.value, 'owner:', gameplay_end.owner.name)

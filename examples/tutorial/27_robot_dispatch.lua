@@ -8,6 +8,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+-- The same language serves Jangala's original field-system concerns: reserve
+-- power, confirm safety and dispatch a connected unit as one coherent plan.
+
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local channel = require('fibers.channel')
@@ -16,56 +19,55 @@ local Counter = require('fibers.resource.counter')
 
 local perform = fibers.perform
 local spawn = fibers.spawn
-local choice = Op.choice
-local all = Op.all
-local always = Op.always
 
-local function call_op(robot, command)
-  return robot.online:expect_op(true):and_then(function()
-    return robot.requests:put_op(command):and_then(function()
-      return robot.replies:get_op()
+local function mission_op(field_unit, mission)
+  return field_unit.online:expect_op(true):and_then(function()
+    return field_unit.commands:put_op(mission):and_then(function()
+      return field_unit.reports:get_op()
     end)
   end)
 end
 
-local online = true
-local result
+local unit_is_online = true
+local outcome
 
 fibers.run(function()
-  local robot = {
-    online = Scalar.new(online, 'robot:online'),
-    requests = channel.new(),
-    replies = channel.new(),
+  local field_unit = {
+    online = Scalar.new(unit_is_online, 'water-survey-unit:online'),
+    commands = channel.new(),
+    reports = channel.new(),
   }
-  local stop = channel.new()
-  local safety = Scalar.new('clear', 'safety')
-  local power = Counter.new({ initial = 1, name = 'power' })
+  local stop_requests = channel.new()
+  local safety_interlock = Scalar.new('clear', 'deployment-safety')
+  local battery_reserve = Counter.new({ initial = 1, name = 'battery-reserve' })
 
-  if online then
+  if unit_is_online then
     spawn(function()
-      perform(robot.requests:get_op():and_then(function(command)
-        return robot.replies:put_op('completed ' .. command)
+      perform(field_unit.commands:get_op():and_then(function(mission)
+        return field_unit.reports:put_op('completed ' .. mission)
       end))
-    end, 'robot')
+    end, 'water-survey-unit')
   end
 
-  result = perform(choice(
-    all({
-        safety:expect_op('clear'),
-        power:take_op(1),
-      })
-      :and_then(function()
-        return call_op(robot, 'inspection')
-      end)
-      :or_else(always('dispatch unavailable')),
-
-    stop:get_op():map(function(reason)
-      return 'stopped: ' .. reason
+  local dispatch = Op.all({
+    safety_interlock:expect_op('clear'),
+    battery_reserve:take_op(1),
+  })
+    :and_then(function()
+      return mission_op(field_unit, 'survey the eastern water point')
     end)
-  ):wrap(function(message)
+    :or_else(Op.always('field dispatch unavailable'))
+
+  local stop = stop_requests:get_op():map(function(reason)
+    return 'stopped: ' .. reason
+  end)
+
+  outcome = perform(Op.choice(dispatch, stop):wrap(function(message)
     print(message)
     return message
   end))
 end)
 
-assert(result == (online and 'completed inspection' or 'dispatch unavailable'))
+assert(
+  outcome == (unit_is_online and 'completed survey the eastern water point' or 'field dispatch unavailable')
+)

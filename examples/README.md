@@ -1,7 +1,7 @@
 # Examples
 
-Examples are grouped by audience and stability. Every tutorial file is a small,
-standalone programme which can be run from the repository root.
+Examples are grouped by audience and stability. Every tutorial and gameplay
+file is a small standalone programme which can be run from the repository root.
 
 ## Tutorial
 
@@ -10,53 +10,58 @@ with ordinary direct methods. `_op` forms appear only when composition gives
 them a purpose, and the more specialised proof and ownership facilities arrive
 after the direct model is established.
 
+The first two scenarios are deliberately generic. The sequence then ranges
+across emergency systems, robotics, field communications, desktop applications,
+firmware, games, servers and embedded hosts. Fibers is a concurrency language,
+not a domain-specific framework.
+
 ### Foundations
 
-| Example | Introduces |
+| Example | Scenario and idea |
 |---|---|
-| `00_getting_started.lua` | direct communication, fibres and scope ownership |
-| `01_direct_methods_and_options.lua` | the direct method and inert `_op` pairing |
-| `02_choice_and_timeout.lua` | unordered `choice` and an ordinary timeout branch |
-| `03_named_composition.lua` | readable results from `named_choice` and `named_all` |
-| `04_transactional_and_then.lua` | value-dependent transactional sequencing |
-| `05_transactional_spawn.lua` | task admission as part of the committed world |
-| `06_scoped_tasks.lua` | task results and structured lifetime boundaries |
-| `07_task_cancellation.lua` | explicit cancellation and inspectable task exits |
-| `08_transactional_state.lua` | direct and composable Scalar state |
-| `09_mailbox_backpressure.lua` | bounded mailboxes, close and overload policy |
-| `10_pulse_broadcast.lua` | coalescing broadcast notification |
+| `00_getting_started.lua` | a generic worker receives a command inside an owned child fibre |
+| `01_direct_methods_and_options.lua` | direct status updates and their inert `_op` twins |
+| `02_choice_and_timeout.lua` | emergency sensor confirmation or a precautionary deadline |
+| `03_named_composition.lua` | robot localisation choice and jointly ready motion systems |
+| `04_transactional_and_then.lua` | reserve a satellite uplink slot and admit a clinic session together |
+| `05_transactional_spawn.lua` | start a selected desktop indexing job exactly once |
+| `06_scoped_tasks.lua` | calibrate a sensor and configure a radio under one firmware start-up scope |
+| `07_task_cancellation.lua` | emergency-stop a robot motion planner and inspect its exit |
+| `08_transactional_state.lua` | update an incident level directly and transactionally |
+| `09_mailbox_backpressure.lua` | preserve a save request under cosmetic desktop-event overload |
+| `10_pulse_broadcast.lua` | a shelter radio and warning beacon observe one hazard change |
 
 ### Transactional composition
 
-| Example | Introduces |
+| Example | Scenario and idea |
 |---|---|
-| `11_certified_or_else.lua` | proof-directed fallback and rollback of provisional work |
-| `12_callback_phases.lua` | speculative callbacks, pure preparation, discharge and `wrap` |
-| `13_defeat_obligations.lua` | typed obligations attached to losing occurrences |
-| `14_all_and_tensor.lua` | conservative conjunction and intentional sibling hand-off |
+| `11_certified_or_else.lua` | flank only when stamina and squad radio form a complete game-AI plan |
+| `12_callback_phases.lua` | select an emergency dispatch, page responders after commit, then update the dashboard |
+| `13_defeat_obligations.lua` | retire an incompatible robot trajectory when a cautious route wins |
+| `14_all_and_tensor.lua` | reserve motor/vision capacity, then hand off a control word |
 
 ### Lifetimes and supervision
 
-| Example | Introduces |
+| Example | Scenario and idea |
 |---|---|
-| `15_nursery_failure.lua` | fail-fast child failure, sibling cancellation and reports |
-| `16_supervisor_collect.lua` | collecting independent child failures without failing the body |
-| `17_memory_stream.lua` | in-memory duplex streams |
-| `18_custody_move.lua` | transactional protocol state and ownership movement |
+| `15_nursery_failure.lua` | a failed flood controller cancels public warnings and the incident body |
+| `16_supervisor_collect.lua` | an optional desktop thumbnailer fails while search remains healthy |
+| `17_memory_stream.lua` | an embedded plugin reports to its native host through an owned stream |
+| `18_custody_move.lua` | hand camera control from a cinematic to gameplay |
 
 ### I/O, hosts and larger patterns
 
-| Example | Introduces |
+| Example | Scenario and idea |
 |---|---|
 | `19_pipe.lua` | owned pipe I/O |
 | `20_socket.lua` | owned stream sockets |
 | `21_resolver.lua` | owned name resolution and dialling |
 | `22_datagram.lua` | datagram sockets |
 | `23_process.lua` | child processes and communication |
-| `24_external_signal_feed.lua` | host delivery into a Fibers runtime |
-| `25_shared_deadline.lua` | one absolute deadline across several stages |
-| `26_service_supervision.lua` | service exit versus administrative shutdown |
-| `27_robot_dispatch.lua` | a fuller cross-resource decision |
+| `24_external_signal_feed.lua` | a hardware sensor delivered from the host runtime |
+| `25_shared_deadline.lua` | one firmware boot deadline across sensor and radio stages |
+| `26_service_supervision.lua` | dispatch-engine exit versus operations-centre shutdown |
+| `27_robot_dispatch.lua` | reserve power, confirm safety and dispatch a field unit |
 
 The progression is deliberate:
 
@@ -70,12 +75,50 @@ do one thing directly
 → prove fallback and attach committed obligations
 → combine several requirements
 → supervise failure and move custody
-→ apply the model to I/O, hosts and services
+→ apply the model across firmware, robotics, emergency systems, desktop apps,
+  games, hosts and field infrastructure
 ```
 
 Readers interested chiefly in application code can read `00`–`11`, then move
 to `15`–`17` and `25`–`27`. Facility authors should also read `12`–`14`, `18`
 and the advanced documentation.
+
+## Gameplay
+
+[`gameplay/`](gameplay/) develops complete mechanics rather than introducing one
+API member at a time:
+
+- a skippable cutscene whose camera, dialogue and animation settle cleanly;
+- a player-session lifetime;
+- atomic match admission;
+- an AI intention ladder based on `or_else`;
+- camera custody transfer;
+- supervised live-event spectacle;
+- an atomic inventory/world mechanic;
+- a combo input window.
+
+These examples are portable and are intended to become shared conformance and
+browser demonstrations. The companion [Roblox guide](../docs/guide/roblox.md)
+maps them onto Roblox scenes, player lifetimes, host events, shutdown and Actor
+boundaries.
+
+## Roblox Studio
+
+[`roblox/`](roblox/) exercises the experimental Roblox host adapter with real
+`RBXScriptSignal`-shaped APIs:
+
+- a manually phase-driven application with a strict host time horizon;
+- an explicit event-attached application lifecycle;
+- event-driven and RunService-phase scheduling above the same boundary;
+- a GUI action raced against a deadline;
+- a skippable cutscene owned by one scope;
+- a player-session lifetime;
+- root cancellation and settlement through `BindToClose`;
+- controlled demonstrations of queued, latest and coalesced signal modes.
+
+These `.luau` examples require Roblox Studio and are therefore not included in
+`make examples`. Their host and subscription behaviour is covered by the
+portable fake-engine tests in `tests/embedding/test_roblox.lua`.
 
 ## Recipes
 

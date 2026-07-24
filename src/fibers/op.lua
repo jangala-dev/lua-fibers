@@ -1,5 +1,15 @@
--- Compact external transaction algebra for lua.
--- Options are immutable syntax nodes; Runtime supplies the solver.
+-- Public option language for Fibers. Runtime supplies proof search and commit.
+--
+-- Application code should read in ordinary terms:
+--   choice       either coherent world is acceptable
+--   and_then     continue transactionally from a provisional result
+--   or_else      use the fallback only after valid present refutation
+--   all          satisfy every lane without positive sibling supply
+--   tensor       satisfy every lane with compatible sibling hand-off
+--   wrap         continue in the participant after commitment
+--
+-- Options are immutable by contract: construct, combine and perform them, but
+-- do not modify their representation tables.
 --
 -- The canonical search grammar is deliberately small:
 --   always | primitive | choice | guard | and_then | product | or_else | consequence
@@ -297,6 +307,9 @@ function Op:on_defeat(effect)
   return annotated(self, nil, effect, nil)
 end
 
+-- Unordered permission: any coherent branch may commit. Source position does
+-- not express priority; use or_else when a fallback requires proof that a
+-- preferred world is presently absent.
 function Op.choice(...)
   local xs = {}
   for i = 1, select('#', ...) do
@@ -318,6 +331,8 @@ function Op.choice(...)
   return node
 end
 
+-- Choice with a result label. Useful when the branch names are already the
+-- natural language of a mechanic: completed, skipped, player_left.
 function Op.named_choice(entries)
   local parsed = parse_named_entries(entries, 'named_choice')
   local branches = {}
@@ -347,6 +362,8 @@ local function product(xs, mode, label)
   return node
 end
 
+-- Independent conjunction. Every lane must be supportable from the common
+-- parent world; one sibling may constrain another but cannot supply it.
 function Op.all(xs)
   return product(xs, 'independent', 'all')
 end
@@ -371,10 +388,14 @@ function Op.named_all(entries)
   end)
 end
 
+-- Interacting conjunction. Compatible siblings may supply one another, such as
+-- a scene cue written in one lane and read in another.
 function Op.tensor(xs)
   return product(xs, 'interacting', 'tensor')
 end
 
+-- Transform provisional values during search. fn is pure, non-yielding and may
+-- be replayed. Use wrap for participant-local work after commitment.
 function Op:map(fn)
   assert_not_wrapped(self, 'map')
   -- Canonically and_then followed by always. Retaining the original callback as
@@ -393,6 +414,8 @@ function Op:map(fn)
   return node
 end
 
+-- Continue transactionally from provisional values. Earlier communication,
+-- state and admission remain retractable until the complete continuation commits.
 function Op:and_then(fn, opts)
   assert_not_wrapped(self, 'and_then')
   local node = op('and_then', {
@@ -407,12 +430,16 @@ function Op:and_then(fn, opts)
   return node
 end
 
+-- Proof-directed preference. The fallback is entered only after the preferred
+-- option yields Retry; Unknown never grants permission to fall back.
 function Op:or_else(q)
   local node = op('or_else', { p = self, q = q })
   node._contains_or_else = true
   return node
 end
 
+-- Resume participant-local code after commitment. Unlike speculative callbacks,
+-- fn may perform further options and carry out ordinary application work.
 function Op:wrap(fn)
   return annotated(self, fn, nil, nil)
 end

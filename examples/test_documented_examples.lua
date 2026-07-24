@@ -14,19 +14,25 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local FibersScalar = require('fibers.resource.scalar')
+local FibersChannel = require('fibers.channel')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersStream = require('fibers.stream')
 local FibersCalendar = require('examples.case_studies.calendar.calendar')
 local FibersPetri = require('examples.case_studies.petri.petri')
 local FibersHost = require('fibers.host')
 
--- README rendezvous and structured scope.
+-- README generic command and structured scope.
 fibers.run(function(scope)
-  local inbox = FibersRendezvous.new('docs-inbox')
+  local commands = FibersChannel.new()
+  local results = FibersChannel.new()
+
   scope:spawn(function()
-    fibers.perform(inbox:put_op('hello'))
-  end, 'sender')
-  assert(fibers.perform(inbox:get_op()) == 'hello')
+    local command = commands:get()
+    results:put('completed ' .. command)
+  end, 'command-worker')
+
+  commands:put('refresh configuration')
+  assert(results:get() == 'completed refresh configuration')
 end)
 
 -- Programming-guide Scalar transition.

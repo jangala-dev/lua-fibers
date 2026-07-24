@@ -8,33 +8,33 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- and_then carries a provisional result into the next option. The reservation
--- and send below form one transaction; no compensation code is required.
+-- and_then carries a provisional result into the next option. Reserving the
+-- last satellite uplink slot and admitting a clinic session form one transaction.
 
 local fibers = require('fibers')
 local channel = require('fibers.channel')
 local Counter = require('fibers.resource.counter')
 
-local slots = Counter.new({ initial = 1, name = 'worker-slots' })
-local requests = channel.new()
-local received, outcome
+local uplink_slots = Counter.new({ initial = 1, name = 'satellite-uplink-slots' })
+local telemetry_sessions = channel.new()
+local admitted_clinic, outcome
 
 fibers.run(function(scope)
   scope:spawn(function()
-    received = requests:get()
-  end, 'receiver')
+    admitted_clinic = telemetry_sessions:get()
+  end, 'telemetry-router')
 
-  outcome = fibers.perform(slots
+  outcome = fibers.perform(uplink_slots
     :take_op(1)
     :and_then(function()
-      return requests:put_op('inspection')
+      return telemetry_sessions:put_op('clinic-7')
     end)
     :map(function()
-      return 'admitted'
+      return 'telemetry admitted'
     end))
 end)
 
-assert(outcome == 'admitted')
-assert(received == 'inspection')
-assert(slots.value == 0)
-print('transaction:', outcome)
+assert(outcome == 'telemetry admitted')
+assert(admitted_clinic == 'clinic-7')
+assert(uplink_slots.value == 0)
+print('field network:', outcome, '-', admitted_clinic)

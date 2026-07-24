@@ -11,49 +11,52 @@ package.path = table.concat({
 -- The callback phases are part of the programming model:
 --   1. map/and_then/guards construct possible worlds and must remain pure;
 --   2. effect prepare is pure, then discharge runs after commitment;
---   3. wrap runs in the resumed participant and may perform ordinary work.
+--   3. wrap resumes the participant and may perform ordinary presentation.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Effect = require('fibers.effect')
 
-local events = {}
-local LogKind
+local timeline = {}
+local DispatchAlertKind
 
-LogKind = Effect.kind({
-  name = 'tutorial.log',
+DispatchAlertKind = Effect.kind({
+  name = 'tutorial.dispatch-alert',
   key = function(payload)
-    return payload.id
+    return payload.incident_id
   end,
-  merge = function(a, _b)
-    return a
+  merge = function(first, _second)
+    return first
   end,
   prepare = function(_runtime, payload)
-    -- Pure: construct a plan only. Do not append to events here.
+    -- Pure: describe the post-commit plan only. Do not page responders here.
     return {
-      kind = LogKind,
+      kind = DispatchAlertKind,
       payload = payload,
       discharge = function(_runtime, prepared)
-        events[#events + 1] = 'effect: ' .. prepared.payload.message
+        timeline[#timeline + 1] = 'effect: page ' .. prepared.payload.team
       end,
     }
   end,
 })
 
-local result
+local alert
 fibers.run(function()
-  local effect = Effect.of(LogKind, { id = 'selected', message = 'committed' })
+  local dispatch = Effect.of(DispatchAlertKind, {
+    incident_id = 'river-rise-17',
+    team = 'river response team',
+  })
 
-  result = fibers.perform(Op.emit(effect)
+  alert = fibers.perform(Op.emit(dispatch)
     :map(function()
-      return 'selected' -- speculative and pure
+      return 'alert selected' -- speculative and pure
     end)
-    :wrap(function(value)
-      events[#events + 1] = 'wrap: ' .. value
-      return value
+    :wrap(function(selected)
+      timeline[#timeline + 1] = 'wrap: update operations dashboard'
+      return selected
     end))
 end)
 
-assert(result == 'selected')
-assert(table.concat(events, ',') == 'effect: committed,wrap: selected')
-print(table.concat(events, ' then '))
+assert(alert == 'alert selected')
+assert(table.concat(timeline, ',') == 'effect: page river response team,wrap: update operations dashboard')
+print(table.concat(timeline, ' then '))

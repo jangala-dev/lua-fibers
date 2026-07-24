@@ -14,21 +14,22 @@ package.path = table.concat({
 local fibers = require('fibers')
 local channel = require('fibers.channel')
 
-local inbox = channel.new()
-local first, second
+local status_updates = channel.new()
+local first_update, second_update
 
 fibers.run(function(scope)
   scope:spawn(function()
-    inbox:put('direct')
-    inbox:put('composed')
-  end, 'sender')
+    status_updates:put('configuration loaded')
+    status_updates:put('connection ready')
+  end, 'status-source')
 
-  first = inbox:get()
+  first_update = status_updates:get()
 
-  local receive_later = inbox:get_op() -- inert until perform
-  second = fibers.perform(receive_later)
+  local receive_later = status_updates:get_op() -- inert until perform
+  second_update = fibers.perform(receive_later)
 end)
 
-assert(first == 'direct')
-assert(second == 'composed')
-print('direct:', first, 'option:', second)
+assert(first_update == 'configuration loaded')
+assert(second_update == 'connection ready')
+print('direct:', first_update)
+print('option:', second_update)

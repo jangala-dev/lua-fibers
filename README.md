@@ -1,8 +1,16 @@
 # Fibers
 
-Readable structured concurrency for Lua and Luau.
+Transactional concurrency and accountable lifetimes for Lua and Luau.
 
-Fibers lets a programme describe possible concurrent actions, combine those descriptions in ordinary Lua, and perform one coherent result. The same small vocabulary applies to channels, time, transactional state, task lifetimes and host resources.
+Fibers is designed for firmware controllers, robotics, emergency and field
+systems, highly concurrent desktop and server applications, and embedded C,
+C++ and Rust hosts. The same model also supports ambitious game logic, with
+Luau and Roblox as first-class proving grounds.
+
+A programme describes possible concurrent actions, combines those descriptions
+in ordinary Lua, and performs one coherent result. The same small vocabulary
+applies to channels, time, transactional state, task lifetimes, ownership and
+host resources.
 
 Fibers version 1 is an advanced work in progress. Its public surface is being reduced and settled before the first release.
 
@@ -12,21 +20,19 @@ Fibres run ordinary Lua functions. Everyday facilities provide direct methods fo
 
 ```lua
 local fibers = require('fibers')
-local Op = require('fibers.op')
-local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
 
-local jobs = channel.new()
-local replies = channel.new()
+local commands = channel.new()
+local results = channel.new()
 
 fibers.run(function()
   fibers.spawn(function()
-    local job = jobs:get()
-    replies:put('completed ' .. job)
-  end, 'worker')
+    local command = commands:get()
+    results:put('completed ' .. command)
+  end, 'command-worker')
 
-  jobs:put('inspection')
-  print(replies:get())
+  commands:put('refresh configuration')
+  print(results:get())
 end)
 ```
 
@@ -37,41 +43,61 @@ end)
 Each direct method has an inert `_op` form. Asking for the option form lets the same actions be combined before one coherent result is performed:
 
 ```lua
-local jobs = channel.new()
-local replies = channel.new()
-local stop = channel.new()
+local fibers = require('fibers')
+local Op = require('fibers.op')
+local channel = require('fibers.channel')
+
+local commands = channel.new()
+local acknowledgements = channel.new()
+local stop_requests = channel.new()
 
 fibers.run(function()
   fibers.spawn(function()
-    fibers.perform(jobs:get_op():and_then(function(job)
-      return replies:put_op('completed ' .. job)
+    fibers.perform(commands:get_op():and_then(function(command)
+      return acknowledgements:put_op('completed ' .. command)
     end))
-  end, 'worker')
+  end, 'command-worker')
 
-  local completed = jobs:put_op('inspection')
+  local do_work = commands:put_op('refresh state')
     :and_then(function()
-      return replies:get_op()
+      return acknowledgements:get_op()
     end)
     :map(function(reply)
-      return 'worker: ' .. reply
+      return 'work: ' .. reply
     end)
 
-  local stopped = stop:get_op():map(function(reason)
+  local stop = stop_requests:get_op():map(function(reason)
     return 'stopped: ' .. reason
   end)
 
-  local outcome = fibers.perform(Op.choice(completed, stopped))
-  print(outcome)
+  print(fibers.perform(Op.choice(do_work, stop)))
 end)
 ```
 
 This can be read directly:
 
-> Either send the inspection job and then receive its reply, or receive a reason to stop.
+> Either refresh the state and receive its acknowledgement, or receive a reason to stop.
 
-Both sides describe the complete exchange, so the sends, receives and sequencing remain provisional until `perform` selects one coherent outcome. The same vocabulary extends to time, state, task lifetimes and host resources.
+Both sides describe the complete exchange, so the sends, receives and sequencing remain provisional until `perform` selects one coherent outcome.
 
-The runnable progression begins with [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua), introduces options in [`01_direct_methods_and_options.lua`](examples/tutorial/01_direct_methods_and_options.lua), `choice` in [`02_choice_and_timeout.lua`](examples/tutorial/02_choice_and_timeout.lua), named composition in [`03_named_composition.lua`](examples/tutorial/03_named_composition.lua), and transactional sequencing in [`04_transactional_and_then.lua`](examples/tutorial/04_transactional_and_then.lua). The [example index](examples/README.md) continues through task admission, cancellation, overload, proof-directed fallback, ownership, I/O, embedding and service supervision.
+The runnable progression begins with two deliberately generic examples: [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua) and [`01_direct_methods_and_options.lua`](examples/tutorial/01_direct_methods_and_options.lua). It then ranges through emergency coordination, robotics, field communications, desktop workloads, firmware, games, servers, host embedding and ownership. The [example index](examples/README.md) gives the complete route.
+
+## Built for ambitious behaviour
+
+Fibers is not tied to one application domain. The same small language can describe:
+
+| Domain | Example decision |
+|---|---|
+| Firmware and controllers | read a sensor, meet one boot deadline and leave actuators in a safe state |
+| Robotics and autonomy | reserve motion and perception capacity, then admit one coherent trajectory |
+| Emergency and field systems | confirm a hazard, reserve communications and dispatch a connected response unit |
+| Highly concurrent desktop and server applications | admit work, supervise background services and retain failed shutdown as an outstanding obligation |
+| Games, Luau and Roblox | complete or skip a cutscene, settle player-owned work and compose ambitious mechanics cleanly |
+| Embedded plugin hosts | expose bounded C, C++ or Rust resources while guest logic remains inside ownership policy |
+
+The portable tutorial moves among these domains so that the concurrency vocabulary, rather than one scenario, remains the organising idea. The dedicated [`examples/gameplay/`](examples/gameplay/) collection develops cutscenes, player sessions, matchmaking, AI intention, camera custody and game mechanics in greater depth.
+
+The experimental [`fibers.roblox`](src/fibers/roblox/init.lua) adapter embeds the runtime through a bounded `prepare`/`advance` boundary, with event- and RunService-phase scheduling, owned signal subscriptions and root shutdown handling above it. [`examples/roblox/`](examples/roblox/) and [`docs/guide/roblox.md`](docs/guide/roblox.md) provide the Studio examples and step-by-step path. These sit alongside the firmware, robotics, field and hosted-system uses from which the design grew.
 
 ## The model
 
@@ -83,9 +109,9 @@ A fibre is a cooperatively scheduled Lua function. Within a fibre, code remains 
 
 ```lua
 fibers.spawn(function()
-  local message = fibers.perform(inbox:get_op())
-  handle(message)
-end)
+  local command = fibers.perform(commands:get_op())
+  apply_command(command)
+end, 'command-worker')
 ```
 
 ### Options describe possible actions
@@ -95,8 +121,8 @@ An option is inert. Constructing one does not send, receive, sleep or change sta
 In this documentation, an option is the concept; `Op` is the Lua type representing an option. An option is an inert description which may be combined before it is submitted to `perform`. Methods ending in `_op` return these descriptions.
 
 ```lua
-local receive = inbox:get_op()
-local timeout = Sleep.sleep_op(1)
+local await_shutdown = stop_requests:get_op()
+local response_deadline = Sleep.sleep_op(30)
 ```
 
 The suffix keeps possible actions visible in application code.
@@ -106,7 +132,7 @@ The suffix keeps possible actions visible in application code.
 `perform` submits an option to the runtime and is the explicit execution and suspension boundary.
 
 ```lua
-local message = fibers.perform(inbox:get_op())
+local command = fibers.perform(commands:get_op())
 ```
 
 The option may commit immediately, wait for other participants, or compose several actions into one transaction. Application code uses the same boundary in each case.
@@ -116,13 +142,13 @@ The option may commit immediately, wait for other participants, or compose sever
 Selected everyday facilities also provide a direct performing method:
 
 ```lua
-local message = inbox:get()
+local command = commands:get()
 ```
 
 This is exactly:
 
 ```lua
-local message = fibers.perform(inbox:get_op())
+local command = fibers.perform(commands:get_op())
 ```
 
 Use the direct form for ordinary sequential fibre code. Ask for an option when
@@ -131,10 +157,11 @@ facility method and the explicit form share one implementation and return the
 same values and errors.
 
 ```lua
-local message = fibers.perform(Op.choice(
-  inbox:get_op(),
-  Sleep.sleep_op(1):map(function()
-    return 'timeout'
+local outcome = fibers.perform(Op.choice(
+  reply_ready:get_op(),
+  stop_requested:get_op(),
+  Sleep.sleep_op(30):map(function()
+    return 'response deadline reached'
   end)
 ))
 ```
@@ -151,11 +178,11 @@ Every structured task belongs to a scope. A scope accounts for its children and 
 
 ```lua
 fibers.run(function(scope)
-  local task = scope:spawn(function()
-    return produce_result()
-  end, 'worker')
+  local map_task = scope:spawn(function()
+    return load_map('Moon Garden')
+  end, 'load-map')
 
-  return fibers.perform(task:await_op())
+  return fibers.perform(map_task:await_op())
 end)
 ```
 
@@ -182,10 +209,10 @@ Most programmes begin with `perform`, `choice`, `or_else`, `and_then`, `wrap`, `
 ### Choice expresses permission
 
 ```lua
-local result = fibers.perform(Op.choice(
-  inbox:get_op(),
+local outcome = fibers.perform(Op.choice(
+  voice_lines:get_op(),
   Sleep.sleep_op(1):wrap(function()
-    return 'timeout'
+    return '[continue with subtitles]'
   end)
 ))
 ```
@@ -220,12 +247,12 @@ An undecided search is not treated as absence. Implementation limits therefore d
 ### Sequencing remains transactional
 
 ```lua
-local reserve_and_send = slots:take_op(1):and_then(function()
-  return requests:put_op('start')
+local admit_party = arena_places:take_op(#party.players):and_then(function()
+  return match_lobby:put_op(party)
 end)
 ```
 
-The slot is not consumed independently if the continuation cannot complete. Earlier communication and state changes remain provisional until the whole sequence commits.
+The arena places are not consumed independently if the party cannot be admitted. Earlier communication and state changes remain provisional until the whole sequence commits.
 
 Callbacks used by `map`, `and_then` and transactional resource transitions may be revisited during proof search. They must be deterministic, non-yielding and free of irreversible side effects.
 
@@ -235,19 +262,19 @@ Callbacks used by `map`, `and_then` and transactional resource transitions may b
 
 ```lua
 Op.all({
-  account_a:take_op(1),
-  account_b:take_op(1),
+  camera_channels:take_op(1),
+  animation_channels:take_op(1),
 })
 ```
 
-One lane cannot fund the other.
+The camera reservation cannot create a missing animation channel, or vice versa.
 
 `tensor` permits compatible siblings to participate in an intentional transactional hand-off:
 
 ```lua
 Op.tensor({
-  slots:give_op(1),
-  slots:take_op(1),
+  cue_bus:inlet():write_op('GO'),
+  cue_bus:outlet():read_some_op(2),
 })
 ```
 
@@ -277,9 +304,9 @@ A pure effect preparation must not reserve host capacity, mutate external state,
 A guard delays construction until one structural occurrence becomes relevant. Its result is stable within that speculative activation, but a later activation may call the builder again. Use it for private fresh values; use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
 
 ```lua
-local receive_and_report = inbox:get_op():wrap(function(message)
-  print('received:', message)
-  return message
+local show_selected_line = voice_lines:get_op():wrap(function(line)
+  subtitle_panel:set_text(line)
+  return line
 end)
 ```
 
@@ -295,11 +322,11 @@ Task admission is an important effect example: a task whose admission option los
 local fibers = require('fibers')
 
 fibers.run(function()
-  local task = fibers.spawn(function()
-    return 40 + 2
-  end, 'worker')
+  local cinematic = fibers.spawn(function()
+    return play_opening_cinematic()
+  end, 'opening-cinematic')
 
-  assert(fibers.perform(task:await_op()) == 42)
+  assert(fibers.perform(cinematic:await_op()) == 'completed')
 end)
 ```
 
@@ -318,8 +345,8 @@ The root `fibers` module is the lifecycle and contextual prelude: `run` establis
 ```lua
 local channel = require('fibers.channel')
 
-local synchronous = channel.new()
-local buffered = channel.new(16)
+local commands = channel.new()
+local buffered_events = channel.new(16)
 ```
 
 Both forms expose `put_op` and `get_op` and compose with the same algebra.
@@ -516,7 +543,12 @@ The project does not presently claim a denotational semantics, a mechanised proo
 
 ## Intended uses
 
-Fibers is intended for programmes whose concurrent behaviour should remain readable as it becomes more exact. This includes interactive systems written in Lua or Luau, as well as device, robotics and control software where suspension, cancellation, resource lifetime and failure boundaries need to remain visible.
+Fibers is intended for programmes whose concurrent behaviour should remain
+readable as it becomes more exact. This includes firmware and control software,
+robotics, emergency and field systems, network services, highly concurrent
+desktop applications, simulations, embedded plugin logic, and ambitious games
+and interactive worlds—especially where interruption, cancellation, resource
+lifetime and failure boundaries need to remain visible.
 
 The same expression can therefore be read at two levels:
 
@@ -537,7 +569,7 @@ LuaJIT v2.1
 Luau
 ```
 
-Luau has a distinct loader and host-integration path. Native host facilities also depend on the selected environment. See [`docs/contributing/compatibility.md`](docs/contributing/compatibility.md) for the current policy and verification commands.
+Luau has a distinct loader and host-integration path. The source tree includes an experimental Roblox embedded driver and signal adapter; Wally/Rojo packaging and real-Studio smoke testing remain release work. Native host facilities also depend on the selected environment. See [`docs/contributing/compatibility.md`](docs/contributing/compatibility.md) for the current policy and verification commands.
 
 ## Getting started
 
@@ -565,6 +597,8 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 
 - [Programming guide](docs/guide/getting-started.md)
 - [Direct methods and options](docs/guide/direct-and-options.md)
+- [Fibers for Roblox](docs/guide/roblox.md)
+- [Gameplay examples](examples/gameplay/README.md)
 - [Pipes and sockets](docs/guide/io.md)
 - [Tutorial and embedding examples](examples/README.md)
 - [Facility recipes](examples/recipes/README.md)

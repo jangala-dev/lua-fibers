@@ -21,11 +21,11 @@ Most programmes begin with `fibers.run`:
 
 ```lua
 fibers.run(function(scope)
-  local task = scope:spawn(function()
-    return 'done'
-  end, 'worker')
+  local configuration_task = scope:spawn(function()
+    return 'configuration loaded'
+  end, 'load-configuration')
 
-  assert(task:await() == 'done')
+  assert(configuration_task:await() == 'configuration loaded')
 end)
 ```
 
@@ -33,10 +33,10 @@ end)
 
 ```lua
 fibers.run(function()
-  local task = fibers.spawn(function()
-    return 7
+  local cache_task = fibers.spawn(function()
+    return 'cache warm'
   end)
-  assert(task:await() == 7)
+  assert(cache_task:await() == 'cache warm')
 end)
 ```
 
@@ -59,13 +59,13 @@ end
 Selected everyday facilities expose both forms:
 
 ```lua
-local message = inbox:get()
+local update = status_updates:get()
 ```
 
 is exactly:
 
 ```lua
-local message = fibers.perform(inbox:get_op())
+local update = fibers.perform(status_updates:get_op())
 ```
 
 Use direct methods for ordinary sequential code. Use `_op` when an action must
@@ -100,9 +100,9 @@ Fibers has three callback phases. Search callbacks such as `guard`, `map`, `and_
 `choice` is unordered disjunction:
 
 ```lua
-local value = fibers.perform(Op.choice(
-  left:get_op(),
-  right:get_op()
+local selected = fibers.perform(Op.choice(
+  scene_finished:get_op(),
+  skip_requested:get_op()
 ))
 ```
 
@@ -112,9 +112,9 @@ A timeout is ordinary choice:
 
 ```lua
 local result = fibers.perform(Op.choice(
-  inbox:get_op(),
+  voice_lines:get_op(),
   Sleep.sleep_op(1):wrap(function()
-    return 'timeout'
+    return '[continue with subtitles]'
   end)
 ))
 ```
@@ -122,8 +122,10 @@ local result = fibers.perform(Op.choice(
 `or_else` provides validated immediate fallback. Its fallback is eligible only after the preferred option has been completely refuted under recorded managed facts.
 
 ```lua
-local value = fibers.perform(
-  cache:get_op(key):or_else(Op.always(default_value))
+local intention = fibers.perform(
+  attack_op(agent, target)
+    :or_else(take_cover_op(agent))
+    :or_else(return_to_patrol_op(agent))
 )
 ```
 
@@ -132,9 +134,9 @@ local value = fibers.perform(
 `all` combines independent requirements in one commit:
 
 ```lua
-local rows = fibers.perform(Op.all({
-  left:take_op(1),
-  right:take_op(1),
+local reservations = fibers.perform(Op.all({
+  camera_channels:take_op(1),
+  animation_channels:take_op(1),
 }))
 ```
 
@@ -142,8 +144,8 @@ local rows = fibers.perform(Op.all({
 
 ```lua
 fibers.perform(Op.tensor({
-  slots:give_op(1),
-  slots:take_op(1),
+  cue_bus:inlet():write_op('GO'),
+  cue_bus:outlet():read_some_op(2),
 }))
 ```
 
@@ -154,8 +156,8 @@ Use `all` when each lane must be satisfiable without positive supply from its si
 Channel is the ordinary communication facility:
 
 ```lua
-local inbox = channel.new()       -- synchronous
-local buffered = channel.new(16) -- bounded FIFO
+local commands = channel.new()          -- synchronous
+local buffered_events = channel.new(16) -- bounded FIFO
 ```
 
 Both forms expose `put_op` and `get_op`.
@@ -163,10 +165,10 @@ Both forms expose `put_op` and `get_op`.
 ```lua
 fibers.run(function()
   fibers.spawn(function()
-    inbox:put('hello')
+    commands:put('refresh configuration')
   end)
 
-  assert(inbox:get() == 'hello')
+  assert(commands:get() == 'refresh configuration')
 end)
 ```
 
@@ -177,16 +179,16 @@ The lower-level synchronous exchange resource remains available as `fibers.resou
 Use `Scalar` for one replaceable fact:
 
 ```lua
-local state = Scalar.new({ open = true, count = 0 }, 'state')
+local quest = Scalar.new({ stage = 'find_key', clues = 1 }, 'moon-gate-quest')
 
-local increment = state:read_op():and_then(function(old)
-  if not old.open then
+local advance = quest:read_op():and_then(function(current)
+  if current.stage ~= 'find_key' or current.clues < 1 then
     return Op.never()
   end
-  return state:write_op({ open = true, count = old.count + 1 })
+  return quest:write_op({ stage = 'open_gate', clues = current.clues })
 end)
 
-fibers.perform(increment)
+fibers.perform(advance)
 ```
 
 For an ordered state machine, define a typed transition:
@@ -216,12 +218,12 @@ assert(next_value == 1)
 `Pulse` represents coalescing change notification. `Mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies. Both expose options and compose with the same choice and product vocabulary.
 
 ```lua
-local pulse = Pulse.new()
-local tx, rx = Mailbox.new(16)
+local weather_changed = Pulse.new()
+local combat_tx, combat_rx = Mailbox.new(16)
 
-pulse:signal()
-tx:send('message')
-assert(rx:recv() == 'message')
+weather_changed:signal()
+combat_tx:send('perfect parry')
+assert(combat_rx:recv() == 'perfect parry')
 ```
 
 ## Flows and streams
@@ -230,19 +232,19 @@ assert(rx:recv() == 'message')
 
 ```lua
 local Flow = require('fibers.resource.flow')
-local flow = Flow.new({ capacity = 4096 })
+local dialogue_flow = Flow.new({ capacity = 4096 })
 
-flow:inlet():write('hello\n')
-assert(flow:outlet():read_line() == 'hello')
+dialogue_flow:inlet():write('The gate is open.\n')
+assert(dialogue_flow:outlet():read_line() == 'The gate is open.')
 ```
 
 `Stream` is the familiar readable, writable or duplex facility built from one or two Flows:
 
 ```lua
-local a, b = Stream.memory_pair({ capacity = 4096 })
+local narrator, subtitles = Stream.memory_pair({ capacity = 4096 })
 
-a:write('hello\n')
-assert(b:read_line() == 'hello')
+narrator:write('The gate is open.\n')
+assert(subtitles:read_line() == 'The gate is open.')
 ```
 
 Host-backed streams are opened transactionally:
@@ -320,6 +322,7 @@ Petri and Calendar are trusted kernel case studies under `examples/case_studies/
 ## Further reading
 
 - `direct-and-options.md` — direct methods and composable options
+- `roblox.md` — step-by-step game logic, scene lifetimes and Roblox host architecture
 - `../advanced/option-algebra.md` — option semantics and laws
 - `../advanced/lifetimes-and-custody.md` — custody, borrowing, claims and policy
 - `../advanced/flows-and-streams.md` — Flow leases, Streams and the shared reactor

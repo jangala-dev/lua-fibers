@@ -59,6 +59,62 @@ Luau CLI. The narrower targets are available when diagnosing a failure.
 Luau is part of `make test-matrix`. Native host integrations remain separate
 because the standalone CLI does not provide the relevant capabilities.
 
+## Experimental Roblox host
+
+The generated Luau target now includes a deliberately narrow Roblox host
+profile rather than a separate concurrency model:
+
+```text
+Roblox task scheduler / Actor VM
+└── one Fibers runtime
+    ├── proof and commit engine
+    ├── lightweight internal fibres
+    ├── scopes, Regions and settlement
+    └── queued Roblox signal and shutdown adapters
+```
+
+The first slice consists of:
+
+- `fibers.roblox.prepare`, which creates a root Runtime and Scope without taking
+  ownership of the engine loop;
+- `Application:advance`, which accepts a host time horizon and deterministic
+  proof-work allowance, retaining unfinished work for a later turn;
+- `fibers.roblox.attach`, which adds event-driven or RunService-phase scheduling
+  above the manual boundary using `task.defer`, `task.delay` and `task.cancel`;
+- `fibers.roblox.events`, `latest` and `pulse`, which give signal buffering an
+  explicit application meaning;
+- owned subscriptions whose Region settlement disconnects the corresponding
+  `RBXScriptConnection`;
+- `fibers.roblox.bind_to_close`, which publishes shutdown into the runtime and
+  waits for root settlement or a declared deadline;
+- fake scheduler, event, phase, signal and DataModel tests which run under stock
+  Lua.
+
+A normal Roblox callback only appends or coalesces an external delivery and
+requests a future application turn. Proof search and participant continuation
+resume later through `Application:advance`; they never run recursively inside the
+engine callback. A selected RunService phase is itself a deliberate host-driver
+boundary and remains subject to the application turn budget.
+
+Host horizon exhaustion is scheduling suspension, not proof absence. It retains
+the current runtime state and cannot admit an `or_else` fallback. Proof quantum
+exhaustion remains the existing budget-pending/Unknown result and is likewise not
+Retry.
+
+The standalone Luau CLI cannot exercise Roblox Instances, so release validation
+has two layers: generated-source and fake-engine conformance in the ordinary
+matrix, then a real Studio smoke place before the adapter is promoted from
+experimental. Wally/Rojo packaging is also still outstanding.
+
+Player and character helpers, RemoteEvent protocols, data operations, asset
+loading and Instance-specific custody remain application or future adapter work.
+One Fibers world per Actor is the conservative initial boundary; transactions
+should not span Actors until a distinct distributed protocol is designed.
+
+The public learning path is described in [`../guide/roblox.md`](../guide/roblox.md).
+Portable scenarios live under [`../../examples/gameplay/`](../../examples/gameplay/)
+and Studio examples under [`../../examples/roblox/`](../../examples/roblox/).
+
 ## Promotion gates
 
 ### 1. Runtime conformance

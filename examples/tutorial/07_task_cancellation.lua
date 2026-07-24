@@ -8,27 +8,28 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Cancellation is an explicit request to an owned task. The task observes it at
--- a Fibers suspension boundary and its exit remains available for inspection.
+-- Cancellation is an explicit request to an owned task. An emergency stop
+-- reaches the robot motion planner at a Fibers suspension boundary and leaves
+-- an inspectable exit.
 
 local fibers = require('fibers')
 local Signal = require('fibers.resource.signal')
 
-local task_exit
+local planner_exit
 
 fibers.run(function(scope)
-  local blocked = Signal.new('blocked-worker')
-  local task = scope:spawn(function()
-    fibers.perform(blocked:wait_op())
+  local waiting_for_clearance = Signal.new('motion-clearance')
+  local planner = scope:spawn(function()
+    fibers.perform(waiting_for_clearance:wait_op())
     return 'unreachable'
-  end, 'worker')
+  end, 'robot-motion-planner')
 
-  local first, reason = task:request_cancel('shutdown requested')
+  local first, reason = planner:request_cancel('emergency stop pressed')
   assert(first == true)
-  assert(reason == 'shutdown requested')
+  assert(reason == 'emergency stop pressed')
 
-  task_exit = fibers.perform(task:exit_op())
+  planner_exit = fibers.perform(planner:exit_op())
 end)
 
-assert(task_exit.tag == 'cancelled' or task_exit.tag == 'failed')
-print('task exit:', task_exit.tag, task_exit.reason or task_exit.error)
+assert(planner_exit.tag == 'cancelled' or planner_exit.tag == 'failed')
+print('motion planner exit:', planner_exit.tag, planner_exit.reason or planner_exit.error)

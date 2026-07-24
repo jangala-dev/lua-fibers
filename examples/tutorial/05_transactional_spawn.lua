@@ -8,39 +8,40 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- spawn_op makes task admission part of the selected world. A committed spawn
--- starts exactly once; a losing spawn branch never starts at all.
+-- spawn_op makes task admission part of the selected world. A committed desktop
+-- indexing job starts exactly once; a losing full-rescan branch never starts.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
 
-local starts = 0
-local value, decision
+local jobs_started = 0
+local index_result, decision
 
 fibers.run(function(scope)
   local task = fibers.perform(scope:spawn_op(function()
-    starts = starts + 1
-    return 42
-  end, { name = 'committed-worker' }))
+    jobs_started = jobs_started + 1
+    return 'workspace index ready'
+  end, { name = 'workspace-index' }))
 
-  value = task:await()
+  index_result = task:await()
 end)
 
 fibers.run(function(scope)
   decision = fibers.perform(Op.choice(
-    Op.always('keep the current plan'),
+    Op.always('keep cached search results'),
     scope
       :spawn_op(function()
-        starts = starts + 1
-        return 'should not run'
-      end, { name = 'losing-worker' })
+        jobs_started = jobs_started + 1
+        return 'full rescan completed'
+      end, { name = 'losing-full-rescan' })
       :map(function()
-        return 'spawned replacement'
+        return 'replace the cache'
       end)
   ))
 end, { choice_seed = 2 })
 
-assert(value == 42)
-assert(decision == 'keep the current plan')
-assert(starts == 1)
-print('task value:', value, 'losing branch started:', starts - 1)
+assert(index_result == 'workspace index ready')
+assert(decision == 'keep cached search results')
+assert(jobs_started == 1)
+print('desktop index:', index_result)
+print('decision:', decision, 'losing jobs started:', jobs_started - 1)

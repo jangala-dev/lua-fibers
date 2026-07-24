@@ -8,9 +8,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Pulse is a coalescing broadcast notification. Every waiter observes that the
--- logical version advanced; the signal does not have to be consumed by one of
--- them.
+-- Pulse is a coalescing broadcast notification. The shelter radio and warning
+-- beacon both notice that the hazard picture changed; neither consumes the
+-- notification from the other.
 
 local fibers = require('fibers')
 local Pulse = require('fibers.pulse')
@@ -18,25 +18,25 @@ local Pulse = require('fibers.pulse')
 local observed = {}
 
 fibers.run(function(scope)
-  local changed = Pulse.new({ name = 'configuration-changed' })
+  local hazard_changed = Pulse.new({ name = 'shelter-hazard-changed' })
 
-  local first = scope:spawn(function()
-    return changed:changed(0)
-  end, 'first-waiter')
+  local radio = scope:spawn(function()
+    return hazard_changed:changed(0)
+  end, 'shelter-radio')
 
-  local second = scope:spawn(function()
-    return changed:changed(0)
-  end, 'second-waiter')
+  local beacon = scope:spawn(function()
+    return hazard_changed:changed(0)
+  end, 'warning-beacon')
 
-  assert(changed:signal() == 1)
-  observed[1] = first:await()
-  observed[2] = second:await()
+  assert(hazard_changed:signal() == 1)
+  observed[1] = radio:await()
+  observed[2] = beacon:await()
 
-  changed:close('configuration source stopped')
-  local version, reason = changed:changed(1)
+  hazard_changed:close('incident controller stood down')
+  local version, reason = hazard_changed:changed(1)
   observed[3], observed[4] = version, reason
 end)
 
 assert(observed[1] == 1 and observed[2] == 1)
-assert(observed[3] == nil and observed[4] == 'configuration source stopped')
-print('broadcast version:', observed[1], observed[2], 'closed:', observed[4])
+assert(observed[3] == nil and observed[4] == 'incident controller stood down')
+print('hazard version:', observed[1], observed[2], 'closed:', observed[4])

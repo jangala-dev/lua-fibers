@@ -8,9 +8,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Named combinators retain the readability of the decision in its result.
--- named_choice returns the selected branch name followed by its values;
--- named_all returns a table keyed like its input.
+-- Named combinators retain the language of the decision in its result.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
@@ -18,29 +16,30 @@ local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
 local Host = require('fibers.host')
 
-local inbox = channel.new()
-local selected, message, total
+local position_fixes = channel.new()
+local selected, position, drive_ready
 
 fibers.run(function(scope)
   scope:spawn(function()
-    inbox:put('ready')
-  end, 'sender')
+    position_fixes:put('aisle 7, bay 3')
+  end, 'vision-localiser')
 
-  selected, message = fibers.perform(Op.named_choice({
-    message = inbox:get_op(),
-    timeout = Sleep.sleep_op(5):map(function()
-      return 'no message'
+  selected, position = fibers.perform(Op.named_choice({
+    vision = position_fixes:get_op(),
+    dead_reckoning = Sleep.sleep_op(5):map(function()
+      return 'estimated from wheel odometry'
     end),
   }))
 
-  local values = fibers.perform(Op.named_all({
-    base = Op.always(40),
-    increment = Op.always(2),
+  local readiness = fibers.perform(Op.named_all({
+    motors = Op.always('armed'),
+    lidar = Op.always('clear'),
   }))
-  total = values.base + values.increment
+  drive_ready = readiness.motors .. ' and ' .. readiness.lidar
 end, { host = Host.manual() })
 
-assert(selected == 'message')
-assert(message == 'ready')
-assert(total == 42)
-print('selected:', selected, message, 'total:', total)
+assert(selected == 'vision')
+assert(position == 'aisle 7, bay 3')
+assert(drive_ready == 'armed and clear')
+print('localisation:', selected, position)
+print('drive:', drive_ready)

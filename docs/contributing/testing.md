@@ -37,6 +37,15 @@ make test-luau-reference
 make test-luau
 ```
 
+`make test-roblox-fake` runs the Roblox adapter against the deterministic
+fake engine. The older `make test-roblox` name remains an alias.
+
+`tests/embedding/test_roblox.lua` is a portable fake-engine conformance test,
+not a Studio example. It intentionally runs in the stock-Lua matrix as well
+as the generated Luau profiles, because the adapter shares the portable
+driver, protected-call and lifetime machinery. Real Roblox Instances and
+scheduler behaviour remain a separate Studio smoke gate.
+
 The portable profile is declared in `tests/luau/profile.lua`; every test file
 has an explicit portability classification. The reference profile inherits
 the portable profile and reruns its semantic surface with the repository

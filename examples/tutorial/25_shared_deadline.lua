@@ -8,41 +8,42 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Keep one absolute deadline across several stages. Replacing it with a fresh
--- relative timeout at each stage would accidentally extend the total budget.
+-- Keep one absolute deadline across several firmware start-up stages. Starting
+-- a fresh relative timeout for every device would silently extend the allowed
+-- boot window.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
 
-local first_stage, second_stage, finished_at
+local sensor_stage, radio_stage, finished_at
 
 fibers.run(function()
-  local deadline = fibers.now() + 3
+  local boot_deadline = fibers.now() + 3
 
-  first_stage = fibers.perform(Op.named_choice({
-    reply = Sleep.sleep_op(1):map(function()
-      return 'headers received'
+  sensor_stage = fibers.perform(Op.named_choice({
+    ready = Sleep.sleep_op(1):map(function()
+      return 'sensor calibrated'
     end),
-    timeout = Sleep.sleep_until_op(deadline):map(function()
-      return 'deadline reached'
+    timeout = Sleep.sleep_until_op(boot_deadline):map(function()
+      return 'boot deadline reached'
     end),
   }))
 
-  second_stage = fibers.perform(Op.named_choice({
-    reply = Sleep.sleep_op(3):map(function()
-      return 'body received'
+  radio_stage = fibers.perform(Op.named_choice({
+    ready = Sleep.sleep_op(3):map(function()
+      return 'radio joined mesh'
     end),
-    timeout = Sleep.sleep_until_op(deadline):map(function()
-      return 'deadline reached'
+    timeout = Sleep.sleep_until_op(boot_deadline):map(function()
+      return 'boot deadline reached'
     end),
   }))
 
   finished_at = fibers.now()
 end, { host = Host.manual() })
 
-assert(first_stage == 'reply')
-assert(second_stage == 'timeout')
+assert(sensor_stage == 'ready')
+assert(radio_stage == 'timeout')
 assert(finished_at == 3)
-print('stages:', first_stage, second_stage, 'finished at:', finished_at)
+print('firmware start-up:', sensor_stage, radio_stage, 'finished at:', finished_at)

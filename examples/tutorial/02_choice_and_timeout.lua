@@ -8,8 +8,8 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- choice says that either coherent result is acceptable. Source order does not
--- create priority.
+-- choice says that either coherent result is acceptable. A flood sensor may
+-- confirm an alarm, or the emergency controller may proceed on precaution.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
@@ -17,28 +17,28 @@ local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
 local Host = require('fibers.host')
 
-local inbox = channel.new()
+local confirmations = channel.new()
 local result
 
 fibers.run(function(scope)
   scope:spawn(function()
     Sleep.sleep(2)
-    inbox:put('late message')
-  end, 'delayed-sender')
+    confirmations:put('river sensor confirmed')
+  end, 'late-sensor-confirmation')
 
   result = fibers.perform(Op.choice(
-    inbox:get_op(),
+    confirmations:get_op(),
     Sleep.sleep_op(1):map(function()
-      return 'timeout'
+      return 'dispatch on precautionary threshold'
     end)
   ))
 
-  -- The sender remains owned by the scope. Drain it so this example exits
-  -- normally rather than cancelling it at the boundary.
-  if result == 'timeout' then
-    assert(inbox:get() == 'late message')
+  -- The late producer remains owned by the scope. Drain its message so this
+  -- example exits normally rather than cancelling the child at the boundary.
+  if result == 'dispatch on precautionary threshold' then
+    assert(confirmations:get() == 'river sensor confirmed')
   end
 end, { host = Host.manual() })
 
-assert(result == 'timeout')
-print('choice result:', result)
+assert(result == 'dispatch on precautionary threshold')
+print('emergency decision:', result)

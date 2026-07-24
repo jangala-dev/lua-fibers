@@ -8,7 +8,7 @@ Advanced examples in this guide use named modules explicitly:
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Region = require('fibers.region')
-local policy = require('policy')
+local policy = require('fibers.policy')
 ```
 
 
@@ -18,11 +18,11 @@ local policy = require('policy')
 local fibers = require('fibers')
 
 fibers.run(function(scope)
-  local task = scope:spawn(function()
-    return 'done'
-  end, 'worker')
+  local camera_task = scope:spawn(function()
+    return 'opening shot complete'
+  end, 'opening-camera')
 
-  assert(fibers.perform(task:await_op()) == 'done')
+  assert(fibers.perform(camera_task:await_op()) == 'opening shot complete')
 end)
 ```
 
@@ -118,16 +118,16 @@ Custom lifetime-bearing values may be admitted as bare items or as `Region.Owned
 Direct movement transfers a live root in one commit:
 
 ```lua
-fibers.perform(source:move_op(item, destination))
+fibers.perform(cinematic:move_op(camera_handle, gameplay))
 ```
 
 Negotiated movement composes movement with synchronous consent:
 
 ```lua
 fibers.perform(Op.tensor({
-  source:offer_op(item, destination, { role = 'session' }),
-  destination:accept_op(function(offer)
-    return offer.terms and offer.terms.role == 'session'
+  lobby:offer_op(player_session, match, { role = 'player-session' }),
+  match:accept_op(function(offer)
+    return offer.terms and offer.terms.role == 'player-session'
   end),
 }))
 ```
@@ -201,8 +201,8 @@ Borrowing grants rights without transferring custody:
 
 ```lua
 local borrow = fibers.perform(
-  owner:borrow_op(item, borrower, { 'read' }, {
-    name = 'temporary-reader',
+  cinematic:borrow_op(camera_handle, photo_mode, { 'preview' }, {
+    name = 'photo-mode-camera-preview',
   })
 )
 ```
@@ -261,11 +261,11 @@ Settlement may perform further options and may wait. It is not speculative clean
 A custom owned value can be constructed with:
 
 ```lua
-local owned = Region.Owned.item(handle, function(ctx, record, claim)
-  return handle:close_op(claim.reason)
+local owned = Region.Owned.item(camera_handle, function(ctx, record, claim)
+  return camera_handle:release_op(claim.reason)
 end, {
-  role = 'demo-handle',
-  settle_name = 'demo-close',
+  role = 'camera-control',
+  settle_name = 'release-camera',
 })
 
 fibers.perform(scope:admit_op(owned))
@@ -318,8 +318,8 @@ completes only after every retained root is accounted for
 
 ```lua
 fibers.run(function()
-  fibers.spawn(function() error('worker failed') end)
-  fibers.perform(wait_for_work_op())
+  fibers.spawn(function() error('boss controller failed') end)
+  fibers.perform(encounter_finished_op())
 end)
 ```
 
@@ -329,7 +329,7 @@ A supervisor isolates child failure according to its mode:
 fibers.scope({
   policy = policy.supervisor({ child_failure = 'collect' }),
 }, function()
-  fibers.spawn(worker)
+  fibers.spawn(run_optional_fireworks)
 end)
 ```
 

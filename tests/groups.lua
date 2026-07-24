@@ -63,6 +63,7 @@ return {
   },
   embedding = {
     'tests/embedding/test_host.lua',
+    'tests/embedding/test_roblox.lua',
     'tests/embedding/test_host_handle.lua',
     'tests/embedding/test_fd_nixio_wrap.lua',
     'tests/embedding/test_process_nixio_provider.lua',

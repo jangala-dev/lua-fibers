@@ -8,45 +8,44 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- or_else is semantic priority. The fallback opens only after the preferred
--- transaction has a valid present refutation. Earlier provisional work is then
--- retracted.
+-- or_else is semantic priority. The captain flanks only when the complete
+-- order can be delivered; otherwise the provisional stamina spend is retracted
+-- before the hold-position fallback commits.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local channel = require('fibers.channel')
 local Counter = require('fibers.resource.counter')
 
-local slots = Counter.new({ initial = 1, name = 'slots' })
-local requests = channel.new()
-local first, second, received
+local stamina = Counter.new({ initial = 1, name = 'captain-stamina' })
+local squad_orders = channel.new()
+local first_order, second_order, delivered_order
 
-local function dispatch_op()
-  return slots
+local function flank_op()
+  return stamina
     :take_op(1)
     :and_then(function()
-      return requests:put_op('inspection')
+      return squad_orders:put_op('flank the eastern stair')
     end)
     :map(function()
-      return 'dispatched'
+      return 'flanking'
     end)
 end
 
 fibers.run(function(scope)
-  -- No receiver exists, so the complete preferred transaction is absent. The
-  -- provisional slot take is rolled back before the fallback commits.
-  first = fibers.perform(dispatch_op():or_else(Op.always('unavailable')))
-  assert(slots.value == 1)
+  first_order = fibers.perform(flank_op():or_else(Op.always('hold position')))
+  assert(stamina.value == 1)
 
   scope:spawn(function()
-    received = requests:get()
-  end, 'receiver')
+    delivered_order = squad_orders:get()
+  end, 'squad-radio')
 
-  second = fibers.perform(dispatch_op():or_else(Op.always('unavailable')))
+  second_order = fibers.perform(flank_op():or_else(Op.always('hold position')))
 end)
 
-assert(first == 'unavailable')
-assert(second == 'dispatched')
-assert(received == 'inspection')
-assert(slots.value == 0)
-print('without receiver:', first, 'with receiver:', second)
+assert(first_order == 'hold position')
+assert(second_order == 'flanking')
+assert(delivered_order == 'flank the eastern stair')
+assert(stamina.value == 0)
+print('without radio:', first_order)
+print('with radio:', second_order, '-', delivered_order)

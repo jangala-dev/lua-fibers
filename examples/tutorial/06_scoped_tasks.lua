@@ -8,20 +8,26 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Tasks belong to a scope. The boundary accounts for children and retained
--- obligations before returning.
+-- Tasks belong to a scope. A firmware start-up boundary accounts for sensor
+-- calibration and radio configuration before the controller proceeds.
 
 local fibers = require('fibers')
 
-local value
+local sensor, radio
 
 fibers.run(function(scope)
-  local task = scope:spawn(function()
-    return 40 + 2
-  end, 'worker')
+  local sensor_task = scope:spawn(function()
+    return 'temperature sensor calibrated'
+  end, 'calibrate-temperature-sensor')
 
-  value = task:await()
+  local radio_task = scope:spawn(function()
+    return 'mesh radio configured'
+  end, 'configure-mesh-radio')
+
+  sensor = sensor_task:await()
+  radio = radio_task:await()
 end)
 
-assert(value == 42)
-print('task result:', value)
+assert(sensor == 'temperature sensor calibrated')
+assert(radio == 'mesh radio configured')
+print('controller ready:', sensor, 'and', radio)

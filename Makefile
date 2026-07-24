@@ -12,7 +12,7 @@ REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./reference/?.lua;./
 export LUA_PATH := $(REPO_LUA_PATH)
 
 .PHONY: test test-ledger test-reference test-public test-composition test-resources \
-	test-lifetimes test-io test-embedding test-kernel test-internal test-case-studies \
+	test-lifetimes test-io test-embedding test-roblox test-roblox-fake test-kernel test-internal test-case-studies \
 	test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
 	test-luajit-interpreter test-texlua build-luau build-luau-reference \
@@ -48,6 +48,12 @@ test-io:
 
 test-embedding:
 	$(LUA) tests/run_group.lua embedding
+
+test-roblox-fake:
+	$(LUA) tests/embedding/test_roblox.lua
+
+# Compatibility alias. Real-engine validation belongs in Roblox Studio.
+test-roblox: test-roblox-fake
 
 test-kernel:
 	$(LUA) tests/run_group.lua kernel
@@ -132,6 +138,7 @@ test-matrix: test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 \
 examples:
 	@set -e; for example in \
 		examples/tutorial/*.lua \
+		examples/gameplay/*.lua \
 		examples/embedding/*.lua \
 		examples/lifetimes/*.lua \
 		examples/recipes/*_example.lua; do \

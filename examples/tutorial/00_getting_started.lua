@@ -8,25 +8,25 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Start with ordinary sequential code. Fibres suspend at direct operations, and
--- the enclosing scope accounts for every child before it returns.
+-- Start with ordinary sequential code. The worker suspends until a command
+-- arrives, and the enclosing scope accounts for the child before it returns.
 
 local fibers = require('fibers')
 local channel = require('fibers.channel')
 
-local jobs = channel.new()
-local replies = channel.new()
+local commands = channel.new()
+local results = channel.new()
 local result
 
 fibers.run(function(scope)
   scope:spawn(function()
-    local job = jobs:get()
-    replies:put('completed ' .. job)
-  end, 'worker')
+    local command = commands:get()
+    results:put('completed ' .. command)
+  end, 'command-worker')
 
-  jobs:put('inspection')
-  result = replies:get()
+  commands:put('refresh configuration')
+  result = results:get()
 end)
 
-assert(result == 'completed inspection')
-print('result:', result)
+assert(result == 'completed refresh configuration')
+print('worker:', result)
