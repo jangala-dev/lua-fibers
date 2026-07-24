@@ -8,15 +8,15 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Effect = require('fibers.lifetime.effect')
-local EventQueue = require('fibers.external.event_queue')
-local Signal = require('fibers.external.signal')
-local Interest = require('fibers.external.interest')
-local ExternalFeed = require('fibers.external.feed')
+local Effect = require('fibers.effect')
+local EventQueue = require('fibers.resource.event_queue')
+local Signal = require('fibers.resource.signal')
+local Interest = require('fibers.host.external').Interest
+local ExternalFeed = require('fibers.host.external').Feed
 local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 local Errors = require('fibers.resource.flow.errors')
 local HostError = require('fibers.host.error')
-local Ownership = require('fibers.lifetime.ownership')
+local Region = require('fibers.region')
 local IOAudit = require('fibers.diagnostics.io')
 
 local Reactor = {}
@@ -119,7 +119,7 @@ function Entry.new(reactor, spec)
   if key == nil then
     error('reactor-backed direction requires a readiness key', 3)
   end
-  local entry = Ownership.handle(spec.name or id, {
+  local entry = Region.handle(spec.name or id, {
     kind = 'host_reaction',
     mode = spec.mode,
     stream = spec.stream,

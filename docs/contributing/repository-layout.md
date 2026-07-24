@@ -31,8 +31,11 @@ src/fibers/
     lease.lua              transactional leasing
     authoring.lua          trusted facility compilation materials
 
-  external/                externally observed facts, feeds and interests
-  lifetime/                custody, ownership, settlement and effects
+  effect.lua               committed obligation kinds and effects
+  region/
+    init.lua               custody, ownership handles and claims
+    settlement.lua         custody settlement protocol
+    adoption.lua           host-acquisition adoption protocol
   diagnostics/             optional I/O audit and proof-search observation
 
   file/                    evented files, pipes and provider implementations
@@ -119,8 +122,9 @@ Op → resource primitives → Flow → Stream → File / Process / Socket
 ## Test groups
 
 `tests/groups.lua` defines the public, composition, resources, lifetimes,
-embedding, kernel, internal, case-study, experiment and performance groups. Run
-one group with:
+embedding, kernel, internal, case-study, experiment and performance groups.
+`scripts/check-test-layout.lua` requires every `test_*.lua` file to belong to
+exactly one group and every profile to name valid groups. Run one group with:
 
 ```sh
 lua tests/run_group.lua public
@@ -142,4 +146,5 @@ both `.lua` and `.luau` forms of the same module.
 
 This is a filesystem rule only; logical names such as `fibers.scope` and
 `fibers.scope.result` are unchanged. `scripts/check-module-layout.py` enforces
-both the unambiguous module rule and the global `internal/` ownership boundary.
+the unambiguous module rule, canonical public paths, static Fibers imports and
+the global `internal/` ownership boundary.

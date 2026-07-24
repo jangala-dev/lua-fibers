@@ -20,7 +20,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
-local Effect = require('fibers.lifetime.effect')
+local Effect = require('fibers.effect')
 local log = {}
 local counter = Scalar.new(0, 'counter')
 

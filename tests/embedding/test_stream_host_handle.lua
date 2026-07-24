@@ -14,8 +14,8 @@ local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.external.readiness')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersReadiness = require('fibers.host.readiness')
+local FibersRegion = require('fibers.region')
 local FibersStream = require('fibers.stream')
 local FibersHost = require('fibers.host')
 local Host = FibersHost

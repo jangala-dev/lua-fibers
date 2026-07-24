@@ -6,7 +6,12 @@
 -- Post-commit value transforms and typed defeat obligations are orthogonal
 -- annotations on dynamic option occurrences.
 
-local EffectKind = require('fibers.lifetime.effect_kind')
+local function is_effect(value)
+  return type(value) == 'table'
+    and value._fibers_effect == true
+    and type(value.kind) == 'table'
+    and value.kind._fibers_effect_kind == true
+end
 
 local Op = {}
 Op.__index = Op
@@ -242,7 +247,7 @@ function Op.never()
 end
 
 function Op.emit(effect)
-  if not EffectKind.is_effect(effect) then
+  if not is_effect(effect) then
     error('emit expects a typed effect obligation', 2)
   end
   return op('consequence', { effect = effect })
@@ -286,7 +291,7 @@ end
 -- entered as a competing branch and another incompatible branch commits.
 -- Retry, fallback and incomplete search are not defeat.
 function Op:on_defeat(effect)
-  if not EffectKind.is_effect(effect) then
+  if not is_effect(effect) then
     error('on_defeat expects a typed Effect', 2)
   end
   return annotated(self, nil, effect, nil)

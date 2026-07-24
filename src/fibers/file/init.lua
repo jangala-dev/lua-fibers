@@ -5,7 +5,7 @@
 
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 local IO = require('fibers.host.io')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')

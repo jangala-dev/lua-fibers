@@ -9,10 +9,10 @@ local HostError = require('fibers.host.error')
 local Completion = require('fibers.resource.completion')
 local IO = require('fibers.host.io')
 local Mailbox = require('fibers.mailbox')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
 local Protected = require('fibers.internal.protected')
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 local perform = require('fibers.perform')
 
 local Algorithms = {}
@@ -626,7 +626,7 @@ local function new_file_op(path, mode, opts, label, temporary)
   next_file = next_file + 1
   local name = opts.name or ('file-' .. tostring(next_file))
   local tx, rx = Mailbox.new(opts.queue_limit or 32, { name = name .. ':requests' })
-  local file = Ownership.handle(name, {
+  local file = Region.handle(name, {
     kind = 'regular_file',
     path = path,
     mode = mode,

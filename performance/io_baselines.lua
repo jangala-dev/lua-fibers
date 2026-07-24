@@ -31,7 +31,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 local File = require('fibers.file')
 local ManualHost = require('fibers.host.manual')
 local Runtime = require('fibers.runtime')

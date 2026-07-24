@@ -1,8 +1,8 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local Scalar = require('fibers.resource.scalar')
-local Interest = require('fibers.external.interest')
-local ExternalFeed = require('fibers.external.feed')
+local Interest = require('fibers.host.external').Interest
+local ExternalFeed = require('fibers.host.external').Feed
 
 local Signal = {}
 Signal.__index = function(self, key)

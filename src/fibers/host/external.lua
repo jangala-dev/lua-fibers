@@ -1,3 +1,80 @@
+-- Host protocol for external observations and retry interests.
+
+-- Runtime-bound capability for externally mutating a transactional resource.
+
+local Feed = {}
+Feed.__index = Feed
+
+function Feed.new(runtime, resource, apply, clear)
+  if type(resource) ~= 'table' then
+    error('Feed requires a resource', 2)
+  end
+  apply = apply or resource._fibers_external_deliver
+  clear = clear or resource._fibers_external_clear
+  if type(apply) ~= 'function' then
+    error('resource does not support external delivery', 2)
+  end
+  return setmetatable({
+    _fibers_external_feed = true,
+    runtime = runtime,
+    resource = resource,
+    apply = apply,
+    clear_apply = clear,
+  }, Feed)
+end
+
+function Feed.for_resource(runtime, resource)
+  if not runtime then
+    return Feed.new(runtime, resource)
+  end
+  local cache = rawget(runtime, '_external_feeds')
+  if not cache then
+    cache = setmetatable({}, { __mode = 'kv' })
+    runtime._external_feeds = cache
+  end
+  local feed = cache[resource]
+  if not feed then
+    feed = Feed.new(runtime, resource)
+    cache[resource] = feed
+  end
+  return feed
+end
+
+function Feed.is_feed(value)
+  return type(value) == 'table' and value._fibers_external_feed == true
+end
+
+function Feed:_deliver(...)
+  return self.apply(self.resource, ...)
+end
+
+function Feed:_clear(...)
+  if type(self.clear_apply) ~= 'function' then
+    error('resource does not support external clear', 2)
+  end
+  return self.clear_apply(self.resource, ...)
+end
+
+function Feed:set(...)
+  return self.runtime:deliver(self, ...)
+end
+
+function Feed:clear(...)
+  return self.runtime:clear_external(self, ...)
+end
+
+function Feed:ready(mode, value)
+  return self:set(mode, value == nil and true or value)
+end
+
+function Feed:readable(value)
+  return self:set('read', value == nil and true or value)
+end
+
+function Feed:writable(value)
+  return self:set('write', value == nil and true or value)
+end
+
 -- Host-actionable retry interests.
 --
 -- Interests are not evidence that retry is justified.  RetryProof frontiers
@@ -102,4 +179,5 @@ function Interest.summarise(list)
   return out
 end
 
-return Interest
+local External = { Feed = Feed, Interest = Interest }
+return External

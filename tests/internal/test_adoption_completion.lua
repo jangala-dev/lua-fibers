@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 local Completion = require('fibers.resource.completion')
 
 local closed = {}

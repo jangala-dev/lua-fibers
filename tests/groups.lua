@@ -24,7 +24,8 @@ return {
     'tests/resources/test_index.lua',
     'tests/resources/test_index_lease_extended.lua',
     'tests/resources/test_lease_laws.lua',
-    'tests/resources/test_resources.lua',
+    'tests/resources/test_event.lua',
+    'tests/resources/test_scalar.lua',
     'tests/resources/test_state_resource_laws.lua',
   },
   lifetimes = {

@@ -12,16 +12,16 @@ local Scalar = require('fibers.resource.scalar')
 local CommandModule = require('fibers.process.command')
 local HostError = require('fibers.host.error')
 local FlowErrors = require('fibers.resource.flow.errors')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 local Completion = require('fibers.resource.completion')
 local IO = require('fibers.host.io')
 local IOAudit = require('fibers.diagnostics.io')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.lifetime.settlement')
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
+local Settlement = require('fibers.region.settlement')
 local Protected = require('fibers.internal.protected')
 local Sleep = require('fibers.sleep')
-local Exit = require('fibers.lifetime.exit')
+local Exit = require('fibers.task').Exit
 local perform = require('fibers.perform')
 
 local Lifecycle = {}
@@ -836,7 +836,7 @@ function Command:launch_op(opts)
   return Op.guard(function()
     next_process = next_process + 1
     local name = opts.name or ('process-' .. tostring(next_process))
-    local proc = Ownership.handle(name, {
+    local proc = Region.handle(name, {
       kind = 'process',
       command = command,
       lifecycle = Lifecycle.new(name),

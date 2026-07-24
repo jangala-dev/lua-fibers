@@ -1,6 +1,6 @@
 local Facility = require('fibers.resource.authoring')
 local Scalar = require('fibers.resource.scalar')
-local Interest = require('fibers.external.interest')
+local Interest = require('fibers.host.external').Interest
 
 local Clock = {}
 Clock.__index = Clock

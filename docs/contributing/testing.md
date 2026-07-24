@@ -43,3 +43,17 @@ the portable profile and reruns its semantic surface with the repository
 reference evaluator, excluding implementation-specific ledger and performance
 checks. `make test-luau` and `make test-matrix` run both profiles. See
 [Luau build programme](luau.md).
+## Repository checks
+
+`make check` runs the repository-wide static checks:
+
+- Python, shell and Lua script syntax;
+- StyLua formatting;
+- local Markdown links;
+- canonical module ownership and resolvable static Fibers imports;
+- complete, non-duplicated stock-Lua test grouping;
+- portable and reference Luau generation, including full test classification.
+
+The build-only `make check-luau-build` target validates both generated Luau
+trees without requiring `luau` or `luau-analyze`. `make check-luau` and
+`make test-luau` add analysis and execution when those tools are installed.

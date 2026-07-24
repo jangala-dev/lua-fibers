@@ -7,9 +7,9 @@
 -- arrays so multi-handle acquisition and rollback never depend on table order.
 
 local HostError = require('fibers.host.error')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.lifetime.settlement')
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
+local Settlement = require('fibers.region.settlement')
 local IOAudit = require('fibers.diagnostics.io')
 
 local Adoption = {}
@@ -35,7 +35,7 @@ end
 function Adoption.bundle(name)
   next_id = next_id + 1
   local id = 'adoption-bundle-' .. tostring(next_id)
-  local bundle = Ownership.handle(name or id, {
+  local bundle = Region.handle(name or id, {
     kind = 'adoption_bundle',
     values = {},
     order = {},
@@ -184,7 +184,7 @@ end
 function Adoption.slot(name)
   next_id = next_id + 1
   local id = 'adoption-' .. tostring(next_id)
-  local slot = Ownership.handle(name or id, {
+  local slot = Region.handle(name or id, {
     kind = 'adoption_slot',
     value = nil,
     close_value = nil,

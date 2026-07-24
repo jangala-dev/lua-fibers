@@ -484,7 +484,7 @@ fibers.perform(Sleep.sleep_op(0.25))
 
 Timers are options, so timeouts require no separate cancellation mechanism.
 
-Lower-level materials for facility authors have canonical direct imports under `fibers.resource.*`, `fibers.external.*` and `fibers.lifetime.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
+Lower-level materials have canonical direct imports under their semantic owners: transactional resources under `fibers.resource.*`, custody under `fibers.region` and `fibers.region.*`, committed obligations under `fibers.effect`, and host observation protocols under `fibers.host.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
 
 ## Why the algebra goes further
 

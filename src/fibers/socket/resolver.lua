@@ -11,10 +11,10 @@ local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
 local IO = require('fibers.host.io')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
 local Protected = require('fibers.internal.protected')
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 local perform = require('fibers.perform')
 
 local Module = {}
@@ -169,7 +169,7 @@ function Module.resolve_op(endpoint, opts)
   local owner = IO.current_owner(opts, 'socket.resolve_op')
   next_query = next_query + 1
   local name = opts.name or ('resolver-query-' .. tostring(next_query))
-  local query = Ownership.handle(name, {
+  local query = Region.handle(name, {
     kind = 'resolver_query',
     endpoint = endpoint,
     completion = Completion.new(name .. ':completion'),

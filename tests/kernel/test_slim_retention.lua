@@ -13,8 +13,8 @@ package.path = table.concat({
 }, ';')
 
 local Runtime = require('fibers.runtime')
-local Region = require('fibers.lifetime.region')
-local Signal = require('fibers.external.signal')
+local Region = require('fibers.region')
+local Signal = require('fibers.resource.signal')
 
 local function fail(msg)
   error(msg, 2)

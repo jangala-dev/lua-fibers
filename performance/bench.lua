@@ -45,11 +45,11 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.resource.scalar')
-local EventQueue = require('fibers.external.event_queue')
-local Clock = require('fibers.external.clock')
-local Region = require('fibers.lifetime.region')
+local EventQueue = require('fibers.resource.event_queue')
+local Clock = require('fibers.resource.clock')
+local Region = require('fibers.region')
 local Scope = require('fibers.scope')
-local Effect = require('fibers.lifetime.effect')
+local Effect = require('fibers.effect')
 
 local unpack_ = table.unpack or unpack
 

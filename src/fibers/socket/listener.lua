@@ -6,14 +6,14 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 local IO = require('fibers.host.io')
 local IOAudit = require('fibers.diagnostics.io')
 local Lifecycle = require('fibers.socket.lifecycle')
 local Connection = require('fibers.socket.connection')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.lifetime.settlement')
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
+local Settlement = require('fibers.region.settlement')
 local Queue = require('fibers.resource.queue')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
@@ -258,7 +258,7 @@ function Module.listen_op(address, opts)
   local owner = IO.current_owner(opts, 'socket.listen_op')
   next_listener = next_listener + 1
   local name = opts.name or ('listener-' .. tostring(next_listener))
-  local listener = Ownership.handle(name, {
+  local listener = Region.handle(name, {
     kind = 'socket_listener',
     address = address,
     scope_owner = owner,

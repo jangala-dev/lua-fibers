@@ -15,7 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 
 local function accept_matching(life, pred)
   return life:accept_op():and_then(function(offer)

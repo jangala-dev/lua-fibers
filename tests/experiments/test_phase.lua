@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 local Phase = require('experiments.phase')
 
 local function fail(msg)

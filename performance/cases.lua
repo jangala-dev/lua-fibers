@@ -5,7 +5,7 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.resource.scalar')
-local EventQueue = require('fibers.external.event_queue')
+local EventQueue = require('fibers.resource.event_queue')
 
 local cases = {}
 

@@ -16,8 +16,9 @@ generates a target-specific tree under `build/luau/` by:
 5. generating the Luau conformance smoke programme and the named portable or
    reference test profile.
 
-The initial build includes the kernel, runtime, scopes, lifetimes, flows,
-in-memory resources, ManualHost and PureHost.  Shared file and process
+The initial build includes the kernel, runtime, Scope, Effect, Region, Flow,
+in-memory resources, host external protocols, ManualHost and PureHost. Shared
+file and process
 abstractions may enter the dependency closure, but native host providers for
 files, sockets and processes are deliberately outside the first target.
 
@@ -78,8 +79,9 @@ are found.
 
 `tests/luau/profile.json` classifies every `test_*.lua` file and defines the
 `portable` profile. The profile contains 81 tests covering public
-semantics, composition, resources, lifetimes, ManualHost embedding, in-memory
-I/O, both semantic evaluators, kernel laws, internal portable helpers, case
+semantics, composition, resources, Effect/Region/Scope lifetimes, ManualHost
+embedding, in-memory I/O, both semantic evaluators, kernel laws, portable
+implementation helpers, case
 studies and performance architecture.
 
 The `reference` profile inherits that list, selects the repository reference

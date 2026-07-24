@@ -8,9 +8,9 @@ local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
 local Rope = require('fibers.resource.flow.rope')
 local Errors = require('fibers.resource.flow.errors')
-local Effect = require('fibers.lifetime.effect')
-local Ownership = require('fibers.lifetime.ownership')
-local Settlement = require('fibers.lifetime.settlement')
+local Effect = require('fibers.effect')
+local Region = require('fibers.region')
+local Settlement = require('fibers.region.settlement')
 
 local Lease = {}
 Lease.__index = Lease
@@ -1177,16 +1177,16 @@ function Flow.new(opts)
   validate_options(opts, { name = true, capacity = true }, 'Flow.new options')
   next_id = next_id + 1
   local name = opts.name or ('flow-' .. tostring(next_id))
-  local self = Ownership.handle(name, { kind = 'flow' })
+  local self = Region.handle(name, { kind = 'flow' })
   setmetatable(self, Flow)
   self.name = name
   self.capacity = as_capacity(opts.capacity)
   self.state = Scalar.machine(new_state(), name .. ':state')
   self._fibers_settle = Settlement.flow()
   self._fibers_settle_name = 'flow'
-  self.input = Ownership.handle(name .. ':inlet', { kind = 'flow_inlet', flow = self })
+  self.input = Region.handle(name .. ':inlet', { kind = 'flow_inlet', flow = self })
   setmetatable(self.input, Inlet)
-  self.output = Ownership.handle(name .. ':outlet', { kind = 'flow_outlet', flow = self })
+  self.output = Region.handle(name .. ':outlet', { kind = 'flow_outlet', flow = self })
   setmetatable(self.output, Outlet)
   return self
 end

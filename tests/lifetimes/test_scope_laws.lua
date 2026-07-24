@@ -13,9 +13,9 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 local FibersScope = require('fibers.scope')
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 
 local function fail(msg)
   error(msg, 2)

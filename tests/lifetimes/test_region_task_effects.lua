@@ -14,7 +14,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersIndex = require('fibers.resource.index')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 local FibersTask = require('fibers.task')
 local TC = require('tests.support.effect_helpers')
 

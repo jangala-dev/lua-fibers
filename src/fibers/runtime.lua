@@ -2,8 +2,8 @@
 
 local Op = require('fibers.op')
 local Ledger = require('fibers.internal.kernel.ledger')
-local Interest = require('fibers.external.interest')
-local ExternalFeed = require('fibers.external.feed')
+local Interest = require('fibers.host.external').Interest
+local ExternalFeed = require('fibers.host.external').Feed
 local Protected = require('fibers.internal.protected')
 local Machine = require('fibers.internal.kernel.machine')
 local IR = require('fibers.internal.kernel.ir')
@@ -13,6 +13,38 @@ local Domain = require('fibers.internal.kernel.domain')
 local DependencyIndex = Dependencies.Index
 local Certificate = require('fibers.internal.kernel.certificate')
 local Path = require('fibers.internal.kernel.path')
+
+-- Internal perform-boundary interruption tokens.
+local InterruptToken = {}
+InterruptToken.__index = InterruptToken
+local next_interrupt_id = 0
+
+function InterruptToken:is_raised()
+  return self.raised == true
+end
+
+local function new_interrupt(name)
+  next_interrupt_id = next_interrupt_id + 1
+  local id = 'interrupt-' .. tostring(next_interrupt_id)
+  return setmetatable({
+    name = name or id,
+    version = 0,
+    raised = false,
+    reason = nil,
+    _fibers_id = id,
+    _fibers_interrupt = true,
+  }, InterruptToken)
+end
+
+local function raise_interrupt(token, reason)
+  if type(token) ~= 'table' or token._fibers_interrupt ~= true then
+    error('raise_interrupt expects an interrupt token', 2)
+  end
+  token.raised = true
+  token.reason = reason
+  token.version = (token.version or 0) + 1
+  return true
+end
 
 local Runtime = {}
 local EMPTY_ARRAY = {}
@@ -541,17 +573,17 @@ function Runtime:clear_external(feed, ...)
 end
 
 function Runtime:signal(name)
-  local resource = require('fibers.external.signal').new(name)
+  local resource = require('fibers.resource.signal').new(name)
   return resource, self:external_feed(resource)
 end
 
 function Runtime:events(name)
-  local resource = require('fibers.external.event_queue').new(name)
+  local resource = require('fibers.resource.event_queue').new(name)
   return resource, self:external_feed(resource)
 end
 
 function Runtime:readiness(key, name)
-  local resource = require('fibers.external.readiness').new(key, nil, name)
+  local resource = require('fibers.host.readiness').new(key, nil, name)
   return resource, self:external_feed(resource)
 end
 
@@ -594,8 +626,7 @@ function Runtime:_spawn_committed(fn, name, scope)
 end
 
 function Runtime:_discharge_interrupt(token, reason)
-  local Interrupt = require('fibers.lifetime.interrupt')
-  Interrupt.raise(token, reason)
+  raise_interrupt(token, reason)
   local ids, requests = {}, {}
   for i = 1, #self.pending do
     local req = self.pending[i]
@@ -2105,4 +2136,5 @@ function Runtime:_pump()
   return true
 end
 
+Runtime._new_interrupt = new_interrupt
 return Runtime

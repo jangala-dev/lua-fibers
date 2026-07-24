@@ -15,8 +15,8 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.external.readiness')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersReadiness = require('fibers.host.readiness')
+local FibersRegion = require('fibers.region')
 local FibersStream = require('fibers.stream')
 
 local Common = {}

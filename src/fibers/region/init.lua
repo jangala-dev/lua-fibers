@@ -7,10 +7,53 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
-local Effect = require('fibers.lifetime.effect')
-local Ownership = require('fibers.lifetime.ownership')
-local Claim = Ownership.Claim
-local Settlement = require('fibers.lifetime.settlement')
+local Effect = require('fibers.effect')
+local Settlement = require('fibers.region.settlement')
+
+local next_handle = 0
+local OwnershipKind = { name = 'ownership' }
+
+local function no_settlement()
+  return function()
+    return require('fibers.op').always(true)
+  end
+end
+
+local function ownership_handle(name, fields)
+  next_handle = next_handle + 1
+  local id = 'owned-' .. tostring(next_handle)
+  local h = fields or {}
+  h.name = name or h.name or id
+  h.owner = h.owner
+  h.owner_version = h.owner_version or 0
+  h._fibers_id = h._fibers_id or id
+  h._fibers_kind = OwnershipKind
+  h._fibers_obligation_kind = h._fibers_obligation_kind or h.kind
+  h._fibers_settle = h._fibers_settle or h.settle or no_settlement()
+  h._fibers_settle_name = h._fibers_settle_name or h.settle_name or 'none'
+  return h
+end
+
+local Claim = {}
+local next_claim = 0
+
+function Claim.new(region, root, records, purpose)
+  next_claim = next_claim + 1
+  return {
+    _fibers_claim = true,
+    _fibers_value = true,
+    id = 'claim-' .. tostring(next_claim),
+    region = region,
+    root = root,
+    records = records,
+    purpose = purpose,
+    reason = type(purpose) == 'table' and purpose.reason or nil,
+  }
+end
+
+function Claim.is(x)
+  return type(x) == 'table' and x._fibers_claim == true
+end
 
 local Region = {}
 Region.__index = Region
@@ -437,7 +480,7 @@ end
 local Owned = {}
 
 local function owned_spec(item, settle, children, opts)
-  if type(item) ~= 'table' or item._fibers_kind ~= Ownership.Kind then
+  if type(item) ~= 'table' or item._fibers_kind ~= OwnershipKind then
     error('Region.Owned expects an owned handle', 3)
   end
   opts = opts or {}
@@ -471,7 +514,7 @@ function Owned.from_item(item)
   if Owned.is(item) then
     return item
   end
-  if type(item) ~= 'table' or item._fibers_kind ~= Ownership.Kind then
+  if type(item) ~= 'table' or item._fibers_kind ~= OwnershipKind then
     error('owned admission expects a Region.Owned value or owned handle', 3)
   end
   return owned_spec(item, item._fibers_settle, nil, {
@@ -546,7 +589,7 @@ local function select_transition(name, ready, step, order)
 end
 
 function Region.handle(name, fields)
-  local h = Ownership.handle(name, fields)
+  local h = Region.handle(name, fields)
   return h
 end
 function Region.owned(item, settle, opts)
@@ -905,4 +948,7 @@ end
 Region.Kind = Kind
 Region.Phase = Phase
 Region.Owned = Owned
+Region.handle = ownership_handle
+Region.OwnershipKind = OwnershipKind
+Region.Claim = Claim
 return Region

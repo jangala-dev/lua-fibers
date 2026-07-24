@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and test the portable Fibers target for the standalone Luau CLI.
+"""Build the portable Fibers target for the standalone Luau CLI.
 
 The stock Lua source remains canonical.  This build computes the dependency
 closure of the portable public surface and an explicit Luau test profile,
@@ -26,24 +26,38 @@ PROFILE_PATH = REPO_ROOT / "tests" / "luau" / "profile.json"
 PORTABLE_ENTRIES = (
     "fibers",
     "fibers.channel",
-    "fibers.resource.flow",
-    "fibers.resource.flow.errors",
-    "fibers.resource.flow.rope",
+    "fibers.diagnostics.io",
+    "fibers.diagnostics.search",
+    "fibers.effect",
     "fibers.host",
+    "fibers.host.external",
     "fibers.host.manual",
     "fibers.host.pure",
+    "fibers.host.readiness",
     "fibers.mailbox",
     "fibers.op",
     "fibers.perform",
     "fibers.policy",
     "fibers.pulse",
+    "fibers.region",
+    "fibers.region.adoption",
+    "fibers.region.settlement",
+    "fibers.resource.authoring",
+    "fibers.resource.clock",
+    "fibers.resource.completion",
     "fibers.resource.counter",
+    "fibers.resource.event_queue",
+    "fibers.resource.flow",
+    "fibers.resource.flow.errors",
+    "fibers.resource.flow.rope",
     "fibers.resource.index",
     "fibers.resource.keyed",
     "fibers.resource.lease",
+    "fibers.resource.queue",
     "fibers.resource.rendezvous",
-    "fibers.runtime",
     "fibers.resource.scalar",
+    "fibers.resource.signal",
+    "fibers.runtime",
     "fibers.scope",
     "fibers.sleep",
     "fibers.stream",
@@ -200,6 +214,8 @@ def load_profile(name: str) -> tuple[dict[str, object], dict[str, object]]:
         classification = record.get("classification")
         if not isinstance(path, str) or not isinstance(classification, str):
             raise RuntimeError("invalid Luau test classification")
+        if classification not in {"portable", "host_specific", "stock_lua_loader"}:
+            raise RuntimeError(f"unknown Luau test classification {classification}: {path}")
         if path in classified:
             raise RuntimeError(f"duplicate Luau test classification: {path}")
         classified[path] = classification

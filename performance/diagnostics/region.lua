@@ -11,7 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 local fibers = require('fibers')
-local Region = require('fibers.lifetime.region')
+local Region = require('fibers.region')
 local n = tonumber(arg[1]) or 100
 local r = Region.new('bench-region')
 local hs = {}

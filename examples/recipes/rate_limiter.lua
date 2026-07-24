@@ -6,7 +6,7 @@
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
 local Ready = Scalar.Ready
-local Clock = require('fibers.external.clock')
+local Clock = require('fibers.resource.clock')
 
 local RateLimiter = {}
 RateLimiter.__index = RateLimiter

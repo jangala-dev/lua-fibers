@@ -13,7 +13,7 @@ package.path = table.concat({
 }, ';')
 
 local Op = require('fibers.op')
-local Effect = require('fibers.lifetime.effect')
+local Effect = require('fibers.effect')
 local Runtime = require('fibers.runtime')
 
 local function fail(msg)

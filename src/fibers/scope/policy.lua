@@ -7,9 +7,9 @@
 
 local Runtime = require('fibers.runtime')
 local Protected = require('fibers.internal.protected')
-local Exit = require('fibers.lifetime.exit')
+local Exit = require('fibers.task').Exit
 local ScopeResult = require('fibers.scope.result')
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
 local Task = require('fibers.task')

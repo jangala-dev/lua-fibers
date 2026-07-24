@@ -18,14 +18,14 @@ local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScalar = require('fibers.resource.scalar')
 local FibersRendezvous = require('fibers.resource.rendezvous')
-local FibersRegion = require('fibers.lifetime.region')
-local FibersEffect = require('fibers.lifetime.effect')
+local FibersRegion = require('fibers.region')
+local FibersEffect = require('fibers.effect')
 local Runtime = FibersRuntime
 local Op = FibersOp
 local Scalar = FibersScalar
 local Rendezvous = FibersRendezvous
 local Effect = FibersEffect
-local Interrupt = require('fibers.lifetime.interrupt')
+local Interrupt = { new = require('fibers.runtime')._new_interrupt }
 
 local function fail(msg)
   error(msg, 2)

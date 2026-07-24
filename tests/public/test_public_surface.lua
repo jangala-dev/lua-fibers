@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Effect = require('fibers.lifetime.effect')
+local Effect = require('fibers.effect')
 local Sleep = require('fibers.sleep')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
@@ -26,12 +26,12 @@ local FibersScalar = require('fibers.resource.scalar')
 local FibersQueue = require('fibers.resource.queue')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersLease = require('fibers.resource.lease')
-local FibersSignal = require('fibers.external.signal')
-local FibersEventQueue = require('fibers.external.event_queue')
-local FibersClock = require('fibers.external.clock')
-local FibersReadiness = require('fibers.external.readiness')
-local FibersRegion = require('fibers.lifetime.region')
-local FibersEffect = require('fibers.lifetime.effect')
+local FibersSignal = require('fibers.resource.signal')
+local FibersEventQueue = require('fibers.resource.event_queue')
+local FibersClock = require('fibers.resource.clock')
+local FibersReadiness = require('fibers.host.readiness')
+local FibersRegion = require('fibers.region')
+local FibersEffect = require('fibers.effect')
 local FibersTask = require('fibers.task')
 local FibersPhase = require('experiments.phase')
 local FibersPolicy = require('fibers.policy')
@@ -139,9 +139,9 @@ do
   assert_eq(fibers.uninterruptible, nil, 'mask has no long alias')
   assert_eq(FibersHost.Reactor, require('fibers.host.reactor'), 'Host exposes the reactor')
   assert_eq(require('fibers.resource.rendezvous'), FibersRendezvous, 'Rendezvous is in the resource toolkit')
-  assert_eq(require('fibers.external.signal'), FibersSignal, 'Signal is an external fact')
-  assert_eq(require('fibers.lifetime.region'), FibersRegion, 'Region is lifetime machinery')
-  assert_eq(require('fibers.lifetime.effect'), FibersEffect, 'Effect is lifetime machinery')
+  assert_eq(require('fibers.resource.signal'), FibersSignal, 'Signal is an external-fed resource')
+  assert_eq(require('fibers.region'), FibersRegion, 'Region owns custody')
+  assert_eq(require('fibers.effect'), FibersEffect, 'Effect describes committed obligations')
   assert_eq(FibersRegion._ledger, nil, 'Region does not export its shared ledger')
   assert_eq(FibersRegion._clone_ledger, nil, 'Region does not export ledger cloning')
   assert_truthy(type(FibersPhase.new) == 'function', 'Phase remains available only as an experiment')
@@ -158,6 +158,16 @@ do
     'fibers.internal.flow_machine',
     'fibers.internal.scalar_wait',
     'fibers.runner',
+    'fibers.lifetime.region',
+    'fibers.lifetime.effect',
+    'fibers.lifetime.settlement',
+    'fibers.lifetime.adoption',
+    'fibers.external.signal',
+    'fibers.external.event_queue',
+    'fibers.external.clock',
+    'fibers.external.readiness',
+    'fibers.external.feed',
+    'fibers.external.interest',
   }
   for i = 1, #absent_modules do
     local module = absent_modules[i]

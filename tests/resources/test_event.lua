@@ -19,9 +19,9 @@ local Runtime = require('fibers.runtime')
 local function deliver(rt, resource, ...)
   return rt:external_feed(resource):set(...)
 end
-local Signal = require('fibers.external.signal')
+local Signal = require('fibers.resource.signal')
 local Rendezvous = require('fibers.resource.rendezvous')
-local H = require('tests.resources.test_helpers')
+local H = require('tests.resources.helpers')
 
 local function test_not_ready_with_fallback_commits_fallback()
   local ev = Signal.new('unset')

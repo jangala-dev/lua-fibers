@@ -13,7 +13,7 @@ local Mailbox = require('fibers.mailbox')
 local Stream = require('fibers.stream')
 ```
 
-Import only the facilities a programme uses. Runtime embedding, host adapters, transactional resource materials and lifetime machinery live in their own named modules.
+Import only the facilities a programme uses. Runtime embedding, host adapters, transactional resource materials and custody machinery live in their own named modules.
 
 ## Run, spawn and perform
 
@@ -307,10 +307,10 @@ fibers.resource.counter
 fibers.resource.index
 fibers.resource.keyed
 fibers.resource.lease
-fibers.external.signal
-fibers.external.event_queue
-fibers.external.clock
-fibers.external.readiness
+fibers.resource.signal
+fibers.resource.event_queue
+fibers.resource.clock
+fibers.host.readiness
 ```
 
 See `../advanced/facility-authoring.md` and `../../examples/recipes/` for complete facilities built only from supported interfaces.

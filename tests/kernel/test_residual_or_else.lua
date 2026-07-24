@@ -16,7 +16,7 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local machine = Runtime.new().machine_name
 local Rendezvous = require('fibers.resource.rendezvous')
-local Signal = require('fibers.external.signal')
+local Signal = require('fibers.resource.signal')
 
 local function fail(msg)
   error(msg, 2)

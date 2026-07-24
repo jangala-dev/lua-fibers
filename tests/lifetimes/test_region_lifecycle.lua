@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 assert(FibersRegion.resolve_claim_op == nil, 'resolve_claim_op should be absent')
 
 local function fail(msg)

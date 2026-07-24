@@ -32,8 +32,8 @@ local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
 local Lease = require('fibers.resource.lease')
 local Flow = require('fibers.resource.flow')
-local Signal = require('fibers.external.signal')
-local EventQueue = require('fibers.external.event_queue')
+local Signal = require('fibers.resource.signal')
+local EventQueue = require('fibers.resource.event_queue')
 
 local function assert_eq(a, b, msg)
   if a ~= b then

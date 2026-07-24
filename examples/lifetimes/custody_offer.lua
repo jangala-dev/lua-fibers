@@ -25,7 +25,7 @@ local Runtime = require('fibers.runtime')
 local Scalar = require('fibers.resource.scalar')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scope = require('fibers.scope')
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 
 local function yn(v)
   return v and 'yes' or 'no'

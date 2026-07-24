@@ -7,7 +7,7 @@ Advanced examples in this guide use named modules explicitly:
 ```lua
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Region = require('fibers.lifetime.region')
+local Region = require('fibers.region')
 local policy = require('policy')
 ```
 

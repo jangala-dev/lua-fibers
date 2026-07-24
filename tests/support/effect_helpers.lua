@@ -1,8 +1,8 @@
-local EffectKind = require('fibers.lifetime.effect_kind')
+local Effect = require('fibers.effect')
 
 local M = {}
 
-M.TagKind = EffectKind.new({
+M.TagKind = Effect.kind({
   name = 'test.tag',
   order = 900,
   key = function(payload)
@@ -33,7 +33,7 @@ M.TagKind = EffectKind.new({
   end,
 })
 
-M.ConflictKind = EffectKind.new({
+M.ConflictKind = Effect.kind({
   name = 'test.conflict',
   order = 901,
   key = function(_payload)
@@ -52,7 +52,7 @@ M.ConflictKind = EffectKind.new({
   end,
 })
 
-M.PrepareRefuseKind = EffectKind.new({
+M.PrepareRefuseKind = Effect.kind({
   name = 'test.prepare_refuse',
   order = 902,
   key = function(_payload)
@@ -66,7 +66,7 @@ M.PrepareRefuseKind = EffectKind.new({
   end,
 })
 
-M.DischargeFatalKind = EffectKind.new({
+M.DischargeFatalKind = Effect.kind({
   name = 'test.discharge_fatal',
   order = 903,
   key = function(_payload)

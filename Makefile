@@ -17,10 +17,11 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	test-experiments test-performance test-native test-stress test-full test-matrix \
 	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
 	test-luajit-interpreter test-texlua build-luau build-luau-reference \
-	check-luau check-luau-portable check-luau-reference test-luau test-luau-smoke \
-	test-luau-portable test-luau-reference examples bench bench-ledger bench-io \
-	profile-proof-io performance check-format check-links \
-	check-layout check
+	check-luau-build check-luau check-luau-portable check-luau-reference \
+	test-luau test-luau-smoke test-luau-portable test-luau-reference examples \
+	bench bench-ledger bench-io profile-proof-io performance check-format \
+	check-links check-layout check-tests check-scripts check
+
 
 test:
 	$(LUA) tests/run_all.lua
@@ -94,6 +95,8 @@ build-luau:
 build-luau-reference:
 	$(PYTHON) scripts/build-luau.py --profile reference --output "$(LUAU_REFERENCE_BUILD_DIR)"
 
+check-luau-build: build-luau build-luau-reference
+
 check-luau-portable: build-luau
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/portable.luau"
@@ -155,174 +158,28 @@ performance:
 	$(LUAJIT) performance/suite.lua
 
 check:
+	$(MAKE) check-scripts
 	$(MAKE) check-format
 	$(MAKE) check-links
 	$(MAKE) check-layout
+	$(MAKE) check-tests
+	$(MAKE) check-luau-build
 
 check-links:
 	$(LUA) scripts/check-links.lua .
 
 check-format:
-	./scripts/check-format.sh
+	sh scripts/check-format.sh
 
 check-layout:
-	$(PYTHON) scripts/check-module-layout.py src
-	@test -f src/fibers/init.lua
-	@test ! -e src/fibers.lua
-	@test ! -e src/fibers/atoms.lua
-	@test ! -d src/fibers/atoms
-	@test ! -e src/fibers/kernel.lua
-	@test ! -d src/fibers/kernel
-	@test -f src/fibers/runtime.lua
-	@test -d src/fibers/internal/kernel
-	@test -f src/fibers/internal/kernel/supply.lua
-	@test ! -f src/fibers/internal/kernel/engine.lua
-	@test -f src/fibers/internal/kernel/machine.lua
-	@test -f src/fibers/internal/kernel/ledger.lua
-	@test -f src/fibers/internal/kernel/algebra.lua
-	@test -f src/fibers/internal/kernel/domain.lua
-	@test -f src/fibers/internal/kernel/certificate.lua
-	@test -f src/fibers/internal/kernel/path.lua
-	@test -f src/fibers/internal/kernel/trail.lua
-	@test -f src/fibers/internal/kernel/ir.lua
-	@test ! -d src/fibers/internal/ledger_kernel
-	@test ! -f src/fibers/internal/kernel/store.lua
-	@test ! -f src/fibers/internal/kernel/frontier.lua
-	@test ! -f src/fibers/internal/kernel/activation.lua
-	@test -f src/fibers/flow/init.lua
-	@test ! -e src/fibers/flow.lua
-	@test -f src/fibers/host/init.lua
-	@test ! -e src/fibers/host.lua
-	@test -f src/fibers/scope/init.lua
-	@test ! -e src/fibers/scope.lua
-	@test -f src/fibers/internal/flow_machine.lua
-	@test -f src/fibers/internal/scalar_wait.lua
-	@test -f src/fibers/internal/flow_leases.lua
-	@test ! -e src/fibers/flow/lease.lua
-	@test ! -e src/fibers/flow/space_lease.lua
-	@test -f src/fibers/host/reactor.lua
-	@test -f src/fibers/host/adapter.lua
-	@test ! -e src/fibers/host/family.lua
-	@test ! -e src/fibers/host/socket_core.lua
-	@test ! -e src/fibers/host/datagram_core.lua
-	@test ! -e src/fibers/host/resolver.lua
-	@test ! -e src/fibers/host/process_core.lua
-	@test ! -e src/fibers/host/process_io_core.lua
-	@test -f src/fibers/host/error.lua
-	@test -f src/fibers/host/native_error.lua
-	@test -f src/fibers/host/provider/nixio.lua
-	@test -f src/fibers/host/provider/luaposix.lua
-	@test -f src/fibers/host/provider/ffi_linux.lua
-	@test -f src/fibers/host/wait_set.lua
-	@test ! -e src/fibers/host/poll_plan.lua
-	@test ! -e src/fibers/host/poller_queue.lua
-	@test ! -e src/fibers/host/poller.lua
-	@test ! -e src/fibers/host/nixio_poll.lua
-	@test -f src/fibers/internal/completion.lua
-	@test -f src/fibers/internal/adoption.lua
-	@test -f src/fibers/internal/io_audit.lua
-	@test -f src/fibers/file/init.lua
-	@test ! -e src/fibers/file.lua
-	@test -d src/fibers/file
-	@test -f src/fibers/file/regular.lua
-	@test -f src/fibers/file/algorithms.lua
-	@test -f src/fibers/file/provider.lua
-	@test -f src/fibers/file/worker_provider.lua
-	@test -f src/fibers/file/worker_command.lua
-	@test -f src/fibers/file/memory_provider.lua
-	@test -f src/fibers/file/worker_main.lua
-	@test -f src/fibers/file/uring_provider.lua
-	@test -f src/fibers/file/aio_probe.lua
-	@test -f src/fibers/socket/init.lua
-	@test ! -e src/fibers/socket.lua
-	@test -f src/fibers/process/init.lua
-	@test ! -e src/fibers/process.lua
-	@test -f src/fibers/process/command.lua
-	@test -f src/fibers/internal/process/lifecycle.lua
-	@test ! -e src/fibers/host/_process_ffi_common.lua
-	@test ! -e src/fibers/host/process_luaposix.lua
-	@test ! -e src/fibers/host/process_nixio.lua
-	@test ! -e src/fibers/host/socket_luaposix.lua
-	@test ! -e src/fibers/host/socket_nixio.lua
-	@test ! -e src/fibers/host/resolver_luaposix.lua
-	@test ! -e src/fibers/host/resolver_nixio.lua
-	@test -f src/fibers/socket/address.lua
-	@test -f src/fibers/socket/listener.lua
-	@test -f src/fibers/socket/dial.lua
-	@test -f src/fibers/socket/resolver.lua
-	@test -f src/fibers/socket/datagram.lua
-	@test -f docs/advanced/io-invariants.md
-	@test -f tests/internal/test_io_audit.lua
-	@test -f tests/io/test_socket_provider_matrix.lua
-	@test -f tests/io/test_socket_failure_matrix.lua
-	@test -f tests/io/test_file.lua
-	@test -f tests/support/file_worker_delayed.lua
-	@test -f tests/io/test_process.lua
-	@test -f tests/native/test_process_native.lua
-	@test -f tests/luau/profile.json
-	@test -f scripts/build-luau.py
-	@test -f scripts/check-module-layout.py
-	@test -f tests/luau/smoke.lua
-	@test -f docs/contributing/luau.md
-	@test ! -e tests/embedding/hosts/test_all.lua
-	@test ! -e tests/embedding/hosts/test_nixio_linux.lua
-	@test -f tests/support/socket_provider_contract.lua
-	@test -f tests/support/resolver_provider_contract.lua
-	@test -f tests/support/process_provider_contract.lua
-	@test -f src/fibers/internal/socket/datagram_lifecycle.lua
-	@test -f src/fibers/internal/socket/datagram_send_state.lua
-	@test -f src/fibers/internal/socket/datagram_service.lua
-	@test ! -e src/fibers/host/wait.lua
-	@test ! -e src/fibers/host/datagram_luaposix.lua
-	@test ! -e src/fibers/host/datagram_nixio.lua
-	@test ! -e src/fibers/host/_socket_ffi_common.lua
-	@test ! -e src/fibers/host/_resolver_ffi_common.lua
-	@test -f src/fibers/internal/io.lua
-	@test -f src/fibers/internal/socket/lifecycle.lua
-	@test -f src/fibers/internal/socket/connection.lua
-	@test -f src/fibers/internal/socket/listener_lifecycle.lua
-	@test -f src/fibers/internal/socket/dial_lifecycle.lua
-	@test ! -e src/fibers/internal/socket_lifecycle.lua
-	@test ! -e src/fibers/internal/flow.lua
-	@test ! -e src/fibers/stream/pump.lua
-	@test -f src/fibers/internal/fifo.lua
-	@test -d src/fibers/resource
-	@test -d src/fibers/external
-	@test -d src/fibers/lifetime
-	@test -f examples/recipes/rate_limiter.lua
-	@test -f examples/case_studies/petri/petri.lua
-	@test -f experiments/phase.lua
-	@test -f examples/tutorial/07_flow_tensor.lua
-	@test -f examples/tutorial/08_pipe.lua
-	@test -f examples/tutorial/09_socket.lua
-	@test -f examples/tutorial/10_direct_methods.lua
-	@test -f examples/tutorial/11_resolver.lua
-	@test -f examples/tutorial/12_datagram.lua
-	@test -f examples/tutorial/13_process.lua
-	@test -f tests/io/test_socket_conformance.lua
-	@test -f tests/io/test_resolver.lua
-	@test -f tests/io/test_datagram.lua
-	@test -f tests/io/test_datagram_conformance.lua
-	@test -f tests/embedding/test_datagram_optional_providers.lua
-	@test -f tests/embedding/test_socket_resolver_optional_providers.lua
-	@test -f tests/internal/test_adoption_completion.lua
-	@test -f tests/internal/test_datagram_service.lua
-	@test -f tests/stress/test_stream_reactor_stress.lua
-	@test -f tests/stress/test_socket_churn.lua
-	@test -f tests/stress/test_datagram_churn.lua
-	@test -f tests/native/test_datagram_native.lua
-	@test -f tests/profiles.lua
-	@test -f docs/guide/io.md
-	@test -f docs/guide/direct-and-options.md
-	@test -f scripts/check-links.lua
-	@test ! -e experiments/scalar_flow.lua
-	@test -f reference/fibers/internal/reference_machine.lua
-	@test ! -e src/fibers/internal/reference_machine.lua
-	@test -f performance/bench.lua
-	@test -f performance/io_baselines.lua
-	@test -f performance/proof_engine_io.lua
-	@test -f docs/notes/performance/PROOF-ENGINE-PROGRAMME.md
-	@test ! -e benchmarks
-	@! grep -RInE '^[[:space:]]*supply[[:space:]]*=' src examples experiments reference --include='*.lua'
-	@! grep -RInE '^[[:space:]]*supply_(up|down|any)[[:space:]]*=' src examples experiments reference --include='*.lua'
+	$(PYTHON) scripts/check-module-layout.py .
 
+check-tests:
+	$(LUA) scripts/check-test-layout.lua
+
+check-scripts:
+	$(PYTHON) -c "import ast, pathlib; [ast.parse(path.read_text(encoding='utf-8'), filename=str(path)) for path in pathlib.Path('scripts').glob('*.py')]"
+	$(PYTHON) -c "import json; [json.load(open(path, encoding='utf-8')) for path in ('.devcontainer/devcontainer.json', 'tests/luau/profile.json')]"
+	@for file in scripts/*.sh .devcontainer/*.sh; do sh -n "$$file"; done
+	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua tests/run_*.lua performance/*.lua experiments/*.lua
+	$(MAKE) -f .devcontainer/Makefile validate-pins

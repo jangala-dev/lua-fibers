@@ -19,7 +19,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Clock = require('fibers.external.clock')
+local Clock = require('fibers.resource.clock')
 local now = 0
 local rt = Runtime.new({ host = {
   now = function()

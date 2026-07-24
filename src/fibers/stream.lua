@@ -7,9 +7,9 @@
 local Op = require('fibers.op')
 local Flow = require('fibers.resource.flow')
 local Reactor = require('fibers.host.reactor')
-local Ownership = require('fibers.lifetime.ownership')
-local Settlement = require('fibers.lifetime.settlement')
-local Owned = require('fibers.lifetime.region').Owned
+local Region = require('fibers.region')
+local Settlement = require('fibers.region.settlement')
+local Owned = require('fibers.region').Owned
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
 
@@ -38,7 +38,7 @@ local function compose(opts)
   opts = opts or {}
   next_id = next_id + 1
   local name = opts.name or ('stream-' .. tostring(next_id))
-  local stream = Ownership.handle(name, {
+  local stream = Region.handle(name, {
     kind = opts.kind or 'stream',
     mode = opts.mode or 'composed',
     _reader = opts.reader,

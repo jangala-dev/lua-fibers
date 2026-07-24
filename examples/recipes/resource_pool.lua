@@ -12,7 +12,7 @@ local Ready = Scalar.Ready
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
 local Lease = require('fibers.resource.lease')
-local Effect = require('fibers.lifetime.effect')
+local Effect = require('fibers.effect')
 
 local Pool = {}
 Pool.__index = Pool

@@ -6,13 +6,13 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 local IO = require('fibers.host.io')
 local DialLifecycle = require('fibers.socket.dial_lifecycle')
 local Connection = require('fibers.socket.connection')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.lifetime.settlement')
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
+local Settlement = require('fibers.region.settlement')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
 
@@ -266,7 +266,7 @@ function Module.dial_op(address, opts)
   local owner = IO.current_owner(opts, 'socket.dial_op')
   next_dial = next_dial + 1
   local name = opts.name or ('dial-' .. tostring(next_dial))
-  local dial = Ownership.handle(name, {
+  local dial = Region.handle(name, {
     kind = 'socket_dial',
     address = address,
     scope_owner = owner,

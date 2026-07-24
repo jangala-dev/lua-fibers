@@ -23,7 +23,7 @@ end
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRendezvous = require('fibers.resource.rendezvous')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 local FibersTask = require('fibers.task')
 local Protected = require('fibers.internal.protected')
 

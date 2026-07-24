@@ -7,7 +7,7 @@
 -- handles directly, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
-local Readiness = require('fibers.external.readiness')
+local Readiness = require('fibers.host.readiness')
 local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.diagnostics.io')

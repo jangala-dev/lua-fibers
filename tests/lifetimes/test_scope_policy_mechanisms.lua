@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 local FibersTask = require('fibers.task')
 
 local function assert_eq(a, b, msg)

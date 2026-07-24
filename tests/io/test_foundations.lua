@@ -17,7 +17,7 @@ local Host = require('fibers.host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
 local Completion = require('fibers.resource.completion')
-local Adoption = require('fibers.lifetime.adoption')
+local Adoption = require('fibers.region.adoption')
 
 local function assert_eq(a, b, msg)
   if a ~= b then

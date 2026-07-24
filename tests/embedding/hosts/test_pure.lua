@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
-local FibersSignal = require('fibers.external.signal')
+local FibersSignal = require('fibers.resource.signal')
 local Host = require('fibers.host')
 local PureHost = require('fibers.host.pure')
 local Common = require('tests.embedding.hosts.common')

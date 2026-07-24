@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRendezvous = require('fibers.resource.rendezvous')
-local FibersSignal = require('fibers.external.signal')
+local FibersSignal = require('fibers.resource.signal')
 local FibersPolicy = require('fibers.policy')
 
 local function fail(msg)

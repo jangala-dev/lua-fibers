@@ -9,15 +9,79 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
 local Scalar = require('fibers.resource.scalar')
-local Effect = require('fibers.lifetime.effect')
-local Interrupt = require('fibers.lifetime.interrupt')
-local Ownership = require('fibers.lifetime.ownership')
-local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.lifetime.settlement')
+local Effect = require('fibers.effect')
+local Region = require('fibers.region')
+local Owned = require('fibers.region').Owned
+local Settlement = require('fibers.region.settlement')
 local Protected = require('fibers.internal.protected')
-local Exit = require('fibers.lifetime.exit')
 
 local unpack_ = table.unpack or unpack
+local Exit = {}
+Exit.__index = Exit
+
+local unpack_ = table.unpack or unpack
+
+local function exit_pack(...)
+  return { n = select('#', ...), ... }
+end
+
+local function new_exit(tag, fields)
+  fields = fields or {}
+  fields.tag = tag
+  fields._fibers_exit = true
+  return setmetatable(fields, Exit)
+end
+
+function Exit.returned(...)
+  return new_exit('returned', { values = exit_pack(...) })
+end
+
+function Exit.failed(err)
+  return new_exit('failed', { error = err })
+end
+
+function Exit.cancelled(reason, token)
+  return new_exit('cancelled', { reason = reason, token = token })
+end
+
+function Exit.is(x)
+  return type(x) == 'table' and x._fibers_exit == true
+end
+
+function Exit.status(x)
+  return Exit.is(x) and x.tag or nil
+end
+
+function Exit.unwrap(x)
+  if not Exit.is(x) then
+    error('Exit.unwrap expects an Exit value', 2)
+  end
+  if x.tag == 'returned' then
+    local vals = x.values or { n = 0 }
+    return unpack_(vals, 1, vals.n or #vals)
+  elseif x.tag == 'cancelled' then
+    error(Runtime.cancelled(x.reason, x.token), 0)
+  elseif x.tag == 'failed' then
+    error(x.error, 0)
+  end
+  error('unknown task exit tag ' .. tostring(x.tag), 2)
+end
+
+function Exit:tostring()
+  if self.tag == 'returned' then
+    return 'Exit.returned'
+  end
+  if self.tag == 'cancelled' then
+    return 'Exit.cancelled: ' .. tostring(self.reason)
+  end
+  if self.tag == 'failed' then
+    return 'Exit.failed: ' .. tostring(self.error)
+  end
+  return 'Exit.' .. tostring(self.tag)
+end
+
+Exit.__tostring = Exit.tostring
+
 local function pack(...)
   return { _fibers_pack = true, n = select('#', ...), ... }
 end
@@ -60,13 +124,13 @@ function Task.new(fn, name, scope)
     name = name or id,
     completion = Scalar.new({ status = 'pending' }, (name or id) .. '-completion'),
     cancellation = Scalar.new({ requested = false, cancelled = false }, (name or id) .. '-cancellation'),
-    interrupt = Interrupt.new((name or id) .. '-interrupt'),
+    interrupt = Runtime._new_interrupt((name or id) .. '-interrupt'),
     scope = scope,
     owner = nil,
     owner_version = 0,
     _fibers_obligation_kind = 'task',
     _fibers_id = id,
-    _fibers_kind = Ownership.Kind,
+    _fibers_kind = Region.OwnershipKind,
     _fibers_settle = Settlement.task_interrupt(),
     _fibers_settle_name = 'task_interrupt',
   }, Task)
@@ -226,4 +290,5 @@ function Task:request_cancel(reason)
   return perform(self:request_cancel_op(reason))
 end
 
+Task.Exit = Exit
 return Task

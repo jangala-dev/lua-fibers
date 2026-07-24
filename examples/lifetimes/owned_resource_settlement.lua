@@ -20,12 +20,12 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Scalar = require('fibers.resource.scalar')
-local Region = require('fibers.lifetime.region')
+local Region = require('fibers.region')
 local Scope = require('fibers.scope')
 
 local Owned = Region.Owned
 
-local Settlement = require('fibers.lifetime.settlement')
+local Settlement = require('fibers.region.settlement')
 
 local scope = Scope.new('owned-resource-example')
 local closed = Scalar.new(false, 'demo-handle-closed')

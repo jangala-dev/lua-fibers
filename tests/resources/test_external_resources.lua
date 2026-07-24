@@ -18,10 +18,10 @@ local Runtime = require('fibers.runtime')
 local function deliver(rt, resource, ...)
   return rt:external_feed(resource):set(...)
 end
-local Signal = require('fibers.external.signal')
-local EventQueue = require('fibers.external.event_queue')
-local Clock = require('fibers.external.clock')
-local Readiness = require('fibers.external.readiness')
+local Signal = require('fibers.resource.signal')
+local EventQueue = require('fibers.resource.event_queue')
+local Clock = require('fibers.resource.clock')
+local Readiness = require('fibers.host.readiness')
 local Rendezvous = require('fibers.resource.rendezvous')
 
 local function fail(msg)
@@ -273,7 +273,7 @@ end
 
 -- External feeds are resource-generic capabilities rather than resource-kind checks.
 do
-  local ExternalFeed = require('fibers.external.feed')
+  local ExternalFeed = require('fibers.host.external').Feed
   local rt = Runtime.new()
   local resource = {
     _fibers_external_deliver = function(self, value)

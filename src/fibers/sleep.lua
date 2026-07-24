@@ -5,7 +5,7 @@
 -- deadline once for the perform attempt.
 
 local Op = require('fibers.op')
-local Clock = require('fibers.external.clock')
+local Clock = require('fibers.resource.clock')
 local perform = require('fibers.perform')
 
 local Sleep = {}

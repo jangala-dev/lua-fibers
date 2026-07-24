@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.external.readiness')
+local FibersReadiness = require('fibers.host.readiness')
 local Host = require('fibers.host')
 
 local function fail(msg)

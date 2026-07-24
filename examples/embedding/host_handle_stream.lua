@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local Host = require('fibers.host')
-local Region = require('fibers.lifetime.region')
+local Region = require('fibers.region')
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')

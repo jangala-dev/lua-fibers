@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local FibersRegion = require('fibers.lifetime.region')
+local FibersRegion = require('fibers.region')
 
 local function fail(msg)
   error(msg, 2)

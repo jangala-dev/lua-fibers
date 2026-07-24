@@ -16,7 +16,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Scalar = require('fibers.resource.scalar')
-local H = require('tests.resources.test_helpers')
+local H = require('tests.resources.helpers')
 local TC = require('tests.support.effect_helpers')
 
 local function update_scalar(scalar, fn)
