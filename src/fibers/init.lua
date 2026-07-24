@@ -1,36 +1,96 @@
--- Fibers application-facing concurrency language.
+-- Root lifecycle and contextual operations for Fibers programmes.
 --
--- Options are inert descriptions. Resource methods ending in `_op` build
--- them; perform is the single execution boundary. More specialised resources,
--- lifetime types, hosts and embedding interfaces live in their named modules.
+-- `run` and `try_run` establish a Runtime and root Scope. The remaining
+-- operations are interpreted by the currently running fibre. Types,
+-- constructors and option combinators live in their named modules.
 
-local M = {}
-
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
-local perform = require('fibers.perform')
-local Effect = require('fibers.lifetime.effect')
 local Protected = require('fibers.internal.protected')
-local Policy = require('fibers.policy')
-local Sleep = require('fibers.sleep')
-local Host = require('fibers.host')
-local Runner = require('fibers.runner')
+local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
-local ScopeResult = require('fibers.scope.result')
+local perform = require('fibers.perform')
 
-M.sleep_op = Sleep.sleep_op
-M.sleep_until_op = Sleep.sleep_until_op
-M.sleep = Sleep.sleep
-M.sleep_until = Sleep.sleep_until
+local M = { perform = perform }
 
-M.always = Op.always
-M.never = Op.never
-M.choice = Op.choice
-M.named_choice = Op.named_choice
-M.all = Op.all
-M.named_all = Op.named_all
-M.tensor = Op.tensor
-M.after_commit = Effect.after_commit
+local function runtime_options(opts, host)
+  local runtime_opts = {}
+  for key, value in pairs(opts or {}) do
+    runtime_opts[key] = value
+  end
+  runtime_opts.host = host
+  return runtime_opts
+end
+
+local function default_host(opts)
+  if opts and opts.host then
+    return opts.host
+  end
+  local host = require('fibers.host').pure()
+  if opts and opts.now then
+    host.now = function(rt)
+      return opts.now(rt)
+    end
+  end
+  return host
+end
+
+function M.try_run(fn, opts)
+  opts = opts or {}
+  if type(fn) ~= 'function' then
+    error('fibers.try_run expects a function', 2)
+  end
+  local Policy = require('fibers.policy')
+  local ScopeResult = require('fibers.scope.result')
+  local host = default_host(opts)
+  local rt = Runtime.new(runtime_options(opts, host))
+  local scope = Scope.new(
+    opts.name or 'root',
+    { runtime = rt, policy = opts.policy or Policy.nursery({ name = opts.name or 'root' }) }
+  )
+  local result
+  local runtime_status
+  local ok, err = Protected.pcall(function()
+    rt:spawn_raw(function()
+      result = scope:try_run(fn)
+      return result
+    end, opts.name or 'root', scope)
+    runtime_status = rt:drive({
+      host = host,
+      run = opts.run,
+      host_options = opts.host_options,
+      max_iterations = opts.max_iterations,
+    })
+  end)
+  local finalised, finalise_err = Protected.pcall(function()
+    return rt:_finalize()
+  end)
+  if ok and not finalised then
+    ok, err = false, finalise_err
+  end
+  if ok and result then
+    result.runtime_status = runtime_status
+    result.runtime = rt
+    result.scope = scope
+    return result
+  end
+  if not ok then
+    return ScopeResult.fail({
+      reason = 'runtime_error',
+      primary = err,
+      report = scope:_make_report(err, {}, { reason = 'runtime_error' }),
+      runtime_status = runtime_status,
+    })
+  end
+  return ScopeResult.fail({
+    reason = 'runtime_pending',
+    primary = runtime_status,
+    report = scope:_make_report(runtime_status, {}, { reason = 'runtime_pending' }),
+    runtime_status = runtime_status,
+  })
+end
+
+function M.run(fn, opts)
+  return M.try_run(fn, opts):raise()
+end
 
 function M.pcall(fn, ...)
   return Protected.pcall(fn, ...)
@@ -52,12 +112,18 @@ function M.current_scope()
   return current_scope()
 end
 
-M.perform = perform
+function M.now()
+  local rt = Runtime.current()
+  if not rt then
+    error('fibers.now must be called from a running fibre', 2)
+  end
+  return rt:now()
+end
 
 function M.spawn_raw(fn, name)
   local rt = Runtime.current()
   if not rt then
-    error('fibers.spawn_raw must be called from a running fiber; use fibers.run to start a root fiber', 2)
+    error('fibers.spawn_raw must be called from a running fibre', 2)
   end
   local scope = current_scope()
   if scope then
@@ -80,7 +146,7 @@ end
 function M.spawn(fn, name)
   local scope = current_scope()
   if not scope or type(scope.spawn) ~= 'function' then
-    error('fibers.spawn requires a current scope; use fibers.spawn_raw for unstructured fibres', 2)
+    error('fibers.spawn requires a current scope; use Runtime:spawn_raw for unstructured fibres', 2)
   end
   return scope:spawn(fn, name)
 end
@@ -99,12 +165,12 @@ function M.mask(fn, ...)
     return fn(...)
   end
   scope.mask_depth = (scope.mask_depth or 0) + 1
-  local r = pack(Protected.pcall(fn, ...))
+  local result = pack(Protected.pcall(fn, ...))
   scope.mask_depth = scope.mask_depth - 1
-  if not r[1] then
-    error(r[2], 0)
+  if not result[1] then
+    error(result[2], 0)
   end
-  return unpack_(r, 2, r.n)
+  return unpack_(result, 2, result.n)
 end
 
 function M.try_scope(opts, fn)
@@ -117,7 +183,7 @@ function M.try_scope(opts, fn)
   end
   local rt = Runtime.current()
   if not rt then
-    error('fibers.try_scope must be called from a running fiber', 2)
+    error('fibers.try_scope must be called from a running fibre', 2)
   end
   local parent = current_scope()
   local scope = Scope.new(
@@ -132,85 +198,6 @@ function M.scope(opts, fn)
     fn, opts = opts, {}
   end
   return M.try_scope(opts or {}, fn):raise()
-end
-
-local function runtime_options(opts, host)
-  local rt_opts = {}
-  for k, v in pairs(opts or {}) do
-    rt_opts[k] = v
-  end
-  rt_opts.host = host
-  return rt_opts
-end
-
-local function default_host(opts)
-  if opts and opts.host then
-    return opts.host
-  end
-  local host = Host.pure()
-  if opts and opts.now then
-    host.now = function(rt)
-      return opts.now(rt)
-    end
-  end
-  return host
-end
-
-function M.try_run(fn, opts)
-  opts = opts or {}
-  if type(fn) ~= 'function' then
-    error('fibers.try_run expects a function', 2)
-  end
-  local host = default_host(opts)
-  local rt = Runtime.new(runtime_options(opts, host))
-  local scope = Scope.new(
-    opts.name or 'root',
-    { runtime = rt, policy = opts.policy or Policy.nursery({ name = opts.name or 'root' }) }
-  )
-  local result
-  local runner_status
-  local ok, err = Protected.pcall(function()
-    rt:spawn_raw(function()
-      result = scope:try_run(fn)
-      return result
-    end, opts.name or 'root', scope)
-    runner_status = Runner.run(rt, {
-      host = host,
-      run = opts.run,
-      host_options = opts.host_options,
-      max_iterations = opts.max_iterations,
-    })
-  end)
-  local finalised, finalise_err = Protected.pcall(function()
-    return rt:_finalize()
-  end)
-  if ok and not finalised then
-    ok, err = false, finalise_err
-  end
-  if ok and result then
-    result.runtime_status = runner_status
-    result.runtime = rt
-    result.scope = scope
-    return result
-  end
-  if not ok then
-    return ScopeResult.fail({
-      reason = 'runtime_error',
-      primary = err,
-      report = scope:_make_report(err, {}, { reason = 'runtime_error' }),
-      runtime_status = runner_status,
-    })
-  end
-  return ScopeResult.fail({
-    reason = 'runtime_pending',
-    primary = runner_status,
-    report = scope:_make_report(runner_status, {}, { reason = 'runtime_pending' }),
-    runtime_status = runner_status,
-  })
-end
-
-function M.run(fn, opts)
-  return M.try_run(fn, opts):raise()
 end
 
 return M

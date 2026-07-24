@@ -7,7 +7,7 @@
 local Op = require('fibers.op')
 local Region = require('fibers.lifetime.region')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local EventQueue = require('fibers.external.event_queue')
 local Task = require('fibers.task')
 local Lease = require('fibers.resource.lease')
@@ -16,9 +16,8 @@ local Runtime = require('fibers.runtime')
 local Protected = require('fibers.internal.protected')
 local ScopeReport = require('fibers.scope.report')
 local ScopeResult = require('fibers.scope.result')
-local Interrupt = require('fibers.internal.interrupt')
-local Settlement = require('fibers.internal.settlement')
-local ScalarWait = require('fibers.internal.scalar_wait')
+local Interrupt = require('fibers.lifetime.interrupt')
+local Settlement = require('fibers.lifetime.settlement')
 local ScopePolicy = require('fibers.scope.policy')
 
 local unpack_ = table.unpack or unpack
@@ -103,7 +102,7 @@ local function new_offers(name)
 end
 
 local function wait_state(scalar, pred)
-  return ScalarWait.value_op(scalar, pred)
+  return Scalar.value_op(scalar, pred)
 end
 
 function Scope.new(name, opts)

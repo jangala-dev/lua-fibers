@@ -5,8 +5,8 @@
 -- therefore O(1) amortised and do not copy the queued payloads.
 
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
-local Scalar = require('fibers.scalar')
+local Facility = require('fibers.resource.authoring')
+local Scalar = require('fibers.resource.scalar')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
 

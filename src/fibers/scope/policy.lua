@@ -9,9 +9,9 @@ local Runtime = require('fibers.runtime')
 local Protected = require('fibers.internal.protected')
 local Exit = require('fibers.lifetime.exit')
 local ScopeResult = require('fibers.scope.result')
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Task = require('fibers.task')
 
 local Driver = {}

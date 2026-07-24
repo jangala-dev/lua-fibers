@@ -14,7 +14,7 @@ package.path = table.concat({
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 
 local function truthy(value, message)
   if not value then

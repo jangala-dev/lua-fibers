@@ -12,14 +12,18 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Effect = require('fibers.lifetime.effect')
+local Sleep = require('fibers.sleep')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersHost = require('fibers.host')
-local FibersFlow = require('fibers.flow')
+local FibersFlow = require('fibers.resource.flow')
 local FibersFile = require('fibers.file')
 local FibersSocket = require('fibers.socket')
 local FibersProcess = require('fibers.process')
-local FibersScalar = require('fibers.scalar')
+local FibersScalar = require('fibers.resource.scalar')
+local FibersQueue = require('fibers.resource.queue')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersLease = require('fibers.resource.lease')
 local FibersSignal = require('fibers.external.signal')
@@ -55,7 +59,7 @@ local function wait_until(scalar, pred)
   local function loop()
     return scalar:snapshot_op():and_then(function(s)
       if pred(s.value) then
-        return fibers.always(s.value)
+        return Op.always(s.value)
       end
       return scalar:changed_op(s.version):and_then(function()
         return loop()
@@ -86,10 +90,17 @@ end
 -- facilities and advanced interfaces are imported from their named modules.
 do
   local policy = require('fibers.policy')
-  assert_eq(type(fibers.run), 'function', 'root exports run')
+  assert_eq(type(fibers.run), 'function', 'root exports root lifecycle run')
+  assert_eq(type(fibers.try_run), 'function', 'root exports checked root lifecycle run')
   assert_eq(type(fibers.perform), 'function', 'root exports perform')
-  assert_eq(type(fibers.choice), 'function', 'root exports option composition')
+  assert_eq(type(Op.choice), 'function', 'Op exports option composition')
   assert_eq(type(fibers.spawn), 'function', 'root exports structured spawn')
+  assert_eq(type(fibers.now), 'function', 'root exports contextual time')
+  assert_eq(type(FibersRuntime.drive), 'function', 'Runtime exports host-driving lifecycle')
+  assert_eq(fibers.always, nil, 'root does not export option constructors')
+  assert_eq(fibers.choice, nil, 'root does not export option combinators')
+  assert_eq(fibers.sleep, nil, 'root does not export Sleep')
+  assert_eq(fibers.after_commit, nil, 'root does not export Effect constructors')
   assert_eq(fibers.Op, nil, 'root does not export the Op module')
   assert_eq(fibers.Runtime, nil, 'root does not export Runtime')
   assert_eq(fibers.Scalar, nil, 'root does not export Scalar')
@@ -101,8 +112,9 @@ do
   assert_eq(policy, FibersPolicy, 'policy remains available as a named module')
   assert_eq(require('fibers.op'), FibersOp, 'Op has a direct named module')
   assert_eq(FibersOp.consequence, nil, 'emit has no long alias')
-  assert_eq(require('fibers.scalar'), FibersScalar, 'Scalar has a direct named module')
-  assert_eq(require('fibers.flow'), FibersFlow, 'Flow has a direct named module')
+  assert_eq(require('fibers.resource.scalar'), FibersScalar, 'Scalar has a direct named module')
+  assert_eq(require('fibers.resource.flow'), FibersFlow, 'Flow has one canonical resource module')
+  assert_eq(require('fibers.resource.queue'), FibersQueue, 'Queue has one canonical resource module')
   assert_eq(require('fibers.file'), FibersFile, 'File facilities have a direct named module')
   assert_eq(type(FibersFile.open), 'function', 'File exposes evented regular-file opening')
   assert_eq(type(FibersFile.tmpfile), 'function', 'File exposes owned temporary files')
@@ -133,10 +145,41 @@ do
   assert_eq(FibersRegion._ledger, nil, 'Region does not export its shared ledger')
   assert_eq(FibersRegion._clone_ledger, nil, 'Region does not export ledger cloning')
   assert_truthy(type(FibersPhase.new) == 'function', 'Phase remains available only as an experiment')
-  local atoms_ok = pcall(require, 'fibers.atoms')
-  local kernel_ok = pcall(require, 'fibers.kernel')
-  assert_eq(atoms_ok, false, 'the obsolete atoms aggregate is removed')
-  assert_eq(kernel_ok, false, 'the trusted kernel aggregate is removed')
+  local absent_modules = {
+    'fibers.atoms',
+    'fibers.kernel',
+    'fibers.resource',
+    'fibers.flow',
+    'fibers.queue',
+    'fibers.scalar',
+    'fibers.internal.fifo',
+    'fibers.internal.completion',
+    'fibers.internal.facility',
+    'fibers.internal.flow_machine',
+    'fibers.internal.scalar_wait',
+    'fibers.runner',
+  }
+  for i = 1, #absent_modules do
+    local module = absent_modules[i]
+    local ok = pcall(require, module)
+    assert_eq(ok, false, module .. ' is not a supported duplicate import path')
+  end
+end
+
+-- The root lifecycle preserves Lua multiple returns, including nil values.
+do
+  local a, b, c = fibers.run(function()
+    return 'root-a', nil, 'root-c'
+  end)
+  assert_eq(a, 'root-a')
+  assert_eq(b, nil)
+  assert_eq(c, 'root-c')
+
+  local checked = fibers.try_run(function()
+    return 'checked-root'
+  end)
+  assert_eq(checked.ok, true)
+  assert_eq(checked:unpack(), 'checked-root')
 end
 
 -- The friendly top-level surface is enough for ordinary rendezvous use.
@@ -215,7 +258,7 @@ do
   } })
   local ok, observed
   rt:spawn_raw(function()
-    ok, observed = rt:perform(fibers.sleep_op(5))
+    ok, observed = rt:perform(Sleep.sleep_op(5))
   end, 'sleeper')
   local st = rt:run()
   assert_status(st, 'pending')
@@ -250,7 +293,7 @@ do
   })
   local effect = FibersEffect.of(Kind, { key = 'once' })
   local st = fibers.try_run(function()
-    fibers.perform(fibers.after_commit(effect))
+    fibers.perform(Effect.after_commit(effect))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(discharged, 1)
@@ -300,9 +343,9 @@ do
       return value and 42 or 0
     end, 'worker'))
 
-    received = fibers.perform(fibers.choice(
+    received = fibers.perform(Op.choice(
       inbox:get_op(),
-      fibers.sleep_op(1):map(function()
+      Sleep.sleep_op(1):map(function()
         return 'timeout'
       end)
     ))

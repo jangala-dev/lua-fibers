@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Service = require('fibers.internal.socket.datagram_service')
+local Service = require('fibers.socket.datagram_service')
 
 local function fake_handle(read_ready, write_ready)
   return {

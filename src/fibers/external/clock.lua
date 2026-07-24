@@ -1,5 +1,5 @@
-local Facility = require('fibers.internal.facility')
-local Scalar = require('fibers.scalar')
+local Facility = require('fibers.resource.authoring')
+local Scalar = require('fibers.resource.scalar')
 local Interest = require('fibers.external.interest')
 
 local Clock = {}

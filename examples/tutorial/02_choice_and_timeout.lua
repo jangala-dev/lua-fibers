@@ -14,6 +14,8 @@ package.path = table.concat({
 -- Choice: compose a timeout and a channel receive as ordinary operations.
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
 local host = require('fibers.host')
 
@@ -23,13 +25,13 @@ local eventual_message
 
 fibers.run(function()
   fibers.spawn(function()
-    fibers.perform(fibers.sleep_op(2):and_then(function()
+    fibers.perform(Sleep.sleep_op(2):and_then(function()
       return my_chan:put_op('hello')
     end))
   end, 'delayed-sender')
 
-  retval = fibers.perform(fibers.choice(
-    fibers.sleep_op(1):wrap(function()
+  retval = fibers.perform(Op.choice(
+    Sleep.sleep_op(1):wrap(function()
       return 'timeout'
     end),
     my_chan:get_op()

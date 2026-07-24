@@ -18,7 +18,8 @@ package.path = table.concat({
 -- selected fibres resume.
 
 local fibers = require('fibers')
-local Scalar = require('fibers.scalar')
+local Op = require('fibers.op')
+local Scalar = require('fibers.resource.scalar')
 local Effect = require('fibers.lifetime.effect')
 local log = {}
 local counter = Scalar.new(0, 'counter')
@@ -49,9 +50,9 @@ local function log_effect(id, message)
 end
 
 fibers.run(function()
-  fibers.perform(fibers.tensor({
+  fibers.perform(Op.tensor({
     counter:write_op(1),
-    fibers.after_commit(log_effect('counter-updated', 'counter was committed')),
+    Effect.after_commit(log_effect('counter-updated', 'counter was committed')),
   }))
 end)
 

@@ -33,9 +33,9 @@ assert(not IR.metadata_may_supply(pop_meta, pop_intent))
 assert(IR.metadata_may_supply(pop_meta, put_intent))
 assert(not IR.metadata_may_supply(put_meta, put_intent))
 
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 local Runtime = require('fibers.runtime')
 local machine = Runtime.new().machine_name
 

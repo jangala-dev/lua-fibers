@@ -16,7 +16,6 @@ local Runtime = require('fibers.runtime')
 local Region = require('fibers.lifetime.region')
 local Stream = require('fibers.stream')
 local HostHandle = require('fibers.host.handle')
-local Runner = require('fibers.runner')
 local Host = require('fibers.host')
 
 -- This example is not a real socket implementation.  It shows the socket-shaped
@@ -94,13 +93,13 @@ rt:spawn_raw(function()
 end, 'root')
 
 -- Opening the stream registers both directions with the shared reactor; the read then waits for host readiness.
-Runner.run(rt, { host = host, max_iterations = 20 })
+rt:drive({ host = host, max_iterations = 20 })
 assert(stream ~= nil)
 assert(got == nil)
 
 socket:feed('ping')
 host:writable(socket.key)
-Runner.run(rt, { host = host, max_iterations = 120 })
+rt:drive({ host = host, max_iterations = 120 })
 
 assert(got == 'ping')
 assert(flushed == true)

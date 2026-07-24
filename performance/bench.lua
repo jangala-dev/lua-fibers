@@ -39,12 +39,12 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 local Policy = require('fibers.policy')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local EventQueue = require('fibers.external.event_queue')
 local Clock = require('fibers.external.clock')
 local Region = require('fibers.lifetime.region')
@@ -852,7 +852,7 @@ add('flow', 'splice derived', 140, function(n)
 end)
 
 -- --------------------------------------------------------------------------
--- Runner.
+-- Driver.
 -- --------------------------------------------------------------------------
 
 local results = {}

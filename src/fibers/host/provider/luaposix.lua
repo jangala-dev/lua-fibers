@@ -2,7 +2,7 @@
 -- conversions; fibers.host.native supplies all Fibers semantics.
 
 local NativeError = require('fibers.host.native_error')
-local BitOps = require('fibers.internal.bitops')
+local BitOps = require('fibers.host.bitops')
 
 local ok_poll, poll = pcall(require, 'posix.poll')
 local ok_time, time = pcall(require, 'posix.time')

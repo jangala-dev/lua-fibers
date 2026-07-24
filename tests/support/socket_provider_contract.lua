@@ -1,4 +1,5 @@
 local fibers = require('fibers')
+local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
 local HostError = require('fibers.host.error')
 
@@ -33,7 +34,7 @@ function Contract.exercise(name, host, address, opts)
     local watchdog
     if opts.watchdog_seconds then
       watchdog = scope:spawn(function()
-        fibers.sleep(opts.watchdog_seconds)
+        Sleep.sleep(opts.watchdog_seconds)
         error(name .. ' provider contract timed out during ' .. stage, 0)
       end, name .. ':watchdog')
     end

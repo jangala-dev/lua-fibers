@@ -15,7 +15,7 @@ local Inspect = require('tests.support.flow_inspect')
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
-local FibersScalar = require('fibers.scalar')
+local FibersScalar = require('fibers.resource.scalar')
 local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 
@@ -51,7 +51,7 @@ end
 
 local Op = FibersOp
 local Stream = FibersStream
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 
 -- Primitive flow: inlet writes bytes, outlet reads bytes, handles are stable.
 do

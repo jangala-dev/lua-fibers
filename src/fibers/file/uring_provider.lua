@@ -4,9 +4,9 @@
 -- 16-byte CQE ABI. It supports the complete version-1 file surface without
 -- issuing blocking filesystem calls on the runtime thread.
 
-local Completion = require('fibers.internal.completion')
+local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
-local IO = require('fibers.internal.io')
+local IO = require('fibers.host.io')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')

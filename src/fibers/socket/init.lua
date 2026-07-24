@@ -9,7 +9,7 @@ local DialModule = require('fibers.socket.dial')
 local DatagramModule = require('fibers.socket.datagram')
 local ResolverModule = require('fibers.socket.resolver')
 local HostError = require('fibers.host.error')
-local IO = require('fibers.internal.io')
+local IO = require('fibers.host.io')
 local perform = require('fibers.perform')
 
 local Socket = {

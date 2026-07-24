@@ -15,9 +15,9 @@ local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local Op = FibersOp
-local Flow = require('fibers.flow')
-local Rope = require('fibers.flow.rope')
-local Errors = require('fibers.flow.errors')
+local Flow = require('fibers.resource.flow')
+local Rope = require('fibers.resource.flow.rope')
+local Errors = require('fibers.resource.flow.errors')
 
 local function fail(msg)
   error(msg, 2)

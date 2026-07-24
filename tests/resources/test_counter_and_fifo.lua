@@ -15,7 +15,7 @@ package.path = table.concat({
 
 local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
-local Queue = require('fibers.internal.fifo')
+local Queue = require('fibers.resource.queue')
 local Runtime = require('fibers.runtime')
 
 local function fail(msg)

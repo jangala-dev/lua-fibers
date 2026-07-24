@@ -11,7 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 local Runtime = require('fibers.runtime')
 local Petri = require('examples.case_studies.petri.petri')
 local Calendar = require('examples.case_studies.calendar.calendar')

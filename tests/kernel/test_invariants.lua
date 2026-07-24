@@ -16,7 +16,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
-local FibersScalar = require('fibers.scalar')
+local FibersScalar = require('fibers.resource.scalar')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersEffect = require('fibers.lifetime.effect')
@@ -25,7 +25,7 @@ local Op = FibersOp
 local Scalar = FibersScalar
 local Rendezvous = FibersRendezvous
 local Effect = FibersEffect
-local Interrupt = require('fibers.internal.interrupt')
+local Interrupt = require('fibers.lifetime.interrupt')
 
 local function fail(msg)
   error(msg, 2)
@@ -93,7 +93,7 @@ do
   feed:set('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()
-    choice_result = rt:perform(fibers.choice(
+    choice_result = rt:perform(Op.choice(
       Op.always('winner'),
       q:next_op():map(function(v)
         return 'events:' .. tostring(v)

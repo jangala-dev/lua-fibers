@@ -9,15 +9,16 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local channel = require('fibers.channel')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Counter = require('fibers.resource.counter')
 
 local perform = fibers.perform
 local spawn = fibers.spawn
-local choice = fibers.choice
-local all = fibers.all
-local always = fibers.always
+local choice = Op.choice
+local all = Op.all
+local always = Op.always
 
 local function call_op(robot, command)
   return robot.online:expect_op(true):and_then(function()

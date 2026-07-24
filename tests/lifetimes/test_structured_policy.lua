@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersSignal = require('fibers.external.signal')
@@ -196,7 +197,7 @@ do
         :map(function()
           return 'admitted'
         end)
-        :or_else(fibers.always('rejected')))
+        :or_else(Op.always('rejected')))
     end)
   end)
   assert_eq(r.ok, false)

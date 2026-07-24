@@ -6,16 +6,135 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Completion = require('fibers.internal.completion')
-local Algorithms = require('fibers.file.algorithms')
-local IO = require('fibers.internal.io')
+local Completion = require('fibers.resource.completion')
+local IO = require('fibers.host.io')
 local Mailbox = require('fibers.mailbox')
-local Ownership = require('fibers.internal.ownership')
+local Ownership = require('fibers.lifetime.ownership')
 local Owned = require('fibers.lifetime.region').Owned
 local Protected = require('fibers.internal.protected')
-local Provider = require('fibers.file.provider')
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 local perform = require('fibers.perform')
+
+local Algorithms = {}
+
+function Algorithms.read_exactly(read, count, fields)
+  local parts, total = {}, 0
+  while total < count do
+    local bytes, err = read(count - total)
+    if bytes == nil then
+      return nil, err
+    end
+    if bytes == '' then
+      fields = fields or {}
+      fields.expected = count
+      fields.received = total
+      return nil, HostError.eof('file', 'read_exactly', fields)
+    end
+    parts[#parts + 1] = bytes
+    total = total + #bytes
+  end
+  return table.concat(parts)
+end
+
+function Algorithms.read_all(read, opts)
+  opts = opts or {}
+  local max = assert(opts.max)
+  local chunk = assert(opts.chunk_size)
+  local parts, total = {}, 0
+  while total < max do
+    local bytes, err = read(math.min(chunk, max - total))
+    if bytes == nil then
+      return nil, err
+    end
+    if bytes == '' then
+      return table.concat(parts)
+    end
+    parts[#parts + 1] = bytes
+    total = total + #bytes
+  end
+
+  local extra, err = read(1)
+  if extra == nil then
+    return nil, err
+  end
+  if extra ~= '' then
+    if opts.restore_probe then
+      local restored, restore_err = opts.restore_probe()
+      if restored == nil or restored == false then
+        return nil, restore_err
+      end
+    end
+    return nil,
+      HostError.system(
+        'file',
+        'read_all',
+        'file exceeds configured maximum',
+        'EFBIG',
+        nil,
+        { path = opts.path, max = max }
+      )
+  end
+  return table.concat(parts)
+end
+
+function Algorithms.write_all(write, bytes, fields)
+  local total = 0
+  while total < #bytes do
+    local written, err = write(bytes:sub(total + 1))
+    if written == nil or written == false then
+      return nil, err
+    end
+    if written <= 0 then
+      return nil,
+        HostError.system(
+          'file',
+          'write_all',
+          'write made no progress',
+          'EIO',
+          nil,
+          { path = fields and fields.path, written = total }
+        )
+    end
+    total = total + written
+  end
+  return total
+end
+
+local Provider = {}
+local by_runtime = setmetatable({}, { __mode = 'k' })
+
+function Provider.for_runtime(runtime, opts)
+  if not runtime then
+    error('file provider requires a current runtime', 2)
+  end
+  local cached = by_runtime[runtime]
+  if cached and (type(cached.is_supported) ~= 'function' or cached:is_supported()) then
+    return cached
+  end
+  by_runtime[runtime] = nil
+
+  local host = runtime.host
+  if not host or type(host.file_provider) ~= 'function' then
+    return nil, HostError.unsupported('file', 'provider', { host = host and host.name })
+  end
+  local ok, provider = pcall(host.file_provider, host, runtime, opts or {})
+  if
+    not ok
+    or not provider
+    or (type(provider.is_supported) == 'function' and not provider:is_supported())
+  then
+    return nil, HostError.unsupported('file', 'provider', { host = host.name })
+  end
+
+  by_runtime[runtime] = provider
+  if type(provider.shutdown) == 'function' and type(runtime._add_finalizer) == 'function' then
+    runtime:_add_finalizer(function()
+      by_runtime[runtime] = nil
+      return provider:shutdown()
+    end)
+  end
+  return provider
+end
 
 local File = {}
 local RegularFile = {}

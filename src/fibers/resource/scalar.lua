@@ -1,5 +1,5 @@
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 local Algebra = require('fibers.internal.kernel.algebra')
 
 local Scalar = {}
@@ -201,5 +201,64 @@ end
 Scalar.Kind = Kind
 
 Facility.performing(Scalar, { 'read', 'changed', 'expect', 'write' })
+
+-- Versioned waits over Scalar resources.
+local unpack_ = table.unpack or unpack
+
+local function pack(...)
+  return { n = select('#', ...), ... }
+end
+
+local function footprint(scalar, writable)
+  if not writable then
+    return Op.dependencies(scalar:snapshot_op(), scalar:changed_op(0))
+  end
+  return {
+    external = true,
+    locations = {
+      [scalar._location] = {
+        read = true,
+        write = true,
+        wait = true,
+        supplies = { any = true },
+      },
+    },
+  }
+end
+
+function Scalar.select_op(scalar, select, opts)
+  opts = opts or {}
+  local dependencies = opts.footprint or footprint(scalar, opts.writable == true)
+  local function loop()
+    return scalar:snapshot_op():and_then(function(snapshot)
+      local option, wait = select(snapshot.value)
+      if option ~= nil then
+        return option
+      end
+      if wait == false then
+        return Op.never()
+      end
+      return scalar:changed_op(snapshot.version):and_then(loop, dependencies)
+    end, dependencies)
+  end
+  return loop()
+end
+
+function Scalar.until_op(scalar, predicate, opts)
+  return Scalar.select_op(scalar, function(value)
+    local result = pack(predicate(value))
+    if result[1] then
+      return Op.always(unpack_(result, 2, result.n))
+    end
+  end, opts)
+end
+
+function Scalar.value_op(scalar, predicate, opts)
+  return Scalar.select_op(scalar, function(value)
+    if predicate(value) then
+      return Op.always(value)
+    end
+  end, opts)
+end
 
 return Scalar

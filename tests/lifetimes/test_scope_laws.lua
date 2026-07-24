@@ -12,9 +12,10 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersScope = require('fibers.scope')
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 
 local function fail(msg)
   error(msg, 2)
@@ -42,7 +43,7 @@ do
       :map(function()
         return 'unexpected'
       end)
-      :or_else(fibers.always('sealed')))
+      :or_else(Op.always('sealed')))
     owns = fibers.perform(life:owns_op(h))
   end)
   assert_eq(result, 'sealed', 'sealed scope should reject admission')
@@ -67,7 +68,7 @@ do
       :map(function()
         return 'unexpected'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
     still_to = fibers.perform(to:owns_op(h))
     fibers.perform(Settlement.retire_item_op(to, h))
   end)
@@ -108,7 +109,7 @@ do
     fibers.perform(life:admit_op(FibersRegion.Owned.item(h, {
       name = 'table-protocol',
       discharge_op = function()
-        return fibers.always(true):map(function()
+        return Op.always(true):map(function()
           discharged = true
           return true
         end)

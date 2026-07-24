@@ -12,11 +12,12 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Host = require('fibers.host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
-local Completion = require('fibers.internal.completion')
-local Adoption = require('fibers.internal.adoption')
+local Completion = require('fibers.resource.completion')
+local Adoption = require('fibers.lifetime.adoption')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -122,12 +123,12 @@ end
 
 -- Completion can expose pending as an option for single-winner protocols.
 do
-  local Completion = require('fibers.internal.completion')
+  local Completion = require('fibers.resource.completion')
   local completion = Completion.new('pending-completion')
   fibers.run(function()
     assert_eq(fibers.perform(completion:pending_op()), true)
     fibers.perform(completion:publish_success_op('done'))
-    assert_eq(fibers.perform(completion:pending_op():or_else(fibers.always(false))), false)
+    assert_eq(fibers.perform(completion:pending_op():or_else(Op.always(false))), false)
   end)
 end
 

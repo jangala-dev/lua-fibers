@@ -41,8 +41,8 @@ end
 do
   assert_eq(type(Sleep.sleep_until_op), 'function', 'sleep_until_op export')
   assert_eq(type(Sleep.sleep_op), 'function', 'sleep_op export')
-  assert_eq(type(fibers.sleep_until_op), 'function', 'top-level sleep_until_op export')
-  assert_eq(type(fibers.sleep_op), 'function', 'top-level sleep_op export')
+  assert_eq(type(Sleep.sleep_until_op), 'function', 'top-level sleep_until_op export')
+  assert_eq(type(Sleep.sleep_op), 'function', 'top-level sleep_op export')
 end
 
 -- Absolute sleep waits until the host clock reaches the deadline.

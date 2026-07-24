@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersRegion = require('fibers.lifetime.region')
 
@@ -35,7 +36,7 @@ do
   local retired = 0
   local h = FibersRegion.handle('inner-owned', {
     settle = function()
-      return fibers.always(true):map(function()
+      return Op.always(true):map(function()
         retired = retired + 1
         return true
       end)
@@ -61,7 +62,7 @@ do
   local retired = 0
   local h = FibersRegion.handle('promoted-owned', {
     settle = function()
-      return fibers.always(true):map(function()
+      return Op.always(true):map(function()
         retired = retired + 1
         return true
       end)

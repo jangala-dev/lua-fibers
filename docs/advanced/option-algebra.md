@@ -1,5 +1,7 @@
 # The Fibers option algebra
 
+Public examples use `local Op = require('fibers.op')`; the contextual `fibers` module supplies `perform`, not option constructors.
+
 This document states the semantic model implemented by `fibers`. It is not a complete formalisation, but it defines the distinctions which implementations and trusted facilities must preserve.
 
 ## 1. Transactions describe worlds
@@ -232,16 +234,16 @@ Examples:
 
 ```lua
 -- Joint allocation from committed stock.
-fibers.all({ counter:take_op(1), counter:take_op(1) })
+Op.all({ counter:take_op(1), counter:take_op(1) })
 
 -- Sibling deletion constrains the pop; the pop must skip the deleted entry.
-fibers.all({ index:remove_op('a'), index:pop_first_op() })
+Op.all({ index:remove_op('a'), index:pop_first_op() })
 
 -- Sibling addition may supply a take only in tensor.
-fibers.tensor({ counter:give_op(1), counter:take_op(1) })
+Op.tensor({ counter:give_op(1), counter:take_op(1) })
 
 -- Sibling put may supply a get only in tensor.
-fibers.tensor({ keyed:put_op('k', 'v'), keyed:get_op('k') })
+Op.tensor({ keyed:put_op('k', 'v'), keyed:get_op('k') })
 ```
 
 Product identities are represented as product rows:

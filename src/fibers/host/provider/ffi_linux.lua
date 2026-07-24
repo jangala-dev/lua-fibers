@@ -4,8 +4,46 @@
 -- fibers.host.native owns Fibers handles, readiness delivery, network policy,
 -- resolver deduplication, process lifecycle and capability reporting.
 
-local BitOps = require('fibers.internal.bitops')
+local BitOps = require('fibers.host.bitops')
 local Native = require('fibers.host.native')
+
+local AioProbe = {}
+local cdef_done = setmetatable({}, { __mode = 'k' })
+
+function AioProbe.available(ffi, C)
+  if not ffi or not C then
+    return false
+  end
+  local ok_cdef = cdef_done[ffi] == true
+  if not ok_cdef then
+    ok_cdef = pcall(function()
+      ffi.cdef([[
+      struct aiocb;
+      int aio_read(struct aiocb *);
+      int aio_write(struct aiocb *);
+      int aio_fsync(int, struct aiocb *);
+      int aio_error(const struct aiocb *);
+      long aio_return(struct aiocb *);
+      int aio_cancel(int, struct aiocb *);
+      ]])
+    end)
+    if ok_cdef then
+      cdef_done[ffi] = true
+    end
+  end
+  if not ok_cdef then
+    return false
+  end
+  local ok, available = pcall(function()
+    return C.aio_read ~= nil
+      and C.aio_write ~= nil
+      and C.aio_fsync ~= nil
+      and C.aio_error ~= nil
+      and C.aio_return ~= nil
+      and C.aio_cancel ~= nil
+  end)
+  return ok and available == true
+end
 
 local M = {}
 local function native_context(opts)
@@ -990,7 +1028,6 @@ function M.new(opts)
   end
 
   local UringProvider = require('fibers.file.uring_provider')
-  local AioProbe = require('fibers.file.aio_probe')
   local uring_supported = select(
     1,
     UringProvider.probe({ ffi = ffi, C = C, arch = opts.arch or ffi.arch or (rawget(_G, 'jit') and jit.arch) })

@@ -1,9 +1,8 @@
 -- Shared transactional lifecycle machine for listener-like socket resources.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local HostError = require('fibers.host.error')
-local ScalarWait = require('fibers.internal.scalar_wait')
 
 local Ready = Scalar.Ready
 local Lifecycle = {}
@@ -19,7 +18,7 @@ end
 Lifecycle.copy = copy
 
 function Lifecycle.wait_for(machine, select)
-  return ScalarWait.select_op(machine, select, { writable = true })
+  return Scalar.select_op(machine, select, { writable = true })
 end
 
 local function transition(name, step)
@@ -176,7 +175,7 @@ function Lifecycle.define(spec)
   end
 
   function Type:start_result_op()
-    return ScalarWait.select_op(self.state, function(state)
+    return Scalar.select_op(self.state, function(state)
       if state.kind == 'starting' then
         return nil, true
       end
@@ -198,7 +197,7 @@ function Lifecycle.define(spec)
 
   if spec.available then
     function Type:available_op()
-      return ScalarWait.select_op(self.state, function(state)
+      return Scalar.select_op(self.state, function(state)
         if state.kind == 'starting' or state.kind == 'active' then
           return Op.always(true)
         end
@@ -208,7 +207,7 @@ function Lifecycle.define(spec)
   end
 
   function Type:unavailable_op()
-    return ScalarWait.select_op(self.state, function(state)
+    return Scalar.select_op(self.state, function(state)
       if state.kind == 'stopping' or state.kind == 'stopped' then
         return Op.always(state)
       end
@@ -217,7 +216,7 @@ function Lifecycle.define(spec)
   end
 
   function Type:terminal_op()
-    return ScalarWait.select_op(self.state, function(state)
+    return Scalar.select_op(self.state, function(state)
       if state.kind == 'stopped' then
         return Op.always(state)
       end

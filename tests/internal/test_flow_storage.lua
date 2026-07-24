@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Errors = require('fibers.flow.errors')
+local Errors = require('fibers.resource.flow.errors')
 
 local function fail(msg)
   error(msg, 2)
@@ -36,7 +36,7 @@ end
 -- Lease:length and Lease:inspect should be callable methods, not shadowed by
 -- fields on the lease table.
 do
-  local flow = require('fibers.flow').new({ name = 'lease-method-flow', capacity = 10 })
+  local flow = require('fibers.resource.flow').new({ name = 'lease-method-flow', capacity = 10 })
   local lease, len, info
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -55,7 +55,7 @@ end
 -- Flow.  A second owner cannot acquire a lease until the first is acked,
 -- returned, failed, or settled.
 do
-  local flow = require('fibers.flow').new({ name = 'single-active-lease-flow', capacity = 10 })
+  local flow = require('fibers.resource.flow').new({ name = 'single-active-lease-flow', capacity = 10 })
   local first, second, second_err, after_ack
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -76,7 +76,7 @@ end
 -- Queued bytes are stored as a rope of chunks rather than a single mutable
 -- concatenated string.  The public observation remains a byte stream.
 do
-  local flow = require('fibers.flow').new({ name = 'rope-backed-flow', capacity = 64 })
+  local flow = require('fibers.resource.flow').new({ name = 'rope-backed-flow', capacity = 64 })
   local snap, got
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('ab'))

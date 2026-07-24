@@ -14,8 +14,8 @@ local Runtime = require('fibers.runtime')
 local IR = require('fibers.internal.kernel.ir')
 local Store = require('fibers.internal.kernel.ledger')
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
-local Scalar = require('fibers.scalar')
+local Facility = require('fibers.resource.authoring')
+local Scalar = require('fibers.resource.scalar')
 
 local function eq(a, b, m)
   if a ~= b then

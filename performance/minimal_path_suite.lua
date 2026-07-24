@@ -26,7 +26,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Clock = require('performance.clock')
 
 local function env_number(name, default)

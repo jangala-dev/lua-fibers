@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Host = require('fibers.host')
 local Region = require('fibers.lifetime.region')
-local Runner = require('fibers.runner')
+local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 
@@ -38,7 +38,7 @@ runtime:spawn_raw(function()
 end, 'example-user')
 
 assert(input_writer:write('hello') == 5)
-Runner.run(runtime, { host = host, max_iterations = 80 })
+runtime:drive({ host = host, max_iterations = 80 })
 assert(got == 'hello' and flushed == true)
 assert(output_reader:read(4) == 'pong')
 print('examples/embedding/host_handle_stream.lua: ok')

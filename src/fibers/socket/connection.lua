@@ -1,7 +1,7 @@
 -- Construction and adoption transfer for connected socket Streams.
 
 local HostError = require('fibers.host.error')
-local IO = require('fibers.internal.io')
+local IO = require('fibers.host.io')
 local Protected = require('fibers.internal.protected')
 
 local Connection = {}

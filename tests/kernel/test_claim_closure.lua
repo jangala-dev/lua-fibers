@@ -14,7 +14,7 @@ package.path = table.concat({
 local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 local Program = require('fibers.internal.kernel.ir')
 local Runtime = require('fibers.runtime')
 

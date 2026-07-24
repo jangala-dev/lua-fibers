@@ -1,7 +1,7 @@
 -- Shared process status, lifecycle and stdio machinery.
 
 local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.internal.io_audit')
+local IOAudit = require('fibers.diagnostics.io')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 

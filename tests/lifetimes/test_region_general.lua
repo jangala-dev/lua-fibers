@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersTask = require('fibers.task')
 
@@ -219,7 +220,7 @@ do
       :map(function()
         return 'forged-settled'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
     settled = fibers.perform(region:resolve_op(claim, { kind = 'discharge' }))
   end).runtime_status
 

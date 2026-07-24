@@ -12,9 +12,10 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Flow = require('fibers.flow')
-local Errors = require('fibers.flow.errors')
+local Flow = require('fibers.resource.flow')
+local Errors = require('fibers.resource.flow.errors')
 
 local function fail(msg)
   error(msg, 2)
@@ -115,14 +116,13 @@ do
   local flow = Flow.new({ name = 'public-space-losing-choice', capacity = 3 })
   local result, snap
   local st = fibers.try_run(function()
-    result = fibers.perform(
-      fibers.choice(
-        fibers.always('winner'),
+    result =
+      fibers.perform(Op.choice(
+        Op.always('winner'),
         flow:inlet():reserve_some_op(3, 'loser'):map(function()
           return 'loser'
         end)
-      )
-    )
+      ))
     snap = fibers.perform(flow:inspect_op())
   end, { choice_seed = 3 }).runtime_status
   assert_eq(st.tag, 'found')

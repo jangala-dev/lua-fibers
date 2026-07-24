@@ -12,6 +12,8 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
@@ -116,9 +118,9 @@ do
   local result = fibers.try_run(function()
     local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'pending-timeout-listener' })
     local dial = socket.dial(listener:local_address(), { name = 'pending-timeout-dial' })
-    local value, err = fibers.perform(fibers.choice(
+    local value, err = fibers.perform(Op.choice(
       dial:result_op(),
-      fibers.sleep_op(0.01):map(function()
+      Sleep.sleep_op(0.01):map(function()
         return nil, { kind = 'timeout' }
       end)
     ))
@@ -149,14 +151,14 @@ do
     end, 'delayed-success-server')
     local dial = socket.dial(listener:local_address(), { name = 'delayed-success-dial' })
     scope:spawn(function()
-      fibers.sleep(0.01)
+      Sleep.sleep(0.01)
       local handle = assert(get_pending(), 'pending handle should exist')
       handle._allow_finish = true
       handle:mark_writable()
     end, 'delayed-connect-completion')
-    local connection, err = fibers.perform(fibers.choice(
+    local connection, err = fibers.perform(Op.choice(
       dial:result_op(),
-      fibers.sleep_op(1):map(function()
+      Sleep.sleep_op(1):map(function()
         return nil, { kind = 'timeout' }
       end)
     ))
@@ -182,7 +184,7 @@ do
     local waiter = scope:spawn(function()
       accepted, accept_err = listener:accept()
     end, 'blocked-accept')
-    fibers.sleep(0)
+    Sleep.sleep(0)
     listener:close('close blocked accept')
     waiter:await()
     assert_eq(accepted, nil)

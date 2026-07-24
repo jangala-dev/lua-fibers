@@ -14,6 +14,8 @@ File operations require an active runtime:
 
 ```lua
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
 local Host = require('fibers.host')
 
@@ -184,9 +186,9 @@ finished. If the launch branch loses, no child is created.
 ```lua
 local proc = fibers.perform(command:launch_op())
 
-local launched, launch_err = fibers.perform(fibers.choice(
+local launched, launch_err = fibers.perform(Op.choice(
   proc:launch_result_op(),
-  fibers.sleep_op(1):map(function()
+  Sleep.sleep_op(1):map(function()
     return nil, { kind = 'timeout', phase = 'launch' }
   end)
 ))

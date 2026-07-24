@@ -18,7 +18,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local TC = require('tests.support.effect_helpers')
 
 local function new_runtime(opts)
@@ -1162,7 +1162,7 @@ print('tests/test_op.lua: core algebra contract ok')
 --   fibers.op
 --   fibers.runtime
 --   fibers.resource.rendezvous
---   fibers.scalar
+--   fibers.resource.scalar
 
 package.path = table.concat({
   './src/?.lua',
@@ -1180,7 +1180,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local TC = require('tests.support.effect_helpers')
 
 local function new_runtime(opts)

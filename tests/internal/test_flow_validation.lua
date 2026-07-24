@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 
 local function eq(a, b, msg)
   if a ~= b then

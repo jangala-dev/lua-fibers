@@ -1,8 +1,8 @@
 -- Deterministic in-memory provider for the shared host implementation.
 
-local Completion = require('fibers.internal.completion')
+local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.internal.io_audit')
+local IOAudit = require('fibers.diagnostics.io')
 local perform = require('fibers.perform')
 local Protected = require('fibers.internal.protected')
 local WaitSet = require('fibers.host.wait_set')

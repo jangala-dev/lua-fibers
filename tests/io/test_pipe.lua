@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Host = require('fibers.host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
@@ -39,7 +40,7 @@ do
     end,
   })
   fibers.run(function()
-    local result = fibers.perform(fibers.always('winner'):or_else(file.pipe_op({ name = 'loser' })))
+    local result = fibers.perform(Op.always('winner'):or_else(file.pipe_op({ name = 'loser' })))
     assert_eq(result, 'winner')
   end, { host = host })
   assert_eq(acquisitions, 0)

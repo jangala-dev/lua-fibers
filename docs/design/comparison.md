@@ -77,7 +77,7 @@ Approximate correspondences are:
 | `withNack`/`wrapAbort` | occurrence defeat obligations |
 | channel send/receive | `Rendezvous` put/get |
 
-CML event choice is nondeterministic when several events can proceed. The revised `fibers.choice` has the same important algebraic intention: branch position does not confer priority. `fibers` uses a deterministic seed-derived traversal for reproducibility, but this is runtime policy rather than source-order semantics.
+CML event choice is nondeterministic when several events can proceed. The revised `Op.choice` has the same important algebraic intention: branch position does not confer priority. `fibers` uses a deterministic seed-derived traversal for reproducibility, but this is runtime policy rather than source-order semantics.
 
 Fibers gives `guard` an activation-scoped interpretation. Each structural use is prepared independently, so `tensor({ g, g })` evaluates a reused guard twice, while one outer guard may deliberately construct a shared option. A guard returned by `and_then` is evaluated when that particular provisional progression activates. Its result is then retained while the same progression is searched, suspended or reconstructed. This resembles CML pre-synchronisation preparation while accounting for Fibers' multi-step speculative worlds.
 
@@ -127,12 +127,12 @@ First, it has native versioned resource transitions rather than a core centred o
 
 ### Choice and priority
 
-Transactional Events choice is nondeterministic rather than left-biased. That aligns with the revised `fibers.choice`.
+Transactional Events choice is nondeterministic rather than left-biased. That aligns with the revised `Op.choice`.
 
 Priority in `fibers` is not encoded by branch position. It is expressed through:
 
 ```lua
-preferred:or_else(fibers.choice(a, b, c))
+preferred:or_else(Op.choice(a, b, c))
 ```
 
 The fallback tier is admitted only after the preferred transactional scope has produced a complete, revalidatable `Retry` proof. This separates indifference within a tier from justified priority between tiers.
@@ -165,7 +165,7 @@ Approximate correspondences are:
 | `postCommit` | consequence or wrap, depending on ownership |
 | blocking partial update | a primitive whose complete absence contributes `Retry` |
 
-Reagent choice is deliberately left-biased in order to support algorithms such as elimination backoff. `fibers.choice` is instead unordered. A correctness-relevant preference is stated using `or_else`; a throughput preference which does not require refutation should remain runtime policy rather than changing the denotation of the option.
+Reagent choice is deliberately left-biased in order to support algorithms such as elimination backoff. `Op.choice` is instead unordered. A correctness-relevant preference is stated using `or_else`; a throughput preference which does not require refutation should remain runtime policy rather than changing the denotation of the option.
 
 The principal algebraic distinction introduced by `fibers` is the split between two product modes:
 
@@ -194,7 +194,7 @@ Reagents are designed for authors of scalable concurrent data structures. The au
 
 Reagents are stronger in the intended domain of parallel, lock-free implementation and persistent reusable catalysts. `fibers` is stronger in its direct vocabulary for proof-bearing fallback, explicit bounded-search incompleteness, ownership movements and the distinction between independent and interacting conjunction.
 
-A formal relationship between Reagent pairing and `fibers.all`/`fibers.tensor` remains open work.
+A formal relationship between Reagent pairing and `Op.all`/`Op.tensor` remains open work.
 
 ## 5. The distinctive fibres algebra
 
@@ -221,7 +221,7 @@ This makes several common decisions concise.
 ### Priority followed by indifference
 
 ```lua
-preferred:or_else(fibers.choice(a, b, c))
+preferred:or_else(Op.choice(a, b, c))
 ```
 
 Use the preferred option whenever it can commit in the selected world. Otherwise choose any acceptable option in the second tier.
@@ -229,7 +229,7 @@ Use the preferred option whenever it can commit in the selected world. Otherwise
 ### A tier of preferred alternatives followed by fallback
 
 ```lua
-fibers.choice(socket_a, socket_b):or_else(timeout)
+Op.choice(socket_a, socket_b):or_else(timeout)
 ```
 
 The timeout is admitted only after both socket alternatives have been completely refuted at the relevant managed instant.
@@ -237,7 +237,7 @@ The timeout is admitted only after both socket alternatives have been completely
 ### Joint requirements without hand-off
 
 ```lua
-fibers.all({ account_a:take_op(1), account_b:take_op(1) })
+Op.all({ account_a:take_op(1), account_b:take_op(1) })
 ```
 
 Both withdrawals must be supported by the parent world; one lane cannot fund the other.
@@ -245,7 +245,7 @@ Both withdrawals must be supported by the parent world; one lane cannot fund the
 ### Intentional transactional hand-off
 
 ```lua
-fibers.tensor({ slots:give_op(1), slots:take_op(1) })
+Op.tensor({ slots:give_op(1), slots:take_op(1) })
 ```
 
 Compatible sibling supply may participate in the same committed world.

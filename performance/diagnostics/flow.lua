@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 
 local n = tonumber(arg[1]) or 2000
 local mode = arg[2] or 'sequential'

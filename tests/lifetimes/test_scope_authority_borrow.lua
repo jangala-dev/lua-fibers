@@ -12,12 +12,13 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersLease = require('fibers.resource.lease')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersScope = require('fibers.scope')
-local FibersFlow = require('fibers.flow')
-local Settlement = require('fibers.internal.settlement')
+local FibersFlow = require('fibers.resource.flow')
+local Settlement = require('fibers.lifetime.settlement')
 
 local function fail(msg)
   error(msg, 2)
@@ -36,7 +37,7 @@ end
 local function maybe(op)
   return op:map(function()
     return 'yes'
-  end):or_else(fibers.always('no'))
+  end):or_else(Op.always('no'))
 end
 
 -- Owned live custody grants authority; claimed custody suspends ordinary use.
@@ -95,12 +96,10 @@ do
   local read_read
   fibers.run(function()
     fibers.perform(owner:admit_op(h))
-    local borrows = fibers.perform(fibers
-      .all({
-        owner:borrow_op(h, r1, { 'read' }),
-        owner:borrow_op(h, r2, { 'read' }),
-      })
-      :or_else(fibers.always(false)))
+    local borrows = fibers.perform(Op.all({
+      owner:borrow_op(h, r1, { 'read' }),
+      owner:borrow_op(h, r2, { 'read' }),
+    }):or_else(Op.always(false)))
     read_read = borrows and 'yes' or 'no'
     -- This test is only about coexisting borrows. Borrow release itself is
     -- covered above; avoiding manual policy here keeps the test algebraic.

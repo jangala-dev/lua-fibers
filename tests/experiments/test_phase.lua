@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRegion = require('fibers.lifetime.region')
 local Phase = require('experiments.phase')
 
@@ -42,7 +43,7 @@ do
         :map(function()
           return 'moved'
         end)
-        :or_else(fibers.always('blocked')))
+        :or_else(Op.always('blocked')))
       fibers.perform(frame:move_op(h, 'input', 'render', 'asset'))
     end)
     owner_after_input = h.owner
@@ -72,7 +73,7 @@ do
         :map(function()
           return 'borrowed'
         end)
-        :or_else(fibers.always('blocked')))
+        :or_else(Op.always('blocked')))
       fibers.perform(frame:borrow_op('simulate', world, 'extract', { 'read' }, 'world_view'))
       owner_after_borrow = world.owner
     end)
@@ -83,7 +84,7 @@ do
         :map(function()
           return true
         end)
-        :or_else(fibers.always(false)))
+        :or_else(Op.always(false)))
     end)
   end)
   assert_eq(undeclared_borrow, 'blocked', 'phase borrowing should require a declared borrow edge')
@@ -105,7 +106,7 @@ do
         :map(function()
           return 'carried'
         end)
-        :or_else(fibers.always('blocked')))
+        :or_else(Op.always('blocked')))
       carried = fibers.perform(ph:carry_fact_op('commands', 'input', 'simulate'))
     end)
     frame:run('simulate', function(_sim, ph)

@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
 local socket = require('fibers.socket')
@@ -82,7 +83,7 @@ do
     before = before + 1
   end
   fibers.run(function()
-    local result = fibers.perform(fibers.always('winner'):or_else(socket.listen_inet_op('127.0.0.1', 8123)))
+    local result = fibers.perform(Op.always('winner'):or_else(socket.listen_inet_op('127.0.0.1', 8123)))
     assert_eq(result, 'winner')
   end, { host = host })
   local after = 0

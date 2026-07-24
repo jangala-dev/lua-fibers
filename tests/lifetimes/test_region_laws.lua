@@ -11,6 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 local f = require('fibers')
+local fibers = require('fibers')
 local R = require('fibers.lifetime.region')
 local Op = require('fibers.op')
 local function fail(m)
@@ -36,7 +37,7 @@ do
   local h = R.handle('ph')
   local moved
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       f.perform(a:admit_op(h))
       moved = f.perform(a:move_op(h, b))
     end).runtime_status,
@@ -55,7 +56,7 @@ do
   local a, b = R.handle('a'), R.handle('b')
   local rows, observed
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       rows = f.perform(Op.all({ r:admit_op(a), r:admit_op(b) }))
     end).runtime_status,
     'found'
@@ -65,7 +66,7 @@ do
   ok(rows)
   local c = R.handle('c')
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       observed = f.perform(Op.all({ r:admit_op(c), r:owns_op(c) }))
     end).runtime_status,
     'found'
@@ -80,7 +81,7 @@ do
   local p, c = R.handle('p'), R.handle('c')
   local child
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       f.perform(a:admit_op(R.Owned.tree(p, nil, { R.Owned.inert(c) })))
       child = f.perform(a:move_op(c, b)
         :map(function()
@@ -102,7 +103,7 @@ do
   local h = R.handle('h')
   local claim, forged, failed
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       f.perform(r:admit_op(h))
       claim = f.perform(r:claim_op(h, { reason = 'x' }))
       local fake = { _fibers_claim = true, id = claim.id, region = r, root = h, records = claim.records }
@@ -129,14 +130,14 @@ do
   local a, b = R.new('ha'), R.new('hb')
   local h = R.handle('hh')
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       f.perform(Op.tensor({ a:admit_op(h), a:move_op(h, b) }))
     end).runtime_status,
     'quiescent'
   )
   eq(h.owner, nil)
   st(
-    f.try_run(function()
+    fibers.try_run(function()
       f.perform(a:admit_op(h):and_then(function()
         return a:move_op(h, b)
       end))

@@ -1,4 +1,5 @@
 local fibers = require('fibers')
+local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
@@ -352,13 +353,13 @@ function tests.file_driver_does_not_stop_other_fibres()
     if opts.exclusive and self.paths[path] ~= nil then
       return nil, HostError.system('file', 'open', 'exists', 'EEXIST')
     end
-    fibers.sleep(0.02)
+    Sleep.sleep(0.02)
     return original_open(self, path, mode)
   end
   fibers.run(function()
     local ticked = false
     local task = fibers.spawn(function()
-      fibers.sleep(0.005)
+      Sleep.sleep(0.005)
       ticked = true
     end, 'file-ticker')
     assert(file.read_all('/slow', {}) == 'ready')
@@ -404,7 +405,7 @@ function tests.worker_file_provider_is_evented()
   local result = fibers.try_run(function()
     local ticked = false
     local ticker = fibers.spawn(function()
-      fibers.sleep(0.005)
+      Sleep.sleep(0.005)
       ticked = true
     end, 'file-worker-ticker')
     assert(file.read_all(path, { max = 32 }) == 'worker')

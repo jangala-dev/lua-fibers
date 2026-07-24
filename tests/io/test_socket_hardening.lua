@@ -12,6 +12,8 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
 local socket = require('fibers.socket')
@@ -30,7 +32,7 @@ end
 
 local function yield_turns(n)
   for _ = 1, (n or 1) do
-    fibers.sleep(0)
+    Sleep.sleep(0)
   end
 end
 
@@ -195,7 +197,7 @@ do
       connection_ref = connected_state.connection
       assert_truthy(connection_ref, 'dial should have a successful unclaimed connection')
       assert_eq(connection_ref.owner, connected_state.source_region)
-      assert_eq(fibers.perform(fibers.always('not claimed'):or_else(dial_ref:connected_op())), 'not claimed')
+      assert_eq(fibers.perform(Op.always('not claimed'):or_else(dial_ref:connected_op())), 'not claimed')
     end)
 
     assert_eq(connection_ref.owner, nil, 'Dial settlement should release unclaimed connection ownership')

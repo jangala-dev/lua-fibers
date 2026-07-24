@@ -204,7 +204,7 @@ end
 -- Whole-Flow shutdown reaches true terminality even with queued bytes and both
 -- kinds of active lease.  No retained byte custody survives closed_op.
 do
-  local Flow = require('fibers.flow')
+  local Flow = require('fibers.resource.flow')
   local flow = Flow.new({ name = 'terminal-flow', capacity = 8 })
   local closed, close_err, inspect, stale_lease_err, stale_space_err
   fibers.run(function()

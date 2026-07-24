@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local socket = require('fibers.socket')
 local ManualHost = require('fibers.host.manual')
 local HostError = require('fibers.host.error')
@@ -34,7 +35,7 @@ losing_host.create_datagram = function(self, ...)
   return create(self, ...)
 end
 fibers.run(function()
-  local value = fibers.perform(fibers.always('winner'):or_else(socket.udp_ipv4_op('127.0.0.1', 0)))
+  local value = fibers.perform(Op.always('winner'):or_else(socket.udp_ipv4_op('127.0.0.1', 0)))
   assert_eq(value, 'winner')
 end, { host = losing_host })
 assert_eq(acquisitions, 0, 'losing datagram option must remain inert')

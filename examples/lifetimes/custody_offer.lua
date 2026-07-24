@@ -20,11 +20,12 @@ package.path = table.concat({
 -- together or not at all.
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scope = require('fibers.scope')
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 
 local function yn(v)
   return v and 'yes' or 'no'
@@ -70,13 +71,13 @@ rt:spawn_raw(function()
     :map(function()
       return 'unexpected custody offer'
     end)
-    :or_else(fibers.always('no accept; no custody offer')))
+    :or_else(Op.always('no accept; no custody offer')))
   result.request_still_owns = rt:perform(request:owns_op(session))
   result.supervisor_owns_before = rt:perform(supervisor:owns_op(session))
 
   -- Now the receiver accepts.  Its acceptance is composed with its own registry
   -- and audit updates.  These updates commit iff ownership moves.
-  local rows = rt:perform(fibers.tensor({
+  local rows = rt:perform(Op.tensor({
     request:offer_op(session, supervisor),
     supervisor:accept_op(),
     registry:write_op({ owner = 'supervisor', task = session.name }),

@@ -1,4 +1,6 @@
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
 local Stream = require('fibers.stream')
@@ -48,7 +50,7 @@ do
   assert(command.start_op == nil, 'start is intentionally not an option')
 
   fibers.run(function()
-    local skipped = fibers.perform(fibers.always('skip'):or_else(command:launch_op()))
+    local skipped = fibers.perform(Op.always('skip'):or_else(command:launch_op()))
     assert_eq(skipped, 'skip')
     assert_eq(starts, 0, 'an unselected launch option performs no host work')
 
@@ -228,11 +230,11 @@ do
         shutdown = { grace = 0 },
       })
       :start())
-    local value = fibers.perform(fibers.choice(
+    local value = fibers.perform(Op.choice(
       proc:result_op():map(function()
         return 'process'
       end),
-      fibers.sleep_op(0.01):map(function()
+      Sleep.sleep_op(0.01):map(function()
         return 'timeout'
       end)
     ))

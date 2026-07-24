@@ -7,7 +7,7 @@
 
 local Op = require('fibers.op')
 local EffectKind = require('fibers.lifetime.effect_kind')
-local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
+local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 
 local Effect = {}
 

@@ -4,8 +4,10 @@ Fibers presents a small application-facing concurrency language. Direct methods 
 
 ```lua
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Pulse = require('fibers.pulse')
 local Mailbox = require('fibers.mailbox')
 local Stream = require('fibers.stream')
@@ -27,7 +29,7 @@ fibers.run(function(scope)
 end)
 ```
 
-`fibers.run` creates a runtime, a root scope and a standalone runner. `fibers.spawn` is shorthand for spawning in the current scope.
+`fibers.run` creates a runtime and root scope, then drives them through the selected host. `fibers.spawn` is shorthand for spawning in the current scope.
 
 ```lua
 fibers.run(function()
@@ -38,7 +40,7 @@ fibers.run(function()
 end)
 ```
 
-Nested scopes use `fibers.scope`. The raising forms `run` and `scope` return body values or raise after the boundary has accounted for retained custody. `try_run` and `try_scope` return a `ScopeResult`.
+Nested scopes use `fibers.scope`. The raising forms `fibers.run` and `fibers.scope` return body values or raise after the boundary has accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return a `ScopeResult`.
 
 ```lua
 local outcome = fibers.try_scope(function()
@@ -77,7 +79,7 @@ An option is an inert transaction description. Constructing one does not perform
 An `Op` can be thought of as an option: an inert transaction description. Resource methods ending in `_op` construct these values.
 
 ```lua
-local op = fibers.always(42)
+local op = Op.always(42)
 assert(fibers.perform(op) == 42)
 ```
 
@@ -98,7 +100,7 @@ op:on_defeat(effect)
 `choice` is unordered disjunction:
 
 ```lua
-local value = fibers.perform(fibers.choice(
+local value = fibers.perform(Op.choice(
   left:get_op(),
   right:get_op()
 ))
@@ -109,9 +111,9 @@ If both branches can commit, either result is valid. Source position does not gi
 A timeout is ordinary choice:
 
 ```lua
-local result = fibers.perform(fibers.choice(
+local result = fibers.perform(Op.choice(
   inbox:get_op(),
-  fibers.sleep_op(1):wrap(function()
+  Sleep.sleep_op(1):wrap(function()
     return 'timeout'
   end)
 ))
@@ -121,7 +123,7 @@ local result = fibers.perform(fibers.choice(
 
 ```lua
 local value = fibers.perform(
-  cache:get_op(key):or_else(fibers.always(default_value))
+  cache:get_op(key):or_else(Op.always(default_value))
 )
 ```
 
@@ -130,7 +132,7 @@ local value = fibers.perform(
 `all` combines independent requirements in one commit:
 
 ```lua
-local rows = fibers.perform(fibers.all({
+local rows = fibers.perform(Op.all({
   left:take_op(1),
   right:take_op(1),
 }))
@@ -139,7 +141,7 @@ local rows = fibers.perform(fibers.all({
 `tensor` additionally permits compatible sibling hand-off:
 
 ```lua
-fibers.perform(fibers.tensor({
+fibers.perform(Op.tensor({
   slots:give_op(1),
   slots:take_op(1),
 }))
@@ -179,7 +181,7 @@ local state = Scalar.new({ open = true, count = 0 }, 'state')
 
 local increment = state:read_op():and_then(function(old)
   if not old.open then
-    return fibers.never()
+    return Op.never()
   end
   return state:write_op({ open = true, count = old.count + 1 })
 end)
@@ -227,7 +229,7 @@ assert(rx:recv() == 'message')
 `Flow` is the supported transactional byte-building block. It provides stable producer and consumer endpoints, backpressure, exact byte reads, closure and retained-byte leases.
 
 ```lua
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 local flow = Flow.new({ capacity = 4096 })
 
 flow:inlet():write('hello\n')
@@ -260,10 +262,10 @@ All host-backed stream directions in one Runtime share one lazily created reacto
 Application code may use the direct form:
 
 ```lua
-fibers.sleep(0.25)
+Sleep.sleep(0.25)
 ```
 
-The composable form remains `fibers.sleep_op(0.25)`.
+The composable form remains `Sleep.sleep_op(0.25)`.
 
 The relative deadline is fixed once per perform attempt; validation restart does not slide it forwards.
 

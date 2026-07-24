@@ -5,7 +5,7 @@
 -- done_op() can therefore satisfy a wait; under all a sibling positive supply
 -- is not hidden from the zero predicate.
 
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Ready, Wait = Scalar.Ready, Scalar.Wait
 
 local CountdownLatch = {}

@@ -26,7 +26,7 @@ option is submitted to `perform` and selected as part of a committed world.
 ## Flow
 
 ```lua
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 
 local flow = Flow.new({
   name = 'request-body',

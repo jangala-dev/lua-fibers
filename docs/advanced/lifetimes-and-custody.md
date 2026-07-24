@@ -6,6 +6,7 @@ Advanced examples in this guide use named modules explicitly:
 
 ```lua
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Region = require('fibers.lifetime.region')
 local policy = require('policy')
 ```
@@ -123,7 +124,7 @@ fibers.perform(source:move_op(item, destination))
 Negotiated movement composes movement with synchronous consent:
 
 ```lua
-fibers.perform(fibers.tensor({
+fibers.perform(Op.tensor({
   source:offer_op(item, destination, { role = 'session' }),
   destination:accept_op(function(offer)
     return offer.terms and offer.terms.role == 'session'

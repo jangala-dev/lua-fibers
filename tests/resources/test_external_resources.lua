@@ -219,7 +219,7 @@ end
 -- Observation also protects external resource observations if a producer
 -- bypasses the runtime-wide epoch.
 do
-  local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
+  local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
   local ev = Signal.new('bounded-source-observation')
   local rt = Runtime.new()
   local got

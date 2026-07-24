@@ -18,9 +18,10 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
-local FibersFlow = require('fibers.flow')
+local FibersFlow = require('fibers.resource.flow')
 local FibersTask = require('fibers.task')
 local Certificate = require('fibers.internal.kernel.certificate')
 
@@ -54,7 +55,7 @@ do
       :map(function()
         return 'primary'
       end)
-      :or_else(fibers.always('fallback')))
+      :or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
@@ -74,7 +75,7 @@ do
       :map(function()
         return 'primary'
       end)
-      :or_else(fibers.always('fallback')))
+      :or_else(Op.always('fallback')))
   end, 'claim-or-fallback')
   rt:spawn_raw(function()
     admitted = rt:perform(region:admit_op(item))
@@ -97,7 +98,7 @@ do
   end, 'absence-never-started')
   local got
   local st = fibers.try_run(function()
-    got = fibers.perform(task:await_op():or_else(fibers.always('fallback')))
+    got = fibers.perform(task:await_op():or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
@@ -113,7 +114,7 @@ do
   local got, started
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
-    got = rt:perform(task:await_op():or_else(fibers.always('fallback')))
+    got = rt:perform(task:await_op():or_else(Op.always('fallback')))
   end, 'await-or-fallback')
   rt:spawn_raw(function()
     started = rt:perform(task:start_op(region))
@@ -129,7 +130,7 @@ do
   local flow = FibersFlow.new({ name = 'absence-flow-alone', capacity = 8 })
   local got
   local st = fibers.try_run(function()
-    got = fibers.perform(flow:outlet():read_some_op(3):or_else(fibers.always('fallback')))
+    got = fibers.perform(flow:outlet():read_some_op(3):or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
@@ -142,7 +143,7 @@ do
   local got, n
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
-    got = rt:perform(flow:outlet():read_some_op(3):or_else(fibers.always('fallback')))
+    got = rt:perform(flow:outlet():read_some_op(3):or_else(Op.always('fallback')))
   end, 'read-or-fallback')
   rt:spawn_raw(function()
     n = rt:perform(flow:inlet():write_op('abc'))

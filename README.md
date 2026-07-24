@@ -12,6 +12,8 @@ Fibres run ordinary Lua functions. Everyday facilities provide direct methods fo
 
 ```lua
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
 
 local jobs = channel.new()
@@ -28,7 +30,7 @@ fibers.run(function()
 end)
 ```
 
-`spawn` starts the worker in the current scope. The direct `get` and `put` methods perform their actions in place, suspending only when another participant is required.
+`fibers.spawn` starts the worker in the current scope. The direct `get` and `put` methods perform their actions in place, suspending only when another participant is required.
 
 ## Compose the same actions when needed
 
@@ -58,7 +60,7 @@ fibers.run(function()
     return 'stopped: ' .. reason
   end)
 
-  local outcome = fibers.perform(fibers.choice(completed, stopped))
+  local outcome = fibers.perform(Op.choice(completed, stopped))
   print(outcome)
 end)
 ```
@@ -94,7 +96,7 @@ An `Op` can be thought of as an option: an inert description which may be combin
 
 ```lua
 local receive = inbox:get_op()
-local timeout = fibers.sleep_op(1)
+local timeout = Sleep.sleep_op(1)
 ```
 
 The suffix keeps possible actions visible in application code.
@@ -129,9 +131,9 @@ facility method and the explicit form share one implementation and return the
 same values and errors.
 
 ```lua
-local message = fibers.perform(fibers.choice(
+local message = fibers.perform(Op.choice(
   inbox:get_op(),
-  fibers.sleep_op(1):map(function()
+  Sleep.sleep_op(1):map(function()
     return 'timeout'
   end)
 ))
@@ -180,9 +182,9 @@ Most programmes begin with `perform`, `choice`, `or_else`, `and_then`, `wrap`, `
 ### Choice expresses permission
 
 ```lua
-local result = fibers.perform(fibers.choice(
+local result = fibers.perform(Op.choice(
   inbox:get_op(),
-  fibers.sleep_op(1):wrap(function()
+  Sleep.sleep_op(1):wrap(function()
     return 'timeout'
   end)
 ))
@@ -232,7 +234,7 @@ Callbacks used by `map`, `and_then` and transactional resource transitions may b
 `all` combines requirements which must each be supportable without positive supply from their siblings:
 
 ```lua
-fibers.all({
+Op.all({
   account_a:take_op(1),
   account_b:take_op(1),
 })
@@ -243,7 +245,7 @@ One lane cannot fund the other.
 `tensor` permits compatible siblings to participate in an intentional transactional hand-off:
 
 ```lua
-fibers.tensor({
+Op.tensor({
   slots:give_op(1),
   slots:take_op(1),
 })
@@ -294,7 +296,7 @@ fibers.run(function()
 end)
 ```
 
-The raising forms `run` and `scope` return body values or raise after their boundaries have accounted for retained custody. `try_run` and `try_scope` return structured results instead.
+The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead.
 
 The lifetime model also supports cancellation, owned resources, transactional movement, borrowing, claims and settlement. These facilities are deliberately progressive: ordinary programmes can begin with tasks and scopes, while systems code can state stronger ownership protocols where required.
 
@@ -302,7 +304,7 @@ See [`docs/advanced/lifetimes-and-custody.md`](docs/advanced/lifetimes-and-custo
 
 ## Everyday facilities
 
-The root `fibers` module contains the execution and composition language. Facilities live in named modules.
+The root `fibers` module is the lifecycle and contextual prelude: `run` establishes a root runtime and scope, while `perform`, `spawn`, `now`, protected calls and nested scopes operate within it. Types, constructors, option combinators and facilities live in their named modules.
 
 ### Channels
 
@@ -318,7 +320,7 @@ Both forms expose `put_op` and `get_op` and compose with the same algebra.
 ### Transactional state
 
 ```lua
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local state = Scalar.new('idle', 'state')
 
 fibers.perform(state:expect_op('idle'):and_then(function()
@@ -332,7 +334,7 @@ Scalar also supports typed state-machine transitions for facilities whose rules 
 
 `fibers.pulse` provides coalescing change notification. `fibers.mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies.
 
-`fibers.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. All host-backed directions in one Runtime share one indexed poller and one lazily created reactor rather than allocating one task per direction.
+`fibers.resource.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. All host-backed directions in one Runtime share one indexed poller and one lazily created reactor rather than allocating one task per direction.
 
 ### Pipes
 
@@ -477,12 +479,12 @@ See [`docs/guide/io.md`](docs/guide/io.md).
 ### Time
 
 ```lua
-fibers.perform(fibers.sleep_op(0.25))
+fibers.perform(Sleep.sleep_op(0.25))
 ```
 
 Timers are options, so timeouts require no separate cancellation mechanism.
 
-Lower-level materials for facility authors live under `fibers.resource`, `fibers.external` and `fibers.lifetime`. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
+Lower-level materials for facility authors have canonical direct imports under `fibers.resource.*`, `fibers.external.*` and `fibers.lifetime.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
 
 ## Why the algebra goes further
 

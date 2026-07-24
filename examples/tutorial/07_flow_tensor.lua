@@ -12,12 +12,13 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Flow = require('fibers.flow')
+local Op = require('fibers.op')
+local Flow = require('fibers.resource.flow')
 local flow = Flow.new({ capacity = 16, name = 'flow-tensor' })
 local inlet, outlet = flow:inlet(), flow:outlet()
 
 fibers.run(function()
-  local rows = fibers.perform(fibers.tensor({
+  local rows = fibers.perform(Op.tensor({
     inlet:write_op('hello'),
     outlet:read_some_op(5),
   }))

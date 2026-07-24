@@ -11,7 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-require('fibers.internal.io_audit').install(require('tests.support.io_audit_observer'))
+require('fibers.diagnostics.io').install(require('tests.support.io_audit_observer'))
 
 local Harness = require('tests.support.harness')
 local groups = require('tests.groups')

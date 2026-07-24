@@ -8,9 +8,31 @@
 local Op = require('fibers.op')
 local Supply = require('fibers.internal.kernel.supply')
 local Algebra = require('fibers.internal.kernel.algebra')
-local Result = require('fibers.internal.facility_result')
 
 local M = {}
+
+local function encode_result(codec, program, value, session)
+  codec = codec or { kind = 'value' }
+  local pack = session and function(...)
+    return session:pack(...)
+  end or Op._pack
+  local kind = codec.kind
+  if kind == 'constant' then
+    return pack(codec.value)
+  elseif kind == 'value' then
+    return pack(value)
+  elseif kind == 'present' then
+    return pack(value ~= Algebra.ABSENT)
+  elseif kind == 'presence' then
+    if value == Algebra.ABSENT or (codec.nil_sentinel and value == codec.nil_sentinel) then
+      return pack(nil)
+    end
+    return pack(value)
+  elseif kind == 'project' then
+    return pack(codec.project(value, program))
+  end
+  error('unknown facility result codec ' .. tostring(kind), 2)
+end
 
 M.SUPPLY_NONE = 0
 M.SUPPLY_OPAQUE = 1
@@ -611,7 +633,7 @@ local function machine_outcome(program, value, context, occurrence_payload)
 end
 
 function M.result_pack(program, value, session)
-  return Result.encode(program.result, program, value, session)
+  return encode_result(program.result, program, value, session)
 end
 
 function M.predicate_holds(program, value)

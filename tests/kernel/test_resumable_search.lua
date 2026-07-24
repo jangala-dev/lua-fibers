@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local Op = require('fibers.op')
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 

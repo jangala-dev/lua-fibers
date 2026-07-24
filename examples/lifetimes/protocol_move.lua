@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 

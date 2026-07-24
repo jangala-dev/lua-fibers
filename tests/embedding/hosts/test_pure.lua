@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Sleep = require('fibers.sleep')
 local FibersSignal = require('fibers.external.signal')
 local Host = require('fibers.host')
 local PureHost = require('fibers.host.pure')
@@ -35,7 +36,7 @@ do
 
   local done = false
   local st = fibers.try_run(function()
-    fibers.perform(fibers.sleep_op(4))
+    fibers.perform(Sleep.sleep_op(4))
     done = true
   end, { host = host }).runtime_status
 

@@ -6,9 +6,9 @@
 
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Ready, Wait = Scalar.Ready, Scalar.Wait
-local Queue = require('fibers.internal.fifo')
+local Queue = require('fibers.resource.queue')
 local Rendezvous = require('fibers.resource.rendezvous')
 
 local Mailbox = {}

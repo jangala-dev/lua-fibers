@@ -31,6 +31,35 @@ def check_root(root: Path, extensions: tuple[str, ...]) -> list[str]:
     return errors
 
 
+
+def check_fibers_ownership(root: Path) -> list[str]:
+    errors: list[str] = []
+    fibers = root / "fibers"
+    if not fibers.is_dir():
+        return errors
+
+    internal = fibers / "internal"
+    if internal.is_dir():
+        allowed = {internal / "protected.lua", internal / "kernel"}
+        for child in sorted(internal.iterdir()):
+            if child not in allowed:
+                errors.append(
+                    f"{child} has no global internal owner; move it to its semantic subsystem"
+                )
+
+    forbidden = [
+        fibers / "flow.lua",
+        fibers / "queue.lua",
+        fibers / "scalar.lua",
+        fibers / "resource" / "init.lua",
+        fibers / "runner.lua",
+    ]
+    for path in forbidden:
+        if path.exists():
+            errors.append(f"deprecated duplicate public path exists: {path}")
+
+    return errors
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("roots", nargs="+", type=Path)
@@ -42,6 +71,7 @@ def main() -> int:
             errors.append(f"module root does not exist: {root}")
             continue
         errors.extend(check_root(root, (".lua", ".luau")))
+        errors.extend(check_fibers_ownership(root))
 
     if errors:
         print("ambiguous module layout:")

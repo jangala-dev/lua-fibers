@@ -17,11 +17,9 @@ local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersStream = require('fibers.stream')
-local FibersRunner = require('fibers.runner')
 local FibersHost = require('fibers.host')
 local Host = FibersHost
 local Runtime = FibersRuntime
-local Runner = FibersRunner
 local Region = FibersRegion
 local Stream = FibersStream
 local Handle = require('fibers.host.handle')
@@ -46,7 +44,7 @@ local function assert_status(st, tag, msg)
 end
 
 local function run(rt, host, iters)
-  return Runner.run(rt, { host = host, max_iterations = iters or 80 })
+  return rt:drive({ host = host, max_iterations = iters or 80 })
 end
 
 local function drive_until(rt, host, pred, label, iters)

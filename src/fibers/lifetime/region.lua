@@ -6,11 +6,11 @@
 -- while improving scalability.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Effect = require('fibers.lifetime.effect')
-local Ownership = require('fibers.internal.ownership')
-local Claim = require('fibers.internal.claim')
-local Settlement = require('fibers.internal.settlement')
+local Ownership = require('fibers.lifetime.ownership')
+local Claim = Ownership.Claim
+local Settlement = require('fibers.lifetime.settlement')
 
 local Region = {}
 Region.__index = Region

@@ -12,11 +12,12 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local FibersRuntime = require('fibers.runtime')
 local FibersReadiness = require('fibers.external.readiness')
 local FibersRegion = require('fibers.lifetime.region')
 local FibersStream = require('fibers.stream')
-local Runner = require('fibers.runner')
 
 local Common = {}
 
@@ -64,7 +65,7 @@ end
 
 local function run_host(name, host, max_iterations)
   return function(rt)
-    return Runner.run(rt, { host = host, max_iterations = max_iterations or 40 })
+    return rt:drive({ host = host, max_iterations = max_iterations or 40 })
   end
 end
 
@@ -145,11 +146,11 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
     -- This is a temporal race.  Keep both waits visible to the host.
     -- or_else is proof-directed fallback and deliberately discards the
     -- preferred branch's wait after the fallback has been entered.
-    winner = rt:perform(fibers.choice(
+    winner = rt:perform(Op.choice(
       src:readable_op():map(function()
         return 'readiness'
       end),
-      fibers.sleep_op(0.25):map(function()
+      Sleep.sleep_op(0.25):map(function()
         return 'timeout'
       end)
     ))
@@ -176,7 +177,7 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
       :map(function()
         return 'readiness'
       end)
-      :or_else(fibers.sleep_op(0.01):map(function()
+      :or_else(Sleep.sleep_op(0.01):map(function()
         return 'timeout'
       end)))
   end, name .. '-timeout-v-readiness')
@@ -213,7 +214,7 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
     rt:perform(stream:abort_op('test complete'))
   end, name .. ':flow')
 
-  local st = Runner.run(rt, { host = host, max_iterations = 200 })
+  local st = rt:drive({ host = host, max_iterations = 200 })
   Common.assert_status(st, 'found', name .. ' stream pipe runner')
   Common.assert_eq(flushed, true, name .. ' stream flush should succeed')
   Common.assert_eq(got, 'hello', name .. ' stream should loop bytes through pipe')

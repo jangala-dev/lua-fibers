@@ -18,18 +18,20 @@ local file = require('fibers.file')
 local mailbox = require('fibers.mailbox')
 local Pulse = require('fibers.pulse')
 local process = require('fibers.process')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local socket = require('fibers.socket')
 local Stream = require('fibers.stream')
 local perform = require('fibers.perform')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
+local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
 local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
 local Lease = require('fibers.resource.lease')
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 local Signal = require('fibers.external.signal')
 local EventQueue = require('fibers.external.event_queue')
 
@@ -60,7 +62,7 @@ local function assert_absent(value, names, label)
   end
 end
 
-assert_eq(fibers.perform, perform, 'facade re-exports the shared perform function')
+assert_eq(fibers.perform, perform, 'contextual prelude exposes the shared perform function')
 
 -- Public naming policy: selected conveniences are exact names with only _op
 -- removed. Advanced resources and inspection options remain option-only.
@@ -109,7 +111,7 @@ do
     'dial_unix',
   }, 'socket')
   assert_twins(Stream, { 'merge_lines' }, 'stream module')
-  assert_twins(fibers, { 'sleep', 'sleep_until' }, 'fibers')
+  assert_twins(Sleep, { 'sleep', 'sleep_until' }, 'Sleep')
 
   assert_absent(scalar, { 'snapshot' }, 'scalar')
   assert_absent(pulse, { 'snapshot', 'version', 'why', 'is_closed' }, 'pulse')
@@ -251,9 +253,9 @@ do
     assert_truthy(child:closed())
 
     -- Explicit option composition remains the same underlying language.
-    local timed = fibers.perform(fibers.choice(
-      fibers.always('ready'),
-      fibers.sleep_op(1):map(function()
+    local timed = fibers.perform(Op.choice(
+      Op.always('ready'),
+      Sleep.sleep_op(1):map(function()
         return 'late'
       end)
     ))
@@ -264,7 +266,7 @@ end
 -- The extracted helper retains the explicit running-fibre boundary and wording.
 do
   local ok, err = pcall(function()
-    return perform(fibers.always(true))
+    return perform(Op.always(true))
   end)
   assert_eq(ok, false)
   assert_truthy(

@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Runtime = require('fibers.runtime')
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Clock = require('performance.clock')
 
 local cells = tonumber(os.getenv('FIBERS_STORE_CELLS') or '16')

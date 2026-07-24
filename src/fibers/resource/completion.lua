@@ -4,8 +4,7 @@
 -- result options while sharing one tested terminal-state protocol.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
-local ScalarWait = require('fibers.internal.scalar_wait')
+local Scalar = require('fibers.resource.scalar')
 
 local Completion = {}
 Completion.__index = Completion
@@ -36,7 +35,7 @@ local publish = Scalar.transition({
 })
 
 local function terminal_option(self, selector)
-  return ScalarWait.select_op(self.state, selector)
+  return Scalar.select_op(self.state, selector)
 end
 
 function Completion.new(name)

@@ -8,13 +8,13 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Address = require('fibers.socket.address')
-local Completion = require('fibers.internal.completion')
+local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
-local IO = require('fibers.internal.io')
-local Ownership = require('fibers.internal.ownership')
+local IO = require('fibers.host.io')
+local Ownership = require('fibers.lifetime.ownership')
 local Owned = require('fibers.lifetime.region').Owned
 local Protected = require('fibers.internal.protected')
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 local perform = require('fibers.perform')
 
 local Module = {}

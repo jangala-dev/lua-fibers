@@ -4,7 +4,7 @@
 -- launch protocol, stdio plan, Process object, errors and exactly-once reaping.
 
 local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.internal.io_audit')
+local IOAudit = require('fibers.diagnostics.io')
 local Process = require('fibers.host.process')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')

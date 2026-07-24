@@ -1,15 +1,15 @@
 # Embedding and host integration
 
-`fibers` does not require ownership of the process event loop. An application may use the standalone runner or drive a `Runtime` directly.
+`fibers` does not require ownership of the process event loop. An application may use the root lifecycle prelude or drive a `Runtime` directly.
 
-Embedding code imports the driver interfaces separately from the application façade:
+Embedding code imports driver interfaces separately from the lifecycle prelude:
 
 ```lua
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
-local Runner = require('fibers.runner')
+local Sleep = require('fibers.sleep')
 local Stream = require('fibers.stream')
-local host = require('host')
+local Host = require('fibers.host')
 ```
 
 
@@ -18,7 +18,7 @@ local host = require('host')
 ```lua
 local fibers = require('fibers')
 
-local host = host.manual()
+local host = Host.manual()
 local rt = Runtime.new({ host = host })
 
 rt:spawn_raw(function()
@@ -85,19 +85,19 @@ A hard limit returns the same budget status with `reason` set to `search_total_l
 
 The trail limit is checked between reduction rounds. One deterministic reduction may therefore take the live journal modestly beyond the configured value before the runtime reports the limit. Hard limits are disabled by default and currently apply to the production ledger machine, not the repository reference evaluator.
 
-## Standalone runner
+## Root lifecycle
 
-`fibers.run` creates a runtime and uses `Runner`:
+`fibers.run` constructs a Runtime and root Scope, then drives the selected Host:
 
 ```lua
 fibers.run(function()
-  fibers.perform(fibers.sleep_op(1))
+  fibers.perform(Sleep.sleep_op(1))
 end, {
-  host = host.default(),
+  host = Host.default(),
 })
 ```
 
-The runner repeatedly calls `Runtime:run`. When the runtime reports actionable pending interests, it calls the host's blocking hook and re-enters the runtime after the host reports progress.
+`fibers.run` delegates host integration to `Runtime:drive`. The driver repeatedly calls `Runtime:run`; when the runtime reports actionable pending interests, it calls the host's blocking hook and re-enters the runtime after the host reports progress.
 
 An embedding which already owns an event loop should normally drive `Runtime:run` or `Runtime:step` itself.
 
@@ -127,7 +127,7 @@ host:block(runtime, interests, status, opts) -> progressed, reason
 
 `Runtime:now` calls the host's time function. Time should be monotonic for timer semantics unless the application deliberately supplies another model.
 
-`host:block` may block, poll, register interests or decline them. If it returns no progress, `Runner.run` returns the pending status to its caller with the host reason attached.
+`host:block` may block, poll, register interests or decline them. If it returns no progress, `Runtime:drive` returns the pending status with the host reason attached; `fibers.try_run` reports that as a checked root-lifecycle failure.
 
 Built-in host constructors are:
 
@@ -221,8 +221,8 @@ Delivery updates only the bound facility, increments its version and runtime epo
 `Clock` observes `Runtime:now()`. Application code usually uses:
 
 ```lua
-fibers.sleep_until_op(deadline)
-fibers.sleep_op(duration)
+Sleep.sleep_until_op(deadline)
+Sleep.sleep_op(duration)
 ```
 
 A relative sleep fixes its absolute deadline once per perform attempt. Backtracking and validation refresh do not slide the deadline.

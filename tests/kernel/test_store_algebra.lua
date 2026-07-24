@@ -10,7 +10,7 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 local S = require('fibers.internal.kernel.ledger')
 local A = require('fibers.internal.kernel.algebra')
 local IR = require('fibers.internal.kernel.ir')

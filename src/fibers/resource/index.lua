@@ -1,4 +1,4 @@
-local Facility = require('fibers.internal.facility')
+local Facility = require('fibers.resource.authoring')
 
 local Index = {}
 Index.__index = function(self, key)

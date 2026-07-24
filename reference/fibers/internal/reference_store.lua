@@ -11,7 +11,6 @@
 -- Facility modules construct locations and options.  They do not define
 -- search, fallback, validation, product visibility or commit semantics.
 
-local Op = require('fibers.op')
 local Algebra = require('fibers.internal.kernel.algebra')
 local IR = require('fibers.internal.kernel.ir')
 

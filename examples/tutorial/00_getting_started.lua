@@ -9,6 +9,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local channel = require('fibers.channel')
 
 local function direct_version()
@@ -55,7 +56,7 @@ local function composed_version()
       return 'stopped: ' .. reason
     end)
 
-    outcome = fibers.perform(fibers.choice(completed, stopped))
+    outcome = fibers.perform(Op.choice(completed, stopped))
   end)
 
   return outcome

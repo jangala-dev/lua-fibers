@@ -17,6 +17,7 @@ package.path = table.concat({
 -- host remains in control of time and stepping.
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Clock = require('fibers.external.clock')
 local now = 0
@@ -31,7 +32,7 @@ local signal, signal_feed = rt:signal('reload-signal')
 local result
 
 rt:spawn_raw(function()
-  result = rt:perform(fibers.choice(
+  result = rt:perform(Op.choice(
     signal:wait_op():map(function(value)
       return 'signal: ' .. tostring(value)
     end),

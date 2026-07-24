@@ -149,7 +149,7 @@ runtime.host_reactor:assert_quiescent('after shutdown')
 ```
 
 These methods are intended for tests, embedders and diagnostics. The underlying
-`fibers.internal.io_audit` module remains internal.
+`fibers.diagnostics.io` module remains internal.
 
 ## Provider contract
 

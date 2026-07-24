@@ -174,7 +174,7 @@ Use a machine location when a protocol is naturally one serial state value.
 The public Scalar transition façade is normally the simplest route:
 
 ```lua
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 
 local transition = Scalar.transition {
   name = 'buffer.take',

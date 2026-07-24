@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersScalar = require('fibers.scalar')
+local FibersScalar = require('fibers.resource.scalar')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersStream = require('fibers.stream')
 local FibersCalendar = require('examples.case_studies.calendar.calendar')

@@ -6,8 +6,8 @@
 -- leases, so the granted authority has an ordinary lifetime.
 
 local Op = require('fibers.op')
-local Ownership = require('fibers.internal.ownership')
-local Settlement = require('fibers.internal.settlement')
+local Ownership = require('fibers.lifetime.ownership')
+local Settlement = require('fibers.lifetime.settlement')
 
 local Borrow = {}
 Borrow.__index = Borrow

@@ -5,10 +5,10 @@
 -- host handles, arranges reactor registrations around those same Flows.
 
 local Op = require('fibers.op')
-local Flow = require('fibers.flow')
+local Flow = require('fibers.resource.flow')
 local Reactor = require('fibers.host.reactor')
-local Ownership = require('fibers.internal.ownership')
-local Settlement = require('fibers.internal.settlement')
+local Ownership = require('fibers.lifetime.ownership')
+local Settlement = require('fibers.lifetime.settlement')
 local Owned = require('fibers.lifetime.region').Owned
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')

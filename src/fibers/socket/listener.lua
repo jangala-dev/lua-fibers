@@ -6,17 +6,25 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.internal.adoption')
-local IO = require('fibers.internal.io')
-local IOAudit = require('fibers.internal.io_audit')
-local ListenerLifecycle = require('fibers.internal.socket.listener_lifecycle')
-local Connection = require('fibers.internal.socket.connection')
-local Ownership = require('fibers.internal.ownership')
+local Adoption = require('fibers.lifetime.adoption')
+local IO = require('fibers.host.io')
+local IOAudit = require('fibers.diagnostics.io')
+local Lifecycle = require('fibers.socket.lifecycle')
+local Connection = require('fibers.socket.connection')
+local Ownership = require('fibers.lifetime.ownership')
 local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.internal.settlement')
-local Queue = require('fibers.internal.fifo')
+local Settlement = require('fibers.lifetime.settlement')
+local Queue = require('fibers.resource.queue')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
+
+local ListenerLifecycle = Lifecycle.define({
+  prefix = 'socket.listener',
+  error_domain = 'socket',
+  start_action = 'listen',
+  start_failed_reason = 'listener start failed',
+  closed_reason = 'listener closed',
+})
 
 local Module = {}
 local Listener = {}

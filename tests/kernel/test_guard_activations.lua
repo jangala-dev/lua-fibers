@@ -15,7 +15,7 @@ package.path = table.concat({
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Sleep = require('fibers.sleep')
 

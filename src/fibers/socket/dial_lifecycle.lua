@@ -1,9 +1,9 @@
 -- Explicit transactional lifecycle resource for outbound socket dials.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local HostError = require('fibers.host.error')
-local Common = require('fibers.internal.socket.lifecycle')
+local Common = require('fibers.socket.lifecycle')
 
 local Ready = Scalar.Ready
 local copy = Common.copy

@@ -15,11 +15,11 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
-local FibersScalar = require('fibers.scalar')
-local FibersFlow = require('fibers.flow')
+local FibersScalar = require('fibers.resource.scalar')
+local FibersFlow = require('fibers.resource.flow')
 local Op = FibersOp
 local Flow = FibersFlow
-local FlowErrors = require('fibers.flow.errors')
+local FlowErrors = require('fibers.resource.flow.errors')
 local Runtime = require('fibers.runtime')
 
 local function fail(msg)

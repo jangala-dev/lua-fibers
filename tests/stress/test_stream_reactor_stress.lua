@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
 local Runtime = require('fibers.runtime')
 local ManualHost = require('fibers.host.manual')
@@ -56,13 +57,13 @@ local report = fibers.try_run(function(scope)
     writer:close('churn writer complete')
     assert(reader:read('*a', { max = 2 }) == 'x')
     reader:close('churn reader complete')
-    fibers.perform(fibers.sleep_op(0))
+    fibers.perform(Sleep.sleep_op(0))
   end
 
   local rt = Runtime.current()
   local reactor = rt and rt.host_reactor
   assert_truthy(reactor, 'stress should have created a runtime reactor')
-  fibers.perform(fibers.sleep_op(0))
+  fibers.perform(Sleep.sleep_op(0))
   assert(reactor:registration_count() == 0, 'all stress registrations should retire')
 end, {
   host = ManualHost.new({ pipes = true, auto_advance_time = true }),

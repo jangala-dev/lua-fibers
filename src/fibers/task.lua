@@ -8,15 +8,14 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Effect = require('fibers.lifetime.effect')
-local Interrupt = require('fibers.internal.interrupt')
-local Ownership = require('fibers.internal.ownership')
+local Interrupt = require('fibers.lifetime.interrupt')
+local Ownership = require('fibers.lifetime.ownership')
 local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 local Protected = require('fibers.internal.protected')
 local Exit = require('fibers.lifetime.exit')
-local ScalarWait = require('fibers.internal.scalar_wait')
 
 local unpack_ = table.unpack or unpack
 local function pack(...)
@@ -47,7 +46,7 @@ local function is_pending(v)
 end
 
 local function wait_for_scalar(scalar, pred)
-  return ScalarWait.value_op(scalar, pred)
+  return Scalar.value_op(scalar, pred)
 end
 
 function Task.new(fn, name, scope)

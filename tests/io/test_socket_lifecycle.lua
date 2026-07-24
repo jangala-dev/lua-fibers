@@ -12,9 +12,17 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local HostError = require('fibers.host.error')
-local ListenerLifecycle = require('fibers.internal.socket.listener_lifecycle')
-local DialLifecycle = require('fibers.internal.socket.dial_lifecycle')
+local Lifecycle = require('fibers.socket.lifecycle')
+local ListenerLifecycle = Lifecycle.define({
+  prefix = 'socket.listener',
+  error_domain = 'socket',
+  start_action = 'listen',
+  start_failed_reason = 'listener start failed',
+  closed_reason = 'listener closed',
+})
+local DialLifecycle = require('fibers.socket.dial_lifecycle')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -39,7 +47,7 @@ do
     local lifecycle = ListenerLifecycle.new('listener-law', address)
 
     assert_eq(lifecycle:state_value().kind, 'starting')
-    assert_eq(fibers.perform(lifecycle:unavailable_op():or_else(fibers.always('available'))), 'available')
+    assert_eq(fibers.perform(lifecycle:unavailable_op():or_else(Op.always('available'))), 'available')
 
     local activated, active = fibers.perform(lifecycle:activate_op(handle, address))
     assert_eq(activated, true)
@@ -98,7 +106,7 @@ do
     assert_eq(published, true)
     assert_eq(connected.kind, 'connected')
 
-    local absence = fibers.perform(lifecycle:failure_op():or_else(fibers.always('no failure')))
+    local absence = fibers.perform(lifecycle:failure_op():or_else(Op.always('no failure')))
     assert_eq(absence, 'no failure')
 
     local claimed_connection, claimed_source = fibers.perform(lifecycle:claim_op())
@@ -106,7 +114,7 @@ do
     assert_eq(claimed_source, source)
     assert_eq(lifecycle:state_value().kind, 'claimed')
 
-    local second = fibers.perform(lifecycle:claim_op():or_else(fibers.always('already claimed')))
+    local second = fibers.perform(lifecycle:claim_op():or_else(Op.always('already claimed')))
     assert_eq(second, 'already claimed')
     local err = fibers.perform(lifecycle:failure_op())
     assert_truthy(HostError.is(err, 'closed'))

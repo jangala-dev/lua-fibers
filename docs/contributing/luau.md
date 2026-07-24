@@ -66,7 +66,7 @@ The smoke programme must establish:
 
 - portable module loading through `.luaurc` aliases;
 - ManualHost scheduling and rendezvous;
-- the application-facing `fibers.run` path;
+- the application-facing `fibers.run` root-lifecycle path;
 - table-valued error identity through `fibers.pcall`;
 - no dependency on filesystem or process globals.
 
@@ -77,14 +77,14 @@ are found.
 ### 2. Portable and reference test profiles
 
 `tests/luau/profile.json` classifies every `test_*.lua` file and defines the
-`portable` profile. The profile contains 79 tests covering public
+`portable` profile. The profile contains 81 tests covering public
 semantics, composition, resources, lifetimes, ManualHost embedding, in-memory
 I/O, both semantic evaluators, kernel laws, internal portable helpers, case
 studies and performance architecture.
 
 The `reference` profile inherits that list, selects the repository reference
 evaluator as the generated runtime default and excludes five checks concerned
-with ledger implementation structure or performance. It therefore reruns 74
+with ledger implementation structure or performance. It therefore reruns 76
 portable semantic tests as an independent cross-check. Explicit `machine`
 options in individual tests continue to override the profile default.
 

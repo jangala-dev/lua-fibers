@@ -7,7 +7,7 @@
 -- live in Lease.  Pool state does not duplicate idle/leased status.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Ready = Scalar.Ready
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')

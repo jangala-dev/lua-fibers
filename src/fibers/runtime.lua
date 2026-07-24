@@ -7,7 +7,7 @@ local ExternalFeed = require('fibers.external.feed')
 local Protected = require('fibers.internal.protected')
 local Machine = require('fibers.internal.kernel.machine')
 local IR = require('fibers.internal.kernel.ir')
-local Instrumentation = require('fibers.internal.kernel.instrumentation')
+local Instrumentation = require('fibers.diagnostics.search')
 local Dependencies = require('fibers.internal.kernel.dependencies')
 local Domain = require('fibers.internal.kernel.domain')
 local DependencyIndex = Dependencies.Index
@@ -594,7 +594,7 @@ function Runtime:_spawn_committed(fn, name, scope)
 end
 
 function Runtime:_discharge_interrupt(token, reason)
-  local Interrupt = require('fibers.internal.interrupt')
+  local Interrupt = require('fibers.lifetime.interrupt')
   Interrupt.raise(token, reason)
   local ids, requests = {}, {}
   for i = 1, #self.pending do
@@ -2042,15 +2042,55 @@ function Runtime:run(opts)
   return driver_call(self, 'run', Runtime._run_impl, opts)
 end
 
+function Runtime:drive(opts)
+  opts = opts or {}
+  local Host = require('fibers.host')
+  local host = opts.host or self.host
+  local run_opts = opts.run
+  local max_iterations = opts.max_iterations or opts.max_driver_iterations
+  local iterations = 0
+  local saw_found = false
+  local last_found = nil
+
+  while true do
+    iterations = iterations + 1
+    if max_iterations and iterations > max_iterations then
+      return { tag = 'pending', reason = 'runtime drive iteration budget exhausted' }
+    end
+
+    local status = self:run(run_opts)
+    if status and status.tag == 'found' then
+      saw_found = true
+      last_found = status
+    elseif status and status.tag == 'pending' then
+      local interests = status.interests or status.waits or {}
+      local progressed, reason = Host.block(host, self, interests, status, opts.host_options)
+      if not progressed then
+        status.host_reason = reason
+        status.reason = status.reason or reason
+        status.interests, status.waits = interests, interests
+        return status
+      end
+    elseif status and (status.tag == 'idle' or status.tag == 'quiescent') then
+      if saw_found then
+        return last_found or { tag = 'found', value = true }
+      end
+      return status
+    else
+      return status
+    end
+  end
+end
+
 function Runtime:io_audit_snapshot(opts)
-  return require('fibers.internal.io_audit').snapshot(self, opts)
+  return require('fibers.diagnostics.io').snapshot(self, opts)
 end
 
 function Runtime:assert_io_quiescent(label)
   if self.host_reactor then
     self.host_reactor:assert_quiescent(label)
   end
-  return require('fibers.internal.io_audit').assert_clean(self, { label = label })
+  return require('fibers.diagnostics.io').assert_clean(self, { label = label })
 end
 
 function Runtime:_pump()

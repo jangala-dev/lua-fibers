@@ -7,10 +7,10 @@
 -- arrays so multi-handle acquisition and rollback never depend on table order.
 
 local HostError = require('fibers.host.error')
-local Ownership = require('fibers.internal.ownership')
+local Ownership = require('fibers.lifetime.ownership')
 local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.internal.settlement')
-local IOAudit = require('fibers.internal.io_audit')
+local Settlement = require('fibers.lifetime.settlement')
+local IOAudit = require('fibers.diagnostics.io')
 
 local Adoption = {}
 local Slot = {}

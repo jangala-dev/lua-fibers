@@ -13,8 +13,8 @@ A facility normally:
 5. leaves fibre and lifetime structure to callers unless ownership is intrinsic to the facility.
 
 ```lua
-local fibers = require('fibers')
-local Scalar = require('fibers.scalar')
+local Op = require('fibers.op')
+local Scalar = require('fibers.resource.scalar')
 
 local Latch = {}
 Latch.__index = Latch
@@ -27,7 +27,7 @@ function Latch:wait_op()
   local function loop()
     return self.state:snapshot_op():and_then(function(snapshot)
       if snapshot.value == 0 then
-        return fibers.always(true)
+        return Op.always(true)
       end
       return self.state:changed_op(snapshot.version):and_then(loop)
     end)

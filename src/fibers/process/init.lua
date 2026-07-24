@@ -8,21 +8,84 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local Scalar = require('fibers.resource.scalar')
 local CommandModule = require('fibers.process.command')
 local HostError = require('fibers.host.error')
-local FlowErrors = require('fibers.flow.errors')
-local Adoption = require('fibers.internal.adoption')
-local Completion = require('fibers.internal.completion')
-local Lifecycle = require('fibers.internal.process.lifecycle')
-local IO = require('fibers.internal.io')
-local IOAudit = require('fibers.internal.io_audit')
-local Ownership = require('fibers.internal.ownership')
+local FlowErrors = require('fibers.resource.flow.errors')
+local Adoption = require('fibers.lifetime.adoption')
+local Completion = require('fibers.resource.completion')
+local IO = require('fibers.host.io')
+local IOAudit = require('fibers.diagnostics.io')
+local Ownership = require('fibers.lifetime.ownership')
 local Owned = require('fibers.lifetime.region').Owned
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 local Protected = require('fibers.internal.protected')
 local Sleep = require('fibers.sleep')
 local Exit = require('fibers.lifetime.exit')
 local perform = require('fibers.perform')
+
+local Lifecycle = {}
+Lifecycle.__index = Lifecycle
+
+local Ready = Scalar.Ready
+
+local request_close = Scalar.transition({
+  name = 'process.request_close',
+  mode = 'update',
+  accepts_supply = false,
+  supplies = 'none',
+  step = function(current, reason)
+    if current.requested then
+      return Ready.same(true, current.reason)
+    end
+    return Ready.write({ requested = true, reason = reason or 'process closed' }, true, reason)
+  end,
+})
+
+local function wait_for(scalar, predicate)
+  return Scalar.until_op(scalar, predicate)
+end
+
+function Lifecycle.new(name)
+  return setmetatable({
+    name = name,
+    state = Scalar.new({ kind = 'created' }, name .. ':state'),
+    close_request = Scalar.machine({ requested = false, reason = nil }, name .. ':close-request'),
+  }, Lifecycle)
+end
+
+function Lifecycle:state_op()
+  return self.state:read_op()
+end
+
+function Lifecycle:state_value()
+  return self.state.value
+end
+
+function Lifecycle:set_state_op(value)
+  return self.state:write_op(value)
+end
+
+function Lifecycle:request_close_op(reason)
+  return self.close_request:transition_op(request_close, reason)
+end
+
+function Lifecycle:close_requested_op()
+  return wait_for(self.close_request, function(value)
+    if value.requested then
+      return true, value.reason
+    end
+    return false
+  end)
+end
+
+function Lifecycle:is_close_requested()
+  return self.close_request.value.requested == true
+end
+
+function Lifecycle:close_reason()
+  return self.close_request.value.reason
+end
 
 local Module = {}
 local Command = CommandModule.Command

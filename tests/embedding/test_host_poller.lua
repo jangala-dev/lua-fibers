@@ -15,7 +15,7 @@ local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 local Region = require('fibers.lifetime.region')
-local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
+local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 
 local function fail(msg)
   error(msg, 2)
@@ -78,7 +78,7 @@ end
 -- The shared external event queue is the poller hot FIFO.
 do
   local EventQueue = require('fibers.external.event_queue')
-  local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
+  local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
   local q = EventQueue.new('poller-burst')
   local rt = Runtime.new()
   local consumed = 0

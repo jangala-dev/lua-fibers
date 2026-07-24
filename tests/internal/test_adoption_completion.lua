@@ -12,8 +12,8 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Adoption = require('fibers.internal.adoption')
-local Completion = require('fibers.internal.completion')
+local Adoption = require('fibers.lifetime.adoption')
+local Completion = require('fibers.resource.completion')
 
 local closed = {}
 local function closer(value, reason)

@@ -1,5 +1,5 @@
-local Facility = require('fibers.internal.facility')
-local Keyspace = require('fibers.internal.facility_keyspace')
+local Facility = require('fibers.resource.authoring')
+local Keyspace = Facility.Keyspace
 
 local Keyed = {}
 Keyed.__index = function(self, key)

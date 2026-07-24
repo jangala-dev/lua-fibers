@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local FibersRegion = require('fibers.lifetime.region')
@@ -19,7 +20,7 @@ local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local Stream = FibersStream
 local HostHandle = require('fibers.host.handle')
-local Settlement = require('fibers.internal.settlement')
+local Settlement = require('fibers.lifetime.settlement')
 
 local function fail(msg)
   error(msg, 2)
@@ -78,7 +79,7 @@ do
       :map(function()
         return 'released'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
     fibers.perform(Settlement.retire_item_op(life, stream, 'done'))
     settled_status = fibers.perform(life:inspect_op())
   end).runtime_status
@@ -108,7 +109,7 @@ do
       :map(function()
         return 'moved-child'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
     fibers.perform(Settlement.retire_item_op(b, stream, 'done'))
     b_count_after_settlement = fibers.perform(b:inspect_op()).owned_count
   end).runtime_status
@@ -188,21 +189,21 @@ do
       :map(function()
         return 'moved'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
     release_child = rt:perform(life
       :raw_region()
       :release_op(child)
       :map(function()
         return 'released-child'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
     settle_without_claim = rt:perform(life
       :raw_region()
       :resolve_op(parent, { kind = 'discharge' })
       :map(function()
         return 'settled-tree'
       end)
-      :or_else(fibers.always('blocked')))
+      :or_else(Op.always('blocked')))
   end, 'phase-monitor')
 
   for _ = 1, 20 do

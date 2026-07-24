@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
 local HostError = require('fibers.host.error')
@@ -89,8 +90,7 @@ do
     return base_resolve(self, endpoint, opts)
   end
   fibers.run(function()
-    local winner =
-      fibers.perform(fibers.always('preferred'):or_else(socket.resolve_name_op('unused.test', 80)))
+    local winner = fibers.perform(Op.always('preferred'):or_else(socket.resolve_name_op('unused.test', 80)))
     assert_eq(winner, 'preferred')
     assert_eq(calls, 0, 'losing resolver option must not call the host')
   end, { host = host })

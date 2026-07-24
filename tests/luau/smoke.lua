@@ -5,7 +5,7 @@ local fibers = require('fibers')
 local Host = require('fibers.host')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 
 -- ManualHost exercises the embeddable runtime without filesystem or process
 -- facilities from the standalone Luau sandbox.
@@ -26,7 +26,7 @@ do
   assert(received == 'ok')
 end
 
--- The application-facing runner should work for immediately committable work;
+-- The application-facing root lifecycle should work for immediately committable work;
 -- no host sleep or native I/O is required.
 fibers.run(function()
   local scalar = Scalar.new(0, 'luau-scalar')

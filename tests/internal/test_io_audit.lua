@@ -17,7 +17,7 @@ local socket = require('fibers.socket')
 local Host = require('fibers.host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.internal.io_audit')
+local IOAudit = require('fibers.diagnostics.io')
 IOAudit.install(require('tests.support.io_audit_observer'))
 
 local function assert_eq(actual, expected, message)

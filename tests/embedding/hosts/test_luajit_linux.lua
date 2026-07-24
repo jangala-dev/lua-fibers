@@ -30,7 +30,7 @@ if not ok_ffi or type(ffi) ~= 'table' then
   return Common.skip('tests/hosts/test_luajit_linux.lua', 'ffi module not available')
 end
 
-local BitOps = require('fibers.internal.bitops')
+local BitOps = require('fibers.host.bitops')
 local bit, bit_reason = BitOps.resolve()
 if not bit then
   return Common.skip('tests/hosts/test_luajit_linux.lua', bit_reason or 'bit operations unavailable')

@@ -13,11 +13,11 @@ local EventQueue = require('fibers.external.event_queue')
 local Signal = require('fibers.external.signal')
 local Interest = require('fibers.external.interest')
 local ExternalFeed = require('fibers.external.feed')
-local UnsafeExternalMutation = require('fibers.internal.unsafe_external_mutation')
-local Errors = require('fibers.flow.errors')
+local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+local Errors = require('fibers.resource.flow.errors')
 local HostError = require('fibers.host.error')
-local Ownership = require('fibers.internal.ownership')
-local IOAudit = require('fibers.internal.io_audit')
+local Ownership = require('fibers.lifetime.ownership')
+local IOAudit = require('fibers.diagnostics.io')
 
 local Reactor = {}
 Reactor.__index = Reactor

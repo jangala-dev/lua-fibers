@@ -17,7 +17,8 @@ package.path = table.concat({
 -- composition over read_op, write_op, snapshot_op and changed_op.
 
 local fibers = require('fibers')
-local Scalar = require('fibers.scalar')
+local Op = require('fibers.op')
+local Scalar = require('fibers.resource.scalar')
 
 local function increment(scalar)
   return scalar:read_op():and_then(function(n)
@@ -31,7 +32,7 @@ local function wait_until(scalar, pred)
   local function loop()
     return scalar:snapshot_op():and_then(function(s)
       if pred(s.value) then
-        return fibers.always(s.value)
+        return Op.always(s.value)
       end
       return scalar:changed_op(s.version):and_then(function()
         return loop()

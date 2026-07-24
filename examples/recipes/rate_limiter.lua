@@ -4,7 +4,7 @@
 -- token consumption happen in named transitions, avoiding double-refill races.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.scalar')
+local Scalar = require('fibers.resource.scalar')
 local Ready = Scalar.Ready
 local Clock = require('fibers.external.clock')
 
