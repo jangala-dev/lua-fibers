@@ -16,6 +16,19 @@ function Clock.new(name)
   return c
 end
 
+function Clock:now_op()
+  local transition = Scalar.transition({
+    name = self.name .. ':now',
+    mode = 'query',
+    accepts_supply = false,
+    supplies = 'none',
+    step = function(_, _, ctx)
+      return Scalar.Ready.same(true, ctx.now())
+    end,
+  })
+  return Facility.external_wait(self, Kind, self._location, transition)
+end
+
 function Clock:at_op(deadline)
   local transition = Scalar.transition({
     name = self.name .. ':at',

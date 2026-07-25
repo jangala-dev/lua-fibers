@@ -21,6 +21,7 @@ local FibersHost = require('fibers.host')
 local FibersFlow = require('fibers.resource.flow')
 local FibersFile = require('fibers.file')
 local FibersSocket = require('fibers.socket')
+local FibersDNS = require('fibers.dns')
 local FibersProcess = require('fibers.process')
 local FibersScalar = require('fibers.resource.scalar')
 local FibersQueue = require('fibers.resource.queue')
@@ -126,6 +127,17 @@ do
   assert_eq(type(FibersFile.write_all), 'function', 'File exposes evented writes')
   assert_eq(type(FibersFile.mkdir_p), 'function', 'File exposes evented directory creation')
   assert_eq(require('fibers.socket'), FibersSocket, 'Socket facilities have a direct named module')
+  assert_eq(require('fibers.dns'), FibersDNS, 'DNS facilities have a direct named module')
+  assert_eq(type(FibersSocket.dns_resolver), 'function', 'Socket exposes the Fibers DNS resolver')
+  assert_eq(
+    type(FibersSocket.dial_name_op),
+    'function',
+    'Socket exposes Happy Eyeballs named Dial construction'
+  )
+  assert_eq(type(FibersSocket.dial_name), 'function', 'Socket exposes direct named Dial construction')
+  assert_eq(type(FibersSocket.connect_name), 'function', 'Socket exposes Happy Eyeballs named connection')
+  assert_eq(type(FibersSocket.NamedDial), 'table', 'Socket exposes the NamedDial lifecycle')
+  assert_eq(type(FibersDNS.new), 'function', 'DNS exposes resolver construction')
   assert_eq(require('fibers.process'), FibersProcess, 'Process facilities have a direct named module')
   assert_eq(fibers.file, nil, 'root does not export file facilities')
   assert_eq(fibers.socket, nil, 'root does not export socket facilities')

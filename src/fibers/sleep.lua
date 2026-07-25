@@ -19,6 +19,10 @@ local function assert_finite_number(x, name)
   return x
 end
 
+function Sleep.now_op()
+  return clock:now_op()
+end
+
 function Sleep.sleep_until_op(t)
   assert_finite_number(t, 'sleep_until_op deadline')
   return clock:at_op(t)

@@ -366,7 +366,7 @@ local selected, selected_err = fibers.perform(selected_dial:result_op())
 ```
 
 The split allows the eventual connection result to participate correctly in
-`choice`, timeouts and future Happy Eyeballs races. `dial:connected_op()` is a
+`choice`, timeouts and Happy Eyeballs races. `dial:connected_op()` is a
 success-only option and becomes refutable after terminal failure or closure. A
 successful but unclaimed connection remains owned by the Dial driver's scope;
 claiming it moves the complete Stream subtree into the caller's scope. As with
@@ -419,17 +419,73 @@ local connection, dial_err = dial:result()
 Resolution is deliberately two-stage. `socket.resolve_op` admits an owned query
 and starts its driver after commitment. `query:addresses_op()` is success-only
 and becomes refutable after terminal failure; `query:result_op()` combines it
-with the failure result through certified fallback. This shape leaves the query
-alive for future Happy Eyeballs coordination rather than hiding DNS inside one
-blocking dial call.
+with the failure result through certified fallback. A and AAAA completion is
+also published independently through `query:family_ready_op(family)` and
+`query:family_finished_op(family)`. This leaves the query alive as two dynamic,
+explicitly closed address sources for Happy Eyeballs coordination rather than
+hiding DNS inside one blocking dial call.
 
-The deterministic ManualHost provides configurable records and separate family
-filters. Verified LuaJIT/cffi Linux, luaposix and Nixio hosts may provide
-`getaddrinfo` as a blocking resolver capability and advertise
-`resolver_blocking = true`. Providers which cannot safely expose resolution
-leave the capability disabled. Embedders which cannot allow resolver calls on
-the runtime thread should replace it with a worker-backed or native asynchronous
-resolver.
+Fibers includes a DNS stub resolver implemented over its own non-blocking UDP,
+TCP, timers and task scopes. It sends recursive-desired A and AAAA questions to
+configured recursive name servers, validates replies, follows bounded CNAME
+chains, caches positive and negative answers, retries alternate servers and
+falls back to DNS-over-TCP when UDP is truncated. It never calls `getaddrinfo`.
+
+```lua
+local resolver = socket.dns_resolver({
+  nameservers = {
+    socket.ipv4_address('192.0.2.53', 53),
+    socket.ipv6_address('2001:db8::53', 53),
+  },
+})
+
+local query = socket.resolve_name('example.org', 443, {
+  resolver = resolver,
+})
+```
+
+When a native host advertises only a blocking resolver but supplies Fibers
+stream and datagram sockets, `socket.resolve` prefers the DNS implementation.
+An explicit `resolver`, `dns = true`, `nameservers`, or `name_server` option also
+selects it. The host resolver remains available for deterministic ManualHost
+records and as a compatibility fallback when DNS configuration is unavailable;
+`require_nonblocking = true` disables that fallback.
+
+The default DNS configuration is read from `/etc/resolv.conf`, local static
+names are read from `/etc/hosts`, and transaction-id entropy may be read from
+`/dev/urandom`. All three use the evented `fibers.file` provider rather than
+synchronous Lua file handles. Secure transaction-id entropy is required by
+default; embedded applications should normally supply name-server addresses,
+host records and secure entropy explicitly. The DNS cache is bounded by
+`maximum_cache_entries`, which defaults to 1024. Services
+must presently be numeric ports; DNS does not provide the `/etc/services` part
+of `getaddrinfo`.
+The resolver is a stub resolver, not an iterative recursive resolver, and does
+not yet validate DNSSEC.
+
+Named connections use the two independently closed family results directly:
+
+```lua
+local connection, report = socket.connect_name('example.org', 443, {
+  resolver = resolver,
+  resolution_delay = 0.050,
+  attempt_delay = 0.250,
+  maximum_candidates = 64,
+  maximum_active_attempts = 4,
+})
+assert(connection, report)
+```
+
+`socket.connect_name` implements the Happy Eyeballs v2 coordination loop as a
+Scalar state machine. Attempt outcomes, DNS completions and timer/admission
+progress are composed as `outcomes:or_else(sources:or_else(progress))`. New
+addresses may join the globally ordered unattempted set after numeric Dials have
+begun. The first successful Stream moves into the caller's scope, and the call
+returns only after
+the private race has settled every losing query, Dial and Stream. Use
+`socket.dial_name_op` when admission itself must participate in a choice, then
+select from the returned `NamedDial` lifecycle. See
+[`docs/guide/happy-eyeballs.md`](happy-eyeballs.md).
 
 Explicit option forms include:
 
@@ -443,6 +499,7 @@ socket.dial_ipv6_op(host, port, opts)
 socket.dial_unix_op(path, opts)
 
 socket.resolve_name_op(host, service, opts)
+socket.dial_name_op(host, service, opts)
 ```
 
 Source binding fields from the earlier API remain accepted by the numeric dial

@@ -49,6 +49,8 @@ return {
   io = {
     'tests/io/test_datagram.lua',
     'tests/io/test_datagram_conformance.lua',
+    'tests/io/test_dns_resolver.lua',
+    'tests/io/test_happy_eyeballs.lua',
     'tests/io/test_foundations.lua',
     'tests/io/test_file.lua',
     'tests/io/test_pipe.lua',
@@ -124,6 +126,9 @@ return {
     'tests/internal/test_io_audit.lua',
     'tests/internal/test_bitops.lua',
     'tests/internal/test_datagram_service.lua',
+    'tests/internal/test_dns_codec.lua',
+    'tests/internal/test_dns_hardening.lua',
+    'tests/internal/test_algebraic_dns_reference.lua',
     'tests/internal/test_flow_helpers.lua',
     'tests/internal/test_flow_storage.lua',
     'tests/internal/test_flow_scalar_state_machine.lua',

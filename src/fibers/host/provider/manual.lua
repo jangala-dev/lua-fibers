@@ -49,8 +49,12 @@ local function address_key(address)
 end
 
 local function wildcard_key(address)
-  local family = address.kind == 'inet6' or address.family == 'inet6' and 'inet6' or 'inet4'
-  return address_key({ kind = family, host = family == 'inet6' and '::' or '0.0.0.0', port = address.port })
+  local family = (address.kind == 'inet6' or address.family == 'inet6') and 'inet6' or 'inet4'
+  return address_key({
+    kind = family,
+    host = family == 'inet6' and '::' or '0.0.0.0',
+    port = address.port,
+  })
 end
 
 local function buffer()

@@ -26,6 +26,7 @@ local Connected = Scalar.transition({
       address = current.address,
       connection = payload.connection,
       source_region = payload.source_region,
+      report = payload.report,
     }
     return Ready.write(next_state, true, next_state)
   end,
@@ -48,6 +49,9 @@ local Failed = Scalar.transition({
       if payload.fatal == true then
         next_state.fatal = true
       end
+      if payload.report ~= nil and next_state.report == nil then
+        next_state.report = payload.report
+      end
       return Ready.write(next_state, false, next_state)
     end
     local next_state = {
@@ -57,6 +61,7 @@ local Failed = Scalar.transition({
       fatal = payload.fatal == true,
       connection = current.connection,
       source_region = current.source_region,
+      report = payload.report or current.report,
     }
     return Ready.write(next_state, true, next_state)
   end,
@@ -74,8 +79,9 @@ local Claim = Scalar.transition({
     local next_state = {
       kind = 'claimed',
       address = current.address,
+      report = current.report,
     }
-    return Ready.write(next_state, current.connection, current.source_region)
+    return Ready.write(next_state, current.connection, current.source_region, current.report)
   end,
 })
 
@@ -94,6 +100,7 @@ local RequestClose = Scalar.transition({
         fatal = payload.fatal == true,
         connection = current.connection,
         source_region = current.source_region,
+        report = payload.report or current.report,
       }
       return Ready.write(next_state, true, next_state)
     end
@@ -110,6 +117,13 @@ local RequestClose = Scalar.transition({
           next_state = copy(current)
         end
         next_state.fatal = true
+        needs_write = true
+      end
+      if payload.report ~= nil and current.report == nil then
+        if next_state == current then
+          next_state = copy(current)
+        end
+        next_state.report = payload.report
         needs_write = true
       end
       if needs_write then
@@ -135,6 +149,7 @@ local Closed = Scalar.transition({
       reason = payload.reason or current.reason,
       error = payload.error or current.error,
       fatal = payload.fatal == true or current.fatal == true,
+      report = payload.report or current.report,
     }
     return Ready.write(next_state, true, next_state)
   end,
@@ -158,17 +173,19 @@ function Dial:state_op()
   return self.state:read_op()
 end
 
-function Dial:publish_connected_op(connection, source_region)
+function Dial:publish_connected_op(connection, source_region, report)
   return self.state:transition_op(Connected, {
     connection = connection,
     source_region = source_region,
+    report = report,
   })
 end
 
-function Dial:publish_failure_op(err, fatal)
+function Dial:publish_failure_op(err, fatal, report)
   return self.state:transition_op(Failed, {
     error = err,
     fatal = fatal == true,
+    report = report,
   })
 end
 
@@ -224,19 +241,21 @@ function Dial:failure_op()
   end)
 end
 
-function Dial:request_close_op(reason, err, fatal)
+function Dial:request_close_op(reason, err, fatal, report)
   return self.state:transition_op(RequestClose, {
     reason = reason,
     error = err,
     fatal = fatal == true,
+    report = report,
   })
 end
 
-function Dial:closed_op(reason, err, fatal)
+function Dial:closed_op(reason, err, fatal, report)
   return self.state:transition_op(Closed, {
     reason = reason,
     error = err,
     fatal = fatal == true,
+    report = report,
   })
 end
 
@@ -246,6 +265,18 @@ function Dial:driver_release_op()
       return nil, true
     end
     return Op.always(state)
+  end)
+end
+
+function Dial:report_op()
+  return wait_for(self.state, function(state)
+    if state.report ~= nil then
+      return Op.always(state.report)
+    end
+    if state.kind == 'starting' or state.kind == 'connected' or state.kind == 'closing' then
+      return nil, true
+    end
+    return nil, false
   end)
 end
 

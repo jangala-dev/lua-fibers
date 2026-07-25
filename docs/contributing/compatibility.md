@@ -103,11 +103,18 @@ are closed in the child; arbitrary inherited descriptors and numeric process
 groups remain unsupported.
 
 Hosts with synchronous `getaddrinfo` advertise `resolver_blocking = true`.
-Embedders which cannot permit resolver calls on the runtime thread must replace
-that provider with a worker-backed or native asynchronous resolver. The
-deterministic ManualHost supplies virtual pipes, sockets and resolver records
-for semantic tests. Optional hosts advertise only capabilities whose provider
-contracts pass and return structured unsupported errors for the remainder.
+The public socket resolver prefers Fibers' own DNS-over-UDP/TCP implementation
+when such a host also provides stream and datagram sockets. This keeps network
+resolution off the runtime thread while preserving the host resolver as a
+compatibility fallback when no DNS configuration can be found. Applications
+which cannot permit that fallback set `require_nonblocking = true` or supply an
+explicit `socket.dns_resolver`.
+
+The deterministic ManualHost supplies virtual pipes, sockets, datagrams and
+resolver records for semantic tests. Its native resolver is non-blocking and is
+therefore retained by default; DNS wire tests select the Fibers resolver
+explicitly. Optional hosts advertise only capabilities whose provider contracts
+pass and return structured unsupported errors for the remainder.
 
 ## Evented file capabilities
 

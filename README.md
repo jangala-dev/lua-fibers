@@ -478,6 +478,22 @@ assert(addresses, resolve_err)
 local dial = socket.dial(addresses[1])
 ```
 
+The ordinary named connection API consumes A and AAAA results incrementally and
+runs staggered Happy Eyeballs v2 attempts. Attempt outcomes, DNS completions and
+admission timers form one prioritised option expression over a transactional
+race state:
+
+```lua
+local connection, report = socket.connect_name('example.org', 443)
+assert(connection, report)
+```
+
+The winning Stream moves into the caller's scope. The call returns after every
+losing query, Dial and Stream has settled. Resolver configuration, hosts data
+and secure entropy are read through `fibers.file`, so the native DNS path does
+not reintroduce synchronous file I/O. See
+[`docs/guide/happy-eyeballs.md`](docs/guide/happy-eyeballs.md).
+
 Accepted and connected Streams remain owned by their Listener or Dial until a
 claim moves the complete Stream subtree into the caller's scope. Native Linux
 FFI, luaposix and Nixio hosts provide non-blocking IPv4, IPv6 and Unix stream
@@ -600,6 +616,8 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 - [Fibers for Roblox](docs/guide/roblox.md)
 - [Gameplay examples](examples/gameplay/README.md)
 - [Pipes and sockets](docs/guide/io.md)
+- [Non-blocking DNS](docs/guide/dns.md)
+- [Happy Eyeballs v2](docs/guide/happy-eyeballs.md)
 - [Tutorial and embedding examples](examples/README.md)
 - [Facility recipes](examples/recipes/README.md)
 

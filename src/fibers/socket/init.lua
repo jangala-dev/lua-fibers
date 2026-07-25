@@ -8,17 +8,26 @@ local ListenerModule = require('fibers.socket.listener')
 local DialModule = require('fibers.socket.dial')
 local DatagramModule = require('fibers.socket.datagram')
 local ResolverModule = require('fibers.socket.resolver')
+local HappyEyeballsModule = require('fibers.socket.happy_eyeballs')
+local DNS = require('fibers.dns')
 local HostError = require('fibers.host.error')
 local IO = require('fibers.host.io')
 local perform = require('fibers.perform')
+local Runtime = require('fibers.runtime')
 
 local Socket = {
   Listener = ListenerModule.Listener,
   Dial = DialModule.Dial,
   Query = ResolverModule.Query,
+  NamedDial = HappyEyeballsModule.NamedDial,
   DatagramSocket = DatagramModule.DatagramSocket,
   Error = HostError,
+  DNSResolver = DNS.Resolver,
 }
+
+function Socket.dns_resolver(opts)
+  return DNS.new(opts)
+end
 
 function Socket.ipv4_address(host, port)
   return Address.ipv4(host, port)
@@ -88,6 +97,10 @@ end
 
 function Socket.resolve_name_op(host, service, opts)
   return ResolverModule.resolve_op(Address.name(host, service, opts), opts)
+end
+
+function Socket.dial_name_op(host, service, opts)
+  return HappyEyeballsModule.dial_op(Address.name(host, service, opts), opts)
 end
 
 function Socket.dial_op(address, opts)
@@ -164,6 +177,17 @@ end
 
 function Socket.resolve_name(host, service, opts)
   return perform(Socket.resolve_name_op(host, service, opts))
+end
+
+function Socket.dial_name(host, service, opts)
+  return perform(Socket.dial_name_op(host, service, opts))
+end
+
+function Socket.connect_name(host, service, opts)
+  opts = IO.copy_table(opts)
+  local target = opts.target or opts.owner or Runtime.current_scope()
+  local dial = perform(Socket.dial_name_op(host, service, opts))
+  return dial:connect(target)
 end
 
 function Socket.dial(address, opts)
