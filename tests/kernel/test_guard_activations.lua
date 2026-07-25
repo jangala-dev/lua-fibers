@@ -18,6 +18,8 @@ local Runtime = require('fibers.runtime')
 local Scalar = require('fibers.resource.scalar')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Sleep = require('fibers.sleep')
+local Clock = require('fibers.resource.clock')
+local Scope = require('fibers.scope')
 
 local function fail(message)
   error(message, 2)
@@ -161,6 +163,78 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     found(rt:step(), machine .. ': activation-relative sleep should finish')
     eq(finished, true)
     eq(observed, 13, machine .. ': sleep deadline should be fixed at activation plus delay')
+  end
+
+  -- The guard argument is an ephemeral perform-local activation view. Its
+  -- monotonic instant is sampled at most once, and the public surface exposes
+  -- only the stable values needed to construct an explicit residual.
+  do
+    local reads = 0
+    local host = {
+      now = function()
+        reads = reads + 1
+        return 40 + reads
+      end,
+    }
+    local rt = Runtime.new({ machine = machine, host = host })
+    local scope = Scope.new('guard-activation-context', { runtime = rt })
+    local captured, result
+    rt:spawn_raw(function()
+      result = pack(rt:perform(Op.guard(function(activation)
+        captured = activation
+        local first = activation:now()
+        local second = activation:now()
+        return Op.always(
+          first,
+          second,
+          activation:region() == scope.region,
+          activation.runtime == nil,
+          activation.host == nil,
+          activation.scope == nil,
+          activation.label == nil,
+          activation._close == nil,
+          activation.close == nil
+        )
+      end)))
+    end, 'guard-activation-context-root', scope)
+    found(rt:run(), machine .. ': guard activation context should complete')
+    eq(result[1], result[2], machine .. ': one activation should observe one instant')
+    eq(reads, 1, machine .. ': activation time should be sampled once')
+    eq(result[3], true, machine .. ': activation should expose the performing Region')
+    eq(result[4], true, machine .. ': activation should not expose the Runtime')
+    eq(result[5], true, machine .. ': activation should not expose the Runtime host')
+    eq(result[6], true, machine .. ': activation should not expose the Scope')
+    eq(result[7], true, machine .. ': activation should not expose its internal label')
+    eq(result[8], true, machine .. ': activation should not expose evaluator closure')
+    eq(result[9], true, machine .. ': activation should expose no module closure function')
+    local open, err = pcall(function()
+      return captured:now()
+    end)
+    eq(open, false, machine .. ': activation view must not outlive guard elaboration')
+    eq(
+      tostring(err):match('no longer available') ~= nil,
+      true,
+      machine .. ': closed activation should explain its lifetime'
+    )
+  end
+
+  -- Contextual surface operations resolve against the performing activation,
+  -- not the host-language point where the reusable guard value was constructed.
+  do
+    local contextual = Op.guard(function(activation)
+      return Op.always(activation:region())
+    end)
+    local rt = Runtime.new({ machine = machine })
+    local outer = Scope.new('guard-context-outer', { runtime = rt })
+    local inner = Scope.new('guard-context-inner', { runtime = rt, parent = outer })
+    local observed_region
+    rt:spawn_raw(function()
+      rt:with_scope(inner, function()
+        observed_region = rt:perform(contextual)
+      end)
+    end, 'guard-context-performing-scope', outer)
+    found(rt:run(), machine .. ': contextual guard should complete')
+    eq(observed_region, inner.region, machine .. ': guard should resolve the performing Region')
   end
 
   -- A changed transactional observation creates a new activation even when

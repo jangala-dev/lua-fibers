@@ -83,13 +83,8 @@ local function terminal_accept(state)
     })
 end
 
-function Listener:accept_op(target)
-  local target_region = IO.region_of(target or Runtime.current_scope())
-  if not target_region then
-    error('Listener:accept_op expects a target Scope or Region, or a current Scope', 2)
-  end
-
-  local accepted = self.queue:get_op():and_then(function(connection)
+local function accept_to_region_op(listener, target_region)
+  local accepted = listener.queue:get_op():and_then(function(connection)
     local source_region = IO.region_of(connection.owner)
     if not source_region then
       return Op.never()
@@ -100,7 +95,18 @@ function Listener:accept_op(target)
   end)
 
   -- Queued input has certified priority over terminal listener state.
-  return accepted:or_else(self.lifecycle:unavailable_op():map(terminal_accept))
+  return accepted:or_else(listener.lifecycle:unavailable_op():map(terminal_accept))
+end
+
+function Listener:accept_op(target)
+  local listener = self
+  return IO.with_target_region_op(
+    target,
+    'Listener:accept_op expects a target Scope or Region, or a current Scope',
+    function(region)
+      return accept_to_region_op(listener, region)
+    end
+  )
 end
 
 local function listener_close_result(state)

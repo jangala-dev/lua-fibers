@@ -110,9 +110,9 @@ do
       return now
     end,
   } })
-  local ok, observed
+  local observed
   rt:spawn_raw(function()
-    ok, observed = rt:perform(clock:at_op(5))
+    observed = rt:perform(clock:at_op(5))
   end, 'clock-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
@@ -120,7 +120,6 @@ do
   now = 5
   st = rt:step()
   assert_status(st, 'found')
-  assert_eq(ok, true)
   assert_eq(observed, 5)
 end
 
@@ -196,24 +195,23 @@ do
       return now
     end,
   } })
-  local ok, observed
+  local observed
   rt:spawn_raw(function()
-    ok, observed = rt:perform(clock:at_op(5))
+    observed = rt:perform(clock:at_op(5))
   end, 'bounded-clock-waiter')
   for _ = 1, 5 do
     rt:step({ max_work = 1 })
   end
-  assert_eq(ok, nil, 'sleep should still be pending before deadline')
+  assert_eq(observed, nil, 'sleep should still be pending before deadline')
   now = 5
   local st
   for _ = 1, 30 do
     st = rt:step({ max_work = 1 })
-    if ok then
+    if observed ~= nil then
       break
     end
   end
-  assert_eq(ok, true, 'bounded clock wait should commit after deadline without explicit invalidation')
-  assert_eq(observed, 5)
+  assert_eq(observed, 5, 'bounded clock wait should commit after deadline without explicit invalidation')
 end
 
 -- Observation also protects external resource observations if a producer

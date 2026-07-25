@@ -464,19 +464,6 @@ local function opposite_role(role)
   return nil
 end
 
-local function supply_reason(certainty, mechanism, orientation)
-  if certainty == M.SUPPLY_OPAQUE then
-    return 'dynamic'
-  end
-  if mechanism == 'exchange' then
-    return 'exchange'
-  end
-  if mechanism == 'location' then
-    return orientation and ('location-' .. tostring(orientation)) or 'location-any-demand'
-  end
-  return 'none'
-end
-
 function M.supply_relation(metadata, intent)
   metadata = metadata or empty_metadata()
   if M.active_dynamic(metadata) then

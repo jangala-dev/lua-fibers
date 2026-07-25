@@ -145,7 +145,17 @@ facility-specific state calculations
 
 They must be deterministic for their explicit inputs, non-yielding, free of irreversible I/O and external mutation, and independent of undeclared transactional facts.
 
-`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. Guard preparation may allocate fresh private values or take an intentional activation-time snapshot, but it remains immediate and non-transactional: it must not yield, call `perform`, drive the runtime or mutate Fibers-managed transactional state outside an option. Its effects are not rolled back, and programs must not depend on the relative evaluation order of separate guard activations.
+`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. The callback receives a deliberately narrow ephemeral activation view. It exposes only one stable monotonic activation instant and the performing Scope's Region:
+
+```lua
+Op.guard(function(activation)
+  local started_at = activation:now()
+  local region = activation:region()
+  return explicit_residual_op(started_at, region)
+end)
+```
+
+The view is valid only while the builder runs. It does not expose the Runtime, host, Scope or internal activation label. It may be used to elaborate relative or contextual surface syntax into an explicit residual operation; retaining the view and consulting it later is an error. Guard preparation may allocate fresh private values or take an intentional activation-time snapshot, but it remains immediate and non-transactional: it must not yield, call `perform`, drive the runtime or mutate Fibers-managed transactional state outside an option. Its effects are not rolled back, and programs must not depend on the relative evaluation order of separate guard activations.
 
 A callback which must observe a committed world belongs in `wrap` or an effect, not in `map`, `and_then`, `guard` or a primitive transducer.
 
@@ -315,6 +325,16 @@ end) -- evaluates f once
 ```
 
 The option returned for an activation remains fixed across local backtracking, bounded-search suspension, retained-search reconstruction and validation while the same transactional observations remain valid. A different proof progression or a changed observed version creates a different activation and reevaluates its guards. A new `perform` attempt starts with a fresh activation root.
+
+The intended normal form is:
+
+```text
+relative or contextual surface operation
+        ↓ guard activation
+explicit resources + absolute values + core operations
+```
+
+For example, `clock:after_op(0.25)` elaborates once to `clock:at_op(concrete_deadline)`, and an omitted transfer target may elaborate to the Region of the Scope performing that occurrence. The residual itself does not retain or consult the activation view.
 
 Guard evaluation is demand-driven. An unopened `or_else` fallback or an unentered choice branch need not evaluate its guards.
 

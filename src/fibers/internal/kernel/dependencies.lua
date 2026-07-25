@@ -5,7 +5,6 @@
 -- blocked-demand index in domain.lua.
 
 local IR = require('fibers.internal.kernel.ir')
-local Certificate = require('fibers.internal.kernel.certificate')
 
 local Bucket = {}
 Bucket.__index = Bucket

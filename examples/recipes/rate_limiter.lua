@@ -152,8 +152,8 @@ function RateLimiter:acquire_op(n)
 end
 
 function RateLimiter:state_op()
-  return Op.guard(function(ctx)
-    local now = ctx:now()
+  return Op.guard(function(activation)
+    local now = activation:now()
     return self.state:read_op():map(function(state)
       local s = refill_state(self, state, now)
       return { tokens = s.tokens, last = s.last, capacity = self.capacity, rate = self.rate }

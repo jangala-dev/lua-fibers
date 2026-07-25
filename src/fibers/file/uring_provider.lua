@@ -69,9 +69,6 @@ end
 local function u8(ffi, p, o)
   return ffi.cast('fibers_u8*', ptr_add(ffi, p, o))
 end
-local function u16(ffi, p, o)
-  return ffi.cast('fibers_u16*', ptr_add(ffi, p, o))
-end
 local function u32(ffi, p, o)
   return ffi.cast('volatile fibers_u32*', ptr_add(ffi, p, o))
 end
@@ -232,7 +229,7 @@ function Provider.new(runtime, opts)
   local p = params[0]
   local sq_size = tonumber(p.sq_off.array) + tonumber(p.sq_entries) * 4
   local cq_size = tonumber(p.cq_off.cqes) + tonumber(p.cq_entries) * 16
-  if tonumber(p.features) % 2 == 1 then
+  if tonumber(p.features) % (IORING_FEAT_SINGLE_MMAP * 2) >= IORING_FEAT_SINGLE_MMAP then
     local size = math.max(sq_size, cq_size)
     local base = map(self, size, IORING_OFF_SQ_RING)
     if not base then

@@ -230,14 +230,25 @@ Delivery updates only the bound facility, increments its version and runtime epo
 
 ## Time and sleep
 
-`Clock` observes `Runtime:now()`. Application code usually uses:
+`Clock` is the time resource. An explicit or default clock provides:
+
+```lua
+local clock = Clock.default()
+clock:now_op()          -- yields the observed monotonic time
+clock:at_op(deadline)   -- waits until an absolute time
+clock:after_op(duration) -- relative surface syntax
+```
+
+`after_op` is defined algebraically: each guard activation takes one stable activation-time observation and returns a fresh `at_op` with a concrete deadline. Backtracking and validation therefore do not slide the deadline, while a genuinely new activation receives a new deadline.
+
+Application code may retain the familiar sleep vocabulary over the default clock:
 
 ```lua
 Sleep.sleep_until_op(deadline)
 Sleep.sleep_op(duration)
 ```
 
-A relative sleep fixes its absolute deadline once per perform attempt. Backtracking and validation refresh do not slide the deadline.
+`Sleep` does not expose `now_op`; clock observation belongs to `Clock`.
 
 The host flow is:
 

@@ -58,14 +58,6 @@ local function integer_at_least(value, fallback, minimum, name)
   return value
 end
 
-local function target_region(target)
-  local region = IO.region_of(target or Runtime.current_scope())
-  if not region then
-    error('named Dial connection transfer expects a target Scope or Region, or a current Scope', 3)
-  end
-  return region
-end
-
 local function named_dial_settlement(dial)
   return Settlement.request_then_wait(function(_ctx, _record, reason)
     return dial:close_op(reason or 'scope settlement')
@@ -94,13 +86,23 @@ function NamedDial:state_value()
   return self.lifecycle:state_value()
 end
 
-function NamedDial:connected_op(target)
-  local region = target_region(target)
-  return self.lifecycle:claim_op():and_then(function(connection, source_region)
+local function connected_to_region_op(dial, region)
+  return dial.lifecycle:claim_op():and_then(function(connection, source_region)
     return source_region:move_op(connection, region):map(function()
       return connection
     end)
   end)
+end
+
+function NamedDial:connected_op(target)
+  local dial = self
+  return IO.with_target_region_op(
+    target,
+    'named Dial connection transfer expects a target Scope or Region, or a current Scope',
+    function(region)
+      return connected_to_region_op(dial, region)
+    end
+  )
 end
 
 function NamedDial:failed_op()
@@ -117,18 +119,28 @@ function NamedDial:report_op()
   return self.lifecycle:report_op()
 end
 
-function NamedDial:connect_result_op(target)
-  local region = target_region(target)
-  return self.lifecycle
+local function connect_result_to_region_op(dial, region)
+  return dial.lifecycle
     :claim_op()
     :and_then(function(connection, source_region, report)
       return source_region:move_op(connection, region):map(function()
         return connection, report
       end)
     end)
-    :or_else(self:failed_op():map(function(err)
+    :or_else(dial:failed_op():map(function(err)
       return nil, err
     end))
+end
+
+function NamedDial:connect_result_op(target)
+  local dial = self
+  return IO.with_target_region_op(
+    target,
+    'named Dial connection transfer expects a target Scope or Region, or a current Scope',
+    function(region)
+      return connect_result_to_region_op(dial, region)
+    end
+  )
 end
 
 function NamedDial:close_op(reason)

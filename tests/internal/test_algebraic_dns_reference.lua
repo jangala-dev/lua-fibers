@@ -10,12 +10,14 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
+local Clock = require('fibers.resource.clock')
 local Host = require('fibers.host')
 local socket = require('fibers.socket')
 local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
 local DialLifecycle = require('fibers.socket.dial_lifecycle')
 local Race = require('fibers.internal.socket.happy_eyeballs_race')
+local clock = Clock.default()
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -38,18 +40,14 @@ do
   local host = Host.manual()
   local result = fibers.try_run(function()
     local observed = fibers.perform(Op.named_all({
-      left = Sleep.now_op():map(function(_, now)
-        return now
-      end),
-      right = Sleep.now_op():map(function(_, now)
-        return now
-      end),
+      left = clock:now_op(),
+      right = clock:now_op(),
     }))
     assert_eq(observed.left, 0)
     assert_eq(observed.right, observed.left)
 
     Sleep.sleep(0.125)
-    local _, later = fibers.perform(Sleep.now_op())
+    local later = fibers.perform(clock:now_op())
     assert_eq(later, 0.125)
   end, { host = host })
   assert_truthy(result.ok, result:tostring())

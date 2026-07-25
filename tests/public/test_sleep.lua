@@ -15,6 +15,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Sleep = require('fibers.sleep')
+local Clock = require('fibers.resource.clock')
 local Op = require('fibers.op')
 
 local function fail(msg)
@@ -37,12 +38,19 @@ local function assert_error(fn, msg)
   end
 end
 
--- The module exports precisely the two option constructors.
+-- Sleep is a vocabulary facade; Clock owns observation and relative/absolute
+-- time operations.
 do
   assert_eq(type(Sleep.sleep_until_op), 'function', 'sleep_until_op export')
   assert_eq(type(Sleep.sleep_op), 'function', 'sleep_op export')
-  assert_eq(type(Sleep.sleep_until_op), 'function', 'top-level sleep_until_op export')
-  assert_eq(type(Sleep.sleep_op), 'function', 'top-level sleep_op export')
+  assert_eq(Sleep.now_op, nil, 'sleep must not expose clock observation')
+  assert_eq(Clock.default(), Clock.default(), 'default clock identity is stable')
+  assert_eq(type(Clock.default().now_op), 'function', 'clock now_op export')
+  assert_eq(type(Clock.default().at_op), 'function', 'clock at_op export')
+  assert_eq(type(Clock.default().after_op), 'function', 'clock after_op export')
+  assert_eq(type(Clock.default().now), 'function', 'clock direct now export')
+  assert_eq(type(Clock.default().at), 'function', 'clock direct at export')
+  assert_eq(type(Clock.default().after), 'function', 'clock direct after export')
 end
 
 -- Absolute sleep waits until the host clock reaches the deadline.
@@ -63,6 +71,25 @@ do
   st = rt:step()
   assert_status(st, 'found')
   assert_eq(ok, true)
+  assert_eq(observed, 10)
+end
+
+-- Clock:after_op is the canonical relative-time operation. It elaborates once
+-- into an absolute Clock:at_op residual.
+do
+  local now = 7
+  local rt = Runtime.new({ host = {
+    now = function()
+      return now
+    end,
+  } })
+  local observed
+  rt:spawn_raw(function()
+    observed = rt:perform(Clock.default():after_op(3))
+  end, 'clock-after')
+  assert_status(rt:run(), 'pending')
+  now = 10
+  assert_status(rt:step(), 'found')
   assert_eq(observed, 10)
 end
 

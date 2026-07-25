@@ -287,9 +287,10 @@ local function continuation_hint(opts)
   return opts.footprint or opts.continuation or opts
 end
 
--- Delayed construction is a first-class node. The evaluator memoises each
--- guard by its request-local speculative activation, rather than by Op object
--- identity.
+-- Delayed algebraic elaboration is a first-class node. The evaluator memoises
+-- each guard by its request-local speculative activation, rather than by Op
+-- object identity. The builder receives an ephemeral activation view which may
+-- resolve perform-local facts into the explicit residual Op it returns.
 function Op.guard(fn, opts)
   return op('guard', {
     fn = fn,

@@ -1,49 +1,32 @@
--- Sleep facility.
+-- Sleep vocabulary over the default monotonic Clock.
 --
--- Sleep is ordinary option syntax built over a clock resource.  Absolute sleep
--- is a clock-resource wait.  Relative sleep is a guard that fixes its absolute
--- deadline once for the perform attempt.
+-- Clock owns the time algebra. Sleep retains the familiar direct and option
+-- names as a small convenience facade.
 
-local Op = require('fibers.op')
 local Clock = require('fibers.resource.clock')
 local perform = require('fibers.perform')
 
 local Sleep = {}
+local clock = Clock.default()
 
-local clock = Clock.new('sleep')
-
-local function assert_finite_number(x, name)
-  if type(x) ~= 'number' or x ~= x or x == math.huge or x == -math.huge then
-    error(name .. ' must be a finite number', 3)
-  end
-  return x
+local function sleep_result(observed_at)
+  return true, observed_at
 end
 
-function Sleep.now_op()
-  return clock:now_op()
+function Sleep.sleep_until_op(deadline)
+  return clock:at_op(deadline):map(sleep_result)
 end
 
-function Sleep.sleep_until_op(t)
-  assert_finite_number(t, 'sleep_until_op deadline')
-  return clock:at_op(t)
+function Sleep.sleep_op(delay)
+  return clock:after_op(delay):map(sleep_result)
 end
 
-function Sleep.sleep_op(d)
-  assert_finite_number(d, 'sleep_op delay')
-  return Op.guard(function(ctx)
-    if not ctx or type(ctx.now) ~= 'function' then
-      error('sleep_op requires an attempt context with a runtime clock', 2)
-    end
-    return Sleep.sleep_until_op(ctx:now() + d)
-  end)
+function Sleep.sleep_until(deadline)
+  return perform(Sleep.sleep_until_op(deadline))
 end
 
-function Sleep.sleep_until(t)
-  return perform(Sleep.sleep_until_op(t))
-end
-
-function Sleep.sleep(d)
-  return perform(Sleep.sleep_op(d))
+function Sleep.sleep(delay)
+  return perform(Sleep.sleep_op(delay))
 end
 
 return Sleep

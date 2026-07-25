@@ -4,6 +4,7 @@
 -- driver construction, masked option performance during short adoption
 -- intervals, and conversion of host handles into Streams.
 
+local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 local Task = require('fibers.task')
@@ -28,6 +29,25 @@ function IO.region_of(owner)
     return owner
   end
   return nil
+end
+
+-- Elaborate an optional Scope/Region target to an explicit Region operation.
+-- An omitted target is resolved once from the performing guard activation.
+function IO.with_target_region_op(target, message, build)
+  if target ~= nil then
+    local region = IO.region_of(target)
+    if not region then
+      error(message, 3)
+    end
+    return build(region)
+  end
+  return Op.guard(function(activation)
+    local region = activation:region()
+    if not region then
+      error(message, 2)
+    end
+    return build(region)
+  end)
 end
 
 function IO.current_owner(opts, label)

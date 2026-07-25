@@ -7,7 +7,7 @@
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
 local Counter = require('fibers.resource.counter')
-local Sleep = require('fibers.sleep')
+local Clock = require('fibers.resource.clock')
 local Address = require('fibers.socket.address')
 local Policy = require('fibers.internal.socket.happy_eyeballs_policy')
 local DialModule = require('fibers.socket.dial')
@@ -25,11 +25,10 @@ local completion_addresses = Policy.completion_addresses
 local completion_error = Policy.completion_error
 local order_candidates = Policy.order_candidates
 local active_attempt_count = Policy.active_attempt_count
+local default_clock = Clock.default()
 
 local function now_op()
-  return Sleep.now_op():map(function(_, observed_at)
-    return observed_at
-  end)
+  return default_clock:now_op()
 end
 
 local PublishFamily = Scalar.transition({
@@ -384,18 +383,16 @@ function Race:_progress_op(current, owner, now, available_slots)
     return Op.never()
   end
 
-  local clock
+  local readiness
   if at <= now then
-    clock = Op.always(now)
+    readiness = Op.always(now)
   else
-    clock = Sleep.sleep_until_op(at):map(function(_, observed_at)
-      return observed_at
-    end)
+    readiness = default_clock:at_op(at)
   end
 
   -- Clock readiness, action selection, capacity claim, Dial admission and the
   -- race-state update form one provisional world. There is no wake-only step.
-  return clock:and_then(function(observed_at)
+  return readiness:and_then(function(observed_at)
     return self:_action_at_op(owner, observed_at)
   end)
 end

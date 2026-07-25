@@ -12,7 +12,6 @@ local Effect = require('fibers.effect')
 local EventQueue = require('fibers.resource.event_queue')
 local Signal = require('fibers.resource.signal')
 local Interest = require('fibers.host.external').Interest
-local ExternalFeed = require('fibers.host.external').Feed
 local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 local Errors = require('fibers.resource.flow.errors')
 local HostError = require('fibers.host.error')

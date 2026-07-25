@@ -442,14 +442,6 @@ local function intents_compatible(a, b)
   return same_root_compatible(a, b)
 end
 
-local function remove_two(xs, i, j)
-  if i > j then
-    i, j = j, i
-  end
-  table.remove(xs, j)
-  table.remove(xs, i)
-end
-
 local function remove_intent_ids(state, ids)
   local remove = {}
   for i = 1, #ids do
@@ -890,12 +882,6 @@ local function attach_candidate_effects(runtime, candidate, extra)
   return candidate
 end
 
-local function request_may_supply(request, intents)
-  local metadata = request.metadata or IR.metadata(request.op)
-  request.metadata = metadata
-  return IR.metadata_may_supply_any(metadata, intents)
-end
-
 local dfs
 
 dfs = function(state)
@@ -933,23 +919,9 @@ dfs = function(state)
         elseif kind == 'guard' then
           local parent_activation = task.activation
           local request = state.roots[task.root_id].request
-          local residual = request.memo[parent_activation]
+          local residual = request.guard_residuals[parent_activation]
           if not residual then
-            residual = state.runtime:_call_in_phase('guard', 'callback_error', expr.fn, {
-              runtime = state.runtime,
-              now = function()
-                return state.runtime:now()
-              end,
-            })
-            if not Op.is_op(residual) then
-              error('guard callback must return an Op', 0)
-            end
-            verify_continuation_dependencies(state, {
-              phase = 'guard',
-              activation = parent_activation,
-              continuation_footprint = expr.continuation_footprint,
-            }, residual)
-            request.memo[parent_activation] = residual
+            residual = state.runtime:_guard_residual(request, expr, parent_activation, true)
           end
           task.expr = residual
           task.activation = Activation.child(parent_activation, 'guard:result')

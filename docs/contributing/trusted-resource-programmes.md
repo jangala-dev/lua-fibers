@@ -323,7 +323,7 @@ IR.machine_transition {
 
 Producer authority is exposed through a runtime-bound `ExternalFeed`. Delivery must update only the bound facility, increment its location version and invalidate any negative proof which could become false.
 
-Clock uses a timer interest and a pull-validated deadline check rather than feed mutation.
+Clock uses a timer interest and a pull-validated deadline check rather than feed mutation. Relative `after_op` syntax is a guard elaboration into an absolute `at_op`; the core clock primitive therefore handles only explicit observations and deadlines.
 
 ## Effects and wraps
 

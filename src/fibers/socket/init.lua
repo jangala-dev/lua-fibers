@@ -13,7 +13,6 @@ local DNS = require('fibers.dns')
 local HostError = require('fibers.host.error')
 local IO = require('fibers.host.io')
 local perform = require('fibers.perform')
-local Runtime = require('fibers.runtime')
 
 local Socket = {
   Listener = ListenerModule.Listener,
@@ -185,7 +184,7 @@ end
 
 function Socket.connect_name(host, service, opts)
   opts = IO.copy_table(opts)
-  local target = opts.target or opts.owner or Runtime.current_scope()
+  local target = opts.target or opts.owner
   local dial = perform(Socket.dial_name_op(host, service, opts))
   return dial:connect(target)
 end

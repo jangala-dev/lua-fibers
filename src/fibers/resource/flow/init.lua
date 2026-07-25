@@ -85,8 +85,6 @@ function SpaceLease:fail_op(err)
   return self.flow:_fail_space_op(self, err)
 end
 
-local Leases = { Lease = Lease, SpaceLease = SpaceLease }
-
 local FlowChangedKind
 
 local function flow_key(payload)

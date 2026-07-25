@@ -53,21 +53,23 @@ function Dial:state_value()
   return self.lifecycle:state_value()
 end
 
-local function target_region(target)
-  local region = IO.region_of(target or Runtime.current_scope())
-  if not region then
-    error('Dial connection transfer expects a target Scope or Region, or a current Scope', 3)
-  end
-  return region
-end
-
-function Dial:connected_op(target)
-  local region = target_region(target)
-  return self.lifecycle:claim_op():and_then(function(connection, source_region)
+local function connected_to_region_op(dial, region)
+  return dial.lifecycle:claim_op():and_then(function(connection, source_region)
     return source_region:move_op(connection, region):map(function()
       return connection
     end)
   end)
+end
+
+function Dial:connected_op(target)
+  local dial = self
+  return IO.with_target_region_op(
+    target,
+    'Dial connection transfer expects a target Scope or Region, or a current Scope',
+    function(region)
+      return connected_to_region_op(dial, region)
+    end
+  )
 end
 
 function Dial:failed_op()

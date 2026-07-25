@@ -13,6 +13,7 @@ local Domain = require('fibers.internal.kernel.domain')
 local DependencyIndex = Dependencies.Index
 local Certificate = require('fibers.internal.kernel.certificate')
 local Path = require('fibers.internal.kernel.path')
+local GuardActivation = require('fibers.internal.guard_activation')
 
 -- Internal perform-boundary interruption tokens.
 local InterruptToken = {}
@@ -75,10 +76,10 @@ local function clear_pending_fields(fiber)
   fiber._contains_or_else = nil
   fiber._active_root_residual = nil
   fiber.activation_root = nil
-  if fiber.memo then
-    clear_table(fiber.memo)
+  if fiber.guard_residuals then
+    clear_table(fiber.guard_residuals)
   else
-    fiber.memo = {}
+    fiber.guard_residuals = {}
   end
   return fiber
 end
@@ -626,7 +627,7 @@ local function spawn_unchecked(self, fn, name, scope)
     done = false,
     scope = scope,
     scope_stack = scope and { scope } or {},
-    memo = {},
+    guard_residuals = {},
   }
   self._ready_tail = self._ready_tail + 1
   self._ready_fibers[self._ready_tail] = fiber
@@ -734,16 +735,18 @@ function Runtime:_guard_residual(request, guard, activation, reveal)
   if not request or not activation then
     return nil, false
   end
-  local cached = request.memo[activation]
+  local cached = request.guard_residuals[activation]
   if cached or not reveal then
     return cached, false
   end
-  cached = self:_call_in_phase('guard', 'callback_error', guard.fn, {
-    runtime = self,
-    now = function()
-      return self:now()
-    end,
-  })
+  local scope = request.scope
+  local activation_view = GuardActivation.new(self, scope and scope.region or nil)
+  local ok, value = pcall(self._call_in_phase, self, 'guard', 'callback_error', guard.fn, activation_view)
+  GuardActivation.close(activation_view)
+  if not ok then
+    error(value, 0)
+  end
+  cached = value
   if not Op.is_op(cached) then
     error('guard callback must return an Op', 0)
   end
@@ -763,7 +766,7 @@ function Runtime:_guard_residual(request, guard, activation, reveal)
       )
     end
   end
-  request.memo[activation] = cached
+  request.guard_residuals[activation] = cached
   if request.op == guard and activation == request.activation_root then
     request._active_root_residual = cached
     if IR.has_or_else(cached) and not request._contains_or_else then
@@ -786,7 +789,7 @@ end
 function Runtime:_add_pending(fiber, op, interrupt)
   self.next_request = self.next_request + 1
   local request = fiber
-  clear_table(request.memo)
+  clear_table(request.guard_residuals)
   request.id = self.next_request
   request.activation_root = self.activation.new_request(request.id)
   request.op = op

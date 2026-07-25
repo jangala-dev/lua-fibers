@@ -1265,7 +1265,7 @@ local function inspect_transparent_residual(state, task, activation, op)
     if op.kind == 'guard' then
       local root = state and task and state.roots[task.root_id] or nil
       local request = root and root.request or nil
-      local cached = request and activation and request.memo[activation] or nil
+      local cached = request and activation and request.guard_residuals[activation] or nil
       if cached then
         return cached, activation, RESIDUAL_REVEALED
       end

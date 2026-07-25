@@ -253,6 +253,14 @@ do
   assert_eq(got, 'ready')
 end
 
+do
+  local clock = FibersClock.default()
+  assert_eq(type(clock.now_op), 'function', 'Clock exposes now_op')
+  assert_eq(type(clock.at_op), 'function', 'Clock exposes at_op')
+  assert_eq(type(clock.after_op), 'function', 'Clock exposes after_op')
+  assert_eq(Sleep.now_op, nil, 'Sleep does not duplicate clock observation')
+end
+
 -- Clocks are ordinary resources backed by host time.
 do
   local now = 0

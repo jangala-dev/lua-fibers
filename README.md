@@ -301,7 +301,7 @@ Fibers has three normative callback phases. A callback must obey the rules of th
 
 A pure effect preparation must not reserve host capacity, mutate external state, deliver events, spawn, perform or yield. It may depend only on its payload, immutable runtime configuration and managed facts already represented by the candidate. Put irreversible work in `discharge`, not `prepare`.
 
-A guard delays construction until one structural occurrence becomes relevant. Its result is stable within that speculative activation, but a later activation may call the builder again. Use it for private fresh values; use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
+A guard delays algebraic elaboration until one structural occurrence becomes relevant. Its builder receives a deliberately narrow ephemeral activation view exposing only a stable monotonic activation instant and the current Region; it must embed those values into the explicit residual `Op` it returns. The view is invalid once the builder returns. The residual is stable within that speculative activation, while a later activation may elaborate afresh. `Clock:after_op(d)` follows this rule by becoming `Clock:at_op(activation:now() + d)`. Use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
 
 ```lua
 local show_selected_line = voice_lines:get_op():wrap(function(line)
