@@ -1,6 +1,7 @@
 ---Owned adaptation of an RBXScriptSignal into a Fibers event source.
 
 local Runtime = require('fibers.runtime')
+local Op = require('fibers.op')
 local Region = require('fibers.region')
 local Settlement = require('fibers.region.settlement')
 local perform = require('fibers.perform')
@@ -52,8 +53,8 @@ end
 local function settle_protocol(subscription)
   return Settlement.protocol({
     name = 'roblox_subscription_disconnect',
-    discharge_op = function()
-      return require('fibers.op').always(true):wrap(function()
+    settle_op = function()
+      return Op.always(true):wrap(function()
         subscription:_disconnect()
         return true
       end)

@@ -249,7 +249,17 @@ local function file_settlement(file)
     return file:close_op(reason or 'file scope settlement')
   end, function()
     return file:closed_op()
-  end)
+  end, {
+    name = 'regular_file',
+    settle_result = function(ok, err)
+      -- A failed open owns no host file; its terminal error is the acquisition
+      -- result, not a second settlement failure.
+      if not ok and file.backend ~= nil then
+        error(err or 'file settlement failed', 0)
+      end
+      return true
+    end,
+  })
 end
 
 function RegularFile:owned(children)

@@ -39,13 +39,11 @@ local function listener_settlement(listener)
   return Settlement.request_then_wait(function(_ctx, _record, reason)
     return listener:close_op(reason or 'scope settlement')
   end, function()
-    return listener:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'listener settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+    return listener:closed_op()
+  end, {
+    name = 'listener',
+    settle_result = Settlement.require_ok('listener settlement failed'),
+  })
 end
 
 function Listener:owned(children)

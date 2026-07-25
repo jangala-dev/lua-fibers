@@ -35,12 +35,15 @@ end
 do
   local retired = 0
   local h = FibersRegion.handle('inner-owned', {
-    settle = function()
-      return Op.always(true):map(function()
-        retired = retired + 1
-        return true
-      end)
-    end,
+    settle = {
+      name = 'test-retire',
+      settle_op = function()
+        return Op.always(true):map(function()
+          retired = retired + 1
+          return true
+        end)
+      end,
+    },
     settle_name = 'test-retire',
   })
   local owner_after_inner
@@ -61,12 +64,15 @@ end
 do
   local retired = 0
   local h = FibersRegion.handle('promoted-owned', {
-    settle = function()
-      return Op.always(true):map(function()
-        retired = retired + 1
-        return true
-      end)
-    end,
+    settle = {
+      name = 'test-retire',
+      settle_op = function()
+        return Op.always(true):map(function()
+          retired = retired + 1
+          return true
+        end)
+      end,
+    },
     settle_name = 'test-retire',
   })
   local owned_by_root_after_inner

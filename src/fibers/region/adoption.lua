@@ -7,6 +7,7 @@
 -- arrays so multi-handle acquisition and rollback never depend on table order.
 
 local HostError = require('fibers.host.error')
+local Op = require('fibers.op')
 local Region = require('fibers.region')
 local Owned = require('fibers.region').Owned
 local Settlement = require('fibers.region.settlement')
@@ -44,10 +45,14 @@ function Adoption.bundle(name)
   })
   bundle._fibers_settle = Settlement.protocol({
     name = 'adoption_bundle',
-    discharge_op = function()
-      local Op = require('fibers.op')
-      local ok, err = bundle:close('scope settlement')
-      return Op.always(ok, err)
+    settle_op = function()
+      return Op.always(true):wrap(function()
+        local ok, err = bundle:close('scope settlement')
+        if not ok then
+          error(err or 'adoption bundle settlement failed', 0)
+        end
+        return true
+      end)
     end,
   })
   bundle._fibers_settle_name = 'adoption_bundle'
@@ -193,10 +198,14 @@ function Adoption.slot(name)
   })
   slot._fibers_settle = Settlement.protocol({
     name = 'adoption_slot',
-    discharge_op = function()
-      local Op = require('fibers.op')
-      local ok, err = slot:close('scope settlement')
-      return Op.always(ok, err)
+    settle_op = function()
+      return Op.always(true):wrap(function()
+        local ok, err = slot:close('scope settlement')
+        if not ok then
+          error(err or 'adoption slot settlement failed', 0)
+        end
+        return true
+      end)
     end,
   })
   slot._fibers_settle_name = 'adoption_slot'

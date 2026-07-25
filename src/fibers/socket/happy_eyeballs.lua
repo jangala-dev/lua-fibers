@@ -62,13 +62,11 @@ local function named_dial_settlement(dial)
   return Settlement.request_then_wait(function(_ctx, _record, reason)
     return dial:close_op(reason or 'scope settlement')
   end, function()
-    return dial:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'named dial settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+    return dial:closed_op()
+  end, {
+    name = 'named_dial',
+    settle_result = Settlement.require_ok('named dial settlement failed'),
+  })
 end
 
 function NamedDial:owned(children)

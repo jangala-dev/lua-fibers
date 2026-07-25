@@ -135,6 +135,88 @@ do
   assert_eq(count, 0, 'settlement should release item')
 end
 
+-- Requests traverse parents before children. Settlement traverses children before
+-- parents and reverses sibling declaration order.
+do
+  local life = FibersScope.new('ordered-settlement-life')
+  local trace = {}
+  local function protocol(name)
+    return Settlement.protocol({
+      name = name,
+      request_op = function()
+        return Op.always(true):map(function()
+          trace[#trace + 1] = 'request ' .. name
+          return true
+        end)
+      end,
+      settle_op = function()
+        return Op.always(true):map(function()
+          trace[#trace + 1] = 'settle ' .. name
+          return true
+        end)
+      end,
+    })
+  end
+  local root = FibersRegion.handle('ordered-root')
+  local a = FibersRegion.handle('ordered-a')
+  local a1 = FibersRegion.handle('ordered-a1')
+  local b = FibersRegion.handle('ordered-b')
+  fibers.run(function()
+    fibers.perform(life:admit_op(FibersRegion.Owned.tree(root, protocol('root'), {
+      FibersRegion.Owned.tree(a, protocol('a'), {
+        FibersRegion.Owned.item(a1, protocol('a1')),
+      }),
+      FibersRegion.Owned.item(b, protocol('b')),
+    })))
+    fibers.perform(Settlement.retire_item_op(life, root, 'ordered'))
+  end)
+  assert_eq(
+    table.concat(trace, ', '),
+    'request root, request a, request a1, request b, settle b, settle a1, settle a, settle root',
+    'owned-tree settlement order'
+  )
+end
+
+-- Parent settlement may depend on child settlement without deadlocking because
+-- the settlement pass runs bottom-up.
+do
+  local life = FibersScope.new('dependent-settlement-life')
+  local child_settled = false
+  local parent = FibersRegion.handle('dependent-parent')
+  local child = FibersRegion.handle('dependent-child')
+  local parent_protocol = Settlement.protocol({
+    name = 'dependent-parent',
+    request_op = function()
+      return Op.always(true)
+    end,
+    settle_op = function()
+      if not child_settled then
+        error('parent settled before child', 0)
+      end
+      return Op.always(true)
+    end,
+  })
+  local child_protocol = Settlement.protocol({
+    name = 'dependent-child',
+    request_op = function()
+      return Op.always(true)
+    end,
+    settle_op = function()
+      return Op.always(true):map(function()
+        child_settled = true
+        return true
+      end)
+    end,
+  })
+  fibers.run(function()
+    fibers.perform(life:admit_op(FibersRegion.Owned.tree(parent, parent_protocol, {
+      FibersRegion.Owned.item(child, child_protocol),
+    })))
+    fibers.perform(Settlement.retire_item_op(life, parent, 'dependent'))
+  end)
+  assert_eq(child_settled, true)
+end
+
 -- Settlement is now a tree-level state transition.  The initiating request marks
 -- the whole owned subtree as claimed before the masked settlement protocol
 -- waits and then releases the subtree atomically.
@@ -142,11 +224,14 @@ do
   local rt = FibersRuntime.new()
   local life = FibersScope.new('phase-life')
   local settled, feed = rt:signal('phase-settled')
-  local function K(_ctx, _record)
-    return settled:wait_op():map(function()
-      return true
-    end)
-  end
+  local K = Settlement.protocol({
+    name = 'phase-test',
+    settle_op = function()
+      return settled:wait_op():map(function()
+        return true
+      end)
+    end,
+  })
   local parent = FibersRegion.handle('phase-parent')
   local child = FibersRegion.handle('phase-child')
   local other = FibersScope.new('phase-other')
@@ -230,52 +315,228 @@ do
   assert_eq(final_owned_count, 0, 'claim settlement should release the subtree')
 end
 
--- Failed settlement is an observable committed ownership state, not silent
--- limbo.  The claim remains real and the item is not released.
+-- Failed settlement retains irreversible progress. Retry resumes from that
+-- progress and never replays successful requests or settled sibling records.
 do
   local rt = FibersRuntime.new()
   local life = FibersScope.new('failing-settlement-life')
-  local h = FibersRegion.handle('failing-settlement-item')
+  local root = FibersRegion.handle('failing-root')
+  local good = FibersRegion.handle('failing-good')
+  local flaky = FibersRegion.handle('failing-flaky')
+  local request_count = { root = 0, good = 0, flaky = 0 }
+  local settle_count = { root = 0, good = 0, flaky = 0 }
+  local flaky_attempt = 0
+
+  local function protocol(name, settle)
+    return Settlement.protocol({
+      name = name,
+      request_op = function()
+        return Op.always(true):map(function()
+          request_count[name] = request_count[name] + 1
+          return true
+        end)
+      end,
+      settle_op = settle or function()
+        return Op.always(true):map(function()
+          settle_count[name] = settle_count[name] + 1
+          return true
+        end)
+      end,
+    })
+  end
+
   rt:spawn_raw(function()
-    rt:perform(life:raw_region():admit_op(FibersRegion.Owned.item(h, function()
-      error('settlement boom')
-    end, { settle_name = 'failing' })))
-    rt:perform(Settlement.retire_item_op(life, h, 'retire'))
+    rt:perform(life:admit_op(FibersRegion.Owned.tree(root, protocol('root'), {
+      FibersRegion.Owned.item(good, protocol('good')),
+      FibersRegion.Owned.item(
+        flaky,
+        protocol('flaky', function()
+          flaky_attempt = flaky_attempt + 1
+          settle_count.flaky = settle_count.flaky + 1
+          if flaky_attempt == 1 then
+            error('settlement boom', 0)
+          end
+          return Op.always(true)
+        end)
+      ),
+    })))
+    rt:perform(Settlement.retire_item_op(life, root, 'retire'))
   end, 'failing-settlement-root')
 
-  local ok, err = pcall(function()
+  local ok, failure = pcall(function()
     return rt:run()
   end)
   assert_eq(ok, false, 'settlement protocol failure should fail the waiting task')
-  assert_truthy(Settlement.is_failure(err), 'settlement error should be a recovery capability')
-  assert_eq(err.item, h)
-  assert_eq(err.region, life:raw_region())
-  assert_eq(err.claim_id, err.claim.id)
-  assert_truthy(tostring(err.error):match('settlement boom'), 'original settlement error should be retained')
-  assert_truthy(tostring(err):match('settlement boom'), 'settlement error should be propagated')
-
-  local rec
-  fibers.run(function()
-    rec = fibers.perform(life:raw_region():record_op(h))
+  assert_truthy(Settlement.is_failure(failure), 'settlement error should be a recovery capability')
+  assert_truthy(tostring(failure):match('settlement boom'), 'settlement error should be propagated')
+  assert_eq(failure.retry_op ~= nil, true, 'failed settlement should expose retry authority')
+  assert_eq(failure.restore_op, nil, 'started settlement must not expose generic restoration')
+  local can_discharge_incomplete = pcall(function()
+    failure.region:discharge_claim_op(failure.claim)
   end)
-  assert_truthy(rec, 'failed settlement record should remain visible')
-  assert_eq(rec.phase, 'failed')
-  assert_eq(rec.settlement_failed, true)
-  assert_eq(rec.claim, nil, 'public records must not expose recovery authority')
-  assert_eq(rec.claim_id, err.claim_id, 'diagnostic claim id should match the capability')
-  assert_truthy(
-    tostring(rec.settlement_error_message or ''):match('settlement boom'),
-    'record should expose failure message'
+  assert_eq(
+    can_discharge_incomplete,
+    false,
+    'an incomplete settlement claim must not be erased through the low-level Region API'
   )
-  local failed_count
+
+  local records = {}
   fibers.run(function()
-    failed_count = fibers.perform(life:inspect_op()).owned_count
-    fibers.perform(err:restore_op())
-    rec = fibers.perform(life:raw_region():record_op(h))
+    records.root = fibers.perform(life:record_op(root))
+    records.good = fibers.perform(life:record_op(good))
+    records.flaky = fibers.perform(life:record_op(flaky))
   end)
-  assert_eq(failed_count, 1, 'failed settlement should not release ownership')
-  assert_eq(rec.phase, 'live', 'the returned capability should restore the unresolved claim')
-  assert_eq(rec.settlement_failed, nil)
+  assert_eq(records.root.phase, 'failed')
+  assert_eq(records.root.settlement_state, 'blocked_by_descendant')
+  assert_eq(records.good.settlement_state, 'settled')
+  assert_eq(records.good.settlement_failed, false)
+  assert_eq(records.flaky.settlement_state, 'settlement_failed')
+  assert_eq(request_count.root, 1)
+  assert_eq(request_count.good, 1)
+  assert_eq(request_count.flaky, 1)
+  assert_eq(settle_count.root, 0, 'unresolved child must block parent settlement')
+  assert_eq(settle_count.good, 1)
+  assert_eq(settle_count.flaky, 1)
+
+  fibers.run(function()
+    fibers.perform(failure:retry_op())
+  end)
+  assert_eq(request_count.root, 1, 'successful request must not replay during retry')
+  assert_eq(request_count.good, 1, 'settled sibling request must not replay during retry')
+  assert_eq(request_count.flaky, 1, 'successful flaky request must not replay during retry')
+  assert_eq(settle_count.good, 1, 'settled sibling must not settle twice')
+  assert_eq(settle_count.flaky, 2, 'failed record should retry settlement')
+  assert_eq(settle_count.root, 1, 'parent should settle after all children')
+  assert_eq(root.owner, nil, 'successful retry should discharge the complete tree')
+end
+
+-- Retrying a failed claim resumes its public phase to claimed before
+-- protocol work, preserving ordinary settlement authority checks.
+do
+  local rt = FibersRuntime.new()
+  local life = FibersScope.new('retry-authority-life')
+  local item = FibersRegion.handle('retry-authority-item')
+  local attempts = 0
+  local observed_phases = {}
+  local protocol = Settlement.protocol({
+    name = 'retry-authority',
+    settle_op = function(ctx, record)
+      return ctx:authorise_op(record.item, 'use')
+    end,
+    settle_result = function(authorised_item, authority)
+      attempts = attempts + 1
+      observed_phases[#observed_phases + 1] = authority and authority.kind or nil
+      if authorised_item ~= item or not authority then
+        error('settlement authority unavailable during retry', 0)
+      end
+      if attempts == 1 then
+        error('retry authority test', 0)
+      end
+      return true
+    end,
+  })
+  rt:spawn_raw(function()
+    rt:perform(life:admit_op(FibersRegion.Owned.item(item, protocol)))
+    rt:perform(Settlement.retire_item_op(life, item, 'retry-authority'))
+  end, 'retry-authority-root')
+
+  local ok, failure = pcall(function()
+    return rt:run()
+  end)
+  assert_eq(ok, false)
+  assert_truthy(Settlement.is_failure(failure))
+  fibers.run(function()
+    fibers.perform(failure:retry_op())
+  end)
+  assert_eq(attempts, 2)
+  assert_eq(observed_phases[1], 'settlement')
+  assert_eq(observed_phases[2], 'settlement')
+  assert_eq(item.owner, nil)
+  local stale_retry = pcall(function()
+    failure:retry_op()
+  end)
+  assert_eq(stale_retry, false, 'completed recovery capability should not be reusable')
+end
+
+-- Force escalation runs top-down, then observes final settlement bottom-up.
+do
+  local rt = FibersRuntime.new()
+  local life = FibersScope.new('force-settlement-life')
+  local root = FibersRegion.handle('force-root')
+  local a = FibersRegion.handle('force-a')
+  local b = FibersRegion.handle('force-b')
+  local trace = {}
+  local function protocol(name)
+    return Settlement.protocol({
+      name = name,
+      request_op = function()
+        error('ordinary request failed for ' .. name, 0)
+      end,
+      force_op = function()
+        return Op.always(true):map(function()
+          trace[#trace + 1] = 'force ' .. name
+          return true
+        end)
+      end,
+      settle_op = function()
+        return Op.always(true):map(function()
+          trace[#trace + 1] = 'settle ' .. name
+          return true
+        end)
+      end,
+    })
+  end
+  local failure
+  rt:spawn_raw(function()
+    rt:perform(life:admit_op(FibersRegion.Owned.tree(root, protocol('root'), {
+      FibersRegion.Owned.item(a, protocol('a')),
+      FibersRegion.Owned.item(b, protocol('b')),
+    })))
+    rt:perform(Settlement.retire_item_op(life, root, 'force'))
+  end, 'force-settlement-root')
+  local ok, err = pcall(function()
+    return rt:run()
+  end)
+  assert_eq(ok, false)
+  failure = err
+  assert_truthy(Settlement.is_failure(failure))
+  fibers.run(function()
+    fibers.perform(failure:force_op())
+  end)
+  assert_eq(
+    table.concat(trace, ', '),
+    'force root, force a, force b, settle b, settle a, settle root',
+    'force and settlement ordering'
+  )
+end
+
+-- Independent roots unwind in reverse admission order. Their internal trees
+-- retain the separate top-down request and bottom-up settlement law.
+do
+  local trace = {}
+  local function root(name)
+    return FibersRegion.handle('root-order-' .. name, {
+      settle = Settlement.protocol({
+        name = 'root-order-' .. name,
+        settle_op = function()
+          return Op.always(true):map(function()
+            trace[#trace + 1] = name
+            return true
+          end)
+        end,
+      }),
+      settle_name = 'root-order-' .. name,
+    })
+  end
+  local a, b, c = root('a'), root('b'), root('c')
+  fibers.run(function()
+    fibers.scope(function(scope)
+      fibers.perform(scope:admit_op(a))
+      fibers.perform(scope:admit_op(b))
+      fibers.perform(scope:admit_op(c))
+    end)
+  end)
+  assert_eq(table.concat(trace, ', '), 'c, b, a', 'independent roots should unwind as a stack')
 end
 
 print('tests/test_settlement_structure.lua: ok')

@@ -13,12 +13,6 @@ local Settlement = require('fibers.region.settlement')
 local next_handle = 0
 local OwnershipKind = { name = 'ownership' }
 
-local function no_settlement()
-  return function()
-    return require('fibers.op').always(true)
-  end
-end
-
 local function ownership_handle(name, fields)
   next_handle = next_handle + 1
   local id = 'owned-' .. tostring(next_handle)
@@ -29,7 +23,7 @@ local function ownership_handle(name, fields)
   h._fibers_id = h._fibers_id or id
   h._fibers_kind = OwnershipKind
   h._fibers_obligation_kind = h._fibers_obligation_kind or h.kind
-  h._fibers_settle = h._fibers_settle or h.settle or no_settlement()
+  h._fibers_settle = Settlement.normalize(h._fibers_settle or h.settle, 'owned handle settlement')
   h._fibers_settle_name = h._fibers_settle_name or h.settle_name or 'none'
   return h
 end
@@ -48,6 +42,9 @@ function Claim.new(region, root, records, purpose)
     records = records,
     purpose = purpose,
     reason = type(purpose) == 'table' and purpose.reason or nil,
+    started = false,
+    running = false,
+    complete = false,
   }
 end
 
@@ -101,6 +98,12 @@ local function copy_record(r, public)
     settlement_error = r.settlement_error,
     settlement_error_message = r.settlement_error_message,
     settlement_failed = r.settlement_failed,
+    settlement_state = r.settlement_state,
+    settlement_request_state = r.settlement_request_state,
+    settlement_force_state = r.settlement_force_state,
+    settlement_request_error = r.settlement_request_error,
+    settlement_force_error = r.settlement_force_error,
+    admission_order = r.admission_order,
     rights = r.rights,
     meta = r.meta,
   }
@@ -202,6 +205,7 @@ local function copy_region_state(rs, region)
       sealed = region and region.sealed == true or false,
       version = region and region.version or 0,
       count = 0,
+      next_admission = 0,
       records = pmap(nil),
       order = nil,
       seen = pmap(nil),
@@ -212,6 +216,7 @@ local function copy_region_state(rs, region)
       sealed = rs.sealed == true,
       version = rs.version or 0,
       count = 0,
+      next_admission = rs.next_admission or 0,
       records = pmap(nil),
       order = nil,
       seen = pmap(nil),
@@ -225,6 +230,7 @@ local function copy_region_state(rs, region)
       sealed = rs.sealed == true,
       version = rs.version or 0,
       count = rs.count or 0,
+      next_admission = rs.next_admission or 0,
       records = pmap(records),
       order = order,
       seen = pmap(seen),
@@ -234,6 +240,7 @@ local function copy_region_state(rs, region)
     sealed = rs.sealed == true,
     version = rs.version or 0,
     count = rs.count or 0,
+    next_admission = rs.next_admission or 0,
     records = pmap(rs.records),
     order = rs.order,
     seen = pmap(rs.seen),
@@ -341,6 +348,7 @@ local function region_state(s, region)
       sealed = region.sealed == true,
       version = region.version or 0,
       count = 0,
+      next_admission = 0,
       records = pmap(nil),
       order = nil,
       seen = pmap(nil),
@@ -444,15 +452,24 @@ local function subtree_list(records, root, public)
 end
 
 local function sorted_items(region_state_value, roots_only)
-  local out = {}
+  local rows = {}
   each_record(region_state_value, function(item, rec)
     if not roots_only or rec.parent == nil then
-      out[#out + 1] = item
+      rows[#rows + 1] = { item = item, admission_order = rec.admission_order or 0 }
     end
   end)
-  table.sort(out, function(a, b)
-    return tostring(a._fibers_id or a.name or a) < tostring(b._fibers_id or b.name or b)
+  table.sort(rows, function(a, b)
+    if roots_only and a.admission_order ~= b.admission_order then
+      -- Scope retirement unwinds independent roots in reverse admission order.
+      return a.admission_order > b.admission_order
+    end
+    return tostring(a.item._fibers_id or a.item.name or a.item)
+      < tostring(b.item._fibers_id or b.item.name or b.item)
   end)
+  local out = {}
+  for i = 1, #rows do
+    out[i] = rows[i].item
+  end
   return out
 end
 
@@ -627,8 +644,14 @@ function Region:admit_op(item_or_owned, from_owner)
   end, function(s)
     local ns = clone_ledger(s)
     local rs = ensure_region(ns, self)
+    rs.next_admission = (rs.next_admission or 0) + 1
+    local admission_order = rs.next_admission
     for item, rec in pairs(records) do
-      record_set(ns, self, rs, item, copy_record(rec, false))
+      local nr = copy_record(rec, false)
+      if item == root then
+        nr.admission_order = admission_order
+      end
+      record_set(ns, self, rs, item, nr)
       owner_set(ns, item, self)
     end
     bump(rs)
@@ -696,9 +719,15 @@ function Region:move_op(item, to_region)
     local ns = clone_ledger(s)
     local from, to = ensure_region(ns, self), ensure_region(ns, to_region)
     local subtree = collect_subtree(from.records, item)
+    to.next_admission = (to.next_admission or 0) + 1
+    local admission_order = to.next_admission
     for child, rec in pairs(subtree) do
       record_set(ns, self, from, child, nil)
-      record_set(ns, to_region, to, child, copy_record(rec, false))
+      local nr = copy_record(rec, false)
+      if child == item then
+        nr.admission_order = admission_order
+      end
+      record_set(ns, to_region, to, child, nr)
       owner_set(ns, child, to_region)
     end
     bump(from)
@@ -771,6 +800,16 @@ end
 
 function Region:resolve_op(claim, resolution)
   resolution = resolution or { kind = 'discharge' }
+  local requested_kind = resolution.kind or resolution
+  if requested_kind == 'restore' and Claim.is(claim) and claim.started then
+    error('a settlement claim cannot be restored after settlement has begun', 2)
+  end
+  if requested_kind == 'discharge' and Claim.is(claim) and claim.started and not claim.complete then
+    error('an incomplete settlement claim cannot be discharged', 2)
+  end
+  if requested_kind == 'resume' and (not Claim.is(claim) or not claim.started or claim.complete) then
+    error('only an incomplete started settlement claim can be resumed', 2)
+  end
   local t = select_transition('region.resolve_claim', function(s)
     return valid_claim(s, self, claim) ~= nil
   end, function(s)
@@ -783,6 +822,15 @@ function Region:resolve_op(claim, resolution)
         record_set(ns, self, rs, child, nil)
         owner_set(ns, child, nil)
       end
+    elseif kind == 'resume' then
+      for child, rec in pairs(subtree) do
+        local nr = copy_record(rec, false)
+        nr.phase = Phase.claimed
+        nr.settlement_failed = nil
+        nr.settlement_error = nil
+        nr.settlement_error_message = nil
+        record_set(ns, self, rs, child, nr)
+      end
     elseif kind == 'restore' then
       for child, rec in pairs(subtree) do
         local nr = copy_record(rec, false)
@@ -794,15 +842,37 @@ function Region:resolve_op(claim, resolution)
         nr.settlement_failed = nil
         nr.settlement_error = nil
         nr.settlement_error_message = nil
+        nr.settlement_state = nil
+        nr.settlement_request_state = nil
+        nr.settlement_force_state = nil
+        nr.settlement_request_error = nil
+        nr.settlement_force_error = nil
         record_set(ns, self, rs, child, nr)
       end
     elseif kind == 'fail' then
+      local progress_by_item = {}
+      for i = 1, #(resolution.progress or {}) do
+        local entry = resolution.progress[i]
+        progress_by_item[entry.item] = entry
+      end
+      local first_error = resolution.error
+      if first_error == nil and resolution.failures and resolution.failures[1] then
+        first_error = resolution.failures[1].error
+      end
       for child, rec in pairs(subtree) do
         local nr = copy_record(rec, false)
+        local progress = progress_by_item[child]
         nr.phase = Phase.failed
-        nr.settlement_failed = true
-        nr.settlement_error = resolution.error
-        nr.settlement_error_message = tostring(resolution.error)
+        nr.settlement_state = progress and progress.state or 'failed'
+        nr.settlement_request_state = progress and progress.request_state or nil
+        nr.settlement_force_state = progress and progress.force_state or nil
+        nr.settlement_request_error = progress and progress.request_error or nil
+        nr.settlement_force_error = progress and progress.force_error or nil
+        nr.settlement_failed = not progress or progress.settlement_state ~= 'succeeded'
+        nr.settlement_error = progress
+            and (progress.settlement_error or progress.request_error or progress.force_error)
+          or first_error
+        nr.settlement_error_message = nr.settlement_error and tostring(nr.settlement_error) or nil
         record_set(ns, self, rs, child, nr)
       end
     else

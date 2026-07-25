@@ -192,13 +192,11 @@ local function datagram_settlement(socket)
   return Settlement.request_then_wait(function(_ctx, _record, reason)
     return socket:close_op(reason or 'scope settlement')
   end, function()
-    return socket:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'datagram settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+    return socket:closed_op()
+  end, {
+    name = 'datagram_socket',
+    settle_result = Settlement.require_ok('datagram settlement failed'),
+  })
 end
 
 function Datagram:owned(children)

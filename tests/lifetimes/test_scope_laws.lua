@@ -99,8 +99,17 @@ do
   assert_eq(owner_after, nil, 'resolve discharge should release owner')
 end
 
--- Settlement protocol tables are normalised and remain backwards-compatible
--- with existing function protocols.
+-- Settlement protocols use the explicit request/settle table contract.
+-- Function finalisers are deliberately not accepted.
+do
+  local rejected = pcall(function()
+    FibersRegion.Owned.item(FibersRegion.handle('function-protocol-rejected'), function()
+      return Op.always(true)
+    end)
+  end)
+  assert_eq(rejected, false, 'function settlement protocols should be rejected')
+end
+
 do
   local life = FibersScope.new('protocol-law')
   local h = FibersRegion.handle('protocol-law-owned')
@@ -108,7 +117,7 @@ do
   fibers.run(function()
     fibers.perform(life:admit_op(FibersRegion.Owned.item(h, {
       name = 'table-protocol',
-      discharge_op = function()
+      settle_op = function()
         return Op.always(true):map(function()
           discharged = true
           return true
@@ -117,7 +126,7 @@ do
     })))
     fibers.perform(Settlement.retire_item_op(life, h))
   end)
-  assert_eq(discharged, true, 'protocol table discharge_op should run during settlement')
+  assert_eq(discharged, true, 'protocol table settle_op should run during settlement')
 end
 
 -- Ambient scope usage is restored after nested scopes and errors.

@@ -114,7 +114,7 @@ function Borrow.new(grantor_scope, borrower_scope, subject, rights, opts)
     meta = opts.meta,
     settle = Settlement.protocol({
       name = 'borrow',
-      discharge_op = function(_ctx, record)
+      settle_op = function(_ctx, record)
         return release_all_op(record.item)
       end,
     }),

@@ -583,8 +583,9 @@ repeated socket churn.
 Newly acquired handles are covered by pre-admitted adoption records before any
 fibre can yield. Accepted and dialled Streams remain in driver scopes until a
 caller commits their custody transfer. Listener and Dial drivers are structural children of their resource roots.
-Resource settlement therefore cancels and joins them before releasing the root,
-while readiness and bounded-queue waits remain cancellable.
+Resource settlement requests root shutdown before requesting its children, then
+joins and settles those children before completing and discharging the root.
+Readiness and bounded-queue waits remain cancellable.
 
 The deterministic `ManualHost` implements pipes, virtual sockets and resolver
 records for tests, examples and embedding work. Native pipes are available in

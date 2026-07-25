@@ -143,10 +143,11 @@ A Region stores records containing fields such as:
 ```text
 item
 role
-parent and children
-settlement function and name
-phase
-claim metadata
+parent and ordered children
+settlement protocol and name
+admission order for roots
+phase and claim metadata
+settlement request, force and completion progress
 settlement failure information
 ```
 
@@ -155,11 +156,11 @@ The relevant lifecycle is:
 ```text
 live      available for movement or claim
 claimed   exclusively held by a claim capability
-failed    settlement failed and custody remains observable
+failed    settlement is incomplete and custody remains observable
 absent    discharged or moved out of the Region
 ```
 
-A live item has at most one owner.
+A live item has at most one owner. Child order is semantic: children are declared in ownership or acquisition order and settle in the reverse order. Independent roots are retired in reverse admission order.
 
 The low-level Region surface includes:
 
@@ -186,6 +187,8 @@ region:snapshot_op()
 region:live_op(item)
 region:authorise_op(item, right, opts)
 ```
+
+`restore_claim_op` and manual `discharge_claim_op` apply to pristine low-level claims. Once settlement has begun, a claim cannot be restored, and it cannot be discharged until the settlement driver has recorded every member as settled.
 
 A bare Region records ownership truth. It does not itself know how to interrupt a task, flush a stream or close a host handle. Those behaviours are supplied by settlement protocols and scope policy.
 
@@ -222,15 +225,16 @@ Authority enforcement is currently strongest at explicit endpoint and ownership 
 
 ## Claims
 
-A claim is a fresh capability object tied to one Region, one root and its complete owned subtree.
+A claim is a fresh capability object tied to one Region, one root and its complete ordered owned subtree.
 
 Claim creation:
 
 ```text
 verify live root
-compute subtree closure
+compute subtree closure in pre-order
 verify every member is live
 create fresh claim capability
+freeze the claimed topology
 mark every member claimed
 ```
 
@@ -241,45 +245,147 @@ While claimed, the subtree cannot be moved, released or claimed again.
 Resolution kinds are:
 
 ```text
-discharge   remove custody after successful settlement
-fail        retain custody in failed phase with error information
-restore     return the subtree to live custody
+discharge   remove custody after complete successful settlement
+fail        retain custody and settlement progress in failed phase
+restore     return a pristine, unstarted claim to live custody
 ```
+
+Restoration is not rollback of external cleanup. After any request, force or settlement step has begun, generic restoration is forbidden.
 
 ## Settlement protocol
 
 Settlement starts only after the claim commits:
 
 ```text
-transaction: claim subtree
-post-commit participant work: run settlement option
-transaction: resolve claim
+transaction: claim and freeze subtree
+post-commit: request quiescence from roots towards leaves
+post-commit: settle from leaves towards roots
+transaction: discharge the complete claim
 ```
 
 Settlement may perform further options and may wait. It is not speculative cleanup inside a state transition.
 
-A custom owned value can be constructed with:
+A protocol is an explicit table:
 
 ```lua
-local owned = Region.Owned.item(camera_handle, function(ctx, record, claim)
-  return camera_handle:release_op(claim.reason)
-end, {
+local Settlement = require('fibers.region.settlement')
+
+local camera_protocol = Settlement.protocol({
+  name = 'camera-control',
+
+  request_op = function(ctx, record, claim)
+    -- Initiate quiescence. This step must not wait for descendants to settle.
+    return record.item:request_release_op(claim.reason)
+  end,
+
+  settle_op = function(ctx, record, claim)
+    -- Complete or observe final settlement after every child has settled.
+    return record.item:released_op()
+  end,
+
+  force_op = function(ctx, record, claim)
+    -- Optional policy-driven destructive escalation.
+    return record.item:force_release_op(claim.reason)
+  end,
+
+  settle_result = Settlement.require_ok('camera settlement failed'),
+})
+
+local owned = Region.Owned.item(camera_handle, camera_protocol, {
   role = 'camera-control',
-  settle_name = 'release-camera',
+  settle_name = 'camera-control',
 })
 
 fibers.perform(scope:admit_op(owned))
 ```
 
-The settlement callback returns an `Op`. Merely constructing that option must not perform irreversible cleanup.
+`request_op`, `settle_op` and `force_op` construct `Op` values. Merely constructing those options must not perform irreversible cleanup. Synchronous construction errors and errors raised by result validators become settlement failures.
+
+`settle_op` is mandatory. `request_op` and `force_op` are optional. A missing request is treated as immediately requested. `Settlement.request_then_wait` constructs the common two-phase form without merging the phases.
+
+Operations which conventionally return `nil, err` should supply a result validator such as `Settlement.require_ok(...)`; arbitrary return values are otherwise treated as successful completion of the step.
 
 Use `Region.Owned.tree` for an item with explicit owned children and `Region.Owned.inert` when no settlement work is required.
+
+## Ordered settlement
+
+A claim records its subtree in pre-order. Normal settlement uses two structural passes:
+
+```text
+request pass       pre-order
+                   parent before children
+                   siblings in declaration order
+
+settlement pass    reverse pre-order
+                   children before parent
+                   siblings in reverse declaration order
+
+ledger discharge   complete subtree removed atomically
+```
+
+For:
+
+```text
+root
+├── a
+│   └── a1
+└── b
+```
+
+the order is:
+
+```text
+request root
+request a
+request a1
+request b
+settle b
+settle a1
+settle a
+settle root
+```
+
+The request pass stops admission, propagates cancellation or initiates shutdown before descendants are joined. The settlement pass keeps parent infrastructure available until its descendants have finished.
+
+A `request_op` may wait for acknowledgement that shutdown was accepted, but must not wait for descendant settlement. Such waiting belongs in `settle_op`.
+
+A record is eligible for settlement only after all its direct children have settled. A failure in one branch does not prevent request or settlement attempts in an independent sibling branch. An ancestor remains unresolved while any descendant remains unresolved.
+
+Independent roots have no cross-root transaction. Scope policy retires them sequentially in reverse admission order. A root moved into another Region receives a new admission position there; the order within its subtree is preserved.
+
+### Aggregate protocols
+
+One external obligation should have one principal settlement protocol. A parent may settle a facility as an aggregate, in which case structural child records should normally be inert. Parent and child protocols must not both perform the same irreversible close unless that operation is explicitly idempotent.
+
+### Force escalation
+
+Force is policy-driven rather than an automatic consequence of cancellation:
+
+```text
+force unresolved records in pre-order
+then repeat settlement in reverse pre-order
+```
+
+Top-down force permits a parent process, transport or worker to be destroyed when that is required to unblock descendants. Bottom-up settlement still records what actually ended.
 
 ## Failed settlement remains custody truth
 
 A settlement failure occurs after the claim has committed. It cannot be rolled back as though the claim never existed.
 
-The record remains owned in failed phase with diagnostic fields including the settlement error. Ordinary movement, release and duplicate claim remain blocked until policy explicitly restores or otherwise resolves it.
+The claim retains a progress entry for each record. Public progress states include:
+
+```text
+not_requested
+requested
+forced
+settled
+request_failed
+force_failed
+settlement_failed
+blocked_by_descendant
+```
+
+Already-settled records remain accounted as settled within the failed claim. They do not become live again and are not repeated by a retry.
 
 A failing settlement protocol produces a `Settlement.Failure` value. Direct settlement raises it; checked scope boundaries retain it in their result and report. It is both a structured error and the exclusive recovery capability for the unresolved claim:
 
@@ -293,15 +399,20 @@ end)
 local failure = result.settlement_failure
 if failure and Settlement.is_failure(failure) then
   print(failure.item, failure.error)
-  fibers.perform(failure:restore_op())
+
+  -- Resume ordinary settlement from retained progress.
+  fibers.perform(failure:retry_op())
+
+  -- Or, where policy permits destructive escalation:
+  -- fibers.perform(failure:force_op())
 end
 ```
 
-A failure exposes `item`, `region`, `claim`, `claim_id`, `purpose`, `reason`, `records` and the original `error`. It provides `resolve_op`, `restore_op` and `discharge_op`. The claim is intentionally absent from ordinary public Region records; possession of the failure value is what confers recovery authority. Checked scope results expose `settlement_failure` and `settlement_failures`, and their reports retain the same list.
+A failure exposes `item`, `region`, `claim`, `claim_id`, `purpose`, `reason`, `records`, `progress`, `failures` and the first `error`. It provides `retry_op` and `force_op`. It does not provide restoration or arbitrary discharge authority.
 
 Central rule:
 
-> Failed settlement is an unresolved obligation, not an exception erased during unwinding.
+> Failed settlement is an unresolved owned obligation with retained irreversible progress, not an exception erased during unwinding.
 
 ## Scope policy
 
@@ -372,10 +483,16 @@ Exclusive claim
   A claimed subtree cannot be moved, released or claimed again.
 
 Explicit resolution
-  A claim ends only through discharge, failure or restoration.
+  A pristine claim may be restored or manually discharged. A started settlement claim is discharged only after complete settlement, or retained as failed.
+
+Ordered quiescence
+  Settlement requests run parent-first; settlement completion runs child-first.
+
+Progress retention
+  Successful irreversible progress remains represented after a later failure and is skipped by retry.
 
 Failure retention
-  Failed settlement remains represented in the ledger.
+  Failed settlement remains represented in the ledger with exclusive recovery authority.
 
 Borrow separation
   Borrowing changes authority, not custody.

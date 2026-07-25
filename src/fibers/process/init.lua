@@ -113,13 +113,11 @@ local function process_settlement(proc)
   return Settlement.request_then_wait(function(_ctx, _record, reason)
     return proc:request_close_op(reason or 'scope settlement')
   end, function()
-    return proc:closed_op():and_then(function(ok, err)
-      if not ok then
-        error(err or 'process settlement failed', 0)
-      end
-      return Op.always(true)
-    end)
-  end)
+    return proc:closed_op()
+  end, {
+    name = 'process',
+    settle_result = Settlement.require_ok('process settlement failed'),
+  })
 end
 
 function Process:owned(children)

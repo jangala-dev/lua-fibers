@@ -103,9 +103,12 @@ do
   local r = fibers.try_run(function()
     fibers.scope(function(scope)
       local h = FibersRegion.handle('failing-settle')
-      fibers.perform(scope:raw_region():admit_op(FibersRegion.Owned.item(h, function()
-        error('settlement failed', 0)
-      end, { settle_name = 'fail' })))
+      fibers.perform(scope:raw_region():admit_op(FibersRegion.Owned.item(h, {
+        name = 'fail',
+        settle_op = function()
+          error('settlement failed', 0)
+        end,
+      }, { settle_name = 'fail' })))
       return 'body-value'
     end)
   end)

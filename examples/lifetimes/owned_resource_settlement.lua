@@ -15,8 +15,9 @@ package.path = table.concat({
 --
 -- Ordinary code should normally use facilities such as Scope, Task and
 -- Stream.  Resource authors can admit an Owned value with an Op-valued
--- settlement protocol.  Retirement claims the item, runs that protocol, then
--- releases the ownership record.
+-- settlement protocol. Retirement claims the item, requests quiescence,
+-- settles from descendants towards ancestors, then discharges the ownership
+-- record. This single-item example only needs a settle phase.
 
 local fibers = require('fibers')
 local Scalar = require('fibers.resource.scalar')
@@ -31,17 +32,24 @@ local scope = Scope.new('owned-resource-example')
 local closed = Scalar.new(false, 'demo-handle-closed')
 local handle = Region.handle('demo-handle')
 
-local owned = Owned.item(handle, function(_ctx, record, claim)
-  return closed:write_op({
-    closed = true,
-    item = record.item,
-    claim_id = claim.id,
-    reason = claim.reason,
-  })
-end, {
-  role = 'demo-handle',
-  settle_name = 'demo-close',
-})
+local owned = Owned.item(
+  handle,
+  Settlement.protocol({
+    name = 'demo-close',
+    settle_op = function(_ctx, record, claim)
+      return closed:write_op({
+        closed = true,
+        item = record.item,
+        claim_id = claim.id,
+        reason = claim.reason,
+      })
+    end,
+  }),
+  {
+    role = 'demo-handle',
+    settle_name = 'demo-close',
+  }
+)
 
 local settled
 local st = fibers.try_run(function()

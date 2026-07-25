@@ -558,12 +558,15 @@ Principal laws:
 ```text
 a live owned root has at most one owner
 movement leaves one owner and enters the other in one commit
-a claim grants exclusive settlement authority over its subtree
+a claim freezes its complete ordered subtree and grants exclusive settlement authority
+normal requests run parent-first and settlement completion runs child-first
+successful settlement progress is retained across later failure and retry
+started settlement claims cannot be generically restored or incompletely discharged
 failed settlement remains represented in the ledger
 scope completion requires policy accounting for retained roots
 ```
 
-Settlement protocols run after a claim commits and may themselves perform options.
+Settlement protocols run after a claim commits and may themselves perform options. They expose separate `request_op`, `settle_op` and optional `force_op` phases; they are not ordinary function finalisers.
 
 ## 18. Host boundary
 

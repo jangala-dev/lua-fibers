@@ -28,7 +28,10 @@ local function query_settlement(query)
     return query:close_op(reason or 'resolver query settlement')
   end, function()
     return query:closed_op()
-  end)
+  end, {
+    name = 'resolver_query',
+    settle_result = Settlement.require_ok('resolver query settlement failed'),
+  })
 end
 
 function Query:owned(children)

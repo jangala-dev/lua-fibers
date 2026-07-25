@@ -55,9 +55,12 @@ do
   rt:spawn_raw(function()
     scope:run(function(s)
       local h = FibersRegion.handle('compound-failure-owned')
-      fibers.perform(s:raw_region():admit_op(FibersRegion.Owned.item(h, function()
-        error('settlement boom')
-      end, { settle_name = 'boom' })))
+      fibers.perform(s:raw_region():admit_op(FibersRegion.Owned.item(h, {
+        name = 'boom',
+        settle_op = function()
+          error('settlement boom')
+        end,
+      }, { settle_name = 'boom' })))
       error('body boom')
     end)
   end, 'compound-failure-root', scope)
@@ -162,11 +165,14 @@ do
   local state
   rt:spawn_raw(function()
     scope:run(function(s)
-      rt:perform(s:raw_region():admit_op(FibersRegion.Owned.item(h, function()
-        return settled:wait_op():map(function()
-          return true
-        end)
-      end, { settle_name = 'wait' })))
+      rt:perform(s:raw_region():admit_op(FibersRegion.Owned.item(h, {
+        name = 'wait',
+        settle_op = function()
+          return settled:wait_op():map(function()
+            return true
+          end)
+        end,
+      }, { settle_name = 'wait' })))
     end)
   end, 'hardening-settling-root', scope)
 
