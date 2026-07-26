@@ -1073,10 +1073,57 @@ local function test_choice_seed_replays_unordered_selection()
 end
 
 local function test_choice_rejects_sparse_or_named_tables()
-  local ok = pcall(function()
+  local ok_named = pcall(function()
     Op.choice({ left = Op.always('bad') })
   end)
-  assert_eq(ok, false, 'plain choice should not accept named maps')
+  assert_eq(ok_named, false, 'plain choice should not accept named maps')
+
+  local ok_sparse = pcall(function()
+    Op.choice({ [1] = Op.always('first'), [3] = Op.always('third') })
+  end)
+  assert_eq(ok_sparse, false, 'plain choice should not accept sparse arrays')
+end
+
+local function test_all_and_tensor_require_dense_arrays_of_ops()
+  local constructors = {
+    { name = 'all', fn = Op.all },
+    { name = 'tensor', fn = Op.tensor },
+  }
+  local invalid = {
+    { value = 'not-an-array', description = 'a non-table value' },
+    { value = { left = Op.always('bad') }, description = 'a named map' },
+    {
+      value = { [1] = Op.always('first'), [3] = Op.always('third') },
+      description = 'a sparse array',
+    },
+    { value = { Op.always('good'), 'bad' }, description = 'a non-Op lane' },
+  }
+
+  for i = 1, #constructors do
+    local constructor = constructors[i]
+    for j = 1, #invalid do
+      local case = invalid[j]
+      local ok, err = pcall(constructor.fn, case.value)
+      assert_eq(ok, false, constructor.name .. ' should reject ' .. case.description)
+      assert_truthy(
+        tostring(err):find(constructor.name .. ' expects a dense array of Op values', 1, true),
+        constructor.name .. ' should report its dense Op-array contract'
+      )
+    end
+  end
+end
+
+local function test_all_and_tensor_copy_their_validated_lanes()
+  local all_lanes = { Op.always('a'), Op.always('b') }
+  local tensor_lanes = { Op.always('x'), Op.always('y') }
+  local all_op = Op.all(all_lanes)
+  local tensor_op = Op.tensor(tensor_lanes)
+
+  all_lanes[1] = 'mutated'
+  tensor_lanes[2] = 'mutated'
+
+  assert_truthy(Op.is_op(all_op.lanes[1]), 'all should retain its validated lane copy')
+  assert_truthy(Op.is_op(tensor_op.lanes[2]), 'tensor should retain its validated lane copy')
 end
 
 local function test_named_choice_tags_the_winning_branch()
@@ -1110,6 +1157,8 @@ local tests = {
   test_choice_normalises_nested_lists_and_choice_nodes,
   test_choice_seed_replays_unordered_selection,
   test_choice_rejects_sparse_or_named_tables,
+  test_all_and_tensor_require_dense_arrays_of_ops,
+  test_all_and_tensor_copy_their_validated_lanes,
   test_named_choice_tags_the_winning_branch,
   test_named_all_returns_record_values_and_raw_rows,
   test_canonical_algebra_vocabulary,

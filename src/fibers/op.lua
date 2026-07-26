@@ -54,13 +54,18 @@ local function is_dense_array(x)
   if type(x) ~= 'table' then
     return false
   end
-  local n = #x
-  for k in pairs(x) do
-    if type(k) ~= 'number' or k < 1 or k > n or k ~= math.floor(k) then
+
+  local count, highest = 0, 0
+  for k in next, x do
+    if type(k) ~= 'number' or k < 1 or k ~= math.floor(k) then
       return false
     end
+    count = count + 1
+    if k > highest then
+      highest = k
+    end
   end
-  return true
+  return highest == count
 end
 
 local function append_choice_arg(out, x, level)
@@ -347,15 +352,26 @@ function Op.named_choice(entries)
 end
 
 local function product(xs, mode, label)
-  if type(xs) ~= 'table' then
-    error(label .. ' expects an array of Op values', 3)
+  local message = label .. ' expects a dense array of Op values'
+  if not is_dense_array(xs) then
+    error(message, 3)
   end
-  if #xs == 0 then
+
+  local lanes = {}
+  for i = 1, #xs do
+    local lane = xs[i]
+    if not is_op(lane) then
+      error(message, 3)
+    end
+    lanes[i] = lane
+  end
+
+  if #lanes == 0 then
     return Op.always(empty_rows())
   end
-  local node = op('product', { lanes = xs, mode = mode })
-  for i = 1, #xs do
-    if xs[i]._contains_or_else == true then
+  local node = op('product', { lanes = lanes, mode = mode })
+  for i = 1, #lanes do
+    if lanes[i]._contains_or_else == true then
       node._contains_or_else = true
       break
     end
