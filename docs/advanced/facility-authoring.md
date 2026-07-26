@@ -7,12 +7,15 @@ Most extensions should be ordinary Lua modules which compose supported options a
 A facility normally:
 
 1. owns one or more supported resources;
-2. exposes methods ending in `_op`;
-3. returns inert options without calling `perform` internally;
-4. uses `all`, `tensor`, `choice`, sequencing and mapping to state its laws;
-5. leaves fibre and lifetime structure to callers unless custody is intrinsic to the facility.
+2. exposes methods ending in `_op` which construct composable options;
+3. mirrors its principal `_op` methods with plain direct methods which perform
+   those options;
+4. keeps the option construction path inert and does not call `perform` inside an `_op` method;
+5. uses `all`, `tensor`, `choice`, sequencing and mapping to state its laws;
+6. leaves fibre and lifetime structure to callers unless custody is intrinsic to the facility.
 
 ```lua
+local fibers = require('fibers')
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
 
@@ -34,11 +37,28 @@ function Latch:wait_op()
   end
   return loop()
 end
+
+function Latch:wait()
+  return fibers.perform(self:wait_op())
+end
 ```
 
 ## Naming
 
-Use `_op` for methods which construct composable options. Reserve plain methods for immediate inspection or local construction which cannot suspend or commit transactional state.
+Use `_op` for methods which construct composable options. For each principal
+suspending or transactional operation, normally expose a plain method with the
+same stem as the direct on-ramp:
+
+```text
+queue:get()       perform the operation directly
+queue:get_op()    return the operation for composition
+```
+
+The plain method should perform the corresponding `_op` method rather than
+duplicate its implementation. Plain methods may therefore suspend and commit
+transactional state. Methods which are genuinely immediate remain useful for
+local inspection and construction, but their names should not imply a stronger
+non-suspension rule for the whole plain-method surface.
 
 ## Completed closure for host-backed facilities
 

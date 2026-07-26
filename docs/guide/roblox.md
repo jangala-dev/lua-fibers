@@ -711,6 +711,6 @@ outstanding Closure rather than erasing it during unwinding.
 - [`direct-and-options.md`](direct-and-options.md)
 - [`../advanced/option-algebra.md`](../advanced/option-algebra.md)
 - [`../advanced/lifetimes-and-custody.md`](../advanced/lifetimes-and-custody.md)
-- [`../advanced/ports.lua`](../advanced/ports.lua)
+- [`../advanced/ports.md`](../advanced/ports.md)
 - [`../../examples/gameplay/`](../../examples/gameplay/)
 - [`../../examples/roblox/`](../../examples/roblox/)

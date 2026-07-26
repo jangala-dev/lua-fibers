@@ -24,7 +24,8 @@ local session_reason
 
 fibers.run(function(root)
   root:spawn(function()
-    Sleep.sleep(3)
+    -- Keep departure between refresh ticks: choice is unordered when both are ready.
+    Sleep.sleep(3.5)
     player_left:put('Mira left the server')
   end, 'simulate-player-leaving')
 

@@ -1,4 +1,3 @@
---[=[
 # Port architectures
 
 This note records the intended architecture for ports of the Fibers semantics.
@@ -400,10 +399,3 @@ These projects describe the host mechanisms assumed by this note:
 * Rust and JavaScript future bridging:
   https://wasm-bindgen.github.io/wasm-bindgen/reference/js-promises-and-rust-futures.html
 * Kotlin coroutine scopes and jobs: https://kotlinlang.org/docs/coroutines-basics.html
-]=]
-
-return {
-  status = 'design-note',
-  normative = false,
-  targets = { 'luau', 'roblox', 'rust-std', 'rust-no-std', 'embassy', 'browser-wasm', 'wasi', 'kotlin' },
-}

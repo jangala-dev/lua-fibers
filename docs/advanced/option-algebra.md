@@ -517,7 +517,7 @@ host-actionable Interest
 
 Interests explain how progress might occur; they are not evidence by themselves. Retry follows from exhaustive proof search and managed negative checks.
 
-External law:
+**External-observation law:**
 
 ```text
 Any delivery which could make a preferred option ready must invalidate a

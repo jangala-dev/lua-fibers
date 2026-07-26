@@ -1,6 +1,10 @@
 # Trusted transactional facility authoring
 
-The compact runtime is closed to new transaction semantics but open to new transactional programmes. Ordinary library authors should compose public facilities and `Op` combinators. This document is for trusted contributors who need to add a new primitive facility by compiling options to `fibers.internal.kernel.ir`.
+The compact runtime is closed to new transaction semantics but open to new
+transactional programmes. Ordinary library authors should compose public
+facilities and `Op` combinators. This document is for trusted contributors who
+need to add a new primitive facility through the `fibers.resource.authoring`
+façade, which encapsulates the kernel IR and ledger.
 
 The kernel-facing API is internal and may change before a stable release.
 
@@ -21,7 +25,6 @@ Those are fixed kernel responsibilities.
 
 Ordinary facilities should instead follow `../advanced/facility-authoring.md` and depend only on supported public modules.
 
-
 ## Preferred construction order
 
 Use the least powerful form which expresses the protocol:
@@ -38,79 +41,103 @@ external observation
 
 Keep higher-level facilities such as Queue, Mailbox, Task, Scope and Stream as ordinary Lua composition where practical.
 
-## Option façade
+## Trusted authoring façade
 
-Primitive options are created with the internal `Op._resource` constructor:
+Primitive options are created through `fibers.resource.authoring`, not by
+calling an `Op` private constructor directly:
 
 ```lua
-local Op = require('fibers.op')
-local IR = require('fibers.internal.kernel.ir')
+local Facility = require('fibers.resource.authoring')
 
-return Op._resource(public_facility, facility_kind, programme)
+return Facility.op(public_facility, facility_kind, programme, payload)
 ```
 
-`public_facility` and `facility_kind` are used for diagnostics and identity. `programme` is an inert IR record. Public constructors should validate stable arguments and must not mutate committed state.
+`Facility.op` attaches the resource descriptor and creates the primitive
+occurrence. `public_facility` and `facility_kind` are used for diagnostics and
+identity; `programme` is an inert trusted programme. `payload` is optional and
+is used when one cached descriptor has several occurrences. Public constructors
+should validate stable arguments and must not mutate committed state.
+
+The underlying `Op._primitive` constructor is an implementation detail of this
+façade. Trusted facilities should use `Facility.op`, `Facility.static`,
+`Facility.descriptor` and `Facility.occurrence` so that the boundary remains
+explicit.
 
 ## Versioned locations
 
-Create a location with `Ledger.new_location`:
+Create locations through `Facility.location`:
 
 ```lua
-local Ledger = require('fibers.internal.kernel.ledger')
+local Facility = require('fibers.resource.authoring')
 
-local location = Ledger.new_location {
-  name = 'box:value',
+local location = Facility.location(box, 'value', {
   algebra = 'replace',
   domain = 'plain',
   value = initial,
-  owner = box,
   apply = function(value, loc)
     box.value = value
     box.version = loc.version
   end,
-}
+})
 ```
 
 Supported fields include:
 
 ```text
-name                diagnostic name
+name                diagnostic name; derived from owner and suffix by default
 algebra             replace | add | presence | finite_map | machine
 domain              diagnostic/domain marker
 value               committed value
 version             initial version, normally zero
 owner, key           optional facility metadata
-
-Here `owner` is kernel location metadata used to group a facility's transactional
-locations. It is unrelated to Lifetime custody and grants no authority over a
-Lifetime.
 apply(value, loc)    mirror committed state into the public façade
 clone_value(value)   copy one finite-map entry when applying map deltas
 put_equal            permit equal parallel finite-map puts
 remove_idempotent    permit duplicate finite-map removals; default true
 ```
 
-A new location algebra belongs in `algebra.lua` only when it has clear sequential, independent-parallel and interacting-parallel laws and is shared by materially different facilities.
+Here `owner` is kernel location metadata used to group a facility's
+transactional locations. It is unrelated to Lifetime custody and grants no
+authority over a Lifetime.
+
+A new location algebra belongs in `algebra.lua` only when it has clear
+sequential, independent-parallel and interacting-parallel laws and is shared by
+materially different facilities.
 
 ## Reads and fixed patches
 
+Use the façade's fixed programme constructors where possible:
+
 ```lua
 function Box:read_op()
-  return Op._resource(self, Box.Kind,
-    IR.read(self._location, 'identity'))
+  return Facility.static(self, Box.Kind, 'read', {
+    location = self._location,
+    result = Facility.result.value,
+  })
 end
 
 function Box:write_op(value)
-  return Op._resource(self, Box.Kind,
-    IR.patch(
-      self._location,
-      { kind = 'replace', value = value },
-      'constant', true
-    ))
+  return Facility.static(self, Box.Kind, 'patch', {
+    location = self._location,
+    patch = { kind = 'replace', value = value },
+    result = Facility.result.boolean,
+  })
 end
 ```
 
-Current result kinds include internal forms used by the built-in resource programmes, such as `identity`, `presence_bool`, `presence_value`, `index_entry`, `scalar_snapshot` and `counter_state`. Treat these names as kernel implementation details.
+For reusable descriptors with a per-occurrence payload, construct the descriptor
+once with `Facility.descriptor` and create occurrences with
+`Facility.occurrence`.
+
+Current result codecs include:
+
+```text
+Facility.result.value
+Facility.result.boolean
+Facility.result.present
+Facility.result.presence(nil_sentinel)
+Facility.result.project(function(value, programme) ... end)
+```
 
 Current patch shapes are:
 
@@ -122,35 +149,33 @@ Current patch shapes are:
 { kind = 'machine', steps = { ... } }
 ```
 
-Facility code should prefer an existing façade rather than construct complex patches directly.
+Use `Facility.change` helpers where one exists. Facility code should prefer an
+existing façade rather than construct complex patches directly.
 
 ## Claims
 
-A claim is a partial query followed by a fixed transition. Standard uses include Counter take, Keyed presence or absence, Index pop and Lease admission.
+A claim is a partial query followed by a fixed transition. Standard uses include
+Counter take, Keyed presence or absence, Index pop and Lease admission.
 
 ```lua
-local programme = IR.claim {
+local programme = Facility.claim({
   location = location,
-  orientation = 'up',
+  demand = 'up',
   query = {
     kind = 'predicate',
     predicate = 'ge',
     threshold = amount,
   },
-  transition = {
-    kind = 'static',
-    patch = { kind = 'add', delta = -amount },
-  },
-  result_kind = 'constant',
-  result_value = amount,
-}
+  change = Facility.change.add(-amount),
+  result = { kind = 'constant', value = amount },
+})
 ```
 
 For monotone structures:
 
 ```text
-orientation = 'up'    additions or presence supply readiness
-orientation = 'down'  removals or absence supply readiness
+demand = 'up'    additions or presence supply readiness
+demand = 'down'  removals or absence supply readiness
 ```
 
 Dependency footprints use one canonical supply set:
@@ -167,9 +192,11 @@ constructing trusted transitions and are normalised immediately to that set.
 `any` is an explicit declaration for an unordered state algebra; omission is
 not treated as `any`.
 
-Under `all`, the supplying component of an independent sibling delta is hidden. Under `tensor`, compatible supply may be used.
+Under `all`, the supplying component of an independent sibling delta is hidden.
+Under `tensor`, compatible supply may be used.
 
-`IR.select` and `IR.admit` are internal convenience constructors for ordered finite-map selection and compatibility-checked insertion.
+`Facility.select` and `Facility.admit` are trusted convenience constructors for
+ordered finite-map selection and compatibility-checked insertion.
 
 ## Serial machine transitions
 
@@ -250,7 +277,7 @@ S -> Ready(S₁, result₁), Ready(S₂, result₂), ...
 Provide a lazy cursor factory:
 
 ```lua
-local programme = IR.witness_transition {
+local programme = Facility.witness({
   location = location,
   group = location,
   accepts_supply = true,
@@ -269,7 +296,7 @@ local programme = IR.witness_transition {
       end,
     }
   end,
-}
+})
 ```
 
 Each cursor result may contain:
@@ -284,35 +311,36 @@ The machine treats each witness as an ordinary global branch. If another lane la
 
 The cursor factory and cursor must be deterministic and non-yielding. They must enumerate every intended witness before returning nil. Returning nil is a local exhaustion claim; global Retry is still established only by the machine after all enclosing alternatives are exhausted.
 
-
 Petri and Calendar are the principal examples.
 
 ## Linear exchange
 
-Use `IR.exchange` for synchronous one-use interaction:
+Use the trusted `exchange` primitive kind for synchronous one-use interaction:
 
 ```lua
-IR.exchange(resource_identity, 'put', value)
-IR.exchange(resource_identity, 'get')
+Facility.static(resource, Kind, 'exchange', { role = 'put', value = value })
+Facility.static(resource, Kind, 'exchange', { role = 'get' })
 ```
 
 The standard public façade is `Rendezvous`. Pairing, participant recruitment, rollback and exhaustive failure remain controlled by the machine. Do not consume an offer eagerly in facility code.
 
 ## Version waits and snapshots
 
-`IR.version_wait(location, version)` waits until a location version differs. Scalar and Scope inspection expose versioned change forms.
+`Facility.static(resource, Kind, 'version_wait', { location = location, version = version })`
+waits until a location version differs. Cached descriptors may bind the version
+as an occurrence payload. Scalar and Scope inspection expose versioned change
+forms.
 
-`IR.snapshot(resource, kind)` invokes the small fixed snapshot handling in the machine. It is currently used by Keyed and Lease. Prefer an ordinary read or witnessed read-only transition for new facilities unless a shared snapshot form is justified.
+`Facility.snapshot(resource, observation)` constructs the small fixed snapshot
+programme used by Keyed and Lease. Prefer an ordinary read or witnessed read-only
+transition for new facilities unless a shared snapshot form is justified.
 
 ## External observations
 
 External facilities use a host-maintained location and attach an interest and negative check to a partial machine transition:
 
 ```lua
-IR.machine_transition {
-  location = location,
-  resource = facility,
-  transition = transition,
+local option = Facility.external_wait(facility, Kind, location, transition, {
   interest = function(runtime)
     return Interest.external(facility, 'ready', {
       feed = ExternalFeed.for_resource(runtime, facility),
@@ -322,7 +350,7 @@ IR.machine_transition {
   absence_check = function(runtime)
     return still_absent(runtime, facility)
   end,
-}
+})
 ```
 
 Producer authority is exposed through a runtime-bound `ExternalFeed`. Delivery must update only the bound facility, increment its location version and invalidate any negative proof which could become false.

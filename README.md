@@ -640,7 +640,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 - [Lifetimes: custody, Grants and Closure](docs/advanced/lifetimes-and-custody.md)
 - [Flows, streams and the host reactor](docs/advanced/flows-and-streams.md)
 - [Embedding and host integration](docs/advanced/embedding.md)
-- [Port architectures: Rust, Embassy, WASM and Kotlin](docs/advanced/ports.lua)
+- [Port architectures: Rust, Embassy, WASM and Kotlin](docs/advanced/ports.md)
 - [Comparison with related systems](docs/design/comparison.md)
 - [Kernel design](docs/design/kernel.md)
 
