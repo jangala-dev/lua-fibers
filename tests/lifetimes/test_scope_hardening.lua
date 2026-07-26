@@ -86,9 +86,9 @@ end
 do
   local seen_body_failure = false
   local policy = {
-    on_body_failure = function(_self, _scope, err)
-      seen_body_failure = tostring(err):match('policy body failure') ~= nil
-      return true
+    on_body_exit = function(_self, _scope, _state, body_ok, err)
+      seen_body_failure = not body_ok and tostring(err):match('policy body failure') ~= nil
+      return { seal = true }
     end,
   }
   local rt = FibersRuntime.new()

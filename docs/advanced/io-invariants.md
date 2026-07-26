@@ -50,7 +50,7 @@ The reactor performs bounded work:
 - `would_block` disarms the registration until readiness is delivered again.
 
 No fairness stronger than bounded service and repeated queue progress is
-currently promised. Providers must not depend on source order among ready
+currently promised. Host backends must not depend on source order among ready
 registrations.
 
 ## Stream closure
@@ -108,8 +108,8 @@ and reaping. These invariants apply:
 - supplied Streams are borrowed and bridged rather than silently taken;
 - `closed_op` proves settlement of the host handle, Streams, bridges and driver.
 
-Native providers should use a stable process identity, such as a pidfd, where
-available. A fallback provider must serialise signal and reap decisions so a
+Native bindings should use a stable process identity, such as a pidfd, where
+available. A fallback process strategy must serialise signal and reap decisions so a
 reused numeric PID cannot be targeted after the owned child has terminated.
 
 `communicate` is deliberately a direct post-commit procedure. External input
@@ -151,7 +151,7 @@ runtime.host_reactor:assert_quiescent('after shutdown')
 These methods are intended for tests, embedders and diagnostics. The underlying
 `fibers.diagnostics.io` module remains internal.
 
-## Provider contract
+## Host contract
 
 Every host declares socket support explicitly:
 
@@ -162,11 +162,11 @@ host.capabilities.socket_ipv6
 host.capabilities.socket_unix
 ```
 
-A `true` family capability commits the provider to the common contract suite. A
+A `true` family capability commits the host to the common contract suite. A
 `false` capability must produce a structured `unsupported` result rather than a
 module-load failure or a weaker approximation.
 
-A conforming stream-socket provider must preserve:
+A conforming stream-socket host must preserve:
 
 - non-blocking connect completion through an authoritative finish call;
 - bounded listener acceptance and custody of queued connections;

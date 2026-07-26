@@ -14,6 +14,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local socket = require('fibers.socket')
 
@@ -31,7 +32,7 @@ end
 
 -- Listening, dialling and accepting preserve the original Stream-shaped surface.
 do
-  local host = Host.manual({ sockets = true, auto_advance_time = false })
+  local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   fibers.run(function()
     local listener, listen_err =
       fibers.perform(socket.listen_inet_op('127.0.0.1', 0, { name = 'echo-listener' }))
@@ -65,7 +66,7 @@ end
 
 -- A failed dial remains a Dial result; the start option itself still commits.
 do
-  local host = Host.manual({ sockets = true, auto_advance_time = false })
+  local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   fibers.run(function()
     local dial = fibers.perform(socket.dial_inet_op('127.0.0.1', 6553))
     local connection, err = fibers.perform(dial:result_op())
@@ -77,7 +78,7 @@ end
 
 -- Losing listener admission performs no host acquisition.
 do
-  local host = Host.manual({ sockets = true, auto_advance_time = false })
+  local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   local before = 0
   for _ in pairs(host.socket_listeners) do
     before = before + 1

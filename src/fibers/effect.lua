@@ -88,7 +88,6 @@ local EffectKind = (function()
   return EffectKind
 end)()
 
-local Op = require('fibers.op')
 local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 
 local Effect = {}
@@ -117,46 +116,6 @@ function Effect.of(kind, payload)
     error(err and (err.message or tostring(err)) or 'invalid effect payload', 2)
   end
   return e
-end
-
-function Effect.after_commit(effect)
-  return Op.emit(effect)
-end
-
-local WakeKind
-local function wake_key(payload)
-  return payload.id or payload.key or tostring(payload.kind) .. ':' .. tostring(payload.source)
-end
-
-WakeKind = EffectKind.new({
-  name = 'wake',
-  key = wake_key,
-  merge = function(a, _b)
-    return shallow_copy(a)
-  end,
-  prepare = function(_rt, payload)
-    return {
-      kind = WakeKind,
-      key = wake_key(payload),
-      payload = payload,
-      discharge = function(rt, entry, log)
-        local host = rt.host or {}
-        local wake = host.wake
-        if wake then
-          return wake(entry.payload, rt)
-        end
-      end,
-    }
-  end,
-})
-
-function Effect.wake(kind, key, detail)
-  return Effect.of(WakeKind, {
-    kind = kind,
-    key = key,
-    id = tostring(kind) .. ':' .. tostring(key),
-    detail = detail,
-  })
 end
 
 local InterruptKind
@@ -307,7 +266,6 @@ function Effect.spawn(fn, name, id, scope, owner)
   })
 end
 
-Effect.WakeKind = WakeKind
 Effect.InterruptKind = InterruptKind
 Effect.ScopeKind = ScopeKind
 Effect.SpawnKind = SpawnKind

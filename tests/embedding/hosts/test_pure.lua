@@ -15,6 +15,7 @@ local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local FibersSignal = require('fibers.resource.signal')
 local Host = require('fibers.host')
+local WaitSet = require('fibers.host.wait_set')
 local PureHost = require('fibers.host.pure')
 local Common = require('tests.embedding.hosts.common')
 
@@ -74,13 +75,15 @@ end
 
 -- Host helper extracts the earliest time wait and ignores non-time waits.
 do
-  local deadline = Host.earliest_deadline({
+  local deadline = WaitSet.build({
     { kind = 'external', key = 'x' },
     { kind = 'timer', deadline = 7 },
     { kind = 'timer', deadline = 3 },
-  })
+  }).deadline
   Common.assert_eq(deadline, 3)
-  Common.assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
+  Common.assert_truthy(
+    WaitSet.build({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }).has_non_time
+  )
 end
 
 print('tests/hosts/test_pure.lua: ok')

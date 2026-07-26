@@ -1,8 +1,35 @@
--- Shared normalisation for native-provider error conventions.
-
-local HostError = require('fibers.host.error')
+-- Shared normalisation for native-binding error conventions.
 
 local NativeError = {}
+
+function NativeError.set(...)
+  local out = {}
+  for i = 1, select('#', ...) do
+    local value = select(i, ...)
+    if value ~= nil then
+      out[value] = true
+    end
+  end
+  return out
+end
+
+function NativeError.number(value)
+  if type(value) == 'table' and type(value.fd) == 'number' then
+    return value.fd
+  end
+  if value ~= nil and (type(value) == 'table' or type(value) == 'userdata') then
+    local found, method = pcall(function()
+      return value.fileno
+    end)
+    if found and type(method) == 'function' then
+      local ok, result = pcall(method, value)
+      if ok then
+        return tonumber(result)
+      end
+    end
+  end
+  return tonumber(value)
+end
 
 function NativeError.new(opts)
   opts = opts or {}
@@ -36,27 +63,6 @@ function NativeError.new(opts)
     return number ~= nil and names[number] or nil
   end
 
-  function Error.message(prefix, a, b)
-    local message, number = Error.split(a, b)
-    if message ~= nil and message ~= '' then
-      return tostring(message), number
-    end
-    local detail
-    if number ~= nil and type(strerror) == 'function' then
-      local ok, value = pcall(strerror, number)
-      if ok and value ~= nil and value ~= '' then
-        detail = tostring(value)
-      end
-    end
-    if detail then
-      return tostring(prefix) .. ': ' .. detail, number
-    end
-    if number ~= nil then
-      return tostring(prefix) .. ' (errno ' .. tostring(number) .. ')', number
-    end
-    return tostring(prefix), nil
-  end
-
   function Error.detail(prefix, a, b)
     local message, number = Error.split(a, b)
     if message ~= nil and message ~= '' then
@@ -72,18 +78,6 @@ function NativeError.new(opts)
       return tostring(prefix) .. ' (errno ' .. tostring(number) .. ')', number
     end
     return tostring(prefix), nil
-  end
-
-  function Error.system(domain, action, a, b, fields)
-    local message, number = Error.message(tostring(action) .. ' failed', a, b)
-    return HostError.system(domain, action, message, Error.name(number), number, fields)
-  end
-
-  function Error.option(value)
-    if type(value) == 'boolean' then
-      return value and 1 or 0
-    end
-    return value
   end
 
   return Error

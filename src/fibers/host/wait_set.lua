@@ -21,26 +21,19 @@ function WaitSet.normalise_mode(mode)
   return mode
 end
 
-local function identity(value)
-  return value
-end
-
-function WaitSet.build(waits, opts)
-  opts = opts or {}
-  local key_of = opts.key_of or identity
-  local fd_of = opts.fd_of
+function WaitSet.build(waits)
   local set = {
     waits = waits or {},
     records = {},
     by_key = {},
+    by_poll = {},
     by_fd = {},
     deadline = nil,
     unsupported = false,
     has_non_time = false,
   }
 
-  local function ensure(source_key)
-    local key = key_of(source_key)
+  local function ensure(key)
     if key == nil then
       set.unsupported = true
       return nil
@@ -49,17 +42,25 @@ function WaitSet.build(waits, opts)
     if record then
       return record
     end
+    local poll = type(key) == 'table' and key.poll or key
+    local number = type(key) == 'table' and key.number or nil
+    if poll == nil then
+      set.unsupported = true
+      return nil
+    end
     record = {
       key = key,
-      fd = fd_of and fd_of(key) or nil,
+      poll = poll,
+      fd = number,
       read = false,
       write = false,
       waits = {},
       poller = {},
     }
     set.by_key[key] = record
-    if record.fd ~= nil then
-      set.by_fd[record.fd] = record
+    set.by_poll[poll] = record
+    if number ~= nil then
+      set.by_fd[number] = record
     end
     set.records[#set.records + 1] = record
     return record
@@ -179,21 +180,12 @@ function WaitSet.block_without_io(host, runtime, set, status)
   if set.deadline ~= nil then
     local delay = WaitSet.delay_until(runtime, set.deadline) or 0
     if delay > 0 then
-      if host.on_wait then
-        host.on_wait(set.deadline, delay, set.waits, status)
-      end
       local ok, err = host:sleep(delay)
       if not ok then
         error(err, 3)
       end
-      if host.on_wake then
-        host.on_wake(set.deadline, set.waits, status)
-      end
     end
     return true, 'time'
-  end
-  if host.on_unsupported then
-    host.on_unsupported(set.waits, status)
   end
   return nil, 'unsupported-waits'
 end

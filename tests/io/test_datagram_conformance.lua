@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local socket = require('fibers.socket')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -84,7 +84,7 @@ local function run_exchange(label, host, family)
   assert(report.ok, label .. ': ' .. tostring(report.primary or report.error))
 end
 
-run_exchange('manual-ipv4', ManualHost.new({ datagrams = true }), 'inet4')
-run_exchange('manual-ipv6', ManualHost.new({ datagrams = true }), 'inet6')
+run_exchange('manual-ipv4', SimulatedHost.new({ datagrams = true }), 'inet4')
+run_exchange('manual-ipv6', SimulatedHost.new({ datagrams = true }), 'inet6')
 
 print('tests/io/test_datagram_conformance.lua: ok')

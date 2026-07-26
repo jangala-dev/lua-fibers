@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local socket = require('fibers.socket')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 
 local count = tonumber(os.getenv('FIBERS_STRESS_SOCKET_CYCLES')) or 24
 local report = fibers.try_run(function(scope)
@@ -42,7 +42,7 @@ local report = fibers.try_run(function(scope)
   server:await()
   listener:close('stress complete')
 end, {
-  host = ManualHost.new({ sockets = true, pipes = true }),
+  host = SimulatedHost.new({ sockets = true, pipes = true }),
   max_iterations = 200000,
 })
 assert(report.ok, tostring(report.primary or report.error))

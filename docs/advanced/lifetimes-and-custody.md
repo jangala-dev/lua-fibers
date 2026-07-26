@@ -59,8 +59,7 @@ return a `ScopeResult` containing success values or a structured report.
 | Movement | Atomic transfer of custody. |
 | Borrow | Temporary authority without transfer of custody. |
 | Seal | Refusal of new custody. |
-| Claim | Exclusive authority to resolve an owned subtree. |
-| Resolution | Discharge, failure or restoration of a claim. |
+| Claim | Exclusive authority over an owned subtree during restoration or settlement. |
 | Settlement | Protocol work undertaken after a claim commits. |
 
 Custody and Lua reachability are not the same. Holding a reference does not necessarily mean the current scope owns or is authorised to use it.
@@ -79,7 +78,6 @@ scope:accept_op(filter)
 scope:authorise_op(item, right)
 scope:borrow_op(item, borrower_or_rights, rights_or_opts, maybe_opts)
 scope:claim_op(item, purpose)
-scope:resolve_op(claim, resolution)
 scope:request_cancel_op(reason)
 scope:seal_op(reason)
 
@@ -169,10 +167,6 @@ region:admit_op(item_or_owned, from_owner)
 region:release_op(item)
 region:move_op(item, target_region)
 region:claim_op(item, purpose)
-region:resolve_op(claim, resolution)
-region:discharge_claim_op(claim)
-region:fail_claim_op(claim, err)
-region:restore_claim_op(claim)
 region:seal_op()
 
 region:is_open_op()
@@ -188,7 +182,7 @@ region:live_op(item)
 region:authorise_op(item, right, opts)
 ```
 
-`restore_claim_op` and manual `discharge_claim_op` apply to pristine low-level claims. Once settlement has begun, a claim cannot be restored, and it cannot be discharged until the settlement driver has recorded every member as settled.
+`claim:restore_op()` restores a pristine low-level claim. Once settlement has begun, the claim may only be recovered through the `Settlement.Failure` capability returned by the settlement driver. That capability exposes `retry_op()` and `force_op()`; application code cannot manually mark, resume or discharge a settlement claim.
 
 A bare Region records ownership truth. It does not itself know how to interrupt a task, flush a stream or close a host handle. Those behaviours are supplied by settlement protocols and scope policy.
 
@@ -238,19 +232,13 @@ freeze the claimed topology
 mark every member claimed
 ```
 
-Only the original capability object can resolve the claim. Reconstructing its diagnostic fields does not confer authority.
+Only the original capability object can restore a pristine claim, and only the settlement failure capability can recover a started claim. Reconstructing diagnostic fields does not confer authority.
 
 While claimed, the subtree cannot be moved, released or claimed again.
 
-Resolution kinds are:
+A pristine, unstarted claim may be returned to live custody with `claim:restore_op()`. Once settlement starts, the driver alone records failure and successful discharge. Recovery is then available only through `Settlement.Failure:retry_op()` or `Settlement.Failure:force_op()`.
 
-```text
-discharge   remove custody after complete successful settlement
-fail        retain custody and settlement progress in failed phase
-restore     return a pristine, unstarted claim to live custody
-```
-
-Restoration is not rollback of external cleanup. After any request, force or settlement step has begun, generic restoration is forbidden.
+Restoration is not rollback of external cleanup. After any request, force or settlement step has begun, restoration is forbidden.
 
 ## Settlement protocol
 
@@ -482,8 +470,8 @@ Seal monotonicity
 Exclusive claim
   A claimed subtree cannot be moved, released or claimed again.
 
-Explicit resolution
-  A pristine claim may be restored or manually discharged. A started settlement claim is discharged only after complete settlement, or retained as failed.
+Narrow recovery authority
+  A pristine claim may be restored through its capability. A started settlement claim is discharged only after complete settlement, or retained as failed with retry and force authority.
 
 Ordered quiescence
   Settlement requests run parent-first; settlement completion runs child-first.

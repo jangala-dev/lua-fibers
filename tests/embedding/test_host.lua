@@ -15,6 +15,7 @@ local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local FibersSignal = require('fibers.resource.signal')
 local Host = require('fibers.host')
+local WaitSet = require('fibers.host.wait_set')
 local PureHost = require('fibers.host.pure')
 
 local function fail(msg)
@@ -92,13 +93,13 @@ end
 
 -- Host helper extracts the earliest time wait and ignores non-time waits.
 do
-  local deadline = Host.earliest_deadline({
+  local deadline = WaitSet.build({
     { kind = 'external', key = 'x' },
     { kind = 'timer', deadline = 7 },
     { kind = 'timer', deadline = 3 },
-  })
+  }).deadline
   assert_eq(deadline, 3)
-  assert_truthy(Host.has_non_time_waits({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }))
+  assert_truthy(WaitSet.build({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }).has_non_time)
 end
 
 -- Host selection returns complete, indivisible families.
@@ -125,7 +126,15 @@ do
   local available = Host.available()
   assert_truthy(type(available) == 'table' and #available > 0, 'host.available should list selectable hosts')
 
-  assert_truthy(type(manual.create_pipe) == 'function', 'selected family should own its pipe capability')
+  assert_eq(manual.create_pipe, nil, 'manual host should expose only injected facilities')
+
+  local injected = Host.manual({
+    create_pipe = function(_self, opts)
+      return opts and opts.name
+    end,
+  })
+  assert_eq(injected.capabilities.pipe, true)
+  assert_eq(injected:create_pipe({ name = 'injected-pipe' }), 'injected-pipe')
 end
 
 print('tests/test_host.lua: ok')

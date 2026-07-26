@@ -32,8 +32,8 @@ end
 
 local capability_host = NixioHost.new()
 if capability_host.capabilities.process then
-  assert(capability_host.capabilities.process_exec_proof == false)
-  assert(capability_host.capabilities.process_pass_fds == false)
+  assert(capability_host.capabilities.process_exec_proof == nil)
+  assert(capability_host.capabilities.process_pass_fds == nil)
   assert(capability_host.capabilities.process_close_fds == 'known')
   assert(capability_host.capabilities.process_groups == 'session')
 end

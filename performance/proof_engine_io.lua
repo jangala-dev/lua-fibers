@@ -33,7 +33,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local File = require('fibers.file')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 local Runtime = require('fibers.runtime')
 local Socket = require('fibers.socket')
 local Stream = require('fibers.stream')
@@ -64,7 +64,7 @@ local function add(name, units, host, body)
 end
 
 add('memory-stream', 'bytes', function()
-  return ManualHost.new({ pipes = true })
+  return SimulatedHost.new({ pipes = true })
 end, function(scope)
   local chunks = math.max(1, math.floor(16 * scale))
   local chunk = string.rep('x', 4096)
@@ -91,7 +91,7 @@ end, function(scope)
 end)
 
 add('socket-lifecycle', 'connections', function()
-  return ManualHost.new({ sockets = true, pipes = true })
+  return SimulatedHost.new({ sockets = true, pipes = true })
 end, function(scope)
   local count = math.max(1, math.floor(2 * scale))
   local accepted = 0
@@ -118,7 +118,7 @@ end, function(scope)
 end)
 
 add('datagram-roundtrip', 'datagrams', function()
-  return ManualHost.new({ datagrams = true })
+  return SimulatedHost.new({ datagrams = true })
 end, function()
   local count = math.max(1, math.floor(16 * scale))
   local sender = assert(Socket.datagram_ipv4('127.0.0.1', 0, {
@@ -140,7 +140,7 @@ end, function()
 end)
 
 add('reactor-registration', 'registrations', function()
-  return ManualHost.new({ pipes = true })
+  return SimulatedHost.new({ pipes = true })
 end, function()
   local count = math.max(1, math.floor(4 * scale))
   local endpoints = {}

@@ -1746,8 +1746,7 @@ end
 
 local function analyse_domain(state)
   local profile_plan = state.profile_plan
-  local domain =
-    Domain.open(state.demand_index, state, compatibility_fn(state), state.runtime.branch_policy ~= 'legacy')
+  local domain = Domain.open(state.demand_index, state, compatibility_fn(state), true)
   local exchange = domain.exchange
   if profile_plan then
     profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans

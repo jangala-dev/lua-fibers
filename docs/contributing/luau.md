@@ -17,9 +17,9 @@ generates a target-specific tree under `build/luau/` by:
    reference test profile.
 
 The initial build includes the kernel, runtime, Scope, Effect, Region, Flow,
-in-memory resources, host external protocols, ManualHost and PureHost. Shared
+in-memory resources, host external protocols, the small ManualHost and PureHost. Shared
 file and process
-abstractions may enter the dependency closure, but native host providers for
+abstractions may enter the dependency closure, but native host bindings for
 files, sockets and processes are deliberately outside the first target.
 
 ## Shared module layout
@@ -122,7 +122,7 @@ and Studio examples under [`../../examples/roblox/`](../../examples/roblox/).
 The smoke programme must establish:
 
 - portable module loading through `.luaurc` aliases;
-- ManualHost scheduling and rendezvous;
+- ManualHost deterministic scheduling and rendezvous;
 - the application-facing `fibers.run` root-lifecycle path;
 - table-valued error identity through `fibers.pcall`;
 - no dependency on filesystem or process globals.
@@ -136,7 +136,7 @@ are found.
 `tests/luau/profile.lua` classifies every `test_*.lua` file and defines the
 `portable` profile. The profile contains 81 tests covering public
 semantics, composition, resources, Effect/Region/Scope lifetimes, ManualHost
-embedding, in-memory I/O, both semantic evaluators, kernel laws, portable
+embedding, test-only SimulatedHost I/O, both semantic evaluators, kernel laws, portable
 implementation helpers, case
 studies and performance architecture.
 

@@ -10,6 +10,7 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
+local WaitSet = require('fibers.host.wait_set')
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
@@ -78,7 +79,7 @@ do
     st = rt:step({ max_work = 1 })
   end
   local waits = (st and st.waits or {})
-  local rw = Host.readiness_waits(waits)
+  local rw = WaitSet.readiness_waits(waits)
   assert_eq(#rw, 1, 'one readiness wait expected')
   assert_eq(rw[1].readiness_key, 'handle-1')
   assert_eq(rw[1].mode, 'read')

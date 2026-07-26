@@ -15,6 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRegion = require('fibers.region')
 local FibersTask = require('fibers.task')
+local Settlement = require('fibers.region.settlement')
 
 local function fail(msg)
   error(msg, 2)
@@ -216,12 +217,13 @@ do
     }
 
     forged_result = fibers.perform(region
-      :resolve_op(fake, { kind = 'discharge' })
+      :_restore_pristine_claim_op(fake)
       :map(function()
-        return 'forged-settled'
+        return 'forged-restored'
       end)
       :or_else(Op.always('blocked')))
-    settled = fibers.perform(region:resolve_op(claim, { kind = 'discharge' }))
+    fibers.perform(claim:restore_op())
+    settled = fibers.perform(Settlement.retire_item_op(region, parent, 'capability test'))
   end).runtime_status
 
   assert_status(st, 'found')
@@ -230,7 +232,7 @@ do
   assert_eq(subtree[1].claim, nil, 'subtree_op must not expose claim authority')
   assert_eq(rec.claim_id, claim.id, 'public record may expose diagnostic claim id')
   assert_eq(forged_result, 'blocked', 'forged claim with matching id must be rejected')
-  assert_eq(settled, parent, 'real claim should discharge')
+  assert_eq(settled, parent, 'settlement should retire the real tree')
   assert_eq(parent.owner, nil)
   assert_eq(child.owner, nil)
 end

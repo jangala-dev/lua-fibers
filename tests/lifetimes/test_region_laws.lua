@@ -107,20 +107,18 @@ do
       f.perform(r:admit_op(h))
       claim = f.perform(r:claim_op(h, { reason = 'x' }))
       local fake = { _fibers_claim = true, id = claim.id, region = r, root = h, records = claim.records }
-      forged = f.perform(r:resolve_op(fake, { kind = 'discharge' })
+      forged = f.perform(r:_restore_pristine_claim_op(fake)
         :map(function()
           return true
         end)
         :or_else(Op.always(false)))
-      f.perform(r:resolve_op(claim, { kind = 'fail', error = 'boom' }))
+      f.perform(claim:restore_op())
       failed = f.perform(r:record_op(h))
-      f.perform(r:resolve_op(claim, { kind = 'restore' }))
     end).runtime_status,
     'found'
   )
   eq(forged, false)
-  eq(failed.phase, 'failed')
-  eq(failed.settlement_failed, true)
+  eq(failed.phase, 'live')
   eq(h.owner, r)
 end
 

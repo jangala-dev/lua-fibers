@@ -550,7 +550,7 @@ move
 release
 seal
 claim
-resolve by discharge, failure or restoration
+restore while pristine, or settle through the settlement driver
 ```
 
 Principal laws:

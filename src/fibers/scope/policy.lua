@@ -484,13 +484,9 @@ function Driver.run(scope, fn, policy)
   local settlement_failures = {}
 
   local close_ok, close_err = Protected.pcall(function()
-    local legacy_handled
-    if not body_ok and policy and type(policy.on_body_failure) == 'function' then
-      legacy_handled = policy:on_body_failure(scope, body_primary)
-    end
     local decision = call_policy(policy, 'on_body_exit', scope, state, body_ok, body_primary)
     if decision == nil then
-      decision = body_ok and { seal = true } or { seal = true, cancel_children = legacy_handled == nil }
+      decision = body_ok and { seal = true } or { seal = true, cancel_children = true }
     end
     if decision.seal or decision.cancel_children then
       Driver.begin_close(scope, decision.reason or close_reason, {

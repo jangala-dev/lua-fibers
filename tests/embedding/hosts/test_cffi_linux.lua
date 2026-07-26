@@ -113,7 +113,7 @@ do
 end
 
 -- Keep real kernel timing out of the semantic reference evaluator; the
--- deterministic ManualHost socket and resolver contracts still run there.
+-- deterministic SimulatedHost socket and resolver contracts still run there.
 if os.getenv('FIBERS_MACHINE') ~= 'reference' then
   local socket_host = LinuxHost.new()
   Common.native_socket_smoke('cffi_linux', socket_host)

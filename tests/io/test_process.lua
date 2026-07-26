@@ -2,6 +2,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local Stream = require('fibers.stream')
 local process = require('fibers.process')
@@ -37,7 +38,7 @@ end
 -- convenience, while multi-phase procedures deliberately have no _op twin.
 do
   local starts = 0
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     processes = true,
     pipes = true,
     on_process_start = function(proc)
@@ -76,7 +77,7 @@ end
 
 -- Fixed output and status through ManualHost.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     processes = true,
     pipes = true,
     on_process_start = function(proc, child)
@@ -112,7 +113,7 @@ end
 
 -- Piped input reaches the child and output is drained without deadlock.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     processes = true,
     pipes = true,
     on_process_start = function(proc, child)
@@ -158,7 +159,7 @@ end
 
 -- stderr may be merged into stdout without creating a second public Stream.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     processes = true,
     pipes = true,
     on_process_start = function(proc, child)
@@ -188,7 +189,7 @@ end
 
 -- Supplied Streams are bridged without transferring or requiring a descriptor.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     processes = true,
     pipes = true,
     on_process_start = function(proc, child)
@@ -220,7 +221,7 @@ end
 
 -- Caller timeout remains distinct from process failure; close performs TERM and reap.
 do
-  local host = Host.manual({ processes = true, pipes = true })
+  local host = SimulatedHost.new({ processes = true, pipes = true })
   fibers.run(function()
     local proc = assert(process
       .command({
@@ -247,7 +248,7 @@ end
 
 -- Capture limits close the process rather than waiting indefinitely for exit.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     processes = true,
     pipes = true,
     on_process_start = function(proc, child)
@@ -276,7 +277,7 @@ end
 
 -- Unsupported hosts fail through the normal start result.
 do
-  local host = Host.manual({ processes = false })
+  local host = SimulatedHost.new({ processes = false })
   fibers.run(function()
     local proc, err = process.command('missing'):start()
     assert(proc == nil)

@@ -15,6 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 
 local function assert_eq(actual, expected, message)
@@ -49,7 +50,7 @@ end
 
 -- Manual resolution publishes an immutable, deduplicated numeric list.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     resolver_records = {
       ['service.test'] = {
         { kind = 'inet6', host = '2001:db8::10' },
@@ -76,7 +77,7 @@ end
 -- A losing resolver option performs no host work. Query admission and the
 -- resolver driver effect occur only if the option commits.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     resolver_records = {
       ['unused.test'] = {
         { kind = 'inet4', host = '192.0.2.20' },
@@ -98,7 +99,7 @@ end
 
 -- Family filters are host resolver policy, not post-hoc socket inference.
 do
-  local host = Host.manual()
+  local host = SimulatedHost.new()
   fibers.run(function()
     local query = socket.resolve_name('localhost', 80, { family = 'inet4' })
     local addresses = assert(query:result())
@@ -110,7 +111,7 @@ end
 -- Terminal resolution failure is a result value and the success option is
 -- refutable, allowing result_op's certified fallback to commit.
 do
-  local host = Host.manual({ resolver_records = {} })
+  local host = SimulatedHost.new({ resolver_records = {} })
   fibers.run(function()
     local query = socket.resolve_name('missing.test', 80)
     local addresses, err = query:result()
@@ -122,7 +123,7 @@ end
 
 -- A resolved address can be used directly by the existing Dial facility.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     pipes = true,
     resolver_records = {

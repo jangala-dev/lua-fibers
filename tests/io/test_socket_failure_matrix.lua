@@ -16,6 +16,7 @@ local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local Handle = require('fibers.host.handle')
 
@@ -37,13 +38,13 @@ end
 local function pending_dial_host()
   local pending
   local host
-  host = Host.manual({
+  host = SimulatedHost.new({
     sockets = true,
     dial_factory = function(self, address, opts)
       -- Keep the real connected pipe pair behind a separate readiness gate. The
       -- gate models an EINPROGRESS socket without inheriting the pipe writer's
       -- permanently writable level, so the completion timer can run normally.
-      local connected, peer, err = self:dial_socket(address, opts)
+      local connected, peer, err = self:_manual_dial_socket(address, opts)
       if not connected then
         return nil, err
       end
@@ -177,7 +178,7 @@ end
 -- A pending accept is released by listener closure with a structured terminal
 -- result rather than waiting indefinitely.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local result = fibers.try_run(function(scope)
     local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'blocked-accept-listener' })
     local accepted, accept_err
@@ -197,7 +198,7 @@ end
 
 -- Binding an occupied address is a normal expected host failure.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local result = fibers.try_run(function()
     local first = socket.listen_ipv4('127.0.0.1', 8127, { name = 'address-owner' })
     local second, err = socket.listen_ipv4('127.0.0.1', 8127, { name = 'address-conflict' })
@@ -214,7 +215,7 @@ end
 -- Stream half-close preserves queued output and produces EOF; closing the peer's
 -- read direction makes later writes fail as a broken pipe.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local result = fibers.try_run(function(scope)
     local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'half-close-listener' })
     local server = scope:spawn(function()

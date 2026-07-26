@@ -15,7 +15,7 @@ local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
 local Runtime = require('fibers.runtime')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 
 local function assert_truthy(value, message)
   if not value then
@@ -66,7 +66,7 @@ local report = fibers.try_run(function(scope)
   fibers.perform(Sleep.sleep_op(0))
   assert(reactor:registration_count() == 0, 'all stress registrations should retire')
 end, {
-  host = ManualHost.new({ pipes = true, auto_advance_time = true }),
+  host = SimulatedHost.new({ pipes = true, auto_advance_time = true }),
   max_iterations = 20000,
 })
 

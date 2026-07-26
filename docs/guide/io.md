@@ -297,7 +297,7 @@ process.command({
 })
 ```
 
-The deterministic ManualHost, Linux FFI hosts and luaposix host implement the
+The test-only SimulatedHost, Linux FFI hosts and luaposix host implement the
 full version 1 process contract. Nixio supplies evented child processes through
 a per-command reaper and status pipe. It supports ordinary stdio, environment,
 working-directory, session, signalling and reaping behaviour, but advertises
@@ -447,7 +447,7 @@ local query = socket.resolve_name('example.org', 443, {
 When a native host advertises only a blocking resolver but supplies Fibers
 stream and datagram sockets, `socket.resolve` prefers the DNS implementation.
 An explicit `resolver`, `dns = true`, `nameservers`, or `name_server` option also
-selects it. The host resolver remains available for deterministic ManualHost
+selects it. The host resolver remains available for deterministic SimulatedHost
 records and as a compatibility fallback when DNS configuration is unavailable;
 `require_nonblocking = true` disables that fallback.
 
@@ -573,7 +573,7 @@ phase after construction has committed. Readiness remains a hint: an
 authoritative call may still return `would_block`. Closing retires pending sends,
 closes the host handle and joins the driver before `closed_op` succeeds.
 
-The deterministic ManualHost can deliver, drop and truncate packets without
+The test-only SimulatedHost can deliver, drop and truncate packets without
 real timing. It is used by both semantic evaluators. Native conformance covers
 IPv4 and IPv6 loopback, zero-length messages, source addresses, truncation and
 repeated socket churn.
@@ -587,8 +587,9 @@ Resource settlement requests root shutdown before requesting its children, then
 joins and settles those children before completing and discharging the root.
 Readiness and bounded-queue waits remain cancellable.
 
-The deterministic `ManualHost` implements pipes, virtual sockets and resolver
-records for tests, examples and embedding work. Native pipes are available in
+The test-only `SimulatedHost` implements pipes, virtual sockets and resolver
+records. `ManualHost` itself provides only deterministic time, readiness and injected final host methods.
+Native pipes are available in
 the existing POSIX-oriented host families. The LuaJIT/cffi Linux host family now
 adds non-blocking IPv4, IPv6 and Unix stream sockets, including `accept4`
 fallback, `SO_ERROR` connect completion, close-on-exec descriptors and Unix-path

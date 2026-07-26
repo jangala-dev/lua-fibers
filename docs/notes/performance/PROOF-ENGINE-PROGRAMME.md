@@ -76,7 +76,7 @@ nearest genuine outer alternative provide rollback if later work fails.
 This remains the same lazy fixed-point search. It improves its normalisation
 step; it does not dispatch the transaction elsewhere.
 
-In a local ManualHost comparison:
+In a local SimulatedHost comparison:
 
 | Workload | Metric | Before | After |
 |---|---:|---:|---:|
@@ -189,7 +189,7 @@ frontier proof establishes otherwise.
 
 ## Pass 6 measurements
 
-With 16 ManualHost datagram round trips, the structural profile changed from
+With 16 SimulatedHost datagram round trips, the structural profile changed from
 pass one's residual workload as follows:
 
 | Metric per commit | Pass 1 | Pass 6 |

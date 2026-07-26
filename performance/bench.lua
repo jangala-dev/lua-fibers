@@ -585,7 +585,7 @@ add('effect', 'merge duplicate effects', 700, function(n)
   local rt = Runtime.new()
   local lanes = {}
   for i = 1, 8 do
-    lanes[i] = Effect.after_commit(bench_effect('same-key', 1))
+    lanes[i] = Op.emit(bench_effect('same-key', 1))
   end
   local op = Op.tensor(lanes)
   rt:spawn_raw(function()

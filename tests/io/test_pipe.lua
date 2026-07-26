@@ -14,7 +14,9 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local Handle = require('fibers.host.handle')
+local HostHandles = require('tests.support.host_handles')
 local HostError = require('fibers.host.error')
 local file = require('fibers.file')
 
@@ -32,11 +34,11 @@ end
 -- Losing pipe options perform no host acquisition.
 do
   local acquisitions = 0
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
       acquisitions = acquisitions + 1
-      return Handle.pipe_pair({ host = h, name = opts.name })
+      return HostHandles.pipe_pair({ host = h, name = opts.name })
     end,
   })
   fibers.run(function()
@@ -48,7 +50,7 @@ end
 
 -- A pipe provides independently shaped readable and writable Streams.
 do
-  local host = Host.manual({ pipes = true, auto_advance_time = false })
+  local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
   fibers.run(function()
     local reader, writer, err = fibers.perform(file.pipe_op({ name = 'roundtrip', capacity = 32 }))
     assert_truthy(reader, tostring(err))
@@ -68,10 +70,10 @@ end
 -- Scope settlement closes both acquired handles when application code does not.
 do
   local read_handle, write_handle
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
-      read_handle, write_handle = Handle.pipe_pair({ host = h, name = opts.name })
+      read_handle, write_handle = HostHandles.pipe_pair({ host = h, name = opts.name })
       return read_handle, write_handle
     end,
   })
@@ -106,10 +108,10 @@ end
 -- Partial acquisition closes the handle which was created before failure.
 do
   local read_handle
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
-      read_handle = Handle.pipe_pair({ host = h, name = opts.name })
+      read_handle = HostHandles.pipe_pair({ host = h, name = opts.name })
       return read_handle, nil, HostError.system('pipe', 'create', 'writer creation failed')
     end,
   })
@@ -125,7 +127,7 @@ end
 -- Stream admission failure closes both immediately adopted handles.
 do
   local bad_reader, writer
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
       bad_reader = Handle.new({
@@ -138,7 +140,7 @@ do
         end,
       })
       local _reader
-      _reader, writer = Handle.pipe_pair({ host = h, name = opts.name .. ':writer-source' })
+      _reader, writer = HostHandles.pipe_pair({ host = h, name = opts.name .. ':writer-source' })
       _reader:close('unused')
       return bad_reader, writer
     end,
@@ -155,7 +157,7 @@ end
 
 -- Directional close retains the familiar pipe semantics.
 do
-  local host = Host.manual({ pipes = true, auto_advance_time = false })
+  local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
   fibers.run(function()
     local reader, writer = fibers.perform(file.pipe_op({ name = 'directional-close' }))
     assert_eq(fibers.perform(writer:write_op('retained')), 8)
@@ -169,11 +171,11 @@ end
 do
   local reader_handle, writer_handle
   local close_err = HostError.system('pipe', 'close', 'reader close failed', 'ECLOSE')
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
-      reader_handle, writer_handle = Handle.pipe_pair({ host = h, name = opts.name })
-      reader_handle.operations.close = function()
+      reader_handle, writer_handle = HostHandles.pipe_pair({ host = h, name = opts.name })
+      reader_handle._close = function()
         return nil, close_err
       end
       return reader_handle, writer_handle

@@ -282,13 +282,7 @@ do
         return 'released-child'
       end)
       :or_else(Op.always('blocked')))
-    settle_without_claim = rt:perform(life
-      :raw_region()
-      :resolve_op(parent, { kind = 'discharge' })
-      :map(function()
-        return 'settled-tree'
-      end)
-      :or_else(Op.always('blocked')))
+    settle_without_claim = life:raw_region().resolve_op == nil and 'absent' or 'present'
   end, 'phase-monitor')
 
   for _ = 1, 20 do
@@ -302,7 +296,7 @@ do
   assert_eq(phase_child, 'claimed', 'settle request should mark child claimed')
   assert_eq(move_during_settle, 'blocked', 'claimed subtree should not be handed off')
   assert_eq(release_child, 'blocked', 'contained child should not be released directly')
-  assert_eq(settle_without_claim, 'blocked', 'claim settlement requires a valid claim')
+  assert_eq(settle_without_claim, 'absent', 'Region should not expose generic claim resolution')
   assert_eq(settle_done, false, 'settle perform should still await driver')
 
   feed:set(true)
@@ -372,7 +366,7 @@ do
   assert_eq(failure.retry_op ~= nil, true, 'failed settlement should expose retry authority')
   assert_eq(failure.restore_op, nil, 'started settlement must not expose generic restoration')
   local can_discharge_incomplete = pcall(function()
-    failure.region:discharge_claim_op(failure.claim)
+    failure.region:_discharge_settled_claim_op(failure.claim)
   end)
   assert_eq(
     can_discharge_incomplete,

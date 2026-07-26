@@ -104,6 +104,9 @@ do
   assert_eq(fibers.choice, nil, 'root does not export option combinators')
   assert_eq(fibers.sleep, nil, 'root does not export Sleep')
   assert_eq(fibers.after_commit, nil, 'root does not export Effect constructors')
+  assert_eq(Effect.after_commit, nil, 'Effect.after_commit has been superseded by Op.emit')
+  assert_eq(Effect.wake, nil, 'unused wake effects are not public')
+  assert_eq(Effect.WakeKind, nil, 'unused wake effect kind is not public')
   assert_eq(fibers.Op, nil, 'root does not export the Op module')
   assert_eq(fibers.Runtime, nil, 'root does not export Runtime')
   assert_eq(fibers.Scalar, nil, 'root does not export Scalar')
@@ -307,7 +310,7 @@ do
   assert_eq(Kind.order, nil, 'EffectKind has no global numeric ordering field')
   local effect = FibersEffect.of(Kind, { key = 'once' })
   local st = fibers.try_run(function()
-    fibers.perform(Effect.after_commit(effect))
+    fibers.perform(Op.emit(effect))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(discharged, 1)

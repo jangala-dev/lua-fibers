@@ -41,7 +41,7 @@ src/fibers/
   file/                    evented files, pipes and provider implementations
   process/                 Command and owned Process facility
   socket/                  addresses, Listener, Dial, UDP and shared protocols
-  host/                    host contracts, reactor and native providers
+  host/                    host contracts, reactor and native bindings
 
   internal/
     protected.lua          cross-version yieldable protected calls

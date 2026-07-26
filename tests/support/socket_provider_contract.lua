@@ -99,7 +99,11 @@ function Contract.exercise(name, host, address, opts)
   assert_truthy(result.ok, name .. ' provider contract failed: ' .. tostring(result.primary or result))
   result.runtime:assert_io_quiescent(name .. ' provider contract')
   assert_truthy(accepted_local, name .. ' accepted connection should expose local address')
-  assert_truthy(accepted_peer, name .. ' accepted connection should expose peer address')
+  -- An unbound Unix-domain client is unnamed, so the accepted side has no
+  -- pathname to report for its peer. Internet socket peers remain mandatory.
+  if address.kind ~= 'unix' and address.family ~= 'unix' then
+    assert_truthy(accepted_peer, name .. ' accepted connection should expose peer address')
+  end
   assert_truthy(client_peer, name .. ' client connection should expose peer address')
   if opts.require_client_local then
     assert_truthy(client_local, name .. ' client connection should expose local address')

@@ -33,7 +33,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Adoption = require('fibers.region.adoption')
 local File = require('fibers.file')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 local Runtime = require('fibers.runtime')
 local Socket = require('fibers.socket')
 local Stream = require('fibers.stream')
@@ -116,7 +116,7 @@ end)
 
 add('socket-accept', 'connections', function()
   local count = math.max(1, math.floor(8 * scale))
-  local host = ManualHost.new({ sockets = true, pipes = true })
+  local host = SimulatedHost.new({ sockets = true, pipes = true })
   local accepted = 0
 
   fibers.run(function(scope)
@@ -148,7 +148,7 @@ end)
 
 add('datagram-roundtrip', 'datagrams', function()
   local count = math.max(1, math.floor(64 * scale))
-  local host = ManualHost.new({ datagrams = true })
+  local host = SimulatedHost.new({ datagrams = true })
   local received = 0
 
   fibers.run(function()
@@ -180,7 +180,7 @@ end)
 
 add('idle-reactor-registration', 'registrations', function()
   local count = math.max(1, math.floor(16 * scale))
-  local host = ManualHost.new({ pipes = true })
+  local host = SimulatedHost.new({ pipes = true })
   local registrations
 
   fibers.run(function()

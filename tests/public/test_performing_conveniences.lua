@@ -27,6 +27,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
@@ -151,7 +152,7 @@ end
 
 -- Direct methods are exact performing conveniences over their _op forms.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     pipes = true,
     sockets = true,
     datagrams = true,

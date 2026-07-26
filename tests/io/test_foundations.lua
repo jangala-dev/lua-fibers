@@ -14,8 +14,10 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
+local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
 local Adoption = require('fibers.region.adoption')
 
@@ -64,7 +66,19 @@ do
   assert_eq(tostring(err), 'connection refused')
   assert_truthy(HostError.is_would_block(HostError.would_block('fd', 'read')))
   assert_truthy(HostError.is_eof(HostError.eof('fd', 'read')))
-  assert_truthy(Host.supports(Host.manual({ pipes = true }), 'pipe'))
+  assert_truthy(SimulatedHost.new({ pipes = true }).capabilities.pipe == true)
+end
+
+-- Public Unix endpoints require a pathname, while native queries may report
+-- an unnamed local or peer endpoint.
+do
+  assert_eq(Address.decode_unix(nil), nil)
+  assert_eq(Address.decode_unix(''), nil)
+  local address = Address.decode_unix('/tmp/fibers.sock')
+  assert_eq(address.kind, 'unix')
+  assert_eq(address.path, '/tmp/fibers.sock')
+  local ok = pcall(Address.unix, '')
+  assert_eq(ok, false, 'public Unix addresses must remain non-empty')
 end
 
 -- Completion publishes one terminal result and wakes result waiters.

@@ -1,4 +1,4 @@
--- Deliberately small pure-Lua host adapter.
+-- Deliberately small pure-Lua host.
 --
 -- This adapter supports time waits only.  It uses os.time by default for the
 -- host clock and os.execute("sleep N") when the host exposes it.  Sandboxed
@@ -38,9 +38,6 @@ function Pure.new(opts)
     kind = 'pure',
     name = 'pure',
     family = 'pure',
-    on_wait = opts.on_wait,
-    on_wake = opts.on_wake,
-    on_unsupported = opts.on_unsupported,
     _now = now,
     _sleep = sleep,
   }, Pure)
@@ -51,24 +48,7 @@ function Pure.new(opts)
     return now()
   end
 
-  self.capabilities = {
-    time = true,
-    readiness = false,
-    fd = false,
-    pipe = false,
-    socket = false,
-    socket_ipv4 = false,
-    socket_ipv6 = false,
-    socket_unix = false,
-    datagram = false,
-    resolver = false,
-    resolver_blocking = false,
-    file = false,
-    file_backend = nil,
-    file_io_uring = false,
-    file_aio_detected = false,
-    process = false,
-  }
+  self.capabilities = { time = true }
   return self
 end
 

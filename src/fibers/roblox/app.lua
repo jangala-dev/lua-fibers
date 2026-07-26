@@ -6,7 +6,7 @@
 ---exhausts the current turn. Host horizon exhaustion retains exact proof and
 ---fibre progress; it is not semantic Retry and cannot enable `or_else`.
 
-local HostHelpers = require('fibers.host')
+local WaitSet = require('fibers.host.wait_set')
 local Policy = require('fibers.policy')
 local Protected = require('fibers.internal.protected')
 local Runtime = require('fibers.runtime')
@@ -93,7 +93,6 @@ local function runtime_options(opts, host)
     'dependency_index_threshold',
     'component_search',
     'normalise_search',
-    'branch_policy',
     'certified_symmetry',
     'resumable_search',
   }) do
@@ -121,7 +120,7 @@ end
 
 local function earliest_deadline(status)
   local interests = status and (status.interests or status.waits) or {}
-  return HostHelpers.earliest_deadline(interests), interests
+  return WaitSet.build(interests).deadline, interests
 end
 
 local function unsupported_interest(interests)

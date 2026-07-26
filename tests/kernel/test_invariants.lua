@@ -170,14 +170,14 @@ do
   assert_eq(err.kind, 'phase_error', 'host arrival in prepare is a phase error')
 end
 
--- Region exposes generic claim/settle machinery, not settlement-policy-specific tree methods.
+-- Region exposes claiming, but settlement recovery remains behind precise internal operations.
 do
   local r = FibersRegion.new('claim-surface')
-  assert_eq(type(r.claim_op), 'function', 'Region should expose generic claim_op')
-  assert_eq(type(r.resolve_op), 'function', 'Region should expose generic resolve_op')
-  assert_eq(r.resolve_claim_op, nil, 'Region should not expose a longer resolution alias')
-  assert_eq(type(r.discharge_claim_op), 'function', 'Region should expose explicit discharge_claim_op')
-  assert_eq(type(r.fail_claim_op), 'function', 'Region should expose explicit fail_claim_op')
+  assert_eq(type(r.claim_op), 'function', 'Region should expose claim_op')
+  assert_eq(r.resolve_op, nil, 'Region should not expose generic claim resolution')
+  assert_eq(r.discharge_claim_op, nil, 'Region should not expose manual claim discharge')
+  assert_eq(r.fail_claim_op, nil, 'Region should not expose manual claim failure')
+  assert_eq(r.restore_claim_op, nil, 'Region should not expose generic claim restoration')
   assert_eq(type(r.move_op), 'function', 'Region should expose explicit move_op')
   assert_eq(type(r.retire_tree_op), 'nil', 'Region should not expose retire_tree_op')
   assert_eq(type(r.release_tree_op), 'nil', 'Region should not expose release_tree_op')

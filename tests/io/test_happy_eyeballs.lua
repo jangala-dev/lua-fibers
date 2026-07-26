@@ -16,6 +16,7 @@ local Sleep = require('fibers.sleep')
 local Op = require('fibers.op')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 
 local function assert_eq(actual, expected, message)
@@ -43,7 +44,7 @@ end
 -- Dual-stack names begin with IPv6 and transfer only the winning Stream out of
 -- the private race scope.
 do
-  local host = Host.manual({ sockets = true, resolver_records = {} })
+  local host = SimulatedHost.new({ sockets = true, resolver_records = {} })
   local result = fibers.try_run(function(scope)
     local listener = assert(socket.listen_ipv6('::1', 0))
     local actual = listener:local_address()
@@ -73,7 +74,7 @@ end
 -- are consumed before admission, so the first family comes from the combined
 -- ordering rather than a hard-coded IPv6 preference.
 do
-  local host = Host.manual({ sockets = true, resolver_records = {} })
+  local host = SimulatedHost.new({ sockets = true, resolver_records = {} })
   local result = fibers.try_run(function(scope)
     local listener4 = assert(socket.listen_ipv4('127.0.0.1', 0))
     local port = listener4:local_address().port
@@ -113,7 +114,7 @@ end
 -- An immediate failure accelerates the next family rather than waiting for the
 -- connection-attempt delay.
 do
-  local host = Host.manual({ sockets = true, resolver_records = {} })
+  local host = SimulatedHost.new({ sockets = true, resolver_records = {} })
   local result = fibers.try_run(function(scope)
     local listener = assert(socket.listen_ipv4('127.0.0.1', 0))
     local actual = listener:local_address()
@@ -144,7 +145,7 @@ do
 end
 
 local function dynamic_resolution_case(aaaa_delay, resolution_delay, expected_family)
-  local host = Host.manual({ sockets = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, resolver = false })
   local result = fibers.try_run(function(scope)
     local listener4 = assert(socket.listen_ipv4('127.0.0.1', 0))
     local port = listener4:local_address().port
@@ -225,7 +226,7 @@ do
     return handle, err
   end
 
-  local host = Host.manual({ sockets = true, resolver = false, dial_factory = dial_factory })
+  local host = SimulatedHost.new({ sockets = true, resolver = false, dial_factory = dial_factory })
   local result = fibers.try_run(function(scope)
     local listener = assert(socket.listen_ipv4('127.0.0.1', 0))
     local port = listener:local_address().port
@@ -268,7 +269,7 @@ end
 -- first_family_count permits a bounded run from the initially preferred
 -- family before ordinary alternation resumes.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['first-family.test'] = {
@@ -305,7 +306,7 @@ end
 -- Destination ordering can be injected without placing socket work in a
 -- speculative callback.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['sorted.test'] = {
@@ -344,7 +345,7 @@ end
 -- A relative timeout starts when the admitted driver begins, not when an inert
 -- dial option is constructed.
 do
-  local host = Host.manual({ sockets = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, resolver = false })
   local result = fibers.try_run(function(scope)
     local listener = assert(socket.listen_ipv4('127.0.0.1', 0))
     local port = listener:local_address().port
@@ -409,7 +410,7 @@ do
     return handle
   end
 
-  local host = Host.manual({ sockets = true, resolver_records = {}, dial_factory = dial_factory })
+  local host = SimulatedHost.new({ sockets = true, resolver_records = {}, dial_factory = dial_factory })
   local result = fibers.try_run(function(scope)
     local listener6 = assert(socket.listen_ipv6('::1', 0))
     local port = listener6:local_address().port
@@ -439,7 +440,7 @@ end
 
 -- Certified exhaustion reports every failed attempt.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['dead.test'] = {
@@ -464,7 +465,7 @@ end
 
 -- A losing connect option performs no resolver or socket acquisition.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['unused.test'] = { { kind = 'inet4', host = '127.0.0.1' } },
@@ -491,7 +492,7 @@ end
 -- Destination policy receives the resolver's stable order, not an address-key
 -- canonicalisation. The callback may use that order as its final tie-break.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['stable-order.test'] = {
@@ -535,7 +536,7 @@ end
 -- RFC 8305's absolute 10 millisecond attempt-delay floor is validated before
 -- any named Dial is admitted.
 do
-  local host = Host.manual({ sockets = true, resolver_records = {} })
+  local host = SimulatedHost.new({ sockets = true, resolver_records = {} })
   fibers.run(function()
     local ok, err = pcall(socket.dial_name_op, 'invalid-delay.test', 80, {
       attempt_delay = 0.009,
@@ -547,7 +548,7 @@ end
 
 -- The retained candidate set is bounded and reports discarded destinations.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['candidate-bound.test'] = {
@@ -595,7 +596,7 @@ do
     return handle
   end
 
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     resolver_records = {
       ['active-bound.test'] = {

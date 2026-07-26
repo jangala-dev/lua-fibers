@@ -4,7 +4,7 @@ package.path = table.concat(
 )
 
 local saved = {}
-for _, name in ipairs({ 'nixio', 'nixio.fs', 'fibers.host.nixio', 'fibers.host.provider.nixio' }) do
+for _, name in ipairs({ 'nixio', 'nixio.fs', 'fibers.host.nixio' }) do
   saved[name] = package.loaded[name]
   package.loaded[name] = nil
 end
@@ -132,13 +132,7 @@ local ok, err = pcall(function()
 
   local raw = file()
   local managed = assert(Fd.new(raw, { nonblocking = false }))
-  local found = false
-  for _, value in ipairs(Fd.open_objects()) do
-    if value == raw then
-      found = true
-    end
-  end
-  assert(found)
+  assert(managed.handle == raw)
   assert(managed:close())
 
   pipe_payloads[#pipe_payloads + 1] = 'pid 321\nexited 0\n'

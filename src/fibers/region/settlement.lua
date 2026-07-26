@@ -123,8 +123,8 @@ local function perform_masked(op)
 end
 
 local function require_context(ctx)
-  if type(ctx) ~= 'table' or type(ctx.claim_op) ~= 'function' or type(ctx.resolve_op) ~= 'function' then
-    error('settlement requires a context with claim_op and resolve_op', 3)
+  if type(ctx) ~= 'table' or type(ctx.claim_op) ~= 'function' then
+    error('settlement requires a context with claim_op', 3)
   end
   return ctx
 end
@@ -480,12 +480,12 @@ end
 
 local function resolve_failed_op(ctx, claim, failures)
   require_context(ctx)
-  return ctx:resolve_op(claim, { kind = 'fail', failures = failures, progress = claim.progress })
+  return claim.region:_record_failed_claim_op(claim, failures, claim.progress)
 end
 
 local function resolve_settle_op(ctx, claim)
   require_context(ctx)
-  return ctx:resolve_op(claim, { kind = 'discharge' })
+  return claim.region:_discharge_settled_claim_op(claim)
 end
 
 local function mark_failed(ctx, claim, failures)
@@ -512,7 +512,7 @@ local function run_claim_inline(ctx, claim, opts, after_settle)
       -- A failed claim remains exclusive, but its public ledger phase is
       -- `failed`. Resume it to `claimed` before running recovery protocols so
       -- ordinary settlement authority checks remain valid.
-      perform_masked(ctx:resolve_op(claim, { kind = 'resume' }))
+      perform_masked(claim.region:_resume_failed_claim_op(claim))
     end
 
     claim.started = true

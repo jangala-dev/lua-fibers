@@ -1,11 +1,13 @@
--- One Linux FFI provider table for LuaJIT FFI and cffi.
+-- One Linux FFI binding for LuaJIT FFI and cffi.
 --
 -- This module contains only C declarations, constants and native conversions.
--- fibers.host.native owns Fibers handles, readiness delivery, network policy,
+-- fibers.host.posix owns Fibers handles, readiness delivery, network policy,
 -- resolver deduplication, process lifecycle and capability reporting.
 
 local BitOps = require('fibers.host.bitops')
-local Native = require('fibers.host.native')
+local NativeError = require('fibers.host.native_error')
+local Posix = require('fibers.host.posix')
+local Address = require('fibers.socket.address')
 
 local AioProbe = {}
 local cdef_done = setmetatable({}, { __mode = 'k' })
@@ -47,7 +49,7 @@ end
 
 local M = {}
 local function native_context(opts)
-  local ffi, C = assert(opts.ffi, 'ffi provider required'), opts.C or opts.ffi.C
+  local ffi, C = assert(opts.ffi, 'ffi binding required'), opts.C or opts.ffi.C
   local convert = opts.tonumber_c or rawget(ffi, 'tonumber') or tonumber
   local native = { ffi = ffi, C = C, bit = opts.bit }
   function native.number(value)
@@ -141,24 +143,15 @@ local function native_context(opts)
   return native
 end
 
-local function set_of(...)
-  local out = {}
-  for i = 1, select('#', ...) do
-    local value = select(i, ...)
-    if value ~= nil then
-      out[value] = true
-    end
-  end
-  return out
-end
+local set_of = NativeError.set
 
 function M.new(opts)
   opts = opts or {}
-  local name = assert(opts.name, 'FFI provider name required')
+  local name = assert(opts.name, 'FFI binding name required')
   local ffi = assert(opts.ffi, 'FFI module required')
   local bit = opts.bit or select(1, BitOps.resolve())
   if not bit then
-    return { name = name, family = 'numeric-fd', available = false, reason = 'bit operations unavailable' }
+    return nil, 'bit operations unavailable'
   end
 
   local native = native_context({ ffi = ffi, C = opts.C or ffi.C, bit = bit, tonumber_c = opts.tonumber_c })
@@ -332,7 +325,7 @@ function M.new(opts)
     end
   end
 
-  local provider = {
+  local binding = {
     name = name,
     family = 'numeric-fd',
     errors = {
@@ -351,7 +344,7 @@ function M.new(opts)
     capabilities = { datagram_truncation = true },
   }
 
-  provider.time = {
+  binding.time = {
     now = function()
       local ts = ffi.new('struct timespec[1]')
       if number(C.clock_gettime(CLOCK_MONOTONIC, ts)) ~= 0 then
@@ -384,29 +377,10 @@ function M.new(opts)
     end,
   }
 
-  local function fd_number(value)
-    if type(value) == 'number' then
-      return value
-    end
-    if type(value) == 'string' then
-      return tonumber(value)
-    end
-    if type(value) == 'table' then
-      if type(value.fd) == 'number' then
-        return value.fd
-      end
-      if type(value.fileno) == 'function' then
-        local ok, result = pcall(value.fileno, value)
-        if ok then
-          return tonumber(result)
-        end
-      end
-    end
-    return tonumber(value)
-  end
+  local fd_number = NativeError.number
 
-  provider.poll = {
-    key = fd_number,
+  binding.poll = {
+    poll_value = fd_number,
     number = fd_number,
     wait = function(plan, timeout)
       local count = #plan.records
@@ -446,7 +420,7 @@ function M.new(opts)
     end,
   }
 
-  provider.fd = {
+  binding.fd = {
     supported = function()
       return pcall(function()
         return C.read, C.write, C.close, C.pipe, C.fcntl
@@ -455,7 +429,7 @@ function M.new(opts)
     validate = function(value)
       return assert(tonumber(value), 'fd must be numeric')
     end,
-    key = fd_number,
+    poll_value = fd_number,
     number = fd_number,
     read = function(fd, maximum)
       maximum = math.max(0, tonumber(maximum) or 4096)
@@ -507,21 +481,15 @@ function M.new(opts)
     end,
   }
 
-  local function infer_kind(address)
-    local kind = address and (address.kind or address.family)
-    if kind == 'inet4' or kind == 'inet6' or kind == 'unix' then
-      return kind
-    end
-    local host = address and (address.host or address.address) or '0.0.0.0'
-    return type(host) == 'string' and host:find(':', 1, true) and 'inet6' or 'inet4'
-  end
-
   local function encode(address)
-    address = address or {}
-    local kind = infer_kind(address)
+    local ok, value = pcall(Address.validate, address, 'socket address')
+    if not ok then
+      return nil
+    end
+    local kind = value.kind
     if kind == 'unix' then
-      local path = address.path
-      if type(path) ~= 'string' or path == '' or #path >= 108 then
+      local path = value.path
+      if #path >= 108 then
         return nil
       end
       local storage = ffi.new('struct sockaddr_un[1]')
@@ -537,18 +505,15 @@ function M.new(opts)
         },
       }
     end
-    local host, port = address.host or address.address, tonumber(address.port)
-    if type(host) ~= 'string' or host == '' or not port or port < 0 or port > 65535 then
-      return nil
-    end
+    local host, port = value.host, value.port
     if kind == 'inet6' then
       local storage, binary = ffi.new('struct sockaddr_in6[1]'), ffi.new('struct in6_addr[1]')
       if number(C.inet_pton(AF_INET6, host, binary)) ~= 1 then
         return nil
       end
       storage[0].sin6_family, storage[0].sin6_port = AF_INET6, C.htons(port)
-      storage[0].sin6_flowinfo = tonumber(address.flowinfo) or 0
-      storage[0].sin6_scope_id = tonumber(address.scope_id) or 0
+      storage[0].sin6_flowinfo = value.flowinfo
+      storage[0].sin6_scope_id = value.scope_id
       storage[0].sin6_addr = binary[0]
       return {
         family = AF_INET6,
@@ -588,32 +553,23 @@ function M.new(opts)
       if native.null(ptr) then
         return nil
       end
-      return {
-        kind = 'inet4',
-        family = 'inet4',
-        host = ffi.string(buffer),
-        port = number(C.ntohs(address.sin_port)),
-      }
+      return Address.ipv4(ffi.string(buffer), number(C.ntohs(address.sin_port)))
     elseif family == AF_INET6 then
       local address, buffer = ffi.cast('struct sockaddr_in6 *', storage), ffi.new('char[128]')
       local ptr = C.inet_ntop(AF_INET6, address.sin6_addr.s6_addr, buffer, 128)
       if native.null(ptr) then
         return nil
       end
-      return {
-        kind = 'inet6',
-        family = 'inet6',
-        host = ffi.string(buffer),
-        port = number(C.ntohs(address.sin6_port)),
+      return Address.ipv6(ffi.string(buffer), number(C.ntohs(address.sin6_port)), {
         flowinfo = number(address.sin6_flowinfo),
         scope_id = number(address.sin6_scope_id),
-      }
+      })
     elseif family == AF_UNIX then
       local address = ffi.cast('struct sockaddr_un *', storage)
       local maximum = math.max(0, tonumber(length or 0) - ffi.offsetof('struct sockaddr_un', 'sun_path'))
       local path = ffi.string(address.sun_path, math.min(maximum, 108))
       local zero = path:find('\0', 1, true)
-      return { kind = 'unix', family = 'unix', path = zero and path:sub(1, zero - 1) or path }
+      return Address.decode_unix(zero and path:sub(1, zero - 1) or path)
     end
   end
 
@@ -672,7 +628,7 @@ function M.new(opts)
     return result_zero(C.setsockopt(fd, native_level, native_option, box, ffi.sizeof('int')))
   end
 
-  provider.net = {
+  binding.net = {
     datagram = true,
     supports = supports,
     encode = encode,
@@ -779,7 +735,7 @@ function M.new(opts)
   }
 
   if opts.resolver_enabled ~= false then
-    provider.resolver = {
+    binding.resolver = {
       supported = function()
         return pcall(function()
           return C.getaddrinfo, C.freeaddrinfo, C.gai_strerror
@@ -810,14 +766,14 @@ function M.new(opts)
       end,
       address = function(value, service)
         if value and value.port == 0 then
-          value.port = tonumber(service) or 0
+          return Address.with_port(value, tonumber(service) or 0)
         end
         return value
       end,
     }
   end
 
-  provider.process = function(Fd)
+  binding.process = function(Fd)
     local Direct = require('fibers.host.process_direct')
     local signals = {
       hup = 1,
@@ -838,7 +794,7 @@ function M.new(opts)
       local ok = pcall(function()
         return C.fork, C.execvp, C.dup2, C.waitpid, C.kill, C._exit
       end)
-      return ok and provider.fd.supported(), 'required POSIX process functions unavailable'
+      return ok and binding.fd.supported(), 'required POSIX process functions unavailable'
     end
 
     local function environment(spec)
@@ -869,7 +825,7 @@ function M.new(opts)
           keep[fd], ordered[#ordered + 1] = true, fd
         end
         if fd >= 3 then
-          local ok, errno = provider.fd.set_cloexec(fd, false)
+          local ok, errno = binding.fd.set_cloexec(fd, false)
           if not ok then
             return nil, errno
           end
@@ -966,11 +922,11 @@ function M.new(opts)
       again = function(errno)
         return errno == EAGAIN or errno == EWOULDBLOCK
       end,
-      pipe = provider.fd.pipe,
-      close = provider.fd.close,
-      read = provider.fd.read,
-      write = provider.fd.write,
-      set_cloexec = provider.fd.set_cloexec,
+      pipe = binding.fd.pipe,
+      close = binding.fd.close,
+      read = binding.fd.read,
+      write = binding.fd.write,
+      set_cloexec = binding.fd.set_cloexec,
       fork = function()
         local pid = number(C.fork())
         if pid ~= -1 then
@@ -1034,12 +990,12 @@ function M.new(opts)
   )
   local aio_supported = AioProbe.available(ffi, C)
   if uring_supported then
-    provider.capabilities.file = true
-    provider.capabilities.file_backend = 'io_uring'
-    provider.capabilities.file_io_uring = true
+    binding.capabilities.file = true
+    binding.capabilities.file_backend = 'io_uring'
+    binding.capabilities.file_io_uring = true
   end
-  provider.capabilities.file_aio_detected = aio_supported
-  provider.file_provider_factory = function(Fd)
+  binding.capabilities.file_aio_detected = aio_supported
+  binding.file = function(Fd)
     return function(_self, runtime, provider_opts)
       if uring_supported then
         local value = UringProvider.new(runtime, {
@@ -1057,40 +1013,32 @@ function M.new(opts)
     end
   end
 
-  provider.is_supported = function()
+  binding.is_supported = function()
     local ok, reason = pcall(function()
       return C.clock_gettime, C.poll, C.read, C.write, C.close, C.pipe, C.fcntl
     end)
     if not ok then
       return false, reason or table.concat(cdef_errors, '; ')
     end
-    local time_ok = pcall(provider.time.now)
+    local time_ok = pcall(binding.time.now)
     return time_ok, time_ok and nil or 'clock_gettime probe failed'
   end
-  provider.support_reason = function()
-    local ok, reason = provider.is_supported()
-    return ok and nil or reason
-  end
-  return provider
+  return binding
 end
 
 function M.load(module_name, name, opts)
   local ok, ffi = pcall(require, module_name)
   if not ok or type(ffi) ~= 'table' then
-    return Native.define({
-      name = name,
-      family = 'numeric-fd',
-      available = false,
-      reason = module_name .. ' module not available',
-    })
+    return Posix.unavailable('fibers.host.' .. name, module_name .. ' module not available')
   end
   local bit, reason = BitOps.resolve()
   if not bit then
-    return Native.define({ name = name, family = 'numeric-fd', available = false, reason = reason })
+    return Posix.unavailable('fibers.host.' .. name, reason)
   end
   opts = opts or {}
   opts.name, opts.ffi, opts.bit, opts.C = name, ffi, bit, ffi.C
-  return Native.define(M.new(opts))
+  local binding, binding_reason = M.new(opts)
+  return binding and Posix.define(binding) or Posix.unavailable('fibers.host.' .. name, binding_reason)
 end
 
 return M

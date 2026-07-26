@@ -132,7 +132,7 @@ p50, p95 and p99 upper bounds from these histograms and reports the exact maximu
 separately.
 
 
-## Architectural A/B suite
+## Architectural structure suite
 
 The first seven architectural stages are exercised separately:
 
@@ -142,12 +142,12 @@ FIBERS_ARCH_FORMAT=csv FIBERS_ARCH_OUTPUT=architecture.csv \
   texlua performance/architecture_suite.lua
 ```
 
-The suite runs both the legacy policy switches and the new architecture, by
-default against both trail and reference evaluators. It checks one validating
-digest per case and reports component fraction, forced reductions, opaque
-requests, duplicate diagnostic states and search work. Set `FIBERS_ARCH_FANOUT8=1` to include fanout eight explicitly.  It is no
-longer pathological under the current policy, but remains opt-in so the A/B
-suite stays compact.
+The suite runs the current architecture against both trail and reference
+evaluators. It checks one validating digest per case and reports component
+fraction, forced reductions, opaque requests, duplicate diagnostic states and
+search work. Historical policy comparisons remain under
+`docs/notes/performance/history/`. Set `FIBERS_ARCH_FANOUT8=1` to include fanout
+eight explicitly; it remains opt-in so the structural suite stays compact.
 
 The acceptance rules are recorded in `performance/INVARIANTS.md`.
 
@@ -273,7 +273,7 @@ FIBERS_IO_BENCH_CASE=datagram lua performance/io_baselines.lua
 It measures acquisition/adoption cost, memory Stream throughput, accepted
 connections, datagram throughput and idle reactor registration.  The default
 uses `ManualHost` so it is deterministic and available across the interpreter
-matrix.  Native provider throughput and leak tests remain separate stress jobs.
+matrix.  Native binding throughput and leak tests remain separate stress jobs.
 
 ## Validating benchmark harness
 

@@ -2,6 +2,7 @@ local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local MemoryProvider = require('fibers.file.memory_provider')
 
@@ -145,7 +146,7 @@ local function memory_provider(initial)
 end
 
 local function host_with_provider(provider)
-  local host = Host.manual({ auto_advance_time = true })
+  local host = SimulatedHost.new({ auto_advance_time = true })
   function host:file_provider()
     return provider
   end
@@ -375,7 +376,7 @@ function tests.runtime_closes_selected_file_provider_once()
     self.shutdowns = self.shutdowns + 1
     return true
   end
-  local host = Host.manual({ auto_advance_time = true })
+  local host = SimulatedHost.new({ auto_advance_time = true })
   function host:file_provider()
     return provider
   end

@@ -15,6 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local socket = require('fibers.socket')
 
@@ -48,7 +49,7 @@ end
 
 -- Acceptance transfers the complete Stream subtree into the accepting scope.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local accepted
   fibers.run(function(root)
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'ownership-listener' })
@@ -81,7 +82,7 @@ end
 -- target; the associated Scope supplies the driver's structured execution
 -- context.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
     local owner = root:raw_region()
     local listener = socket.listen_inet('127.0.0.1', 0, {
@@ -105,7 +106,7 @@ end
 -- Listener and Dial driver tasks are structural children, so moving the
 -- resource root carries its driver obligation with it.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
     local listener
     fibers.scope({ name = 'listener-origin' }, function(origin)
@@ -137,7 +138,7 @@ end
 
 -- A full accepted-connection queue must not make Listener closure uninterruptible.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, {
       name = 'full-queue-listener',
@@ -162,7 +163,7 @@ end
 
 -- A queued connection remains preferred when closure commits at the same time.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'close-race-listener' })
     local address = listener:local_address()
@@ -185,7 +186,7 @@ end
 -- An unclaimed successful Dial remains in its driver scope and is closed by
 -- Dial settlement; it never leaks into the surrounding scope.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local dial_ref, connection_ref
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'unclaimed-listener' })
@@ -210,7 +211,7 @@ end
 -- A claimed Dial connection moves into the caller's scope and the Dial driver
 -- terminates without retaining custody.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'claimed-listener' })
     local address = listener:local_address()
@@ -230,7 +231,7 @@ end
 -- Dial results are single-claim.  A repeated result call terminates with a
 -- structured closed value rather than waiting indefinitely.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'single-claim-listener' })
     local address = listener:local_address()
@@ -249,7 +250,7 @@ end
 -- Closing a Dial immediately after admission must terminate its result and
 -- driver even if connection work has not yet had a scheduling turn.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'early-close-listener' })
     local address = listener:local_address()
@@ -267,7 +268,7 @@ end
 -- Closing a successful but unclaimed Dial makes success unavailable and
 -- produces a structured terminal result rather than an indefinitely blocked one.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'closed-result-listener' })
     local address = listener:local_address()
@@ -288,7 +289,7 @@ end
 -- Normal scope settlement stops a Listener driver and settles queued
 -- connections even when application code does not call close explicitly.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local listener_ref, queued_ref
   fibers.run(function()
     listener_ref = socket.listen_inet('127.0.0.1', 0, {
@@ -308,7 +309,7 @@ end
 
 -- Listener closure remains idempotent.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'idempotent-listener' })
     assert_eq(listener:close('first close'), true)
@@ -319,14 +320,14 @@ end
 
 -- A listener close failure is retained as a scope-settlement failure.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local create_listener = host.create_listener
   host.create_listener = function(self, address, opts)
     local handle, err = create_listener(self, address, opts)
     if not handle then
       return nil, err
     end
-    handle.operations.close = function()
+    handle._close = function()
       return nil, HostError.system('socket', 'close_listener', 'injected close failure', 'EIO')
     end
     return handle
@@ -343,8 +344,8 @@ end
 -- violated the driver contract.  Observers still receive a terminal result,
 -- but the defect is retained as a scope-settlement failure.
 do
-  local host = Host.manual({ sockets = true })
-  host.dial_socket = function()
+  local host = SimulatedHost.new({ sockets = true })
+  host.start_dial = function()
     error('injected dial adapter defect')
   end
 
@@ -365,14 +366,14 @@ end
 -- A host close implementation which throws is a protocol defect. It is
 -- converted to a terminal lifecycle error and retained by settlement.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   local create_listener = host.create_listener
   host.create_listener = function(self, address, opts)
     local handle, err = create_listener(self, address, opts)
     if not handle then
       return nil, err
     end
-    handle.operations.close = function()
+    handle._close = function()
       error('injected throwing close defect')
     end
     return handle
@@ -392,7 +393,7 @@ end
 -- A listener adapter which throws during acquisition publishes a fatal
 -- lifecycle state, unblocks the driver and still fails the calling scope.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   host.create_listener = function()
     error('injected listen adapter defect')
   end
@@ -407,7 +408,7 @@ end
 
 -- Socket option constructors snapshot caller-owned address and option tables.
 do
-  local host = Host.manual({ sockets = true })
+  local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local address = socket.inet_address('127.0.0.1', 0)
     local opts = {

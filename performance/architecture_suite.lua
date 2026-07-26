@@ -1,4 +1,4 @@
--- Structural A/B suite for the first seven performance architecture stages.
+-- Structural suite for the current performance architecture.
 --
 -- This suite includes instrumentation in its elapsed figures deliberately: its
 -- primary outputs are solver work and component shape, not headline throughput.
@@ -49,20 +49,10 @@ end
 
 local profiles = {
   {
-    name = 'legacy',
-    options = {
-      dependency_index = false,
-      component_search = false,
-      normalise_search = false,
-      branch_policy = 'legacy',
-    },
-  },
-  {
     name = 'architecture',
     options = {
       component_search = true,
       normalise_search = true,
-      branch_policy = 'constrained',
     },
   },
 }
@@ -410,7 +400,7 @@ local function render_text()
     )
   end
   lines[#lines + 1] = ''
-  lines[#lines + 1] = 'All profile and evaluator variants produced the same validating digest per case.'
+  lines[#lines + 1] = 'All evaluator variants produced the same validating digest per case.'
   return table.concat(lines, '\n') .. '\n'
 end
 

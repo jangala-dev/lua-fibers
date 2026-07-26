@@ -267,7 +267,6 @@ function M.capture(runtime, requests, component, source)
   end
   M.add(certificate, 'policy', {
     machine = runtime.machine_name,
-    branch = runtime.branch_policy,
     normalise = runtime.normalise_search ~= false,
     symmetry = runtime.certified_symmetry ~= false,
   })
@@ -369,7 +368,6 @@ function M.valid(certificate, runtime)
     if fact.kind == 'policy' then
       if
         fact.machine ~= runtime.machine_name
-        or fact.branch ~= runtime.branch_policy
         or fact.normalise ~= (runtime.normalise_search ~= false)
         or fact.symmetry ~= (runtime.certified_symmetry ~= false)
       then

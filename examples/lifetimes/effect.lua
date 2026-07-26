@@ -52,7 +52,7 @@ end
 fibers.run(function()
   fibers.perform(Op.tensor({
     counter:write_op(1),
-    Effect.after_commit(log_effect('counter-updated', 'counter was committed')),
+    Op.emit(log_effect('counter-updated', 'counter was committed')),
   }))
 end)
 

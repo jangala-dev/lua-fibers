@@ -10,9 +10,10 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 local socket = require('fibers.socket')
 
-local host = Host.manual({
+local host = SimulatedHost.new({
   sockets = true,
   resolver_records = {
     ['echo.test'] = {

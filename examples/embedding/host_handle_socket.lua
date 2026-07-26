@@ -17,12 +17,13 @@ local Region = require('fibers.region')
 local Stream = require('fibers.stream')
 local HostHandle = require('fibers.host.handle')
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 
 -- This example is not a real socket implementation.  It shows the socket-shaped
 -- contract: host readiness wakes the runtime reactor, and the handle read/write callbacks
 -- remain authoritative.
 
-local host = Host.manual({ auto_advance_time = false })
+local host = SimulatedHost.new({ auto_advance_time = false })
 
 local socket = {
   key = 'example-socket',

@@ -110,7 +110,7 @@ compatibility fallback when no DNS configuration can be found. Applications
 which cannot permit that fallback set `require_nonblocking = true` or supply an
 explicit `socket.dns_resolver`.
 
-The deterministic ManualHost supplies virtual pipes, sockets, datagrams and
+The test-only SimulatedHost supplies virtual pipes, sockets, datagrams and
 resolver records for semantic tests. Its native resolver is non-blocking and is
 therefore retained by default; DNS wire tests select the Fibers resolver
 explicitly. Optional hosts advertise only capabilities whose provider contracts
@@ -125,7 +125,7 @@ selected complete mechanism:
 ```text
 io_uring   Linux FFI ring operations
 worker     persistent and one-shot helper processes over evented pipes
-memory     deterministic ManualHost storage
+memory     deterministic SimulatedHost test storage
 ```
 
 Linux FFI hosts probe `io_uring` at construction. `file_io_uring` reports a

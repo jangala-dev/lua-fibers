@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local socket = require('fibers.socket')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 
 local function assert_truthy(value, message)
   if not value then
@@ -69,7 +69,7 @@ local function echo_once(host, address)
   assert_eq(client_result, 'echo:hello', 'client should receive echo line')
 end
 
-local host = ManualHost.new({ sockets = true, pipes = true })
+local host = SimulatedHost.new({ sockets = true, pipes = true })
 echo_once(host, socket.ipv4_address('127.0.0.1', 0))
 echo_once(host, socket.ipv6_address('::1', 0))
 echo_once(host, socket.unix_address('/manual/socket-conformance'))
@@ -102,7 +102,7 @@ local reuse = fibers.try_run(function(scope)
 
   server:await()
   listener:close('reuse complete')
-end, { host = ManualHost.new({ sockets = true, pipes = true }) })
+end, { host = SimulatedHost.new({ sockets = true, pipes = true }) })
 assert_truthy(reuse.ok, 'socket reuse failed: ' .. tostring(reuse.error))
 
 print('tests/io/test_socket_conformance.lua: ok')

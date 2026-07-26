@@ -14,7 +14,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local socket = require('fibers.socket')
-local ManualHost = require('fibers.host.manual')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 
 local function assert_eq(actual, expected, message)
@@ -28,7 +28,7 @@ end
 
 -- A losing construction option must perform no host acquisition.
 local acquisitions = 0
-local losing_host = ManualHost.new({ datagrams = true })
+local losing_host = SimulatedHost.new({ datagrams = true })
 local create = losing_host.create_datagram
 losing_host.create_datagram = function(self, ...)
   acquisitions = acquisitions + 1
@@ -40,7 +40,7 @@ fibers.run(function()
 end, { host = losing_host })
 assert_eq(acquisitions, 0, 'losing datagram option must remain inert')
 
-local host = ManualHost.new({ datagrams = true })
+local host = SimulatedHost.new({ datagrams = true })
 local report = fibers.try_run(function()
   local sender = assert(socket.udp_ipv4('127.0.0.1', 0, {
     send_capacity = 2,
@@ -76,7 +76,7 @@ assert(report.ok, tostring(report.primary or report.error))
 
 -- Dropping a packet in the deterministic transport still represents successful
 -- kernel admission and therefore does not make flush fail.
-local drop_host = ManualHost.new({
+local drop_host = SimulatedHost.new({
   datagrams = true,
   datagram_send = function()
     return false
@@ -91,7 +91,7 @@ end, { host = drop_host })
 
 -- Closing a socket makes blocked and future receives terminate with a structured
 -- closed result rather than hanging.
-local close_host = ManualHost.new({ datagrams = true })
+local close_host = SimulatedHost.new({ datagrams = true })
 fibers.run(function(scope)
   local receiver = assert(socket.udp_ipv4('127.0.0.1', 0))
   local waiter = scope:spawn(function()

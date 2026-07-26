@@ -12,15 +12,46 @@ package.path = table.concat({
 }, ';')
 
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 local Region = require('fibers.region')
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 
-local host = Host.manual({ auto_advance_time = false })
-local input, input_writer = Host.Handle.pipe_pair({ host = host, name = 'example-input' })
-local output_reader, output = Host.Handle.pipe_pair({ host = host, name = 'example-output' })
-local handle = Host.Handle.duplex(input, output, { host = host, name = 'example-duplex' })
+local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
+local input, input_writer = assert(host:create_pipe({ name = 'example-input' }))
+local output_reader, output = assert(host:create_pipe({ name = 'example-output' }))
+local handle = Host.Handle.new({
+  host = host,
+  name = 'example-duplex',
+  key = { read = input:readiness_key(), write = output:readiness_key() },
+  read = function(_, maximum)
+    return input:read(maximum)
+  end,
+  write = function(_, bytes)
+    return output:write(bytes)
+  end,
+  shutdown_read = function(_, reason)
+    return input:shutdown_read(reason)
+  end,
+  shutdown_write = function(_, reason)
+    return output:shutdown_write(reason)
+  end,
+  ready = function(_, mode)
+    return mode == 'write' and output:write_ready_op() or input:read_ready_op()
+  end,
+  bind_runtime = function(_, rt)
+    input:bind_runtime(rt)
+    output:bind_runtime(rt)
+  end,
+  close = function(_, reason)
+    local ok, err = input:close(reason)
+    if not ok then
+      return nil, err
+    end
+    return output:close(reason)
+  end,
+})
 local runtime = Runtime.new({ host = host })
 local region = Region.new('handle-example-region')
 local got, flushed

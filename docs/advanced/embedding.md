@@ -18,7 +18,7 @@ local Host = require('fibers.host')
 ```lua
 local fibers = require('fibers')
 
-local host = Host.manual()
+local host = Host.manual() -- deterministic time and readiness
 local rt = Runtime.new({ host = host })
 
 rt:spawn_raw(function()
@@ -269,26 +269,7 @@ Readiness keys are host-defined tokens: file descriptors, sockets, GUI handles, 
 
 Readiness is a level hint. It is not proof that a subsequent non-blocking I/O call will succeed. The call may still return `would_block`; the host or handle must then clear or refresh the readiness level before waiting again.
 
-Helpers include:
-
-```lua
-local waits = host.readiness_waits(status.interests)
-
-for _, interest in ipairs(waits) do
-  poller:register(interest.readiness_key, interest.mode, interest)
-end
-
--- after polling
-host.deliver_readiness(rt, interest)
-```
-
-or:
-
-```lua
-host.deliver_ready(rt, status.interests, function(key, mode, interest)
-  return poller:is_ready(key, mode)
-end)
-```
+The final host method `block(runtime, interests, status, opts)` owns wait planning and delivery. POSIX-like hosts use the internal `fibers.host.wait_set` module to group readiness keys and deadlines; embedders may use the same module when implementing a custom host, but these helpers are not re-exported from `fibers.host`.
 
 There is no host readiness query during transaction search. External truth enters through feeds so that validation remains meaningful.
 
@@ -321,7 +302,7 @@ The read side reserves Flow capacity before calling the host. The write side lea
 
 Readiness remains a hint. A host call may still return `would_block`; the reactor then releases the read-space reservation or retains the write-data lease as appropriate and waits for refreshed readiness.
 
-The deterministic manual host provides in-memory pipe handles for embedding and tests.
+The small ManualHost provides deterministic time and readiness. In-memory pipe and socket simulation lives in `tests.support.simulated_host`; custom embedders inject final host methods directly.
 
 A custom `HostHandle` supplies:
 
@@ -359,12 +340,7 @@ environment, process-group, standard-stream and exec setup must either succeed
 or produce a structured launch error. Partial child processes must be killed
 and reaped before the failed call returns.
 
-A compatibility host may expose a narrower, explicit process contract when its
-native API lacks a required primitive. Such a host must describe the missing
-guarantees through capability fields and reject unsupported command options
-rather than silently approximating them. The Nixio host, for example, reports
-`process_exec_proof = false`, `process_pass_fds = false`,
-`process_close_fds = "known"` and `process_groups = "session"`.
+A host may expose a narrower, explicit process contract when its native API lacks a required primitive. Capabilities are sparse: presence means support and absence means unsupported. The Nixio host therefore reports `process_close_fds = "known"` and `process_groups = "session"`; it omits `process_exec_proof` and `process_pass_fds`.
 
 Parent pipe endpoints are non-blocking HostHandles and enter the normal adoption,
 Stream and reactor path. The process handle itself is also audited. Exactly one
@@ -372,10 +348,7 @@ supervisor owns signal decisions and reaping; `reap` returns `would_block` until
 a terminal status is authoritative and returns the same cached status after
 successful reaping.
 
-The Linux FFI family uses pidfds where available and timer-polled `waitpid`
-otherwise. ManualHost provides deterministic process completion and signalling
-for semantic tests. A host with no usable process contract must advertise
-`capabilities.process = false` and return `unsupported`.
+The Linux FFI family uses pidfds where available and timer-polled `waitpid` otherwise. The test-only SimulatedHost provides deterministic process completion and signalling. A host with no usable process contract omits `capabilities.process` and the `start_process` method.
 
 ## File capability
 
@@ -393,9 +366,7 @@ returns a backend implementing `read`, `read_line`, `write`, `seek`, `flush`,
 execute potentially blocking filesystem calls on the runtime thread.
 
 Linux FFI hosts return a shared `io_uring` provider when the ring probe passes.
-If a host has process support and supplies no native provider, Fibers selects
-the helper-process provider. ManualHost supplies an in-memory provider. There
-is no synchronous bootstrap fallback.
+If a host has process support and supplies no native provider, Fibers selects the helper-process provider. The test-only SimulatedHost supplies an in-memory provider. There is no synchronous bootstrap fallback.
 
 Capability detail fields are:
 
@@ -446,16 +417,16 @@ effect preparation and discharge
 
 Only fibre-phase code may suspend through `perform`.
 
-## Host provider tables
+## Native host bindings
 
-Every complete host family is assembled from one provider table. The provider
-exports native mechanisms and canonical raw results; `fibers.host.native` owns
-the Fibers-facing descriptor, readiness, socket, datagram, resolver and process
-semantics.
+A native family is one file. It defines a table of raw clock, descriptor, poll,
+network, resolver and process calls, then passes that table directly to the
+shared POSIX-like host implementation:
 
 ```lua
-local Native = require('fibers.host.native')
-local provider = {
+local Posix = require('fibers.host.posix')
+
+local binding = {
   name = 'example',
   family = 'example-handles',
   errors = error_classification,
@@ -467,26 +438,25 @@ local provider = {
   process = raw_process_strategy,
 }
 
-return Native.define(provider)
+return Posix.define(binding)
 ```
 
-Provider functions perform only native calls, address conversion and native
-error conversion. They return native values or `nil, errno, message`; they do
-not construct Fibers handles, Flows, host errors, sockets or process objects.
-The shared implementation owns cancellation, readiness delivery, handle
-lifecycle, connection policy, datagram policy, capability reporting and process
-endpoints.
+The binding performs native calls, native value conversion and native error
+extraction. `fibers.host.posix` constructs the final host directly and owns
+Fibers handles, generation-safe readiness keys, socket and datagram policy,
+resolver deduplication, process endpoints and capability reporting. There is no
+intermediate adapter or provider-description layer.
 
-The deterministic ManualHost follows the same contract through
-`fibers.host.provider.manual`. Adding a host should therefore require one
-provider table rather than a family of facility-specific modules.
+Native operation identity, the value submitted to the poller and an optional
+numeric descriptor are separate. Nixio may therefore use an opaque object for
+I/O and polling while LuaPOSIX and FFI use integers; operations which require a
+numeric descriptor test for it explicitly.
 
-Timer and readiness planning live in `fibers.host.wait_set`, so provider
-construction does not depend on the host selector.
+ManualHost, PureHost and RobloxHost construct the final host protocol directly. ManualHost is deliberately small: deterministic time, readiness and optional injected final methods. The richer in-memory operating-system simulation is test support. Timer and readiness planning remain in `fibers.host.wait_set`.
 
 ## Host acceptance checklist
 
-A host adapter should be tested for:
+A host should be tested for:
 
 ```text
 monotonic clock progression
@@ -504,7 +474,7 @@ The host and readiness tests in `tests/` are the executable contract.
 
 ## I/O lifecycle inspection
 
-Host adapters can inspect the runtime-owned reactor and the external-resource
+Hosts can inspect the runtime-owned reactor and the external-resource
 audit while diagnosing integration failures:
 
 ```lua

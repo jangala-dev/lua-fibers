@@ -5,7 +5,6 @@ package.path = table.concat(
 
 local saved_nixio = package.loaded.nixio
 local saved_host = package.loaded['fibers.host.nixio']
-local saved_provider = package.loaded['fibers.host.provider.nixio']
 local next_fd = 10
 local function object()
   next_fd = next_fd + 1
@@ -56,21 +55,17 @@ local nixio = {
     return 'errno ' .. tostring(number)
   end,
 }
-package.loaded.nixio, package.loaded['fibers.host.nixio'], package.loaded['fibers.host.provider.nixio'] =
-  nixio, nil, nil
+package.loaded.nixio, package.loaded['fibers.host.nixio'] = nixio, nil
 local ok, err = pcall(function()
-  local provider = require('fibers.host.provider.nixio')
   local host = require('fibers.host.nixio').new()
   local raw = object()
   local handle = assert(host.fd.new(raw, { host = host }))
-  assert(provider.poll.key(raw) == raw)
-  assert(provider.poll.key(handle:readiness_key()) == raw)
-  assert(handle.obj == raw and handle.fd == raw.id and raw.blocking == false)
+  assert(handle:readiness_key().poll == raw)
+  assert(handle.handle == raw and handle.fd == raw.id and raw.blocking == false)
   assert(handle:shutdown_read() and handle:shutdown_write())
   assert(handle:close() and raw.closed)
   host:close()
 end)
-package.loaded.nixio, package.loaded['fibers.host.nixio'], package.loaded['fibers.host.provider.nixio'] =
-  saved_nixio, saved_host, saved_provider
+package.loaded.nixio, package.loaded['fibers.host.nixio'] = saved_nixio, saved_host
 assert(ok, err)
 return true

@@ -382,7 +382,6 @@ function Runtime.new(opts)
     dependency_index_threshold = math.max(1, math.floor(opts.dependency_index_threshold or 8)),
     component_search = opts.component_search ~= false,
     normalise_search = opts.normalise_search ~= false,
-    branch_policy = opts.branch_policy or 'constrained',
     certified_symmetry = opts.certified_symmetry ~= false,
     plan_reuse = opts.plan_reuse ~= false,
     resumable_search = opts.resumable_search ~= false,
@@ -2139,7 +2138,10 @@ function Runtime:drive(opts)
       last_found = status
     elseif status and status.tag == 'pending' then
       local interests = status.interests or status.waits or {}
-      local progressed, reason = Host.block(host, self, interests, status, opts.host_options)
+      if not host or type(host.block) ~= 'function' then
+        error('runtime host must implement block', 2)
+      end
+      local progressed, reason = host:block(self, interests, status, opts.host_options or {})
       if not progressed then
         status.host_reason = reason
         status.reason = status.reason or reason

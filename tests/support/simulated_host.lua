@@ -1,4 +1,4 @@
--- Deterministic in-memory provider for the shared host implementation.
+-- Deterministic in-memory operating-system simulation for tests.
 
 local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
@@ -6,15 +6,15 @@ local IOAudit = require('fibers.diagnostics.io')
 local perform = require('fibers.perform')
 local Protected = require('fibers.internal.protected')
 local WaitSet = require('fibers.host.wait_set')
+local Address = require('fibers.socket.address')
 
-local Provider = {
-  name = 'manual',
-  family = 'manual',
-  capabilities = { datagram_truncation = true },
+local Binding = {
+  name = 'simulated',
+  family = 'simulated',
 }
 
 local AGAIN, CLOSED, BROKEN = 'again', 'closed', 'broken_pipe'
-Provider.errors = {
+Binding.errors = {
   again = { [AGAIN] = true },
   closed = { [CLOSED] = true },
   broken_pipe = { [BROKEN] = true },
@@ -35,26 +35,14 @@ local function copy(value)
 end
 
 local function address_key(address)
-  if type(address) ~= 'table' then
-    return tostring(address)
-  end
-  if address.kind == 'unix' or address.family == 'unix' then
-    return 'unix:' .. tostring(address.path)
-  end
-  local family = address.kind or address.family or 'inet4'
-  if family == 'inet' then
-    family = tostring(address.host or ''):find(':', 1, true) and 'inet6' or 'inet4'
-  end
-  return table.concat({ family, tostring(address.host or '0.0.0.0'), tostring(address.port or 0) }, ':')
+  return Address.key(Address.validate(address, 'simulated socket address'))
 end
 
 local function wildcard_key(address)
-  local family = (address.kind == 'inet6' or address.family == 'inet6') and 'inet6' or 'inet4'
-  return address_key({
-    kind = family,
-    host = family == 'inet6' and '::' or '0.0.0.0',
-    port = address.port,
-  })
+  address = Address.validate(address, 'simulated socket address')
+  local wildcard = address.kind == 'inet6' and Address.ipv6('::', address.port)
+    or Address.ipv4('0.0.0.0', address.port)
+  return Address.key(wildcard)
 end
 
 local function buffer()
@@ -85,7 +73,7 @@ local function endpoint(host, kind, can_read, can_write)
   return {
     host = host,
     kind = kind,
-    key = 'manual-' .. kind .. '-' .. tostring(host._manual_serial),
+    key = 'simulated-' .. kind .. '-' .. tostring(host._manual_serial),
     can_read = can_read,
     can_write = can_write,
   }
@@ -109,22 +97,22 @@ local function pipe_pair(host)
   return reader, writer
 end
 
-Provider.fd = {
+Binding.fd = {
   supported = function()
     return true
   end,
   validate = function(value)
     return assert(value, 'manual descriptor required')
   end,
-  key = function(value)
+  poll_value = function(value)
     return value.key
   end,
-  decorate = function(handle, value)
+  opened = function(handle, value)
     value.handle = handle
     update(value.rx or value.tx or {})
   end,
   pipe = function(host)
-    return pipe_pair(assert(host, 'manual pipe requires host'))
+    return pipe_pair(assert(host, 'simulated pipe requires host'))
   end,
   set_nonblocking = function()
     return true
@@ -134,7 +122,7 @@ Provider.fd = {
   end,
 }
 
-function Provider.fd.read(raw, maximum)
+function Binding.fd.read(raw, maximum)
   local state = raw.rx
   if raw.closed or not state or state.read_closed then
     return nil, CLOSED
@@ -158,7 +146,7 @@ function Provider.fd.read(raw, maximum)
   return data
 end
 
-function Provider.fd.write(raw, bytes)
+function Binding.fd.write(raw, bytes)
   local state = raw.tx
   if raw.closed or not state or state.write_closed then
     return nil, CLOSED
@@ -175,7 +163,7 @@ function Provider.fd.write(raw, bytes)
   return #bytes
 end
 
-function Provider.fd.shutdown(raw, mode)
+function Binding.fd.shutdown(raw, mode)
   if mode == 'read' and raw.rx then
     raw.rx.read_closed, raw.rx.chunks, raw.rx.bytes = true, {}, 0
     update(raw.rx)
@@ -186,7 +174,7 @@ function Provider.fd.shutdown(raw, mode)
   return true
 end
 
-function Provider.fd.close(raw)
+function Binding.fd.close(raw)
   if raw.closed then
     return true
   end
@@ -208,7 +196,7 @@ function Provider.fd.close(raw)
   return true
 end
 
-Provider.net = {
+Binding.net = {
   datagram = true,
   supports = function(family)
     return family == 'inet4' or family == 'inet6' or family == 'unix'
@@ -220,19 +208,18 @@ Provider.net = {
     return true
   end,
   encode = function(address)
-    local family = address.kind or address.family
-    if family == 'inet' then
-      family = tostring(address.host or ''):find(':', 1, true) and 'inet6' or 'inet4'
+    local ok, value = pcall(Address.validate, address, 'simulated socket address')
+    if not ok then
+      return nil, HostError.invalid_argument('socket', 'address', { address = address })
     end
-    family = family or 'inet4'
-    return { family = family, native = copy(address) }
+    return { family = value.kind, native = value }
   end,
   decode = function(address)
-    return address and copy(address) or nil
+    return address and Address.validate(address, 'simulated socket address') or nil
   end,
   open = function(family, kind, host)
     local raw =
-      endpoint(assert(host, 'manual socket requires host'), kind, kind == 'stream', kind == 'stream')
+      endpoint(assert(host, 'simulated socket requires host'), kind, kind == 'stream', kind == 'stream')
     raw.family, raw.socket_kind = family, kind
     if kind == 'datagram' then
       raw.incoming = {}
@@ -244,7 +231,7 @@ Provider.net = {
   end,
 }
 
-function Provider.net.bind(raw, address)
+function Binding.net.bind(raw, address)
   local actual = copy(address)
   if actual.kind ~= 'unix' and actual.family ~= 'unix' and tonumber(actual.port) == 0 then
     actual.port = raw.host.next_ephemeral_port
@@ -263,14 +250,14 @@ function Provider.net.bind(raw, address)
   return true
 end
 
-function Provider.net.listen(raw)
+function Binding.net.listen(raw)
   raw.pending = {}
   raw.listener_key = raw.bound_key
   raw.host.socket_listeners[raw.listener_key] = raw
   return true
 end
 
-function Provider.net.accept(raw)
+function Binding.net.accept(raw)
   if raw.closed then
     return nil, nil, CLOSED
   end
@@ -287,7 +274,7 @@ function Provider.net.accept(raw)
   return item.raw, copy(item.peer)
 end
 
-function Provider.net.connect(raw, address)
+function Binding.net.connect(raw, address)
   local host = raw.host
   local listener = host.socket_listeners[address_key(address)]
   if not listener and address.kind ~= 'unix' and address.family ~= 'unix' then
@@ -318,13 +305,13 @@ function Provider.net.connect(raw, address)
   return true
 end
 
-function Provider.net.socket_error()
+function Binding.net.socket_error()
   return 0
 end
-function Provider.net.query(raw, peer)
+function Binding.net.query(raw, peer)
   return copy(peer and raw.peer or raw.address)
 end
-function Provider.net.prime(handle)
+function Binding.net.prime(handle)
   local raw = handle.handle
   if raw.rx then
     update(raw.rx)
@@ -334,7 +321,7 @@ function Provider.net.prime(handle)
   end
 end
 
-function Provider.net.receive(raw, maximum)
+function Binding.net.receive(raw, maximum)
   if raw.closed then
     return nil, nil, nil, CLOSED
   end
@@ -357,7 +344,7 @@ function Provider.net.receive(raw, maximum)
   return data, copy(packet.peer), flags
 end
 
-function Provider.net.send(raw, data, destination)
+function Binding.net.send(raw, data, destination)
   if raw.closed then
     return nil, CLOSED
   end
@@ -384,7 +371,7 @@ function Provider.net.send(raw, data, destination)
   return #data
 end
 
-Provider.resolver = {
+Binding.resolver = {
   query = function(host, endpoint, opts)
     local records, value = {}, host.resolver_records[endpoint.host]
     local family = (opts or {}).family or endpoint.family_hint
@@ -421,7 +408,8 @@ Provider.resolver = {
   end,
 }
 
-local function manual_process(Fd, ProcessCore)
+local function manual_process(Fd)
+  local ProcessCore = require('fibers.host.process').core
   local signals = ProcessCore.signals()
   local Class = ProcessCore.class({
     signals = signals,
@@ -504,7 +492,7 @@ local function manual_process(Fd, ProcessCore)
     start_process = function(host, spec)
       local pid, child, endpoints = host.next_pid, {}, {}
       host.next_pid = pid + 1
-      local name = spec.name or ('manual-process-' .. tostring(pid))
+      local name = spec.name or ('simulated-process-' .. tostring(pid))
       if spec.stdin == 'pipe' then
         child.stdin, endpoints.stdin = Fd.pipe({ host = host, name = name .. ':stdin' })
       end
@@ -535,9 +523,10 @@ local function manual_process(Fd, ProcessCore)
     end,
   }
 end
-Provider.process = manual_process
+Binding.process = manual_process
 
-Provider.time = {
+Binding.capabilities = { datagram_truncation = true }
+Binding.time = {
   now = function()
     return 0
   end,
@@ -545,228 +534,248 @@ Provider.time = {
     return true
   end,
 }
-Provider.poll = {
+Binding.poll = {
   wait = function()
-    return {}
+    return nil, 'simulated-poll-unused'
   end,
 }
 
-Provider.create = function(opts)
-  local state = {
-    _now = opts.now or 0,
-    _manual_serial = 0,
-    auto_advance_time = opts.auto_advance_time ~= false,
-    ready = {},
-    socket_listeners = {},
-    datagram_sockets = {},
-    processes = {},
-    next_ephemeral_port = opts.first_ephemeral_port or 40000,
-    next_pid = opts.first_pid or 1000,
-    resolver_records = opts.resolver_records or opts.dns or {},
-    datagram_send = opts.datagram_send,
-    on_process_start = opts.on_process_start,
-    on_process_signal = opts.on_process_signal,
-    enable_pipes = opts.pipes == true,
-    enable_sockets = opts.sockets == true,
-    enable_datagrams = opts.datagrams == true or opts.udp == true,
-    enable_processes = opts.processes == true or opts.exec == true or opts.process_factory ~= nil,
-    enable_resolver = opts.resolver ~= false,
-  }
-  state.now = function()
-    return state._now
+local Posix = require('fibers.host.posix')
+local Simulated = Posix.define(Binding)
+local base_new = Simulated.new
+
+function Simulated.new(opts)
+  opts = opts or {}
+  local host = base_new(opts)
+  local base_create_pipe = host.create_pipe
+  local base_create_listener = host.create_listener
+  local base_start_dial = host.start_dial
+  local base_create_datagram = host.create_datagram
+  local base_resolve = host.resolve
+  local base_start_process = host.start_process
+
+  host._now = opts.now or 0
+  host._manual_serial = 0
+  host.auto_advance_time = opts.auto_advance_time ~= false
+  host.ready = {}
+  host.socket_listeners = {}
+  host.datagram_sockets = {}
+  host.processes = {}
+  host.next_ephemeral_port = opts.first_ephemeral_port or 40000
+  host.next_pid = opts.first_pid or 1000
+  host.resolver_records = opts.resolver_records or opts.dns or {}
+  host.datagram_send = opts.datagram_send
+  host.on_process_start = opts.on_process_start
+  host.on_process_signal = opts.on_process_signal
+  host.pipe_factory = opts.pipe_factory
+  host.listener_factory = opts.listener_factory
+  host.dial_factory = opts.dial_factory
+  host.process_factory = opts.process_factory
+  host.now = function()
+    return host._now
   end
-  state.file_storage =
-    require('fibers.file.memory_provider').new({ files = opts.files, directories = opts.directories })
-  state.pipe_factory = opts.pipe_factory
-  state.listener_factory = opts.listener_factory
-  state.dial_factory = opts.dial_factory
-  state.process_factory = opts.process_factory
-  return state
-end
 
-Provider.file_provider = function(host)
-  return host.file_storage
-end
-Provider.capability_builder = function(host)
-  return {
-    time = true,
-    readiness = true,
-    fd = false,
-    pipe = host.enable_pipes or host.pipe_factory ~= nil,
-    socket = host.enable_sockets,
-    socket_ipv4 = host.enable_sockets,
-    socket_ipv6 = host.enable_sockets,
-    socket_unix = host.enable_sockets,
-    datagram = host.enable_datagrams,
-    datagram_truncation = host.enable_datagrams,
-    resolver = host.enable_resolver,
-    resolver_blocking = false,
-    process = host.enable_processes or host.process_factory ~= nil,
-    file = true,
-    file_backend = 'memory',
-    file_io_uring = false,
-    file_aio_detected = false,
-  }
-end
-Provider.methods = {}
+  local pipes = opts.pipes == true or host.pipe_factory ~= nil
+  local sockets = opts.sockets == true
+  local datagrams = opts.datagrams == true or opts.udp == true
+  local processes = opts.processes == true or opts.exec == true or host.process_factory ~= nil
+  local resolver = opts.resolver ~= false
 
-function Provider.methods:set_time(value)
-  self._now = tonumber(value) or self._now
-  return self._now
-end
-function Provider.methods:advance(value)
-  self._now = self._now + (tonumber(value) or 0)
-  return self._now
-end
-function Provider.methods:set_readiness(key, mode, value)
-  mode = WaitSet.normalise_mode(mode)
-  local record = self.ready[tostring(key)] or {}
-  self.ready[tostring(key)] = record
-  record[mode] = value == nil and true or value or nil
-  return true
-end
-function Provider.methods:readable(key)
-  return self:set_readiness(key, 'read', true)
-end
-function Provider.methods:writable(key)
-  return self:set_readiness(key, 'write', true)
-end
-function Provider.methods:clear_readiness(key, mode)
-  local record = self.ready[tostring(key)]
-  if not record then
+  host.capabilities = { time = true, readiness = true, file = true, file_backend = 'memory' }
+  if pipes then
+    host.capabilities.pipe = true
+  end
+  if sockets then
+    host.capabilities.socket = true
+    host.capabilities.socket_ipv4 = true
+    host.capabilities.socket_ipv6 = true
+    host.capabilities.socket_unix = true
+  end
+  if datagrams then
+    host.capabilities.datagram = true
+    host.capabilities.datagram_truncation = true
+  end
+  if resolver then
+    host.capabilities.resolver = true
+  end
+  if processes then
+    host.capabilities.process = true
+  end
+
+  host.file_storage = require('fibers.file.memory_provider').new({
+    files = opts.files,
+    directories = opts.directories,
+  })
+
+  function host:sleep(seconds)
+    self._now = self._now + math.max(0, tonumber(seconds) or 0)
     return true
   end
-  if mode == nil then
-    self.ready[tostring(key)] = nil
-  else
-    record[WaitSet.normalise_mode(mode)] = nil
-  end
-  return true
-end
-function Provider.methods:is_ready(key, mode)
-  local record = self.ready[tostring(key)]
-  return not not (record and record[WaitSet.normalise_mode(mode)])
-end
-function Provider.methods:complete_process(pid_or_process, status)
-  local process = type(pid_or_process) == 'table' and pid_or_process or self.processes[pid_or_process]
-  if not process then
-    return nil, HostError.invalid_argument('process', 'complete', { pid = pid_or_process })
-  end
-  return process:complete(status)
-end
-function Provider.methods:deliver_datagram(address, data, peer, fields)
-  local raw = self.datagram_sockets[address_key(address)] or self.datagram_sockets[wildcard_key(address)]
-  if not raw or raw.closed then
-    return nil, HostError.closed('datagram', 'deliver', { address = address })
-  end
-  raw.incoming[#raw.incoming + 1] = {
-    data = assert(data, 'datagram data required'),
-    peer = copy(peer or { kind = 'inet4', host = '127.0.0.1', port = 53 }),
-    fields = fields,
-  }
-  if raw.handle then
-    raw.handle:mark_readable()
-  end
-  return true
-end
 
-Provider.methods_factory = function(parts)
-  local Fd, Socket, Process = parts.fd, parts.socket, parts.process
-  return {
-    create_pipe = function(self, opts)
-      if self.pipe_factory then
-        return self.pipe_factory(self, opts or {})
-      end
-      if not self.capabilities.pipe then
-        return nil, nil, HostError.unsupported('host', 'pipe', { host = self.name })
-      end
-      return Fd.pipe({
-        host = self,
-        name = opts and opts.name,
-        nonblocking = opts == nil or opts.nonblocking ~= false,
-      })
-    end,
-    create_listener = function(self, address, opts)
-      if self.listener_factory then
-        return self.listener_factory(self, address, opts or {})
-      end
-      if not self.capabilities.socket then
-        return nil, HostError.unsupported('host', 'listen', { host = self.name, address = address })
-      end
-      return Socket.create_listener(self, address, opts)
-    end,
-    dial_socket = function(self, address, opts)
-      local handle, err = Socket.start_dial(self, address, opts)
-      if not handle then
-        return nil, nil, err
-      end
-      local connected, peer, finish_err = handle:finish_connect()
-      if not connected then
-        handle:close(finish_err or 'manual dial did not complete')
-        return nil, nil, finish_err
-      end
-      return connected, peer
-    end,
-    start_dial = function(self, address, opts)
-      if self.dial_factory then
-        return self.dial_factory(self, address, opts or {})
-      end
-      local handle, peer, err = self:dial_socket(address, opts)
-      if not handle then
-        return nil, err
-      end
-      handle.finish_connect = function(self_handle)
-        return self_handle, peer
-      end
-      return handle
-    end,
-    start_process = function(self, spec)
-      if self.process_factory then
-        return self.process_factory(self, spec)
-      end
-      if not self.capabilities.process or not Process then
-        return nil, nil, HostError.unsupported('host', 'process', { host = self.name })
-      end
-      return Process.start_process(self, spec)
-    end,
-  }
-end
+  function host:set_time(value)
+    self._now = tonumber(value) or self._now
+    return self._now
+  end
 
-Provider.block = function(host, runtime, waits, status, opts)
-  local set, delivered = WaitSet.build(waits), false
-  for i = 1, #set.records do
-    local record = set.records[i]
-    if
-      WaitSet.deliver(runtime, record, host:is_ready(record.key, 'read'), host:is_ready(record.key, 'write'))
-    then
-      delivered = true
-    end
+  function host:advance(value)
+    self._now = self._now + (tonumber(value) or 0)
+    return self._now
   end
-  if delivered then
-    if host.on_wake then
-      host.on_wake('readiness', waits, status)
-    end
-    return true, 'readiness'
+
+  function host:set_readiness(key, mode, value)
+    mode = WaitSet.normalise_mode(mode)
+    local record = self.ready[tostring(key)] or {}
+    self.ready[tostring(key)] = record
+    record[mode] = value == nil and true or value or nil
+    return true
   end
-  if set.deadline ~= nil then
-    if host.auto_advance_time and (opts or {}).auto_advance_time ~= false then
-      if host._now < set.deadline then
-        if host.on_wait then
-          host.on_wait(set.deadline, set.deadline - host._now, waits, status)
+
+  function host:readable(key)
+    return self:set_readiness(key, 'read', true)
+  end
+  function host:writable(key)
+    return self:set_readiness(key, 'write', true)
+  end
+
+  function host:clear_readiness(key, mode)
+    local record = self.ready[tostring(key)]
+    if not record then
+      return true
+    end
+    if mode == nil then
+      self.ready[tostring(key)] = nil
+    else
+      record[WaitSet.normalise_mode(mode)] = nil
+    end
+    return true
+  end
+
+  function host:is_ready(key, mode)
+    local record = self.ready[tostring(key)]
+    return not not (record and record[WaitSet.normalise_mode(mode)])
+  end
+
+  function host:complete_process(pid_or_process, status)
+    local process = type(pid_or_process) == 'table' and pid_or_process or self.processes[pid_or_process]
+    if not process then
+      return nil, HostError.invalid_argument('process', 'complete', { pid = pid_or_process })
+    end
+    return process:complete(status)
+  end
+
+  function host:deliver_datagram(address, data, peer, fields)
+    local raw = self.datagram_sockets[address_key(address)] or self.datagram_sockets[wildcard_key(address)]
+    if not raw or raw.closed then
+      return nil, HostError.closed('datagram', 'deliver', { address = address })
+    end
+    raw.incoming[#raw.incoming + 1] = {
+      data = assert(data, 'datagram data required'),
+      peer = Address.validate(peer or Address.ipv4('127.0.0.1', 53)),
+      fields = fields,
+    }
+    if raw.handle then
+      raw.handle:mark_readable()
+    end
+    return true
+  end
+
+  host.create_pipe = pipes
+      and function(self, options)
+        if self.pipe_factory then
+          return self.pipe_factory(self, options or {})
         end
-        host._now = set.deadline
+        return base_create_pipe(self, options)
       end
-      if host.on_wake then
-        host.on_wake('time', waits, status)
+    or false
+
+  host.create_listener = sockets
+      and function(self, address, options)
+        if self.listener_factory then
+          return self.listener_factory(self, address, options or {})
+        end
+        return base_create_listener(self, address, options)
       end
-      return true, 'time'
+    or false
+
+  host._manual_dial_socket = sockets
+      and function(self, address, options)
+        local handle, err = base_start_dial(self, address, options)
+        if not handle then
+          return nil, nil, err
+        end
+        local connected, peer, finish_err = handle:finish_connect()
+        if not connected then
+          handle:close(finish_err or 'manual dial did not complete')
+          return nil, nil, finish_err
+        end
+        return connected, peer
+      end
+    or false
+
+  host.start_dial = sockets
+      and function(self, address, options)
+        if self.dial_factory then
+          return self.dial_factory(self, address, options or {})
+        end
+        return base_start_dial(self, address, options)
+      end
+    or false
+
+  host.create_datagram = datagrams
+      and function(self, address, options)
+        return base_create_datagram(self, address, options)
+      end
+    or false
+
+  host.resolve = resolver
+      and function(self, endpoint, options)
+        return base_resolve(self, endpoint, options)
+      end
+    or false
+
+  host.start_process = processes
+      and function(self, spec)
+        if self.process_factory then
+          return self.process_factory(self, spec)
+        end
+        return base_start_process(self, spec)
+      end
+    or false
+
+  function host:file_provider()
+    return self.file_storage
+  end
+
+  function host:block(runtime, waits, _status, options)
+    if self.closed then
+      error('simulated host is closed', 2)
     end
-    return nil, 'time-not-ready'
+    local set, delivered = WaitSet.build(waits), false
+    for i = 1, #set.records do
+      local record = set.records[i]
+      delivered = WaitSet.deliver(
+        runtime,
+        record,
+        self:is_ready(record.key, 'read'),
+        self:is_ready(record.key, 'write')
+      ) or delivered
+    end
+    if delivered then
+      return true, 'readiness'
+    end
+    if set.deadline ~= nil then
+      if self.auto_advance_time and (options or {}).auto_advance_time ~= false then
+        if self._now < set.deadline then
+          self._now = set.deadline
+        end
+        return true, 'time'
+      end
+      return nil, 'time-not-ready'
+    end
+    return nil, #set.records > 0 and 'readiness-not-ready' or 'unsupported-waits'
   end
-  if host.on_unsupported then
-    host.on_unsupported(waits, status)
-  end
-  return #set.records > 0 and nil or nil, #set.records > 0 and 'readiness-not-ready' or 'unsupported-waits'
+
+  return host
 end
 
-return Provider
+return Simulated

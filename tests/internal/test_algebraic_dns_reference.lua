@@ -12,6 +12,7 @@ local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Clock = require('fibers.resource.clock')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local socket = require('fibers.socket')
 local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
@@ -37,7 +38,7 @@ end
 -- Clock observations used by provisional continuations are managed facts. Two
 -- observations in one product share the same proof-time instant.
 do
-  local host = Host.manual()
+  local host = SimulatedHost.new()
   local result = fibers.try_run(function()
     local observed = fibers.perform(Op.named_all({
       left = clock:now_op(),
@@ -74,7 +75,7 @@ end
 -- Query result state is a projection of the two authoritative family
 -- completions. A custom family backend never publishes a third combined fact.
 do
-  local host = Host.manual({ sockets = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, resolver = false })
   local result = fibers.try_run(function()
     local resolver = {
       resolve = function()
@@ -107,7 +108,7 @@ end
 -- Family validation, ordering, diversity reservation and capacity accounting
 -- are established by the committing PublishFamily transition itself.
 do
-  local host = Host.manual()
+  local host = SimulatedHost.new()
   local result = fibers.try_run(function()
     local endpoint = Address.name('example.test', 443)
     local race = Race.new(endpoint, {

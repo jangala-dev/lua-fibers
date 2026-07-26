@@ -10,6 +10,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 local socket = require('fibers.socket')
 
 fibers.run(function(scope)
@@ -31,6 +32,6 @@ fibers.run(function(scope)
   connection:close('server complete')
   client:await()
   listener:close('example complete')
-end, { host = Host.manual({ sockets = true }) })
+end, { host = SimulatedHost.new({ sockets = true }) })
 
 print('socket echo: ok')

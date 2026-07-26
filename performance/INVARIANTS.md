@@ -47,8 +47,9 @@ runners.
 ## Workload classes
 
 The principal suite retains simple, moderate and complex application-shaped
-work. `performance/architecture_suite.lua` separately exercises the architectural
-mechanisms and compares them with the legacy policy switches.
+work. `performance/architecture_suite.lua` separately exercises the current
+architectural mechanisms against both evaluators. Historical policy comparisons
+remain under `docs/notes/performance/history/`.
 `performance/advanced_suite.lua` isolates the cache, memoisation, symmetry and
 cross-cycle reuse passes from one another and retains ordinary rendezvous as a
 fixed-cost control.

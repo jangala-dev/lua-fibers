@@ -176,7 +176,7 @@ do
       return socket
     end,
   }
-  local cleared = { 'fibers.host.luaposix', 'fibers.host.provider.luaposix' }
+  local cleared = { 'fibers.host.luaposix' }
   for name in pairs(modules) do
     cleared[#cleared + 1] = name
   end
@@ -291,7 +291,7 @@ do
     nixio = function()
       return nixio
     end,
-  }, { 'nixio', 'fibers.host.nixio', 'fibers.host.provider.nixio' }, function()
+  }, { 'nixio', 'fibers.host.nixio' }, function()
     local Host = require('fibers.host.nixio')
     assert(Host.is_supported())
     local host = Host.new()

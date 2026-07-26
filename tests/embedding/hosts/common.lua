@@ -190,9 +190,10 @@ end
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
   local Handle = require('fibers.host.handle')
+  local HostHandles = require('tests.support.host_handles')
   local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
-  local handle = Handle.duplex(r, w, { host = host, name = name .. ':duplex' })
+  local handle = HostHandles.duplex(r, w, { host = host, name = name .. ':duplex' })
   local rt = FibersRuntime.new({ host = host })
   local region = FibersRegion.new(name .. ':region')
   local got, flushed, stream

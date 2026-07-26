@@ -1045,7 +1045,7 @@ dfs = function(state)
       end
       local refutation
 
-      local frontier = Frontier.analyse(state, intents_compatible, state.runtime.branch_policy ~= 'legacy')
+      local frontier = Frontier.analyse(state, intents_compatible, true)
       local exchange = frontier.exchange
       if profile_plan then
         profile_plan.intent_pairs_scanned = profile_plan.intent_pairs_scanned + exchange.scans

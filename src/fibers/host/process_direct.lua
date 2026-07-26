@@ -1,6 +1,6 @@
 -- Shared close-on-exec fork/exec strategy.
 --
--- The native provider supplies raw POSIX mechanisms.  This module owns the
+-- The native binding supplies raw POSIX mechanisms.  This module owns the
 -- launch protocol, stdio plan, Process object, errors and exactly-once reaping.
 
 local HostError = require('fibers.host.error')

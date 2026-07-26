@@ -161,13 +161,12 @@ end
 
 -- Nixio readiness delivery must not depend on the returned fd retaining the
 -- identity of the object supplied to poll(). Nixio documents in-place mutation,
--- and the host adapter tolerates both an omitted second return and a returned
+-- and the host binding tolerates both an omitted second return and a returned
 -- table whose fd field is the integer descriptor rather than the original object.
 do
   local module_names = {
     'nixio',
     'fibers.host.nixio',
-    'fibers.host.provider.nixio',
   }
   local saved_loaded, saved_preload = {}, {}
   for i = 1, #module_names do
@@ -241,7 +240,7 @@ do
         external_kind = 'readiness',
         resource = {},
         feed = read_feed,
-        readiness_key = { family = 'nixio', handle = descriptor_read },
+        readiness_key = { family = 'nixio', poll = descriptor_read, number = 77, generation = 1 },
         mode = 'read',
       },
       {
@@ -249,7 +248,7 @@ do
         external_kind = 'readiness',
         resource = {},
         feed = write_feed,
-        readiness_key = { family = 'nixio', handle = descriptor_write },
+        readiness_key = { family = 'nixio', poll = descriptor_write, number = 88, generation = 2 },
         mode = 'write',
       },
     }

@@ -529,13 +529,6 @@ function Scope:claim_op(item, purpose)
   return self.region:claim_op(item, purpose)
 end
 
-function Scope:resolve_op(claim, resolution)
-  if resolution == nil then
-    error('Scope:resolve_op requires a resolution', 2)
-  end
-  return self.region:resolve_op(claim, resolution)
-end
-
 function Scope:request_cancel_op(reason)
   return self.cancellation
     :transition_op(RequestCancellation, { reason = reason })

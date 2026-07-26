@@ -10,9 +10,10 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 local file = require('fibers.file')
 
--- ManualHost supplies a deterministic linked pipe for this portable example.
+-- The example support simulator supplies a deterministic linked pipe.
 -- Native host families create non-blocking operating-system pipes instead.
 fibers.run(function()
   local reader, writer = fibers.perform(file.pipe_op({ name = 'example-pipe' }))
@@ -26,4 +27,4 @@ fibers.run(function()
   local bytes = assert(fibers.perform(reader:read_all_op({ max = 1024 })))
   assert(bytes == 'hello through a pipe')
   fibers.perform(reader:close_op('reader complete'))
-end, { host = Host.manual({ pipes = true, auto_advance_time = false }) })
+end, { host = SimulatedHost.new({ pipes = true, auto_advance_time = false }) })

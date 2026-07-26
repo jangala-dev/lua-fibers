@@ -108,16 +108,7 @@ function RobloxHost.new(opts)
     kind = 'roblox',
     name = 'roblox',
     family = 'roblox',
-    capabilities = {
-      time = true,
-      external = true,
-      readiness = false,
-      fd = false,
-      pipe = false,
-      socket = false,
-      file = false,
-      process = false,
-    },
+    capabilities = { time = true, external = true },
     _task = task_api,
     _now = now,
     _done_event = done_event,
@@ -130,7 +121,6 @@ function RobloxHost.new(opts)
     _done = false,
     _done_value = nil,
     _closed = false,
-    on_wake = opts.on_wake,
     on_external_error = opts.on_external_error,
   }, RobloxHost)
 

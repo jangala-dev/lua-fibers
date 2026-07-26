@@ -1,4 +1,4 @@
--- Shared reaper-process launch strategy for providers without close-on-exec.
+-- Shared reaper-process launch strategy for bindings without close-on-exec.
 --
 -- A helper owns the real child, reports launch and terminal status through one
 -- pipe, and reaps it exactly once.  Providers supply opaque-handle mechanics.

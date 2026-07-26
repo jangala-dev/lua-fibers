@@ -50,7 +50,7 @@ do
     live_auth = fibers.perform(maybe(owner:authorise_op(h, 'write')))
     local claim = fibers.perform(owner:claim_op(h, { type = 'test', reason = 'authority' }))
     claimed_auth = fibers.perform(maybe(owner:authorise_op(h, 'write')))
-    fibers.perform(owner:resolve_op(claim, { kind = 'restore' }))
+    fibers.perform(claim:restore_op())
     restored_auth = fibers.perform(maybe(owner:authorise_op(h, 'write')))
     fibers.perform(Settlement.retire_item_op(owner, h))
   end)

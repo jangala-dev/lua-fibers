@@ -11,8 +11,9 @@ package.path = table.concat({
 local fibers = require('fibers')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 
-local host = Host.manual({ datagrams = true })
+local host = SimulatedHost.new({ datagrams = true })
 
 fibers.run(function()
   local client = assert(socket.udp_ipv4('127.0.0.1', 0))

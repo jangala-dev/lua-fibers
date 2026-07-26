@@ -29,11 +29,12 @@ local function ownership_handle(name, fields)
 end
 
 local Claim = {}
+Claim.__index = Claim
 local next_claim = 0
 
 function Claim.new(region, root, records, purpose)
   next_claim = next_claim + 1
-  return {
+  return setmetatable({
     _fibers_claim = true,
     _fibers_value = true,
     id = 'claim-' .. tostring(next_claim),
@@ -45,7 +46,11 @@ function Claim.new(region, root, records, purpose)
     started = false,
     running = false,
     complete = false,
-  }
+  }, Claim)
+end
+
+function Claim:restore_op()
+  return self.region:_restore_pristine_claim_op(self)
 end
 
 function Claim.is(x)
@@ -798,99 +803,124 @@ local function valid_claim(s, region, claim)
   return subtree
 end
 
-function Region:resolve_op(claim, resolution)
-  resolution = resolution or { kind = 'discharge' }
-  local requested_kind = resolution.kind or resolution
-  if requested_kind == 'restore' and Claim.is(claim) and claim.started then
-    error('a settlement claim cannot be restored after settlement has begun', 2)
-  end
-  if requested_kind == 'discharge' and Claim.is(claim) and claim.started and not claim.complete then
-    error('an incomplete settlement claim cannot be discharged', 2)
-  end
-  if requested_kind == 'resume' and (not Claim.is(claim) or not claim.started or claim.complete) then
-    error('only an incomplete started settlement claim can be resumed', 2)
-  end
-  local t = select_transition('region.resolve_claim', function(s)
-    return valid_claim(s, self, claim) ~= nil
-  end, function(s)
-    local ns = clone_ledger(s)
-    local rs = ensure_region(ns, self)
-    local subtree = valid_claim(ns, self, claim)
-    local kind = resolution.kind or resolution
+local function resolve_claim_op(region, claim, kind, details)
+  details = details or {}
+  local t = select_transition('region.resolve_claim', function(state)
+    return valid_claim(state, region, claim) ~= nil
+  end, function(state)
+    local next_state = clone_ledger(state)
+    local region_records = ensure_region(next_state, region)
+    local subtree = valid_claim(next_state, region, claim)
     if kind == 'discharge' then
       for child in pairs(subtree) do
-        record_set(ns, self, rs, child, nil)
-        owner_set(ns, child, nil)
+        record_set(next_state, region, region_records, child, nil)
+        owner_set(next_state, child, nil)
       end
     elseif kind == 'resume' then
-      for child, rec in pairs(subtree) do
-        local nr = copy_record(rec, false)
-        nr.phase = Phase.claimed
-        nr.settlement_failed = nil
-        nr.settlement_error = nil
-        nr.settlement_error_message = nil
-        record_set(ns, self, rs, child, nr)
+      for child, record in pairs(subtree) do
+        local next_record = copy_record(record, false)
+        next_record.phase = Phase.claimed
+        next_record.settlement_failed = nil
+        next_record.settlement_error = nil
+        next_record.settlement_error_message = nil
+        record_set(next_state, region, region_records, child, next_record)
       end
     elseif kind == 'restore' then
-      for child, rec in pairs(subtree) do
-        local nr = copy_record(rec, false)
-        nr.phase = Phase.live
-        nr.claim = nil
-        nr.claim_id = nil
-        nr.claim_purpose = nil
-        nr.claim_reason = nil
-        nr.settlement_failed = nil
-        nr.settlement_error = nil
-        nr.settlement_error_message = nil
-        nr.settlement_state = nil
-        nr.settlement_request_state = nil
-        nr.settlement_force_state = nil
-        nr.settlement_request_error = nil
-        nr.settlement_force_error = nil
-        record_set(ns, self, rs, child, nr)
+      for child, record in pairs(subtree) do
+        local next_record = copy_record(record, false)
+        next_record.phase = Phase.live
+        next_record.claim = nil
+        next_record.claim_id = nil
+        next_record.claim_purpose = nil
+        next_record.claim_reason = nil
+        next_record.settlement_failed = nil
+        next_record.settlement_error = nil
+        next_record.settlement_error_message = nil
+        next_record.settlement_state = nil
+        next_record.settlement_request_state = nil
+        next_record.settlement_force_state = nil
+        next_record.settlement_request_error = nil
+        next_record.settlement_force_error = nil
+        record_set(next_state, region, region_records, child, next_record)
       end
     elseif kind == 'fail' then
       local progress_by_item = {}
-      for i = 1, #(resolution.progress or {}) do
-        local entry = resolution.progress[i]
+      for i = 1, #(details.progress or {}) do
+        local entry = details.progress[i]
         progress_by_item[entry.item] = entry
       end
-      local first_error = resolution.error
-      if first_error == nil and resolution.failures and resolution.failures[1] then
-        first_error = resolution.failures[1].error
+      local first_error = details.error
+      if first_error == nil and details.failures and details.failures[1] then
+        first_error = details.failures[1].error
       end
-      for child, rec in pairs(subtree) do
-        local nr = copy_record(rec, false)
+      for child, record in pairs(subtree) do
+        local next_record = copy_record(record, false)
         local progress = progress_by_item[child]
-        nr.phase = Phase.failed
-        nr.settlement_state = progress and progress.state or 'failed'
-        nr.settlement_request_state = progress and progress.request_state or nil
-        nr.settlement_force_state = progress and progress.force_state or nil
-        nr.settlement_request_error = progress and progress.request_error or nil
-        nr.settlement_force_error = progress and progress.force_error or nil
-        nr.settlement_failed = not progress or progress.settlement_state ~= 'succeeded'
-        nr.settlement_error = progress
+        next_record.phase = Phase.failed
+        next_record.settlement_state = progress and progress.state or 'failed'
+        next_record.settlement_request_state = progress and progress.request_state or nil
+        next_record.settlement_force_state = progress and progress.force_state or nil
+        next_record.settlement_request_error = progress and progress.request_error or nil
+        next_record.settlement_force_error = progress and progress.force_error or nil
+        next_record.settlement_failed = not progress or progress.settlement_state ~= 'succeeded'
+        next_record.settlement_error = progress
             and (progress.settlement_error or progress.request_error or progress.force_error)
           or first_error
-        nr.settlement_error_message = nr.settlement_error and tostring(nr.settlement_error) or nil
-        record_set(ns, self, rs, child, nr)
+        next_record.settlement_error_message = next_record.settlement_error
+            and tostring(next_record.settlement_error)
+          or nil
+        record_set(next_state, region, region_records, child, next_record)
       end
     else
-      error('unknown claim resolution ' .. tostring(kind), 0)
+      error('unknown internal claim resolution ' .. tostring(kind), 0)
     end
-    bump(rs)
-    return Ready.write(ns, claim.root)
+    bump(region_records)
+    return Ready.write(next_state, claim.root)
   end)
   return op_transition(t)
 end
-function Region:discharge_claim_op(claim)
-  return self:resolve_op(claim, { kind = 'discharge' })
+
+function Region:_restore_pristine_claim_op(claim)
+  if not Claim.is(claim) or claim.region ~= self then
+    error('claim restoration requires a claim owned by this Region', 2)
+  end
+  if claim.started then
+    error('a settlement claim cannot be restored after settlement has begun', 2)
+  end
+  return resolve_claim_op(self, claim, 'restore')
 end
-function Region:fail_claim_op(claim, err)
-  return self:resolve_op(claim, { kind = 'fail', error = err })
+
+function Region:_resume_failed_claim_op(claim)
+  if not Claim.is(claim) or claim.region ~= self then
+    error('claim recovery requires a claim owned by this Region', 2)
+  end
+  if not claim.started or claim.complete then
+    error('only an incomplete started settlement claim can be resumed', 2)
+  end
+  return resolve_claim_op(self, claim, 'resume')
 end
-function Region:restore_claim_op(claim)
-  return self:resolve_op(claim, { kind = 'restore' })
+
+function Region:_record_failed_claim_op(claim, failures, progress)
+  if not Claim.is(claim) or claim.region ~= self then
+    error('claim failure recording requires a claim owned by this Region', 2)
+  end
+  if not claim.started or claim.complete then
+    error('only an incomplete started settlement claim can be marked failed', 2)
+  end
+  return resolve_claim_op(self, claim, 'fail', {
+    failures = failures,
+    progress = progress,
+  })
+end
+
+function Region:_discharge_settled_claim_op(claim)
+  if not Claim.is(claim) or claim.region ~= self then
+    error('claim discharge requires a claim owned by this Region', 2)
+  end
+  if not claim.started or not claim.complete then
+    error('only a complete settlement claim can be discharged', 2)
+  end
+  return resolve_claim_op(self, claim, 'discharge')
 end
 
 function Region:seal_op()

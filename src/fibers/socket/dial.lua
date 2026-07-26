@@ -119,20 +119,14 @@ local function driver(dial, driver_scope, opts)
 
     local host = opts.host or (rt and rt.host)
     local start_dial = host and host.start_dial
-    local legacy_dial = host and host.dial_socket
-    if type(start_dial) ~= 'function' and type(legacy_dial) ~= 'function' then
+    if type(start_dial) ~= 'function' then
       local err = HostError.unsupported('host', 'dial', { address = dial.address })
       IO.release_owned(rt, driver_region, slot)
       IO.masked_perform(rt, dial.lifecycle:publish_failure_op(err))
       return
     end
 
-    local handle, peer, err
-    if type(start_dial) == 'function' then
-      handle, err = start_dial(host, dial.address, opts)
-    else
-      handle, peer, err = legacy_dial(host, dial.address, opts)
-    end
+    local handle, err = start_dial(host, dial.address, opts)
     if not handle then
       IO.release_owned(rt, driver_region, slot)
       err = HostError.normalise(err, {

@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local socket = require('fibers.socket')
 local Contract = require('tests.support.socket_provider_contract')
 
@@ -47,7 +48,7 @@ end
 
 -- ManualHost is the complete deterministic provider oracle.
 do
-  local host = Host.manual({ sockets = true, pipes = true })
+  local host = SimulatedHost.new({ sockets = true, pipes = true })
   Contract.exercise('manual-ipv4', host, socket.ipv4_address('127.0.0.1', 0), {
     require_client_local = true,
     local_address = socket.ipv4_address('127.0.0.1', 0),
@@ -71,10 +72,10 @@ do
       return true
     end,
   })
-  assert_eq(host.capabilities.socket, false)
-  assert_eq(host.capabilities.socket_ipv4, false)
-  assert_eq(host.capabilities.socket_ipv6, false)
-  assert_eq(host.capabilities.socket_unix, false)
+  assert_eq(host.capabilities.socket, nil)
+  assert_eq(host.capabilities.socket_ipv4, nil)
+  assert_eq(host.capabilities.socket_ipv6, nil)
+  assert_eq(host.capabilities.socket_unix, nil)
   Contract.expect_unsupported('pure', host, socket.ipv4_address('127.0.0.1', 0))
 end
 
@@ -90,11 +91,7 @@ for _, spec in ipairs({
   local ok, provider = pcall(require, spec.module)
   if ok and provider and type(provider.is_supported) == 'function' and provider.is_supported() then
     local host = provider.new()
-    assert_truthy(type(host.capabilities.socket) == 'boolean', spec.name .. ' must declare socket capability')
-    assert_truthy(type(host.capabilities.socket_ipv4) == 'boolean', spec.name .. ' must declare IPv4')
-    assert_truthy(type(host.capabilities.socket_ipv6) == 'boolean', spec.name .. ' must declare IPv6')
-    assert_truthy(type(host.capabilities.socket_unix) == 'boolean', spec.name .. ' must declare Unix sockets')
-    if host.capabilities.socket == false then
+    if host.capabilities.socket ~= true then
       Contract.expect_unsupported(spec.name, host, socket.ipv4_address('127.0.0.1', 0))
     else
       if host.capabilities.socket_ipv4 then

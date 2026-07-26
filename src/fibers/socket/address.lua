@@ -50,6 +50,16 @@ function Address.unix(path)
   return build('unix', { path = nonempty(path, 'socket.unix_address') })
 end
 
+-- Native Unix-domain address queries may report an unnamed endpoint. Public
+-- listen and dial addresses remain strict, while decoders use nil to mean that
+-- the operating system did not provide a usable pathname.
+function Address.decode_unix(path)
+  if type(path) ~= 'string' or path == '' then
+    return nil
+  end
+  return Address.unix(path)
+end
+
 function Address.name(host, service, opts)
   opts = opts or {}
   if service == nil then

@@ -12,6 +12,7 @@ local Sleep = require('fibers.sleep')
 local Op = require('fibers.op')
 local socket = require('fibers.socket')
 local Host = require('fibers.host')
+local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local Codec = require('fibers.dns.codec')
 
@@ -41,7 +42,7 @@ end
 -- A and AAAA are issued concurrently over Fibers datagrams.  The second
 -- resolution is served from the resolver's positive cache.
 do
-  local host = Host.manual({ sockets = true, datagrams = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, datagrams = true, resolver = false })
   local report = fibers.try_run(function(scope)
     local server = assert(socket.udp_ipv4('127.0.0.1', 0))
     local name_server = server:local_address()
@@ -100,7 +101,7 @@ end
 -- Family completion is published independently, providing the dynamic source
 -- closure needed by a Happy Eyeballs coordinator.
 do
-  local host = Host.manual({ sockets = true, datagrams = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, datagrams = true, resolver = false })
   fibers.run(function(scope)
     local server = assert(socket.udp_ipv4('127.0.0.1', 0))
     local name_server = server:local_address()
@@ -165,7 +166,7 @@ end
 
 -- CNAME chains can be completed from one coherent answer.
 do
-  local host = Host.manual({ sockets = true, datagrams = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, datagrams = true, resolver = false })
   fibers.run(function(scope)
     local server = assert(socket.udp_ipv4('127.0.0.1', 0))
     local name_server = server:local_address()
@@ -208,7 +209,7 @@ end
 -- A truncated UDP reply is retried over a Fibers TCP stream using the same
 -- transaction id and question.
 do
-  local host = Host.manual({ sockets = true, datagrams = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, datagrams = true, resolver = false })
   local report = fibers.try_run(function(scope)
     local port = 5533
     local udp = assert(socket.udp_ipv4('127.0.0.1', port))
@@ -273,7 +274,7 @@ end
 -- Timeouts advance to the next configured server rather than repeatedly using
 -- the first server before alternatives have been tried.
 do
-  local host = Host.manual({ sockets = true, datagrams = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, datagrams = true, resolver = false })
   fibers.run(function(scope)
     local working = assert(socket.udp_ipv4('127.0.0.1', 0))
     local dead = socket.ipv4_address('127.0.0.1', working:local_address().port + 1)
@@ -315,7 +316,7 @@ end
 
 -- NXDOMAIN is a terminal, structured result rather than an exception.
 do
-  local host = Host.manual({ sockets = true, datagrams = true, resolver = false })
+  local host = SimulatedHost.new({ sockets = true, datagrams = true, resolver = false })
   fibers.run(function(scope)
     local server = assert(socket.udp_ipv4('127.0.0.1', 0))
     local service = scope:spawn(function()
@@ -381,7 +382,7 @@ end
 -- Resolver configuration, hosts data and entropy use the evented fibers.file
 -- provider rather than synchronous Lua file handles.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     datagrams = true,
     resolver = false,
@@ -422,7 +423,7 @@ end
 -- Secure transaction identifiers may be supplied by the non-blocking file
 -- provider. Secure entropy is required by default.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     datagrams = true,
     resolver = false,
@@ -471,7 +472,7 @@ end
 -- Secure entropy is the default policy. Missing entropy fails before any DNS
 -- packet is sent unless the caller explicitly permits the weak fallback.
 do
-  local host = Host.manual({
+  local host = SimulatedHost.new({
     sockets = true,
     datagrams = true,
     resolver = false,
@@ -498,7 +499,7 @@ end
 -- The resolver cache has a deterministic FIFO bound. Re-reading the oldest
 -- name after inserting a third entry performs another exchange.
 do
-  local host = Host.manual({ resolver = false })
+  local host = SimulatedHost.new({ resolver = false })
   local report = fibers.try_run(function()
     local resolver = socket.dns_resolver({
       host = host,

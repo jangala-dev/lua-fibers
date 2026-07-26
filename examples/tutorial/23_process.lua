@@ -10,10 +10,11 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Host = require('fibers.host')
+local SimulatedHost = require('examples.support.simulated_host')
 local HostError = require('fibers.host.error')
 local process = require('fibers.process')
 
-local host = Host.manual({
+local host = SimulatedHost.new({
   processes = true,
   pipes = true,
   on_process_start = function(proc, child)

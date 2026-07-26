@@ -88,15 +88,14 @@ do
     fibers.perform(life:admit_op(h))
     local claim = fibers.perform(life:claim_op(h, { type = 'law', reason = 'restore' }))
     claimed_phase = fibers.perform(life:record_op(h)).phase
-    fibers.perform(life:resolve_op(claim, { kind = 'restore' }))
+    fibers.perform(claim:restore_op())
     restored_phase = fibers.perform(life:record_op(h)).phase
-    local final = fibers.perform(life:claim_op(h, { type = 'law', reason = 'discharge' }))
-    fibers.perform(life:resolve_op(final, { kind = 'discharge' }))
+    fibers.perform(Settlement.retire_item_op(life, h, 'law retirement'))
     owner_after = h.owner
   end)
   assert_eq(claimed_phase, 'claimed', 'claim_op should claim the record')
-  assert_eq(restored_phase, 'live', 'resolve restore should make the record live')
-  assert_eq(owner_after, nil, 'resolve discharge should release owner')
+  assert_eq(restored_phase, 'live', 'claim restoration should make the record live')
+  assert_eq(owner_after, nil, 'settlement should release owner')
 end
 
 -- Settlement protocols use the explicit request/settle table contract.

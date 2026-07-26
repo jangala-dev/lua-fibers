@@ -1,38 +1,11 @@
--- Host adapter helpers.
+-- Host boundary helpers.
 --
--- A host adapter is the boundary between the embeddable Runtime and a process
+-- A host is the boundary between the embeddable Runtime and a process
 -- that wants to drive it as a standalone application.  The Runtime reports typed
 -- waits; the host decides how, or whether, the process should block until one of
 -- those waits may have changed.
 
 local Host = {}
-
-function Host.supports(host, capability)
-  return type(host) == 'table'
-    and type(host.capabilities) == 'table'
-    and host.capabilities[capability] == true
-end
-
-local WaitSet = require('fibers.host.wait_set')
-
-Host.earliest_deadline = function(waits)
-  return WaitSet.build(waits).deadline
-end
-Host.has_non_time_waits = function(waits)
-  return WaitSet.build(waits).has_non_time
-end
-Host.delay_until = WaitSet.delay_until
-Host.timeout_ms = WaitSet.timeout_ms
-Host.readiness_waits = WaitSet.readiness_waits
-Host.poller_waits = WaitSet.poller_waits
-Host.normalise_readiness_mode = WaitSet.normalise_mode
-
-function Host.block(host, rt, waits, status, opts)
-  if host and type(host.block) == 'function' then
-    return host:block(rt, waits or {}, status, opts or {})
-  end
-  return nil, 'host-does-not-block'
-end
 
 local FAMILY_MODULES = {
   pure = 'fibers.host.pure',

@@ -330,7 +330,7 @@ fibers.run(function()
 end)
 ```
 
-The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead. When settlement fails, the checked result retains a settlement-failure capability so policy can inspect the error and explicitly restore or discharge the unresolved claim.
+The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead. When settlement fails, the checked result retains a settlement-failure capability so policy can inspect the error and explicitly retry or force the unresolved settlement.
 
 The lifetime model also supports cancellation, owned resources, transactional movement, borrowing, claims and settlement. These facilities are deliberately progressive: ordinary programmes can begin with tasks and scopes, while systems code can state stronger ownership protocols where required.
 
@@ -523,7 +523,7 @@ local packet, receive_err = udp:receive_from({ max_size = 4096 })
 it does not imply remote delivery. Incoming queues are bounded, and received
 records retain the peer address, truncation status and original size where the
 host can report it. Native Linux FFI hosts support IPv4 and IPv6 UDP; luaposix
-and Nixio providers use the same host contract when those modules are present.
+and Nixio bindings use the same host contract when those modules are present.
 See [`docs/guide/io.md`](docs/guide/io.md).
 
 ### Time
