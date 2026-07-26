@@ -10,7 +10,7 @@ For every optimisation and every fixed input:
 - the set of valid committed outcomes is unchanged;
 - `Retry`, `Unknown` and certified negative proofs retain their meaning;
 - speculative writes and effects remain isolated until commit;
-- occurrence identity, product-lane compatibility and settlement truth are
+- occurrence identity, product-lane compatibility and Closure truth are
   preserved;
 - trail and reference evaluators agree on validating scenarios;
 - a fixed machine, seed and frontier remains replayable;

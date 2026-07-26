@@ -113,7 +113,7 @@ local function pending_dial_host()
 end
 
 -- An external timeout is not a connection failure. The pending Dial remains an
--- owned resource and closes cleanly when the caller abandons it.
+-- resource held in custody and closes cleanly when the caller abandons it.
 do
   local host, get_pending = pending_dial_host()
   local result = fibers.try_run(function()

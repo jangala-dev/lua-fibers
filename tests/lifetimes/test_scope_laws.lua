@@ -13,9 +13,10 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local FibersRegion = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
 local FibersScope = require('fibers.scope')
-local Settlement = require('fibers.region.settlement')
+local Closure = require('fibers.closure')
 
 local function fail(msg)
   error(msg, 2)
@@ -34,7 +35,7 @@ end
 -- A sealed scope accepts no new custody.
 do
   local life = FibersScope.new('sealed-law')
-  local h = FibersRegion.handle('sealed-law-owned')
+  local h = Lifetimes.resource('sealed-law-owned')
   local result, owns
   fibers.run(function()
     fibers.perform(life:seal_op('test'))
@@ -44,7 +45,7 @@ do
         return 'unexpected'
       end)
       :or_else(Op.always('sealed')))
-    owns = fibers.perform(life:owns_op(h))
+    owns = fibers.perform(life:has_custody_op(h))
   end)
   assert_eq(result, 'sealed', 'sealed scope should reject admission')
   assert_eq(owns, false, 'rejected admission should leave item unowned')
@@ -55,22 +56,22 @@ do
   local from = FibersScope.new('move-law-from')
   local to = FibersScope.new('move-law-to')
   local sealed = FibersScope.new('move-law-sealed')
-  local h = FibersRegion.handle('move-law-owned')
+  local h = Lifetimes.resource('move-law-owned')
   local moved, from_after, to_after, failed_move, still_to
   fibers.run(function()
     fibers.perform(from:admit_op(h))
     fibers.perform(from:move_op(h, to))
-    moved = h.owner == to:raw_region()
-    from_after = fibers.perform(from:owns_op(h))
-    to_after = fibers.perform(to:owns_op(h))
+    moved = fibers.perform(to:has_custody_op(h))
+    from_after = fibers.perform(from:has_custody_op(h))
+    to_after = fibers.perform(to:has_custody_op(h))
     fibers.perform(sealed:seal_op('closed-target'))
     failed_move = fibers.perform(to:move_op(h, sealed)
       :map(function()
         return 'unexpected'
       end)
       :or_else(Op.always('blocked')))
-    still_to = fibers.perform(to:owns_op(h))
-    fibers.perform(Settlement.retire_item_op(to, h))
+    still_to = fibers.perform(to:has_custody_op(h))
+    fibers.perform(Closure.close_op(to, h))
   end)
   assert_eq(moved, true, 'move_op should update concrete owner')
   assert_eq(from_after, false, 'source should not retain custody after move')
@@ -79,53 +80,55 @@ do
   assert_eq(still_to, true, 'failed move should leave custody unchanged')
 end
 
--- Scope claim and resolve are dual public operations over the Region lifecycle.
+-- Closure is the only public resolution path. Internal close tokens are not
+-- exposed; successful closure retires custody and records a closed Lifetime.
 do
-  local life = FibersScope.new('claim-resolve-law')
-  local h = FibersRegion.handle('claim-resolve-owned')
-  local claimed_phase, restored_phase, owner_after
+  local life = FibersScope.new('closure-law')
+  local h = Lifetimes.resource('closure-owned')
+  local live_phase, owner_after, closure_phase
   fibers.run(function()
     fibers.perform(life:admit_op(h))
-    local claim = fibers.perform(life:claim_op(h, { type = 'law', reason = 'restore' }))
-    claimed_phase = fibers.perform(life:record_op(h)).phase
-    fibers.perform(claim:restore_op())
-    restored_phase = fibers.perform(life:record_op(h)).phase
-    fibers.perform(Settlement.retire_item_op(life, h, 'law retirement'))
-    owner_after = h.owner
+    live_phase = fibers.perform(life:custody_op(h)).phase
+    fibers.perform(life:close_op(h, 'law closure'))
+    local state = Lifetime.of(h):current_state()
+    owner_after = state.custodian
+    closure_phase = state.closure_phase
   end)
-  assert_eq(claimed_phase, 'claimed', 'claim_op should claim the record')
-  assert_eq(restored_phase, 'live', 'claim restoration should make the record live')
-  assert_eq(owner_after, nil, 'settlement should release owner')
+  assert_eq(live_phase, 'live', 'admission should establish live custody')
+  assert_eq(owner_after, nil, 'closure should retire custody')
+  assert_eq(closure_phase, 'closed', 'closure should record the terminal phase')
 end
 
--- Settlement protocols use the explicit request/settle table contract.
+-- Closure protocols use the explicit request/finish contract.
 -- Function finalisers are deliberately not accepted.
 do
   local rejected = pcall(function()
-    FibersRegion.Owned.item(FibersRegion.handle('function-protocol-rejected'), function()
-      return Op.always(true)
-    end)
+    Lifetime.define({ name = 'function-protocol-rejected' }, {
+      closure = function()
+        return Op.always(true)
+      end,
+    })
   end)
-  assert_eq(rejected, false, 'function settlement protocols should be rejected')
+  assert_eq(rejected, false, 'function Closure protocols should be rejected')
 end
 
 do
   local life = FibersScope.new('protocol-law')
-  local h = FibersRegion.handle('protocol-law-owned')
   local discharged = false
+  local h = Lifetimes.resource('protocol-law-owned', {
+    name = 'table-protocol',
+    finish_op = function()
+      return Op.always(true):map(function()
+        discharged = true
+        return true
+      end)
+    end,
+  })
   fibers.run(function()
-    fibers.perform(life:admit_op(FibersRegion.Owned.item(h, {
-      name = 'table-protocol',
-      settle_op = function()
-        return Op.always(true):map(function()
-          discharged = true
-          return true
-        end)
-      end,
-    })))
-    fibers.perform(Settlement.retire_item_op(life, h))
+    fibers.perform(life:admit_op(h))
+    fibers.perform(Closure.close_op(life, h))
   end)
-  assert_eq(discharged, true, 'protocol table settle_op should run during settlement')
+  assert_eq(discharged, true, 'protocol table finish_op should run during Closure')
 end
 
 -- Ambient scope usage is restored after nested scopes and errors.

@@ -1,7 +1,7 @@
 -- Shared implementation helpers for host-backed facilities.
 --
--- This module is internal. It centralises ownership resolution, structured
--- driver construction, masked option performance during short adoption
+-- This module is internal. It centralises Scope resolution, structured
+-- driver construction, masked option performance during short host-hold
 -- intervals, and conversion of host handles into Streams.
 
 local Op = require('fibers.op')
@@ -21,67 +21,107 @@ function IO.copy_table(value)
   return out
 end
 
-function IO.region_of(owner)
-  if owner and owner._fibers_scope and type(owner.raw_region) == 'function' then
-    return owner:raw_region()
-  end
-  if owner and type(owner.admit_op) == 'function' and type(owner.release_op) == 'function' then
-    return owner
+function IO.scope_of(value)
+  if value and value._fibers_scope and type(value.admit_op) == 'function' then
+    return value
   end
   return nil
 end
 
--- Elaborate an optional Scope/Region target to an explicit Region operation.
--- An omitted target is resolved once from the performing guard activation.
-function IO.with_target_region_op(target, message, build)
+-- Elaborate an optional Scope target to an explicit Scope operation. An
+-- omitted target is resolved once from the performing guard activation.
+function IO.with_target_scope_op(target, message, build)
   if target ~= nil then
-    local region = IO.region_of(target)
-    if not region then
+    local scope = IO.scope_of(target)
+    if not scope then
       error(message, 3)
     end
-    return build(region)
+    return build(scope)
   end
   return Op.guard(function(activation)
-    local region = activation:region()
-    if not region then
+    local scope = activation:scope()
+    if not scope then
       error(message, 2)
     end
-    return build(region)
+    return build(scope)
   end)
 end
 
-function IO.current_owner(opts, label)
+function IO.current_scope(opts, label)
   opts = opts or {}
-  local owner = opts.owner or Runtime.current_scope()
-  if not owner then
-    error(label .. ' requires opts.owner or a current Scope', 3)
+  local scope = opts.scope or Runtime.current_scope()
+  if not IO.scope_of(scope) then
+    error(label .. ' requires opts.scope or a current Scope', 3)
   end
-  if type(owner.admit_op) ~= 'function' then
-    error(label .. ' owner must be a Scope or Region', 3)
-  end
-  return owner
+  return scope
 end
 
-function IO.scope_for_owner(owner, label)
-  if owner and owner._fibers_scope then
-    return owner
-  end
-  local region = IO.region_of(owner)
-  local scope = region and region._fibers_scope_owner or nil
-  if scope and scope._fibers_scope then
+function IO.require_scope(value, label)
+  local scope = IO.scope_of(value)
+  if scope then
     return scope
   end
-  error(label .. ' owner Region must belong to a Scope so its driver has a structured execution scope', 3)
+  error(label .. ' must be a Scope', 3)
+end
+
+function IO.new_driver_task(scope, name, fn)
+  return Task._new(function(task_handle)
+    return scope:_run_child_body(fn, task_handle, { name = name })
+  end, name)
+end
+
+local function driver_exit_error(exit)
+  if type(exit) ~= 'table' then
+    return HostError.protocol('runtime', 'driver_exit', 'driver returned an invalid Exit value')
+  end
+  if exit.tag == 'cancelled' then
+    return Runtime.cancelled(exit.reason, exit.token)
+  end
+  if exit.tag == 'failed' then
+    return exit.error
+  end
+  if exit.tag ~= 'returned' then
+    return HostError.protocol('runtime', 'driver_exit', 'unknown driver Exit tag', { tag = exit.tag })
+  end
+  return nil
+end
+
+-- A host-backed facility is closed only after both its public terminal condition
+-- and the complete body of its private structured driver have settled. The body
+-- ordinarily wraps a private Scope, so observing its Exit also joins all private
+-- descendants. opts.require_returned preserves facilities whose driver failure
+-- is not already represented by the terminal operation.
+function IO.closed_after_driver_op(task, terminal_op, opts)
+  if opts ~= nil and type(opts) ~= 'table' then
+    error('closed_after_driver_op options must be a table', 2)
+  end
+  opts = opts or {}
+  if opts.require_returned ~= nil and type(opts.require_returned) ~= 'boolean' then
+    error('closed_after_driver_op require_returned must be boolean', 2)
+  end
+  if task ~= nil and type(task.body_result_op) ~= 'function' then
+    error('closed_after_driver_op expects a Task-like driver', 2)
+  end
+  if not Op.is_op(terminal_op) then
+    error('closed_after_driver_op expects a terminal Op', 2)
+  end
+  if task == nil then
+    return terminal_op
+  end
+
+  return task:body_result_op():and_then(function(exit)
+    if opts.require_returned == true then
+      local err = driver_exit_error(exit)
+      if err ~= nil then
+        return Op.always(nil, err)
+      end
+    end
+    return terminal_op
+  end, Op.dependencies(terminal_op))
 end
 
 function IO.masked_perform(rt, option)
   return rt:_perform_current(option, nil, true)
-end
-
-function IO.new_driver_task(owner, name, fn)
-  return Task.new(function(task_handle)
-    return owner:_run_child_body(fn, task_handle, { name = name })
-  end, name, owner)
 end
 
 function IO.close_value(domain, value, reason)
@@ -109,21 +149,11 @@ function IO.safe_close(domain, value, reason, fields)
   return true
 end
 
-function IO.release_owned(rt, region, record)
-  local ok, err = Protected.pcall(function()
-    return IO.masked_perform(rt, region:release_op(record))
-  end)
-  if not ok then
-    return nil, err
-  end
-  return true
-end
-
-function IO.open_handle_stream(rt, owner, handle, opts)
+function IO.open_handle_stream(rt, scope, handle, opts)
   return IO.masked_perform(
     rt,
     Stream.open_op(handle, {
-      owner = owner,
+      scope = scope,
       name = opts.name,
       read = opts.read == true,
       write = opts.write == true,

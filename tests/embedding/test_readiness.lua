@@ -17,7 +17,7 @@ local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.region')
+local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local FibersHost = require('fibers.host')
 local Op = FibersOp
@@ -133,7 +133,7 @@ end
 -- Readiness carries no error or close payload. Backend read/write remains authoritative.
 do
   local rt = Runtime.new()
-  local region = FibersRegion.new('readiness-authority-region')
+  local owner = FibersScope.new('readiness-authority-owner')
   local backend = FakeHandle.new({
     name = 'readiness-authority-backend',
     readiness = 'manual',
@@ -144,7 +144,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { owner = region, read = true, write = true, name = 'readiness-authority-stream' }
+        { scope = owner, read = true, write = true, name = 'readiness-authority-stream' }
       )
     )
     read_val, read_err = rt:perform(stream:reader():read_some_op(1))
@@ -187,13 +187,13 @@ end
 -- no stream bytes appear.
 do
   local rt = Runtime.new()
-  local region = FibersRegion.new('stale-readiness-region')
+  local owner = FibersScope.new('stale-readiness-owner')
   local backend =
     FakeHandle.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err, snap
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'stale-readiness-stream' })
+      Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'stale-readiness-stream' })
     )
     got, err = rt:perform(stream:reader():read_some_op(1))
   end, 'root')
@@ -224,7 +224,7 @@ end
 -- Write readiness admits a reactor write reaction.
 do
   local rt = Runtime.new()
-  local region = FibersRegion.new('readiness-write-region')
+  local owner = FibersScope.new('readiness-write-owner')
   local backend = FakeHandle.new({
     name = 'readiness-write-backend',
     readiness = 'manual',
@@ -234,7 +234,7 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { owner = region, read = true, write = true, name = 'readiness-write-stream' })
+      Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'readiness-write-stream' })
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -263,7 +263,7 @@ end
 -- Bounded stepping also resumes a readiness-backed write reaction after readiness arrival.
 do
   local rt = Runtime.new()
-  local region = FibersRegion.new('bounded-ready-reactor-region')
+  local owner = FibersScope.new('bounded-ready-reactor-owner')
   local backend = FakeHandle.new({
     name = 'bounded-ready-reactor-backend',
     readiness = 'manual',
@@ -275,7 +275,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { owner = region, read = true, write = true, name = 'bounded-ready-reactor-stream' }
+        { scope = owner, read = true, write = true, name = 'bounded-ready-reactor-stream' }
       )
     )
     rt:perform(stream:writer():write_op('xy'))

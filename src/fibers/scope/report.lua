@@ -1,6 +1,6 @@
 -- Structured scope boundary reports.
 --
--- A scope body may fail, and settlement may also fail while retiring owned
+-- A scope body may fail, and closure may also fail while closing retained
 -- roots. ScopeReport keeps those facts together without becoming lifecycle
 -- status.
 
@@ -34,8 +34,8 @@ function ScopeReport.new(scope, primary, secondaries, fields)
     child_exits = fields.child_exits or {},
     child_failures = fields.child_failures or {},
     body_exit = fields.body_exit,
-    settlement_failures = fields.settlement_failures or {},
-    settlement_failure_count = #(fields.settlement_failures or {}),
+    closure_failures = fields.closure_failures or {},
+    closure_failure_count = #(fields.closure_failures or {}),
   }, ScopeReport)
 end
 

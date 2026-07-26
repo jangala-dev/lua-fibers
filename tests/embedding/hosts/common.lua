@@ -16,7 +16,7 @@ local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local FibersRuntime = require('fibers.runtime')
 local FibersReadiness = require('fibers.host.readiness')
-local FibersRegion = require('fibers.region')
+local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 
 local Common = {}
@@ -195,12 +195,12 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
   local handle = HostHandles.duplex(r, w, { host = host, name = name .. ':duplex' })
   local rt = FibersRuntime.new({ host = host })
-  local region = FibersRegion.new(name .. ':region')
+  local owner = FibersScope.new(name .. ':owner')
   local got, flushed, stream
 
   rt:spawn_raw(function()
     stream = rt:perform(FibersStream.open_op(handle, {
-      owner = region,
+      scope = owner,
       name = name .. ':stream',
       read = true,
       write = true,

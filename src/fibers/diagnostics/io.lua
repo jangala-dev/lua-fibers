@@ -19,7 +19,7 @@ end
 for _, name in ipairs({
   'created',
   'bind',
-  'adopt',
+  'hold',
   'transfer',
   'release',
   'closing',

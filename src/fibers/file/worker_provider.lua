@@ -237,7 +237,7 @@ function Backend:close(reason)
 
   -- CLOSE is a protocol request, not a cancellation request. Once it has been
   -- acknowledged, let the helper exit normally and reap it before asking the
-  -- Process resource to settle. This avoids racing natural exit against
+  -- Process resource to close. This avoids racing natural exit against
   -- process shutdown and losing the final pipe state on some hosts.
   local status, result_err = self.process:result()
   local closed, close_err = self.process:close(reason or 'file closed')

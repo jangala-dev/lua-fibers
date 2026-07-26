@@ -32,8 +32,8 @@ Roblox.run(function()
 
     local selected = fibers.perform(Op.named_choice({
       completed = Op.all({
-        camera:exit_op(),
-        dialogue:exit_op(),
+        camera:body_result_op(),
+        dialogue:body_result_op(),
       }),
       skipped = skipped:next_op(),
     }))

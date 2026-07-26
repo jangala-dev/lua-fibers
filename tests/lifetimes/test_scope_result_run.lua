@@ -12,8 +12,8 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local FibersRegion = require('fibers.region')
-local Settlement = require('fibers.region.settlement')
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
 
 local function fail(msg)
   error(msg, 2)
@@ -98,33 +98,33 @@ do
   assert_truthy(tostring(err):match('child boom'), 'raising run should surface child failure')
 end
 
--- Body values are not returned if settlement fails after body success.
+-- Body values are not returned if Closure fails after body success.
 do
   local r = fibers.try_run(function()
     fibers.scope(function(scope)
-      local h = FibersRegion.handle('failing-settle')
-      fibers.perform(scope:raw_region():admit_op(FibersRegion.Owned.item(h, {
-        name = 'fail',
-        settle_op = function()
-          error('settlement failed', 0)
-        end,
-      }, { settle_name = 'fail' })))
+      local h = { name = 'failing-settle' }
+      Lifetime.define(
+        h,
+        {
+          closure = {
+            name = 'fail',
+            finish_op = function()
+              error('closure failed', 0)
+            end,
+          },
+        }
+      )
+      fibers.perform(scope:admit_op(h))
       return 'body-value'
     end)
   end)
   assert_eq(r.ok, false)
-  assert_truthy(r.reason == 'body_error' or r.reason == 'settlement_failed')
-  assert_truthy(
-    tostring(r.report or r.primary):match('settlement failed'),
-    'settlement failure should be reported'
-  )
-  assert_truthy(
-    Settlement.is_failure(r.settlement_failure),
-    'checked result should retain recovery authority'
-  )
-  assert_eq(r.settlement_failures[1], r.settlement_failure)
-  assert_eq(r.report.settlement_failures[1], r.settlement_failure)
-  assert_eq(r.report.settlement_failure_count, 1)
+  assert_truthy(r.reason == 'body_error' or r.reason == 'closure_failed')
+  assert_truthy(tostring(r.report or r.primary):match('closure failed'), 'closure failure should be reported')
+  assert_truthy(Closure.is_failure(r.closure_failure), 'checked result should retain recovery authority')
+  assert_eq(r.closure_failures[1], r.closure_failure)
+  assert_eq(r.report.closure_failures[1], r.closure_failure)
+  assert_eq(r.report.closure_failure_count, 1)
 end
 
 print('tests/test_scope_result_run.lua: ok')

@@ -1,9 +1,9 @@
----Owned adaptation of an RBXScriptSignal into a Fibers event source.
+---Lifetime-backed adaptation of an RBXScriptSignal into a Fibers event source.
 
 local Runtime = require('fibers.runtime')
 local Op = require('fibers.op')
-local Region = require('fibers.region')
-local Settlement = require('fibers.region.settlement')
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 
 local Subscription = {}
@@ -50,10 +50,10 @@ local function require_host(runtime, opts)
   return host
 end
 
-local function settle_protocol(subscription)
-  return Settlement.protocol({
+local function closure_protocol(subscription)
+  return Closure.protocol({
     name = 'roblox_subscription_disconnect',
-    settle_op = function()
+    finish_op = function()
       return Op.always(true):wrap(function()
         subscription:_disconnect()
         return true
@@ -113,7 +113,7 @@ function Subscription:_disconnect()
   local connection = self.connection
   if connection and type(connection.Disconnect) == 'function' then
     -- Keep the connection and open state intact until Disconnect succeeds. A
-    -- failed settlement must retain enough truth and authority to be retried.
+    -- failed closure must retain enough truth and authority to be retried.
     connection:Disconnect()
   end
   self.connection = nil
@@ -151,15 +151,13 @@ function Subscription.new(signal, opts)
     _pulse_version = 0,
   }, Subscription)
 
-  self.handle = Region.handle(name .. ':connection', {
-    kind = 'roblox_subscription',
-    subscription = self,
-  })
-  scope:perform(scope:admit_op(Region.owned(self.handle, settle_protocol(self), {
+  Lifetime.define(self, {
+    name = name,
     role = 'roblox_subscription',
-    settle_name = 'roblox_subscription_disconnect',
+    closure = closure_protocol(self),
     meta = { mode = mode, name = name },
-  })))
+  })
+  scope:perform(scope:admit_op(self))
 
   local callback
   if mode == 'events' then
@@ -177,7 +175,7 @@ function Subscription.new(signal, opts)
   end
 
   -- Admission happens before connecting. If Connect fails, scope unwinding still
-  -- owns and retires the inert handle; no unmanaged connection can leak.
+  -- owns and retires the dormant subscription Lifetime; no unmanaged connection can leak.
   self.connection = signal:Connect(callback)
   return self
 end
@@ -206,7 +204,7 @@ function Subscription:is_connected()
   return connected == nil or connected == true
 end
 
----Report whether successful settlement disconnected the subscription.
+---Report whether successful closure disconnected the subscription.
 function Subscription:is_closed()
   return self._closed
 end
@@ -216,7 +214,7 @@ function Subscription:close_op(reason)
   if self._closed then
     return require('fibers.op').always(true)
   end
-  return Settlement.retire_item_op(self.scope, self.handle, reason or 'subscription closed')
+  return Closure.close_op(self.scope, self, reason or 'subscription closed')
 end
 
 ---Retire and disconnect the subscription through its owning Scope.

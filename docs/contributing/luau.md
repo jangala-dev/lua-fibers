@@ -16,7 +16,7 @@ generates a target-specific tree under `build/luau/` by:
 5. generating the Luau conformance smoke programme and the named portable or
    reference test profile.
 
-The initial build includes the kernel, runtime, Scope, Effect, Region, Flow,
+The initial build includes the kernel, runtime, Scope, Effect, Lifetime, Flow,
 in-memory resources, host external protocols, the small ManualHost and PureHost. Shared
 file and process
 abstractions may enter the dependency closure, but native host bindings for
@@ -69,24 +69,24 @@ Roblox task scheduler / Actor VM
 └── one Fibers runtime
     ├── proof and commit engine
     ├── lightweight internal fibres
-    ├── scopes, Regions and settlement
+    ├── Scopes, Lifetimes and Closure
     └── queued Roblox signal and shutdown adapters
 ```
 
 The first slice consists of:
 
 - `fibers.roblox.prepare`, which creates a root Runtime and Scope without taking
-  ownership of the engine loop;
+  control of the engine loop;
 - `Application:advance`, which accepts a host time horizon and deterministic
   proof-work allowance, retaining unfinished work for a later turn;
 - `fibers.roblox.attach`, which adds event-driven or RunService-phase scheduling
   above the manual boundary using `task.defer`, `task.delay` and `task.cancel`;
 - `fibers.roblox.events`, `latest` and `pulse`, which give signal buffering an
   explicit application meaning;
-- owned subscriptions whose Region settlement disconnects the corresponding
+- subscriptions held in custody, whose Lifetime Closure disconnects the corresponding
   `RBXScriptConnection`;
 - `fibers.roblox.bind_to_close`, which publishes shutdown into the runtime and
-  waits for root settlement or a declared deadline;
+  waits for root Closure or a declared deadline;
 - fake scheduler, event, phase, signal and DataModel tests which run under stock
   Lua.
 
@@ -135,7 +135,7 @@ are found.
 
 `tests/luau/profile.lua` classifies every `test_*.lua` file and defines the
 `portable` profile. The profile contains 81 tests covering public
-semantics, composition, resources, Effect/Region/Scope lifetimes, ManualHost
+semantics, composition, resources, Effect/Lifetime/Scope semantics, ManualHost
 embedding, test-only SimulatedHost I/O, both semantic evaluators, kernel laws, portable
 implementation helpers, case
 studies and performance architecture.

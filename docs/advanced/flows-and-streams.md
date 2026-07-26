@@ -51,7 +51,7 @@ The complete producer surface is:
 ```lua
 inlet:write_op(bytes)
 inlet:write_some_op(bytes)
-inlet:reserve_some_op(maximum, owner, meta)
+inlet:reserve_some_op(maximum, holder, meta)
 inlet:flush_op()
 inlet:close_op(reason)
 inlet:closed_op()
@@ -92,7 +92,7 @@ outlet:read_all_op(opts)
 outlet:peek_exactly_op(count)
 outlet:drop_op(count)
 outlet:splice_to_op(inlet, count)
-outlet:lease_some_op(maximum, owner, meta)
+outlet:lease_some_op(maximum, holder, meta)
 outlet:close_op(reason)
 outlet:closed_op()
 outlet:fail_op(error)
@@ -170,7 +170,7 @@ reserved custody. It is deliberately named differently from `Inlet:close_op`,
 which is graceful producer EOF.
 
 `closed_op` becomes available only when both endpoints are terminal and no byte
-or capacity custody remains. It returns `nil, settlement_error` if settlement
+or capacity custody remains. It returns `nil, closure_error` if Closure
 failed.
 
 The public stable error vocabulary is:
@@ -284,7 +284,7 @@ A host-backed Stream has one constructor:
 
 ```lua
 local stream = perform(Stream.open_op(handle, {
-  owner = scope, -- defaults to the current Scope
+  scope = scope, -- defaults to the current Scope
   name = 'connection',
 
   read = true,
@@ -358,17 +358,17 @@ host half-shutdown and retires the write reaction.
 writability.
 
 `close_op` is graceful user closure: it abandons reading, drains writing, closes
-the HostHandle and waits for completed settlement.
+the HostHandle and waits for completed Closure.
 
 `abort_op` abandons both directions, discards queued output and waits for prompt
-completed settlement. Scope cancellation and failure settlement use the abortive
+completed Closure. Scope cancellation and failure Closure use the abortive
 form.
 
 `closed_op` observes completed direction retirement, HostHandle closure and any
 close error.
 
-Ownership movement uses the general lifetime API. Stream provides no transfer
-aliases. Facilities needing independently owned halves construct separate
+Custody movement uses the general Lifetime API. Stream provides no transfer
+aliases. Facilities needing halves under independent custody construct separate
 read-only and write-only Stream roots, as pipes and process standard streams do.
 
 ## Indexed poller and reactor

@@ -3,7 +3,7 @@
 -- A Phase cycle is a small compound over Scope.  Each named phase has a Scope
 -- interval.  Cross-phase movement is explicit:
 --   * carry(label) permits custody movement
---   * borrow(label) permits authority borrowing
+--   * grant(label) permits non-custodial authority
 --   * fact(label) permits fact propagation
 -- Labels are declared on edges and supplied at the crossing site.  Phase does
 -- not infer labels from records or metadata.
@@ -57,7 +57,7 @@ function Phase.new(name, opts)
     name = name or id,
     runtime = opts.runtime,
     parent = opts.parent,
-    policy = opts.policy,
+    closure = opts.closure,
     order = {},
     declared = {},
     scopes = {},
@@ -90,8 +90,8 @@ function Phase:edge(from_name, to_name, opts)
     to = to_name,
     carry_labels = {},
     carry_set = {},
-    borrow_labels = {},
-    borrow_set = {},
+    grant_labels = {},
+    grant_set = {},
     fact_labels = {},
     fact_set = {},
     opts = opts or {},
@@ -113,15 +113,15 @@ function Edge:carry(label)
   return self
 end
 
-function Edge:borrow(label)
+function Edge:grant(label)
   if label == nil then
     label = '*'
   end
   if type(label) ~= 'string' then
-    error('Edge:borrow expects a label', 2)
+    error('Edge:grant expects a label', 2)
   end
-  self.borrow_labels[#self.borrow_labels + 1] = label
-  self.borrow_set[label] = true
+  self.grant_labels[#self.grant_labels + 1] = label
+  self.grant_set[label] = true
   return self
 end
 
@@ -159,7 +159,7 @@ function Phase:scope(name, opts)
   scope = Scope.new((self.name or 'phase') .. ':' .. name, {
     runtime = rt,
     parent = parent,
-    policy = opts.policy or self.policy or (is_scope(parent) and parent.policy or nil),
+    closure = opts.closure or self.closure or (is_scope(parent) and parent.closure or nil),
   })
   scope.phase_cycle = self
   scope.phase_name = name
@@ -210,13 +210,13 @@ function Phase:allows_move_op(_item, from_name, to_name, opts)
   return Op.always(set_has(edge.carry_set, label), label)
 end
 
-function Phase:allows_borrow_op(_item, from_name, to_name, opts)
+function Phase:allows_grant_op(_item, from_name, to_name, opts)
   local edge = edge_for(self, from_name, to_name)
   if not edge then
     return Op.always(false, nil)
   end
-  local label = crossing_label(opts, 'Phase:allows_borrow_op')
-  return Op.always(set_has(edge.borrow_set, label), label)
+  local label = crossing_label(opts, 'Phase:allows_grant_op')
+  return Op.always(set_has(edge.grant_set, label), label)
 end
 
 function Phase:allows_fact_op(label, from_name, to_name)
@@ -239,15 +239,15 @@ function Phase:move_op(item, from_name, to_name, opts)
   end)
 end
 
-function Phase:borrow_op(from_name, item, to_name, rights, opts)
-  local label = crossing_label(opts, 'Phase:borrow_op')
-  local borrow_opts = type(opts) == 'table' and opts or { label = label }
-  return self:allows_borrow_op(item, from_name, to_name, label):and_then(function(ok)
+function Phase:grant_op(from_name, item, to_name, rights, opts)
+  local label = crossing_label(opts, 'Phase:grant_op')
+  local grant_opts = type(opts) == 'table' and opts or { label = label }
+  return self:allows_grant_op(item, from_name, to_name, label):and_then(function(ok)
     if not ok then
       return Op.never()
     end
-    borrow_opts.borrower = self:scope(to_name)
-    return self:scope(from_name):borrow_op(item, rights, borrow_opts)
+    grant_opts.holder = self:scope(to_name)
+    return self:scope(from_name):grant_op(item, self:scope(to_name), rights, grant_opts)
   end)
 end
 

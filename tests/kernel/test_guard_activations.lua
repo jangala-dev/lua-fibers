@@ -55,7 +55,7 @@ local function run(machine, op, opts)
 end
 
 for _, machine in ipairs({ 'ledger', 'reference' }) do
-  -- Host-language sharing of an immutable guard value must not merge two
+  -- Host-language sharing of an shared guard value must not merge two
   -- tensor operands into one dynamic activation.
   do
     local calls = 0
@@ -187,10 +187,10 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
         return Op.always(
           first,
           second,
-          activation:region() == scope.region,
+          activation:scope() == scope,
           activation.runtime == nil,
           activation.host == nil,
-          activation.scope == nil,
+          type(activation.scope) == 'function',
           activation.label == nil,
           activation._close == nil,
           activation.close == nil
@@ -200,10 +200,10 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     found(rt:run(), machine .. ': guard activation context should complete')
     eq(result[1], result[2], machine .. ': one activation should observe one instant')
     eq(reads, 1, machine .. ': activation time should be sampled once')
-    eq(result[3], true, machine .. ': activation should expose the performing Region')
+    eq(result[3], true, machine .. ': activation should expose the performing Scope')
     eq(result[4], true, machine .. ': activation should not expose the Runtime')
     eq(result[5], true, machine .. ': activation should not expose the Runtime host')
-    eq(result[6], true, machine .. ': activation should not expose the Scope')
+    eq(result[6], true, machine .. ': activation should expose only the Scope method')
     eq(result[7], true, machine .. ': activation should not expose its internal label')
     eq(result[8], true, machine .. ': activation should not expose evaluator closure')
     eq(result[9], true, machine .. ': activation should expose no module closure function')
@@ -222,19 +222,19 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   -- not the host-language point where the reusable guard value was constructed.
   do
     local contextual = Op.guard(function(activation)
-      return Op.always(activation:region())
+      return Op.always(activation:scope())
     end)
     local rt = Runtime.new({ machine = machine })
     local outer = Scope.new('guard-context-outer', { runtime = rt })
     local inner = Scope.new('guard-context-inner', { runtime = rt, parent = outer })
-    local observed_region
+    local observed_scope
     rt:spawn_raw(function()
       rt:with_scope(inner, function()
-        observed_region = rt:perform(contextual)
+        observed_scope = rt:perform(contextual)
       end)
     end, 'guard-context-performing-scope', outer)
     found(rt:run(), machine .. ': contextual guard should complete')
-    eq(observed_region, inner.region, machine .. ': guard should resolve the performing Region')
+    eq(observed_scope, inner, machine .. ': guard should resolve the performing Scope')
   end
 
   -- A changed transactional observation creates a new activation even when

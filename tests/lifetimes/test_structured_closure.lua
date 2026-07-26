@@ -16,8 +16,8 @@ local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersSignal = require('fibers.resource.signal')
-local FibersRegion = require('fibers.region')
-local FibersPolicy = require('fibers.policy')
+local Lifetime = require('fibers.lifetime')
+local FibersClosure = require('fibers.closure')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -56,8 +56,8 @@ do
   fibers.run(function()
     state = fibers.perform(sibling:state_op())
   end)
-  assert_truthy(state.exited, 'sibling should be joined')
-  assert_eq(state.exit.tag, 'cancelled', 'sibling should be cancelled by nursery failure')
+  assert_truthy(state.body_exited, 'sibling should be joined')
+  assert_eq(state.body_result.tag, 'cancelled', 'sibling should be cancelled by nursery failure')
 end
 
 -- Supervisor failure does not interrupt the body or cancel successful siblings.
@@ -66,7 +66,7 @@ do
   local sibling_completed = false
   local r = fibers.try_run(function()
     return fibers.try_scope(
-      { policy = FibersPolicy.supervisor({ child_failure = 'fail_at_exit' }) },
+      { closure = FibersClosure.supervisor({ child_failure = 'fail_at_exit' }) },
       function()
         local ready = FibersRendezvous.new('supervisor-ready')
         fibers.spawn(function()
@@ -93,7 +93,7 @@ end
 -- Collecting supervisors retain child failures without failing the boundary.
 do
   local r = fibers.try_run(function()
-    return fibers.try_scope({ policy = FibersPolicy.supervisor({ child_failure = 'collect' }) }, function()
+    return fibers.try_scope({ closure = FibersClosure.supervisor({ child_failure = 'collect' }) }, function()
       fibers.spawn(function()
         error('collected boom', 0)
       end)
@@ -114,7 +114,7 @@ do
   )
 end
 
--- The high-level raw spawn escape is denied by default but can be enabled by policy.
+-- The high-level raw spawn escape is denied by default but can be enabled by Closure.
 do
   local denied, allowed = false, false
   fibers.run(function()
@@ -127,12 +127,12 @@ do
     fibers.spawn_raw(function()
       allowed = true
     end)
-  end, { policy = FibersPolicy.nursery({ allow_unstructured = true }) })
+  end, { closure = FibersClosure.nursery({ allow_unstructured = true }) })
   assert_truthy(denied, 'nursery should reject high-level unstructured spawn')
-  assert_truthy(allowed, 'policy should be able to permit unstructured spawn explicitly')
+  assert_truthy(allowed, 'Closure should be able to permit unstructured spawn explicitly')
 end
 
--- Cancellation of a child scope propagates through its policy to grandchildren.
+-- Cancellation of a child scope propagates through its Closure propagation to grandchildren.
 do
   local child, grandchild
   local r = fibers.try_run(function()
@@ -155,25 +155,25 @@ do
     child_state = fibers.perform(child:state_op())
     grandchild_state = fibers.perform(grandchild:state_op())
   end)
-  assert_eq(child_state.exit.tag, 'cancelled')
-  assert_eq(grandchild_state.exit.tag, 'cancelled')
+  assert_eq(child_state.body_result.tag, 'cancelled')
+  assert_eq(grandchild_state.body_result.tag, 'cancelled')
 end
 
--- A strict movement policy can prohibit custody escape while leaving Region as
--- the explicit low-level mechanism.
+-- A strict Closure rule can prohibit custody escape.
 do
   local denied = false
   fibers.run(function(root)
-    local h = FibersRegion.handle('strict-move')
-    fibers.scope({ policy = FibersPolicy.nursery({ allow_outward_move = false }) }, function(inner)
+    local h = { name = 'strict-move' }
+    Lifetime.inert(h)
+    fibers.scope({ closure = FibersClosure.nursery({ allow_outward_move = false }) }, function(inner)
       fibers.perform(inner:admit_op(h))
       local ok, err = pcall(function()
-        inner:move_op(h, root)
+        fibers.perform(inner:move_op(h, root))
       end)
       denied = not ok and tostring(err):match('denied') ~= nil
     end)
   end)
-  assert_truthy(denied, 'strict policy should deny outward custody movement')
+  assert_truthy(denied, 'strict Closure should deny outward custody movement')
 end
 
 -- Once fail-fast closure commits, a caught cancellation cannot admit a late child.
@@ -209,7 +209,7 @@ end
 -- Supervisors retain every independently failing child, not only the first.
 do
   local r = fibers.try_run(function()
-    return fibers.try_scope({ policy = FibersPolicy.supervisor({ child_failure = 'collect' }) }, function()
+    return fibers.try_scope({ closure = FibersClosure.supervisor({ child_failure = 'collect' }) }, function()
       fibers.spawn(function()
         error('first collected failure', 0)
       end, 'first-collected')
@@ -226,4 +226,4 @@ do
   assert_eq(#inner.report.child_exits, 2, 'all child exits should be retained')
 end
 
-print('tests/test_structured_policy.lua: ok')
+print('tests/test_structured_closure.lua: ok')

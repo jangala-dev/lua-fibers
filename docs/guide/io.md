@@ -1,7 +1,7 @@
 # Files, pipes, processes and sockets
 
 Fibers restores the practical shape of the earlier I/O layer while retaining
-version 1 ownership and option semantics.
+version 1 custody and option semantics.
 
 ## Evented regular files
 
@@ -37,7 +37,7 @@ local contents, err = fibers.perform(
 ```
 
 Callers that need detached ordered admission can use the explicit `submit_*_op`
-forms. These return an owned `File.Job` or `File.Request` whose completion remains
+forms. These return a `File.Job` or `File.Request` held in custody, whose completion remains
 selectable through `result_op()`:
 
 ```lua
@@ -45,7 +45,7 @@ local job = fibers.perform(file.submit_read_all_op('/etc/resolv.conf', { max = 6
 local contents, err = fibers.perform(job:result_op())
 ```
 
-`file.open()` returns an owned regular file. Operations on one file are
+`file.open()` returns a regular file held in custody. Operations on one file are
 serialised in submission order:
 
 ```lua
@@ -114,8 +114,8 @@ local bytes = reader:read_all({ max = 4096 })
 reader:close('complete')
 ```
 
-Internally, pre-admitted adoption records cover both handles until their
-Streams take ownership. Public callers receive the two Streams directly,
+Internally, private host holds cover both handles until their Streams are
+admitted and take custody. Public callers receive the two Streams directly,
 matching the successful surface of the pre-version-1 library.
 
 ## Stream migration helpers
@@ -145,8 +145,9 @@ stream:read_op('*a', { max = 1024 * 1024 })
 
 ## Processes
 
-`fibers.process` separates an immutable command specification from the owned
-running Process:
+`fibers.process` separates an captured command specification from the running Process Lifetime. A Process is one Lifetime shared by its domain, Task and private
+Scope views; direct-wait, reaper and other host strategies sit beneath one
+validated provider boundary:
 
 ```lua
 local process = require('fibers.process')
@@ -171,7 +172,7 @@ A Command is pure and reusable. Builder methods return new values:
 
 ```lua
 local base = process.command('worker', '--once')
-local captured = base
+local configured = base
   :with_stdout('pipe')
   :with_stderr('pipe')
   :with_env({ MODE = 'capture' })
@@ -180,7 +181,7 @@ local captured = base
 Starting is deliberately divided into launch admission, launch observation,
 and eventual process result. `launch_op()` is a true option: a guard constructs
 a fresh Process at synchronisation time, admission and the supervisor spawn
-effect commit together, and the option returns without claiming that `exec` has
+effect commit together, and the option returns without implying that `exec` has
 finished. If the launch branch loses, no child is created.
 
 ```lua
@@ -215,7 +216,7 @@ choice(command:launch_op(), shutdown_op)
     whether a launch should exist
 
 choice(proc:launch_result_op(), timeout_op)
-    how long to wait for that owned launch
+    how long to wait for that launch Lifetime
 ```
 
 A timeout is caller policy; it is not confused with child-process failure.
@@ -252,14 +253,14 @@ stdout:  inherit | null | pipe | Stream
 stderr:  inherit | null | pipe | stdout | Stream
 ```
 
-A supplied Stream is bridged through a Process-owned pipe. It need not expose a
-file descriptor, and it remains owned by its caller. `process.redirect` can
+A supplied Stream is bridged through a pipe held by the Process Lifetime. It need not expose a
+file descriptor, and it remains in its caller's custody. `process.redirect` can
 request flushing or closure of the destination after the bridge finishes.
 
 `communicate()` is a committed, single-use procedure rather than an option. It
 writes and closes stdin, drains stdout and stderr concurrently, waits for the
-reaped status, and enforces explicit capture limits. Capture failure begins
-structural Process closure so a child cannot remain blocked on unconsumed
+reaped status, and enforces explicit output limits. Output-collection failure begins
+structural Process Closure so a child cannot remain blocked on unconsumed
 output.
 
 ```lua
@@ -270,7 +271,7 @@ local result = proc:communicate({
 })
 ```
 
-Process requests and completed settlement are distinct:
+Process requests and completed Closure are distinct:
 
 ```lua
 proc:terminate_op() -- commit the configured graceful signal request
@@ -282,8 +283,7 @@ proc:closed_op()
 The direct `terminate()`, `kill()` and `signal()` methods perform their request
 options. `close(reason)` performs `request_close_op(reason)` and then waits for
 `closed_op()`. The supervisor closes stdin, waits for the grace interval,
-escalates where necessary, reaps the child, and settles its Streams and driver
-task. Scope settlement invokes the same protocol, and inability to signal, reap
+escalates where necessary, reaps the child, and finishes its Streams and driver Task. Scope Closure invokes the same protocol, and inability to signal, reap
 or close remains visible in the scope report.
 
 Commands which may create descendants should normally request a new process
@@ -346,12 +346,12 @@ assert(connection, accept_err)
 ```
 
 Accepted connections expose the ordinary Stream surface directly. Before
-acceptance they remain owned by the Listener's driver scope. `accept_op`
+acceptance they remain in the Listener Lifetime's private Scope custody. `accept_op`
 dequeues a connection and moves its complete Stream subtree into the accepting
 scope in the same commit. If the option loses a choice, neither action occurs.
 Queued input has certified priority over terminal listener closure. When a
 transfer option will be stored or performed by another fibre, pass its target
-Scope or Region explicitly; an omitted target is the current scope at option
+target Scope explicitly; an omitted target is the current scope at option
 construction.
 
 Outbound connection establishment is deliberately two-stage:
@@ -368,12 +368,12 @@ local selected, selected_err = fibers.perform(selected_dial:result_op())
 The split allows the eventual connection result to participate correctly in
 `choice`, timeouts and Happy Eyeballs races. `dial:connected_op()` is a
 success-only option and becomes refutable after terminal failure or closure. A
-successful but unclaimed connection remains owned by the Dial driver's scope;
+successful but untaken connection remains in the Dial Lifetime's private Scope custody;
 claiming it moves the complete Stream subtree into the caller's scope. As with
 `accept_op`, pass an explicit target when a result option is intended for a
 different fibre or scope.
 `dial:result_op()` returns either the transferred connection or its structured
-error. `dial:closed_op()` observes driver termination and completed custody
+error. `dial:closed_op()` observes execution termination and completed custody
 disposition.
 
 Listener and Dial lifecycle state is explicit transactional state rather than a
@@ -381,18 +381,18 @@ collection of completion flags and mutable booleans. The principal states are:
 
 ```text
 Listener: starting -> active -> stopping -> stopped
-Dial:     starting -> connected -> claimed
+Dial:     starting -> connected -> taken
           |             |
           +-> failed    +-> closing -> closed
           +----------------^
 ```
 
-A close option commits the lifecycle transition and the driver's interrupt
+A close option commits the lifecycle transition and the Lifetime execution interrupt
 effect in the same world. Host closure then occurs in participant-local
-post-commit code. A Dial claim commits its `connected -> claimed` transition and
+post-commit code. A Dial take commits its `connected -> taken` transition and
 the Stream custody move together, so neither can occur without the other.
 Expected host failures are stored in lifecycle state as values; adapter defects
-and close failures are marked fatal and remain visible during scope settlement.
+and close failures are marked fatal and remain visible during Scope Closure.
 
 Numeric address constructors are explicit:
 
@@ -416,7 +416,7 @@ local dial = socket.dial(addresses[1])
 local connection, dial_err = dial:result()
 ```
 
-Resolution is deliberately two-stage. `socket.resolve_op` admits an owned query
+Resolution is deliberately two-stage. `socket.resolve_op` admits a query Lifetime
 and starts its driver after commitment. `query:addresses_op()` is success-only
 and becomes refutable after terminal failure; `query:result_op()` combines it
 with the failure result through certified fallback. A and AAAA completion is
@@ -482,7 +482,7 @@ progress are composed as `outcomes:or_else(sources:or_else(progress))`. New
 addresses may join the globally ordered unattempted set after numeric Dials have
 begun. The first successful Stream moves into the caller's scope, and the call
 returns only after
-the private race has settled every losing query, Dial and Stream. Use
+the private race has closed every losing query, Dial and Stream. Use
 `socket.dial_name_op` when admission itself must participate in a choice, then
 select from the returned `NamedDial` lifecycle. See
 [`docs/guide/happy-eyeballs.md`](happy-eyeballs.md).
@@ -578,13 +578,12 @@ real timing. It is used by both semantic evaluators. Native conformance covers
 IPv4 and IPv6 loopback, zero-length messages, source addresses, truncation and
 repeated socket churn.
 
-## Ownership and host support
+## Custody and host support
 
-Newly acquired handles are covered by pre-admitted adoption records before any
-fibre can yield. Accepted and dialled Streams remain in driver scopes until a
-caller commits their custody transfer. Listener and Dial drivers are structural children of their resource roots.
-Resource settlement requests root shutdown before requesting its children, then
-joins and settles those children before completing and discharging the root.
+Newly acquired handles enter private host holds before any fibre can yield. Accepted and dialled Streams remain in each resource Lifetime's private Scope until a
+caller commits their custody transfer. Listener and Dial Task, Scope and domain views share one Lifetime; no driver Task is a separate structural child of the public root.
+Resource Closure requests root shutdown before requesting its children, then
+joins and finishes those children before closing the root.
 Readiness and bounded-queue waits remain cancellable.
 
 The test-only `SimulatedHost` implements pipes, virtual sockets and resolver
@@ -641,12 +640,12 @@ host.capabilities.socket_unix
 
 A disabled family returns a structured `unsupported` error. A provider which
 enables a family is expected to pass the same listener, Dial, transfer, address
-metadata and settlement contract as `ManualHost`.
+metadata and Closure contract as `ManualHost`.
 
 ## I/O qualification and diagnostics
 
 Resource qualification can assert that every handle and readiness registration
-has settled:
+has closed:
 
 ```lua
 local result = fibers.try_run(main, { host = host })
@@ -662,6 +661,6 @@ local snapshot = fibers.current_runtime():io_audit_snapshot({
 })
 ```
 
-The audit reports live handle ownership, registration generations, close
+The audit reports live handle custody, registration generations, close
 failures, stale readiness deliveries and lifecycle violations. See
 [`../advanced/io-invariants.md`](../advanced/io-invariants.md).

@@ -9,18 +9,18 @@ local Scalar = require('fibers.resource.scalar')
 local Rope = require('fibers.resource.flow.rope')
 local Errors = require('fibers.resource.flow.errors')
 local Effect = require('fibers.effect')
-local Region = require('fibers.region')
-local Settlement = require('fibers.region.settlement')
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
 
 local Lease = {}
 Lease.__index = Lease
 
-function Lease.new(flow, id, owner, bytes, opts)
+function Lease.new(flow, id, holder, bytes, opts)
   opts = opts or {}
   return setmetatable({
     flow = flow,
     id = id,
-    owner = owner,
+    holder = holder,
     _bytes = bytes or '',
     _length = #(bytes or ''),
     meta = opts.meta,
@@ -38,7 +38,7 @@ function Lease:length()
   return self._length or #(self._bytes or '')
 end
 function Lease:inspect()
-  return { id = self.id, bytes = self:bytes(), length = self:length(), owner = self.owner, flow = self.flow }
+  return { id = self.id, bytes = self:bytes(), length = self:length(), holder = self.holder, flow = self.flow }
 end
 function Lease:ack_op(n)
   return self.flow:_ack_lease_op(self, n)
@@ -53,12 +53,12 @@ end
 local SpaceLease = {}
 SpaceLease.__index = SpaceLease
 
-function SpaceLease.new(flow, id, owner, capacity, opts)
+function SpaceLease.new(flow, id, holder, capacity, opts)
   opts = opts or {}
   return setmetatable({
     flow = flow,
     id = id,
-    owner = owner,
+    holder = holder,
     _capacity = capacity or 0,
     meta = opts.meta,
     _fibers_flow_space_lease = true,
@@ -73,7 +73,7 @@ function SpaceLease:capacity()
   return self._capacity or 0
 end
 function SpaceLease:inspect()
-  return { id = self.id, capacity = self:capacity(), owner = self.owner, flow = self.flow, meta = self.meta }
+  return { id = self.id, capacity = self:capacity(), holder = self.holder, flow = self.flow, meta = self.meta }
 end
 function SpaceLease:commit_op(bytes)
   return self.flow:_commit_space_op(self, bytes)
@@ -145,12 +145,12 @@ local function new_state()
     output_error = nil,
     rope = Rope.new(),
     lease_id = nil,
-    lease_owner = nil,
+    lease_holder = nil,
     lease_bytes = nil,
     lease_meta = nil,
     next_lease = 0,
     space_id = nil,
-    space_owner = nil,
+    space_holder = nil,
     space_capacity = 0,
     space_meta = nil,
     next_space = 0,
@@ -168,12 +168,12 @@ local function copy_state(s, clone_rope)
     output_error = s.output_error,
     rope = clone_rope and (Rope.is(s.rope) and s.rope:clone() or Rope.new()) or (s.rope or Rope.new()),
     lease_id = s.lease_id,
-    lease_owner = s.lease_owner,
+    lease_holder = s.lease_holder,
     lease_bytes = s.lease_bytes,
     lease_meta = s.lease_meta,
     next_lease = s.next_lease or 0,
     space_id = s.space_id,
-    space_owner = s.space_owner,
+    space_holder = s.space_holder,
     space_capacity = s.space_capacity or 0,
     space_meta = s.space_meta,
     next_space = s.next_space or 0,
@@ -229,16 +229,16 @@ local function inspect_state(self, s)
   }
 end
 local function lease_handle(flow, s)
-  return Lease.new(flow, s.lease_id, s.lease_owner, s.lease_bytes or '', { meta = s.lease_meta })
+  return Lease.new(flow, s.lease_id, s.lease_holder, s.lease_bytes or '', { meta = s.lease_meta })
 end
 local function clear_lease(s)
-  s.lease_id, s.lease_owner, s.lease_bytes, s.lease_meta = nil, nil, nil, nil
+  s.lease_id, s.lease_holder, s.lease_bytes, s.lease_meta = nil, nil, nil, nil
 end
 local function space_lease_handle(flow, s)
-  return SpaceLease.new(flow, s.space_id, s.space_owner, s.space_capacity or 0, { meta = s.space_meta })
+  return SpaceLease.new(flow, s.space_id, s.space_holder, s.space_capacity or 0, { meta = s.space_meta })
 end
 local function clear_space_lease(s)
-  s.space_id, s.space_owner, s.space_capacity, s.space_meta = nil, nil, 0, nil
+  s.space_id, s.space_holder, s.space_capacity, s.space_meta = nil, nil, 0, nil
 end
 local function close_endpoint(s, endpoint)
   s[endpoint .. '_open'] = false
@@ -512,7 +512,7 @@ local FlowTransitions = Scalar.kind({
       end,
       step = function(s, p)
         if s.lease_id then
-          if p.owner ~= nil and s.lease_owner == p.owner then
+          if p.holder ~= nil and s.lease_holder == p.holder then
             return Ready.same(lease_handle(p.flow, s))
           end
           return Ready.same(nil, Errors.LEASE_ALREADY_ACTIVE)
@@ -527,7 +527,7 @@ local FlowTransitions = Scalar.kind({
         local bytes = next_s.rope:take(math.min(p.n, next_s.rope:length()))
         next_s.next_lease = (next_s.next_lease or 0) + 1
         next_s.lease_id = (p.flow_id or 'flow') .. ':lease:' .. tostring(next_s.next_lease)
-        next_s.lease_owner = p.owner
+        next_s.lease_holder = p.holder
         next_s.lease_bytes = bytes
         next_s.lease_meta = p.meta
         return Ready.write(next_s, lease_handle(p.flow, next_s))
@@ -630,7 +630,7 @@ local FlowTransitions = Scalar.kind({
           return Ready.same(nil, Errors.BROKEN_PIPE)
         end
         if s.space_id then
-          if p.owner ~= nil and s.space_owner == p.owner then
+          if p.holder ~= nil and s.space_holder == p.holder then
             return Ready.same(space_lease_handle(p.flow, s))
           end
           return Ready.same(nil, Errors.SPACE_LEASE_ALREADY_ACTIVE)
@@ -642,7 +642,7 @@ local FlowTransitions = Scalar.kind({
         local next_s = copy_metadata_state(s)
         next_s.next_space = (next_s.next_space or 0) + 1
         next_s.space_id = (p.flow_id or 'flow') .. ':space:' .. tostring(next_s.next_space)
-        next_s.space_owner = p.owner
+        next_s.space_holder = p.holder
         next_s.space_capacity = math.min(p.n, free)
         next_s.space_meta = p.meta
         return Ready.write(next_s, space_lease_handle(p.flow, next_s))
@@ -947,8 +947,9 @@ local free_for_capacity = Machine.free
 local transition_op = Machine.transition_op
 
 local function live_or_retired_op(handle, body)
-  local flow = handle and handle.flow or handle
-  if (handle and handle._fibers_retired) or (flow and flow._fibers_retired) then
+  local life = Lifetime.of(handle)
+  local phase = life and life:current_state().closure_phase or nil
+  if phase == 'closed' or phase == 'closure_failed' then
     return Op.always(nil, Errors.RETIRED)
   end
   return body()
@@ -971,10 +972,10 @@ function Inlet:write_some_op(bytes)
   end)
 end
 
-function Inlet:reserve_some_op(n, owner, meta)
+function Inlet:reserve_some_op(n, holder, meta)
   return live_or_retired_op(self, function()
     n = as_pos_int(n, 1, 'flow space reservation size')
-    return transition_op(self.flow, 'reserve_space', { n = n, owner = owner, meta = meta })
+    return transition_op(self.flow, 'reserve_space', { n = n, holder = holder, meta = meta })
   end)
 end
 
@@ -1112,10 +1113,10 @@ function Outlet:splice_to_op(inlet, n)
   end)
 end
 
-function Outlet:lease_some_op(n, owner, meta)
+function Outlet:lease_some_op(n, holder, meta)
   return live_or_retired_op(self, function()
     n = as_pos_int(n, 1, 'flow lease size')
-    return transition_op(self.flow, 'lease', { n = n, owner = owner, meta = meta })
+    return transition_op(self.flow, 'lease', { n = n, holder = holder, meta = meta })
   end)
 end
 
@@ -1174,17 +1175,32 @@ function Flow.new(opts)
   validate_options(opts, { name = true, capacity = true }, 'Flow.new options')
   next_id = next_id + 1
   local name = opts.name or ('flow-' .. tostring(next_id))
-  local self = Region.handle(name, { kind = 'flow' })
-  setmetatable(self, Flow)
-  self.name = name
-  self.capacity = as_capacity(opts.capacity)
-  self.state = Scalar.machine(new_state(), name .. ':state')
-  self._fibers_settle = Settlement.flow()
-  self._fibers_settle_name = 'flow'
-  self.input = Region.handle(name .. ':inlet', { kind = 'flow_inlet', flow = self })
-  setmetatable(self.input, Inlet)
-  self.output = Region.handle(name .. ':outlet', { kind = 'flow_outlet', flow = self })
-  setmetatable(self.output, Outlet)
+  local self = setmetatable({
+    name = name,
+    _fibers_id = name,
+    capacity = as_capacity(opts.capacity),
+    state = Scalar.machine(new_state(), name .. ':state'),
+  }, Flow)
+  self.input = setmetatable({ name = name .. ':inlet', flow = self }, Inlet)
+  self.output = setmetatable({ name = name .. ':outlet', flow = self }, Outlet)
+  Lifetime.define(self.input, {
+    role = 'flow_inlet',
+    rights = { write = true, use = true },
+    closure = Closure.request_then_wait(function(_ctx, record)
+      return record.item:close_op()
+    end, function(_ctx, record)
+      return record.item:closed_op()
+    end, { name = 'flow_inlet', finish_result = Closure.require_ok('flow inlet closure failed') }),
+  })
+  Lifetime.define(self.output, {
+    role = 'flow_outlet',
+    rights = { read = true, use = true },
+    closure = Closure.request_then_wait(function(_ctx, record)
+      return record.item:close_op()
+    end, function(_ctx, record)
+      return record.item:closed_op()
+    end, { name = 'flow_outlet', finish_result = Closure.require_ok('flow outlet closure failed') }),
+  })
   return self
 end
 

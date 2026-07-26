@@ -67,7 +67,7 @@ do
   end, { host = host })
 end
 
--- Scope settlement closes both acquired handles when application code does not.
+-- Scope Closure closes both acquired handles when application code does not.
 do
   local read_handle, write_handle
   local host = SimulatedHost.new({
@@ -124,7 +124,7 @@ do
   assert_eq(read_handle.closed, true)
 end
 
--- Stream admission failure closes both immediately adopted handles.
+-- Stream admission failure closes both immediately held host handles.
 do
   local bad_reader, writer
   local host = SimulatedHost.new({
@@ -190,7 +190,7 @@ do
     observed = err
   end, { host = host })
   assert_eq(observed, close_err)
-  assert_eq(result.ok, false, 'scope should retain the endpoint settlement failure')
+  assert_eq(result.ok, false, 'scope should retain the endpoint closure failure')
 end
 
 -- The public Pipe facility also works through the available native Linux host.

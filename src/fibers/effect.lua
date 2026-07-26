@@ -12,7 +12,7 @@
 -- prepare must not reserve capacity, mutate host state, deliver external facts,
 -- spawn, perform, yield or otherwise require rollback.  It may return nil plus a
 -- structured reason to reject the candidate, or a prepared record containing a
--- discharge function.  A refusal must depend only on the payload, immutable
+-- discharge function.  A refusal must depend only on the payload, captured
 -- runtime configuration or managed facts already represented by the candidate.
 --
 -- Effect identity is the pair (EffectKind object, raw Lua key).  Lua types and
@@ -88,8 +88,6 @@ local EffectKind = (function()
   return EffectKind
 end)()
 
-local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
-
 local Effect = {}
 
 local function shallow_copy(t)
@@ -152,74 +150,6 @@ function Effect.interrupt(token, reason)
   return Effect.of(InterruptKind, { token = token, reason = reason })
 end
 
-local ScopeKind
-local function scope_key(payload)
-  local typ = payload.type or payload.event or 'scope'
-  local item = payload.item
-  local item_id = item and (item._fibers_id or item.name) or payload.item_id or ''
-  local from = payload.from
-  local to = payload.to or payload.region
-  local from_id = from and (from._fibers_id or from.name) or payload.from_id or ''
-  local to_id = to and (to._fibers_id or to.name) or payload.to_id or ''
-  return tostring(typ) .. ':' .. tostring(item_id) .. ':' .. tostring(from_id) .. ':' .. tostring(to_id)
-end
-
-ScopeKind = EffectKind.new({
-  name = 'scope',
-  key = scope_key,
-  merge = function(a, _b)
-    return shallow_copy(a)
-  end,
-  prepare = function(_rt, payload)
-    return {
-      kind = ScopeKind,
-      key = scope_key(payload),
-      payload = payload,
-      discharge = function(rt, entry, _log)
-        local seen = {}
-        local function discharge_source(src)
-          if type(src) == 'table' and type(src._fibers_external_deliver) == 'function' and not seen[src] then
-            seen[src] = true
-            UnsafeExternalMutation.deliver(src, entry.payload)
-          end
-        end
-        local function discharge_region_owner(region)
-          local scope = type(region) == 'table' and region._fibers_scope_owner or nil
-          if scope and type(scope._ensure_policy_monitor) == 'function' then
-            scope:_ensure_policy_monitor(rt, entry.payload)
-          end
-          discharge_source(scope and scope._lifetime_events or nil)
-        end
-        discharge_source(entry.payload.source)
-        local sources = entry.payload.sources
-        if type(sources) == 'table' then
-          for i = 1, #sources do
-            discharge_source(sources[i])
-          end
-        end
-        discharge_region_owner(entry.payload.from)
-        discharge_region_owner(entry.payload.to or entry.payload.region)
-        if entry.payload.type == 'task_exit' then
-          local item = entry.payload.item or entry.payload.task
-          discharge_region_owner(item and item.owner)
-        end
-        local host = rt.host or {}
-        local discharge = host.scope
-        if discharge then
-          return discharge(entry.payload, rt)
-        end
-      end,
-    }
-  end,
-})
-
-function Effect.scope(event)
-  if type(event) ~= 'table' then
-    error('Effect.scope expects an event table', 2)
-  end
-  return Effect.of(ScopeKind, event)
-end
-
 local SpawnKind
 local next_spawn = 0
 local function spawn_key(payload)
@@ -267,7 +197,6 @@ function Effect.spawn(fn, name, id, scope, owner)
 end
 
 Effect.InterruptKind = InterruptKind
-Effect.ScopeKind = ScopeKind
 Effect.SpawnKind = SpawnKind
 Effect.EffectKind = EffectKind
 

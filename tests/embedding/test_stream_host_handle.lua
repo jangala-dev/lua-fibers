@@ -16,12 +16,12 @@ local Inspect = require('tests.support.flow_inspect')
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local FibersReadiness = require('fibers.host.readiness')
-local FibersRegion = require('fibers.region')
+local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local FibersHost = require('fibers.host')
 local Host = FibersHost
 local Runtime = FibersRuntime
-local Region = FibersRegion
+local Scope = FibersScope
 local Stream = FibersStream
 local HostHandle = require('fibers.host.handle')
 
@@ -226,17 +226,14 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('socket-read-region')
+  local owner = Scope.new('socket-read-owner')
   local handle = make_socket(host, 'socket-read')
   local stream_handle = wrap_handle(host, handle)
   local stream, got
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(
-        stream_handle,
-        { owner = region, read = true, write = true, name = 'socket-read-stream' }
-      )
+      Stream.open_op(stream_handle, { scope = owner, read = true, write = true, name = 'socket-read-stream' })
     )
     got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'socket-reader')
@@ -255,7 +252,7 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('socket-write-region')
+  local owner = Scope.new('socket-write-owner')
   local handle = make_socket(host, 'socket-write')
   handle.write_blocked = true
   local stream_handle = wrap_handle(host, handle)
@@ -265,7 +262,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         stream_handle,
-        { owner = region, read = true, write = true, name = 'socket-write-stream' }
+        { scope = owner, read = true, write = true, name = 'socket-write-stream' }
       )
     )
     rt:perform(stream:writer():write_op('hello'))
@@ -295,7 +292,7 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('socket-partial-region')
+  local owner = Scope.new('socket-partial-owner')
   local handle = make_socket(host, 'socket-partial')
   handle.write_chunk_size = 2
   host:writable(handle.key)
@@ -306,7 +303,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         stream_handle,
-        { owner = region, read = true, write = true, name = 'socket-partial-stream' }
+        { scope = owner, read = true, write = true, name = 'socket-partial-stream' }
       )
     )
     rt:perform(stream:writer():write_op('abcdef'))
@@ -324,14 +321,14 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('socket-eof-region')
+  local owner = Scope.new('socket-eof-owner')
   local handle = make_socket(host, 'socket-eof')
   local stream_handle = wrap_handle(host, handle)
   local stream, first, second, err
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(stream_handle, { owner = region, read = true, write = true, name = 'socket-eof-stream' })
+      Stream.open_op(stream_handle, { scope = owner, read = true, write = true, name = 'socket-eof-stream' })
     )
     first = rt:perform(stream:reader():read_some_op(8))
     second, err = rt:perform(stream:reader():read_some_op(8))

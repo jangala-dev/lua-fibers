@@ -11,7 +11,7 @@ local function assert_eq(a, b, msg)
   assert(a == b, (msg or 'values differ') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a))
 end
 
--- Command is a pure immutable value.
+-- Command is a pure reusable value.
 do
   local base = process.command('worker', '--once')
   local changed = base:with_stdout('pipe'):with_env({ MODE = 'test' })
@@ -69,7 +69,7 @@ do
     assert(first:close())
     assert(second:close())
     assert(first.communicate_op == nil, 'communicate is a direct multi-phase procedure')
-    assert(first.close_op == nil, 'close is request plus completed settlement')
+    assert(first.close_op == nil, 'close is request plus completed Closure')
   end, { host = host })
 
   assert_eq(starts, 2, 'each committed launch starts exactly one host process')
@@ -283,6 +283,45 @@ do
     assert(proc == nil)
     assert(HostError.is_unsupported(err, 'process'))
   end, { host = host })
+end
+
+-- All host strategies cross one validated provider boundary beneath the Process
+-- Lifetime. An invalid provider handle fails as a structured protocol error and
+-- any returned host values are closed immediately.
+do
+  local process_closed, endpoint_closed = false, false
+  local host = SimulatedHost.new({
+    processes = true,
+    process_factory = function()
+      return {
+        pid = function()
+          return 991
+        end,
+        close = function()
+          process_closed = true
+          return true
+        end,
+        -- deliberately missing wait_op, reap and signal
+      }, {
+        stdout = {
+          close = function()
+            endpoint_closed = true
+            return true
+          end,
+        },
+      }
+    end,
+  })
+
+  fibers.run(function()
+    local proc, err = process.command({ 'invalid-provider', stdout = 'pipe' }):start()
+    assert(proc == nil)
+    assert(HostError.is(err, 'protocol'))
+    assert_eq(err.action, 'start_process')
+    assert_eq(err.missing, 'wait_op')
+  end, { host = host })
+  assert(process_closed, 'invalid provider process handle should be closed')
+  assert(endpoint_closed, 'invalid provider endpoints should be closed')
 end
 
 return true

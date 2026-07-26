@@ -1,4 +1,4 @@
--- Runtime-owned executor for readiness-driven host reactions.
+-- Runtime-local executor for readiness-driven host reactions.
 --
 -- The production reactor is indexed rather than algebraically enumerated.  A
 -- compact HostPoller option yields ready registration identities; committed
@@ -15,7 +15,8 @@ local Interest = require('fibers.host.external').Interest
 local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
 local Errors = require('fibers.resource.flow.errors')
 local HostError = require('fibers.host.error')
-local Region = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
 local IOAudit = require('fibers.diagnostics.io')
 
 local Reactor = {}
@@ -117,8 +118,9 @@ function Entry.new(reactor, spec)
   if key == nil then
     error('reactor-backed direction requires a readiness key', 3)
   end
-  local entry = Region.handle(spec.name or id, {
+  local entry = setmetatable({
     kind = 'host_reaction',
+    name = spec.name or id,
     mode = spec.mode,
     stream = spec.stream,
     flow = spec.flow,
@@ -130,8 +132,7 @@ function Entry.new(reactor, spec)
     _fibers_id = id,
     id = id,
     armed = false,
-  })
-  setmetatable(entry, Entry)
+  }, Entry)
   entry._fibers_id = id
   entry.retired_signal = Signal.new((spec.name or id) .. ':retired')
   entry.registered = false
@@ -145,6 +146,20 @@ function Entry.new(reactor, spec)
   entry.service_count = 0
   entry.would_block_count = 0
   entry.last_service_sequence = nil
+  local hidden_endpoint
+  if entry.flow then
+    hidden_endpoint = entry.mode == 'read' and entry.flow:inlet() or entry.flow:outlet()
+  end
+  Lifetime.define(entry, {
+    name = entry.name,
+    role = 'host_reaction',
+    children = hidden_endpoint and { hidden_endpoint } or nil,
+    closure = Closure.request_then_wait(function(_ctx, record, close)
+      return record.item:retire_op(close.reason, record.item.mode == 'write' and 'abort' or 'immediate')
+    end, function(_ctx, record)
+      return record.item:retired_op()
+    end, { name = 'host_reaction', finish_result = Closure.require_ok('reactor retirement failed') }),
+  })
   IOAudit.created(entry, { kind = 'reactor_registration' })
   return entry
 end
@@ -545,7 +560,7 @@ function Reactor:_service_write(entry)
       masked_perform(self.runtime, entry.flow:outlet():fail_op(Errors.BACKEND_PROTOCOL_ERROR))
       return self:_retire_entry(entry, ack_err or Errors.BACKEND_PROTOCOL_ERROR)
     end
-    -- Lease handles are immutable snapshots.  Reacquire after every
+    -- Lease handles are captured snapshots.  Reacquire after every
     -- acknowledgement so a partial write observes the remaining suffix.
     entry.lease = nil
   elseif HostError.is_would_block(err) or n == 0 then

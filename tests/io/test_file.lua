@@ -345,6 +345,36 @@ function tests.memory_provider_keeps_open_inode_after_rename_and_unlink()
   end, { host = host_with_provider(provider) })
 end
 
+function tests.file_close_waits_for_private_lifetime_descendants()
+  local provider = memory_provider()
+  local original_open = provider.open
+  local child_finished = false
+
+  function provider:open(path, mode, opts)
+    local backend, err = original_open(self, path, mode, opts)
+    if not backend then
+      return nil, err
+    end
+    local original_close = backend.close
+    function backend:close(reason)
+      fibers.spawn(function()
+        Sleep.sleep(0.01)
+        child_finished = true
+      end, 'file-close-descendant')
+      return original_close(self, reason)
+    end
+    return backend
+  end
+
+  local result = fibers.try_run(function()
+    local opened = assert(file.open('/joined-close', 'w+b', {}))
+    assert(opened:close())
+    assert(child_finished, 'File:close returned before its private Lifetime descendants settled')
+  end, { host = host_with_provider(provider) })
+
+  assert(result.ok, result:tostring())
+end
+
 function tests.file_driver_does_not_stop_other_fibres()
   local provider = memory_provider({ ['/slow'] = 'ready' })
   local original_open = provider.open

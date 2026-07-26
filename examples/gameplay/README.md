@@ -9,7 +9,7 @@ Read them in order:
 
 | Example | Mechanic | Fibers idea |
 |---|---|---|
-| `00_skippable_cutscene.lua` | a cinematic which leaves cleanly when skipped | scene-owned tasks, `choice`, cancellation and joined exits |
+| `00_skippable_cutscene.lua` | a cinematic which leaves cleanly when skipped | Tasks held by the scene Lifetime, `choice`, cancellation and joined exits |
 | `01_player_session.lua` | work which exists only while one player is present | nested scope as the player-session lifetime |
 | `02_atomic_match_admission.lua` | reserve capacity and start a match together | transactional state plus transactional task admission |
 | `03_ai_intention_ladder.lua` | attack, take cover, or patrol | proof-directed `or_else` rather than timeout-driven fallback |

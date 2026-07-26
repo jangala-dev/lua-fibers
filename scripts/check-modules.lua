@@ -39,10 +39,38 @@ local function module_name(path, root)
   return relative:gsub('/', '.')
 end
 
+local function check_unambiguous_paths(paths, root, errors)
+  local entries = {}
+  for i = 1, #paths do
+    local path = paths[i]
+    local relative = assert(path:match('^' .. root .. '/(.+)$'))
+    entries[#entries + 1] = {
+      path = path,
+      stem = relative:gsub('%.lua$', ''),
+    }
+  end
+  for i = 1, #entries do
+    local entry = entries[i]
+    if not entry.stem:match('/init$') then
+      local prefix = entry.stem .. '/'
+      for j = 1, #entries do
+        local child = entries[j]
+        if child.stem:sub(1, #prefix) == prefix then
+          errors[#errors + 1] = 'ambiguous module path: ' .. entry.path
+            .. ' coexists with child module ' .. child.path
+          break
+        end
+      end
+    end
+  end
+end
+
 local modules = {}
 local errors = {}
 for _, root in ipairs({ 'src', 'reference' }) do
-  for _, path in ipairs(list_files('find ' .. shell_quote(root) .. " -type f -name '*.lua' -print")) do
+  local paths = list_files('find ' .. shell_quote(root) .. " -type f -name '*.lua' -print")
+  check_unambiguous_paths(paths, root, errors)
+  for _, path in ipairs(paths) do
     local name = module_name(path, root)
     if modules[name] then
       errors[#errors + 1] = 'duplicate module ' .. name .. ': ' .. modules[name] .. ' and ' .. path

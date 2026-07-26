@@ -8,7 +8,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Cancellation is an explicit request to an owned task. An emergency stop
+-- Cancellation is an explicit request to a Task held in custody. An emergency stop
 -- reaches the robot motion planner at a Fibers suspension boundary and leaves
 -- an inspectable exit.
 
@@ -28,7 +28,7 @@ fibers.run(function(scope)
   assert(first == true)
   assert(reason == 'emergency stop pressed')
 
-  planner_exit = fibers.perform(planner:exit_op())
+  planner_exit = fibers.perform(planner:body_result_op())
 end)
 
 assert(planner_exit.tag == 'cancelled' or planner_exit.tag == 'failed')

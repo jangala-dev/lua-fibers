@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
-local Region = require('fibers.region')
+local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 local HostHandle = require('fibers.host.handle')
 local Host = require('fibers.host')
@@ -81,12 +81,12 @@ local handle = HostHandle.new({
 })
 
 local rt = Runtime.new({ host = host })
-local region = Region.new('example-socket-region')
+local scope = Scope.new('example-socket-scope', { runtime = rt })
 local stream, got, flushed
 
 rt:spawn_raw(function()
   stream = rt:perform(
-    Stream.open_op(handle, { owner = region, read = true, write = true, name = 'example-socket-stream' })
+    Stream.open_op(handle, { scope = scope, read = true, write = true, name = 'example-socket-stream' })
   )
   got = rt:perform(stream:reader():read_exactly_op(4))
   rt:perform(stream:writer():write_op('pong'))

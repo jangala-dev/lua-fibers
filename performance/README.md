@@ -45,13 +45,13 @@ explicit because it contains deliberate proof-search stress cases.
   external partner;
 - `choice conflict backtracking`: a small conflicting product with fallback;
 - `sequential write read`: Flow state transitions and buffering;
-- `spawn await settlement`: structured task creation, completion and settlement.
+- `spawn await closure`: structured task creation, completion and Closure.
 
 ### Complex
 
 - `triple swap with decoy`: global coordination with an unproductive partner;
 - `contended producers`: many pending senders sharing one rendezvous;
-- `nursery rendezvous fanout seven`: structured ownership and rendezvous under a
+- `nursery rendezvous fanout seven`: structured custody and rendezvous under a
   deliberately awkward frontier.
 
 Every case validates its result. A fast but incorrect run fails the suite.
@@ -270,7 +270,7 @@ FIBERS_IO_BENCH_SCALE=2 FIBERS_IO_BENCH_REPEATS=5 \
 FIBERS_IO_BENCH_CASE=datagram lua performance/io_baselines.lua
 ```
 
-It measures acquisition/adoption cost, memory Stream throughput, accepted
+It measures private host-hold cost, memory Stream throughput, accepted
 connections, datagram throughput and idle reactor registration.  The default
 uses `ManualHost` so it is deterministic and available across the interpreter
 matrix.  Native binding throughput and leak tests remain separate stress jobs.
@@ -295,7 +295,7 @@ The focused compatibility diagnostics are retained under
 ```text
 flow.lua            Flow sequential and tensor throughput
 petri_calendar.lua  constant-state and growing-state behaviour
-region.lua          persistent ownership-ledger growth
+lifetime.lua        Runtime-local Lifetime-store growth
 search_cases.lua    search calls, rollbacks, trail entries and refresh statistics
 ```
 

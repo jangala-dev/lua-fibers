@@ -10,7 +10,7 @@ package.path = table.concat({
 
 -- A cutscene owns its camera, dialogue and animation work. Skipping chooses the
 -- exit path, requests cancellation of the losing work and waits until every
--- scene-owned task has actually stopped.
+-- Task held by the scene Lifetime has actually stopped.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
@@ -51,9 +51,9 @@ fibers.run(function(scope)
     animation:request_cancel(reason)
   end
 
-  camera_exit = fibers.perform(camera:exit_op())
-  dialogue_exit = fibers.perform(dialogue:exit_op())
-  animation_exit = fibers.perform(animation:exit_op())
+  camera_exit = fibers.perform(camera:body_result_op())
+  dialogue_exit = fibers.perform(dialogue:body_result_op())
+  animation_exit = fibers.perform(animation:body_result_op())
 end, { host = Host.manual() })
 
 assert(selected == 'skipped')

@@ -357,7 +357,7 @@ function Runtime.new(opts)
   if opts.instrumentation then
     instrumentation = Instrumentation.new(opts.instrumentation)
   end
-  return setmetatable({
+  local runtime = setmetatable({
     opts = opts,
     host = opts.host or {},
     _phase = 'external',
@@ -426,6 +426,9 @@ function Runtime.new(opts)
       rollbacks = 0,
     },
   }, Runtime)
+  -- Loaded lazily to avoid the Runtime/Effect/Lifetime construction cycle.
+  runtime.lifetimes = require('fibers.lifetime.store').new(runtime)
+  return runtime
 end
 
 function Runtime:_add_finalizer(fn)
@@ -739,7 +742,7 @@ function Runtime:_guard_residual(request, guard, activation, reveal)
     return cached, false
   end
   local scope = request.scope
-  local activation_view = GuardActivation.new(self, scope and scope.region or nil)
+  local activation_view = GuardActivation.new(self, scope)
   local ok, value = pcall(self._call_in_phase, self, 'guard', 'callback_error', guard.fn, activation_view)
   GuardActivation.close(activation_view)
   if not ok then
@@ -1871,7 +1874,7 @@ function Runtime:_step_impl(opts)
   -- Bounded stepping must not pin itself to the oldest blocked request. Try
   -- each pending focus in round-robin order until one commit is found. This is
   -- the single-step counterpart of Runtime:run's all-focus pass and allows
-  -- background services and policy monitors to progress behind a blocked root.
+  -- background services and independent Lifetimes to progress behind a blocked root.
   local count = #self.pending
   local start = ((self._step_cursor or 0) % count) + 1
   local refs = reuse_table(self, '_driver_refs')
@@ -2094,12 +2097,12 @@ local function driver_call(self, action, fn, ...)
   self:_end_cycle_budget()
   if not result[1] then
     local err = result[2]
-    -- Structured scope reports and settlement failures are already public
+    -- Structured scope reports and closure failures are already public
     -- failure objects. Preserve them across the driver boundary rather than
     -- obscuring them inside a generic RuntimeError.
     if
       type(err) == 'table'
-      and (err._fibers_error or err._fibers_scope_report or err._fibers_settlement_failure)
+      and (err._fibers_error or err._fibers_scope_report or err._fibers_closure_failure)
     then
       error(err, 0)
     end

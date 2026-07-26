@@ -5,7 +5,7 @@
 -- embedded into the explicit residual Op returned by that callback.
 --
 -- The public surface is deliberately narrow: one stable activation-time
--- monotonic observation and the performing Scope's Region. Runtime authority
+-- monotonic observation and the performing Scope. Runtime authority
 -- remains private to the evaluator.
 
 local GuardActivation = {}
@@ -23,11 +23,11 @@ local function require_open(self, level)
   return state
 end
 
-function GuardActivation.new(runtime, region)
+function GuardActivation.new(runtime, scope)
   local activation = setmetatable({}, Methods)
   states[activation] = {
     runtime = runtime,
-    region = region,
+    scope = scope,
   }
   return activation
 end
@@ -43,8 +43,8 @@ function Methods:now()
   return state.now
 end
 
-function Methods:region()
-  return require_open(self, 1).region
+function Methods:scope()
+  return require_open(self, 1).scope
 end
 
 function GuardActivation.close(activation)

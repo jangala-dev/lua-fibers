@@ -69,8 +69,8 @@ local update = fibers.perform(status_updates:get_op())
 ```
 
 Use direct methods for ordinary sequential code. Use `_op` when an action must
-participate in `choice`, `or_else`, `and_then`, `all` or `tensor`. The detailed
-policy is in [`direct-and-options.md`](direct-and-options.md).
+participate in `choice`, `or_else`, `and_then`, `all` or `tensor`. Detailed
+guidance is in [`direct-and-options.md`](direct-and-options.md).
 
 ## Options
 
@@ -271,7 +271,7 @@ The composable form remains `Sleep.sleep_op(0.25)`.
 
 The relative deadline is fixed once per perform attempt; validation restart does not slide it forwards.
 
-## Scopes, cancellation and settlement
+## Scopes, cancellation and Closure
 
 Most lifetime-bearing values should be created or admitted inside a scope:
 
@@ -285,7 +285,7 @@ fibers.scope(function(scope)
 end)
 ```
 
-The public application vocabulary remains small. Advanced custody, borrowing, settlement and policy interfaces are described in `../advanced/lifetimes-and-custody.md`.
+The public application vocabulary remains small. Advanced custody, Grants and Closure are described in `../advanced/lifetimes-and-custody.md`.
 
 ## Protected calls
 
@@ -324,7 +324,7 @@ Petri and Calendar are trusted kernel case studies under `examples/case_studies/
 - `direct-and-options.md` — direct methods and composable options
 - `roblox.md` — step-by-step game logic, scene lifetimes and Roblox host architecture
 - `../advanced/option-algebra.md` — option semantics and laws
-- `../advanced/lifetimes-and-custody.md` — custody, borrowing, claims and policy
+- `../advanced/lifetimes-and-custody.md` — custody, Grants and Closure
 - `../advanced/flows-and-streams.md` — Flow leases, Streams and the shared reactor
 - `../advanced/embedding.md` — direct runtime driving and hosts
 - `../advanced/facility-authoring.md` — composing supported public facilities

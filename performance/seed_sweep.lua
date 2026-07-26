@@ -16,7 +16,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Policy = require('fibers.policy')
+local Closure = require('fibers.closure')
 local Clock = require('performance.clock')
 
 local function env_number(name, default)
@@ -59,7 +59,7 @@ for fanout = min_size, max_size do
       choice_seed = seed,
       search_limit = search_limit,
       instrumentation = { slow_plan_limit = 1, clock = Clock.now },
-      policy = Policy.nursery({ name = 'seed-sweep-policy' }),
+      closure = Closure.nursery({ name = 'seed-sweep-closure' }),
     })
     local elapsed = Clock.now() - started
     local snapshot = result.runtime and result.runtime:instrumentation_snapshot()

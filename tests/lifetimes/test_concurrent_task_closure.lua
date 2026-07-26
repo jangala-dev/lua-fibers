@@ -28,7 +28,7 @@ local function assert_truthy(v, msg)
   end
 end
 
--- Normal body return waits for all successful owned task roots before the
+-- Normal body return waits for all successful Task roots held in custody before the
 -- root lifetime is considered honest.
 do
   local a_done, b_done = false, false
@@ -47,7 +47,7 @@ do
 end
 
 -- A child failure after the root body returns is still the root lifetime's
--- failure. This is the fire-and-account property: owned tasks cannot fail
+-- failure. This is the fire-and-account property: Tasks held in custody cannot fail
 -- silently after their creating function returns.
 do
   local r = fibers.try_run(function()
@@ -64,13 +64,13 @@ do
   )
 end
 
--- Settlement observes task exits concurrently. A pending sibling must not hide a
--- failing sibling that exits first; the policy should notice the failure, cancel
--- the pending sibling, and then retire both through normal settlement.
+-- Closure observes task exits concurrently. A pending sibling must not hide a
+-- failing sibling that exits first; Closure propagation should notice the failure, cancel
+-- the pending sibling, and then retire both through normal closure.
 do
   local waiter
   local r = fibers.try_run(function()
-    local src = FibersSignal.new('concurrent-settlement-never')
+    local src = FibersSignal.new('concurrent-closure-never')
     waiter = fibers.spawn(function()
       fibers.perform(src:wait_op())
     end, 'pending-sibling')
@@ -93,11 +93,11 @@ do
   fibers.run(function()
     waiter_state = fibers.perform(waiter:state_op())
   end)
-  assert_truthy(waiter_state and waiter_state.exited, 'pending sibling should be cancelled and settled')
+  assert_truthy(waiter_state and waiter_state.body_exited, 'pending sibling should be cancelled and settled')
   assert_truthy(
-    waiter_state.exit.tag == 'cancelled' or waiter_state.exit.tag == 'failed',
+    waiter_state.body_result.tag == 'cancelled' or waiter_state.body_result.tag == 'failed',
     'pending sibling should not remain pending'
   )
 end
 
-print('tests/test_concurrent_task_settlement.lua: ok')
+print('tests/test_concurrent_task_closure.lua: ok')

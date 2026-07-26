@@ -55,15 +55,15 @@ function Lease:_location(subject)
   return self._space:location(subject)
 end
 
-function Lease:acquire_op(subject, mode, owner)
+function Lease:acquire_op(subject, mode, holder)
   if subject == nil then
     error('lease acquire requires subject', 2)
   end
   if mode == nil then
     error('lease acquire requires mode', 2)
   end
-  if owner == nil then
-    error('lease acquire requires owner', 2)
+  if holder == nil then
+    error('lease acquire requires holder', 2)
   end
   local location = self:_location(subject)
   return Facility.op(
@@ -72,19 +72,19 @@ function Lease:acquire_op(subject, mode, owner)
     Facility.admit({
       location = location,
       demand = 'down',
-      key = owner,
+      key = holder,
       value = mode,
       compatibility = self.compat,
       result = Facility.result.boolean,
     })
   )
 end
-function Lease:release_op(subject, owner)
+function Lease:release_op(subject, holder)
   if subject == nil then
     error('lease release requires subject', 2)
   end
-  if owner == nil then
-    error('lease release requires owner', 2)
+  if holder == nil then
+    error('lease release requires holder', 2)
   end
   return Facility.op(
     self,
@@ -92,8 +92,8 @@ function Lease:release_op(subject, owner)
     Facility.claim({
       location = self:_location(subject),
       demand = 'up',
-      query = { kind = 'predicate', predicate = 'map_present', key = owner },
-      change = Facility.change.map_remove(owner),
+      query = { kind = 'predicate', predicate = 'map_present', key = holder },
+      change = Facility.change.map_remove(holder),
       result = Facility.result.boolean,
     })
   )

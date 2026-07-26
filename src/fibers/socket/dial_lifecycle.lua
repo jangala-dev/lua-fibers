@@ -25,7 +25,7 @@ local Connected = Scalar.transition({
       kind = 'connected',
       address = current.address,
       connection = payload.connection,
-      source_region = payload.source_region,
+      source_scope = payload.source_scope,
       report = payload.report,
     }
     return Ready.write(next_state, true, next_state)
@@ -38,7 +38,7 @@ local Failed = Scalar.transition({
   accepts_supply = false,
   supplies = 'none',
   step = function(current, payload)
-    if current.kind == 'failed' or current.kind == 'claimed' or current.kind == 'closed' then
+    if current.kind == 'failed' or current.kind == 'taken' or current.kind == 'closed' then
       return Ready.same(false, current)
     end
     if current.kind == 'closing' then
@@ -60,15 +60,15 @@ local Failed = Scalar.transition({
       error = payload.error,
       fatal = payload.fatal == true,
       connection = current.connection,
-      source_region = current.source_region,
+      source_scope = current.source_scope,
       report = payload.report or current.report,
     }
     return Ready.write(next_state, true, next_state)
   end,
 })
 
-local Claim = Scalar.transition({
-  name = 'socket.dial.claim',
+local Take = Scalar.transition({
+  name = 'socket.dial.take',
   mode = 'update',
   accepts_supply = false,
   supplies = 'none',
@@ -77,11 +77,11 @@ local Claim = Scalar.transition({
       return Scalar.Wait
     end
     local next_state = {
-      kind = 'claimed',
+      kind = 'taken',
       address = current.address,
       report = current.report,
     }
-    return Ready.write(next_state, current.connection, current.source_region, current.report)
+    return Ready.write(next_state, current.connection, current.source_scope, current.report)
   end,
 })
 
@@ -99,7 +99,7 @@ local RequestClose = Scalar.transition({
         error = payload.error,
         fatal = payload.fatal == true,
         connection = current.connection,
-        source_region = current.source_region,
+        source_scope = current.source_scope,
         report = payload.report or current.report,
       }
       return Ready.write(next_state, true, next_state)
@@ -140,7 +140,7 @@ local Closed = Scalar.transition({
   accepts_supply = false,
   supplies = 'none',
   step = function(current, payload)
-    if current.kind == 'closed' or current.kind == 'claimed' or current.kind == 'failed' then
+    if current.kind == 'closed' or current.kind == 'taken' or current.kind == 'failed' then
       return Ready.same(false, current)
     end
     local next_state = {
@@ -173,10 +173,10 @@ function Dial:state_op()
   return self.state:read_op()
 end
 
-function Dial:publish_connected_op(connection, source_region, report)
+function Dial:publish_connected_op(connection, source_scope, report)
   return self.state:transition_op(Connected, {
     connection = connection,
-    source_region = source_region,
+    source_scope = source_scope,
     report = report,
   })
 end
@@ -201,14 +201,14 @@ function Dial:connected_state_op()
   end)
 end
 
-function Dial:claim_op()
+function Dial:take_op()
   local lifecycle = self
   return wait_for(self.state, function(state)
     if state.kind == 'starting' then
       return nil, true
     end
     if state.kind == 'connected' then
-      return lifecycle.state:transition_op(Claim, {})
+      return lifecycle.state:transition_op(Take, {})
     end
     return nil, false
   end)
@@ -225,9 +225,9 @@ function Dial:failure_op()
     if state.kind == 'failed' then
       return Op.always(state.error)
     end
-    if state.kind == 'claimed' then
-      return Op.always(HostError.closed('socket', 'claim_dial_connection', {
-        reason = 'connection already claimed',
+    if state.kind == 'taken' then
+      return Op.always(HostError.closed('socket', 'take_dial_connection', {
+        reason = 'connection already taken',
         address = state.address,
       }))
     end
@@ -282,7 +282,7 @@ end
 
 function Dial:terminal_op()
   return wait_for(self.state, function(state)
-    if state.kind == 'failed' or state.kind == 'claimed' or state.kind == 'closed' then
+    if state.kind == 'failed' or state.kind == 'taken' or state.kind == 'closed' then
       return Op.always(state)
     end
     return nil, true

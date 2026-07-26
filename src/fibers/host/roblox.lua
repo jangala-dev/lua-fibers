@@ -269,7 +269,7 @@ function RobloxHost:done_value()
   return self._done_value
 end
 
----Wait from a convenience caller or shutdown callback until settlement.
+---Wait from a convenience caller or shutdown callback until closure.
 function RobloxHost:wait_done(timeout)
   if self._done then
     return true, self._done_value

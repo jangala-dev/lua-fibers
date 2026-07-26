@@ -12,10 +12,11 @@ local DialLifecycle = require('fibers.socket.dial_lifecycle')
 local Race = require('fibers.internal.socket.happy_eyeballs_race')
 local HostError = require('fibers.host.error')
 local IO = require('fibers.host.io')
-local Region = require('fibers.region')
-local Owned = require('fibers.region').Owned
+local Lifetime = require('fibers.lifetime')
+local Task = require('fibers.task')
+local Scope = require('fibers.scope')
 local Protected = require('fibers.internal.protected')
-local Settlement = require('fibers.region.settlement')
+local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 
 local Module = {}
@@ -58,21 +59,14 @@ local function integer_at_least(value, fallback, minimum, name)
   return value
 end
 
-local function named_dial_settlement(dial)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return dial:close_op(reason or 'scope settlement')
+local function named_dial_closure(dial)
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return dial:close_op(reason or 'scope closure')
   end, function()
     return dial:closed_op()
   end, {
     name = 'named_dial',
-    settle_result = Settlement.require_ok('named dial settlement failed'),
-  })
-end
-
-function NamedDial:owned(children)
-  return Owned.tree(self, self._fibers_settle, children or {}, {
-    role = 'socket_named_dial',
-    settle_name = 'socket_named_dial',
+    finish_result = Closure.require_ok('named dial closure failed'),
   })
 end
 
@@ -84,9 +78,9 @@ function NamedDial:state_value()
   return self.lifecycle:state_value()
 end
 
-local function connected_to_region_op(dial, region)
-  return dial.lifecycle:claim_op():and_then(function(connection, source_region)
-    return source_region:move_op(connection, region):map(function()
+local function connected_to_scope_op(dial, target_scope)
+  return dial.lifecycle:take_op():and_then(function(connection, source_scope)
+    return source_scope:move_op(connection, target_scope):map(function()
       return connection
     end)
   end)
@@ -94,11 +88,11 @@ end
 
 function NamedDial:connected_op(target)
   local dial = self
-  return IO.with_target_region_op(
+  return IO.with_target_scope_op(
     target,
-    'named Dial connection transfer expects a target Scope or Region, or a current Scope',
-    function(region)
-      return connected_to_region_op(dial, region)
+    'named Dial connection transfer expects a target Scope, or a current Scope',
+    function(scope)
+      return connected_to_scope_op(dial, scope)
     end
   )
 end
@@ -117,11 +111,11 @@ function NamedDial:report_op()
   return self.lifecycle:report_op()
 end
 
-local function connect_result_to_region_op(dial, region)
+local function connect_result_to_scope_op(dial, target_scope)
   return dial.lifecycle
-    :claim_op()
-    :and_then(function(connection, source_region, report)
-      return source_region:move_op(connection, region):map(function()
+    :take_op()
+    :and_then(function(connection, source_scope, report)
+      return source_scope:move_op(connection, target_scope):map(function()
         return connection, report
       end)
     end)
@@ -132,11 +126,11 @@ end
 
 function NamedDial:connect_result_op(target)
   local dial = self
-  return IO.with_target_region_op(
+  return IO.with_target_scope_op(
     target,
-    'named Dial connection transfer expects a target Scope or Region, or a current Scope',
-    function(region)
-      return connect_result_to_region_op(dial, region)
+    'named Dial connection transfer expects a target Scope, or a current Scope',
+    function(scope)
+      return connect_result_to_scope_op(dial, scope)
     end
   )
 end
@@ -162,12 +156,7 @@ local function closed_result(state)
 end
 
 function NamedDial:closed_op()
-  return Op.named_all({
-    driver = self.driver and self.driver:exit_op() or Op.always(true),
-    lifecycle = self.lifecycle:terminal_op(),
-  }):map(function(result)
-    return closed_result(result.lifecycle)
-  end)
+  return IO.closed_after_driver_op(self.driver, self.lifecycle:terminal_op():map(closed_result))
 end
 
 local function copy_error(err)
@@ -185,7 +174,7 @@ end
 
 local function resolver_options(named_dial, driver_scope, opts, host)
   local out = IO.copy_table(opts.resolver_options)
-  out.owner = driver_scope
+  out.scope = driver_scope
   out.host = host
   out.resolver = opts.resolver or out.resolver
   out.dns = opts.dns ~= nil and opts.dns or out.dns
@@ -317,9 +306,8 @@ local function driver(named_dial, driver_scope, opts)
     return
   end
 
-  local driver_region = IO.region_of(driver_scope)
   local published, state =
-    IO.masked_perform(rt, named_dial.lifecycle:publish_connected_op(connection, driver_region, report))
+    IO.masked_perform(rt, named_dial.lifecycle:publish_connected_op(connection, driver_scope, report))
   if not published then
     if state.kind == 'closing' or state.kind == 'closed' then
       return
@@ -335,7 +323,7 @@ local function driver(named_dial, driver_scope, opts)
     )
   end
 
-  -- Keep the private scope, and therefore an unclaimed winning Stream, alive
+  -- Keep the private scope, and therefore an untaken winning Stream, alive
   -- until the caller moves the connection out or closes the named Dial.
   perform(named_dial.lifecycle:driver_release_op())
 end
@@ -346,7 +334,7 @@ function Module.dial_op(endpoint, opts)
   if not Address.is_name(endpoint) then
     error('socket.dial_name_op expects a name endpoint', 2)
   end
-  local owner = IO.current_owner(opts, 'socket.dial_name_op')
+  local scope = IO.current_scope(opts, 'socket.dial_name_op')
   next_dial = next_dial + 1
   local name = opts.name or ('named-dial-' .. tostring(next_dial))
   local rt = Runtime.current()
@@ -373,25 +361,29 @@ function Module.dial_op(endpoint, opts)
     )
   end
 
-  local dial = Region.handle(name, {
+  local driver_parent = IO.require_scope(scope, 'socket.dial_name_op')
+  local dial = setmetatable({
     kind = 'socket_named_dial',
+    name = name,
     endpoint = endpoint,
-    scope_owner = owner,
     lifecycle = DialLifecycle.new(name, endpoint),
     driver = nil,
     started_at = rt and rt:now() or 0,
+  }, NamedDial)
+  Lifetime.define(dial, {
+    name = name,
+    role = 'socket_named_dial',
+    closure = named_dial_closure(dial),
   })
-  setmetatable(dial, NamedDial)
-  dial._fibers_settle = named_dial_settlement(dial)
-  dial._fibers_settle_name = 'socket_named_dial'
+  local private_scope = Scope.for_lifetime(dial._lifetime)
+  dial.driver = Task._new(function()
+    return private_scope:run(function(driver_scope)
+      return driver(dial, driver_scope, opts)
+    end)
+  end, name, driver_parent, { lifetime = dial._lifetime, closure = driver_parent.closure })
 
-  local driver_parent = IO.scope_for_owner(owner, 'socket.dial_name_op')
-  dial.driver = IO.new_driver_task(driver_parent, name .. ':driver', function(driver_scope)
-    return driver(dial, driver_scope, opts)
-  end)
-
-  return owner
-    :admit_op(dial:owned({ dial.driver:owned() }))
+  return scope
+    :admit_op(dial)
     :and_then(function()
       return dial.driver:spawn_effect_op()
     end, false)
@@ -418,13 +410,13 @@ end
 
 -- Strong performing convenience: the winning Stream has moved to the target and
 -- every resolver query, losing Dial and losing Stream in the private race scope
--- has settled before this method returns.
+-- has closed before this method returns.
 function NamedDial:connect(target)
   local connection, result = self:connect_result(target)
   local closed, close_err = self:closed()
   if not closed then
     if connection and type(connection.abort) == 'function' then
-      Protected.pcall(connection.abort, connection, close_err or 'named Dial settlement failed')
+      Protected.pcall(connection.abort, connection, close_err or 'named Dial closure failed')
     end
     return nil, close_err
   end

@@ -21,7 +21,7 @@ local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.resource.scalar')
 local Op = require('fibers.op')
 local fibers = require('fibers')
-local Policy = require('fibers.policy')
+local Closure = require('fibers.closure')
 local Clock = require('performance.clock')
 
 local function env(name, default)
@@ -238,7 +238,7 @@ local function nursery_case(fanout)
       machine = machine,
       choice_seed = 1,
       instrumentation = { clock = Clock.now, slow_plan_limit = 3 },
-      policy = Policy.nursery({ name = 'arch-nursery-policy' }),
+      closure = Closure.nursery({ name = 'arch-nursery-closure' }),
     })
     local result = fibers.try_run(function()
       local channel = Rendezvous.new('arch-nursery-channel-' .. tostring(fanout))

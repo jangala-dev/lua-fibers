@@ -15,6 +15,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+local fibers = require('fibers')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
@@ -1921,5 +1922,61 @@ if #failures > 0 then
 end
 
 print('tests/test_op.lua: subtle algebra contract ok')
+
+-- Public constructors reject malformed callbacks and operands immediately.
+do
+  assert(not pcall(Op.guard, 'not-a-function'))
+  local base = Op.always('x')
+  assert(not pcall(function()
+    return base:map('not-a-function')
+  end))
+  assert(not pcall(function()
+    return base:and_then('not-a-function')
+  end))
+  assert(not pcall(function()
+    return base:wrap('not-a-function')
+  end))
+  assert(not pcall(function()
+    return base:or_else('not-an-op')
+  end))
+end
+
+-- Named map forms use string keys for portable deterministic ordering. Ordered
+-- entries remain available when a non-string label is deliberately required.
+do
+  assert(not pcall(function()
+    return Op.named_choice({ [1] = Op.always('numeric-map-key') })
+  end))
+  local label, value = fibers.run(function()
+    return fibers.perform(Op.named_choice({ { 1, Op.always('ordered') } }))
+  end)
+  assert_eq(label, 1)
+  assert_eq(value, 'ordered')
+end
+
+-- Small public always-options are fresh opaque occurrences. Unsupported mutation
+-- of one occurrence must not alter later options returned by the library.
+do
+  local first = Op.always(true)
+  local second = Op.always(true)
+  local empty_first = Op.always()
+  local empty_second = Op.always()
+  assert(first ~= second)
+  assert(empty_first ~= empty_second)
+  assert(empty_first.vals ~= empty_second.vals)
+  first.kind = 'choice'
+  empty_first.vals.n = 1
+  empty_first.vals[1] = 'mutated'
+  local value = fibers.run(function()
+    return fibers.perform(second)
+  end)
+  assert_eq(value, true)
+  local count = fibers.run(function()
+    local values = { n = 0 }
+    values.n = select('#', fibers.perform(empty_second))
+    return values.n
+  end)
+  assert_eq(count, 0)
+end
 
 print('tests/test_op.lua: ok')

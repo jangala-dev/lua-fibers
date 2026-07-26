@@ -11,14 +11,14 @@ local perform = require('fibers.perform')
 
 local M = { perform = perform }
 
-local function settlement_failures_from(err)
+local function closure_failures_from(err)
   if type(err) ~= 'table' then
     return {}
   end
-  if err._fibers_settlement_failure == true then
+  if err._fibers_closure_failure == true then
     return { err }
   end
-  if type(err.cause) == 'table' and err.cause._fibers_settlement_failure == true then
+  if type(err.cause) == 'table' and err.cause._fibers_closure_failure == true then
     return { err.cause }
   end
   return {}
@@ -51,13 +51,13 @@ function M.try_run(fn, opts)
   if type(fn) ~= 'function' then
     error('fibers.try_run expects a function', 2)
   end
-  local Policy = require('fibers.policy')
+  local Closure = require('fibers.closure')
   local ScopeResult = require('fibers.scope.result')
   local host = default_host(opts)
   local rt = Runtime.new(runtime_options(opts, host))
   local scope = Scope.new(
     opts.name or 'root',
-    { runtime = rt, policy = opts.policy or Policy.nursery({ name = opts.name or 'root' }) }
+    { runtime = rt, closure = opts.closure or Closure.nursery({ name = opts.name or 'root' }) }
   )
   local result
   local runtime_status
@@ -86,24 +86,27 @@ function M.try_run(fn, opts)
     return result
   end
   if not ok then
-    local settlement_failures = settlement_failures_from(err)
+    local closure_failures = closure_failures_from(err)
     return ScopeResult.fail({
       reason = 'runtime_error',
       primary = err,
       report = scope:_make_report(err, {}, {
         reason = 'runtime_error',
-        settlement_failures = settlement_failures,
+        closure_failures = closure_failures,
       }),
-      settlement_failures = settlement_failures,
+      closure_failures = closure_failures,
       runtime_status = runtime_status,
     })
   end
-  return ScopeResult.fail({
+  local pending = ScopeResult.fail({
     reason = 'runtime_pending',
     primary = runtime_status,
     report = scope:_make_report(runtime_status, {}, { reason = 'runtime_pending' }),
     runtime_status = runtime_status,
   })
+  pending.runtime = rt
+  pending.scope = scope
+  return pending
 end
 
 function M.run(fn, opts)
@@ -145,14 +148,14 @@ function M.spawn_raw(fn, name)
   end
   local scope = current_scope()
   if scope then
-    local policy = scope.policy
-    local allowed = policy and policy.permit_unstructured == true
-    if policy and type(policy.allow_unstructured) == 'function' then
-      allowed = policy:allow_unstructured(scope, fn, name) ~= false
+    local closure = scope.closure
+    local allowed = closure and closure.permit_unstructured == true
+    if closure and type(closure.allow_unstructured) == 'function' then
+      allowed = closure:allow_unstructured(scope, fn, name) ~= false
     end
     if not allowed then
       error(
-        'unstructured spawn is prohibited by the current scope policy; '
+        'unstructured spawn is prohibited by the current scope Closure; '
           .. 'use fibers.spawn or Runtime:spawn_raw',
         2
       )
@@ -206,7 +209,7 @@ function M.try_scope(opts, fn)
   local parent = current_scope()
   local scope = Scope.new(
     opts.name or 'scope',
-    { runtime = rt, parent = parent, policy = opts.policy or (parent and parent.policy) }
+    { runtime = rt, parent = parent, closure = opts.closure or (parent and parent.closure) }
   )
   return scope:try_run(fn)
 end

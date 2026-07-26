@@ -52,7 +52,7 @@ local function test_parallel_lease_and_read_do_not_duplicate_bytes()
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
     rows = fibers.perform(Op.tensor({
-      outlet:lease_some_op(3, 'owner'),
+      outlet:lease_some_op(3, 'holder'),
       outlet:read_some_op(3),
     }))
     inspect = fibers.perform(flow:inspect_op())
@@ -73,7 +73,7 @@ local function test_parallel_ack_then_return_returns_only_unacked_tail()
   local lease, rows, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
-    lease = fibers.perform(outlet:lease_some_op(3, 'owner'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'holder'))
     rows = fibers.perform(Op.tensor({
       lease:ack_op(1),
       lease:release_op(),
@@ -129,7 +129,7 @@ local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
   local lease, inspect, ack_ok, ack_err
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
-    lease = fibers.perform(outlet:lease_some_op(3, 'owner'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'holder'))
     fibers.perform(outlet:close_op('stop'))
     inspect = fibers.perform(flow:inspect_op())
     ack_ok, ack_err = fibers.perform(lease:ack_op(1))
@@ -148,7 +148,7 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   local lease, rows, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abc'))
-    lease = fibers.perform(outlet:lease_some_op(3, 'owner'))
+    lease = fibers.perform(outlet:lease_some_op(3, 'holder'))
     rows = fibers.perform(Op.all({
       lease:ack_op(3),
       inlet:write_op('def'):or_else(Op.always('blocked')),
@@ -165,7 +165,7 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   local lease2, rows2, got2
   local st2 = fibers.try_run(function()
     fibers.perform(inlet2:write_op('abc'))
-    lease2 = fibers.perform(outlet2:lease_some_op(3, 'owner'))
+    lease2 = fibers.perform(outlet2:lease_some_op(3, 'holder'))
     rows2 = fibers.perform(Op.tensor({
       lease2:ack_op(3),
       inlet2:write_op('def'),

@@ -31,7 +31,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Adoption = require('fibers.region.adoption')
+local HostHold = require('fibers.internal.lifetime.host_hold')
 local File = require('fibers.file')
 local SimulatedHost = require('tests.support.simulated_host')
 local Runtime = require('fibers.runtime')
@@ -65,15 +65,15 @@ local function add(name, units, fn)
   cases[#cases + 1] = { name = name, units = units, fn = fn }
 end
 
-add('adoption-slot', 'resources', function()
+add('host-hold', 'resources', function()
   local count = math.max(1, math.floor(1000 * scale))
   for i = 1, count do
-    local slot = Adoption.slot('bench-adoption-' .. tostring(i))
+    local slot = HostHold.new('bench-host-hold-' .. tostring(i))
     local value = { id = i }
-    assert(slot:adopt(value, function()
+    assert(slot:hold('value', value, function()
       return true
     end))
-    assert(slot:release(value) == value)
+    assert(slot:release('value', value) == value)
     assert(slot:close('benchmark'))
   end
   return count
@@ -152,10 +152,10 @@ add('datagram-roundtrip', 'datagrams', function()
   local received = 0
 
   fibers.run(function()
-    local sender = assert(Socket.datagram_ipv4('127.0.0.1', 0, {
+    local sender = assert(Socket.udp_ipv4('127.0.0.1', 0, {
       send_capacity = count,
     }))
-    local receiver = assert(Socket.datagram_ipv4('127.0.0.1', 0, {
+    local receiver = assert(Socket.udp_ipv4('127.0.0.1', 0, {
       receive_capacity = count,
     }))
 

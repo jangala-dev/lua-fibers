@@ -59,14 +59,14 @@ end
 do
   local result = fibers.try_run(function()
     local lifecycle = DialLifecycle.new('reference-report', Address.name('example.test', 443))
-    local connection, source_region = {}, {}
+    local connection, source_scope = {}, {}
     local report = { status = 'connected', attempt = 1 }
-    local published = fibers.perform(lifecycle:publish_connected_op(connection, source_region, report))
+    local published = fibers.perform(lifecycle:publish_connected_op(connection, source_scope, report))
     assert_eq(published, true)
-    local claimed, source, claimed_report = fibers.perform(lifecycle:claim_op())
-    assert_eq(claimed, connection)
-    assert_eq(source, source_region)
-    assert_eq(claimed_report, report)
+    local taken, source, taken_report = fibers.perform(lifecycle:take_op())
+    assert_eq(taken, connection)
+    assert_eq(source, source_scope)
+    assert_eq(taken_report, report)
     assert_eq(fibers.perform(lifecycle:report_op()), report)
   end)
   assert_truthy(result.ok, result:tostring())

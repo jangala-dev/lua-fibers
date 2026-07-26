@@ -14,9 +14,9 @@ The difficult parts—provisional work, cancellation, child lifetimes, committed
 side effects and cleanup—belong beneath that sentence rather than being spread
 through event connections and delayed callbacks.
 
-This guide is a step-by-step adoption path for the experimental Roblox adapter
+This guide is a step-by-step introduction for the experimental Roblox adapter
 now included in the source tree. The generated Luau target contains
-`fibers.host.roblox`, `fibers.roblox` and the owned signal-subscription adapter.
+`fibers.host.roblox`, `fibers.roblox` and the signal-subscription adapter with Lifetime custody.
 Packaging for Wally and Roblox model distribution remains future release work,
 but the host boundary and its portable fake-engine tests are implemented.
 
@@ -35,7 +35,7 @@ embedded subsystem rather than a second engine loop:
 ```text
 Roblox scheduler or game loop
     → supplies one bounded execution horizon
-    → Fibers advances until settlement, quiescence or turn exhaustion
+    → Fibers advances until Closure, quiescence or turn exhaustion
     → Fibers returns its interests and earliest deadline
     → Roblox schedules another advance only when required
 ```
@@ -101,7 +101,7 @@ Ordinary Roblox signal callbacks still only queue facts. The chosen phase is the
 host scheduling boundary; Fibers advances afterwards under the declared budget.
 `Roblox.run` and `Roblox.try_run` are convenience wrappers over `attach` for
 scripts which want to yield until the root settles. They do not replace the
-host-owned scheduling boundary.
+host-controlled scheduling boundary.
 
 See [`examples/roblox/00_manual_horizon.client.luau`](../../examples/roblox/00_manual_horizon.client.luau),
 [`examples/roblox/01_button_choice.client.luau`](../../examples/roblox/01_button_choice.client.luau)
@@ -207,7 +207,7 @@ local outcome = fibers.scope({ name = "opening-cinematic" }, function(scene)
 end)
 ```
 
-The scene does not return while scene-owned work remains unaccounted for. A
+The scene does not return while work under the scene Scope remains unaccounted for. A
 skip is therefore an ordinary exit path, not a collection of emergency flags.
 
 See [`00_skippable_cutscene.lua`](../../examples/gameplay/00_skippable_cutscene.lua).
@@ -275,7 +275,7 @@ end
 ```
 
 The experimental adapter turns `Players.PlayerAdded`, `PlayerRemoving`,
-character replacement and similar signals into owned event sources through
+character replacement and similar signals into event sources held in custody through
 `Roblox.events`, `Roblox.latest` or `Roblox.pulse`. The underlying Roblox events
 remain host facts; the session lifetime remains a Fibers concept.
 
@@ -398,7 +398,7 @@ Some child failures should end the mechanic immediately:
 - the boss controller lost its state;
 - the scene camera cannot continue.
 
-Use the default fail-fast nursery policy for these.
+Use the default fail-fast nursery Closure for these.
 
 Other failures should be retained without destroying the main experience:
 
@@ -411,7 +411,7 @@ Use a collecting supervisor:
 ```luau
 local eventResult = fibers.try_scope({
     name = "eclipse-festival",
-    policy = policy.supervisor({ child_failure = "collect" }),
+    closure = Closure.supervisor({ child_failure = "collect" }),
 }, function(event)
     event:spawn(runMoonrise, "headline-moonrise")
     event:spawn(runFireworks, "optional-fireworks")
@@ -487,7 +487,7 @@ local frames = Roblox.pulse(RunService.Heartbeat, {
 - `pulse` coalesces a burst and returns the newest logical generation.
 
 Each subscription owns its `RBXScriptConnection`. It is disconnected when the
-owning scope settles, or explicitly through `subscription:close()`.
+custodial Scope closes, or explicitly through `subscription:close()`.
 
 ```luau
 local pressed = Roblox.events(skipButton.Activated, {
@@ -524,8 +524,8 @@ fact that something changed.
 Signal subscription is an immediate committed host action. Construct it in the
 body of a running fibre or another post-commit path, not inside `guard`, `map`,
 `and_then`, effect preparation or another callback which Fibers may replay. The
-returned subscription is then an ordinary owned resource: `next_op()` is inert,
-`close_op()` is transactional, and scope settlement disconnects it.
+returned subscription is then an ordinary resource held in custody: `next_op()` is inert,
+`close_op()` is transactional, and Scope Closure disconnects it.
 
 The signal-mode example deliberately fires several observations before one
 manual `advance`, making all three buffering contracts observable rather than
@@ -534,9 +534,9 @@ depending on frame timing.
 See [`examples/roblox/01_button_choice.client.luau`](../../examples/roblox/01_button_choice.client.luau)
 and [`examples/roblox/05_signal_modes.client.luau`](../../examples/roblox/05_signal_modes.client.luau).
 
-## 13. Settle the server at shutdown
+## 13. Close the server at shutdown
 
-`Roblox.bind_to_close(scope)` installs an owned monitor and registers a
+`Roblox.bind_to_close(scope)` installs a monitor Lifetime and registers a
 `DataModel:BindToClose()` callback:
 
 ```luau
@@ -558,14 +558,14 @@ end, {
 
 The callback queues one shutdown fact and waits. The hidden Fibers monitor
 requests root cancellation from inside the runtime, after which normal scope and
-Region settlement applies:
+Lifetime Closure applies:
 
-- root admission is sealed by the scope policy;
+- root admission is sealed by the scope Closure;
 - live child tasks observe cancellation at Fibers suspension points;
-- signal subscriptions disconnect as owned obligations;
-- player sessions, matches and host resources settle before the runtime ends;
-- failed settlement remains represented in the resulting scope report;
-- Roblox's callback returns when settlement completes or the adapter deadline is
+- signal subscriptions disconnect through their Lifetimes;
+- player sessions, matches and host resources close before the runtime ends;
+- failed Closure remains represented in the resulting scope report;
+- Roblox's callback returns when Closure completes or the adapter deadline is
   reached.
 
 See [`examples/roblox/04_server_shutdown.server.luau`](../../examples/roblox/04_server_shutdown.server.luau).
@@ -596,7 +596,7 @@ This boundary is conservative and understandable:
 
 - transactional commit remains local to one runtime;
 - cross-Actor communication remains asynchronous;
-- ownership does not silently span isolated Luau VMs;
+- custody does not silently span isolated Luau VMs;
 - parallelism is a host deployment choice, not a change to option semantics.
 
 Roblox's current Parallel Luau model and Actor APIs are documented at
@@ -648,8 +648,8 @@ The first host slice is now present:
 - `Roblox.attach`, with event-driven and RunService-phase scheduling policies;
 - separate host time horizons and resumable proof-work quanta;
 - queued external delivery without solver re-entry;
-- owned `RBXScriptSignal` subscriptions with queued, latest and pulse modes;
-- `BindToClose` cancellation and settlement;
+- `RBXScriptSignal` subscriptions held in custody, with queued, latest and pulse modes;
+- `BindToClose` cancellation and Closure;
 - portable fake scheduler, signal, phase and DataModel tests;
 - Studio-facing examples.
 
@@ -695,7 +695,7 @@ inside `map`, `and_then`, guards, transition steps or effect preparation.
 Use a typed effect for selected runtime obligations, or `wrap` for
 participant-local post-commit work.
 
-### One owner for unfinished work
+### One custodian for unfinished work
 
 Scenes, players, matches, quests and live events should each have a visible
 lifetime boundary.
@@ -703,7 +703,7 @@ lifetime boundary.
 ### Failed cleanup remains real
 
 If saving, closing or returning authority fails, retain that failure as an
-outstanding settlement rather than erasing it during unwinding.
+outstanding Closure rather than erasing it during unwinding.
 
 ## Further reading
 

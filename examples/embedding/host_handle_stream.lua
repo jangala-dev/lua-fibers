@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Host = require('fibers.host')
 local SimulatedHost = require('examples.support.simulated_host')
-local Region = require('fibers.region')
+local Scope = require('fibers.scope')
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
@@ -53,12 +53,12 @@ local handle = Host.Handle.new({
   end,
 })
 local runtime = Runtime.new({ host = host })
-local region = Region.new('handle-example-region')
+local scope = Scope.new('handle-example-scope', { runtime = runtime })
 local got, flushed
 
 runtime:spawn_raw(function()
   local stream = runtime:perform(Stream.open_op(handle, {
-    owner = region,
+    scope = scope,
     name = 'example-handle-stream',
     read = true,
     write = true,

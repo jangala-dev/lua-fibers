@@ -15,7 +15,7 @@ local Inspect = require('tests.support.flow_inspect')
 local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.region')
+local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local Stream = FibersStream
 local HostHandle = require('fibers.host.handle')
@@ -129,7 +129,7 @@ end
 -- Backend write failure settles an active reactor write lease and wakes flush with the backend error.
 do
   local rt = FibersRuntime.new()
-  local region = FibersRegion.new('settle-backend-region')
+  local owner = FibersScope.new('settle-backend-owner')
   local backend = FakeHandle.new({
     name = 'settle-backend',
     readiness = 'manual',
@@ -141,7 +141,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { owner = region, read = true, write = true, name = 'settle-backend-stream', write_capacity = 3 }
+        { scope = owner, read = true, write = true, name = 'settle-backend-stream', write_capacity = 3 }
       )
     )
     rt:perform(stream:writer():write_op('abc'))
@@ -176,7 +176,7 @@ end
 -- the active lease is still settled by the failure path.
 do
   local rt = FibersRuntime.new()
-  local region = FibersRegion.new('settle-protocol-region')
+  local owner = FibersScope.new('settle-protocol-owner')
   local backend = FakeHandle.new({ name = 'settle-protocol-backend' })
   function backend:write(bytes)
     return #bytes + 1
@@ -186,7 +186,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { owner = region, read = true, write = true, name = 'settle-protocol-stream', write_capacity = 3 }
+        { scope = owner, read = true, write = true, name = 'settle-protocol-stream', write_capacity = 3 }
       )
     )
     rt:perform(stream:writer():write_op('abc'))
@@ -228,4 +228,4 @@ do
   assert_eq(stale_space_err, 'no_space_lease')
 end
 
-print('tests/test_flow_settlement.lua: ok')
+print('tests/test_flow_closure.lua: ok')

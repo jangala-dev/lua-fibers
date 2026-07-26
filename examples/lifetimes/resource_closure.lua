@@ -1,0 +1,52 @@
+package.path = table.concat({
+  './src/?.lua',
+  './src/?/init.lua',
+  './src/?/?.lua',
+  './reference/?.lua',
+  './reference/?/init.lua',
+  './reference/?/?.lua',
+  './?.lua',
+  './?/init.lua',
+  './?/?.lua',
+  package.path,
+}, ';')
+
+-- Resource-author Closure in miniature. A resource is born with a dormant
+-- Lifetime. Admission makes that Lifetime a child of the Scope; closing it
+-- requests and finishes the complete subtree.
+
+local fibers = require('fibers')
+local Lifetime = require('fibers.lifetime')
+local Scalar = require('fibers.resource.scalar')
+local Closure = require('fibers.closure')
+
+local closed = Scalar.new(false, 'demo-handle-closed')
+local handle = { name = 'demo-handle' }
+Lifetime.define(handle, {
+  role = 'demo-handle',
+  closure = Closure.protocol({
+    name = 'demo-close',
+    finish_op = function(_ctx, entry, close)
+      return closed:write_op({
+        closed = true,
+        resource = entry.item,
+        reason = close.reason,
+      })
+    end,
+  }),
+})
+
+local finished
+local result = fibers.try_run(function(scope)
+  fibers.perform(scope:admit_op(handle))
+  fibers.perform(Closure.close_op(scope, handle, 'done'))
+  finished = fibers.perform(closed:read_op())
+end)
+
+assert(result.runtime_status.tag == 'found')
+assert(finished.closed == true)
+assert(finished.resource == handle)
+assert(finished.reason == 'done')
+assert(Lifetime.of(handle):current_state().closure_phase == 'closed')
+
+print('examples/lifetimes/resource_closure.lua: ok')

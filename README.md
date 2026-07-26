@@ -9,7 +9,7 @@ Luau and Roblox as first-class proving grounds.
 
 A programme describes possible concurrent actions, combines those descriptions
 in ordinary Lua, and performs one coherent result. The same small vocabulary
-applies to channels, time, transactional state, task lifetimes, ownership and
+applies to channels, time, transactional state, task lifetimes, custody and
 host resources.
 
 Fibers version 1 is an advanced work in progress. Its public surface is being reduced and settled before the first release.
@@ -80,7 +80,7 @@ This can be read directly:
 
 Both sides describe the complete exchange, so the sends, receives and sequencing remain provisional until `perform` selects one coherent outcome.
 
-The runnable progression begins with two deliberately generic examples: [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua) and [`01_direct_methods_and_options.lua`](examples/tutorial/01_direct_methods_and_options.lua). It then ranges through emergency coordination, robotics, field communications, desktop workloads, firmware, games, servers, host embedding and ownership. The [example index](examples/README.md) gives the complete route.
+The runnable progression begins with two deliberately generic examples: [`examples/tutorial/00_getting_started.lua`](examples/tutorial/00_getting_started.lua) and [`01_direct_methods_and_options.lua`](examples/tutorial/01_direct_methods_and_options.lua). It then ranges through emergency coordination, robotics, field communications, desktop workloads, firmware, games, servers, host embedding and custody. The [example index](examples/README.md) gives the complete route.
 
 ## Built for ambitious behaviour
 
@@ -92,16 +92,16 @@ Fibers is not tied to one application domain. The same small language can descri
 | Robotics and autonomy | reserve motion and perception capacity, then admit one coherent trajectory |
 | Emergency and field systems | confirm a hazard, reserve communications and dispatch a connected response unit |
 | Highly concurrent desktop and server applications | admit work, supervise background services and retain failed shutdown as an outstanding obligation |
-| Games, Luau and Roblox | complete or skip a cutscene, settle player-owned work and compose ambitious mechanics cleanly |
-| Embedded plugin hosts | expose bounded C, C++ or Rust resources while guest logic remains inside ownership policy |
+| Games, Luau and Roblox | complete or skip a cutscene, close player work under custody and compose ambitious mechanics cleanly |
+| Embedded plugin hosts | expose bounded C, C++ or Rust resources while guest logic remains within explicit custody and Closure |
 
 The portable tutorial moves among these domains so that the concurrency vocabulary, rather than one scenario, remains the organising idea. The dedicated [`examples/gameplay/`](examples/gameplay/) collection develops cutscenes, player sessions, matchmaking, AI intention, camera custody and game mechanics in greater depth.
 
-The experimental [`fibers.roblox`](src/fibers/roblox/init.lua) adapter embeds the runtime through a bounded `prepare`/`advance` boundary, with event- and RunService-phase scheduling, owned signal subscriptions and root shutdown handling above it. [`examples/roblox/`](examples/roblox/) and [`docs/guide/roblox.md`](docs/guide/roblox.md) provide the Studio examples and step-by-step path. These sit alongside the firmware, robotics, field and hosted-system uses from which the design grew.
+The experimental [`fibers.roblox`](src/fibers/roblox/init.lua) adapter embeds the runtime through a bounded `prepare`/`advance` boundary, with event- and RunService-phase scheduling, signal subscriptions under Lifetime custody and root shutdown handling above it. [`examples/roblox/`](examples/roblox/) and [`docs/guide/roblox.md`](docs/guide/roblox.md) provide the Studio examples and step-by-step path. These sit alongside the firmware, robotics, field and hosted-system uses from which the design grew.
 
 ## The model
 
-Five ideas are enough to begin.
+Two semantic ideas organise the system; five practical ideas are enough to begin.
 
 ### Fibres are ordinary sequential code
 
@@ -126,6 +126,13 @@ local response_deadline = Sleep.sleep_op(30)
 ```
 
 The suffix keeps possible actions visible in application code.
+
+Fibers values are opaque library objects. Use their documented operations rather
+than changing their Lua representation. Fibers protects its runtime stores and
+validates supported transitions, but it does not attempt to sandbox trusted Lua
+code or prevent deliberate mutation through `rawset`, `debug` or implementation
+internals. Configuration which defines later runtime behaviour, such as a
+Closure contract, is captured when the corresponding Lifetime is defined.
 
 ### `perform` resolves an option
 
@@ -168,13 +175,19 @@ local outcome = fibers.perform(Op.choice(
 
 ### Effects belong to committed worlds
 
-An effect is a typed runtime obligation selected with an option and discharged only if that world commits. Fibers uses effects for task spawning, interruption, scope notification and host wake-up.
+An effect is a typed runtime obligation selected with an option and discharged only if that world commits. Fibers uses effects for task spawning, interruption, reactor control and other committed host work.
 
 Most application code uses effects through ordinary facilities rather than constructing them directly. The important guarantee is that speculative alternatives do not start tasks or mutate the outside world merely because they were considered.
 
-### Scopes account for lifetimes
+### Lifetimes account for continuing consequences
 
-Every structured task belongs to a scope. A scope accounts for its children and retained obligations before it returns.
+An `Op` describes a world which may commit. A Lifetime records what that world
+leaves alive and who remains responsible for it. Task, Scope and resources are
+narrow views of Lifetimes rather than separate custody systems.
+
+Every structured task belongs to a Scope. The Scope is the ordinary capability
+for admitting children; its underlying Lifetime accounts for those children and
+retained resources before it closes.
 
 ```lua
 fibers.run(function(scope)
@@ -186,7 +199,7 @@ fibers.run(function(scope)
 end)
 ```
 
-Options compose possibilities. Scopes compose lifetimes.
+Options compose possible worlds. Lifetimes account for their continuing consequences.
 
 ## A small algebra
 
@@ -299,9 +312,9 @@ Fibers has three normative callback phases. A callback must obey the rules of th
 | 2. Committed-world effect protocol | effect `prepare`, then `discharge` | `prepare` is pure and replayable. It may reject a candidate or return a discharge plan. `discharge` runs once, after state installation, and performs the committed host action. |
 | 3. Participant continuation | `wrap` | Runs once when the selected participant resumes. It may perform further options and ordinary application work, but cannot alter the world which has already committed. |
 
-A pure effect preparation must not reserve host capacity, mutate external state, deliver events, spawn, perform or yield. It may depend only on its payload, immutable runtime configuration and managed facts already represented by the candidate. Put irreversible work in `discharge`, not `prepare`.
+A pure effect preparation must not reserve host capacity, mutate external state, deliver events, spawn, perform or yield. It may depend only on its payload, captured runtime configuration and managed facts already represented by the candidate. Put irreversible work in `discharge`, not `prepare`.
 
-A guard delays algebraic elaboration until one structural occurrence becomes relevant. Its builder receives a deliberately narrow ephemeral activation view exposing only a stable monotonic activation instant and the current Region; it must embed those values into the explicit residual `Op` it returns. The view is invalid once the builder returns. The residual is stable within that speculative activation, while a later activation may elaborate afresh. `Clock:after_op(d)` follows this rule by becoming `Clock:at_op(activation:now() + d)`. Use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
+A guard delays algebraic elaboration until one structural occurrence becomes relevant. Its builder receives a deliberately narrow ephemeral activation view exposing only a stable monotonic activation instant and the current Scope; it must embed those values into the explicit residual `Op` it returns. The view is invalid once the builder returns. The residual is stable within that speculative activation, while a later activation may elaborate afresh. `Clock:after_op(d)` follows this rule by becoming `Clock:at_op(activation:now() + d)`. Use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
 
 ```lua
 local show_selected_line = voice_lines:get_op():wrap(function(line)
@@ -330,9 +343,9 @@ fibers.run(function()
 end)
 ```
 
-The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead. When settlement fails, the checked result retains a settlement-failure capability so policy can inspect the error and explicitly retry or force the unresolved settlement.
+The raising forms `fibers.run` and `fibers.scope` return body values or raise after their boundaries have accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return structured results instead. When Closure fails, the checked result retains an opaque recovery capability so the caller can inspect the error and explicitly retry or force the unresolved Closure.
 
-The lifetime model also supports cancellation, owned resources, transactional movement, borrowing, claims and settlement. These facilities are deliberately progressive: ordinary programmes can begin with tasks and scopes, while systems code can state stronger ownership protocols where required.
+The advanced Lifetime model has three laws: custody is the unique tree of responsibility, Grants provide non-custodial authority, and Closure resolves continuing consequences. Ordinary programmes can begin with tasks and scopes; systems code can state stronger transfer, Grant and Closure protocols where required.
 
 See [`docs/advanced/lifetimes-and-custody.md`](docs/advanced/lifetimes-and-custody.md).
 
@@ -372,7 +385,7 @@ Scalar also supports typed state-machine transitions for facilities whose rules 
 
 ### Pipes
 
-Anonymous pipes are owned pairs of one-way Streams:
+Anonymous pipes are pairs of one-way Streams held in custody:
 
 ```lua
 local file = require('fibers.file')
@@ -385,8 +398,8 @@ local bytes = fibers.perform(reader:read_all_op({ max = 4096 }))
 ```
 
 Pipe acquisition occurs only after `pipe_op` commits. Newly created host handles
-are covered immediately by temporary adoption records until their permanent
-Stream ownership has been admitted. See [`docs/guide/io.md`](docs/guide/io.md).
+are immediately accountable to the current Lifetime until their permanent
+Stream custody has been admitted. A private host hold covers the brief post-commit interval before Stream admission; it is not part of the public Lifetime model. See [`docs/guide/io.md`](docs/guide/io.md).
 
 ### Files
 
@@ -411,10 +424,10 @@ end, { host = Host.default() })
 ```
 
 Each direct method performs a corresponding `_op`, and ordinary `_op` calls yield
-their final value. Explicit `submit_*_op` forms return an owned `File.Job` or
+their final value. Explicit `submit_*_op` forms return a `File.Job` held in custody or
 `File.Request` with a selectable `result_op()`. Open files support exact reads
 and separate `flush` from durable `sync`. `file.tmpfile()`
-creates an exclusively named owned file which is unlinked on close unless it is
+creates a named file held in exclusive custody, which is unlinked on close unless it is
 renamed. Linux FFI hosts use `io_uring` when available. Other native hosts, and
 Linux systems without a usable ring, use helper processes over evented pipes.
 There is no synchronous pre-runtime file API. See
@@ -422,7 +435,7 @@ There is no synchronous pre-runtime file API. See
 
 ### Processes
 
-Commands are immutable descriptions; starting one creates an owned Process with
+Commands are captured, reusable descriptions; starting one creates a Process held in custody with
 ordinary Fibers Streams for configured standard input and output:
 
 ```lua
@@ -450,7 +463,7 @@ Launch admission, launch completion and process exit are separate phases.
 its committed supervisor effect performs the irreversible host launch.
 `start()` is the direct launch-plus-handshake convenience. `result_op()` can then
 participate in choice and becomes ready only after the child has been reaped.
-Scope settlement closes stdin, requests graceful termination, escalates where
+Process Closure closes stdin, requests graceful termination, escalates where
 required, and retains signal, reap or close failure. See
 [`docs/guide/io.md`](docs/guide/io.md).
 
@@ -468,7 +481,7 @@ local connection, err = dial:result()
 ```
 
 IPv4, IPv6 and Unix addresses are explicit values. Host names are unresolved
-endpoints and pass through an owned resolver query:
+endpoints and pass through a resolver query held in custody:
 
 ```lua
 local query = socket.resolve_name('example.org', 443)
@@ -489,13 +502,13 @@ assert(connection, report)
 ```
 
 The winning Stream moves into the caller's scope. The call returns after every
-losing query, Dial and Stream has settled. Resolver configuration, hosts data
+losing query, Dial and Stream has closed. Resolver configuration, hosts data
 and secure entropy are read through `fibers.file`, so the native DNS path does
 not reintroduce synchronous file I/O. See
 [`docs/guide/happy-eyeballs.md`](docs/guide/happy-eyeballs.md).
 
-Accepted and connected Streams remain owned by their Listener or Dial until a
-claim moves the complete Stream subtree into the caller's scope. Native Linux
+Accepted and connected Streams remain in the custody of their Listener or Dial
+until one committed movement transfers the complete Stream subtree to the caller. Native Linux
 FFI, luaposix and Nixio hosts provide non-blocking IPv4, IPv6 and Unix stream
 sockets where the platform supports each family. Verified LuaJIT/cffi,
 luaposix and Nixio hosts may expose a blocking `getaddrinfo` resolver and
@@ -534,7 +547,7 @@ fibers.perform(Sleep.sleep_op(0.25))
 
 Timers are options, so timeouts require no separate cancellation mechanism.
 
-Lower-level materials have canonical direct imports under their semantic owners: transactional resources under `fibers.resource.*`, custody under `fibers.region` and `fibers.region.*`, committed obligations under `fibers.effect`, and host observation protocols under `fibers.host.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
+Lower-level materials have canonical direct imports under their semantic owners: transactional resources under `fibers.resource.*`, Lifetime construction under `fibers.lifetime`, Grants under `fibers.grant`, Closure under `fibers.closure`, committed obligations under `fibers.effect`, and host observation protocols under `fibers.host.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
 
 ## Why the algebra goes further
 
@@ -544,7 +557,7 @@ Fibers is designed for readable application code, but its small surface carries 
 - **Certified priority:** `or_else` distinguishes a genuine proof of present absence from incomplete search.
 - **Two conjunctions:** `all` and `tensor` distinguish joint requirements from intentional transactional hand-off.
 - **Occurrence-sensitive commitment:** wraps, effects and defeat obligations belong to precise dynamic option occurrences.
-- **Cross-resource decisions:** communication, state, external observations, ownership changes and selected consequences can participate in one coherent commit.
+- **Cross-resource decisions:** communication, state, external observations, custody changes and selected consequences can participate in one coherent commit.
 
 The implementation searches for a compatible resource world, validates the facts on which that world depends, and commits it through one serial authority. A separate repository-local reference evaluator runs the same semantic test corpus using a simpler strategy.
 
@@ -624,7 +637,7 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 ### Understanding the design
 
 - [Option algebra](docs/advanced/option-algebra.md)
-- [Lifetimes, custody and settlement](docs/advanced/lifetimes-and-custody.md)
+- [Lifetimes: custody, Grants and Closure](docs/advanced/lifetimes-and-custody.md)
 - [Flows, streams and the host reactor](docs/advanced/flows-and-streams.md)
 - [Embedding and host integration](docs/advanced/embedding.md)
 - [Port architectures: Rust, Embassy, WASM and Kotlin](docs/advanced/ports.lua)

@@ -8,7 +8,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- An operations-centre owner can wait on dispatch-engine exit and administrative
+-- An operations centre can wait on dispatch-engine exit and administrative
 -- shutdown in one decision. Shutdown then cancels and joins the engine before
 -- returning.
 
@@ -41,13 +41,13 @@ fibers.run(function(scope)
   end, 'service-operator')
 
   selected, detail = fibers.perform(Op.named_choice({
-    engine_exit = engine:exit_op(),
+    engine_exit = engine:body_result_op(),
     shutdown = shutdown:get_op(),
   }))
 
   if selected == 'shutdown' then
     engine:request_cancel(detail)
-    engine_exit = fibers.perform(engine:exit_op())
+    engine_exit = fibers.perform(engine:body_result_op())
   else
     engine_exit = detail
   end

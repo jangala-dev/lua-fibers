@@ -1,21 +1,22 @@
 -- Scoped message-oriented datagram sockets.
 --
 -- Datagram boundaries and source addresses are preserved.  Sending admits a
--- complete message to a bounded queue; the owned driver performs sendto/recvfrom
+-- complete message to a bounded queue; the driver Lifetime performs sendto/recvfrom
 -- only after the construction option has committed.
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Address = require('fibers.socket.address')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.region.adoption')
+local HostHold = require('fibers.internal.lifetime.host_hold')
 local IO = require('fibers.host.io')
 local IOAudit = require('fibers.diagnostics.io')
 local Lifecycle = require('fibers.socket.lifecycle')
 local DatagramService = require('fibers.socket.datagram_service')
-local Region = require('fibers.region')
-local Owned = require('fibers.region').Owned
-local Settlement = require('fibers.region.settlement')
+local Lifetime = require('fibers.lifetime')
+local Task = require('fibers.task')
+local Scope = require('fibers.scope')
+local Closure = require('fibers.closure')
 local Queue = require('fibers.resource.queue')
 local Scalar = require('fibers.resource.scalar')
 local Protected = require('fibers.internal.protected')
@@ -188,21 +189,14 @@ local function terminal_error(state, action)
     })
 end
 
-local function datagram_settlement(socket)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return socket:close_op(reason or 'scope settlement')
+local function datagram_closure(socket)
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return socket:close_op(reason or 'scope closure')
   end, function()
     return socket:closed_op()
   end, {
     name = 'datagram_socket',
-    settle_result = Settlement.require_ok('datagram settlement failed'),
-  })
-end
-
-function Datagram:owned(children)
-  return Owned.tree(self, self._fibers_settle, children or {}, {
-    role = 'datagram_socket',
-    settle_name = 'datagram_socket',
+    finish_result = Closure.require_ok('datagram closure failed'),
   })
 end
 
@@ -333,12 +327,7 @@ local function close_result(state)
 end
 
 function Datagram:closed_op()
-  local joined = self.driver and self.driver:exit_op() or Op.always(true)
-  local lifecycle = self.lifecycle
-  local terminal = lifecycle:terminal_op()
-  return joined:and_then(function()
-    return terminal:map(close_result)
-  end, terminal)
+  return IO.closed_after_driver_op(self.driver, self.lifecycle:terminal_op():map(close_result))
 end
 
 local function close_from_driver(socket, rt, reason, err, fatal)
@@ -513,36 +502,37 @@ function Module.udp_op(address, opts)
   if not service_quantum or service_quantum < 1 or service_quantum ~= math.floor(service_quantum) then
     error('socket.udp_op service_quantum must be a positive integer', 2)
   end
-  local owner = IO.current_owner(opts, 'socket.udp_op')
+  local scope = IO.current_scope(opts, 'socket.udp_op')
   next_datagram = next_datagram + 1
   local name = opts.name or ('datagram-' .. tostring(next_datagram))
-  local socket = Region.handle(name, {
+  local driver_parent = IO.require_scope(scope, 'socket.udp_op')
+  local socket = setmetatable({
     kind = 'datagram_socket',
+    name = name,
     address = address,
-    scope_owner = owner,
     lifecycle = DatagramLifecycle.new(name, address),
-    adoption = Adoption.slot(name .. ':adoption'),
+    host_hold = HostHold.new(name .. ':host-hold'),
     incoming = Queue.new({ capacity = receive_capacity, name = name .. ':incoming' }),
     sends = SendState.new(name .. ':sends', send_capacity),
     max_datagram_size = max_datagram_size,
     service_quantum = service_quantum,
     driver = nil,
+  }, Datagram)
+  Lifetime.define(socket, {
+    name = name,
+    role = 'datagram_socket',
+    closure = datagram_closure(socket),
+    children = { socket.host_hold },
   })
-  setmetatable(socket, Datagram)
-  socket._fibers_settle = datagram_settlement(socket)
+  local private_scope = Scope.for_lifetime(socket._lifetime)
+  socket.driver = Task._new(function()
+    return private_scope:run(function()
+      return driver(socket)
+    end)
+  end, name, driver_parent, { lifetime = socket._lifetime, closure = driver_parent.closure })
 
-  local driver_parent = IO.scope_for_owner(owner, 'socket.udp_op')
-  socket.driver = IO.new_driver_task(driver_parent, name .. ':driver', function()
-    return driver(socket)
-  end)
-
-  local owned = socket:owned({
-    socket.adoption:owned({ role = 'datagram_adoption' }),
-    socket.driver:owned(),
-  })
-
-  return owner
-    :admit_op(owned)
+  return scope
+    :admit_op(socket)
     :and_then(function()
       return socket.driver:spawn_effect_op()
     end, false)
@@ -569,17 +559,17 @@ function Module.udp_op(address, opts)
         return nil, err
       end
 
-      local adopted, adoption_err = socket.adoption:adopt(handle, close_handle)
-      if not adopted then
-        IO.masked_perform(rt, socket.lifecycle:start_failed_op(adoption_err, true))
-        return nil, adoption_err
+      local held, hold_err = socket.host_hold:hold('socket', handle, close_handle)
+      if not held then
+        IO.masked_perform(rt, socket.lifecycle:start_failed_op(hold_err, true))
+        return nil, hold_err
       end
       if type(handle.bind_runtime) == 'function' then
         handle:bind_runtime(rt)
       end
       local local_address = type(handle.local_address) == 'function' and handle:local_address() or address
       IOAudit.transfer(handle, socket, { kind = 'host_handle', role = 'datagram' })
-      local released, release_err = socket.adoption:release(handle)
+      local released, release_err = socket.host_hold:release('socket', handle)
       if not released then
         close_handle(handle, release_err)
         IO.masked_perform(rt, socket.lifecycle:start_failed_op(release_err, true))

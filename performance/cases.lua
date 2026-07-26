@@ -1,6 +1,6 @@
 local fibers = require('fibers')
 local Flow = require('fibers.resource.flow')
-local Policy = require('fibers.policy')
+local Closure = require('fibers.closure')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
@@ -194,7 +194,7 @@ add('moderate', 'flow', 'sequential write read', 280, function(ctx, n)
   return n * 2
 end)
 
-add('moderate', 'scope', 'spawn await settlement', 36, function(ctx, n)
+add('moderate', 'scope', 'spawn await closure', 36, function(ctx, n)
   local total = 0
   local result = fibers.try_run(function()
     for i = 1, n do
@@ -294,7 +294,7 @@ add('complex', 'search', 'nursery rendezvous fanout seven', 1, function(ctx, rou
       end,
       ctx:run_options({
         name = 'perf-nursery-fanout',
-        policy = Policy.nursery({ name = 'perf-nursery-policy' }),
+        closure = Closure.nursery({ name = 'perf-nursery-closure' }),
       })
     )
     ctx:add_runtime(result.runtime)

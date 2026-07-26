@@ -1,18 +1,19 @@
 -- Scoped outbound socket dial facility.
 --
--- A Dial owns its driver and any successful but unclaimed Stream. Claiming a
+-- A Dial owns its driver and any successful Stream not yet taken. Taking a
 -- connection commits its lifecycle transition and custody transfer together.
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.region.adoption')
+local HostHold = require('fibers.internal.lifetime.host_hold')
 local IO = require('fibers.host.io')
 local DialLifecycle = require('fibers.socket.dial_lifecycle')
+local Lifetime = require('fibers.lifetime')
+local Task = require('fibers.task')
+local Scope = require('fibers.scope')
 local Connection = require('fibers.socket.connection')
-local Region = require('fibers.region')
-local Owned = require('fibers.region').Owned
-local Settlement = require('fibers.region.settlement')
+local Closure = require('fibers.closure')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
 
@@ -25,22 +26,19 @@ local function close_socket(value, reason)
   return IO.close_value('socket', value, reason)
 end
 
-local function dial_settlement(dial)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return dial:close_op(reason or 'scope settlement')
+local function dial_closure(dial)
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return dial:close_op(reason or 'scope closure')
   end, function()
     return dial:closed_op()
   end, {
     name = 'dial',
-    settle_result = Settlement.require_ok('dial settlement failed'),
+    finish_result = Closure.require_ok('dial closure failed'),
   })
 end
 
-function Dial:owned(children)
-  return Owned.tree(self, self._fibers_settle, children or {}, {
-    role = 'socket_dial',
-    settle_name = 'socket_dial',
-  })
+function Dial:lifetime()
+  return self._lifetime
 end
 
 function Dial:state_op()
@@ -51,9 +49,9 @@ function Dial:state_value()
   return self.lifecycle:state_value()
 end
 
-local function connected_to_region_op(dial, region)
-  return dial.lifecycle:claim_op():and_then(function(connection, source_region)
-    return source_region:move_op(connection, region):map(function()
+local function connected_to_scope_op(dial, scope)
+  return dial.lifecycle:take_op():and_then(function(connection, source_scope)
+    return source_scope:move_op(connection, scope):map(function()
       return connection
     end)
   end)
@@ -61,11 +59,11 @@ end
 
 function Dial:connected_op(target)
   local dial = self
-  return IO.with_target_region_op(
+  return IO.with_target_scope_op(
     target,
-    'Dial connection transfer expects a target Scope or Region, or a current Scope',
-    function(region)
-      return connected_to_region_op(dial, region)
+    'Dial connection transfer expects a target Scope, or a current Scope',
+    function(scope)
+      return connected_to_scope_op(dial, scope)
     end
   )
 end
@@ -83,15 +81,15 @@ end
 function Dial:close_op(reason)
   local dial = self
   reason = reason or 'dial closed'
-  local cancel = dial.driver and dial.driver:request_cancel_op(reason) or Op.always(true)
+  local cancel = dial._task:request_cancel_op(reason)
   return dial.lifecycle:request_close_op(reason):and_then(function(first)
-    if first and dial.driver then
+    if first then
       return cancel:map(function()
         return true
       end)
     end
     return Op.always(true)
-  end, cancel)
+  end, Op.dependencies(cancel))
 end
 
 local function closed_result(state)
@@ -102,33 +100,25 @@ local function closed_result(state)
 end
 
 function Dial:closed_op()
-  local joined = self.driver and self.driver:exit_op() or Op.always(true)
-  local lifecycle = self.lifecycle
-  local terminal = lifecycle:terminal_op()
-  return joined:and_then(function()
-    return terminal:map(closed_result)
-  end, terminal)
+  return IO.closed_after_driver_op(self._task, self.lifecycle:terminal_op():map(closed_result))
 end
 
 local function driver(dial, driver_scope, opts)
   local rt = Runtime.current()
-  local driver_region = IO.region_of(driver_scope)
   local ok, driver_err = Protected.pcall(function()
-    local slot = Adoption.slot(dial.name .. ':adoption')
-    perform(driver_scope:admit_op(slot:owned({ role = 'dial_adoption' })))
+    local host_hold = HostHold.new(dial.name .. ':host-hold')
+    perform(driver_scope:admit_op(host_hold))
 
     local host = opts.host or (rt and rt.host)
     local start_dial = host and host.start_dial
     if type(start_dial) ~= 'function' then
       local err = HostError.unsupported('host', 'dial', { address = dial.address })
-      IO.release_owned(rt, driver_region, slot)
       IO.masked_perform(rt, dial.lifecycle:publish_failure_op(err))
       return
     end
 
     local handle, err = start_dial(host, dial.address, opts)
     if not handle then
-      IO.release_owned(rt, driver_region, slot)
       err = HostError.normalise(err, {
         domain = 'socket',
         action = 'dial',
@@ -138,10 +128,9 @@ local function driver(dial, driver_scope, opts)
       return
     end
 
-    local adopted, adoption_err = slot:adopt(handle, close_socket)
-    if not adopted then
-      IO.release_owned(rt, driver_region, slot)
-      error(adoption_err, 0)
+    local held, hold_err = host_hold:hold('socket', handle, close_socket)
+    if not held then
+      error(hold_err, 0)
     end
 
     if type(handle.bind_runtime) == 'function' then
@@ -163,8 +152,7 @@ local function driver(dial, driver_scope, opts)
           break
         end
         if not HostError.is_would_block(finish_err) then
-          slot:close(finish_err)
-          IO.release_owned(rt, driver_region, slot)
+          host_hold:close(finish_err)
           IO.masked_perform(
             rt,
             dial.lifecycle:publish_failure_op(HostError.normalise(finish_err, {
@@ -179,25 +167,26 @@ local function driver(dial, driver_scope, opts)
       end
     end
 
-    local connection, connection_err = Connection.adopt(rt, driver_scope, driver_region, slot, handle, {
-      name = dial.name .. ':connection',
-      capacity = opts.capacity,
-      read_capacity = opts.read_capacity,
-      write_capacity = opts.write_capacity,
-      chunk_size = opts.chunk_size,
-      read_chunk_size = opts.read_chunk_size,
-      write_chunk_size = opts.write_chunk_size,
-      action = 'open_connection',
-      address = dial.address,
-      peer_address = peer,
-      default_peer = dial.address,
-    })
+    local connection, connection_err =
+      Connection.from_host_hold(rt, driver_scope, host_hold, 'socket', handle, {
+        name = dial.name .. ':connection',
+        capacity = opts.capacity,
+        read_capacity = opts.read_capacity,
+        write_capacity = opts.write_capacity,
+        chunk_size = opts.chunk_size,
+        read_chunk_size = opts.read_chunk_size,
+        write_chunk_size = opts.write_chunk_size,
+        action = 'open_connection',
+        address = dial.address,
+        peer_address = peer,
+        default_peer = dial.address,
+      })
     if not connection then
       error(connection_err, 0)
     end
 
     local published, state =
-      IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_region))
+      IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_scope))
     if not published then
       if state.kind == 'closing' or state.kind == 'closed' then
         return
@@ -211,8 +200,8 @@ local function driver(dial, driver_scope, opts)
       )
     end
 
-    -- Retain the child scope, and therefore the unclaimed connection, until
-    -- claim or closure makes the lifecycle terminal for the driver.
+    -- Retain the child scope, and therefore the untaken connection, until
+    -- take or closure makes the lifecycle terminal for the driver.
     perform(dial.lifecycle:driver_release_op())
   end)
 
@@ -257,29 +246,32 @@ function Module.dial_op(address, opts)
   if type(opts.local_address) == 'table' then
     opts.local_address = IO.copy_table(opts.local_address)
   end
-  local owner = IO.current_owner(opts, 'socket.dial_op')
+  local scope = IO.current_scope(opts, 'socket.dial_op')
   next_dial = next_dial + 1
   local name = opts.name or ('dial-' .. tostring(next_dial))
-  local dial = Region.handle(name, {
+  local parent_scope = IO.require_scope(scope, 'socket.dial_op')
+  local dial = setmetatable({
     kind = 'socket_dial',
+    name = name,
     address = address,
-    scope_owner = owner,
     lifecycle = DialLifecycle.new(name, address),
-    driver = nil,
+  }, Dial)
+  Lifetime.define(dial, {
+    name = name,
+    role = 'socket_dial',
+    closure = dial_closure(dial),
   })
-  setmetatable(dial, Dial)
-  dial._fibers_settle = dial_settlement(dial)
-  dial._fibers_settle_name = 'socket_dial'
+  local private_scope = Scope.for_lifetime(dial._lifetime)
+  dial._task = Task._new(function()
+    return private_scope:run(function(driver_scope)
+      return driver(dial, driver_scope, opts)
+    end)
+  end, name, parent_scope, { lifetime = dial._lifetime, closure = parent_scope.closure })
 
-  local driver_parent = IO.scope_for_owner(owner, 'socket.dial_op')
-  dial.driver = IO.new_driver_task(driver_parent, name .. ':driver', function(driver_scope)
-    return driver(dial, driver_scope, opts)
-  end)
-
-  return owner
-    :admit_op(dial:owned({ dial.driver:owned() }))
+  return scope
+    :admit_op(dial)
     :and_then(function()
-      return dial.driver:spawn_effect_op()
+      return dial._task:spawn_effect_op()
     end, false)
     :map(function()
       return dial

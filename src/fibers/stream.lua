@@ -7,9 +7,8 @@
 local Op = require('fibers.op')
 local Flow = require('fibers.resource.flow')
 local Reactor = require('fibers.host.reactor')
-local Region = require('fibers.region')
-local Settlement = require('fibers.region.settlement')
-local Owned = require('fibers.region').Owned
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
 
@@ -25,20 +24,12 @@ local function validate_options(opts, allowed, label)
   end
 end
 
-local function region_of(value)
-  if value and value._fibers_scope and type(value.raw_region) == 'function' then
-    return value:raw_region()
-  end
-  if value and type(value.admit_op) == 'function' and type(value.move_op) == 'function' then
-    return value
-  end
-end
-
 local function compose(opts)
   opts = opts or {}
   next_id = next_id + 1
   local name = opts.name or ('stream-' .. tostring(next_id))
-  local stream = Region.handle(name, {
+  local stream = setmetatable({
+    name = name,
     kind = opts.kind or 'stream',
     mode = opts.mode or 'composed',
     _reader = opts.reader,
@@ -49,12 +40,26 @@ local function compose(opts)
     write_registration = nil,
     _reactor_live = 0,
     _handle_closed = false,
-    _fibers_kind_name = opts.kind or 'stream',
-    _fibers_obligation_kind = opts.kind or 'stream',
-    settle = opts.settle or Settlement.stream(),
-    settle_name = opts.settle_name or 'stream',
+  }, Duplex)
+  local children = {}
+  if opts.reader then
+    children[#children + 1] = opts.reader
+  end
+  if opts.writer then
+    children[#children + 1] = opts.writer
+  end
+  Lifetime.define(stream, {
+    role = opts.kind or 'stream',
+    closure = opts.closure or Closure.protocol({
+      name = 'stream',
+      finish_op = function(_ctx, record)
+        return record.item:closed_op()
+      end,
+      finish_result = Closure.require_ok('stream closure failed'),
+    }),
+    children = children,
   })
-  return setmetatable(stream, Duplex)
+  return stream
 end
 
 function Stream.compose(read_flow, write_flow, opts)
@@ -339,15 +344,13 @@ local function attach_direction(stream, side, reactor, handle, registrations, ch
     chunk_size = side == 'read' and stream.read_chunk_size or stream.write_chunk_size,
   })
   stream[side .. '_registration'] = registration
-  children[#children + 1] = Owned.inert(flow_of(ep), { role = side .. '_flow' })
-  children[#children + 1] = Owned.inert(ep, { role = side == 'read' and 'reader' or 'writer' })
-  children[#children + 1] = Owned.inert(registration, { role = side .. '_reaction' })
+  children[#children + 1] = registration
   registrations[#registrations + 1] = { side .. '_registration', registration:register_op() }
 end
 
-local function open_in_op(owner, handle, opts)
+local function open_in_op(scope, handle, opts)
   validate_options(opts, {
-    owner = true,
+    scope = true,
     name = true,
     read = true,
     write = true,
@@ -356,9 +359,8 @@ local function open_in_op(owner, handle, opts)
     read_chunk_size = true,
     write_chunk_size = true,
   }, 'Stream.open_op options')
-  local region = region_of(owner)
-  if not region then
-    error('Stream.open_op opts.owner must be a Scope or Region', 3)
+  if not (scope and scope._fibers_scope) then
+    error('Stream.open_op scope must be a Scope', 3)
   end
   if type(handle) ~= 'table' or handle._fibers_host_handle ~= true then
     error('Stream.open_op expects a HostHandle', 3)
@@ -394,12 +396,10 @@ local function open_in_op(owner, handle, opts)
   attach_direction(stream, 'read', reactor, handle, registrations, children)
   attach_direction(stream, 'write', reactor, handle, registrations, children)
   stream._reactor_live = #registrations
-  local owned = Owned.tree(stream, stream._fibers_settle or Settlement.stream(), children, {
-    role = 'stream',
-    settle_name = 'stream',
-  })
-  local admit = owner._fibers_scope and owner:admit_op(owned) or region:admit_op(owned)
-  return admit:and_then(function()
+  for i = 1, #children do
+    stream._lifetime:add_child(children[i])
+  end
+  return scope:admit_op(stream):and_then(function()
     return Op.named_all(registrations):map(function()
       return stream
     end)
@@ -408,11 +408,11 @@ end
 
 function Stream.open_op(handle, opts)
   opts = opts or {}
-  local owner = opts.owner or (Runtime.current_scope and Runtime.current_scope())
-  if not owner then
-    error('Stream.open_op requires opts.owner or a current Scope', 2)
+  local scope = opts.scope or (Runtime.current_scope and Runtime.current_scope())
+  if not scope then
+    error('Stream.open_op requires opts.scope or a current Scope', 2)
   end
-  return open_in_op(owner, handle, opts)
+  return open_in_op(scope, handle, opts)
 end
 
 function Stream.merge_lines_op(streams, opts)

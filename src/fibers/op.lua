@@ -8,8 +8,8 @@
 --   tensor       satisfy every lane with compatible sibling hand-off
 --   wrap         continue in the participant after commitment
 --
--- Options are immutable by contract: construct, combine and perform them, but
--- do not modify their representation tables.
+-- Options are inert, opaque library values: construct, combine and perform
+-- them through this API. Their Lua table representation is not an API surface.
 --
 -- The canonical search grammar is deliberately small:
 --   always | primitive | choice | guard | and_then | product | or_else | consequence
@@ -29,12 +29,8 @@ Op.__index = Op
 local unpack_ = table.unpack or unpack
 local next_op_id = 0
 
-local EMPTY_PACK = { _fibers_pack = true, n = 0 }
 local function pack_(...)
   local n = select('#', ...)
-  if n == 0 then
-    return EMPTY_PACK
-  end
   return { _fibers_pack = true, n = n, ... }
 end
 
@@ -116,14 +112,15 @@ local function parse_named_entries(entries, label)
 
   local keys = {}
   for k, v in pairs(entries) do
+    if type(k) ~= 'string' then
+      error(label .. ' map form requires string keys; use ordered { name, op } entries for other labels', 3)
+    end
     if not is_op(v) then
       error(label .. ' expects a map of Op values', 3)
     end
     keys[#keys + 1] = k
   end
-  table.sort(keys, function(a, b)
-    return tostring(a) < tostring(b)
-  end)
+  table.sort(keys)
   for i = 1, #keys do
     out[#out + 1] = { keys[i], entries[keys[i]] }
   end
@@ -231,29 +228,9 @@ local function annotated(inner, post, defeat, symmetry_key)
   return node
 end
 
-local EMPTY_ALWAYS, TRUE_ALWAYS, FALSE_ALWAYS
 function Op.always(...)
-  local n = select('#', ...)
-  if n == 0 then
-    if not EMPTY_ALWAYS then
-      EMPTY_ALWAYS = op('always', { vals = EMPTY_PACK })
-    end
-    return EMPTY_ALWAYS
-  end
-  if n == 1 then
-    local value = ...
-    if value == true then
-      if not TRUE_ALWAYS then
-        TRUE_ALWAYS = op('always', { vals = pack_(true) })
-      end
-      return TRUE_ALWAYS
-    elseif value == false then
-      if not FALSE_ALWAYS then
-        FALSE_ALWAYS = op('always', { vals = pack_(false) })
-      end
-      return FALSE_ALWAYS
-    end
-  end
+  -- Return a fresh public option occurrence. Small shared singleton tables make
+  -- unsupported mutation non-local and are not worth the minor allocation win.
   return op('always', { vals = pack_(...) })
 end
 
@@ -297,6 +274,9 @@ end
 -- object identity. The builder receives an ephemeral activation view which may
 -- resolve perform-local facts into the explicit residual Op it returns.
 function Op.guard(fn, opts)
+  if type(fn) ~= 'function' then
+    error('guard expects a function', 2)
+  end
   return op('guard', {
     fn = fn,
     continuation_footprint = continuation_hint(opts),
@@ -414,6 +394,9 @@ end
 -- Transform provisional values during search. fn is pure, non-yielding and may
 -- be replayed. Use wrap for participant-local work after commitment.
 function Op:map(fn)
+  if type(fn) ~= 'function' then
+    error('map expects a function', 2)
+  end
   assert_not_wrapped(self, 'map')
   -- Canonically and_then followed by always. Retaining the original callback as
   -- metadata lets the interpreter fuse that derived always without adding a
@@ -434,6 +417,9 @@ end
 -- Continue transactionally from provisional values. Earlier communication,
 -- state and admission remain retractable until the complete continuation commits.
 function Op:and_then(fn, opts)
+  if type(fn) ~= 'function' then
+    error('and_then expects a function', 2)
+  end
   assert_not_wrapped(self, 'and_then')
   local node = op('and_then', {
     p = self,
@@ -450,6 +436,9 @@ end
 -- Proof-directed preference. The fallback is entered only after the preferred
 -- option yields Retry; Unknown never grants permission to fall back.
 function Op:or_else(q)
+  if not is_op(q) then
+    error('or_else expects an Op', 2)
+  end
   local node = op('or_else', { p = self, q = q })
   node._contains_or_else = true
   return node
@@ -458,6 +447,9 @@ end
 -- Resume participant-local code after commitment. Unlike speculative callbacks,
 -- fn may perform further options and carry out ordinary application work.
 function Op:wrap(fn)
+  if type(fn) ~= 'function' then
+    error('wrap expects a function', 2)
+  end
   return annotated(self, fn, nil, nil)
 end
 
@@ -476,7 +468,7 @@ function Op._symmetry_key(value)
   return is_op(value) and value.kind == 'annotated' and value.symmetry_key or nil
 end
 
--- Trusted primitive occurrence. Programmes are immutable and shared; payload
+-- Trusted primitive occurrence. Programme descriptors are stable and shared; payload
 -- binding happens exactly once here, producing the canonical fields consumed by
 -- both machines.
 function Op._primitive(program, payload)

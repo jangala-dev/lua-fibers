@@ -8,8 +8,9 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- An embedded plugin and its native host communicate through an owned in-memory
--- stream. The same shape can later sit behind LuaJIT, Luau or WASM boundaries.
+-- An embedded plugin and its native host communicate through an in-memory
+-- Stream held in custody by the current Scope. The same shape can later sit
+-- behind LuaJIT, Luau or WASM boundaries.
 
 local fibers = require('fibers')
 local Stream = require('fibers.stream')

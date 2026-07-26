@@ -33,7 +33,7 @@ fibers.run(function(scope)
     end)
   ))
 
-  -- The late producer remains owned by the scope. Drain its message so this
+  -- The late producer remains in the Scope's custody. Drain its message so this
   -- example exits normally rather than cancelling the child at the boundary.
   if result == 'dispatch on precautionary threshold' then
     assert(confirmations:get() == 'river sensor confirmed')

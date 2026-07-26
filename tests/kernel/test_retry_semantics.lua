@@ -20,9 +20,9 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
-local FibersTask = require('fibers.task')
 local Certificate = require('fibers.internal.kernel.certificate')
 
 local function fail(msg)
@@ -44,14 +44,16 @@ local function assert_status(st, tag, msg)
   end
 end
 
--- With no possible owner transition, region claim absence may enter fallback.
+-- With no possible custody or Grant transition, authority absence may enter
+-- fallback.
 do
-  local region = FibersRegion.new('absence-region-alone')
-  local item = FibersRegion.handle('unowned')
+  local scope = FibersScope.new('absence-scope-alone')
+  local item = { name = 'unowned' }
+  Lifetime.inert(item)
   local got
   local st = fibers.try_run(function()
-    got = fibers.perform(region
-      :claim_op(item)
+    got = fibers.perform(scope
+      :can_op(item, 'use')
       :map(function()
         return 'primary'
       end)
@@ -59,69 +61,65 @@ do
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
-  assert_eq(item.owner, nil)
+  assert_eq(Lifetime.of(item):current_state().custodian, nil)
 end
 
--- A concurrent admission must be allowed to commit before the claim fallback.
--- The claim then observes the committed owner fact and takes the primary path.
+-- A concurrent admission may commit before authority fallback. The authority
+-- operation then observes live custody and takes the primary path.
 do
-  local region = FibersRegion.new('absence-region-partner')
-  local item = FibersRegion.handle('admitted-later')
+  local scope = FibersScope.new('absence-scope-partner')
+  local item = { name = 'admitted-later' }
+  Lifetime.inert(item)
   local got, admitted
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
-    got = rt:perform(region
-      :claim_op(item)
+    got = rt:perform(scope
+      :can_op(item, 'use')
       :map(function()
         return 'primary'
       end)
       :or_else(Op.always('fallback')))
-  end, 'claim-or-fallback')
+  end, 'authority-or-fallback')
   rt:spawn_raw(function()
-    admitted = rt:perform(region:admit_op(item))
+    admitted = rt:perform(scope:admit_op(item))
   end, 'admit-partner')
   local st = rt:run()
   assert_status(st, 'found')
   assert_eq(admitted, item)
   assert_eq(got, 'primary')
-  assert_eq(item.owner, region)
-  assert_truthy(
-    region.owned[item] and region.owned[item].phase == 'claimed',
-    'claim should own the committed item'
-  )
+  assert_eq(Lifetime.of(item):current_state().custodian, scope:lifetime())
+  local record
+  rt:spawn_raw(function()
+    record = rt:perform(scope:custody_op(item))
+  end, 'inspect-custody')
+  rt:run()
+  assert_truthy(record and record.phase == 'live', 'admission should establish live custody')
 end
 
--- A never-started task really is absent to an await fallback.
+-- A dormant running Lifetime has no outcome and therefore permits fallback.
 do
-  local task = FibersTask.new(function()
+  local life = Lifetime.task(function()
     return 'unused'
-  end, 'absence-never-started')
+  end, { name = 'absence-dormant-running' })
   local got
   local st = fibers.try_run(function()
-    got = fibers.perform(task:await_op():or_else(Op.always('fallback')))
+    got = fibers.perform(life:outcome_op():or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
 end
 
--- A start option and the child fibre must be given a chance to run before
--- the await fallback can commit.
+-- Once a task admission commits, its scheduled body must be allowed to produce
+-- the Lifetime outcome before an await fallback is accepted.
 do
-  local region = FibersRegion.new('absence-task-region')
-  local task = FibersTask.new(function()
-    return 'done'
-  end, 'absence-child')
-  local got, started
-  local rt = FibersRuntime.new()
-  rt:spawn_raw(function()
-    got = rt:perform(task:await_op():or_else(Op.always('fallback')))
-  end, 'await-or-fallback')
-  rt:spawn_raw(function()
-    started = rt:perform(task:start_op(region))
-  end, 'start-child')
-  local st = rt:run()
+  local got
+  local st = fibers.try_run(function(scope)
+    local task = fibers.perform(scope:spawn_op(function()
+      return 'done'
+    end, { name = 'absence-child' }))
+    got = fibers.perform(task:await_op():or_else(Op.always('fallback')))
+  end).runtime_status
   assert_status(st, 'found')
-  assert_eq(started, task)
   assert_eq(got, 'done')
 end
 

@@ -458,7 +458,7 @@ local function handle_mode(mode, path, permissions, exclusive)
   if not handle then
     response_error(code, err)
     -- Keep the helper alive until the parent has drained the final response and
-    -- closes stdin. Some process hosts otherwise settle the child and close its
+    -- closes stdin. Some process hosts otherwise close the child and close its
     -- stdout endpoint before the buffered error frame is consumed.
     line()
     return 0

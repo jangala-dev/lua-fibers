@@ -1,6 +1,6 @@
 # Embedding and host integration
 
-`fibers` does not require ownership of the process event loop. An application may use the root lifecycle prelude or drive a `Runtime` directly.
+`fibers` does not require control of the process event loop. An application may use the root lifecycle prelude or drive a `Runtime` directly.
 
 Embedding code imports driver interfaces separately from the lifecycle prelude:
 
@@ -275,7 +275,7 @@ There is no host readiness query during transaction search. External truth enter
 
 ## HostHandle, streams and the reactor
 
-`host.Handle` provides the boundary between non-blocking host I/O and the runtime-owned HostReactor readiness index and HostReactor.
+`host.Handle` provides the boundary between non-blocking host I/O and the Runtime-local HostReactor readiness index and HostReactor.
 
 A handle supplies:
 
@@ -315,7 +315,7 @@ handle:shutdown_write(reason)
 handle:close(reason)
 ```
 
-Opening a Stream commits its ownership and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases settle, the handle closes exactly once, and `closed_op` observes complete Flow and registration closure.
+Opening a Stream commits its custody and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases close, the handle closes exactly once, and `closed_op` observes complete Flow and registration closure.
 
 See [`flows-and-streams.md`](flows-and-streams.md) for the Flow lease contracts and reactor service model.
 
@@ -342,9 +342,8 @@ and reaped before the failed call returns.
 
 A host may expose a narrower, explicit process contract when its native API lacks a required primitive. Capabilities are sparse: presence means support and absence means unsupported. The Nixio host therefore reports `process_close_fds = "known"` and `process_groups = "session"`; it omits `process_exec_proof` and `process_pass_fds`.
 
-Parent pipe endpoints are non-blocking HostHandles and enter the normal adoption,
-Stream and reactor path. The process handle itself is also audited. Exactly one
-supervisor owns signal decisions and reaping; `reap` returns `would_block` until
+Parent pipe endpoints are non-blocking HostHandles and enter the normal private host-hold, Stream and reactor path. The process handle itself is also audited. Exactly one
+supervisor has custody of signal decisions and reaping; `reap` returns `would_block` until
 a terminal status is authoritative and returns the same cached status after
 successful reaping.
 
@@ -379,27 +378,18 @@ file_aio_detected  the POSIX AIO symbol set was detected
 `file_aio_detected` does not imply that AIO is the selected complete backend; path and
 lifetime operations still require `io_uring` or worker isolation.
 
-## Effects and host callbacks
+## Effects and host work
 
-Hosts may receive post-commit callbacks such as wake or scope notifications:
+Hosts are reached through typed effects and reactor/provider contracts after the
+selected world has committed. Effect preparation must remain pure; irreversible
+host work belongs to effect discharge or to a running Lifetime body.
 
-```lua
-local rt = Runtime.new({
-  host = {
-    now = function() return os.clock() end,
-    wake = function(payload, runtime)
-      -- nudge host-side work
-    end,
-    scope = function(event, runtime)
-      -- observe committed lifetime events
-    end,
-  },
-})
-```
+A host callback must not call `perform` re-entrantly. External completions are
+published through the Runtime's feed and reactor mechanisms and become facts for
+a later proof step.
 
-These callbacks run after location state has committed. They must not call `perform` re-entrantly.
-
-The runtime guarantee is in-process. Crash durability requires durable external state and idempotent integration.
+The runtime guarantee is in-process. Crash durability requires durable external
+state and idempotent integration.
 
 ## Protected calls and runtime phases
 
@@ -474,7 +464,7 @@ The host and readiness tests in `tests/` are the executable contract.
 
 ## I/O lifecycle inspection
 
-Hosts can inspect the runtime-owned reactor and the external-resource
+Hosts can inspect the Runtime-local reactor and the external-resource
 audit while diagnosing integration failures:
 
 ```lua
@@ -482,14 +472,14 @@ local reactor = rt.host_reactor and rt.host_reactor:snapshot()
 local audit = rt:io_audit_snapshot({ include_history = true })
 ```
 
-After an owned I/O tree has settled, contract tests should call:
+After an I/O tree held in custody has closed, contract tests should call:
 
 ```lua
 rt:assert_io_quiescent('embedding shutdown')
 ```
 
 This verifies that no HostHandle remains live, no reactor registration remains
-indexed and no ownership violation was recorded. Stale readiness deliveries are
+indexed and no custody violation was recorded. Stale readiness deliveries are
 ignored by generation and counted in `audit.stats.stale_ready`.
 
 Hosts must declare stream-socket family support separately through

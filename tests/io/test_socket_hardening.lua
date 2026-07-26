@@ -18,6 +18,7 @@ local Host = require('fibers.host')
 local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.host.error')
 local socket = require('fibers.socket')
+local Lifetime = require('fibers.lifetime')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -59,72 +60,95 @@ do
 
     fibers.scope({ name = 'connection-handler' }, function(handler)
       accepted = listener:accept()
-      assert_eq(accepted.owner, handler:raw_region(), 'accepted Stream should move into handler scope')
+      assert_eq(
+        Lifetime.of(accepted):current_state().custodian,
+        handler:lifetime(),
+        'accepted Stream should move into handler scope'
+      )
       assert_truthy(
-        accepted:reader().owner == handler:raw_region(),
+        Lifetime.of(accepted:reader()):current_state().custodian == handler:lifetime(),
         'reader child should move with Stream subtree'
       )
       assert_truthy(
-        accepted:writer().owner == handler:raw_region(),
+        Lifetime.of(accepted:writer()):current_state().custodian == handler:lifetime(),
         'writer child should move with Stream subtree'
       )
     end)
 
-    assert_eq(accepted.owner, nil, 'handler settlement should release the accepted Stream')
-    assert_truthy(accepted.handle.closed, 'handler settlement should close the accepted host handle')
-    client:close('ownership test complete')
-    listener:close('ownership test complete')
+    assert_eq(
+      Lifetime.of(accepted):current_state().custodian,
+      nil,
+      'handler Closure should release the accepted Stream'
+    )
+    assert_truthy(accepted.handle.closed, 'handler Closure should close the accepted host handle')
+    client:close('custody test complete')
+    listener:close('custody test complete')
     listener:closed()
   end, { host = host })
 end
 
--- An explicitly supplied scope-owned Region remains a supported custody
--- target; the associated Scope supplies the driver's structured execution
--- context.
+-- An explicitly supplied Scope is the custody and execution boundary.
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
-    local owner = root:raw_region()
+    local scope = root
     local listener = socket.listen_inet('127.0.0.1', 0, {
-      name = 'region-owned-listener',
-      owner = owner,
+      name = 'scope-custody-listener',
+      scope = scope,
     })
     local address = listener:local_address()
     local dial = socket.dial_inet(address.host, address.port, {
-      name = 'region-owned-dial',
-      owner = owner,
+      name = 'scope-custody-dial',
+      scope = scope,
     })
     local client = dial:result(root)
     local server = listener:accept(root)
-    client:close('region owner test complete')
-    server:close('region owner test complete')
-    listener:close('region owner test complete')
+    client:close('scope custody test complete')
+    server:close('scope custody test complete')
+    listener:close('scope custody test complete')
     listener:closed()
   end, { host = host })
 end
 
--- Listener and Dial driver tasks are structural children, so moving the
--- resource root carries its driver obligation with it.
+-- Listener and Dial are each one running Lifetime held by its caller. Their execution and
+-- private Scope are views of the domain Lifetime rather than separate
+-- driver Lifetimes.
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
     local listener
     fibers.scope({ name = 'listener-origin' }, function(origin)
       listener = socket.listen_inet('127.0.0.1', 0, { name = 'moved-listener' })
-      assert_eq(listener.driver.owner, origin:raw_region())
+      assert_eq(Lifetime.of(listener), listener:lifetime())
+      assert_truthy(listener:lifetime().has_body, 'Listener Lifetime should carry its running body')
+      local listener_roots = fibers.perform(origin:children_op())
+      assert_eq(#listener_roots, 1, "Listener should be the one root in its caller's custody")
+      assert_eq(listener_roots[1], listener)
       fibers.perform(origin:move_op(listener, root))
-      assert_eq(listener.owner, root:raw_region())
-      assert_eq(listener.driver.owner, root:raw_region(), 'Listener move should carry driver child')
+      assert_eq(Lifetime.of(listener):current_state().custodian, root:lifetime())
+      assert_eq(
+        Lifetime.of(listener):current_state().custodian,
+        root:lifetime(),
+        'Listener move should reparent one Lifetime root'
+      )
     end)
 
     local address = listener:local_address()
     local dial
     fibers.scope({ name = 'dial-origin' }, function(origin)
       dial = socket.dial_inet(address.host, address.port, { name = 'moved-dial' })
-      assert_eq(dial.driver.owner, origin:raw_region())
+      assert_eq(Lifetime.of(dial), dial:lifetime())
+      assert_truthy(dial:lifetime().has_body, 'Dial Lifetime should carry its running body')
+      local dial_roots = fibers.perform(origin:children_op())
+      assert_eq(#dial_roots, 1, "Dial should be the one root in its caller's custody")
+      assert_eq(dial_roots[1], dial)
       fibers.perform(origin:move_op(dial, root))
-      assert_eq(dial.owner, root:raw_region())
-      assert_eq(dial.driver.owner, root:raw_region(), 'Dial move should carry driver child')
+      assert_eq(Lifetime.of(dial):current_state().custodian, root:lifetime())
+      assert_eq(
+        Lifetime.of(dial):current_state().custodian,
+        root:lifetime(),
+        'Dial move should reparent one Lifetime root'
+      )
     end)
 
     local client = dial:result()
@@ -173,76 +197,87 @@ do
     fibers.perform(listener.lifecycle:request_stop_op('simulated terminal listener'))
     local accepted = listener:accept()
     assert_truthy(accepted, 'queued accept should beat terminal listener fallback')
-    assert_eq(accepted.owner, fibers.current_scope():raw_region())
+    assert_eq(Lifetime.of(accepted):current_state().custodian, fibers.current_scope():lifetime())
 
     accepted:close('accepted during close')
     listener:host_handle():close('simultaneous close')
-    listener.driver:request_cancel('simultaneous close')
+    fibers.perform(listener:lifetime():request_cancel_op('simultaneous close'))
     listener:closed()
     client:close('close-race test complete')
   end, { host = host })
 end
 
--- An unclaimed successful Dial remains in its driver scope and is closed by
--- Dial settlement; it never leaks into the surrounding scope.
+-- An untaken successful Dial remains in its driver scope and is closed by
+-- Dial Closure; it never leaks into the surrounding scope.
 do
   local host = SimulatedHost.new({ sockets = true })
   local dial_ref, connection_ref
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'unclaimed-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'untaken-listener' })
     local address = listener:local_address()
 
-    fibers.scope({ name = 'unclaimed-dial-scope' }, function()
-      dial_ref = socket.dial_inet(address.host, address.port, { name = 'unclaimed-dial' })
+    fibers.scope({ name = 'untaken-dial-scope' }, function()
+      dial_ref = socket.dial_inet(address.host, address.port, { name = 'untaken-dial' })
       local connected_state = fibers.perform(dial_ref.lifecycle:connected_state_op())
       connection_ref = connected_state.connection
-      assert_truthy(connection_ref, 'dial should have a successful unclaimed connection')
-      assert_eq(connection_ref.owner, connected_state.source_region)
-      assert_eq(fibers.perform(Op.always('not claimed'):or_else(dial_ref:connected_op())), 'not claimed')
+      assert_truthy(connection_ref, 'dial should have a successful untaken connection')
+      assert_eq(
+        Lifetime.of(connection_ref):current_state().custodian,
+        connected_state.source_scope:lifetime()
+      )
+      assert_eq(fibers.perform(Op.always('not taken'):or_else(dial_ref:connected_op())), 'not taken')
     end)
 
-    assert_eq(connection_ref.owner, nil, 'Dial settlement should release unclaimed connection ownership')
-    assert_truthy(connection_ref.handle.closed, 'Dial settlement should close unclaimed connection')
-    listener:close('unclaimed test complete')
+    assert_eq(
+      Lifetime.of(connection_ref):current_state().custodian,
+      nil,
+      'Dial Closure should close an untaken connection'
+    )
+    assert_truthy(connection_ref.handle.closed, 'Dial Closure should close untaken connection')
+    listener:close('untaken test complete')
     listener:closed()
   end, { host = host })
 end
 
--- A claimed Dial connection moves into the caller's scope and the Dial driver
+-- A taken Dial connection moves into the caller's scope and the Dial driver
 -- terminates without retaining custody.
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'claimed-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'taken-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'claimed-dial' })
+    local dial = socket.dial_inet(address.host, address.port, { name = 'taken-dial' })
 
     fibers.scope({ name = 'dial-target' }, function(target)
       local connection = dial:result()
-      assert_eq(connection.owner, target:raw_region(), 'Dial result should move connection into caller scope')
+      assert_eq(
+        Lifetime.of(connection):current_state().custodian,
+        target:lifetime(),
+        'Dial result should move connection into caller scope'
+      )
       assert_eq(dial:closed(), true, 'Dial driver should finish after custody transfer')
     end)
 
-    listener:close('claimed test complete')
+    listener:close('taken test complete')
     listener:closed()
   end, { host = host })
 end
 
--- Dial results are single-claim.  A repeated result call terminates with a
+-- Dial results are single-take.  A repeated result call terminates with a
 -- structured closed value rather than waiting indefinitely.
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'single-claim-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'single-take-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'single-claim-dial' })
+    local dial = socket.dial_inet(address.host, address.port, { name = 'single-take-dial' })
     local first = dial:result()
     local second, err = dial:result()
     assert_eq(second, nil)
     assert_truthy(HostError.is(err, 'closed'), 'repeated Dial result should be terminal')
-    assert_eq(err.reason, 'connection already claimed')
-    first:close('single claim test complete')
-    listener:close('single claim test complete')
+    assert_eq(err.reason, 'connection already taken')
+    first:close('single take test complete')
+    listener:close('single take test complete')
     listener:closed()
   end, { host = host })
 end
@@ -265,7 +300,7 @@ do
   end, { host = host })
 end
 
--- Closing a successful but unclaimed Dial makes success unavailable and
+-- Closing a successful but untaken Dial makes success unavailable and
 -- produces a structured terminal result rather than an indefinitely blocked one.
 do
   local host = SimulatedHost.new({ sockets = true })
@@ -279,14 +314,14 @@ do
     assert_eq(dial:closed(), true)
     local connection, err = dial:result()
     assert_eq(connection, nil)
-    assert_truthy(HostError.is(err, 'closed'), 'closed unclaimed Dial should return a closed error')
+    assert_truthy(HostError.is(err, 'closed'), 'closed untaken Dial should return a closed error')
 
     listener:close('closed result test complete')
     listener:closed()
   end, { host = host })
 end
 
--- Normal scope settlement stops a Listener driver and settles queued
+-- Normal Scope Closure stops a Listener driver and closes queued
 -- connections even when application code does not call close explicitly.
 do
   local host = SimulatedHost.new({ sockets = true })
@@ -303,8 +338,8 @@ do
     -- Return without closing the listener.
   end, { host = host })
 
-  assert_truthy(listener_ref:host_handle().closed, 'scope settlement should close listener handle')
-  assert_truthy(queued_ref.handle.closed, 'scope settlement should close queued connection')
+  assert_truthy(listener_ref:host_handle().closed, 'Scope Closure should close listener handle')
+  assert_truthy(queued_ref.handle.closed, 'Scope Closure should close queued connection')
 end
 
 -- Listener closure remains idempotent.
@@ -318,7 +353,7 @@ do
   end, { host = host })
 end
 
--- A listener close failure is retained as a scope-settlement failure.
+-- A listener close failure is retained as a scope-closure failure.
 do
   local host = SimulatedHost.new({ sockets = true })
   local create_listener = host.create_listener
@@ -336,13 +371,13 @@ do
   local result = fibers.try_run(function()
     socket.listen_inet('127.0.0.1', 0, { name = 'failing-close-listener' })
   end, { host = host })
-  assert_eq(result.ok, false, 'listener settlement failure should fail the scope')
+  assert_eq(result.ok, false, 'listener closure failure should fail the scope')
   assert_truthy(tostring(result):match('injected close failure'), 'scope report should retain close failure')
 end
 
 -- A host adapter which throws instead of returning a structured HostError has
 -- violated the driver contract.  Observers still receive a terminal result,
--- but the defect is retained as a scope-settlement failure.
+-- but the defect is retained as a scope-closure failure.
 do
   local host = SimulatedHost.new({ sockets = true })
   host.start_dial = function()
@@ -356,7 +391,7 @@ do
     assert_truthy(HostError.is(err, 'protocol'), 'adapter defect should publish a protocol result')
   end, { host = host })
 
-  assert_eq(result.ok, false, 'adapter defect should fail scope settlement')
+  assert_eq(result.ok, false, 'adapter defect should fail Scope Closure')
   assert_truthy(
     tostring(result):match('injected dial adapter defect'),
     'scope report should retain adapter defect'
@@ -364,7 +399,7 @@ do
 end
 
 -- A host close implementation which throws is a protocol defect. It is
--- converted to a terminal lifecycle error and retained by settlement.
+-- converted to a terminal lifecycle error and retained by Closure.
 do
   local host = SimulatedHost.new({ sockets = true })
   local create_listener = host.create_listener
@@ -386,7 +421,7 @@ do
     assert_truthy(HostError.is(err, 'protocol'))
   end, { host = host })
 
-  assert_eq(result.ok, false, 'throwing close defect should fail settlement')
+  assert_eq(result.ok, false, 'throwing close defect should fail Closure')
   assert_truthy(tostring(result):match('injected throwing close defect'))
 end
 

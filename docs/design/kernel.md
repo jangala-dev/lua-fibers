@@ -87,7 +87,7 @@ contain:
 selected participant attempts
 synchronous exchange matches
 provisional and committed location summaries
-ownership and custody changes
+custody changes
 negative validation facts
 selected commit and defeat consequences
 participant-local wrap trees
@@ -285,7 +285,7 @@ a component work budget
 ```
 
 Implementations may use compact arrays, cursors and integer identifiers. The
-conceptual records do not require materialising the whole immutable option graph.
+conceptual records do not require materialising the whole stable option graph.
 
 A promoted component may conclude:
 

@@ -15,7 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
-local Settlement = require('fibers.region.settlement')
+local Closure = require('fibers.closure')
 
 local function accept_matching(life, pred)
   return life:accept_op():and_then(function(offer)
@@ -27,12 +27,12 @@ local function accept_matching(life, pred)
 end
 
 local function retire(rt, scope, item, reason)
-  return rt:perform(Settlement.retire_item_op(scope, item, reason or 'done'))
+  return rt:perform(Closure.close_op(scope, item, reason or 'done'))
 end
 
 local life = FibersScope.new('life')
 assert(life.name == 'life')
-assert(life:raw_region().name == 'life')
+assert(life:lifetime().name == 'life')
 local rt = FibersRuntime.new()
 local status
 rt:spawn_raw(function()
@@ -50,18 +50,19 @@ rt2:spawn_raw(function()
   task = rt2:perform(life_a:spawn_op(function()
     return 'done'
   end, { name = 'owned-task' }))
-  owned_a = rt2:perform(life_a:owns_op(task))
+  owned_a = rt2:perform(life_a:has_custody_op(task))
   rt2:perform(life_a:move_op(task, life_b))
-  owned_b = rt2:perform(life_b:owns_op(task))
+  owned_b = rt2:perform(life_b:has_custody_op(task))
   report = { rt2:perform(task:await_op()) }
   retire(rt2, life_b, task)
   rt2:perform(life_b:seal_op())
+  status = rt2:perform(life_b:inspect_op())
 end, 'scope-root')
 local st2 = rt2:run()
 assert(st2.tag == 'found' or st2.tag == 'quiescent')
 assert(task and owned_a == true and owned_b == true)
 assert(report[1] == 'done')
-assert(life_b.region.sealed == true)
+assert(status.sealed == true)
 
 local from = FibersScope.new('from')
 local to = FibersScope.new('to')
@@ -76,7 +77,7 @@ rt4:spawn_raw(function()
     to:accept_op(),
   }))
   accepted = rows[2][1]
-  to_owns = rt4:perform(to:owns_op(handed))
+  to_owns = rt4:perform(to:has_custody_op(handed))
   rt4:perform(handed:await_op())
   retire(rt4, to, handed)
 end, 'custody-transfer-root')
@@ -118,8 +119,10 @@ rt_match:spawn_raw(function()
     end),
   }))
   accepted_match = rows[2][1]
-  owns_a_after = rt_match:perform(match_from_a:owns_op(task_a))
-  owns_b_after = rt_match:perform(match_to:owns_op(task_b))
+  -- debug
+  -- print('rows2', rows[2], rows[2] and rows[2][1])
+  owns_a_after = rt_match:perform(match_from_a:has_custody_op(task_a))
+  owns_b_after = rt_match:perform(match_to:has_custody_op(task_b))
   rt_match:perform(task_a:await_op())
   rt_match:perform(task_b:await_op())
   retire(rt_match, match_from_a, task_a)
@@ -188,8 +191,8 @@ do
       end),
     }))
     accepted_b = rows[2][1]
-    a_still_owned = rt_filter:perform(from_a:owns_op(task_a))
-    b_moved = rt_filter:perform(to:owns_op(task_b))
+    a_still_owned = rt_filter:perform(from_a:has_custody_op(task_a))
+    b_moved = rt_filter:perform(to:has_custody_op(task_b))
     rt_filter:perform(task_a:await_op())
     rt_filter:perform(task_b:await_op())
     retire(rt_filter, from_a, task_a)

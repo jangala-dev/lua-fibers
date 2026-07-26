@@ -14,11 +14,11 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
 local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
 local FibersStream = require('fibers.stream')
-local FibersPolicy = require('fibers.policy')
+local FibersClosure = require('fibers.closure')
 local Stream = FibersStream
 local HostHandle = require('fibers.host.handle')
 
@@ -47,20 +47,26 @@ local function drive(rt, limit)
   return st
 end
 
--- Body failures and settlement failures are reported together.  The body error
+-- Body failures and closure failures are reported together.  The body error
 -- remains primary; cleanup failure is retained as a structured secondary.
 do
   local rt = FibersRuntime.new()
-  local scope = FibersScope.new('compound-failure-scope', { runtime = rt, policy = FibersPolicy.nursery() })
+  local scope = FibersScope.new('compound-failure-scope', { runtime = rt, closure = FibersClosure.nursery() })
   rt:spawn_raw(function()
     scope:run(function(s)
-      local h = FibersRegion.handle('compound-failure-owned')
-      fibers.perform(s:raw_region():admit_op(FibersRegion.Owned.item(h, {
-        name = 'boom',
-        settle_op = function()
-          error('settlement boom')
-        end,
-      }, { settle_name = 'boom' })))
+      local h = { name = 'compound-failure-owned' }
+      Lifetime.define(
+        h,
+        {
+          closure = {
+            name = 'boom',
+            finish_op = function()
+              error('closure boom')
+            end,
+          },
+        }
+      )
+      fibers.perform(s:admit_op(h))
       error('body boom')
     end)
   end, 'compound-failure-root', scope)
@@ -71,40 +77,40 @@ do
   local report = FibersScope.is_report(err) and err or err.scope_report
   assert_truthy(
     FibersScope.is_report(report),
-    'scope should raise a structured report when body and settlement both fail'
+    'scope should raise a structured report when body and Closure both fail'
   )
   assert_truthy(tostring(report.primary):match('body boom'), 'body error should remain primary')
-  assert_eq(report.secondary_count, 1, 'settlement failure should be secondary')
+  assert_eq(report.secondary_count, 1, 'closure failure should be secondary')
   assert_truthy(
-    tostring(report.secondaries[1]):match('settlement boom'),
-    'secondary should describe settlement failure'
+    tostring(report.secondaries[1]):match('closure boom'),
+    'secondary should describe closure failure'
   )
 end
 
--- Policy hooks are first-class scope extension points rather than hard-coded
--- nursery behaviour.
+-- Closure propagation hooks are first-class extension points rather than
+-- hard-coded nursery behaviour.
 do
   local seen_body_failure = false
-  local policy = {
-    on_body_exit = function(_self, _scope, _state, body_ok, err)
-      seen_body_failure = not body_ok and tostring(err):match('policy body failure') ~= nil
+  local closure = {
+    on_body_result = function(_self, _parent, _state, body_ok, err)
+      seen_body_failure = not body_ok and tostring(err):match('closure body failure') ~= nil
       return { seal = true }
     end,
   }
   local rt = FibersRuntime.new()
-  local root = FibersScope.new('policy-hook-root', { runtime = rt, policy = FibersPolicy.nursery() })
+  local root = FibersScope.new('closure-hook-root', { runtime = rt, closure = FibersClosure.nursery() })
   rt:spawn_raw(function()
     root:run(function()
-      fibers.scope({ policy = policy }, function()
-        error('policy body failure')
+      fibers.scope({ closure = FibersClosure.running(closure) }, function()
+        error('closure body failure')
       end)
     end)
-  end, 'policy-hook-root-fibre', root)
+  end, 'closure-hook-root-fibre', root)
   local ok = pcall(function()
     drive(rt, 100)
   end)
   assert_eq(ok, false, 'body failure should still propagate')
-  assert_eq(seen_body_failure, true, 'policy hook should observe body failure')
+  assert_eq(seen_body_failure, true, 'Closure hook should observe body failure')
 end
 
 -- Safe acquisition binds to the current scope by default.
@@ -114,7 +120,7 @@ do
     local backend = FakeHandle.new({ name = 'safe-acquire-backend' })
     local stream =
       fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'safe-acquire-stream' }))
-    owner_was_root = stream.owner == root:raw_region()
+    owner_was_root = fibers.perform(root:has_custody_op(stream))
   end)
   assert_eq(owner_was_root, true, 'safe stream acquisition should use current scope')
 end
@@ -126,7 +132,7 @@ do
   local ok, err = pcall(function()
     Stream.open_op(backend, { read = true, write = true, name = 'no-current-scope-stream' })
   end)
-  assert_eq(ok, false, 'safe acquisition should require a current scope or opts.owner')
+  assert_eq(ok, false, 'safe acquisition should require a current scope or opts.scope')
   assert_truthy(tostring(err):match('current Scope'), 'error should explain missing current Scope')
 end
 
@@ -134,7 +140,7 @@ end
 do
   local stream, read_err
   local rt = FibersRuntime.new()
-  local root = FibersScope.new('retired-authority-root', { runtime = rt, policy = FibersPolicy.nursery() })
+  local root = FibersScope.new('retired-authority-root', { runtime = rt, closure = FibersClosure.nursery() })
   rt:spawn_raw(function()
     root:run(function()
       fibers.scope(function()
@@ -155,24 +161,30 @@ do
   )
 end
 
--- inspect_op exposes sealed boundary facts while root settlement is in
+-- inspect_op exposes sealed boundary facts while root closure is in
 -- progress, without depending on a lifecycle phase enum.
 do
   local rt = FibersRuntime.new()
   local settled, feed = rt:signal('hardening-settled')
-  local scope = FibersScope.new('hardening-settling', { runtime = rt, policy = FibersPolicy.nursery() })
-  local h = FibersRegion.handle('hardening-settling-owned')
+  local scope = FibersScope.new('hardening-settling', { runtime = rt, closure = FibersClosure.nursery() })
+  local h = { name = 'hardening-settling-owned' }
   local state
   rt:spawn_raw(function()
     scope:run(function(s)
-      rt:perform(s:raw_region():admit_op(FibersRegion.Owned.item(h, {
-        name = 'wait',
-        settle_op = function()
-          return settled:wait_op():map(function()
-            return true
-          end)
-        end,
-      }, { settle_name = 'wait' })))
+      Lifetime.define(
+        h,
+        {
+          closure = {
+            name = 'wait',
+            finish_op = function()
+              return settled:wait_op():map(function()
+                return true
+              end)
+            end,
+          },
+        }
+      )
+      rt:perform(s:admit_op(h))
     end)
   end, 'hardening-settling-root', scope)
 
@@ -194,7 +206,7 @@ do
   end
   assert_truthy(state, 'monitor should read scope state')
   assert_eq(state.sealed, true, 'scope should expose sealed boundary fact')
-  assert_eq(state.done, false, 'scope should not be done while settlement waits')
+  assert_eq(state.done, false, 'scope should not be done while Closure waits')
   feed:set(true)
   rt:run()
 end
@@ -206,7 +218,7 @@ do
     local backend = FakeHandle.new({ name = 'friendly-stream-backend' })
     local stream =
       fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'friendly-stream' }))
-    owner_was_root = stream.owner == root:raw_region()
+    owner_was_root = fibers.perform(root:has_custody_op(stream))
   end)
   assert_eq(owner_was_root, true, 'Stream.open_op should bind to the current scope')
 end

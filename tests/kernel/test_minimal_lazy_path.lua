@@ -37,12 +37,13 @@ local function truthy(value, message)
   end
 end
 
--- Immutable common options are constructed once per resource.  This is an
--- API-preserving allocation reduction: callers still receive ordinary Ops.
+-- Public value options are fresh opaque occurrences so unsupported mutation
+-- remains local. Trusted resource programmes may still cache primitive options
+-- whose descriptors are owned by the facility.
 do
-  eq(Op.always(), Op.always(), 'empty always operation should be interned')
-  eq(Op.always(true), Op.always(true), 'true always operation should be interned')
-  eq(Op.always(false), Op.always(false), 'false always operation should be interned')
+  truthy(Op.always() ~= Op.always(), 'empty always operation should be fresh')
+  truthy(Op.always(true) ~= Op.always(true), 'true always operation should be fresh')
+  truthy(Op.always(false) ~= Op.always(false), 'false always operation should be fresh')
 
   local rendezvous = Rendezvous.new('minimal-cached-rendezvous')
   eq(rendezvous:get_op(), rendezvous:get_op(), 'rendezvous get option should be cached')

@@ -13,14 +13,14 @@ package.path = table.concat({
 -- headline sequence completes normally.
 
 local fibers = require('fibers')
-local policy = require('fibers.policy')
+local closure = require('fibers.closure')
 
 local event_result
 
 local outer = fibers.try_run(function()
   event_result = fibers.try_scope({
     name = 'eclipse-festival',
-    policy = policy.supervisor({ child_failure = 'collect' }),
+    closure = closure.supervisor({ child_failure = 'collect' }),
   }, function(scope)
     scope:spawn(function()
       error('firework launcher 3 did not answer', 0)

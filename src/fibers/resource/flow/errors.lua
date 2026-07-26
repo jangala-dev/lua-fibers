@@ -18,7 +18,7 @@ return {
   STALE_LEASE = 'stale_lease',
   LEASE_ALREADY_ACTIVE = 'lease_already_active',
   LEASE_ACK_TOO_LARGE = 'lease_ack_too_large',
-  LEASE_OWNER_MISMATCH = 'lease_owner_mismatch',
+  LEASE_HOLDER_MISMATCH = 'lease_holder_mismatch',
   LEASE_CONFLICT = 'flow-lease-conflict',
 
   NO_SPACE_LEASE = 'no_space_lease',

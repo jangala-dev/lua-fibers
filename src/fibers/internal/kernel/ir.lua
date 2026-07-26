@@ -2,7 +2,7 @@
 --
 -- Facility APIs compile to these records.  The runtime owns their meaning;
 -- facility modules cannot redefine search, projection, exhaustion, validation
--- or commit.  This module also compiles immutable option graphs into cached
+-- or commit.  This module also compiles stable option graphs into cached
 -- dependency metadata used by recruitment, component isolation and diagnostics.
 
 local Op = require('fibers.op')
@@ -69,10 +69,14 @@ end
 
 -- Cached option metadata -------------------------------------------------
 
-local metadata_cache = setmetatable({}, { __mode = 'k' })
-local active_metadata_cache = setmetatable({}, { __mode = 'k' })
-local preferred_metadata_cache = setmetatable({}, { __mode = 'k' })
-local dependency_hint_cache = setmetatable({}, { __mode = 'k' })
+-- These caches are advisory. Weak keys alone are insufficient on Lua 5.1 and
+-- LuaJIT because they do not provide ephemeron semantics: cached metadata can
+-- reach its option/program key through resource locations and retain complete
+-- Scope graphs. Weak values make the cache collectable on every supported Lua.
+local metadata_cache = setmetatable({}, { __mode = 'kv' })
+local active_metadata_cache = setmetatable({}, { __mode = 'kv' })
+local preferred_metadata_cache = setmetatable({}, { __mode = 'kv' })
+local dependency_hint_cache = setmetatable({}, { __mode = 'kv' })
 
 local function empty_metadata()
   return {

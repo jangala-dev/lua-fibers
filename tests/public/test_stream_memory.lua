@@ -289,18 +289,21 @@ do
   assert_eq(Inspect.data(f:reader().flow), '', 'exact EOF consumes the returned final partial')
 end
 
--- Region/Scope ownership movement works for stream compounds.
+-- Scope movement reparents complete Stream Lifetime subtrees.
 do
-  local Scope = FibersScope
   local a, _b = Stream.memory_pair({ name = 'movement' })
-  local from = Scope.new('from')
-  local to = Scope.new('to')
-  local st = fibers.try_run(function()
-    fibers.perform(from:raw_region():admit_op(a))
-    fibers.perform(from:raw_region():move_op(a, to:raw_region()))
+  local moved, left
+  local st = fibers.try_run(function(root)
+    fibers.scope(function(from)
+      fibers.perform(from:admit_op(a))
+      fibers.perform(from:move_op(a, root))
+      left = fibers.perform(from:has_custody_op(a))
+      moved = fibers.perform(root:has_custody_op(a))
+    end)
   end).runtime_status
   assert_status(st, 'found')
-  assert_eq(a.owner, to:raw_region())
+  assert_eq(left, false)
+  assert_eq(moved, true)
 end
 
 -- Chunked storage preserves order without keeping one monolithic data string.

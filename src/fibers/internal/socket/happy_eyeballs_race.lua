@@ -2,7 +2,7 @@
 --
 -- DNS completions, attempt results, clock observations, capacity claims and Dial
 -- admission are composed as options over one Scalar machine. Irreversible socket
--- work remains inside owned numeric Dial drivers and begins only after commit.
+-- work remains inside numeric Dial Lifetimes and begins only after commit.
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
@@ -257,13 +257,13 @@ function Race:publish_family_op(family, completion, finished_at)
   })
 end
 
-function Race:_attempt_result_ops(current, owner)
+function Race:_attempt_result_ops(current, scope)
   local options = {}
   for i = 1, #current.attempts do
     local entry = current.attempts[i]
     if entry.status == 'active' then
       local attempt = entry
-      local result = attempt.dial:result_op(owner):map(function(connection, err)
+      local result = attempt.dial:result_op(scope):map(function(connection, err)
         return { connection = connection, error = err }
       end)
       options[#options + 1] = Op.named_all({
@@ -315,7 +315,7 @@ function Race:_resolution_ops(current, query)
   return Op.choice(options)
 end
 
-function Race:_action_at_op(owner, now)
+function Race:_action_at_op(scope, now)
   return self.state
     :transition_op(NextAction, {
       now = now,
@@ -326,7 +326,7 @@ function Race:_action_at_op(owner, now)
         return Op.always(action)
       end
       return self.attempt_slots:take_op(1):and_then(function()
-        local dial_opts = Policy.attempt_options(self, action.address, action.index, owner)
+        local dial_opts = Policy.attempt_options(self, action.address, action.index, scope)
         return DialModule.dial_op(action.address, dial_opts):and_then(function(dial)
           return self.state:transition_op(AdmitAttempt, {
             spec = action,
@@ -377,7 +377,7 @@ function Race:_next_progress_at(current, now, available_slots)
   return at
 end
 
-function Race:_progress_op(current, owner, now, available_slots)
+function Race:_progress_op(current, scope, now, available_slots)
   local at = self:_next_progress_at(current, now, available_slots)
   if at == nil then
     return Op.never()
@@ -393,22 +393,22 @@ function Race:_progress_op(current, owner, now, available_slots)
   -- Clock readiness, action selection, capacity claim, Dial admission and the
   -- race-state update form one provisional world. There is no wake-only step.
   return readiness:and_then(function(observed_at)
-    return self:_action_at_op(owner, observed_at)
+    return self:_action_at_op(scope, observed_at)
   end)
 end
 
 -- One algebraic scheduling step. Ready attempt outcomes have semantic priority
 -- over DNS publication, and DNS publication has priority over timers/admission.
-function Race:step_op(query, owner)
+function Race:step_op(query, scope)
   return Op.guard(function()
     return Op.named_all({
       state = self.state:read_op(),
       available_slots = self.attempt_slots:read_op(),
       now = now_op(),
     }):and_then(function(view)
-      local outcomes = self:_attempt_result_ops(view.state, owner)
+      local outcomes = self:_attempt_result_ops(view.state, scope)
       local resolutions = self:_resolution_ops(view.state, query)
-      local progress = self:_progress_op(view.state, owner, view.now, view.available_slots)
+      local progress = self:_progress_op(view.state, scope, view.now, view.available_slots)
       return outcomes:or_else(resolutions:or_else(progress))
     end)
   end)

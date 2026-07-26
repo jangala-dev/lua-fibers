@@ -9,10 +9,11 @@ local HostError = require('fibers.host.error')
 local Completion = require('fibers.resource.completion')
 local IO = require('fibers.host.io')
 local Mailbox = require('fibers.mailbox')
-local Region = require('fibers.region')
-local Owned = require('fibers.region').Owned
+local Lifetime = require('fibers.lifetime')
+local Task = require('fibers.task')
+local Scope = require('fibers.scope')
 local Protected = require('fibers.internal.protected')
-local Settlement = require('fibers.region.settlement')
+local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 
 local Algorithms = {}
@@ -244,32 +245,24 @@ function Request:result()
   return perform(self:result_op())
 end
 
-local function file_settlement(file)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return file:close_op(reason or 'file scope settlement')
+local function file_closure(file)
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return file:close_op(reason or 'file scope closure')
   end, function()
     return file:closed_op()
   end, {
     name = 'regular_file',
-    settle_result = function(ok, err)
+    finish_result = function(ok, err)
       -- A failed open owns no host file; its terminal error is the acquisition
-      -- result, not a second settlement failure.
+      -- result, not a second closure failure.
       if not ok and file.backend ~= nil then
-        error(err or 'file settlement failed', 0)
+        error(err or 'file closure failed', 0)
       end
       return true
     end,
   })
 end
 
-function RegularFile:owned(children)
-  return Owned.tree(
-    self,
-    self._fibers_settle,
-    children or {},
-    { role = 'regular_file', settle_name = 'regular_file' }
-  )
-end
 function RegularFile:ready_op()
   return self.ready_completion:result_op()
 end
@@ -280,7 +273,11 @@ function RegularFile:filename()
   return self.path
 end
 function RegularFile:closed_op()
-  return self.closed_completion:result_op()
+  -- Host closure may be published before the private driver Scope has retired
+  -- every child. A successful File close therefore joins both conditions.
+  return IO.closed_after_driver_op(self.driver, self.closed_completion:result_op(), {
+    require_returned = true,
+  })
 end
 
 local function enqueue(file, kind, args)
@@ -632,12 +629,14 @@ end
 
 local function new_file_op(path, mode, opts, label, temporary)
   opts = IO.copy_table(opts)
-  local owner = IO.current_owner(opts, label)
+  local scope = IO.current_scope(opts, label)
   next_file = next_file + 1
   local name = opts.name or ('file-' .. tostring(next_file))
   local tx, rx = Mailbox.new(opts.queue_limit or 32, { name = name .. ':requests' })
-  local file = Region.handle(name, {
+  local driver_parent = IO.require_scope(scope, label)
+  local file = setmetatable({
     kind = 'regular_file',
+    name = name,
     path = path,
     mode = mode,
     tx = tx,
@@ -649,48 +648,52 @@ local function new_file_op(path, mode, opts, label, temporary)
     provider_opts = opts,
     temporary = temporary == true,
     auto_unlink = false,
+  }, RegularFile)
+  Lifetime.define(file, {
+    name = name,
+    role = 'regular_file',
+    closure = file_closure(file),
   })
-  setmetatable(file, RegularFile)
-  file._fibers_settle = file_settlement(file)
-  file._fibers_settle_name = 'regular_file'
-  local driver_parent = IO.scope_for_owner(owner, label)
-  file.driver = IO.new_driver_task(driver_parent, name .. ':driver', function()
-    local ok, err = Protected.pcall(drive_file, file, opts)
-    if ok then
-      return
-    end
-    local rt = Runtime.current()
-    local failure = Runtime.is_cancelled(err)
-        and HostError.closed(
-          'file',
-          'driver',
-          { path = file.path, reason = err.reason or 'file driver cancelled' }
-        )
-      or IO.protocol_error('file', 'driver', err, { path = file.path })
-    if file.backend then
-      Protected.pcall(file.backend.close, file.backend, failure)
-    end
-    if file.auto_unlink then
-      Protected.pcall(function()
-        local provider = Provider.for_runtime(rt, opts)
-        if provider then
-          provider:unlink(file.path, opts)
-        end
-      end)
-    end
-    if file.ready_completion:is_pending() then
-      publish(rt, file.ready_completion, false, failure)
-    end
-    IO.masked_perform(rt, file.tx:close_op(failure))
-    if file.closed_completion:is_pending() then
-      publish(rt, file.closed_completion, false, failure)
-    end
-    if not Runtime.is_cancelled(err) then
-      error(failure, 0)
-    end
-  end)
-  local admission = owner
-    :admit_op(file:owned({ file.driver:owned() }))
+  local private_scope = Scope.for_lifetime(file._lifetime)
+  file.driver = Task._new(function()
+    return private_scope:run(function()
+      local ok, err = Protected.pcall(drive_file, file, opts)
+      if ok then
+        return
+      end
+      local rt = Runtime.current()
+      local failure = Runtime.is_cancelled(err)
+          and HostError.closed(
+            'file',
+            'driver',
+            { path = file.path, reason = err.reason or 'file driver cancelled' }
+          )
+        or IO.protocol_error('file', 'driver', err, { path = file.path })
+      if file.backend then
+        Protected.pcall(file.backend.close, file.backend, failure)
+      end
+      if file.auto_unlink then
+        Protected.pcall(function()
+          local provider = Provider.for_runtime(rt, opts)
+          if provider then
+            provider:unlink(file.path, opts)
+          end
+        end)
+      end
+      if file.ready_completion:is_pending() then
+        publish(rt, file.ready_completion, false, failure)
+      end
+      IO.masked_perform(rt, file.tx:close_op(failure))
+      if file.closed_completion:is_pending() then
+        publish(rt, file.closed_completion, false, failure)
+      end
+      if not Runtime.is_cancelled(err) then
+        error(failure, 0)
+      end
+    end)
+  end, name, driver_parent, { lifetime = file._lifetime, closure = driver_parent.closure })
+  local admission = scope
+    :admit_op(file)
     :and_then(function()
       return file.driver:spawn_effect_op()
     end, false)
@@ -741,12 +744,6 @@ function File.tmpfile(opts)
   return perform(File.tmpfile_op(opts))
 end
 
-local function job_settlement(_job)
-  return Settlement.task_interrupt()
-end
-function Job:owned()
-  return self.task:owned(job_settlement(self))
-end
 function Job:result_op()
   return self.task:await_op()
 end
@@ -756,21 +753,22 @@ end
 
 local function path_job_op(action, fn, opts)
   opts = IO.copy_table(opts)
-  local owner = IO.current_owner(opts, 'file.submit_' .. action .. '_op')
+  local scope = IO.current_scope(opts, 'file.submit_' .. action .. '_op')
   next_job = next_job + 1
   local name = opts.name or ('file-' .. action .. '-' .. tostring(next_job))
-  local task = IO.new_driver_task(
-    IO.scope_for_owner(owner, 'file.submit_' .. action .. '_op'),
-    name,
-    function()
+  local parent_scope = IO.require_scope(scope, 'file.submit_' .. action .. '_op')
+  local job = setmetatable({ name = name }, Job)
+  Lifetime.define(job, { name = name, role = 'file_job', closure = Closure.none() })
+  local private_scope = Scope.for_lifetime(job._lifetime)
+  job.task = Task._new(function()
+    return private_scope:run(function()
       return fn(opts)
-    end
-  )
-  local job = setmetatable({ name = name, task = task }, Job)
-  local submission = owner
-    :admit_op(task:owned())
+    end)
+  end, name, parent_scope, { lifetime = job._lifetime, closure = parent_scope.closure })
+  local submission = scope
+    :admit_op(job)
     :and_then(function()
-      return task:spawn_effect_op()
+      return job.task:spawn_effect_op()
     end, false)
     :map(function()
       return job

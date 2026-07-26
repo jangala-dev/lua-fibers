@@ -13,7 +13,8 @@ package.path = table.concat({
 }, ';')
 
 local Runtime = require('fibers.runtime')
-local Region = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local Scope = require('fibers.scope')
 local Signal = require('fibers.resource.signal')
 
 local function fail(msg)
@@ -71,30 +72,39 @@ do
   eq(weak[2], nil, 'external-feed cache should not retain a feed')
 end
 
--- Retired ownership records must leave the module-global ledger entirely once
--- a region becomes empty; otherwise short-lived scopes accumulate forever.
+-- A completed runtime-local Lifetime store retains neither empty Scope
+-- capabilities nor retired resources after the Runtime itself is released.
 do
   local weak = setmetatable({}, { __mode = 'v' })
   do
     local rt = Runtime.new()
-    local region = Region.new('temporary-region')
-    local item = Region.handle('temporary-item')
-    weak[1], weak[2] = region, item
+    local scope = Scope.new('temporary-scope', { runtime = rt })
+    local item = { name = 'temporary-item' }
+    Lifetime.inert(item)
+    weak[1], weak[2], weak[3] = scope, item, rt
     rt:spawn_raw(function()
-      rt:perform(region:admit_op(Region.inert(item)))
-      rt:perform(region:release_op(item))
-    end, 'temporary-owner')
+      scope:run(function(s)
+        rt:perform(s:admit_op(item))
+      end)
+    end, 'temporary-owner', scope)
     while true do
       local st = rt:run()
       if st.tag == 'idle' or st.tag == 'quiescent' then
         break
       end
     end
-    rt, region, item = nil, nil, nil
+    local snapshot
+    rt:spawn_raw(function()
+      snapshot = rt:perform(scope:inspect_op())
+    end, 'empty-store-snapshot')
+    rt:run()
+    eq(snapshot.custody_count, 0, 'completed Scope should retain no Lifetime records under custody')
+    rt, scope, item, snapshot = nil, nil, nil, nil
   end
   collect()
-  eq(weak[1], nil, 'empty ownership ledger should not retain a region')
-  eq(weak[2], nil, 'retired ownership ledger should not retain an item')
+  eq(weak[1], nil, 'runtime-local store should not retain an empty Scope')
+  eq(weak[2], nil, 'runtime-local store should not retain a retired resource')
+  eq(weak[3], nil, 'discarding a Runtime should release its Lifetime store')
 end
 
 print('tests/test_slim_retention.lua: ok')

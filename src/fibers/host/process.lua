@@ -7,6 +7,62 @@ local Sleep = require('fibers.sleep')
 
 local M = {}
 
+local function close_returned(value, reason)
+  if value and type(value.close) == 'function' then
+    pcall(value.close, value, reason)
+  end
+end
+
+local function invalid_contract(host, missing)
+  return HostError.protocol(
+    'host',
+    'start_process',
+    'host process provider returned an invalid process handle',
+    {
+      host = host and host.name or nil,
+      missing = missing,
+    }
+  )
+end
+
+-- One host-independent launch boundary. Direct waitpid providers, reaper-process
+-- providers, simulated hosts and future platform implementations all return the
+-- same process-handle contract beneath the public Process Lifetime.
+function M.start(host, spec)
+  if not host or type(host.start_process) ~= 'function' then
+    return nil, nil, HostError.unsupported('host', 'process', { host = host and host.name or nil })
+  end
+  local process, endpoints, err = host:start_process(spec)
+  if not process then
+    return nil, nil, err or endpoints
+  end
+  if endpoints ~= nil and type(endpoints) ~= 'table' then
+    close_returned(process, 'invalid host process contract')
+    return nil, nil, invalid_contract(host, 'endpoints')
+  end
+
+  local required = { 'wait_op', 'reap', 'signal', 'close' }
+  for i = 1, #required do
+    local name = required[i]
+    if type(process[name]) ~= 'function' then
+      close_returned(process, 'invalid host process contract')
+      for _, endpoint in pairs(endpoints or {}) do
+        close_returned(endpoint, 'invalid host process contract')
+      end
+      return nil, nil, invalid_contract(host, name)
+    end
+  end
+  local pid = type(process.pid) == 'function' and process:pid() or process.pid or process._pid
+  if pid == nil then
+    close_returned(process, 'invalid host process contract')
+    for _, endpoint in pairs(endpoints or {}) do
+      close_returned(endpoint, 'invalid host process contract')
+    end
+    return nil, nil, invalid_contract(host, 'pid')
+  end
+  return process, endpoints or {}
+end
+
 local Process = {}
 do
   local M = Process

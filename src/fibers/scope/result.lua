@@ -23,9 +23,7 @@ end
 
 function ScopeResult.fail(fields)
   fields = fields or {}
-  local settlement_failures = fields.settlement_failures
-    or (fields.report and fields.report.settlement_failures)
-    or {}
+  local closure_failures = fields.closure_failures or (fields.report and fields.report.closure_failures) or {}
   return setmetatable({
     _fibers_scope_result = true,
     ok = false,
@@ -33,8 +31,8 @@ function ScopeResult.fail(fields)
     primary = fields.primary,
     report = fields.report,
     runtime_status = fields.runtime_status,
-    settlement_failures = settlement_failures,
-    settlement_failure = settlement_failures[1],
+    closure_failures = closure_failures,
+    closure_failure = closure_failures[1],
   }, ScopeResult)
 end
 

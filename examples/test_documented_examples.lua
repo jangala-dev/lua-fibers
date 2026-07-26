@@ -20,6 +20,9 @@ local FibersStream = require('fibers.stream')
 local FibersCalendar = require('examples.case_studies.calendar.calendar')
 local FibersPetri = require('examples.case_studies.petri.petri')
 local FibersHost = require('fibers.host')
+local FibersOp = require('fibers.op')
+local FibersLifetime = require('fibers.lifetime')
+local FibersScope = require('fibers.scope')
 
 -- README generic command and structured scope.
 fibers.run(function(scope)
@@ -121,6 +124,33 @@ fibers.run(function()
   local a, b = FibersStream.memory_pair({ capacity = 4096 })
   fibers.perform(a:writer():write_op('hello\n'))
   assert(fibers.perform(b:reader():read_line_op()) == 'hello')
+end)
+
+-- Lifetime guide: custody, Grants and Closure use the ordinary Op algebra.
+fibers.run(function(source)
+  local worker = FibersScope.new('documented-grant-worker', {
+    runtime = source.runtime,
+  })
+  local resource = { name = 'documented-resource' }
+  FibersLifetime.inert(resource, { rights = { read = true } })
+
+  fibers.perform(source:admit_op(resource))
+  local grant = fibers.perform(source:grant_op(resource, worker, { 'read' }))
+  local authorised = fibers.perform(worker:can_op(resource, 'read'))
+  assert(authorised == resource)
+
+  fibers.perform(worker:close_op(grant, 'example complete'))
+  local after_close = fibers.perform(worker
+    :can_op(resource, 'read')
+    :map(function()
+      return true
+    end)
+    :or_else(FibersOp.always(false)))
+  assert(after_close == false)
+
+  fibers.perform(source:move_op(resource, worker))
+  assert(fibers.perform(worker:has_custody_op(resource)) == true)
+  fibers.perform(worker:close_op(resource, 'example complete'))
 end)
 
 print('examples/test_documented_examples.lua: ok')

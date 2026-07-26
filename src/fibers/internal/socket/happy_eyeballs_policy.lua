@@ -386,11 +386,11 @@ local function order_candidates(race, current, family, values)
   return interleave(ordered, race.first_family_count), added, nil, dropped
 end
 
-local function attempt_options(race, address, index, owner)
+local function attempt_options(race, address, index, scope)
   local opts = race.opts
   local out = IO.copy_table(opts.dial_options)
   out.host = opts.host or out.host
-  out.owner = owner
+  out.scope = scope
   out.name = table.concat({
     opts.name or 'happy-eyeballs',
     'attempt-' .. tostring(index),

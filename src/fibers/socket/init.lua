@@ -184,7 +184,7 @@ end
 
 function Socket.connect_name(host, service, opts)
   opts = IO.copy_table(opts)
-  local target = opts.target or opts.owner
+  local target = opts.target or opts.scope
   local dial = perform(Socket.dial_name_op(host, service, opts))
   return dial:connect(target)
 end

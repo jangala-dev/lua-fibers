@@ -121,10 +121,10 @@ add('datagram-roundtrip', 'datagrams', function()
   return SimulatedHost.new({ datagrams = true })
 end, function()
   local count = math.max(1, math.floor(16 * scale))
-  local sender = assert(Socket.datagram_ipv4('127.0.0.1', 0, {
+  local sender = assert(Socket.udp_ipv4('127.0.0.1', 0, {
     send_capacity = count,
   }))
-  local receiver = assert(Socket.datagram_ipv4('127.0.0.1', 0, {
+  local receiver = assert(Socket.udp_ipv4('127.0.0.1', 0, {
     receive_capacity = count,
   }))
   for i = 1, count do

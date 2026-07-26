@@ -18,7 +18,8 @@ local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScalar = require('fibers.resource.scalar')
 local FibersRendezvous = require('fibers.resource.rendezvous')
-local FibersRegion = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local Scope = require('fibers.scope')
 local FibersEffect = require('fibers.effect')
 local Runtime = FibersRuntime
 local Op = FibersOp
@@ -170,17 +171,21 @@ do
   assert_eq(err.kind, 'phase_error', 'host arrival in prepare is a phase error')
 end
 
--- Region exposes claiming, but settlement recovery remains behind precise internal operations.
+-- Scope exposes custody operations directly. Internal close tokens and
+-- unaccounted release are absent from the public surface.
 do
-  local r = FibersRegion.new('claim-surface')
-  assert_eq(type(r.claim_op), 'function', 'Region should expose claim_op')
-  assert_eq(r.resolve_op, nil, 'Region should not expose generic claim resolution')
-  assert_eq(r.discharge_claim_op, nil, 'Region should not expose manual claim discharge')
-  assert_eq(r.fail_claim_op, nil, 'Region should not expose manual claim failure')
-  assert_eq(r.restore_claim_op, nil, 'Region should not expose generic claim restoration')
-  assert_eq(type(r.move_op), 'function', 'Region should expose explicit move_op')
-  assert_eq(type(r.retire_tree_op), 'nil', 'Region should not expose retire_tree_op')
-  assert_eq(type(r.release_tree_op), 'nil', 'Region should not expose release_tree_op')
+  local scope = Scope.new('lifetime-surface')
+  local item = { name = 'lifetime-surface-item' }
+  Lifetime.inert(item)
+  assert_eq(scope.custody, nil, 'Custody should not be a facade object')
+  assert_eq(type(scope.move_op), 'function', 'Scope should expose explicit movement')
+  assert_eq(type(scope.offer_op), 'function', 'Scope should expose negotiated transfer')
+  assert_eq(type(scope.grant_op), 'function', 'Scope should expose Grant creation')
+  assert_eq(type(scope.can_op), 'function', 'Scope should expose authority checks')
+  assert_eq(scope.claim_op, nil, 'close tokens should remain private')
+  assert_eq(scope.resolve_op, nil, 'Scope should not expose generic token resolution')
+  assert_eq(scope.release_op, nil, 'Scope should not expose unaccounted release')
+  assert_eq(Lifetime.of(item) ~= nil, true, 'ownable values should carry a Lifetime')
 end
 
 print('tests/test_invariants.lua: ok')

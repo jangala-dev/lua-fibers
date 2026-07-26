@@ -14,8 +14,9 @@ package.path = table.concat({
 local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
-local Region = require('fibers.region')
+local Scope = require('fibers.scope')
 local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+require('fibers.diagnostics.io').install(require('tests.support.io_audit_observer'))
 
 local function fail(msg)
   error(msg, 2)
@@ -34,7 +35,7 @@ end
 -- Stale readiness for an earlier registration generation is ignored by the reactor.
 do
   local rt = Runtime.new()
-  local region = Region.new('poller-generation-region')
+  local owner = Scope.new('poller-generation-owner')
   local backend = FakeHandle.new({
     name = 'poller-generation-backend',
     readiness = 'manual',
@@ -49,7 +50,7 @@ do
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_op(backend, {
-      owner = region,
+      scope = owner,
       name = 'poller-generation-stream',
       read = true,
       write = false,

@@ -40,7 +40,7 @@ do
   local lease, len, info
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
-    lease = fibers.perform(flow:outlet():lease_some_op(3, 'owner-a'))
+    lease = fibers.perform(flow:outlet():lease_some_op(3, 'holder-a'))
     len = lease:length()
     info = lease:inspect()
   end).runtime_status
@@ -52,17 +52,17 @@ do
 end
 
 -- The current Flow storage algebra intentionally permits only one active lease per
--- Flow.  A second owner cannot acquire a lease until the first is acked,
+-- Flow.  A second holder cannot acquire a lease until the first is acked,
 -- returned, failed, or settled.
 do
   local flow = require('fibers.resource.flow').new({ name = 'single-active-lease-flow', capacity = 10 })
   local first, second, second_err, after_ack
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
-    first = fibers.perform(flow:outlet():lease_some_op(3, 'owner-a'))
-    second, second_err = fibers.perform(flow:outlet():lease_some_op(3, 'owner-b'))
+    first = fibers.perform(flow:outlet():lease_some_op(3, 'holder-a'))
+    second, second_err = fibers.perform(flow:outlet():lease_some_op(3, 'holder-b'))
     fibers.perform(first:ack_op(3))
-    after_ack = fibers.perform(flow:outlet():lease_some_op(3, 'owner-b'))
+    after_ack = fibers.perform(flow:outlet():lease_some_op(3, 'holder-b'))
   end).runtime_status
   assert_status(st, 'found')
   assert_truthy(first, 'first lease should commit')

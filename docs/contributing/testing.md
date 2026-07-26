@@ -19,6 +19,18 @@ The environment variable `FIBERS_TEST_PROFILE` accepts `default`, `matrix`, or
 raised with `FIBERS_STRESS_SOCKET_CYCLES` and
 `FIBERS_STRESS_DATAGRAM_CYCLES`.
 
+Lifetime assurance is organised around the three public laws rather than former
+implementation mechanisms:
+
+- custody tests cover unique parentage, atomic movement and ordered children;
+- Grant tests cover rights, direction, revocation, transfer terms and subject
+  liveness;
+- Closure tests cover propagation, parent-first requests, child-first finishing,
+  retained failure progress and single-use recovery authority.
+
+Internal close tokens and host holds have focused implementation tests, but are
+not part of the public Lifetime contract.
+
 ## TexLua and Luau
 
 `make test-texlua` runs the stock matrix profile under the Lua 5.3-derived

@@ -5,7 +5,7 @@
 
 local Runtime = require('fibers.runtime')
 local HostError = require('fibers.host.error')
-local Adoption = require('fibers.region.adoption')
+local HostHold = require('fibers.internal.lifetime.host_hold')
 local IO = require('fibers.host.io')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
@@ -16,20 +16,6 @@ local next_pipe = 0
 
 local function close_pipe_handle(handle, reason)
   return IO.close_value('pipe', handle, reason)
-end
-
-local function release_slot(rt, start, which)
-  local active_key = which .. '_slot_active'
-  if not start[active_key] then
-    return true
-  end
-  local slot = start[which .. '_slot']
-  local ok, err = IO.release_owned(rt, start.region, slot)
-  if not ok then
-    return nil, err
-  end
-  start[active_key] = false
-  return true
 end
 
 local function acquire_handles(rt, opts)
@@ -62,8 +48,8 @@ local function acquire_handles(rt, opts)
   return read_handle, write_handle
 end
 
-local function open_endpoint(rt, owner, handle, mode, opts)
-  return IO.open_handle_stream(rt, owner, handle, {
+local function open_endpoint(rt, scope, handle, mode, opts)
+  return IO.open_handle_stream(rt, scope, handle, {
     name = opts.name .. ':' .. mode,
     read = mode == 'read',
     write = mode == 'write',
@@ -87,16 +73,13 @@ local function fail_start(rt, start, err)
       IO.masked_perform(rt, start.write_stream:abort_op(err))
     end)
   end
-  start.read_slot:close(err)
-  start.write_slot:close(err)
-  release_slot(rt, start, 'read')
-  release_slot(rt, start, 'write')
+  start.host_hold:close(err)
   return nil, nil, err
 end
 
 local function finish_endpoint(rt, start, which, handle, opts)
   local ok, stream = Protected.pcall(function()
-    return open_endpoint(rt, start.owner, handle, which, opts)
+    return open_endpoint(rt, start.scope, handle, which, opts)
   end)
   if not ok then
     return nil,
@@ -107,20 +90,12 @@ local function finish_endpoint(rt, start, which, handle, opts)
   end
   start[which .. '_stream'] = stream
 
-  local transferred, transfer_err = start[which .. '_slot']:release(handle)
+  local transferred, transfer_err = start.host_hold:release(which, handle)
   if not transferred then
     return nil,
       HostError.normalise(transfer_err, {
         domain = 'pipe',
-        action = 'transfer_' .. which .. '_adoption',
-      })
-  end
-  local released, release_err = release_slot(rt, start, which)
-  if not released then
-    return nil,
-      HostError.normalise(release_err, {
-        domain = 'pipe',
-        action = 'release_' .. which .. '_adoption',
+        action = 'transfer_' .. which .. '_host_hold',
       })
   end
   return stream
@@ -132,10 +107,12 @@ local function start_pipe(rt, start, opts)
     return fail_start(rt, start, err)
   end
 
-  local adopted, adopt_err =
-    Adoption.adopt_pair(start.read_slot, start.write_slot, read_handle, write_handle, close_pipe_handle)
-  if not adopted then
-    return fail_start(rt, start, adopt_err)
+  local held, hold_err = start.host_hold:hold_many({
+    { key = 'read', value = read_handle, close = close_pipe_handle },
+    { key = 'write', value = write_handle, close = close_pipe_handle },
+  })
+  if not held then
+    return fail_start(rt, start, hold_err)
   end
 
   local read_stream, read_err = finish_endpoint(rt, start, 'read', read_handle, opts)
@@ -153,44 +130,30 @@ function File.pipe_op(opts)
   opts = opts or {}
   next_pipe = next_pipe + 1
   local name = opts.name or ('pipe-' .. tostring(next_pipe))
-  local owner = IO.current_owner(opts, 'file.pipe_op')
-  local region = IO.region_of(owner)
-  if not region then
-    error('file.pipe_op owner must be a Scope or Region', 2)
-  end
-
+  local scope = IO.current_scope(opts, 'file.pipe_op')
   local start = {
-    owner = owner,
-    region = region,
-    read_slot = Adoption.slot(name .. ':read-adoption'),
-    write_slot = Adoption.slot(name .. ':write-adoption'),
+    scope = scope,
+    host_hold = HostHold.new(name .. ':host-hold'),
     read_stream = nil,
     write_stream = nil,
-    read_slot_active = true,
-    write_slot_active = true,
   }
 
-  return owner
-    :admit_op(start.read_slot:owned({ role = 'pipe_read_adoption' }))
-    :and_then(function()
-      return owner:admit_op(start.write_slot:owned({ role = 'pipe_write_adoption' }))
-    end)
-    :wrap(function()
-      local rt = Runtime.current()
-      if not rt then
-        error('file.pipe_op committed without a current runtime', 2)
-      end
-      return start_pipe(rt, start, {
-        host = opts.host,
-        name = name,
-        capacity = opts.capacity,
-        read_capacity = opts.read_capacity,
-        write_capacity = opts.write_capacity,
-        chunk_size = opts.chunk_size,
-        read_chunk_size = opts.read_chunk_size,
-        write_chunk_size = opts.write_chunk_size,
-      })
-    end)
+  return scope:admit_op(start.host_hold):wrap(function()
+    local rt = Runtime.current()
+    if not rt then
+      error('file.pipe_op committed without a current runtime', 2)
+    end
+    return start_pipe(rt, start, {
+      host = opts.host,
+      name = name,
+      capacity = opts.capacity,
+      read_capacity = opts.read_capacity,
+      write_capacity = opts.write_capacity,
+      chunk_size = opts.chunk_size,
+      read_chunk_size = opts.read_chunk_size,
+      write_chunk_size = opts.write_chunk_size,
+    })
+  end)
 end
 
 File.Error = HostError

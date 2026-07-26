@@ -23,7 +23,6 @@ end
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRendezvous = require('fibers.resource.rendezvous')
-local FibersRegion = require('fibers.region')
 local FibersTask = require('fibers.task')
 local Protected = require('fibers.internal.protected')
 
@@ -118,9 +117,8 @@ end)
 
 test('task bodies may perform while protected for result reporting', function()
   local value
-  local st = fibers.try_run(function()
-    local region = FibersRegion.new('protected-region')
-    local task = fibers.perform(FibersTask.spawn_op(region, function()
+  local st = fibers.try_run(function(scope)
+    local task = fibers.perform(scope:spawn_op(function()
       return fibers.perform(FibersOp.always('task-ok'))
     end, 'protected-task'))
     value = fibers.perform(task:await_op())

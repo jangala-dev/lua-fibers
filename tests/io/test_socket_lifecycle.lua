@@ -93,13 +93,13 @@ do
   end)
 end
 
--- Dial claim is a single state transition and certified failure remains absent
--- while an unclaimed connection exists.
+-- Dial take is a single state transition and certified failure remains absent
+-- while an untaken connection exists.
 do
   fibers.run(function()
     local lifecycle = DialLifecycle.new('dial-law', { kind = 'inet', port = 443 })
     local connection = { name = 'connection' }
-    local source = { name = 'source-region' }
+    local source = { name = 'source-scope' }
 
     assert_eq(lifecycle:state_value().kind, 'starting')
     local published, connected = fibers.perform(lifecycle:publish_connected_op(connection, source))
@@ -109,17 +109,17 @@ do
     local absence = fibers.perform(lifecycle:failure_op():or_else(Op.always('no failure')))
     assert_eq(absence, 'no failure')
 
-    local claimed_connection, claimed_source = fibers.perform(lifecycle:claim_op())
-    assert_eq(claimed_connection, connection)
-    assert_eq(claimed_source, source)
-    assert_eq(lifecycle:state_value().kind, 'claimed')
+    local taken_connection, taken_source = fibers.perform(lifecycle:take_op())
+    assert_eq(taken_connection, connection)
+    assert_eq(taken_source, source)
+    assert_eq(lifecycle:state_value().kind, 'taken')
 
-    local second = fibers.perform(lifecycle:claim_op():or_else(Op.always('already claimed')))
-    assert_eq(second, 'already claimed')
+    local second = fibers.perform(lifecycle:take_op():or_else(Op.always('already taken')))
+    assert_eq(second, 'already taken')
     local err = fibers.perform(lifecycle:failure_op())
     assert_truthy(HostError.is(err, 'closed'))
-    assert_eq(err.reason, 'connection already claimed')
-    assert_eq(fibers.perform(lifecycle:terminal_op()).kind, 'claimed')
+    assert_eq(err.reason, 'connection already taken')
+    assert_eq(fibers.perform(lifecycle:terminal_op()).kind, 'taken')
   end)
 end
 
@@ -133,7 +133,7 @@ do
     local second = fibers.perform(closing:request_close_op('second close'))
     assert_eq(second, false)
     assert_eq(select(2, fibers.perform(closing:closed_op('driver stopped'))).kind, 'closed')
-    local connection, err = fibers.perform(closing:claim_op():or_else(closing:failure_op():map(function(e)
+    local connection, err = fibers.perform(closing:take_op():or_else(closing:failure_op():map(function(e)
       return nil, e
     end)))
     assert_eq(connection, nil)

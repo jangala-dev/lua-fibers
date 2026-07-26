@@ -12,14 +12,14 @@ package.path = table.concat({
 -- optional thumbnail failure, and still returns the healthy search index.
 
 local fibers = require('fibers')
-local policy = require('fibers.policy')
+local closure = require('fibers.closure')
 
 local workspace_report
 
 local outer = fibers.try_run(function()
   return fibers.try_scope({
     name = 'workspace-services',
-    policy = policy.supervisor({ child_failure = 'collect' }),
+    closure = closure.supervisor({ child_failure = 'collect' }),
   }, function()
     fibers.spawn(function()
       error('thumbnail decoder rejected an optional preview', 0)

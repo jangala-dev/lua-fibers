@@ -48,7 +48,7 @@ do
   assert_eq(socket.inet_address('2001:db8::1', 443).kind, 'inet6')
 end
 
--- Manual resolution publishes an immutable, deduplicated numeric list.
+-- Manual resolution publishes a captured, deduplicated numeric list.
 do
   local host = SimulatedHost.new({
     resolver_records = {

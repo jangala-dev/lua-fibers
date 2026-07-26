@@ -19,7 +19,7 @@ local Handle = require('fibers.host.handle')
 local HostError = require('fibers.host.error')
 local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
-local Adoption = require('fibers.region.adoption')
+local HostHold = require('fibers.internal.lifetime.host_hold')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -98,15 +98,15 @@ do
   assert_eq(completion:state_value().kind, 'succeeded')
 end
 
--- An admitted adoption slot closes an acquired value during scope settlement.
+-- An admitted internal host hold closes an unreleased host value during Lifetime Closure.
 do
   local closed = 0
   fibers.run(function(scope)
-    local slot = Adoption.slot('settled-adoption')
-    fibers.perform(scope:admit_op(slot:owned()))
+    local host_hold = HostHold.new('settled-host-hold')
+    fibers.perform(scope:admit_op(host_hold))
     local value = { name = 'external' }
     assert_eq(
-      slot:adopt(value, function(v, reason)
+      host_hold:hold('value', value, function(v, reason)
         assert_eq(v, value)
         assert_truthy(reason ~= nil)
         closed = closed + 1
@@ -118,19 +118,18 @@ do
   assert_eq(closed, 1)
 end
 
--- Releasing an adoption slot after permanent ownership prevents backup closure.
+-- Releasing a held value after permanent custody transfer prevents backup closure.
 do
   local closed = 0
   fibers.run(function(scope)
-    local slot = Adoption.slot('released-adoption')
-    fibers.perform(scope:admit_op(slot:owned()))
+    local host_hold = HostHold.new('released-host-hold')
+    fibers.perform(scope:admit_op(host_hold))
     local value = {}
-    slot:adopt(value, function()
+    host_hold:hold('value', value, function()
       closed = closed + 1
       return true
     end)
-    assert_eq(slot:release(value), value)
-    fibers.perform(scope:raw_region():release_op(slot))
+    assert_eq(host_hold:release('value', value), value)
   end)
   assert_eq(closed, 0)
 end

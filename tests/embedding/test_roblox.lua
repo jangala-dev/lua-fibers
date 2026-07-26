@@ -333,7 +333,7 @@ do
   end)
 
   assert_eq(selected, 'player pressed Skip')
-  assert_eq(signal:connection_count(), 0, 'scope settlement should disconnect the signal')
+  assert_eq(signal:connection_count(), 0, 'Scope Closure should disconnect the signal')
   host:close()
   scheduler:run_until_idle()
 end
@@ -527,7 +527,7 @@ do
   scheduler:run_until_idle()
 end
 
--- A failed Disconnect leaves the subscription retryable for settlement recovery.
+-- A failed Disconnect leaves the subscription retryable for Closure recovery.
 do
   local scheduler = FakeTask.new()
   local host = new_host(scheduler)
@@ -594,7 +594,7 @@ do
   scheduler:run_until_idle()
 end
 
--- BindToClose publishes cancellation and waits for bounded attached settlement.
+-- BindToClose publishes cancellation and waits for bounded attached Closure.
 do
   local scheduler = FakeTask.new()
   local host = new_host(scheduler)

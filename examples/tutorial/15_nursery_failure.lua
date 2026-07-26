@@ -8,7 +8,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Nursery policy is fail-fast. If the authoritative flood controller fails,
+-- Nursery Closure is fail-fast. If the authoritative flood controller fails,
 -- the blocked public-warning sibling and the incident body are cancelled and
 -- joined before the boundary returns.
 
@@ -44,7 +44,7 @@ local warning_state
 fibers.run(function()
   warning_state = fibers.perform(warning_task:state_op())
 end)
-assert(warning_state.exited)
-assert(warning_state.exit.tag == 'cancelled')
+assert(warning_state.body_exited)
+assert(warning_state.body_result.tag == 'cancelled')
 
-print('incident:', result.reason, 'warning feed:', warning_state.exit.tag)
+print('incident:', result.reason, 'warning feed:', warning_state.body_result.tag)

@@ -14,7 +14,10 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersSignal = require('fibers.resource.signal')
-local FibersPolicy = require('fibers.policy')
+local FibersClosure = require('fibers.closure')
+local Op = require('fibers.op')
+local Lifetime = require('fibers.lifetime')
+local Closure = FibersClosure
 
 local function fail(msg)
   error(msg, 2)
@@ -42,7 +45,7 @@ do
     child = fibers.spawn(function()
       return 'ok'
     end)
-    local exit = fibers.perform(child:exit_op())
+    local exit = fibers.perform(child:body_result_op())
     assert_eq(exit.tag, 'returned')
   end).runtime_status
   assert_truthy(
@@ -52,39 +55,39 @@ do
   assert_truthy(child, 'fibers.spawn should return a task handle under the root scope')
 end
 
--- A custom nursery policy is now passed to run/try_run; it is not a separate
+-- A custom nursery Closure is passed to run/try_run; it is not a separate
 -- launch path.
 do
   local got, child
   local r = fibers.try_run(function(scope)
-    local ch = FibersRendezvous.new('policy-rendezvous')
+    local ch = FibersRendezvous.new('closure-rendezvous')
     child = fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
     end, 'sender')
     got = fibers.perform(ch:get_op())
-    assert_truthy(scope:raw_region(), 'root scope should expose its Region to compound authors')
-  end, { policy = FibersPolicy.nursery() })
+    assert_truthy(scope:lifetime(), 'root Scope should expose its Lifetime to compound authors')
+  end, { closure = FibersClosure.nursery() })
   assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(got, 'hello')
   assert_truthy(child, 'nursery spawn should return a task handle')
 end
 
--- Direct cancellation is task-level. Scope policy uses the same task/resource
--- protocols internally during settlement.
+-- Direct cancellation is task-level. Scope Closure uses the same task/resource
+-- protocols internally during closure.
 do
   local task
   local r = fibers.try_run(function()
-    local src = FibersSignal.new('policy-cancel-source')
+    local src = FibersSignal.new('closure-cancel-source')
     task = fibers.spawn(function()
       fibers.perform(src:wait_op())
     end, 'waiter')
     fibers.perform(task:request_cancel_op('stop'))
-    local exit = fibers.perform(task:exit_op())
+    local exit = fibers.perform(task:body_result_op())
     assert_truthy(
       exit.tag == 'cancelled' or exit.tag == 'failed',
       'explicit cancellation should end the task'
     )
-  end, { policy = FibersPolicy.nursery() })
+  end, { closure = FibersClosure.nursery() })
   assert_truthy(r.ok, tostring(r.report or r.reason))
 end
 
@@ -92,12 +95,12 @@ end
 do
   local child
   local r = fibers.try_run(function()
-    local src = FibersSignal.new('policy-body-failure-source')
+    local src = FibersSignal.new('closure-body-failure-source')
     child = fibers.spawn(function()
       fibers.perform(src:wait_op())
     end, 'owned-waiter')
     error('body failed')
-  end, { policy = FibersPolicy.nursery() })
+  end, { closure = FibersClosure.nursery() })
   assert_eq(r.ok, false)
   assert_eq(r.reason, 'body_error')
   assert_truthy(tostring(r.primary):match('body failed'))
@@ -108,31 +111,73 @@ do
   end).runtime_status
   assert_status(st, 'found', 'status after inspecting cancelled child')
   assert_truthy(
-    state.exit.tag == 'cancelled' or state.exit.tag == 'failed',
+    state.body_result.tag == 'cancelled' or state.body_result.tag == 'failed',
     'child should be cancelled or report scope failure under body failure'
   )
 end
 
--- A custom policy owns the boundary algorithm and may delegate to the shared
--- mechanism driver explicitly.
+-- A custom Closure supplies pure propagation decisions while the Lifetime
+-- driver retains local shutdown and result accounting.
 do
   local entered = false
-  local policy = {
+  local closure = {
     name = 'custom-boundary',
     permit_unstructured = false,
     permit_outward_move = true,
     permit_admission = true,
-    try_run = function(self, scope, fn, driver)
-      entered = true
-      return driver.run(scope, fn, self)
+    on_body_result = function(_self, parent, _state, ok)
+      entered = parent ~= nil and ok == true
+      return { seal = true }
     end,
   }
   local r = fibers.try_run(function()
     return 'custom-ok'
-  end, { policy = policy })
+  end, { closure = FibersClosure.running(closure) })
   assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(r:unpack(), 'custom-ok')
-  assert_truthy(entered, 'custom policy try_run should own the boundary')
+  assert_truthy(entered, 'custom Closure should receive the Lifetime body result')
 end
 
-print('tests/test_policy.lua: ok')
+-- Closure contracts are captured when a Lifetime is defined. Mutating the
+-- original public protocol afterwards does not change the admitted Lifetime.
+do
+  local log = {}
+  local protocol = Closure.protocol({
+    name = 'captured-protocol',
+    finish_op = function()
+      log[#log + 1] = 'captured'
+      return Op.always(true)
+    end,
+  })
+  local value = { name = 'captured-closure-resource' }
+  Lifetime.define(value, { closure = protocol })
+  protocol.finish_op = function()
+    log[#log + 1] = 'mutated'
+    return Op.always(true)
+  end
+  fibers.run(function(scope)
+    fibers.perform(scope:admit_op(value))
+  end)
+  assert_eq(log[1], 'captured')
+  assert_eq(log[2], nil)
+end
+
+-- Closure constructors reject malformed contracts at the public boundary.
+do
+  assert(not pcall(Closure.protocol, {
+    name = 7,
+    finish_op = function()
+      return Op.always(true)
+    end,
+  }))
+  assert(not pcall(Closure.protocol, { finish_op = true }))
+  assert(not pcall(Closure.request_then_wait, function()
+    return Op.always(true)
+  end, function()
+    return Op.always(true)
+  end, 'not-options'))
+  assert(not pcall(Closure.running, { on_body_result = true }))
+  assert(not pcall(Closure.nursery, 'not-options'))
+end
+
+print('tests/test_closure.lua: ok')

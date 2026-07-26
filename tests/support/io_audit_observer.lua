@@ -2,7 +2,7 @@
 --
 -- The audit is deliberately observational: production semantics do not depend
 -- on it.  Records use weak keys so inspection cannot keep host handles or
--- reactor entries alive.  Facilities report ownership and registration changes
+-- reactor entries alive.  Facilities report custody and registration changes
 -- here, allowing contract tests and embedders to detect leaked handles, stale
 -- registrations, duplicate transfers, and failed closure.
 
@@ -72,7 +72,8 @@ local function ensure(value, fields)
       value_label = label(value),
       kind = fields and fields.kind or 'external',
       state = 'created',
-      owner = nil,
+      custodian = nil,
+      hold_holder = nil,
       runtime = nil,
       close_attempts = 0,
       registration_count = 0,
@@ -124,64 +125,64 @@ function Audit.bind(value, rt)
   append(rec, 'bound', { runtime = rt })
 end
 
-function Audit.adopt(value, owner, fields)
+function Audit.hold(value, holder, fields)
   local rec = ensure(value, { kind = fields and fields.kind or 'host_handle' })
   if not rec then
     return
   end
   if rec.state == 'closed' then
-    violation(rec, 'adopt_closed', { owner = owner })
-  elseif rec.owner and rec.owner ~= owner and rec.state ~= 'released' then
-    violation(rec, 'double_owner', { previous = rec.owner, current = owner })
+    violation(rec, 'hold_closed', { holder = holder })
+  elseif rec.custodian and rec.custodian ~= holder and rec.state ~= 'released' then
+    violation(rec, 'conflicting_hold', { previous = rec.custodian, current = holder })
   end
-  rec.owner = owner
-  rec.adoption_owner = owner
-  rec.state = 'adopted'
-  append(rec, 'adopted', {
-    owner = owner,
+  rec.custodian = holder
+  rec.hold_holder = holder
+  rec.state = 'held'
+  append(rec, 'held', {
+    holder = holder,
     entry = fields and fields.entry,
   })
 end
 
-function Audit.transfer(value, owner, fields)
+function Audit.transfer(value, custodian, fields)
   local rec = ensure(value, { kind = fields and fields.kind or 'host_handle' })
   if not rec then
     return
   end
   if rec.state == 'closed' then
-    violation(rec, 'transfer_closed', { owner = owner })
+    violation(rec, 'transfer_closed', { custodian = custodian })
   end
-  rec.owner = owner
-  rec.state = 'owned'
+  rec.custodian = custodian
+  rec.state = 'in_custody'
   append(rec, 'transferred', {
-    owner = owner,
+    custodian = custodian,
     role = fields and fields.role,
   })
 end
 
-function Audit.release(value, owner)
+function Audit.release(value, actor)
   local rec = ensure(value)
   if not rec then
     return
   end
-  if rec.adoption_owner == owner then
-    rec.adoption_owner = nil
-    if rec.owner == owner then
-      rec.owner = nil
+  if rec.hold_holder == actor then
+    rec.hold_holder = nil
+    if rec.custodian == actor then
+      rec.custodian = nil
       rec.state = 'released'
     end
-    append(rec, 'released', { owner = owner })
+    append(rec, 'released', { actor = actor })
     return
   end
-  if owner ~= nil and rec.owner ~= nil and rec.owner ~= owner then
-    violation(rec, 'release_wrong_owner', { expected = rec.owner, got = owner })
+  if actor ~= nil and rec.custodian ~= nil and rec.custodian ~= actor then
+    violation(rec, 'release_wrong_custodian', { expected = rec.custodian, got = actor })
     return
   end
-  if rec.owner == owner then
-    rec.owner = nil
+  if rec.custodian == actor then
+    rec.custodian = nil
     rec.state = 'released'
   end
-  append(rec, 'released', { owner = owner })
+  append(rec, 'released', { actor = actor })
 end
 
 function Audit.closing(value, reason)
@@ -205,7 +206,7 @@ function Audit.closed(value, ok, err, reason)
   end
   if ok then
     rec.state = 'closed'
-    rec.owner = nil
+    rec.custodian = nil
     rec.close_error = nil
     append(rec, 'closed', { reason = reason })
   else
@@ -235,7 +236,7 @@ function Audit.retire(entry, err, reason)
   end
   rec.state = err and 'retire_failed' or 'retired'
   rec.retire_error = err
-  rec.owner = nil
+  rec.custodian = nil
   append(rec, err and 'retire_failed' or 'retired', { reason = reason, error = err })
 end
 
@@ -293,7 +294,8 @@ function Audit.snapshot(rt, opts)
       label = rec.value_label,
       kind = rec.kind,
       state = rec.state,
-      owner = rec.owner,
+      custodian = rec.custodian,
+      hold_holder = rec.hold_holder,
       close_attempts = rec.close_attempts,
       registration_count = rec.registration_count,
       service_count = rec.service_count,

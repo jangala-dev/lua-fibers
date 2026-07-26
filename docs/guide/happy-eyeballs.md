@@ -3,7 +3,7 @@
 `socket.connect_name` combines incremental A and AAAA resolution with staggered
 IPv6 and IPv4 connection attempts. Resolution, candidate arrival, attempt
 completion and delay expiry remain independent events. The first successful
-Stream moves into the caller's scope; the private race scope settles every
+Stream moves into the caller's Scope; the private race Scope closes every
 resolver query, losing Dial and losing Stream before the call returns.
 
 ```lua
@@ -25,7 +25,7 @@ The implementation follows the Happy Eyeballs v2 coordination model:
 - connection attempts are staggered rather than started as one burst;
 - an immediate failure permits the next attempt without waiting for the full
   stagger delay;
-- the first selected successful connection cancels and settles the remaining
+- the first selected successful connection cancels and closes the remaining
   race;
 - terminal failure requires both address sources to be closed, no candidate to
   remain, no attempt to be active and no successful connection to await
@@ -60,9 +60,9 @@ The effectful coordinator is deliberately small. Pure ordering and reporting
 policy is kept in `fibers.internal.socket.happy_eyeballs_policy`; the race module
 contains the transitions and the prioritised expression above.
 
-## Owned named Dials
+## Named Dials under custody
 
-`socket.dial_name_op` admits an owned `NamedDial` and starts its private driver
+`socket.dial_name_op` admits a `NamedDial` Lifetime and starts its private driver
 after the option commits:
 
 ```lua
@@ -73,7 +73,7 @@ assert(connection, report)
 
 `dial:connect()` is the direct launch-and-collection convenience. It returns
 only after the winner has moved into the target scope and the private race has
-settled. The lower-level lifecycle remains selectable:
+closed. The lower-level lifecycle remains selectable:
 
 ```lua
 local connection, err = fibers.perform(dial:result_op(target_scope))
@@ -83,13 +83,13 @@ local closed, close_err = fibers.perform(dial:closed_op())
 
 `connected_op` is success-only. `failed_op` observes terminal failure.
 `result_op` combines them through certified fallback. A successful connection
-which has not yet been collected remains owned by the named Dial's driver scope.
+which has not yet been collected remains in the named Dial's private Scope custody.
 Closing the Dial cancels resolution and every outstanding numeric Dial.
 
 There is deliberately no `connect_name_op`. Starting the private driver is a
 committed effect; its later connection result cannot be required by the same
 transaction which admits that driver. The public split is therefore the same as
-other effectful facilities: an option admits the owned handle, then its result
+other effectful facilities: an option admits the handle under custody, then its result
 operations participate in subsequent choices.
 
 ## Resolver integration
@@ -230,7 +230,7 @@ conformance tests rather than as a persistent serialisation format.
 
 ## Scope and custody guarantee
 
-The internal ownership tree is:
+The internal custody tree is:
 
 ```text
 NamedDial
@@ -244,5 +244,5 @@ NamedDial
 The winning numeric Dial first moves its Stream into the private driver scope.
 Collecting the named result then moves that Stream into the caller's target
 scope. Every other resource remains in the private tree and is closed through
-ordinary settlement. This prevents a late successful attempt from leaking a
+ordinary Closure. This prevents a late successful attempt from leaking a
 socket after another attempt has already won.

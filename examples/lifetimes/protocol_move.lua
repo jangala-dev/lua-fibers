@@ -20,7 +20,7 @@ local client, server = Stream.memory_pair({ name = 'negotiated-stream', capacity
 local negotiator = Scope.new('negotiator')
 local responder = Scope.new('responder')
 local protocol = Scalar.new('unknown', 'protocol-state')
-local reply
+local reply, responder_has_custody
 
 local function negotiate_op(stream)
   return stream:reader():read_line_op():and_then(function(line)
@@ -50,14 +50,15 @@ local function negotiate_op(stream)
 end
 
 local st = fibers.try_run(function()
-  fibers.perform(negotiator:raw_region():admit_op(server))
+  fibers.perform(negotiator:admit_op(server))
   fibers.perform(client:writer():write_op('PING\n'))
   fibers.perform(negotiate_op(server))
   reply = fibers.perform(client:reader():read_line_op())
+  responder_has_custody = fibers.perform(responder:has_custody_op(server))
 end).runtime_status
 
 assert(st.tag == 'found')
 assert(protocol.value == 'ping')
 assert(reply == 'PONG')
-assert(server.owner == responder:raw_region())
+assert(responder_has_custody)
 print('examples/lifetimes/protocol_move.lua: ok')

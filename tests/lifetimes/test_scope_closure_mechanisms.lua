@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.region')
+local Lifetimes = require('tests.support.lifetimes')
 local FibersTask = require('fibers.task')
 
 local function assert_eq(a, b, msg)
@@ -22,16 +22,16 @@ local function assert_eq(a, b, msg)
   end
 end
 
--- Region change observation is a managed transactional fact.
+-- Lifetime topology change observation is a managed transactional fact.
 do
   local rt = FibersRuntime.new()
-  local region = FibersRegion.new('changed-region')
+  local scope = Lifetimes.scope(rt, 'changed-scope')
   local first, changed
   rt:spawn_raw(function()
-    first = rt:perform(region:snapshot_op())
-    rt:perform(region:admit_op(FibersRegion.handle('changed-item')))
-    changed = rt:perform(region:changed_op(first.version))
-  end, 'region-change')
+    first = rt:perform(scope:_store():snapshot_op(scope))
+    rt:perform(scope:admit_op(Lifetimes.resource('changed-item')))
+    changed = rt:perform(scope:_store():changed_op(scope, first.version))
+  end, 'lifetime-change')
   repeat
   until rt:run().tag ~= 'found'
   assert_eq(changed, first.version + 1)
@@ -57,7 +57,7 @@ end
 do
   local task
   fibers.run(function(scope)
-    task = FibersTask.new(function() end, 'cancel-fact', scope)
+    task = fibers.perform(scope:spawn_op(function() end, 'cancel-fact'))
     local first, reason = fibers.perform(task:request_cancel_op('first'))
     local second = fibers.perform(task:request_cancel_op('second'))
     local requested
@@ -69,4 +69,4 @@ do
   end)
 end
 
-print('tests/test_scope_policy_mechanisms.lua: ok')
+print('tests/test_scope_closure_mechanisms.lua: ok')

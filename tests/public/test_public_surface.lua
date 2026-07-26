@@ -31,10 +31,11 @@ local FibersSignal = require('fibers.resource.signal')
 local FibersEventQueue = require('fibers.resource.event_queue')
 local FibersClock = require('fibers.resource.clock')
 local FibersReadiness = require('fibers.host.readiness')
-local FibersRegion = require('fibers.region')
+local FibersLifetime = require('fibers.lifetime')
 local FibersEffect = require('fibers.effect')
 local FibersTask = require('fibers.task')
-local FibersPolicy = require('fibers.policy')
+local FibersClosure = require('fibers.closure')
+local FibersGrant = require('fibers.grant')
 local FibersRoblox = require('fibers.roblox')
 local FibersRobloxHost = require('fibers.host.roblox')
 local FibersRobloxSubscription = require('fibers.roblox.subscription')
@@ -92,7 +93,7 @@ end
 -- The root module is deliberately a small application language. Specialised
 -- facilities and advanced interfaces are imported from their named modules.
 do
-  local policy = require('fibers.policy')
+  local closure = require('fibers.closure')
   assert_eq(type(fibers.run), 'function', 'root exports root lifecycle run')
   assert_eq(type(fibers.try_run), 'function', 'root exports checked root lifecycle run')
   assert_eq(type(fibers.perform), 'function', 'root exports perform')
@@ -110,12 +111,16 @@ do
   assert_eq(fibers.Op, nil, 'root does not export the Op module')
   assert_eq(fibers.Runtime, nil, 'root does not export Runtime')
   assert_eq(fibers.Scalar, nil, 'root does not export Scalar')
-  assert_eq(fibers.Region, nil, 'root does not export Region')
   assert_eq(fibers.Stream, nil, 'root does not export Stream')
   assert_eq(fibers.Flow, nil, 'root does not export Flow')
   assert_eq(fibers.host, nil, 'root does not export host adapters')
-  assert_eq(fibers.policy, nil, 'root does not export policy modules')
-  assert_eq(policy, FibersPolicy, 'policy remains available as a named module')
+  assert_eq(fibers.closure, nil, 'root does not export the Closure module')
+  assert_eq(require('fibers.closure'), FibersClosure, 'Closure has a direct named module')
+  assert_eq(require('fibers.grant'), FibersGrant, 'Grant has a direct named module')
+  assert_eq(pcall(require, 'fibers.policy'), false, 'the former Policy module is absent')
+  assert_eq(pcall(require, 'fibers.lifetime.settlement'), false, 'Settlement is not a peer public concept')
+  assert_eq(pcall(require, 'fibers.lifetime.custody'), false, 'Custody has no facade object')
+  assert_eq(pcall(require, 'fibers.lifetime.capture'), false, 'host capture remains private')
   assert_eq(require('fibers.op'), FibersOp, 'Op has a direct named module')
   assert_eq(FibersOp.consequence, nil, 'emit has no long alias')
   assert_eq(require('fibers.resource.scalar'), FibersScalar, 'Scalar has a direct named module')
@@ -168,10 +173,8 @@ do
   assert_eq(type(FibersRoblox.bind_to_close), 'function', 'Roblox integration exposes root shutdown binding')
   assert_eq(require('fibers.resource.rendezvous'), FibersRendezvous, 'Rendezvous is in the resource toolkit')
   assert_eq(require('fibers.resource.signal'), FibersSignal, 'Signal is an external-fed resource')
-  assert_eq(require('fibers.region'), FibersRegion, 'Region owns custody')
+  assert_eq(type(FibersLifetime.define), 'function', 'Lifetime defines continuing custody')
   assert_eq(require('fibers.effect'), FibersEffect, 'Effect describes committed obligations')
-  assert_eq(FibersRegion._ledger, nil, 'Region does not export its shared ledger')
-  assert_eq(FibersRegion._clone_ledger, nil, 'Region does not export ledger cloning')
 end
 
 -- The root lifecycle preserves Lua multiple returns, including nil values.
@@ -316,44 +319,42 @@ do
   assert_eq(discharged, 1)
 end
 
--- Region and Task make post-commit spawn usable directly.  Keeping the
--- completed task handle should not keep the start closure's captures alive.
+-- Structured spawn admits and starts one running Lifetime. Keeping the Task
+-- capability must not retain the body closure after closure.
 do
-  local region = FibersRegion.new('root-region')
   local value, task
   local marker = { retained = false }
   local weak = setmetatable({ marker = marker }, { __mode = 'v' })
-  local st = fibers.try_run(function()
+  local st = fibers.try_run(function(scope)
     local captured = marker
     marker = nil
-    task = fibers.perform(FibersTask.spawn_op(region, function()
+    task = fibers.perform(scope:spawn_op(function()
       return captured and 7 or 0
     end, 'child'))
     value = fibers.perform(task:await_op())
   end).runtime_status
   assert_status(st, 'found')
-  assert_truthy(task, 'spawn should return a task handle')
+  assert_truthy(FibersTask.is(task), 'spawn should return a Task capability')
   assert_eq(value, 7)
   for _ = 1, 4 do
     collectgarbage('collect')
   end
-  assert_eq(weak.marker, nil, 'completed task handle should not retain start closure captures')
+  assert_eq(weak.marker, nil, 'closed Task should not retain body captures')
 end
 
 -- The public resource-toolkit pieces compose in one ordinary programme.
 do
   local inbox = FibersRendezvous.new('atom-kit-inbox')
   local flag = FibersScalar.new(false, 'atom-kit-flag')
-  local region = FibersRegion.new('atom-kit-region')
   local received, joined
 
-  local st = fibers.try_run(function()
+  local st = fibers.try_run(function(scope)
     fibers.spawn(function()
       fibers.perform(inbox:put_op('hello'))
       fibers.perform(flag:write_op(true))
     end, 'sender')
 
-    local task = fibers.perform(FibersTask.spawn_op(region, function()
+    local task = fibers.perform(scope:spawn_op(function()
       local value = fibers.perform(wait_until(flag, function(v)
         return v == true
       end))
@@ -367,8 +368,7 @@ do
       end)
     ))
 
-    local value = fibers.perform(task:await_op())
-    joined = { value = value }
+    joined = { value = fibers.perform(task:await_op()) }
   end).runtime_status
 
   assert_status(st, 'found')
@@ -376,15 +376,14 @@ do
   assert_eq(joined.value, 42)
 end
 
--- Task await unwraps Exit and preserves Lua multiple-return values.
+-- Body results and complete outcomes preserve Lua multiple returns.
 do
-  local region = FibersRegion.new('multi-return-region')
   local a, b, c, exit
-  local st = fibers.try_run(function()
-    local task = fibers.perform(FibersTask.spawn_op(region, function()
+  local st = fibers.try_run(function(scope)
+    local task = fibers.perform(scope:spawn_op(function()
       return 'x', nil, 'z'
     end, 'multi-return-task'))
-    exit = fibers.perform(task:exit_op())
+    exit = fibers.perform(task:body_result_op())
     a, b, c = fibers.perform(task:await_op())
   end).runtime_status
   assert_status(st, 'found')
@@ -392,6 +391,20 @@ do
   assert_eq(a, 'x')
   assert_eq(b, nil)
   assert_eq(c, 'z')
+end
+
+do
+  local Scope = require('fibers.scope')
+  local scope = Scope.new('public-lifetime-surface')
+  assert(scope.custody == nil, 'Custody is a law, not a facade object')
+  assert(type(scope.offer_op) == 'function')
+  assert(type(scope.accept_op) == 'function')
+  assert(type(scope.grant_op) == 'function')
+  assert(type(scope.can_op) == 'function')
+  assert(type(scope.custody_op) == 'function')
+  assert(type(scope.subtree_op) == 'function')
+  assert(scope.borrow_op == nil and scope.authorise_op == nil)
+  assert(scope.claim_op == nil, 'close tokens remain private')
 end
 
 print('tests/public/test_public_surface.lua: ok')

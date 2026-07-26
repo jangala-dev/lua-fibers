@@ -7,7 +7,7 @@ file is a small standalone programme which can be run from the repository root.
 
 `tutorial/` is intended to be read and run in numeric order. The sequence begins
 with ordinary direct methods. `_op` forms appear only when composition gives
-them a purpose, and the more specialised proof and ownership facilities arrive
+them a purpose, and the more specialised proof and custody facilities arrive
 after the direct model is established.
 
 The first two scenarios are deliberately generic. The sequence then ranges
@@ -19,7 +19,7 @@ not a domain-specific framework.
 
 | Example | Scenario and idea |
 |---|---|
-| `00_getting_started.lua` | a generic worker receives a command inside an owned child fibre |
+| `00_getting_started.lua` | a generic worker receives a command inside a child Lifetime |
 | `01_direct_methods_and_options.lua` | direct status updates and their inert `_op` twins |
 | `02_choice_and_timeout.lua` | emergency sensor confirmation or a precautionary deadline |
 | `03_named_composition.lua` | robot localisation choice and jointly ready motion systems |
@@ -46,16 +46,16 @@ not a domain-specific framework.
 |---|---|
 | `15_nursery_failure.lua` | a failed flood controller cancels public warnings and the incident body |
 | `16_supervisor_collect.lua` | an optional desktop thumbnailer fails while search remains healthy |
-| `17_memory_stream.lua` | an embedded plugin reports to its native host through an owned stream |
+| `17_memory_stream.lua` | an embedded plugin reports to its native host through a Stream held in custody |
 | `18_custody_move.lua` | hand camera control from a cinematic to gameplay |
 
 ### I/O, hosts and larger patterns
 
 | Example | Scenario and idea |
 |---|---|
-| `19_pipe.lua` | owned pipe I/O |
-| `20_socket.lua` | owned stream sockets |
-| `21_resolver.lua` | owned name resolution and dialling |
+| `19_pipe.lua` | pipe I/O under custody |
+| `20_socket.lua` | Stream sockets under custody |
+| `21_resolver.lua` | name resolution and dialling under custody |
 | `22_datagram.lua` | datagram sockets |
 | `23_process.lua` | child processes and communication |
 | `24_external_signal_feed.lua` | a hardware sensor delivered from the host runtime |
@@ -88,7 +88,7 @@ and the advanced documentation.
 [`gameplay/`](gameplay/) develops complete mechanics rather than introducing one
 API member at a time:
 
-- a skippable cutscene whose camera, dialogue and animation settle cleanly;
+- a skippable cutscene whose camera, dialogue and animation close cleanly;
 - a player-session lifetime;
 - atomic match admission;
 - an AI intention ladder based on `or_else`;
@@ -111,9 +111,9 @@ boundaries.
 - an explicit event-attached application lifecycle;
 - event-driven and RunService-phase scheduling above the same boundary;
 - a GUI action raced against a deadline;
-- a skippable cutscene owned by one scope;
+- a skippable cutscene under one Scope;
 - a player-session lifetime;
-- root cancellation and settlement through `BindToClose`;
+- root cancellation and Closure through `BindToClose`;
 - controlled demonstrations of queued, latest and coalesced signal modes.
 
 These `.luau` examples require Roblox Studio and are therefore not included in
@@ -133,7 +133,7 @@ host handles.
 
 ## Lifetimes
 
-`lifetimes/` covers effects, negotiated custody and custom settlement.
+`lifetimes/` covers effects, negotiated custody and custom Closure.
 
 ## Case studies
 

@@ -1132,7 +1132,7 @@ dfs = function(state)
           end
           -- Non-supplying serial transducers have an explicit deterministic
           -- order and can be resolved as one location journal. This avoids
-          -- factorially re-enumerating Region and scope-monitor updates.
+          -- factorially re-enumerating Lifetime and policy updates.
           local branch = clone_state(state)
           if forced and profile_plan then
             profile_plan.forced_claim_opportunities = profile_plan.forced_claim_opportunities + 1

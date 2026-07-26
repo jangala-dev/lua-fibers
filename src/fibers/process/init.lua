@@ -1,10 +1,11 @@
 -- Structured child-process facility.
 --
--- Command is an immutable specification. launch_op selects and admits a fresh
+-- Command is a captured, reusable specification. launch_op selects and admits a fresh
 -- Process at synchronisation time; its committed driver performs the irreversible
 -- host launch afterwards. start is the direct launch-plus-handshake convenience.
--- Process observations remain ordinary options, and close settles the complete
--- owned resource tree.
+-- Process is one running Lifetime under custody above an interchangeable host-process
+-- provider. Task, Scope and Process are capability views over that Lifetime;
+-- observations remain ordinary options and Closure resolves its private custody.
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
@@ -12,16 +13,18 @@ local Scalar = require('fibers.resource.scalar')
 local CommandModule = require('fibers.process.command')
 local HostError = require('fibers.host.error')
 local FlowErrors = require('fibers.resource.flow.errors')
-local Adoption = require('fibers.region.adoption')
+local HostHold = require('fibers.internal.lifetime.host_hold')
 local Completion = require('fibers.resource.completion')
 local IO = require('fibers.host.io')
+local HostProcess = require('fibers.host.process')
 local IOAudit = require('fibers.diagnostics.io')
-local Region = require('fibers.region')
-local Owned = require('fibers.region').Owned
-local Settlement = require('fibers.region.settlement')
+local Lifetime = require('fibers.lifetime')
+local Task = require('fibers.task')
+local Scope = require('fibers.scope')
+local Closure = require('fibers.closure')
 local Protected = require('fibers.internal.protected')
 local Sleep = require('fibers.sleep')
-local Exit = require('fibers.task').Exit
+local Exit = Task.Exit
 local perform = require('fibers.perform')
 
 local Lifecycle = {}
@@ -109,22 +112,19 @@ local function close_process_endpoint(value, reason)
   return IO.close_value('process_pipe', value, reason)
 end
 
-local function process_settlement(proc)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return proc:request_close_op(reason or 'scope settlement')
+local function process_closure(proc)
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return proc:request_close_op(reason or 'scope closure')
   end, function()
     return proc:closed_op()
   end, {
     name = 'process',
-    settle_result = Settlement.require_ok('process settlement failed'),
+    finish_result = Closure.require_ok('process closure failed'),
   })
 end
 
-function Process:owned(children)
-  return Owned.tree(self, self._fibers_settle, children or {}, {
-    role = 'process',
-    settle_name = 'process',
-  })
+function Process:lifetime()
+  return self._lifetime
 end
 
 function Process:pid()
@@ -172,7 +172,9 @@ function Process:request_close_op(reason)
 end
 
 function Process:closed_op()
-  return self.closed_completion:result_op()
+  return IO.closed_after_driver_op(self._task, self.closed_completion:result_op(), {
+    require_returned = true,
+  })
 end
 
 local function process_not_running(proc, action)
@@ -308,8 +310,8 @@ function Process:communicate(opts)
     or nil
 
   local complete_op = Op.named_all({
-    stdout = stdout_task and stdout_task:exit_op() or Op.always(nil),
-    stderr = stderr_task and stderr_task:exit_op() or Op.always(nil),
+    stdout = stdout_task and stdout_task:body_result_op() or Op.always(nil),
+    stderr = stderr_task and stderr_task:body_result_op() or Op.always(nil),
     status = self:result_op(),
   }):map(function(parts)
     return { kind = 'complete', parts = parts }
@@ -320,7 +322,7 @@ function Process:communicate(opts)
     if not task then
       return
     end
-    failure_options[#failure_options + 1] = task:exit_op():and_then(function(exit)
+    failure_options[#failure_options + 1] = task:body_result_op():and_then(function(exit)
       local _, task_err = Exit.unwrap(exit)
       if task_err ~= nil then
         return Op.always({ kind = 'output_failure', stream = name, error = task_err })
@@ -385,6 +387,7 @@ function Process:inspect_op()
       stdout = parts.stdout,
       stderr = parts.stderr,
       status = self._status,
+      lifetime = self._lifetime,
     }
   end)
 end
@@ -426,9 +429,9 @@ local function endpoint_opts(spec, which)
   return configured, nil, nil
 end
 
-local function open_parent_stream(rt, owner, handle, which, opts)
+local function open_parent_stream(rt, scope, handle, which, opts)
   local read = which == 'stdout' or which == 'stderr'
-  return IO.open_handle_stream(rt, owner, handle, {
+  return IO.open_handle_stream(rt, scope, handle, {
     name = opts.name .. ':' .. which,
     read = read,
     write = not read,
@@ -456,8 +459,8 @@ local function publish_launch_failure(rt, proc, err)
     if proc.stderr_pipe_stream and proc.stderr_pipe_stream ~= proc.stdout_pipe_stream then
       proc.stderr_pipe_stream:abort(err)
     end
-    if proc.adoption then
-      proc.adoption:close(err)
+    if proc.host_hold then
+      proc.host_hold:close(err)
     end
     if proc.host_process then
       proc.host_process:close(err)
@@ -535,26 +538,26 @@ end
 
 local function finish_close(proc, reason)
   local errors = {}
-  local function capture(label, fn)
+  local function record_close_error(label, fn)
     local ok, a, b = Protected.pcall(fn)
     if not ok or not a then
       errors[#errors + 1] = { stage = label, error = ok and b or a }
     end
   end
-  capture('stdin', function()
+  record_close_error('stdin', function()
     return close_stream(proc.stdin_pipe_stream or proc.stdin_stream, reason, true)
   end)
-  capture('stdout', function()
+  record_close_error('stdout', function()
     return close_stream(proc.stdout_pipe_stream or proc.stdout_stream, reason, true)
   end)
   local stderr_to_close = proc.stderr_pipe_stream or proc.stderr_stream
   local stdout_to_close = proc.stdout_pipe_stream or proc.stdout_stream
   if stderr_to_close and stderr_to_close ~= stdout_to_close then
-    capture('stderr', function()
+    record_close_error('stderr', function()
       return close_stream(stderr_to_close, reason, true)
     end)
   end
-  capture('host_process', function()
+  record_close_error('host_process', function()
     return proc.host_process and proc.host_process:close(reason) or true
   end)
   if #errors > 0 then
@@ -569,7 +572,7 @@ end
 
 local function supervise(proc, driver_scope, opts)
   local rt = Runtime.current()
-  local bundle = proc.adoption
+  local host_hold = proc.host_hold
   local spec = copy_spec(proc.command._spec)
   local stdin_mode, stdin_source, stdin_redirect = endpoint_opts(spec, 'stdin')
   local stdout_mode, stdout_destination, stdout_redirect = endpoint_opts(spec, 'stdout')
@@ -580,13 +583,7 @@ local function supervise(proc, driver_scope, opts)
 
   publish_state(rt, proc, { kind = 'launching' })
   local host = opts.host or rt.host
-  if not host or type(host.start_process) ~= 'function' then
-    local err = HostError.unsupported('host', 'process', { host = host and host.name or nil })
-    publish_launch_failure(rt, proc, err)
-    return
-  end
-
-  local host_process, endpoints, start_err = host:start_process(spec)
+  local host_process, endpoints, start_err = HostProcess.start(host, spec)
   if not host_process then
     publish_launch_failure(
       rt,
@@ -609,9 +606,9 @@ local function supervise(proc, driver_scope, opts)
       entries[#entries + 1] = { name = which, value = endpoints[which], close = close_process_endpoint }
     end
   end
-  local adopted, adopt_err = bundle:adopt_many(entries)
-  if not adopted then
-    publish_launch_failure(rt, proc, adopt_err)
+  local held, hold_err = host_hold:hold_many(entries)
+  if not held then
+    publish_launch_failure(rt, proc, hold_err)
     return
   end
 
@@ -623,7 +620,7 @@ local function supervise(proc, driver_scope, opts)
   proc.host_process = host_process
   proc._pid = type(host_process.pid) == 'function' and host_process:pid() or host_process.pid
   IOAudit.transfer(host_process, proc, { kind = 'process_handle', role = 'process' })
-  bundle:release('process', host_process)
+  host_hold:release('process', host_process)
 
   for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
     local handle = endpoints[which]
@@ -653,7 +650,7 @@ local function supervise(proc, driver_scope, opts)
         return
       end
       proc[which .. '_pipe_stream'] = stream_or_err
-      bundle:release(which, handle)
+      host_hold:release(which, handle)
     end
   end
 
@@ -823,19 +820,20 @@ function Command:launch_op(opts)
     error("group shutdown requires process_group = 'new', a numeric group, or new_session", 2)
   end
 
-  -- Ownership is part of the surrounding fibre context and is captured when the
+  -- Custody comes from the surrounding fibre context and is resolved when the
   -- option is constructed. The Process itself is fresh per guard activation.
-  local owner = IO.current_owner(opts, 'Command:launch_op')
-  local driver_parent = IO.scope_for_owner(owner, 'Command:launch_op')
+  local scope = IO.current_scope(opts, 'Command:launch_op')
+  local parent_scope = IO.require_scope(scope, 'Command:launch_op')
 
-  -- A launch option constructs a fresh Process for each synchronisation attempt.
-  -- The guard is speculative and pure: no host action occurs until admission and
-  -- the supervisor spawn effect have committed.
+  -- A launch option constructs a fresh Process Lifetime for each synchronisation
+  -- attempt. The guard is speculative and pure: no host action occurs until the
+  -- Process root and its private custody have committed and its Task view starts.
   return Op.guard(function()
     next_process = next_process + 1
     local name = opts.name or ('process-' .. tostring(next_process))
-    local proc = Region.handle(name, {
+    local proc = setmetatable({
       kind = 'process',
+      name = name,
       command = command,
       lifecycle = Lifecycle.new(name),
       launch_completion = Completion.new(name .. ':launch'),
@@ -843,8 +841,7 @@ function Command:launch_op(opts)
       reap_completion = Completion.new(name .. ':reap'),
       closed_completion = Completion.new(name .. ':closed'),
       _communicating = false,
-      adoption = Adoption.bundle(name .. ':adoption'),
-      driver = nil,
+      host_hold = HostHold.new(name .. ':host-hold'),
       host_process = nil,
       stdin_stream = nil,
       stdout_stream = nil,
@@ -852,19 +849,24 @@ function Command:launch_op(opts)
       _pid = nil,
       _status = nil,
       _close_error = nil,
+    }, Process)
+    Lifetime.define(proc, {
+      name = name,
+      role = 'process',
+      closure = process_closure(proc),
+      children = { proc.host_hold },
     })
-    setmetatable(proc, Process)
-    proc._fibers_settle = process_settlement(proc)
-    proc._fibers_settle_name = 'process'
+    local private_scope = Scope.for_lifetime(proc._lifetime)
+    proc._task = Task._new(function()
+      return private_scope:run(function(driver_scope)
+        return driver_body(proc, driver_scope, opts)
+      end)
+    end, name, parent_scope, { lifetime = proc._lifetime, closure = parent_scope.closure })
 
-    proc.driver = IO.new_driver_task(driver_parent, name .. ':supervisor', function(driver_scope)
-      return driver_body(proc, driver_scope, opts)
-    end)
-
-    return owner
-      :admit_op(proc:owned({ proc.adoption:owned({ role = 'process_adoption' }), proc.driver:owned() }))
+    return scope
+      :admit_op(proc)
       :and_then(function()
-        return proc.driver:spawn_effect_op()
+        return proc._task:spawn_effect_op()
       end, false)
       :map(function()
         return proc

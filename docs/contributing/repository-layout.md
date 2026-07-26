@@ -1,6 +1,6 @@
 # Repository layout
 
-The source tree is organised by semantic ownership. A public concept has one
+The source tree is organised by semantic responsibility. A public concept has one
 canonical import path; the root `fibers` module is a lifecycle and contextual
 prelude rather than a catalogue of the package tree.
 
@@ -10,8 +10,11 @@ src/fibers/
                            run, spawn, perform, now and nested scopes
   op.lua                   inert option algebra
   runtime.lua              embedded runtime, host driving and serial commit
-  scope/                   structured lifetime boundary and policy
-  task.lua                 public Task value
+  lifetime.lua             Lifetime construction and node capabilities
+  grant.lua                non-custodial authority Lifetimes
+  closure.lua              public Closure contract and propagation
+  scope/                   custody/admission view and boundary Closure
+  task.lua                 execution/control view of a Lifetime
 
   channel.lua              common application communication
   mailbox.lua              split messaging endpoints
@@ -32,14 +35,16 @@ src/fibers/
     authoring.lua          trusted facility compilation materials
 
   effect.lua               committed obligation kinds and effects
-  region/
-    init.lua               custody, ownership handles and claims
-    settlement.lua         custody settlement protocol
-    adoption.lua           host-acquisition adoption protocol
+  lifetime/
+    store.lua              Runtime-local custody forest
+
+  internal/lifetime/
+    closure.lua            ordered Closure engine, retry and force
+    host_hold.lua          private post-commit handle coverage
   diagnostics/             optional I/O audit and proof-search observation
 
   file/                    evented files, pipes and provider implementations
-  process/                 Command and owned Process facility
+  process/                 Command and Process Lifetime facility
   socket/                  addresses, Listener, Dial, UDP and shared protocols
   host/                    host contracts, reactor and native bindings
 
@@ -50,7 +55,7 @@ src/fibers/
 examples/tutorial/         ordinary application use
 examples/recipes/          tested facilities built from supported modules
 examples/embedding/        host and runtime integration
-examples/lifetimes/        advanced custody and settlement examples
+examples/lifetimes/        advanced custody and Closure examples
 examples/case_studies/     trusted kernel programmes, not installed APIs
 
 docs/notes/                design notes and work-in-progress prototypes
@@ -91,15 +96,15 @@ There is no `fibers.resource` façade and no duplicate top-level façade for
 Flow, Queue or Scalar. Top-level placement denotes common application
 vocabulary; `resource/` denotes lower-level transactional construction.
 
-## Ownership rule
+## Module placement rule
 
 A source file should answer one of these questions clearly:
 
 - Which public concept does it define?
-- Which subsystem owns this shared protocol?
+- Which subsystem defines this shared protocol?
 - Which correctness boundary of the kernel does it protect?
 
-A small implementation used by one owner is merged into that owner. A separate
+A small implementation used by one module is merged into that module. A separate
 private module is retained only when it is substantial, shared within the
 subsystem or independently testable as a correctness boundary. Global
 `fibers.internal` is reserved for the closed kernel and the cross-version
@@ -148,5 +153,5 @@ both `.lua` and `.luau` forms of the same module.
 
 This is a filesystem rule only; logical names such as `fibers.scope` and
 `fibers.scope.result` are unchanged. `scripts/check-modules.lua` checks duplicate logical modules, ambiguous module
-paths and unresolved static Fibers imports. Package ownership remains a design
+paths and unresolved static Fibers imports. Package boundaries remain a design
 and review concern rather than a frozen test invariant.

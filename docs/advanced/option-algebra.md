@@ -21,13 +21,22 @@ A successful world may contain:
 participant results
 synchronous exchange matches
 versioned-location deltas
-ownership changes
+custody changes
 observations and negative guards
 commit and defeat effects
 participant-local wraps
 ```
 
 Search is speculative. Losing worlds install no state and discharge no effects.
+
+Options are opaque library values, not a hostile-code immutability boundary.
+Application and facility code should construct and combine them through the
+public API rather than altering their table representation. The runtime protects
+its managed stores and validates supported operations, but deliberately does not
+attempt to prevent trusted Lua code from using raw or debug access.
+
+Named map forms use string keys so that ordering is portable and deterministic.
+Use ordered `{ name, option }` entries when a non-string label is required.
 
 ## 2. Canonical option language
 
@@ -145,13 +154,13 @@ facility-specific state calculations
 
 They must be deterministic for their explicit inputs, non-yielding, free of irreversible I/O and external mutation, and independent of undeclared transactional facts.
 
-`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. The callback receives a deliberately narrow ephemeral activation view. It exposes only one stable monotonic activation instant and the performing Scope's Region:
+`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. The callback receives a deliberately narrow ephemeral activation view. It exposes only one stable monotonic activation instant and the performing Scope:
 
 ```lua
 Op.guard(function(activation)
   local started_at = activation:now()
-  local region = activation:region()
-  return explicit_residual_op(started_at, region)
+  local scope = activation:scope()
+  return explicit_residual_op(started_at, scope)
 end)
 ```
 
@@ -334,7 +343,7 @@ relative or contextual surface operation
 explicit resources + absolute values + core operations
 ```
 
-For example, `clock:after_op(0.25)` elaborates once to `clock:at_op(concrete_deadline)`, and an omitted transfer target may elaborate to the Region of the Scope performing that occurrence. The residual itself does not retain or consult the activation view.
+For example, `clock:after_op(0.25)` elaborates once to `clock:at_op(concrete_deadline)`, and an omitted transfer target may elaborate to the Scope performing that occurrence. The residual itself does not retain or consult the activation view.
 
 Guard evaluation is demand-driven. An unopened `or_else` fallback or an unentered choice branch need not evaluate its guards.
 
@@ -367,7 +376,7 @@ prepared_record
 nil, structured_refusal
 ```
 
-A prepared record must contain a `discharge` function. Preparation may depend only on the payload, immutable runtime configuration and managed facts already represented in the candidate. In particular, refusal must not depend on unversioned volatile host state: such a refusal may reject the preferred side of `or_else`, so it must remain valid under the candidate's validation facts.
+A prepared record must contain a `discharge` function. Preparation may depend only on the payload, captured runtime configuration and managed facts already represented in the candidate. In particular, refusal must not depend on unversioned volatile host state: such a refusal may reject the preferred side of `or_else`, so it must remain valid under the candidate's validation facts.
 
 All effects are merged and prepared before resource state is installed. Once the candidate commits, each prepared `discharge` runs once in stable first-occurrence order. Discharge may perform the irreversible host action represented by the effect, but it may not call `perform`; failure is fatal and post-commit.
 
@@ -479,7 +488,7 @@ S -> ReadySame(result)
 S -> ReadyWrite(S', result)
 ```
 
-Flow, Region, RateLimiter and several coordination facilities use this form.
+Flow, the Lifetime store, RateLimiter and several coordination facilities use this form.
 
 ### Witnessed transitions
 
@@ -497,7 +506,7 @@ Rendezvous compiles to a one-use exchange intent. Matching remains provisional u
 
 ## 15. External observations
 
-Signal, EventQueue and Readiness use host-owned versioned locations updated through runtime-bound `ExternalFeed` capabilities. Clock options read host time and carry deadline checks.
+Signal, EventQueue and Readiness use host-maintained versioned locations updated through runtime-bound `ExternalFeed` capabilities. Clock options read host time and carry deadline checks.
 
 An exhausted external option may contribute:
 
@@ -517,7 +526,7 @@ fallback proof before that fallback may commit.
 
 ## 16. Effects
 
-Effects are typed committed-world obligations. Built-in uses include spawn, interrupt, scope lifecycle notification and host wake.
+Effects are typed committed-world obligations. Built-in uses include committed spawn and interrupt.
 
 Identity is the ordered pair:
 
@@ -540,33 +549,38 @@ prepared effects discharge once after state installation
 
 Effect kinds do not carry a global priority or numeric order. A facility which requires an inseparable discharge sequence should represent it as one compound effect. Effects are in-process obligations, not a durable outbox.
 
-## 17. Ownership and settlement
+## 17. Lifetimes: custody, Grants and Closure
 
-Region options make custody part of the committed world:
+Lifetime operations make continuing responsibility part of the committed world:
 
 ```text
-admit
-move
-release
-seal
-claim
-restore while pristine, or settle through the settlement driver
+admit a dormant Lifetime
+move custody
+create or close a Grant
+request or finish Closure
+seal a Scope against new children
 ```
 
 Principal laws:
 
 ```text
-a live owned root has at most one owner
-movement leaves one owner and enters the other in one commit
-a claim freezes its complete ordered subtree and grants exclusive settlement authority
-normal requests run parent-first and settlement completion runs child-first
-successful settlement progress is retained across later failure and retry
-started settlement claims cannot be generically restored or incompletely discharged
-failed settlement remains represented in the ledger
-scope completion requires policy accounting for retained roots
+every live Lifetime has exactly one custodial parent
+movement changes the parent of a complete subtree in one commit
+Grants add non-custodial authority without changing custody
+only the current custodian may issue a Grant
+Closure requests run parent-first and finishing runs child-first
+successful Closure progress is retained across later failure and retry
+failed Closure remains represented in the Lifetime store
 ```
 
-Settlement protocols run after a claim commits and may themselves perform options. They expose separate `request_op`, `settle_op` and optional `force_op` phases; they are not ordinary function finalisers.
+Closure protocols run only after the close operation commits and may themselves
+perform options. They expose `request_op`, `finish_op` and optional `force_op`
+phases. The engine's exclusive close token is private; callbacks receive only a
+bounded Closure context.
+
+Custody, Grant and Closure operations are ordinary `Op` values. The Lifetime
+model therefore uses this algebra rather than defining a second set of choice or
+sequencing operators.
 
 ## 18. Host boundary
 
@@ -635,7 +649,7 @@ nested product and continuation locality
 proof-directed fallback and stale validation
 all/tensor supply laws
 external interests
-ownership and settlement
+custody and Closure
 Flow and stream losing-branch safety
 ```
 

@@ -17,17 +17,17 @@ custody may be pending without becoming ownerless
 Implementation sentence:
 
 ```text
-an escrow is a Region-owned pending transfer record with terms, timeout and resolution
+an escrow is a Lifetime-held pending transfer with terms, timeout and resolution
 ```
 
 Possible use:
 
 ```text
-protocol upgrade, session adoption, resource migration, deferred acceptance
+protocol upgrade, session acceptance, resource migration, deferred acceptance
 ```
 
 Escrow differs from direct movement.  Movement transfers custody now.  Escrow
-holds custody under terms until adoption, rejection, timeout or failure resolves
+holds custody under terms until acceptance, rejection, timeout or failure resolves
 it.
 
 ## Membrane
@@ -41,7 +41,7 @@ authority may cross a boundary only in declared forms
 Implementation sentence:
 
 ```text
-a membrane is a table of authority translations at a scope boundary, built from authorise_op, borrow_op and move_op
+a membrane is a table of authority translations at a scope boundary, built from Grants, `can_op` and `move_op`
 ```
 
 Possible use:
@@ -51,7 +51,7 @@ subsystem APIs, safe plugin boundaries, protocol views, read-only world access
 ```
 
 A membrane should not be a separate access-control side-channel.  It should be a
-facility over authority and borrowing.
+facility over Grants and custody.
 
 ## Covenant
 
@@ -64,13 +64,13 @@ named obligations commit together or not at all
 Implementation sentence:
 
 ```text
-a covenant is a named tensor of terms, each contributing journals, movement, borrowing or effects
+a covenant is a named tensor of terms, each contributing journals, movement, Grants or effects
 ```
 
 Possible use:
 
 ```text
-multi-party session adoption, resource exchange, phase transition agreements
+multi-party session acceptance, resource exchange, phase transition agreements
 ```
 
 Covenant is design language until large `tensor` expressions need a more legible
@@ -87,7 +87,7 @@ flows may transform while preserving linked fate
 Implementation sentence:
 
 ```text
-a braid is a family of flows with related leases, lineage and settlement rules
+a braid is a family of flows with related leases, lineage and Closure rules
 ```
 
 Possible use:
@@ -104,13 +104,13 @@ several flows and transformations.
 Law:
 
 ```text
-failed settlement remains owned truth
+failed Closure remains custody truth
 ```
 
 Implementation sentence:
 
 ```text
-a tomb is a region or scope that owns unresolved settlement records and their retry, quarantine or force-release policy
+a tomb is a Lifetime that retains unresolved Closure records and their retry, quarantine or force-release strategy
 ```
 
 Possible use:
@@ -150,13 +150,13 @@ may later stop holding.
 Law:
 
 ```text
-observation may itself be maintained, valid and owned
+observation may itself be maintained, valid and under custody
 ```
 
 Implementation sentence:
 
 ```text
-a mirror is an owned derived view fed by committed events and guarded by validity
+a mirror is a derived view held in custody, fed by committed events and guarded by validity
 ```
 
 Possible use:
@@ -165,7 +165,7 @@ Possible use:
 scope inspection, stream diagnostics, phase debugging, live resource maps
 ```
 
-Events are not the source of truth.  A mirror should be an owned maintained view
+Events are not the source of truth.  A mirror should be a maintained view under custody
 of the underlying ledger.
 
 ## Phase
@@ -179,7 +179,7 @@ time advances only when its obligations have been accounted for
 Implementation sentence:
 
 ```text
-a phase is a named scope interval with declared custody movement, authority borrowing, fact propagation and settlement at the boundary
+a phase is a named scope interval with declared custody movement, authority Grants, fact propagation and Closure at the boundary
 ```
 
 Possible use:

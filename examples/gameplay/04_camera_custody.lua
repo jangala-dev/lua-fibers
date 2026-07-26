@@ -24,10 +24,10 @@ local director_end, gameplay_end = Stream.memory_pair({
 local cinematic = Scope.new('opening-cinematic')
 local gameplay = Scope.new('player-gameplay')
 local camera_mode = Scalar.new('cinematic', 'camera-mode')
-local acknowledgement
+local acknowledgement, gameplay_has_custody
 
 local result = fibers.try_run(function()
-  fibers.perform(cinematic:raw_region():admit_op(gameplay_end))
+  fibers.perform(cinematic:admit_op(gameplay_end))
   fibers.perform(director_end:writer():write_op('RELEASE_CAMERA\n'))
 
   fibers.perform(gameplay_end:reader():read_line_op():and_then(function(message)
@@ -46,10 +46,11 @@ local result = fibers.try_run(function()
   end))
 
   acknowledgement = fibers.perform(director_end:reader():read_line_op())
+  gameplay_has_custody = fibers.perform(gameplay:has_custody_op(gameplay_end))
 end)
 
 assert(result.ok)
 assert(camera_mode.value == 'player')
 assert(acknowledgement == 'CAMERA_READY')
-assert(gameplay_end.owner == gameplay:raw_region())
-print('camera:', camera_mode.value, 'owner:', gameplay_end.owner.name)
+assert(gameplay_has_custody)
+print('camera:', camera_mode.value, 'custodian:', gameplay.name)

@@ -37,7 +37,7 @@ local function assert_truthy(value, message)
 end
 
 -- A live pipe exposes both host handles and both reactor registrations. Scope
--- settlement retires and closes the complete tree, returning the runtime to a
+-- Closure retires and closes the complete tree, returning the runtime to a
 -- clean audit state.
 do
   IOAudit.reset_for_test()
@@ -48,15 +48,15 @@ do
     writer:flush()
     assert_eq(reader:read(1), 'x')
     during = fibers.current_runtime():io_audit_snapshot()
-    assert_truthy((during.counts.owned or 0) >= 2, 'pipe handles should be owned by Streams')
+    assert_truthy((during.counts.in_custody or 0) >= 2, 'pipe handles should be in Stream custody')
     assert_eq((during.counts.registered or 0), 2, 'directional pipe Streams should have two registrations')
   end, { host = SimulatedHost.new({ pipes = true }) })
   assert_truthy(result.ok, result:tostring())
-  assert_eq(#result.runtime:io_audit_snapshot().items, 0, 'settlement should leave no live I/O records')
+  assert_eq(#result.runtime:io_audit_snapshot().items, 0, 'Closure should leave no live I/O records')
   assert_truthy(result.runtime:assert_io_quiescent('audited pipe'))
 end
 
--- Listener, accepted connection and Dial handles all become owned records and
+-- Listener, accepted connection and Dial handles all enter custody and
 -- leave no live registrations after normal closure.
 do
   IOAudit.reset_for_test()
@@ -78,7 +78,7 @@ do
     listener:closed()
   end, { host = SimulatedHost.new({ sockets = true }) })
   assert_truthy(result.ok, result:tostring())
-  assert_eq(#result.runtime:io_audit_snapshot().items, 0, 'socket tree should settle completely')
+  assert_eq(#result.runtime:io_audit_snapshot().items, 0, 'socket tree should close completely')
   result.runtime:assert_io_quiescent('audited sockets')
 end
 

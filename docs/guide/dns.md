@@ -2,7 +2,7 @@
 
 `fibers.dns` is a recursive-server stub resolver built entirely from Fibers
 facilities. Network activity uses scoped datagram sockets, stream dials, timers
-and ordinary owned tasks. No `getaddrinfo` call is made by this implementation.
+and ordinary Task Lifetimes. No `getaddrinfo` call is made by this implementation.
 
 ```lua
 local socket = require('fibers.socket')
@@ -24,8 +24,8 @@ assert(addresses, err)
 ```
 
 The existing combined `socket.Query` lifecycle remains compatible. Closing a
-query cancels its driver; scope settlement closes any UDP socket, TCP connection
-or resolver task still owned by that query. Each address family is also
+query cancels its driver; Scope Closure closes any UDP socket, TCP connection
+or resolver task still under that query's custody. Each address family is also
 observable independently:
 
 ```lua

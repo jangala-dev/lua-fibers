@@ -162,7 +162,7 @@ Approximate correspondences are:
 | choice `+` | `choice`, but with different bias |
 | sequencing `>>` | `and_then` |
 | pairing `*` | product |
-| `postCommit` | consequence or wrap, depending on ownership |
+| `postCommit` | consequence or wrap, depending on custody |
 | blocking partial update | a primitive whose complete absence contributes `Retry` |
 
 Reagent choice is deliberately left-biased in order to support algorithms such as elimination backoff. `Op.choice` is instead unordered. A correctness-relevant preference is stated using `or_else`; a throughput preference which does not require refutation should remain runtime policy rather than changing the denotation of the option.
@@ -192,7 +192,7 @@ Reagents are designed for authors of scalable concurrent data structures. The au
 
 ### Expressivity
 
-Reagents are stronger in the intended domain of parallel, lock-free implementation and persistent reusable catalysts. `fibers` is stronger in its direct vocabulary for proof-bearing fallback, explicit bounded-search incompleteness, ownership movements and the distinction between independent and interacting conjunction.
+Reagents are stronger in the intended domain of parallel, lock-free implementation and persistent reusable catalysts. `fibers` is stronger in its direct vocabulary for proof-bearing fallback, explicit bounded-search incompleteness, custody movements and the distinction between independent and interacting conjunction.
 
 A formal relationship between Reagent pairing and `Op.all`/`Op.tensor` remains open work.
 
@@ -257,7 +257,7 @@ Compatible sibling supply may participate in the same committed world.
 - synchronous exchange;
 - state transitions and allocation;
 - alternative witnesses;
-- ownership and lifetime changes;
+- custody and Lifetime changes;
 - readiness and timer observations;
 - selected post-commit obligations.
 

@@ -15,12 +15,12 @@ local Inspect = require('tests.support.flow_inspect')
 local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
-local FibersRegion = require('fibers.region')
+local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 local FibersHost = require('fibers.host')
 local Host = FibersHost
 local Runtime = FibersRuntime
-local Region = FibersRegion
+local Scope = FibersScope
 local Stream = FibersStream
 local Handle = require('fibers.host.handle')
 
@@ -66,7 +66,7 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('prebind-ready-region')
+  local owner = Scope.new('prebind-ready-owner')
   local written, flushed = '', false
   local handle = Handle.new({
     host = host,
@@ -83,7 +83,7 @@ do
   handle:mark_writable()
   rt:spawn_raw(function()
     local stream = rt:perform(
-      Stream.open_op(handle, { owner = region, name = 'prebind-ready-stream', read = false, write = true })
+      Stream.open_op(handle, { scope = owner, name = 'prebind-ready-stream', read = false, write = true })
     )
     rt:perform(stream:writer():write_op('ready'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -98,13 +98,13 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('handle-read-region')
+  local owner = Scope.new('handle-read-owner')
   local handle = FakeHandle.new({ host = host, key = 'fake-read-handle' })
   local stream, got
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(handle, { owner = region, name = 'handle-read-stream', read = true, write = false })
+      Stream.open_op(handle, { scope = owner, name = 'handle-read-stream', read = true, write = false })
     )
     got = rt:perform(stream:reader():read_exactly_op(4))
   end, 'handle-reader')
@@ -124,13 +124,13 @@ end
 do
   local host = Host.manual({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local region = Region.new('handle-write-region')
+  local owner = Scope.new('handle-write-owner')
   local handle = FakeHandle.new({ host = host, key = 'fake-write-handle', write_blocked = true })
   local stream, flushed
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(handle, { owner = region, name = 'handle-write-stream', read = false, write = true })
+      Stream.open_op(handle, { scope = owner, name = 'handle-write-stream', read = false, write = true })
     )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())

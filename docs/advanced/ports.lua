@@ -4,7 +4,7 @@
 This note records the intended architecture for ports of the Fibers semantics.
 It is a design direction rather than part of the Lua version 1 API contract.
 The normative portable material is the option algebra, proof outcomes, commit
-protocol, callback phases and Region laws.
+protocol, callback phases and Lifetime laws.
 
 ## Shared semantic centre
 
@@ -19,7 +19,7 @@ proof search
         |
 serial validation and commit
         |
-Region custody, scopes, tasks and settlement
+Lifetime custody, Scope and Task views, and Closure
 ```
 
 Host integration supplies clocks, wake-up, I/O completion and external facts. It
@@ -42,22 +42,22 @@ The generated Luau target is the first language-port experiment and should
 remain source-compatible with the Lua semantic centre. Roblox adds an embedded
 host profile rather than a different concurrency model. The source tree now
 contains the first experimental slice: a bounded manual application driver,
-event- and phase-scheduling policies, queued signal delivery, owned
-subscriptions and bounded `BindToClose` settlement.
+event- and phase-scheduling policies, queued signal delivery, Lifetimes for
+subscriptions and bounded `BindToClose` Closure.
 
 ```text
 Roblox task scheduler or Actor VM
 └── one Fibers runtime
     ├── proof and commit engine
     ├── lightweight internal Luau fibres
-    ├── Regions, scopes and settlement
+    ├── Lifetime forest, capability views and Closure
     └── RBXScriptSignal and engine-resource adapters
 ```
 
 Roblox owns the scheduler and frame lifecycle. The canonical boundary is a
 non-blocking `Application:advance` call supplied with an absolute host time
 horizon and bounded proof quantum. Fibers owns transactional admission, child
-lifetimes, cancellation and settlement inside that turn. Reaching the host
+lifetimes, cancellation and Closure inside that turn. Reaching the host
 horizon retains exact progress and is not Retry.
 
 Ordinary engine callbacks publish queued external facts and request a later turn;
@@ -73,10 +73,10 @@ Application:advance     implemented: bounded manual host horizon
 Event scheduling        implemented: coalesced defer plus earliest deadline
 RunService phases       implemented: selected bounded phase turns
 RBXScriptSignal         implemented: queued, latest or pulse subscription
-BindToClose             implemented: root shutdown and bounded settlement
+BindToClose             implemented: root shutdown and bounded Closure
 Players/characters      next: player-session and character helpers
-RemoteEvent             future: owned message streams and request lifetimes
-DataStore/HTTP          future: host completion plus explicit settlement
+RemoteEvent             future: message Streams and request Lifetimes under custody
+DataStore/HTTP          future: host completion plus explicit Closure
 Instance lifetime       future: custody and destruction observation
 ```
 
@@ -95,7 +95,7 @@ or host profile.
 
 ```text
 fibers-model       portable semantic and conformance types
-fibers-core        proof, ledger, commit and Region logic
+fibers-core        proof, commit and Lifetime logic
 fibers-static      no_std/no_alloc bounded storage
 fibers-alloc       no_std + alloc dynamic storage
 fibers-embassy     MCU host adapters and root driver
@@ -128,7 +128,7 @@ After commitment the runtime:
 
 1. obtains bounded or allocated frame storage;
 2. constructs and pins the future in that storage;
-3. records Region ownership and parent scope;
+3. records Lifetime parentage and the Scope capability;
 4. places the fibre identifier on the internal ready queue;
 5. polls it during a later or current runtime turn.
 
@@ -140,13 +140,13 @@ host executor task or root Promise
 └── Fibers runtime Future
     ├── proof and commit engine
     ├── ready-fibre queue
-    ├── Regions and scopes
+    ├── Lifetime forest and Scope views
     └── lightweight internal Future frames
 ```
 
 The host executor remains responsible for waking and polling the root future.
 Fibers is responsible for transactional admission, cancellation, scheduling and
-settlement of its internal fibres.
+Closure of its internal fibres.
 
 ### Waking
 
@@ -174,7 +174,7 @@ Separate limits should cover:
 internal fibre polls per turn
 proof steps per turn
 commits per turn
-settlement work per turn
+Closure work per turn
 ```
 
 A turn limit yields and retains work. A proof or storage capacity limit returns
@@ -223,7 +223,7 @@ Possible storage forms are:
 
 * generated typed pools per async function;
 * fixed-capacity heterogeneous slabs with several size classes;
-* Region-local frame arenas;
+* Lifetime-local frame arenas;
 * caller-supplied static arenas.
 
 The profile should expose maxima for at least:
@@ -234,7 +234,7 @@ option nodes or typed composition depth
 participants and pending performs
 search frames and trail entries
 ledger locations and writes
-effects and ownership records
+effects and custody records
 retained proof sessions
 ```
 
@@ -251,8 +251,8 @@ or an unsound proof of general absence.
 
 Cancellation is cooperative. It is observed when an internal future yields to
 Fibers or reaches a Fibers transaction boundary. A CPU loop or blocking foreign
-call can still delay the runtime. The Region retains custody until the future
-finishes and settlement completes or fails explicitly.
+call can still delay the runtime. The Lifetime retains custody until the future
+finishes and Closure completes or fails explicitly.
 
 ## Browser WASM profile
 
@@ -266,7 +266,7 @@ JavaScript event loop
     ├── internal Rust fibres
     ├── proof and commit engine
     ├── browser event feeds
-    ├── Regions and settlement
+    ├── Lifetimes and Closure
     └── host resource adapters
 ```
 
@@ -292,8 +292,8 @@ EventTarget             event stream, queue or pulse
 AbortSignal             cancellation feed
 setTimeout              deadline option
 fetch                    request, response and body lifetime
-WebSocket               owned duplex stream
-WebRTC data channel      stateful owned duplex resource
+WebSocket               duplex Stream held in custody
+WebRTC data channel      stateful duplex resource held in custody
 IndexedDB request        external completion and transaction boundary
 Worker message           channel-like external feed
 Transferable object      custody movement between runtimes
@@ -349,14 +349,14 @@ job integration. They should not replace the Fibers evaluator.
 Kotlin CoroutineDispatcher / CoroutineScope
 └── Fibers runtime
     ├── option evaluator and ledger
-    ├── Regions and settlement
+    ├── Lifetimes and Closure
     └── internal Fibers continuations
 ```
 
 `CoroutineScope`, `Job` and `SupervisorJob` map well to ordinary structured
 lifetime policies. Kotlin channels and `select` map to simple waits and races.
 They do not by themselves provide transactional and_then, proof-directed
-or_else, all versus tensor, provisional rollback or custody settlement.
+or_else, all versus tensor, provisional rollback or custody Closure.
 
 A Kotlin port should therefore:
 
@@ -364,7 +364,7 @@ A Kotlin port should therefore:
 * use inert Option values for Fibers composition;
 * host the proof and commit kernel separately from coroutine selection;
 * map committed child admission to a coroutine launch only after commit;
-* retain Region and settlement outcomes as structured values rather than hiding
+* retain Lifetime and Closure outcomes as structured values rather than hiding
   them entirely in CancellationException or finally blocks.
 
 Kotlin is likely to use allocated graphs and continuations. Its principal value
@@ -375,7 +375,7 @@ protocol code, rather than no-allocation operation.
 
 A prudent sequence is:
 
-1. freeze the language-independent option, effect and Region contracts;
+1. freeze the language-independent option, effect and Lifetime contracts;
 2. build a portable conformance corpus from the Lua production and reference
    evaluators;
 3. package the strict Luau target and implement the single-world Roblox host;

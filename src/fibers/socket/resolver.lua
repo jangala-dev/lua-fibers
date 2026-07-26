@@ -1,4 +1,4 @@
--- Owned asynchronous resolver queries.
+-- Asynchronous resolver queries as running Lifetimes.
 --
 -- The host decides how resolution is performed. A simple host may execute a
 -- blocking resolver call in the committed driver fibre and advertises that fact
@@ -12,10 +12,11 @@ local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
 local DNSResolver = require('fibers.dns.resolver')
 local IO = require('fibers.host.io')
-local Region = require('fibers.region')
-local Owned = require('fibers.region').Owned
+local Lifetime = require('fibers.lifetime')
+local Task = require('fibers.task')
+local Scope = require('fibers.scope')
 local Protected = require('fibers.internal.protected')
-local Settlement = require('fibers.region.settlement')
+local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 
 local Module = {}
@@ -23,21 +24,14 @@ local Query = {}
 Query.__index = Query
 local next_query = 0
 
-local function query_settlement(query)
-  return Settlement.request_then_wait(function(_ctx, _record, reason)
-    return query:close_op(reason or 'resolver query settlement')
+local function query_closure(query)
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return query:close_op(reason or 'resolver query closure')
   end, function()
     return query:closed_op()
   end, {
     name = 'resolver_query',
-    settle_result = Settlement.require_ok('resolver query settlement failed'),
-  })
-end
-
-function Query:owned(children)
-  return Owned.tree(self, self._fibers_settle, children or {}, {
-    role = 'resolver_query',
-    settle_name = 'resolver_query',
+    finish_result = Closure.require_ok('resolver query closure failed'),
   })
 end
 
@@ -174,13 +168,13 @@ function Query:close_op(reason)
 end
 
 function Query:closed_op()
-  return Op.named_all({
-    driver = self.driver and self.driver:exit_op() or Op.always(true),
+  local terminal = Op.named_all({
     inet6 = self:family_finished_op('inet6'),
     inet4 = self:family_finished_op('inet4'),
   }):map(function()
     return true
   end)
+  return IO.closed_after_driver_op(self.driver, terminal)
 end
 
 local function normalise_addresses(values, endpoint, allow_empty, expected_family)
@@ -466,6 +460,9 @@ local function drive(query, opts)
     end)
   end)
   if not ok then
+    if Runtime.is_cancelled(addresses) then
+      error(addresses, 0)
+    end
     local failure = IO.protocol_error('resolver', 'resolve', addresses, { endpoint = query.endpoint })
     for i = 1, #FAMILIES do
       local completion = query.family_completions[FAMILIES[i]]
@@ -485,37 +482,42 @@ function Module.resolve_op(endpoint, opts)
   if not Address.is_name(endpoint) then
     error('socket.resolve_op expects a name endpoint', 2)
   end
-  local owner = IO.current_owner(opts, 'socket.resolve_op')
+  local scope = IO.current_scope(opts, 'socket.resolve_op')
   next_query = next_query + 1
   local name = opts.name or ('resolver-query-' .. tostring(next_query))
-  local query = Region.handle(name, {
+  local driver_parent = IO.require_scope(scope, 'socket.resolve_op')
+  local query = setmetatable({
     kind = 'resolver_query',
+    name = name,
     endpoint = endpoint,
     family_completions = {
       inet6 = Completion.new(name .. ':inet6'),
       inet4 = Completion.new(name .. ':inet4'),
     },
     driver = nil,
+  }, Query)
+  Lifetime.define(query, {
+    name = name,
+    role = 'resolver_query',
+    closure = query_closure(query),
   })
-  setmetatable(query, Query)
-  query._fibers_settle = query_settlement(query)
-  query._fibers_settle_name = 'resolver_query'
+  local private_scope = Scope.for_lifetime(query._lifetime)
+  query.driver = Task._new(function()
+    return private_scope:run(function()
+      local ok, err = Protected.pcall(drive, query, opts)
+      if ok then
+        return
+      end
+      if Runtime.is_cancelled(err) then
+        publish_cancelled(Runtime.current(), query, err.reason or 'resolver query cancelled')
+        return
+      end
+      error(err, 0)
+    end)
+  end, name, driver_parent, { lifetime = query._lifetime, closure = driver_parent.closure })
 
-  local driver_parent = IO.scope_for_owner(owner, 'socket.resolve_op')
-  query.driver = IO.new_driver_task(driver_parent, name .. ':driver', function()
-    local ok, err = Protected.pcall(drive, query, opts)
-    if ok then
-      return
-    end
-    if Runtime.is_cancelled(err) then
-      publish_cancelled(Runtime.current(), query, err.reason or 'resolver query cancelled')
-      return
-    end
-    error(err, 0)
-  end)
-
-  return owner
-    :admit_op(query:owned({ query.driver:owned() }))
+  return scope
+    :admit_op(query)
     :and_then(function()
       return query.driver:spawn_effect_op()
     end, false)

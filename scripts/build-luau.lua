@@ -81,12 +81,38 @@ local function module_name(path, root, prefix)
   return name
 end
 
+local function validate_unambiguous_paths(paths, root)
+  local entries = {}
+  for i = 1, #paths do
+    local path = paths[i]
+    local relative = assert(path:match('^' .. root:gsub('([^%w])', '%%%1') .. '/(.+)$'))
+    entries[#entries + 1] = {
+      path = path,
+      stem = relative:gsub('%.lua$', ''),
+    }
+  end
+  for i = 1, #entries do
+    local entry = entries[i]
+    if not entry.stem:match('/init$') then
+      local prefix = entry.stem .. '/'
+      for j = 1, #entries do
+        local child = entries[j]
+        if child.stem:sub(1, #prefix) == prefix then
+          fail('ambiguous module path: ' .. entry.path
+            .. ' coexists with child module ' .. child.path)
+        end
+      end
+    end
+  end
+end
+
 local function collect_modules(roots, auxiliary)
   local modules = {}
   for i = 1, #roots do
     local root = roots[i]
     local prefix = auxiliary and root or nil
     local paths = list_files("find " .. shell_quote(root) .. " -type f -name '*.lua' -print")
+    validate_unambiguous_paths(paths, root)
     for j = 1, #paths do
       local path = paths[j]
       local name = module_name(path, root, prefix)

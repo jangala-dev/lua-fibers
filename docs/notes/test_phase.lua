@@ -13,7 +13,8 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local FibersRegion = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local Runtime = require('fibers.runtime')
 local Phase = dofile('docs/notes/phase.lua')
 
 local function fail(msg)
@@ -31,12 +32,13 @@ do
   local frame = Phase.new('frame'):phase('input'):phase('render')
   frame:edge('input', 'render'):carry('asset'):done()
 
-  local h = FibersRegion.handle('phase-resource', { kind = 'asset' })
-  local render_region, owner_after_input, render_authorised, owner_after_render, undeclared_move
+  local h = { name = 'phase-resource' }; Lifetime.inert(h, { role = 'asset' })
+  local render_lifetime, custodian_after_input, render_authorised, custodian_after_render, undeclared_move
   fibers.run(function()
+    frame.runtime = Runtime.current()
     frame:run('input', function(input)
       local render = frame:scope('render')
-      render_region = render:raw_region()
+      render_lifetime = render:lifetime()
       fibers.perform(input:admit_op(h))
       undeclared_move = fibers.perform(frame
         :move_op(h, 'input', 'physics', 'asset')
@@ -46,51 +48,52 @@ do
         :or_else(Op.always('blocked')))
       fibers.perform(frame:move_op(h, 'input', 'render', 'asset'))
     end)
-    owner_after_input = h.owner
+    custodian_after_input = Lifetime.of(h):current_state().custodian
     frame:run('render', function(render)
-      render_authorised = fibers.perform(render:authorise_op(h, 'use')) == h
+      render_authorised = fibers.perform(render:can_op(h, 'use')) == h
     end)
-    owner_after_render = h.owner
+    custodian_after_render = Lifetime.of(h):current_state().custodian
   end)
   assert_eq(undeclared_move, 'blocked', 'phase movement should require a declared edge and carry label')
-  assert_eq(owner_after_input, render_region, 'later phase should receive custody moved from input')
+  assert_eq(custodian_after_input, render_lifetime, 'later phase should receive custody moved from input')
   assert_eq(render_authorised, true, 'render phase should authorise the carried resource')
-  assert_eq(owner_after_render, nil, 'render phase should settle carried resource on exit')
+  assert_eq(custodian_after_render, nil, 'render phase should close carried resource on exit')
 end
 
--- Declared borrow crossings grant authority without moving custody.
+-- Declared Grant crossings add authority without moving custody.
 do
-  local frame = Phase.new('frame-borrow'):phase('simulate'):phase('extract')
-  frame:edge('simulate', 'extract'):borrow('world_view'):done()
+  local frame = Phase.new('frame-grant'):phase('simulate'):phase('extract')
+  frame:edge('simulate', 'extract'):grant('world_view'):done()
 
-  local world = FibersRegion.handle('phase-world-view', { kind = 'world_view' })
-  local owner_after_borrow, read_authorised, write_authorised, undeclared_borrow
-  fibers.run(function()
+  local world = { name = 'phase-world-view' }; Lifetime.inert(world, { role = 'world_view', rights = { read = true, write = true } })
+  local custodian_after_grant, read_authorised, write_authorised, undeclared_grant
+  fibers.run(function(root)
+    frame.runtime = Runtime.current()
+    fibers.perform(root:admit_op(world))
     frame:run('simulate', function(sim)
-      fibers.perform(sim:admit_op(world))
-      undeclared_borrow = fibers.perform(frame
-        :borrow_op('simulate', world, 'render', { 'read' }, 'world_view')
+      undeclared_grant = fibers.perform(frame
+        :grant_op('simulate', world, 'render', { 'read' }, 'world_view')
         :map(function()
-          return 'borrowed'
+          return 'granted'
         end)
         :or_else(Op.always('blocked')))
-      fibers.perform(frame:borrow_op('simulate', world, 'extract', { 'read' }, 'world_view'))
-      owner_after_borrow = world.owner
+      fibers.perform(frame:grant_op('simulate', world, 'extract', { 'read' }, 'world_view'))
+      custodian_after_grant = Lifetime.of(world):current_state().custodian
     end)
     frame:run('extract', function(extract)
-      read_authorised = fibers.perform(extract:authorise_op(world, 'read')) == world
+      read_authorised = fibers.perform(extract:can_op(world, 'read')) == world
       write_authorised = fibers.perform(extract
-        :authorise_op(world, 'write')
+        :can_op(world, 'write')
         :map(function()
           return true
         end)
         :or_else(Op.always(false)))
     end)
   end)
-  assert_eq(undeclared_borrow, 'blocked', 'phase borrowing should require a declared borrow edge')
-  assert_eq(owner_after_borrow ~= nil, true, 'borrow should not move custody out of source phase')
-  assert_eq(read_authorised, true, 'declared phase borrow should grant requested authority')
-  assert_eq(write_authorised, false, 'declared read borrow should not grant write authority')
+  assert_eq(undeclared_grant, 'blocked', 'phase granting should require a declared Grant edge')
+  assert_eq(custodian_after_grant ~= nil, true, 'Grant should not move custody from the parent Lifetime')
+  assert_eq(read_authorised, true, 'declared phase Grant should provide requested authority')
+  assert_eq(write_authorised, false, 'declared read Grant should not grant write authority')
 end
 
 -- Declared fact crossings copy phase facts without moving custody or authority.
@@ -100,6 +103,7 @@ do
 
   local carried, blocked, seen
   fibers.run(function()
+    frame.runtime = Runtime.current()
     frame:run('input', function(_input, ph)
       fibers.perform(ph:put_fact_op('input', 'commands', { jump = true }))
       blocked = fibers.perform(ph:carry_fact_op('commands', 'input', 'render')
@@ -124,6 +128,7 @@ do
   local frame = Phase.new('frame-fresh'):phase('tick')
   local first, second
   fibers.run(function()
+    frame.runtime = Runtime.current()
     frame:run('tick', function(scope)
       first = scope
     end)
@@ -131,7 +136,7 @@ do
       second = scope
     end)
   end)
-  assert_eq(first ~= second, true, 'phase run should create a fresh interval after settlement')
+  assert_eq(first ~= second, true, 'phase run should create a fresh interval after Closure')
 end
 
 print('docs/notes/test_phase.lua: ok')

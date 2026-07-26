@@ -40,14 +40,15 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Flow = require('fibers.resource.flow')
-local Policy = require('fibers.policy')
+local Closure = require('fibers.closure')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.resource.scalar')
 local EventQueue = require('fibers.resource.event_queue')
 local Clock = require('fibers.resource.clock')
-local Region = require('fibers.region')
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
 local Scope = require('fibers.scope')
 local Effect = require('fibers.effect')
 
@@ -599,31 +600,29 @@ add('effect', 'merge duplicate effects', 700, function(n)
 end)
 
 -- --------------------------------------------------------------------------
--- Region, Task, Scope, and policy cases.
+-- Lifetime, Task, Scope, and Closure cases.
 -- --------------------------------------------------------------------------
 
-add('region', 'admit owns release', 500, function(n)
-  local rt = Runtime.new()
-  local region = Region.new('bench-region')
+add('lifetime', 'admit custody close', 500, function(n)
   local ok_count = 0
-  rt:spawn_raw(function()
+  local result = fibers.try_run(function(scope)
     for i = 1, n do
-      local h = Region.handle('handle-' .. tostring(i))
-      local admitted = rt:perform(region:admit_op(h))
-      local owns = rt:perform(region:owns_op(h))
-      local released = rt:perform(region:release_op(h))
-      if admitted == h and owns == true and released == h then
+      local resource = { name = 'resource-' .. tostring(i) }
+      Lifetime.inert(resource)
+      local admitted = fibers.perform(scope:admit_op(resource))
+      local has_custody = fibers.perform(scope:has_custody_op(resource))
+      local closed = fibers.perform(Closure.close_op(scope, resource, 'benchmark'))
+      if admitted == resource and has_custody == true and closed == Lifetime.of(resource) then
         ok_count = ok_count + 1
       end
     end
-  end, 'bench-region')
-  run_rt(rt)
+  end)
+  assert_truthy(result.ok)
   assert_eq(ok_count, n)
-  assert_eq(region.owned_count, 0)
   return n
 end)
 
-add('task', 'scope spawn await settle', 80, function(n)
+add('task', 'scope spawn await close', 80, function(n)
   local sum = 0
   local r = fibers.try_run(function()
     for i = 1, n do
@@ -638,7 +637,7 @@ add('task', 'scope spawn await settle', 80, function(n)
   return n
 end)
 
-add('policy', 'nursery spawn rendezvous join', 8, function(n)
+add('closure', 'nursery spawn rendezvous join', 8, function(n)
   local sum = 0
   local r = fibers.try_run(function()
     local ch = Rendezvous.new('bench-nursery-rendezvous')
@@ -650,7 +649,7 @@ add('policy', 'nursery spawn rendezvous join', 8, function(n)
     for _ = 1, n do
       sum = sum + fibers.perform(ch:get_op())
     end
-  end, { policy = Policy.nursery({ name = 'bench-nursery' }) })
+  end, { closure = Closure.nursery({ name = 'bench-nursery' }) })
   assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(sum, n * (n + 1) / 2)
   return n
@@ -663,9 +662,9 @@ add('scope', 'custody offer', 30, function(n)
     local r = fibers.try_run(function(root)
       local rt = fibers.current_runtime()
       local request =
-        Scope.new('bench-request-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
+        Scope.new('bench-request-' .. tostring(i), { runtime = rt, parent = root, closure = root.closure })
       local supervisor =
-        Scope.new('bench-supervisor-' .. tostring(i), { runtime = rt, parent = root, policy = root.policy })
+        Scope.new('bench-supervisor-' .. tostring(i), { runtime = rt, parent = root, closure = root.closure })
       local resume = Rendezvous.new('bench-resume-' .. tostring(i))
       local task
       request:run(function(req)
@@ -678,8 +677,8 @@ add('scope', 'custody offer', 30, function(n)
           supervisor:accept_op(),
         }))
         assert_truthy(rows[2][1].item == task, 'offer receiver did not observe task')
-        assert_eq(fibers.perform(req:owns_op(task)), false)
-        assert_eq(fibers.perform(supervisor:owns_op(task)), true)
+        assert_eq(fibers.perform(req:has_custody_op(task)), false)
+        assert_eq(fibers.perform(supervisor:has_custody_op(task)), true)
       end)
       supervisor:run(function()
         fibers.perform(resume:put_op('ok'))
@@ -782,7 +781,7 @@ add('flow', 'lease ack return', 220, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(inlet:write_op('abcdef'))
-      local lease = rt:perform(outlet:lease_some_op(4, 'owner'))
+      local lease = rt:perform(outlet:lease_some_op(4, 'holder'))
       rt:perform(lease:ack_op(1))
       rt:perform(lease:release_op())
       local bytes = rt:perform(outlet:read_some_op(10))

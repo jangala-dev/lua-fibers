@@ -48,7 +48,7 @@ end
 ---Subscribe to every firing of an RBXScriptSignal.
 ---
 ---Each firing is queued, including nil-bearing argument lists. The connection is
----owned by the current Scope and disconnects during settlement. Create
+---under the current Scope's custody and disconnects during closure. Create
 ---subscriptions from committed fibre code, not a speculative callback.
 function Roblox.events(signal, opts)
   opts = copy(opts)
@@ -95,7 +95,7 @@ end
 
 ---Prepare a manually driven Fibers application.
 ---
----This is the canonical Roblox embedding interface. The caller retains ownership
+---This is the canonical Roblox embedding interface. The caller retains control
 ---of the engine loop and invokes `app:advance({ horizon = ... })` at suitable
 ---boundaries. No Roblox task or RunService connection is created.
 function Roblox.prepare(fn, opts)
@@ -131,7 +131,7 @@ function Roblox.try_run(fn, opts)
   local result, reason = app:await(opts.await_timeout)
   if not result then
     app:close()
-    error('Roblox application did not settle: ' .. tostring(reason), 2)
+    error('Roblox application did not close: ' .. tostring(reason), 2)
   end
   app:close()
   return result
@@ -151,11 +151,11 @@ local function parse_bind_args(scope_or_opts, maybe_opts)
   return scope, opts
 end
 
----Cancel a scope when DataModel:BindToClose fires and wait for settlement.
+---Cancel a scope when DataModel:BindToClose fires and wait for closure.
 ---
----Call this from the root fibre. The hidden monitor is an ordinary owned child
+---Call this from the root fibre. The hidden monitor is an ordinary child Lifetime
 ---task. The Roblox callback publishes a host fact; the attached application then
----advances through ordinary bounded turns until settlement or the declared
+---advances through ordinary bounded turns until closure or the declared
 ---shutdown deadline.
 function Roblox.bind_to_close(scope_or_opts, maybe_opts)
   local scope, opts = parse_bind_args(scope_or_opts, maybe_opts)

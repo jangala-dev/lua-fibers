@@ -80,6 +80,10 @@ domain              diagnostic/domain marker
 value               committed value
 version             initial version, normally zero
 owner, key           optional facility metadata
+
+Here `owner` is kernel location metadata used to group a facility's transactional
+locations. It is unrelated to Lifetime custody and grants no authority over a
+Lifetime.
 apply(value, loc)    mirror committed state into the public façade
 clone_value(value)   copy one finite-map entry when applying map deltas
 put_equal            permit equal parallel finite-map puts
@@ -233,7 +237,7 @@ consumer which may be enabled by a sibling producer declares
 `accepts_supply = false`.  Missing declarations are errors for trusted
 programmes; there is no conservative compatibility default.
 
-Flow and Region are substantial examples of this form.
+Flow and the Lifetime store are substantial examples of this form.
 
 ## Witnessed transitions
 
@@ -292,17 +296,17 @@ IR.exchange(resource_identity, 'put', value)
 IR.exchange(resource_identity, 'get')
 ```
 
-The standard public façade is `Rendezvous`. Pairing, participant recruitment, rollback and exhaustive failure remain machine-owned. Do not consume an offer eagerly in facility code.
+The standard public façade is `Rendezvous`. Pairing, participant recruitment, rollback and exhaustive failure remain controlled by the machine. Do not consume an offer eagerly in facility code.
 
 ## Version waits and snapshots
 
-`IR.version_wait(location, version)` waits until a location version differs. Scalar and Region expose public `changed_op` forms.
+`IR.version_wait(location, version)` waits until a location version differs. Scalar and Scope inspection expose versioned change forms.
 
 `IR.snapshot(resource, kind)` invokes the small fixed snapshot handling in the machine. It is currently used by Keyed and Lease. Prefer an ordinary read or witnessed read-only transition for new facilities unless a shared snapshot form is justified.
 
 ## External observations
 
-External facilities use a host-owned location and attach an interest and negative check to a partial machine transition:
+External facilities use a host-maintained location and attach an interest and negative check to a partial machine transition:
 
 ```lua
 IR.machine_transition {
@@ -354,7 +358,7 @@ Also test structure-specific laws such as:
 associativity and commutativity where promised
 idempotence
 conservation
-unique ownership
+unique token association
 linear consumption
 ordered witness preference
 cursor completeness on finite cases
@@ -365,7 +369,7 @@ cursor completeness on finite cases
 Prefer:
 
 ```text
-small immutable programme records
+small stable programme records
 small domain-specific deltas
 persistent or copy-on-write state roots
 lazy indexed witness cursors
@@ -373,4 +377,4 @@ stable location identities
 coarse pure calculations outside hot branch loops
 ```
 
-Do not add facility-owned solver hooks. Optimise recognised IR and delta forms or add a new shared kernel form only after materially different facilities demonstrate the same need.
+Do not add facility-specific solver hooks. Optimise recognised IR and delta forms or add a new shared kernel form only after materially different facilities demonstrate the same need.

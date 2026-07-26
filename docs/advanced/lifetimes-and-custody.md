@@ -1,317 +1,328 @@
-# Lifetimes, custody and settlement
+# Lifetimes: custody, Grants and Closure
 
-`fibers` treats structured lifetime management as transactional custody recorded in a Region ledger. Scope policy decides how a boundary reacts to body completion, child failure, cancellation and unresolved settlement.
-
-Advanced examples in this guide use named modules explicitly:
-
-```lua
-local fibers = require('fibers')
-local Op = require('fibers.op')
-local Region = require('fibers.region')
-local policy = require('fibers.policy')
-```
-
-
-## Ordinary scope use
-
-```lua
-local fibers = require('fibers')
-
-fibers.run(function(scope)
-  local camera_task = scope:spawn(function()
-    return 'opening shot complete'
-  end, 'opening-camera')
-
-  assert(fibers.perform(camera_task:await_op()) == 'opening shot complete')
-end)
-```
-
-A scope callback receives the scope. `fibers.spawn` targets the current scope; `scope:spawn` is the explicit form.
-
-Raising forms:
+Fibers has two fundamental semantic concepts:
 
 ```text
-fibers.run
-fibers.scope
-Scope:run
+Op
+  a possible committed world
+
+Lifetime
+  a continuing consequence of that world
 ```
 
-return body values or raise after boundary accounting.
+Every continuing consequence is represented by one Lifetime node. Tasks, Scopes
+and domain resources are restricted views of those nodes rather than separate
+custody systems.
 
-Checked forms:
+The advanced Lifetime model has three laws:
 
 ```text
-fibers.try_run
-fibers.try_scope
-Scope:try_run
+Custody
+  one tree of responsibility
+
+Grant
+  a graph of non-custodial authority
+
+Closure
+  how responsibility is resolved
 ```
 
-return a `ScopeResult` containing success values or a structured report.
+Admission, movement, granting and closure all produce `Op` values. They therefore
+compose with the same `choice`, `and_then`, `or_else`, `all` and `tensor` algebra
+as messages, timers and resource transitions.
 
-## Vocabulary
+## 1. Lifetime views
 
-| Term | Meaning |
-| --- | --- |
-| Obligation | Continuing responsibility admitted or created by a committed world. |
-| Custody | Responsibility to resolve an obligation. |
-| Authority | Permission to act through a handle. |
-| Admission | Transactional entry into custody. |
-| Movement | Atomic transfer of custody. |
-| Borrow | Temporary authority without transfer of custody. |
-| Seal | Refusal of new custody. |
-| Claim | Exclusive authority over an owned subtree during restoration or settlement. |
-| Settlement | Protocol work undertaken after a claim commits. |
+A Lifetime may have several views:
 
-Custody and Lua reachability are not the same. Holding a reference does not necessarily mean the current scope owns or is authorised to use it.
+```text
+Scope
+  authority to admit and manage child Lifetimes
 
-## Scope surface
+Task
+  execution and control view of a running Lifetime
 
-Principal methods include:
+Process, Stream, File, Listener, ...
+  domain-specific views
+```
+
+The views refer to the same node. They do not each maintain cancellation,
+parentage or closure state.
 
 ```lua
-scope:spawn_op(fn, opts)
-scope:spawn(fn, opts)
-scope:admit_op(item_or_owned, from_owner)
-scope:move_op(item, target_scope_or_region)
-scope:offer_op(item, target_scope, terms)
+local task = fibers.perform(scope:spawn_op(function(child)
+  -- `task` and `child` are views of one Lifetime.
+  return 42
+end))
+
+local value = fibers.perform(task:await_op())
+```
+
+`Task:await_op()` waits for the complete Lifetime outcome. The body result is
+available separately through `Task:body_result_op()` for advanced diagnostics.
+A body can return successfully while Closure later fails, or fail while all
+retained consequences close correctly.
+
+## 2. Dormant construction and admission
+
+An ownable value is constructed with a dormant Lifetime:
+
+```lua
+local Lifetime = require('fibers.lifetime')
+local Closure = require('fibers.closure')
+
+local sensor = { name = 'sensor' }
+
+Lifetime.define(sensor, {
+  closure = Closure.protocol({
+    name = 'sensor',
+
+    request_op = function(_scope, entry, close)
+      return entry.item:request_close_op(close.reason)
+    end,
+
+    finish_op = function(_scope, entry, _close)
+      return entry.item:closed_op()
+    end,
+
+    force_op = function(_scope, entry, close)
+      return entry.item:force_close_op(close.reason)
+    end,
+  }),
+})
+```
+
+A definition is one-shot. The Closure protocol and propagation policy are
+captured at definition time. Later mutation of the source Lua table does not
+change the admitted Lifetime. This defines when runtime configuration takes
+effect; it is not a general promise that Lua values are immutable.
+
+Structural children must already carry explicit Lifetimes:
+
+```lua
+Lifetime.define(parent, {
+  closure = parent_closure,
+  children = { child_a, child_b },
+})
+```
+
+Admission attaches the dormant subtree to a Scope:
+
+```lua
+fibers.perform(scope:admit_op(sensor))
+```
+
+If admission loses a `choice`, the Lifetime remains dormant and no running body
+starts. A running body starts only after admission commits.
+
+## 3. Custody
+
+Every live Lifetime has exactly one custodial parent. The parent is accountable
+for eventually closing the child or moving it elsewhere.
+
+A Scope is the custody capability of its Lifetime:
+
+```lua
+scope:admit_op(resource)
+scope:move_op(resource, target_scope)
+scope:offer_op(resource, target_scope, terms)
 scope:accept_op(filter)
-scope:authorise_op(item, right)
-scope:borrow_op(item, borrower_or_rights, rights_or_opts, maybe_opts)
-scope:claim_op(item, purpose)
-scope:request_cancel_op(reason)
-scope:seal_op(reason)
+scope:close_op(resource, reason)
 
-scope:cancel_requested_op()
-scope:cancellation_op()
-scope:sealed_op()
-scope:done_op()
-scope:owns_op(item)
-scope:record_op(item)
-scope:subtree_op(item)
-scope:roots_op()
-scope:inspect_op()
+scope:has_custody_op(resource)
+scope:children_op()
+scope:custody_op(resource)
+scope:subtree_op(resource)
 ```
 
-`scope:raw_region()` exposes the underlying Region for trusted facility code and APIs which explicitly require a Region owner.
+### Atomic movement
 
-## Admission and structured spawn
-
-`Scope:spawn_op` constructs a Task, admits it to the Region and emits a post-commit spawn effect in one option.
-
-```text
-construct Task
-+ admit owned Task
-+ select spawn effect
-+ return Task
-```
-
-If that option loses, the task does not start.
-
-`scope:spawn` performs `spawn_op` immediately in the current fibre.
-
-Custom lifetime-bearing values may be admitted as bare items or as `Region.Owned` specifications carrying settlement metadata.
-
-## Atomic movement
-
-Direct movement transfers a live root in one commit:
+Movement changes the custodial parent of a complete subtree in one committed
+world:
 
 ```lua
-fibers.perform(cinematic:move_op(camera_handle, gameplay))
+fibers.perform(source:move_op(stream, destination))
 ```
 
-Negotiated movement composes movement with synchronous consent:
+There is no interval in which both Scopes, or neither Scope, are responsible.
+The subtree retains its internal parentage.
+
+### Negotiated movement
+
+When both sides must participate, use offer and acceptance:
 
 ```lua
-fibers.perform(Op.tensor({
-  lobby:offer_op(player_session, match, { role = 'player-session' }),
-  match:accept_op(function(offer)
-    return offer.terms and offer.terms.role == 'player-session'
+local moved = fibers.perform(Op.tensor({
+  source:offer_op(stream, destination, { purpose = 'request-body' }),
+  destination:accept_op(function(offer)
+    return offer.item == stream
   end),
 }))
 ```
 
-A rejected offer rejects that candidate. It does not consume an unrelated offer.
+The offer and movement are one transaction. Rejected alternatives do not consume
+an unrelated offer or partially move custody.
 
-Movement covers the complete owned subtree rooted at the item. A contained child cannot be moved independently.
+### Custody is not a general reference
 
-## Region records and phases
+Holding a Lua reference does not imply custody. It also need not imply authority
+to use the resource. Custody is the unique responsibility relation stored in the
+Runtime-local Lifetime forest.
 
-A Region stores records containing fields such as:
+## 4. Grants
 
-```text
-item
-role
-parent and ordered children
-settlement protocol and name
-admission order for roots
-phase and claim metadata
-settlement request, force and completion progress
-settlement failure information
-```
-
-The relevant lifecycle is:
-
-```text
-live      available for movement or claim
-claimed   exclusively held by a claim capability
-failed    settlement is incomplete and custody remains observable
-absent    discharged or moved out of the Region
-```
-
-A live item has at most one owner. Child order is semantic: children are declared in ownership or acquisition order and settle in the reverse order. Independent roots are retired in reverse admission order.
-
-The low-level Region surface includes:
+A Grant is a Lifetime carrying selected authority over another Lifetime. It does
+not change custody.
 
 ```lua
-region:admit_op(item_or_owned, from_owner)
-region:release_op(item)
-region:move_op(item, target_region)
-region:claim_op(item, purpose)
-region:seal_op()
-
-region:is_open_op()
-region:changed_op(version)
-region:owns_op(item)
-region:record_op(item)
-region:children_op(item)
-region:subtree_op(item)
-region:members_op()
-region:roots_op()
-region:snapshot_op()
-region:live_op(item)
-region:authorise_op(item, right, opts)
+local grant = fibers.perform(source:grant_op(
+  stream,
+  worker,
+  { 'read' }
+))
 ```
 
-`claim:restore_op()` restores a pristine low-level claim. Once settlement has begun, the claim may only be recovered through the `Settlement.Failure` capability returned by the settlement driver. That capability exposes `retry_op()` and `force_op()`; application code cannot manually mark, resume or discharge a settlement claim.
-
-A bare Region records ownership truth. It does not itself know how to interrupt a task, flush a stream or close a host handle. Those behaviours are supplied by settlement protocols and scope policy.
-
-## Authority and borrowing
-
-A scope can prove authority for an owned or borrowed item:
+The Grant becomes a child of `worker`. The Stream remains a child of `source`.
+The worker can prove the granted right:
 
 ```lua
-fibers.perform(scope:authorise_op(item, 'read'))
+local stream, authority = fibers.perform(worker:can_op(stream, 'read'))
 ```
 
-Borrowing grants rights without transferring custody:
+Closing the Grant revokes the authority:
 
 ```lua
-local borrow = fibers.perform(
-  cinematic:borrow_op(camera_handle, photo_mode, { 'preview' }, {
-    name = 'photo-mode-camera-preview',
-  })
-)
+fibers.perform(worker:close_op(grant, 'revoked'))
 ```
 
-The borrow is itself an obligation in the borrower scope. Settling it releases the temporary authority. The original owner remains responsible for the underlying item.
+A Grant closes automatically when its holding Scope closes.
 
-Distinguish:
+### Rights
 
-```text
-move    custody changes owner
-borrow  custody remains; temporary authority is granted
-lease   compatibility-managed transactional right
-claim   exclusive authority to settle custody
-```
-
-Authority enforcement is currently strongest at explicit endpoint and ownership seams, including Flow and Stream handles. It is not a general Lua object-capability sandbox.
-
-## Claims
-
-A claim is a fresh capability object tied to one Region, one root and its complete ordered owned subtree.
-
-Claim creation:
-
-```text
-verify live root
-compute subtree closure in pre-order
-verify every member is live
-create fresh claim capability
-freeze the claimed topology
-mark every member claimed
-```
-
-Only the original capability object can restore a pristine claim, and only the settlement failure capability can recover a started claim. Reconstructing diagnostic fields does not confer authority.
-
-While claimed, the subtree cannot be moved, released or claimed again.
-
-A pristine, unstarted claim may be returned to live custody with `claim:restore_op()`. Once settlement starts, the driver alone records failure and successful discharge. Recovery is then available only through `Settlement.Failure:retry_op()` or `Settlement.Failure:force_op()`.
-
-Restoration is not rollback of external cleanup. After any request, force or settlement step has begun, restoration is forbidden.
-
-## Settlement protocol
-
-Settlement starts only after the claim commits:
-
-```text
-transaction: claim and freeze subtree
-post-commit: request quiescence from roots towards leaves
-post-commit: settle from leaves towards roots
-transaction: discharge the complete claim
-```
-
-Settlement may perform further options and may wait. It is not speculative cleanup inside a state transition.
-
-A protocol is an explicit table:
+Rights may be supplied as a string, a dense array, or a string-keyed set:
 
 ```lua
-local Settlement = require('fibers.region.settlement')
+source:grant_op(resource, worker, 'read')
+source:grant_op(resource, worker, { 'read', 'observe' })
+source:grant_op(resource, worker, { read = true, observe = true })
+```
 
-local camera_protocol = Settlement.protocol({
-  name = 'camera-control',
+Sparse arrays, duplicate rights and mixed array/map forms are rejected. Rights,
+the subject and transfer terms are snapshotted privately when the Grant is
+constructed. Mutating the returned Lua table or an `inspect()` result cannot add
+authority or make a Grant transferable.
 
-  request_op = function(ctx, record, claim)
-    -- Initiate quiescence. This step must not wait for descendants to settle.
-    return record.item:request_release_op(claim.reason)
+Only the subject's current custodian may issue a Grant. Granted authority may
+be exercised by the holder and its custodial descendants, but it cannot be
+copied onwards by issuing a sub-Grant. This keeps revocation direct and avoids
+implicit authority lineage. A future version may add explicit delegation terms,
+but delegation is not part of the version 1 contract.
+
+### Terms
+
+Grants are non-transferable by default:
+
+```lua
+local grant = fibers.perform(source:grant_op(resource, worker, { 'read' }, {
+  terms = { transferable = true },
+}))
+```
+
+Version 1 recognises only the `transferable` term. Unknown terms are rejected
+rather than silently retained. Deadline, use-count, delegation, exclusivity and
+compatibility must be represented explicitly by the subject facility or another
+transactional resource until the Grant contract is deliberately extended.
+
+### Subject closure
+
+A Grant is effective only while both the Grant and its subject are live. Closing
+the subject invalidates every Grant over it immediately, even if a holder has not
+yet closed the Grant node itself. Authority is available to the holding Scope and
+its descendants; it does not flow upwards to ancestors or sideways to siblings.
+
+### Custody and Grants are deliberately distinct
+
+Custody is unique and tree-shaped because it determines Closure responsibility.
+Grants are non-unique and graph-shaped because several Lifetimes may hold
+compatible authority over one subject.
+
+Trying to represent custody as merely another Grant would lose the invariant
+that exactly one parent is responsible for Closure.
+
+## 5. Closure
+
+Closure is the only public termination contract. It includes:
+
+- local shutdown of the node;
+- propagation from body, cancellation and child outcomes;
+- ordered closure of descendants;
+- retry and force after incomplete closure.
+
+A Lifetime has one monotonic Closure phase:
+
+```text
+dormant
+  ↓
+open
+  ↓
+close_requested
+  ↓
+closing
+  ├──→ closed
+  └──→ closure_failed
+          ├── retry
+          └── force
+```
+
+Natural body completion, explicit cancellation and custodian-driven shutdown all
+converge on this state machine.
+
+### Local Closure protocol
+
+A local protocol has two ordinary phases and one optional escalation phase:
+
+```lua
+Closure.protocol({
+  name = 'resource',
+
+  request_op = function(scope, entry, close)
+    -- Initiate quiescence. Do not wait for descendants here.
+    return entry.item:request_close_op(close.reason)
   end,
 
-  settle_op = function(ctx, record, claim)
-    -- Complete or observe final settlement after every child has settled.
-    return record.item:released_op()
+  finish_op = function(scope, entry, close)
+    -- Complete or observe local closure after descendants finish.
+    return entry.item:closed_op()
   end,
 
-  force_op = function(ctx, record, claim)
-    -- Optional policy-driven destructive escalation.
-    return record.item:force_release_op(claim.reason)
+  force_op = function(scope, entry, close)
+    -- Optional destructive escalation.
+    return entry.item:force_close_op(close.reason)
   end,
-
-  settle_result = Settlement.require_ok('camera settlement failed'),
 })
+```
 
-local owned = Region.Owned.item(camera_handle, camera_protocol, {
-  role = 'camera-control',
-  settle_name = 'camera-control',
+Callbacks receive a bounded Closure context containing the root, reason,
+purpose and current phase. They never receive the engine's exclusive internal
+close token.
+
+The common two-phase form is:
+
+```lua
+Closure.request_then_wait(request_fn, finished_fn, {
+  name = 'resource',
+  force_op = force_fn,
+  finish_result = Closure.require_ok('resource closure failed'),
 })
-
-fibers.perform(scope:admit_op(owned))
 ```
 
-`request_op`, `settle_op` and `force_op` construct `Op` values. Merely constructing those options must not perform irreversible cleanup. Synchronous construction errors and errors raised by result validators become settlement failures.
+A passive value may use only `finish_op`. A running Lifetime normally uses the
+standard running Closure, which requests cancellation during abnormal shutdown
+and waits for the complete body outcome.
 
-`settle_op` is mandatory. `request_op` and `force_op` are optional. A missing request is treated as immediately requested. `Settlement.request_then_wait` constructs the common two-phase form without merging the phases.
+### Structural order
 
-Operations which conventionally return `nil, err` should supply a result validator such as `Settlement.require_ok(...)`; arbitrary return values are otherwise treated as successful completion of the step.
-
-Use `Region.Owned.tree` for an item with explicit owned children and `Region.Owned.inert` when no settlement work is required.
-
-## Ordered settlement
-
-A claim records its subtree in pre-order. Normal settlement uses two structural passes:
-
-```text
-request pass       pre-order
-                   parent before children
-                   siblings in declaration order
-
-settlement pass    reverse pre-order
-                   children before parent
-                   siblings in reverse declaration order
-
-ledger discharge   complete subtree removed atomically
-```
-
-For:
+For an ordered tree:
 
 ```text
 root
@@ -320,178 +331,190 @@ root
 └── b
 ```
 
-the order is:
+Closure runs:
 
 ```text
 request root
 request a
 request a1
 request b
-settle b
-settle a1
-settle a
-settle root
+
+finish b
+finish a1
+finish a
+finish root
 ```
 
-The request pass stops admission, propagates cancellation or initiates shutdown before descendants are joined. The settlement pass keeps parent infrastructure available until its descendants have finished.
+Requests travel from parents to children so that admission can stop and
+shutdown can propagate. Finishing travels from children to parents so that
+parent infrastructure remains available while descendants quiesce.
 
-A `request_op` may wait for acknowledgement that shutdown was accepted, but must not wait for descendant settlement. Such waiting belongs in `settle_op`.
+Siblings request in declaration order and finish in reverse declaration order.
+Independent roots close in reverse admission order.
 
-A record is eligible for settlement only after all its direct children have settled. A failure in one branch does not prevent request or settlement attempts in an independent sibling branch. An ancestor remains unresolved while any descendant remains unresolved.
+### Propagation
 
-Independent roots have no cross-root transaction. Scope policy retires them sequentially in reverse admission order. A root moved into another Region receives a new admission position there; the order within its subtree is preserved.
-
-### Aggregate protocols
-
-One external obligation should have one principal settlement protocol. A parent may settle a facility as an aggregate, in which case structural child records should normally be inert. Parent and child protocols must not both perform the same irreversible close unless that operation is explicitly idempotent.
-
-### Force escalation
-
-Force is policy-driven rather than an automatic consequence of cancellation:
-
-```text
-force unresolved records in pre-order
-then repeat settlement in reverse pre-order
-```
-
-Top-down force permits a parent process, transport or worker to be destroyed when that is required to unblock descendants. Bottom-up settlement still records what actually ended.
-
-## Failed settlement remains custody truth
-
-A settlement failure occurs after the claim has committed. It cannot be rolled back as though the claim never existed.
-
-The claim retains a progress entry for each record. Public progress states include:
-
-```text
-not_requested
-requested
-forced
-settled
-request_failed
-force_failed
-settlement_failed
-blocked_by_descendant
-```
-
-Already-settled records remain accounted as settled within the failed claim. They do not become live again and are not repeated by a retry.
-
-A failing settlement protocol produces a `Settlement.Failure` value. Direct settlement raises it; checked scope boundaries retain it in their result and report. It is both a structured error and the exclusive recovery capability for the unresolved claim:
+Child failure behaviour is part of Closure rather than a separate policy system.
+The built-in forms are:
 
 ```lua
-local Settlement = require('fibers.region.settlement')
+Closure.nursery()
+Closure.supervisor({ child_failure = 'fail_at_exit' })
+Closure.supervisor({ child_failure = 'collect' })
+Closure.supervisor({ child_failure = 'ignore' })
+```
 
+A nursery propagates a failed child to the boundary and requests closure of the
+remaining work. A supervisor records child outcomes according to its configured
+mode without necessarily closing siblings.
+
+Custom propagation is pure:
+
+```lua
+local propagation = {
+  on_child_outcome = function(_self, parent, state, child, outcome)
+    if outcome.tag == 'failed' then
+      return {
+        fail_boundary = true,
+        seal = true,
+        cancel_body = true,
+        cancel_children = true,
+      }
+    end
+    return {}
+  end,
+}
+
+local closure = Closure.running(propagation)
+```
+
+Domain-local shutdown and propagation compose without either replacing the
+other:
+
+```lua
+local closure = Closure.combine(local_resource_closure, propagation)
+```
+
+Children inherit only the propagation projection. They never inherit their
+parent's local `request_op`, `finish_op` or `force_op`.
+
+## 6. Closure failure and recovery
+
+External closure is not transactional. Some descendants may finish before a
+later descendant fails. Fibers therefore retains irreversible progress rather
+than pretending the subtree became live again.
+
+Checked boundaries expose a `Closure.Failure`:
+
+```lua
 local result = fibers.try_scope(function(scope)
-  -- admit work whose settlement may fail
+  -- Work whose Closure may fail.
 end)
 
-local failure = result.settlement_failure
-if failure and Settlement.is_failure(failure) then
-  print(failure.item, failure.error)
+local failure = result.closure_failure
+if failure then
+  local report = failure:inspect()
 
-  -- Resume ordinary settlement from retained progress.
+  -- Continue ordinary Closure from retained progress.
   fibers.perform(failure:retry_op())
 
-  -- Or, where policy permits destructive escalation:
+  -- Or apply the optional force phase.
   -- fibers.perform(failure:force_op())
 end
 ```
 
-A failure exposes `item`, `region`, `claim`, `claim_id`, `purpose`, `reason`, `records`, `progress`, `failures` and the first `error`. It provides `retry_op` and `force_op`. It does not provide restoration or arbitrary discharge authority.
+The failure contains diagnostics and one opaque recovery capability. It does not
+expose the engine's close token, generic restoration or arbitrary discharge.
+Retry or force consumes that capability only when its operation commits. A
+failed recovery issues one new failure capability; a successful recovery cannot
+be repeated. Completed descendants are skipped during retry.
 
-Central rule:
+A failed Closure remains custody truth: the parent is still accountable for the
+unresolved consequence until retry or force reaches `closed`.
 
-> Failed settlement is an unresolved owned obligation with retained irreversible progress, not an exception erased during unwinding.
+## 7. Body result, domain result and Lifetime outcome
 
-## Scope policy
-
-The default nursery policy:
-
-```text
-monitors admitted task roots
-seals on body completion or failure
-on child failure, records the cause and requests body/sibling cancellation
-waits for retained tasks
-settles remaining roots while masked
-completes only after every retained root is accounted for
-```
-
-```lua
-fibers.run(function()
-  fibers.spawn(function() error('boss controller failed') end)
-  fibers.perform(encounter_finished_op())
-end)
-```
-
-A supervisor isolates child failure according to its mode:
-
-```lua
-fibers.scope({
-  policy = policy.supervisor({ child_failure = 'collect' }),
-}, function()
-  fibers.spawn(run_optional_fireworks)
-end)
-```
-
-Supported `child_failure` values are:
+These facts remain distinct:
 
 ```text
-fail_at_exit
-collect
-ignore
+body result
+  what the running function returned or raised
+
+domain result
+  what the resource means, for example process exit or connection failure
+
+Lifetime outcome
+  whether all continuing consequences closed correctly
 ```
 
-Policies also gate escape hatches:
+A Process may exit before its Streams and host handles close. A Dial may report a
+domain connection failure while its Lifetime closes successfully. A successful
+body does not erase a later Closure failure.
 
-```text
-allow_unstructured   permit high-level fibers.spawn_raw
-allow_outward_move   permit custody movement out of the scope
-allow_admission      permit new admission
-```
+The distinction is necessary for truthful accounting rather than additional
+ontology.
 
-The low-level Region API remains available to trusted implementation code.
+## 8. Host acquisition
 
-A custom policy may implement `try_run(scope, fn, driver)`. The supplied driver provides mechanisms such as monitor start, close, seal and root retirement; policy owns the boundary decisions.
+An irreversible host call may return a handle before the next transactional
+admission can run. Fibers covers that short interval with a private host hold.
+The hold is internal runtime machinery, not a fourth Lifetime law or an
+application-facing facility.
 
-## Principal laws
+The observable law is simply:
 
-```text
-Unique custody
-  A live owned root has at most one Region owner.
+> A returned host value is immediately accountable to the current Lifetime and
+> either becomes a normal child Lifetime or closes with that Lifetime.
 
-Atomic admission
-  Losing admission creates no custody and starts no work.
+## 9. Core laws
 
-Atomic movement
-  A complete subtree leaves one Region and enters another in one commit.
+### Unique custody
 
-Seal monotonicity
-  A sealed Region accepts no new custody.
+Every live Lifetime has exactly one custodial parent.
 
-Exclusive claim
-  A claimed subtree cannot be moved, released or claimed again.
+### Atomic admission
 
-Narrow recovery authority
-  A pristine claim may be restored through its capability. A started settlement claim is discharged only after complete settlement, or retained as failed with retry and force authority.
+A losing admission starts no body and creates no custody.
 
-Ordered quiescence
-  Settlement requests run parent-first; settlement completion runs child-first.
+### Atomic movement
 
-Progress retention
-  Successful irreversible progress remains represented after a later failure and is skipped by retry.
+A complete subtree changes parent in one committed world.
 
-Failure retention
-  Failed settlement remains represented in the ledger with exclusive recovery authority.
+### Delegated authority
 
-Borrow separation
-  Borrowing changes authority, not custody.
+Only the current custodian of a subject may issue a Grant over it.
 
-Boundary accounting
-  A scope does not complete while its policy retains unaccounted live roots.
+### Grant revocation
 
-Policy causality
-  Cancellation induced by a failure does not replace the failure which caused it.
-```
+Closing a Grant revokes its authority; closing the subject invalidates all
+Grants over it.
 
-## Facilities above the lifetime layer
+### Monotonic Closure
 
-Task, Flow, Stream, Pool and host-backed handles define facility-specific settlement protocols but use the same Region and Scope mechanisms. Future lifetime abstractions should be derived from custody, authority, claims and policy rather than creating unrelated cleanup systems.
+A Lifetime moves forwards through its Closure phases. Failed Closure retains
+progress and responsibility.
+
+### Ordered Closure
+
+Requests run parent-first; finishing runs child-first.
+
+### Complete containment
+
+A Lifetime cannot reach `closed` while it retains unresolved descendants.
+
+### Runtime locality
+
+A live Lifetime belongs to one Runtime-local forest and cannot cross Runtime
+stores.
+
+## 10. Summary
+
+The advanced model can be stated in four sentences:
+
+> Every continuing consequence is a Lifetime.
+> Each Lifetime has exactly one custodian.
+> Other Lifetimes may hold Grants over it.
+> Closure resolves it and everything for which it remains responsible.
+
+Every change to custody, Grants or Closure is an `Op`, so the Lifetime model
+uses the existing possible-world algebra rather than introducing a second one.

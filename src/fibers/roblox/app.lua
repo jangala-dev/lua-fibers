@@ -7,7 +7,7 @@
 ---fibre progress; it is not semantic Retry and cannot enable `or_else`.
 
 local WaitSet = require('fibers.host.wait_set')
-local Policy = require('fibers.policy')
+local Closure = require('fibers.closure')
 local Protected = require('fibers.internal.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
@@ -24,14 +24,14 @@ local function copy(value)
   return out
 end
 
-local function settlement_failures_from(err)
+local function closure_failures_from(err)
   if type(err) ~= 'table' then
     return {}
   end
-  if err._fibers_settlement_failure == true then
+  if err._fibers_closure_failure == true then
     return { err }
   end
-  if type(err.cause) == 'table' and err.cause._fibers_settlement_failure == true then
+  if type(err.cause) == 'table' and err.cause._fibers_closure_failure == true then
     return { err.cause }
   end
   return {}
@@ -153,7 +153,7 @@ function Application.new(fn, opts)
   local runtime = Runtime.new(runtime_options(opts, host))
   local scope = Scope.new(name, {
     runtime = runtime,
-    policy = opts.policy or Policy.nursery({ name = name }),
+    closure = opts.closure or Closure.nursery({ name = name }),
   })
 
   local self = setmetatable({
@@ -242,15 +242,15 @@ function Application:_complete(runtime_status, runtime_error)
 
   local result = self._root_result
   if runtime_error ~= nil then
-    local settlement_failures = settlement_failures_from(runtime_error)
+    local closure_failures = closure_failures_from(runtime_error)
     result = ScopeResult.fail({
       reason = 'runtime_error',
       primary = runtime_error,
       report = self.scope:_make_report(runtime_error, {}, {
         reason = 'runtime_error',
-        settlement_failures = settlement_failures,
+        closure_failures = closure_failures,
       }),
-      settlement_failures = settlement_failures,
+      closure_failures = closure_failures,
       runtime_status = runtime_status,
     })
   elseif result == nil then
@@ -323,7 +323,7 @@ local function pending_turn(self, reason, runtime_status, fields)
   return public_status(self, fields)
 end
 
----Advance the application within one host-owned execution horizon.
+---Advance the application within one host-controlled execution horizon.
 ---
 ---`opts.horizon` is an absolute value in the host clock domain. Alternatively,
 ---`opts.max_seconds` supplies a relative horizon. `max_steps` bounds runtime
@@ -658,7 +658,7 @@ function Application:detach()
   return self
 end
 
----Wait for an attached application to settle.
+---Wait for an attached application to close.
 ---
 ---This is convenience sugar for scripts and `BindToClose`; it does not drive the
 ---runtime itself. The attached scheduler continues to call `advance`.

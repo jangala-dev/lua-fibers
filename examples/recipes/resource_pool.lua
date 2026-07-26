@@ -128,9 +128,9 @@ function Pool:add_op(key, item)
   end)
 end
 
-function Pool:acquire_op(owner)
-  if owner == nil then
-    error('pool acquire requires owner', 2)
+function Pool:acquire_op(holder)
+  if holder == nil then
+    error('pool acquire requires holder', 2)
   end
   return require_open(self):and_then(function()
     return self.idle:pop_first_op():and_then(function(entry)
@@ -139,8 +139,8 @@ function Pool:acquire_op(owner)
         if type(state) ~= 'table' then
           return Op.never()
         end
-        return self.leases:acquire_op(key, 'lease', owner):map(function()
-          return { pool = self, key = key, item = state.item, owner = owner }
+        return self.leases:acquire_op(key, 'lease', holder):map(function()
+          return { pool = self, key = key, item = state.item, holder = holder }
         end)
       end)
     end)
@@ -151,14 +151,14 @@ function Pool:release_op(lease)
   if type(lease) ~= 'table' then
     error('pool release expects a lease table', 2)
   end
-  local key, owner = lease.key, lease.owner
+  local key, holder = lease.key, lease.holder
   return self.items:get_op(key):and_then(function(state)
     if type(state) ~= 'table' then
       return Op.never()
     end
     if state.retire_on_release then
       return Op.tensor({
-        self.leases:release_op(key, owner),
+        self.leases:release_op(key, holder),
         self.items:remove_present_op(key),
         Op.emit(retire_effect(self, key, state.item, state.reason)),
       }):map(function()
@@ -166,7 +166,7 @@ function Pool:release_op(lease)
       end)
     end
     return Op.tensor({
-      self.leases:release_op(key, owner),
+      self.leases:release_op(key, holder),
       self.idle:insert_op(key, math.huge, key),
     }):map(function()
       return true

@@ -96,7 +96,7 @@ executed continuation against its declaration and rejects an incomplete one.
 This is intended as a test and development aid; verification is not enabled on
 the normal fast path.
 
-Task, Scope, Region, Flow and benchmark-owned continuations whose future
+Task, Scope, Lifetime, Flow and benchmark-retained continuations whose future
 options are structurally known now use this declaration path.
 
 ## 4. Incremental pending dependency index
@@ -199,7 +199,7 @@ The current tiered run gives the following representative results:
 | scalar read/write | 28.5 us/op | 1 | 1 |
 | two-fibre rendezvous | 95.8 us/op | 4 | 3 |
 | internal then external rendezvous | 183.4 us/op | 4 | 4 |
-| task spawn, await and settlement | 1.50 ms/op | 8 | 5 |
+| task spawn, await and Closure | 1.50 ms/op | 8 | 5 |
 | triple swap with decoy | 2.24 ms/op | 64 | 37 |
 | contended producers | 97.3 us/op | 4 | 3 |
 | nursery rendezvous fanout seven | 1.13 ms/op | 8 | 8 |
