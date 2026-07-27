@@ -40,7 +40,10 @@ end
 
 local function wait_for_queue(listener, count)
   while true do
-    local rows = fibers.perform(listener.queue:snapshot_op())
+    local rows = {}
+    for _, entry in pairs(listener.queue._items.entries) do
+      rows[#rows + 1] = entry
+    end
     if #rows >= count then
       return rows
     end

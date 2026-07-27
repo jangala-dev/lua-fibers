@@ -15,31 +15,30 @@ A facility normally:
 6. leaves fibre and lifetime structure to callers unless custody is intrinsic to the facility.
 
 ```lua
-local fibers = require('fibers')
-local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Counter = require('fibers.resource.counter')
+local perform = require('fibers.perform')
 
 local Latch = {}
 Latch.__index = Latch
 
-function Latch.new(count)
-  return setmetatable({ state = Scalar.new(count or 0, 'latch') }, Latch)
+function Latch.new(count, name)
+  return setmetatable({ remaining = Counter.new(count or 0, name) }, Latch)
+end
+
+function Latch:count_down_op(amount)
+  return self.remaining:take_op(amount or 1)
 end
 
 function Latch:wait_op()
-  local function loop()
-    return self.state:snapshot_op():and_then(function(snapshot)
-      if snapshot.value == 0 then
-        return Op.always(true)
-      end
-      return self.state:changed_op(snapshot.version):and_then(loop)
-    end)
-  end
-  return loop()
+  return self.remaining:zero_op()
+end
+
+function Latch:count_down(amount)
+  return perform(self:count_down_op(amount))
 end
 
 function Latch:wait()
-  return fibers.perform(self:wait_op())
+  return perform(self:wait_op())
 end
 ```
 
@@ -98,7 +97,11 @@ Use a typed effect when the work belongs to the committed world. Use `wrap` when
 Prefer:
 
 - Channel for application communication;
-- Scalar for state machines;
+- Scalar for replaceable state;
+- Counter for quantities and epochs;
+- Index for ordered witnessed collections;
+- Rendezvous for synchronous exchange;
+- Machine for genuinely serial state relations;
 - Pulse for coalescing notification;
 - Scope and Task for work held in custody;
 - the resource toolkit for allocation and compatibility laws.

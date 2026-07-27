@@ -632,7 +632,7 @@ local function new_file_op(path, mode, opts, label, temporary)
   local scope = IO.current_scope(opts, label)
   next_file = next_file + 1
   local name = opts.name or ('file-' .. tostring(next_file))
-  local tx, rx = Mailbox.new(opts.queue_limit or 32, { name = name .. ':requests' })
+  local tx, rx = Mailbox.new(opts.queue_limit or 32, name .. ':requests')
   local driver_parent = IO.require_scope(scope, label)
   local file = setmetatable({
     kind = 'regular_file',

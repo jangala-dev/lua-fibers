@@ -49,7 +49,7 @@ local function new_runtime(opts)
 end
 
 local function seeded_index(name)
-  return Index.new({
+  return Index.from({
     { key = 'a', rank = 1, value = 'A' },
     { key = 'b', rank = 2, value = 'B' },
     { key = 'c', rank = 3, value = 'C' },
@@ -147,7 +147,7 @@ end
 
 local function test_pop_then_reinsert_same_key_is_sequential_replacement()
   local rt = new_runtime()
-  local ix = Index.new({ { key = 'a', rank = 1, value = 'A' } }, 'idx-pop-reinsert')
+  local ix = Index.from({ { key = 'a', rank = 1, value = 'A' } }, 'idx-pop-reinsert')
   local out
 
   rt:spawn_raw(function()
@@ -169,7 +169,7 @@ end
 
 local function test_empty_index_claim_uses_absence_fallback()
   local rt = new_runtime()
-  local ix = Index.new({}, 'idx-empty')
+  local ix = Index.new('idx-empty')
   local out
 
   rt:spawn_raw(function()
@@ -182,7 +182,7 @@ end
 
 local function test_insert_plus_pop_first_consumes_same_world_insert()
   local rt = new_runtime()
-  local ix = Index.new({}, 'idx-insert-pop-empty')
+  local ix = Index.new('idx-insert-pop-empty')
   local rows
 
   rt:spawn_raw(function()
@@ -248,7 +248,7 @@ end
 
 local function test_absence_sees_projected_insert()
   local rt = new_runtime()
-  local ix = Index.new({}, 'idx-absence-insert')
+  local ix = Index.new('idx-absence-insert')
   local rows
 
   rt:spawn_raw(function()
@@ -266,7 +266,7 @@ end
 
 local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
   local rt = new_runtime({ quiet_deadlock = true })
-  local ix = Index.new({ { key = 'a', rank = 1, value = 'A' } }, 'idx-one-entry-two-ends')
+  local ix = Index.from({ { key = 'a', rank = 1, value = 'A' } }, 'idx-one-entry-two-ends')
   local rows
 
   rt:spawn_raw(function()
@@ -285,7 +285,7 @@ end
 
 local function test_all_insert_does_not_supply_pop_but_commits_insert()
   local rt = new_runtime()
-  local ix = Index.new({}, 'idx-all-insert-pop')
+  local ix = Index.new('idx-all-insert-pop')
   local rows
 
   rt:spawn_raw(function()
@@ -303,7 +303,7 @@ end
 
 local function test_tensor_insert_supplies_pop_and_consumes_insert()
   local rt = new_runtime()
-  local ix = Index.new({}, 'idx-tensor-insert-pop-law')
+  local ix = Index.new('idx-tensor-insert-pop-law')
   local rows
 
   rt:spawn_raw(function()

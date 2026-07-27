@@ -52,27 +52,27 @@ end
 -- A capacity lease reserves producer-side room before an irreversible source
 -- obtains bytes, then atomically publishes the bytes into the Flow.
 do
-  local flow = Flow.new({ name = 'public-space-lease', capacity = 4 })
-  local lease, committed, got, snap
+  local flow = Flow.new(4, 'public-space-lease')
+  local lease, partial, rest, committed, got
   local st = fibers.try_run(function()
     lease = fibers.perform(flow:inlet():reserve_some_op(3, 'host-reader'))
-    snap = fibers.perform(flow:inspect_op())
+    partial, rest = fibers.perform(flow:inlet():write_some_op('xy'))
     committed = fibers.perform(lease:commit_op('ab'))
-    got = fibers.perform(flow:outlet():read_exactly_op(2))
+    got = fibers.perform(flow:outlet():read_exactly_op(3))
   end).runtime_status
   assert_eq(st.tag, 'found')
   assert_truthy(type(lease.capacity) == 'function', 'reservation should return a SpaceLease')
   assert_eq(lease:capacity(), 3)
-  assert_eq(snap.reserved, 3, 'reserved space should count as retained capacity')
-  assert_eq(snap.free, 1)
+  assert_eq(partial, 1, 'reservation should leave only one writable byte')
+  assert_eq(rest, 'y')
   assert_eq(committed, 2)
-  assert_eq(got, 'ab')
+  assert_eq(got, 'xab')
 end
 
 -- Reserved capacity blocks other producers until it is committed or released.
 do
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'public-space-backpressure', capacity = 3 })
+  local flow = Flow.new(3, 'public-space-backpressure')
   local lease, written
   rt:spawn_raw(function()
     lease = rt:perform(flow:inlet():reserve_some_op(3, 'external-source'))
@@ -98,7 +98,7 @@ end
 -- A producer cannot publish more bytes than it reserved; the reservation
 -- remains live until explicitly released or failed.
 do
-  local flow = Flow.new({ name = 'public-space-overcommit', capacity = 3 })
+  local flow = Flow.new(3, 'public-space-overcommit')
   local lease, n, err, released
   local st = fibers.try_run(function()
     lease = fibers.perform(flow:inlet():reserve_some_op(2, 'external-source'))
@@ -113,8 +113,8 @@ end
 
 -- A losing reservation option leaves no retained capacity behind.
 do
-  local flow = Flow.new({ name = 'public-space-losing-choice', capacity = 3 })
-  local result, snap
+  local flow = Flow.new(3, 'public-space-losing-choice')
+  local result, written, got
   local st = fibers.try_run(function()
     result =
       fibers.perform(Op.choice(
@@ -123,17 +123,18 @@ do
           return 'loser'
         end)
       ))
-    snap = fibers.perform(flow:inspect_op())
+    written = fibers.perform(flow:inlet():write_op('abc'))
+    got = fibers.perform(flow:outlet():read_exactly_op(3))
   end, { choice_seed = 3 }).runtime_status
   assert_eq(st.tag, 'found')
   assert_eq(result, 'winner')
-  assert_eq(snap.reserved, 0)
-  assert_eq(snap.retained, 0)
+  assert_eq(written, 3, 'losing reservation must release all capacity')
+  assert_eq(got, 'abc')
 end
 
 -- The version 1 Flow surface is intentionally alias-free.
 do
-  local flow = Flow.new({ name = 'public-flow-surface', capacity = 8 })
+  local flow = Flow.new(8, 'public-flow-surface')
   local inlet, outlet = flow:inlet(), flow:outlet()
   assert_nil(flow.reservoir, 'Flow should not expose an internal reservoir object')
 
@@ -166,6 +167,7 @@ do
     assert_nil(outlet[name], 'Outlet should not expose ' .. name)
   end
 
+  assert_nil(flow.inspect_op)
   assert_nil(flow.close_op)
   assert_nil(flow.shutdown_op)
   assert_nil(flow.drained_op)
@@ -194,7 +196,7 @@ end
 
 -- Option records use only the version 1 field names.
 do
-  local flow = Flow.new({ name = 'public-flow-options', capacity = 16 })
+  local flow = Flow.new(16, 'public-flow-options')
   local ok, err = pcall(function()
     flow:outlet():read_line_op({ limit = 4 })
   end)

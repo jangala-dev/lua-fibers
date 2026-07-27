@@ -15,7 +15,7 @@ local fibers = require('fibers')
 local channel = require('fibers.channel')
 local Counter = require('fibers.resource.counter')
 
-local uplink_slots = Counter.new({ initial = 1, name = 'satellite-uplink-slots' })
+local uplink_slots = Counter.new(1, 'satellite-uplink-slots')
 local telemetry_sessions = channel.new()
 local admitted_clinic, outcome
 

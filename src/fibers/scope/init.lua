@@ -453,9 +453,9 @@ function Scope:cancellation_op()
   return self._lifetime:cancellation_op()
 end
 
-function Scope:running_children_snapshot_op()
+function Scope:running_children_op()
   local roots_op = self:_store():roots_op(self)
-  return self:_store():snapshot_op(self):and_then(function(status)
+  return self:_store():status_op(self):and_then(function(status)
     return roots_op:map(function(roots)
       local tasks = {}
       for i = 1, #roots do
@@ -472,7 +472,7 @@ end
 
 function Scope:begin_close_op(reason, opts)
   opts = opts or {}
-  return self:running_children_snapshot_op():and_then(function(snapshot)
+  return self:running_children_op():and_then(function(snapshot)
     local ops = { self._lifetime:request_close_op(reason), self:seal_op(reason) }
     if opts.cancel_body ~= false then
       ops[#ops + 1] = self:_request_cancel_op(reason)
@@ -495,7 +495,7 @@ function Scope:seal_op(_reason)
 end
 
 local function lifetime_sealed_op(scope)
-  return scope:_store():snapshot_op(scope):and_then(function(status)
+  return scope:_store():status_op(scope):and_then(function(status)
     if status.sealed then
       return Op.always(true)
     end
@@ -550,7 +550,7 @@ end
 function Scope:inspect_op()
   local outcome_read = self._lifetime.outcome:read_op()
   local node_state = self:_store():node_state_op(self._lifetime)
-  return self:_store():snapshot_op(self):and_then(function(lifetime_status)
+  return self:_store():status_op(self):and_then(function(lifetime_status)
     return node_state:and_then(function(state)
       return outcome_read:map(function(outcome_state)
         local done = type(outcome_state) == 'table' and outcome_state.status == 'done'

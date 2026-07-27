@@ -468,8 +468,8 @@ Hosts can inspect the Runtime-local reactor and the external-resource
 audit while diagnosing integration failures:
 
 ```lua
-local reactor = rt.host_reactor and rt.host_reactor:snapshot()
-local audit = rt:io_audit_snapshot({ include_history = true })
+local registrations = rt.host_reactor and rt.host_reactor:registration_count() or 0
+local audit = rt:io_audit({ include_history = true })
 ```
 
 After an I/O tree held in custody has closed, contract tests should call:

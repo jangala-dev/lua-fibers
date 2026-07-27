@@ -250,10 +250,10 @@ local function merge_snapshot(dst, src)
   return dst
 end
 
-function Context:snapshot()
+function Context:report()
   local out
   for i = 1, #self.runtimes do
-    out = merge_snapshot(out, self.runtimes[i]:instrumentation_snapshot())
+    out = merge_snapshot(out, self.runtimes[i]:instrumentation_report())
   end
   return out or { counters = {}, maxima = {}, histograms = {}, slow_plans = {} }
 end
@@ -271,7 +271,7 @@ local function run_once(case, n, instrumented)
     elapsed = elapsed,
     operations = operations or n,
     retained_kb = after_kb - before_kb,
-    diagnostics = instrumented and ctx:snapshot() or nil,
+    diagnostics = instrumented and ctx:report() or nil,
   }
 end
 

@@ -21,13 +21,6 @@ local function encode_result(codec, program, value, session)
     return pack(codec.value)
   elseif kind == 'value' then
     return pack(value)
-  elseif kind == 'present' then
-    return pack(value ~= Algebra.ABSENT)
-  elseif kind == 'presence' then
-    if value == Algebra.ABSENT or (codec.nil_sentinel and value == codec.nil_sentinel) then
-      return pack(nil)
-    end
-    return pack(value)
   elseif kind == 'project' then
     return pack(codec.project(value, program))
   end
@@ -610,7 +603,7 @@ local function machine_outcome(program, value, context, occurrence_payload)
     return nil
   end
   if not is_ready(outcome) then
-    error('machine transition must return Scalar.Wait or Scalar.Ready', 2)
+    error('machine transition must return Machine.Wait or Machine.Ready', 2)
   end
   if transition.mode == 'query' and outcome.writes then
     error('query transition cannot write', 2)
@@ -637,6 +630,12 @@ function M.predicate_holds(program, value)
   end
   if predicate == 'ge' then
     return value >= program.threshold
+  end
+  if predicate == 'le' then
+    return value <= program.threshold
+  end
+  if predicate == 'eq' then
+    return value == program.threshold
   end
   if predicate == 'map_present' then
     return value[program.key] ~= nil

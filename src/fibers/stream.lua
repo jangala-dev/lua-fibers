@@ -196,29 +196,6 @@ local function flow_of(value)
   return value and value.flow
 end
 
-function Duplex:inspect_op()
-  local options = {}
-  if self._reader then
-    options[#options + 1] = { 'read', flow_of(self._reader):inspect_op() }
-  end
-  if self._writer then
-    options[#options + 1] = { 'write', flow_of(self._writer):inspect_op() }
-  end
-  return Op.named_all(options):map(function(parts)
-    return {
-      stream = self,
-      read = parts.read,
-      write = parts.write,
-      mode = self.mode,
-      readable = self:is_readable(),
-      writable = self:is_writable(),
-      local_address = self._local_address,
-      peer_address = self._peer_address,
-      close = self:close_state(),
-    }
-  end)
-end
-
 local function retire_direction(self, side, reason, policy, abort)
   local ep = side_endpoint(self, side)
   if not ep then
@@ -311,15 +288,15 @@ function Stream.memory_pair(opts)
   opts = opts or {}
   validate_options(opts, { name = true, capacity = true }, 'Stream.memory_pair options')
   local name = opts.name or 'memory-flow'
-  local ab = Flow.new({ name = name .. ':a->b', capacity = opts.capacity })
-  local ba = Flow.new({ name = name .. ':b->a', capacity = opts.capacity })
+  local ab = Flow.new(opts.capacity, name .. ':a->b')
+  local ba = Flow.new(opts.capacity, name .. ':b->a')
   return Stream.compose(ba, ab, { name = name .. ':a', mode = 'memory' }),
     Stream.compose(ab, ba, { name = name .. ':b', mode = 'memory' })
 end
 
 local function host_stream(name, opts)
-  local read_flow = opts.read and Flow.new({ name = name .. ':rx', capacity = opts.read_capacity }) or nil
-  local write_flow = opts.write and Flow.new({ name = name .. ':tx', capacity = opts.write_capacity }) or nil
+  local read_flow = opts.read and Flow.new(opts.read_capacity, name .. ':rx') or nil
+  local write_flow = opts.write and Flow.new(opts.write_capacity, name .. ':tx') or nil
   local stream = Stream.compose(read_flow, write_flow, {
     name = name,
     mode = opts.read and opts.write and 'duplex' or (opts.read and 'reader' or 'writer'),

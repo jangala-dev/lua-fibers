@@ -174,7 +174,7 @@ function Phase:facts_for(name)
   self:phase(name)
   local facts = self.facts[name]
   if not facts then
-    facts = Keyed.new({}, (self.name or 'phase') .. ':' .. name .. ':facts')
+    facts = Keyed.new((self.name or 'phase') .. ':' .. name .. ':facts')
     self.facts[name] = facts
   end
   return facts
@@ -192,13 +192,6 @@ function Phase:get_fact_op(name, label)
     error('Phase:get_fact_op expects a fact label', 2)
   end
   return self:facts_for(name):get_op(label)
-end
-
-function Phase:peek_fact_op(name, label)
-  if type(label) ~= 'string' then
-    error('Phase:peek_fact_op expects a fact label', 2)
-  end
-  return self:facts_for(name):peek_op(label)
 end
 
 function Phase:allows_move_op(_item, from_name, to_name, opts)

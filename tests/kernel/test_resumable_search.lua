@@ -125,7 +125,7 @@ do
   assert_eq(got, 'new')
   assert(rt.stats.plans > plans_before, 'frontier change should require a new proof')
   if rt.machine_name == 'ledger' then
-    local snapshot = rt:instrumentation_snapshot()
+    local snapshot = rt:instrumentation_report()
     assert(
       (snapshot.counters.search_session_invalidations or 0) >= 1,
       'session invalidation should be observable'

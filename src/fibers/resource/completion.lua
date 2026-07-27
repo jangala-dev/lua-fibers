@@ -1,51 +1,31 @@
 -- Single-assignment completion state for deferred host work.
---
--- Completion is intentionally internal.  Facilities may expose domain-shaped
--- result options while sharing one tested terminal-state protocol.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Facility = require('fibers.resource.authoring')
+local StateMachine = require('fibers.resource.machine')
 
 local Completion = {}
 Completion.__index = Completion
+
+local Kind = Facility.kind('completion')
+local Ready = StateMachine.Ready
 local unpack_ = table.unpack or unpack
 
-local function pack(...)
-  return { n = select('#', ...), ... }
-end
-
-local Ready = Scalar.Ready
-local next_id = 0
-
-local publish = Scalar.transition({
-  name = 'completion.publish',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current, payload)
-    if current.kind ~= 'pending' then
-      return Ready.same(nil, {
-        kind = 'completion_already_terminal',
-        current = current,
-        attempted = payload.state,
-      })
-    end
-    return Ready.write(payload.state, true)
-  end,
-})
-
-local function terminal_option(self, selector)
-  return Scalar.select_op(self.state, selector)
-end
+local Publish = StateMachine.isolated_update('completion.publish', function(current, state)
+  if current.kind ~= 'pending' then
+    return Ready.same(nil, {
+      kind = 'completion_already_terminal',
+      current = current,
+      attempted = state,
+    })
+  end
+  return Ready.write(state, true)
+end)
 
 function Completion.new(name)
-  next_id = next_id + 1
-  local id = 'completion-' .. tostring(next_id)
-  return setmetatable({
-    name = name or id,
-    _fibers_id = id,
-    state = Scalar.machine({ kind = 'pending' }, (name or id) .. ':state'),
-  }, Completion)
+  local completion = Facility.identity(setmetatable({}, Completion), Kind, name)
+  completion.state = StateMachine.new({ kind = 'pending' }, completion.name .. ':state')
+  return completion
 end
 
 function Completion:is_pending()
@@ -57,25 +37,19 @@ function Completion:state_value()
 end
 
 function Completion:publish_success_op(...)
-  return self.state:transition_op(publish, {
-    state = { kind = 'succeeded', values = pack(...) },
-  })
+  return self.state:transition_op(Publish, { kind = 'succeeded', values = Op._pack(...) })
 end
 
-function Completion:publish_failure_op(err)
-  return self.state:transition_op(publish, {
-    state = { kind = 'failed', error = err },
-  })
+function Completion:publish_failure_op(error)
+  return self.state:transition_op(Publish, { kind = 'failed', error = error })
 end
 
 function Completion:publish_cancelled_op(reason)
-  return self.state:transition_op(publish, {
-    state = { kind = 'cancelled', reason = reason },
-  })
+  return self.state:transition_op(Publish, { kind = 'cancelled', reason = reason })
 end
 
 function Completion:terminal_op()
-  return terminal_option(self, function(state)
+  return self.state:select_op(function(state)
     if state.kind ~= 'pending' then
       return Op.always(state)
     end
@@ -83,7 +57,7 @@ function Completion:terminal_op()
 end
 
 function Completion:pending_op()
-  return self.state:read_op():and_then(function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'pending' then
       return Op.always(true)
     end
@@ -94,8 +68,7 @@ end
 function Completion:result_op()
   return self:terminal_op():map(function(state)
     if state.kind == 'succeeded' then
-      local values = state.values or pack(state.value)
-      return unpack_(values, 1, values.n)
+      return unpack_(state.values, 1, state.values.n)
     end
     if state.kind == 'failed' then
       return nil, state.error
@@ -105,26 +78,30 @@ function Completion:result_op()
 end
 
 function Completion:success_op()
-  return terminal_option(self, function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'succeeded' then
-      local values = state.values or pack(state.value)
-      return Op.always(unpack_(values, 1, values.n))
-    elseif state.kind ~= 'pending' then
+      return Op.always(unpack_(state.values, 1, state.values.n))
+    end
+    if state.kind ~= 'pending' then
       return Op.never()
     end
   end)
 end
 
 function Completion:failure_op()
-  return terminal_option(self, function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'failed' then
       return Op.always(state.error)
-    elseif state.kind == 'cancelled' then
+    end
+    if state.kind == 'cancelled' then
       return Op.always(state.reason)
-    elseif state.kind == 'succeeded' then
+    end
+    if state.kind == 'succeeded' then
       return Op.never()
     end
   end)
 end
+
+Completion.Kind = Kind
 
 return Completion

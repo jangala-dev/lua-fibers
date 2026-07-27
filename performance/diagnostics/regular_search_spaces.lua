@@ -345,7 +345,7 @@ collectgarbage('collect')
 local started = Clock.now()
 local rt, status, valid, driver_calls, digest = scenario(options)
 local elapsed = Clock.now() - started
-local snapshot = rt:instrumentation_snapshot() or {}
+local snapshot = rt:instrumentation_report() or {}
 local c, m = snapshot.counters or {}, snapshot.maxima or {}
 local fields = {
   options.case,

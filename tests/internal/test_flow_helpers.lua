@@ -18,6 +18,7 @@ local Op = FibersOp
 local Flow = require('fibers.resource.flow')
 local Rope = require('fibers.resource.flow.rope')
 local Errors = require('fibers.resource.flow.errors')
+local Inspect = require('tests.support.flow_inspect')
 
 local function fail(msg)
   error(msg, 2)
@@ -40,7 +41,7 @@ end
 
 -- peek observes without consuming, even when the selected world commits.
 do
-  local flow = Flow.new({ name = 'peek-flow', capacity = 16 })
+  local flow = Flow.new(16, 'peek-flow')
   local p, later
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -55,7 +56,7 @@ end
 -- read_until excludes the delimiter; read_including includes it. Both consume
 -- through the delimiter only when the selected world commits.
 do
-  local flow = Flow.new({ name = 'until-flow', capacity = 32 })
+  local flow = Flow.new(32, 'until-flow')
   local before, including, tail
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc--def--tail'))
@@ -71,7 +72,7 @@ end
 
 -- read_until default terminal partial policy reports eof and the partial.
 do
-  local flow = Flow.new({ name = 'until-partial-flow', capacity = 16 })
+  local flow = Flow.new(16, 'until-partial-flow')
   local got, err, partial, after_err
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('unterminated'))
@@ -89,7 +90,7 @@ end
 
 -- read_line is a small consumer of read_until with partial return semantics.
 do
-  local flow = Flow.new({ name = 'line-derived-flow', capacity = 16 })
+  local flow = Flow.new(16, 'line-derived-flow')
   local line, eof, eof_err
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('tail'))
@@ -105,7 +106,7 @@ end
 
 -- drop is derived from exact read and does not return bytes.
 do
-  local flow = Flow.new({ name = 'drop-flow', capacity = 16 })
+  local flow = Flow.new(16, 'drop-flow')
   local dropped, tail
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -120,8 +121,8 @@ end
 -- splice_to is algebraically derived: losing splice branches leave both flows
 -- unchanged, while selected splice moves bytes as one committed world.
 do
-  local src = Flow.new({ name = 'splice-src', capacity = 16 })
-  local dst = Flow.new({ name = 'splice-dst', capacity = 16 })
+  local src = Flow.new(16, 'splice-src')
+  local dst = Flow.new(16, 'splice-dst')
   local choice, moved, src_left, dst_got
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abcdef'))
@@ -146,47 +147,47 @@ end
 -- splice_to must not consume source bytes when the destination cannot accept
 -- the bytes.  The derived law is peek -> write -> drop, not read -> write.
 do
-  local src = Flow.new({ name = 'splice-too-large-src', capacity = 16 })
-  local dst = Flow.new({ name = 'splice-too-large-dst', capacity = 2 })
-  local moved, err, src_left, dst_snap
+  local src = Flow.new(16, 'splice-too-large-src')
+  local dst = Flow.new(2, 'splice-too-large-dst')
+  local moved, err, src_left, dst_queued
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
     moved, err = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
-    dst_snap = fibers.perform(dst:inspect_op())
+    dst_queued = Inspect.queued(dst)
   end).runtime_status
   assert_status(st, 'found')
   assert_nil(moved)
   assert_eq(err, Errors.TOO_LARGE)
   assert_eq(src_left, 'abc', 'failed destination write must not consume source')
-  assert_eq(dst_snap.queued_length, 0, 'failed splice must not append destination bytes')
+  assert_eq(dst_queued, 0, 'failed splice must not append destination bytes')
 end
 
 -- Destination closure is another write-side failure; it must also leave the
 -- source untouched.
 do
-  local src = Flow.new({ name = 'splice-closed-src', capacity = 16 })
-  local dst = Flow.new({ name = 'splice-closed-dst', capacity = 16 })
-  local moved, err, src_left, dst_snap
+  local src = Flow.new(16, 'splice-closed-src')
+  local dst = Flow.new(16, 'splice-closed-dst')
+  local moved, err, src_left, dst_queued
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
     fibers.perform(dst:inlet():close_op())
     moved, err = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
-    dst_snap = fibers.perform(dst:inspect_op())
+    dst_queued = Inspect.queued(dst)
   end).runtime_status
   assert_status(st, 'found')
   assert_nil(moved)
   assert_eq(err, Errors.CLOSED)
   assert_eq(src_left, 'abc', 'closed destination must not consume source')
-  assert_eq(dst_snap.queued_length, 0, 'closed destination must not receive bytes')
+  assert_eq(dst_queued, 0, 'closed destination must not receive bytes')
 end
 
 -- A multi-byte delimiter prefix at the payload limit is not too large yet: it
 -- may still become the terminator.  A non-prefix byte past the limit is too
 -- large and does not consume.
 do
-  local flow = Flow.new({ name = 'until-multibyte-prefix-flow', capacity = 16 })
+  local flow = Flow.new(16, 'until-multibyte-prefix-flow')
   local got, err
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -212,7 +213,7 @@ do
 end
 
 do
-  local flow = Flow.new({ name = 'until-multibyte-too-large-flow', capacity = 16 })
+  local flow = Flow.new(16, 'until-multibyte-too-large-flow')
   local got, err, left
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcd'))
@@ -227,7 +228,7 @@ end
 
 -- Direct writes and flushes use the canonical Flow vocabulary.
 do
-  local flow = Flow.new({ name = 'canonical-flow', capacity = 16 })
+  local flow = Flow.new(16, 'canonical-flow')
   local n, drained, got
   local st = fibers.try_run(function()
     n = fibers.perform(flow:inlet():write_op('xy'))
@@ -244,7 +245,7 @@ end
 -- effect.  Blocked or losing mutations do not produce a notification, and Flow
 -- no longer patches Scalar's private location apply function.
 do
-  local flow = Flow.new({ name = 'flow-change-effect', capacity = 8 })
+  local flow = Flow.new(8, 'flow-change-effect')
   assert_nil(flow._state_observers)
   assert_nil(flow._subscribe_state)
   local notified = 0
@@ -263,7 +264,7 @@ do
 end
 
 do
-  local flow = Flow.new({ name = 'losing-flow-change-effect', capacity = 0 })
+  local flow = Flow.new(0, 'losing-flow-change-effect')
   local notified = 0
   local rt = FibersRuntime.new()
   rt.host_reactor = {
@@ -292,13 +293,13 @@ do
   local prefix = string.rep('a', 8192)
   local rope = Rope.new(prefix)
   assert_nil(rope:find('\r\n'))
-  local first = rope:_search_debug('\r\n')
+  local first = Inspect.search(rope, '\r\n')
   assert_eq(first.scanned, #prefix)
   assert_eq(first.matched, 0)
 
   local with_cr = rope:clone()
   with_cr:append('\r')
-  local second = with_cr:_search_debug('\r\n')
+  local second = Inspect.search(with_cr, '\r\n')
   assert_eq(second.scanned, #prefix + 1)
   assert_eq(second.matched, 1)
   assert_nil(second.match)
@@ -306,7 +307,7 @@ do
   local complete = with_cr:clone()
   complete:append('\n')
   assert_eq(complete:find('\r\n'), #prefix)
-  local third = complete:_search_debug('\r\n')
+  local third = Inspect.search(complete, '\r\n')
   assert_eq(third.scanned, #prefix + 2)
 end
 
@@ -318,7 +319,7 @@ do
     error('delimiter search must not flatten the Rope', 0)
   end
   local ok, err = pcall(function()
-    local flow = Flow.new({ name = 'incremental-delimiter-flow', capacity = 32 })
+    local flow = Flow.new(32, 'incremental-delimiter-flow')
     local got
     local st = fibers.try_run(function()
       fibers.perform(flow:inlet():write_op('header\r'))

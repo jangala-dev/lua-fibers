@@ -24,7 +24,9 @@ local FibersSocket = require('fibers.socket')
 local FibersDNS = require('fibers.dns')
 local FibersProcess = require('fibers.process')
 local FibersScalar = require('fibers.resource.scalar')
-local FibersQueue = require('fibers.resource.queue')
+local FibersMachine = require('fibers.resource.machine')
+local FibersCounter = require('fibers.resource.counter')
+local FibersFIFO = require('fibers.resource.fifo')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersLease = require('fibers.resource.lease')
 local FibersSignal = require('fibers.resource.signal')
@@ -39,6 +41,12 @@ local FibersGrant = require('fibers.grant')
 local FibersRoblox = require('fibers.roblox')
 local FibersRobloxHost = require('fibers.host.roblox')
 local FibersRobloxSubscription = require('fibers.roblox.subscription')
+local FibersChannel = require('fibers.channel')
+local FibersMailbox = require('fibers.mailbox')
+local FibersPulse = require('fibers.pulse')
+local FibersSemaphore = require('fibers.semaphore')
+local FibersLatch = require('fibers.latch')
+local FibersRefCount = require('fibers.resource.ref_count')
 
 local function fail(msg)
   error(msg, 2)
@@ -60,34 +68,18 @@ local function assert_status(st, tag, msg)
 end
 
 local function wait_until(scalar, pred)
-  local function loop()
-    return scalar:snapshot_op():and_then(function(s)
-      if pred(s.value) then
-        return Op.always(s.value)
-      end
-      return scalar:changed_op(s.version):and_then(function()
-        return loop()
-      end)
-    end)
-  end
-  return loop()
+  return scalar:value_op(pred)
 end
 
 local function modify_when(scalar, pred, update)
-  local function loop()
-    return scalar:snapshot_op():and_then(function(s)
-      if not pred(s.value) then
-        return scalar:changed_op(s.version):and_then(function()
-          return loop()
-        end)
-      end
-      local new = update(s.value)
+  return scalar:select_op(function(value)
+    if pred(value) then
+      local new = update(value)
       return scalar:write_op(new):map(function()
-        return new, s.value
+        return new, value
       end)
-    end)
-  end
-  return loop()
+    end
+  end)
 end
 
 -- The root module is deliberately a small application language. Specialised
@@ -111,6 +103,7 @@ do
   assert_eq(fibers.Op, nil, 'root does not export the Op module')
   assert_eq(fibers.Runtime, nil, 'root does not export Runtime')
   assert_eq(fibers.Scalar, nil, 'root does not export Scalar')
+  assert_eq(fibers.Machine, nil, 'root does not export Machine')
   assert_eq(fibers.Stream, nil, 'root does not export Stream')
   assert_eq(fibers.Flow, nil, 'root does not export Flow')
   assert_eq(fibers.host, nil, 'root does not export host adapters')
@@ -124,8 +117,23 @@ do
   assert_eq(require('fibers.op'), FibersOp, 'Op has a direct named module')
   assert_eq(FibersOp.consequence, nil, 'emit has no long alias')
   assert_eq(require('fibers.resource.scalar'), FibersScalar, 'Scalar has a direct named module')
+  assert_eq(require('fibers.resource.machine'), FibersMachine, 'Machine has a direct named module')
+  assert_eq(type(FibersMachine.update), 'function', 'Machine exposes update transitions')
+  assert_eq(type(FibersMachine.select), 'function', 'Machine exposes select transitions')
+  assert_eq(type(FibersMachine.query), 'function', 'Machine exposes query transitions')
+  assert_eq(FibersMachine.transition, nil, 'Machine has no table-spec transition constructor')
+  assert_eq(FibersMachine.kind, nil, 'Machine does not register transition tables')
+  assert_eq(FibersMachine.kind_from, nil, 'Machine does not register generated transition tables')
   assert_eq(require('fibers.resource.flow'), FibersFlow, 'Flow has one canonical resource module')
-  assert_eq(require('fibers.resource.queue'), FibersQueue, 'Queue has one canonical resource module')
+  assert_eq(require('fibers.resource.fifo'), FibersFIFO, 'FIFO has one canonical resource module')
+  assert_eq(pcall(require, 'fibers.queue'), false, 'the former Queue module is absent')
+  assert_eq(pcall(require, 'fibers.resource.queue'), false, 'the former resource Queue module is absent')
+  assert_eq(require('fibers.semaphore'), FibersSemaphore, 'Semaphore is a standard compound')
+  assert_eq(require('fibers.latch'), FibersLatch, 'Latch is a standard compound')
+  assert_eq(require('fibers.resource.ref_count'), FibersRefCount, 'RefCount is a resource-building compound')
+  assert_eq(pcall(require, 'fibers.ref_count'), false, 'RefCount has no top-level alias')
+  assert_eq(pcall(require, 'fibers.wait_group'), false, 'WaitGroup is absent')
+  assert_eq(pcall(require, 'fibers.priority_queue'), false, 'PriorityQueue remains a recipe')
   assert_eq(require('fibers.file'), FibersFile, 'File facilities have a direct named module')
   assert_eq(type(FibersFile.open), 'function', 'File exposes evented regular-file opening')
   assert_eq(type(FibersFile.tmpfile), 'function', 'File exposes owned temporary files')
@@ -207,8 +215,7 @@ do
   assert_eq(got, 'hello')
 end
 
--- Scalars provide transactional facts. Waiting is expressed with snapshot/changed
--- and Op composition.
+-- Scalars provide transactional facts. Predicates wait directly through value_op.
 do
   local scalar = FibersScalar.new(false, 'flag')
   local seen
@@ -224,7 +231,7 @@ do
   assert_eq(seen, true)
 end
 
--- Capacity-like state transitions are ordinary algebra over snapshot/changed/set.
+-- Capacity-like state transitions are ordinary scalar composition.
 do
   local c = FibersScalar.new(1, 'credits')
   local new, old

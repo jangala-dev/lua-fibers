@@ -19,11 +19,7 @@ local save_ok, blink_ok, blink_reason
 local first_event, final_event, closed, close_reason, dropped
 
 fibers.run(function()
-  local event_tx, event_rx = Mailbox.new({
-    capacity = 1,
-    full = 'reject_newest',
-    name = 'document-events',
-  })
+  local event_tx, event_rx = Mailbox.reject_newest(1, 'document-events')
 
   save_ok = event_tx:send('save requested')
   blink_ok, blink_reason = event_tx:send('cursor blink')

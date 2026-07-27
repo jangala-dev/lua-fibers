@@ -210,7 +210,7 @@ for _, case in ipairs(cases) do
     })
     assert(result.ok, tostring(result.primary))
     local elapsed = Clock.now() - started
-    local snapshot = result.runtime:instrumentation_snapshot()
+    local snapshot = result.runtime:instrumentation_report()
     local counters = snapshot.counters or {}
     local commits = counters.commits or 0
     local row = {

@@ -465,11 +465,11 @@ function Runtime:_finalize()
   return true
 end
 
-function Runtime:instrumentation_snapshot()
+function Runtime:instrumentation_report()
   if not self.instrumentation then
     return nil
   end
-  return self.instrumentation:snapshot()
+  return self.instrumentation:report()
 end
 
 function Runtime:reset_instrumentation()
@@ -2162,8 +2162,8 @@ function Runtime:drive(opts)
   end
 end
 
-function Runtime:io_audit_snapshot(opts)
-  return require('fibers.diagnostics.io').snapshot(self, opts)
+function Runtime:io_audit(opts)
+  return require('fibers.diagnostics.io').report(self, opts)
 end
 
 function Runtime:assert_io_quiescent(label)

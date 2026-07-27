@@ -106,7 +106,7 @@ end
 -- Flow endpoints are domain capabilities. A Grant supplies read authority
 -- without moving the endpoint Lifetime.
 do
-  local flow = FibersFlow.new({ name = 'flow-authority', capacity = 8 })
+  local flow = FibersFlow.new(8, 'flow-authority')
   local direct_auth, granted_auth, granted_byte, granted_err, write_err
   fibers.run(function(owner)
     local holder = FibersScope.new('flow-grant-holder', { runtime = FibersRuntime.current() })

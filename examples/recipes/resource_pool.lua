@@ -1,14 +1,14 @@
 -- Transactional resource pool with retirement.
 --
--- Pool is ordinary Lua composition over Index + Keyed + Lease + Scalar + Effect.
+-- Pool is ordinary Lua composition over Index + Keyed + Lease + Machine + Effect.
 -- The v1 pool is deliberately small: fixed resources, exclusive leases,
 -- deferred retirement for leased items, and close preventing future add/acquire.
 -- Item metadata lives in Keyed; idle membership lives in Index; active leases
 -- live in Lease.  Pool state does not duplicate idle/leased status.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
-local Ready = Scalar.Ready
+local StateMachine = require('fibers.resource.machine')
+local Ready = StateMachine.Ready
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
 local Lease = require('fibers.resource.lease')
@@ -65,35 +65,19 @@ local function retiring_state(state, reason)
   return { item = state.item, retire_on_release = true, reason = reason or state.reason }
 end
 
-local OpenTransitions = Scalar.kind({
-  name = 'pool.open',
-  transitions = {
-    check_open = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 100,
-      step = function(open)
-        if open == true then
-          return Ready.write(true, true)
-        end
-        return Ready.write(open, false)
-      end,
-    },
-    close = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
-      step = function(_open)
-        return Ready.write(false, true)
-      end,
-    },
-  },
-})
+local CheckOpen = StateMachine.update('pool.check_open', function(open)
+  if open == true then
+    return Ready.write(true, true)
+  end
+  return Ready.write(open, false)
+end, 100)
+
+local Close = StateMachine.update('pool.close', function()
+  return Ready.write(false, true)
+end)
 
 local function require_open(pool)
-  return pool.open:transition_op(OpenTransitions:transition('check_open')):and_then(function(ok)
+  return pool.open:transition_op(CheckOpen):and_then(function(ok)
     if ok then
       return Op.always(true)
     end
@@ -109,9 +93,9 @@ function Pool.new(opts, name)
   return setmetatable({
     name = pname,
     _fibers_id = id,
-    open = opts.open or Scalar.new(true, pname .. ':open'),
-    idle = opts.idle or Index.new({}, pname .. ':idle'),
-    items = opts.items or Keyed.new({}, pname .. ':items'),
+    open = opts.open or StateMachine.new(true, pname .. ':open'),
+    idle = opts.idle or Index.new(pname .. ':idle'),
+    items = opts.items or Keyed.new(pname .. ':items'),
     leases = opts.leases or Lease.new({ lease = {} }, pname .. ':leases'),
     retire = opts.retire,
   }, Pool)
@@ -122,7 +106,7 @@ function Pool:add_op(key, item)
     error('pool add requires key', 2)
   end
   return require_open(self):and_then(function()
-    return self.items:put_absent_op(key, item_state(item)):and_then(function()
+    return self.items:insert_op(key, item_state(item)):and_then(function()
       return self.idle:insert_op(key, math.huge, key)
     end)
   end)
@@ -159,7 +143,7 @@ function Pool:release_op(lease)
     if state.retire_on_release then
       return Op.tensor({
         self.leases:release_op(key, holder),
-        self.items:remove_present_op(key),
+        self.items:take_op(key),
         Op.emit(retire_effect(self, key, state.item, state.reason)),
       }):map(function()
         return true
@@ -184,7 +168,7 @@ function Pool:retire_op(key, reason)
     end
     local retire_idle = Op.tensor({
       self.idle:remove_op(key),
-      self.items:remove_present_op(key),
+      self.items:take_op(key),
       Op.emit(retire_effect(self, key, state.item, reason)),
     }):map(function()
       return true
@@ -197,23 +181,7 @@ function Pool:retire_op(key, reason)
 end
 
 function Pool:close_op(_reason)
-  return self.open:transition_op(OpenTransitions:transition('close'))
-end
-
-function Pool:snapshot_op()
-  return Op.all({
-    self.open:read_op(),
-    self.items:snapshot_op(),
-    self.idle:snapshot_op(),
-    self.leases:snapshot_op(),
-  }):map(function(rows)
-    return {
-      open = rows[1][1],
-      items = rows[2][1].entries,
-      idle = rows[3][1].entries,
-      leases = rows[4][1].holders,
-    }
-  end)
+  return self.open:transition_op(Close)
 end
 
 return Pool

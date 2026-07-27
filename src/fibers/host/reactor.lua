@@ -204,15 +204,13 @@ function Reactor.new(runtime, opts)
     control_quantum = opts.control_quantum or 64,
     service_count = 0,
   }, Reactor)
-  self.ready = EventQueue.new(id .. ':ready', {
-    interest = function(_runtime, queue, feed)
-      return Interest.external(queue, 'poll', {
-        external_kind = 'poller',
-        poller = self,
-        feed = feed,
-      })
-    end,
-  })
+  self.ready = EventQueue.new(id .. ':ready', function(_runtime, queue, feed)
+    return Interest.external(queue, 'poll', {
+      external_kind = 'poller',
+      poller = self,
+      feed = feed,
+    })
+  end)
   return self
 end
 

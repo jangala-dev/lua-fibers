@@ -22,7 +22,7 @@ end
 
 local function reservation_count(calendar)
   local n = 0
-  for _ in pairs(calendar:snapshot()) do
+  for _ in pairs(calendar:reservations()) do
     n = n + 1
   end
   return n
@@ -93,7 +93,7 @@ do
     rows = fibers.perform(Op.tensor({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }))
   end)
   assert(rows[1][1].id == 1 and rows[2][1].start == 0)
-  assert(reservation_count(cal) == 1 and cal:snapshot()[1] == nil)
+  assert(reservation_count(cal) == 1 and cal:reservations()[1] == nil)
 end
 
 do
@@ -105,7 +105,7 @@ do
     )
   end)
   assert(result == 'fallback')
-  assert(reservation_count(cal) == 1 and cal:snapshot()[1] ~= nil)
+  assert(reservation_count(cal) == 1 and cal:reservations()[1] ~= nil)
 end
 
 -- Earliest-slot search uses interval boundaries as a finite complete witness set.

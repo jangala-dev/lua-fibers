@@ -14,7 +14,7 @@
 local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 local Protected = require('fibers.internal.protected')
 
@@ -36,21 +36,14 @@ local RECOVERY_AVAILABLE = 'available'
 local RECOVERY_CONSUMED = 'consumed'
 local STALE_RECOVERY = {}
 
-local ClaimRecovery = Scalar.transition({
-  name = 'closure.claim_recovery',
-  mode = 'select',
-  accepts_supply = false,
-  supplies = 'none',
-  ready = function(state)
-    return state == RECOVERY_AVAILABLE
-  end,
-  step = function(state)
-    if state ~= RECOVERY_AVAILABLE then
-      return Scalar.Wait
-    end
-    return Scalar.Ready.write(RECOVERY_CONSUMED, true)
-  end,
-})
+local ClaimRecovery = StateMachine.isolated_select_when('closure.claim_recovery', function(state)
+  return state == RECOVERY_AVAILABLE
+end, function(state)
+  if state ~= RECOVERY_AVAILABLE then
+    return StateMachine.Wait
+  end
+  return StateMachine.Ready.write(RECOVERY_CONSUMED, true)
+end)
 
 -- Effect identity makes recovery authority linear across interacting product
 -- lanes as well as across time. The scalar records persistent consumption; the
@@ -147,7 +140,7 @@ function ClosureFailure.new(token, failures, mark_error)
   }, ClosureFailure)
   local recovery = {
     token = token,
-    authority = Scalar.new(RECOVERY_AVAILABLE, token.id .. '-recovery'),
+    authority = StateMachine.new(RECOVERY_AVAILABLE, token.id .. '-recovery'),
   }
   rawset(failure, RECOVERY_STATE, function()
     return recovery

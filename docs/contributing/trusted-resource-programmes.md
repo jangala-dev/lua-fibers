@@ -39,7 +39,7 @@ linear exchange
 external observation
 ```
 
-Keep higher-level facilities such as Queue, Mailbox, Task, Scope and Stream as ordinary Lua composition where practical.
+Keep higher-level facilities such as FIFO, Mailbox, Task, Scope and Stream as ordinary Lua composition where practical.
 
 ## Trusted authoring façade
 
@@ -134,8 +134,6 @@ Current result codecs include:
 ```text
 Facility.result.value
 Facility.result.boolean
-Facility.result.present
-Facility.result.presence(nil_sentinel)
 Facility.result.project(function(value, programme) ... end)
 ```
 
@@ -202,30 +200,22 @@ ordered finite-map selection and compatibility-checked insertion.
 
 Use a machine location when a protocol is naturally one serial state value.
 
-The public Scalar transition façade is normally the simplest route:
+The public Machine transition helpers are normally the simplest route:
 
 ```lua
-local Scalar = require('fibers.resource.scalar')
+local Machine = require('fibers.resource.machine')
 
-local transition = Scalar.transition {
-  name = 'buffer.take',
-  mode = 'select',
-  accepts_supply = true,
-  supplies = 'any',
-  order = 10,
-  validate = function(payload)
-    assert(type(payload.n) == 'number' and payload.n > 0)
-  end,
-  step = function(state, payload, context)
-    if #state.items < payload.n then
-      return Scalar.Wait
-    end
+local transition = Machine.select('buffer.take', function(state, payload, context)
+  if #state.items < payload.n then
+    return Machine.Wait
+  end
 
-    local next_state = copy_state(state)
-    local value = remove_prefix(next_state, payload.n)
-    return Scalar.Ready.write(next_state, value)
-  end,
-}
+  local next_state = copy_state(state)
+  local value = remove_prefix(next_state, payload.n)
+  return Machine.Ready.write(next_state, value)
+end, 10, function(payload)
+  assert(type(payload.n) == 'number' and payload.n > 0)
+end)
 ```
 
 Transition modes are:
@@ -239,9 +229,9 @@ query    partial read-only transition
 Return values are:
 
 ```text
-Scalar.Wait
-Scalar.Ready.same(results...)
-Scalar.Ready.write(successor_state, results...)
+Machine.Wait
+Machine.Ready.same(results...)
+Machine.Ready.write(successor_state, results...)
 ```
 
 The callback receives only explicit state, payload and a restricted context. It must be deterministic, non-yielding and free of irreversible effects.
@@ -324,16 +314,12 @@ Facility.static(resource, Kind, 'exchange', { role = 'get' })
 
 The standard public façade is `Rendezvous`. Pairing, participant recruitment, rollback and exhaustive failure remain controlled by the machine. Do not consume an offer eagerly in facility code.
 
-## Version waits and snapshots
+## Version waits
 
 `Facility.static(resource, Kind, 'version_wait', { location = location, version = version })`
 waits until a location version differs. Cached descriptors may bind the version
-as an occurrence payload. Scalar and Scope inspection expose versioned change
-forms.
-
-`Facility.snapshot(resource, observation)` constructs the small fixed snapshot
-programme used by Keyed and Lease. Prefer an ordinary read or witnessed read-only
-transition for new facilities unless a shared snapshot form is justified.
+as an occurrence payload. Prefer an ordinary read, predicate or witnessed
+read-only transition; resources do not expose general state-dump operations.
 
 ## External observations
 

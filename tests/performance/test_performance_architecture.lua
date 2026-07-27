@@ -16,6 +16,7 @@ local IR = require('fibers.internal.kernel.ir')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local BranchPolicy = require('fibers.internal.kernel.domain')
 local fibers = require('fibers')
 local FibersRendezvous = require('fibers.resource.rendezvous')
@@ -114,7 +115,7 @@ end
 do
   local Dependencies = require('fibers.internal.kernel.dependencies')
   local index = Dependencies.Index.new()
-  local scalar = Scalar.machine(0, 'retired-location-atom')
+  local scalar = StateMachine.new(0, 'retired-location-atom')
   local request = { id = 1, op = scalar:write_op(1) }
   request.metadata = IR.metadata(request.op)
   index:add(request)
@@ -148,7 +149,7 @@ for i = 1, 20 do
   end)
 end
 eq(isolated:run().tag, 'quiescent')
-local isolated_snap = isolated:instrumentation_snapshot()
+local isolated_snap = isolated:instrumentation_report()
 truthy((isolated_snap.maxima.component_size or 20) < 20, 'unrelated roots were not isolated')
 truthy((isolated_snap.counters.component_roots_excluded or 0) > 0, 'component exclusion was not measured')
 
@@ -166,7 +167,7 @@ global:spawn_raw(function()
   global:perform(b:get_op())
 end)
 eq(global:run().tag, 'quiescent')
-local global_snap = global:instrumentation_snapshot()
+local global_snap = global:instrumentation_report()
 truthy(
   (global_snap.counters.dynamic_dependency_refinements or 0) > 0,
   'revealed guard did not refine its dependency plan'
@@ -200,7 +201,7 @@ local function independent_components(machine)
   for i = 1, 8 do
     eq(values[i], i * 10, 'component result missing')
   end
-  local snap = rt:instrumentation_snapshot()
+  local snap = rt:instrumentation_report()
   truthy((snap.counters.component_roots_excluded or 0) > 0, 'committing components were not isolated')
   return status.tag
 end
@@ -258,7 +259,7 @@ binary:spawn_raw(function()
 end)
 eq(binary:run().tag, 'found')
 eq(got, 'ok')
-local binary_snap = binary:instrumentation_snapshot()
+local binary_snap = binary:instrumentation_report()
 truthy((binary_snap.counters.forced_exchanges or 0) > 0, 'binary exchange reduction was not used')
 
 -- Empty transactional collections are shared rather than allocated afresh for
@@ -300,7 +301,7 @@ do
   eq(values[1], 1, 'first pooled session result')
   eq(values[2], 2, 'second pooled session result')
   if rt.machine_name == 'ledger' then
-    local counters = rt:instrumentation_snapshot().counters
+    local counters = rt:instrumentation_report().counters
     truthy((counters.search_session_reuses or 0) > 0, 'search-session arena was not reused')
     truthy(#rt._search_session_pool > 0, 'cleared session was not returned to the pool')
     local pooled = rt._search_session_pool[#rt._search_session_pool]
@@ -312,14 +313,14 @@ end
 
 -- A sole non-supplying scalar query is likewise a forced claim resolution.
 local claim_rt = Runtime.new({ instrumentation = true })
-local scalar = Scalar.machine(7, 'forced-claim')
+local scalar = StateMachine.new(7, 'forced-claim')
 local claim_result
 claim_rt:spawn_raw(function()
   claim_result = claim_rt:perform(scalar:expect_op(7))
 end)
 eq(claim_rt:run().tag, 'found')
 eq(claim_result, true)
-local claim_snap = claim_rt:instrumentation_snapshot()
+local claim_snap = claim_rt:instrumentation_report()
 truthy((claim_snap.counters.forced_claims or 0) > 0, 'forced claim reduction was not used')
 
 -- The residual exchange policy chooses the smallest viable domain.
@@ -397,7 +398,7 @@ local function symmetric_failure(machine, enabled)
     rt:perform(Op.tensor({ channel:get_op(), scalar:write_op(1), scalar:write_op(2) }))
   end)
   eq(rt:run().tag, 'quiescent')
-  return rt:instrumentation_snapshot().counters
+  return rt:instrumentation_report().counters
 end
 
 for _, machine in ipairs({ 'ledger', 'reference' }) do
@@ -426,9 +427,9 @@ local function repeated_blocked_run(machine, reuse)
     end)
   end
   eq(rt:run().tag, 'quiescent')
-  local first = rt:instrumentation_snapshot().counters.search_calls or 0
+  local first = rt:instrumentation_report().counters.search_calls or 0
   eq(rt:run().tag, 'quiescent')
-  local counters = rt:instrumentation_snapshot().counters
+  local counters = rt:instrumentation_report().counters
   return first, counters.search_calls or 0, counters
 end
 
@@ -441,7 +442,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
 end
 
 local invalidation = Runtime.new({ instrumentation = true, plan_reuse_threshold = 1 })
-local invalidation_scalar = Scalar.machine(0, 'reuse-invalidation')
+local invalidation_scalar = StateMachine.new(0, 'reuse-invalidation')
 local observed = false
 invalidation:spawn_raw(function()
   observed = invalidation:perform(invalidation_scalar:expect_op(1))
@@ -460,16 +461,16 @@ truthy(observed, 'relevant location change did not invalidate a cached certifica
 -- sessions or a component coordinator.
 do
   local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
-  local scalar = Scalar.machine(0, 'per-focus-certificate-retry')
+  local scalar = StateMachine.new(0, 'per-focus-certificate-retry')
   for i = 1, 8 do
     rt:spawn_raw(function()
       rt:perform(scalar:expect_op(1))
     end, 'per-focus-certificate-' .. tostring(i))
   end
   eq(rt:run().tag, 'quiescent')
-  local first = rt:instrumentation_snapshot().counters.search_calls or 0
+  local first = rt:instrumentation_report().counters.search_calls or 0
   eq(rt:run().tag, 'quiescent')
-  local counters = rt:instrumentation_snapshot().counters
+  local counters = rt:instrumentation_report().counters
   eq(counters.search_calls or 0, first, 'unchanged certificates repeated focus search')
   truthy((counters.plan_reuse_refutation_hits or 0) >= 8, 'per-focus certificates were not reused')
 end
@@ -496,7 +497,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     rt:perform(Op.choice(alternatives))
   end)
   eq(rt:run().tag, 'quiescent')
-  local counters = rt:instrumentation_snapshot().counters
+  local counters = rt:instrumentation_report().counters
   eq(counters.plan_reuse_stores or 0, 0, 'opaque continuation entered cross-cycle plan cache')
   truthy(
     (counters.plan_reuse_ineligible_dynamic or 0) > 0,
@@ -519,7 +520,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   end)
   eq(rt:run().tag, 'found')
   eq(value, 7)
-  local counters = rt:instrumentation_snapshot().counters
+  local counters = rt:instrumentation_report().counters
   eq(counters.plan_reuse_candidate_hits or 0, 0, 'positive candidate cache should be unused')
   truthy((counters.plans or math.huge) <= 2, 'binary exchange was planned redundantly')
 end
@@ -540,7 +541,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   eq(rt:run().tag, 'found')
   eq(value, 11)
   truthy(
-    (rt:instrumentation_snapshot().counters.plan_reuse_invalidations or 0) > 0,
+    (rt:instrumentation_report().counters.plan_reuse_invalidations or 0) > 0,
     'frontier change did not invalidate the cached certificate'
   )
 end

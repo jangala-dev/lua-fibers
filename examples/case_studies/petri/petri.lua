@@ -62,7 +62,7 @@ local function ensure_place(state, place)
   return state.places[place]
 end
 
-local function snapshot_state(s)
+local function marking_of(s)
   local out = {}
   for place in pairs(s.place_names or {}) do
     local tokens, ys = s.places[place] or {}, {}
@@ -329,7 +329,7 @@ function Petri:marking_op()
               return nil
             end
             done = true
-            return { writes = false, result = Op._pack(snapshot_state(state)) }
+            return { writes = false, result = Op._pack(marking_of(state)) }
           end,
         }
       end,
@@ -337,8 +337,8 @@ function Petri:marking_op()
   )
 end
 
-function Petri:snapshot()
-  return snapshot_state(self._state)
+function Petri:marking()
+  return marking_of(self._state)
 end
 
 Petri.Kind = Kind

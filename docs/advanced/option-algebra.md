@@ -147,7 +147,7 @@ The following callbacks may be replayed while proof search explores candidate wo
 
 ```text
 map and and_then callbacks
-Scalar transition callbacks
+Machine transition callbacks
 witness cursor factories and witness predicates
 facility-specific state calculations
 ```

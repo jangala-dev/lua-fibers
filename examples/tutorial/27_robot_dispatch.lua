@@ -39,7 +39,7 @@ fibers.run(function()
   }
   local stop_requests = channel.new()
   local safety_interlock = Scalar.new('clear', 'deployment-safety')
-  local battery_reserve = Counter.new({ initial = 1, name = 'battery-reserve' })
+  local battery_reserve = Counter.new(1, 'battery-reserve')
 
   if unit_is_online then
     spawn(function()

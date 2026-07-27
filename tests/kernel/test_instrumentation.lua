@@ -15,6 +15,7 @@ local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 
 local function truthy(value, message)
   if not value then
@@ -32,7 +33,7 @@ local function eq(actual, expected, message)
 end
 
 local plain = Runtime.new()
-eq(plain:instrumentation_snapshot(), nil, 'instrumentation should be opt-in')
+eq(plain:instrumentation_report(), nil, 'instrumentation should be opt-in')
 
 local rt = Runtime.new({ instrumentation = { trace = true, trace_limit = 32, slow_plan_limit = 4 } })
 local ch = Rendezvous.new('instrumentation-test')
@@ -47,7 +48,7 @@ local status = rt:run()
 eq(status.tag, 'found')
 eq(got, 'ok')
 
-local snap = rt:instrumentation_snapshot()
+local snap = rt:instrumentation_report()
 truthy(snap and snap.counters, 'missing instrumentation snapshot')
 truthy((snap.counters.plans or 0) > 0, 'plans were not recorded')
 if rt.machine_name ~= 'reference' then
@@ -72,25 +73,22 @@ if rt.machine_name ~= 'reference' then
 end
 
 rt:reset_instrumentation()
-local empty = rt:instrumentation_snapshot()
+local empty = rt:instrumentation_report()
 eq(empty.counters.plans, nil, 'reset did not clear counters')
 eq(#empty.slow_plans, 0, 'reset did not clear slow plans')
 
 -- Independent non-supplying machine-transition groups have no semantic
 -- alternative. The one lazy machine should normalise them without introducing
 -- claim branch frames.
-local ForcedTransition = Scalar.transition({
-  name = 'instrumentation.forced_transition',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(_current, payload)
-    return Scalar.Ready.write(payload, true)
-  end,
-})
+local ForcedTransition = StateMachine.isolated_update(
+  'instrumentation.forced_transition',
+  function(_, payload)
+    return StateMachine.Ready.write(payload, true)
+  end
+)
 local forced_rt = Runtime.new({ machine = 'ledger', instrumentation = true })
-local forced_a = Scalar.machine(0, 'instrumentation-forced-a')
-local forced_b = Scalar.machine(0, 'instrumentation-forced-b')
+local forced_a = StateMachine.new(0, 'instrumentation-forced-a')
+local forced_b = StateMachine.new(0, 'instrumentation-forced-b')
 forced_rt:spawn_raw(function()
   forced_rt:perform(Op.all({
     forced_a:transition_op(ForcedTransition, 1),
@@ -100,7 +98,7 @@ end, 'forced-claims')
 eq(forced_rt:run().tag, 'found')
 eq(forced_a.value, 1)
 eq(forced_b.value, 2)
-local forced_snap = forced_rt:instrumentation_snapshot()
+local forced_snap = forced_rt:instrumentation_report()
 truthy((forced_snap.counters.forced_claims or 0) >= 2, 'unavoidable claims were not normalised')
 eq(forced_snap.counters.claim_branches or 0, 0, 'unavoidable claims opened branch frames')
 
@@ -115,7 +113,7 @@ for i = 1, 20 do
 end
 local pruned_status = pruned:run()
 eq(pruned_status.tag, 'quiescent', 'unrelated requests should remain quiescent')
-local pruned_snap = pruned:instrumentation_snapshot()
+local pruned_snap = pruned:instrumentation_report()
 eq(pruned_snap.maxima.search_steps_per_plan, 1, 'irrelevant recruitment should be pruned at the root')
 eq(pruned_snap.counters.recruit_branches, 0, 'irrelevant roots were recruited')
 eq(pruned_snap.counters.footprint_matches or 0, 0, 'unrelated footprints should not match')
@@ -132,7 +130,7 @@ for i = 1, 5 do
   end, 'legacy-unrelated-' .. tostring(i))
 end
 eq(legacy_pruned:run().tag, 'quiescent')
-local legacy_snap = legacy_pruned:instrumentation_snapshot()
+local legacy_snap = legacy_pruned:instrumentation_report()
 eq(legacy_snap.counters.recruit_branches, 0, 'legacy footprint pruning recruited unrelated roots')
 truthy((legacy_snap.counters.footprint_checks or 0) > 0, 'legacy footprint pruning was not exercised')
 

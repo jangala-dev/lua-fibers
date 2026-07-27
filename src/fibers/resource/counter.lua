@@ -11,37 +11,31 @@ Counter.__index = function(self, key)
   end
   return Counter[key]
 end
-local Kind = Facility.kind('counter')
-local STATE_RESULT = Facility.result.project(function(value, program)
-  local owner = program.resource
-  return { value = value, min = owner.min, max = owner.max, version = program.location.version }
-end)
 
-local function opt_number(opts, a, b)
-  if type(opts) == 'number' then
-    return opts
+local Kind = Facility.kind('counter')
+
+local function integer(value, label, level)
+  if type(value) ~= 'number' or value % 1 ~= 0 then
+    error(label .. ' must be an integer', level or 3)
   end
-  if type(opts) == 'table' then
-    if opts[a] ~= nil then
-      return opts[a]
-    end
-    if b and opts[b] ~= nil then
-      return opts[b]
-    end
-  end
+  return value
 end
 
-function Counter.new(opts, name)
-  local initial, min, max
-  if type(opts) == 'table' then
-    initial = opt_number(opts, 'initial', 'value')
-    min, max, name = opts.min, opts.max, opts.name or name
-  else
-    initial = opts
+local function create(initial, minimum, maximum, name)
+  integer(initial, 'counter initial value', 3)
+  integer(minimum, 'counter minimum', 3)
+  if maximum ~= nil then
+    integer(maximum, 'counter maximum', 3)
   end
-  initial, min = initial == nil and 0 or initial, min == nil and 0 or min
-  local counter = Facility.identity(setmetatable({ min = min, max = max }, Counter), Kind, name)
-  counter._location = Facility.location(counter, 'stock', {
+  if initial < minimum or maximum and initial > maximum then
+    error('counter initial value is outside its range', 3)
+  end
+  if maximum and minimum > maximum then
+    error('counter minimum must not exceed maximum', 3)
+  end
+
+  local counter = Facility.identity(setmetatable({ min = minimum, max = maximum }, Counter), Kind, name)
+  counter._location = Facility.location(counter, 'value', {
     algebra = 'add',
     domain = 'counter',
     value = initial,
@@ -50,46 +44,77 @@ function Counter.new(opts, name)
     location = counter._location,
     result = Facility.result.value,
   })
-  counter._state_op = Facility.static(counter, Kind, 'read', {
+  counter._changed_descriptor = Facility.descriptor(counter, Kind, 'version_wait', {
     location = counter._location,
-    result = STATE_RESULT,
+    bind = 'version',
   })
   return counter
 end
 
-function Counter:adjust_op(n)
-  if n == nil then
-    error('counter adjust requires an amount', 2)
+function Counter.new(initial, name)
+  return create(initial or 0, 0, nil, name)
+end
+
+function Counter.bounded(capacity, name)
+  integer(capacity, 'counter capacity', 2)
+  if capacity < 0 then
+    error('counter capacity must be non-negative', 2)
+  end
+  return create(capacity, 0, capacity, name)
+end
+
+function Counter.range(initial, minimum, maximum, name)
+  return create(initial, minimum, maximum, name)
+end
+
+function Counter:read_op()
+  return self._read_op
+end
+
+function Counter:changed_op(version)
+  return Facility.occurrence(self._changed_descriptor, version)
+end
+
+function Counter:adjust_op(amount)
+  integer(amount, 'counter adjustment', 2)
+  if amount == 0 then
+    return Op.always(self.value)
   end
   return Facility.static(self, Kind, 'patch', {
     location = self._location,
-    patch = Facility.change.add(n),
+    patch = Facility.change.add(amount),
     result = Facility.result.boolean,
   })
 end
-function Counter:add_op(n)
-  if n == nil then
-    error('counter add requires an amount', 2)
+
+function Counter:add_op(amount)
+  integer(amount, 'counter addition', 2)
+  if amount < 0 then
+    error('counter addition must be non-negative', 2)
   end
-  if n < 0 then
-    error('counter add requires a non-negative amount; use adjust_op', 2)
-  end
-  return self:adjust_op(n)
+  return self:adjust_op(amount)
 end
-function Counter:give_op(n)
-  n = n or 1
-  if n < 0 then
-    error('counter give requires a non-negative amount', 2)
-  end
-  return self:adjust_op(n)
+
+function Counter:bump_op()
+  return Facility.static(self, Kind, 'patch', {
+    location = self._location,
+    patch = Facility.change.add(1),
+    result = Facility.result.value,
+  })
 end
-function Counter:take_op(n)
-  n = n or 1
-  if n < 0 then
-    error('counter take requires a non-negative amount', 2)
+
+function Counter:give_op(amount)
+  return self:add_op(amount or 1)
+end
+
+function Counter:take_op(amount)
+  amount = amount or 1
+  integer(amount, 'counter take', 2)
+  if amount < 0 then
+    error('counter take must be non-negative', 2)
   end
-  if n == 0 then
-    return Op.always(true)
+  if amount == 0 then
+    return Op.always(self.value)
   end
   return Facility.op(
     self,
@@ -97,18 +122,56 @@ function Counter:take_op(n)
     Facility.claim({
       location = self._location,
       demand = 'up',
-      query = { kind = 'predicate', predicate = 'ge', threshold = (self.min or 0) + n },
-      change = Facility.change.add(-n),
+      query = { kind = 'predicate', predicate = 'ge', threshold = self.min + amount },
+      change = Facility.change.add(-amount),
       result = Facility.result.boolean,
     })
   )
 end
-function Counter:read_op()
-  return self._read_op
+
+local function predicate_op(self, predicate, threshold, demand)
+  integer(threshold, 'counter threshold', 3)
+  return Facility.op(
+    self,
+    Kind,
+    Facility.claim({
+      location = self._location,
+      demand = demand,
+      query = { kind = 'predicate', predicate = predicate, threshold = threshold },
+      result = Facility.result.value,
+    })
+  )
 end
-function Counter:state_op()
-  return self._state_op
+
+function Counter:at_least_op(value)
+  return predicate_op(self, 'ge', value, 'up')
+end
+
+function Counter:at_most_op(value)
+  return predicate_op(self, 'le', value, 'down')
+end
+
+function Counter:equal_op(value)
+  return predicate_op(self, 'eq', value)
+end
+
+function Counter:zero_op()
+  return self:equal_op(0)
 end
 
 Counter.Kind = Kind
+Facility.performing(Counter, {
+  'read',
+  'changed',
+  'adjust',
+  'add',
+  'bump',
+  'give',
+  'take',
+  'at_least',
+  'at_most',
+  'equal',
+  'zero',
+})
+
 return Counter

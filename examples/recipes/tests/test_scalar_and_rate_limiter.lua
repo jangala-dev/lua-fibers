@@ -1,4 +1,4 @@
--- Typed Scalar transitions and RateLimiter facility.
+-- Typed Machine transitions and RateLimiter facility.
 
 package.path = table.concat({
   './src/?.lua',
@@ -14,7 +14,7 @@ package.path = table.concat({
 }, ';')
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local RateLimiter = require('examples.recipes.rate_limiter')
 local Runtime = require('fibers.runtime')
 local fibers = require('fibers')
@@ -51,17 +51,11 @@ end
 
 local function test_scalar_transition_serialises_parallel_updates()
   local rt = new_runtime()
-  local s = Scalar.new(0, 'scalar-transition-all')
-  local inc = Scalar.transition({
-    name = 'test.scalar.inc',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(v, payload)
-      local next_value = v + payload.by
-      return Scalar.Ready.write(next_value, next_value)
-    end,
-  })
+  local s = StateMachine.new(0, 'scalar-transition-all')
+  local inc = StateMachine.update('test.scalar.inc', function(v, payload)
+    local next_value = v + payload.by
+    return StateMachine.Ready.write(next_value, next_value)
+  end)
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({
@@ -136,27 +130,13 @@ local function test_rate_limiter_available_is_observational()
 end
 
 local function test_scalar_transition_ordering_is_direct_and_deterministic()
-  local s = Scalar.new('', 'scalar-ordering')
-  local first = Scalar.transition({
-    name = 'test.order.first',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    order = 0,
-    step = function(v)
-      return Scalar.Ready.write(v .. 'b', 'first')
-    end,
-  })
-  local second = Scalar.transition({
-    name = 'test.order.second',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    order = 100,
-    step = function(v)
-      return Scalar.Ready.write(v .. 'a', 'second')
-    end,
-  })
+  local s = StateMachine.new('', 'scalar-ordering')
+  local first = StateMachine.update('test.order.first', function(v)
+    return StateMachine.Ready.write(v .. 'b', 'first')
+  end)
+  local second = StateMachine.update('test.order.second', function(v)
+    return StateMachine.Ready.write(v .. 'a', 'second')
+  end, 100)
   local rows
   local rt = new_runtime()
   rt:spawn_raw(function()
@@ -169,30 +149,16 @@ local function test_scalar_transition_ordering_is_direct_and_deterministic()
 end
 
 local function test_scalar_transition_ordering_controls_select_handoff()
-  local s = Scalar.new(0, 'scalar-select-ordering')
-  local supply = Scalar.transition({
-    name = 'test.order.supply',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    order = 0,
-    step = function(v)
-      return Scalar.Ready.write(v + 1, true)
-    end,
-  })
-  local take = Scalar.transition({
-    name = 'test.order.take',
-    mode = 'select',
-    accepts_supply = true,
-    supplies = 'any',
-    order = 100,
-    step = function(v)
-      if v <= 0 then
-        return Scalar.Wait
-      end
-      return Scalar.Ready.write(v - 1, v)
-    end,
-  })
+  local s = StateMachine.new(0, 'scalar-select-ordering')
+  local supply = StateMachine.update('test.order.supply', function(v)
+    return StateMachine.Ready.write(v + 1, true)
+  end)
+  local take = StateMachine.select('test.order.take', function(v)
+    if v <= 0 then
+      return StateMachine.Wait
+    end
+    return StateMachine.Ready.write(v - 1, v)
+  end, 100)
   local rows
   local rt = new_runtime()
   rt:spawn_raw(function()
@@ -205,21 +171,19 @@ local function test_scalar_transition_ordering_controls_select_handoff()
 end
 
 local function test_scalar_transition_payload_validation()
-  local s = Scalar.new(0, 'scalar-validation')
-  local checked = Scalar.transition({
-    name = 'test.validation',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    validate = function(payload)
+  local s = StateMachine.new(0, 'scalar-validation')
+  local checked = StateMachine.update(
+    'test.validation',
+    function(v, payload)
+      return StateMachine.Ready.write(v + payload.n, true)
+    end,
+    nil,
+    function(payload)
       if type(payload.n) ~= 'number' or payload.n <= 0 then
         error('n must be positive', 2)
       end
-    end,
-    step = function(v, payload)
-      return Scalar.Ready.write(v + payload.n, true)
-    end,
-  })
+    end
+  )
   local ok = pcall(function()
     s:transition_op(checked, { n = 0 })
   end)

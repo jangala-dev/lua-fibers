@@ -35,20 +35,17 @@ end
 do
   local retired = 0
   local h = { name = 'inner-owned' }
-  Lifetime.define(
-    h,
-    {
-      closure = {
-        name = 'test-retire',
-        finish_op = function()
-          return Op.always(true):map(function()
-            retired = retired + 1
-            return true
-          end)
-        end,
-      },
-    }
-  )
+  Lifetime.define(h, {
+    closure = {
+      name = 'test-retire',
+      finish_op = function()
+        return Op.always(true):map(function()
+          retired = retired + 1
+          return true
+        end)
+      end,
+    },
+  })
   local owner_after_inner
   fibers.run(function()
     fibers.scope(function(scope)
@@ -67,20 +64,17 @@ end
 do
   local retired = 0
   local h = { name = 'promoted-owned' }
-  Lifetime.define(
-    h,
-    {
-      closure = {
-        name = 'test-retire',
-        finish_op = function()
-          return Op.always(true):map(function()
-            retired = retired + 1
-            return true
-          end)
-        end,
-      },
-    }
-  )
+  Lifetime.define(h, {
+    closure = {
+      name = 'test-retire',
+      finish_op = function()
+        return Op.always(true):map(function()
+          retired = retired + 1
+          return true
+        end)
+      end,
+    },
+  })
   local owned_by_root_after_inner
   fibers.run(function(root)
     fibers.scope(function(scope)

@@ -9,6 +9,7 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Sleep = require('fibers.sleep')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Address = require('fibers.socket.address')
 local Datagram = require('fibers.socket.datagram')
 local Dial = require('fibers.socket.dial')
@@ -26,47 +27,29 @@ Resolver.__index = Resolver
 local next_resolver = 0
 local weak_id_counter = 0
 
-local LoadClaim = Scalar.transition({
-  name = 'dns.load_once.claim',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current)
-    if current == 'idle' then
-      return Scalar.Ready.write('loading', true)
-    end
-    if current == 'loaded' then
-      return Scalar.Ready.same(false)
-    end
-    return Scalar.Wait
-  end,
-})
+local LoadClaim = StateMachine.isolated_update('dns.load_once.claim', function(current)
+  if current == 'idle' then
+    return StateMachine.Ready.write('loading', true)
+  end
+  if current == 'loaded' then
+    return StateMachine.Ready.same(false)
+  end
+  return StateMachine.Wait
+end)
 
-local LoadFinish = Scalar.transition({
-  name = 'dns.load_once.finish',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  step = function(current)
-    if current ~= 'loading' then
-      return Scalar.Wait
-    end
-    return Scalar.Ready.write('loaded', true)
-  end,
-})
+local LoadFinish = StateMachine.update('dns.load_once.finish', function(current)
+  if current ~= 'loading' then
+    return StateMachine.Wait
+  end
+  return StateMachine.Ready.write('loaded', true)
+end)
 
-local LoadReset = Scalar.transition({
-  name = 'dns.load_once.reset',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  step = function(current)
-    if current ~= 'loading' then
-      return Scalar.Ready.same(false)
-    end
-    return Scalar.Ready.write('idle', true)
-  end,
-})
+local LoadReset = StateMachine.update('dns.load_once.reset', function(current)
+  if current ~= 'loading' then
+    return StateMachine.Ready.same(false)
+  end
+  return StateMachine.Ready.write('idle', true)
+end)
 
 local function load_once(gate, loader)
   local leader = perform(gate:transition_op(LoadClaim))
@@ -358,15 +341,15 @@ function Resolver.new(opts)
     hosts = hosts,
     hosts_loaded = hosts_loaded,
     hosts_error = nil,
-    hosts_load = Scalar.machine(hosts_loaded and 'loaded' or 'idle', 'dns:hosts-load'),
-    config_load = Scalar.machine('idle', 'dns:config-load'),
+    hosts_load = StateMachine.new(hosts_loaded and 'loaded' or 'idle', 'dns:hosts-load'),
+    config_load = StateMachine.new('idle', 'dns:config-load'),
     random_u16 = opts.random_u16,
     secure_ids = nil,
   }, Resolver)
   if opts.nameservers or opts.nameserver or opts.resolv_conf then
     local config, err = Config.load(opts)
     self.config, self.config_error = config, err
-    self.config_load = Scalar.machine('loaded', 'dns:config-load')
+    self.config_load = StateMachine.new('loaded', 'dns:config-load')
   end
   return self
 end

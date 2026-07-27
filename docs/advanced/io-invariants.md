@@ -154,21 +154,21 @@ The audit is observational and does not affect production semantics. It uses
 weak references so inspection cannot retain resources.
 
 ```lua
-local snapshot = runtime:io_audit_snapshot({
+local audit = runtime:io_audit({
   include_history = true,
 })
 
 runtime:assert_io_quiescent('after server shutdown')
 ```
 
-The snapshot reports live handle and registration states, close attempts,
+The audit reports live handle and registration states, close attempts,
 service counts, lifecycle violations and aggregate reactor statistics. A clean
 runtime has no live handles, no live registrations and no recorded custody violations.
 
 The reactor also exposes:
 
 ```lua
-local snapshot = runtime.host_reactor:snapshot()
+local registrations = runtime.host_reactor:registration_count()
 runtime.host_reactor:assert_quiescent('after shutdown')
 ```
 

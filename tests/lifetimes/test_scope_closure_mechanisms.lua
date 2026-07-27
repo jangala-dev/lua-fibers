@@ -28,7 +28,7 @@ do
   local scope = Lifetimes.scope(rt, 'changed-scope')
   local first, changed
   rt:spawn_raw(function()
-    first = rt:perform(scope:_store():snapshot_op(scope))
+    first = rt:perform(scope:_store():status_op(scope))
     rt:perform(scope:admit_op(Lifetimes.resource('changed-item')))
     changed = rt:perform(scope:_store():changed_op(scope, first.version))
   end, 'lifetime-change')

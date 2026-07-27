@@ -42,53 +42,70 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
+local function perform_op(op)
+  local rt, value = new_runtime()
+  rt:spawn_raw(function()
+    value = rt:perform(op)
+  end, 'probe')
+  assert_status(rt:run(), 'found')
+  return value
+end
+
+local function assert_key(map, key, expected)
+  assert_eq(perform_op(map:contains_op(key)), expected ~= nil)
+  if expected ~= nil then
+    assert_eq(perform_op(map:get_op(key)), expected)
+  end
+end
+
 local function test_keyed_tensor_put_supplies_get()
   local rt = new_runtime()
-  local m = Keyed.new({}, 'keyed-tensor')
+  local m = Keyed.new('keyed-tensor')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({ m:put_op('k', 'v'), m:get_op('k') }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'v')
-  assert_eq(m.entries.k, 'v')
+  assert_key(m, 'k', 'v')
 end
 
 local function test_keyed_all_put_does_not_supply_get()
   local rt = new_runtime()
-  local m = Keyed.new({}, 'keyed-all')
+  local m = Keyed.new('keyed-all')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({ m:put_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'missing')
-  assert_eq(m.entries.k, 'v')
+  assert_key(m, 'k', 'v')
 end
 
-local function test_keyed_remove_constrains_get_under_all()
+local function test_keyed_remove_and_get_share_parent_value()
   local rt = new_runtime()
-  local m = Keyed.new({ a = 'A', b = 'B' }, 'keyed-remove-all')
+  local m = Keyed.from({ a = 'A', b = 'B' }, 'keyed-remove-all')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({ m:remove_op('a'), m:get_op('a'):or_else(Op.always('missing')) }))
   end, 'root')
   assert_status(rt:run(), 'found')
-  assert_eq(rows[2][1], 'missing')
-  assert_nil(m.entries.a)
-  assert_eq(m.entries.b, 'B')
+  assert_eq(rows[1][1], true)
+  assert_eq(rows[2][1], 'A')
+  assert_key(m, 'a', nil)
+  assert_key(m, 'b', 'B')
 end
 
-local function test_keyed_remove_present_returns_value()
+local function test_keyed_take_returns_value()
   local rt = new_runtime()
-  local m = Keyed.new({ a = 'A' }, 'keyed-remove-present')
+  local m = Keyed.from({ a = 'A' }, 'keyed-take')
   local v
   rt:spawn_raw(function()
-    v = rt:perform(m:remove_present_op('a'))
+    v = rt:perform(m:take_op('a'))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(v, 'A')
-  assert_nil(m.entries.a)
+  assert_key(m, 'a', nil)
 end
 
 local function test_lease_readers_merge_and_writer_conflicts()
@@ -144,7 +161,7 @@ end
 
 local function test_priority_queue_order_and_handoff_laws()
   local rt = new_runtime()
-  local pq = PriorityQueue.new({ name = 'pq-order' })
+  local pq = PriorityQueue.new(math.huge, 'pq-order')
   rt:spawn_raw(function()
     rt:perform(Op.all({ pq:put_op(10, 'low'), pq:put_op(1, 'high') }))
   end, 'seed')
@@ -158,7 +175,7 @@ local function test_priority_queue_order_and_handoff_laws()
   assert_eq(v, 'high')
   assert_eq(priority, 1)
 
-  local pq2 = PriorityQueue.new({ name = 'pq-law' })
+  local pq2 = PriorityQueue.new(math.huge, 'pq-law')
   local rt3 = new_runtime()
   local rows
   rt3:spawn_raw(function()
@@ -166,9 +183,15 @@ local function test_priority_queue_order_and_handoff_laws()
   end, 'root')
   assert_status(rt3:run(), 'found')
   assert_eq(rows[2][1], 'urgent')
-  assert_eq(next(pq2.items.entries), nil)
+  local empty
+  local rt_empty = new_runtime()
+  rt_empty:spawn_raw(function()
+    empty = rt_empty:perform(pq2:get_op():or_else(Op.always('empty')))
+  end, 'empty-check')
+  assert_status(rt_empty:run(), 'found')
+  assert_eq(empty, 'empty')
 
-  local pq3 = PriorityQueue.new({ name = 'pq-all' })
+  local pq3 = PriorityQueue.new(math.huge, 'pq-all')
   local rt4 = new_runtime()
   local rows4
   rt4:spawn_raw(function()
@@ -204,7 +227,7 @@ local function test_pool_acquire_release_and_retirement()
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_nil(pool.leases.holders.a.u1)
-  assert_eq(pool.items.entries.a.item, 'A')
+  assert_eq(perform_op(pool.items:get_op('a')).item, 'A')
   assert_eq(pool.idle.entries.a.value, 'a')
 
   local rt3 = new_runtime()
@@ -212,7 +235,7 @@ local function test_pool_acquire_release_and_retirement()
     rt3:perform(pool:retire_op('a', 'bad'))
   end, 'root')
   assert_status(rt3:run(), 'found')
-  assert_nil(pool.items.entries.a)
+  assert_eq(perform_op(pool.items:contains_op('a')), false)
   assert_eq(#retired, 1)
   assert_eq(retired[1].item, 'A')
 end
@@ -226,7 +249,7 @@ local function test_pool_all_add_does_not_supply_acquire_but_tensor_does()
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'empty')
-  assert_eq(pool.items.entries.x.item, 'X')
+  assert_eq(perform_op(pool.items:get_op('x')).item, 'X')
   assert_eq(pool.idle.entries.x.value, 'x')
 
   local pool2 = Pool.new({ name = 'pool-tensor' })
@@ -237,7 +260,7 @@ local function test_pool_all_add_does_not_supply_acquire_but_tensor_does()
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1].item, 'X')
-  assert_eq(pool2.items.entries.x.item, 'X')
+  assert_eq(perform_op(pool2.items:get_op('x')).item, 'X')
   assert_eq(pool2.idle.entries.x, nil)
   assert_eq(pool2.leases.holders.x.u, 'lease')
 end
@@ -264,22 +287,22 @@ local function test_pool_retire_leased_defers_until_release()
   end, 'retire')
   assert_status(rt2:run(), 'found')
   assert_eq(#retired, 0)
-  assert_eq(pool.items.entries.a.retire_on_release, true)
+  assert_eq(perform_op(pool.items:get_op('a')).retire_on_release, true)
   local rt3 = new_runtime()
   rt3:spawn_raw(function()
     rt3:perform(pool:release_op(lease))
   end, 'release')
   assert_status(rt3:run(), 'found')
   assert_eq(#retired, 1)
-  assert_nil(pool.items.entries.a)
+  assert_eq(perform_op(pool.items:contains_op('a')), false)
 end
 
-local function test_keyed_remove_present_then_put_replaces()
+local function test_keyed_take_then_put_replaces()
   local rt = new_runtime()
-  local m = Keyed.new({ a = 'A' }, 'keyed-replace-after-remove-present')
+  local m = Keyed.from({ a = 'A' }, 'keyed-replace-after-remove-present')
   local old
   rt:spawn_raw(function()
-    old = rt:perform(m:remove_present_op('a'):and_then(function(v)
+    old = rt:perform(m:take_op('a'):and_then(function(v)
       return m:put_op('a', 'A2'):map(function()
         return v
       end)
@@ -287,7 +310,7 @@ local function test_keyed_remove_present_then_put_replaces()
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(old, 'A')
-  assert_eq(m.entries.a, 'A2')
+  assert_key(m, 'a', 'A2')
 end
 
 local function test_pool_close_constrains_acquire_under_tensor_and_all()
@@ -305,7 +328,7 @@ local function test_pool_close_constrains_acquire_under_tensor_and_all()
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'closed')
   assert_eq(pool.open.value, false)
-  assert_eq(pool.items.entries.a.item, 'A')
+  assert_eq(perform_op(pool.items:get_op('a')).item, 'A')
   assert_eq(pool.idle.entries.a.value, 'a')
 
   local pool2 = Pool.new({ name = 'pool-close-law-all' })
@@ -322,35 +345,16 @@ local function test_pool_close_constrains_acquire_under_tensor_and_all()
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], 'closed')
   assert_eq(pool2.open.value, false)
-  assert_eq(pool2.items.entries.a.item, 'A')
+  assert_eq(perform_op(pool2.items:get_op('a')).item, 'A')
   assert_eq(pool2.idle.entries.a.value, 'a')
-end
-
-local function test_lease_snapshot_records_structure_validity()
-  local rt = new_runtime()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-snapshot-validity')
-  local snap
-  rt:spawn_raw(function()
-    snap = rt:perform(c:snapshot_op())
-  end, 'root')
-  assert_status(rt:run(), 'found')
-  assert_eq(snap.version, 0)
-
-  local rt2 = new_runtime()
-  rt2:spawn_raw(function()
-    rt2:perform(Op.all({ c:snapshot_op(), c:acquire_op('s', 'read', 'a') }))
-  end, 'root')
-  assert_status(rt2:run(), 'found')
-  assert_eq(c.version, 1)
-  assert_eq(c.holders.s.a, 'read')
 end
 
 local tests = {
   test_keyed_tensor_put_supplies_get,
   test_keyed_all_put_does_not_supply_get,
-  test_keyed_remove_constrains_get_under_all,
-  test_keyed_remove_present_returns_value,
-  test_keyed_remove_present_then_put_replaces,
+  test_keyed_remove_and_get_share_parent_value,
+  test_keyed_take_returns_value,
+  test_keyed_take_then_put_replaces,
   test_lease_readers_merge_and_writer_conflicts,
   test_lease_tensor_release_supplies_acquire_but_all_does_not,
   test_priority_queue_order_and_handoff_laws,
@@ -358,7 +362,6 @@ local tests = {
   test_pool_all_add_does_not_supply_acquire_but_tensor_does,
   test_pool_retire_leased_defers_until_release,
   test_pool_close_constrains_acquire_under_tensor_and_all,
-  test_lease_snapshot_records_structure_validity,
 }
 
 for i = 1, #tests do

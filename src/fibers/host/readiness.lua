@@ -1,5 +1,5 @@
 local Facility = require('fibers.resource.authoring')
-local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Interest = require('fibers.host.external').Interest
 local ExternalFeed = require('fibers.host.external').Feed
 
@@ -82,18 +82,12 @@ function Readiness:readiness_op(selected)
     return self[field]
   end
   local r, key = self, self.key
-  local transition = Scalar.transition({
-    name = self.name .. ':' .. selected,
-    mode = 'query',
-    accepts_supply = false,
-    supplies = 'none',
-    step = function(state)
-      if not state[selected] then
-        return Scalar.Wait
-      end
-      return Scalar.Ready.same(true, key, selected)
-    end,
-  })
+  local transition = StateMachine.isolated_query(self.name .. ':' .. selected, function(state)
+    if not state[selected] then
+      return StateMachine.Wait
+    end
+    return StateMachine.Ready.same(true, key, selected)
+  end)
   local option = Facility.external_wait(self, Kind, self._location, transition, {
     interest = function(rt)
       return Interest.external(r, selected .. ':' .. tostring(key), {

@@ -67,7 +67,7 @@ do
   )
   rt:run()
   assert_eq(reads, 0, 'stale readiness must not invoke the backend')
-  local audit = rt:io_audit_snapshot()
+  local audit = rt:io_audit()
   assert_eq(audit.stats.stale_ready, 1, 'stale readiness should be observable')
   rt:spawn_raw(function()
     rt:perform(stream:abort_op('test complete'))

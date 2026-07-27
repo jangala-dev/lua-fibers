@@ -4,7 +4,7 @@
 -- Runtime and owns the sole transactional topology for that Runtime.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 
 local Store = {}
 
@@ -24,7 +24,7 @@ function Store.new(runtime)
     return node and (node.value or node) or nil
   end
   local Phase = { live = 'live', closing = 'closing', closure_failed = 'closure_failed' }
-  local Ready, Wait = Scalar.Ready, Scalar.Wait
+  local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 
   local next_node = 0
   local next_close_token = 0
@@ -173,7 +173,7 @@ function Store.new(runtime)
     dirty_items = {},
     removed_records = false,
   }
-  local ledger = Scalar.machine(initial_state, 'lifetime-forest')
+  local ledger = StateMachine.new(initial_state, 'lifetime-forest')
   ledger._location.clone_value = nil
 
   local function boundary_state(s, boundary)
@@ -292,42 +292,27 @@ function Store.new(runtime)
     sync_store(v)
   end
 
-  local function transition(spec)
-    return Scalar.transition(spec)
+  local function op_transition(transition, payload)
+    return ledger:transition_op(transition, payload or {})
   end
-  local function op_transition(t, payload)
-    return ledger:transition_op(t, payload or {})
-  end
+
   local function query_transition(name, fn)
-    return transition({
-      name = name,
-      mode = 'query',
-      order = 10,
-      accepts_supply = false,
-      supplies = 'none',
-      step = function(s, p)
-        return Ready.same(fn(s, p))
-      end,
-    })
+    return StateMachine.isolated_query(name, function(state, payload)
+      return Ready.same(fn(state, payload))
+    end, 10)
   end
+
   local function query_op(name, fn)
     return op_transition(query_transition(name, fn))
   end
+
   local function select_transition(name, ready, step, order)
-    return transition({
-      name = name,
-      mode = 'select',
-      order = order or 50,
-      accepts_supply = false,
-      supplies = 'none',
-      ready = ready,
-      step = function(s, p)
-        if not ready(s, p) then
-          return Wait
-        end
-        return step(s, p)
-      end,
-    })
+    return StateMachine.isolated_select_when(name, ready, function(state, payload)
+      if not ready(state, payload) then
+        return Wait
+      end
+      return step(state, payload)
+    end, order or 50)
   end
 
   local function walk_subtree(s, boundary, root, visit, seen)
@@ -901,8 +886,8 @@ function Store.new(runtime)
     end)
   end
 
-  function api:snapshot_op(view)
-    return query_op('lifetime.snapshot', function(s)
+  function api:status_op(view)
+    return query_op('lifetime.status', function(s)
       local boundary, bs = boundary_of(view), boundary_state(s, boundary_of(view))
       local custody, roots, closing, failed = 0, 0, 0, 0
       each_record(s, boundary, function(_, rec)

@@ -55,7 +55,7 @@ local Flow = require('fibers.resource.flow')
 
 -- Primitive flow: inlet writes bytes, outlet reads bytes, handles are stable.
 do
-  local flow = Flow.new({ name = 'primitive-flow', capacity = 16 })
+  local flow = Flow.new(16, 'primitive-flow')
   assert_eq(flow:inlet(), flow:inlet(), 'flow inlet handle should be stable')
   assert_eq(flow:outlet(), flow:outlet(), 'flow outlet handle should be stable')
   assert_nil(flow.writer, 'primitive Flow should not expose writer alias')
@@ -311,11 +311,11 @@ do
   local a, b = Stream.memory_pair({ name = 'chunked' })
   local big_a = string.rep('a', 9000)
   local big_b = string.rep('b', 9000)
-  local first, cross, rest, st_snapshot
+  local first, cross, rest, chunks
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op(big_a))
     fibers.perform(a:writer():write_op(big_b))
-    st_snapshot = fibers.perform(b:reader().flow:inspect_op())
+    chunks = Inspect.chunk_count(b:reader().flow)
     first = fibers.perform(b:reader():read_exactly_op(8999))
     cross = fibers.perform(b:reader():read_exactly_op(2))
     rest = fibers.perform(b:reader():read_exactly_op(8999))
@@ -325,7 +325,7 @@ do
   assert_eq(first, string.rep('a', 8999))
   assert_eq(cross, 'ab', 'reads should cross chunk boundaries in order')
   assert_eq(rest, string.rep('b', 8999))
-  assert_truthy(st_snapshot.chunk_count >= 2, 'large writes should remain as multiple chunks')
+  assert_truthy(chunks >= 2, 'large writes should remain as multiple chunks')
   assert_eq(Inspect.data(b:reader().flow), '')
 end
 
@@ -512,7 +512,7 @@ end
 
 -- Flow exposes delimiter helpers above the byte-storage machine.
 do
-  local flow = Flow.new({ name = 'flow-derived-read-facts', capacity = 32 })
+  local flow = Flow.new(32, 'flow-derived-read-facts')
   local line, tail
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc\ndef'))
@@ -546,8 +546,8 @@ end
 -- A Stream is only a pairing of Flow capabilities: the same Flows remain
 -- directly composable through tensor, tees and other Flow-level protocols.
 do
-  local read_flow = Flow.new({ name = 'composed-read' })
-  local write_flow = Flow.new({ name = 'composed-write' })
+  local read_flow = Flow.new(nil, 'composed-read')
+  local write_flow = Flow.new(nil, 'composed-write')
   local composed = Stream.compose(read_flow, write_flow, { name = 'composed-stream' })
   assert(composed:reader() == read_flow:outlet())
   assert(composed:writer() == write_flow:inlet())

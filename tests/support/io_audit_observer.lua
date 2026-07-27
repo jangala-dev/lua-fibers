@@ -278,7 +278,7 @@ local function include_record(rec, opts)
   return rec.state ~= 'closed' and rec.state ~= 'retired'
 end
 
-function Audit.snapshot(rt, opts)
+function Audit.report(rt, opts)
   opts = opts or {}
   local items = {}
   local counts = {}
@@ -331,12 +331,12 @@ function Audit.snapshot(rt, opts)
 end
 
 function Audit.active(rt)
-  return Audit.snapshot(rt).items
+  return Audit.report(rt).items
 end
 
 function Audit.assert_clean(rt, opts)
   opts = opts or {}
-  local snapshot = Audit.snapshot(rt)
+  local snapshot = Audit.report(rt)
   local bad = {}
   for _, item in ipairs(snapshot.items) do
     if item.kind == 'reactor_registration' then

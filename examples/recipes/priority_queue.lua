@@ -1,68 +1,62 @@
--- Transactional priority queue built from Index + Counter.
--- Lower numeric priority/rank is returned first.  Equal priorities are ordered
--- by the Index auto-insert sequence.
-
 local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
 local Counter = require('fibers.resource.counter')
+local perform = require('fibers.perform')
 
 local PriorityQueue = {}
 PriorityQueue.__index = PriorityQueue
-local next_id = 0
 
-function PriorityQueue.new(opts, name)
-  opts = opts or {}
-  if type(opts) == 'number' then
-    opts = { capacity = opts }
+local function child_name(name, suffix)
+  return name and name .. ':' .. suffix or nil
+end
+
+local function create(name)
+  return setmetatable({ _items = Index.new(child_name(name, 'items')) }, PriorityQueue)
+end
+
+function PriorityQueue.new(capacity, name)
+  assert(
+    capacity == math.huge or type(capacity) == 'number' and capacity >= 0 and capacity % 1 == 0,
+    'priority queue capacity must be a non-negative integer or math.huge'
+  )
+
+  local queue = create(name)
+  if capacity ~= math.huge then
+    queue._slots = Counter.bounded(capacity, child_name(name, 'slots'))
   end
-  next_id = next_id + 1
-  local id = 'priority-queue-' .. tostring(next_id)
-  local qname = opts.name or name or id
-  local cap = opts.capacity
-  return setmetatable({
-    name = qname,
-    items = opts.items or Index.new({}, qname .. ':items'),
-    slots = cap and Counter.new({ initial = cap, min = 0, max = cap, name = qname .. ':slots' }) or nil,
-    capacity = cap,
-  }, PriorityQueue)
+  return queue
 end
 
 function PriorityQueue:put_op(priority, value)
-  if priority == nil then
-    error('priority queue put requires a priority', 2)
+  local put = self._items:insert_auto_op(priority, value)
+  if not self._slots then
+    return put
   end
-  local put_item = self.items:insert_auto_op(priority, value)
-  if not self.slots then
-    return put_item
-  end
-  return Op.tensor({ self.slots:take_op(1), put_item }):map(function()
+  return Op.tensor({ self._slots:take_op(), put }):map(function()
     return true
   end)
 end
 
 function PriorityQueue:get_op()
-  return self.items:pop_first_op():and_then(function(entry)
-    local release = self.slots and self.slots:give_op(1) or Op.always(true)
-    return release:map(function()
+  local get = self._items:pop_first_op()
+  if not self._slots then
+    return get:map(function(entry)
       return entry.value, entry.rank
     end)
-  end)
+  end
+  return get:and_then(function(entry)
+    return self._slots:give_op():map(function()
+      return entry.value, entry.rank
+    end)
+  end, Op.dependencies(get, self._slots:give_op()))
 end
 
-function PriorityQueue:snapshot_op()
-  return self.items:snapshot_op():map(function(snapshot)
-    local rows = {}
-    for _, e in pairs(snapshot.entries or {}) do
-      rows[#rows + 1] = { key = e.key, priority = e.rank, value = e.value, seq = e.seq }
-    end
-    table.sort(rows, function(a, b)
-      if a.priority == b.priority then
-        return (a.seq or 0) < (b.seq or 0)
-      end
-      return a.priority < b.priority
-    end)
-    return rows
-  end)
+function PriorityQueue:put(priority, value)
+  return perform(self:put_op(priority, value))
+end
+
+function PriorityQueue:get()
+  return perform(self:get_op())
 end
 
 return PriorityQueue

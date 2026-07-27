@@ -1,160 +1,97 @@
--- Versioned broadcast pulse built on typed Scalar transitions.
---
--- A Pulse is a coalescing notifier.  Signals increment a logical version;
--- waiters observe that the version has advanced, or that the pulse has been
--- closed.  It is a facility over Scalar, not a scheduler-side wait list.
+-- Coalescing broadcast notification from Counter + Scalar.
 
+local Counter = require('fibers.resource.counter')
 local Scalar = require('fibers.resource.scalar')
-local Ready, Wait = Scalar.Ready, Scalar.Wait
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
 
 local Pulse = {}
 Pulse.__index = Pulse
 
-local next_id = 0
+local OPEN = {}
 
-local function non_negative_integer(n, name, level)
-  if type(n) ~= 'number' or n < 0 or n ~= math.floor(n) then
-    error(name .. ' must be a non-negative integer', level or 3)
-  end
-  return n
+local function child_name(name, suffix)
+  return name and name .. ':' .. suffix or nil
 end
 
-local function copy_state(st)
-  st = st or {}
-  return {
-    version = st.version or 0,
-    closed = st.closed == true,
-    reason = st.reason,
-  }
+local function closed(status)
+  return status ~= OPEN
 end
 
-local State = Scalar.kind({
-  name = 'pulse.state',
-  transitions = {
-    signal = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 0,
-      step = function(st)
-        st = copy_state(st)
-        if st.closed then
-          return Ready.write(st, nil)
-        end
-        st.version = st.version + 1
-        return Ready.write(st, st.version)
-      end,
-    },
-    close = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 10,
-      step = function(st, payload)
-        st = copy_state(st)
-        if st.reason == nil and payload.reason ~= nil then
-          st.reason = payload.reason
-        end
-        st.closed = true
-        return Ready.write(st, true)
-      end,
-    },
-    changed = {
-      mode = 'select',
-      accepts_supply = true,
-      supplies = 'any',
-      order = 100,
-      validate = function(payload)
-        non_negative_integer(payload.last_seen, 'pulse changed last_seen', 3)
-      end,
-      step = function(st, payload)
-        st = copy_state(st)
-        if st.version > payload.last_seen then
-          return Ready.write(st, st.version, nil)
-        end
-        if st.closed then
-          return Ready.write(st, nil, st.reason)
-        end
-        return Wait
-      end,
-    },
-  },
-})
+local function non_negative_integer(value, label, level)
+  if type(value) ~= 'number' or value < 0 or value % 1 ~= 0 then
+    error(label .. ' must be a non-negative integer', level or 3)
+  end
+  return value
+end
 
-function Pulse.new(opts, name)
-  opts = opts or {}
-  if type(opts) == 'number' then
-    opts = { initial_version = opts }
-  end
-  next_id = next_id + 1
-  local id = 'pulse-' .. tostring(next_id)
-  local pname = opts.name or name or id
-  local initial = opts.initial_version
-  if initial == nil then
-    initial = opts.version or 0
-  end
-  non_negative_integer(initial, 'pulse initial_version', 2)
+function Pulse.new(initial, name)
+  initial = non_negative_integer(initial or 0, 'pulse initial version', 2)
   return setmetatable({
-    name = pname,
-    state = opts.state or Scalar.new({ version = initial, closed = false, reason = nil }, pname .. ':state'),
+    _version = Counter.new(initial, child_name(name, 'version')),
+    _status = Scalar.new(OPEN, child_name(name, 'status')),
   }, Pulse)
 end
 
-function Pulse:snapshot_op()
-  return self.state:read_op():map(function(st)
-    return copy_state(st)
-  end)
-end
-
 function Pulse:version_op()
-  return self.state:read_op():map(function(st)
-    return (st and st.version) or 0
-  end)
+  return self._version:read_op()
 end
 
 function Pulse:why_op()
-  return self.state:read_op():map(function(st)
-    return st and st.reason or nil
+  return self._status:read_op():map(function(status)
+    return closed(status) and status.reason or nil
   end)
 end
 
 function Pulse:is_closed_op()
-  return self.state:read_op():map(function(st)
-    return st and st.closed == true or false
-  end)
+  return self._status:read_op():map(closed)
 end
 
 function Pulse:signal_op()
-  return Op.guard(function()
-    return self.state:read_op():and_then(function(st)
-      st = copy_state(st)
-      if st.closed then
-        return Op.always(nil)
-      end
-      return self.state:transition_op(State:transition('signal'))
-    end)
+  local signal = Op.all({
+    self._status:expect_op(OPEN),
+    self._version:bump_op(),
+  }):map(function(rows)
+    return rows[2][1]
   end)
+
+  return signal:or_else(self._status:value_op(closed):map(function()
+    return nil
+  end))
 end
 
 function Pulse:close_op(reason)
-  return self.state:transition_op(State:transition('close'), { reason = reason })
+  local close = self._status:expect_op(OPEN):and_then(function()
+    return self._status:write_op({ reason = reason }):map(function()
+      return true
+    end)
+  end)
+
+  return close:or_else(self._status:value_op(closed):map(function()
+    return true
+  end))
 end
 
 function Pulse:changed_op(last_seen)
-  return self.state:transition_op(State:transition('changed'), { last_seen = last_seen })
+  non_negative_integer(last_seen, 'pulse changed last_seen', 2)
+
+  local changed = self._version:at_least_op(last_seen + 1):map(function(version)
+    return version, nil
+  end)
+
+  local ended = self._status:value_op(closed):map(function(status)
+    return nil, status.reason
+  end)
+
+  return changed:or_else(ended)
 end
 
 function Pulse:next_op()
-  return Op.guard(function()
-    return self.state:read_op():and_then(function(st)
-      return self:changed_op((st and st.version) or 0)
-    end)
+  return self._version:read_op():and_then(function(version)
+    return self:changed_op(version)
   end)
 end
 
-Pulse.State = State
 function Pulse:signal()
   return perform(self:signal_op())
 end

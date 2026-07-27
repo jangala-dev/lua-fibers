@@ -16,22 +16,27 @@ src/fibers/
   scope/                   custody/admission view and boundary Closure
   task.lua                 execution/control view of a Lifetime
 
-  channel.lua              common application communication
-  mailbox.lua              split messaging endpoints
-  pulse.lua                coalescing notification
+  channel.lua              capacity-directed FIFO/Rendezvous façade
+  semaphore.lua            capacity vocabulary over Counter
+  latch.lua                set-once value over Scalar
+  mailbox.lua              Channel + RefCount + Scalar + Counter
+  pulse.lua                Counter epoch + Scalar closure
   sleep.lua                direct and composable time waits
   stream.lua               public readable, writable and duplex interfaces
 
-  resource/                lower-level transactional building blocks
-    flow/                  transactional transfer atom, leases and rope storage
-    queue.lua              transactional queue
-    scalar.lua             scalar state and typed transitions
-    completion.lua         one-shot completion resource
+  resource/                lower-level resources and transactional laws
+    scalar.lua             versioned replacement
+    counter.lua            additive bounded quantity
+    index.lua              ordered witnessed collection
+    fifo.lua               FIFO composition from Index + Counter
     rendezvous.lua         synchronous exchange
-    counter.lua            counted stock
-    index.lua              indexed transactional collection
-    keyed.lua              keyed allocation
-    lease.lua              transactional leasing
+    ref_count.lua          idempotent handles over Counter + Scalar
+    machine.lua            explicit serial state relation
+    event_queue.lua        external-authorisation boundary
+    flow/                  transactional transfer atom, leases and rope storage
+    completion.lua         one-shot completion law
+    keyed.lua              independent keyed presence slots
+    lease.lua              transactional leasing law
     authoring.lua          trusted facility compilation materials
 
   effect.lua               committed obligation kinds and effects
@@ -53,7 +58,7 @@ src/fibers/
     kernel/                closed production proof and transaction kernel
 
 examples/tutorial/         ordinary application use
-examples/recipes/          tested facilities built from supported modules
+examples/recipes/          tested facilities, including PriorityQueue, built from supported modules
 examples/embedding/        host and runtime integration
 examples/lifetimes/        advanced custody and Closure examples
 examples/case_studies/     trusted kernel programmes, not installed APIs
@@ -89,12 +94,30 @@ local Op = require('fibers.op')
 local Channel = require('fibers.channel')
 local Stream = require('fibers.stream')
 local Flow = require('fibers.resource.flow')
-local Queue = require('fibers.resource.queue')
+local FIFO = require('fibers.resource.fifo')
 ```
 
 There is no `fibers.resource` façade and no duplicate top-level façade for
-Flow, Queue or Scalar. Top-level placement denotes common application
+Flow or Scalar. Top-level placement denotes common application
 vocabulary; `resource/` denotes lower-level transactional construction.
+
+Low-level primitive constructors are positional and do not accept options
+tables or injected sub-resources. Semantic values come first; an optional
+diagnostic name follows:
+
+```lua
+Channel.new(capacity, name)
+FIFO.new(capacity, name) -- math.huge is unbounded
+Counter.new(initial, name)
+Counter.bounded(capacity, name) / Counter.range(initial, minimum, maximum, name)
+Pulse.new(initial_version, name)
+Flow.new(capacity, name)
+```
+
+Distinct laws use distinct constructors rather than string switches, for
+example `Mailbox.new`, `Mailbox.reject_newest` and `Mailbox.drop_oldest`.
+Policy-heavy runtimes, hosts and adapters may still use option records where
+the fields form a genuine configuration object.
 
 ## Module placement rule
 

@@ -477,7 +477,7 @@ assert(connection, report)
 ```
 
 `socket.connect_name` implements the Happy Eyeballs v2 coordination loop as a
-Scalar state machine. Attempt outcomes, DNS completions and timer/admission
+Machine. Attempt outcomes, DNS completions and timer/admission
 progress are composed as `outcomes:or_else(sources:or_else(progress))`. New
 addresses may join the globally ordered unattempted set after numeric Dials have
 begun. The first successful Stream moves into the caller's scope, and the call
@@ -656,7 +656,7 @@ result.runtime:assert_io_quiescent('application shutdown')
 For diagnostics:
 
 ```lua
-local snapshot = fibers.current_runtime():io_audit_snapshot({
+local audit = fibers.current_runtime():io_audit({
   include_history = true,
 })
 ```

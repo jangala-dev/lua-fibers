@@ -89,12 +89,4 @@ function Service:progress(kind)
   self.remaining = self.quantum
 end
 
-function Service:snapshot()
-  return {
-    quantum = self.quantum,
-    preferred = self.preferred,
-    remaining = self.remaining,
-  }
-end
-
 return Service

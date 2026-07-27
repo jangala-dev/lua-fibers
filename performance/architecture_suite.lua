@@ -19,6 +19,7 @@ package.path = table.concat({
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Op = require('fibers.op')
 local fibers = require('fibers')
 local Closure = require('fibers.closure')
@@ -167,7 +168,7 @@ end)
 
 add('forced scalar query sequence', function(profile, machine)
   local rt = runtime(profile, machine)
-  local scalar = Scalar.machine(9, 'arch-forced-scalar')
+  local scalar = StateMachine.new(9, 'arch-forced-scalar')
   local total, n = 0, 80
   rt:spawn_raw(function()
     for _ = 1, n do
@@ -278,7 +279,7 @@ for _, scenario in ipairs(scenarios) do
           local started = Clock.now()
           local rt, value = scenario.run(profile, machine)
           elapsed_samples[#elapsed_samples + 1] = Clock.now() - started
-          last_snapshot = rt:instrumentation_snapshot()
+          last_snapshot = rt:instrumentation_report()
           if digest ~= nil then
             assert(digest == value, 'non-replayable scenario digest')
           end

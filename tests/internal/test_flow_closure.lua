@@ -205,25 +205,24 @@ end
 -- kinds of active lease.  No retained byte custody survives closed_op.
 do
   local Flow = require('fibers.resource.flow')
-  local flow = Flow.new({ name = 'terminal-flow', capacity = 8 })
-  local closed, close_err, inspect, stale_lease_err, stale_space_err
+  local flow = Flow.new(8, 'terminal-flow')
+  local closed, close_err, stale_lease_err, stale_space_err
   fibers.run(function()
     fibers.perform(flow:inlet():write_op('abcd'))
     local lease = fibers.perform(flow:outlet():lease_some_op(2, flow))
     local space = fibers.perform(flow:inlet():reserve_some_op(2, flow))
     fibers.perform(flow:abort_op('finished'))
     closed, close_err = fibers.perform(flow:closed_op())
-    inspect = fibers.perform(flow:inspect_op())
     local _ok
     _ok, stale_lease_err = fibers.perform(lease:release_op())
     _ok, stale_space_err = fibers.perform(space:release_op())
   end)
   assert_eq(closed, true, 'closed_op should observe terminal Flow shutdown')
   assert_nil(close_err)
-  assert_eq(inspect.queued, 0)
-  assert_eq(inspect.leased, 0)
-  assert_eq(inspect.reserved, 0)
-  assert_eq(inspect.retained, 0)
+  assert_eq(Inspect.queued(flow), 0)
+  assert_eq(Inspect.leased_bytes(flow), 0)
+  assert_eq(Inspect.reserved(flow), 0)
+  assert_eq(Inspect.retained(flow), 0)
   assert_eq(stale_lease_err, 'no_lease')
   assert_eq(stale_space_err, 'no_space_lease')
 end

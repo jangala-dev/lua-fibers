@@ -50,7 +50,6 @@ do
 
   local scalar = Scalar.new(0, 'minimal-cached-scalar')
   eq(scalar:read_op(), scalar:read_op(), 'scalar read option should be cached')
-  eq(scalar:snapshot_op(), scalar:snapshot_op(), 'scalar snapshot option should be cached')
   truthy(
     scalar:read_op().program and scalar:read_op().program._fibers_program,
     'cached scalar read should use a primitive descriptor'
@@ -58,7 +57,6 @@ do
 
   local counter = Counter.new(0, 'minimal-cached-counter')
   eq(counter:read_op(), counter:read_op(), 'counter read option should be cached')
-  eq(counter:state_op(), counter:state_op(), 'counter state option should be cached')
 
   local queue = EventQueue.new('minimal-cached-events')
   eq(queue:next_op(), queue:next_op(), 'event queue next option should be cached')

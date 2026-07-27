@@ -39,15 +39,15 @@ function Audit.record(value)
   return observer and observer.record and observer.record(value) or nil
 end
 
-function Audit.snapshot(rt, opts)
-  if observer and observer.snapshot then
-    return observer.snapshot(rt, opts)
+function Audit.report(rt, opts)
+  if observer and observer.report then
+    return observer.report(rt, opts)
   end
   return { counts = {}, items = {}, stats = nil }
 end
 
 function Audit.active(rt)
-  return Audit.snapshot(rt).items
+  return Audit.report(rt).items
 end
 
 function Audit.assert_clean(rt, opts)

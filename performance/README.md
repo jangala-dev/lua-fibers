@@ -105,15 +105,15 @@ local rt = Runtime.new({
   },
 })
 
--- Run work, then inspect a detached snapshot.
-local snapshot = rt:instrumentation_snapshot()
+-- Run work, then inspect a detached report.
+local report = rt:instrumentation_report()
 rt:reset_instrumentation()
 ```
 
 An ordinary runtime has `instrumentation == nil` and pays only guarded checks at
 instrumentation sites. Timings in `suite.lua` use this ordinary path.
 
-The snapshot contains:
+The report contains:
 
 - cumulative counters;
 - high-water marks;

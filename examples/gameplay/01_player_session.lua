@@ -30,7 +30,7 @@ fibers.run(function(root)
   end, 'simulate-player-leaving')
 
   session_reason = fibers.scope({ name = 'player:Mira' }, function(scope)
-    local session_ending = Pulse.new({ name = 'player:Mira:ending' })
+    local session_ending = Pulse.new(0, 'player:Mira:ending')
 
     local function run_until_session_ends(name, on_tick)
       scope:spawn(function()

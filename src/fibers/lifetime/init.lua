@@ -9,6 +9,7 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 
 local Lifetime = {}
@@ -17,23 +18,17 @@ local Node = {}
 
 Node.__index = Node
 
-local RequestCancel = Scalar.transition({
-  name = 'lifetime.request_cancel',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  step = function(state, payload)
-    if type(state) == 'table' and (state.cancelled or state.requested) then
-      return Scalar.Ready.same(false, state.reason)
-    end
-    local next_state = {
-      requested = true,
-      cancelled = true,
-      reason = payload.reason,
-    }
-    return Scalar.Ready.write(next_state, true, payload.reason)
-  end,
-})
+local RequestCancel = StateMachine.update('lifetime.request_cancel', function(state, payload)
+  if type(state) == 'table' and (state.cancelled or state.requested) then
+    return StateMachine.Ready.same(false, state.reason)
+  end
+  local next_state = {
+    requested = true,
+    cancelled = true,
+    reason = payload.reason,
+  }
+  return StateMachine.Ready.write(next_state, true, payload.reason)
+end)
 
 local function pending()
   return { status = 'pending' }
@@ -133,7 +128,7 @@ function Lifetime.new(name, opts)
     rights = opts.rights,
     meta = opts.meta,
     cancellation = opts.cancellation
-      or Scalar.new({ requested = false, cancelled = false }, node_name .. '-cancellation'),
+      or StateMachine.new({ requested = false, cancelled = false }, node_name .. '-cancellation'),
     interrupt = opts.interrupt or Runtime._new_interrupt(node_name .. '-interrupt'),
     body_result = opts.body_result or Scalar.new(pending(), node_name .. '-body-result'),
     outcome = opts.outcome or Scalar.new(pending(), node_name .. '-outcome'),

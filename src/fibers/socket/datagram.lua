@@ -17,8 +17,9 @@ local Lifetime = require('fibers.lifetime')
 local Task = require('fibers.task')
 local Scope = require('fibers.scope')
 local Closure = require('fibers.closure')
-local Queue = require('fibers.resource.queue')
+local FIFO = require('fibers.resource.fifo')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
 
@@ -31,73 +32,55 @@ local DatagramLifecycle = Lifecycle.define({
   available = true,
 })
 
-local Ready = Scalar.Ready
+local Ready = StateMachine.Ready
 local SendState = {}
 SendState.__index = SendState
 
-local Allocate = Scalar.transition({
-  name = 'socket.datagram.allocate_send',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current)
-    if current.terminal_error ~= nil then
-      return Ready.same(nil, current.terminal_error)
-    end
-    local next_state = {
-      next_seq = current.next_seq + 1,
-      completed_seq = current.completed_seq,
-      terminal_error = nil,
-      failure_seq = nil,
-    }
-    return Ready.write(next_state, next_state.next_seq)
-  end,
-})
+local Allocate = StateMachine.isolated_update('socket.datagram.allocate_send', function(current)
+  if current.terminal_error ~= nil then
+    return Ready.same(nil, current.terminal_error)
+  end
+  local next_state = {
+    next_seq = current.next_seq + 1,
+    completed_seq = current.completed_seq,
+    terminal_error = nil,
+    failure_seq = nil,
+  }
+  return Ready.write(next_state, next_state.next_seq)
+end)
 
-local Complete = Scalar.transition({
-  name = 'socket.datagram.complete_send',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current, payload)
-    if payload.seq <= current.completed_seq then
-      return Ready.same(true)
-    end
-    if payload.seq ~= current.completed_seq + 1 then
-      return Ready.same(nil, {
-        kind = 'datagram_send_order_violation',
-        expected = current.completed_seq + 1,
-        got = payload.seq,
-      })
-    end
-    local next_state = {
-      next_seq = current.next_seq,
-      completed_seq = payload.seq,
-      terminal_error = current.terminal_error,
-      failure_seq = current.failure_seq,
-    }
-    return Ready.write(next_state, true)
-  end,
-})
+local Complete = StateMachine.isolated_update('socket.datagram.complete_send', function(current, payload)
+  if payload.seq <= current.completed_seq then
+    return Ready.same(true)
+  end
+  if payload.seq ~= current.completed_seq + 1 then
+    return Ready.same(nil, {
+      kind = 'datagram_send_order_violation',
+      expected = current.completed_seq + 1,
+      got = payload.seq,
+    })
+  end
+  local next_state = {
+    next_seq = current.next_seq,
+    completed_seq = payload.seq,
+    terminal_error = current.terminal_error,
+    failure_seq = current.failure_seq,
+  }
+  return Ready.write(next_state, true)
+end)
 
-local Fail = Scalar.transition({
-  name = 'socket.datagram.fail_send',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current, payload)
-    if current.terminal_error ~= nil then
-      return Ready.same(false, current)
-    end
-    local next_state = {
-      next_seq = current.next_seq,
-      completed_seq = current.completed_seq,
-      terminal_error = payload.error,
-      failure_seq = payload.seq or (current.completed_seq + 1),
-    }
-    return Ready.write(next_state, true, next_state)
-  end,
-})
+local Fail = StateMachine.isolated_update('socket.datagram.fail_send', function(current, payload)
+  if current.terminal_error ~= nil then
+    return Ready.same(false, current)
+  end
+  local next_state = {
+    next_seq = current.next_seq,
+    completed_seq = current.completed_seq,
+    terminal_error = payload.error,
+    failure_seq = payload.seq or (current.completed_seq + 1),
+  }
+  return Ready.write(next_state, true, next_state)
+end)
 
 local function wait_flush(state, target)
   return Scalar.select_op(state, function(value)
@@ -113,13 +96,13 @@ end
 function SendState.new(name, capacity)
   local self = setmetatable({
     name = name,
-    state = Scalar.machine({
+    state = StateMachine.new({
       next_seq = 0,
       completed_seq = 0,
       terminal_error = nil,
       failure_seq = nil,
     }, name .. ':state'),
-    queue = Queue.new({ capacity = capacity or 64, name = name .. ':queue' }),
+    queue = FIFO.new(capacity or 64, name .. ':queue'),
   }, SendState)
   self._admit_footprint = Op.dependencies(self.state:transition_op(Allocate), self.queue:put_footprint())
   self._flush_footprint = Op.dependencies(self.state:read_op(), self.state:changed_op(0))
@@ -512,7 +495,7 @@ function Module.udp_op(address, opts)
     address = address,
     lifecycle = DatagramLifecycle.new(name, address),
     host_hold = HostHold.new(name .. ':host-hold'),
-    incoming = Queue.new({ capacity = receive_capacity, name = name .. ':incoming' }),
+    incoming = FIFO.new(receive_capacity, name .. ':incoming'),
     sends = SendState.new(name .. ':sends', send_capacity),
     max_datagram_size = max_datagram_size,
     service_quantum = service_quantum,

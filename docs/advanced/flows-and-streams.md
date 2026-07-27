@@ -28,14 +28,14 @@ option is submitted to `perform` and selected as part of a committed world.
 ```lua
 local Flow = require('fibers.resource.flow')
 
-local flow = Flow.new({
-  name = 'request-body',
-  capacity = 64 * 1024, -- omit for an unbounded Flow
-})
+local flow = Flow.new(64 * 1024, 'request-body')
 
 local inlet = flow:inlet()
 local outlet = flow:outlet()
 ```
+
+The capacity is the first argument and the optional diagnostic name is second.
+Pass `nil` for an unbounded named Flow.
 
 A Flow has one stable producer endpoint, the `Inlet`, and one stable consumer
 endpoint, the `Outlet`:
@@ -160,7 +160,6 @@ settled and future writes fail with `Flow.Error.BROKEN_PIPE`.
 ### Whole-Flow methods
 
 ```lua
-flow:inspect_op()
 flow:abort_op(reason)
 flow:closed_op()
 ```
@@ -210,7 +209,6 @@ Its complete surface is:
 ```lua
 lease:bytes()
 lease:length()
-lease:inspect()
 lease:ack_op(count)
 lease:release_op()
 lease:fail_op(error)
@@ -242,7 +240,6 @@ Its complete surface is:
 
 ```lua
 space:capacity()
-space:inspect()
 space:commit_op(bytes)
 space:release_op()
 space:fail_op(error)
@@ -346,7 +343,6 @@ stream:abort_write_op(reason)
 stream:close_op(reason)
 stream:abort_op(reason)
 stream:closed_op()
-stream:inspect_op()
 ```
 
 `shutdown_read_op` abandons the read direction and retires its host reaction.

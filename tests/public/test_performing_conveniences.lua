@@ -66,10 +66,11 @@ end
 assert_eq(fibers.perform, perform, 'contextual prelude exposes the shared perform function')
 
 -- Public naming policy: selected conveniences are exact names with only _op
--- removed. Advanced resources and inspection options remain option-only.
+-- removed. Advanced resource operations remain option-only.
 do
   local rendezvous = channel.new()
   local queue = channel.new(1)
+  local unbounded = channel.new(math.huge)
   local scalar = Scalar.new('idle')
   local pulse = Pulse.new()
   local tx, rx = mailbox.new(1)
@@ -77,6 +78,8 @@ do
 
   assert_twins(rendezvous, { 'get', 'put' }, 'rendezvous')
   assert_twins(queue, { 'get', 'put' }, 'buffered channel')
+  assert_twins(unbounded, { 'get', 'put' }, 'unbounded channel')
+  assert(unbounded.capacity == math.huge, 'math.huge should select an unbounded FIFO')
   assert_twins(scalar, { 'read', 'changed', 'expect', 'write' }, 'scalar')
   assert_twins(pulse, { 'signal', 'close', 'changed', 'next' }, 'pulse')
   assert_twins(tx, { 'send', 'clone', 'close' }, 'mailbox sender')
@@ -121,33 +124,41 @@ do
   assert_absent(a, { 'inspect' }, 'stream')
   assert_absent(socket, { 'connect_inet', 'connect_unix' }, 'socket')
 
-  assert_absent(Counter.new(), { 'adjust', 'add', 'give', 'take', 'read', 'state' }, 'counter')
-  assert_absent(Index.new(), {
+  assert_twins(Counter.new(), {
+    'read',
+    'changed',
+    'adjust',
+    'add',
+    'bump',
+    'give',
+    'take',
+    'at_least',
+    'at_most',
+    'equal',
+    'zero',
+  }, 'counter')
+  assert_twins(Index.new(), {
     'insert',
     'insert_auto',
     'append',
     'remove',
     'pop_first',
     'pop_last',
-    'snapshot',
+    'changed',
   }, 'index')
-  assert_absent(Keyed.new(), {
-    'get',
-    'peek',
-    'contains',
-    'put',
-    'put_absent',
-    'remove',
-    'remove_present',
-    'snapshot',
-  }, 'keyed')
-  assert_absent(Lease.new(), { 'acquire', 'release', 'snapshot' }, 'lease')
+  local keyed = Keyed.new()
+  assert_twins(keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' }, 'keyed')
+  assert_absent(keyed, { 'peek', 'put_absent', 'remove_present' }, 'keyed')
+  assert_eq(keyed.entries, nil, 'keyed entries remain private')
+  assert_eq(keyed.versions, nil, 'keyed versions remain private')
+  assert_eq(keyed.version, nil, 'keyed aggregate version remains private')
+  assert_twins(Lease.new(), { 'acquire', 'release' }, 'lease')
   local flow = Flow.new()
   assert_absent(flow, { 'inspect', 'abort', 'closed' }, 'flow')
   assert_absent(flow:inlet(), { 'write', 'flush', 'close' }, 'flow inlet')
   assert_absent(flow:outlet(), { 'read_some', 'read_line', 'close' }, 'flow outlet')
-  assert_absent(Signal.new(), { 'wait' }, 'external signal')
-  assert_absent(EventQueue.new(), { 'next' }, 'external event queue')
+  assert_twins(Signal.new(), { 'wait' }, 'external signal')
+  assert_twins(EventQueue.new(), { 'next' }, 'external event queue')
 end
 
 -- Direct methods are exact performing conveniences over their _op forms.
@@ -238,8 +249,9 @@ do
       'kill',
       'request_close',
       'closed',
-      'inspect',
     }, 'process')
+    assert_eq(child.inspect_op, nil, 'process inspection is not a public operation')
+    assert_eq(child.inspect, nil, 'process inspection has no direct convenience')
     assert_eq(child.communicate_op, nil, 'communicate is deliberately procedural')
     assert_eq(child.close_op, nil, 'close is deliberately request plus wait')
     assert_eq(child.request_signal_op, nil, 'long signal option alias is absent')

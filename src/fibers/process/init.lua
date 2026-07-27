@@ -10,6 +10,7 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local CommandModule = require('fibers.process.command')
 local HostError = require('fibers.host.error')
 local FlowErrors = require('fibers.resource.flow.errors')
@@ -30,20 +31,14 @@ local perform = require('fibers.perform')
 local Lifecycle = {}
 Lifecycle.__index = Lifecycle
 
-local Ready = Scalar.Ready
+local Ready = StateMachine.Ready
 
-local request_close = Scalar.transition({
-  name = 'process.request_close',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current, reason)
-    if current.requested then
-      return Ready.same(true, current.reason)
-    end
-    return Ready.write({ requested = true, reason = reason or 'process closed' }, true, reason)
-  end,
-})
+local request_close = StateMachine.isolated_update('process.request_close', function(current, reason)
+  if current.requested then
+    return Ready.same(true, current.reason)
+  end
+  return Ready.write({ requested = true, reason = reason or 'process closed' }, true, reason)
+end)
 
 local function wait_for(scalar, predicate)
   return Scalar.until_op(scalar, predicate)
@@ -53,7 +48,7 @@ function Lifecycle.new(name)
   return setmetatable({
     name = name,
     state = Scalar.new({ kind = 'created' }, name .. ':state'),
-    close_request = Scalar.machine({ requested = false, reason = nil }, name .. ':close-request'),
+    close_request = StateMachine.new({ requested = false, reason = nil }, name .. ':close-request'),
   }, Lifecycle)
 end
 
@@ -362,34 +357,6 @@ function Process:communicate(opts)
     return fail('communicate process result failed', status_row[2])
   end
   return { status = parts.status, stdout = stdout, stderr = stderr }
-end
-
-function Process:inspect_op()
-  local options = {
-    state = self.lifecycle:state_op(),
-  }
-  if self.stdin_stream then
-    options.stdin = self.stdin_stream:inspect_op()
-  end
-  if self.stdout_stream then
-    options.stdout = self.stdout_stream:inspect_op()
-  end
-  if self.stderr_stream and self.stderr_stream ~= self.stdout_stream then
-    options.stderr = self.stderr_stream:inspect_op()
-  end
-  return Op.named_all(options):map(function(parts)
-    return {
-      process = self,
-      pid = self._pid,
-      argv = self:argv(),
-      state = parts.state,
-      stdin = parts.stdin,
-      stdout = parts.stdout,
-      stderr = parts.stderr,
-      status = self._status,
-      lifetime = self._lifetime,
-    }
-  end)
 end
 
 local function stream_bridge(source, destination, opts)
@@ -927,10 +894,6 @@ end
 function Process:closed()
   return perform(self:closed_op())
 end
-function Process:inspect()
-  return perform(self:inspect_op())
-end
-
 function Module.succeeded(status)
   return type(status) == 'table' and status.kind == 'exited' and status.code == 0
 end

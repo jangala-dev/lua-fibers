@@ -18,6 +18,10 @@ function M.kind(name)
   return { name = assert(name, 'facility kind requires a name') }
 end
 
+function M.child_name(name, suffix)
+  return name and name .. ':' .. tostring(suffix) or nil
+end
+
 function M.identity(resource, kind, name)
   local prefix = kind.name
   local id = (ids[prefix] or 0) + 1
@@ -59,11 +63,7 @@ M.change = {
 M.result = {
   value = { kind = 'value' },
   boolean = { kind = 'constant', value = true },
-  present = { kind = 'present' },
 }
-function M.result.presence(nil_sentinel)
-  return { kind = 'presence', nil_sentinel = nil_sentinel }
-end
 function M.result.project(fn)
   return { kind = 'project', project = assert(fn, 'result projection required') }
 end
@@ -193,12 +193,6 @@ function M.machine(location, transition, payload, resource, extra)
 end
 
 function M.witness(opts)
-  if opts.supply ~= nil then
-    error('witness transition no longer accepts supply', 2)
-  end
-  if type(opts.accepts_supply) ~= 'boolean' then
-    error('witness transition requires accepts_supply', 2)
-  end
   local rule = {
     type = 'witness',
     serial = false,
@@ -206,16 +200,12 @@ function M.witness(opts)
     eager = false,
     total = false,
     order = opts.order or 0,
-    accepts_supply = opts.accepts_supply,
-    supplies = M.normalise_supply(opts.supplies, 'witness transition supplies', 2),
+    accepts_supply = opts.accepts_supply == true,
+    supplies = M.normalise_supply(opts.supplies or 'none', 'witness transition supplies', 2),
     writes = true,
     cursor_factory = assert(opts.cursor, 'witness transition requires cursor'),
   }
   return transition_program(opts, rule)
-end
-
-function M.snapshot(resource, observation)
-  return IR.observe(resource, assert(observation, 'observation topology required'), M.result.value)
 end
 
 local function descriptor(resource, kind, program)
@@ -242,6 +232,121 @@ end
 
 function M.occurrence(value, payload)
   return Op._primitive(value, payload)
+end
+
+local VERSIONED_RESULT = M.result.project(function(value, program)
+  return { value = value, version = program.location.version }
+end)
+
+local CELL_WAIT = { _fibers_scalar_wait = true }
+local CELL_EXPECT = {
+  type = 'machine',
+  serial = true,
+  enumerable = false,
+  eager = false,
+  total = false,
+  writes = false,
+  name = 'cell.expect',
+  mode = 'query',
+  order = 0,
+  accepts_supply = false,
+  supplies = {},
+  step = function(current, expected)
+    if current ~= expected then
+      return CELL_WAIT
+    end
+    return { _fibers_scalar_ready = true, writes = false, pack = Op._pack(true) }
+  end,
+}
+
+function M.cell(resource, kind, value, algebra)
+  resource._location = M.location(resource, 'value', {
+    algebra = algebra or 'replace',
+    domain = 'plain',
+    value = value,
+  })
+  resource._read_op = M.static(resource, kind, 'read', {
+    location = resource._location,
+    result = M.result.value,
+  })
+  resource._state_op = M.static(resource, kind, 'read', {
+    location = resource._location,
+    result = VERSIONED_RESULT,
+  })
+  resource._write_descriptor = M.descriptor(resource, kind, 'patch', {
+    location = resource._location,
+    bind = 'replace',
+    result = M.result.boolean,
+  })
+  resource._changed_descriptor = M.descriptor(resource, kind, 'version_wait', {
+    location = resource._location,
+    bind = 'version',
+  })
+  resource._expect_descriptor =
+    M.descriptor(resource, kind, 'transition', M.machine(resource._location, CELL_EXPECT, nil, resource))
+  resource._select_dependencies = M.versioned_dependencies(resource, false)
+  return resource
+end
+
+function M.transition_footprint(location, supplies)
+  return {
+    locations = {
+      [location] = {
+        read = true,
+        write = true,
+        wait = true,
+        supplies = M.normalise_supply(supplies or 'none', 'transition footprint supplies', 2),
+      },
+    },
+  }
+end
+
+function M.versioned_dependencies(resource, writable)
+  if writable then
+    local footprint = M.transition_footprint(resource._location, 'any')
+    footprint.external = true
+    return footprint
+  end
+  return Op.dependencies(resource._state_op, M.occurrence(resource._changed_descriptor, 0))
+end
+
+function M.versioned_select(resource, select, dependencies)
+  dependencies = dependencies or resource._select_dependencies
+  local function loop()
+    return resource._state_op:and_then(function(state)
+      local option, wait = select(state.value)
+      if option ~= nil then
+        return option
+      end
+      if wait == false then
+        return Op.never()
+      end
+      return M.occurrence(resource._changed_descriptor, state.version):and_then(loop, dependencies)
+    end, dependencies)
+  end
+  return loop()
+end
+
+local unpack_ = table.unpack or unpack
+local function pack(...)
+  return { n = select('#', ...), ... }
+end
+
+function M.versioned_until(resource, predicate, dependencies)
+  return M.versioned_select(resource, function(value)
+    local result = pack(predicate(value))
+    if result[1] then
+      return Op.always(unpack_(result, 2, result.n))
+    end
+  end, dependencies)
+end
+
+function M.versioned_value(resource, predicate, dependencies)
+  return M.versioned_select(resource, function(value)
+    if predicate(value) then
+      return Op.always(value)
+    end
+  end, dependencies)
 end
 
 function M.publish(location, value)

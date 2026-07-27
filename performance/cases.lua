@@ -180,7 +180,7 @@ end)
 
 add('moderate', 'flow', 'sequential write read', 280, function(ctx, n)
   local rt = ctx:runtime()
-  local flow = Flow.new({ name = 'perf-flow' })
+  local flow = Flow.new(nil, 'perf-flow')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()

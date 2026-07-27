@@ -2,9 +2,10 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local HostError = require('fibers.host.error')
 
-local Ready = Scalar.Ready
+local Ready = StateMachine.Ready
 local Lifecycle = {}
 
 local function copy(value)
@@ -18,17 +19,11 @@ end
 Lifecycle.copy = copy
 
 function Lifecycle.wait_for(machine, select)
-  return Scalar.select_op(machine, select, { writable = true })
+  return machine:select_op(select, machine:transition_dependencies())
 end
 
 local function transition(name, step)
-  return Scalar.transition({
-    name = name,
-    mode = 'update',
-    accepts_supply = false,
-    supplies = 'none',
-    step = step,
-  })
+  return StateMachine.isolated_update(name, step)
 end
 
 function Lifecycle.define(spec)
@@ -130,7 +125,7 @@ function Lifecycle.define(spec)
   function Type.new(name, address)
     return setmetatable({
       name = name,
-      state = Scalar.machine({
+      state = StateMachine.new({
         kind = 'starting',
         address = address,
         handle = nil,
@@ -175,7 +170,7 @@ function Lifecycle.define(spec)
   end
 
   function Type:start_result_op()
-    return Scalar.select_op(self.state, function(state)
+    return self.state:select_op(function(state)
       if state.kind == 'starting' then
         return nil, true
       end
@@ -192,36 +187,36 @@ function Lifecycle.define(spec)
           address = state.address,
         })
       )
-    end, { writable = true })
+    end, self.state:transition_dependencies())
   end
 
   if spec.available then
     function Type:available_op()
-      return Scalar.select_op(self.state, function(state)
+      return self.state:select_op(function(state)
         if state.kind == 'starting' or state.kind == 'active' then
           return Op.always(true)
         end
         return nil, false
-      end, { writable = true })
+      end, self.state:transition_dependencies())
     end
   end
 
   function Type:unavailable_op()
-    return Scalar.select_op(self.state, function(state)
+    return self.state:select_op(function(state)
       if state.kind == 'stopping' or state.kind == 'stopped' then
         return Op.always(state)
       end
       return nil, false
-    end, { writable = true })
+    end, self.state:transition_dependencies())
   end
 
   function Type:terminal_op()
-    return Scalar.select_op(self.state, function(state)
+    return self.state:select_op(function(state)
       if state.kind == 'stopped' then
         return Op.always(state)
       end
       return nil, true
-    end, { writable = true })
+    end, self.state:transition_dependencies())
   end
 
   return Type

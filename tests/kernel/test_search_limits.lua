@@ -192,7 +192,7 @@ do
   eq(unknown_status.kind, 'budget')
   eq(unknown_status.reason, 'search_quantum')
   eq(fallback_result, nil, 'Unknown positive work must keep fallback uncommitted')
-  local snapshot = unknown_rt:instrumentation_snapshot()
+  local snapshot = unknown_rt:instrumentation_report()
   if (snapshot.counters.fallback_transitions or 0) == 0 then
     error('test did not construct a fallback candidate', 2)
   end

@@ -1,61 +1,70 @@
+-- Independent keyed presence slots.
+--
+-- Each key is its own transactional location.  Values are non-nil: nil means
+-- absence, as it does in ordinary Lua tables.
+
 local Facility = require('fibers.resource.authoring')
-local Keyspace = Facility.Keyspace
+local Op = require('fibers.op')
 
 local Keyed = {}
-Keyed.__index = function(self, key)
-  if key == 'version' then
-    return self._space.version
-  end
-  return Keyed[key]
-end
+Keyed.__index = Keyed
+
 local Kind = Facility.kind('keyed')
-local ABSENT = Keyspace.ABSENT
-local NIL = {}
-local function enc(value)
-  return value == nil and NIL or value
+local ABSENT = Facility.Keyspace.ABSENT
+local FALSE = Op.always(false)
+
+local function yes()
+  return true
 end
 
-function Keyed.new(entries, name)
-  local map = Facility.identity(setmetatable({ _nil_sentinel = NIL }, Keyed), Kind, name)
-  local values, versions = {}, {}
-  for key, value in pairs(entries or {}) do
-    values[key], versions[key] = enc(value), 0
+local function require_key(key, operation)
+  if key == nil then
+    error('keyed ' .. operation .. ' requires a key', 3)
   end
-  map._space = Keyspace.new(map, {
+end
+
+local function require_value(value)
+  if value == nil then
+    error('keyed values cannot be nil', 3)
+  end
+end
+
+local function create(entries, name)
+  if type(entries) ~= 'table' then
+    error('keyed entries must be a table', 3)
+  end
+
+  local values = {}
+  for key, value in pairs(entries) do
+    require_value(value)
+    values[key] = value
+  end
+
+  local keyed = Facility.identity(setmetatable({}, Keyed), Kind, name)
+  keyed._space = Facility.Keyspace.new(keyed, {
     values = values,
-    versions = versions,
     algebra = 'presence',
     domain = 'presence',
     absent = ABSENT,
   })
-  map.entries, map.versions, map._locations = values, versions, map._space.locations
-  map._snapshot_op = Facility.op(
-    map,
-    Kind,
-    Facility.snapshot(
-      map,
-      map._space:observation({
-        include = function(value)
-          return value ~= ABSENT
-        end,
-        decode = function(value)
-          return value == NIL and nil or value
-        end,
-      })
-    )
-  )
-  return map
+  return keyed
 end
-function Keyed:_location(key)
-  return self._space:location(key)
+
+function Keyed.new(name)
+  return create({}, name)
+end
+
+function Keyed.from(entries, name)
+  return create(entries, name)
 end
 
 local function operations(self, key)
-  local location = self:_location(key)
+  local location = self._space:location(key)
   local cached = location._keyed_operations
   if cached then
     return cached
   end
+
   cached = {
     get = Facility.op(
       self,
@@ -64,29 +73,10 @@ local function operations(self, key)
         location = location,
         demand = 'up',
         query = { kind = 'predicate', predicate = 'present' },
-        result = Facility.result.presence(NIL),
+        result = Facility.result.value,
       })
     ),
-    peek = Facility.op(self, Kind, Facility.read(location, Facility.result.presence(NIL))),
-    contains = Facility.op(self, Kind, Facility.read(location, Facility.result.present)),
-    put = Facility.descriptor(self, Kind, 'patch', {
-      location = location,
-      bind = 'presence_put',
-      result = Facility.result.boolean,
-    }),
-    remove = Facility.op(
-      self,
-      Kind,
-      Facility.conditional({
-        location = location,
-        demand = 'up',
-        predicate = 'present',
-        immediate = Facility.change.remove(),
-        change = Facility.change.take(),
-        result = Facility.result.boolean,
-      })
-    ),
-    remove_present = Facility.op(
+    take = Facility.op(
       self,
       Kind,
       Facility.claim({
@@ -94,60 +84,62 @@ local function operations(self, key)
         demand = 'up',
         query = { kind = 'predicate', predicate = 'present' },
         change = Facility.change.take(),
-        result = Facility.result.presence(NIL),
+        result = Facility.result.value,
       })
     ),
+    put = Facility.descriptor(self, Kind, 'patch', {
+      location = location,
+      bind = 'presence_put',
+      result = Facility.result.boolean,
+    }),
   }
+
   location._keyed_operations = cached
   return cached
 end
 
-local function required(key, operation)
-  if key == nil then
-    error('keyed ' .. operation .. ' requires key', 3)
-  end
-end
 function Keyed:get_op(key)
-  required(key, 'get')
+  require_key(key, 'get')
   return operations(self, key).get
 end
-function Keyed:peek_op(key)
-  required(key, 'peek')
-  return operations(self, key).peek
+
+function Keyed:take_op(key)
+  require_key(key, 'take')
+  return operations(self, key).take
 end
-function Keyed:contains_op(key)
-  required(key, 'contains')
-  return operations(self, key).contains
-end
+
 function Keyed:put_op(key, value)
-  required(key, 'put')
-  return Facility.occurrence(operations(self, key).put, enc(value))
+  require_key(key, 'put')
+  require_value(value)
+  return Facility.occurrence(operations(self, key).put, value)
 end
-function Keyed:put_absent_op(key, value)
-  required(key, 'put_absent')
+
+function Keyed:insert_op(key, value)
+  require_key(key, 'insert')
+  require_value(value)
+
   return Facility.op(
     self,
     Kind,
     Facility.claim({
-      location = self:_location(key),
+      location = self._space:location(key),
       demand = 'down',
       query = { kind = 'predicate', predicate = 'absent' },
-      change = Facility.change.put(enc(value)),
+      change = Facility.change.put(value),
       result = Facility.result.boolean,
     })
   )
 end
-function Keyed:remove_op(key)
-  required(key, 'remove')
-  return operations(self, key).remove
-end
-function Keyed:remove_present_op(key)
-  required(key, 'remove_present')
-  return operations(self, key).remove_present
-end
-function Keyed:snapshot_op()
-  return self._snapshot_op
+
+function Keyed:contains_op(key)
+  return self:get_op(key):map(yes):or_else(FALSE)
 end
 
-Keyed.Kind, Keyed.ABSENT = Kind, ABSENT
+function Keyed:remove_op(key)
+  return self:take_op(key):map(yes):or_else(FALSE)
+end
+
+Keyed.Kind = Kind
+Facility.performing(Keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' })
+
 return Keyed

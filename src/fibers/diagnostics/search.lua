@@ -396,7 +396,7 @@ function Instrumentation:finish_plan(plan, outcome)
   retain_slow_plan(self, plan)
 end
 
-function Instrumentation:snapshot()
+function Instrumentation:report()
   local histograms = {}
   for name, values in pairs(self.histograms) do
     histograms[name] = copy_map(values)

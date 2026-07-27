@@ -1,11 +1,11 @@
--- Token-bucket rate limiter built on typed Scalar transitions.
+-- Token-bucket rate limiter built on typed Machine transitions.
 --
 -- The limiter is deliberately a scalar state-machine facility.  Refill and
 -- token consumption happen in named transitions, avoiding double-refill races.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
-local Ready = Scalar.Ready
+local StateMachine = require('fibers.resource.machine')
+local Ready = StateMachine.Ready
 local Clock = require('fibers.resource.clock')
 
 local RateLimiter = {}
@@ -48,46 +48,36 @@ local function normalise_amount(self, n)
   return n
 end
 
-local Bucket = Scalar.kind({
-  name = 'rate_limiter.bucket',
-  transitions = {
-    refill = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      step = function(state, payload, ctx)
-        local next_state = refill_state(payload, state, ctx:now())
-        return Ready.write(next_state, next_state.tokens, next_state.last)
-      end,
-    },
-    try_acquire = {
-      mode = 'update',
-      accepts_supply = true,
-      supplies = 'any',
-      validate = function(payload)
-        finite_number(payload.n, 'rate limiter amount')
-        if payload.n <= 0 then
-          error('rate limiter amount must be positive', 3)
-        end
-        if payload.n > payload.capacity then
-          error('rate limiter amount exceeds capacity', 3)
-        end
-      end,
-      step = function(state, payload, ctx)
-        local now = ctx:now()
-        local next_state = refill_state(payload, state, now)
-        local n = payload.n
-        if next_state.tokens >= n then
-          next_state = { tokens = next_state.tokens - n, last = next_state.last }
-          return Ready.write(next_state, true, nil, next_state.tokens)
-        end
-        local needed = n - next_state.tokens
-        local deadline = now + needed / payload.rate
-        return Ready.write(next_state, false, deadline, next_state.tokens)
-      end,
-    },
-  },
-})
+local Refill = StateMachine.update('rate_limiter.refill', function(state, payload, ctx)
+  local next_state = refill_state(payload, state, ctx:now())
+  return Ready.write(next_state, next_state.tokens, next_state.last)
+end)
+
+local TryAcquire = StateMachine.update(
+  'rate_limiter.try_acquire',
+  function(state, payload, ctx)
+    local now = ctx:now()
+    local next_state = refill_state(payload, state, now)
+    local n = payload.n
+    if next_state.tokens >= n then
+      next_state = { tokens = next_state.tokens - n, last = next_state.last }
+      return Ready.write(next_state, true, nil, next_state.tokens)
+    end
+    local needed = n - next_state.tokens
+    local deadline = now + needed / payload.rate
+    return Ready.write(next_state, false, deadline, next_state.tokens)
+  end,
+  nil,
+  function(payload)
+    finite_number(payload.n, 'rate limiter amount')
+    if payload.n <= 0 then
+      error('rate limiter amount must be positive', 3)
+    end
+    if payload.n > payload.capacity then
+      error('rate limiter amount exceeds capacity', 3)
+    end
+  end
+)
 
 local function bucket_payload(self, extra)
   local p = { capacity = self.capacity, rate = self.rate }
@@ -126,17 +116,17 @@ function RateLimiter.new(opts)
     rate = rate,
     clock = opts.clock or Clock.new(name .. ':clock'),
   }, RateLimiter)
-  self.state = Scalar.new({ tokens = initial, last = last }, name .. ':state')
+  self.state = StateMachine.new({ tokens = initial, last = last }, name .. ':state')
   return self
 end
 
 function RateLimiter:refill_op()
-  return self.state:transition_op(Bucket:transition('refill'), bucket_payload(self))
+  return self.state:transition_op(Refill, bucket_payload(self))
 end
 
 function RateLimiter:try_acquire_op(n)
   n = normalise_amount(self, n)
-  return self.state:transition_op(Bucket:transition('try_acquire'), bucket_payload(self, { n = n }))
+  return self.state:transition_op(TryAcquire, bucket_payload(self, { n = n }))
 end
 
 function RateLimiter:acquire_op(n)

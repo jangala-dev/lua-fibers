@@ -125,7 +125,7 @@ end
 
 -- With no possible producer, flow read absence may enter fallback.
 do
-  local flow = FibersFlow.new({ name = 'absence-flow-alone', capacity = 8 })
+  local flow = FibersFlow.new(8, 'absence-flow-alone')
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(flow:outlet():read_some_op(3):or_else(Op.always('fallback')))
@@ -137,7 +137,7 @@ end
 -- A concurrent writer must not be masked by the reader fallback.  The writer
 -- commits first; the reader then observes bytes and takes the primary path.
 do
-  local flow = FibersFlow.new({ name = 'absence-flow-writer', capacity = 8 })
+  local flow = FibersFlow.new(8, 'absence-flow-writer')
   local got, n
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()

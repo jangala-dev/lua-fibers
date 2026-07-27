@@ -27,6 +27,7 @@ return {
     'tests/resources/test_event.lua',
     'tests/resources/test_scalar.lua',
     'tests/resources/test_state_resource_laws.lua',
+    'tests/resources/test_standard_compounds.lua',
   },
   lifetimes = {
     'tests/lifetimes/test_concurrent_task_closure.lua',

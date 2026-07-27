@@ -69,7 +69,7 @@ for worker = 1, n do
 end
 
 if rt.machine_name == 'ledger' then
-  local counters = rt:instrumentation_snapshot().counters
+  local counters = rt:instrumentation_report().counters
   truthy((counters.search_calls or math.huge) < 100, 'exchange-choice propagation regressed')
   truthy((counters.choice_alternatives_pruned or 0) > 0, 'stale exchange alternatives were not pruned')
 end
@@ -141,7 +141,7 @@ if machine == 'ledger' then
     runtime:perform(Op.all(lanes))
   end, 'matching-failure-dispatcher')
   eq(runtime:run().tag, 'quiescent')
-  local counters = runtime:instrumentation_snapshot().counters
+  local counters = runtime:instrumentation_report().counters
   truthy((counters.matching_feasibility_failures or 0) > 0, 'matching failure was not proved')
   truthy((counters.search_calls or math.huge) <= 2, 'matching feasibility regressed to enumeration')
 end
@@ -175,7 +175,7 @@ if machine == 'ledger' then
     runtime:perform(Op.all(lanes))
   end, 'guarded-matching-failure-dispatcher')
   eq(runtime:run().tag, 'quiescent')
-  local counters = runtime:instrumentation_snapshot().counters
+  local counters = runtime:instrumentation_report().counters
   truthy((counters.matching_feasibility_failures or 0) > 0, 'guarded Hall failure was not proved')
   truthy(
     (counters.matching_guard_revelations or 0) >= jobs * worker_count,
@@ -211,7 +211,7 @@ local function wrapped_dispatch(wrapper, label)
   eq(runtime:run().tag, 'found')
   eq(runtime:run().tag, 'idle')
   if runtime.machine_name == 'ledger' then
-    local counters = runtime:instrumentation_snapshot().counters
+    local counters = runtime:instrumentation_report().counters
     truthy((counters.search_calls or math.huge) < 100, label .. ' exchange propagation regressed')
     truthy((counters.choice_alternatives_pruned or 0) > 0, label .. ' alternatives were not pruned')
   end
@@ -274,7 +274,7 @@ if machine == 'ledger' then
       truthy(type(job) == 'number' and not assigned[job], 'guarded dispatch produced a duplicate job')
       assigned[job] = true
     end
-    local counters = runtime:instrumentation_snapshot().counters
+    local counters = runtime:instrumentation_report().counters
     truthy(
       (counters.search_calls or math.huge) < 100,
       'guard supplier propagation regressed at seed ' .. seed
@@ -326,7 +326,7 @@ if machine == 'ledger' then
     end, label .. '-dispatcher')
     eq(runtime:run().tag, 'found')
     eq(runtime:run().tag, 'idle')
-    local counters = runtime:instrumentation_snapshot().counters
+    local counters = runtime:instrumentation_report().counters
     truthy((counters.search_calls or math.huge) < 100, label .. ' residual propagation regressed')
     local matching_revelations = counters.matching_guard_revelations or 0
     truthy(
@@ -369,7 +369,7 @@ if machine == 'ledger' then
   eq(runtime:run().tag, 'found')
   eq(runtime:run().tag, 'idle')
   truthy(result ~= nil, 'value-routing transaction did not complete')
-  local counters = runtime:instrumentation_snapshot().counters
+  local counters = runtime:instrumentation_report().counters
   truthy(
     (counters.exchange_support_eliminations_learned or 0) > 0,
     'value-dependent exchange incompatibilities were not learned'
@@ -423,7 +423,7 @@ if machine == 'ledger' then
     eq(runtime:run().tag, 'found')
     eq(runtime:run().tag, 'idle')
     truthy(result ~= nil, label .. ' value-routing transaction did not complete')
-    local counters = runtime:instrumentation_snapshot().counters
+    local counters = runtime:instrumentation_report().counters
     truthy(
       (counters.exchange_support_eliminations_learned or 0) > 0,
       label .. ' continuation did not eliminate rejected exchange supports'
@@ -502,7 +502,7 @@ if machine == 'ledger' then
   local odd, odd_status, odd_done = run_ring(9)
   eq(odd_status.tag, 'quiescent')
   eq(odd_done, 0)
-  local odd_counters = odd:instrumentation_snapshot().counters
+  local odd_counters = odd:instrumentation_report().counters
   truthy((odd_counters.binary_relation_failures or 0) >= 1, 'odd ring lacked relation witness')
   truthy((odd_counters.search_calls or math.huge) < 20, 'odd ring regressed to parity enumeration')
 

@@ -89,7 +89,7 @@ if machine == 'ledger' then
   end, 'watched-preferred-state')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
-  local counters = rt:instrumentation_snapshot().counters
+  local counters = rt:instrumentation_report().counters
   assert_truthy((counters.preferred_states_opened or 0) >= 1, 'preferred state opened')
   assert_truthy(
     (counters.preferred_states_closed or 0) >= 1
@@ -235,7 +235,7 @@ if machine == 'ledger' then
   assert_eq(runtime:run().tag, 'found')
   assert_eq(runtime:run().tag, 'idle')
   assert_truthy(values ~= nil, 'nested fallback did not complete')
-  local counters = runtime:instrumentation_snapshot().counters
+  local counters = runtime:instrumentation_report().counters
   assert_truthy(
     (counters.search_calls or math.huge) < 300,
     'nested fallback regressed to fallback-depth enumeration'
@@ -267,7 +267,7 @@ if machine == 'ledger' then
   assert_eq(runtime:run().tag, 'found')
   assert_eq(runtime:run().tag, 'idle')
   assert_truthy(values ~= nil, 'interacting tensor fallback did not complete')
-  local counters = runtime:instrumentation_snapshot().counters
+  local counters = runtime:instrumentation_report().counters
   assert_truthy(
     (counters.search_calls or math.huge) < 250,
     'interacting tensor fallback regressed to sibling-phase enumeration'
@@ -300,7 +300,7 @@ if machine == 'ledger' then
   assert_eq(runtime:run().tag, 'found')
   assert_eq(runtime:run().tag, 'idle')
   assert_truthy(values ~= nil, 'batched fallback did not complete')
-  local counters = runtime:instrumentation_snapshot().counters
+  local counters = runtime:instrumentation_report().counters
   assert_truthy((counters.search_calls or math.huge) < 300, 'batched fallback regressed to repeated search')
 end
 

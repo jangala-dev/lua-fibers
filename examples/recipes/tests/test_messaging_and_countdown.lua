@@ -53,6 +53,8 @@ local function test_top_level_exports()
   assert_eq(type(FibersPulse.new), 'function', 'Pulse export')
   assert_eq(type(CountdownLatch.new), 'function', 'CountdownLatch export')
   assert_eq(type(FibersMailbox.new), 'function', 'Mailbox export')
+  assert_eq(type(FibersMailbox.reject_newest), 'function', 'Mailbox reject_newest export')
+  assert_eq(type(FibersMailbox.drop_oldest), 'function', 'Mailbox drop_oldest export')
   assert_eq(type(FibersChannel.new), 'function', 'Channel export')
 end
 
@@ -65,7 +67,6 @@ local function test_pulse_signal_and_changed()
   end, 'pulse-signal')
   assert_status(rt:run(), 'found')
   assert_eq(version, 1)
-  assert_eq(p.state.value.version, 1)
 
   local rt2 = new_runtime()
   local seen, reason
@@ -106,7 +107,13 @@ local function test_pulse_losing_signal_branch_does_not_mutate()
   end, 'pulse-choice')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'skip')
-  assert_eq(p.state.value.version, 0)
+  local rt2 = new_runtime()
+  local version
+  rt2:spawn_raw(function()
+    version = rt2:perform(p:version_op())
+  end, 'pulse-version')
+  assert_status(rt2:run(), 'found')
+  assert_eq(version, 0)
 end
 
 local function test_countdown_latch_wait_and_tensor_drain()
@@ -226,26 +233,27 @@ local function test_mailbox_clone_and_last_sender_close()
   local tx2
   rt:spawn_raw(function()
     tx2 = rt:perform(tx:clone_op())
-  end, 'mb-clone')
+    rt:perform(tx:close_op('first'))
+    rt:perform(tx2:send_op('still-open'))
+  end, 'mb-clone-and-first-close')
+  rt:spawn_raw(function()
+    assert_eq(rt:perform(rx:recv_op()), 'still-open')
+  end, 'mb-recv-open')
   assert_status(rt:run(), 'found')
 
   local rt2 = new_runtime()
-  local after_first_close, after_second_close
+  local value, reason
   rt2:spawn_raw(function()
-    rt2:perform(tx:close_op('first'))
-    after_first_close = rt2:perform(rx:snapshot_op())
     rt2:perform(tx2:close_op('second'))
-    after_second_close = rt2:perform(rx:snapshot_op())
-  end, 'mb-close-senders')
+    value, reason = rt2:perform(rx:recv_op())
+  end, 'mb-last-close')
   assert_status(rt2:run(), 'found')
-  assert_eq(after_first_close.closed, false)
-  assert_eq(after_first_close.sender_count, 1)
-  assert_eq(after_second_close.closed, true)
-  assert_eq(after_second_close.reason, 'first')
+  assert_eq(value, nil)
+  assert_eq(reason, 'first')
 end
 
 local function test_mailbox_full_policies()
-  local reject_tx = FibersMailbox.new(1, { full = 'reject_newest' })
+  local reject_tx = FibersMailbox.reject_newest(1)
   local rt = new_runtime()
   local ok1, ok2, why2, dropped
   rt:spawn_raw(function()
@@ -259,7 +267,7 @@ local function test_mailbox_full_policies()
   assert_eq(why2, 'full')
   assert_eq(dropped, 1)
 
-  local drop_tx, drop_rx = FibersMailbox.new(1, { full = 'drop_oldest' })
+  local drop_tx, drop_rx = FibersMailbox.drop_oldest(1)
   local rt2 = new_runtime()
   local got, dropped2
   rt2:spawn_raw(function()
@@ -284,12 +292,12 @@ local function test_mailbox_losing_send_branch_does_not_enqueue()
   assert_eq(got, 'skip')
 
   local rt2 = new_runtime()
-  local snap
+  local empty
   rt2:spawn_raw(function()
-    snap = rt2:perform(rx:snapshot_op())
-  end, 'mb-snapshot')
+    empty = rt2:perform(rx:recv_op():or_else(Op.always('empty')))
+  end, 'mb-empty-check')
   assert_status(rt2:run(), 'found')
-  assert_eq(#snap.items, 0)
+  assert_eq(empty, 'empty')
 end
 
 local function test_pulse_signal_after_close_is_noop()
@@ -299,17 +307,17 @@ local function test_pulse_signal_after_close_is_noop()
     rt:perform(p:close_op('done'))
   end, 'pulse-close')
   assert_status(rt:run(), 'found')
-  local scalar_version = p.state.version
-
   local rt2 = new_runtime()
-  local v
+  local before, signalled, after
   rt2:spawn_raw(function()
-    v = rt2:perform(p:signal_op())
+    before = rt2:perform(p:version_op())
+    signalled = rt2:perform(p:signal_op())
+    after = rt2:perform(p:version_op())
   end, 'pulse-closed-signal')
   assert_status(rt2:run(), 'found')
-  assert_eq(v, nil)
-  assert_eq(p.state.value.version, 0)
-  assert_eq(p.state.version, scalar_version)
+  assert_eq(signalled, nil)
+  assert_eq(before, 0)
+  assert_eq(after, 0)
 end
 
 local function test_mailbox_stale_sender_close_cannot_set_reason()
@@ -322,43 +330,43 @@ local function test_mailbox_stale_sender_close_cannot_set_reason()
   assert_status(rt:run(), 'found')
 
   local rt2 = new_runtime()
-  local snap
+  local value, reason, why
   rt2:spawn_raw(function()
-    snap = rt2:perform(rx:snapshot_op())
-  end, 'mb-stale-snapshot')
+    value, reason = rt2:perform(rx:recv_op())
+    why = rt2:perform(rx:why_op())
+  end, 'mb-stale-close-check')
   assert_status(rt2:run(), 'found')
-  assert_eq(snap.closed, true)
-  assert_eq(snap.reason, nil)
+  assert_eq(value, nil)
+  assert_eq(reason, nil)
+  assert_eq(why, nil)
 end
 
 local function test_mailbox_reusable_clone_op_makes_distinct_senders()
   local tx, rx = FibersMailbox.new(1)
   local clone = tx:clone_op()
-  local tx2, tx3, snap
+  local tx2, tx3
   local rt = new_runtime()
   rt:spawn_raw(function()
     tx2 = rt:perform(clone)
     tx3 = rt:perform(clone)
-    snap = rt:perform(rx:snapshot_op())
+    rt:perform(tx2:close_op())
+    rt:perform(tx3:send_op('third'))
   end, 'mb-reusable-clone')
+  rt:spawn_raw(function()
+    assert_eq(rt:perform(rx:recv_op()), 'third')
+  end, 'mb-reusable-clone-recv')
   assert_status(rt:run(), 'found')
-  assert_eq(type(tx2.send_op), 'function')
-  assert_eq(type(tx3.send_op), 'function')
-  assert_eq(snap.sender_count, 3)
-  assert_eq(snap.next_sender_seq, 3)
 
   local rt2 = new_runtime()
-  local after_one, after_two
+  local final
   rt2:spawn_raw(function()
-    rt2:perform(tx2:close_op())
-    after_one = rt2:perform(rx:snapshot_op())
     rt2:perform(tx3:close_op())
-    after_two = rt2:perform(rx:snapshot_op())
+    rt2:perform(tx:send_op('first'))
+    final = rt2:perform(rx:recv_op())
+    rt2:perform(tx:close_op())
   end, 'mb-distinct-closes')
   assert_status(rt2:run(), 'found')
-  assert_eq(after_one.sender_count, 2)
-  assert_eq(after_two.sender_count, 1)
-  assert_eq(after_two.closed, false)
+  assert_eq(final, 'first')
 end
 
 local function test_channel_facade()

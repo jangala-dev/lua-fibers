@@ -112,23 +112,11 @@ local function test_release_one_blocker_not_enough()
   assert_eq(c.holders.s.w2, 'write')
 end
 
-local function test_snapshot()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-snapshot')
-  local rt, snap = new_runtime()
-  rt:spawn_raw(function()
-    rt:perform(c:acquire_op('a', 'read', 'u'))
-    snap = rt:perform(c:snapshot_op())
-  end)
-  assert_status(rt:run(), 'found')
-  assert_eq(snap.holders.a.u, 'read')
-end
-
 for _, t in ipairs({
   test_readers_merge_and_writer_conflicts,
   test_release_supply_law,
   test_incompatible_acquires_do_not_jointly_commit,
   test_release_one_blocker_not_enough,
-  test_snapshot,
 }) do
   t()
 end

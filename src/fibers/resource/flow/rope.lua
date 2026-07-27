@@ -1,31 +1,25 @@
--- Persistent measured byte deque for Flow buffers.
---
--- Rope objects are mutable cursors over immutable chunk nodes.  clone() is
--- constant-time and speculative branches share all byte storage.  A bounded
--- set of persistent KMP states advances delimiter searches across appended
--- chunks; prefix mutation invalidates those derived search states.
+-- Persistent byte deque with incremental delimiter search.
 
 local Rope = {}
 Rope.__index = Rope
 
 local MAX_SEARCHES = 16
 
-local function node(chunk, next_)
-  return { chunk = chunk, next = next_ }
+local function node(bytes, next)
+  return { bytes = bytes, next = next }
 end
 
-local function reverse_nodes(xs)
-  local out = nil
-  while xs do
-    out = node(xs.chunk, out)
-    xs = xs.next
+local function reverse(list)
+  local out
+  while list do
+    out = node(list.bytes, out)
+    list = list.next
   end
   return out
 end
 
 local function prefix_table(pattern)
-  local prefix = { [1] = 0 }
-  local matched = 0
+  local prefix, matched = { [1] = 0 }, 0
   for i = 2, #pattern do
     local byte = pattern:sub(i, i)
     while matched > 0 and pattern:sub(matched + 1, matched + 1) ~= byte do
@@ -41,7 +35,7 @@ end
 
 local function copy_array(values)
   local out = {}
-  for i = 1, #(values or {}) do
+  for i = 1, #values do
     out[i] = values[i]
   end
   return out
@@ -49,7 +43,7 @@ end
 
 local function copy_searches(searches)
   local out = {}
-  for pattern, search in pairs(searches or {}) do
+  for pattern, search in pairs(searches) do
     out[pattern] = {
       pattern = search.pattern,
       prefix = search.prefix,
@@ -61,15 +55,13 @@ local function copy_searches(searches)
   return out
 end
 
-local function feed_search(search, chunk, base)
-  if search.match ~= nil or chunk == '' then
+local function feed(search, bytes, base)
+  if search.match ~= nil or bytes == '' then
     return
   end
-  local pattern = search.pattern
-  local matched = search.matched or 0
-  local prefix = search.prefix
-  for i = 1, #chunk do
-    local byte = chunk:sub(i, i)
+  local pattern, prefix, matched = search.pattern, search.prefix, search.matched
+  for i = 1, #bytes do
+    local byte = bytes:sub(i, i)
     while matched > 0 and pattern:sub(matched + 1, matched + 1) ~= byte do
       matched = prefix[matched]
     end
@@ -84,55 +76,49 @@ local function feed_search(search, chunk, base)
     end
   end
   search.matched = matched
-  search.scanned = base + #chunk
+  search.scanned = base + #bytes
 end
 
-local function for_each_visible(self, fn)
-  local first = true
-  local cur = self.front
-  while cur do
-    local off = first and self.head_off or 0
+local function each(self, visit)
+  local first, current = true, self.front
+  while current do
+    local offset = first and self.offset or 0
     first = false
-    local chunk = cur.chunk:sub(off + 1)
-    if chunk ~= '' then
-      fn(chunk)
+    local bytes = current.bytes:sub(offset + 1)
+    if bytes ~= '' then
+      visit(bytes)
     end
-    cur = cur.next
+    current = current.next
   end
-  if self.back then
-    local xs, n = {}, 0
-    cur = self.back
-    while cur do
-      n = n + 1
-      xs[n] = cur.chunk
-      cur = cur.next
-    end
-    for i = n, 1, -1 do
-      fn(xs[i])
-    end
+
+  local back = {}
+  current = self.back
+  while current do
+    back[#back + 1] = current.bytes
+    current = current.next
+  end
+  for i = #back, 1, -1 do
+    visit(back[i])
   end
 end
 
-local function invalidate_searches(self)
-  self.searches = {}
-  self.search_order = {}
+local function clear_searches(self)
+  self.searches, self.search_order = {}, {}
 end
 
-local function touch_search(self, pattern)
-  local order = self.search_order
-  for i = 1, #order do
-    if order[i] == pattern then
-      table.remove(order, i)
+local function touch(self, pattern)
+  for i = 1, #self.search_order do
+    if self.search_order[i] == pattern then
+      table.remove(self.search_order, i)
       break
     end
   end
-  order[#order + 1] = pattern
+  self.search_order[#self.search_order + 1] = pattern
 end
 
-local function admit_search(self, pattern, search)
+local function cache(self, pattern, search)
   if #self.search_order >= MAX_SEARCHES then
-    local evicted = table.remove(self.search_order, 1)
-    self.searches[evicted] = nil
+    self.searches[table.remove(self.search_order, 1)] = nil
   end
   self.searches[pattern] = search
   self.search_order[#self.search_order + 1] = pattern
@@ -142,40 +128,49 @@ local function ensure_front(self)
   if self.front or not self.back then
     return
   end
-  self.front = reverse_nodes(self.back)
-  self.front_count, self.back_count = self.back_count, 0
-  self.back = nil
+  self.front, self.back = reverse(self.back), nil
 end
 
-function Rope.new(data)
-  local r = setmetatable({
+local function search_for(self, pattern)
+  local search = self.searches[pattern]
+  if search then
+    touch(self, pattern)
+    return search
+  end
+
+  search = { pattern = pattern, prefix = prefix_table(pattern), matched = 0, scanned = 0 }
+  local base = 0
+  each(self, function(bytes)
+    if search.match == nil then
+      feed(search, bytes, base)
+    end
+    base = base + #bytes
+  end)
+  cache(self, pattern, search)
+  return search
+end
+
+function Rope.new(bytes)
+  local rope = setmetatable({
     front = nil,
     back = nil,
-    head_off = 0,
+    offset = 0,
     len = 0,
-    front_count = 0,
-    back_count = 0,
     searches = {},
     search_order = {},
   }, Rope)
-  if data and data ~= '' then
-    r:append(data)
+  if bytes and bytes ~= '' then
+    rope:append(bytes)
   end
-  return r
-end
-
-function Rope.is(x)
-  return getmetatable(x) == Rope
+  return rope
 end
 
 function Rope:clone()
   return setmetatable({
     front = self.front,
     back = self.back,
-    head_off = self.head_off,
+    offset = self.offset,
     len = self.len,
-    front_count = self.front_count,
-    back_count = self.back_count,
     searches = copy_searches(self.searches),
     search_order = copy_array(self.search_order),
   }, Rope)
@@ -184,179 +179,94 @@ end
 function Rope:length()
   return self.len
 end
+
 function Rope:is_empty()
   return self.len == 0
 end
-function Rope:chunk_count()
-  return self.len == 0 and 0 or self.front_count + self.back_count
-end
 
-function Rope:reset()
-  self.front, self.back, self.head_off, self.len = nil, nil, 0, 0
-  self.front_count, self.back_count = 0, 0
-  invalidate_searches(self)
-end
-
-function Rope:append(s)
-  assert(type(s) == 'string', 'Rope:append expects a string')
-  if s == '' then
+function Rope:append(bytes)
+  assert(type(bytes) == 'string', 'Rope:append expects a string')
+  if bytes == '' then
     return self
   end
   local base = self.len
   for _, search in pairs(self.searches) do
-    feed_search(search, s, base)
+    feed(search, bytes, base)
   end
-  self.back = node(s, self.back)
-  self.back_count = self.back_count + 1
-  self.len = self.len + #s
+  self.back = node(bytes, self.back)
+  self.len = self.len + #bytes
   return self
 end
 
-function Rope:prepend(s)
-  assert(type(s) == 'string', 'Rope:prepend expects a string')
-  if s == '' then
+function Rope:prepend(bytes)
+  assert(type(bytes) == 'string', 'Rope:prepend expects a string')
+  if bytes == '' then
     return self
   end
-  invalidate_searches(self)
+  clear_searches(self)
   ensure_front(self)
   local front = self.front
-  if front and self.head_off > 0 then
-    front = node(front.chunk:sub(self.head_off + 1), front.next)
+  if front and self.offset > 0 then
+    front = node(front.bytes:sub(self.offset + 1), front.next)
   end
-  self.front = node(s, front)
-  self.front_count = self.front_count + 1
-  self.head_off = 0
-  self.len = self.len + #s
+  self.front = node(bytes, front)
+  self.offset = 0
+  self.len = self.len + #bytes
   return self
 end
 
 function Rope:take(n)
-  assert(type(n) == 'number' and n >= 0, 'Rope:take expects non-negative count')
-  if n == 0 or self.len == 0 then
+  assert(type(n) == 'number' and n >= 0 and n % 1 == 0, 'Rope:take expects a non-negative integer')
+  n = math.min(n, self.len)
+  if n == 0 then
     return ''
   end
-  if n > self.len then
-    n = self.len
-  end
-  invalidate_searches(self)
-  local out, need = {}, n
-  while need > 0 do
+
+  clear_searches(self)
+  local out, remaining = {}, n
+  while remaining > 0 do
     ensure_front(self)
     local first = self.front
-    local available = #first.chunk - self.head_off
-    local amount = math.min(need, available)
-    out[#out + 1] = first.chunk:sub(self.head_off + 1, self.head_off + amount)
-    need = need - amount
+    local available = #first.bytes - self.offset
+    local amount = math.min(remaining, available)
+    out[#out + 1] = first.bytes:sub(self.offset + 1, self.offset + amount)
+    remaining = remaining - amount
     if amount == available then
-      self.front, self.head_off = first.next, 0
-      self.front_count = self.front_count - 1
+      self.front, self.offset = first.next, 0
     else
-      self.head_off = self.head_off + amount
+      self.offset = self.offset + amount
     end
   end
+
   self.len = self.len - n
   if self.len == 0 then
-    self:reset()
+    self.front, self.back, self.offset = nil, nil, 0
   end
   return table.concat(out)
-end
-
-local function append_visible(out, self, limit)
-  local need, first = limit, true
-  local cur = self.front
-  while cur and need > 0 do
-    local off = first and self.head_off or 0
-    first = false
-    local amount = math.min(need, #cur.chunk - off)
-    out[#out + 1] = cur.chunk:sub(off + 1, off + amount)
-    need = need - amount
-    cur = cur.next
-  end
-  if need > 0 and self.back then
-    local xs, n = {}, 0
-    cur = self.back
-    while cur do
-      n = n + 1
-      xs[n] = cur.chunk
-      cur = cur.next
-    end
-    for i = n, 1, -1 do
-      if need <= 0 then
-        break
-      end
-      local amount = math.min(need, #xs[i])
-      out[#out + 1] = xs[i]:sub(1, amount)
-      need = need - amount
-    end
-  end
 end
 
 function Rope:peek(n)
-  assert(type(n) == 'number' and n >= 0, 'Rope:peek expects non-negative count')
-  if n == 0 or self.len == 0 then
-    return ''
-  end
-  n = math.min(n, self.len)
-  local out = {}
-  append_visible(out, self, n)
-  return table.concat(out)
-end
-
-function Rope:tostring()
-  if self.len == 0 then
-    return ''
-  end
-  local out = {}
-  append_visible(out, self, self.len)
-  return table.concat(out)
-end
-
-local function ensure_search(self, pattern)
-  local search = self.searches[pattern]
-  if search then
-    touch_search(self, pattern)
-    return search
-  end
-  search = {
-    pattern = pattern,
-    prefix = prefix_table(pattern),
-    matched = 0,
-    scanned = 0,
-    match = nil,
-  }
-  local base = 0
-  for_each_visible(self, function(chunk)
-    if search.match == nil then
-      feed_search(search, chunk, base)
+  assert(type(n) == 'number' and n >= 0 and n % 1 == 0, 'Rope:peek expects a non-negative integer')
+  local out, remaining = {}, math.min(n, self.len)
+  each(self, function(bytes)
+    if remaining > 0 then
+      local amount = math.min(remaining, #bytes)
+      out[#out + 1] = bytes:sub(1, amount)
+      remaining = remaining - amount
     end
-    base = base + #chunk
   end)
-  admit_search(self, pattern, search)
-  return search
+  return table.concat(out)
 end
 
 function Rope:find(pattern)
-  assert(type(pattern) == 'string' and pattern ~= '', 'Rope:find expects non-empty string')
-  return ensure_search(self, pattern).match
+  assert(type(pattern) == 'string' and pattern ~= '', 'Rope:find expects a non-empty string')
+  return search_for(self, pattern).match
 end
 
 function Rope:ends_with_prefix(pattern)
-  assert(type(pattern) == 'string' and pattern ~= '', 'Rope:ends_with_prefix expects non-empty string')
-  local search = ensure_search(self, pattern)
+  assert(type(pattern) == 'string' and pattern ~= '', 'Rope:ends_with_prefix expects a non-empty string')
+  local search = search_for(self, pattern)
   return search.match == nil and search.matched > 0
-end
-
-function Rope:_search_debug(pattern)
-  local search = ensure_search(self, pattern)
-  return {
-    scanned = search.scanned,
-    matched = search.matched,
-    match = search.match,
-  }
-end
-
-function Rope:inspect()
-  return { length = self.len, chunk_count = self:chunk_count(), data = self:tostring() }
 end
 
 return Rope

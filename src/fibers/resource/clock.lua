@@ -1,6 +1,6 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Interest = require('fibers.host.external').Interest
 
 local Clock = {}
@@ -34,29 +34,17 @@ function Clock.default()
   return default_clock
 end
 
-local Now = Scalar.transition({
-  name = 'clock.now',
-  mode = 'query',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(_, _, ctx)
-    return Scalar.Ready.same(ctx.now())
-  end,
-})
+local Now = StateMachine.isolated_query('clock.now', function(_, _, context)
+  return StateMachine.Ready.same(context.now())
+end)
 
-local At = Scalar.transition({
-  name = 'clock.at',
-  mode = 'query',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(_, payload, ctx)
-    local now = ctx.now()
-    if now < payload.deadline then
-      return Scalar.Wait
-    end
-    return Scalar.Ready.same(now)
-  end,
-})
+local At = StateMachine.isolated_query('clock.at', function(_, deadline, context)
+  local now = context.now()
+  if now < deadline then
+    return StateMachine.Wait
+  end
+  return StateMachine.Ready.same(now)
+end)
 
 function Clock:now_op()
   return Facility.external_wait(self, Kind, self._location, Now)
@@ -65,7 +53,7 @@ end
 function Clock:at_op(deadline)
   deadline = finite_number(deadline, 'Clock:at_op deadline')
   return Facility.external_wait(self, Kind, self._location, At, {
-    payload = { deadline = deadline },
+    payload = deadline,
     interest = Interest.timer(deadline, self),
     absence_check = function(rt)
       return rt:now() < deadline

@@ -38,17 +38,6 @@ function Lease.new(compat, name)
     end,
   })
   lease.holders, lease.versions, lease._locations = holders, versions, lease._space.locations
-  lease._snapshot_op = Facility.op(
-    lease,
-    Kind,
-    Facility.snapshot(
-      lease,
-      lease._space:observation({
-        field = 'holders',
-        decode = copy_map,
-      })
-    )
-  )
   return lease
 end
 function Lease:_location(subject)
@@ -98,9 +87,7 @@ function Lease:release_op(subject, holder)
     })
   )
 end
-function Lease:snapshot_op()
-  return self._snapshot_op
-end
 
 Lease.Kind = Kind
+Facility.performing(Lease, { 'acquire', 'release' })
 return Lease

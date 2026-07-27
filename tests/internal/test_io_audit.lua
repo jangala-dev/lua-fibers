@@ -47,12 +47,12 @@ do
     writer:write('x')
     writer:flush()
     assert_eq(reader:read(1), 'x')
-    during = fibers.current_runtime():io_audit_snapshot()
+    during = fibers.current_runtime():io_audit()
     assert_truthy((during.counts.in_custody or 0) >= 2, 'pipe handles should be in Stream custody')
     assert_eq((during.counts.registered or 0), 2, 'directional pipe Streams should have two registrations')
   end, { host = SimulatedHost.new({ pipes = true }) })
   assert_truthy(result.ok, result:tostring())
-  assert_eq(#result.runtime:io_audit_snapshot().items, 0, 'Closure should leave no live I/O records')
+  assert_eq(#result.runtime:io_audit().items, 0, 'Closure should leave no live I/O records')
   assert_truthy(result.runtime:assert_io_quiescent('audited pipe'))
 end
 
@@ -78,7 +78,7 @@ do
     listener:closed()
   end, { host = SimulatedHost.new({ sockets = true }) })
   assert_truthy(result.ok, result:tostring())
-  assert_eq(#result.runtime:io_audit_snapshot().items, 0, 'socket tree should close completely')
+  assert_eq(#result.runtime:io_audit().items, 0, 'socket tree should close completely')
   result.runtime:assert_io_quiescent('audited sockets')
 end
 

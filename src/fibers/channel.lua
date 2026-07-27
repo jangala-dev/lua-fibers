@@ -1,35 +1,16 @@
--- Small channel facade over the base communication/storage primitives.
+-- Channel facade over rendezvous and FIFO resources.
 --
--- Channel.new(0) returns a Rendezvous; Channel.new(n > 0) returns a bounded
--- Queue of capacity n.  It deliberately introduces no new resource law.
+-- Capacity zero selects rendezvous, finite positive capacity selects a bounded
+-- FIFO, and math.huge selects an unbounded FIFO.
 
-local Queue = require('fibers.resource.queue')
+local FIFO = require('fibers.resource.fifo')
 local Rendezvous = require('fibers.resource.rendezvous')
 
 local Channel = {}
 
-local function normalise_capacity(capacity)
-  if capacity == nil then
-    return 0
-  end
-  if type(capacity) ~= 'number' or capacity < 0 or capacity ~= math.floor(capacity) then
-    error('channel capacity must be a non-negative integer', 3)
-  end
-  return capacity
-end
-
-function Channel.new(capacity, opts)
-  if type(capacity) == 'table' then
-    opts = capacity
-    capacity = opts.capacity
-  end
-  opts = opts or {}
-  capacity = normalise_capacity(capacity)
-  local name = opts.name
-  if capacity == 0 then
-    return opts.rendezvous or Rendezvous.new(name)
-  end
-  return opts.queue or Queue.new({ capacity = capacity, name = name })
+function Channel.new(capacity, name)
+  capacity = capacity == nil and 0 or capacity
+  return capacity == 0 and Rendezvous.new(name) or FIFO.new(capacity, name)
 end
 
 return Channel

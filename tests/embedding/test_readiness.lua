@@ -207,13 +207,7 @@ do
   end
   assert_nil(got, 'stale readable hint should not append bytes')
   assert_nil(err, 'stale readable hint should not commit an error')
-  rt:spawn_raw(function()
-    snap = rt:perform(stream:reader().flow:inspect_op())
-  end, 'inspect-released-space')
-  drive_until(rt, function()
-    return snap ~= nil
-  end, 'stale read should release its Flow reservation')
-  assert_eq(snap.reserved, 0, 'would_block must release producer-side capacity')
+  assert_eq(Inspect.reserved(stream:reader().flow), 0, 'would_block must release producer-side capacity')
   backend:feed_read('x')
   backend:mark_readable()
   drive_until(rt, function()

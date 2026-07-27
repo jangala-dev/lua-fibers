@@ -360,9 +360,10 @@ local channel = require('fibers.channel')
 
 local commands = channel.new()
 local buffered_events = channel.new(16)
+local unbounded_events = channel.new(math.huge)
 ```
 
-Both forms expose `put_op` and `get_op` and compose with the same algebra.
+All three forms expose `put_op` and `get_op` and compose with the same algebra.
 
 ### Transactional state
 

@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersScalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local FibersChannel = require('fibers.channel')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersStream = require('fibers.stream')
@@ -38,23 +38,21 @@ fibers.run(function(scope)
   assert(results:get() == 'completed refresh configuration')
 end)
 
--- Programming-guide Scalar transition.
+-- Programming-guide Machine transition.
 fibers.run(function()
-  local Increment = FibersScalar.transition({
-    name = 'counter.increment',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    validate = function(payload)
-      assert(type(payload.by) == 'number', 'by must be a number')
-    end,
-    step = function(value, payload)
+  local Increment = StateMachine.update(
+    'counter.increment',
+    function(value, payload)
       local next_value = value + payload.by
-      return FibersScalar.Ready.write(next_value, next_value)
+      return StateMachine.Ready.write(next_value, next_value)
     end,
-  })
+    nil,
+    function(payload)
+      assert(type(payload.by) == 'number', 'by must be a number')
+    end
+  )
 
-  local counter = FibersScalar.machine(0, 'counter')
+  local counter = StateMachine.new(0, 'counter')
   assert(fibers.perform(counter:transition_op(Increment, { by = 1 })) == 1)
 end)
 

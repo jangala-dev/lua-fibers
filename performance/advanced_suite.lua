@@ -223,7 +223,7 @@ for _, scenario in ipairs(scenarios) do
       end
       expected[scenario.name] = expected[scenario.name] or digest
       assert(expected[scenario.name] == digest, 'profile changed validating digest for ' .. scenario.name)
-      local snap = final_rt:instrumentation_snapshot()
+      local snap = final_rt:instrumentation_report()
       local c, m = snap.counters, snap.maxima
       rows[#rows + 1] = {
         case = scenario.name,

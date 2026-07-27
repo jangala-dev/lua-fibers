@@ -36,7 +36,7 @@ end
 -- The closure candidate should discover a direct same-location hand-off
 -- without requiring a fixed source-order guess.
 local rt = Runtime.new({ instrumentation = true })
-local index = Index.new({}, 'claim-closure-index')
+local index = Index.new('claim-closure-index')
 local rows
 rt:spawn_raw(function()
   rows = rt:perform(Op.tensor({
@@ -49,7 +49,7 @@ eq(rt:run().tag, 'found')
 eq(rows[1][1].value, 'value')
 eq(rows[2][1], true)
 
-local snap = rt:instrumentation_snapshot()
+local snap = rt:instrumentation_report()
 if rt.machine_name == 'ledger' then
   truthy((snap.counters.claim_closure_branches or 0) > 0, 'closure branch was not offered')
   truthy((snap.counters.claim_closure_successes or 0) > 0, 'closure did not discover the hand-off')
@@ -59,7 +59,7 @@ end
 -- fails, the same machine must retain singleton alternatives and discover a
 -- different valid order.
 local backtrack_rt = Runtime.new({ instrumentation = true })
-local counter = Counter.new({ initial = 1, min = 0 }, 'claim-closure-counter')
+local counter = Counter.new(1, 'claim-closure-counter')
 local observe_positive = Facility.op(
   counter,
   Counter.Kind,
@@ -84,7 +84,7 @@ eq(backtrack_rows[1][1], true)
 eq(backtrack_rows[2][1], true)
 eq(counter.value, 0)
 
-local backtrack_snap = backtrack_rt:instrumentation_snapshot()
+local backtrack_snap = backtrack_rt:instrumentation_report()
 if backtrack_rt.machine_name == 'ledger' then
   truthy((backtrack_snap.counters.claim_closure_failures or 0) > 0, 'failed closure was not observed')
   truthy((backtrack_snap.counters.claim_single_branches or 0) > 0, 'singleton alternatives were not retained')

@@ -13,6 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Errors = require('fibers.resource.flow.errors')
+local Inspect = require('tests.support.flow_inspect')
 
 local function fail(msg)
   error(msg, 2)
@@ -33,29 +34,26 @@ local function assert_status(st, tag, msg)
   end
 end
 
--- Lease:length and Lease:inspect should be callable methods, not shadowed by
--- fields on the lease table.
+-- Lease methods remain callable and expose the leased bytes directly.
 do
-  local flow = require('fibers.resource.flow').new({ name = 'lease-method-flow', capacity = 10 })
-  local lease, len, info
+  local flow = require('fibers.resource.flow').new(10, 'lease-method-flow')
+  local lease, len
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
     lease = fibers.perform(flow:outlet():lease_some_op(3, 'holder-a'))
     len = lease:length()
-    info = lease:inspect()
   end).runtime_status
   assert_status(st, 'found')
   assert_truthy(lease, 'lease should commit')
   assert_eq(len, 3, 'lease:length should return leased byte length')
-  assert_eq(info.length, 3, 'lease:inspect should report length')
-  assert_eq(info.bytes, 'abc', 'lease:inspect should report bytes')
+  assert_eq(lease:bytes(), 'abc', 'lease:bytes should return leased bytes')
 end
 
 -- The current Flow storage algebra intentionally permits only one active lease per
 -- Flow.  A second holder cannot acquire a lease until the first is acked,
 -- returned, failed, or settled.
 do
-  local flow = require('fibers.resource.flow').new({ name = 'single-active-lease-flow', capacity = 10 })
+  local flow = require('fibers.resource.flow').new(10, 'single-active-lease-flow')
   local first, second, second_err, after_ack
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -76,18 +74,19 @@ end
 -- Queued bytes are stored as a rope of chunks rather than a single mutable
 -- concatenated string.  The public observation remains a byte stream.
 do
-  local flow = require('fibers.resource.flow').new({ name = 'rope-backed-flow', capacity = 64 })
-  local snap, got
+  local flow = require('fibers.resource.flow').new(64, 'rope-backed-flow')
+  local chunks, data, got
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('ab'))
     fibers.perform(flow:inlet():write_op('cd'))
     fibers.perform(flow:inlet():write_op('ef'))
-    snap = fibers.perform(flow:inspect_op())
+    chunks = Inspect.chunk_count(flow)
+    data = Inspect.data(flow)
     got = fibers.perform(flow:outlet():read_exactly_op(6))
   end).runtime_status
   assert_status(st, 'found')
-  assert_truthy(snap.chunk_count >= 3, 'rope-backed Flow should retain append chunks')
-  assert_eq(snap.data, 'abcdef', 'inspection should materialise the byte stream')
+  assert_truthy(chunks >= 3, 'rope-backed Flow should retain append chunks')
+  assert_eq(data, 'abcdef', 'test representation should retain the byte stream')
   assert_eq(got, 'abcdef', 'reads should preserve stream order')
 end
 

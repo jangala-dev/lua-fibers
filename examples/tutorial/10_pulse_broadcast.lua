@@ -18,7 +18,7 @@ local Pulse = require('fibers.pulse')
 local observed = {}
 
 fibers.run(function(scope)
-  local hazard_changed = Pulse.new({ name = 'shelter-hazard-changed' })
+  local hazard_changed = Pulse.new(0, 'shelter-hazard-changed')
 
   local radio = scope:spawn(function()
     return hazard_changed:changed(0)

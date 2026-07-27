@@ -16,7 +16,7 @@ local Task = require('fibers.task')
 local Scope = require('fibers.scope')
 local Connection = require('fibers.socket.connection')
 local Closure = require('fibers.closure')
-local Queue = require('fibers.resource.queue')
+local FIFO = require('fibers.resource.fifo')
 local Protected = require('fibers.internal.protected')
 local perform = require('fibers.perform')
 
@@ -261,7 +261,7 @@ function Module.listen_op(address, opts)
     kind = 'socket_listener',
     name = name,
     address = address,
-    queue = Queue.new({ capacity = opts.accept_capacity or 32, name = name .. ':accepted' }),
+    queue = FIFO.new(opts.accept_capacity or 32, name .. ':accepted'),
     lifecycle = ListenerLifecycle.new(name, address),
     host_hold = HostHold.new(name .. ':host-hold'),
   }, Listener)

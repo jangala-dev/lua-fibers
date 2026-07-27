@@ -128,14 +128,14 @@ do
       Address.ipv6('2001:db8::2', 443),
     }))
     fibers.perform(race:publish_family_op('inet6', v6:state_value(), 0))
-    local first = race:snapshot()
+    local first = race.state.value
     assert_eq(#first.unattempted, 1, 'one slot remains reserved for the unfinished family')
     assert_eq(first.candidates_dropped, 1)
 
     local v4 = Completion.new('reference-v4')
     fibers.perform(v4:publish_success_op({ Address.ipv4('192.0.2.20', 443) }))
     fibers.perform(race:publish_family_op('inet4', v4:state_value(), 0.010))
-    local second = race:snapshot()
+    local second = race.state.value
     assert_eq(#second.unattempted, 2)
     assert_eq(second.unattempted[1].kind, 'inet6')
     assert_eq(second.unattempted[2].kind, 'inet4')

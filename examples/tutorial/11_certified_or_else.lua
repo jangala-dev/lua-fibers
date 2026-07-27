@@ -17,7 +17,7 @@ local Op = require('fibers.op')
 local channel = require('fibers.channel')
 local Counter = require('fibers.resource.counter')
 
-local stamina = Counter.new({ initial = 1, name = 'captain-stamina' })
+local stamina = Counter.new(1, 'captain-stamina')
 local squad_orders = channel.new()
 local first_order, second_order, delivered_order
 

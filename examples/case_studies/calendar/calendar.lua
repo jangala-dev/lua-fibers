@@ -395,7 +395,7 @@ function Calendar:cancel_op(id)
     })
   )
 end
-function Calendar:snapshot_op()
+function Calendar:reservations_op()
   return Facility.op(
     self,
     Kind,
@@ -422,7 +422,7 @@ function Calendar:snapshot_op()
     })
   )
 end
-function Calendar:snapshot()
+function Calendar:reservations()
   local out = {}
   each(self._state.root, function(r)
     out[r.id] = clone_record(r)

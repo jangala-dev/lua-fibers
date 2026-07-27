@@ -46,7 +46,7 @@ local function seed()
 end
 
 local function index_all_hides_better_insert()
-  local x = Index.new(seed())
+  local x = Index.from(seed())
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -58,7 +58,7 @@ local function index_all_hides_better_insert()
   eq(x.entries.a, nil)
 end
 local function index_tensor_uses_better_insert()
-  local x = Index.new(seed())
+  local x = Index.from(seed())
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -70,7 +70,7 @@ local function index_tensor_uses_better_insert()
   eq(x.entries.a.value, 'A')
 end
 local function index_mixed_extrema_are_distinct()
-  local x = Index.new(seed())
+  local x = Index.from(seed())
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -83,7 +83,7 @@ local function index_mixed_extrema_are_distinct()
   eq(next(x.entries), nil)
 end
 local function index_duplicate_insert_conflicts()
-  local x = Index.new({})
+  local x = Index.new()
   local r = rt({ quiet_deadlock = true })
   r:spawn_raw(function()
     r:perform(Op.tensor({ x:insert_op('k', 1, 'A'), x:insert_op('k', 2, 'B') }))

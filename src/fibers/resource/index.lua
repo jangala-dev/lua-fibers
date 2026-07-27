@@ -20,9 +20,9 @@ local function copy_entry(entry)
   return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq } or nil
 end
 
-function Index.new(entries, name)
+local function create(entries, name)
   local index = Facility.identity(setmetatable({ _initial_entries = {} }, Index), Kind, name)
-  for i = 1, #(entries or {}) do
+  for i = 1, #entries do
     local entry, key = entries[i], entries[i].key or i
     index._initial_entries[key] =
       { key = key, rank = entry.rank or i, value = entry.value, seq = entry.seq or i }
@@ -36,15 +36,6 @@ function Index.new(entries, name)
     remove_idempotent = true,
   })
   index._initial_entries = nil
-  local observation = {
-    collect = function(_, read)
-      local entries = {}
-      for key, entry in pairs(read(index._location) or {}) do
-        entries[key] = copy_entry(entry)
-      end
-      return { entries = entries, version = index._location.version }
-    end,
-  }
   index._pop_first_op = Facility.op(
     index,
     Kind,
@@ -63,8 +54,20 @@ function Index.new(entries, name)
       result = ENTRY_RESULT,
     })
   )
-  index._snapshot_op = Facility.op(index, Kind, Facility.snapshot(index, observation))
+  index._changed_descriptor = Facility.descriptor(index, Kind, 'version_wait', {
+    location = index._location,
+    bind = 'version',
+  })
+  index._append_footprint = Facility.transition_footprint(index._location, 'up')
   return index
+end
+
+function Index.new(name)
+  return create({}, name)
+end
+
+function Index.from(entries, name)
+  return create(entries, name)
 end
 
 local function insert_program(index, key, rank, value, seq)
@@ -122,9 +125,16 @@ end
 function Index:pop_last_op()
   return self._pop_last_op
 end
-function Index:snapshot_op()
-  return self._snapshot_op
+function Index:changed_op(version)
+  return Facility.occurrence(self._changed_descriptor, version)
+end
+function Index:append_footprint()
+  return self._append_footprint
 end
 
 Index.Kind = Kind
+Facility.performing(
+  Index,
+  { 'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last', 'changed' }
+)
 return Index

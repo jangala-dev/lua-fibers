@@ -16,7 +16,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
 
-local arena_places = Counter.new({ initial = 4, name = 'moon-arena-places' })
+local arena_places = Counter.new(4, 'moon-arena-places')
 local started = 0
 local first_match, second_attempt
 

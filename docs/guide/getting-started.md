@@ -156,8 +156,9 @@ Use `all` when each lane must be satisfiable without positive supply from its si
 Channel is the ordinary communication facility:
 
 ```lua
-local commands = channel.new()          -- synchronous
-local buffered_events = channel.new(16) -- bounded FIFO
+local commands = channel.new()                  -- synchronous
+local buffered_events = channel.new(16)         -- bounded FIFO
+local unbounded_events = channel.new(math.huge) -- unbounded FIFO
 ```
 
 Both forms expose `put_op` and `get_op`.
@@ -194,21 +195,14 @@ fibers.perform(advance)
 For an ordered state machine, define a typed transition:
 
 ```lua
-local Increment = Scalar.transition({
-  name = 'counter.increment',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  validate = function(payload)
-    assert(type(payload.by) == 'number', 'by must be a number')
-  end,
-  step = function(value, payload)
-    local next_value = value + payload.by
-    return Scalar.Ready.write(next_value, next_value)
-  end,
-})
+local Increment = Machine.update('counter.increment', function(value, payload)
+  local next_value = value + payload.by
+  return Machine.Ready.write(next_value, next_value)
+end, nil, function(payload)
+  assert(type(payload.by) == 'number', 'by must be a number')
+end)
 
-local counter = Scalar.machine(0, 'counter')
+local counter = Machine.new(0, 'counter')
 local next_value = fibers.perform(counter:transition_op(Increment, { by = 1 }))
 assert(next_value == 1)
 ```
@@ -226,13 +220,21 @@ combat_tx:send('perfect parry')
 assert(combat_rx:recv() == 'perfect parry')
 ```
 
+`Mailbox.new` waits for space. The explicit variants select the other overflow
+laws without string-valued constructor options:
+
+```lua
+local latest_tx = Mailbox.reject_newest(16, 'latest-events')
+local rolling_tx = Mailbox.drop_oldest(16, 'rolling-events')
+```
+
 ## Flows and streams
 
 `Flow` is the supported transactional byte-building block. It provides stable producer and consumer endpoints, backpressure, exact byte reads, closure and retained-byte leases.
 
 ```lua
 local Flow = require('fibers.resource.flow')
-local dialogue_flow = Flow.new({ capacity = 4096 })
+local dialogue_flow = Flow.new(4096)
 
 dialogue_flow:inlet():write('The gate is open.\n')
 assert(dialogue_flow:outlet():read_line() == 'The gate is open.')
@@ -314,6 +316,22 @@ fibers.resource.event_queue
 fibers.resource.clock
 fibers.host.readiness
 ```
+
+`Keyed` is the law for independent addressable presence slots:
+
+```lua
+local Keyed = require('fibers.resource.keyed')
+local items = Keyed.new('items')
+
+items:get_op(key)            -- require presence; keep the value
+items:take_op(key)           -- require presence; consume the value
+items:put_op(key, value)     -- establish or replace
+items:insert_op(key, value)  -- require absence; establish
+items:contains_op(key)       -- proof-directed boolean
+items:remove_op(key)         -- proof-directed boolean removal
+```
+
+Values are non-nil; nil denotes absence.  Keys are independent transactional locations rather than entries in one ordered collection.
 
 See `../advanced/facility-authoring.md` and `../../examples/recipes/` for complete facilities built only from supported interfaces.
 

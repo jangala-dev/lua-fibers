@@ -17,7 +17,7 @@ local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
 local Scalar = require('fibers.resource.scalar')
 
-local silver_keys = Counter.new({ initial = 1, name = 'silver-keys' })
+local silver_keys = Counter.new(1, 'silver-keys')
 local moon_gate = Scalar.new('locked', 'moon-gate')
 local first, second
 

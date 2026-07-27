@@ -288,11 +288,11 @@ add('scalar', 'changed wait wake', 400, function(n)
   local scalar = Scalar.new(0, 'bench-scalar-changed')
   local observed = 0
   rt:spawn_raw(function()
-    local snap = rt:perform(scalar:snapshot_op())
+    local version = scalar.version
     for _ = 1, n do
-      local value, version = rt:perform(scalar:changed_op(snap.version))
+      local value, next_version = rt:perform(scalar:changed_op(version))
       observed = value
-      snap = { value = value, version = version }
+      version = next_version
     end
   end, 'bench-scalar-waiter')
   rt:spawn_raw(function()
@@ -699,7 +699,7 @@ end)
 
 add('flow', 'write only unbounded', 400, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-write-only' })
+  local flow = Flow.new(nil, 'bench-flow-write-only')
   local inlet = flow:inlet()
   local total = 0
   rt:spawn_raw(function()
@@ -709,19 +709,12 @@ add('flow', 'write only unbounded', 400, function(n)
   end, 'bench-flow-write-only')
   run_rt(rt)
   assert_eq(total, n)
-  local snap
-  local rt2 = Runtime.new()
-  rt2:spawn_raw(function()
-    snap = rt2:perform(flow:inspect_op())
-  end, 'inspect')
-  run_rt(rt2)
-  assert_eq(snap.queued_length, n)
   return n
 end)
 
 add('flow', 'sequential write read small', 350, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-seq' })
+  local flow = Flow.new(nil, 'bench-flow-seq')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -738,7 +731,7 @@ end)
 
 add('flow', 'tensor write read handoff', 220, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-tensor-handoff' })
+  local flow = Flow.new(nil, 'bench-flow-tensor-handoff')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -754,7 +747,7 @@ end)
 
 add('flow', 'capacity release handoff', 180, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-capacity-release', capacity = 4 })
+  local flow = Flow.new(4, 'bench-flow-capacity-release')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local ok = 0
   rt:spawn_raw(function()
@@ -775,7 +768,7 @@ end)
 
 add('flow', 'lease ack return', 220, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-lease' })
+  local flow = Flow.new(nil, 'bench-flow-lease')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -795,7 +788,7 @@ end)
 
 add('flow', 'read until chunked', 180, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-until' })
+  local flow = Flow.new(nil, 'bench-flow-until')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -814,7 +807,7 @@ end)
 
 add('flow', 'peek then drop', 250, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new({ name = 'bench-flow-peek-drop' })
+  local flow = Flow.new(nil, 'bench-flow-peek-drop')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -833,8 +826,8 @@ end)
 
 add('flow', 'splice derived', 140, function(n)
   local rt = Runtime.new()
-  local src = Flow.new({ name = 'bench-flow-splice-src' })
-  local dst = Flow.new({ name = 'bench-flow-splice-dst' })
+  local src = Flow.new(nil, 'bench-flow-splice-src')
+  local dst = Flow.new(nil, 'bench-flow-splice-dst')
   local total = 0
   rt:spawn_raw(function()
     for _ = 1, n do

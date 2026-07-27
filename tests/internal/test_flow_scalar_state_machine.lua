@@ -1,4 +1,4 @@
--- Scalar-state-machine Flow built over typed Scalar select transitions.
+-- Machine-backed Flow built over typed transitions.
 
 package.path = table.concat({
   './src/?.lua',
@@ -15,12 +15,13 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
-local FibersScalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local FibersFlow = require('fibers.resource.flow')
 local Op = FibersOp
 local Flow = FibersFlow
 local FlowErrors = require('fibers.resource.flow.errors')
 local Runtime = require('fibers.runtime')
+local Inspect = require('tests.support.flow_inspect')
 
 local function fail(msg)
   error(msg, 2)
@@ -40,28 +41,16 @@ local function new_runtime(opts)
 end
 
 local function test_scalar_select_tensor_supply_but_all_non_handoff()
-  local supply = FibersScalar.transition({
-    name = 'test.scalar.supply',
-    mode = 'update',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(v)
-      return FibersScalar.Ready.write(v + 1, true)
-    end,
-  })
-  local take = FibersScalar.transition({
-    name = 'test.scalar.take',
-    mode = 'select',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(v)
-      if v <= 0 then
-        return FibersScalar.Wait
-      end
-      return FibersScalar.Ready.write(v - 1, v)
-    end,
-  })
-  local s = FibersScalar.new(0, 'select-law')
+  local supply = StateMachine.update('test.scalar.supply', function(v)
+    return StateMachine.Ready.write(v + 1, true)
+  end)
+  local take = StateMachine.select('test.scalar.take', function(v)
+    if v <= 0 then
+      return StateMachine.Wait
+    end
+    return StateMachine.Ready.write(v - 1, v)
+  end)
+  local s = StateMachine.new(0, 'select-law')
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
@@ -74,7 +63,7 @@ local function test_scalar_select_tensor_supply_but_all_non_handoff()
   assert_eq(rows[2][1], 1)
   assert_eq(s.value, 0)
 
-  local s2 = FibersScalar.new(0, 'select-all')
+  local s2 = StateMachine.new(0, 'select-all')
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
@@ -89,7 +78,7 @@ local function test_scalar_select_tensor_supply_but_all_non_handoff()
 end
 
 local function test_flow_sequential_write_read()
-  local flow = Flow.new({ name = 'flow-sequential' })
+  local flow = Flow.new(nil, 'flow-sequential')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local got
   local st = fibers.try_run(function()
@@ -101,7 +90,7 @@ local function test_flow_sequential_write_read()
 end
 
 local function test_flow_tensor_write_read_handoff()
-  local flow = Flow.new({ name = 'flow-tensor' })
+  local flow = Flow.new(nil, 'flow-tensor')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows
   local st = fibers.try_run(function()
@@ -113,15 +102,11 @@ local function test_flow_tensor_write_read_handoff()
   assert_status(st, 'found')
   assert_eq(rows[1][1], 3)
   assert_eq(rows[2][1], 'abc')
-  local inspect
-  fibers.run(function()
-    inspect = fibers.perform(flow:inspect_op())
-  end)
-  assert_eq(inspect.queued, 0)
+  assert_eq(Inspect.queued(flow), 0)
 end
 
 local function test_flow_all_write_does_not_supply_read()
-  local flow = Flow.new({ name = 'flow-all' })
+  local flow = Flow.new(nil, 'flow-all')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows
   local st = fibers.try_run(function()
@@ -141,7 +126,7 @@ local function test_flow_all_write_does_not_supply_read()
 end
 
 local function test_flow_close_constrains_write()
-  local flow = Flow.new({ name = 'flow-close' })
+  local flow = Flow.new(nil, 'flow-close')
   local inlet = flow:inlet()
   local rows
   local st = fibers.try_run(function()
@@ -156,7 +141,7 @@ local function test_flow_close_constrains_write()
 end
 
 local function test_flow_capacity_and_write_some()
-  local flow = Flow.new({ capacity = 3, name = 'flow-capacity' })
+  local flow = Flow.new(3, 'flow-capacity')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local ok, err, n, rest, got
   fibers.run(function()
@@ -172,7 +157,7 @@ local function test_flow_capacity_and_write_some()
 end
 
 local function test_flow_lease_ack_and_return()
-  local flow = Flow.new({ name = 'flow-lease' })
+  local flow = Flow.new(nil, 'flow-lease')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, ok, got
   fibers.run(function()

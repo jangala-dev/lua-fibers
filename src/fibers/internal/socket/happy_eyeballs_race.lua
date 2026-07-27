@@ -6,6 +6,7 @@
 
 local Op = require('fibers.op')
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Counter = require('fibers.resource.counter')
 local Clock = require('fibers.resource.clock')
 local Address = require('fibers.socket.address')
@@ -16,7 +17,7 @@ local HostError = require('fibers.host.error')
 local Race = {}
 Race.__index = Race
 
-local Ready, Wait = Scalar.Ready, Scalar.Wait
+local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 local FAMILIES = Policy.FAMILIES
 local copy_list = Policy.copy_list
 local copy_state = Policy.copy_state
@@ -31,57 +32,48 @@ local function now_op()
   return default_clock:now_op()
 end
 
-local PublishFamily = Scalar.transition({
-  name = 'socket.happy_eyeballs.publish_family',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  step = function(current, payload)
-    if current.families[payload.family].done then
-      return Ready.same({ kind = 'ignored', family = payload.family })
-    end
+local PublishFamily = StateMachine.update('socket.happy_eyeballs.publish_family', function(current, payload)
+  if current.families[payload.family].done then
+    return Ready.same({ kind = 'ignored', family = payload.family })
+  end
 
-    local values = completion_addresses(payload.completion) or {}
-    local completion_err = completion_error(payload.completion)
-    local ordered, added, order_err, dropped = order_candidates(payload.race, current, payload.family, values)
-    if not ordered then
-      ordered, added, dropped = copy_list(current.unattempted), {}, 0
-    end
+  local values = completion_addresses(payload.completion) or {}
+  local completion_err = completion_error(payload.completion)
+  local ordered, added, order_err, dropped = order_candidates(payload.race, current, payload.family, values)
+  if not ordered then
+    ordered, added, dropped = copy_list(current.unattempted), {}, 0
+  end
 
-    local next_state = copy_state(current)
-    local info = next_state.families[payload.family]
-    info.done = true
-    info.finished_at = payload.finished_at
-    info.error = order_err or completion_err
-    for i = 1, #added do
-      local address = added[i]
-      info.addresses[#info.addresses + 1] = address
-      next_state.seen[Address.key(address)] = true
-    end
-    next_state.unattempted = copy_list(ordered)
-    next_state.candidates_dropped = next_state.candidates_dropped + (dropped or 0)
-    if
-      payload.family == 'inet4'
-      and #added > 0
-      and not next_state.families.inet6.done
-      and #next_state.attempts == 0
-    then
-      next_state.resolution_deadline = payload.finished_at + payload.race.resolution_delay
-    end
-    return Ready.write(next_state, {
-      kind = 'resolution',
-      family = payload.family,
-      state = next_state,
-    })
-  end,
-})
+  local next_state = copy_state(current)
+  local info = next_state.families[payload.family]
+  info.done = true
+  info.finished_at = payload.finished_at
+  info.error = order_err or completion_err
+  for i = 1, #added do
+    local address = added[i]
+    info.addresses[#info.addresses + 1] = address
+    next_state.seen[Address.key(address)] = true
+  end
+  next_state.unattempted = copy_list(ordered)
+  next_state.candidates_dropped = next_state.candidates_dropped + (dropped or 0)
+  if
+    payload.family == 'inet4'
+    and #added > 0
+    and not next_state.families.inet6.done
+    and #next_state.attempts == 0
+  then
+    next_state.resolution_deadline = payload.finished_at + payload.race.resolution_delay
+  end
+  return Ready.write(next_state, {
+    kind = 'resolution',
+    family = payload.family,
+    state = next_state,
+  })
+end)
 
-local NextAction = Scalar.transition({
-  name = 'socket.happy_eyeballs.next_action',
-  mode = 'select',
-  accepts_supply = false,
-  supplies = 'none',
-  step = function(current, payload)
+local NextAction = StateMachine.isolated_select(
+  'socket.happy_eyeballs.next_action',
+  function(current, payload)
     if current.winner then
       return Ready.same({
         kind = 'winner',
@@ -123,94 +115,82 @@ local NextAction = Scalar.transition({
       key = Address.key(candidate),
       started_at = payload.now,
     })
-  end,
-})
+  end
+)
 
-local AdmitAttempt = Scalar.transition({
-  name = 'socket.happy_eyeballs.admit_attempt',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  step = function(current, payload)
-    if current.winner then
-      return Wait
+local AdmitAttempt = StateMachine.update('socket.happy_eyeballs.admit_attempt', function(current, payload)
+  if current.winner then
+    return Wait
+  end
+  local candidate = current.unattempted[1]
+  if not candidate or Address.key(candidate) ~= payload.spec.key then
+    return Wait
+  end
+  local next_state = copy_state(current)
+  table.remove(next_state.unattempted, 1)
+  local entry = {
+    index = payload.spec.index,
+    family = candidate.kind,
+    address = candidate,
+    key = payload.spec.key,
+    dial = payload.dial,
+    status = 'active',
+    started_at = payload.spec.started_at,
+    completed_at = nil,
+    error = nil,
+  }
+  next_state.attempts[#next_state.attempts + 1] = entry
+  next_state.next_attempt = payload.spec.index + 1
+  next_state.next_launch_at = payload.spec.started_at + payload.attempt_delay
+  return Ready.write(next_state, { kind = 'launched', attempt = entry, state = next_state })
+end)
+
+local FinishAttempt = StateMachine.update('socket.happy_eyeballs.finish_attempt', function(current, payload)
+  local position
+  for i = 1, #current.attempts do
+    if current.attempts[i].index == payload.index and current.attempts[i].status == 'active' then
+      position = i
+      break
     end
-    local candidate = current.unattempted[1]
-    if not candidate or Address.key(candidate) ~= payload.spec.key then
-      return Wait
-    end
-    local next_state = copy_state(current)
-    table.remove(next_state.unattempted, 1)
-    local entry = {
-      index = payload.spec.index,
-      family = candidate.kind,
-      address = candidate,
-      key = payload.spec.key,
-      dial = payload.dial,
-      status = 'active',
-      started_at = payload.spec.started_at,
-      completed_at = nil,
-      error = nil,
+  end
+  if not position then
+    return Ready.same({ kind = 'ignored', release_slot = false })
+  end
+
+  local next_state = copy_state(current)
+  local entry = next_state.attempts[position]
+  entry.completed_at = payload.completed_at
+  if payload.connection then
+    entry.status = 'succeeded'
+    local winner = {
+      entry = entry,
+      connection = payload.connection,
+      address = entry.address,
+      family = entry.family,
+      completed_at = payload.completed_at,
     }
-    next_state.attempts[#next_state.attempts + 1] = entry
-    next_state.next_attempt = payload.spec.index + 1
-    next_state.next_launch_at = payload.spec.started_at + payload.attempt_delay
-    return Ready.write(next_state, { kind = 'launched', attempt = entry, state = next_state })
-  end,
-})
-
-local FinishAttempt = Scalar.transition({
-  name = 'socket.happy_eyeballs.finish_attempt',
-  mode = 'update',
-  accepts_supply = true,
-  supplies = 'any',
-  step = function(current, payload)
-    local position
-    for i = 1, #current.attempts do
-      if current.attempts[i].index == payload.index and current.attempts[i].status == 'active' then
-        position = i
-        break
-      end
-    end
-    if not position then
-      return Ready.same({ kind = 'ignored', release_slot = false })
-    end
-
-    local next_state = copy_state(current)
-    local entry = next_state.attempts[position]
-    entry.completed_at = payload.completed_at
-    if payload.connection then
-      entry.status = 'succeeded'
-      local winner = {
-        entry = entry,
-        connection = payload.connection,
-        address = entry.address,
-        family = entry.family,
-        completed_at = payload.completed_at,
-      }
-      next_state.winner = winner
-      return Ready.write(next_state, {
-        kind = 'winner',
-        winner = winner,
-        state = next_state,
-        completed_at = payload.completed_at,
-        release_slot = true,
-      })
-    end
-
-    entry.status = 'failed'
-    entry.error = payload.error
-    -- Immediate failure accelerates the next candidate.
-    next_state.next_launch_at = payload.completed_at
+    next_state.winner = winner
     return Ready.write(next_state, {
-      kind = 'attempt_failed',
-      attempt = entry,
+      kind = 'winner',
+      winner = winner,
       state = next_state,
       completed_at = payload.completed_at,
       release_slot = true,
     })
-  end,
-})
+  end
+
+  entry.status = 'failed'
+  entry.error = payload.error
+  -- Immediate failure accelerates the next candidate.
+  next_state.next_launch_at = payload.completed_at
+  return Ready.write(next_state, {
+    kind = 'attempt_failed',
+    attempt = entry,
+    state = next_state,
+    completed_at = payload.completed_at,
+    release_slot = true,
+  })
+end)
 
 function Race.new(endpoint, opts, host, started_at)
   local state = {
@@ -238,13 +218,8 @@ function Race.new(endpoint, opts, host, started_at)
     first_family_count = opts.first_family_count,
     maximum_candidates = opts.maximum_candidates,
     maximum_active_attempts = opts.maximum_active_attempts,
-    attempt_slots = Counter.new({
-      initial = opts.maximum_active_attempts,
-      min = 0,
-      max = opts.maximum_active_attempts,
-      name = name .. ':attempt-slots',
-    }),
-    state = Scalar.machine(state, name .. ':race'),
+    attempt_slots = Counter.bounded(opts.maximum_active_attempts, name .. ':attempt-slots'),
+    state = StateMachine.new(state, name .. ':race'),
   }, Race)
 end
 
@@ -412,10 +387,6 @@ function Race:step_op(query, scope)
       return outcomes:or_else(resolutions:or_else(progress))
     end)
   end)
-end
-
-function Race:snapshot()
-  return copy_state(self.state.value)
 end
 
 function Race:terminal_error(state)

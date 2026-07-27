@@ -12,7 +12,7 @@ local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local IR = require('fibers.internal.kernel.ir')
 
-local counter = Counter.new({ initial = 2, min = 0 }, 'direction-counter')
+local counter = Counter.new(2, 'direction-counter')
 local take = counter:take_op(1)
 local give = counter:give_op(1)
 local take_meta = IR.metadata(take)
@@ -21,7 +21,7 @@ local take_intent = { kind = 'transition', program = take.program }
 assert(not IR.metadata_may_supply(take_meta, take_intent))
 assert(IR.metadata_may_supply(give_meta, take_intent))
 
-local index = Index.new({}, 'direction-index')
+local index = Index.new('direction-index')
 local put = index:append_op('value')
 local pop = index:pop_first_op()
 local put_meta = IR.metadata(put)
@@ -34,6 +34,7 @@ assert(IR.metadata_may_supply(pop_meta, put_intent))
 assert(not IR.metadata_may_supply(put_meta, put_intent))
 
 local Scalar = require('fibers.resource.scalar')
+local StateMachine = require('fibers.resource.machine')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local Runtime = require('fibers.runtime')
@@ -45,67 +46,32 @@ local function rejected(fn, fragment)
   assert(tostring(err):find(fragment, 1, true), 'unexpected error: ' .. tostring(err))
 end
 
--- Trusted state-machine transitions must use the one canonical protocol.
-rejected(function()
-  Scalar.transition({
-    mode = 'update',
-    accepts_supply = true,
-    step = function(value)
-      return Scalar.Ready.write(value + 1, true)
-    end,
-  })
-end, 'requires an explicit supplies declaration')
+-- State-machine transitions have small canonical defaults.
+local default_transition = StateMachine.isolated_update(nil, function(value)
+  return StateMachine.Ready.write(value + 1, true)
+end)
+assert(default_transition.accepts_supply == false)
+assert(next(default_transition.supplies) == nil)
 
-rejected(function()
-  Scalar.transition({
-    mode = 'update',
-    supply = 'interacting',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(value)
-      return Scalar.Ready.write(value + 1, true)
-    end,
-  })
-end, 'no longer accepts supply')
-
-rejected(function()
-  Scalar.transition({
-    mode = 'query',
-    accepts_supply = true,
-    supplies = 'any',
-    step = function(value)
-      return Scalar.Ready.same(value)
-    end,
-  })
-end, 'query transitions cannot declare supplied state')
+local query_transition = StateMachine.query(nil, function(value)
+  return StateMachine.Ready.same(value)
+end)
+assert(query_transition.accepts_supply == true)
+assert(next(query_transition.supplies) == nil, 'query transitions never supply state')
 
 -- Supplying another transition and accepting supply from siblings are separate
 -- declarations.  The producer below refuses sibling supply but can still make
 -- the query ready in an interacting product.
-local producer = Scalar.transition({
-  name = 'directional-producer',
-  mode = 'update',
-  accepts_supply = false,
-  supplies = 'any',
-  order = 0,
-  step = function(value)
-    return Scalar.Ready.write(value + 1, true)
-  end,
-})
-local observer = Scalar.transition({
-  name = 'directional-observer',
-  mode = 'query',
-  accepts_supply = true,
-  supplies = 'none',
-  order = 100,
-  step = function(value)
-    if value < 1 then
-      return Scalar.Wait
-    end
-    return Scalar.Ready.same(value)
-  end,
-})
-local scalar = Scalar.new(0, 'directional-separation')
+local producer = StateMachine.rule('directional-producer', 'update', function(value)
+  return StateMachine.Ready.write(value + 1, true)
+end, false, 'any')
+local observer = StateMachine.query('directional-observer', function(value)
+  if value < 1 then
+    return StateMachine.Wait
+  end
+  return StateMachine.Ready.same(value)
+end, 100)
+local scalar = StateMachine.new(0, 'directional-separation')
 local rows
 local rt = Runtime.new()
 rt:spawn_raw(function()
@@ -131,44 +97,9 @@ assert(access.supply_any == nil)
 local Store = require('fibers.internal.kernel.ledger')
 local location = Store.new_location({ name = 'canonical-witness', algebra = 'machine', value = 0 })
 rejected(function()
-  Facility.witness({
-    location = location,
-    supplies = 'any',
-    cursor = function()
-      return {
-        next = function()
-          return nil
-        end,
-      }
-    end,
-  })
-end, 'requires accepts_supply')
-
-rejected(function()
-  Facility.witness({
-    location = location,
-    supply = 'interacting',
-    accepts_supply = true,
-    supplies = 'any',
-    cursor = function()
-      return {
-        next = function()
-          return nil
-        end,
-      }
-    end,
-  })
-end, 'no longer accepts supply')
-
-rejected(function()
-  Scalar.transition({
-    mode = 'update',
-    accepts_supply = true,
-    supplies = { any = true, up = true },
-    step = function(value)
-      return Scalar.Ready.write(value, true)
-    end,
-  })
+  StateMachine.rule(nil, 'update', function(value)
+    return StateMachine.Ready.write(value, true)
+  end, true, { any = true, up = true })
 end, 'cannot combine any')
 
 local declared_any = IR.metadata_hint({
@@ -256,7 +187,7 @@ if machine == 'ledger' then
   local guard_request = assert(guard_rt.pending[1])
   assert(IR.active_dynamic(guard_request.metadata) == false)
   assert(guard_request.metadata.exchanges[guard_channel].get)
-  assert(guard_rt:instrumentation_snapshot().counters.dynamic_dependency_refinements >= 1)
+  assert(guard_rt:instrumentation_report().counters.dynamic_dependency_refinements >= 1)
 end
 
 -- Atoms are interned and use the dense Bucket implementation shared with

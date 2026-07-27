@@ -20,6 +20,7 @@ local Flow = FibersFlow
 local FlowErrors = require('fibers.resource.flow.errors')
 local Stream = FibersStream
 local Runtime = require('fibers.runtime')
+local Inspect = require('tests.support.flow_inspect')
 
 local function fail(msg)
   error(msg, 2)
@@ -46,29 +47,30 @@ local function assert_status(st, tag, msg)
 end
 
 local function test_parallel_lease_and_read_do_not_duplicate_bytes()
-  local flow = Flow.new({ name = 'adv-lease-read' })
+  local flow = Flow.new(nil, 'adv-lease-read')
   local inlet, outlet = flow:inlet(), flow:outlet()
-  local rows, inspect, got
+  local rows, queued, leased, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
     rows = fibers.perform(Op.tensor({
       outlet:lease_some_op(3, 'holder'),
       outlet:read_some_op(3),
     }))
-    inspect = fibers.perform(flow:inspect_op())
+    queued = Inspect.queued(flow)
+    leased = Inspect.leased_bytes(flow)
     fibers.perform(rows[1][1]:release_op())
     got = fibers.perform(outlet:read_some_op(10))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(rows[1][1]:bytes(), 'abc', 'lease should take first bytes')
   assert_eq(rows[2][1], 'def', 'read should take remaining bytes')
-  assert_eq(inspect.queued, 0, 'no queued bytes should be duplicated')
-  assert_eq(inspect.leased, 3, 'leased bytes remain retained')
+  assert_eq(queued, 0, 'no queued bytes should be duplicated')
+  assert_eq(leased, 3, 'leased bytes remain retained')
   assert_eq(got, 'abc', 'returned lease bytes should re-enter the queue')
 end
 
 local function test_parallel_ack_then_return_returns_only_unacked_tail()
-  local flow = Flow.new({ name = 'adv-ack-return' })
+  local flow = Flow.new(nil, 'adv-ack-return')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, rows, got
   local st = fibers.try_run(function()
@@ -88,7 +90,7 @@ local function test_parallel_ack_then_return_returns_only_unacked_tail()
 end
 
 local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_first()
-  local empty = Flow.new({ name = 'adv-empty-close' })
+  local empty = Flow.new(nil, 'adv-empty-close')
   local eof, eof_err
   local st = fibers.try_run(function()
     fibers.perform(empty:inlet():close_op())
@@ -98,7 +100,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   assert_eq(eof, nil)
   assert_eq(eof_err, FlowErrors.EOF)
 
-  local same_world = Flow.new({ name = 'adv-same-world-close' })
+  local same_world = Flow.new(nil, 'adv-same-world-close')
   local same_rows
   local st_same = fibers.try_run(function()
     same_rows = fibers.perform(Op.tensor({
@@ -109,7 +111,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   assert_status(st_same, 'found')
   assert_eq(same_rows[2][1], 'not-yet-eof', 'same-world close should not fabricate EOF for an empty read')
 
-  local flow = Flow.new({ name = 'adv-close-drain' })
+  local flow = Flow.new(nil, 'adv-close-drain')
   local data, eof, eof_err
   local st2 = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc'))
@@ -124,26 +126,28 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
 end
 
 local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
-  local flow = Flow.new({ name = 'adv-shutdown-lease' })
+  local flow = Flow.new(nil, 'adv-shutdown-lease')
   local inlet, outlet = flow:inlet(), flow:outlet()
-  local lease, inspect, ack_ok, ack_err
+  local lease, retained, leased, queued, ack_ok, ack_err
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
     lease = fibers.perform(outlet:lease_some_op(3, 'holder'))
     fibers.perform(outlet:close_op('stop'))
-    inspect = fibers.perform(flow:inspect_op())
+    retained = Inspect.retained(flow)
+    leased = Inspect.leased_bytes(flow)
+    queued = Inspect.queued(flow)
     ack_ok, ack_err = fibers.perform(lease:ack_op(1))
   end).runtime_status
   assert_status(st, 'found')
-  assert_eq(inspect.retained, 0, 'shutdown should drop queued and leased bytes')
-  assert_eq(inspect.leased, 0)
-  assert_eq(inspect.queued, 0)
+  assert_eq(retained, 0, 'shutdown should drop queued and leased bytes')
+  assert_eq(leased, 0)
+  assert_eq(queued, 0)
   assert_eq(ack_ok, false, 'old lease should no longer be live')
   assert_eq(ack_err, FlowErrors.NO_LEASE)
 end
 
 local function test_capacity_release_handoff_tensor_but_not_all()
-  local flow = Flow.new({ name = 'adv-capacity-all', capacity = 3 })
+  local flow = Flow.new(3, 'adv-capacity-all')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, rows, got
   local st = fibers.try_run(function()
@@ -160,7 +164,7 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   assert_eq(rows[2][1], 'blocked', 'all should not let ack capacity supply sibling write')
   assert_eq(got, 'empty')
 
-  local flow2 = Flow.new({ name = 'adv-capacity-tensor', capacity = 3 })
+  local flow2 = Flow.new(3, 'adv-capacity-tensor')
   local inlet2, outlet2 = flow2:inlet(), flow2:outlet()
   local lease2, rows2, got2
   local st2 = fibers.try_run(function()

@@ -1,4 +1,4 @@
--- Premise-aware Counter and Queue built from Index + Counter.
+-- Premise-aware Counter and FIFO built from Index + Counter.
 
 package.path = table.concat({
   './src/?.lua',
@@ -15,7 +15,7 @@ package.path = table.concat({
 
 local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
-local Queue = require('fibers.resource.queue')
+local FIFO = require('fibers.resource.fifo')
 local Runtime = require('fibers.runtime')
 
 local function fail(msg)
@@ -43,7 +43,7 @@ end
 
 local function test_counter_all_allocates_existing_stock()
   local rt = new_runtime()
-  local c = Counter.new({ initial = 2, min = 0 }, 'ctr-all-take')
+  local c = Counter.new(2, 'ctr-all-take')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({ c:take_op(1), c:take_op(1) }))
@@ -56,7 +56,7 @@ end
 
 local function test_counter_all_give_does_not_supply_sibling_take()
   local rt = new_runtime()
-  local c = Counter.new({ initial = 0, min = 0 }, 'ctr-all-give-take')
+  local c = Counter.new(0, 'ctr-all-give-take')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({
@@ -72,7 +72,7 @@ end
 
 local function test_counter_tensor_give_supplies_sibling_take()
   local rt = new_runtime()
-  local c = Counter.new({ initial = 0, min = 0 }, 'ctr-tensor-give-take')
+  local c = Counter.new(0, 'ctr-tensor-give-take')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
@@ -88,7 +88,7 @@ end
 
 local function test_counter_overdraw_fails_as_one_world()
   local rt = new_runtime({ quiet_deadlock = true })
-  local c = Counter.new({ initial = 1, min = 0 }, 'ctr-overdraw')
+  local c = Counter.new(1, 'ctr-overdraw')
   rt:spawn_raw(function()
     rt:perform(Op.tensor({ c:take_op(1), c:take_op(1) }))
   end, 'root')
@@ -100,7 +100,7 @@ local function test_counter_overdraw_fails_as_one_world()
 end
 
 local function test_counter_add_is_positive_and_adjust_is_signed()
-  local c = Counter.new({ initial = 2, min = 0 }, 'ctr-api')
+  local c = Counter.new(2, 'ctr-api')
   local ok = pcall(function()
     c:add_op(-1)
   end)
@@ -116,9 +116,9 @@ local function test_counter_add_is_positive_and_adjust_is_signed()
   assert_eq(c.value, 1)
 end
 
-local function test_queue_tensor_put_supplies_get()
+local function test_fifo_tensor_put_supplies_get()
   local rt = new_runtime()
-  local q = Queue.new({ name = 'q-tensor' })
+  local q = FIFO.new(math.huge, 'q-tensor')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
@@ -129,12 +129,18 @@ local function test_queue_tensor_put_supplies_get()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'x')
-  assert_eq(next(q.items.entries), nil, 'tensor put/get should leave unbounded queue empty')
+  local empty
+  local rt2 = new_runtime()
+  rt2:spawn_raw(function()
+    empty = rt2:perform(q:get_op():or_else(Op.always('empty')))
+  end, 'empty-check')
+  assert_status(rt2:run(), 'found')
+  assert_eq(empty, 'empty')
 end
 
-local function test_queue_all_put_does_not_supply_get()
+local function test_fifo_all_put_does_not_supply_get()
   local rt = new_runtime()
-  local q = Queue.new({ name = 'q-all' })
+  local q = FIFO.new(math.huge, 'q-all')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.all({
@@ -145,31 +151,32 @@ local function test_queue_all_put_does_not_supply_get()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'empty')
-  local only
-  for _, e in pairs(q.items.entries) do
-    only = e
-  end
-  assert_eq(only.value, 'x')
+  local stored
+  local rt2 = new_runtime()
+  rt2:spawn_raw(function()
+    stored = rt2:perform(q:get_op())
+  end, 'stored-get')
+  assert_status(rt2:run(), 'found')
+  assert_eq(stored, 'x')
 end
 
-local function test_queue_all_gets_allocate_existing_stock()
+local function test_fifo_all_gets_allocate_existing_stock()
   local rt = new_runtime()
-  local q = Queue.new({ name = 'q-all-existing' })
-  q.items.entries[1] = { key = 1, rank = 1, seq = 1, value = 'a' }
-  q.items.entries[2] = { key = 2, rank = 2, seq = 2, value = 'b' }
+  local q = FIFO.new(math.huge, 'q-all-existing')
   local rows
   rt:spawn_raw(function()
+    rt:perform(q:put_op('a'))
+    rt:perform(q:put_op('b'))
     rows = rt:perform(Op.all({ q:get_op(), q:get_op() }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'a')
   assert_eq(rows[2][1], 'b')
-  assert_eq(next(q.items.entries), nil)
 end
 
-local function test_bounded_queue_capacity_and_release()
+local function test_bounded_fifo_capacity_and_release()
   local rt = new_runtime()
-  local q = Queue.new({ capacity = 1, name = 'q-bounded' })
+  local q = FIFO.new(1, 'q-bounded')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
@@ -179,15 +186,20 @@ local function test_bounded_queue_capacity_and_release()
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'x')
-  assert_eq(q.slots.value, 1, 'put/get handoff should release capacity')
-  assert_eq(next(q.items.entries), nil)
+  local round_trip
+  local rt2 = new_runtime()
+  rt2:spawn_raw(function()
+    rt2:perform(q:put_op('y'))
+    round_trip = rt2:perform(q:get_op())
+  end, 'capacity-reused')
+  assert_status(rt2:run(), 'found')
+  assert_eq(round_trip, 'y', 'put/get handoff should release capacity')
 end
 
-local function test_queue_put_op_construction_does_not_mutate_queue_state()
-  local q = Queue.new({ name = 'q-construction' })
+local function test_fifo_put_op_construction_does_not_mutate_state()
+  local q = FIFO.new(math.huge, 'q-construction')
   local op1 = q:put_op('lost')
   local op2 = q:put_op('won')
-  assert_eq(next(q.items.entries), nil, 'constructing put_op should not insert into the queue')
   local rt = new_runtime({ choice_seed = 2 })
   local out
   rt:spawn_raw(function()
@@ -195,7 +207,6 @@ local function test_queue_put_op_construction_does_not_mutate_queue_state()
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(out, 'skip')
-  assert_eq(next(q.items.entries), nil, 'losing put_op branch should not mutate queue')
 
   local rt2 = new_runtime()
   rt2:spawn_raw(function()
@@ -203,10 +214,25 @@ local function test_queue_put_op_construction_does_not_mutate_queue_state()
   end, 'root')
   assert_status(rt2:run(), 'found')
   local only
-  for _, e in pairs(q.items.entries) do
-    only = e
+  local rt3 = new_runtime()
+  rt3:spawn_raw(function()
+    only = rt3:perform(q:get_op())
+  end, 'won-get')
+  assert_status(rt3:run(), 'found')
+  assert_eq(only, 'won')
+end
+
+local function test_fifo_capacity_surface()
+  local unbounded = FIFO.new(math.huge, 'unbounded')
+  assert_eq(unbounded.capacity, math.huge)
+  assert_eq(FIFO.unbounded, nil, 'FIFO has one capacity-directed constructor')
+
+  if pcall(FIFO.new, -1) then
+    fail('negative FIFO capacity should fail')
   end
-  assert_eq(only.value, 'won')
+  if pcall(FIFO.new, 1.5) then
+    fail('fractional FIFO capacity should fail')
+  end
 end
 
 local tests = {
@@ -215,15 +241,16 @@ local tests = {
   test_counter_tensor_give_supplies_sibling_take,
   test_counter_overdraw_fails_as_one_world,
   test_counter_add_is_positive_and_adjust_is_signed,
-  test_queue_tensor_put_supplies_get,
-  test_queue_all_put_does_not_supply_get,
-  test_queue_all_gets_allocate_existing_stock,
-  test_bounded_queue_capacity_and_release,
-  test_queue_put_op_construction_does_not_mutate_queue_state,
+  test_fifo_tensor_put_supplies_get,
+  test_fifo_all_put_does_not_supply_get,
+  test_fifo_all_gets_allocate_existing_stock,
+  test_bounded_fifo_capacity_and_release,
+  test_fifo_put_op_construction_does_not_mutate_state,
+  test_fifo_capacity_surface,
 }
 
 for i = 1, #tests do
   tests[i]()
 end
 
-print('tests/test_counter_queue.lua: ok')
+print('tests/resources/test_counter_and_fifo.lua: ok')

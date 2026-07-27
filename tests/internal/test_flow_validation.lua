@@ -20,8 +20,13 @@ local function eq(a, b, msg)
   end
 end
 
+local named_a = Flow.new(1, 'shared-debug-name')
+local named_b = Flow.new(1, 'shared-debug-name')
+eq(named_a.name, named_b.name, 'debug names may be shared')
+eq(named_a._fibers_id == named_b._fibers_id, false, 'Flow identity must not depend on its debug name')
+
 local rt = Runtime.new()
-local flow = Flow.new({ name = 'flow-negative-refresh', capacity = 8 })
+local flow = Flow.new(8, 'flow-negative-refresh')
 local got, written
 local reader = rt:spawn_raw(function()
   got = rt:perform(flow:outlet():read_exactly_op(1):or_else(Op.always('empty')))
