@@ -118,17 +118,17 @@ do
   assert_eq(wrapped, false, 'wrap on absent primary must not run')
 end
 
--- An and_then whose prefix is absent is absent without running the continuation.
+-- An and_then whose prefix is absent is absent without entering its right-hand operation.
 do
   local called = false
   assert_truthy(
-    absent(Op.never():and_then(function()
+    absent(Op.never():and_then(Op.guard(function()
       called = true
       return Op.always('bad')
-    end)),
+    end))),
     'and_then with absent prefix should be absent'
   )
-  assert_eq(called, false, 'and_then continuation must not run when the prefix is absent')
+  assert_eq(called, false, 'and_then right-hand guard must not run when the prefix is absent')
 end
 
 -- together permits internal rendezvous, while each does not.

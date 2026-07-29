@@ -18,7 +18,6 @@ local Runtime = require('fibers.runtime')
 local Cell = require('fibers.resource.cell')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Sleep = require('fibers.sleep')
-local Scope = require('fibers.scope')
 
 local function fail(message)
   error(message, 2)
@@ -81,9 +80,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
       calls = calls + 1
       return Op.always(calls)
     end)
-    local sequence = Op.always('prefix'):and_then(function()
-      return guarded
-    end)
+    local sequence = Op.always('prefix'):and_then(guarded)
     local result = run(machine, Op.together({ sequence, sequence }))
     local rows = result[1]
     eq(calls, 2, machine .. ': reused dynamic sequence should create two guard activations')
@@ -107,12 +104,12 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     eq(calls, 2, machine .. ': choice positions must not share a guard expansion')
   end
 
-  -- Distinct provisional proofs entering one and_then continuation are
+  -- Distinct provisional proofs entering one and_then right-hand guard are
   -- distinct speculative activations, even when they return equal Lua values.
   do
     local calls = 0
     local left = Op.choice(Op.always('same'), Op.always('same'))
-    local op = left:and_then(function(value)
+    local op = left:and_then(Op.guard(function(value)
       return Op.guard(function()
         calls = calls + 1
         if calls == 1 then
@@ -120,16 +117,52 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
         end
         return Op.always(value, calls)
       end)
-    end)
+    end))
     local result = run(machine, op)
     eq(result[1], 'same')
     eq(result[2], 2)
     eq(calls, 2, machine .. ': distinct left proofs should activate guards independently')
   end
 
+  -- Guards receive preceding provisional values directly as varargs. Root
+  -- guards and zero-result prefixes both receive zero arguments; nils and exact
+  -- multiple-value arity are preserved.
+  do
+    local root = run(
+      machine,
+      Op.guard(function(...)
+        return Op.always(select('#', ...))
+      end)
+    )
+    eq(root.n, 1)
+    eq(root[1], 0, machine .. ': root guard should receive no arguments')
+
+    local zero = run(
+      machine,
+      Op.always():and_then(Op.guard(function(...)
+        return Op.always(select('#', ...))
+      end))
+    )
+    eq(zero.n, 1)
+    eq(zero[1], 0, machine .. ': zero-result prefix should supply no arguments')
+
+    local sequenced = run(
+      machine,
+      Op.always(nil, 'value'):and_then(Op.guard(function(...)
+        local count = select('#', ...)
+        local first, second = ...
+        return Op.always(count, first, second)
+      end))
+    )
+    eq(sequenced.n, 3)
+    eq(sequenced[1], 2, machine .. ': guard varargs should preserve nils and arity')
+    eq(sequenced[2], nil)
+    eq(sequenced[3], 'value')
+  end
+
   -- A relative sleep returned by and_then begins when that provisional
-  -- progression activates, not when the outer perform begins.  Repeated
-  -- driver steps retain the resulting deadline.
+  -- progression activates, not when the outer perform begins. Repeated driver
+  -- steps retain the resulting absolute deadline.
   do
     local now = 0
     local rt = Runtime.new({
@@ -144,9 +177,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     local finished, observed = false, nil
 
     rt:spawn_raw(function()
-      local _, deadline = rt:perform(gate:get_op():and_then(function()
-        return Sleep.sleep_op(3)
-      end))
+      local _, deadline = rt:perform(gate:get_op():and_then(Sleep.sleep_op(3)))
       finished, observed = true, deadline
     end, 'guard-activation-sleeper')
 
@@ -168,78 +199,6 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     eq(observed, 13, machine .. ': sleep deadline should be fixed at activation plus delay')
   end
 
-  -- The guard argument is an ephemeral perform-local activation view. Its
-  -- monotonic instant is sampled at most once, and the public surface exposes
-  -- only the stable values needed to construct an explicit residual.
-  do
-    local reads = 0
-    local host = {
-      now = function()
-        reads = reads + 1
-        return 40 + reads
-      end,
-    }
-    local rt = Runtime.new({ machine = machine, host = host })
-    local scope = Scope.new('guard-activation-context', { runtime = rt })
-    local captured, result
-    rt:spawn_raw(function()
-      result = pack(rt:perform(Op.guard(function(activation)
-        captured = activation
-        local first = activation:now()
-        local second = activation:now()
-        return Op.always(
-          first,
-          second,
-          activation:scope() == scope,
-          activation.runtime == nil,
-          activation.host == nil,
-          type(activation.scope) == 'function',
-          activation.label == nil,
-          activation._close == nil,
-          activation.close == nil
-        )
-      end)))
-    end, 'guard-activation-context-root', scope)
-    found(rt:run(), machine .. ': guard activation context should complete')
-    eq(result[1], result[2], machine .. ': one activation should observe one instant')
-    eq(reads, 1, machine .. ': activation time should be sampled once')
-    eq(result[3], true, machine .. ': activation should expose the performing Scope')
-    eq(result[4], true, machine .. ': activation should not expose the Runtime')
-    eq(result[5], true, machine .. ': activation should not expose the Runtime host')
-    eq(result[6], true, machine .. ': activation should expose only the Scope method')
-    eq(result[7], true, machine .. ': activation should not expose its internal label')
-    eq(result[8], true, machine .. ': activation should not expose evaluator closure')
-    eq(result[9], true, machine .. ': activation should expose no module closure function')
-    local open, err = pcall(function()
-      return captured:now()
-    end)
-    eq(open, false, machine .. ': activation view must not outlive guard elaboration')
-    eq(
-      tostring(err):match('no longer available') ~= nil,
-      true,
-      machine .. ': closed activation should explain its lifetime'
-    )
-  end
-
-  -- Contextual surface operations resolve against the performing activation,
-  -- not the host-language point where the reusable guard value was constructed.
-  do
-    local contextual = Op.guard(function(activation)
-      return Op.always(activation:scope())
-    end)
-    local rt = Runtime.new({ machine = machine })
-    local outer = Scope.new('guard-context-outer', { runtime = rt })
-    local inner = Scope.new('guard-context-inner', { runtime = rt, parent = outer })
-    local observed_scope
-    rt:spawn_raw(function()
-      rt:with_scope(inner, function()
-        observed_scope = rt:perform(contextual)
-      end)
-    end, 'guard-context-performing-scope', outer)
-    found(rt:run(), machine .. ': contextual guard should complete')
-    eq(observed_scope, inner, machine .. ': guard should resolve the performing Scope')
-  end
-
   -- A changed transactional observation creates a new activation even when
   -- the earlier progression remains pending behind a guarded option.
   do
@@ -249,14 +208,14 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     local calls, value, activation_number = 0, nil, nil
 
     rt:spawn_raw(function()
-      value, activation_number = rt:perform(cell:read_op():and_then(function(observed)
+      value, activation_number = rt:perform(cell:read_op():and_then(Op.guard(function(observed)
         return Op.guard(function()
           calls = calls + 1
           return gate:get_op():map(function()
             return observed, calls
           end)
         end)
-      end))
+      end)))
     end, 'guard-version-waiter')
 
     rt:spawn_raw(function()
@@ -300,9 +259,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     local cell = Cell.new(0, 'guard-fallback-version')
     local gate = Rendezvous.new('guard-fallback-gate')
     local calls, result = 0, nil
-    local preferred = cell:changed_op(0):and_then(function()
-      return Op.never()
-    end)
+    local preferred = cell:changed_op(0):and_then(Op.never())
     local fallback = Op.guard(function()
       calls = calls + 1
       local activation_number = calls

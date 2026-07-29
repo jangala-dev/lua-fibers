@@ -97,30 +97,6 @@ rejected(function()
   end, true, { any = true, up = true })
 end, 'cannot combine any')
 
-local declared_any = IR.metadata_hint({
-  locations = {
-    [counter._location] = {
-      read = true,
-      write = true,
-      supplies = 'any',
-    },
-  },
-})
-assert(IR.metadata_covers(declared_any, give_meta))
-
-local declared_up = IR.metadata_hint({
-  locations = {
-    [counter._location] = {
-      read = true,
-      write = true,
-      supplies = 'up',
-    },
-  },
-})
-local arbitrary_write = IR.metadata(Cell.new(0, 'arbitrary-write'):write_op(1))
-local covers_arbitrary = IR.metadata_covers(declared_up, arbitrary_write)
-assert(not covers_arbitrary, 'directional declaration must not cover explicit any supply')
-
 -- Read-only dependency queries reuse interned atoms and do not create
 -- additional membership records.
 local Dependencies = require('fibers.internal.kernel.dependencies')
@@ -150,9 +126,9 @@ assert(put_atom.generation == before_generation)
 -- retained-proof eligibility while the dependency index keeps the request out
 -- of the opaque global component.
 local phase_channel = require('fibers.resource.rendezvous').new('phase-sensitive-and-then')
-local phase_op = phase_channel:get_op():and_then(function(value)
+local phase_op = phase_channel:get_op():and_then(Op.guard(function(value)
   return Op.always(value)
-end)
+end))
 local phase_meta = IR.metadata(phase_op)
 assert(phase_meta.dynamic == true)
 assert(IR.active_dynamic(phase_meta) == false)
@@ -191,5 +167,42 @@ local same_put_atom = dependency_index:atom('exchange', exchange_resource, 'put'
 assert(put_atom == same_put_atom, 'dependency atoms must be interned')
 assert(put_atom:add(11) and put_atom:add(12) and not put_atom:add(11))
 assert(put_atom:remove(11) and put_atom:contains(12) and put_atom.count == 1)
+
+-- A dynamic right-hand guard must recruit dependencies from the residual it
+-- actually returns. Fallback cannot commit merely because that dependency was
+-- absent from the prefix component before the guard was revealed.
+for _, solver in ipairs({ machine }) do
+  local sound_rt = Runtime.new({
+    machine = solver,
+    dependency_index_threshold = 1,
+    choice_seed = 1,
+  })
+  local actual = Cell.new(0, 'dynamic-residual-actual-' .. solver)
+  local preferred_result
+
+  sound_rt:spawn_raw(function()
+    local preferred = Op.always():and_then(Op.guard(function()
+      return actual:expect_op(1):map(function()
+        return 'preferred'
+      end)
+    end))
+    preferred_result = sound_rt:perform(preferred:or_else(Op.always('fallback')))
+  end, 'dynamic-residual-consumer-' .. solver)
+
+  -- Make the dependency index non-trivial and ensure an actual supplier is
+  -- pending in the same arbitration world.
+  for i = 1, 4 do
+    local unrelated = Cell.new(false, 'dynamic-residual-unrelated-' .. solver .. '-' .. i)
+    sound_rt:spawn_raw(function()
+      sound_rt:perform(unrelated:expect_op(true))
+    end, 'dynamic-residual-unrelated-' .. solver .. '-' .. i)
+  end
+  sound_rt:spawn_raw(function()
+    sound_rt:perform(actual:write_op(1))
+  end, 'dynamic-residual-supplier-' .. solver)
+
+  assert(sound_rt:run().tag == 'found')
+  assert(preferred_result == 'preferred', 'dynamic residual dependency admitted fallback under ' .. solver)
+end
 
 return true

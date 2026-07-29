@@ -23,8 +23,6 @@ local function create(name)
 end
 
 local function finish(fifo)
-  fifo._put_footprint = Op.dependencies(fifo._items:append_footprint(), fifo._slots and fifo._slots:take_op())
-  fifo._get_footprint = Op.dependencies(fifo._items:pop_first_op(), fifo._slots and fifo._slots:give_op())
   return fifo
 end
 
@@ -48,14 +46,6 @@ function FIFO.new(capacity, name)
   return finish(fifo)
 end
 
-function FIFO:put_footprint()
-  return self._put_footprint
-end
-
-function FIFO:get_footprint()
-  return self._get_footprint
-end
-
 function FIFO:put_op(item)
   local put = self._items:append_op(item)
   if not self._slots then
@@ -70,11 +60,11 @@ function FIFO:get_op()
     return get:map(value)
   end
 
-  return get:and_then(function(entry)
+  return get:and_then(Op.guard(function(entry)
     return self._slots:give_op():map(function()
       return entry.value
     end)
-  end, self._get_footprint)
+  end))
 end
 
 function FIFO:put(item)

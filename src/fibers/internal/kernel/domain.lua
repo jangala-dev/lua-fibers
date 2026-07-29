@@ -748,8 +748,8 @@ local function exact_exchange_program(op, request, activation, resolve_guard)
     elseif op.kind == 'annotated' then
       activation = activation and Path.child(activation, 'annotated:body') or nil
       op = op.p
-    elseif op.kind == 'and_then' and op.derived_map then
-      activation = activation and Path.child(activation, 'and_then:prefix') or nil
+    elseif op.kind == 'map' then
+      activation = activation and Path.child(activation, 'map:body') or nil
       op = op.p
     else
       break
@@ -794,12 +794,12 @@ local function collect_exact_exchange_fragment(op, request, fragment, activation
       resolve_guard
     )
   end
-  if op.kind == 'and_then' and op.derived_map then
+  if op.kind == 'map' then
     return collect_exact_exchange_fragment(
       op.p,
       request,
       fragment,
-      activation and Path.child(activation, 'and_then:prefix') or nil,
+      activation and Path.child(activation, 'map:body') or nil,
       resolve_guard
     )
   end
@@ -983,7 +983,7 @@ local function strip_binary_wrapper(op)
   while op do
     if op.kind == 'annotated' then
       op = op.p
-    elseif op.kind == 'and_then' and op.derived_map then
+    elseif op.kind == 'map' then
       op = op.p
     else
       break

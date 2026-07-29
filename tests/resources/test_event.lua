@@ -67,11 +67,11 @@ local function test_ready_external_value_still_participates_in_global_rendezvous
   local receiver, sender
   rt:spawn_raw(function()
     receiver = rt:perform(ev:wait_op()
-      :and_then(function(v)
+      :and_then(Op.guard(function(v)
         return ch:get_op():map(function(x)
           return v .. ':' .. x
         end)
-      end)
+      end))
       :or_else(Op.always('fallback')))
   end, 'receiver')
   rt:spawn_raw(function()

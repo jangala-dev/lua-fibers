@@ -86,11 +86,11 @@ do
   local receiver, sender
   rt:spawn_raw(function()
     receiver = rt:perform(ev:wait_op()
-      :and_then(function(v)
+      :and_then(Op.guard(function(v)
         return ch:get_op():map(function(x)
           return v .. ':' .. x
         end)
-      end)
+      end))
       :or_else(Op.always('fallback')))
   end, 'receiver')
   rt:spawn_raw(function()
@@ -173,12 +173,7 @@ do
   deliver(rt, q, 'kept')
   local got, remaining
   rt:spawn_raw(function()
-    got = rt:perform(Op.choice(
-      q:next_op():and_then(function()
-        return Op.never()
-      end),
-      Op.always('winner')
-    ))
+    got = rt:perform(Op.choice(q:next_op():and_then(Op.never()), Op.always('winner')))
     remaining = rt:perform(q:next_op())
   end, 'events-loser-consumer')
   assert_status(rt:run(), 'found')

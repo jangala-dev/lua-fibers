@@ -51,24 +51,24 @@ function Cell:write(value)
   return perform(self:write_op(value))
 end
 
-function Cell:select_op(select, dependencies)
-  return Facility.versioned_select(self, select, dependencies)
+function Cell:select_op(select)
+  return Facility.versioned_select(self, select)
 end
 
-function Cell:wait_until_op(predicate, dependencies)
-  return Facility.versioned_wait_until(self, predicate, dependencies)
+function Cell:wait_until_op(predicate)
+  return Facility.versioned_wait_until(self, predicate)
 end
 
-function Cell:wait_until(predicate, dependencies)
-  return perform(self:wait_until_op(predicate, dependencies))
+function Cell:wait_until(predicate)
+  return perform(self:wait_until_op(predicate))
 end
 
-function Cell:match_op(matcher, dependencies)
-  return Facility.versioned_match(self, matcher, dependencies)
+function Cell:match_op(matcher)
+  return Facility.versioned_match(self, matcher)
 end
 
-function Cell:match(matcher, dependencies)
-  return perform(self:match_op(matcher, dependencies))
+function Cell:match(matcher)
+  return perform(self:match_op(matcher))
 end
 
 Cell.Kind = Kind

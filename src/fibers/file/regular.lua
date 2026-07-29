@@ -376,14 +376,9 @@ function RegularFile:close_op(reason)
     return self:closed_op()
   end
   local request = new_request('close', { reason = reason })
-  return self.tx
-    :send_op(request)
-    :and_then(function()
-      return self.tx:close_op(reason or 'file close requested')
-    end, false)
-    :wrap(function()
-      return self:closed()
-    end)
+  return self.tx:send_op(request):and_then(self.tx:close_op(reason or 'file close requested')):wrap(function()
+    return self:closed()
+  end)
 end
 
 function RegularFile:submit_read_all_op(opts)

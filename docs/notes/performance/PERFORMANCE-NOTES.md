@@ -8,7 +8,7 @@ or instruction tuning:
 
 1. performance and semantic invariants;
 2. diagnostic dependency and repeated-state measurement;
-3. compiled option metadata and continuation declarations;
+3. compiled, phase-sensitive option metadata;
 4. incremental pending-request dependency indexes;
 5. conservative dependency-component isolation;
 6. deterministic normalisation and forced reductions; and
@@ -65,39 +65,38 @@ Option metadata is compiled and cached by option identity.  It records:
 - resource-wide dependencies;
 - option-node kinds and counts;
 - external dependencies; and
-- whether any continuation remains opaque.
+- whether any guard remains opaque.
 
 The runtime instrumentation measures component reduction, dependency counts,
 opaque slow paths and repeated coarse search states without making those hashes
 part of normal execution.
 
-## 3. Continuation metadata
+## 3. Sequencing and guard metadata
 
-`map` is recognised as a closed continuation.  `guard` and `and_then` accept an
-optional conservative continuation declaration:
+`map` is a closed structural node. `and_then` also contains its right-hand
+`Op` directly, so static sequencing dependencies are derived from the operation
+graph without a callback or a separate declaration:
 
 ```lua
-local next_op = channel:get_op()
-local op = prior:and_then(function(value)
-  return next_op
-end, Op.dependencies(next_op))
+local op = prior:and_then(channel:get_op())
 ```
 
-Declarations may combine several options or metadata parts.  They state the
-union of dependencies the callback may return, not the option it must return
-on every invocation.
+When the next operation depends on provisional values, the right-hand side is a
+guard:
 
-An unannotated arbitrary Lua continuation remains dynamic and conservatively
-connected to the whole pending frontier.  Correctness therefore does not depend
-on users supplying metadata.
+```lua
+local op = prior:and_then(Op.guard(function(...)
+  return operation_for(...)
+end))
+```
 
-For library development, `Runtime.new({ verify_dependencies = true })` checks an
-executed continuation against its declaration and rejects an incomplete one.
-This is intended as a test and development aid; verification is not enabled on
-the normal fast path.
+An unopened guard remains dynamic and conservative until the evaluator reveals
+its actual residual. The residual's dependencies are then derived and memoised
+for that speculative activation. No public dependency certificate or verifier is
+required, and incomplete metadata cannot narrow an absence proof.
 
-Task, Scope, Lifetime, Flow and benchmark-retained continuations whose future
-options are structurally known now use this declaration path.
+Task, Scope, Lifetime, Flow and other built-in facilities use direct static
+right-hand operations wherever their future structure is already known.
 
 ## 4. Incremental pending dependency index
 
@@ -106,7 +105,7 @@ For sufficiently large pending frontiers, the runtime maintains an index from:
 - exchange resources and complementary roles to pending roots;
 - versioned locations to pending roots and possible suppliers;
 - resource-wide dependencies to pending roots; and
-- opaque continuations to the conservative global set.
+- active opaque guards to the conservative global set.
 
 The index is activated adaptively at 16 pending requests and normally released
 only after the frontier falls below 8.  This hysteresis avoids rebuilding the
@@ -127,11 +126,11 @@ provided the component is statically analysable.  Roots are connected through:
 - complementary exchange roles on the same resource;
 - shared versioned locations;
 - resource-wide observation or supply; and
-- opaque continuation dependencies.
+- opaque guard dependencies.
 
-Opaque requests deliberately join the complete frontier.  The optimisation is
-therefore conservative: missing metadata loses performance but does not silently
-remove a possible participant.
+Requests with active opaque guards deliberately join the complete frontier. The
+optimisation is therefore conservative: unrevealed structure may lose performance
+but cannot silently remove a possible participant.
 
 In the architectural suite, 24 unrelated blocked rendezvous roots search a
 component averaging about 17.5% of the former complete frontier.  Footprint checks

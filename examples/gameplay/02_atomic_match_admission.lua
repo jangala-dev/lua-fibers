@@ -21,12 +21,10 @@ local started = 0
 local first_match, second_attempt
 
 local function start_match_op(scope, party_name, party_size)
-  return arena_places:take_op(party_size):and_then(function()
-    return scope:spawn_op(function()
-      started = started + 1
-      return party_name .. ' entered the Moon Arena'
-    end, { name = 'match:' .. party_name })
-  end)
+  return arena_places:take_op(party_size):and_then(scope:spawn_op(function()
+    started = started + 1
+    return party_name .. ' entered the Moon Arena'
+  end, { name = 'match:' .. party_name }))
 end
 
 fibers.run(function(scope)

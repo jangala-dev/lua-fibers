@@ -73,11 +73,10 @@ function Pulse:signal_op()
 end
 
 function Pulse:close_op(reason)
-  local close = self._status:expect_op(OPEN):and_then(function()
-    return self._status:write_op({ reason = reason }):map(function()
+  local close =
+    self._status:expect_op(OPEN):and_then(self._status:write_op({ reason = reason }):map(function()
       return true
-    end)
-  end)
+    end))
 
   return close:or_else(self._status:wait_until_op(closed):map(function()
     return true
@@ -99,9 +98,9 @@ function Pulse:changed_op(last_seen)
 end
 
 function Pulse:next_op()
-  return self._version:read_op():and_then(function(version)
+  return self._version:read_op():and_then(Op.guard(function(version)
     return self:changed_op(version)
-  end)
+  end))
 end
 
 function Pulse:signal()

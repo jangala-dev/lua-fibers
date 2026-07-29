@@ -238,9 +238,9 @@ add('local', 'map and_then chain', 1500, function(n)
   for _ = 1, 4 do
     op = op:map(function(v)
       return v + 1
-    end):and_then(function(v)
+    end):and_then(Op.guard(function(v)
       return Op.always(v + 1)
-    end)
+    end))
   end
   rt:spawn_raw(function()
     for _ = 1, n do
@@ -273,9 +273,9 @@ add('cell', 'serial read write', 1200, function(n)
   local cell = Cell.new(0, 'bench-cell-serial')
   rt:spawn_raw(function()
     for _ = 1, n do
-      rt:perform(cell:read_op():and_then(function(v)
+      rt:perform(cell:read_op():and_then(Op.guard(function(v)
         return cell:write_op(v + 1)
-      end))
+      end)))
     end
   end, 'bench-cell-serial')
   run_rt(rt)
@@ -379,11 +379,11 @@ add('product', 'together with lane and_then and external rendezvous', 350, funct
   rt:spawn_raw(function()
     for i = 1, n do
       local rows = rt:perform(Op.together({
-        internal:get_op():and_then(function(v)
+        internal:get_op():and_then(Op.guard(function(v)
           return external:get_op():map(function(x)
             return v + x
           end)
-        end),
+        end)),
         internal:put_op(i),
       }))
       sum = sum + rows[1][1]
@@ -459,11 +459,9 @@ add('product', 'dependent cell updaters', 180, function(n)
   local cell = Cell.new(0, 'bench-dependent-cell')
   local returns = {}
   local function update_op()
-    return cell:read_op():and_then(function(old)
-      return cell:write_op(old + 1):and_then(function()
-        return Op.always(old)
-      end)
-    end)
+    return cell:read_op():and_then(Op.guard(function(old)
+      return cell:write_op(old + 1):and_then(Op.always(old))
+    end))
   end
   for i = 1, 4 do
     rt:spawn_raw(function()

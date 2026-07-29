@@ -64,11 +64,9 @@ do
   local guard_calls = 0
 
   local function increment_result(label)
-    return cell:read_op():and_then(function(old)
-      return cell:write_op(old + 1):and_then(function()
-        return Op.always(label, old + 1)
-      end)
-    end)
+    return cell:read_op():and_then(Op.guard(function(old)
+      return cell:write_op(old + 1):and_then(Op.always(label, old + 1))
+    end))
   end
 
   local first = rt:spawn_raw(function()

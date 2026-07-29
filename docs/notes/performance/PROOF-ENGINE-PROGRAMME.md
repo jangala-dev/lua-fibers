@@ -106,21 +106,21 @@ stamp when rolled back. This reduces trail volume without changing the search
 state representation or rollback model.
 
 
-## Pass 4: exact continuation footprints
+## Pass 4: structural sequencing metadata
 
-The remaining slow datagram plans initially contained three dynamic roots in a
-four-root component.  The roots were not inherently dynamic: common internal
-`and_then` continuations had omitted an upper-bound footprint, so the dependency
-model had to assume that they could later touch any managed resource.
+The remaining slow datagram plans initially contained dynamic roots in a
+small component. The roots were not inherently dynamic: common internal
+sequencing was represented by Lua callbacks, so the dependency model could not
+see the right-hand operation before executing the callback.
 
-The queue, lifecycle, datagram send-state and service-policy continuations now
-declare exact closed footprints.  Dependency verification is enabled in the
-proof profile and in the core datagram test, so an understated declaration is a
-test failure rather than a silent optimisation hint.
+`and_then` now stores its right-hand `Op` structurally. Queue, lifecycle,
+datagram send-state and service-policy sequences therefore expose their exact
+static dependencies directly. Value-dependent sequencing uses `guard`; an
+unopened guard remains conservative until its actual residual is revealed.
 
-This is a general precision improvement.  The option remains an ordinary
-continuation in the same lazy machine; the machine merely knows its actual
-possible locations before recruiting unrelated pending roots.
+This removes the duplicate dependency-certificate surface. The machine derives
+metadata from operations which actually exist, so an optimisation declaration
+cannot understate a proof scope.
 
 ## Pass 5: directional supply metadata
 
@@ -147,9 +147,9 @@ preserving all genuinely supplying and constraining relationships.
 ## Pass 7: canonical supply protocol
 
 All trusted resources, state-machine transitions, witnessed transitions,
-continuation footprints and case studies now use the canonical `supplies` set.
+trusted programmes and case studies now use the canonical `supplies` set.
 The former umbrella flag and flat directional fields were removed from option
-metadata, dependency verification and supplier indexes.
+metadata and supplier indexes.
 
 Machine and witnessed transitions also declare `accepts_supply` separately.
 This distinguishes two questions which the earlier field conflated: whether a
@@ -245,11 +245,11 @@ Measure the number of provisional projections and temporary arrays used by a
 closure.  The semantic alternatives are now appropriate; the closure cursor
 can still be made lazier and less allocation-heavy without changing its worlds.
 
-### Continuation footprint coverage
+### Guard residual coverage
 
-Extend verified footprints to other common facilities and report remaining
-opaque continuations by name.  Dynamic metadata must remain the safe default
-for user callbacks whose upper bound is genuinely unknown.
+Identify hot built-in guards whose residual operation family can be represented
+structurally. Dynamic metadata must remain the safe default while a user guard
+has not yet revealed its actual operation.
 
 ### Dependency-bucket precision
 
@@ -258,10 +258,10 @@ come from supplier-bucket generation changes.  Determine whether those buckets
 can be partitioned by direction, key or programme family without losing a
 possible participant.
 
-### Linear continuation work
+### Linear sequencing work
 
-Measure how often `and_then` extends a candidate without introducing another
-alternative.  Seek less activation and graph bookkeeping within the same lazy
+Measure how often `and_then` activates a static right-hand operation without
+introducing another alternative.  Seek less activation and graph bookkeeping within the same lazy
 state, rather than a separate linear evaluator.
 
 ## Acceptance rules

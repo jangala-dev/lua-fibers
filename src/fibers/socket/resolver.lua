@@ -117,21 +117,21 @@ function Query:result_op()
 end
 
 function Query:addresses_op()
-  return self:result_op():and_then(function(addresses)
+  return self:result_op():and_then(Op.guard(function(addresses)
     if addresses then
       return Op.always(addresses)
     end
     return Op.never()
-  end)
+  end))
 end
 
 function Query:failed_op()
-  return self:result_op():and_then(function(addresses, err)
+  return self:result_op():and_then(Op.guard(function(addresses, err)
     if not addresses then
       return Op.always(err)
     end
     return Op.never()
-  end)
+  end))
 end
 
 function Query:state_op()
@@ -155,11 +155,9 @@ function Query:close_op(reason)
   for i = 1, #FAMILIES do
     publishes[#publishes + 1] = self.family_completions[FAMILIES[i]]:publish_cancelled_op(err)
   end
-  return cancel:and_then(function()
-    return Op.each(publishes):map(function()
-      return true
-    end)
-  end)
+  return cancel:and_then(Op.each(publishes):map(function()
+    return true
+  end))
 end
 
 function Query:closed_op()

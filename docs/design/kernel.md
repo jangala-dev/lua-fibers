@@ -150,7 +150,7 @@ B = {
     recruited participants,
     provisional ledger segments,
     provisional rendezvous values,
-    guard and continuation activations,
+    guard and sequencing activations,
     local absence assumptions,
     staged consequences,
     rollback trail
@@ -245,7 +245,7 @@ where unambiguous:
 - exact cell and version reads;
 - one exact primitive transition;
 - one exact rendezvous;
-- deterministic `map`, `wrap` and `and_then` progression;
+- deterministic `map`, `wrap` and static `and_then` progression;
 - products requiring no unresolved competition or fallback;
 - a selected guard whose residual reduces deterministically;
 - exact host observations already available.
@@ -261,7 +261,7 @@ of the following:
 - unresolved `choice`;
 - `or_else` requiring proof of preferred-side absence;
 - competing viable suppliers;
-- relevant opaque guard or continuation support;
+- relevant opaque guard support;
 - product-wide compatibility or allocation;
 - provisional value rejection requiring explanation;
 - a global infeasibility proof;
@@ -305,8 +305,7 @@ An option object is inert and reusable. Semantic identity belongs to an
 activated structural occurrence, not to host-language object identity.
 
 Reusing one `Op` value in two product lanes creates two occurrences with two
-activation identities. Defeat obligations, guard preparation and provisional
-continuations remain occurrence-sensitive.
+activation identities. Defeat obligations, guard preparation and provisional right-hand operations remain occurrence-sensitive.
 
 ### 7.1 Guards
 
@@ -335,22 +334,25 @@ After revelation, the memoised residual is treated as an ordinary option graph.
 Its exact dependency metadata replaces the former conservative opaque plan for
 that activation.
 
-### 7.2 Continuations
+### 7.2 Transactional sequencing
 
 Before an `and_then` prefix produces values, only the prefix is active. The
-continuation is not a permanent potential dependency.
+right-hand operation is structurally present but dormant. Its known dependencies
+remain available to conservative component construction, while it cannot supply
+an active demand until the prefix succeeds.
 
 When the prefix provisionally produces values:
 
-1. a child activation is created;
-2. the continuation is evaluated;
-3. the returned residual is attached to the same lane-local ledger segment;
-4. the dependency index is updated with the residual's actual plan;
+1. a child sequencing activation is created;
+2. the right-hand operation is activated in the same lane-local ledger segment;
+3. any guard within that operation receives the prefix values directly as
+   callback varargs;
+4. a revealed guard residual contributes its actual dependency plan;
 5. propagation resumes before unrelated opaque decisions are made.
 
-If the continuation rejects the provisional world, its conflict explanation
-includes the prefix decisions, delivered values and ledger assumptions on which
-that rejection depends.
+If the right-hand operation rejects the provisional world, its conflict
+explanation includes the prefix decisions, delivered values and ledger
+assumptions on which that rejection depends.
 
 ## 8. Dependency indexing and proof scope
 
@@ -359,16 +361,16 @@ proved. Metadata is conservative and phase-sensitive.
 
 ```text
 unopened guard
-    declared footprint or opaque dynamic classification
+    opaque dynamic classification
 
 revealed guard
     exact residual dependencies
 
 and_then before prefix completion
-    prefix dependencies only
+    prefix is active; structurally known right-hand dependencies remain dormant
 
-revealed continuation
-    retained prefix observations plus residual dependencies
+activated right-hand operation
+    retained prefix observations plus its structural or revealed dependencies
 
 dormant or_else fallback
     no active supplier dependency in the primary scope
@@ -493,8 +495,8 @@ components and arbitrates each component independently:
 
 This preserves local fallback liveness: a perpetually ready unrelated fibre
 cannot starve a certified fallback. Component construction remains
-conservative. Declared continuation dependencies are included when deciding
-which work could invalidate a preferred-side refutation. Observing a Task,
+conservative. Dependencies are derived from the actual operation graph; an
+unopened guard remains opaque and therefore cannot justify a narrower proof scope. Observing a Task,
 Scope, Dial, resolver family or similar Lifetime terminal state also contributes
 a directional causal dependency on pending work within that Lifetime's Scope.
 Producer operations do not thereby become mutually dependent; they are recruited
@@ -525,7 +527,7 @@ The hierarchical ledger remains the sole representation of speculative managed
 state.
 
 Each selected request receives a root segment on first transactional access.
-Product lanes receive child segments; sequential continuations retain their
+Product lanes receive child segments; sequential right-hand operations retain their
 lane-local segment. Segments contain sparse location summaries and materialised
 values only where needed.
 
@@ -594,7 +596,7 @@ capacity failure
     a required quantity exceeding a certified available bound
 
 value incompatibility
-    an exact producer-consumer activation pair rejected by a fixed continuation
+    an exact producer-consumer activation pair rejected by a fixed right-hand operation
 ```
 
 All exact negative providers use one production interface: produce a typed
@@ -622,7 +624,7 @@ separate soundness argument and evidence from repeatable application workloads.
 
 The kernel may retain narrowly scoped incompatibilities discovered during one
 valid search session. For example, when a particular producer-consumer pairing
-delivers a value which a fixed continuation rejects, the corresponding edge may
+delivers a value which a fixed guarded residual rejects, the corresponding edge may
 be marked incompatible for the same activation and observation epoch.
 
 Such learning is valid only while:

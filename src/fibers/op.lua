@@ -2,7 +2,7 @@
 --
 -- Application code should read in ordinary terms:
 --   choice       either coherent world is acceptable
---   and_then     continue transactionally from a provisional result
+--   and_then     sequence another operation in the same transaction
 --   or_else      use the fallback only after valid present refutation
 --   each         satisfy every lane, with each standing on its own
 --   together     satisfy every lane, allowing compatible sibling support
@@ -12,7 +12,7 @@
 -- them through this API. Their Lua table representation is not an API surface.
 --
 -- The canonical search grammar is deliberately small:
---   always | primitive | choice | guard | and_then | product | or_else | consequence
+--   always | primitive | choice | guard | map | and_then | product | or_else | consequence
 -- Post-commit value transforms and typed defeat obligations are orthogonal
 -- annotations on dynamic option occurrences.
 
@@ -149,8 +149,10 @@ local function contains_wrap(x)
   local found = false
   if x.kind == 'annotated' then
     found = x.post ~= nil or contains_wrap(x.p)
-  elseif x.kind == 'and_then' then
+  elseif x.kind == 'map' then
     found = contains_wrap(x.p)
+  elseif x.kind == 'and_then' then
+    found = contains_wrap(x.p) or contains_wrap(x.q)
   elseif x.kind == 'or_else' then
     found = contains_wrap(x.p) or contains_wrap(x.q)
   elseif x.kind == 'product' then
@@ -245,42 +247,26 @@ function Op.emit(effect)
   return op('consequence', { effect = effect })
 end
 
-function Op.dependencies(...)
-  local parts = {}
-  for i = 1, select('#', ...) do
-    local value = select(i, ...)
-    if value ~= nil then
-      parts[#parts + 1] = value
-    end
-  end
-  return { _fibers_dependencies = true, parts = parts }
-end
-
-local function continuation_hint(opts)
-  if opts == nil or opts == false then
-    return opts
-  end
-  if is_op(opts) then
-    return opts
-  end
-  if type(opts) ~= 'table' then
-    error('continuation metadata must be an Op or a footprint table', 3)
-  end
-  return opts.footprint or opts.continuation or opts
-end
-
 -- Delayed algebraic elaboration is a first-class node. The evaluator memoises
--- each guard by its request-local speculative activation, rather than by Op
--- object identity. The builder receives an ephemeral activation view which may
--- resolve perform-local facts into the explicit residual Op it returns.
-function Op.guard(fn, opts)
+-- each guard by its request-local speculative activation and the provisional
+-- values supplied by an immediately preceding and_then. The builder receives
+-- those values directly as varargs and returns the explicit residual Op.
+function Op.guard(fn)
   if type(fn) ~= 'function' then
     error('guard expects a function', 2)
   end
-  return op('guard', {
-    fn = fn,
-    continuation_footprint = continuation_hint(opts),
-  })
+  return op('guard', { fn = fn })
+end
+
+-- Trusted facilities occasionally need one activation-local Runtime or Scope
+-- fact while elaborating a public operation. Keep that authority out of the
+-- public guard callback contract and pass it directly without an activation
+-- object.
+function Op._contextual_guard(fn)
+  if type(fn) ~= 'function' then
+    error('_contextual_guard expects a function', 2)
+  end
+  return op('guard', { fn = fn, contextual = true })
 end
 
 -- A typed defeat obligation is discharged if this option occurrence is
@@ -398,36 +384,23 @@ function Op:map(fn)
     error('map expects a function', 2)
   end
   assert_not_wrapped(self, 'map')
-  -- Canonically and_then followed by always. Retaining the original callback as
-  -- metadata lets the interpreter fuse that derived always without adding a
-  -- separate grammar node or allocation.
-  local node = op('and_then', {
-    p = self,
-    callback_phase = 'map',
-    fn = fn,
-    derived_map = true,
-    continuation_footprint = false,
-  })
+  local node = op('map', { p = self, fn = fn })
   if self._contains_or_else == true then
     node._contains_or_else = true
   end
   return node
 end
 
--- Continue transactionally from provisional values. Earlier communication,
--- state and admission remain retractable until the complete continuation commits.
-function Op:and_then(fn, opts)
-  if type(fn) ~= 'function' then
-    error('and_then expects a function', 2)
+-- Continue transactionally with another operation. Earlier communication,
+-- state and admission remain retractable until the complete sequence commits.
+-- Use Op.guard when the right-hand operation depends on provisional values.
+function Op:and_then(next_op)
+  if not is_op(next_op) then
+    error('and_then expects an Op; use Op.guard for a dynamic right-hand operation', 2)
   end
   assert_not_wrapped(self, 'and_then')
-  local node = op('and_then', {
-    p = self,
-    fn = fn,
-    callback_phase = 'and_then',
-    continuation_footprint = continuation_hint(opts),
-  })
-  if self._contains_or_else == true then
+  local node = op('and_then', { p = self, q = next_op })
+  if self._contains_or_else == true or next_op._contains_or_else == true then
     node._contains_or_else = true
   end
   return node

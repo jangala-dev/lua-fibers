@@ -212,9 +212,7 @@ local function test_pool_acquire_release_and_retirement()
   local rt = new_runtime()
   local lease
   rt:spawn_raw(function()
-    lease = rt:perform(pool:add_op('a', 'A'):and_then(function()
-      return pool:acquire_op('u1')
-    end))
+    lease = rt:perform(pool:add_op('a', 'A'):and_then(pool:acquire_op('u1')))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(lease.key, 'a')
@@ -276,9 +274,7 @@ local function test_pool_retire_leased_defers_until_release()
   local lease
   local rt = new_runtime()
   rt:spawn_raw(function()
-    lease = rt:perform(pool:add_op('a', 'A'):and_then(function()
-      return pool:acquire_op('u')
-    end))
+    lease = rt:perform(pool:add_op('a', 'A'):and_then(pool:acquire_op('u')))
   end, 'seed')
   assert_status(rt:run(), 'found')
   local rt2 = new_runtime()
@@ -302,11 +298,11 @@ local function test_keyed_take_then_put_replaces()
   local m = Keyed.from({ a = 'A' }, 'keyed-replace-after-remove-present')
   local old
   rt:spawn_raw(function()
-    old = rt:perform(m:take_op('a'):and_then(function(v)
+    old = rt:perform(m:take_op('a'):and_then(Op.guard(function(v)
       return m:put_op('a', 'A2'):map(function()
         return v
       end)
-    end))
+    end)))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(old, 'A')
@@ -318,12 +314,10 @@ local function test_pool_close_constrains_acquire_under_together_and_each()
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(pool:add_op('a', 'A'):and_then(function()
-      return Op.together({
-        pool:close_op('shutdown'),
-        pool:acquire_op('u'):or_else(Op.always('closed')),
-      })
-    end))
+    rows = rt:perform(pool:add_op('a', 'A'):and_then(Op.together({
+      pool:close_op('shutdown'),
+      pool:acquire_op('u'):or_else(Op.always('closed')),
+    })))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'closed')
@@ -335,12 +329,10 @@ local function test_pool_close_constrains_acquire_under_together_and_each()
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
-    rows2 = rt2:perform(pool2:add_op('a', 'A'):and_then(function()
-      return Op.each({
-        pool2:close_op('shutdown'),
-        pool2:acquire_op('u'):or_else(Op.always('closed')),
-      })
-    end))
+    rows2 = rt2:perform(pool2:add_op('a', 'A'):and_then(Op.each({
+      pool2:close_op('shutdown'),
+      pool2:acquire_op('u'):or_else(Op.always('closed')),
+    })))
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], 'closed')

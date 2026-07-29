@@ -41,9 +41,9 @@ local function append_log(log, line)
 end
 
 local function append_log_op(cell, line)
-  return cell:read_op():and_then(function(log)
+  return cell:read_op():and_then(Op.guard(function(log)
     return cell:write_op(append_log(log, line))
-  end)
+  end))
 end
 
 local request = Scope.new('request')

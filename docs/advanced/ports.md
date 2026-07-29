@@ -11,7 +11,7 @@ Every port should retain one semantic core:
 
 ```text
 option language
-  always / primitive / choice / and_then / product / or_else / consequence
+  always / primitive / choice / guard / map / and_then / product / or_else / consequence
         |
 proof search
   Hit / Retry / Unknown

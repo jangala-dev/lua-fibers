@@ -44,11 +44,11 @@ function PriorityQueue:get_op()
       return entry.value, entry.rank
     end)
   end
-  return get:and_then(function(entry)
+  return get:and_then(Op.guard(function(entry)
     return self._slots:give_op():map(function()
       return entry.value, entry.rank
     end)
-  end, Op.dependencies(get, self._slots:give_op()))
+  end))
 end
 
 function PriorityQueue:put(priority, value)

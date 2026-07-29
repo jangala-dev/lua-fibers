@@ -77,12 +77,12 @@ local Close = StateMachine.update('pool.close', function()
 end)
 
 local function require_open(pool)
-  return pool.open:transition_op(CheckOpen):and_then(function(ok)
+  return pool.open:transition_op(CheckOpen):and_then(Op.guard(function(ok)
     if ok then
       return Op.always(true)
     end
     return Op.never()
-  end)
+  end))
 end
 
 function Pool.new(opts, name)
@@ -105,30 +105,26 @@ function Pool:add_op(key, item)
   if key == nil then
     error('pool add requires key', 2)
   end
-  return require_open(self):and_then(function()
-    return self.items:insert_op(key, item_state(item)):and_then(function()
-      return self.idle:insert_op(key, math.huge, key)
-    end)
-  end)
+  return require_open(self):and_then(
+    self.items:insert_op(key, item_state(item)):and_then(self.idle:insert_op(key, math.huge, key))
+  )
 end
 
 function Pool:acquire_op(holder)
   if holder == nil then
     error('pool acquire requires holder', 2)
   end
-  return require_open(self):and_then(function()
-    return self.idle:pop_first_op():and_then(function(entry)
-      local key = entry.value
-      return self.items:get_op(key):and_then(function(state)
-        if type(state) ~= 'table' then
-          return Op.never()
-        end
-        return self.leases:acquire_op(key, 'lease', holder):map(function()
-          return { pool = self, key = key, item = state.item, holder = holder }
-        end)
+  return require_open(self):and_then(self.idle:pop_first_op():and_then(Op.guard(function(entry)
+    local key = entry.value
+    return self.items:get_op(key):and_then(Op.guard(function(state)
+      if type(state) ~= 'table' then
+        return Op.never()
+      end
+      return self.leases:acquire_op(key, 'lease', holder):map(function()
+        return { pool = self, key = key, item = state.item, holder = holder }
       end)
-    end)
-  end)
+    end))
+  end)))
 end
 
 function Pool:release_op(lease)
@@ -136,7 +132,7 @@ function Pool:release_op(lease)
     error('pool release expects a lease table', 2)
   end
   local key, holder = lease.key, lease.holder
-  return self.items:get_op(key):and_then(function(state)
+  return self.items:get_op(key):and_then(Op.guard(function(state)
     if type(state) ~= 'table' then
       return Op.never()
     end
@@ -155,14 +151,14 @@ function Pool:release_op(lease)
     }):map(function()
       return true
     end)
-  end)
+  end))
 end
 
 function Pool:retire_op(key, reason)
   if key == nil then
     error('pool retire requires key', 2)
   end
-  return self.items:get_op(key):and_then(function(state)
+  return self.items:get_op(key):and_then(Op.guard(function(state)
     if type(state) ~= 'table' then
       return Op.never()
     end
@@ -177,7 +173,7 @@ function Pool:retire_op(key, reason)
       return true
     end)
     return retire_idle:or_else(defer_until_release)
-  end)
+  end))
 end
 
 function Pool:close_op(_reason)

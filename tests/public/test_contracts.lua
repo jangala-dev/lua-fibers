@@ -18,12 +18,12 @@ local Cell = require('fibers.resource.cell')
 local TC = require('tests.support.effect_helpers')
 
 local function update_cell(cell, fn)
-  return cell:read_op():and_then(function(old)
+  return cell:read_op():and_then(Op.guard(function(old)
     local new = fn(old)
     return cell:write_op(new):map(function()
       return new, old
     end)
-  end)
+  end))
 end
 
 local function fail(msg)
@@ -120,19 +120,19 @@ do
   assert_error_kind(ok, err, 'phase_error', 'perform inside map')
 end
 
--- perform inside and_then is rejected because and_then extends the same candidate world.
+-- perform inside a guard used for dynamic sequencing is rejected because the guard extends the same candidate world.
 do
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(Op.always('x'):and_then(function(v)
+    rt:perform(Op.always('x'):and_then(Op.guard(function(v)
       rt:perform(Op.always('bad'))
       return Op.always(v)
-    end))
-  end, 'and_then-performer')
+    end)))
+  end, 'guarded-sequencing-performer')
   local ok, err = pcall(function()
     rt:run()
   end)
-  assert_error_kind(ok, err, 'phase_error', 'perform inside and_then')
+  assert_error_kind(ok, err, 'phase_error', 'perform inside sequencing guard')
 end
 
 -- Spawn is allowed from external driver code and from a resumed fibre, but not
@@ -270,7 +270,7 @@ do
   assert_eq(ok_spawn, true, 'external spawn is not blocked after raw guard error')
 end
 
--- Raw map/and_then callback errors are also reported as callback errors without
+-- Raw map callback errors are also reported as callback errors without
 -- poisoning later external calls.
 do
   local rt = Runtime.new()
@@ -295,9 +295,7 @@ do
   local cell = Cell.new(0, 'fatal-effect-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(Op.emit(TC.discharge_fatal()):and_then(function()
-      return cell:write_op(1)
-    end))
+    rt:perform(Op.emit(TC.discharge_fatal()):and_then(cell:write_op(1)))
   end, 'raw-effect-error')
   local ok, err = pcall(function()
     rt:run()

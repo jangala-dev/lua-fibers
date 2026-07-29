@@ -142,12 +142,12 @@ function Listener:closed_op()
     return terminal:map(listener_close_result)
   end
   local source_closed = self.offers:closed_op()
-  return source_closed:and_then(function(ok, source_err)
+  return source_closed:and_then(Op.guard(function(ok, source_err)
     if not ok then
       return Op.always(nil, source_err)
     end
     return terminal:map(listener_close_result)
-  end, Op.dependencies(source_closed, terminal))
+  end))
 end
 
 local function retire_listener(listener, rt, source_state)

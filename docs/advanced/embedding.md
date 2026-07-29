@@ -253,7 +253,7 @@ clock:at_op(deadline)   -- waits until an absolute time
 clock:after_op(duration) -- relative surface syntax
 ```
 
-`after_op` is defined algebraically: each guard activation takes one stable activation-time observation and returns a fresh `at_op` with a concrete deadline. Backtracking and validation therefore do not slide the deadline, while a genuinely new activation receives a new deadline.
+`after_op` is defined algebraically as `now_op():and_then(guard(now -> at_op(now + duration)))`. The observed time is therefore an explicit provisional value. Backtracking and validation do not slide the resulting deadline, while a genuinely new progression may observe a new instant.
 
 Application code may retain the familiar sleep vocabulary over the default clock:
 

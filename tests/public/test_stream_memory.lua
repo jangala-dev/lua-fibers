@@ -217,18 +217,16 @@ do
   local state = FibersCell.new(0, 'state')
   local response
   local function handle_one_op(stream)
-    return stream:reader():read_line_op():and_then(function(line)
-      return state:read_op():and_then(function(old)
+    return stream:reader():read_line_op():and_then(Op.guard(function(line)
+      return state:read_op():and_then(Op.guard(function(old)
         return state
           :write_op(old + 1)
-          :and_then(function()
-            return stream:writer():write_op('reply:' .. line .. '\n')
-          end)
+          :and_then(stream:writer():write_op('reply:' .. line .. '\n'))
           :map(function()
             return line
           end)
-      end)
-    end)
+      end))
+    end))
   end
   local st = fibers.try_run(function()
     fibers.perform(b:writer():write_op('ping\n'))
@@ -331,9 +329,7 @@ do
   local a, b = Stream.memory_pair({ name = 'sequential-writes' })
   local got
   local st = fibers.try_run(function()
-    fibers.perform(a:writer():write_op('a'):and_then(function()
-      return a:writer():write_op('b')
-    end))
+    fibers.perform(a:writer():write_op('a'):and_then(a:writer():write_op('b')))
     got = fibers.perform(b:reader():read_exactly_op(2))
   end).runtime_status
   assert_status(st, 'found')

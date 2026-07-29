@@ -371,12 +371,14 @@ function Node:closed_op()
       local phase = node._terminal_phase or 'dormant'
       return phase == 'closed' and Op.always(node) or Op.never()
     end
-    return node.runtime.lifetimes:node_state_op(node):and_then(function(state)
+    return node.runtime.lifetimes:node_state_op(node):and_then(Op.guard(function(state)
       if state.closure_phase == 'closed' then
         return Op.always(node)
       end
-      return node.runtime.lifetimes:changed_op(node, state.version):and_then(wait)
-    end)
+      return node.runtime.lifetimes:changed_op(node, state.version):and_then(Op.guard(function(...)
+        return wait(...)
+      end))
+    end))
   end
   return wait()
 end
@@ -413,18 +415,18 @@ end
 function Node:request_cancel_op(reason)
   local node = self
   local close_op = self:request_close_op(reason)
-  return close_op:and_then(function()
-    return node.cancellation
+  return close_op:and_then(
+    node.cancellation
       :transition_op(RequestCancel, { reason = reason })
-      :and_then(function(first, recorded_reason)
+      :and_then(Op.guard(function(first, recorded_reason)
         if not first then
           return Op.always(false, recorded_reason)
         end
         return Op.emit(Effect.interrupt(node.interrupt, recorded_reason)):map(function()
           return true, recorded_reason
         end)
-      end, false)
-  end)
+      end))
+  )
 end
 
 function Node:cancel_requested_op()
@@ -440,14 +442,14 @@ function Node:cancellation_op()
 end
 
 local function publish_once_op(cell, result)
-  return cell:read_op():and_then(function(value)
+  return cell:read_op():and_then(Op.guard(function(value)
     if is_done(value) then
       return Op.always(false, value.result)
     end
     return cell:write_op({ status = 'done', result = result }):map(function()
       return true, result
     end)
-  end)
+  end))
 end
 
 local function completed_op(cell)
@@ -478,9 +480,9 @@ function Node:inspect_op()
   local outcome = self.outcome:read_op()
   local topology = self.runtime and self.runtime.lifetimes:node_state_op(self)
     or Op.always(self:current_state())
-  return topology:and_then(function(state)
-    return cancellation:and_then(function(cancel)
-      return body_result:and_then(function(body)
+  return topology:and_then(Op.guard(function(state)
+    return cancellation:and_then(Op.guard(function(cancel)
+      return body_result:and_then(Op.guard(function(body)
         return outcome:map(function(boundary)
           return {
             lifetime = self,
@@ -496,9 +498,9 @@ function Node:inspect_op()
             outcome = boundary,
           }
         end)
-      end, Op.dependencies(outcome))
-    end, Op.dependencies(body_result, outcome))
-  end, Op.dependencies(cancellation, body_result, outcome))
+      end))
+    end))
+  end))
 end
 
 Lifetime.Node = Node

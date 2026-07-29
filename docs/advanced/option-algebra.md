@@ -40,14 +40,16 @@ Use ordered `{ name, option }` entries when a non-string label is required.
 
 ## 2. Canonical option language
 
-The public API elaborates to seven canonical forms:
+The public API elaborates to nine canonical forms:
 
 ```text
 option ::=
     always(values)
   | primitive(programme)
   | choice(option₁, ..., optionₙ)
-  | and_then(option, continuation)
+  | guard(builder)
+  | map(option, transform)
+  | and_then(option, next_option)
   | product(mode, option₁, ..., optionₙ)
   | or_else(primary, fallback)
   | consequence(effect)
@@ -58,9 +60,7 @@ mode ::= independent | interacting
 Derived forms include:
 
 ```text
-never          = choice()
-map(option, f) = and_then(option, values -> always(f(values)))
-guard(f)       = activation-local delayed construction
+never           = choice()
 each(lanes)     = product(independent, lanes)
 together(lanes) = product(interacting, lanes)
 emit(effect)   selects a typed post-commit consequence
@@ -146,47 +146,54 @@ Effect discharge occurs after state installation. A discharge failure is fatal b
 The following callbacks may be replayed while proof search explores candidate worlds:
 
 ```text
-map and and_then callbacks
+map callbacks and guard builders
 Machine transition callbacks
 witness cursor factories and witness predicates
 facility-specific state calculations
 ```
 
-They must be deterministic for their explicit inputs, non-yielding, free of irreversible I/O and external mutation, and independent of undeclared transactional facts.
+They must be deterministic for their explicit inputs, non-yielding, free of irreversible I/O and external mutation, and independent of ambient transactional facts not supplied through the operation.
 
-`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. The callback receives a deliberately narrow ephemeral activation view. It exposes only one stable monotonic activation instant and the performing Scope:
+`guard` has a different lifetime. Its callback is evaluated once for each activated speculative progression and its returned `Op` is memoised for that activation. Beneath `and_then`, the callback receives the immediately preceding provisional values directly as varargs:
 
 ```lua
-Op.guard(function(activation)
-  local started_at = activation:now()
-  local scope = activation:scope()
-  return explicit_residual_op(started_at, scope)
-end)
+first:and_then(Op.guard(function(value, err)
+  return explicit_residual_op(value, err)
+end))
 ```
 
-The view is valid only while the builder runs. It does not expose the Runtime, host, Scope or internal activation label. It may be used to elaborate relative or contextual surface syntax into an explicit residual operation; retaining the view and consulting it later is an error. Guard preparation may allocate fresh private values or take an intentional activation-time snapshot, but it remains immediate and non-transactional: it must not yield, call `perform`, drive the runtime or mutate Fibers-managed transactional state outside an option. Its effects are not rolled back, and programs must not depend on the relative evaluation order of separate guard activations.
+A root guard receives no arguments. Nils and exact multiple-value arity are preserved; a root guard and a zero-result prefix both supply zero arguments. Time, Scope and other contextual facts must be obtained through explicit operations or captured explicit values rather than ambient guard state. Guard preparation may allocate fresh private values or take an intentional snapshot of explicit inputs, but it remains immediate and non-transactional: it must not yield, call `perform`, drive the runtime or mutate Fibers-managed transactional state outside an option. Its effects are not rolled back, and programs must not depend on the relative evaluation order of separate guard activations.
 
-A callback which must observe a committed world belongs in `wrap` or an effect, not in `map`, `and_then`, `guard` or a primitive transducer.
+A callback which must observe a committed world belongs in `wrap` or an effect, not in `map`, `guard` or a primitive transducer.
 
 ## 6. Sequencing
 
-`and_then` extends a speculative proof with the value of an earlier proof:
+`and_then` transactionally sequences two operations:
 
 ```text
-option:and_then(k)
+first:and_then(second)
 ```
 
-If `option` provisionally yields `v`, `k(v)` is entered in the same transaction and the same lane-local speculative view. If the continuation later fails, the earlier proof is retracted.
+If `first` provisionally succeeds, `second` is entered in the same transaction and the same lane-local speculative view. If `second` later fails, the earlier proof is retracted. The right-hand operation is inert until the prefix succeeds.
 
-Conditional laws, assuming pure callbacks:
+When the right-hand operation depends on provisional values, use a guard:
+
+```lua
+first:and_then(Op.guard(function(value)
+  return operation_for(value)
+end))
+```
+
+The guard receives the preceding values directly. Nils and exact multiple-value arity are preserved; use `select('#', ...)` when the callback needs the arity.
+
+A useful conditional law is:
 
 ```text
-always(v):and_then(k) ≈ k(v)
-
-option:map(f) ≈ option:and_then(v -> always(f(v)))
+option:map(f)
+  ≈ option:and_then(guard(values... -> always(f(values...))))
 ```
 
-`and_then` is not post-commit code. It may change the world which must be proved.
+`and_then` is not post-commit sequencing. Both operations help define the world which must be proved.
 
 ## 7. Choice
 
@@ -287,7 +294,7 @@ commit a primary world if one exists
 otherwise search fallback only after primary yields Retry
 ```
 
-The preferred search scope includes its option branches, primitive witnesses, compatible partners, recruited participants and dynamically constructed continuations.
+The preferred search scope includes its option branches, primitive witnesses, compatible partners, recruited participants and guarded residual operations.
 
 A fallback candidate carries the preferred refutation's negative guards. It may commit only while those guards remain valid. If a signal arrives, a deadline matures, a location changes or a relevant participant appears, validation rejects the stale fallback and search restarts.
 
@@ -315,7 +322,7 @@ The first expression gives `preferred` semantic priority and then admits any of 
 
 `guard(f)` is a reusable delayed option constructor. Each activated structural guard occurrence is evaluated at most once within one speculative activation.
 
-A speculative activation is one live elaboration of an option in a candidate world. The option initially passed to `perform` has a root activation. Separate product lanes and choice positions receive separate activations, and each provisional result which progresses through `and_then` creates a child activation for the option returned by the continuation.
+A speculative activation is one live elaboration of an option in a candidate world. The option initially passed to `perform` has a root activation. Separate product lanes and choice positions receive separate activations, and each provisional result which progresses through `and_then` creates a child activation for its right-hand operation. A guard within that operation receives the provisional values through its activation context.
 
 Consequently, host-language sharing is not semantic sharing:
 
@@ -335,15 +342,7 @@ end) -- evaluates f once
 
 The option returned for an activation remains fixed across local backtracking, bounded-search suspension, retained-search reconstruction and validation while the same transactional observations remain valid. A different proof progression or a changed observed version creates a different activation and reevaluates its guards. A new `perform` attempt starts with a fresh activation root.
 
-The intended normal form is:
-
-```text
-relative or contextual surface operation
-        ↓ guard activation
-explicit resources + absolute values + core operations
-```
-
-For example, `clock:after_op(0.25)` elaborates once to `clock:at_op(concrete_deadline)`, and an omitted transfer target may elaborate to the Scope performing that occurrence. The residual itself does not retain or consult the activation view.
+The intended public normal form is explicit: contextual facts enter through operations, and guards elaborate only from their supplied values. For example, `clock:after_op(0.25)` is `clock:now_op():and_then(guard(now -> clock:at_op(now + 0.25)))`. A small trusted facility hook may resolve activation-local host facts, such as the performing Scope for an omitted I/O transfer target, without exposing that authority through `Op.guard`.
 
 Guard evaluation is demand-driven. An unopened `or_else` fallback or an unentered choice branch need not evaluate its guards.
 
@@ -358,7 +357,7 @@ This phase includes:
 ```text
 guard builders
 map functions
-and_then continuations
+guard builders used for dynamic sequencing
 resource transition and witness callbacks
 effect key and merge functions
 ```
@@ -408,7 +407,7 @@ and_then constructs worlds
 wrap observes committed worlds
 ```
 
-A transactional continuation cannot consume a wrapped value. A wrap may begin a new transaction.
+The right-hand side of `and_then` cannot consume a wrapped value. A wrap may begin a new transaction.
 
 Conditional laws:
 
@@ -615,8 +614,8 @@ External durability must be implemented through durable state and idempotent eff
 Expected laws, subject to callback purity and value packaging:
 
 ```text
-always(v):and_then(k) ≈ k(v)
-option:map(f) ≈ option:and_then(v -> always(f(v)))
+option:map(f)
+  ≈ option:and_then(guard(values... -> always(f(values...))))
 choice() ≈ never
 choice(a, b) ≈ choice(b, a) for admissible committed worlds
 each({}) ≈ always(empty rows)

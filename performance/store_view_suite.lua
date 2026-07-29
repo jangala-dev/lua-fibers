@@ -46,14 +46,9 @@ local function build_case()
   local operation = Op.always(true)
   for i = 1, cells do
     local read = reads[i]
-    local dependencies = Op.dependencies(read)
-    operation = operation:and_then(function()
-      return read
-    end, dependencies)
+    operation = operation:and_then(read)
   end
-  operation = operation:and_then(function()
-    return product
-  end, Op.dependencies(product))
+  operation = operation:and_then(product)
 
   local total = 0
   rt:spawn_raw(function()

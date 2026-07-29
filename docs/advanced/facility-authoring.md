@@ -82,7 +82,7 @@ Facilities must place each callback in one of three phases.
 
 | Phase | Facility callbacks | Requirements |
 |---|---|---|
-| Speculative search | guards, `map`, `and_then`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
+| Speculative search | guards, `map`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
 | Committed-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
 | Participant continuation | `wrap` | Runs after commit in the resumed fibre. It may perform, spawn and interact with the outside world. |
 

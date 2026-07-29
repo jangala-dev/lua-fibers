@@ -137,14 +137,9 @@ function Offer:_handle()
 end
 
 function Offer:open_op(scope)
-  return scope
-    :admit_op(self)
-    :and_then(function()
-      return self._entry:register_op()
-    end, false)
-    :map(function()
-      return self
-    end)
+  return scope:admit_op(self):and_then(self._entry:register_op()):map(function()
+    return self
+  end)
 end
 
 function Offer:next_op()
@@ -152,11 +147,11 @@ function Offer:next_op()
   local release = self._slots:give_op()
   local demand = self._entry:demand_op()
   local resume = Op.each({ release, demand })
-  return offer:and_then(function(value)
+  return offer:and_then(Op.guard(function(value)
     return resume:map(function()
       return value
     end)
-  end, Op.dependencies(offer, release, demand))
+  end))
 end
 
 function Offer:result_op()

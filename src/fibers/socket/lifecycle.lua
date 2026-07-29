@@ -18,7 +18,7 @@ end
 Lifecycle.copy = copy
 
 function Lifecycle.wait_for(machine, select)
-  return machine:select_op(select, machine:transition_dependencies())
+  return machine:select_op(select)
 end
 
 local function transition(name, step)
@@ -186,7 +186,7 @@ function Lifecycle.define(spec)
           address = state.address,
         })
       )
-    end, self.state:transition_dependencies())
+    end)
   end
 
   if spec.available then
@@ -196,7 +196,7 @@ function Lifecycle.define(spec)
           return Op.always(true)
         end
         return nil, false
-      end, self.state:transition_dependencies())
+      end)
     end
   end
 
@@ -206,7 +206,7 @@ function Lifecycle.define(spec)
         return Op.always(state)
       end
       return nil, false
-    end, self.state:transition_dependencies())
+    end)
   end
 
   function Type:terminal_op()
@@ -215,7 +215,7 @@ function Lifecycle.define(spec)
         return Op.always(state)
       end
       return nil, true
-    end, self.state:transition_dependencies())
+    end)
   end
 
   return Type

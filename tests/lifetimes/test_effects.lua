@@ -219,12 +219,8 @@ local function test_prepare_refusal_backtracks_to_other_worlds()
     local calls = {}
     local st, vals = one_perform(
       Op.choice(
-        Op.emit(TC.prepare_refuse()):and_then(function()
-          return Op.always('bad')
-        end),
-        Op.emit(TC.tag('fallback-choice')):and_then(function()
-          return Op.always('good')
-        end)
+        Op.emit(TC.prepare_refuse()):and_then(Op.always('bad')),
+        Op.emit(TC.tag('fallback-choice')):and_then(Op.always('good'))
       ),
       {
         host = {
@@ -243,12 +239,8 @@ local function test_prepare_refusal_backtracks_to_other_worlds()
     local calls = {}
     local st, vals = one_perform(
       Op.emit(TC.prepare_refuse())
-        :and_then(function()
-          return Op.always('primary')
-        end)
-        :or_else(Op.emit(TC.tag('fallback-or-else')):and_then(function()
-          return Op.always('fallback')
-        end)),
+        :and_then(Op.always('primary'))
+        :or_else(Op.emit(TC.tag('fallback-or-else')):and_then(Op.always('fallback'))),
       {
         host = {
           test_tag = function(tag)
@@ -271,9 +263,7 @@ local function test_discharge_failure_is_fatal_after_resource_commit()
   local cell = Cell.new(0, 'discharge-fatal-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(cell:write_op(1):and_then(function()
-      return Op.emit(TC.discharge_fatal())
-    end))
+    rt:perform(cell:write_op(1):and_then(Op.emit(TC.discharge_fatal())))
   end, 'discharge-fatal')
 
   local ok, err = pcall(function()

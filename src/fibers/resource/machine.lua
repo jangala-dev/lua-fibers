@@ -107,17 +107,12 @@ end)
 function Machine.new(value, name)
   local machine = Facility.identity(setmetatable({}, Machine), Kind, name)
   Facility.cell(machine, Kind, value, 'machine')
-  machine._transition_dependencies = Facility.versioned_dependencies(machine, true)
   machine._transition_descriptors = setmetatable({}, { __mode = 'kv' })
   return machine
 end
 
 function Machine:write_op(value)
   return self:transition_op(WRITE, value)
-end
-
-function Machine:transition_dependencies()
-  return self._transition_dependencies
 end
 
 function Machine:transition_op(transition, payload)

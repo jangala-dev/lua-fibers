@@ -152,11 +152,11 @@ end
 local function test_keyed_take_then_put_replaces()
   local rt, m, old = new_runtime(), Keyed.from({ a = 'A' })
   rt:spawn_raw(function()
-    old = rt:perform(m:take_op('a'):and_then(function(v)
+    old = rt:perform(m:take_op('a'):and_then(Op.guard(function(v)
       return m:put_op('a', 'A2'):map(function()
         return v
       end)
-    end))
+    end)))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(old, 'A')

@@ -179,7 +179,7 @@ end
 
 function Process:signal_op(signal, target)
   target = target or self.command._spec.shutdown.target or 'process'
-  return self.lifecycle:state_op():and_then(function(state)
+  return self.lifecycle:state_op():and_then(Op.guard(function(state)
     if state.kind ~= 'running' and state.kind ~= 'closing' then
       return Op.always(nil, process_not_running(self, 'signal'))
     end
@@ -201,7 +201,7 @@ function Process:signal_op(signal, target)
       end
       return true
     end)
-  end)
+  end))
 end
 
 function Process:terminate_op()
@@ -308,13 +308,13 @@ function Process:communicate(opts)
 
   local alternatives = { complete = complete_op }
   local function failure_op(task)
-    return task:body_result_op():and_then(function(exit)
+    return task:body_result_op():and_then(Op.guard(function(exit)
       local _, task_err = Exit.unwrap(exit)
       if task_err ~= nil then
         return Op.always(task_err)
       end
       return Op.never()
-    end)
+    end))
   end
   if stdout_task then
     alternatives.stdout_failed = failure_op(stdout_task)
@@ -780,14 +780,9 @@ function Command:launch_op(opts)
       end)
     end, name, parent_scope, { lifetime = proc._lifetime, closure = parent_scope.closure })
 
-    return scope
-      :admit_op(proc)
-      :and_then(function()
-        return proc._task:spawn_effect_op()
-      end, false)
-      :map(function()
-        return proc
-      end)
+    return scope:admit_op(proc):and_then(proc._task:spawn_effect_op()):map(function()
+      return proc
+    end)
   end)
 end
 

@@ -87,9 +87,7 @@ do
   local inside, outside = Rendezvous.new('inside'), Rendezvous.new('outside')
   rt:spawn_raw(function()
     rt:perform(Op.together({
-      inside:get_op():and_then(function()
-        return outside:get_op()
-      end),
+      inside:get_op():and_then(outside:get_op()),
       inside:put_op('x'),
     }))
   end)

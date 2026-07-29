@@ -134,11 +134,11 @@ local function test_pop_first_and_then_receives_concrete_lua_entry()
   local out
 
   rt:spawn_raw(function()
-    out = rt:perform(ix:pop_first_op():and_then(function(e)
+    out = rt:perform(ix:pop_first_op():and_then(Op.guard(function(e)
       assert_eq(type(e), 'table')
       assert_eq(e.key, 'a')
       return Op.always('got:' .. e.value)
-    end))
+    end)))
   end, 'root')
 
   assert_status(rt:run(), 'found')
@@ -151,11 +151,11 @@ local function test_pop_then_reinsert_same_key_is_sequential_replacement()
   local out
 
   rt:spawn_raw(function()
-    out = rt:perform(ix:pop_first_op():and_then(function(e)
+    out = rt:perform(ix:pop_first_op():and_then(Op.guard(function(e)
       return ix:insert_op(e.key, e.rank, 'A2'):map(function()
         return e.key
       end)
-    end))
+    end)))
   end, 'root')
 
   assert_status(rt:run(), 'found')

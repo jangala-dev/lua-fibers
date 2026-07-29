@@ -215,34 +215,9 @@ local function finish_group_lane(state, task, frame, outcome)
   )
 end
 
-local function verify_continuation_dependencies(state, task, frame, next_op)
-  if not state.runtime.verify_dependencies or frame.continuation_footprint == nil then
-    return
-  end
-  local declared = IR.metadata_hint(frame.continuation_footprint)
-  local actual = IR.metadata(next_op)
-  local ok, reason = IR.metadata_covers(declared, actual)
-  if not ok then
-    local root = task and state.roots[task.root_id]
-    local request = root and root.request
-    error(
-      'continuation dependency declaration is incomplete'
-        .. ' in '
-        .. tostring(request and request.name or '<unnamed>')
-        .. ' ('
-        .. tostring(frame.phase or 'and_then')
-        .. ', activation='
-        .. Path.label(frame.activation)
-        .. '): '
-        .. tostring(reason),
-      0
-    )
-  end
-end
-
 local function evaluate_guard_residual(state, task, guard, activation)
   local request = state.roots[task.root_id].request
-  return state.runtime:_guard_residual(request, guard, activation, true)
+  return state.runtime:_guard_residual(request, guard, activation, true, task.guard_input_pack)
 end
 
 local function preferred_state_for(state, task, activation)
@@ -326,6 +301,10 @@ local function close_preferred_occurrence(state, frame, certificate, source)
   return closed
 end
 
+local function and_then_activation(frame, outcome)
+  return Path.child(frame.activation, 'and_then:result:' .. Path.label(outcome.activation))
+end
+
 complete_task = function(state, task, outcome)
   while true do
     local n = #task.frames
@@ -340,54 +319,61 @@ complete_task = function(state, task, outcome)
     local frame = task.frames[n]
     setv(state, task.frames, n, nil)
 
-    if frame.kind == 'bind' then
+    if frame.kind == 'map' then
       if outcome.wrap then
-        error('transactional continuation attempted to consume a wrapped result', 0)
+        error('transactional map attempted to consume a wrapped result', 0)
       end
-      if frame.phase == 'map' then
-        -- A map callback has already produced the next completed value.  Keep
-        -- unwinding this task directly instead of allocating Op.always and
-        -- scheduling another deterministic evaluator step.
-        local exchange_support = outcome.exchange_support
-        outcome = new_outcome(
+      -- Keep unwinding directly instead of allocating Op.always and scheduling
+      -- another deterministic evaluator step.
+      local exchange_support = outcome.exchange_support
+      outcome = new_outcome(
+        state,
+        packv(
           state,
-          packv(
-            state,
-            state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
-          ),
-          nil,
-          task
+          state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
+        ),
+        nil,
+        task
+      )
+      outcome.exchange_support = exchange_support
+    elseif frame.kind == 'bind' then
+      if outcome.wrap then
+        error('and_then right-hand operation attempted to consume a wrapped result', 0)
+      end
+      local next_op = frame.q
+      local input_pack = pack_(unpack_pack(outcome.pack))
+      local next_activation = and_then_activation(frame, outcome)
+      if outcome.exchange_support then
+        setv(state, task, 'exchange_support_provenance', outcome.exchange_support)
+      end
+      setv(state, task, 'guard_input_pack', input_pack)
+      if next_op.kind == 'guard' then
+        -- `and_then(guard(...))` is the dynamic sequencing form. Reveal it at
+        -- the bind boundary so it does not introduce an artificial search
+        -- frontier, while retaining the guard occurrence in the semantic path.
+        next_op = state.runtime:_guard_residual(
+          state.roots[task.root_id].request,
+          next_op,
+          next_activation,
+          true,
+          input_pack
         )
-        outcome.exchange_support = exchange_support
+        next_activation = Path.child(next_activation, 'guard:result')
+      end
+      if next_op.kind == 'choice' and #(next_op.choices or {}) == 0 then
+        local failure = Certificate.mark_failure(Certificate.local_absence(), task.id)
+        report_task_absence(state, task, failure, 'and_then_right_rejection', false)
+        eliminate_exchange_support(state, failure)
+      end
+      setv(state, task, 'expr', next_op)
+      setv(state, task, 'activation', next_activation)
+      if task.exchange_support_provenance then
+        setv(state, state, 'residual_propagation_required', true)
+        add_active_next(state, task.id)
       else
-        local next_op =
-          state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
-        if not Op.is_op(next_op) then
-          error('and_then callback must return an Op', 0)
-        end
-        verify_continuation_dependencies(state, task, frame, next_op)
-        if outcome.exchange_support then
-          setv(state, task, 'exchange_support_provenance', outcome.exchange_support)
-        end
-        if next_op.kind == 'choice' and #(next_op.choices or {}) == 0 then
-          local failure = Certificate.mark_failure(Certificate.local_absence(), task.id)
-          eliminate_exchange_support(state, failure)
-        end
-        setv(state, task, 'expr', next_op)
-        setv(
-          state,
-          task,
-          'activation',
-          Path.child(frame.activation, 'and_then:result:' .. Path.label(outcome.activation))
-        )
-        if task.exchange_support_provenance then
-          setv(state, state, 'residual_propagation_required', true)
-          add_active_next(state, task.id)
-        else
-          add_active(state, task.id)
-        end
-        return true
+        add_active(state, task.id)
       end
+      return true
     elseif frame.kind == 'wrap' then
       outcome.wrap = compose_wrap(outcome.wrap, frame.fn)
     elseif frame.kind == 'symmetry_restore' then
@@ -495,6 +481,7 @@ local function start_product(state, task, op)
     local child = state.session:acquire_record('task')
     child.id, child.root_id, child.expr = child_id, task.root_id, op.lanes[i]
     child.activation = Path.child(task.activation, 'product:lane:' .. tostring(i))
+    child.guard_input_pack = task.guard_input_pack
     child.frames[1] = { kind = 'group_lane', group_id = group_id, lane = i }
     child.segment_id, child.scope_path, child.status = segment_id, path, 'active'
     child.choice_serial, child.symmetry_key = 0, task.symmetry_key
@@ -652,7 +639,7 @@ local function task_has_transactional_continuation(task)
   for i = #task.frames, 1, -1 do
     local frame = task.frames[i]
     if frame.kind == 'bind' then
-      return frame.phase ~= 'map'
+      return true
     elseif frame.kind == 'group_lane' then
       return false
     end
@@ -1168,8 +1155,10 @@ local function collect_defeat_effects(expr, out)
     -- The preferred occurrence is entered immediately; fallback is residual
     -- and does not become entered unless preferred retry is certified.
     collect_defeat_effects(expr.p, out)
+  elseif kind == 'map' then
+    collect_defeat_effects(expr.p, out)
   elseif kind == 'and_then' then
-    -- Only the prefix is entered before its result constructs the continuation.
+    -- Only the prefix is entered before sequencing reaches the right-hand side.
     collect_defeat_effects(expr.p, out)
   end
   return out
@@ -1279,7 +1268,10 @@ local function inspect_transparent_residual(state, task, activation, op)
     if op.kind == 'guard' then
       local root = state and task and state.roots[task.root_id] or nil
       local request = root and root.request or nil
-      local cached = request and activation and request.guard_residuals[activation] or nil
+      local cached = request
+          and activation
+          and state.runtime:_guard_residual(request, op, activation, false, task.guard_input_pack)
+        or nil
       if cached then
         return cached, activation, RESIDUAL_REVEALED
       end
@@ -1287,8 +1279,8 @@ local function inspect_transparent_residual(state, task, activation, op)
     elseif op.kind == 'annotated' then
       activation = residual_child(activation, 'annotated:body')
       op = op.p
-    elseif op.kind == 'and_then' and op.derived_map then
-      activation = residual_child(activation, 'and_then:prefix')
+    elseif op.kind == 'map' then
+      activation = residual_child(activation, 'map:body')
       op = op.p
     else
       return op, activation, RESIDUAL_STATIC
@@ -1662,14 +1654,18 @@ local function drain_active(state)
         end
         setv(state, state, 'residual_propagation_required', true)
         add_active(state, task.id)
+      elseif kind == 'map' then
+        local parent_activation = task.activation
+        pushv(state, task.frames, { kind = 'map', fn = expr.fn })
+        setv(state, task, 'expr', expr.p)
+        setv(state, task, 'activation', Path.child(parent_activation, 'map:body'))
+        add_active(state, task.id)
       elseif kind == 'and_then' then
         local parent_activation = task.activation
         pushv(state, task.frames, {
           kind = 'bind',
-          fn = expr.fn,
-          phase = expr.callback_phase,
+          q = expr.q,
           activation = parent_activation,
-          continuation_footprint = expr.continuation_footprint,
         })
         setv(state, task, 'expr', expr.p)
         setv(state, task, 'activation', Path.child(parent_activation, 'and_then:prefix'))

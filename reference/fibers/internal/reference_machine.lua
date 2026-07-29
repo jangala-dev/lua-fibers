@@ -141,6 +141,7 @@ local function clone_state(s)
       choice_serial = t.choice_serial,
       symmetry_key = t.symmetry_key,
       activation = t.activation,
+      guard_input_pack = t.guard_input_pack,
     }
   end
 
@@ -275,16 +276,8 @@ local function finish_group_lane(state, task, frame, outcome)
   return complete_task(state, parent, new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes)))
 end
 
-local function verify_continuation_dependencies(state, frame, next_op)
-  if not state.runtime.verify_dependencies or frame.continuation_footprint == nil then
-    return
-  end
-  local declared = IR.metadata_hint(frame.continuation_footprint)
-  local actual = IR.metadata(next_op)
-  local ok, reason = IR.metadata_covers(declared, actual)
-  if not ok then
-    error('continuation dependency declaration is incomplete: ' .. tostring(reason), 0)
-  end
+local function and_then_activation(frame, outcome)
+  return Activation.child(frame.activation, 'and_then:result:' .. Activation.label(outcome.activation))
 end
 
 complete_task = function(state, task, outcome)
@@ -301,25 +294,30 @@ complete_task = function(state, task, outcome)
     local frame = task.frames[n]
     task.frames[n] = nil
 
-    if frame.kind == 'bind' then
+    if frame.kind == 'map' then
       if outcome.wrap then
-        error('transactional continuation attempted to consume a wrapped result', 0)
+        error('transactional map attempted to consume a wrapped result', 0)
       end
-      if frame.phase == 'map' then
-        task.expr = Op.always(
-          state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
-        )
-      else
-        local next_op =
-          state.runtime:_call_in_phase('and_then', 'callback_error', frame.fn, unpack_pack(outcome.pack))
-        if not Op.is_op(next_op) then
-          error('and_then callback must return an Op', 0)
-        end
-        verify_continuation_dependencies(state, frame, next_op)
-        task.expr = next_op
-        task.activation =
-          Activation.child(frame.activation, 'and_then:result:' .. Activation.label(outcome.activation))
+      outcome = new_outcome(
+        task,
+        pack_(state.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))),
+        nil
+      )
+    elseif frame.kind == 'bind' then
+      if outcome.wrap then
+        error('and_then right-hand operation attempted to consume a wrapped result', 0)
       end
+      local next_op = frame.q
+      local input_pack = pack_(unpack_pack(outcome.pack))
+      local next_activation = and_then_activation(frame, outcome)
+      task.guard_input_pack = input_pack
+      if next_op.kind == 'guard' then
+        local request = state.roots[task.root_id].request
+        next_op = state.runtime:_guard_residual(request, next_op, next_activation, true, input_pack)
+        next_activation = Activation.child(next_activation, 'guard:result')
+      end
+      task.expr = next_op
+      task.activation = next_activation
       add_active(state, task.id)
       return true
     elseif frame.kind == 'wrap' then
@@ -340,7 +338,13 @@ local function add_root(state, root_id)
   end
   local request = state.requests[root_id]
   if not request then
-    return
+    request = state.runtime.pending_by_id[root_id]
+    if not request then
+      return
+    end
+    local requests = copy_map(state.requests)
+    requests[root_id] = request
+    state.requests = requests
   end
   if not request.activation_root then
     request.activation_root = Activation.new_request(request.id or root_id)
@@ -406,6 +410,7 @@ local function start_product(state, task, op)
       choice_serial = 0,
       symmetry_key = task.symmetry_key,
       activation = Activation.child(task.activation, 'product:lane:' .. tostring(i)),
+      guard_input_pack = task.guard_input_pack,
     }
     state.active[#state.active + 1] = child_id
   end
@@ -859,8 +864,10 @@ local function collect_defeat_effects(expr, out)
     -- The preferred occurrence is entered immediately; fallback is residual
     -- and does not become entered unless preferred retry is certified.
     collect_defeat_effects(expr.p, out)
+  elseif kind == 'map' then
+    collect_defeat_effects(expr.p, out)
   elseif kind == 'and_then' then
-    -- Only the prefix is entered before its result constructs the continuation.
+    -- Only the prefix is entered before sequencing reaches the right-hand side.
     collect_defeat_effects(expr.p, out)
   end
   return out
@@ -919,21 +926,23 @@ dfs = function(state)
         elseif kind == 'guard' then
           local parent_activation = task.activation
           local request = state.roots[task.root_id].request
-          local residual = request.guard_residuals[parent_activation]
-          if not residual then
-            residual = state.runtime:_guard_residual(request, expr, parent_activation, true)
-          end
+          local residual =
+            state.runtime:_guard_residual(request, expr, parent_activation, true, task.guard_input_pack)
           task.expr = residual
           task.activation = Activation.child(parent_activation, 'guard:result')
+          add_active(state, task.id)
+        elseif kind == 'map' then
+          local parent_activation = task.activation
+          task.frames[#task.frames + 1] = { kind = 'map', fn = expr.fn }
+          task.expr = expr.p
+          task.activation = Activation.child(parent_activation, 'map:body')
           add_active(state, task.id)
         elseif kind == 'and_then' then
           local parent_activation = task.activation
           task.frames[#task.frames + 1] = {
             kind = 'bind',
-            fn = expr.fn,
-            phase = expr.callback_phase,
+            q = expr.q,
             activation = parent_activation,
-            continuation_footprint = expr.continuation_footprint,
           }
           task.expr = expr.p
           task.activation = Activation.child(parent_activation, 'and_then:prefix')

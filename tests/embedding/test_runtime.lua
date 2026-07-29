@@ -51,9 +51,9 @@ local cell = Cell.new(0, 'budget-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
-    local update = cell:read_op():and_then(function(v)
+    local update = cell:read_op():and_then(Op.guard(function(v)
       return cell:write_op(v + 1)
-    end)
+    end))
     rt2:perform(Op.never():or_else(update))
   end, 'u' .. i)
 end
@@ -137,9 +137,9 @@ local cell = Cell.new(0, 'cursor-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
-    rt2:perform(cell:read_op():and_then(function(v)
+    rt2:perform(cell:read_op():and_then(Op.guard(function(v)
       return cell:write_op(v + 1)
-    end))
+    end)))
   end, 'u' .. i)
 end
 local st = rt2:step({ max_work = 1 })
@@ -190,19 +190,19 @@ local function assert_status(st, tag, msg)
   end
 end
 
--- Deferred and_then continuations created before rendezvous closure must retain the
--- original evaluation context.  In particular, a guard and a residual or_else
--- inside the continuation need the fibre attempt and residual environment.
+-- A guarded right-hand operation created before rendezvous closure must retain
+-- the original evaluation context. In particular, a nested guard and residual
+-- or_else need the fibre attempt and residual environment.
 do
   local rt = Runtime.new()
   local ch = Rendezvous.new('deferred-context-search')
   local got, sent
   rt:spawn_raw(function()
-    got = rt:perform(ch:get_op():and_then(function(v)
+    got = rt:perform(ch:get_op():and_then(Op.guard(function(v)
       return Op.guard(function()
         return Op.never():or_else(Op.always('fallback:' .. v))
       end)
-    end))
+    end)))
   end, 'receiver')
   rt:spawn_raw(function()
     sent = rt:perform(ch:put_op('x'))
@@ -219,11 +219,11 @@ do
   local ch = Rendezvous.new('deferred-context-cursor')
   local got, sent, st
   rt:spawn_raw(function()
-    got = rt:perform(ch:get_op():and_then(function(v)
+    got = rt:perform(ch:get_op():and_then(Op.guard(function(v)
       return Op.guard(function()
         return Op.never():or_else(Op.always('cursor-fallback:' .. v))
       end)
-    end))
+    end)))
   end, 'receiver')
   rt:spawn_raw(function()
     sent = rt:perform(ch:put_op('y'))

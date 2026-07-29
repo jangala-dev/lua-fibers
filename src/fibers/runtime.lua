@@ -12,7 +12,6 @@ local Domain = require('fibers.internal.kernel.domain')
 local DependencyIndex = Dependencies.Index
 local Certificate = require('fibers.internal.kernel.certificate')
 local Path = require('fibers.internal.kernel.path')
-local GuardActivation = require('fibers.internal.guard_activation')
 local Context = require('fibers.internal.context')
 
 local function require_optional(module_name, feature)
@@ -420,7 +419,6 @@ function Runtime.new(opts)
     search_session_pool = opts.search_session_pool ~= false,
     search_session_pool_limit = math.max(0, math.floor(opts.search_session_pool_limit or 64)),
     _frontier_growing = false,
-    verify_dependencies = opts.verify_dependencies == true,
     next_fiber = 0,
     next_request = 0,
     pending_generation = 0,
@@ -758,42 +756,77 @@ function Runtime:_refine_request_metadata(request, metadata)
   return true
 end
 
-function Runtime:_guard_residual(request, guard, activation, reveal)
+local EMPTY_GUARD_INPUT = { n = 0 }
+
+local function normalise_guard_input(input_pack)
+  if input_pack == nil or (input_pack.n or #input_pack) == 0 then
+    return EMPTY_GUARD_INPUT
+  end
+  return input_pack
+end
+
+local function input_values_equal(left, right)
+  if left == right then
+    return true
+  end
+  local ln, rn = left.n or #left, right.n or #right
+  if ln ~= rn then
+    return false
+  end
+  for i = 1, ln do
+    local a, b = left[i], right[i]
+    if a ~= b and not (type(a) == 'number' and type(b) == 'number' and a ~= a and b ~= b) then
+      return false
+    end
+  end
+  return true
+end
+
+local function cached_guard_residual(request, activation, input_pack)
+  local entries = request.guard_residuals[activation]
+  if not entries then
+    return nil
+  end
+  local input = normalise_guard_input(input_pack)
+  for i = 1, #entries do
+    local entry = entries[i]
+    if input_values_equal(entry.input, input) then
+      return entry.residual
+    end
+  end
+  return nil
+end
+
+function Runtime:_guard_residual(request, guard, activation, reveal, input_pack)
   if not request or not activation then
     return nil, false
   end
-  local cached = request.guard_residuals[activation]
+  local input = normalise_guard_input(input_pack)
+  local cached = cached_guard_residual(request, activation, input)
   if cached or not reveal then
     return cached, false
   end
-  local scope = request.scope
-  local activation_view = GuardActivation.new(self, scope)
-  local ok, value = pcall(self._call_in_phase, self, 'guard', 'callback_error', guard.fn, activation_view)
-  GuardActivation.close(activation_view)
-  if not ok then
-    error(value, 0)
+  if guard.contextual == true then
+    cached = self:_call_in_phase(
+      'guard',
+      'callback_error',
+      guard.fn,
+      self,
+      request.scope,
+      unpack_(input, 1, input.n or #input)
+    )
+  else
+    cached = self:_call_in_phase('guard', 'callback_error', guard.fn, unpack_(input, 1, input.n or #input))
   end
-  cached = value
   if not Op.is_op(cached) then
     error('guard callback must return an Op', 0)
   end
-  if guard.continuation_footprint ~= nil then
-    local declared = IR.metadata_hint(guard.continuation_footprint)
-    local actual = IR.metadata(cached)
-    local ok, reason = IR.metadata_covers(declared, actual)
-    if not ok then
-      error(
-        'continuation dependency declaration is incomplete in '
-          .. tostring(request.name or '<unnamed>')
-          .. ' (guard, activation='
-          .. Path.label(activation)
-          .. '): '
-          .. tostring(reason),
-        0
-      )
-    end
+  local entries = request.guard_residuals[activation]
+  if not entries then
+    entries = {}
+    request.guard_residuals[activation] = entries
   end
-  request.guard_residuals[activation] = cached
+  entries[#entries + 1] = { input = input, residual = cached }
   if request.op == guard and activation == request.activation_root then
     request._active_root_residual = cached
     if IR.has_or_else(cached) and not request._contains_or_else then

@@ -167,12 +167,12 @@ local function recovery_claim_op(failure)
   -- transactional cell. Two recovery operations in one world can therefore
   -- neither both claim the authority nor combine one claim with a stale branch.
   local claim = recovery.authority:transition_op(ClaimRecovery):or_else(Op.always(STALE_RECOVERY))
-  return claim:and_then(function(claimed)
+  return claim:and_then(Op.guard(function(claimed)
     local effect = Effect.of(RecoveryClaimKind, { authority = recovery.authority })
     return Op.emit(effect):map(function()
       return claimed
     end)
-  end),
+  end)),
     token
 end
 
@@ -184,12 +184,12 @@ end
 
 local function recovery_op(failure, recover)
   local claim, token = recovery_claim_op(failure)
-  return claim:and_then(function(claimed)
+  return claim:and_then(Op.guard(function(claimed)
     if claimed == STALE_RECOVERY then
       return stale_recovery_op()
     end
     return recover(token.context, token)
-  end)
+  end))
 end
 
 function ClosureFailure:retry_op()

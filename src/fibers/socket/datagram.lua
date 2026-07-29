@@ -101,28 +101,18 @@ function SendState.new(name, capacity)
     }, name .. ':state'),
     queue = FIFO.new(capacity or 64, name .. ':queue'),
   }, SendState)
-  self._admit_footprint = Op.dependencies(self.state:transition_op(Allocate), self.queue:put_footprint())
-  self._flush_footprint = Op.dependencies(self.state:read_op(), self.state:changed_op(0))
   return self
 end
 
-function SendState:admit_footprint()
-  return self._admit_footprint
-end
-
-function SendState:flush_footprint()
-  return self._flush_footprint
-end
-
 function SendState:admit_op(data, address)
-  return self.state:transition_op(Allocate):and_then(function(seq, err)
+  return self.state:transition_op(Allocate):and_then(Op.guard(function(seq, err)
     if seq == nil then
       return Op.always(nil, err)
     end
     return self.queue:put_op({ seq = seq, data = data, address = address }):map(function()
       return true, seq
     end)
-  end, self._admit_footprint)
+  end))
 end
 
 function SendState:next_op()
@@ -143,9 +133,9 @@ end
 
 function SendState:flush_op()
   local state = self.state
-  return state:read_op():and_then(function(value)
+  return state:read_op():and_then(Op.guard(function(value)
     return wait_flush(state, value.next_seq)
-  end, self._flush_footprint)
+  end))
 end
 
 function SendState:state_value()
@@ -216,14 +206,14 @@ function Datagram:send_to_op(data, address)
       })
     )
   end
-  local send = self.lifecycle:available_op():and_then(function()
-    return self.sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
+  local send = self.lifecycle
+    :available_op()
+    :and_then(self.sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
       if not ok then
         return nil, seq
       end
       return true
-    end)
-  end, self.sends:admit_footprint())
+    end))
   return send:or_else(self.lifecycle:unavailable_op():map(function(state)
     return nil, terminal_error(state, 'send_to')
   end))
@@ -270,14 +260,14 @@ function Datagram:close_op(reason)
   local cancel = socket.driver and socket.driver:request_cancel_op(reason) or Op.always(true)
   return socket.lifecycle
     :request_stop_op(reason)
-    :and_then(function(first, state)
+    :and_then(Op.guard(function(first, state)
       if first and socket.driver then
         return cancel:map(function()
           return first, state
         end)
       end
       return Op.always(first, state)
-    end, cancel)
+    end))
     :wrap(function(first, state)
       if first and state.handle then
         local ok, close_err = IO.safe_close('datagram', state.handle, reason, {

@@ -134,7 +134,6 @@ do
         'on_defeat',
         'emit',
         'is_op',
-        'dependencies',
         'certify_symmetry',
       },
     },

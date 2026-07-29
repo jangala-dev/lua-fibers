@@ -35,10 +35,6 @@ function Clock.default()
   return default_clock
 end
 
-local Now = StateMachine.isolated_query('clock.now', function(_, _, context)
-  return StateMachine.Ready.same(context.now())
-end)
-
 local At = StateMachine.isolated_query('clock.at', function(_, deadline, context)
   local now = context.now()
   if now < deadline then
@@ -48,7 +44,9 @@ local At = StateMachine.isolated_query('clock.at', function(_, deadline, context
 end)
 
 function Clock:now_op()
-  return Facility.external_wait(self, Kind, self._location, Now)
+  return Op._contextual_guard(function(runtime)
+    return Op.always(runtime:now())
+  end)
 end
 
 function Clock:now()
@@ -70,13 +68,12 @@ function Clock:at(deadline)
   return perform(self:at_op(deadline))
 end
 
--- Relative time is surface syntax. Each guard activation takes one stable
--- activation-time observation and elaborates to an explicit absolute wait.
+-- Relative time is explicit algebra over one activation-local observation.
 function Clock:after_op(delay)
   delay = finite_number(delay, 'Clock:after_op delay')
-  return Op.guard(function(activation)
-    return self:at_op(activation:now() + delay)
-  end)
+  return self:now_op():and_then(Op.guard(function(now)
+    return self:at_op(now + delay)
+  end))
 end
 
 function Clock:after(delay)

@@ -6,14 +6,14 @@ construction, search, replay, backtracking or effect preparation must not mutate
 retained semantic state or perform an irreversible host action.
 
 The audit does not certify arbitrary callbacks supplied by applications. Public
-`map`, `and_then`, `guard`, selector, matcher and facility-authoring callbacks
+`map`, `guard`, selector, matcher and facility-authoring callbacks
 remain subject to their documented replayability and purity contracts.
 
 ## Scope
 
 The source tree contains:
 
-- 172 built-in `map`, `and_then` and `guard` callback uses across 31 modules;
+- built-in `map` transforms and `guard` builders across the portable and host-backed facilities;
 - 58 built-in state-machine transition definitions, including the 25 Flow
   transitions and five generic socket-lifecycle transitions;
 - six typed committed-effect kinds: interrupt, spawn, Closure close-reason,
@@ -45,10 +45,10 @@ The following are not permitted before commit:
 
 ## Findings and repairs
 
-### Task spawn body consumed during `and_then`
+### Task spawn body consumed during speculative sequencing
 
 `Task:_spawn_effect` previously cleared the retained task body while the spawn
-continuation was being explored. The effect now carries the Task as its owner.
+right-hand operation was being explored. The effect now carries the Task as its owner.
 Effect preparation only validates that a dormant body exists. After the ledger
 commit, discharge calls `Task:_take_spawn_body`, creates the runnable wrapper,
 clears the dormant body and asks the runtime to allocate the committed fibre.

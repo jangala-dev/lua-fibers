@@ -69,7 +69,6 @@ end
 local metadata_cache = setmetatable({}, { __mode = 'kv' })
 local active_metadata_cache = setmetatable({}, { __mode = 'kv' })
 local preferred_metadata_cache = setmetatable({}, { __mode = 'kv' })
-local dependency_hint_cache = setmetatable({}, { __mode = 'kv' })
 
 local function empty_metadata()
   return {
@@ -210,67 +209,6 @@ end
 
 local describe
 
-local function metadata_from_hint(hint, seen)
-  if hint == false then
-    return empty_metadata()
-  end
-  if type(hint) ~= 'table' then
-    local out = empty_metadata()
-    out.dynamic = true
-    return out
-  end
-  if hint.kind and hint._id then
-    return describe(hint, seen)
-  end
-  if hint._fibers_dependencies then
-    local cached = dependency_hint_cache[hint]
-    if cached then
-      return cached
-    end
-    local out = empty_metadata()
-    for i = 1, #(hint.parts or {}) do
-      metadata_merge(out, metadata_from_hint(hint.parts[i], seen))
-    end
-    dependency_hint_cache[hint] = out
-    return out
-  end
-  local out = empty_metadata()
-  out.dynamic = hint.dynamic == true
-  out.active_dynamic = out.dynamic
-  out.external = hint.external == true
-  for resource, roles in pairs(hint.exchanges or {}) do
-    local target = {}
-    out.exchanges[resource] = target
-    for role, present in pairs(roles) do
-      if present then
-        target[role] = true
-      end
-    end
-  end
-  for loc, access in pairs(hint.locations or {}) do
-    if access == true then
-      error('location dependency hints must declare read/write/wait and supplies explicitly', 0)
-    end
-    local fields = {}
-    for key, value in pairs(access or {}) do
-      if key == 'supplies' then
-        fields.supplies = Supply.normalise(value, 'location dependency supplies', 2)
-      else
-        fields[key] = value
-      end
-    end
-    mark_location(out, loc, fields)
-  end
-  for resource, access in pairs(hint.resources or {}) do
-    if access == true then
-      mark_resource(out, resource, { observe = true })
-    else
-      mark_resource(out, resource, access)
-    end
-  end
-  return out
-end
-
 local metadata_caches = {
   full = metadata_cache,
   active = active_metadata_cache,
@@ -317,29 +255,20 @@ describe_mode = function(op, seen, mode)
     if mode ~= 'preferred' then
       metadata_merge(out, describe_mode(op.q, seen, mode))
     end
-  elseif kind == 'annotated' then
+  elseif kind == 'annotated' or kind == 'map' then
     metadata_merge(out, describe_mode(op.p, seen, mode))
   elseif kind == 'guard' then
-    if op.continuation_footprint ~= nil then
-      metadata_merge(out, metadata_from_hint(op.continuation_footprint, seen))
-    else
-      out.dynamic = true
-      out.active_dynamic = true
-    end
+    out.dynamic = true
+    out.active_dynamic = true
   elseif kind == 'and_then' then
-    metadata_merge(out, describe_mode(op.p, seen, mode))
-    if mode ~= 'active' and not op.derived_map then
-      local prefix_active_dynamic = describe_mode(op.p, {}, 'active').dynamic == true
-      if op.continuation_footprint ~= nil then
-        metadata_merge(out, metadata_from_hint(op.continuation_footprint, seen))
-      else
-        out.dynamic = true
-      end
-      -- The continuation is dormant for ordinary active recruitment, but its
-      -- declared dependencies remain part of preferred-side component
-      -- arbitration: a fallback may only be certified after operations capable
-      -- of enabling that continuation have had a chance to progress.
-      out.active_dynamic = prefix_active_dynamic
+    local prefix = describe_mode(op.p, seen, mode)
+    metadata_merge(out, prefix)
+    if mode ~= 'active' then
+      metadata_merge(out, describe_mode(op.q, seen, mode))
+      -- The right-hand operation is dormant for active recruitment. Its full
+      -- structure remains visible to preferred-side arbitration, while active
+      -- opacity is determined solely by the prefix until sequencing advances.
+      out.active_dynamic = describe_mode(op.p, {}, 'active').dynamic == true
     end
   end
 
@@ -367,70 +296,6 @@ end
 
 function M.has_or_else(op)
   return op and op._contains_or_else == true or false
-end
-
-function M.metadata_hint(hint)
-  return metadata_from_hint(hint, {})
-end
-
-function M.metadata_covers(declared, actual)
-  declared, actual = declared or empty_metadata(), actual or empty_metadata()
-  if declared.dynamic then
-    return true
-  end
-  if M.active_dynamic(actual) then
-    return false, 'dynamic continuation'
-  end
-  if actual.external and not declared.external then
-    return false, 'external dependency'
-  end
-  for resource, roles in pairs(actual.exchanges or {}) do
-    local allowed = declared.exchanges and declared.exchanges[resource]
-    if not allowed then
-      return false, 'exchange resource ' .. tostring(resource)
-    end
-    for role in pairs(roles) do
-      if not allowed[role] then
-        return false, 'exchange role ' .. tostring(role)
-      end
-    end
-  end
-  for location, access in pairs(actual.locations or {}) do
-    local allowed = declared.locations and declared.locations[location]
-    if not allowed then
-      return false, 'location ' .. tostring(location.name or location._fibers_id or location)
-    end
-    for mode, present in pairs(access) do
-      if mode == 'supplies' then
-        for direction in pairs(present or {}) do
-          local allowed_supplies = allowed.supplies
-          if not (allowed_supplies and (allowed_supplies.any or allowed_supplies[direction])) then
-            return false,
-              'location supply direction ' .. tostring(direction) .. ' at ' .. tostring(
-                location.name or location._fibers_id or location
-              )
-          end
-        end
-      elseif present and not allowed[mode] then
-        return false,
-          'location mode ' .. tostring(mode) .. ' at ' .. tostring(
-            location.name or location._fibers_id or location
-          )
-      end
-    end
-  end
-  for resource, access in pairs(actual.resources or {}) do
-    local allowed = declared.resources and declared.resources[resource]
-    if not allowed then
-      return false, 'resource ' .. tostring(resource)
-    end
-    for mode, present in pairs(access) do
-      if present and not allowed[mode] then
-        return false, 'resource mode ' .. tostring(mode)
-      end
-    end
-  end
-  return true
 end
 
 function M.metadata(op)

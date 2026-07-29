@@ -131,24 +131,23 @@ end
 
 function RateLimiter:acquire_op(n)
   n = normalise_amount(self, n)
-  return self:try_acquire_op(n):and_then(function(ok, deadline)
+  return self:try_acquire_op(n):and_then(Op.guard(function(ok, deadline)
     if ok then
       return Op.always(true)
     end
-    return self.clock:at_op(deadline):and_then(function()
+    return self.clock:at_op(deadline):and_then(Op.guard(function()
       return self:acquire_op(n)
-    end)
-  end)
+    end))
+  end))
 end
 
 function RateLimiter:state_op()
-  return Op.guard(function(activation)
-    local now = activation:now()
+  return self.clock:now_op():and_then(Op.guard(function(now)
     return self.state:read_op():map(function(state)
       local s = refill_state(self, state, now)
       return { tokens = s.tokens, last = s.last, capacity = self.capacity, rate = self.rate }
     end)
-  end)
+  end))
 end
 
 function RateLimiter:available_op()

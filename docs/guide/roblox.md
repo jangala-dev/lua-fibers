@@ -216,7 +216,7 @@ See [`00_skippable_cutscene.lua`](../../examples/gameplay/00_skippable_cutscene.
 
 ## 4. Separate selection from post-commit presentation
 
-Callbacks used by `map`, `and_then`, guards and transactional resource
+Callbacks used by `map`, guards and transactional resource
 transitions are speculative. Fibers may revisit them while looking for a
 coherent world. They must be pure and non-yielding.
 
@@ -299,15 +299,13 @@ Fibers can describe the complete admission as one world:
 
 ```luau
 local function admitMatch_op(scope, party, arena)
-    return arena.freePlaces:take_op(#party.players):and_then(function()
-        return arena.rotation:expect_op("open")
-    end):and_then(function()
-        return scope:spawn_op(function()
+    return arena.freePlaces:take_op(#party.players)
+        :and_then(arena.rotation:expect_op("open"))
+        :and_then(scope:spawn_op(function()
             return runMatch(party, arena)
         end, {
             name = `match:{party.id}`,
-        })
-    end)
+        }))
 end
 ```
 
@@ -372,19 +370,17 @@ Games contain many temporary owners:
 A camera hand-off can change protocol state and custody together:
 
 ```luau
-local releaseCamera = cameraProtocol:receive_op():and_then(function(message)
-    if message ~= "RELEASE_CAMERA" then
-        return Op.never()
-    end
+local releaseCamera = cameraProtocol:receive_op():and_then(
+    Op.guard(function(message)
+        if message ~= "RELEASE_CAMERA" then
+            return Op.never()
+        end
 
-    return cameraMode:write_op("player")
-        :and_then(function()
-            return cinematicScope:move_op(cameraHandle, gameplayScope)
-        end)
-        :and_then(function()
-            return cameraProtocol:send_op("CAMERA_READY")
-        end)
-end)
+        return cameraMode:write_op("player")
+            :and_then(cinematicScope:move_op(cameraHandle, gameplayScope))
+            :and_then(cameraProtocol:send_op("CAMERA_READY"))
+    end)
+)
 ```
 
 The receiving system cannot observe half a hand-off in which the mode changed
@@ -437,9 +433,7 @@ lose the key if the gate cannot change state.
 local unlockMoonGate = Op.each({
     inventory.silverKeys:take_op(1),
     moonGate.state:expect_op("locked"),
-}):and_then(function()
-    return moonGate.state:write_op("open")
-end)
+}):and_then(moonGate.state:write_op("open"))
 ```
 
 The key and gate change commit together. If the complete world is absent, the
@@ -525,7 +519,7 @@ fact that something changed.
 
 Signal subscription is an immediate committed host action. Construct it in the
 body of a running fibre or another post-commit path, not inside `guard`, `map`,
-`and_then`, effect preparation or another callback which Fibers may replay. The
+effect preparation or another callback which Fibers may replay. The
 returned subscription is then an ordinary resource held in custody: `next_op()` is inert,
 `close_op()` is transactional, and Scope Closure disconnects it.
 
@@ -690,7 +684,7 @@ absence.
 ### Speculative callbacks are pure
 
 Do not play sounds, create Instances, fire remotes or mutate unmanaged tables
-inside `map`, `and_then`, guards, transition steps or effect preparation.
+inside `map`, guards, transition steps or effect preparation.
 
 ### Commit irreversible work deliberately
 

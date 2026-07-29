@@ -109,11 +109,9 @@ local function open_in_op(scope, handle, opts)
   for i = 1, #children do
     stream._lifetime:add_child(children[i])
   end
-  return scope:admit_op(stream):and_then(function()
-    return Op.named_each(registrations):map(function()
-      return stream
-    end)
-  end)
+  return scope:admit_op(stream):and_then(Op.named_each(registrations):map(function()
+    return stream
+  end))
 end
 
 function HostStream.open_op(handle, opts)

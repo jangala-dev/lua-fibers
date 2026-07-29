@@ -12,6 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
+local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
@@ -23,30 +24,20 @@ local protocol = Cell.new('unknown', 'protocol-state')
 local reply, responder_has_custody
 
 local function negotiate_op(stream)
-  return stream:reader():read_line_op():and_then(function(line)
+  return stream:reader():read_line_op():and_then(Op.guard(function(line)
     if line == 'PING' then
       return protocol
         :write_op('ping')
-        :and_then(function()
-          return negotiator:move_op(stream, responder)
-        end)
-        :and_then(function()
-          return stream:writer():write_op('PONG\n')
-        end)
+        :and_then(negotiator:move_op(stream, responder))
+        :and_then(stream:writer():write_op('PONG\n'))
         :map(function()
           return 'ping'
         end)
     end
-    return stream
-      :writer()
-      :write_op('BAD\n')
-      :and_then(function()
-        return stream:close_op('bad protocol')
-      end)
-      :map(function()
-        return nil, 'bad_protocol'
-      end)
-  end)
+    return stream:writer():write_op('BAD\n'):and_then(stream:close_op('bad protocol')):map(function()
+      return nil, 'bad_protocol'
+    end)
+  end))
 end
 
 local st = fibers.try_run(function()

@@ -20,12 +20,12 @@ local H = require('tests.resources.helpers')
 local TC = require('tests.support.effect_helpers')
 
 local function update_cell(cell, fn)
-  return cell:read_op():and_then(function(old)
+  return cell:read_op():and_then(Op.guard(function(old)
     local new = fn(old)
     return cell:write_op(new):map(function()
       return new, old
     end)
-  end)
+  end))
 end
 
 local function test_resource_observation_retries_independent_cell_updates()
@@ -73,9 +73,7 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
       :map(function(v)
         return 'primary:' .. tostring(v)
       end)
-      :or_else(Op.emit(TC.tag('observation.bad-fallback')):and_then(function()
-        return Op.always('fallback')
-      end)))
+      :or_else(Op.emit(TC.tag('observation.bad-fallback')):and_then(Op.always('fallback'))))
   end, 'observation-or-else-second')
 
   H.assert_status(rt:run(), 'found', 'stale primary is retried, not treated as absent')

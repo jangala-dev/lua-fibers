@@ -200,14 +200,14 @@ function Dial:state_value()
 end
 
 local function take_to_scope_op(dial, scope, include_report)
-  return dial.lifecycle:take_op():and_then(function(connection, source_scope, report)
+  return dial.lifecycle:take_op():and_then(Op.guard(function(connection, source_scope, report)
     return source_scope:move_op(connection, scope):map(function()
       if include_report then
         return connection, report
       end
       return connection
     end)
-  end)
+  end))
 end
 
 local function transfer_op(dial, target, include_report)
@@ -247,14 +247,14 @@ end
 function Dial:close_op(reason)
   reason = reason or 'dial closed'
   local cancel = self.driver and self.driver:request_cancel_op(reason) or Op.always(true)
-  return self.lifecycle:request_close_op(reason):and_then(function(first)
+  return self.lifecycle:request_close_op(reason):and_then(Op.guard(function(first)
     if first and self.driver then
       return cancel:map(function()
         return true
       end)
     end
     return Op.always(true)
-  end, Op.dependencies(cancel))
+  end))
 end
 
 function Dial:closed_op()

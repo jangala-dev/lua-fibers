@@ -87,13 +87,14 @@ The principal combinators are:
 
 ```text
 op:map(function(...) ... end)
-op:and_then(function(...) return another_op end)
+op:and_then(next_op)
+Op.guard(function(...) return contextual_op end)
 op:or_else(fallback_op)
 op:wrap(function(...) ... end)
 op:on_defeat(effect)
 ```
 
-Fibers has three callback phases. Search callbacks such as `guard`, `map`, `and_then`, resource transitions and effect keying are speculative and replayable. Effect `prepare` is also pure and replayable; it returns a discharge plan but must not reserve, mutate, spawn, perform or yield. Effect `discharge` runs after state commits. `wrap` then runs for the resumed participant and may perform another option. These rules are normative; see `../advanced/option-algebra.md`.
+Fibers has three callback phases. Search callbacks such as `guard`, `map`, resource transitions and effect keying are speculative and replayable. Effect `prepare` is also pure and replayable; it returns a discharge plan but must not reserve, mutate, spawn, perform or yield. Effect `discharge` runs after state commits. `wrap` then runs for the resumed participant and may perform another option. These rules are normative; see `../advanced/option-algebra.md`.
 
 ### Choice
 
@@ -182,12 +183,14 @@ Use `Cell` for one replaceable fact:
 ```lua
 local quest = Cell.new({ stage = 'find_key', clues = 1 }, 'moon-gate-quest')
 
-local advance = quest:read_op():and_then(function(current)
-  if current.stage ~= 'find_key' or current.clues < 1 then
-    return Op.never()
-  end
-  return quest:write_op({ stage = 'open_gate', clues = current.clues })
-end)
+local advance = quest:read_op():and_then(
+  Op.guard(function(current)
+    if current.stage ~= 'find_key' or current.clues < 1 then
+      return Op.never()
+    end
+    return quest:write_op({ stage = 'open_gate', clues = current.clues })
+  end)
+)
 
 fibers.perform(advance)
 

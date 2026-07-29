@@ -40,12 +40,12 @@ local function new_runtime(opts)
 end
 
 local function update_cell(cell, fn)
-  return cell:read_op():and_then(function(old)
+  return cell:read_op():and_then(Op.guard(function(old)
     local new = fn(old)
     return cell:write_op(new):map(function()
       return new, old
     end)
-  end)
+  end))
 end
 
 local pack_ = table.pack or function(...)
@@ -104,13 +104,7 @@ end
 
 local function test_canonical_algebra_vocabulary()
   assert_eq(Op.always().kind, 'always', 'always is the canonical value term')
-  assert_eq(
-    Op.always():and_then(function()
-      return Op.always()
-    end).kind,
-    'and_then',
-    'and_then is the canonical sequencing term'
-  )
+  assert_eq(Op.always():and_then(Op.always()).kind, 'and_then', 'and_then is the canonical sequencing term')
   assert_eq(
     Op.guard(function()
       return Op.always()
@@ -159,11 +153,9 @@ local function test_map_and_and_then_are_transactional()
       :map(function(v)
         return v + 3
       end)
-      :and_then(function(v)
-        return cell:write_op(v):and_then(function()
-          return cell:read_op()
-        end)
-      end))
+      :and_then(Op.guard(function(v)
+        return cell:write_op(v):and_then(cell:read_op())
+      end)))
   end, 'map-and-then')
 
   assert_status(rt:run(), 'found')
@@ -178,9 +170,7 @@ local function test_and_then_is_all_or_nothing()
   local got
 
   rt:spawn_raw(function()
-    got = rt:perform(cell:write_op(7):and_then(function()
-      return ch:get_op()
-    end))
+    got = rt:perform(cell:write_op(7):and_then(ch:get_op()))
   end, 'and-then-blocked')
 
   local status = rt:run()
@@ -194,19 +184,15 @@ local function test_choice_selects_one_world_and_discards_loser()
   local wraps = {}
   local got
 
-  local winner = Op.emit(TC.tag('choice.winner')):and_then(function()
-    return Op.always('winner'):wrap(function(v)
-      wraps[#wraps + 1] = 'winner-wrap'
-      return v
-    end)
-  end)
+  local winner = Op.emit(TC.tag('choice.winner')):and_then(Op.always('winner'):wrap(function(v)
+    wraps[#wraps + 1] = 'winner-wrap'
+    return v
+  end))
 
-  local loser = Op.emit(TC.tag('choice.loser')):and_then(function()
-    return Op.always('loser'):wrap(function(v)
-      wraps[#wraps + 1] = 'loser-wrap'
-      return v
-    end)
-  end)
+  local loser = Op.emit(TC.tag('choice.loser')):and_then(Op.always('loser'):wrap(function(v)
+    wraps[#wraps + 1] = 'loser-wrap'
+    return v
+  end))
 
   rt:spawn_raw(function()
     got = rt:perform(Op.choice(winner, loser))
@@ -225,12 +211,8 @@ local function test_or_else_preference_and_fallback()
   do
     local rt = new_runtime()
     local got
-    local primary = Op.emit(TC.tag('or_else.primary')):and_then(function()
-      return Op.always('primary')
-    end)
-    local fallback = Op.emit(TC.tag('or_else.fallback')):and_then(function()
-      return Op.always('fallback')
-    end)
+    local primary = Op.emit(TC.tag('or_else.primary')):and_then(Op.always('primary'))
+    local fallback = Op.emit(TC.tag('or_else.fallback')):and_then(Op.always('fallback'))
     rt:spawn_raw(function()
       got = rt:perform(primary:or_else(fallback))
     end, 'or-else-primary')
@@ -245,9 +227,7 @@ local function test_or_else_preference_and_fallback()
 
   do
     local status, values, rt =
-      one_perform(Op.never():or_else(Op.emit(TC.tag('or_else.fallback')):and_then(function()
-        return Op.always('fallback')
-      end)))
+      one_perform(Op.never():or_else(Op.emit(TC.tag('or_else.fallback')):and_then(Op.always('fallback'))))
     assert_status(status, 'found', 'or_else commits fallback when primary is absent')
     assert_eq(values[1], 'fallback')
     assert_eq(transaction_tags(rt), 'or_else.fallback')
@@ -265,9 +245,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
         :map(function(v)
           return 'primary:' .. v
         end)
-        :or_else(Op.emit(TC.tag('or_else.cross.no_partner.fallback')):and_then(function()
-          return Op.always('fallback')
-        end)))
+        :or_else(Op.emit(TC.tag('or_else.cross.no_partner.fallback')):and_then(Op.always('fallback'))))
     end, 'or-else-cross-no-partner-receiver')
 
     assert_status(rt:run(), 'found', 'or_else fallback commits when rendezvous primary has no partner')
@@ -289,9 +267,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       return rows[1][1] .. '+' .. rows[2][1]
     end)
 
-    local fallback = Op.emit(TC.tag('or_else.cross.partial_absent.fallback')):and_then(function()
-      return Op.always('fallback')
-    end)
+    local fallback = Op.emit(TC.tag('or_else.cross.partial_absent.fallback')):and_then(Op.always('fallback'))
 
     rt:spawn_raw(function()
       receiver = rt:perform(primary:or_else(fallback))
@@ -320,9 +296,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
         :map(function(v)
           return 'primary:' .. v
         end)
-        :or_else(Op.emit(TC.tag('or_else.cross.fallback')):and_then(function()
-          return Op.always('fallback')
-        end)))
+        :or_else(Op.emit(TC.tag('or_else.cross.fallback')):and_then(Op.always('fallback'))))
     end, 'or-else-cross-receiver')
 
     rt:spawn_raw(function()
@@ -349,9 +323,7 @@ local function test_or_else_primary_absence_is_checked_across_other_participants
       return rows[1][1] .. '+' .. rows[2][1]
     end)
 
-    local fallback = Op.emit(TC.tag('or_else.cross.all.fallback')):and_then(function()
-      return Op.always('fallback')
-    end)
+    local fallback = Op.emit(TC.tag('or_else.cross.all.fallback')):and_then(Op.always('fallback'))
 
     rt:spawn_raw(function()
       receiver = rt:perform(primary:or_else(fallback))
@@ -434,17 +406,13 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
     },
   })
 
-  local op = Op.emit(TC.tag('wrap.before')):and_then(function()
-    return cell:write_op(9):and_then(function()
-      return Op.emit(TC.tag('wrap.after')):and_then(function()
-        return Op.always('value'):wrap(function(v)
-          timeline[#timeline + 1] = 'wrap'
-          assert_eq(cell.value, 9, 'wrap runs after commit')
-          return v .. ':wrapped'
-        end)
-      end)
-    end)
-  end)
+  local op = Op.emit(TC.tag('wrap.before')):and_then(
+    cell:write_op(9):and_then(Op.emit(TC.tag('wrap.after')):and_then(Op.always('value'):wrap(function(v)
+      timeline[#timeline + 1] = 'wrap'
+      assert_eq(cell.value, 9, 'wrap runs after commit')
+      return v .. ':wrapped'
+    end)))
+  )
 
   rt:spawn_raw(function()
     got = rt:perform(op)
@@ -473,9 +441,7 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
     return v
   end)
   local ok_and_then = pcall(function()
-    return boundary:and_then(function()
-      return Op.always('bad')
-    end)
+    return boundary:and_then(Op.always('bad'))
   end)
   local ok_map = pcall(function()
     return boundary:map(function(v)
@@ -618,9 +584,9 @@ end
 
 local function test_multi_value_and_then_map_and_wrap_preserve_arity()
   local status, values = one_perform(Op.always('A', 'B')
-    :and_then(function(a, b)
+    :and_then(Op.guard(function(a, b)
       return Op.always(b, a, 'C')
-    end)
+    end))
     :map(function(x, y, z)
       return x .. y .. z, x, z
     end)
@@ -657,13 +623,11 @@ local function test_deferred_map_and_and_then_after_rendezvous()
     local cell = Cell.new('unset', 'deferred-and_then-cell')
     local got
     rt:spawn_raw(function()
-      got = rt:perform(ch:get_op():and_then(function(v)
-        return cell:write_op(v):and_then(function()
-          return cell:read_op():map(function(current)
-            return current .. ':done'
-          end)
-        end)
-      end))
+      got = rt:perform(ch:get_op():and_then(Op.guard(function(v)
+        return cell:write_op(v):and_then(cell:read_op():map(function(current)
+          return current .. ':done'
+        end))
+      end)))
     end, 'deferred-and_then-receiver')
     rt:spawn_raw(function()
       rt:perform(ch:put_op('message'))
@@ -698,9 +662,7 @@ local function test_choice_blocked_branch_does_not_partially_commit_before_right
   local ch = Rendezvous.new('choice-blocked-left-rendezvous')
   local got
 
-  local blocked_left = cell:write_op(1):and_then(function()
-    return ch:get_op()
-  end)
+  local blocked_left = cell:write_op(1):and_then(ch:get_op())
   local right = cell:write_op(2):map(function()
     return 'right'
   end)
@@ -778,9 +740,7 @@ local function test_or_else_blocked_primary_discards_partial_state_before_fallba
   local cell = Cell.new(0, 'or-else-blocked-primary-cell')
   local got
 
-  local primary = cell:write_op(1):and_then(function()
-    return ch:get_op()
-  end)
+  local primary = cell:write_op(1):and_then(ch:get_op())
   local fallback = cell:write_op(2):map(function()
     return 'fallback'
   end)
@@ -861,9 +821,7 @@ local function test_multiple_wraps_run_in_order_after_discharge()
 
   rt:spawn_raw(function()
     got = rt:perform(Op.emit(TC.tag('multi-wrap'))
-      :and_then(function()
-        return Op.always('x')
-      end)
+      :and_then(Op.always('x'))
       :wrap(function(v)
         timeline[#timeline + 1] = 'wrap1'
         return v .. '1'
@@ -896,19 +854,13 @@ local function test_wrap_may_perform_new_transaction_after_commit()
     },
   })
 
-  local outer = Op.emit(TC.tag('outer')):and_then(function()
-    return cell:write_op(1):and_then(function()
-      return Op.always('a'):wrap(function(v)
-        timeline[#timeline + 1] = 'wrap-start'
-        assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
-        local y = rt:perform(Op.emit(TC.tag('inner')):and_then(function()
-          return Op.always('b')
-        end))
-        timeline[#timeline + 1] = 'wrap-end'
-        return v .. y
-      end)
-    end)
-  end)
+  local outer = Op.emit(TC.tag('outer')):and_then(cell:write_op(1):and_then(Op.always('a'):wrap(function(v)
+    timeline[#timeline + 1] = 'wrap-start'
+    assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
+    local y = rt:perform(Op.emit(TC.tag('inner')):and_then(Op.always('b')))
+    timeline[#timeline + 1] = 'wrap-end'
+    return v .. y
+  end)))
 
   rt:spawn_raw(function()
     got = rt:perform(outer)
@@ -930,11 +882,9 @@ local function test_wrap_failure_does_not_rollback_committed_resources()
   local rt = new_runtime()
 
   rt:spawn_raw(function()
-    rt:perform(cell:write_op(5):and_then(function()
-      return Op.always('x'):wrap(function()
-        error('wrap boom')
-      end)
-    end))
+    rt:perform(cell:write_op(5):and_then(Op.always('x'):wrap(function()
+      error('wrap boom')
+    end)))
   end, 'wrap-failure')
 
   local ok, err = pcall(function()
@@ -959,28 +909,22 @@ local function test_product_lane_wraps_apply_inside_out_after_commit()
   local got, put_a, put_b
 
   rt:spawn_raw(function()
-    got = rt:perform(Op.emit(TC.tag('outer')):and_then(function()
-      return Op.each({
-        ch_a:get_op():wrap(function(v)
-          timeline[#timeline + 1] = 'wrap-a'
-          local suffix = rt:perform(Op.emit(TC.tag('inner-a')):and_then(function()
-            return Op.always('!')
-          end))
-          return v .. suffix
-        end),
-        ch_b:get_op():wrap(function(v)
-          timeline[#timeline + 1] = 'wrap-b'
-          local suffix = rt:perform(Op.emit(TC.tag('inner-b')):and_then(function()
-            return Op.always('?')
-          end))
-          return v .. suffix
-        end),
-      }):wrap(function(rows)
-        timeline[#timeline + 1] = 'wrap-outer'
-        rows.outer = true
-        return rows
-      end)
-    end))
+    got = rt:perform(Op.emit(TC.tag('outer')):and_then(Op.each({
+      ch_a:get_op():wrap(function(v)
+        timeline[#timeline + 1] = 'wrap-a'
+        local suffix = rt:perform(Op.emit(TC.tag('inner-a')):and_then(Op.always('!')))
+        return v .. suffix
+      end),
+      ch_b:get_op():wrap(function(v)
+        timeline[#timeline + 1] = 'wrap-b'
+        local suffix = rt:perform(Op.emit(TC.tag('inner-b')):and_then(Op.always('?')))
+        return v .. suffix
+      end),
+    }):wrap(function(rows)
+      timeline[#timeline + 1] = 'wrap-outer'
+      rows.outer = true
+      return rows
+    end)))
     timeline[#timeline + 1] = 'resume'
   end, 'wrapped-product-receiver')
 
@@ -1041,9 +985,7 @@ local function test_map_and_and_then_reject_options_containing_wraps()
     end)
   end)
   local ok_and_then = pcall(function()
-    return wrapped_product:and_then(function()
-      return Op.always('next')
-    end)
+    return wrapped_product:and_then(Op.always('next'))
   end)
   local ok_outer_wrap = pcall(function()
     return wrapped_product:wrap(function(rows)
@@ -1260,12 +1202,12 @@ local function new_runtime(opts)
 end
 
 local function update_cell(cell, fn)
-  return cell:read_op():and_then(function(old)
+  return cell:read_op():and_then(Op.guard(function(old)
     local new = fn(old)
     return cell:write_op(new):map(function()
       return new, old
     end)
-  end)
+  end))
 end
 
 local pack_ = table.pack or function(...)
@@ -1399,22 +1341,15 @@ local function test_or_else_primary_second_candidate_beats_fallback()
   local good = Rendezvous.new('primary-second-good')
   local got, bad_sender, good_sender
 
-  local bad_primary = bad:get_op():and_then(function(v)
-    return cell:write_op('bad'):and_then(function()
-      return Op.always('bad:' .. tostring(v))
-    end)
-  end)
-  local good_primary = good:get_op():and_then(function(v)
-    return cell:write_op('good'):and_then(function()
-      return Op.always('good:' .. tostring(v))
-    end)
-  end)
+  local bad_primary = bad:get_op():and_then(Op.guard(function(v)
+    return cell:write_op('bad'):and_then(Op.always('bad:' .. tostring(v)))
+  end))
+  local good_primary = good:get_op():and_then(Op.guard(function(v)
+    return cell:write_op('good'):and_then(Op.always('good:' .. tostring(v)))
+  end))
   local primary = Op.choice(bad_primary, good_primary)
-  local fallback = Op.emit(TC.tag('bad.fallback')):and_then(function()
-    return cell:write_op('fallback'):and_then(function()
-      return Op.always('fallback')
-    end)
-  end)
+  local fallback = Op.emit(TC.tag('bad.fallback'))
+    :and_then(cell:write_op('fallback'):and_then(Op.always('fallback')))
 
   rt:spawn_raw(function()
     got = rt:perform(primary:or_else(fallback))
@@ -1448,9 +1383,7 @@ local function test_or_else_primary_needs_partner_backtracking()
       :map(function(v)
         return 'primary:' .. tostring(v)
       end)
-      :or_else(Op.emit(TC.tag('partner.backtrack.fallback')):and_then(function()
-        return Op.always('fallback')
-      end)))
+      :or_else(Op.emit(TC.tag('partner.backtrack.fallback')):and_then(Op.always('fallback'))))
   end, 'receiver')
 
   rt:spawn_raw(function()
@@ -1470,14 +1403,10 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
   local ch = Rendezvous.new('primary-resource-conflict-rendezvous')
   local receiver, partner
 
-  local primary = ch:get_op():and_then(function(v)
-    return cell:write_op(1):and_then(function()
-      return Op.always('primary:' .. tostring(v))
-    end)
-  end)
-  local fallback = Op.emit(TC.tag('resource.conflict.fallback')):and_then(function()
-    return Op.always('fallback')
-  end)
+  local primary = ch:get_op():and_then(Op.guard(function(v)
+    return cell:write_op(1):and_then(Op.always('primary:' .. tostring(v)))
+  end))
+  local fallback = Op.emit(TC.tag('resource.conflict.fallback')):and_then(Op.always('fallback'))
 
   rt:spawn_raw(function()
     receiver = rt:perform(primary:or_else(fallback))
@@ -1504,12 +1433,8 @@ local function test_or_else_absent_primary_discards_tentative_writes()
   local ch = Rendezvous.new('absent-primary-discards-writes-rendezvous')
   local got
 
-  local primary = cell:write_op('primary'):and_then(function()
-    return ch:get_op()
-  end)
-  local fallback = cell:write_op('fallback'):and_then(function()
-    return Op.always('fallback')
-  end)
+  local primary = cell:write_op('primary'):and_then(ch:get_op())
+  local fallback = cell:write_op('fallback'):and_then(Op.always('fallback'))
 
   rt:spawn_raw(function()
     got = rt:perform(primary:or_else(fallback))
@@ -1564,9 +1489,9 @@ local function test_together_lane_and_then_after_internal_rendezvous_is_lane_loc
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
-      ch:get_op():and_then(function(v)
+      ch:get_op():and_then(Op.guard(function(v)
         return Op.always('got:' .. v)
-      end),
+      end)),
       ch:put_op('payload'),
     }))
   end, 'together-lane-and_then-internal-root')
@@ -1584,11 +1509,11 @@ local function test_together_lane_and_then_returned_wrap_is_lane_local()
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
-      ch:get_op():and_then(function(v)
+      ch:get_op():and_then(Op.guard(function(v)
         return Op.always(v):wrap(function(x)
           return 'wrapped:' .. x
         end)
-      end),
+      end)),
       ch:put_op('payload'),
     }))
   end, 'together-lane-and_then-wrap-root')
@@ -1605,12 +1530,12 @@ local function test_together_lane_and_then_rejection_after_internal_rendezvous_b
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
-      ch:get_op():and_then(function(v)
+      ch:get_op():and_then(Op.guard(function(v)
         if v == 'wanted' then
           return Op.always(v)
         end
         return Op.never()
-      end),
+      end)),
       ch:put_op('wrong'),
     }))
   end, 'together-lane-and_then-reject-root')
@@ -1628,11 +1553,11 @@ local function test_together_lane_and_then_after_internal_rendezvous_can_require
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
-      internal:get_op():and_then(function(v)
+      internal:get_op():and_then(Op.guard(function(v)
         return external:get_op():map(function(w)
           return tostring(v) .. ':' .. tostring(w)
         end)
-      end),
+      end)),
       internal:put_op('inside'),
     }))
   end, 'together-lane-and_then-internal-then-external-root')
@@ -1655,9 +1580,9 @@ local function test_nested_product_deferred_and_then_preserves_inner_lane_locali
   local ch = Rendezvous.new('nested-product-lane-and_then')
   local status, values = one_perform(Op.together({
     Op.together({
-      ch:get_op():and_then(function(v)
+      ch:get_op():and_then(Op.guard(function(v)
         return Op.always('inner:' .. tostring(v))
-      end),
+      end)),
       ch:put_op('payload'),
     }),
     Op.always('outer-side'),
@@ -1679,9 +1604,9 @@ local function test_each_lane_and_then_after_external_rendezvous_is_lane_local()
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({
-      ch:get_op():and_then(function(v)
+      ch:get_op():and_then(Op.guard(function(v)
         return Op.always('got:' .. tostring(v))
-      end),
+      end)),
       Op.always('side'),
     }))
   end, 'each-lane-and_then-external-root')
@@ -1708,12 +1633,12 @@ local function test_multiple_deferred_lane_and_thens_rewrite_only_their_own_lane
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({
-      a:get_op():and_then(function(v)
+      a:get_op():and_then(Op.guard(function(v)
         return Op.always('A:' .. tostring(v))
-      end),
-      b:get_op():and_then(function(v)
+      end)),
+      b:get_op():and_then(Op.guard(function(v)
         return Op.always('B:' .. tostring(v))
-      end),
+      end)),
     }))
   end, 'multiple-lane-and_thens-root')
 
@@ -1734,11 +1659,9 @@ end
 local function test_lane_and_then_returning_emit_contributes_to_selected_world()
   local ch = Rendezvous.new('lane-and_then-returning-emit')
   local status, values, rt = one_perform(Op.together({
-    ch:get_op():and_then(function(v)
-      return Op.emit(TC.tag('lane.emit.' .. tostring(v))):and_then(function()
-        return Op.always('got:' .. tostring(v))
-      end)
-    end),
+    ch:get_op():and_then(Op.guard(function(v)
+      return Op.emit(TC.tag('lane.emit.' .. tostring(v))):and_then(Op.always('got:' .. tostring(v)))
+    end)),
     ch:put_op('payload'),
   }))
 
@@ -1831,11 +1754,9 @@ local function test_dependent_cell_updates_are_serialisable_under_observation()
   local returns = {}
 
   local function op()
-    return cell:read_op():and_then(function(old)
-      return cell:write_op(old + 1):and_then(function()
-        return Op.always(old)
-      end)
-    end)
+    return cell:read_op():and_then(Op.guard(function(old)
+      return cell:write_op(old + 1):and_then(Op.always(old))
+    end))
   end
 
   for i = 1, 3 do
@@ -1944,7 +1865,7 @@ do
     return base:map('not-a-function')
   end))
   assert(not pcall(function()
-    return base:and_then('not-a-function')
+    return base:and_then('not-an-op')
   end))
   assert(not pcall(function()
     return base:wrap('not-a-function')

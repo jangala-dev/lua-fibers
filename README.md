@@ -53,15 +53,15 @@ local stop_requests = channel.new()
 
 fibers.run(function()
   fibers.spawn(function()
-    fibers.perform(commands:get_op():and_then(function(command)
-      return acknowledgements:put_op('completed ' .. command)
-    end))
+    fibers.perform(commands:get_op():and_then(
+      Op.guard(function(command)
+        return acknowledgements:put_op('completed ' .. command)
+      end)
+    ))
   end, 'command-worker')
 
   local do_work = commands:put_op('refresh state')
-    :and_then(function()
-      return acknowledgements:get_op()
-    end)
+    :and_then(acknowledgements:get_op())
     :map(function(reply)
       return 'work: ' .. reply
     end)
@@ -213,7 +213,7 @@ In Fibers, an algebra is simply a small set of ways to combine options. No forma
 | `never()` | this construction cannot succeed |
 | `choice(a, b)` | either coherent result is acceptable |
 | `a:or_else(b)` | use `b` only with certified present absence of `a` |
-| `a:and_then(f)` | continue transactionally from the result of `a` |
+| `a:and_then(b)` | satisfy `a`, then `b`, in one transaction |
 | `each({ a, b })` | satisfy both, with each standing on its own |
 | `together({ a, b })` | satisfy both, allowing compatible sibling hand-off |
 | `a:map(f)` | transform a speculative result |
@@ -262,14 +262,13 @@ An undecided search is not treated as absence. Implementation limits therefore d
 ### Sequencing remains transactional
 
 ```lua
-local admit_party = arena_places:take_op(#party.players):and_then(function()
-  return match_lobby:put_op(party)
-end)
+local admit_party = arena_places:take_op(#party.players)
+  :and_then(match_lobby:put_op(party))
 ```
 
 The arena places are not consumed independently if the party cannot be admitted. Earlier communication and state changes remain provisional until the whole sequence commits.
 
-Callbacks used by `map`, `and_then` and transactional resource transitions may be revisited during proof search. They must be deterministic, non-yielding and free of irreversible side effects.
+Callbacks used by `guard`, `map` and transactional resource transitions may be revisited during proof search. They must be deterministic, non-yielding and free of irreversible side effects. Use a guard on the right of `and_then` when the next operation depends on provisional values.
 
 ### `each` and `together`
 
@@ -310,13 +309,13 @@ Fibers has three normative callback phases. A callback must obey the rules of th
 
 | Phase | Callbacks | Contract |
 |---|---|---|
-| 1. Speculative search | `guard`, `map`, `and_then`, resource transitions, effect `key` and `merge` | May run zero, one or several times. Must be deterministic, non-yielding and free of observable or irreversible side effects. |
+| 1. Speculative search | `guard`, `map`, resource transitions, effect `key` and `merge` | May run zero, one or several times. Must be deterministic, non-yielding and free of observable or irreversible side effects. |
 | 2. Committed-world effect protocol | effect `prepare`, then `discharge` | `prepare` is pure and replayable. It may reject a candidate or return a discharge plan. `discharge` runs once, after state installation, and performs the committed host action. |
 | 3. Participant continuation | `wrap` | Runs once when the selected participant resumes. It may perform further options and ordinary application work, but cannot alter the world which has already committed. |
 
 A pure effect preparation must not reserve host capacity, mutate external state, deliver events, spawn, perform or yield. It may depend only on its payload, captured runtime configuration and managed facts already represented by the candidate. Put irreversible work in `discharge`, not `prepare`.
 
-A guard delays algebraic elaboration until one structural occurrence becomes relevant. Its builder receives a deliberately narrow ephemeral activation view exposing only a stable monotonic activation instant and the current Scope; it must embed those values into the explicit residual `Op` it returns. The view is invalid once the builder returns. The residual is stable within that speculative activation, while a later activation may elaborate afresh. `Clock:after_op(d)` follows this rule by becoming `Clock:at_op(activation:now() + d)`. Use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
+A guard delays algebraic elaboration until one structural occurrence becomes relevant. Beneath `and_then`, its builder receives the preceding provisional values directly as varargs and returns an explicit residual `Op`. A root guard receives no arguments. The residual is stable within that speculative activation, while a later activation may elaborate afresh. Time, Scope and other contextual facts are represented by explicit operations rather than ambient guard state. Use an effect for work belonging to the committed world, or `wrap` for work belonging to the resumed participant.
 
 ```lua
 local show_selected_line = voice_lines:get_op():wrap(function(line)
@@ -373,9 +372,8 @@ All three forms expose `put_op` and `get_op` and compose with the same algebra.
 local Cell = require('fibers.resource.cell')
 local state = Cell.new('idle', 'state')
 
-fibers.perform(state:expect_op('idle'):and_then(function()
-  return state:write_op('running')
-end))
+fibers.perform(state:expect_op('idle')
+  :and_then(state:write_op('running')))
 
 local running = state:wait_until(function(value)
   return value == 'running'
@@ -572,7 +570,7 @@ Lower-level materials have canonical direct imports under their semantic owners:
 
 Fibers is designed for readable application code, but its small surface carries stronger semantics than ordinary event selection.
 
-- **Transactional continuation:** `and_then` can join several communications and state changes into one all-or-nothing protocol.
+- **Transactional sequencing:** `and_then` can join several communications and state changes into one all-or-nothing protocol.
 - **Certified priority:** `or_else` distinguishes a genuine proof of present absence from incomplete search.
 - **Two conjunctions:** `each` means every lane stands on its own; `together` permits compatible sibling support.
 - **Occurrence-sensitive commitment:** wraps, effects and defeat obligations belong to precise dynamic option occurrences.

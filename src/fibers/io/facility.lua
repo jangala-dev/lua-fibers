@@ -30,8 +30,9 @@ function IO.scope_of(value)
   return nil
 end
 
--- Elaborate an optional Scope target to an explicit Scope operation. An
--- omitted target is resolved once from the performing guard activation.
+-- Elaborate an optional Scope target without exposing ambient Scope authority
+-- through the public guard API. An explicit target remains statically known; an
+-- omitted target is resolved once for the performing occurrence.
 function IO.with_target_scope_op(target, message, build)
   if target ~= nil then
     local scope = IO.scope_of(target)
@@ -40,8 +41,7 @@ function IO.with_target_scope_op(target, message, build)
     end
     return build(scope)
   end
-  return Op.guard(function(activation)
-    local scope = activation:scope()
+  return Op._contextual_guard(function(_, scope)
     if not scope then
       error(message, 2)
     end
@@ -93,14 +93,9 @@ function IO.admit_driven_lifetime_op(scope, value, spec)
   end, spec.name, scope, { lifetime = value._lifetime, closure = scope.closure })
   value.driver = driver
 
-  return scope
-    :admit_op(value)
-    :and_then(function()
-      return driver:spawn_effect_op()
-    end, false)
-    :map(function()
-      return value
-    end)
+  return scope:admit_op(value):and_then(driver:spawn_effect_op()):map(function()
+    return value
+  end)
 end
 
 local function driver_exit_error(exit)
@@ -142,7 +137,7 @@ function IO.closed_after_driver_op(task, terminal_op, opts)
     return terminal_op
   end
 
-  return task:body_result_op():and_then(function(exit)
+  return task:body_result_op():and_then(Op.guard(function(exit)
     if opts.require_returned == true then
       local err = driver_exit_error(exit)
       if err ~= nil then
@@ -150,7 +145,7 @@ function IO.closed_after_driver_op(task, terminal_op, opts)
       end
     end
     return terminal_op
-  end, Op.dependencies(terminal_op))
+  end))
 end
 
 function IO.masked_perform(rt, option)

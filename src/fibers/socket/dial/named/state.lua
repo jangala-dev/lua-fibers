@@ -578,7 +578,7 @@ function State:_attempt_result_ops(current, scope)
       options[#options + 1] = Op.named_each({
         result = result,
         completed_at = now_op(),
-      }):and_then(function(observed)
+      }):and_then(Op.guard(function(observed)
         local normalised
         if not observed.result.connection then
           normalised = IOError.normalise(copy_error_fields(observed.result.error), {
@@ -594,15 +594,15 @@ function State:_attempt_result_ops(current, scope)
             error = normalised,
             completed_at = observed.completed_at,
           })
-          :and_then(function(event)
+          :and_then(Op.guard(function(event)
             if not event.release_slot then
               return Op.always(event)
             end
             return self.attempt_slots:give_op(1):map(function()
               return event
             end)
-          end)
-      end)
+          end))
+      end))
     end
   end
   return Op.choice(options)
@@ -616,9 +616,9 @@ function State:_resolution_ops(current, query)
       options[#options + 1] = Op.named_each({
         completion = query:family_finished_op(kind),
         finished_at = now_op(),
-      }):and_then(function(observed)
+      }):and_then(Op.guard(function(observed)
         return self:publish_family_op(kind, observed.completion, observed.finished_at)
-      end)
+      end))
     end
   end
   return Op.choice(options)
@@ -631,21 +631,21 @@ function State:_action_at_op(scope, now)
       deadline = self.opts.overall_deadline,
       attempt_timeout = self.attempt_timeout,
     })
-    :and_then(function(action)
+    :and_then(Op.guard(function(action)
       if action.kind ~= 'launch' then
         return Op.always(action)
       end
-      return self.attempt_slots:take_op(1):and_then(function()
+      return self.attempt_slots:take_op(1):and_then(Op.guard(function()
         local dial_opts = attempt_options(self, action, scope)
-        return DialModule.dial_op(action.address, dial_opts):and_then(function(dial)
+        return DialModule.dial_op(action.address, dial_opts):and_then(Op.guard(function(dial)
           return self.state:transition_op(AdmitAttempt, {
             spec = action,
             dial = dial,
             attempt_delay = self.attempt_delay,
           })
-        end)
-      end)
-    end)
+        end))
+      end))
+    end))
 end
 
 local function earlier(a, b)
@@ -702,46 +702,25 @@ function State:_progress_op(current, scope, now, available_slots)
 
   -- Clock readiness, action selection, capacity claim, Dial admission and the
   -- race-state update form one provisional world. There is no wake-only step.
-  return readiness:and_then(function(observed_at)
+  return readiness:and_then(Op.guard(function(observed_at)
     return self:_action_at_op(scope, observed_at)
-  end)
+  end))
 end
 
 -- One algebraic scheduling step. Ready attempt outcomes have semantic priority
 -- over DNS publication, and DNS publication has priority over timers/admission.
 function State:step_op(query, scope)
-  -- The continuation is data-dependent, but its possible enablers are known
-  -- from the committed race state at construction time.  Declaring them keeps
-  -- fallback arbitration local to the resolver and active Dial Lifetimes rather
-  -- than restoring a runtime-wide positive-before-fallback barrier.
-  local dependencies = {
-    self.state:read_op(),
-    self.attempt_slots:read_op(),
-    now_op(),
-    query:family_finished_op('inet6'),
-    query:family_finished_op('inet4'),
-  }
-  local snapshot = self.state.value
-  for i = 1, #(snapshot.attempts or {}) do
-    local attempt = snapshot.attempts[i]
-    if attempt.status == 'active' then
-      dependencies[#dependencies + 1] = attempt.dial:state_op()
-    end
-  end
-  local footprint = Op.dependencies(unpack_(dependencies))
-
-  return Op.guard(function()
-    return Op.named_each({
-      state = self.state:read_op(),
-      available_slots = self.attempt_slots:read_op(),
-      now = now_op(),
-    }):and_then(function(view)
-      local outcomes = self:_attempt_result_ops(view.state, scope)
-      local resolutions = self:_resolution_ops(view.state, query)
-      local progress = self:_progress_op(view.state, scope, view.now, view.available_slots)
-      return outcomes:or_else(resolutions:or_else(progress))
-    end, footprint)
-  end, footprint)
+  -- The residual operation is derived from the actual transactional view.
+  return Op.named_each({
+    state = self.state:read_op(),
+    available_slots = self.attempt_slots:read_op(),
+    now = now_op(),
+  }):and_then(Op.guard(function(view)
+    local outcomes = self:_attempt_result_ops(view.state, scope)
+    local resolutions = self:_resolution_ops(view.state, query)
+    local progress = self:_progress_op(view.state, scope, view.now, view.available_slots)
+    return outcomes:or_else(resolutions:or_else(progress))
+  end))
 end
 
 function State:terminal_error(state)

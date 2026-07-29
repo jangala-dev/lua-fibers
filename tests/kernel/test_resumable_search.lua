@@ -248,26 +248,24 @@ do
   end
 end
 
--- A continuation may reveal a dependency which was not part of the prefix
--- component. Demand-directed expansion must recruit that supplier and preserve
--- the bounded session across driver calls.
+-- A right-hand operation may introduce a dependency which was not active
+-- while its prefix was pending. Demand-directed expansion must recruit that
+-- supplier and preserve the bounded session across driver calls.
 do
   local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
-  local prefix = Rendezvous.new('resumable-continuation-prefix')
-  local residual = Rendezvous.new('resumable-continuation-residual')
+  local prefix = Rendezvous.new('resumable-sequence-prefix')
+  local residual = Rendezvous.new('resumable-sequence-residual')
   local got
 
   rt:spawn_raw(function()
-    got = rt:perform(prefix:get_op():and_then(function()
-      return residual:get_op()
-    end))
-  end, 'resumable-continuation-consumer')
+    got = rt:perform(prefix:get_op():and_then(residual:get_op()))
+  end, 'resumable-sequence-consumer')
   rt:spawn_raw(function()
     rt:perform(prefix:put_op(true))
-  end, 'resumable-continuation-prefix-supplier')
+  end, 'resumable-sequence-prefix-supplier')
   rt:spawn_raw(function()
-    rt:perform(residual:put_op('continuation-value'))
-  end, 'resumable-continuation-residual-supplier')
+    rt:perform(residual:put_op('sequence-value'))
+  end, 'resumable-sequence-residual-supplier')
 
   local found = false
   for _ = 1, 60 do
@@ -277,9 +275,9 @@ do
       break
     end
   end
-  assert(found, 'revealed continuation dependency expansion should remain resumable')
+  assert(found, 'right-hand dependency expansion should remain resumable')
   rt:run()
-  assert_eq(got, 'continuation-value')
+  assert_eq(got, 'sequence-value')
 end
 
 -- Fallback dependencies may connect requests which are deliberately absent

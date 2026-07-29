@@ -52,13 +52,11 @@ do
 end
 
 -- The same invariant must survive the public evaluator boundary and an
--- and_then continuation which reads the joined product state.
+-- and_then right-hand operation which reads the joined product state.
 for _, machine in ipairs({ 'ledger', 'reference' }) do
   local counter = Counter.new(5, 'join-continuation-' .. machine)
   local result = run(machine, function()
-    return Op.each({ counter:take_op(2), counter:read_op() }):and_then(function()
-      return counter:read_op()
-    end)
+    return Op.each({ counter:take_op(2), counter:read_op() }):and_then(counter:read_op())
   end)
   eq(result, 3, machine .. ': continuation should see one merged decrement')
   eq(counter.value, 3, machine .. ': committed counter should match continuation')

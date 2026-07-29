@@ -48,14 +48,9 @@ end
 
 function Handle:clone_op()
   local group = self._group
-  local clone = self
-    :active_op()
-    :and_then(function()
-      return group._count:give_op(1)
-    end)
-    :wrap(function()
-      return handle(group, true)
-    end)
+  local clone = self:active_op():and_then(group._count:give_op(1)):wrap(function()
+    return handle(group, true)
+  end)
 
   return clone:or_else(self:inactive_op():wrap(function()
     return handle(group, false)
@@ -63,14 +58,12 @@ function Handle:clone_op()
 end
 
 function Handle:close_op()
-  local close = self:active_op():and_then(function()
-    return Op.each({
-      self._active:write_op(false),
-      self._group._count:take_op(1),
-    }):map(function()
-      return true
-    end)
-  end)
+  local close = self:active_op():and_then(Op.each({
+    self._active:write_op(false),
+    self._group._count:take_op(1),
+  }):map(function()
+    return true
+  end))
 
   return close:or_else(self:inactive_op():map(function()
     return false

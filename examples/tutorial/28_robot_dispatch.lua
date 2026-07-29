@@ -21,11 +21,9 @@ local perform = fibers.perform
 local spawn = fibers.spawn
 
 local function mission_op(field_unit, mission)
-  return field_unit.online:expect_op(true):and_then(function()
-    return field_unit.commands:put_op(mission):and_then(function()
-      return field_unit.reports:get_op()
-    end)
-  end)
+  return field_unit.online
+    :expect_op(true)
+    :and_then(field_unit.commands:put_op(mission):and_then(field_unit.reports:get_op()))
 end
 
 local unit_is_online = true
@@ -43,9 +41,9 @@ fibers.run(function()
 
   if unit_is_online then
     spawn(function()
-      perform(field_unit.commands:get_op():and_then(function(mission)
+      perform(field_unit.commands:get_op():and_then(Op.guard(function(mission)
         return field_unit.reports:put_op('completed ' .. mission)
-      end))
+      end)))
     end, 'water-survey-unit')
   end
 
@@ -53,9 +51,7 @@ fibers.run(function()
     safety_interlock:expect_op('clear'),
     battery_reserve:take_op(1),
   })
-    :and_then(function()
-      return mission_op(field_unit, 'survey the eastern water point')
-    end)
+    :and_then(mission_op(field_unit, 'survey the eastern water point'))
     :or_else(Op.always('field dispatch unavailable'))
 
   local stop = stop_requests:get_op():map(function(reason)

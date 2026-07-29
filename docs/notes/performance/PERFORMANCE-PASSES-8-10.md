@@ -17,7 +17,7 @@ local TeXLua/Lua 5.3 regression figures.  They are not cross-machine claims.
 
 All three mechanisms are deliberately conservative.
 
-- Caches are disabled for components containing opaque continuations or external
+- Caches are disabled for components containing active opaque guards or external
   dependencies.
 - `Unknown` results are never cached.
 - State memoisation stores refutations only, not successful candidates.
@@ -127,7 +127,7 @@ Each analysable component can carry a dependency stamp containing:
 
 A stamp is unavailable for:
 
-- opaque continuations;
+- active opaque guards;
 - external dependencies;
 - unversioned resource-wide dependencies; or
 - a small runtime where neither the component nor the total frontier reaches the
@@ -178,7 +178,7 @@ The added tests cover both evaluators and check:
 - certified supplier equivalence reducing repeated worlds;
 - cross-cycle refutation and effect-free candidate reuse;
 - invalidation after relevant location and pending-frontier changes; and
-- exclusion of opaque continuations from all caches.
+- exclusion of active opaque guards from all caches.
 
 The advanced validating suite is:
 

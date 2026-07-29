@@ -32,55 +32,22 @@ local function eq(a, b, m)
   end
 end
 
--- Compiled option metadata distinguishes solver-visible continuations from
--- the conservative opaque Lua path.
+-- Static sequencing is fully analysable, while guard remains the explicit
+-- dynamic boundary until its residual operation is revealed.
 local mapped = Op.always(1):map(function(x)
   return x + 1
 end)
 eq(IR.metadata(mapped).dynamic, false, 'map should be statically closed')
 
-local opaque = Op.always():and_then(function()
-  return Op.always()
-end)
-eq(IR.metadata(opaque).dynamic, true, 'unhinted and_then should remain conservative')
+local static_channel = Rendezvous.new('metadata-static')
+local static = Op.always():and_then(static_channel:get_op())
+eq(IR.metadata(static).dynamic, false, 'and_then(Op) should be analysable')
+truthy(IR.metadata(static).exchanges[static_channel].get, 'static exchange dependency missing')
 
-local hinted_channel = Rendezvous.new('metadata-hinted')
-local hinted = Op.always():and_then(function()
-  return hinted_channel:get_op()
-end, Op.dependencies(hinted_channel:get_op()))
-eq(IR.metadata(hinted).dynamic, false, 'hinted and_then should be analysable')
-truthy(IR.metadata(hinted).exchanges[hinted_channel].get, 'hinted exchange dependency missing')
-
--- Optional development-time verification rejects an incomplete continuation
--- declaration while leaving the ordinary conservative path unchanged.
-local declared_channel = Rendezvous.new('declared-continuation')
-local actual_channel = Rendezvous.new('actual-continuation')
-local verified = Runtime.new({ verify_dependencies = true })
-verified:spawn_raw(function()
-  verified:perform(Op.guard(function()
-    return actual_channel:get_op()
-  end, Op.dependencies(declared_channel:get_op())))
-end)
-local verify_ok, verify_err = pcall(function()
-  verified:run()
-end)
-eq(verify_ok, false, 'incomplete continuation metadata should be rejected')
-truthy(
-  tostring(verify_err):find('continuation dependency declaration is incomplete', 1, true),
-  'dependency verification error was not reported'
-)
-
--- The principal structured-concurrency path also satisfies its internal
--- continuation declarations when verification is enabled.
-local verified_channel = FibersRendezvous.new('verified-structured')
-local verified_value = fibers.run(function()
-  local task = fibers.spawn(function()
-    return fibers.perform(verified_channel:get_op())
-  end, 'verified-receiver')
-  fibers.perform(verified_channel:put_op(17))
-  return fibers.perform(task:await_op())
-end, { verify_dependencies = true })
-eq(verified_value, 17, 'valid structured dependency declarations were rejected')
+local dynamic = Op.always():and_then(Op.guard(function()
+  return static_channel:get_op()
+end))
+eq(IR.metadata(dynamic).dynamic, true, 'guarded continuation should remain conservative')
 
 -- Pending requests and blocked demands use the same interned atom and dense
 -- sparse-set bucket representation.  Membership updates advance one generation
@@ -476,8 +443,8 @@ end
 
 print('tests/test_performance_architecture.lua: remaining performance passes ok')
 
--- Cross-cycle reuse is deliberately unavailable when an opaque continuation
--- can change without a versioned dependency stamp.
+-- Cross-cycle reuse is deliberately unavailable when an active opaque guard
+-- can elaborate to a different residual without a versioned dependency stamp.
 for _, machine in ipairs({ 'ledger', 'reference' }) do
   local rt = Runtime.new({
     machine = machine,
@@ -485,9 +452,9 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     plan_reuse_threshold = 1,
   })
   local channel = Rendezvous.new('opaque-cache-' .. machine)
-  local opaque = channel:get_op():and_then(function(value)
+  local opaque = channel:get_op():and_then(Op.guard(function(value)
     return Op.always(value)
-  end)
+  end))
   local alternatives = {}
   for i = 1, 16 do
     alternatives[i] = opaque
@@ -497,10 +464,10 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   end)
   eq(rt:run().tag, 'quiescent')
   local counters = rt:instrumentation_report().counters
-  eq(counters.plan_reuse_stores or 0, 0, 'opaque continuation entered cross-cycle plan cache')
+  eq(counters.plan_reuse_stores or 0, 0, 'opaque guard entered cross-cycle plan cache')
   truthy(
     (counters.plan_reuse_ineligible_dynamic or 0) > 0,
-    'opaque continuation was not identified as dynamically ineligible'
+    'opaque guard was not identified as dynamically ineligible'
   )
 end
 

@@ -188,19 +188,19 @@ function Driver.request_cancel_op(scope, reason)
       cancel_children = decision.cancel_children == true,
     })
   end
-  return scope:_request_cancel_op(reason):and_then(function(first, recorded_reason)
+  return scope:_request_cancel_op(reason):and_then(Op.guard(function(first, recorded_reason)
     if not first then
       return Op.always(false, recorded_reason)
     end
     if close_op then
-      return close_op:and_then(function()
-        return Op.emit(record_close_reason_effect(state, decision.reason or recorded_reason)):map(function()
+      return close_op:and_then(
+        Op.emit(record_close_reason_effect(state, decision.reason or recorded_reason)):map(function()
           return true, recorded_reason
         end)
-      end)
+      )
     end
     return Op.always(true, recorded_reason)
-  end, close_op and Op.dependencies(close_op) or false)
+  end))
 end
 
 local function retire_roots(scope, reason)

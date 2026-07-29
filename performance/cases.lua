@@ -68,12 +68,11 @@ end)
 add('simple', 'cell', 'serial read write', 1200, function(ctx, n)
   local rt = ctx:runtime()
   local cell = Cell.new(0, 'perf-cell')
-  local write_dependencies = Op.dependencies(cell:write_op(0))
   rt:spawn_raw(function()
     for _ = 1, n do
-      rt:perform(cell:read_op():and_then(function(value)
+      rt:perform(cell:read_op():and_then(Op.guard(function(value)
         return cell:write_op(value + 1)
-      end, write_dependencies))
+      end)))
     end
   end, 'perf-cell-fibre')
   drain(rt)
@@ -126,16 +125,15 @@ add('moderate', 'product', 'internal then external rendezvous', 260, function(ct
   local rt = ctx:runtime()
   local inside = Rendezvous.new('perf-product-inside')
   local outside = Rendezvous.new('perf-product-outside')
-  local outside_dependencies = Op.dependencies(outside:get_op())
   local total = 0
   rt:spawn_raw(function()
     for i = 1, n do
       local rows = rt:perform(Op.together({
-        inside:get_op():and_then(function(value)
+        inside:get_op():and_then(Op.guard(function(value)
           return outside:get_op():map(function(other)
             return value + other
           end)
-        end, outside_dependencies),
+        end)),
         inside:put_op(i),
       }))
       total = total + rows[1][1]

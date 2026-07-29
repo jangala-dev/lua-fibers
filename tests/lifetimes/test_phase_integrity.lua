@@ -57,11 +57,7 @@ do
   first_runtime:spawn_raw(function()
     local admission = first_scope:admit_op(value)
     eq(node.runtime, nil, 'admission construction must remain runtime-neutral')
-    fallback = first_runtime:perform(admission
-      :and_then(function()
-        return Op.never()
-      end)
-      :or_else(Op.always('fallback')))
+    fallback = first_runtime:perform(admission:and_then(Op.never()):or_else(Op.always('fallback')))
     eq(node.runtime, nil, 'defeated admission must not bind a runtime')
     eq(node._admitted, false, 'defeated admission must remain dormant')
   end, 'phase-admission-first-driver')
@@ -111,11 +107,7 @@ do
       return 'spawned'
     end, { name = 'phase-spawn-task' })
 
-    fallback = runtime:perform(spawn
-      :and_then(function()
-        return Op.never()
-      end)
-      :or_else(Op.always('fallback')))
+    fallback = runtime:perform(spawn:and_then(Op.never()):or_else(Op.always('fallback')))
     eq(starts, 0, 'defeated spawn must not start or consume its body')
 
     task = runtime:perform(spawn)
@@ -175,11 +167,7 @@ do
       'constructing cancellation must not mutate closure_state'
     )
     eq(scope:lifetime().closure_state.closure, nil, 'constructing cancellation must not cache Closure state')
-    local losing = cancel_option
-      :and_then(function()
-        return Op.never()
-      end)
-      :or_else(Op.always('fallback'))
+    local losing = cancel_option:and_then(Op.never()):or_else(Op.always('fallback'))
     fallback = runtime:perform(losing)
     eq(
       scope:lifetime().closure_state.close_reason,

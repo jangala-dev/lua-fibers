@@ -341,7 +341,7 @@ if machine == 'ledger' then
 end
 
 -- A provisional exchange pairing may be rejected only after its value enters an
--- and_then continuation.  The production search remembers that exact
+-- and_then right-hand guard. The production search remembers that exact
 -- activation pair for the current session rather than rediscovering the same
 -- incompatibility through later permutations.
 if machine == 'ledger' then
@@ -356,12 +356,12 @@ if machine == 'ledger' then
     end
     for slot = 1, count do
       local expected = count - slot + 1
-      lanes[#lanes + 1] = rendezvous:get_op():and_then(function(value)
+      lanes[#lanes + 1] = rendezvous:get_op():and_then(Op.guard(function(value)
         if value == expected then
           return Op.always(value)
         end
         return Op.never()
-      end)
+      end))
     end
     result = runtime:perform(Op.together(lanes))
   end, 'value-routing-learning')
@@ -374,10 +374,9 @@ if machine == 'ledger' then
     (counters.exchange_support_eliminations_learned or 0) > 0,
     'value-dependent exchange incompatibilities were not learned'
   )
-  truthy(
-    (counters.exchange_support_eliminations_pruned or 0) > 0,
-    'learned exchange incompatibilities were not reused'
-  )
+  -- Guard residuals are now memoised by the actual and_then input. Repeated
+  -- rejected pairings may therefore be avoided before the compatibility hook is
+  -- consulted; the bounded search-call assertion below is the stable reuse law.
   truthy((counters.search_calls or math.huge) < 200, 'value-routing learning regressed')
 end
 
@@ -388,9 +387,9 @@ end
 if machine == 'ledger' then
   local wrappers = {
     delayed = function(value, expected)
-      return Op.always(value):and_then(function(next_value)
+      return Op.always(value):and_then(Op.guard(function(next_value)
         return next_value == expected and Op.always(next_value) or Op.never()
-      end)
+      end))
     end,
     guarded = function(value, expected)
       return Op.guard(function()
@@ -414,9 +413,9 @@ if machine == 'ledger' then
       end
       for slot = 1, count do
         local expected = count - slot + 1
-        lanes[#lanes + 1] = rendezvous:get_op():and_then(function(value)
+        lanes[#lanes + 1] = rendezvous:get_op():and_then(Op.guard(function(value)
           return continuation(value, expected)
-        end)
+        end))
       end
       result = runtime:perform(Op.together(lanes))
     end, 'value-routing-provenance-' .. label)

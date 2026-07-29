@@ -224,37 +224,37 @@ function Phase:allows_fact_op(label, from_name, to_name)
 end
 
 function Phase:move_op(item, from_name, to_name, opts)
-  return self:allows_move_op(item, from_name, to_name, opts):and_then(function(ok)
+  return self:allows_move_op(item, from_name, to_name, opts):and_then(Op.guard(function(ok)
     if not ok then
       return Op.never()
     end
     return self:scope(from_name):move_op(item, self:scope(to_name))
-  end)
+  end))
 end
 
 function Phase:grant_op(from_name, item, to_name, rights, opts)
   local label = crossing_label(opts, 'Phase:grant_op')
   local grant_opts = type(opts) == 'table' and opts or { label = label }
-  return self:allows_grant_op(item, from_name, to_name, label):and_then(function(ok)
+  return self:allows_grant_op(item, from_name, to_name, label):and_then(Op.guard(function(ok)
     if not ok then
       return Op.never()
     end
     grant_opts.holder = self:scope(to_name)
     return self:scope(from_name):grant_op(item, self:scope(to_name), rights, grant_opts)
-  end)
+  end))
 end
 
 function Phase:carry_fact_op(label, from_name, to_name)
-  return self:allows_fact_op(label, from_name, to_name):and_then(function(ok)
+  return self:allows_fact_op(label, from_name, to_name):and_then(Op.guard(function(ok)
     if not ok then
       return Op.never()
     end
-    return self:facts_for(from_name):get_op(label):and_then(function(value)
+    return self:facts_for(from_name):get_op(label):and_then(Op.guard(function(value)
       return self:facts_for(to_name):put_op(label, value):map(function()
         return value
       end)
-    end)
-  end)
+    end))
+  end))
 end
 
 function Phase:run(name, fn, opts)

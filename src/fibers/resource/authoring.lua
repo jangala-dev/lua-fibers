@@ -283,36 +283,12 @@ function M.cell(resource, kind, value, algebra)
   })
   resource._expect_descriptor =
     M.descriptor(resource, kind, 'transition', M.machine(resource._location, CELL_EXPECT, nil, resource))
-  resource._select_dependencies = M.versioned_dependencies(resource, false)
   return resource
 end
 
-function M.transition_footprint(location, supplies)
-  return {
-    locations = {
-      [location] = {
-        read = true,
-        write = true,
-        wait = true,
-        supplies = M.normalise_supply(supplies or 'none', 'transition footprint supplies', 2),
-      },
-    },
-  }
-end
-
-function M.versioned_dependencies(resource, writable)
-  if writable then
-    local footprint = M.transition_footprint(resource._location, 'any')
-    footprint.external = true
-    return footprint
-  end
-  return Op.dependencies(resource._state_op, M.occurrence(resource._changed_descriptor, 0))
-end
-
-function M.versioned_select(resource, select, dependencies)
-  dependencies = dependencies or resource._select_dependencies
+function M.versioned_select(resource, select)
   local function loop()
-    return resource._state_op:and_then(function(state)
+    return resource._state_op:and_then(Op.guard(function(state)
       local option, wait = select(state.value)
       if option ~= nil then
         return option
@@ -320,8 +296,8 @@ function M.versioned_select(resource, select, dependencies)
       if wait == false then
         return Op.never()
       end
-      return M.occurrence(resource._changed_descriptor, state.version):and_then(loop, dependencies)
-    end, dependencies)
+      return M.occurrence(resource._changed_descriptor, state.version):and_then(Op.guard(loop))
+    end))
   end
   return loop()
 end
@@ -331,21 +307,21 @@ local function pack(...)
   return { n = select('#', ...), ... }
 end
 
-function M.versioned_match(resource, matcher, dependencies)
+function M.versioned_match(resource, matcher)
   return M.versioned_select(resource, function(value)
     local result = pack(matcher(value))
     if result[1] then
       return Op.always(unpack_(result, 2, result.n))
     end
-  end, dependencies)
+  end)
 end
 
-function M.versioned_wait_until(resource, predicate, dependencies)
+function M.versioned_wait_until(resource, predicate)
   return M.versioned_select(resource, function(value)
     if predicate(value) then
       return Op.always(value)
     end
-  end, dependencies)
+  end)
 end
 
 function M.publish(location, value)

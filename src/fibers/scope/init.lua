@@ -263,14 +263,9 @@ function Scope:spawn_op(fn, opts)
       closure = Closure.running(opts.closure or self.closure),
     }
   )
-  return self
-    :admit_op(task)
-    :and_then(function()
-      return task:spawn_effect_op()
-    end, false)
-    :map(function()
-      return task
-    end)
+  return self:admit_op(task):and_then(task:spawn_effect_op()):map(function()
+    return task
+  end)
 end
 
 function Scope:spawn(fn, opts)
@@ -309,11 +304,9 @@ function Scope:offer_op(item, target, terms)
     name = item and item.name or nil,
   }
   local put_offer = target_sc.offers:put_op(offer)
-  return self:move_op(item, target_sc):and_then(function()
-    return put_offer:map(function()
-      return offer
-    end)
-  end, Op.dependencies(put_offer))
+  return self:move_op(item, target_sc):and_then(put_offer:map(function()
+    return offer
+  end))
 end
 
 function Scope:accept_op(filter)
@@ -323,7 +316,7 @@ function Scope:accept_op(filter)
   if type(filter) ~= 'function' then
     error('Scope:accept_op filter must be a function', 2)
   end
-  return self.offers:get_op():and_then(function(offer)
+  return self.offers:get_op():and_then(Op.guard(function(offer)
     if filter(offer) then
       return Op.always(offer)
     end
@@ -331,7 +324,7 @@ function Scope:accept_op(filter)
     -- offer and loop, because the custody transfer itself is part of the same committed
     -- transaction.
     return Op.never()
-  end, false)
+  end))
 end
 
 local function phase_live(record)
@@ -340,7 +333,7 @@ end
 
 local function grant_can_op(scope, item, right)
   local subject_lifetime = Lifetime.require(item, 3)
-  return scope:_store():roots_op(scope):and_then(function(items)
+  return scope:_store():roots_op(scope):and_then(Op.guard(function(items)
     local function scan(i)
       if i > #items then
         return Op.never()
@@ -350,19 +343,19 @@ local function grant_can_op(scope, item, right)
         return Op.each({
           scope:_store():record_op(scope, b),
           scope:_store():active_op(subject_lifetime),
-        }):and_then(function(rows)
+        }):and_then(Op.guard(function(rows)
           local record = rows[1][1]
           local subject_active = rows[2][1]
           if phase_live(record) and subject_active then
             return Op.always(item, { kind = 'grant', grant = b, right = right })
           end
           return scan(i + 1)
-        end)
+        end))
       end
       return scan(i + 1)
     end
     return scan(1)
-  end)
+  end))
 end
 
 function Scope:can_op(item, right)
@@ -370,7 +363,7 @@ function Scope:can_op(item, right)
   return self
     :_store()
     :custody_can_op(self, item, right, { allow_closing = (self._closure_depth or 0) > 0 })
-    :and_then(function(ok, phase)
+    :and_then(Op.guard(function(ok, phase)
       if ok then
         local kind = phase == 'closing' and 'closure' or 'custody'
         return Op.always(item, { kind = kind, scope = self, right = right })
@@ -384,7 +377,7 @@ function Scope:can_op(item, right)
         granted = granted:or_else(parent:can_op(item, right))
       end
       return granted
-    end)
+    end))
 end
 
 local function parse_grant_args(self, a, b, c)
@@ -420,17 +413,13 @@ function Scope:grant_op(item, holder_or_rights, rights_or_opts, maybe_opts)
   local delegated = Grant._right_list(grant)
   for i = 1, #delegated do
     local right = delegated[i]
-    ops[#ops + 1] = self:_store():custody_can_op(self, item, right):and_then(function(ok)
+    ops[#ops + 1] = self:_store():custody_can_op(self, item, right):and_then(Op.guard(function(ok)
       return ok and Op.always(true) or Op.never()
-    end)
+    end))
   end
-  return Op.each(ops)
-    :and_then(function()
-      return holder:admit_op(grant)
-    end)
-    :map(function()
-      return grant
-    end)
+  return Op.each(ops):and_then(holder:admit_op(grant)):map(function()
+    return grant
+  end)
 end
 
 function Scope:close_op(item, reason)
@@ -455,7 +444,7 @@ end
 
 function Scope:running_children_op()
   local roots_op = self:_store():roots_op(self)
-  return self:_store():status_op(self):and_then(function(status)
+  return self:_store():status_op(self):and_then(Op.guard(function(status)
     return roots_op:map(function(roots)
       local tasks = {}
       for i = 1, #roots do
@@ -467,12 +456,12 @@ function Scope:running_children_op()
       end
       return { version = status.version, tasks = tasks, roots = roots }
     end)
-  end, Op.dependencies(roots_op))
+  end))
 end
 
 function Scope:begin_close_op(reason, opts)
   opts = opts or {}
-  return self:running_children_op():and_then(function(snapshot)
+  return self:running_children_op():and_then(Op.guard(function(snapshot)
     local ops = { self._lifetime:request_close_op(reason), self:seal_op(reason) }
     if opts.cancel_body ~= false then
       ops[#ops + 1] = self:_request_cancel_op(reason)
@@ -485,7 +474,7 @@ function Scope:begin_close_op(reason, opts)
     return Op.each(ops):map(function()
       return snapshot
     end)
-  end)
+  end))
 end
 
 function Scope:seal_op(_reason)
@@ -495,14 +484,14 @@ function Scope:seal_op(_reason)
 end
 
 local function lifetime_sealed_op(scope)
-  return scope:_store():status_op(scope):and_then(function(status)
+  return scope:_store():status_op(scope):and_then(Op.guard(function(status)
     if status.sealed then
       return Op.always(true)
     end
-    return scope:_store():changed_op(scope, status.version):and_then(function()
+    return scope:_store():changed_op(scope, status.version):and_then(Op.guard(function()
       return lifetime_sealed_op(scope)
-    end)
-  end)
+    end))
+  end))
 end
 
 function Scope:sealed_op()
@@ -550,8 +539,8 @@ end
 function Scope:inspect_op()
   local outcome_read = self._lifetime.outcome:read_op()
   local node_state = self:_store():node_state_op(self._lifetime)
-  return self:_store():status_op(self):and_then(function(lifetime_status)
-    return node_state:and_then(function(state)
+  return self:_store():status_op(self):and_then(Op.guard(function(lifetime_status)
+    return node_state:and_then(Op.guard(function(state)
       return outcome_read:map(function(outcome_state)
         local done = type(outcome_state) == 'table' and outcome_state.status == 'done'
         local result = done and outcome_state.result or nil
@@ -574,8 +563,8 @@ function Scope:inspect_op()
           scope = self,
         }
       end)
-    end, Op.dependencies(outcome_read))
-  end, Op.dependencies(node_state, outcome_read))
+    end))
+  end))
 end
 
 function Scope:_make_report(primary, secondaries, fields)

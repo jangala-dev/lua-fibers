@@ -20,11 +20,9 @@ function Latch.new(name)
 end
 
 function Latch:set_op(value)
-  local set = self._state:expect_op(EMPTY):and_then(function()
-    return self._state:write_op(encode(value)):map(function()
-      return true
-    end)
-  end)
+  local set = self._state:expect_op(EMPTY):and_then(self._state:write_op(encode(value)):map(function()
+    return true
+  end))
 
   return set:or_else(self._state
     :wait_until_op(function(current)

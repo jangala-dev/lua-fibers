@@ -92,7 +92,7 @@ local function apply_setting(radio, key, value)
 end
 
 local function configure_radio_op(channel, power)
-  return desired:read_op():and_then(function(current)
+  return desired:read_op():and_then(Op.guard(function(current)
     local next_config = {
       channel = channel or current.channel,
       power = power or current.power,
@@ -104,7 +104,7 @@ local function configure_radio_op(channel, power)
     }):map(function()
       return next_config
     end)
-  end)
+  end))
 end
 
 local fallback
@@ -112,11 +112,9 @@ local committed
 fibers.run(function()
   -- The complete left branch is defeated.  Neither its Cell write nor either
   -- driver obligation survives into the fallback world.
-  fallback = fibers.perform(configure_radio_op(6, 4)
-    :and_then(function()
-      return Op.never()
-    end)
-    :or_else(Op.always('kept existing configuration')))
+  fallback = fibers.perform(
+    configure_radio_op(6, 4):and_then(Op.never()):or_else(Op.always('kept existing configuration'))
+  )
 
   assert(desired.value.channel == 1 and desired.value.power == 1)
   assert(#driver_calls == 0)

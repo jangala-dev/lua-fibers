@@ -104,14 +104,14 @@ add('isolated blocked components', function(profile, machine)
   return rt, 'quiescent:24'
 end)
 
-add('hinted continuation isolation', function(profile, machine)
+add('opaque guard isolation', function(profile, machine)
   local rt =
     runtime(profile, machine, { dependency_index_threshold = 1, dependency_index_release_threshold = 0 })
   local focus = Rendezvous.new('arch-hinted-focus')
   rt:spawn_raw(function()
     rt:perform(Op.guard(function()
       return focus:get_op()
-    end, Op.dependencies(focus:get_op())))
+    end))
   end)
   for i = 1, 12 do
     local channel = Rendezvous.new('arch-hinted-unrelated-' .. tostring(i))
@@ -124,7 +124,7 @@ add('hinted continuation isolation', function(profile, machine)
   return rt, 'quiescent:13'
 end)
 
-add('opaque continuation slow path', function(profile, machine)
+add('active opaque guard slow path', function(profile, machine)
   local rt =
     runtime(profile, machine, { dependency_index_threshold = 1, dependency_index_release_threshold = 0 })
   local focus = Rendezvous.new('arch-opaque-focus')

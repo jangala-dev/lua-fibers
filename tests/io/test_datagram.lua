@@ -71,7 +71,7 @@ local report = fibers.try_run(function()
   receiver:close('receiver complete')
   assert(sender:closed())
   assert(receiver:closed())
-end, { host = host, verify_dependencies = true })
+end, { host = host })
 assert(report.ok, tostring(report.primary or report.error))
 
 -- Dropping a packet in the deterministic transport still represents successful

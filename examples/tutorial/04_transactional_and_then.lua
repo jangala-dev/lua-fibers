@@ -24,12 +24,8 @@ fibers.run(function(scope)
     admitted_clinic = telemetry_sessions:get()
   end, 'telemetry-router')
 
-  outcome = fibers.perform(uplink_slots
-    :take_op(1)
-    :and_then(function()
-      return telemetry_sessions:put_op('clinic-7')
-    end)
-    :map(function()
+  outcome =
+    fibers.perform(uplink_slots:take_op(1):and_then(telemetry_sessions:put_op('clinic-7')):map(function()
       return 'telemetry admitted'
     end))
 end)

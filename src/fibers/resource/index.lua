@@ -59,7 +59,6 @@ local function create(entries, name)
     location = index._location,
     bind = 'version',
   })
-  index._append_footprint = Facility.transition_footprint(index._location, 'up')
   return index
 end
 
@@ -157,9 +156,5 @@ end
 function Index:changed(version)
   return perform(self:changed_op(version))
 end
-function Index:append_footprint()
-  return self._append_footprint
-end
-
 Index.Kind = Kind
 return Index

@@ -201,7 +201,6 @@ for _, case in ipairs(cases) do
       units = case.body(scope)
     end, {
       host = case.host(),
-      verify_dependencies = true,
       instrumentation = {
         slow_plan_limit = show_slow and 8 or 0,
         trace = trace,

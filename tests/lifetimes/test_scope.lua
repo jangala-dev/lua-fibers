@@ -18,12 +18,12 @@ local FibersScope = require('fibers.scope')
 local Closure = require('fibers.closure')
 
 local function accept_matching(life, pred)
-  return life:accept_op():and_then(function(offer)
+  return life:accept_op():and_then(Op.guard(function(offer)
     if pred(offer) then
       return Op.always(offer)
     end
     return Op.never()
-  end)
+  end))
 end
 
 local function retire(rt, scope, item, reason)

@@ -258,12 +258,12 @@ local function transition(flow, rule, payload)
   if rule.mode == 'query' then
     return option
   end
-  return option:and_then(function(...)
+  return option:and_then(Op.guard(function(...)
     local result = Op._pack(...)
     return Op.emit(Effect.of(Changed, { flow = flow })):map(function()
       return Op._unpack(result, 1, result.n)
     end)
-  end)
+  end))
 end
 
 -- Rules ---------------------------------------------------------------------
@@ -872,14 +872,14 @@ end
 
 function Outlet:splice_to_op(inlet, n)
   n = count(n, 0, 'flow splice size')
-  return self:peek_exactly_op(n):and_then(function(value)
-    return inlet:write_op(value):and_then(function(written, err)
+  return self:peek_exactly_op(n):and_then(Op.guard(function(value)
+    return inlet:write_op(value):and_then(Op.guard(function(written, err)
       if not written then
         return Op.always(nil, err == Errors.CAPACITY and Errors.TOO_LARGE or err)
       end
       return self:drop_op(n)
-    end)
-  end)
+    end))
+  end))
 end
 
 function Outlet:splice_to(inlet, n)
