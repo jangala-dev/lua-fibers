@@ -11,8 +11,42 @@ local Exit = require('fibers.task').Exit
 local ScopeResult = require('fibers.scope.result')
 local Lifetime = require('fibers.lifetime')
 local Op = require('fibers.op')
+local Effect = require('fibers.effect')
 
 local Driver = {}
+
+-- Closure bookkeeping is retained ordinary state rather than ledger-managed
+-- state.  Record it through a committed effect so request_cancel_op remains a
+-- fully transactional Op: speculative exploration and losing branches leave the
+-- Closure object untouched, while downstream and_then composition remains valid.
+local CloseReasonKind
+CloseReasonKind = Effect.kind({
+  name = 'closure.close_reason',
+  key = function(payload)
+    return payload.state
+  end,
+  merge = function(a, b)
+    return { state = a.state, reason = a.reason ~= nil and a.reason or b.reason }
+  end,
+  prepare = function(_runtime, payload)
+    if type(payload.state) ~= 'table' then
+      return nil, 'closure close-reason effect requires retained Closure state'
+    end
+    return {
+      kind = CloseReasonKind,
+      key = payload.state,
+      payload = payload,
+      discharge = function(_rt, entry, _log)
+        local state = entry.payload.state
+        state.close_reason = state.close_reason or entry.payload.reason
+      end,
+    }
+  end,
+})
+
+local function record_close_reason_effect(state, reason)
+  return Effect.of(CloseReasonKind, { state = state, reason = reason })
+end
 
 local function pack(...)
   return { n = select('#', ...), ... }
@@ -71,9 +105,7 @@ local function state_for(scope)
   if not lifetime then
     error('scope Closure requires a Scope Lifetime', 3)
   end
-  local state = lifetime.closure_state
-  state.closure = scope.closure
-  return state
+  return lifetime.closure_state
 end
 
 local function record_entry(state, child, exit)
@@ -161,9 +193,10 @@ function Driver.request_cancel_op(scope, reason)
       return Op.always(false, recorded_reason)
     end
     if close_op then
-      return close_op:map(function()
-        state.close_reason = state.close_reason or decision.reason or recorded_reason
-        return true, recorded_reason
+      return close_op:and_then(function()
+        return Op.emit(record_close_reason_effect(state, decision.reason or recorded_reason)):map(function()
+          return true, recorded_reason
+        end)
       end)
     end
     return Op.always(true, recorded_reason)
@@ -341,7 +374,11 @@ local function result_exit(result)
     return Exit.returned(result:unpack())
   end
   if result.reason == 'cancelled' then
-    return Exit.cancelled(result.primary)
+    local cancellation = result.primary
+    if Runtime.is_cancelled and Runtime.is_cancelled(cancellation) then
+      return Exit.cancelled(cancellation.reason, cancellation.token)
+    end
+    return Exit.cancelled(cancellation)
   end
   return Exit.failed(result.primary or result.report or result)
 end

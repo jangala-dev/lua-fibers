@@ -153,7 +153,7 @@ end
 local SpawnKind
 local next_spawn = 0
 local function spawn_key(payload)
-  return payload.id or payload.name or tostring(payload.fn)
+  return payload.id or payload.owner or payload.name or payload.fn
 end
 
 SpawnKind = EffectKind.new({
@@ -162,35 +162,51 @@ SpawnKind = EffectKind.new({
   merge = function()
     return nil, { kind = 'effect_conflict', message = 'duplicate spawn effect' }
   end,
-  prepare = function(_rt, payload)
-    if type(payload.fn) ~= 'function' then
-      return nil, 'spawn effect requires a function'
+  prepare = function(rt, payload)
+    local owner = payload.owner
+    if owner ~= nil then
+      if type(owner) ~= 'table' or type(owner._take_spawn_body) ~= 'function' then
+        return nil, 'owned spawn effect requires a Task owner'
+      end
+      local life = owner._lifetime
+      if type(life) ~= 'table' or type(life.body) ~= 'function' then
+        return nil, 'owned spawn effect requires a dormant task body'
+      end
+      if life.runtime ~= nil and life.runtime ~= rt then
+        return nil, 'spawn Task belongs to another runtime'
+      end
+    elseif type(payload.fn) ~= 'function' then
+      return nil, 'spawn effect requires a function or Task owner'
     end
     return {
       kind = SpawnKind,
       key = spawn_key(payload),
       payload = payload,
-      discharge = function(rt, entry, _log)
-        if not rt._spawn_committed then
+      discharge = function(discharge_rt, entry, _log)
+        if not discharge_rt._spawn_committed then
           error('runtime does not support committed spawn', 2)
         end
-        local owner = entry.payload.owner
-        if owner then
-          owner.fn = nil
-          owner.scope = nil
+        local p = entry.payload
+        local fn = p.fn
+        if p.owner ~= nil then
+          fn = p.owner:_take_spawn_body(discharge_rt)
         end
-        return rt:_spawn_committed(entry.payload.fn, entry.payload.name, entry.payload.scope)
+        return discharge_rt:_spawn_committed(fn, p.name, p.scope)
       end,
     }
   end,
 })
 
 function Effect.spawn(fn, name, id, scope, owner)
-  next_spawn = next_spawn + 1
+  local identity = id or owner
+  if identity == nil then
+    next_spawn = next_spawn + 1
+    identity = 'spawn-' .. tostring(next_spawn)
+  end
   return Effect.of(SpawnKind, {
     fn = fn,
     name = name,
-    id = id or ('spawn-' .. tostring(next_spawn)),
+    id = identity,
     scope = scope,
     owner = owner,
   })

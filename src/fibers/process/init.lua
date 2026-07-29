@@ -94,7 +94,6 @@ local copy_table = CommandModule.copy_table
 local copy_list = CommandModule.copy_list
 local copy_spec = CommandModule.copy_spec
 local redirect_stream = CommandModule.redirect_stream
-local next_process = 0
 
 Module.command = CommandModule.command
 Module.shell = CommandModule.shell
@@ -749,8 +748,7 @@ function Command:launch_op(opts)
   -- attempt. The guard is speculative and pure: no host action occurs until the
   -- Process root and its private custody have committed and its Task view starts.
   return Op.guard(function()
-    next_process = next_process + 1
-    local name = opts.name or ('process-' .. tostring(next_process))
+    local name = opts.name or 'process'
     local proc = setmetatable({
       kind = 'process',
       name = name,

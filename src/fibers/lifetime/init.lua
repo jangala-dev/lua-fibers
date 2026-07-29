@@ -281,22 +281,38 @@ function Node:_on_retired(reason)
   self._terminal_reason = reason
 end
 
-function Node:bind_runtime(runtime)
+function Node:assert_runtime_compatible(runtime)
   if type(runtime) ~= 'table' or not runtime.lifetimes then
-    error('Lifetime:bind_runtime expects a Runtime with a LifetimeStore', 2)
+    error('Lifetime runtime compatibility requires a Runtime with a LifetimeStore', 2)
   end
-
-  -- Validate the complete dormant graph before mutating any node. This avoids
-  -- partial binding if a malformed raw graph contains a late cycle or shared
-  -- descendant.
   walk_construction_tree(self, function(node)
     if node.runtime and node.runtime ~= runtime then
       error('Lifetime already belongs to another Runtime', 3)
     end
   end)
+  return true
+end
+
+-- Commit-local binding installs runtime identity without opening a boundary by
+-- ordinary mutation. Admission has already installed the boundary state in the
+-- transactional LifetimeStore before this hook runs.
+function Node:_bind_runtime_committed(runtime)
+  if self.runtime and self.runtime ~= runtime then
+    error('Lifetime already belongs to another Runtime', 2)
+  end
+  self.runtime = runtime
+  runtime.lifetimes:attach_boundary(self, self.name)
+  return self
+end
+
+function Node:bind_runtime(runtime)
+  self:assert_runtime_compatible(runtime)
+
+  -- Explicit binding remains an immediate operation used for active roots and
+  -- host-created boundaries. Admission uses _bind_runtime_committed only after
+  -- the ledger transition has committed.
   walk_construction_tree(self, function(node)
-    node.runtime = runtime
-    runtime.lifetimes:attach_boundary(node, node.name)
+    node:_bind_runtime_committed(runtime)
     if node.standalone_boundary then
       runtime.lifetimes:activate_boundary(node)
     end

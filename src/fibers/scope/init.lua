@@ -200,7 +200,7 @@ function Scope:admit_op(value)
     error('Scope:admit_op expects a value carrying a dormant Lifetime', 2)
   end
   local runtime = self:_bind_runtime()
-  node:bind_runtime(runtime)
+  node:assert_runtime_compatible(runtime)
   return runtime.lifetimes:admit_op(self, node):map(function()
     return value
   end)

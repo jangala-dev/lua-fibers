@@ -250,6 +250,16 @@ function Store.new(runtime)
   end
 
   local function sync_store(s)
+    -- Runtime affiliation is a committed consequence of admission. Bind every
+    -- newly present node before clearing its dormant construction topology so
+    -- no losing or merely constructed admission option can localise it.
+    for node in pairs(s.dirty_items or {}) do
+      local rec = s.records[node]
+      if rec and node._bind_runtime_committed then
+        node:_bind_runtime_committed(runtime)
+      end
+    end
+
     local removed_boundary = false
     for boundary in pairs(s.dirty_boundaries or {}) do
       local bs = boundary_state(s, boundary)
@@ -503,20 +513,32 @@ function Store.new(runtime)
     if not root then
       error('LifetimeStore:admit_op expects a Lifetime', 2)
     end
-    local records = root:record_map()
     local boundary = boundary_of(view)
+    local function current_records()
+      -- The dormant graph remains mutable until admission commits. Re-read it
+      -- for each transition attempt rather than freezing it as a side effect of
+      -- constructing the admission Op.
+      return root:record_map()
+    end
     local t = select_transition('lifetime.admit', function(s)
       local bs = boundary_state(s, boundary)
-      if bs.sealed then
+      if bs.sealed or root._admitted then
         return false
       end
-      for item in pairs(records) do
-        if s.records[item] ~= nil then
+      if root.runtime and root.runtime ~= runtime then
+        return false
+      end
+      for item in pairs(current_records()) do
+        if item.runtime and item.runtime ~= runtime then
+          return false
+        end
+        if item._admitted or s.records[item] ~= nil then
           return false
         end
       end
       return true
     end, function(s)
+      local records = current_records()
       local ns = clone_state(s)
       local bs = ensure_boundary(ns, boundary)
       bs.next_admission = (bs.next_admission or 0) + 1

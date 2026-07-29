@@ -158,14 +158,26 @@ function Task:_spawn_body(fn)
   end
 end
 
+-- The task body remains dormant while spawn is explored. Effect preparation
+-- may inspect its availability, but only committed discharge may move it into a
+-- runnable fibre frame.
 function Task:_spawn_effect()
   local life = self._lifetime
+  return Effect.spawn(nil, life.name, life._fibers_id, nil, self)
+end
+
+function Task:_take_spawn_body(runtime)
+  local life = self._lifetime
+  if runtime ~= nil and life.runtime ~= runtime then
+    error('committed spawn Task belongs to another Runtime', 2)
+  end
   local fn = life.body
   if type(fn) ~= 'function' then
-    error('running Lifetime has no body', 2)
+    error('committed spawn Task has no dormant body', 2)
   end
+  local runnable = self:_spawn_body(fn)
   life.body = nil
-  return Effect.spawn(self:_spawn_body(fn), life.name, life._fibers_id, nil, self)
+  return runnable
 end
 
 function Task:spawn_effect_op()

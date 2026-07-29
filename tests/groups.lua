@@ -36,6 +36,7 @@ return {
     'tests/lifetimes/test_lifetime_store.lua',
     'tests/lifetimes/test_lifetime_closure.lua',
     'tests/lifetimes/test_lifetime_views.lua',
+    'tests/lifetimes/test_phase_integrity.lua',
     'tests/lifetimes/test_scope.lua',
     'tests/lifetimes/test_scope_grants.lua',
     'tests/lifetimes/test_scope_hardening.lua',
