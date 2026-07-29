@@ -1,6 +1,6 @@
 -- Deterministic in-memory file provider for ManualHost and semantic tests.
 
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 
 local Provider = {}
 Provider.__index = Provider
@@ -35,10 +35,10 @@ function Provider:open(path, mode, opts)
   local first = mode:sub(1, 1)
   local inode = self.paths[path]
   if opts.exclusive and inode then
-    return nil, HostError.system('file', 'open', 'file exists', 'EEXIST', nil, { path = path })
+    return nil, IOError.system('file', 'open', 'file exists', 'EEXIST', nil, { path = path })
   end
   if first == 'r' and not inode then
-    return nil, HostError.system('file', 'open', 'file not found', 'ENOENT', nil, { path = path })
+    return nil, IOError.system('file', 'open', 'file not found', 'ENOENT', nil, { path = path })
   end
   if not inode then
     inode = new_inode('', opts.permissions)
@@ -63,7 +63,7 @@ end
 
 function Backend:read(count)
   if self.closed then
-    return nil, HostError.closed('file', 'read', { path = self.path })
+    return nil, IOError.closed('file', 'read', { path = self.path })
   end
   local bytes = data(self)
   if self.position >= #bytes then
@@ -76,7 +76,7 @@ end
 
 function Backend:read_line(keep)
   if self.closed then
-    return nil, HostError.closed('file', 'read_line', { path = self.path })
+    return nil, IOError.closed('file', 'read_line', { path = self.path })
   end
   local bytes = data(self)
   if self.position >= #bytes then
@@ -94,7 +94,7 @@ end
 
 function Backend:write(bytes)
   if self.closed then
-    return nil, HostError.closed('file', 'write', { path = self.path })
+    return nil, IOError.closed('file', 'write', { path = self.path })
   end
   if self.append then
     self.position = #self.inode.bytes
@@ -109,12 +109,12 @@ end
 
 function Backend:seek(whence, offset)
   if self.closed then
-    return nil, HostError.closed('file', 'seek', { path = self.path })
+    return nil, IOError.closed('file', 'seek', { path = self.path })
   end
   local base = whence == 'set' and 0 or (whence == 'end' and #data(self) or self.position)
   local pos = base + offset
   if pos < 0 then
-    return nil, HostError.invalid_argument('file', 'seek', { path = self.path })
+    return nil, IOError.invalid_argument('file', 'seek', { path = self.path })
   end
   self.position = pos
   return pos
@@ -134,7 +134,7 @@ end
 function Provider:rename(from, to)
   local inode = self.paths[from]
   if not inode then
-    return nil, HostError.system('file', 'rename', 'file not found', 'ENOENT', nil, { path = from })
+    return nil, IOError.system('file', 'rename', 'file not found', 'ENOENT', nil, { path = from })
   end
   self.paths[to], self.paths[from] = inode, nil
   return true
@@ -142,7 +142,7 @@ end
 
 function Provider:unlink(path)
   if not self.paths[path] then
-    return nil, HostError.system('file', 'unlink', 'file not found', 'ENOENT', nil, { path = path })
+    return nil, IOError.system('file', 'unlink', 'file not found', 'ENOENT', nil, { path = path })
   end
   self.paths[path] = nil
   return true
@@ -150,7 +150,7 @@ end
 
 function Provider:mkdir(path, opts)
   if self.directories[path] then
-    return nil, HostError.system('file', 'mkdir', 'directory exists', 'EEXIST', nil, { path = path })
+    return nil, IOError.system('file', 'mkdir', 'directory exists', 'EEXIST', nil, { path = path })
   end
   self.directories[path] = { permissions = (opts and opts.permissions) or 493 }
   return true

@@ -159,6 +159,7 @@ performance:
 
 check:
 	$(MAKE) check-scripts
+	$(MAKE) check-packages
 	$(MAKE) check-format
 	$(MAKE) check-links
 	$(MAKE) check-modules
@@ -175,5 +176,26 @@ check-modules:
 
 check-scripts:
 	@for file in scripts/*.sh .devcontainer/*.sh; do sh -n "$$file"; done
-	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua tests/run_*.lua tests/luau/*.lua performance/*.lua
+	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua packages/*.lua tests/run_*.lua tests/luau/*.lua performance/*.lua
 	$(MAKE) -f .devcontainer/Makefile validate-pins
+
+.PHONY: build-profile check-packages
+
+PROFILE ?= core
+PROFILE_OUTPUT ?= build/profile-$(PROFILE)
+
+build-profile:
+	$(LUA) scripts/build-profile.lua --profile "$(PROFILE)" --output "$(PROFILE_OUTPUT)" --report "$(PROFILE_OUTPUT)/REPORT.txt"
+
+check-packages:
+	$(LUA) scripts/check-packages.lua
+	@set -e; for profile in core-minimal core roblox io-nixio io-ffi io-cffi io-luaposix full; do \
+		$(LUA) scripts/build-profile.lua --profile "$$profile" --report /tmp/fibers-profile-$$profile.txt >/dev/null; \
+	done
+	$(LUA) scripts/build-profile.lua --entry fibers.stream --report /tmp/fibers-profile-custom-stream.txt >/dev/null
+	$(LUA) scripts/build-profile.lua --entry fibers.io.nixio --report /tmp/fibers-profile-custom-nixio.txt >/dev/null
+
+.PHONY: build-packages
+PACKAGES_OUTPUT ?= build/packages
+build-packages:
+	$(LUA) scripts/build-packages.lua --output "$(PACKAGES_OUTPUT)"

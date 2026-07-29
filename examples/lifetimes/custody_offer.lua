@@ -25,8 +25,6 @@ local Runtime = require('fibers.runtime')
 local Cell = require('fibers.resource.cell')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scope = require('fibers.scope')
-local Closure = require('fibers.closure')
-
 local function yn(v)
   return v and 'yes' or 'no'
 end

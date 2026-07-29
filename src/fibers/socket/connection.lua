@@ -1,7 +1,7 @@
 -- Construction and held-host-handle transfer for connected socket Streams.
 
-local HostError = require('fibers.host.error')
-local IO = require('fibers.host.io')
+local IOError = require('fibers.io.error')
+local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 
 local Connection = {}
@@ -62,7 +62,7 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
     connection = Connection.open(rt, scope, handle, opts)
   end)
   if not opened then
-    local failure = HostError.normalise(open_err, {
+    local failure = IOError.normalise(open_err, {
       domain = 'socket',
       action = opts.action or 'open_connection',
       address = opts.address,
@@ -70,7 +70,7 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
     local discarded, discard_err = host_hold:discard(key, handle, failure)
     if not discarded then
       return nil,
-        HostError.protocol(
+        IOError.protocol(
           'socket',
           opts.action or 'open_connection',
           'connection opening and handle disposal failed',

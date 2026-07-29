@@ -11,7 +11,6 @@ package.path = table.concat({
   package.path,
 }, ';')
 local Runtime = require('fibers.runtime')
-local IR = require('fibers.internal.kernel.ir')
 local Store = require('fibers.internal.kernel.ledger')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')

@@ -14,9 +14,9 @@ package.path = table.concat({
 local Common = require('tests.embedding.hosts.common')
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.host.readiness')
+local FibersReadiness = require('fibers.io.readiness')
 
-local ok_host, LinuxHost = pcall(require, 'fibers.host.luajit_linux')
+local ok_host, LinuxHost = pcall(require, 'fibers.io.luajit_linux')
 Common.assert_truthy(ok_host, 'luajit linux host module should be require-able')
 if not LinuxHost.is_supported() then
   return Common.skip('tests/hosts/test_fd_luajit.lua', 'LuaJIT FFI Linux host not available')

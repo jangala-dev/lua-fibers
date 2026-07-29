@@ -5,7 +5,7 @@
 -- runtimes such as the standalone Luau CLI must supply opts.sleep explicitly.
 -- It does not support file descriptor polling or arbitrary host events.
 
-local WaitSet = require('fibers.host.wait_set')
+local WaitSet = require('fibers.embed.wait_set')
 
 local Pure = {}
 Pure.__index = Pure

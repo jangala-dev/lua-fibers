@@ -22,7 +22,7 @@ src/fibers/
   mailbox.lua              Channel + RefCount + Cell + Counter
   pulse.lua                Counter epoch + Cell closure
   sleep.lua                direct and composable time waits
-  stream.lua               public readable, writable and duplex interfaces
+  stream.lua               portable Flow-backed Stream values and memory pairs
 
   resource/                lower-level resources and transactional laws
     cell.lua               versioned replacement
@@ -54,7 +54,10 @@ src/fibers/
   socket/                  addresses, Listener, Dial, UDP and shared protocols
     dial/                   shared Dial handle plus direct and named strategies
       named/                Happy Eyeballs coordination state
-  host/                    host contracts, reactor and native bindings
+  embed/                   bounded driving, external feeds and host callback queue
+  io/                      I/O contracts, reactor and native backend implementations
+  net/                     host-neutral network value types
+  roblox/                  Roblox scheduling and engine adapters
 
   internal/
     protected.lua          cross-version yieldable protected calls
@@ -141,14 +144,15 @@ protected-call implementation.
 
 `fibers.resource.flow` is the transactional transfer atom. It can be composed
 to build buffering, tees, encoders and other transfer structures.
-`fibers.stream` assembles one or more Flows into a persistent public interface.
-Files, processes and sockets provide Streams, and users may also construct
-memory-backed Streams directly.
+`fibers.stream` assembles one or more Flows into a persistent portable interface.
+It has no static dependency on the host reactor. `fibers.io.stream` adds transactional
+opening over host handles. Files, processes and sockets provide those host-backed
+Streams, while core-only programmes may construct memory-backed Streams directly.
 
 The dependency direction is one-way:
 
 ```text
-Op → resource primitives → Flow → Stream → File / Process / Socket
+Op → resource primitives → Flow → portable Stream → I/O Stream → File / Process / Socket
 ```
 
 ## Test groups
@@ -180,5 +184,4 @@ both `.lua` and `.luau` forms of the same module.
 
 This is a filesystem rule only; logical names such as `fibers.scope` and
 `fibers.scope.result` are unchanged. `scripts/check-modules.lua` checks duplicate logical modules, ambiguous module
-paths and unresolved static Fibers imports. Package boundaries remain a design
-and review concern rather than a frozen test invariant.
+paths and unresolved static Fibers imports. Package ownership is described by `packages/catalogue.lua`; named deployment examples live in `packages/profiles.lua`. `scripts/build-profile.lua` emits an exact static module closure and a package-size report.

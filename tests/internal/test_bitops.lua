@@ -11,7 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local BitOps = require('fibers.host.bitops')
+local BitOps = require('fibers.io.bitops')
 local bit, source = BitOps.resolve()
 assert(bit, source)
 assert(type(source) == 'string' and source ~= '')
@@ -90,7 +90,7 @@ end
 
 if _VERSION == 'Lua 5.3' or _VERSION == 'Lua 5.4' or _VERSION == 'Lua 5.5' then
   with_providers(fake_provider('bit'), fake_provider('bit32'), {}, function()
-    local NativeBitOps = dofile('src/fibers/host/bitops.lua')
+    local NativeBitOps = dofile('src/fibers/io/bitops.lua')
     local native, native_source = NativeBitOps.resolve()
     assert(native, native_source)
     assert(native_source == 'native Lua bitwise operators')
@@ -106,7 +106,7 @@ with_providers(fake_bit, fake_bit32, {
   hide_jit = true,
   hide_native = true,
 }, function()
-  local ModuleBitOps = dofile('src/fibers/host/bitops.lua')
+  local ModuleBitOps = dofile('src/fibers/io/bitops.lua')
   local selected, selected_source = ModuleBitOps.resolve()
   assert(selected == fake_bit)
   assert(selected_source == 'bit module')
@@ -116,14 +116,14 @@ with_providers(nil, fake_bit32, {
   hide_jit = true,
   hide_native = true,
 }, function()
-  local Bit32Ops = dofile('src/fibers/host/bitops.lua')
+  local Bit32Ops = dofile('src/fibers/io/bitops.lua')
   local selected, selected_source = Bit32Ops.resolve()
   assert(selected == fake_bit32)
   assert(selected_source == 'bit32 module')
 end)
 
 if type(rawget(_G, 'jit')) == 'table' then
-  local LuaJITBitOps = dofile('src/fibers/host/bitops.lua')
+  local LuaJITBitOps = dofile('src/fibers/io/bitops.lua')
   local selected, selected_source = LuaJITBitOps.resolve()
   assert(selected, selected_source)
   assert(selected_source == 'LuaJIT bit library')

@@ -1,15 +1,15 @@
 -- One Nixio binding.  Opaque Nixio objects are native handles; all
--- Fibers policy is supplied by fibers.host.posix.
+-- Fibers policy is supplied by fibers.io.posix.
 
-local Posix = require('fibers.host.posix')
-local NativeError = require('fibers.host.native_error')
-local HostError = require('fibers.host.error')
-local Address = require('fibers.socket.address')
+local Posix = require('fibers.io.posix')
+local NativeError = require('fibers.io.native_error')
+local IOError = require('fibers.io.error')
+local Address = require('fibers.net.address')
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 local ok_fs, fs = pcall(require, 'nixio.fs')
 if not ok_nixio or type(nixio) ~= 'table' then
-  return Posix.unavailable('fibers.host.nixio', 'requires nixio')
+  return Posix.unavailable('fibers.io.nixio', 'requires nixio')
 end
 
 local const = nixio.const or {}
@@ -57,7 +57,7 @@ local function normalise_address(address)
   if ok then
     return value
   end
-  return nil, HostError.invalid_argument('socket', 'address', { address = address })
+  return nil, IOError.invalid_argument('socket', 'address', { address = address })
 end
 
 local function encode(address)
@@ -70,7 +70,7 @@ local function encode(address)
   end
   if value.kind == 'inet6' then
     if value.scope_id ~= 0 or value.flowinfo ~= 0 then
-      return nil, HostError.unsupported('socket', 'ipv6_scope_or_flowinfo', { address = value })
+      return nil, IOError.unsupported('socket', 'ipv6_scope_or_flowinfo', { address = value })
     end
     return { family = 'inet6', native = { family = 'inet6', host = value.host, port = value.port } }
   end
@@ -507,7 +507,7 @@ binding.resolver = {
 }
 
 binding.process = function(Fd)
-  local Reaper = require('fibers.host.process_reaper')
+  local Reaper = require('fibers.io.process_reaper')
   local function supported()
     if not ok_fs or type(fs) ~= 'table' then
       return false, 'requires nixio.fs'

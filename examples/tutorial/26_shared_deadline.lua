@@ -15,7 +15,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local sensor_stage, radio_stage, finished_at
 
@@ -41,7 +41,7 @@ fibers.run(function()
   }))
 
   finished_at = fibers.now()
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(sensor_stage == 'ready')
 assert(radio_stage == 'timeout')

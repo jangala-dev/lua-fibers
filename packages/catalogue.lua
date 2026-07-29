@@ -1,0 +1,116 @@
+-- Published package ownership. Components remain finer-grained than packages;
+-- this catalogue is used for release and build reporting, not runtime loading.
+
+return {
+  {
+    name = 'fibers-diagnostics',
+    description = 'Optional proof-search and I/O diagnostics',
+    requires = { 'fibers-core' },
+    prefixes = { 'fibers.diagnostics' },
+  },
+  {
+    name = 'fibers-roblox',
+    description = 'Roblox scheduling and engine adapters for Luau builds',
+    requires = { 'fibers-core' },
+    prefixes = { 'fibers.roblox' },
+  },
+  {
+    name = 'fibers-io-nixio',
+    description = 'Complete nixio operating-system backend',
+    requires = { 'fibers-core', 'fibers-io' },
+    modules = { 'fibers.io.nixio' },
+  },
+  {
+    name = 'fibers-io-linux',
+    description = 'Shared Linux native binding used by FFI implementations',
+    requires = { 'fibers-core', 'fibers-io' },
+    modules = { 'fibers.io.ffi_linux' },
+  },
+  {
+    name = 'fibers-io-ffi',
+    description = 'LuaJIT FFI Linux operating-system backend',
+    requires = { 'fibers-core', 'fibers-io', 'fibers-io-linux' },
+    modules = {
+      'fibers.io.luajit_linux',
+    },
+  },
+  {
+    name = 'fibers-io-cffi',
+    description = 'CFFI Linux operating-system backend',
+    requires = { 'fibers-core', 'fibers-io', 'fibers-io-linux' },
+    modules = { 'fibers.io.cffi_linux' },
+  },
+  {
+    name = 'fibers-io-luaposix',
+    description = 'luaposix operating-system backend',
+    requires = { 'fibers-core', 'fibers-io' },
+    modules = { 'fibers.io.luaposix' },
+  },
+  {
+    name = 'fibers-io',
+    description = 'Host-neutral I/O contracts and facilities',
+    requires = { 'fibers-core' },
+    modules = {
+    },
+    prefixes = {
+      'fibers.io',
+      'fibers.file',
+      'fibers.process',
+      'fibers.socket',
+      'fibers.dns',
+      'fibers.net',
+    },
+  },
+  {
+    name = 'fibers-core',
+    description = 'Operation algebra, Runtime, Lifetimes, portable resources and embedding',
+    requires = {},
+    modules = {
+      'fibers',
+      'fibers.channel',
+      'fibers.closure',
+      'fibers.effect',
+      'fibers.grant',
+      'fibers.latch',
+      'fibers.mailbox',
+      'fibers.op',
+      'fibers.perform',
+      'fibers.protected',
+      'fibers.pulse',
+      'fibers.runtime',
+      'fibers.semaphore',
+      'fibers.sleep',
+      'fibers.stream',
+      'fibers.task',
+    },
+    prefixes = {
+      'fibers.embed',
+      'fibers.internal',
+      'fibers.lifetime',
+      'fibers.resource',
+      'fibers.scope',
+    },
+  },
+  {
+    name = 'fibers-reference',
+    description = 'Independent reference evaluator and conformance support',
+    requires = { 'fibers-core' },
+    source_root = 'reference',
+  },
+  {
+    name = 'fibers-full',
+    description = 'Convenience dependency roll-up',
+    requires = {
+      'fibers-core',
+      'fibers-io',
+      'fibers-io-linux',
+      'fibers-io-ffi',
+      'fibers-io-cffi',
+      'fibers-io-luaposix',
+      'fibers-io-nixio',
+      'fibers-roblox',
+      'fibers-diagnostics',
+    },
+    virtual = true,
+  },
+}

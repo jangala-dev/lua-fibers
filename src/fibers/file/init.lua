@@ -4,9 +4,9 @@
 -- runtime-only evented job service exported by fibers.file.regular.
 
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
-local HostHold = require('fibers.internal.lifetime.host_hold')
-local IO = require('fibers.host.io')
+local IOError = require('fibers.io.error')
+local HostHold = require('fibers.io.internal.host_hold')
+local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Regular = require('fibers.file.regular')
@@ -21,7 +21,7 @@ end
 local function acquire_handles(rt, opts)
   local host = opts.host or rt.host
   if not host or type(host.create_pipe) ~= 'function' then
-    return nil, nil, HostError.unsupported('host', 'pipe', {
+    return nil, nil, IOError.unsupported('host', 'pipe', {
       host = host and host.name or nil,
     })
   end
@@ -39,7 +39,7 @@ local function acquire_handles(rt, opts)
     end
     return nil,
       nil,
-      HostError.normalise(err or detail or 'pipe creation failed', {
+      IOError.normalise(err or detail or 'pipe creation failed', {
         domain = 'pipe',
         action = 'create',
         detail = detail,
@@ -83,7 +83,7 @@ local function finish_endpoint(rt, start, which, handle, opts)
   end)
   if not ok then
     return nil,
-      HostError.normalise(stream, {
+      IOError.normalise(stream, {
         domain = 'pipe',
         action = 'open_' .. which .. '_stream',
       })
@@ -93,7 +93,7 @@ local function finish_endpoint(rt, start, which, handle, opts)
   local transferred, transfer_err = start.host_hold:release(which, handle)
   if not transferred then
     return nil,
-      HostError.normalise(transfer_err, {
+      IOError.normalise(transfer_err, {
         domain = 'pipe',
         action = 'transfer_' .. which .. '_host_hold',
       })
@@ -156,7 +156,7 @@ function File.pipe_op(opts)
   end)
 end
 
-File.Error = HostError
+File.Error = IOError
 File.RegularFile = Regular.RegularFile
 File.Request = Regular.Request
 File.Job = Regular.Job

@@ -1,6 +1,5 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local IR = require('fibers.internal.kernel.ir')
 local Store = require('fibers.internal.kernel.ledger')
 
 local Calendar = {}

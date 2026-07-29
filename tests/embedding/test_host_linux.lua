@@ -13,9 +13,9 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.host.readiness')
-local Host = require('fibers.host')
-local WaitSet = require('fibers.host.wait_set')
+local FibersReadiness = require('fibers.io.readiness')
+local AutoIO = require('fibers.io.auto')
+local WaitSet = require('fibers.embed.wait_set')
 
 local function fail(msg)
   error(msg, 2)
@@ -36,13 +36,13 @@ end
 do
   if type(rawget(_G, 'jit')) ~= 'table' then
     local old_ffi, loaded = package.preload.ffi, false
-    package.loaded['fibers.host.luajit_linux'] = nil
+    package.loaded['fibers.io.luajit_linux'] = nil
     package.loaded.ffi = nil
     package.preload.ffi = function()
       loaded = true
       error('non-LuaJIT ffi must not be loaded')
     end
-    local ok, module = pcall(require, 'fibers.host.luajit_linux')
+    local ok, module = pcall(require, 'fibers.io.luajit_linux')
     package.preload.ffi = old_ffi
     package.loaded.ffi = nil
     assert_truthy(ok, 'luajit host should remain require-able outside LuaJIT')
@@ -55,22 +55,22 @@ end
 -- Optional Linux host modules must be require-able even when their platform
 -- dependencies are unavailable under the test interpreter.
 do
-  local ok1, ffi_host = pcall(require, 'fibers.host.luajit_linux')
+  local ok1, ffi_host = pcall(require, 'fibers.io.luajit_linux')
   assert_truthy(ok1, 'luajit linux host module should be require-able')
   assert_truthy(type(ffi_host.is_supported) == 'function', 'luajit host should expose is_supported')
   assert_truthy(type(ffi_host.new) == 'function', 'luajit host should expose new')
 
-  local ok2, nixio_host = pcall(require, 'fibers.host.nixio')
+  local ok2, nixio_host = pcall(require, 'fibers.io.nixio')
   assert_truthy(ok2, 'nixio linux host module should be require-able')
   assert_truthy(type(nixio_host.is_supported) == 'function', 'nixio host should expose is_supported')
   assert_truthy(type(nixio_host.new) == 'function', 'nixio host should expose new')
 
-  local ok3, posix_host = pcall(require, 'fibers.host.luaposix')
+  local ok3, posix_host = pcall(require, 'fibers.io.luaposix')
   assert_truthy(ok3, 'luaposix host module should be require-able')
   assert_truthy(type(posix_host.is_supported) == 'function', 'luaposix host should expose is_supported')
   assert_truthy(type(posix_host.new) == 'function', 'luaposix host should expose new')
 
-  local ok4, cffi_host = pcall(require, 'fibers.host.cffi_linux')
+  local ok4, cffi_host = pcall(require, 'fibers.io.cffi_linux')
   assert_truthy(ok4, 'cffi linux host module should be require-able')
   assert_truthy(type(cffi_host.is_supported) == 'function', 'cffi host should expose is_supported')
   assert_truthy(type(cffi_host.new) == 'function', 'cffi host should expose new')
@@ -99,10 +99,10 @@ end
 -- Host constructor helpers should be present.  They may raise if the optional
 -- backend is not available; is_supported on the module is the probe.
 do
-  assert_truthy(type(Host.luajit_linux) == 'function', 'Host.luajit_linux helper should exist')
-  assert_truthy(type(Host.nixio) == 'function', 'Host.nixio helper should exist')
-  assert_truthy(type(Host.luaposix) == 'function', 'Host.luaposix helper should exist')
-  assert_truthy(type(Host.cffi_linux) == 'function', 'Host.cffi_linux helper should exist')
+  assert_truthy(type(AutoIO.luajit_linux) == 'function', 'AutoIO.luajit_linux helper should exist')
+  assert_truthy(type(AutoIO.nixio) == 'function', 'AutoIO.nixio helper should exist')
+  assert_truthy(type(AutoIO.luaposix) == 'function', 'AutoIO.luaposix helper should exist')
+  assert_truthy(type(AutoIO.cffi_linux) == 'function', 'AutoIO.cffi_linux helper should exist')
 end
 
 print('tests/test_host_linux.lua: ok')

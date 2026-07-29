@@ -2,7 +2,7 @@
 -- Blocking filesystem calls occur only in the helper process; the Fibers side
 -- uses ordinary evented process pipes.
 
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local Process = require('fibers.process')
 local unpack_ = table.unpack or unpack
 
@@ -73,7 +73,7 @@ local function merged_opts(defaults, overrides)
 end
 
 local function protocol_error(action, message, fields)
-  return HostError.protocol('file', action, message, fields)
+  return IOError.protocol('file', action, message, fields)
 end
 
 local function parse_header(line, action)
@@ -90,7 +90,7 @@ end
 local function read_response(stream, action)
   local line, line_err = stream:read_line({ max = 4096 })
   if not line then
-    return nil, HostError.normalise(line_err, { domain = 'file', action = action })
+    return nil, IOError.normalise(line_err, { domain = 'file', action = action })
   end
   line = line:gsub('\r?\n$', '')
   local kind, n, m = parse_header(line, action)
@@ -105,7 +105,7 @@ local function read_response(stream, action)
     if n > 0 then
       payload, line_err = stream:read_exactly(n)
       if not payload then
-        return nil, HostError.normalise(line_err, { domain = 'file', action = action })
+        return nil, IOError.normalise(line_err, { domain = 'file', action = action })
       end
     end
     return payload, nil, kind
@@ -117,9 +117,9 @@ local function read_response(stream, action)
       return nil, protocol_error(action, 'truncated file worker error')
     end
     if code == 'ENOTSUP' or code == 'EOPNOTSUPP' then
-      return nil, HostError.unsupported('file', action, { message = message, code = code })
+      return nil, IOError.unsupported('file', action, { message = message, code = code })
     end
-    return nil, HostError.system('file', action, message, code)
+    return nil, IOError.system('file', action, message, code)
   end
   return nil, protocol_error(action, 'unknown file worker response', { payload = line })
 end
@@ -136,7 +136,7 @@ end
 function Provider:open(path, mode, opts)
   opts = merged_opts(self.opts, opts)
   if not self:is_supported() then
-    return nil, HostError.unsupported('file', 'open', { path = path })
+    return nil, IOError.unsupported('file', 'open', { path = path })
   end
   local argv = WorkerCommand.argv(
     opts,
@@ -149,7 +149,7 @@ function Provider:open(path, mode, opts)
   local command = Process.command({ argv = argv, stdin = 'pipe', stdout = 'pipe', stderr = 'pipe' })
   local proc, err = command:start({ name = opts.name or ('file-worker:' .. path) })
   if not proc then
-    return nil, HostError.normalise(err, { domain = 'file', action = 'open', path = path })
+    return nil, IOError.normalise(err, { domain = 'file', action = 'open', path = path })
   end
   local _, greet_err = read_response(proc:stdout(), 'open')
   if greet_err then
@@ -176,21 +176,21 @@ end
 
 function Backend:_request(action, header, payload)
   if self.closed then
-    return nil, HostError.closed('file', action, { path = self.path })
+    return nil, IOError.closed('file', action, { path = self.path })
   end
   local ok, err = self.input:write(header .. '\n')
   if not ok then
-    return nil, HostError.normalise(err, { domain = 'file', action = action, path = self.path })
+    return nil, IOError.normalise(err, { domain = 'file', action = action, path = self.path })
   end
   if payload and payload ~= '' then
     ok, err = self.input:write(payload)
     if not ok then
-      return nil, HostError.normalise(err, { domain = 'file', action = action, path = self.path })
+      return nil, IOError.normalise(err, { domain = 'file', action = action, path = self.path })
     end
   end
   ok, err = self.input:flush()
   if not ok then
-    return nil, HostError.normalise(err, { domain = 'file', action = action, path = self.path })
+    return nil, IOError.normalise(err, { domain = 'file', action = action, path = self.path })
   end
   return read_response(self.output, action)
 end
@@ -245,7 +245,7 @@ function Backend:close(reason)
     return nil, request_err
   end
   if not Process.succeeded(status) then
-    return nil, result_err or HostError.system('file', 'close', 'file worker failed')
+    return nil, result_err or IOError.system('file', 'close', 'file worker failed')
   end
   if not closed then
     return nil, close_err
@@ -256,13 +256,13 @@ end
 function Provider:_path(action, args, opts)
   opts = merged_opts(self.opts, opts)
   if not self:is_supported() then
-    return nil, HostError.unsupported('file', action:lower())
+    return nil, IOError.unsupported('file', action:lower())
   end
   local argv = WorkerCommand.argv(opts, 'path', action, unpack_(args))
   local command = Process.command({ argv = argv, stdin = 'null', stdout = 'pipe', stderr = 'pipe' })
   local proc, err = command:start({ name = 'file-worker:' .. action:lower() })
   if not proc then
-    return nil, HostError.normalise(err, { domain = 'file', action = action:lower() })
+    return nil, IOError.normalise(err, { domain = 'file', action = action:lower() })
   end
   local value, response_err = read_response(proc:stdout(), action:lower())
   local status, result_err = proc:result()
@@ -271,7 +271,7 @@ function Provider:_path(action, args, opts)
     return nil, response_err
   end
   if not Process.succeeded(status) then
-    return nil, result_err or HostError.system('file', action:lower(), 'file worker failed')
+    return nil, result_err or IOError.system('file', action:lower(), 'file worker failed')
   end
   return value ~= nil
 end

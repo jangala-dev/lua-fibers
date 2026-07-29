@@ -45,7 +45,7 @@ end
 local function require_host(runtime, opts)
   local host = opts.host or runtime.host
   if type(host) ~= 'table' or host.kind ~= 'roblox' or type(host.enqueue) ~= 'function' then
-    error('Roblox subscription requires a fibers.host.roblox host', 3)
+    error('Roblox subscription requires a fibers.roblox.host host', 3)
   end
   return host
 end

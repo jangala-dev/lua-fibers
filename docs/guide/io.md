@@ -17,14 +17,14 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
-local Host = require('fibers.host')
+local AutoIO = require('fibers.io.auto')
 
 fibers.run(function()
   local resolv_conf, err = file.read_all('/etc/resolv.conf', {
     max = 64 * 1024,
   })
   assert(resolv_conf, err)
-end, { host = Host.default() })
+end, { host = AutoIO.default() })
 ```
 
 Direct methods perform their corresponding `_op`; ordinary `_op` calls yield the

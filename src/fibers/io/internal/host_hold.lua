@@ -7,8 +7,8 @@
 local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
-local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.diagnostics.io')
+local IOError = require('fibers.io.error')
+local IOAudit = require('fibers.internal.io_audit')
 local Protected = require('fibers.protected')
 
 local HostHold = {}
@@ -64,14 +64,14 @@ end
 function HostHold:hold(key, value, close)
   if type(key) ~= 'string' or key == '' then
     close_value(value, close, 'host hold refused')
-    return nil, HostError.protocol('host_hold', 'hold', 'host-hold key must be a non-empty string')
+    return nil, IOError.protocol('host_hold', 'hold', 'host-hold key must be a non-empty string')
   end
   if value == nil then
-    return nil, HostError.protocol('host_hold', 'hold', 'cannot hold nil')
+    return nil, IOError.protocol('host_hold', 'hold', 'cannot hold nil')
   end
   if self.closed or self.values[key] ~= nil or self.taken[key] then
     close_value(value, close, 'host hold refused')
-    return nil, HostError.protocol('host_hold', 'hold', 'host-hold key is unavailable', { key = key })
+    return nil, IOError.protocol('host_hold', 'hold', 'host-hold key is unavailable', { key = key })
   end
   self.values[key] = { value = value, close = close }
   self.order[#self.order + 1] = key
@@ -81,13 +81,13 @@ end
 
 function HostHold:hold_many(entries)
   if type(entries) ~= 'table' then
-    return nil, HostError.protocol('host_hold', 'hold_many', 'entries must be an ordered array')
+    return nil, IOError.protocol('host_hold', 'hold_many', 'entries must be an ordered array')
   end
   local inserted = {}
   for i = 1, #entries do
     local entry = entries[i]
     if type(entry) ~= 'table' then
-      return nil, HostError.protocol('host_hold', 'hold_many', 'entry must be a table', { index = i })
+      return nil, IOError.protocol('host_hold', 'hold_many', 'entry must be a table', { index = i })
     end
     local key = entry.key or entry.name or entry[1]
     local value = entry.value
@@ -116,10 +116,10 @@ end
 function HostHold:release(key, expected)
   local rec = self.values[key]
   if not rec then
-    return nil, HostError.protocol('host_hold', 'release', 'host-hold key is empty', { key = key })
+    return nil, IOError.protocol('host_hold', 'release', 'host-hold key is empty', { key = key })
   end
   if expected ~= nil and rec.value ~= expected then
-    return nil, HostError.protocol('host_hold', 'release', 'host-hold value mismatch', { key = key })
+    return nil, IOError.protocol('host_hold', 'release', 'host-hold value mismatch', { key = key })
   end
   self.values[key] = nil
   self.taken[key] = true
@@ -134,10 +134,10 @@ end
 function HostHold:discard(key, expected, reason)
   local rec = self.values[key]
   if not rec then
-    return nil, HostError.protocol('host_hold', 'discard', 'host-hold key is empty', { key = key })
+    return nil, IOError.protocol('host_hold', 'discard', 'host-hold key is empty', { key = key })
   end
   if expected ~= nil and rec.value ~= expected then
-    return nil, HostError.protocol('host_hold', 'discard', 'host-hold value mismatch', { key = key })
+    return nil, IOError.protocol('host_hold', 'discard', 'host-hold value mismatch', { key = key })
   end
 
   self.values[key] = nil
@@ -147,14 +147,14 @@ function HostHold:discard(key, expected, reason)
   local called, ok, err = Protected.pcall(close_value, rec.value, rec.close, reason or 'host value discarded')
   if not called then
     return nil,
-      HostError.protocol('host_hold', 'discard', 'held value close raised', {
+      IOError.protocol('host_hold', 'discard', 'held value close raised', {
         key = key,
         cause = ok,
       })
   end
   if not ok then
     return nil,
-      HostError.protocol('host_hold', 'discard', 'held value failed to close', {
+      IOError.protocol('host_hold', 'discard', 'held value failed to close', {
         key = key,
         cause = err,
       })
@@ -197,7 +197,7 @@ function HostHold:close(reason)
   end
   if #errors > 0 then
     return nil,
-      HostError.protocol('host_hold', 'close', 'one or more held values failed to close', {
+      IOError.protocol('host_hold', 'close', 'one or more held values failed to close', {
         errors = errors,
       })
   end

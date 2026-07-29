@@ -4,7 +4,7 @@
 -- conventional resolv.conf file is loaded lazily through fibers.file. No host
 -- resolver or getaddrinfo call is used.
 
-local Address = require('fibers.socket.address')
+local Address = require('fibers.net.address')
 local File = require('fibers.file')
 
 local function finite_number(value, fallback, minimum, maximum)

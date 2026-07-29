@@ -1,7 +1,7 @@
 -- In-memory HostHandle helpers for tests.
 
-local Handle = require('fibers.host.handle')
-local HostError = require('fibers.host.error')
+local Handle = require('fibers.io.handle')
+local HostError = require('fibers.io.error')
 
 local Helpers = {}
 local next_id = 0

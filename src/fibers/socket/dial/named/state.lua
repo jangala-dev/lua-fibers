@@ -9,12 +9,11 @@ local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Counter = require('fibers.resource.counter')
 local Clock = require('fibers.resource.clock')
-local Address = require('fibers.socket.address')
-local IO = require('fibers.host.io')
+local Address = require('fibers.net.address')
 local Protected = require('fibers.protected')
 local DialModule = require('fibers.socket.dial')
 local Connection = require('fibers.socket.connection')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 
 local State = {}
 State.__index = State
@@ -39,16 +38,16 @@ local function copy_map(values)
 end
 
 local function copy_error_fields(err)
-  if not HostError.is(err) then
+  if not IOError.is(err) then
     return err
   end
   local fields = {}
   for key, value in pairs(err) do
-    if key ~= '_fibers_host_error' and key ~= 'report' then
+    if key ~= '_fibers_io_error' and key ~= 'report' then
       fields[key] = value
     end
   end
-  return HostError.new(err.kind, fields)
+  return IOError.new(err.kind, fields)
 end
 
 local function copy_family(info)
@@ -133,7 +132,7 @@ local function validate_addresses(values, family, endpoint)
     local ok, address_or_err = Protected.pcall(Address.validate, values[i], 'Happy Eyeballs candidate')
     if not ok then
       return nil,
-        HostError.protocol('socket', 'dial_order', tostring(address_or_err), {
+        IOError.protocol('socket', 'dial_order', tostring(address_or_err), {
           endpoint = endpoint,
           family = family,
           index = i,
@@ -142,7 +141,7 @@ local function validate_addresses(values, family, endpoint)
     local address = address_or_err
     if address.kind ~= family then
       return nil,
-        HostError.protocol('socket', 'dial_order', 'resolver returned an address from the wrong family', {
+        IOError.protocol('socket', 'dial_order', 'resolver returned an address from the wrong family', {
           endpoint = endpoint,
           expected_family = family,
           actual_family = address.kind,
@@ -161,7 +160,7 @@ end
 local function validate_global_order(values, expected, endpoint)
   if type(values) ~= 'table' then
     return nil,
-      HostError.protocol(
+      IOError.protocol(
         'socket',
         'dial_order',
         'order_destinations must return an address list',
@@ -176,7 +175,7 @@ local function validate_global_order(values, expected, endpoint)
     local ok, address_or_err = Protected.pcall(Address.validate, values[i], 'ordered destination')
     if not ok then
       return nil,
-        HostError.protocol('socket', 'dial_order', tostring(address_or_err), {
+        IOError.protocol('socket', 'dial_order', tostring(address_or_err), {
           endpoint = endpoint,
           index = i,
         })
@@ -184,7 +183,7 @@ local function validate_global_order(values, expected, endpoint)
     local key = Address.key(address_or_err)
     if not available[key] then
       return nil,
-        HostError.protocol('socket', 'dial_order', 'ordering callback returned an unknown destination', {
+        IOError.protocol('socket', 'dial_order', 'ordering callback returned an unknown destination', {
           endpoint = endpoint,
           index = i,
           address = address_or_err,
@@ -192,7 +191,7 @@ local function validate_global_order(values, expected, endpoint)
     end
     if used[key] then
       return nil,
-        HostError.protocol('socket', 'dial_order', 'ordering callback returned a duplicate destination', {
+        IOError.protocol('socket', 'dial_order', 'ordering callback returned a duplicate destination', {
           endpoint = endpoint,
           index = i,
           address = address_or_err,
@@ -296,7 +295,7 @@ local function order_candidates(race, current, family, values)
     if not result then
       return nil,
         nil,
-        HostError.protocol('socket', 'dial_order', tostring(callback_err), {
+        IOError.protocol('socket', 'dial_order', tostring(callback_err), {
           endpoint = race.endpoint,
           ordering = race.destination_ordering,
         })
@@ -582,7 +581,7 @@ function State:_attempt_result_ops(current, scope)
       }):and_then(function(observed)
         local normalised
         if not observed.result.connection then
-          normalised = HostError.normalise(copy_error_fields(observed.result.error), {
+          normalised = IOError.normalise(copy_error_fields(observed.result.error), {
             domain = 'socket',
             action = 'dial',
             address = attempt.address,
@@ -752,14 +751,14 @@ function State:terminal_error(state)
   if #attempts == 0 then
     local err = state.families.inet6.error or state.families.inet4.error
     if err then
-      return HostError.normalise(copy_error_fields(err), {
+      return IOError.normalise(copy_error_fields(err), {
         domain = 'socket',
         action = 'connect',
         endpoint = race.endpoint,
       })
     end
   end
-  return HostError.new('connect_failed', {
+  return IOError.new('connect_failed', {
     domain = 'socket',
     action = 'connect',
     code = 'connect_failed',
@@ -775,7 +774,7 @@ end
 function State:deadline_error(state)
   local race = self
   state = state or race.state.value
-  return HostError.system('socket', 'connect', 'Happy Eyeballs deadline expired', 'ETIMEDOUT', nil, {
+  return IOError.system('socket', 'connect', 'Happy Eyeballs deadline expired', 'ETIMEDOUT', nil, {
     endpoint = race.endpoint,
     deadline = race.opts.overall_deadline,
     attempts = attempt_records(state),
@@ -791,7 +790,7 @@ local function error_summary(err)
   if err == nil then
     return nil
   end
-  if not HostError.is(err) then
+  if not IOError.is(err) then
     return { message = tostring(err) }
   end
   return {

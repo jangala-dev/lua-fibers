@@ -15,7 +15,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local selected, reason
 local camera_exit, dialogue_exit, animation_exit
@@ -54,7 +54,7 @@ fibers.run(function(scope)
   camera_exit = fibers.perform(camera:body_result_op())
   dialogue_exit = fibers.perform(dialogue:body_result_op())
   animation_exit = fibers.perform(animation:body_result_op())
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(selected == 'skipped')
 assert(camera_exit.tag == 'cancelled')

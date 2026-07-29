@@ -4,7 +4,7 @@ local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
-local External = require('fibers.host.external')
+local External = require('fibers.embed.external')
 
 local EventQueue = {}
 EventQueue.__index = function(self, key)

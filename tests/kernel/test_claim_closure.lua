@@ -15,7 +15,6 @@ local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local Program = require('fibers.internal.kernel.ir')
 local Runtime = require('fibers.runtime')
 
 local function eq(actual, expected, message)

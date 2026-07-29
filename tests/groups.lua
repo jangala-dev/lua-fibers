@@ -65,6 +65,8 @@ return {
   },
   embedding = {
     'tests/embedding/test_host.lua',
+    'tests/embedding/test_embed.lua',
+    'tests/embedding/test_platform.lua',
     'tests/embedding/test_roblox.lua',
     'tests/embedding/test_host_handle.lua',
     'tests/embedding/test_host_offer.lua',
@@ -124,7 +126,9 @@ return {
     'tests/kernel/test_witness_validation.lua',
   },
   internal = {
+    'tests/internal/test_context.lua',
     'tests/internal/test_host_hold.lua',
+    'tests/internal/test_package_structure.lua',
     'tests/internal/test_closed_op_conformance.lua',
     'tests/internal/test_io_audit.lua',
     'tests/internal/test_bitops.lua',

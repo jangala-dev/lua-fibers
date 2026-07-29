@@ -8,12 +8,12 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local HostOffer = require('fibers.host.offer')
-local HostHandle = require('fibers.host.handle')
-local HostError = require('fibers.host.error')
+local HostOffer = require('fibers.io.offer')
+local HostHandle = require('fibers.io.handle')
+local HostError = require('fibers.io.error')
 local SimulatedHost = require('tests.support.simulated_host')
 local Sleep = require('fibers.sleep')
-local Reactor = require('fibers.host.reactor')
+local Reactor = require('fibers.io.reactor')
 local Runtime = require('fibers.runtime')
 local FakeHandle = require('tests.support.fake_handle')
 

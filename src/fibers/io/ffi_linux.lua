@@ -1,13 +1,13 @@
 -- One Linux FFI binding for LuaJIT FFI and cffi.
 --
 -- This module contains only C declarations, constants and native conversions.
--- fibers.host.posix owns Fibers handles, readiness delivery, network policy,
+-- fibers.io.posix owns Fibers handles, readiness delivery, network policy,
 -- resolver deduplication, process lifecycle and capability reporting.
 
-local BitOps = require('fibers.host.bitops')
-local NativeError = require('fibers.host.native_error')
-local Posix = require('fibers.host.posix')
-local Address = require('fibers.socket.address')
+local BitOps = require('fibers.io.bitops')
+local NativeError = require('fibers.io.native_error')
+local Posix = require('fibers.io.posix')
+local Address = require('fibers.net.address')
 
 local AioProbe = {}
 local cdef_done = setmetatable({}, { __mode = 'k' })
@@ -774,7 +774,7 @@ function M.new(opts)
   end
 
   binding.process = function(Fd)
-    local Direct = require('fibers.host.process_direct')
+    local Direct = require('fibers.io.process_direct')
     local signals = {
       hup = 1,
       int = 2,
@@ -1029,16 +1029,16 @@ end
 function M.load(module_name, name, opts)
   local ok, ffi = pcall(require, module_name)
   if not ok or type(ffi) ~= 'table' then
-    return Posix.unavailable('fibers.host.' .. name, module_name .. ' module not available')
+    return Posix.unavailable('fibers.io.' .. name, module_name .. ' module not available')
   end
   local bit, reason = BitOps.resolve()
   if not bit then
-    return Posix.unavailable('fibers.host.' .. name, reason)
+    return Posix.unavailable('fibers.io.' .. name, reason)
   end
   opts = opts or {}
   opts.name, opts.ffi, opts.bit, opts.C = name, ffi, bit, ffi.C
   local binding, binding_reason = M.new(opts)
-  return binding and Posix.define(binding) or Posix.unavailable('fibers.host.' .. name, binding_reason)
+  return binding and Posix.define(binding) or Posix.unavailable('fibers.io.' .. name, binding_reason)
 end
 
 return M

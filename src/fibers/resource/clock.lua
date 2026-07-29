@@ -2,7 +2,7 @@ local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
-local Interest = require('fibers.host.external').Interest
+local Interest = require('fibers.embed.external').Interest
 
 local Clock = {}
 Clock.__index = Clock

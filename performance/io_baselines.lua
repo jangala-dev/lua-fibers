@@ -31,7 +31,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local HostHold = require('fibers.internal.lifetime.host_hold')
+local HostHold = require('fibers.io.internal.host_hold')
 local File = require('fibers.file')
 local SimulatedHost = require('tests.support.simulated_host')
 local Runtime = require('fibers.runtime')

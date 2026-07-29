@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Common = require('tests.embedding.hosts.common')
 
-local ok_host, CffiHost = pcall(require, 'fibers.host.cffi_linux')
+local ok_host, CffiHost = pcall(require, 'fibers.io.cffi_linux')
 Common.assert_truthy(ok_host, 'cffi linux host module should be require-able')
 if not CffiHost.is_supported() then
   local _, reason = CffiHost.is_supported()

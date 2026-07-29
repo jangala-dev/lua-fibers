@@ -14,7 +14,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local position_fixes = channel.new()
 local selected, position, drive_ready
@@ -36,7 +36,7 @@ fibers.run(function(scope)
     lidar = Op.always('clear'),
   }))
   drive_ready = readiness.motors .. ' and ' .. readiness.lidar
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(selected == 'vision')
 assert(position == 'aisle 7, bay 3')

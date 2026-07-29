@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 local Lifecycle = require('fibers.socket.lifecycle')
 local ListenerLifecycle = Lifecycle.define({
   prefix = 'socket.listener',

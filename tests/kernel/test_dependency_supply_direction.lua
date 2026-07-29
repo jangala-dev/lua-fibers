@@ -36,7 +36,6 @@ assert(not IR.metadata_may_supply(put_meta, put_intent))
 local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Op = require('fibers.op')
-local Facility = require('fibers.resource.authoring')
 local Runtime = require('fibers.runtime')
 local machine = Runtime.new().machine_name
 

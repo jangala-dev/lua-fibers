@@ -11,17 +11,17 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Host = require('fibers.host')
+local Handle = require('fibers.io.handle')
 local SimulatedHost = require('examples.support.simulated_host')
 local Scope = require('fibers.scope')
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
-local Stream = require('fibers.stream')
+local Stream = require('fibers.io.stream')
 
 local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
 local input, input_writer = assert(host:create_pipe({ name = 'example-input' }))
 local output_reader, output = assert(host:create_pipe({ name = 'example-output' }))
-local handle = Host.Handle.new({
+local handle = Handle.new({
   host = host,
   name = 'example-duplex',
   key = { read = input:readiness_key(), write = output:readiness_key() },

@@ -3,14 +3,14 @@
 -- Facility modules depend on this small function rather than on the application
 -- facade.  Direct performing conveniences are exact tail calls to perform(op).
 
-local Runtime = require('fibers.runtime')
+local Context = require('fibers.internal.context')
 
 local function perform(option)
-  local rt = Runtime.current()
+  local rt = Context.current_runtime()
   if not rt then
     error('fibers.perform must be called from a running fiber', 2)
   end
-  local scope = Runtime.current_scope and Runtime.current_scope() or nil
+  local scope = Context.current_scope()
   if scope and type(scope.perform) == 'function' then
     return scope:perform(option)
   end

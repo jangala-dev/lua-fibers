@@ -13,13 +13,12 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Host = require('fibers.host')
 local SimulatedHost = require('tests.support.simulated_host')
-local Handle = require('fibers.host.handle')
-local HostError = require('fibers.host.error')
-local Address = require('fibers.socket.address')
+local Handle = require('fibers.io.handle')
+local HostError = require('fibers.io.error')
+local Address = require('fibers.net.address')
 local Completion = require('fibers.resource.completion')
-local HostHold = require('fibers.internal.lifetime.host_hold')
+local HostHold = require('fibers.io.internal.host_hold')
 local Connection = require('fibers.socket.connection')
 
 local function assert_eq(a, b, msg)

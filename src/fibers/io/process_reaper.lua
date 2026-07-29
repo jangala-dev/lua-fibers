@@ -3,11 +3,11 @@
 -- A helper owns the real child, reports launch and terminal status through one
 -- pipe, and reaps it exactly once.  Providers supply opaque-handle mechanics.
 
-local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.diagnostics.io')
-local Process = require('fibers.host.process')
+local IOError = require('fibers.io.error')
+local IOAudit = require('fibers.internal.io_audit')
+local Process = require('fibers.io.process')
 local Op = require('fibers.op')
-local HostOffer = require('fibers.host.offer')
+local HostOffer = require('fibers.io.offer')
 
 local Reaper = {}
 local ACTION =
@@ -61,13 +61,7 @@ function Reaper.new(spec)
       local current, errno, message = spec.environment()
       if not current then
         return nil,
-          HostError.system(
-            'process',
-            'environment',
-            message or spec.message(errno),
-            spec.name_of(errno),
-            errno
-          )
+          IOError.system('process', 'environment', message or spec.message(errno), spec.name_of(errno), errno)
       end
       for name, value in pairs(current) do
         out[tostring(name)] = tostring(value)
@@ -96,20 +90,20 @@ function Reaper.new(spec)
   local function preflight(process_spec, env)
     if type(process_spec.process_group) == 'number' then
       return nil,
-        HostError.unsupported(
+        IOError.unsupported(
           'process',
           'process_group',
           { host = spec.name, process_group = process_spec.process_group }
         )
     end
     if process_spec.pass_fds and #process_spec.pass_fds > 0 then
-      return nil, HostError.unsupported('process', 'pass_fds', { host = spec.name })
+      return nil, IOError.unsupported('process', 'pass_fds', { host = spec.name })
     end
     if process_spec.cwd then
       local kind, errno, message = spec.stat(process_spec.cwd)
       if kind ~= 'dir' then
         return nil,
-          HostError.system(
+          IOError.system(
             'process',
             'chdir',
             message or spec.message(errno),
@@ -144,7 +138,7 @@ function Reaper.new(spec)
       end
     end
     return nil,
-      HostError.system(
+      IOError.system(
         'process',
         'exec',
         'executable not found: ' .. program,
@@ -161,7 +155,7 @@ function Reaper.new(spec)
     end
     return nil,
       nil,
-      HostError.system(
+      IOError.system(
         'process',
         action or 'pipe',
         message or spec.message(errno),
@@ -304,7 +298,7 @@ function Reaper.new(spec)
       local errno = tonumber(number)
       local action = ACTION[stage] or stage
       return nil,
-        HostError.system(
+        IOError.system(
           'process',
           action,
           spec.message(errno) or (action .. ' failed'),
@@ -314,7 +308,7 @@ function Reaper.new(spec)
         )
     end
     return nil,
-      HostError.protocol(
+      IOError.protocol(
         'process',
         'exec_handshake',
         'invalid reaper startup response',
@@ -332,12 +326,12 @@ function Reaper.new(spec)
       end
       local chunk, err = read_chunk(status_read, 256)
       if not chunk then
-        return nil, nil, HostError.system('process', 'exec_handshake', tostring(err), nil, nil)
+        return nil, nil, IOError.system('process', 'exec_handshake', tostring(err), nil, nil)
       end
       if chunk == '' then
         return nil,
           nil,
-          HostError.protocol(
+          IOError.protocol(
             'process',
             'exec_handshake',
             'reaper closed before reporting a child pid',
@@ -348,7 +342,7 @@ function Reaper.new(spec)
       if #buffer > 4096 then
         return nil,
           nil,
-          HostError.protocol(
+          IOError.protocol(
             'process',
             'exec_handshake',
             'reaper response is too large',
@@ -376,7 +370,7 @@ function Reaper.new(spec)
     end
     local stage, errno = line:match('^failed ([%w_]+) (%d+)$')
     if stage then
-      self.terminal_error = HostError.system(
+      self.terminal_error = IOError.system(
         'process',
         ACTION[stage] or stage,
         spec.message(tonumber(errno)),
@@ -386,7 +380,7 @@ function Reaper.new(spec)
       )
       return
     end
-    self.terminal_error = HostError.protocol(
+    self.terminal_error = IOError.protocol(
       'process',
       'reap',
       'invalid reaper terminal response',
@@ -404,18 +398,18 @@ function Reaper.new(spec)
       if chunk then
         self.buffer = self.buffer .. chunk
         parse_terminal(self)
-      elseif HostError.is_would_block(err) then
+      elseif IOError.is_would_block(err) then
         return nil, err
-      elseif HostError.is_eof(err) then
+      elseif IOError.is_eof(err) then
         self.terminal_error =
-          HostError.protocol('process', 'reap', 'reaper closed without terminal status', { pid = self._pid })
+          IOError.protocol('process', 'reap', 'reaper closed without terminal status', { pid = self._pid })
       else
-        return nil, HostError.normalise(err, { domain = 'process', action = 'reap', pid = self._pid })
+        return nil, IOError.normalise(err, { domain = 'process', action = 'reap', pid = self._pid })
       end
     end
     local result, errno, message = spec.wait(self.reaper_pid, true)
     if not result or result.kind == 'running' then
-      return nil, HostError.would_block('process', 'reap', { pid = self._pid, reaper_pid = self.reaper_pid })
+      return nil, IOError.would_block('process', 'reap', { pid = self._pid, reaper_pid = self.reaper_pid })
     end
     if self.status_handle then
       self.status_handle:close('process reaped')
@@ -461,7 +455,7 @@ function Reaper.new(spec)
       if not self.exit_source then
         return Op.always(
           nil,
-          HostError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
+          IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
         )
       end
       return self.exit_source:result_op()
@@ -471,7 +465,7 @@ function Reaper.new(spec)
       local ok, errno, message = spec.kill(destination, number)
       if not ok then
         return nil,
-          HostError.system(
+          IOError.system(
             'process',
             'signal',
             message or spec.message(errno),
@@ -506,7 +500,7 @@ function Reaper.new(spec)
   function Provider.start_process(host, process_spec)
     local ok, reason = spec.supported()
     if not ok then
-      return nil, nil, HostError.unsupported('host', 'process', { host = host.name, reason = reason })
+      return nil, nil, IOError.unsupported('host', 'process', { host = host.name, reason = reason })
     end
     local env, env_err = environment(process_spec)
     if not env then
@@ -534,7 +528,7 @@ function Reaper.new(spec)
     if not blocking then
       return nil,
         nil,
-        HostError.system(
+        IOError.system(
           'process',
           'exec_handshake',
           message or spec.message(errno),
@@ -546,7 +540,7 @@ function Reaper.new(spec)
     if not reaper then
       return nil,
         nil,
-        HostError.system(
+        IOError.system(
           'process',
           'fork',
           fork_message or spec.message(fork_errno),
@@ -574,7 +568,7 @@ function Reaper.new(spec)
       { host = host, name = (process_spec.name or ('process-' .. pid)) .. ':status', nonblocking = true }
     )
     if not status_handle then
-      return nil, nil, HostError.normalise(wrap_err, { domain = 'process', action = 'wrap_status' })
+      return nil, nil, IOError.normalise(wrap_err, { domain = 'process', action = 'wrap_status' })
     end
     status_handle.capabilities.write = false
     status_handle.capabilities.shutdown_write = false

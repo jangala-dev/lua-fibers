@@ -15,7 +15,7 @@ local Common = require('tests.embedding.hosts.common')
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 
-local ok_mod, LinuxHost = pcall(require, 'fibers.host.cffi_linux')
+local ok_mod, LinuxHost = pcall(require, 'fibers.io.cffi_linux')
 Common.assert_truthy(ok_mod, 'cffi linux host module should be require-able')
 Common.assert_truthy(type(LinuxHost.is_supported) == 'function', 'cffi linux host should expose is_supported')
 Common.assert_truthy(type(LinuxHost.new) == 'function', 'cffi linux host should expose new')

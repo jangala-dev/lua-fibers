@@ -10,7 +10,7 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
-local WaitSet = require('fibers.host.wait_set')
+local WaitSet = require('fibers.embed.wait_set')
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
@@ -18,14 +18,10 @@ local FakeHandle = require('tests.support.fake_handle')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
-local FibersStream = require('fibers.stream')
-local FibersHost = require('fibers.host')
+local FibersStream = require('fibers.io.stream')
 local Op = FibersOp
 local Runtime = FibersRuntime
-local Host = FibersHost
 local Stream = FibersStream
-local HostHandle = require('fibers.host.handle')
-
 local function fail(msg)
   error(msg, 2)
 end

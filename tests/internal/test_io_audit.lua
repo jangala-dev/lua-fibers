@@ -14,10 +14,9 @@ package.path = table.concat({
 local fibers = require('fibers')
 local file = require('fibers.file')
 local socket = require('fibers.socket')
-local Host = require('fibers.host')
 local SimulatedHost = require('tests.support.simulated_host')
-local Handle = require('fibers.host.handle')
-local HostError = require('fibers.host.error')
+local Handle = require('fibers.io.handle')
+local HostError = require('fibers.io.error')
 local IOAudit = require('fibers.diagnostics.io')
 IOAudit.install(require('tests.support.io_audit_observer'))
 

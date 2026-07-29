@@ -7,11 +7,11 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Address = require('fibers.socket.address')
+local Address = require('fibers.net.address')
 local Completion = require('fibers.resource.completion')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local DNSResolver = require('fibers.dns.resolver')
-local IO = require('fibers.host.io')
+local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
@@ -100,7 +100,7 @@ local function combine_family_states(query, families)
     return addresses
   end
   return nil,
-    preferred_error or errors[1] or HostError.system(
+    preferred_error or errors[1] or IOError.system(
       'resolver',
       'resolve',
       'name resolved to no usable addresses',
@@ -147,7 +147,7 @@ end
 function Query:close_op(reason)
   reason = reason or 'resolver query closed'
   local cancel = self.driver and self.driver:request_cancel_op(reason) or Op.always(true)
-  local err = HostError.closed('resolver', 'resolve', {
+  local err = IOError.closed('resolver', 'resolve', {
     reason = reason,
     endpoint = self.endpoint,
   })
@@ -172,7 +172,7 @@ end
 local function normalise_addresses(values, endpoint, allow_empty, expected_family)
   if type(values) ~= 'table' then
     return nil,
-      HostError.protocol('resolver', 'resolve', 'host resolver must return an address list', {
+      IOError.protocol('resolver', 'resolve', 'host resolver must return an address list', {
         endpoint = endpoint,
       })
   end
@@ -182,7 +182,7 @@ local function normalise_addresses(values, endpoint, allow_empty, expected_famil
     local ok, address_or_err = Protected.pcall(Address.validate, values[i], 'resolver result')
     if not ok then
       return nil,
-        HostError.protocol('resolver', 'resolve', tostring(address_or_err), {
+        IOError.protocol('resolver', 'resolve', tostring(address_or_err), {
           endpoint = endpoint,
           index = i,
         })
@@ -190,24 +190,19 @@ local function normalise_addresses(values, endpoint, allow_empty, expected_famil
     local address = address_or_err
     if not Address.is_numeric(address) then
       return nil,
-        HostError.protocol('resolver', 'resolve', 'resolver returned an unresolved endpoint', {
+        IOError.protocol('resolver', 'resolve', 'resolver returned an unresolved endpoint', {
           endpoint = endpoint,
           index = i,
         })
     end
     if expected_family and address.kind ~= expected_family then
       return nil,
-        HostError.protocol(
-          'resolver',
-          'resolve_family',
-          'resolver returned an address from the wrong family',
-          {
-            endpoint = endpoint,
-            expected_family = expected_family,
-            actual_family = address.kind,
-            index = i,
-          }
-        )
+        IOError.protocol('resolver', 'resolve_family', 'resolver returned an address from the wrong family', {
+          endpoint = endpoint,
+          expected_family = expected_family,
+          actual_family = address.kind,
+          index = i,
+        })
     end
     local key = Address.key(address)
     if not seen[key] then
@@ -217,7 +212,7 @@ local function normalise_addresses(values, endpoint, allow_empty, expected_famil
   end
   if #out == 0 and not allow_empty then
     return nil,
-      HostError.system('resolver', 'resolve', 'name resolved to no usable addresses', 'EAI_NONAME', nil, {
+      IOError.system('resolver', 'resolve', 'name resolved to no usable addresses', 'EAI_NONAME', nil, {
         endpoint = endpoint,
       })
   end
@@ -262,13 +257,13 @@ end
 
 local function host_resolve(host, endpoint, opts)
   if not host or type(host.resolve) ~= 'function' then
-    return nil, HostError.unsupported('host', 'resolve', { endpoint = endpoint })
+    return nil, IOError.unsupported('host', 'resolve', { endpoint = endpoint })
   end
   return host:resolve(endpoint, opts)
 end
 
 local function family_error(query, family, message, code)
-  return HostError.system('resolver', 'resolve', message, code or 'EAI_NODATA', nil, {
+  return IOError.system('resolver', 'resolve', message, code or 'EAI_NODATA', nil, {
     endpoint = query.endpoint,
     family = family,
   })
@@ -281,7 +276,7 @@ local function publish_family(rt, query, family, addresses, err)
   else
     IO.masked_perform(
       rt,
-      completion:publish_failure_op(HostError.normalise(err, {
+      completion:publish_failure_op(IOError.normalise(err, {
         domain = 'resolver',
         action = 'resolve',
         endpoint = query.endpoint,
@@ -292,7 +287,7 @@ local function publish_family(rt, query, family, addresses, err)
 end
 
 local function publish_cancelled(rt, query, reason)
-  local err = HostError.closed('resolver', 'resolve', {
+  local err = IOError.closed('resolver', 'resolve', {
     reason = reason,
     endpoint = query.endpoint,
   })

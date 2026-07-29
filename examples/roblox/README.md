@@ -5,9 +5,10 @@ are not run by the stock-Lua example target because they require Roblox services
 and `RBXScriptSignal` values.
 
 Roblox remains in control of scheduling and frame progression. The canonical
-interface is `Roblox.prepare` plus bounded `Application:advance` calls. The
-`Roblox.attach`, `run` and `try_run` helpers add scheduling convenience without
-changing that boundary.
+interface is `Roblox.prepare` plus bounded `Application:advance` calls. This
+manually driven path does not require Roblox scheduler or `BindableEvent`
+capabilities. The `Roblox.attach`, `run` and `try_run` helpers add scheduling
+convenience above the same boundary.
 
 Install the generated Luau package so that these modules are available beneath
 your package root:

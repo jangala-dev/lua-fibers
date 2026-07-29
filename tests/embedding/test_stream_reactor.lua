@@ -17,10 +17,10 @@ local FakeHandle = require('tests.support.fake_handle')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
-local FibersStream = require('fibers.stream')
+local FibersStream = require('fibers.io.stream')
 local Op = FibersOp
 local Stream = FibersStream
-local HostHandle = require('fibers.host.handle')
+local HostHandle = require('fibers.io.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -633,7 +633,7 @@ do
   local owner = FibersScope.new('backend-contract-owner')
   local ok, err = pcall(function()
     Stream.open_op(
-      require('fibers.host.handle').new({
+      require('fibers.io.handle').new({
         name = 'missing-close',
         key = 'missing-close-key',
         read = function()
@@ -648,7 +648,7 @@ do
 
   ok, err = pcall(function()
     Stream.open_op(
-      require('fibers.host.handle').new({
+      require('fibers.io.handle').new({
         name = 'missing-read',
         key = 'missing-read-key',
         close = function()
@@ -661,7 +661,7 @@ do
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('requires read', 1, true))
 
-  local wrapped = require('fibers.host.handle').new({
+  local wrapped = require('fibers.io.handle').new({
     name = 'wrapped-missing-close',
     key = 'wrapped-missing-close-key',
     read = function()
@@ -679,7 +679,7 @@ end
 do
   local rt = FibersRuntime.new()
   local owner = FibersScope.new('direction-key-owner')
-  local backend = require('fibers.host.handle').new({
+  local backend = require('fibers.io.handle').new({
     name = 'direction-key-backend',
     key = { read = 'direction-read-key', write = 'direction-write-key' },
     read = function()

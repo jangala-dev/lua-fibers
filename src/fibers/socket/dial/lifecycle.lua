@@ -2,7 +2,7 @@
 
 local Op = require('fibers.op')
 local StateMachine = require('fibers.resource.machine')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local Common = require('fibers.socket.lifecycle')
 
 local Ready = StateMachine.Ready
@@ -184,13 +184,13 @@ function Dial:failure_op()
       return Op.always(state.error)
     end
     if state.kind == 'taken' then
-      return Op.always(HostError.closed('socket', 'take_dial_connection', {
+      return Op.always(IOError.closed('socket', 'take_dial_connection', {
         reason = 'connection already taken',
         address = state.address,
       }))
     end
     if state.kind == 'closing' or state.kind == 'closed' then
-      return Op.always(state.error or HostError.closed('socket', 'dial', {
+      return Op.always(state.error or IOError.closed('socket', 'dial', {
         reason = state.reason or 'dial closed',
         address = state.address,
       }))

@@ -7,8 +7,8 @@
 local Runtime = require('fibers.runtime')
 local Resolver = require('fibers.socket.resolver')
 local State = require('fibers.socket.dial.named.state')
-local HostError = require('fibers.host.error')
-local IO = require('fibers.host.io')
+local IOError = require('fibers.io.error')
+local IO = require('fibers.io.facility')
 local perform = require('fibers.perform')
 
 local RFC_MINIMUM_ATTEMPT_DELAY = 0.010
@@ -86,7 +86,7 @@ local function destination_ordering(opts, host)
       'host'
   end
   error(
-    HostError.unsupported('socket', 'sort_destination_addresses', {
+    IOError.unsupported('socket', 'sort_destination_addresses', {
       endpoint = opts.endpoint,
       message = 'Happy Eyeballs requires a host or application destination-ordering policy; '
         .. "set destination_ordering = 'stable' only as an explicit non-RFC fallback",

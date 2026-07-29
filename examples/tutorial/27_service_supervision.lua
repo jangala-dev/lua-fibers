@@ -17,7 +17,7 @@ local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Signal = require('fibers.resource.signal')
 local channel = require('fibers.channel')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local selected, detail, engine_exit
 
@@ -51,7 +51,7 @@ fibers.run(function(scope)
   else
     engine_exit = detail
   end
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(selected == 'shutdown')
 assert(detail == 'operations-centre maintenance')

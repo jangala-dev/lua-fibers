@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Completion = require('fibers.resource.completion')
-local IO = require('fibers.host.io')
+local IO = require('fibers.io.facility')
 local Op = require('fibers.op')
 
 local function assert_eq(actual, expected, message)

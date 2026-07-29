@@ -103,17 +103,14 @@ do
   local r = fibers.try_run(function()
     fibers.scope(function(scope)
       local h = { name = 'failing-settle' }
-      Lifetime.define(
-        h,
-        {
-          closure = {
-            name = 'fail',
-            finish_op = function()
-              error('closure failed', 0)
-            end,
-          },
-        }
-      )
+      Lifetime.define(h, {
+        closure = {
+          name = 'fail',
+          finish_op = function()
+            error('closure failed', 0)
+          end,
+        },
+      })
       fibers.perform(scope:admit_op(h))
       return 'body-value'
     end)

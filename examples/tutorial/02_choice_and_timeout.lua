@@ -15,7 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local confirmations = channel.new()
 local result
@@ -38,7 +38,7 @@ fibers.run(function(scope)
   if result == 'dispatch on precautionary threshold' then
     assert(confirmations:get() == 'river sensor confirmed')
   end
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(result == 'dispatch on precautionary threshold')
 print('emergency decision:', result)

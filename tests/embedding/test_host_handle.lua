@@ -16,13 +16,12 @@ local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
-local FibersStream = require('fibers.stream')
-local FibersHost = require('fibers.host')
-local Host = FibersHost
+local FibersStream = require('fibers.io.stream')
+local ManualHost = require('fibers.embed.manual')
 local Runtime = FibersRuntime
 local Scope = FibersScope
 local Stream = FibersStream
-local Handle = require('fibers.host.handle')
+local Handle = require('fibers.io.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -64,7 +63,7 @@ end
 -- providers may discover a level-ready descriptor while constructing it, before
 -- Stream.open_op attaches the handle to the runtime-owned reactor.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('prebind-ready-owner')
   local written, flushed = '', false
@@ -96,7 +95,7 @@ end
 
 -- A fake HostHandle opens through the handle backend and Stream.open_op and drives the read reaction.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('handle-read-owner')
   local handle = FakeHandle.new({ host = host, key = 'fake-read-handle' })
@@ -122,7 +121,7 @@ end
 -- A fake HostHandle drives the write reaction; blocking and later writability are
 -- host facts rather than stream facts.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('handle-write-owner')
   local handle = FakeHandle.new({ host = host, key = 'fake-write-handle', write_blocked = true })

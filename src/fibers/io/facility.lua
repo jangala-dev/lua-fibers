@@ -6,11 +6,11 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Stream = require('fibers.stream')
+local Stream = require('fibers.io.stream')
 local Task = require('fibers.task')
 local Scope = require('fibers.scope')
 local Lifetime = require('fibers.lifetime')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local Protected = require('fibers.protected')
 
 local IO = {}
@@ -105,7 +105,7 @@ end
 
 local function driver_exit_error(exit)
   if type(exit) ~= 'table' then
-    return HostError.protocol('runtime', 'driver_exit', 'driver returned an invalid Exit value')
+    return IOError.protocol('runtime', 'driver_exit', 'driver returned an invalid Exit value')
   end
   if exit.tag == 'cancelled' then
     return Runtime.cancelled(exit.reason, exit.token)
@@ -114,7 +114,7 @@ local function driver_exit_error(exit)
     return exit.error
   end
   if exit.tag ~= 'returned' then
-    return HostError.protocol('runtime', 'driver_exit', 'unknown driver Exit tag', { tag = exit.tag })
+    return IOError.protocol('runtime', 'driver_exit', 'unknown driver Exit tag', { tag = exit.tag })
   end
   return nil
 end
@@ -161,13 +161,13 @@ function IO.close_value(domain, value, reason)
   if value and type(value.close) == 'function' then
     return value:close(reason)
   end
-  return nil, HostError.unsupported(domain, 'close')
+  return nil, IOError.unsupported(domain, 'close')
 end
 
 function IO.protocol_error(domain, action, err, fields)
   fields = fields or {}
   fields.cause = fields.cause or err
-  return HostError.protocol(domain, action, tostring(err), fields)
+  return IOError.protocol(domain, action, tostring(err), fields)
 end
 
 function IO.safe_close(domain, value, reason, fields)
@@ -177,7 +177,7 @@ function IO.safe_close(domain, value, reason, fields)
     return nil, IO.protocol_error(domain, fields.action or 'close', closed, fields)
   end
   if not closed then
-    return nil, HostError.normalise(err, fields)
+    return nil, IOError.normalise(err, fields)
   end
   return true
 end

@@ -4,8 +4,6 @@
 -- held as an ordinary child Lifetime; closing it revokes the authority.
 -- A Grant is permission, not a lock or reservation. Exclusive access must be
 -- represented explicitly by the subject facility or another transactional resource.
-
-local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')

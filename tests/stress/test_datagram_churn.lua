@@ -18,7 +18,7 @@ if os.getenv('FIBERS_MACHINE') == 'reference' then
   return { status = 'skip', reason = 'native churn uses the production evaluator' }
 end
 
-local ok_mod, LinuxHost = pcall(require, 'fibers.host.luajit_linux')
+local ok_mod, LinuxHost = pcall(require, 'fibers.io.luajit_linux')
 if not ok_mod or not LinuxHost.is_supported() then
   return { status = 'skip', reason = 'LuaJIT FFI Linux datagram host unavailable' }
 end

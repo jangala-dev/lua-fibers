@@ -12,13 +12,13 @@ local Runtime = require('fibers.runtime')
 local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local CommandModule = require('fibers.process.command')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local FlowErrors = require('fibers.resource.flow.errors')
-local HostHold = require('fibers.internal.lifetime.host_hold')
+local HostHold = require('fibers.io.internal.host_hold')
 local Completion = require('fibers.resource.completion')
-local IO = require('fibers.host.io')
-local HostProcess = require('fibers.host.process')
-local IOAudit = require('fibers.diagnostics.io')
+local IO = require('fibers.io.facility')
+local HostProcess = require('fibers.io.process')
+local IOAudit = require('fibers.internal.io_audit')
 local Lifetime = require('fibers.lifetime')
 local Task = require('fibers.task')
 local Scope = require('fibers.scope')
@@ -171,7 +171,7 @@ end
 
 local function process_not_running(proc, action)
   local state = proc:state_value()
-  return HostError.closed('process', action, {
+  return IOError.closed('process', action, {
     pid = proc._pid,
     state = state and state.kind,
   })
@@ -186,12 +186,12 @@ function Process:signal_op(signal, target)
     return Op.always(true):wrap(function()
       local handle = self.host_process
       if not handle or type(handle.signal) ~= 'function' then
-        return nil, HostError.unsupported('host', 'process_signal', { pid = self._pid })
+        return nil, IOError.unsupported('host', 'process_signal', { pid = self._pid })
       end
       local ok, err = handle:signal(signal, target)
       if not ok then
         return nil,
-          HostError.normalise(err, {
+          IOError.normalise(err, {
             domain = 'process',
             action = 'signal',
             pid = self._pid,
@@ -233,7 +233,7 @@ function Process:communicate(opts)
   end
   if self._communicating then
     return nil,
-      HostError.invalid_argument('process', 'communicate', {
+      IOError.invalid_argument('process', 'communicate', {
         message = 'communicate may be used only once for a Process',
       })
   end
@@ -251,7 +251,7 @@ function Process:communicate(opts)
     if opts.input ~= nil and opts.input ~= '' then
       return fail(
         'communicate input unavailable',
-        HostError.invalid_argument('process', 'communicate', {
+        IOError.invalid_argument('process', 'communicate', {
           message = 'process stdin is not piped',
         })
       )
@@ -261,7 +261,7 @@ function Process:communicate(opts)
       if type(opts.input) ~= 'string' then
         return fail(
           'invalid communicate input',
-          HostError.invalid_argument('process', 'communicate', {
+          IOError.invalid_argument('process', 'communicate', {
             message = 'communicate input must be a string',
           })
         )
@@ -480,7 +480,7 @@ local function finish_close(proc, reason)
   end)
   if #errors > 0 then
     return nil,
-      HostError.protocol('process', 'close', 'one or more process resources failed to close', {
+      IOError.protocol('process', 'close', 'one or more process resources failed to close', {
         pid = proc._pid,
         errors = errors,
       })
@@ -506,7 +506,7 @@ local function supervise(proc, driver_scope, opts)
     publish_launch_failure(
       rt,
       proc,
-      HostError.normalise(start_err or endpoints, {
+      IOError.normalise(start_err or endpoints, {
         domain = 'process',
         action = 'start',
         argv = spec.argv,
@@ -545,7 +545,7 @@ local function supervise(proc, driver_scope, opts)
     publish_launch_failure(
       rt,
       proc,
-      HostError.normalise(exit_open_err, {
+      IOError.normalise(exit_open_err, {
         domain = 'process',
         action = 'open_exit_completion',
         pid = proc._pid,
@@ -573,7 +573,7 @@ local function supervise(proc, driver_scope, opts)
         publish_launch_failure(
           rt,
           proc,
-          HostError.normalise(stream_or_err, {
+          IOError.normalise(stream_or_err, {
             domain = 'process',
             action = 'open_' .. which,
             pid = proc._pid,
@@ -628,7 +628,7 @@ local function supervise(proc, driver_scope, opts)
       publish_launch_failure(
         rt,
         proc,
-        HostError.normalise(err, {
+        IOError.normalise(err, {
           domain = 'process',
           action = 'start_driver',
           pid = proc._pid,
@@ -664,8 +664,8 @@ local function supervise(proc, driver_scope, opts)
       end)
     end
     local signal_ok, signal_err = host_process:signal(spec.shutdown.signal, spec.shutdown.target)
-    if not signal_ok and not HostError.is(signal_err, 'closed') then
-      proc._close_error = HostError.normalise(signal_err, {
+    if not signal_ok and not IOError.is(signal_err, 'closed') then
+      proc._close_error = IOError.normalise(signal_err, {
         domain = 'process',
         action = 'terminate',
         pid = proc._pid,
@@ -710,7 +710,7 @@ local function driver_body(proc, driver_scope, opts)
     return
   end
   local rt = Runtime.current()
-  local failure = HostError.is(err) and err
+  local failure = IOError.is(err) and err
     or IO.protocol_error('process', 'supervisor', err, {
       pid = proc._pid,
       argv = proc.command._spec.argv,
@@ -863,6 +863,6 @@ end
 
 Module.Command = Command
 Module.Process = Process
-Module.Error = HostError
+Module.Error = IOError
 
 return Module

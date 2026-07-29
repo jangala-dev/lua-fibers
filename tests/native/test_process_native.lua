@@ -3,10 +3,10 @@ local Contract = require('tests.support.process_provider_contract')
 local exercised = 0
 local reasons = {}
 for _, spec in ipairs({
-  { module = 'fibers.host.luajit_linux', name = 'luajit_linux' },
-  { module = 'fibers.host.cffi_linux', name = 'cffi_linux' },
-  { module = 'fibers.host.luaposix', name = 'luaposix' },
-  { module = 'fibers.host.nixio', name = 'nixio' },
+  { module = 'fibers.io.luajit_linux', name = 'luajit_linux' },
+  { module = 'fibers.io.cffi_linux', name = 'cffi_linux' },
+  { module = 'fibers.io.luaposix', name = 'luaposix' },
+  { module = 'fibers.io.nixio', name = 'nixio' },
 }) do
   local ok, host_module = pcall(require, spec.module)
   local supported, reason = false, ok and nil or host_module

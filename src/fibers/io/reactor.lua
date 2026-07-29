@@ -11,13 +11,13 @@ local Runtime = require('fibers.runtime')
 local Effect = require('fibers.effect')
 local EventQueue = require('fibers.resource.event_queue')
 local Signal = require('fibers.resource.signal')
-local Interest = require('fibers.host.external').Interest
-local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+local Interest = require('fibers.embed.external').Interest
+local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Errors = require('fibers.resource.flow.errors')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
-local IOAudit = require('fibers.diagnostics.io')
+local IOAudit = require('fibers.internal.io_audit')
 local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
 
@@ -36,7 +36,7 @@ local next_entry = 0
 
 local function optional_shutdown(handle, name, reason)
   local ok, err = handle[name](handle, reason)
-  if ok == nil and HostError.is_unsupported(err) then
+  if ok == nil and IOError.is_unsupported(err) then
     return true
   end
   return ok, err
@@ -663,8 +663,8 @@ function Reactor:_service_offer(entry)
   local ok, value, err = call_nonyielding_pull(self, source._pull, entry.handle)
   if not ok then
     release_offer_slot(self, source)
-    local failure = HostError.is(value) and value
-      or HostError.protocol(source.domain, source.action, tostring(value), {
+    local failure = IOError.is(value) and value
+      or IOError.protocol(source.domain, source.action, tostring(value), {
         cause = value,
       })
     entry.retire_state = { kind = 'failed', error = failure }
@@ -695,7 +695,7 @@ function Reactor:_service_offer(entry)
     return self:_retire_entry(entry, 'offer capacity release failed')
   end
 
-  if HostError.is_would_block(err) then
+  if IOError.is_would_block(err) then
     entry.would_block_count = entry.would_block_count + 1
     if entry.mode == 'poll' then
       entry.next_poll = self.runtime:now() + (entry.poll_interval or 0.025)
@@ -704,13 +704,13 @@ function Reactor:_service_offer(entry)
     return true
   end
 
-  if HostError.is(err, 'closed') or HostError.is_eof(err) then
+  if IOError.is(err, 'closed') or IOError.is_eof(err) then
     source.error = source._closed_error and source._closed_error(err) or err
     entry.retire_state = { kind = 'succeeded', reason = 'host source closed' }
     return self:_retire_entry(entry, 'host source closed')
   end
 
-  local failure = HostError.normalise(err, { domain = source.domain, action = source.action })
+  local failure = IOError.normalise(err, { domain = source.domain, action = source.action })
   entry.retire_state = { kind = 'failed', error = failure }
   return self:_retire_entry(entry, 'host source failed')
 end
@@ -740,7 +740,7 @@ function Reactor:_service_read(entry)
     return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
   end
 
-  if err == Errors.EOF or HostError.is_eof(err) then
+  if err == Errors.EOF or IOError.is_eof(err) then
     if bytes and #bytes > 0 then
       local n, commit_err = masked_perform(self.runtime, space:commit_op(bytes))
       if not n then
@@ -754,7 +754,7 @@ function Reactor:_service_read(entry)
     return self:_retire_entry(entry, Errors.EOF)
   end
 
-  if HostError.is_would_block(err) then
+  if IOError.is_would_block(err) then
     entry.would_block_count = entry.would_block_count + 1
     if bytes ~= nil and bytes ~= '' then
       masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
@@ -823,7 +823,7 @@ function Reactor:_service_write(entry)
     -- Lease handles are captured snapshots.  Reacquire after every
     -- acknowledgement so a partial write observes the remaining suffix.
     entry.lease = nil
-  elseif HostError.is_would_block(err) or n == 0 then
+  elseif IOError.is_would_block(err) or n == 0 then
     entry.would_block_count = entry.would_block_count + 1
     -- Retain byte custody and rearm the one-shot readiness registration.
   else
@@ -838,8 +838,8 @@ end
 function Reactor:_service_callback(entry)
   local ok, serviced, err = call_nonyielding_pull(self, entry.callback, entry.handle)
   if not ok then
-    entry.retire_error = HostError.is(serviced) and serviced
-      or HostError.protocol(
+    entry.retire_error = IOError.is(serviced) and serviced
+      or IOError.protocol(
         'host',
         'reactor_callback',
         tostring(serviced),
@@ -848,12 +848,12 @@ function Reactor:_service_callback(entry)
     return self:_retire_entry(entry, 'reactor callback raised')
   end
   if serviced == nil or serviced == false then
-    if HostError.is_would_block(err) then
+    if IOError.is_would_block(err) then
       entry.would_block_count = entry.would_block_count + 1
       self:_refresh(entry)
       return true
     end
-    entry.retire_error = HostError.normalise(err, { domain = 'host', action = 'reactor_callback' })
+    entry.retire_error = IOError.normalise(err, { domain = 'host', action = 'reactor_callback' })
     return self:_retire_entry(entry, 'reactor callback failed')
   end
   self:_refresh(entry)

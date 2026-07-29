@@ -5,10 +5,10 @@
 -- directly; there is no adapter description between the binding and the host.
 
 local FlowErrors = require('fibers.resource.flow.errors')
-local Handle = require('fibers.host.handle')
-local HostError = require('fibers.host.error')
-local WaitSet = require('fibers.host.wait_set')
-local Address = require('fibers.socket.address')
+local Handle = require('fibers.io.handle')
+local IOError = require('fibers.io.error')
+local WaitSet = require('fibers.embed.wait_set')
+local Address = require('fibers.net.address')
 
 local Posix = {}
 
@@ -21,6 +21,9 @@ local function unavailable(prefix, reason)
       return reason
     end,
     new = function()
+      error(prefix .. ': ' .. tostring(reason), 2)
+    end,
+    platform = function()
       error(prefix .. ': ' .. tostring(reason), 2)
     end,
   }
@@ -36,7 +39,7 @@ end
 
 local function system_error(binding, domain, action, errno, message, fields)
   local detail, name = error_detail(binding, errno, message)
-  return HostError.system(domain, action, detail, name, errno, fields)
+  return IOError.system(domain, action, detail, name, errno, fields)
 end
 
 local function is_error(binding, group, errno)
@@ -229,9 +232,9 @@ local function make_network(binding, Fd)
 
   local function socket_error(action, errno, message, fields)
     if is_error(binding, 'again', errno) then
-      return HostError.would_block('socket', action, fields)
+      return IOError.would_block('socket', action, fields)
     elseif is_error(binding, 'closed', errno) then
-      return HostError.closed('socket', action, fields)
+      return IOError.closed('socket', action, fields)
     end
     return system_error(binding, 'socket', action, errno, message, fields)
   end
@@ -258,7 +261,7 @@ local function make_network(binding, Fd)
 
   local function option(value, level, name, enabled, action, fields)
     if not net.set_option then
-      return nil, HostError.unsupported('socket', action, fields)
+      return nil, IOError.unsupported('socket', action, fields)
     end
     local ok, errno, message = net.set_option(value, level, name, enabled)
     return ok and true or nil, ok and nil or socket_error(action, errno, message, fields)
@@ -267,7 +270,7 @@ local function make_network(binding, Fd)
   local function wrap(value, host, name, family)
     local handle, err = Fd.new(value, { host = host, name = name, nonblocking = true, cloexec = true })
     if not handle then
-      return nil, HostError.normalise(err, { domain = 'socket', action = 'wrap' })
+      return nil, IOError.normalise(err, { domain = 'socket', action = 'wrap' })
     end
     handle.family, handle.socket_family = binding.family .. '-socket', family
     handle.local_address = function(self)
@@ -295,7 +298,7 @@ local function make_network(binding, Fd)
       return nil, err
     end
     if not net.supports(endpoint.family) then
-      return nil, HostError.unsupported('socket', 'listen', { address = address })
+      return nil, IOError.unsupported('socket', 'listen', { address = address })
     end
     local value, errno, message = net.open(endpoint.family, 'stream', host)
     if not value then
@@ -340,7 +343,7 @@ local function make_network(binding, Fd)
       local child_raw, peer, accept_errno, accept_message = net.accept(raw_of(self))
       if not child_raw then
         if is_error(binding, 'again', accept_errno) then
-          return nil, nil, HostError.would_block('socket', 'accept', { address = self.address })
+          return nil, nil, IOError.would_block('socket', 'accept', { address = self.address })
         end
         return nil, nil, socket_error('accept', accept_errno, accept_message, { address = self.address })
       end
@@ -376,7 +379,7 @@ local function make_network(binding, Fd)
       return nil, err
     end
     if not net.supports(endpoint.family) then
-      return nil, HostError.unsupported('socket', 'dial', { address = address })
+      return nil, IOError.unsupported('socket', 'dial', { address = address })
     end
     local value, errno, message = net.open(endpoint.family, 'stream', host)
     if not value then
@@ -396,7 +399,7 @@ local function make_network(binding, Fd)
       if local_endpoint.family ~= endpoint.family then
         return close_failed(
           handle,
-          HostError.invalid_argument('socket', 'bind', {
+          IOError.invalid_argument('socket', 'bind', {
             address = opts.local_address,
             message = 'local and peer address families differ',
           })
@@ -448,7 +451,7 @@ local function make_network(binding, Fd)
         return self, query(raw_of(self), true, endpoint.family) or address
       end
       if is_error(binding, 'connect_pending', socket_errno) then
-        return nil, nil, HostError.would_block('socket', 'connect', { address = address })
+        return nil, nil, IOError.would_block('socket', 'connect', { address = address })
       end
       return nil, nil, socket_error('connect', socket_errno, socket_message, { address = address })
     end
@@ -458,11 +461,11 @@ local function make_network(binding, Fd)
   if net.datagram then
     local function datagram_error(action, errno, message, fields)
       if is_error(binding, 'again', errno) then
-        return HostError.would_block('datagram', action, fields)
+        return IOError.would_block('datagram', action, fields)
       elseif is_error(binding, 'closed', errno) then
-        return HostError.closed('datagram', action, fields)
+        return IOError.closed('datagram', action, fields)
       elseif is_error(binding, 'message_too_large', errno) then
-        return HostError.message_too_large('datagram', action, fields)
+        return IOError.message_too_large('datagram', action, fields)
       end
       return system_error(binding, 'datagram', action, errno, message, fields)
     end
@@ -534,7 +537,7 @@ local function make_network(binding, Fd)
         end
         if target.family ~= endpoint.family then
           return nil,
-            HostError.protocol(
+            IOError.protocol(
               'datagram',
               'send_to',
               'source and destination address families differ',
@@ -576,7 +579,7 @@ local function make_resolver(binding)
     end
     if #out == 0 then
       return nil,
-        HostError.system(
+        IOError.system(
           'resolver',
           'resolve',
           'name resolved to no usable stream addresses',
@@ -640,7 +643,7 @@ function Posix.define(binding)
   assert(type(binding.time) == 'table', 'host binding time operations required')
   assert(type(binding.poll) == 'table', 'host binding poll operations required')
 
-  local prefix = 'fibers.host.' .. binding.name
+  local prefix = 'fibers.io.' .. binding.name
   local Fd = make_fd(binding)
   local Network = make_network(binding, Fd)
   local resolver = binding.resolver
@@ -690,6 +693,7 @@ function Posix.define(binding)
       kind = binding.name,
       name = binding.name,
       family = binding.family,
+      wait_domain = binding.wait_domain or binding.family,
       fd = Fd,
       capabilities = capabilities(binding, features),
       now = function()
@@ -698,6 +702,8 @@ function Posix.define(binding)
     }, Host)
     return host
   end
+
+  Module.platform = Module.new
 
   function Host:sleep(seconds)
     return binding.time.sleep(seconds)

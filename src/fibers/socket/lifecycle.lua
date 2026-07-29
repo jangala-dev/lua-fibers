@@ -1,9 +1,8 @@
 -- Shared transactional lifecycle machine for listener-like socket resources.
 
 local Op = require('fibers.op')
-local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 
 local Ready = StateMachine.Ready
 local Lifecycle = {}
@@ -182,7 +181,7 @@ function Lifecycle.define(spec)
       end
       return Op.always(
         nil,
-        HostError.closed(spec.error_domain, spec.start_action, {
+        IOError.closed(spec.error_domain, spec.start_action, {
           reason = state.reason or spec.closed_reason,
           address = state.address,
         })

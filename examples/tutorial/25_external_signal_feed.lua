@@ -13,9 +13,9 @@ package.path = table.concat({
 -- the Fibers runtime without running application logic re-entrantly.
 
 local Runtime = require('fibers.runtime')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
-local runtime = Runtime.new({ host = Host.manual() })
+local runtime = Runtime.new({ host = ManualHost.new() })
 local signal, feed = runtime:signal('door-sensor')
 local result
 

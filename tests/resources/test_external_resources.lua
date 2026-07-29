@@ -21,7 +21,7 @@ end
 local Signal = require('fibers.resource.signal')
 local EventQueue = require('fibers.resource.event_queue')
 local Clock = require('fibers.resource.clock')
-local Readiness = require('fibers.host.readiness')
+local Readiness = require('fibers.io.readiness')
 local Rendezvous = require('fibers.resource.rendezvous')
 
 local function fail(msg)
@@ -217,7 +217,7 @@ end
 -- Observation also protects external resource observations if a producer
 -- bypasses the runtime-wide epoch.
 do
-  local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+  local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
   local ev = Signal.new('bounded-source-observation')
   local rt = Runtime.new()
   local got
@@ -271,7 +271,7 @@ end
 
 -- External feeds are resource-generic capabilities rather than resource-kind checks.
 do
-  local ExternalFeed = require('fibers.host.external').Feed
+  local ExternalFeed = require('fibers.embed.external').Feed
   local rt = Runtime.new()
   local resource = {
     _fibers_external_deliver = function(self, value)

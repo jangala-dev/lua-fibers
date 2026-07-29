@@ -6,14 +6,14 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
-local HostHold = require('fibers.internal.lifetime.host_hold')
-local IO = require('fibers.host.io')
+local IOError = require('fibers.io.error')
+local HostHold = require('fibers.io.internal.host_hold')
+local IO = require('fibers.io.facility')
 local Activation = require('fibers.socket.activation')
 local Lifecycle = require('fibers.socket.lifecycle')
 local Connection = require('fibers.socket.connection')
 local Closure = require('fibers.closure')
-local HostOffer = require('fibers.host.offer')
+local HostOffer = require('fibers.io.offer')
 local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
@@ -153,7 +153,7 @@ end
 local function retire_listener(listener, rt, source_state)
   local reason = source_state.reason or 'listener offer source stopped'
   local err = source_state.kind == 'failed' and source_state.error or nil
-  local fatal = err ~= nil and not HostError.is(err)
+  local fatal = err ~= nil and not IOError.is(err)
   local first, state = IO.masked_perform(rt, listener.lifecycle:request_stop_op(reason, err, fatal))
   local close_error
   if state.handle and not listener.handle_closed then
@@ -211,7 +211,7 @@ local function accepted_offers(listener, opts)
       end
     end,
     closed_error = function(err)
-      return HostError.closed('socket', 'accept', {
+      return IOError.closed('socket', 'accept', {
         reason = err and err.reason or 'listener closed',
         address = listener:local_address(),
       })

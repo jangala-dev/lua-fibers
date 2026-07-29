@@ -5,9 +5,9 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local Completion = require('fibers.resource.completion')
-local IO = require('fibers.host.io')
+local IO = require('fibers.io.facility')
 local Mailbox = require('fibers.mailbox')
 local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
@@ -26,7 +26,7 @@ function Algorithms.read_exactly(read, count, fields)
       fields = fields or {}
       fields.expected = count
       fields.received = total
-      return nil, HostError.eof('file', 'read_exactly', fields)
+      return nil, IOError.eof('file', 'read_exactly', fields)
     end
     parts[#parts + 1] = bytes
     total = total + #bytes
@@ -63,7 +63,7 @@ function Algorithms.read_all(read, opts)
       end
     end
     return nil,
-      HostError.system(
+      IOError.system(
         'file',
         'read_all',
         'file exceeds configured maximum',
@@ -84,7 +84,7 @@ function Algorithms.write_all(write, bytes, fields)
     end
     if written <= 0 then
       return nil,
-        HostError.system(
+        IOError.system(
           'file',
           'write_all',
           'write made no progress',
@@ -113,7 +113,7 @@ function Provider.for_runtime(runtime, opts)
 
   local host = runtime.host
   if not host or type(host.file_provider) ~= 'function' then
-    return nil, HostError.unsupported('file', 'provider', { host = host and host.name })
+    return nil, IOError.unsupported('file', 'provider', { host = host and host.name })
   end
   local ok, provider = pcall(host.file_provider, host, runtime, opts or {})
   if
@@ -121,7 +121,7 @@ function Provider.for_runtime(runtime, opts)
     or not provider
     or (type(provider.is_supported) == 'function' and not provider:is_supported())
   then
-    return nil, HostError.unsupported('file', 'provider', { host = host.name })
+    return nil, IOError.unsupported('file', 'provider', { host = host.name })
   end
 
   by_runtime[runtime] = provider
@@ -279,7 +279,7 @@ end
 
 local function enqueue(file, kind, args)
   if not file.closed_completion:is_pending() then
-    return Op.always(nil, HostError.closed('file', kind, { path = file.path }))
+    return Op.always(nil, IOError.closed('file', kind, { path = file.path }))
   end
   local request = new_request(kind, args)
   return file.tx:send_op(request):map(function()
@@ -503,7 +503,7 @@ local function execute_request(file, provider, backend, request)
     return backend:flush()
   elseif kind == 'sync' then
     if type(backend.sync) ~= 'function' then
-      return nil, HostError.unsupported('file', 'sync', { path = file.path })
+      return nil, IOError.unsupported('file', 'sync', { path = file.path })
     end
     return backend:sync(args.data_only)
   elseif kind == 'rename' then
@@ -521,7 +521,7 @@ local function execute_request(file, provider, backend, request)
       -- temporary-file semantics, this keeps completion-backed providers such
       -- as io_uring alive until the final path operation has completed.
       local unlinked, err = provider:unlink(file.path, file.provider_opts or {})
-      if unlinked or (HostError.is(err, 'system') and err.code == 'ENOENT') then
+      if unlinked or (IOError.is(err, 'system') and err.code == 'ENOENT') then
         file.auto_unlink = false
       else
         unlink_err = err
@@ -536,7 +536,7 @@ local function execute_request(file, provider, backend, request)
     end
     return true
   end
-  return nil, HostError.invalid_argument('file', kind, { message = 'unknown file request' })
+  return nil, IOError.invalid_argument('file', kind, { message = 'unknown file request' })
 end
 
 local function drive_file(file, opts)
@@ -562,7 +562,7 @@ local function drive_file(file, opts)
         file.auto_unlink = true
         break
       end
-      if not (HostError.is(open_err, 'system') and open_err.code == 'EEXIST') then
+      if not (IOError.is(open_err, 'system') and open_err.code == 'EEXIST') then
         break
       end
     end
@@ -570,7 +570,7 @@ local function drive_file(file, opts)
     backend, open_err = provider:open(file.path, file.mode, opts)
   end
   if not backend then
-    local failure = HostError.normalise(open_err, { domain = 'file', action = 'open', path = file.path })
+    local failure = IOError.normalise(open_err, { domain = 'file', action = 'open', path = file.path })
     publish(rt, file.ready_completion, false, failure)
     IO.masked_perform(rt, file.tx:close_op(failure))
     publish(rt, file.closed_completion, false, failure)
@@ -598,7 +598,7 @@ local function drive_file(file, opts)
         rt,
         request.completion,
         false,
-        HostError.normalise(err, { domain = 'file', action = request.kind, path = file.path })
+        IOError.normalise(err, { domain = 'file', action = request.kind, path = file.path })
       )
     else
       publish(rt, request.completion, true, value, err)
@@ -616,7 +616,7 @@ local function drive_file(file, opts)
   local ok, err = backend:close('file request queue closed')
   if ok and file.auto_unlink then
     local unlinked, unlink_err = provider:unlink(file.path, file.provider_opts or {})
-    if not unlinked and not (HostError.is(unlink_err, 'system') and unlink_err.code == 'ENOENT') then
+    if not unlinked and not (IOError.is(unlink_err, 'system') and unlink_err.code == 'ENOENT') then
       ok, err = nil, unlink_err
     end
     file.auto_unlink = false
@@ -657,7 +657,7 @@ local function new_file_op(path, mode, opts, label, temporary)
       end
       local rt = Runtime.current()
       local failure = Runtime.is_cancelled(err)
-          and HostError.closed(
+          and IOError.closed(
             'file',
             'driver',
             { path = file.path, reason = err.reason or 'file driver cancelled' }
@@ -894,7 +894,7 @@ local function mkdir_p_job(path, opts, label)
       if type(provider.mkdir_p) == 'function' then
         return provider:mkdir_p(path, job_opts)
       end
-      return nil, HostError.unsupported('file', 'mkdir_p', { path = path })
+      return nil, IOError.unsupported('file', 'mkdir_p', { path = path })
     end)
   end, opts)
 end
@@ -928,5 +928,5 @@ end
 File.RegularFile = RegularFile
 File.Request = Request
 File.Job = Job
-File.Error = HostError
+File.Error = IOError
 return File

@@ -196,7 +196,6 @@ end
 -- Witness cursors are retained at their current alternative rather than being
 -- reopened after each budget boundary.
 do
-  local IR = require('fibers.internal.kernel.ir')
   local Store = require('fibers.internal.kernel.ledger')
   local Kind = { name = 'resumable-witness' }
   local location = Store.new_location({

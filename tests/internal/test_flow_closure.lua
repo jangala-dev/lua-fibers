@@ -16,10 +16,8 @@ local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
-local FibersStream = require('fibers.stream')
+local FibersStream = require('fibers.io.stream')
 local Stream = FibersStream
-local HostHandle = require('fibers.host.handle')
-
 local function fail(msg)
   error(msg, 2)
 end

@@ -17,11 +17,9 @@ local FibersRuntime = require('fibers.runtime')
 local Lifetime = require('fibers.lifetime')
 local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
-local FibersStream = require('fibers.stream')
+local FibersStream = require('fibers.io.stream')
 local FibersClosure = require('fibers.closure')
 local Stream = FibersStream
-local HostHandle = require('fibers.host.handle')
-
 local function fail(msg)
   error(msg, 2)
 end
@@ -55,17 +53,14 @@ do
   rt:spawn_raw(function()
     scope:run(function(s)
       local h = { name = 'compound-failure-owned' }
-      Lifetime.define(
-        h,
-        {
-          closure = {
-            name = 'boom',
-            finish_op = function()
-              error('closure boom')
-            end,
-          },
-        }
-      )
+      Lifetime.define(h, {
+        closure = {
+          name = 'boom',
+          finish_op = function()
+            error('closure boom')
+          end,
+        },
+      })
       fibers.perform(s:admit_op(h))
       error('body boom')
     end)
@@ -171,19 +166,16 @@ do
   local state
   rt:spawn_raw(function()
     scope:run(function(s)
-      Lifetime.define(
-        h,
-        {
-          closure = {
-            name = 'wait',
-            finish_op = function()
-              return settled:wait_op():map(function()
-                return true
-              end)
-            end,
-          },
-        }
-      )
+      Lifetime.define(h, {
+        closure = {
+          name = 'wait',
+          finish_op = function()
+            return settled:wait_op():map(function()
+              return true
+            end)
+          end,
+        },
+      })
       rt:perform(s:admit_op(h))
     end)
   end, 'hardening-settling-root', scope)

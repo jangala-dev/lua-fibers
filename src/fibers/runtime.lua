@@ -2,18 +2,33 @@
 
 local Op = require('fibers.op')
 local Ledger = require('fibers.internal.kernel.ledger')
-local Interest = require('fibers.host.external').Interest
-local ExternalFeed = require('fibers.host.external').Feed
+local Interest = require('fibers.embed.external').Interest
+local ExternalFeed = require('fibers.embed.external').Feed
 local Protected = require('fibers.internal.protected')
 local Machine = require('fibers.internal.kernel.machine')
 local IR = require('fibers.internal.kernel.ir')
-local Instrumentation = require('fibers.diagnostics.search')
 local Dependencies = require('fibers.internal.kernel.dependencies')
 local Domain = require('fibers.internal.kernel.domain')
 local DependencyIndex = Dependencies.Index
 local Certificate = require('fibers.internal.kernel.certificate')
 local Path = require('fibers.internal.kernel.path')
 local GuardActivation = require('fibers.internal.guard_activation')
+local Context = require('fibers.internal.context')
+
+local function require_optional(module_name, feature)
+  local ok, module = pcall(require, module_name)
+  if ok then
+    return module
+  end
+  error(
+    (feature or module_name)
+      .. ' requires optional package module '
+      .. module_name
+      .. ': '
+      .. tostring(module),
+    3
+  )
+end
 
 -- Internal perform-boundary interruption tokens.
 local InterruptToken = {}
@@ -119,13 +134,11 @@ local function select_machine(opts)
   return Machine, 'ledger'
 end
 Runtime.__index = Runtime
-local CURRENT_RUNTIME = nil
-local CURRENT_SCOPE = nil
 function Runtime.current()
-  return CURRENT_RUNTIME
+  return Context.current_runtime()
 end
 function Runtime.current_scope()
-  return CURRENT_SCOPE
+  return Context.current_scope()
 end
 
 local unpack_ = table.unpack or unpack
@@ -355,7 +368,13 @@ function Runtime.new(opts)
   end
   local instrumentation = nil
   if opts.instrumentation then
-    instrumentation = Instrumentation.new(opts.instrumentation)
+    if type(opts.instrumentation) == 'table' and type(opts.instrumentation.inc) == 'function' then
+      instrumentation = opts.instrumentation
+    else
+      local module_name = 'fibers.diagnostics.search'
+      local Instrumentation = require_optional(module_name, 'Runtime instrumentation')
+      instrumentation = Instrumentation.new(opts.instrumentation)
+    end
   end
   local runtime = setmetatable({
     opts = opts,
@@ -531,7 +550,7 @@ function Runtime:push_scope(scope)
   fiber.scope_stack = fiber.scope_stack or {}
   fiber.scope_stack[#fiber.scope_stack + 1] = scope
   fiber.scope = scope
-  CURRENT_SCOPE = scope
+  Context.set_scope(scope)
   return { fiber = fiber, depth = #fiber.scope_stack, scope = scope }
 end
 
@@ -546,7 +565,7 @@ function Runtime:pop_scope(token)
   end
   stack[#stack] = nil
   fiber.scope = stack[#stack]
-  CURRENT_SCOPE = fiber.scope
+  Context.set_scope(fiber.scope)
   return true
 end
 
@@ -614,7 +633,8 @@ function Runtime:events(name)
 end
 
 function Runtime:readiness(key, name)
-  local resource = require('fibers.host.readiness').new(key, nil, name)
+  local module_name = 'fibers.io.readiness'
+  local resource = require_optional(module_name, 'Runtime:readiness').new(key, nil, name)
   return resource, self:external_feed(resource)
 end
 
@@ -865,9 +885,8 @@ function Runtime:_resume_fiber(fiber, a, b, c)
   if instrumentation then
     instrumentation:inc('fibre_resumes')
   end
-  local previous, previous_scope, previous_fiber = CURRENT_RUNTIME, CURRENT_SCOPE, self._current_fiber
+  local context_token, previous_fiber = Context.enter(self, fiber.scope), self._current_fiber
   self._current_fiber = fiber
-  CURRENT_RUNTIME, CURRENT_SCOPE = self, fiber.scope
   local old_phase = self:_set_phase('fiber')
   if fiber.started then
     ok, yielded, yielded_op, yielded_interrupt = coroutine.resume(fiber.co, a, b, c)
@@ -876,14 +895,14 @@ function Runtime:_resume_fiber(fiber, a, b, c)
     ok, yielded, yielded_op, yielded_interrupt = coroutine.resume(fiber.co)
   end
   self:_restore_phase(old_phase)
+  Context.leave(context_token)
+  self._current_fiber = previous_fiber
   if instrumentation then
     instrumentation:inc(
       'fibre_cpu_ns',
       math.floor((instrumentation.clock() - resume_started) * 1000000000 + 0.5)
     )
   end
-  CURRENT_RUNTIME, CURRENT_SCOPE = previous, previous_scope
-  self._current_fiber = previous_fiber
   if not ok then
     self:_finish_fiber(fiber)
     error(yielded, 0)
@@ -2201,7 +2220,6 @@ end
 
 function Runtime:drive(opts)
   opts = opts or {}
-  local Host = require('fibers.host')
   local host = opts.host or self.host
   local run_opts = opts.run
   local max_iterations = opts.max_iterations or opts.max_driver_iterations
@@ -2243,14 +2261,16 @@ function Runtime:drive(opts)
 end
 
 function Runtime:io_audit(opts)
-  return require('fibers.diagnostics.io').report(self, opts)
+  local module_name = 'fibers.diagnostics.io'
+  return require_optional(module_name, 'I/O audit').report(self, opts)
 end
 
 function Runtime:assert_io_quiescent(label)
   if self.host_reactor then
     self.host_reactor:assert_quiescent(label)
   end
-  return require('fibers.diagnostics.io').assert_clean(self, { label = label })
+  local module_name = 'fibers.diagnostics.io'
+  return require_optional(module_name, 'I/O audit').assert_clean(self, { label = label })
 end
 
 function Runtime:_pump()

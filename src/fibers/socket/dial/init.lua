@@ -6,9 +6,9 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
-local Address = require('fibers.socket.address')
-local IO = require('fibers.host.io')
+local IOError = require('fibers.io.error')
+local Address = require('fibers.net.address')
+local IO = require('fibers.io.facility')
 local DialLifecycle = require('fibers.socket.dial.lifecycle')
 local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
@@ -32,7 +32,7 @@ local function named_strategy()
 end
 
 local function copy_error(err)
-  if not HostError.is(err) then
+  if not IOError.is(err) then
     return err
   end
   local out = {}
@@ -47,8 +47,8 @@ local function attach_report(err, report)
     return err
   end
   local out = copy_error(err)
-  if not HostError.is(out) then
-    out = HostError.system('socket', 'dial', tostring(err), nil, nil)
+  if not IOError.is(out) then
+    out = IOError.system('socket', 'dial', tostring(err), nil, nil)
   end
   out.report = report
   return out
@@ -83,11 +83,11 @@ end
 local function cancelled_error(dial, err)
   local fields = terminal_fields(dial)
   fields.reason = err.reason or 'dial cancelled'
-  return HostError.closed('socket', 'dial', fields)
+  return IOError.closed('socket', 'dial', fields)
 end
 
 local function unexpected_error(dial, err)
-  if HostError.is(err) then
+  if IOError.is(err) then
     return err, false
   end
   return IO.protocol_error('socket', 'dial_driver', err, terminal_fields(dial)), true
@@ -148,7 +148,7 @@ local function driver(dial, driver_scope)
       return
     end
     error(
-      HostError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connection', {
+      IOError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connection', {
         endpoint = dial.endpoint,
         strategy = dial.strategy,
         state = state.kind,

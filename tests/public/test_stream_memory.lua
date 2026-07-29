@@ -16,7 +16,6 @@ local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersCell = require('fibers.resource.cell')
-local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 
 local function fail(msg)

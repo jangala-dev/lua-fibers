@@ -1,9 +1,8 @@
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
-local Host = require('fibers.host')
 local SimulatedHost = require('tests.support.simulated_host')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 local Stream = require('fibers.stream')
 local process = require('fibers.process')
 

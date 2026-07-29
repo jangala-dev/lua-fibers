@@ -15,11 +15,10 @@ local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local StateMachine = require('fibers.resource.machine')
 local FibersChannel = require('fibers.channel')
-local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersStream = require('fibers.stream')
 local FibersCalendar = require('examples.case_studies.calendar.calendar')
 local FibersPetri = require('examples.case_studies.petri.petri')
-local FibersHost = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 local FibersOp = require('fibers.op')
 local FibersLifetime = require('fibers.lifetime')
 local FibersScope = require('fibers.scope')
@@ -103,7 +102,7 @@ end)
 
 -- External feeds are driver actions, not fibre actions.
 do
-  local rt = FibersRuntime.new({ host = FibersHost.manual() })
+  local rt = FibersRuntime.new({ host = ManualHost.new() })
   local signal, feed = rt:signal('shutdown')
   local result
 

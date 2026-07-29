@@ -1,4 +1,4 @@
--- Structured errors at the host boundary.
+-- Structured errors at the I/O and host boundary.
 --
 -- Host adapters return these values for expected failures.  Flow and Stream may
 -- translate selected host conditions (notably EOF) into their own public error
@@ -9,7 +9,7 @@ local ErrorMT = {}
 ErrorMT.__index = ErrorMT
 
 function ErrorMT:__tostring()
-  return self.message or self.code or self.kind or 'host error'
+  return self.message or self.code or self.kind or 'I/O error'
 end
 
 local function copy_fields(dst, fields)
@@ -21,10 +21,10 @@ end
 
 function Error.new(kind, fields)
   if type(kind) ~= 'string' or kind == '' then
-    error('host error kind must be a non-empty string', 2)
+    error('I/O error kind must be a non-empty string', 2)
   end
   local out = copy_fields({
-    _fibers_host_error = true,
+    _fibers_io_error = true,
     kind = kind,
   }, fields)
   out.message = out.message or out.code or kind
@@ -32,7 +32,7 @@ function Error.new(kind, fields)
 end
 
 function Error.is(err, kind)
-  return type(err) == 'table' and err._fibers_host_error == true and (kind == nil or err.kind == kind)
+  return type(err) == 'table' and err._fibers_io_error == true and (kind == nil or err.kind == kind)
 end
 
 function Error.unsupported(domain, action, fields)
@@ -42,13 +42,13 @@ function Error.unsupported(domain, action, fields)
       domain = domain or 'host',
       action = action,
       code = action and ('unsupported_' .. tostring(action)) or 'unsupported',
-      message = action and ('unsupported host action: ' .. tostring(action)) or 'unsupported host action',
+      message = action and ('unsupported I/O action: ' .. tostring(action)) or 'unsupported I/O action',
     }, fields)
   )
 end
 
 local SIMPLE = {
-  would_block = { domain = 'io', temporary = true, message = 'host action would block' },
+  would_block = { domain = 'io', temporary = true, message = 'I/O action would block' },
   eof = { domain = 'io', action = 'read', message = 'end of file' },
   closed = { domain = 'io', message = 'resource is closed' },
   broken_pipe = { domain = 'io', action = 'write', message = 'pipe reader is closed' },
@@ -75,7 +75,7 @@ function Error.system(domain, action, message, code, number, fields)
       action = action,
       code = code,
       number = number,
-      message = message or code or 'host system error',
+      message = message or code or 'I/O system error',
     }, fields)
   )
 end
@@ -84,7 +84,7 @@ local CODED = {
   invalid_argument = {
     domain = 'host',
     code = 'invalid_argument',
-    message = 'invalid host action argument',
+    message = 'invalid I/O action argument',
   },
   message_too_large = {
     domain = 'datagram',
@@ -119,7 +119,7 @@ function Error.protocol(domain, action, message, fields)
     copy_fields({
       domain = domain or 'host',
       action = action,
-      message = message or 'host protocol error',
+      message = message or 'I/O protocol error',
     }, fields)
   )
 end

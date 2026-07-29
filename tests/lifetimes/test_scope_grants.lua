@@ -19,7 +19,6 @@ local Lifetime = require('fibers.lifetime')
 local Lifetimes = require('tests.support.lifetimes')
 local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
-local Closure = require('fibers.closure')
 local Completion = require('fibers.resource.completion')
 
 local function fail(msg)

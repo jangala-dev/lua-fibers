@@ -13,9 +13,9 @@ package.path = table.concat({
 
 local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
-local Stream = require('fibers.stream')
+local Stream = require('fibers.io.stream')
 local Scope = require('fibers.scope')
-local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 require('fibers.diagnostics.io').install(require('tests.support.io_audit_observer'))
 
 local function fail(msg)
@@ -79,7 +79,7 @@ end
 -- The shared external event queue is the poller hot FIFO.
 do
   local EventQueue = require('fibers.resource.event_queue')
-  local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+  local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
   local q = EventQueue.new('poller-burst')
   local rt = Runtime.new()
   local consumed = 0
@@ -117,7 +117,7 @@ end
 
 -- Stateless hosts share one plan for readiness resources and indexed poller registrations.
 do
-  local WaitSet = require('fibers.host.wait_set')
+  local WaitSet = require('fibers.embed.wait_set')
   local key = {}
   local readiness_feed, poller_feed = {}, {}
   local registration = { id = 'shared', generation = 1, key = key, mode = 'write' }
@@ -167,7 +167,7 @@ end
 do
   local module_names = {
     'nixio',
-    'fibers.host.nixio',
+    'fibers.io.nixio',
   }
   local saved_loaded, saved_preload = {}, {}
   for i = 1, #module_names do
@@ -223,7 +223,7 @@ do
   end
 
   local ok, err = pcall(function()
-    local NixioHost = require('fibers.host.nixio')
+    local NixioHost = require('fibers.io.nixio')
     local host = NixioHost.new()
     local delivered = {}
     local rt = {

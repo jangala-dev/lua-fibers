@@ -8,13 +8,13 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
-local Reactor = require('fibers.host.reactor')
+local IOError = require('fibers.io.error')
+local Reactor = require('fibers.io.reactor')
 local Closure = require('fibers.closure')
 local Counter = require('fibers.resource.counter')
 local EventQueue = require('fibers.resource.event_queue')
 local Signal = require('fibers.resource.signal')
-local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
+local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Lifetime = require('fibers.lifetime')
 local Protected = require('fibers.protected')
 
@@ -28,7 +28,7 @@ local function source_error(source, state)
     return state.error
   end
   return source.error
-    or HostError.closed(source.domain, source.action, {
+    or IOError.closed(source.domain, source.action, {
       reason = state and state.reason or source.reason or 'offer source completed',
     })
 end
@@ -47,7 +47,7 @@ local function aggregate_error(source, message, ...)
   if #compact == 1 then
     return compact[1]
   end
-  return HostError.protocol(source.domain, source.action, message, { errors = compact })
+  return IOError.protocol(source.domain, source.action, message, { errors = compact })
 end
 
 local function source_closure(source)
@@ -214,11 +214,10 @@ function Offer:_drain_unclaimed(rt, reason)
       local values = packed[i]
       local disposed, dispose_err = Protected.pcall(self._dispose, unpack_(values, 1, values.n), reason)
       if not disposed then
-        errors[#errors + 1] =
-          HostError.protocol(self.domain, self.action, 'unclaimed offer disposal raised', {
-            index = i,
-            cause = dispose_err,
-          })
+        errors[#errors + 1] = IOError.protocol(self.domain, self.action, 'unclaimed offer disposal raised', {
+          index = i,
+          cause = dispose_err,
+        })
       end
     end
   end
@@ -262,11 +261,11 @@ function Offer:_reactor_retired(rt, state, preserve_offers)
   if type(self._retired) == 'function' then
     local called, ok, err = Protected.pcall(self._retired, rt, terminal_state)
     if not called then
-      retired_error = HostError.protocol(self.domain, self.action, 'offer retirement callback raised', {
+      retired_error = IOError.protocol(self.domain, self.action, 'offer retirement callback raised', {
         cause = ok,
       })
     elseif ok == nil or ok == false then
-      retired_error = err or HostError.protocol(self.domain, self.action, 'offer retirement callback failed')
+      retired_error = err or IOError.protocol(self.domain, self.action, 'offer retirement callback failed')
     end
   end
   if retired_error then

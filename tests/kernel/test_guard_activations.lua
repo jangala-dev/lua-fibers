@@ -18,7 +18,6 @@ local Runtime = require('fibers.runtime')
 local Cell = require('fibers.resource.cell')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Sleep = require('fibers.sleep')
-local Clock = require('fibers.resource.clock')
 local Scope = require('fibers.scope')
 
 local function fail(message)

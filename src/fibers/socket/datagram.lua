@@ -6,13 +6,13 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Address = require('fibers.socket.address')
-local HostError = require('fibers.host.error')
-local HostHold = require('fibers.internal.lifetime.host_hold')
-local IO = require('fibers.host.io')
+local Address = require('fibers.net.address')
+local IOError = require('fibers.io.error')
+local HostHold = require('fibers.io.internal.host_hold')
+local IO = require('fibers.io.facility')
 local Activation = require('fibers.socket.activation')
 local Lifecycle = require('fibers.socket.lifecycle')
-local HostOffer = require('fibers.host.offer')
+local HostOffer = require('fibers.io.offer')
 local Closure = require('fibers.closure')
 local FIFO = require('fibers.resource.fifo')
 local Cell = require('fibers.resource.cell')
@@ -163,7 +163,7 @@ end
 
 local function terminal_error(state, action)
   return state.error
-    or HostError.closed('datagram', action, {
+    or IOError.closed('datagram', action, {
       reason = state.reason or 'datagram socket closed',
       address = state.address,
     })
@@ -209,7 +209,7 @@ function Datagram:send_to_op(data, address)
   if local_address and local_address.kind ~= address.kind then
     return Op.always(
       nil,
-      HostError.invalid_argument('datagram', 'send_to', {
+      IOError.invalid_argument('datagram', 'send_to', {
         message = 'datagram source and destination address families differ',
         source = local_address,
         destination = address,
@@ -313,7 +313,7 @@ end
 local function close_from_driver(socket, rt, reason, err, fatal)
   local first, state = IO.masked_perform(rt, socket.lifecycle:request_stop_op(reason, err, fatal))
   local pending_error = err
-    or HostError.closed('datagram', 'send_to', {
+    or IOError.closed('datagram', 'send_to', {
       reason = reason,
       address = socket:local_address(),
     })
@@ -333,13 +333,13 @@ end
 
 local function normalise_packet(socket, packet)
   if type(packet) ~= 'table' or type(packet.data) ~= 'string' then
-    return nil, HostError.protocol('datagram', 'receive_from', 'host returned an invalid datagram record')
+    return nil, IOError.protocol('datagram', 'receive_from', 'host returned an invalid datagram record')
   end
   if packet.peer ~= nil then
     local ok, peer = pcall(Address.validate, packet.peer, 'received datagram peer')
     if not ok then
       return nil,
-        HostError.protocol('datagram', 'receive_from', 'host returned an invalid peer address', {
+        IOError.protocol('datagram', 'receive_from', 'host returned an invalid peer address', {
           cause = peer,
         })
     end
@@ -374,7 +374,7 @@ local function packet_source(socket, capacity)
       return normalised
     end,
     closed_error = function(err)
-      return HostError.closed('datagram', 'receive_from', {
+      return IOError.closed('datagram', 'receive_from', {
         reason = err and err.reason or 'datagram socket closed',
         address = socket:local_address(),
       })
@@ -386,7 +386,7 @@ local function service_send(socket, handle, record)
   local n, err = handle:send_to(record.data, record.address)
   if n ~= nil then
     if n ~= #record.data then
-      local protocol = HostError.protocol('datagram', 'send_to', 'host reported a partial datagram send', {
+      local protocol = IOError.protocol('datagram', 'send_to', 'host reported a partial datagram send', {
         expected = #record.data,
         actual = n,
         address = record.address,
@@ -397,10 +397,10 @@ local function service_send(socket, handle, record)
     perform(socket.sends:complete_op(record.seq))
     return nil
   end
-  if HostError.is_would_block(err) then
+  if IOError.is_would_block(err) then
     return record
   end
-  err = HostError.normalise(err, {
+  err = IOError.normalise(err, {
     domain = 'datagram',
     action = 'send_to',
     address = record.address,
@@ -459,7 +459,7 @@ local function driver(socket, driver_scope)
 
   local failure
   local fatal = false
-  if HostError.is(driver_err) then
+  if IOError.is(driver_err) then
     failure = driver_err
   else
     failure = IO.protocol_error('datagram', 'driver', driver_err, {

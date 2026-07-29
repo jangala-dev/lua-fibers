@@ -8,16 +8,15 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Sleep = require('fibers.sleep')
-local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
-local Address = require('fibers.socket.address')
+local Address = require('fibers.net.address')
 local Datagram = require('fibers.socket.datagram')
 local Dial = require('fibers.socket.dial')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local Codec = require('fibers.dns.codec')
 local Config = require('fibers.dns.config')
 local File = require('fibers.file')
-local IO = require('fibers.host.io')
+local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 
@@ -85,16 +84,16 @@ local function copy_list(values)
 end
 
 local function copy_error(err)
-  if not HostError.is(err) then
+  if not IOError.is(err) then
     return err
   end
   local fields = {}
   for key, value in pairs(err) do
-    if key ~= '_fibers_host_error' and key ~= 'report' then
+    if key ~= '_fibers_io_error' and key ~= 'report' then
       fields[key] = value
     end
   end
-  return HostError.new(err.kind, fields)
+  return IOError.new(err.kind, fields)
 end
 
 local function error_value(kind, code, message, fields)
@@ -105,17 +104,17 @@ local function error_value(kind, code, message, fields)
   if kind == 'temporary' or kind == 'timeout' then
     fields.temporary = true
   end
-  return HostError.system('dns', 'resolve', message, code, nil, fields)
+  return IOError.system('dns', 'resolve', message, code, nil, fields)
 end
 
 local function invalid_argument(message, fields)
   fields = copy_table(fields)
   fields.message = message
-  return HostError.invalid_argument('dns', 'resolve', fields)
+  return IOError.invalid_argument('dns', 'resolve', fields)
 end
 
 local function protocol_error(message, fields)
-  return HostError.protocol('dns', 'resolve', message, fields)
+  return IOError.protocol('dns', 'resolve', message, fields)
 end
 
 local function normalise_name(name)
@@ -260,7 +259,7 @@ local function next_id(self)
   local allow_weak = self.opts.allow_weak_random == true or self.opts.require_secure_random == false
   if not allow_weak then
     return nil,
-      HostError.unsupported('dns', 'secure_random', {
+      IOError.unsupported('dns', 'secure_random', {
         code = 'dns_secure_random_unavailable',
         message = 'secure DNS transaction-ID entropy is unavailable',
         cause = entropy_err,
@@ -369,7 +368,7 @@ function Resolver:_load_config()
   end)
   if not self.config then
     return nil,
-      HostError.unsupported('dns', 'configuration', {
+      IOError.unsupported('dns', 'configuration', {
         code = 'dns_no_nameserver',
         message = tostring(self.config_error),
       })
@@ -501,18 +500,18 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
     max_datagram_size = opts.maximum_message_size or 65535,
   }))
   if not socket then
-    return nil, HostError.normalise(open_err, { domain = 'dns', action = 'udp_open', server = server })
+    return nil, IOError.normalise(open_err, { domain = 'dns', action = 'udp_open', server = server })
   end
 
   local sent, send_err = socket:send_to(wire, server)
   if not sent then
     close_quietly(socket, 'DNS UDP send failed')
-    return nil, HostError.normalise(send_err, { domain = 'dns', action = 'udp_send', server = server })
+    return nil, IOError.normalise(send_err, { domain = 'dns', action = 'udp_send', server = server })
   end
   local flushed, flush_err = socket:flush()
   if not flushed then
     close_quietly(socket, 'DNS UDP flush failed')
-    return nil, HostError.normalise(flush_err, { domain = 'dns', action = 'udp_send', server = server })
+    return nil, IOError.normalise(flush_err, { domain = 'dns', action = 'udp_send', server = server })
   end
 
   local rt = Runtime.current()
@@ -540,8 +539,7 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
     end
     if not packet then
       close_quietly(socket, 'DNS UDP receive failed')
-      return nil,
-        HostError.normalise(receive_err, { domain = 'dns', action = 'udp_receive', server = server })
+      return nil, IOError.normalise(receive_err, { domain = 'dns', action = 'udp_receive', server = server })
     end
     local decision = classify_udp_packet(packet, server, id, name, qtype, opts)
     if decision.kind == 'answer' then
@@ -564,33 +562,33 @@ function Resolver:_tcp_exchange(server, wire, id, name, qtype, timeout, opts)
     write_capacity = opts.tcp_write_capacity,
   }))
   if not dial then
-    return nil, HostError.normalise(dial_err, { domain = 'dns', action = 'tcp_dial', server = server })
+    return nil, IOError.normalise(dial_err, { domain = 'dns', action = 'tcp_dial', server = server })
   end
   local deadline = Runtime.current():now() + (tonumber(opts.tcp_timeout) or timeout or 5.0)
   local connection, connect_err = perform_before(dial:result_op(), deadline)
   if not connection then
     close_quietly(dial, 'DNS TCP dial failed')
-    return nil, HostError.normalise(connect_err, { domain = 'dns', action = 'tcp_dial', server = server })
+    return nil, IOError.normalise(connect_err, { domain = 'dns', action = 'tcp_dial', server = server })
   end
 
   local written, write_err = perform_before(connection:write_op(Codec.frame_tcp(wire)), deadline)
   if not written then
     close_quietly(connection, 'DNS TCP write failed')
     close_quietly(dial, 'DNS TCP write failed')
-    return nil, HostError.normalise(write_err, { domain = 'dns', action = 'tcp_write', server = server })
+    return nil, IOError.normalise(write_err, { domain = 'dns', action = 'tcp_write', server = server })
   end
   local flushed, flush_err = perform_before(connection:flush_op(), deadline)
   if not flushed then
     close_quietly(connection, 'DNS TCP flush failed')
     close_quietly(dial, 'DNS TCP flush failed')
-    return nil, HostError.normalise(flush_err, { domain = 'dns', action = 'tcp_write', server = server })
+    return nil, IOError.normalise(flush_err, { domain = 'dns', action = 'tcp_write', server = server })
   end
 
   local prefix, prefix_err = perform_before(connection:read_exactly_op(2), deadline)
   if not prefix then
     close_quietly(connection, 'DNS TCP prefix failed')
     close_quietly(dial, 'DNS TCP prefix failed')
-    return nil, HostError.normalise(prefix_err, { domain = 'dns', action = 'tcp_read', server = server })
+    return nil, IOError.normalise(prefix_err, { domain = 'dns', action = 'tcp_read', server = server })
   end
   local length = Codec.read_u16(prefix, 1)
   local maximum = tonumber(opts.maximum_tcp_message_size or 65535)
@@ -603,7 +601,7 @@ function Resolver:_tcp_exchange(server, wire, id, name, qtype, timeout, opts)
   close_quietly(connection, 'DNS TCP complete')
   close_quietly(dial, 'DNS TCP complete')
   if not data then
-    return nil, HostError.normalise(read_err, { domain = 'dns', action = 'tcp_read', server = server })
+    return nil, IOError.normalise(read_err, { domain = 'dns', action = 'tcp_read', server = server })
   end
   local message, decode_err = Codec.decode_message(data, {
     max_message_size = maximum,
@@ -1026,10 +1024,10 @@ function Resolver:_resolve_endpoint(endpoint, opts)
       return addresses
     end
     last_err = err
-    if not (HostError.is(err, 'system') and err.code == 'EAI_NONAME') then
+    if not (IOError.is(err, 'system') and err.code == 'EAI_NONAME') then
       -- NODATA for a search candidate is also eligible to continue to the next
       -- candidate, while transport and protocol failures are terminal.
-      if not (HostError.is(err, 'system') and err.code == 'EAI_NODATA') then
+      if not (IOError.is(err, 'system') and err.code == 'EAI_NODATA') then
         return nil, err
       end
     end

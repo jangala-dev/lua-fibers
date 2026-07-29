@@ -1,12 +1,12 @@
 -- Scoped stream and datagram sockets.
 
-local Address = require('fibers.socket.address')
+local Address = require('fibers.net.address')
 local Listener = require('fibers.socket.listener')
 local Dial = require('fibers.socket.dial')
 local Datagram = require('fibers.socket.datagram')
 local Resolver = require('fibers.socket.resolver')
 local DNS = require('fibers.dns')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local perform = require('fibers.perform')
 
 local Socket = {
@@ -14,7 +14,7 @@ local Socket = {
   Dial = Dial.Dial,
   Query = Resolver.Query,
   DatagramSocket = Datagram.DatagramSocket,
-  Error = HostError,
+  Error = IOError,
   DNSResolver = DNS.Resolver,
 
   ipv4_address = Address.ipv4,

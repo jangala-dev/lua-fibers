@@ -279,10 +279,11 @@ perform(a:write_op('hello\n'))
 assert(perform(b:read_line_op()) == 'hello')
 ```
 
-A host-backed Stream has one constructor:
+A host-backed Stream is an I/O facility layered over the portable Stream value:
 
 ```lua
-local stream = perform(Stream.open_op(handle, {
+local HostStream = require('fibers.io.stream')
+local stream = perform(HostStream.open_op(handle, {
   scope = scope, -- defaults to the current Scope
   name = 'connection',
 
@@ -301,7 +302,7 @@ enabled. A `HostHandle` must provide `close`, and must provide `read` or `write`
 for each enabled direction.
 
 Ordinary socket, file and process users will normally receive Streams from those
-facilities rather than call `Stream.open_op` directly.
+facilities rather than call `HostStream.open_op` directly. `fibers.stream.open_op` has been removed; host-backed streams use `fibers.io.stream.open_op`.
 
 ### Stream capabilities
 

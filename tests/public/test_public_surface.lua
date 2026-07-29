@@ -15,7 +15,9 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local FibersRuntime = require('fibers.runtime')
-local FibersHost = require('fibers.host')
+local FibersAutoIO = require('fibers.io.auto')
+local FibersManualHost = require('fibers.embed.manual')
+local FibersPureHost = require('fibers.embed.pure')
 local FibersFlow = require('fibers.resource.flow')
 local FibersFile = require('fibers.file')
 local FibersSocket = require('fibers.socket')
@@ -30,7 +32,7 @@ local FibersLease = require('fibers.resource.lease')
 local FibersSignal = require('fibers.resource.signal')
 local FibersEventQueue = require('fibers.resource.event_queue')
 local FibersClock = require('fibers.resource.clock')
-local FibersReadiness = require('fibers.host.readiness')
+local FibersReadiness = require('fibers.io.readiness')
 local FibersLifetime = require('fibers.lifetime')
 local FibersEffect = require('fibers.effect')
 local FibersTask = require('fibers.task')
@@ -38,7 +40,7 @@ local FibersClosure = require('fibers.closure')
 local FibersGrant = require('fibers.grant')
 local FibersScope = require('fibers.scope')
 local FibersRoblox = require('fibers.roblox')
-local FibersRobloxHost = require('fibers.host.roblox')
+local FibersRobloxHost = require('fibers.roblox.host')
 local FibersRobloxSubscription = require('fibers.roblox.subscription')
 local FibersChannel = require('fibers.channel')
 local FibersMailbox = require('fibers.mailbox')
@@ -227,21 +229,20 @@ do
     { 'DNS', FibersDNS, { 'new' } },
     { 'Process', FibersProcess, { 'command', 'shell', 'redirect', 'succeeded', 'describe_status' } },
     {
-      'Host',
-      FibersHost,
+      'AutoIO',
+      FibersAutoIO,
       {
         'default',
         'select',
         'available',
-        'pure',
-        'manual',
-        'roblox',
         'luajit_linux',
         'cffi_linux',
         'luaposix',
         'nixio',
       },
     },
+    { 'ManualHost', FibersManualHost, { 'new', 'is_supported' } },
+    { 'PureHost', FibersPureHost, { 'new' } },
     {
       'Roblox',
       FibersRoblox,
@@ -309,7 +310,6 @@ do
     assert_functions(surfaces[i][1], surfaces[i][2], surfaces[i][3])
   end
 
-  assert_eq(FibersHost.Reactor, require('fibers.host.reactor'), 'Host.Reactor')
   assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox.Host')
   assert_eq(FibersRoblox.Subscription, FibersRobloxSubscription, 'Roblox.Subscription')
 

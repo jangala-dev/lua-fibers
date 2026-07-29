@@ -3,7 +3,7 @@
 -- ManualHost owns only time, readiness and final host-method injection. It does
 -- not simulate pipes, sockets, DNS, datagrams, processes or files.
 
-local WaitSet = require('fibers.host.wait_set')
+local WaitSet = require('fibers.embed.wait_set')
 
 local Manual = {}
 Manual.__index = Manual
@@ -41,9 +41,10 @@ function Manual.new(opts)
   local initial = opts.now
   local now_fn = type(initial) == 'function' and initial or nil
   local host = setmetatable({
-    kind = 'manual',
-    name = 'manual',
-    family = 'manual',
+    kind = opts.kind or 'manual',
+    name = opts.name or opts.kind or 'manual',
+    family = opts.family or opts.kind or 'manual',
+    wait_domain = opts.wait_domain or opts.family or opts.kind or 'manual',
     _now = tonumber(initial) or 0,
     _now_fn = now_fn,
     _sleep = opts.sleep,
@@ -133,7 +134,7 @@ end
 
 function Manual:block(runtime, waits, _status, opts)
   if self.closed then
-    error('fibers.host.manual: host is closed', 2)
+    error('fibers.embed.manual: host is closed', 2)
   end
   local set, delivered = WaitSet.build(waits), false
   for i = 1, #set.records do

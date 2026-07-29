@@ -1,7 +1,7 @@
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
-local Interest = require('fibers.host.external').Interest
-local ExternalFeed = require('fibers.host.external').Feed
+local Interest = require('fibers.embed.external').Interest
+local ExternalFeed = require('fibers.embed.external').Feed
 
 local Readiness = {}
 Readiness.__index = function(self, key)

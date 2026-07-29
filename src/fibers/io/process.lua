@@ -1,7 +1,7 @@
 -- Shared process status, lifecycle and stdio machinery.
 
-local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.diagnostics.io')
+local IOError = require('fibers.io.error')
+local IOAudit = require('fibers.internal.io_audit')
 
 local M = {}
 
@@ -12,7 +12,7 @@ local function close_returned(value, reason)
 end
 
 local function invalid_contract(host, missing)
-  return HostError.protocol(
+  return IOError.protocol(
     'host',
     'start_process',
     'host process provider returned an invalid process handle',
@@ -28,7 +28,7 @@ end
 -- same process-handle contract beneath the public Process Lifetime.
 function M.start(host, spec)
   if not host or type(host.start_process) ~= 'function' then
-    return nil, nil, HostError.unsupported('host', 'process', { host = host and host.name or nil })
+    return nil, nil, IOError.unsupported('host', 'process', { host = host and host.name or nil })
   end
   local process, endpoints, err = host:start_process(spec)
   if not process then
@@ -105,7 +105,7 @@ do
             return number
           end
         end
-        return nil, HostError.invalid_argument('process', 'signal', { signal = value })
+        return nil, IOError.invalid_argument('process', 'signal', { signal = value })
       end,
     }
   end
@@ -155,7 +155,7 @@ do
 
     function Process:signal(value, target)
       if self.reaped then
-        return nil, HostError.closed('process', 'signal', { pid = self._pid })
+        return nil, IOError.closed('process', 'signal', { pid = self._pid })
       end
       local number, err = spec.signals.normalise(value)
       if not number then
@@ -306,7 +306,7 @@ do
         if opts.abort then
           opts.abort()
         end
-        return nil, HostError.normalise(err, { domain = 'process', action = 'wrap_' .. which })
+        return nil, IOError.normalise(err, { domain = 'process', action = 'wrap_' .. which })
       end
       restrict(handle, which)
       endpoints[which] = handle

@@ -1,11 +1,11 @@
 -- One LuaPOSIX binding.  This file contains only native bindings and
--- conversions; fibers.host.posix supplies all Fibers semantics.
+-- conversions; fibers.io.posix supplies all Fibers semantics.
 
-local Posix = require('fibers.host.posix')
-local NativeError = require('fibers.host.native_error')
-local BitOps = require('fibers.host.bitops')
-local Address = require('fibers.socket.address')
-local HostError = require('fibers.host.error')
+local Posix = require('fibers.io.posix')
+local NativeError = require('fibers.io.native_error')
+local BitOps = require('fibers.io.bitops')
+local Address = require('fibers.net.address')
+local IOError = require('fibers.io.error')
 
 local ok_poll, poll = pcall(require, 'posix.poll')
 local ok_time, time = pcall(require, 'posix.time')
@@ -34,7 +34,7 @@ local available = ok_poll
 
 if not available then
   return Posix.unavailable(
-    'fibers.host.luaposix',
+    'fibers.io.luaposix',
     'requires luaposix poll, time, errno, unistd, fcntl and socket modules'
   )
 end
@@ -83,7 +83,7 @@ local function normalise_address(address)
   if ok then
     return value
   end
-  return nil, HostError.invalid_argument('socket', 'address', { address = address })
+  return nil, IOError.invalid_argument('socket', 'address', { address = address })
 end
 
 local function encode(address)
@@ -437,7 +437,7 @@ binding.resolver = {
 }
 
 binding.process = function(Fd)
-  local Direct = require('fibers.host.process_direct')
+  local Direct = require('fibers.io.process_direct')
   local process_available = ok_signal
     and ok_wait
     and ok_stdlib

@@ -20,7 +20,7 @@ local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Roblox = require('fibers.roblox')
-local RobloxHost = require('fibers.host.roblox')
+local RobloxHost = require('fibers.roblox.host')
 local Protected = require('fibers.protected')
 local unpack_ = table.unpack or unpack
 local FakeTask = require('tests.support.roblox.fake_task')
@@ -90,10 +90,29 @@ local function advance_until_settled(app, limit)
   error('manual Roblox application exceeded advance limit', 2)
 end
 
+-- Manual prepare needs neither a scheduler nor a BindableEvent bridge.
+do
+  local host = Roblox.new_host({
+    now = function()
+      return 0
+    end,
+    task = false,
+    make_event = false,
+  })
+  local app = Roblox.prepare(function()
+    return 'manual-only'
+  end, { host = host, owns_host = false })
+  local status = app:advance({ horizon = 1, max_steps = 32, max_work = 256 })
+  assert_eq(status.state, 'settled')
+  assert_eq(app:result():raise(), 'manual-only')
+  app:close()
+  host:close()
+end
+
 -- Roblox is explicitly selected because Host.default is reserved for standalone drivers.
 do
   local scheduler = FakeTask.new()
-  local selected = require('fibers.host').select('roblox', {
+  local selected = Roblox.new_host({
     task = scheduler.api,
     now = function()
       return scheduler.now

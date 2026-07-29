@@ -15,7 +15,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local follow_up = channel.new()
 local selected, move
@@ -32,7 +32,7 @@ fibers.run(function(scope)
       return 'return to neutral stance'
     end),
   }))
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(selected == 'input')
 assert(move == 'crescent uppercut')

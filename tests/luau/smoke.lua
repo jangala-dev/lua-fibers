@@ -2,7 +2,7 @@
 -- aliases and emits this file as build/luau/tests/smoke.luau.
 
 local fibers = require('fibers')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Cell = require('fibers.resource.cell')
@@ -10,7 +10,7 @@ local Cell = require('fibers.resource.cell')
 -- ManualHost exercises the embeddable runtime without filesystem or process
 -- facilities from the standalone Luau sandbox.
 do
-  local rt = Runtime.new({ host = Host.manual() })
+  local rt = Runtime.new({ host = ManualHost.new() })
   local channel = Rendezvous.new('luau-smoke')
   local received
 

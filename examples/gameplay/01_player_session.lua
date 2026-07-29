@@ -16,7 +16,7 @@ local Sleep = require('fibers.sleep')
 local Op = require('fibers.op')
 local Pulse = require('fibers.pulse')
 local channel = require('fibers.channel')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local player_left = channel.new()
 local refreshes = 0
@@ -57,7 +57,7 @@ fibers.run(function(root)
     session_ending:close(reason)
     return reason
   end)
-end, { host = Host.manual() })
+end, { host = ManualHost.new() })
 
 assert(session_reason == 'Mira left the server')
 assert(refreshes == 3)

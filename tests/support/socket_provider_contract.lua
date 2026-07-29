@@ -1,7 +1,7 @@
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 
 local Contract = {}
 

@@ -17,10 +17,10 @@ local Rendezvous = require('fibers.resource.rendezvous')
 local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local EventQueue = require('fibers.resource.event_queue')
-local Readiness = require('fibers.host.readiness')
+local Readiness = require('fibers.io.readiness')
 local Signal = require('fibers.resource.signal')
 local Clock = require('fibers.resource.clock')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
@@ -116,7 +116,7 @@ end
 -- Timer dependencies remain valid strictly before their deadline and invalidate
 -- at the deadline without relying on a runtime-wide epoch.
 do
-  local host = Host.manual({ now = 0 })
+  local host = ManualHost.new({ now = 0 })
   local rt = Runtime.new({
     machine = 'ledger',
     host = host,

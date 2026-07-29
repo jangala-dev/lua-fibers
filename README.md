@@ -396,7 +396,7 @@ Cell also supports typed state-machine transitions for facilities whose rules sh
 
 `fibers.pulse` provides coalescing change notification. `fibers.mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies.
 
-`fibers.resource.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. The same indexed reactor publishes bounded host-owned offers for accepted connections, connection completions and received datagrams. All host-backed directions and offer sources in one Runtime share one poller and one lazily created reactor rather than allocating one task per registration.
+`fibers.resource.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds portable readable, writable or duplex facilities from one or two Flows without importing host I/O. `fibers.io.stream` adds transactional host-handle opening. Committed Flow changes notify host service through a deduplicated post-commit effect. The same indexed reactor publishes bounded host-owned offers for accepted connections, connection completions and received datagrams. All host-backed directions and offer sources in one Runtime share one poller and one lazily created reactor rather than allocating one task per registration.
 
 ### Pipes
 
@@ -423,7 +423,7 @@ Regular-file and path operations are runtime-only and evented:
 ```lua
 local fibers = require('fibers')
 local file = require('fibers.file')
-local Host = require('fibers.host')
+local AutoIO = require('fibers.io.auto')
 
 fibers.run(function()
   local contents = assert(file.read_all('/etc/resolv.conf', {
@@ -435,7 +435,7 @@ fibers.run(function()
   assert(output:flush())
   assert(output:sync())
   assert(output:close())
-end, { host = Host.default() })
+end, { host = AutoIO.default() })
 ```
 
 Each direct method performs a corresponding `_op`, and ordinary `_op` calls yield
@@ -566,7 +566,7 @@ fibers.perform(Sleep.sleep_op(0.25))
 
 Timers are options, so timeouts require no separate cancellation mechanism.
 
-Lower-level materials have canonical direct imports under their semantic owners: transactional resources under `fibers.resource.*`, Lifetime construction under `fibers.lifetime`, Grants under `fibers.grant`, Closure under `fibers.closure`, committed obligations under `fibers.effect`, and host observation protocols under `fibers.host.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
+Lower-level materials have canonical direct imports under their semantic owners: transactional resources under `fibers.resource.*`, Lifetime construction under `fibers.lifetime`, Grants under `fibers.grant`, Closure under `fibers.closure`, committed obligations under `fibers.effect`, and embedding and I/O observation protocols under `fibers.embed.*` and `fibers.io.*`; there is no aggregate resource façade. Worked facilities are kept in [`examples/recipes/`](examples/recipes/) rather than expanding the principal API.
 
 ## Why the algebra goes further
 
@@ -671,3 +671,9 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 - [Repository layout](docs/contributing/repository-layout.md)
 - [Lua compatibility](docs/contributing/compatibility.md)
 - [Test profiles](docs/contributing/testing.md)
+
+## Package and embedding structure
+
+The v1 source now distinguishes `fibers-core`, host-neutral `fibers-io`, a shared `fibers-io-linux` binding layer, explicit `fibers-io-<backend>` implementations and the separate `fibers-roblox` engine integration. Automatic native probing is confined to `fibers.io.auto`; constrained builds can select exact module roots and emit a reduced tree or bundle with `scripts/build-profile.lua`.
+
+See [Packages, profiles and embedding](docs/design/packages-and-embedding.md).

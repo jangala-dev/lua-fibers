@@ -2,12 +2,12 @@
 
 local Op = require('fibers.op')
 local Completion = require('fibers.resource.completion')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 local IOAudit = require('fibers.diagnostics.io')
 local perform = require('fibers.perform')
 local Protected = require('fibers.protected')
-local WaitSet = require('fibers.host.wait_set')
-local Address = require('fibers.socket.address')
+local WaitSet = require('fibers.embed.wait_set')
+local Address = require('fibers.net.address')
 
 local Binding = {
   name = 'simulated',
@@ -410,7 +410,7 @@ Binding.resolver = {
 }
 
 local function manual_process(Fd)
-  local ProcessCore = require('fibers.host.process').core
+  local ProcessCore = require('fibers.io.process').core
   local signals = ProcessCore.signals()
   local Class = ProcessCore.class({
     signals = signals,
@@ -536,7 +536,7 @@ Binding.poll = {
   end,
 }
 
-local Posix = require('fibers.host.posix')
+local Posix = require('fibers.io.posix')
 local Simulated = Posix.define(Binding)
 local base_new = Simulated.new
 

@@ -18,7 +18,7 @@ local StateMachine = require('fibers.resource.machine')
 local RateLimiter = require('examples.recipes.rate_limiter')
 local Runtime = require('fibers.runtime')
 local fibers = require('fibers')
-local Host = require('fibers.host')
+local ManualHost = require('fibers.embed.manual')
 
 local function fail(msg)
   error(msg, 2)
@@ -70,7 +70,7 @@ local function test_cell_transition_serialises_parallel_updates()
 end
 
 local function test_rate_limiter_parallel_acquire_serialises_without_double_refill()
-  local host = Host.manual({ now = 1 })
+  local host = ManualHost.new({ now = 1 })
   local rt = Runtime.new({ host = host })
   local rl = RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-parallel' })
   local rows
@@ -85,7 +85,7 @@ local function test_rate_limiter_parallel_acquire_serialises_without_double_refi
 end
 
 local function test_rate_limiter_waits_until_enough_tokens()
-  local host = Host.manual({ now = 0 })
+  local host = ManualHost.new({ now = 0 })
   local rt = Runtime.new({ host = host })
   local rl = RateLimiter.new({ capacity = 1, rate = 1, initial = 0, last = 0, name = 'rl-wait' })
   local ok
@@ -100,7 +100,7 @@ local function test_rate_limiter_waits_until_enough_tokens()
 end
 
 local function test_rate_limiter_try_acquire_reports_deadline()
-  local host = Host.manual({ now = 0 })
+  local host = ManualHost.new({ now = 0 })
   local rt = Runtime.new({ host = host })
   local rl = RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-try' })
   local ok, deadline, available
@@ -116,7 +116,7 @@ local function test_rate_limiter_try_acquire_reports_deadline()
 end
 
 local function test_rate_limiter_available_is_observational()
-  local host = Host.manual({ now = 1 })
+  local host = ManualHost.new({ now = 1 })
   local rt = Runtime.new({ host = host })
   local rl = RateLimiter.new({ capacity = 3, rate = 2, initial = 0, last = 0, name = 'rl-available' })
   local available

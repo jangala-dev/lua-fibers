@@ -7,10 +7,10 @@
 -- handles directly, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
-local Readiness = require('fibers.host.readiness')
-local UnsafeExternalMutation = require('fibers.host.unsafe_external_mutation')
-local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.diagnostics.io')
+local Readiness = require('fibers.io.readiness')
+local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local IOError = require('fibers.io.error')
+local IOAudit = require('fibers.internal.io_audit')
 
 local Handle = {}
 Handle.__index = Handle
@@ -64,7 +64,7 @@ local function callback(self, name, ...)
   if type(f) == 'function' then
     return f(self, ...)
   end
-  return nil, HostError.unsupported('handle', name, { handle = self.name })
+  return nil, IOError.unsupported('handle', name, { handle = self.name })
 end
 
 function Handle.new(opts)
@@ -118,7 +118,7 @@ end
 
 local function require_capability(self, capability)
   if not self:supports(capability) then
-    return nil, HostError.unsupported('handle', capability, { handle = self.name })
+    return nil, IOError.unsupported('handle', capability, { handle = self.name })
   end
   return true
 end
@@ -187,7 +187,7 @@ function Handle:clear_writable()
 end
 
 local function call_error(self, action, detail, extra)
-  return HostError.normalise(detail, {
+  return IOError.normalise(detail, {
     domain = 'handle',
     action = action,
     detail = extra,
@@ -265,12 +265,12 @@ end
 function Handle:close(reason)
   return close_once(self, reason, function()
     if not self:supports('close') then
-      return nil, HostError.unsupported('handle', 'close', { handle = self.name })
+      return nil, IOError.unsupported('handle', 'close', { handle = self.name })
     end
     local ok, err, detail = callback(self, 'close', reason)
     if not ok then
       return nil,
-        HostError.normalise(err, {
+        IOError.normalise(err, {
           domain = 'handle',
           action = 'close',
           detail = detail,

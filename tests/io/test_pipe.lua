@@ -13,11 +13,11 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Host = require('fibers.host')
+local PureHost = require('fibers.embed.pure')
 local SimulatedHost = require('tests.support.simulated_host')
-local Handle = require('fibers.host.handle')
+local Handle = require('fibers.io.handle')
 local HostHandles = require('tests.support.host_handles')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 local file = require('fibers.file')
 
 local function assert_eq(a, b, msg)
@@ -92,7 +92,7 @@ do
   fibers.run(function()
     reader, writer, err = fibers.perform(file.pipe_op({ name = 'unsupported' }))
   end, {
-    host = Host.pure({
+    host = PureHost.new({
       now = function()
         return 0
       end,
@@ -195,7 +195,7 @@ end
 
 -- The public Pipe facility also works through the available native Linux host.
 do
-  local ok_linux, LinuxHost = pcall(require, 'fibers.host.luajit_linux')
+  local ok_linux, LinuxHost = pcall(require, 'fibers.io.luajit_linux')
   if ok_linux and LinuxHost.is_supported() then
     local host = LinuxHost.new()
     local result = fibers.try_run(function()

@@ -5,9 +5,9 @@
 -- issuing blocking filesystem calls on the runtime thread.
 
 local Completion = require('fibers.resource.completion')
-local HostError = require('fibers.host.error')
-local IO = require('fibers.host.io')
-local Reactor = require('fibers.host.reactor')
+local IOError = require('fibers.io.error')
+local IO = require('fibers.io.facility')
+local Reactor = require('fibers.io.reactor')
 local perform = require('fibers.perform')
 
 local Provider = {}
@@ -151,7 +151,7 @@ local function errno_message(self, eno)
 end
 local function result_error(self, action, res, fields)
   local eno = -tonumber(res)
-  return HostError.system('file', action, errno_message(self, eno), nil, eno, fields)
+  return IOError.system('file', action, errno_message(self, eno), nil, eno, fields)
 end
 local function path_buffer(ffi, path)
   local buf = ffi.new('char[?]', #path + 1)
@@ -329,7 +329,7 @@ end
 
 function Provider:_submit(setup, keep)
   if self.closed then
-    return nil, HostError.closed('file', 'submit')
+    return nil, IOError.closed('file', 'submit')
   end
   local head = tonumber(self.sq_head[0])
   local tail = tonumber(self.sq_tail[0])
@@ -339,7 +339,7 @@ function Provider:_submit(setup, keep)
     head = tonumber(self.sq_head[0])
     tail = tonumber(self.sq_tail[0])
     if tail - head >= entries then
-      return nil, HostError.system('file', 'submit', 'io_uring submission queue is full', 'EBUSY')
+      return nil, IOError.system('file', 'submit', 'io_uring submission queue is full', 'EBUSY')
     end
   end
   local index = tail % (tonumber(self.sq_mask[0]) + 1)
@@ -358,7 +358,7 @@ function Provider:_submit(setup, keep)
     self.sq_tail[0] = tail
     self.pending[id] = nil
     local eno = self.ffi.errno and self.ffi.errno() or nil
-    return nil, HostError.system('file', 'submit', 'io_uring_enter failed', nil, eno)
+    return nil, IOError.system('file', 'submit', 'io_uring_enter failed', nil, eno)
   end
   return req
 end
@@ -399,7 +399,7 @@ end
 function Provider:open(path, mode, opts)
   local flags, append = mode_flags(mode, opts)
   if not flags then
-    return nil, HostError.invalid_argument('file', 'open', { path = path, mode = mode })
+    return nil, IOError.invalid_argument('file', 'open', { path = path, mode = mode })
   end
   local pbuf = path_buffer(self.ffi, path)
   local req, err = self:_submit(function(sqe)
@@ -432,7 +432,7 @@ end
 
 function Backend:read(count)
   if self.closed then
-    return nil, HostError.closed('file', 'read', { path = self.path })
+    return nil, IOError.closed('file', 'read', { path = self.path })
   end
   local p = self.provider
   local buf = p.ffi.new('fibers_u8[?]', math.max(count, 1))
@@ -455,7 +455,7 @@ function Backend:read(count)
 end
 function Backend:write(bytes)
   if self.closed then
-    return nil, HostError.closed('file', 'write', { path = self.path })
+    return nil, IOError.closed('file', 'write', { path = self.path })
   end
   local p = self.provider
   local buf = p.ffi.new('fibers_u8[?]', math.max(#bytes, 1))
@@ -510,7 +510,7 @@ function Backend:seek(whence, offset)
   end
   local next_pos = base + offset
   if next_pos < 0 then
-    return nil, HostError.invalid_argument('file', 'seek', { path = self.path, offset = offset })
+    return nil, IOError.invalid_argument('file', 'seek', { path = self.path, offset = offset })
   end
   self.position = next_pos
   return next_pos
@@ -591,7 +591,7 @@ function Provider:mkdir_p(path, opts)
   for part in path:gmatch('[^/]+') do
     current = (current == '' or current == '/') and (current .. part) or (current .. '/' .. part)
     local ok, err = self:mkdir(current, opts)
-    if not ok and not (HostError.is(err, 'system') and tonumber(err.number) == 17) then
+    if not ok and not (IOError.is(err, 'system') and tonumber(err.number) == 17) then
       return nil, err
     end
   end

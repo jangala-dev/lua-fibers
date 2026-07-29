@@ -15,10 +15,9 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
-local Host = require('fibers.host')
 local SimulatedHost = require('tests.support.simulated_host')
-local HostError = require('fibers.host.error')
-local Handle = require('fibers.host.handle')
+local HostError = require('fibers.io.error')
+local Handle = require('fibers.io.handle')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then

@@ -3,12 +3,12 @@
 -- Numeric and Unix endpoints use this direct strategy.
 
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
-local HostHold = require('fibers.internal.lifetime.host_hold')
-local IO = require('fibers.host.io')
+local IOError = require('fibers.io.error')
+local HostHold = require('fibers.io.internal.host_hold')
+local IO = require('fibers.io.facility')
 local Connection = require('fibers.socket.connection')
 local Clock = require('fibers.resource.clock')
-local HostOffer = require('fibers.host.offer')
+local HostOffer = require('fibers.io.offer')
 local perform = require('fibers.perform')
 
 local function finite_time(value, name, level)
@@ -37,7 +37,7 @@ local function close_socket(value, reason)
 end
 
 local function timeout_error(dial, deadline)
-  return HostError.system('socket', 'connect', 'connection attempt deadline expired', 'ETIMEDOUT', nil, {
+  return IOError.system('socket', 'connect', 'connection attempt deadline expired', 'ETIMEDOUT', nil, {
     address = dial.endpoint,
     deadline = deadline,
   })
@@ -60,11 +60,11 @@ local function connect_completion(dial, handle, driver_scope)
       if connected then
         return { handle = connected, peer = peer }
       end
-      if HostError.is_would_block(err) then
+      if IOError.is_would_block(err) then
         return nil, err
       end
       return nil,
-        HostError.normalise(err, {
+        IOError.normalise(err, {
           domain = 'socket',
           action = 'connect_finish',
           address = dial.endpoint,
@@ -119,13 +119,13 @@ function Direct.run(dial, driver_scope, opts)
   local host = opts.host or rt.host
   local start_dial = host and host.start_dial
   if type(start_dial) ~= 'function' then
-    local err = HostError.unsupported('host', 'dial', { address = dial.endpoint })
+    local err = IOError.unsupported('host', 'dial', { address = dial.endpoint })
     return nil, err, report(dial, 'failed', started_at, rt:now(), err)
   end
 
   local handle, err = start_dial(host, dial.endpoint, opts)
   if not handle then
-    err = HostError.normalise(err, {
+    err = IOError.normalise(err, {
       domain = 'socket',
       action = 'dial',
       address = dial.endpoint,

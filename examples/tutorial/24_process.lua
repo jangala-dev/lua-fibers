@@ -9,9 +9,8 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Host = require('fibers.host')
 local SimulatedHost = require('examples.support.simulated_host')
-local HostError = require('fibers.host.error')
+local IOError = require('fibers.io.error')
 local process = require('fibers.process')
 
 local host = SimulatedHost.new({
@@ -29,9 +28,9 @@ local host = SimulatedHost.new({
         local bytes, err = child.stdin:read(4096)
         if bytes then
           input[#input + 1] = bytes
-        elseif HostError.is_eof(err) then
+        elseif IOError.is_eof(err) then
           break
-        elseif not HostError.is_would_block(err) then
+        elseif not IOError.is_would_block(err) then
           error(err, 0)
         end
       end

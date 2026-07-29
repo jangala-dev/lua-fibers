@@ -1,4 +1,3 @@
-local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 local perform = require('fibers.perform')
 

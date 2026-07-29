@@ -261,10 +261,11 @@ narrator:write('The gate is open.\n')
 assert(subtitles:read_line() == 'The gate is open.')
 ```
 
-Host-backed streams are opened transactionally:
+Host-backed streams are supplied by `fibers-io` and opened transactionally:
 
 ```lua
-local stream = fibers.perform(Stream.open_op(handle, {
+local HostStream = require('fibers.io.stream')
+local stream = fibers.perform(HostStream.open_op(handle, {
   name = 'connection',
   read = true,
   write = true,
@@ -330,7 +331,7 @@ fibers.resource.lease
 fibers.resource.signal
 fibers.resource.event_queue
 fibers.resource.clock
-fibers.host.readiness
+fibers.io.readiness
 ```
 
 `Keyed` is the law for independent addressable presence slots:

@@ -176,12 +176,12 @@ do
       return socket
     end,
   }
-  local cleared = { 'fibers.host.luaposix' }
+  local cleared = { 'fibers.io.luaposix' }
   for name in pairs(modules) do
     cleared[#cleared + 1] = name
   end
   with_modules(modules, cleared, function()
-    local Host = require('fibers.host.luaposix')
+    local Host = require('fibers.io.luaposix')
     assert(Host.is_supported())
     local host = Host.new()
     local listener = assert(host:create_listener({ kind = 'inet4', host = '127.0.0.1', port = 0 }, {}))
@@ -291,8 +291,8 @@ do
     nixio = function()
       return nixio
     end,
-  }, { 'nixio', 'fibers.host.nixio' }, function()
-    local Host = require('fibers.host.nixio')
+  }, { 'nixio', 'fibers.io.nixio' }, function()
+    local Host = require('fibers.io.nixio')
     assert(Host.is_supported())
     local host = Host.new()
     local listener = assert(host:create_listener({ kind = 'inet4', host = '127.0.0.1', port = 0 }, {}))

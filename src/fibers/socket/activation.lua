@@ -1,9 +1,9 @@
 -- Transactional installation of newly created host socket handles.
 
 local Runtime = require('fibers.runtime')
-local HostError = require('fibers.host.error')
-local IO = require('fibers.host.io')
-local IOAudit = require('fibers.diagnostics.io')
+local IOError = require('fibers.io.error')
+local IO = require('fibers.io.facility')
+local IOAudit = require('fibers.internal.io_audit')
 local Protected = require('fibers.protected')
 
 local Activation = {}
@@ -18,7 +18,7 @@ function Activation.create(owner, spec)
   local host = spec.host or (rt and rt.host)
   local create = host and host[spec.host_method]
   if type(create) ~= 'function' then
-    return fail(rt, spec.lifecycle, HostError.unsupported('host', spec.action, { address = spec.address }))
+    return fail(rt, spec.lifecycle, IOError.unsupported('host', spec.action, { address = spec.address }))
   end
 
   local called, handle, err = Protected.pcall(create, host, spec.address, spec.options)
@@ -31,7 +31,7 @@ function Activation.create(owner, spec)
     return fail(
       rt,
       spec.lifecycle,
-      HostError.normalise(err, {
+      IOError.normalise(err, {
         domain = spec.domain,
         action = spec.action,
         address = spec.address,
@@ -59,7 +59,7 @@ function Activation.create(owner, spec)
   if not activated then
     spec.close(handle, spec.closed_reason)
     return nil,
-      HostError.closed(spec.domain, spec.action, {
+      IOError.closed(spec.domain, spec.action, {
         reason = spec.closed_message,
         address = spec.address,
       })

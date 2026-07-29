@@ -9,7 +9,7 @@ package.path = table.concat({
 
 local Resolver = require('fibers.dns.resolver')
 local Codec = require('fibers.dns.codec')
-local Address = require('fibers.socket.address')
+local Address = require('fibers.net.address')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then

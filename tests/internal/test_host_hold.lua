@@ -12,7 +12,7 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local HostHold = require('fibers.internal.lifetime.host_hold')
+local HostHold = require('fibers.io.internal.host_hold')
 local Completion = require('fibers.resource.completion')
 
 local closed = {}

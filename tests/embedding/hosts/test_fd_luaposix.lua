@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Common = require('tests.embedding.hosts.common')
 
-local ok_host, PosixHost = pcall(require, 'fibers.host.luaposix')
+local ok_host, PosixHost = pcall(require, 'fibers.io.luaposix')
 Common.assert_truthy(ok_host, 'luaposix host module should be require-able')
 if not PosixHost.is_supported() then
   return Common.skip('tests/hosts/test_fd_luaposix.lua', 'luaposix host not available')

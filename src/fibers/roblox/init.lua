@@ -9,7 +9,7 @@
 ---proof engine recursively.
 
 local Runtime = require('fibers.runtime')
-local Host = require('fibers.host.roblox')
+local Host = require('fibers.roblox.host')
 local Application = require('fibers.roblox.app')
 local Subscription = require('fibers.roblox.subscription')
 local perform = require('fibers.perform')
@@ -40,7 +40,7 @@ local function current_context(opts)
   end
   local host = opts.host or runtime.host
   if type(host) ~= 'table' or host.kind ~= 'roblox' then
-    error('Roblox adapter requires a fibers.host.roblox host', 3)
+    error('Roblox adapter requires a fibers.roblox.host host', 3)
   end
   return runtime, scope, host
 end

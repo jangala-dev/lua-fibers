@@ -92,8 +92,8 @@ do
     nixio = function()
       return nixio
     end,
-  }, { 'nixio', 'fibers.host.nixio' }, function()
-    local host = require('fibers.host.nixio').new()
+  }, { 'nixio', 'fibers.io.nixio' }, function()
+    local host = require('fibers.io.nixio').new()
     local datagram =
       assert(host:create_datagram({ kind = 'inet6', host = '::1', port = 0, scope_id = 0, flowinfo = 0 }, {}))
     local packet = assert(datagram:recv_from(4096))

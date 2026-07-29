@@ -8,8 +8,9 @@ Embedding code imports driver interfaces separately from the lifecycle prelude:
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Sleep = require('fibers.sleep')
-local Stream = require('fibers.stream')
-local Host = require('fibers.host')
+local Stream = require('fibers.io.stream')
+local AutoIO = require('fibers.io.auto')
+local ManualHost = require('fibers.embed.manual')
 ```
 
 
@@ -18,7 +19,7 @@ local Host = require('fibers.host')
 ```lua
 local fibers = require('fibers')
 
-local host = Host.manual() -- deterministic time and readiness
+local host = ManualHost.new() -- deterministic time and readiness
 local rt = Runtime.new({ host = host })
 
 rt:spawn_raw(function()
@@ -93,7 +94,7 @@ The trail limit is checked between reduction rounds. One deterministic reduction
 fibers.run(function()
   fibers.perform(Sleep.sleep_op(1))
 end, {
-  host = Host.default(),
+  host = AutoIO.default(),
 })
 ```
 
@@ -140,26 +141,39 @@ host:block(runtime, interests, status, opts) -> progressed, reason
 
 `host:block` may block, poll, register interests or decline them. If it returns no progress, `Runtime:drive` returns the pending status with the host reason attached; `fibers.try_run` reports that as a checked root-lifecycle failure.
 
-Built-in host constructors are:
+Portable and embedded hosts are selected directly from their semantic owner:
 
 ```lua
-host.pure(opts)
-host.manual(opts)
-host.roblox(opts)       -- explicit embedded boundary; does not block
-host.luajit_linux(opts)
-host.cffi_linux(opts)
-host.luaposix(opts)
-host.nixio(opts)
-host.select(name, opts)
-host.default(opts)
+local PureHost = require('fibers.embed.pure')
+local ManualHost = require('fibers.embed.manual')
+local Roblox = require('fibers.roblox')
+
+local pure = PureHost.new(opts)
+local manual = ManualHost.new(opts)
+local app = Roblox.prepare(root, opts)
 ```
 
-`pure` is portable and time-oriented. `manual` is deterministic and intended for tests and explicit event-loop integration. `roblox` is non-blocking and is used through `fibers.roblox.prepare` or `fibers.roblox.attach`; it is deliberately excluded from `Host.default`, which serves the standalone `Runtime:drive` path. Native hosts are optional and expose support checks in their implementation modules.
+`pure` is time-oriented. `manual` is deterministic and intended for tests and
+explicit event-loop integration. Roblox is non-blocking and is driven through
+`prepare` or `attach`.
 
-Inspect availability with:
+Optional native I/O backends may be imported explicitly or discovered through
+`fibers.io.auto`:
 
 ```lua
-for _, item in ipairs(host.available()) do
+local AutoIO = require('fibers.io.auto')
+
+local host = AutoIO.nixio(opts)
+local selected = AutoIO.select('luaposix', opts)
+local default = AutoIO.default(opts)
+```
+
+`AutoIO.default` tries the supported native implementations and falls back to the
+portable time-only host. It does not select manual or engine integrations.
+Inspect native availability with:
+
+```lua
+for _, item in ipairs(AutoIO.available()) do
   print(item.name, item.supported, item.reason)
 end
 ```
@@ -269,13 +283,13 @@ Readiness keys are host-defined tokens: file descriptors, sockets, GUI handles, 
 
 Readiness is a level hint. It is not proof that a subsequent non-blocking I/O call will succeed. The call may still return `would_block`; the host or handle must then clear or refresh the readiness level before waiting again.
 
-The final host method `block(runtime, interests, status, opts)` owns wait planning and delivery. POSIX-like hosts use the internal `fibers.host.wait_set` module to group readiness keys and deadlines; embedders may use the same module when implementing a custom host, but these helpers are not re-exported from `fibers.host`.
+The final host method `block(runtime, interests, status, opts)` owns wait planning and delivery. POSIX-like hosts use the internal `fibers.embed.wait_set` module to group readiness keys and deadlines; embedders may use the same module when implementing a custom host, but automatic I/O selection does not re-export these helpers.
 
 There is no host readiness query during transaction search. External truth enters through feeds so that validation remains meaningful.
 
 ## HostHandle, streams and the reactor
 
-`host.Handle` provides the boundary between non-blocking host I/O and the Runtime-local HostReactor readiness index and HostReactor.
+`fibers.io.handle` provides the boundary between non-blocking host I/O and the Runtime-local readiness index and reactor.
 
 A handle supplies:
 
@@ -419,7 +433,7 @@ network, resolver and process calls, then passes that table directly to the
 shared POSIX-like host implementation:
 
 ```lua
-local Posix = require('fibers.host.posix')
+local Posix = require('fibers.io.posix')
 
 local binding = {
   name = 'example',
@@ -437,7 +451,7 @@ return Posix.define(binding)
 ```
 
 The binding performs native calls, native value conversion and native error
-extraction. `fibers.host.posix` constructs the final host directly and owns
+extraction. `fibers.io.posix` constructs the final host directly and owns
 Fibers handles, generation-safe readiness keys, socket and datagram policy,
 resolver deduplication, process endpoints and capability reporting. There is no
 intermediate adapter or provider-description layer.
@@ -447,7 +461,7 @@ numeric descriptor are separate. Nixio may therefore use an opaque object for
 I/O and polling while LuaPOSIX and FFI use integers; operations which require a
 numeric descriptor test for it explicitly.
 
-ManualHost, PureHost and RobloxHost construct the final host protocol directly. ManualHost is deliberately small: deterministic time, readiness and optional injected final methods. The richer in-memory operating-system simulation is test support. Timer and readiness planning remain in `fibers.host.wait_set`.
+ManualHost, PureHost and RobloxHost construct the final host protocol directly. ManualHost is deliberately small: deterministic time, readiness and optional injected final methods. The richer in-memory operating-system simulation is test support. Timer and readiness planning remain in `fibers.embed.wait_set`.
 
 ## Host acceptance checklist
 

@@ -14,8 +14,6 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local Lifetimes = require('tests.support.lifetimes')
-local FibersTask = require('fibers.task')
-
 local function assert_eq(a, b, msg)
   if a ~= b then
     error((msg or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)

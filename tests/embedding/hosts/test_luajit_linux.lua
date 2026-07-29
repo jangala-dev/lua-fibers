@@ -14,9 +14,8 @@ package.path = table.concat({
 local Common = require('tests.embedding.hosts.common')
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersHost = require('fibers.host')
 
-local ok_mod, LinuxHost = pcall(require, 'fibers.host.luajit_linux')
+local ok_mod, LinuxHost = pcall(require, 'fibers.io.luajit_linux')
 Common.assert_truthy(ok_mod, 'luajit linux host module should be require-able')
 Common.assert_truthy(type(LinuxHost.is_supported) == 'function', 'luajit host should expose is_supported')
 Common.assert_truthy(type(LinuxHost.new) == 'function', 'luajit host should expose new')
@@ -30,7 +29,7 @@ if not ok_ffi or type(ffi) ~= 'table' then
   return Common.skip('tests/hosts/test_luajit_linux.lua', 'ffi module not available')
 end
 
-local BitOps = require('fibers.host.bitops')
+local BitOps = require('fibers.io.bitops')
 local bit, bit_reason = BitOps.resolve()
 if not bit then
   return Common.skip('tests/hosts/test_luajit_linux.lua', bit_reason or 'bit operations unavailable')

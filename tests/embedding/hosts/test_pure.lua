@@ -14,9 +14,8 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local FibersSignal = require('fibers.resource.signal')
-local Host = require('fibers.host')
-local WaitSet = require('fibers.host.wait_set')
-local PureHost = require('fibers.host.pure')
+local WaitSet = require('fibers.embed.wait_set')
+local PureHost = require('fibers.embed.pure')
 local Common = require('tests.embedding.hosts.common')
 
 -- The pure host drives time waits without busy-waiting in user code.  The test

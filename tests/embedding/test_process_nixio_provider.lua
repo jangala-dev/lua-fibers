@@ -4,7 +4,7 @@ package.path = table.concat(
 )
 
 local saved = {}
-for _, name in ipairs({ 'nixio', 'nixio.fs', 'fibers.host.nixio' }) do
+for _, name in ipairs({ 'nixio', 'nixio.fs', 'fibers.io.nixio' }) do
   saved[name] = package.loaded[name]
   package.loaded[name] = nil
 end
@@ -125,7 +125,7 @@ local fake_fs = {
 package.loaded.nixio, package.loaded['nixio.fs'] = fake_nixio, fake_fs
 
 local ok, err = pcall(function()
-  local Host = require('fibers.host.nixio')
+  local Host = require('fibers.io.nixio')
   assert(Host.is_supported())
   local host = Host.new()
   local Fd = host.fd

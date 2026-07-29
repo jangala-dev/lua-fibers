@@ -11,7 +11,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
-local Host = require('fibers.host')
+local PureHost = require('fibers.embed.pure')
 local SimulatedHost = require('tests.support.simulated_host')
 local socket = require('fibers.socket')
 local Contract = require('tests.support.socket_provider_contract')
@@ -64,7 +64,7 @@ end
 -- The pure host declares the complete stream-socket capability matrix as false
 -- and returns a structured unsupported result.
 do
-  local host = Host.pure({
+  local host = PureHost.new({
     now = function()
       return 0
     end,
@@ -83,10 +83,10 @@ end
 -- presently implement only readiness, pipes or datagrams remain honest rather
 -- than being inferred to support stream sockets.
 for _, spec in ipairs({
-  { module = 'fibers.host.luaposix', name = 'luaposix' },
-  { module = 'fibers.host.nixio', name = 'nixio' },
-  { module = 'fibers.host.luajit_linux', name = 'luajit_linux' },
-  { module = 'fibers.host.cffi_linux', name = 'cffi_linux' },
+  { module = 'fibers.io.luaposix', name = 'luaposix' },
+  { module = 'fibers.io.nixio', name = 'nixio' },
+  { module = 'fibers.io.luajit_linux', name = 'luajit_linux' },
+  { module = 'fibers.io.cffi_linux', name = 'cffi_linux' },
 }) do
   local ok, provider = pcall(require, spec.module)
   if ok and provider and type(provider.is_supported) == 'function' and provider.is_supported() then

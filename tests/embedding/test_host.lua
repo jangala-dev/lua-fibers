@@ -14,9 +14,10 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local FibersSignal = require('fibers.resource.signal')
-local Host = require('fibers.host')
-local WaitSet = require('fibers.host.wait_set')
-local PureHost = require('fibers.host.pure')
+local AutoIO = require('fibers.io.auto')
+local ManualHost = require('fibers.embed.manual')
+local WaitSet = require('fibers.embed.wait_set')
+local PureHost = require('fibers.embed.pure')
 
 local function fail(msg)
   error(msg, 2)
@@ -104,7 +105,7 @@ end
 
 -- Host selection returns complete, indivisible families.
 do
-  local manual = Host.manual({ now = 0 })
+  local manual = ManualHost.new({ now = 0 })
   assert_eq(manual.name, 'manual')
   assert_eq(manual.family, 'manual')
   assert_truthy(
@@ -112,7 +113,7 @@ do
     'manual host should describe capabilities'
   )
 
-  local pure = Host.select('pure', {
+  local pure = PureHost.new({
     now = function()
       return 0
     end,
@@ -123,12 +124,15 @@ do
   assert_eq(pure.name, 'pure')
   assert_eq(pure.family, 'pure')
 
-  local available = Host.available()
-  assert_truthy(type(available) == 'table' and #available > 0, 'host.available should list selectable hosts')
+  local available = AutoIO.available()
+  assert_truthy(
+    type(available) == 'table' and #available > 0,
+    'AutoIO.available should list native I/O backends'
+  )
 
   assert_eq(manual.create_pipe, nil, 'manual host should expose only injected facilities')
 
-  local injected = Host.manual({
+  local injected = ManualHost.new({
     create_pipe = function(_self, opts)
       return opts and opts.name
     end,

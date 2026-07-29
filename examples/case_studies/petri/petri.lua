@@ -1,6 +1,5 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local Program = require('fibers.internal.kernel.ir')
 local Substrate = require('fibers.internal.kernel.ledger')
 
 local Petri = {}

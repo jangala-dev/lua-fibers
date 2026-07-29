@@ -15,9 +15,9 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.host.readiness')
+local FibersReadiness = require('fibers.io.readiness')
 local FibersScope = require('fibers.scope')
-local FibersStream = require('fibers.stream')
+local FibersStream = require('fibers.io.stream')
 
 local Common = {}
 
@@ -185,7 +185,6 @@ end
 
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
-  local Handle = require('fibers.host.handle')
   local HostHandles = require('tests.support.host_handles')
   local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))

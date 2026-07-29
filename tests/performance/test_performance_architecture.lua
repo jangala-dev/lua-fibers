@@ -265,7 +265,6 @@ truthy((binary_snap.counters.forced_exchanges or 0) > 0, 'binary exchange reduct
 -- Empty transactional collections are shared rather than allocated afresh for
 -- a rendezvous which neither observes nor writes committed state.
 do
-  local Store = require('fibers.internal.kernel.ledger')
   local rt = Runtime.new()
   local c = Rendezvous.new('empty-candidate-state')
   rt:spawn_raw(function()

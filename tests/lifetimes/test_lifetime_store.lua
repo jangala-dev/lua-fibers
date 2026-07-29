@@ -12,7 +12,6 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')

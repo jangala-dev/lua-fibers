@@ -14,9 +14,8 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
-local Stream = require('fibers.stream')
-local HostHandle = require('fibers.host.handle')
-local Host = require('fibers.host')
+local Stream = require('fibers.io.stream')
+local HostHandle = require('fibers.io.handle')
 local SimulatedHost = require('examples.support.simulated_host')
 
 -- This example is not a real socket implementation.  It shows the socket-shaped

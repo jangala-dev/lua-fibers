@@ -16,7 +16,7 @@ through event connections and delayed callbacks.
 
 This guide is a step-by-step introduction for the experimental Roblox adapter
 now included in the source tree. The generated Luau target contains
-`fibers.host.roblox`, `fibers.roblox` and the signal-subscription adapter with Lifetime custody.
+`fibers.roblox.host`, `fibers.roblox` and the signal-subscription adapter with Lifetime custody.
 Packaging for Wally and Roblox model distribution remains future release work,
 but the host boundary and its portable fake-engine tests are implemented.
 
@@ -40,9 +40,11 @@ Roblox scheduler or game loop
     → Roblox schedules another advance only when required
 ```
 
-The canonical interface is `prepare` plus `advance`. The following example
-places that boundary inside an existing Heartbeat loop; this is a manual
-phase-driven embedding, not a requirement to poll Fibers every frame:
+The canonical interface is `prepare` plus `advance`. Manual driving needs only
+a monotonic clock and the callback queue; it does not require `task`,
+`RunService` or a `BindableEvent`. The following example places that boundary
+inside an existing Heartbeat loop; this is a manual phase-driven embedding, not
+a requirement to poll Fibers every frame:
 
 ```luau
 local app = Roblox.prepare(function(root)

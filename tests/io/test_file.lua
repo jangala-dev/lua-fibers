@@ -1,9 +1,9 @@
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local file = require('fibers.file')
-local Host = require('fibers.host')
+local AutoIO = require('fibers.io.auto')
 local SimulatedHost = require('tests.support.simulated_host')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 local MemoryProvider = require('fibers.file.memory_provider')
 
 local tests = {}
@@ -418,7 +418,7 @@ function tests.runtime_closes_selected_file_provider_once()
 end
 
 function tests.worker_file_provider_is_evented()
-  local host = Host.default()
+  local host = AutoIO.default()
   if not (host.capabilities and host.capabilities.process) then
     if host.close then
       host:close()
@@ -454,7 +454,7 @@ function tests.native_evented_file_provider_when_available()
   if os.getenv('FIBERS_MACHINE') == 'reference' then
     return
   end
-  local host = Host.default()
+  local host = AutoIO.default()
   if not (host.capabilities and host.capabilities.file) then
     if host.close then
       host:close()

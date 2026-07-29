@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Common = require('tests.embedding.hosts.common')
 
-local ok_host, NixioHost = pcall(require, 'fibers.host.nixio')
+local ok_host, NixioHost = pcall(require, 'fibers.io.nixio')
 Common.assert_truthy(ok_host, 'nixio host module should be require-able')
 if not NixioHost.is_supported() then
   return Common.skip('tests/hosts/test_fd_nixio.lua', 'nixio host not available')

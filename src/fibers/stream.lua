@@ -1,12 +1,11 @@
 -- Streams are capability-shaped compositions of unidirectional byte Flows.
 --
 -- A Stream adds no byte state of its own.  It pairs an optional Flow Outlet
--- with an optional Flow Inlet, composes their lifecycle operations, and, for
--- host handles, arranges reactor registrations around those same Flows.
+-- with an optional Flow Inlet and composes their lifecycle operations. Host
+-- handle integration lives in `fibers.io.stream` so memory Streams remain core.
 
 local Op = require('fibers.op')
 local Flow = require('fibers.resource.flow')
-local Reactor = require('fibers.host.reactor')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local Runtime = require('fibers.runtime')
@@ -352,104 +351,6 @@ function Stream.memory_pair(opts)
   local ba = Flow.new(opts.capacity, name .. ':b->a')
   return Stream.compose(ba, ab, { name = name .. ':a', mode = 'memory' }),
     Stream.compose(ab, ba, { name = name .. ':b', mode = 'memory' })
-end
-
-local function host_stream(name, opts)
-  local read_flow = opts.read and Flow.new(opts.read_capacity, name .. ':rx') or nil
-  local write_flow = opts.write and Flow.new(opts.write_capacity, name .. ':tx') or nil
-  local stream = Stream.compose(read_flow, write_flow, {
-    name = name,
-    mode = opts.read and opts.write and 'duplex' or (opts.read and 'reader' or 'writer'),
-    kind = 'host_stream',
-  })
-  stream.handle, stream.reactor = opts.handle, opts.reactor
-  stream.read_chunk_size, stream.write_chunk_size = opts.read_chunk_size, opts.write_chunk_size
-  return stream
-end
-
-local function attach_direction(stream, side, reactor, handle, registrations, children)
-  local ep = side_endpoint(stream, side)
-  if not ep then
-    return
-  end
-  local registration = reactor:direction({
-    name = stream.name .. ':' .. side,
-    mode = side,
-    stream = stream,
-    flow = flow_of(ep),
-    handle = handle,
-    chunk_size = side == 'read' and stream.read_chunk_size or stream.write_chunk_size,
-  })
-  stream[side .. '_registration'] = registration
-  children[#children + 1] = registration
-  registrations[#registrations + 1] = { side .. '_registration', registration:register_op() }
-end
-
-local function open_in_op(scope, handle, opts)
-  validate_options(opts, {
-    scope = true,
-    name = true,
-    read = true,
-    write = true,
-    read_capacity = true,
-    write_capacity = true,
-    read_chunk_size = true,
-    write_chunk_size = true,
-  }, 'Stream.open_op options')
-  if not (scope and scope._fibers_scope) then
-    error('Stream.open_op scope must be a Scope', 3)
-  end
-  if type(handle) ~= 'table' or handle._fibers_host_handle ~= true then
-    error('Stream.open_op expects a HostHandle', 3)
-  end
-  if type(opts.read) ~= 'boolean' or type(opts.write) ~= 'boolean' then
-    error('Stream.open_op requires explicit boolean opts.read and opts.write', 3)
-  end
-  if not opts.read and not opts.write then
-    error('Stream.open_op requires an enabled direction', 3)
-  end
-  for _, capability in ipairs({ opts.read and 'read', opts.write and 'write', 'readiness', 'close' }) do
-    if capability and not handle:supports(capability) then
-      error('Stream HostHandle requires ' .. capability .. ' capability', 3)
-    end
-  end
-  local runtime = Runtime.current()
-  if not runtime then
-    error('Stream.open_op requires a current runtime', 3)
-  end
-  local name = opts.name or handle.name or 'host-stream'
-  local reactor = Reactor.for_runtime(runtime)
-  local stream = host_stream(name, {
-    handle = handle,
-    reactor = reactor,
-    read = opts.read,
-    write = opts.write,
-    read_capacity = opts.read_capacity,
-    write_capacity = opts.write_capacity,
-    read_chunk_size = opts.read_chunk_size or 4096,
-    write_chunk_size = opts.write_chunk_size or 4096,
-  })
-  local registrations, children = {}, {}
-  attach_direction(stream, 'read', reactor, handle, registrations, children)
-  attach_direction(stream, 'write', reactor, handle, registrations, children)
-  stream._reactor_live = #registrations
-  for i = 1, #children do
-    stream._lifetime:add_child(children[i])
-  end
-  return scope:admit_op(stream):and_then(function()
-    return Op.named_each(registrations):map(function()
-      return stream
-    end)
-  end)
-end
-
-function Stream.open_op(handle, opts)
-  opts = opts or {}
-  local scope = opts.scope or (Runtime.current_scope and Runtime.current_scope())
-  if not scope then
-    error('Stream.open_op requires opts.scope or a current Scope', 2)
-  end
-  return open_in_op(scope, handle, opts)
 end
 
 function Stream.merge_lines_op(streams, opts)

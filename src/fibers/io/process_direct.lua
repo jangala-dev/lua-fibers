@@ -3,11 +3,11 @@
 -- The native binding supplies raw POSIX mechanisms.  This module owns the
 -- launch protocol, stdio plan, Process object, errors and exactly-once reaping.
 
-local HostError = require('fibers.host.error')
-local IOAudit = require('fibers.diagnostics.io')
-local Process = require('fibers.host.process')
+local IOError = require('fibers.io.error')
+local IOAudit = require('fibers.internal.io_audit')
+local Process = require('fibers.io.process')
 local Op = require('fibers.op')
-local HostOffer = require('fibers.host.offer')
+local HostOffer = require('fibers.io.offer')
 
 local Direct = {}
 
@@ -22,7 +22,7 @@ local ACTION = {
 }
 
 local function error_value(spec, action, errno, message, fields)
-  return HostError.system(
+  return IOError.system(
     'process',
     action,
     message or spec.message(errno) or (action .. ' failed'),
@@ -102,12 +102,12 @@ function Direct.new(spec)
     local result, errno, message = spec.wait(self._pid, true)
     if not result then
       if spec.again(errno) then
-        return nil, HostError.would_block('process', 'reap', { pid = self._pid })
+        return nil, IOError.would_block('process', 'reap', { pid = self._pid })
       end
       return nil, error_value(spec, 'reap', errno, message, { pid = self._pid })
     end
     if result.kind == 'running' or result.kind == 'stopped' then
-      return nil, HostError.would_block('process', 'reap', { pid = self._pid })
+      return nil, IOError.would_block('process', 'reap', { pid = self._pid })
     end
     local status
     if result.kind == 'exited' then
@@ -116,7 +116,7 @@ function Direct.new(spec)
       status = Core.signalled(signals, result.signal, result.core_dumped)
     else
       return nil,
-        HostError.protocol('process', 'reap', 'unexpected wait status', { pid = self._pid, status = result })
+        IOError.protocol('process', 'reap', 'unexpected wait status', { pid = self._pid, status = result })
     end
     self.status, self.reaped = status, true
     return status
@@ -160,7 +160,7 @@ function Direct.new(spec)
       if not self.exit_source then
         return Op.always(
           nil,
-          HostError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
+          IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
         )
       end
       return self.exit_source:result_op()
@@ -187,7 +187,7 @@ function Direct.new(spec)
   function Provider.start_process(host, process_spec)
     local supported, reason = spec.supported()
     if not supported then
-      return nil, nil, HostError.unsupported('host', 'process', { host = host.name, reason = reason })
+      return nil, nil, IOError.unsupported('host', 'process', { host = host.name, reason = reason })
     end
 
     local stdio, parents, stdio_err = IO.open(process_spec, function(which)
@@ -304,7 +304,7 @@ function Direct.new(spec)
       if not stage then
         return nil,
           nil,
-          HostError.protocol(
+          IOError.protocol(
             'process',
             'exec_handshake',
             'invalid child setup failure',

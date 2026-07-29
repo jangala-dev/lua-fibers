@@ -10,20 +10,19 @@ package.path = table.concat({
   './?/?.lua',
   package.path,
 }, ';')
-local WaitSet = require('fibers.host.wait_set')
+local WaitSet = require('fibers.embed.wait_set')
 local Inspect = require('tests.support.flow_inspect')
 
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
-local FibersReadiness = require('fibers.host.readiness')
+local FibersReadiness = require('fibers.io.readiness')
 local FibersScope = require('fibers.scope')
-local FibersStream = require('fibers.stream')
-local FibersHost = require('fibers.host')
-local Host = FibersHost
+local FibersStream = require('fibers.io.stream')
+local ManualHost = require('fibers.embed.manual')
 local Runtime = FibersRuntime
 local Scope = FibersScope
 local Stream = FibersStream
-local HostHandle = require('fibers.host.handle')
+local HostHandle = require('fibers.io.handle')
 
 local function fail(msg)
   error(msg, 2)
@@ -200,7 +199,7 @@ end
 -- Manual host delivers readiness waits through the same runtime-bound source path
 -- as OS hosts, and preserves key/mode in wait summaries.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local src = FibersReadiness.new('manual-key', 'read', 'manual-key-readiness')
   local seen, key, mode
@@ -224,7 +223,7 @@ end
 
 -- A socket-shaped backend uses host readiness to drive the existing read reaction.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('socket-read-owner')
   local handle = make_socket(host, 'socket-read')
@@ -250,7 +249,7 @@ end
 
 -- Write readiness drives the write reaction, and host writes remain authoritative.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('socket-write-owner')
   local handle = make_socket(host, 'socket-write')
@@ -290,7 +289,7 @@ end
 
 -- Partial host writes preserve the byte stream through committed in-flight leases.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('socket-partial-owner')
   local handle = make_socket(host, 'socket-partial')
@@ -319,7 +318,7 @@ end
 
 -- EOF and read errors arrive through handle read, not readiness payloads.
 do
-  local host = Host.manual({ auto_advance_time = false })
+  local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
   local owner = Scope.new('socket-eof-owner')
   local handle = make_socket(host, 'socket-eof')

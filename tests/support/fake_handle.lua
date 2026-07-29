@@ -1,8 +1,8 @@
 -- Deterministic HostHandle test double.
 
 local Errors = require('fibers.resource.flow.errors')
-local Handle = require('fibers.host.handle')
-local HostError = require('fibers.host.error')
+local Handle = require('fibers.io.handle')
+local HostError = require('fibers.io.error')
 local IOAudit = require('fibers.diagnostics.io')
 
 local Fake = {}

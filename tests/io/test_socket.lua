@@ -13,9 +13,9 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Host = require('fibers.host')
+local PureHost = require('fibers.embed.pure')
 local SimulatedHost = require('tests.support.simulated_host')
-local HostError = require('fibers.host.error')
+local HostError = require('fibers.io.error')
 local socket = require('fibers.socket')
 
 local function assert_eq(a, b, msg)
@@ -105,7 +105,7 @@ do
   fibers.run(function()
     listener, err = fibers.perform(socket.listen_inet_op('127.0.0.1', 0))
   end, {
-    host = Host.pure({
+    host = PureHost.new({
       now = function()
         return 0
       end,

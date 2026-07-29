@@ -37,7 +37,7 @@ local function default_host(opts)
   if opts and opts.host then
     return opts.host
   end
-  local host = require('fibers.host').pure()
+  local host = require('fibers.embed.pure').new()
   if opts and opts.now then
     host.now = function(rt)
       return opts.now(rt)
