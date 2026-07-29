@@ -56,4 +56,4 @@ fibers.run(function(scope)
   listener:close('example complete')
 end, { host = host })
 
-print('examples/tutorial/21_resolver.lua: ok')
+print('examples/tutorial/22_resolver.lua: ok')

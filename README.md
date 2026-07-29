@@ -179,6 +179,8 @@ An effect is a typed runtime obligation selected with an option and discharged o
 
 Most application code uses effects through ordinary facilities rather than constructing them directly. The important guarantee is that speculative alternatives do not start tasks or mutate the outside world merely because they were considered.
 
+See [`examples/tutorial/13_typed_effects.lua`](examples/tutorial/13_typed_effects.lua) for a complete radio-configuration example with defeated effects, pure preparation and merged committed driver work.
+
 ### Lifetimes account for continuing consequences
 
 An `Op` describes a world which may commit. A Lifetime records what that world

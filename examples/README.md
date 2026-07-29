@@ -37,31 +37,32 @@ not a domain-specific framework.
 |---|---|
 | `11_certified_or_else.lua` | flank only when stamina and squad radio form a complete game-AI plan |
 | `12_callback_phases.lua` | select an emergency dispatch, page responders after commit, then update the dashboard |
-| `13_defeat_obligations.lua` | retire an incompatible robot trajectory when a cautious route wins |
-| `14_all_and_tensor.lua` | reserve motor/vision capacity, then hand off a control word |
+| `13_typed_effects.lua` | commit a radio configuration, merge driver obligations and reject an unsupported candidate |
+| `14_defeat_obligations.lua` | retire an incompatible robot trajectory when a cautious route wins |
+| `15_all_and_tensor.lua` | reserve motor/vision capacity, then hand off a control word |
 
 ### Lifetimes and supervision
 
 | Example | Scenario and idea |
 |---|---|
-| `15_nursery_failure.lua` | a failed flood controller cancels public warnings and the incident body |
-| `16_supervisor_collect.lua` | an optional desktop thumbnailer fails while search remains healthy |
-| `17_memory_stream.lua` | an embedded plugin reports to its native host through a Stream held in custody |
-| `18_custody_move.lua` | hand camera control from a cinematic to gameplay |
+| `16_nursery_failure.lua` | a failed flood controller cancels public warnings and the incident body |
+| `17_supervisor_collect.lua` | an optional desktop thumbnailer fails while search remains healthy |
+| `18_memory_stream.lua` | an embedded plugin reports to its native host through a Stream held in custody |
+| `19_custody_move.lua` | hand camera control from a cinematic to gameplay |
 
 ### I/O, hosts and larger patterns
 
 | Example | Scenario and idea |
 |---|---|
-| `19_pipe.lua` | pipe I/O under custody |
-| `20_socket.lua` | Stream sockets under custody |
-| `21_resolver.lua` | name resolution and dialling under custody |
-| `22_datagram.lua` | datagram sockets |
-| `23_process.lua` | child processes and communication |
-| `24_external_signal_feed.lua` | a hardware sensor delivered from the host runtime |
-| `25_shared_deadline.lua` | one firmware boot deadline across sensor and radio stages |
-| `26_service_supervision.lua` | dispatch-engine exit versus operations-centre shutdown |
-| `27_robot_dispatch.lua` | reserve power, confirm safety and dispatch a field unit |
+| `20_pipe.lua` | pipe I/O under custody |
+| `21_socket.lua` | Stream sockets under custody |
+| `22_resolver.lua` | name resolution and dialling under custody |
+| `23_datagram.lua` | datagram sockets |
+| `24_process.lua` | child processes and communication |
+| `25_external_signal_feed.lua` | a hardware sensor delivered from the host runtime |
+| `26_shared_deadline.lua` | one firmware boot deadline across sensor and radio stages |
+| `27_service_supervision.lua` | dispatch-engine exit versus operations-centre shutdown |
+| `28_robot_dispatch.lua` | reserve power, confirm safety and dispatch a field unit |
 
 The progression is deliberate:
 
@@ -72,7 +73,7 @@ do one thing directly
 → sequence and admit work transactionally
 → own and cancel concurrent work
 → compose state and bounded messaging
-→ prove fallback and attach committed obligations
+→ prove fallback and describe committed effects and defeat obligations
 → combine several requirements
 → supervise failure and move custody
 → apply the model across firmware, robotics, emergency systems, desktop apps,
@@ -80,7 +81,7 @@ do one thing directly
 ```
 
 Readers interested chiefly in application code can read `00`–`11`, then move
-to `15`–`17` and `25`–`27`. Facility authors should also read `12`–`14`, `18`
+to `16`–`18` and `26`–`28`. Facility authors should also read `12`–`15`, `19`
 and the advanced documentation.
 
 ## Gameplay

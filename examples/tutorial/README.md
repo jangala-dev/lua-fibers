@@ -15,19 +15,19 @@ The tutorial has four stages:
    robot localisation, field-network admission, desktop task admission,
    firmware start-up, cancellation, transactional state, backpressure and
    broadcast hazard changes.
-2. **Transactional composition (`11`–`14`)** — game AI preference, the three
-   callback phases, robot trajectory defeat obligations, and the distinction
-   between `all` and `tensor`.
-3. **Lifetimes (`15`–`18`)** — emergency-controller failure, collecting desktop
+2. **Transactional composition (`11`–`15`)** — game AI preference, callback
+   phases, typed committed effects, robot trajectory defeat obligations, and the
+   distinction between `all` and `tensor`.
+3. **Lifetimes (`16`–`19`)** — emergency-controller failure, collecting desktop
    supervisors, plugin streams and game-camera custody.
-4. **Systems work (`19`–`27`)** — pipes, sockets, resolution, datagrams,
+4. **Systems work (`20`–`28`)** — pipes, sockets, resolution, datagrams,
    processes, hardware feeds, firmware deadlines, operations-centre supervision
    and field-unit dispatch.
 
 A compact first reading is:
 
 ```text
-00 → 01 → 02 → 04 → 06 → 08 → 11 → 15 → 17 → 25 → 27
+00 → 01 → 02 → 04 → 06 → 08 → 11 → 13 → 16 → 18 → 26 → 28
 ```
 
 Readers chiefly interested in game logic should continue with
