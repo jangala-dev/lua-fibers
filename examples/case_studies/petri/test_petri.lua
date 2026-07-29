@@ -58,12 +58,12 @@ do
   assert(count(m, 'workers') == 0 and count(m, 'running') == 1)
 end
 
--- Tensor permits direct token hand-off; all does not.
+-- Together permits direct token hand-off; each does not.
 do
   local net = Petri.new()
   local rows
   run(function()
-    rows = fibers.perform(Op.tensor({ net:put_op('p', 'x'), net:take_op('p') }))
+    rows = fibers.perform(Op.together({ net:put_op('p', 'x'), net:take_op('p') }))
   end)
   assert(rows[1][1] == true and rows[2][1] == 'x')
   assert(count(net:marking(), 'p') == 0)
@@ -73,7 +73,8 @@ do
   local net = Petri.new()
   local result
   run(function()
-    result = fibers.perform(Op.all({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback')))
+    result =
+      fibers.perform(Op.each({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
   assert(count(net:marking(), 'p') == 0)
@@ -106,7 +107,7 @@ do
   })
   local rows
   run(function()
-    rows = fibers.perform(Op.all({ net:fire_op(any), net:fire_op(red) }))
+    rows = fibers.perform(Op.each({ net:fire_op(any), net:fire_op(red) }))
   end)
   assert(rows[1][1] == 'blue' and rows[2][1] == 'red')
   assert(count(net:marking(), 'p') == 0)
@@ -117,7 +118,7 @@ do
   local net = Petri.new({ p = { 'only' } })
   local result
   run(function()
-    result = fibers.perform(Op.all({ net:take_op('p'), net:take_op('p') }):or_else(Op.always('fallback')))
+    result = fibers.perform(Op.each({ net:take_op('p'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
   assert(count(net:marking(), 'p') == 1)

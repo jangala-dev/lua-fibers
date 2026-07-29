@@ -31,7 +31,7 @@ Roblox.run(function()
     local dialogue = scene:spawn(playDialogue, 'dialogue')
 
     local selected = fibers.perform(Op.named_choice({
-      completed = Op.all({
+      completed = Op.each({
         camera:body_result_op(),
         dialogue:body_result_op(),
       }),

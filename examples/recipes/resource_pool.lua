@@ -141,7 +141,7 @@ function Pool:release_op(lease)
       return Op.never()
     end
     if state.retire_on_release then
-      return Op.tensor({
+      return Op.together({
         self.leases:release_op(key, holder),
         self.items:take_op(key),
         Op.emit(retire_effect(self, key, state.item, state.reason)),
@@ -149,7 +149,7 @@ function Pool:release_op(lease)
         return true
       end)
     end
-    return Op.tensor({
+    return Op.together({
       self.leases:release_op(key, holder),
       self.idle:insert_op(key, math.huge, key),
     }):map(function()
@@ -166,7 +166,7 @@ function Pool:retire_op(key, reason)
     if type(state) ~= 'table' then
       return Op.never()
     end
-    local retire_idle = Op.tensor({
+    local retire_idle = Op.together({
       self.idle:remove_op(key),
       self.items:take_op(key),
       Op.emit(retire_effect(self, key, state.item, reason)),

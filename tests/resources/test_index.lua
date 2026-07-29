@@ -1,6 +1,6 @@
 -- Ordered Index allocation laws.
 -- These tests exercise distinct witnessed selection, ordered allocation,
--- linear consumption, and the all/tensor supply distinction.
+-- linear consumption, and the each/together supply distinction.
 
 package.path = table.concat({
   './src/?.lua',
@@ -62,7 +62,7 @@ local function test_two_parallel_pop_first_claims_get_distinct_concrete_values()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:pop_first_op():map(function(e)
         return e.key, e.value
       end),
@@ -88,7 +88,7 @@ local function test_parallel_pop_last_claims_get_distinct_tail_values()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:pop_last_op():map(function(e)
         return e.key
       end),
@@ -112,7 +112,7 @@ local function test_remove_plus_pop_skips_removed_head()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:remove_op('a'),
       ix:pop_first_op():map(function(e)
         return e.key
@@ -186,7 +186,7 @@ local function test_insert_plus_pop_first_consumes_same_world_insert()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():map(function(e)
         return e.key, e.value
@@ -207,7 +207,7 @@ local function test_insert_plus_pop_first_uses_projected_order()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():map(function(e)
         return e.key
@@ -227,7 +227,7 @@ local function test_insert_plus_two_pops_allocates_insert_then_existing()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():map(function(e)
         return e.key
@@ -252,7 +252,7 @@ local function test_absence_sees_projected_insert()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():or_else(Op.always('empty')),
     }))
@@ -270,7 +270,7 @@ local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:pop_first_op(),
       ix:pop_last_op(),
     }))
@@ -280,16 +280,16 @@ local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
   if status and status.tag == 'found' then
     fail('two consuming selections from one entry should not commit')
   end
-  assert_eq(ix.entries.a.value, 'A', 'failed tensor should leave entry intact')
+  assert_eq(ix.entries.a.value, 'A', 'failed together should leave entry intact')
 end
 
-local function test_all_insert_does_not_supply_pop_but_commits_insert()
+local function test_each_insert_does_not_supply_pop_but_commits_insert()
   local rt = new_runtime()
-  local ix = Index.new('idx-all-insert-pop')
+  local ix = Index.new('idx-each-insert-pop')
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():or_else(Op.always('empty')),
     }))
@@ -298,16 +298,16 @@ local function test_all_insert_does_not_supply_pop_but_commits_insert()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'empty')
-  assert_eq(ix.entries.z.value, 'Z', 'all sibling insert should remain committed')
+  assert_eq(ix.entries.z.value, 'Z', 'each sibling insert should remain committed')
 end
 
-local function test_tensor_insert_supplies_pop_and_consumes_insert()
+local function test_together_insert_supplies_pop_and_consumes_insert()
   local rt = new_runtime()
-  local ix = Index.new('idx-tensor-insert-pop-law')
+  local ix = Index.new('idx-together-insert-pop-law')
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():or_else(Op.always('empty')),
     }))
@@ -316,16 +316,16 @@ local function test_tensor_insert_supplies_pop_and_consumes_insert()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1].key, 'z')
-  assert_nil(ix.entries.z, 'tensor sibling insert may be consumed as handoff')
+  assert_nil(ix.entries.z, 'together sibling insert may be consumed as handoff')
 end
 
-local function test_all_parallel_pops_allocate_shared_committed_stock()
+local function test_each_parallel_pops_allocate_shared_committed_stock()
   local rt = new_runtime()
-  local ix = seeded_index('idx-all-two-pops')
+  local ix = seeded_index('idx-each-two-pops')
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       ix:pop_first_op():map(function(e)
         return e.key
       end),
@@ -343,13 +343,13 @@ local function test_all_parallel_pops_allocate_shared_committed_stock()
   assert_eq(ix.entries.c.value, 'C')
 end
 
-local function test_all_remove_constrains_sibling_pop_without_supplying()
+local function test_each_remove_constrains_sibling_pop_without_supplying()
   local rt = new_runtime()
-  local ix = seeded_index('idx-all-remove-pop')
+  local ix = seeded_index('idx-each-remove-pop')
   local rows
 
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       ix:remove_op('a'),
       ix:pop_first_op():map(function(e)
         return e.key
@@ -377,10 +377,10 @@ local tests = {
   test_insert_plus_two_pops_allocates_insert_then_existing,
   test_absence_sees_projected_insert,
   test_pop_first_and_pop_last_fail_as_one_world_with_one_entry,
-  test_all_insert_does_not_supply_pop_but_commits_insert,
-  test_tensor_insert_supplies_pop_and_consumes_insert,
-  test_all_parallel_pops_allocate_shared_committed_stock,
-  test_all_remove_constrains_sibling_pop_without_supplying,
+  test_each_insert_does_not_supply_pop_but_commits_insert,
+  test_together_insert_supplies_pop_and_consumes_insert,
+  test_each_parallel_pops_allocate_shared_committed_stock,
+  test_each_remove_constrains_sibling_pop_without_supplying,
 }
 
 for i = 1, #tests do

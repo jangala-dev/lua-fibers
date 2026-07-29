@@ -293,7 +293,7 @@ The focused compatibility diagnostics are retained under
 `performance/diagnostics/`:
 
 ```text
-flow.lua            Flow sequential and tensor throughput
+flow.lua            Flow sequential and interacting-product throughput
 petri_calendar.lua  constant-state and growing-state behaviour
 lifetime.lua        Runtime-local Lifetime-store growth
 search_cases.lua    search calls, rollbacks, trail entries and refresh statistics

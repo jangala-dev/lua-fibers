@@ -40,7 +40,7 @@ end
 do
   local host = SimulatedHost.new()
   local result = fibers.try_run(function()
-    local observed = fibers.perform(Op.named_all({
+    local observed = fibers.perform(Op.named_each({
       left = clock:now_op(),
       right = clock:now_op(),
     }))
@@ -89,7 +89,7 @@ do
       end,
     }
     local query = socket.resolve_name('derived.test', 443, { resolver = resolver })
-    local families = fibers.perform(Op.named_all({
+    local families = fibers.perform(Op.named_each({
       inet6 = query:family_finished_op('inet6'),
       inet4 = query:family_finished_op('inet4'),
     }))

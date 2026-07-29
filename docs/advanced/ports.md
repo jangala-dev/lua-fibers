@@ -355,7 +355,7 @@ Kotlin CoroutineDispatcher / CoroutineScope
 `CoroutineScope`, `Job` and `SupervisorJob` map well to ordinary structured
 lifetime policies. Kotlin channels and `select` map to simple waits and races.
 They do not by themselves provide transactional and_then, proof-directed
-or_else, all versus tensor, provisional rollback or custody Closure.
+or_else, each versus together, provisional rollback or custody Closure.
 
 A Kotlin port should therefore:
 

@@ -347,7 +347,7 @@ local function grant_can_op(scope, item, right)
       end
       local b = items[i]
       if Grant.is(b) and Grant._subject_lifetime(b) == subject_lifetime and b:has_right(right) then
-        return Op.all({
+        return Op.each({
           scope:_store():record_op(scope, b),
           scope:_store():active_op(subject_lifetime),
         }):and_then(function(rows)
@@ -424,7 +424,7 @@ function Scope:grant_op(item, holder_or_rights, rights_or_opts, maybe_opts)
       return ok and Op.always(true) or Op.never()
     end)
   end
-  return Op.all(ops)
+  return Op.each(ops)
     :and_then(function()
       return holder:admit_op(grant)
     end)
@@ -482,7 +482,7 @@ function Scope:begin_close_op(reason, opts)
         ops[#ops + 1] = snapshot.tasks[i]:request_cancel_op(reason)
       end
     end
-    return Op.all(ops):map(function()
+    return Op.each(ops):map(function()
       return snapshot
     end)
   end)
@@ -523,7 +523,7 @@ function Scope:_mark_done_op(result)
   else
     phase_op = lifetime:_mark_closed_op(result.reason)
   end
-  return Op.all({ phase_op, lifetime:publish_outcome_op(result) }):map(function()
+  return Op.each({ phase_op, lifetime:publish_outcome_op(result) }):map(function()
     return ScopeResult.is(result) and result:done_outcome() or result, scope
   end)
 end

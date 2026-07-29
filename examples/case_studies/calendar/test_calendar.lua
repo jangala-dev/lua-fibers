@@ -54,7 +54,7 @@ do
   local cal = Calendar.new()
   local rows
   run(function()
-    rows = fibers.perform(Op.all({
+    rows = fibers.perform(Op.each({
       cal:reserve_at_op({ 'a' }, 0, 5),
       cal:reserve_at_op({ 'a' }, 5, 10),
       cal:reserve_at_op({ 'b' }, 0, 10),
@@ -70,7 +70,7 @@ do
   local cal = Calendar.new()
   local rows
   run(function()
-    rows = fibers.perform(Op.all({
+    rows = fibers.perform(Op.each({
       cal:reserve_op({
         resources = { 'room' },
         earliest = 0,
@@ -85,12 +85,12 @@ do
   assert(reservation_count(cal) == 2)
 end
 
--- Cancellation supplies a blocked reservation only through tensor.
+-- Cancellation supplies a blocked reservation only within `together`.
 do
   local cal = Calendar.new({ { id = 1, start = 0, finish = 5, resources = { 'room' } } })
   local rows
   run(function()
-    rows = fibers.perform(Op.tensor({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }))
+    rows = fibers.perform(Op.together({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }))
   end)
   assert(rows[1][1].id == 1 and rows[2][1].start == 0)
   assert(reservation_count(cal) == 1 and cal:reservations()[1] == nil)
@@ -101,7 +101,7 @@ do
   local result
   run(function()
     result = fibers.perform(
-      Op.all({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }):or_else(Op.always('fallback'))
+      Op.each({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }):or_else(Op.always('fallback'))
     )
   end)
   assert(result == 'fallback')

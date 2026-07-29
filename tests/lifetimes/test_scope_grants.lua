@@ -95,7 +95,7 @@ do
   local read_write
   fibers.run(function(scope)
     fibers.perform(scope:admit_op(h))
-    local grants = fibers.perform(Op.all({
+    local grants = fibers.perform(Op.each({
       scope:grant_op(h, scope, { 'read' }),
       scope:grant_op(h, scope, { 'write' }),
     }):or_else(Op.always(false)))
@@ -111,7 +111,7 @@ do
   local direct_auth, granted_auth, granted_byte, granted_err, write_err
   fibers.run(function(owner)
     local holder = FibersScope.new('flow-grant-holder', { runtime = FibersRuntime.current() })
-    fibers.perform(Op.all({ owner:admit_op(flow:inlet()), owner:admit_op(flow:outlet()) }))
+    fibers.perform(Op.each({ owner:admit_op(flow:inlet()), owner:admit_op(flow:outlet()) }))
     local _n, err = fibers.perform(flow:inlet():write_op('ab'))
     write_err = err
     direct_auth = fibers.perform(maybe(holder:can_op(flow:outlet(), 'read')))

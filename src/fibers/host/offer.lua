@@ -151,7 +151,7 @@ function Offer:next_op()
   local offer = self._queue:next_op()
   local release = self._slots:give_op()
   local demand = self._entry:demand_op()
-  local resume = Op.all({ release, demand })
+  local resume = Op.each({ release, demand })
   return offer:and_then(function(value)
     return resume:map(function()
       return value

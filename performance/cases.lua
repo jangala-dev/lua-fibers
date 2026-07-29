@@ -131,7 +131,7 @@ add('moderate', 'product', 'internal then external rendezvous', 260, function(ct
   local total = 0
   rt:spawn_raw(function()
     for i = 1, n do
-      local rows = rt:perform(Op.tensor({
+      local rows = rt:perform(Op.together({
         inside:get_op():and_then(function(value)
           return outside:get_op():map(function(other)
             return value + other
@@ -158,7 +158,7 @@ add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
   local fallbacks = 0
   rt:spawn_raw(function()
     for _ = 1, n do
-      local rows = rt:perform(Op.tensor({
+      local rows = rt:perform(Op.together({
         cell
           :write_op(1)
           :map(function()
@@ -222,17 +222,17 @@ add('complex', 'search', 'triple swap with decoy', 14, function(ctx, n)
     local ca = Rendezvous.new('perf-ca-' .. tostring(round))
     local a, b, c
     rt:spawn_raw(function()
-      a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows)
+      a = rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }):map(function(rows)
         return rows[2][1]
       end))
     end, 'perf-swap-a')
     rt:spawn_raw(function()
-      b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows)
+      b = rt:perform(Op.each({ bc:put_op('B'), ab:get_op() }):map(function(rows)
         return rows[2][1]
       end))
     end, 'perf-swap-b')
     rt:spawn_raw(function()
-      c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows)
+      c = rt:perform(Op.each({ ca:put_op('C'), bc:get_op() }):map(function(rows)
         return rows[2][1]
       end))
     end, 'perf-swap-c')

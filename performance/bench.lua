@@ -331,30 +331,30 @@ add('rendezvous', 'external ping pong', 1000, function(n)
   return n
 end)
 
-add('rendezvous', 'tensor internal rendezvous', 700, function(n)
+add('rendezvous', 'internal rendezvous in together', 700, function(n)
   local rt = Runtime.new()
-  local ch = Rendezvous.new('bench-tensor-internal')
+  local ch = Rendezvous.new('bench-together-internal')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
-      local rows = rt:perform(Op.tensor({ ch:put_op(i), ch:get_op() }))
+      local rows = rt:perform(Op.together({ ch:put_op(i), ch:get_op() }))
       sum = sum + rows[2][1]
     end
-  end, 'bench-tensor-internal')
+  end, 'bench-together-internal')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
   return n
 end)
 
-add('product', 'all independent cells', 900, function(n)
+add('product', 'each independent cells', 900, function(n)
   local rt = Runtime.new()
-  local a = Cell.new(0, 'bench-all-a')
-  local b = Cell.new(0, 'bench-all-b')
-  local c = Cell.new(0, 'bench-all-c')
+  local a = Cell.new(0, 'bench-each-a')
+  local b = Cell.new(0, 'bench-each-b')
+  local c = Cell.new(0, 'bench-each-c')
   local seen = 0
   rt:spawn_raw(function()
     for i = 1, n do
-      local rows = rt:perform(Op.all({
+      local rows = rt:perform(Op.each({
         a:write_op(i),
         b:read_op(),
         c:write_op(i * 2),
@@ -363,7 +363,7 @@ add('product', 'all independent cells', 900, function(n)
         seen = seen + rows[2][1]
       end
     end
-  end, 'bench-all-independent')
+  end, 'bench-each-independent')
   run_rt(rt)
   assert_eq(a.value, n)
   assert_eq(c.value, n * 2)
@@ -371,14 +371,14 @@ add('product', 'all independent cells', 900, function(n)
   return n
 end)
 
-add('product', 'tensor lane and_then external rendezvous', 350, function(n)
+add('product', 'together with lane and_then and external rendezvous', 350, function(n)
   local rt = Runtime.new()
   local internal = Rendezvous.new('bench-and-then-internal')
   local external = Rendezvous.new('bench-and-then-external')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
-      local rows = rt:perform(Op.tensor({
+      local rows = rt:perform(Op.together({
         internal:get_op():and_then(function(v)
           return external:get_op():map(function(x)
             return v + x
@@ -405,7 +405,7 @@ add('product', 'choice conflict backtrack', 450, function(n)
   local wins = 0
   rt:spawn_raw(function()
     for _ = 1, n do
-      local rows = rt:perform(Op.tensor({
+      local rows = rt:perform(Op.together({
         cell
           :write_op(1)
           :map(function()
@@ -488,17 +488,17 @@ add('product', 'triple swap with decoy', 80, function(n)
     local ca = Rendezvous.new('bench-triple-ca-' .. tostring(k))
     local a, b, c, decoy
     rt:spawn_raw(function()
-      a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows)
+      a = rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }):map(function(rows)
         return rows[2][1]
       end))
     end, 'A')
     rt:spawn_raw(function()
-      b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows)
+      b = rt:perform(Op.each({ bc:put_op('B'), ab:get_op() }):map(function(rows)
         return rows[2][1]
       end))
     end, 'B')
     rt:spawn_raw(function()
-      c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows)
+      c = rt:perform(Op.each({ ca:put_op('C'), bc:get_op() }):map(function(rows)
         return rows[2][1]
       end))
     end, 'C')
@@ -588,7 +588,7 @@ add('effect', 'merge duplicate effects', 700, function(n)
   for i = 1, 8 do
     lanes[i] = Op.emit(bench_effect('same-key', 1))
   end
-  local op = Op.tensor(lanes)
+  local op = Op.together(lanes)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(op)
@@ -672,7 +672,7 @@ add('scope', 'custody offer', 30, function(n)
           local msg = fibers.perform(resume:get_op())
           return msg
         end, { name = 'bench-session-' .. tostring(i) }))
-        local rows = fibers.perform(Op.tensor({
+        local rows = fibers.perform(Op.together({
           req:offer_op(task, supervisor),
           supervisor:accept_op(),
         }))
@@ -729,17 +729,17 @@ add('flow', 'sequential write read small', 350, function(n)
   return n
 end)
 
-add('flow', 'tensor write read handoff', 220, function(n)
+add('flow', 'write/read handoff in together', 220, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-tensor-handoff')
+  local flow = Flow.new(nil, 'bench-flow-together-handoff')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
     for _ = 1, n do
-      local rows = rt:perform(Op.tensor({ inlet:write_op('abcd'), outlet:read_some_op(4) }))
+      local rows = rt:perform(Op.together({ inlet:write_op('abcd'), outlet:read_some_op(4) }))
       total = total + rows[1][1] + #rows[2][1]
     end
-  end, 'bench-flow-tensor')
+  end, 'bench-flow-together')
   run_rt(rt)
   assert_eq(total, n * 8)
   return n
@@ -753,7 +753,7 @@ add('flow', 'capacity release handoff', 180, function(n)
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(inlet:write_op('abcd'))
-      local rows = rt:perform(Op.tensor({ outlet:read_some_op(4), inlet:write_op('wxyz') }))
+      local rows = rt:perform(Op.together({ outlet:read_some_op(4), inlet:write_op('wxyz') }))
       if rows[1][1] == 'abcd' and rows[2][1] == 4 then
         ok = ok + 1
       end

@@ -290,7 +290,7 @@ function Process:communicate(opts)
   if stderr_stream == stdout_stream then
     stderr_stream = nil
   end
-  local tasks = perform(Op.named_all({
+  local tasks = perform(Op.named_each({
     stdout = stdout_stream and scope:spawn_op(function()
       return stdout_stream:read_all({ max = stdout_limit })
     end, { name = self.name .. ':communicate-stdout' }) or Op.always(nil),
@@ -300,7 +300,7 @@ function Process:communicate(opts)
   }))
   local stdout_task, stderr_task = tasks.stdout, tasks.stderr
 
-  local complete_op = Op.named_all({
+  local complete_op = Op.named_each({
     stdout = stdout_task and stdout_task:body_result_op() or Op.always(nil),
     stderr = stderr_task and stderr_task:body_result_op() or Op.always(nil),
     status = self:result_op(),

@@ -61,7 +61,7 @@ function FIFO:put_op(item)
   if not self._slots then
     return put
   end
-  return Op.tensor({ self._slots:take_op(), put }):map(truth)
+  return Op.together({ self._slots:take_op(), put }):map(truth)
 end
 
 function FIFO:get_op()

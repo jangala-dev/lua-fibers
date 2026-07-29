@@ -56,17 +56,21 @@ end
 
 for _, machine in ipairs({ 'ledger', 'reference' }) do
   -- Host-language sharing of an shared guard value must not merge two
-  -- tensor operands into one dynamic activation.
+  -- Place two uses of the same guard in one `together` operation.
   do
     local calls = 0
     local guarded = Op.guard(function()
       calls = calls + 1
       return Op.always(calls)
     end)
-    local result = run(machine, Op.tensor({ guarded, guarded }))
+    local result = run(machine, Op.together({ guarded, guarded }))
     local rows = result[1]
-    eq(calls, 2, machine .. ': tensor should force two guard activations')
-    eq(rows[1][1] == rows[2][1], false, machine .. ': tensor activations should be independent')
+    eq(calls, 2, machine .. ': together should activate both guard occurrences')
+    eq(
+      rows[1][1] == rows[2][1],
+      false,
+      machine .. ': separate together lanes should have independent activations'
+    )
   end
 
   -- The same rule applies when sharing is hidden behind a reused and_then
@@ -81,7 +85,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     local sequence = Op.always('prefix'):and_then(function()
       return guarded
     end)
-    local result = run(machine, Op.tensor({ sequence, sequence }))
+    local result = run(machine, Op.together({ sequence, sequence }))
     local rows = result[1]
     eq(calls, 2, machine .. ': reused dynamic sequence should create two guard activations')
     eq(rows[1][1] == rows[2][1], false, machine .. ': dynamic activations should be independent')
@@ -281,7 +285,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     local op = Op.guard(function()
       calls = calls + 1
       local prepared = Op.always('shared-' .. tostring(calls))
-      return Op.tensor({ prepared, prepared })
+      return Op.together({ prepared, prepared })
     end)
     local result = run(machine, op)
     local rows = result[1]

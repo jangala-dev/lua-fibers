@@ -134,7 +134,7 @@ add('certified symmetric suppliers', function(profile)
     end)
   end
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ channel:get_op(), cell:write_op(1), cell:write_op(2) }))
+    rt:perform(Op.together({ channel:get_op(), cell:write_op(1), cell:write_op(2) }))
   end)
   assert(drain(rt).tag == 'quiescent')
   return rt, 'retry:10'
@@ -182,17 +182,17 @@ add('triple swap with decoy', function(profile)
   local ab, bc, ca = Rendezvous.new('adv-ab'), Rendezvous.new('adv-bc'), Rendezvous.new('adv-ca')
   local a, b, c
   rt:spawn_raw(function()
-    a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows)
+    a = rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }):map(function(rows)
       return rows[2][1]
     end))
   end)
   rt:spawn_raw(function()
-    b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows)
+    b = rt:perform(Op.each({ bc:put_op('B'), ab:get_op() }):map(function(rows)
       return rows[2][1]
     end))
   end)
   rt:spawn_raw(function()
-    c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows)
+    c = rt:perform(Op.each({ ca:put_op('C'), bc:get_op() }):map(function(rows)
       return rows[2][1]
     end))
   end)

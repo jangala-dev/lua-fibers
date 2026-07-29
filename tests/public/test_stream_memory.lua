@@ -349,7 +349,7 @@ do
   local got
   local rt = FibersRuntime.new({ quiet_deadlock = true })
   rt:spawn_raw(function()
-    got = rt:perform(Op.tensor({ a:writer():write_op('a'), a:writer():write_op('b') }))
+    got = rt:perform(Op.together({ a:writer():write_op('a'), a:writer():write_op('b') }))
   end, 'parallel-stream-writes')
   local st = rt:run()
   assert_status(st, 'found')
@@ -544,7 +544,7 @@ do
 end
 
 -- A Stream is only a pairing of Flow capabilities: the same Flows remain
--- directly composable through tensor, tees and other Flow-level protocols.
+-- directly composable through `together`, tees and other Flow-level protocols.
 do
   local read_flow = Flow.new(nil, 'composed-read')
   local write_flow = Flow.new(nil, 'composed-write')

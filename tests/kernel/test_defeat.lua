@@ -115,7 +115,7 @@ do
   rt:spawn_raw(function()
     got = rt:perform(Op.choice(
       Op.always('winner'),
-      Op.all({
+      Op.each({
         Op.always('a'):on_defeat(defeat('lane-a')),
         Op.always('b'):on_defeat(defeat('lane-b')),
       })

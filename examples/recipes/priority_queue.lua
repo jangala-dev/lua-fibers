@@ -32,7 +32,7 @@ function PriorityQueue:put_op(priority, value)
   if not self._slots then
     return put
   end
-  return Op.tensor({ self._slots:take_op(), put }):map(function()
+  return Op.together({ self._slots:take_op(), put }):map(function()
     return true
   end)
 end

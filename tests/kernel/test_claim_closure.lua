@@ -39,7 +39,7 @@ local rt = Runtime.new({ instrumentation = true })
 local index = Index.new('claim-closure-index')
 local rows
 rt:spawn_raw(function()
-  rows = rt:perform(Op.tensor({
+  rows = rt:perform(Op.together({
     index:pop_first_op(),
     index:append_op('value'),
   }))
@@ -73,7 +73,7 @@ local observe_positive = Facility.op(
 )
 local backtrack_rows
 backtrack_rt:spawn_raw(function()
-  backtrack_rows = backtrack_rt:perform(Op.tensor({
+  backtrack_rows = backtrack_rt:perform(Op.together({
     counter:take_op(1),
     observe_positive,
   }))

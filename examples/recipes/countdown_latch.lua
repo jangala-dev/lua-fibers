@@ -1,9 +1,9 @@
 -- Transactional countdown latch built on typed Machine transitions.
 --
 -- A CountdownLatch tracks a count and a generation.  wait_op() succeeds only when
--- the projected count for the committed world is zero.  Under tensor a sibling
--- done_op() can therefore satisfy a wait; under all a sibling positive supply
--- is not hidden from the zero predicate.
+-- the projected count for the committed world is zero.  Under `together`, a sibling
+-- done_op() can therefore satisfy a wait; under `each`, sibling positive supply
+-- is hidden from the zero predicate.
 
 local StateMachine = require('fibers.resource.machine')
 local Ready, Wait = StateMachine.Ready, StateMachine.Wait

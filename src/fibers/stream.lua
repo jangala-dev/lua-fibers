@@ -241,7 +241,7 @@ local function retire_direction(self, side, reason, policy, abort)
   local request = abort and flow_of(ep):abort_op(reason) or ep:close_op(reason)
   local registration = self[side .. '_registration']
   if registration then
-    request = Op.tensor({ request, registration:retire_op(reason, policy) }):map(function()
+    request = Op.together({ request, registration:retire_op(reason, policy) }):map(function()
       return true
     end)
   end
@@ -280,7 +280,7 @@ local function close_request(self, reason, abort_write)
     operations[#operations + 1] = abort_write and self:abort_write_op(reason)
       or self:shutdown_write_op(reason)
   end
-  return #operations == 0 and Op.always(true) or Op.tensor(operations):map(function()
+  return #operations == 0 and Op.always(true) or Op.together(operations):map(function()
     return true
   end)
 end
@@ -332,7 +332,7 @@ function Duplex:closed_op()
   if self.write_registration then
     operations[#operations + 1] = self.write_registration:retired_op()
   end
-  return Op.all(operations):map(function()
+  return Op.each(operations):map(function()
     if self._close_error then
       return nil, self._close_error
     end
@@ -437,7 +437,7 @@ local function open_in_op(scope, handle, opts)
     stream._lifetime:add_child(children[i])
   end
   return scope:admit_op(stream):and_then(function()
-    return Op.named_all(registrations):map(function()
+    return Op.named_each(registrations):map(function()
       return stream
     end)
   end)

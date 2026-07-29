@@ -70,7 +70,7 @@ local function terminal_values(state)
 end
 
 function Query:_families_op()
-  return Op.named_all({
+  return Op.named_each({
     inet6 = self:family_finished_op('inet6'),
     inet4 = self:family_finished_op('inet4'),
   })
@@ -156,7 +156,7 @@ function Query:close_op(reason)
     publishes[#publishes + 1] = self.family_completions[FAMILIES[i]]:publish_cancelled_op(err)
   end
   return cancel:and_then(function()
-    return Op.all(publishes):map(function()
+    return Op.each(publishes):map(function()
       return true
     end)
   end)

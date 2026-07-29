@@ -31,7 +31,7 @@ fibers.run(function(scope)
     end),
   }))
 
-  local readiness = fibers.perform(Op.named_all({
+  local readiness = fibers.perform(Op.named_each({
     motors = Op.always('armed'),
     lidar = Op.always('clear'),
   }))

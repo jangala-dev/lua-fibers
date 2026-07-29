@@ -97,7 +97,7 @@ local function configure_radio_op(channel, power)
       channel = channel or current.channel,
       power = power or current.power,
     }
-    return Op.all({
+    return Op.each({
       desired:write_op(next_config),
       apply_setting('uplink', 'channel', channel),
       apply_setting('uplink', 'power', power),

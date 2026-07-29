@@ -60,7 +60,7 @@ function Pulse:is_closed()
 end
 
 function Pulse:signal_op()
-  local signal = Op.all({
+  local signal = Op.each({
     self._status:expect_op(OPEN),
     self._version:bump_op(),
   }):map(function(rows)

@@ -38,13 +38,13 @@ do
   local rt = Runtime.new()
   local ab, bc, ca = Rendezvous.new('ab'), Rendezvous.new('bc'), Rendezvous.new('ca')
   rt:spawn_raw(function()
-    rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }))
+    rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }))
   end)
   rt:spawn_raw(function()
-    rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }))
+    rt:perform(Op.each({ bc:put_op('B'), ab:get_op() }))
   end)
   rt:spawn_raw(function()
-    rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }))
+    rt:perform(Op.each({ ca:put_op('C'), bc:get_op() }))
   end)
   rt:spawn_raw(function()
     rt:perform(ab:get_op())
@@ -72,7 +72,7 @@ do
   local rt = Runtime.new()
   local cell = Cell.new(0)
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({
+    rt:perform(Op.together({
       cell:write_op(1):choice(Op.always('no-write')),
       cell:write_op(2),
     }))
@@ -86,7 +86,7 @@ do
   local rt = Runtime.new()
   local inside, outside = Rendezvous.new('inside'), Rendezvous.new('outside')
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({
+    rt:perform(Op.together({
       inside:get_op():and_then(function()
         return outside:get_op()
       end),

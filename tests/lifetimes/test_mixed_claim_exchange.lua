@@ -23,15 +23,15 @@ local rt = Runtime.new()
 local c, ch, s = Counter.new(0), Rendezvous.new('claim-backtrack'), Cell.new(0)
 local taken, sent
 rt:spawn_raw(function()
-  local rows = rt:perform(Op.all({ c:take_op(1), ch:get_op(), s:write_op(2) }))
+  local rows = rt:perform(Op.each({ c:take_op(1), ch:get_op(), s:write_op(2) }))
   taken = rows[1][1]
 end, 'taker')
 rt:spawn_raw(function()
   sent = rt:perform(Op.choice({
-    Op.all({ c:give_op(1), ch:put_op('bad'), s:write_op(1) }):map(function()
+    Op.each({ c:give_op(1), ch:put_op('bad'), s:write_op(1) }):map(function()
       return 'bad'
     end),
-    Op.all({ c:give_op(1), ch:put_op('good'), s:write_op(2) }):map(function()
+    Op.each({ c:give_op(1), ch:put_op('good'), s:write_op(2) }):map(function()
       return 'good'
     end),
   }))

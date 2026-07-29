@@ -49,7 +49,7 @@ fibers.run(function()
     end, 'water-survey-unit')
   end
 
-  local dispatch = Op.all({
+  local dispatch = Op.each({
     safety_interlock:expect_op('clear'),
     battery_reserve:take_op(1),
   })

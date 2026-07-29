@@ -1153,7 +1153,7 @@ dfs = function(state)
           -- A serial-transducer location has one deterministic transition
           -- order. Prefer resolving all currently entered transitions as one
           -- journal: this preserves cases such as two mailbox sends followed
-          -- by a close in the same tensor, where every sendability check must
+          -- by a close in the same interacting product, where every sendability check must
           -- precede the close. If the complete journal is not admissible, retain
           -- the one-at-a-time alternatives needed for supplying hand-off and
           -- global backtracking (write/read, insert/pop, and similar cases).

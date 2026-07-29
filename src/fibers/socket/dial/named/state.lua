@@ -576,7 +576,7 @@ function State:_attempt_result_ops(current, scope)
       local result = attempt.dial:result_op(scope):map(function(connection, err)
         return { connection = connection, error = err }
       end)
-      options[#options + 1] = Op.named_all({
+      options[#options + 1] = Op.named_each({
         result = result,
         completed_at = now_op(),
       }):and_then(function(observed)
@@ -614,7 +614,7 @@ function State:_resolution_ops(current, query)
   for _, family in ipairs(FAMILIES) do
     local kind = family
     if not current.families[kind].done then
-      options[#options + 1] = Op.named_all({
+      options[#options + 1] = Op.named_each({
         completion = query:family_finished_op(kind),
         finished_at = now_op(),
       }):and_then(function(observed)
@@ -732,7 +732,7 @@ function State:step_op(query, scope)
   local footprint = Op.dependencies(unpack_(dependencies))
 
   return Op.guard(function()
-    return Op.named_all({
+    return Op.named_each({
       state = self.state:read_op(),
       available_slots = self.attempt_slots:read_op(),
       now = now_op(),

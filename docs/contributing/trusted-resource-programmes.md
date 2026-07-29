@@ -190,8 +190,8 @@ constructing trusted transitions and are normalised immediately to that set.
 `any` is an explicit declaration for an unordered state algebra; omission is
 not treated as `any`.
 
-Under `all`, the supplying component of an independent sibling delta is hidden.
-Under `tensor`, compatible supply may be used.
+Under `each`, the supplying component of an independent sibling delta is hidden.
+Under `together`, compatible supply may be used.
 
 `Facility.select` and `Facility.admit` are trusted convenience constructors for
 ordered finite-map selection and compatibility-checked insertion.
@@ -356,8 +356,8 @@ Every new primitive facility should test:
 ```text
 losing choices leave committed state unchanged
 sequential continuations see their own tentative changes
-all hides positive sibling supply
-tensor permits only intended hand-off
+each hides positive sibling supply
+together permits only intended hand-off
 parallel incompatible deltas reject the candidate
 witness alternatives backtrack globally
 local exhaustion does not become premature Retry

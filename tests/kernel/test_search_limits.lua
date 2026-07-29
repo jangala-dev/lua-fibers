@@ -68,7 +68,7 @@ local function atomic_dispatch(opts, n)
       end
       jobs[job] = Op.choice(alternatives)
     end
-    rt:perform(Op.all(jobs))
+    rt:perform(Op.each(jobs))
   end, 'search-limit-dispatcher')
   return rt, rt:run()
 end
@@ -184,7 +184,7 @@ do
       end
       jobs[job] = Op.choice(choices)
     end
-    unknown_rt:perform(Op.all(jobs))
+    unknown_rt:perform(Op.each(jobs))
   end, 'independent-unknown-positive-focus')
 
   local first = unknown_rt:run()
@@ -228,7 +228,7 @@ do
       end
       jobs[#jobs + 1] = Op.choice(choices)
     end
-    unknown_rt:perform(Op.all(jobs))
+    unknown_rt:perform(Op.each(jobs))
   end, 'component-unknown-positive-focus')
 
   local status = unknown_rt:run()

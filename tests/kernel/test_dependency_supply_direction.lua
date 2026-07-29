@@ -75,7 +75,7 @@ local cell = StateMachine.new(0, 'directional-separation')
 local rows
 local rt = Runtime.new()
 rt:spawn_raw(function()
-  rows = rt:perform(Op.tensor({
+  rows = rt:perform(Op.together({
     cell:transition_op(observer),
     cell:transition_op(producer),
   }))

@@ -253,7 +253,7 @@ do
         end
         jobs[job] = Op.choice(alternatives)
       end
-      app.runtime:perform(Op.all(jobs))
+      app.runtime:perform(Op.each(jobs))
     end, 'roblox-capacity-dispatcher')
 
     local status = app:advance()

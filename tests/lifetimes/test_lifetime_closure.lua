@@ -114,7 +114,7 @@ do
   end
   eq(good_count, 1)
 
-  local pair = Op.tensor({ failure:force_op(), failure:force_op() }):or_else(Op.always('fallback'))
+  local pair = Op.together({ failure:force_op(), failure:force_op() }):or_else(Op.always('fallback'))
   local pair_result = fibers.run(function()
     return fibers.perform(pair)
   end)

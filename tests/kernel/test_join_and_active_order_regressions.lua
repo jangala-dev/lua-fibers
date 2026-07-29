@@ -56,7 +56,7 @@ end
 for _, machine in ipairs({ 'ledger', 'reference' }) do
   local counter = Counter.new(5, 'join-continuation-' .. machine)
   local result = run(machine, function()
-    return Op.all({ counter:take_op(2), counter:read_op() }):and_then(function()
+    return Op.each({ counter:take_op(2), counter:read_op() }):and_then(function()
       return counter:read_op()
     end)
   end)
@@ -69,7 +69,7 @@ local function observed_with(machine, mode, lane_order, sibling_kind)
     Counter.new(5, table.concat({ 'active-order', machine, mode, lane_order, sibling_kind }, '-'))
   local take = counter:take_op(1)
   local observe = counter:at_least_op(1)
-  local inner = Op.all(lane_order == 'take-observe' and { take, observe } or { observe, take })
+  local inner = Op.each(lane_order == 'take-observe' and { take, observe } or { observe, take })
 
   local sibling
   if sibling_kind == 'plain' then
@@ -84,7 +84,7 @@ local function observed_with(machine, mode, lane_order, sibling_kind)
     error('unknown sibling kind', 0)
   end
 
-  local outer = (mode == 'tensor' and Op.tensor or Op.all)({ inner, sibling })
+  local outer = (mode == 'together' and Op.together or Op.each)({ inner, sibling })
   local rows = run(machine, function()
     return outer
   end)
@@ -98,7 +98,7 @@ end
 -- which were already queued. A dormant or immediately certified or_else is
 -- observationally transparent to neighbouring product lanes.
 for _, machine in ipairs({ 'ledger', 'reference' }) do
-  for _, mode in ipairs({ 'all', 'tensor' }) do
+  for _, mode in ipairs({ 'each', 'together' }) do
     for _, lane_order in ipairs({ 'take-observe', 'observe-take' }) do
       local baseline, baseline_value = observed_with(machine, mode, lane_order, 'plain')
       for _, sibling_kind in ipairs({ 'preferred', 'fallback', 'nested' }) do

@@ -90,7 +90,7 @@ local forced_rt = Runtime.new({ machine = 'ledger', instrumentation = true })
 local forced_a = StateMachine.new(0, 'instrumentation-forced-a')
 local forced_b = StateMachine.new(0, 'instrumentation-forced-b')
 forced_rt:spawn_raw(function()
-  forced_rt:perform(Op.all({
+  forced_rt:perform(Op.each({
     forced_a:transition_op(ForcedTransition, 1),
     forced_b:transition_op(ForcedTransition, 2),
   }))

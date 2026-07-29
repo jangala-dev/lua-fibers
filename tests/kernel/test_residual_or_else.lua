@@ -224,7 +224,7 @@ if machine == 'ledger' then
       ready[i] = Rendezvous.new('nested-fallback-ready-' .. tostring(i))
       lanes[i] = operation:or_else(ready[i]:get_op())
     end
-    values = runtime:perform(Op.all(lanes))
+    values = runtime:perform(Op.each(lanes))
   end, 'nested-fallback-consumer')
   for i = 1, count do
     local value = i
@@ -255,22 +255,22 @@ if machine == 'ledger' then
     for i = 1, count do
       local operation
       for level = 1, levels do
-        local absent = Rendezvous.new('tensor-fallback-absent-' .. tostring(i) .. '-' .. tostring(level))
+        local absent = Rendezvous.new('together-fallback-absent-' .. tostring(i) .. '-' .. tostring(level))
         operation = operation and operation:or_else(absent:get_op()) or absent:get_op()
       end
-      local ready = Rendezvous.new('tensor-fallback-ready-' .. tostring(i))
+      local ready = Rendezvous.new('together-fallback-ready-' .. tostring(i))
       lanes[#lanes + 1] = operation:or_else(ready:get_op())
       lanes[#lanes + 1] = ready:put_op(i)
     end
-    values = runtime:perform(Op.tensor(lanes))
-  end, 'tensor-fallback-root')
+    values = runtime:perform(Op.together(lanes))
+  end, 'together-fallback-root')
   assert_eq(runtime:run().tag, 'found')
   assert_eq(runtime:run().tag, 'idle')
-  assert_truthy(values ~= nil, 'interacting tensor fallback did not complete')
+  assert_truthy(values ~= nil, 'interacting-product fallback did not complete')
   local counters = runtime:instrumentation_report().counters
   assert_truthy(
     (counters.search_calls or math.huge) < 250,
-    'interacting tensor fallback regressed to sibling-phase enumeration'
+    'interacting-product fallback regressed to sibling-phase enumeration'
   )
   assert_truthy(
     (counters.product_support_closures or 0) >= count * levels,
@@ -289,7 +289,7 @@ if machine == 'ledger' then
       ready[i] = Rendezvous.new('batched-fallback-ready-' .. tostring(i))
       lanes[i] = absent:get_op():or_else(ready[i]:get_op())
     end
-    values = runtime:perform(Op.all(lanes))
+    values = runtime:perform(Op.each(lanes))
   end, 'batched-fallback-consumer')
   for i = 1, count do
     local value = i

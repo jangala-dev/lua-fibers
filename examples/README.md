@@ -39,7 +39,7 @@ not a domain-specific framework.
 | `12_callback_phases.lua` | select an emergency dispatch, page responders after commit, then update the dashboard |
 | `13_typed_effects.lua` | commit a radio configuration, merge driver obligations and reject an unsupported candidate |
 | `14_defeat_obligations.lua` | retire an incompatible robot trajectory when a cautious route wins |
-| `15_all_and_tensor.lua` | reserve motor/vision capacity, then hand off a control word |
+| `15_each_and_together.lua` | reserve motor/vision capacity, then hand off a control word |
 
 ### Lifetimes and supervision
 

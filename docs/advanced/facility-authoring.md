@@ -11,7 +11,7 @@ A facility normally:
 3. mirrors its principal `_op` methods with plain direct methods which perform
    those options;
 4. keeps the option construction path inert and does not call `perform` inside an `_op` method;
-5. uses `all`, `tensor`, `choice`, sequencing and mapping to state its laws;
+5. uses `each`, `together`, `choice`, sequencing and mapping to state its laws;
 6. leaves fibre and lifetime structure to callers unless custody is intrinsic to the facility.
 
 ```lua

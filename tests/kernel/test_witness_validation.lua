@@ -86,8 +86,8 @@ do
     requests[i] = {
       id = i,
       op = Op.choice(
-        Op.all({ edges[i]:put_op(i), edges[previous]:put_op(i) }),
-        Op.all({ edges[i]:get_op(), edges[previous]:get_op() })
+        Op.each({ edges[i]:put_op(i), edges[previous]:put_op(i) }),
+        Op.each({ edges[i]:get_op(), edges[previous]:get_op() })
       ),
     }
     ids[i] = i

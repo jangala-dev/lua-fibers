@@ -395,7 +395,7 @@ local function symmetric_failure(machine, enabled)
     end)
   end
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ channel:get_op(), cell:write_op(1), cell:write_op(2) }))
+    rt:perform(Op.together({ channel:get_op(), cell:write_op(1), cell:write_op(2) }))
   end)
   eq(rt:run().tag, 'quiescent')
   return rt:instrumentation_report().counters

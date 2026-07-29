@@ -936,14 +936,14 @@ function Resolver:_resolve_candidate(name, port, family, opts)
       end, self.name .. ':' .. Codec.type_name(qtype)),
     }
   end
-  local tasks = perform(Op.named_all(task_entries))
+  local tasks = perform(Op.named_each(task_entries))
 
   local outcome_entries = {}
   for i = 1, #task_entries do
     local family_name = task_entries[i][1]
     outcome_entries[i] = { family_name, tasks[family_name]:outcome_op() }
   end
-  local outcomes = perform(Op.named_all(outcome_entries))
+  local outcomes = perform(Op.named_each(outcome_entries))
 
   local addresses, errors, seen = {}, {}, {}
   for i = 1, #task_entries do

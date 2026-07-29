@@ -40,7 +40,7 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
-local function test_cell_select_tensor_supply_but_all_non_handoff()
+local function test_cell_select_together_supply_but_each_non_handoff()
   local supply = StateMachine.update('test.cell.supply', function(v)
     return StateMachine.Ready.write(v + 1, true)
   end)
@@ -54,7 +54,7 @@ local function test_cell_select_tensor_supply_but_all_non_handoff()
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       s:transition_op(supply),
       s:transition_op(take),
     }))
@@ -63,11 +63,11 @@ local function test_cell_select_tensor_supply_but_all_non_handoff()
   assert_eq(rows[2][1], 1)
   assert_eq(s.value, 0)
 
-  local s2 = StateMachine.new(0, 'select-all')
+  local s2 = StateMachine.new(0, 'select-each')
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
-    rows2 = rt2:perform(Op.all({
+    rows2 = rt2:perform(Op.each({
       s2:transition_op(supply),
       s2:transition_op(take):or_else(Op.always('empty')),
     }))
@@ -89,12 +89,12 @@ local function test_flow_sequential_write_read()
   assert_eq(got, 'abc')
 end
 
-local function test_flow_tensor_write_read_handoff()
-  local flow = Flow.new(nil, 'flow-tensor')
+local function test_flow_together_write_read_handoff()
+  local flow = Flow.new(nil, 'flow-together')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows
   local st = fibers.try_run(function()
-    rows = fibers.perform(Op.tensor({
+    rows = fibers.perform(Op.together({
       inlet:write_op('abc'),
       outlet:read_some_op(3),
     }))
@@ -105,12 +105,12 @@ local function test_flow_tensor_write_read_handoff()
   assert_eq(Inspect.queued(flow), 0)
 end
 
-local function test_flow_all_write_does_not_supply_read()
-  local flow = Flow.new(nil, 'flow-all')
+local function test_flow_each_write_does_not_supply_read()
+  local flow = Flow.new(nil, 'flow-each')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows
   local st = fibers.try_run(function()
-    rows = fibers.perform(Op.all({
+    rows = fibers.perform(Op.each({
       inlet:write_op('abc'),
       outlet:read_some_op(3):or_else(Op.always('empty')),
     }))
@@ -130,7 +130,7 @@ local function test_flow_close_constrains_write()
   local inlet = flow:inlet()
   local rows
   local st = fibers.try_run(function()
-    rows = fibers.perform(Op.tensor({
+    rows = fibers.perform(Op.together({
       inlet:close_op(),
       inlet:write_op('x'),
     }))
@@ -173,10 +173,10 @@ local function test_flow_lease_ack_and_return()
 end
 
 local tests = {
-  test_cell_select_tensor_supply_but_all_non_handoff,
+  test_cell_select_together_supply_but_each_non_handoff,
   test_flow_sequential_write_read,
-  test_flow_tensor_write_read_handoff,
-  test_flow_all_write_does_not_supply_read,
+  test_flow_together_write_read_handoff,
+  test_flow_each_write_does_not_supply_read,
   test_flow_close_constrains_write,
   test_flow_capacity_and_write_some,
   test_flow_lease_ack_and_return,

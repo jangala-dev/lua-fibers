@@ -64,7 +64,7 @@ named obligations commit together or not at all
 Implementation sentence:
 
 ```text
-a covenant is a named tensor of terms, each contributing journals, movement, Grants or effects
+a covenant is a named interacting product of terms, each contributing journals, movement, Grants or effects
 ```
 
 Possible use:
@@ -73,7 +73,7 @@ Possible use:
 multi-party session acceptance, resource exchange, phase transition agreements
 ```
 
-Covenant is design language until large `tensor` expressions need a more legible
+Covenant is design language until large `together` expressions need a more legible
 shape.
 
 ## Braid

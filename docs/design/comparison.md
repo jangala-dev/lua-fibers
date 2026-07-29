@@ -27,7 +27,7 @@ The arrows indicate inherited questions and increasingly rich composition, not d
 | Main interaction | Events and synchronous channels | Two-party rendezvous | All-or-nothing sequences of rendezvous | Atomic-reference updates and synchronous swaps | Versioned state, exchange, recruitment, custody and consequences |
 | Alternative | Internal/external process choice | Nondeterministic event choice | Nondeterministic transactional choice | Optionally left-biased choice | Unordered `choice`; validated priority through `or_else` |
 | Sequencing | Prefix and process sequencing | Work before or after one selected event | Transactional `thenEvt` | End-to-end composition | Transactional `and_then` |
-| Side-by-side conjunction | Parallel process composition | No general event product | Usually encoded through sequence | Pairing `*` | Independent `all` and interacting `tensor` |
+| Side-by-side conjunction | Parallel process composition | No general event product | Usually encoded through sequence | Pairing `*` | Independent `each` and interacting `together` |
 | Shared state | Modelled as processes | Commonly hidden behind server threads | Encodable over events | Native atomic updates | Native versioned locations and transition algebras |
 | Failure information | Traces, refusals and divergence in semantic models | Event not presently selectable | Transactional search failure | `Block` and transient implementation `Retry` | `Hit`, proof-bearing `Retry` and bounded-search `Unknown` |
 | Primitive-authoring centre | Process definitions and refinements | Event-valued protocols | Transactional channel protocols | Scalable lock-free data structures | Trusted declarative transactional facilities |
@@ -79,7 +79,7 @@ Approximate correspondences are:
 
 CML event choice is nondeterministic when several events can proceed. The revised `Op.choice` has the same important algebraic intention: branch position does not confer priority. `fibers` uses a deterministic seed-derived traversal for reproducibility, but this is runtime policy rather than source-order semantics.
 
-Fibers gives `guard` an activation-scoped interpretation. Each structural use is prepared independently, so `tensor({ g, g })` evaluates a reused guard twice, while one outer guard may deliberately construct a shared option. A guard returned by `and_then` is evaluated when that particular provisional progression activates. Its builder receives a short-lived activation view and returns an explicit residual operation; the view is closed immediately afterwards. The residual is then retained while the same progression is searched, suspended or reconstructed. This resembles CML pre-synchronisation preparation while accounting for Fibers' multi-step speculative worlds.
+Fibers gives `guard` an activation-scoped interpretation. Each structural use is prepared independently, so `together({ g, g })` evaluates a reused guard twice, while one outer guard may deliberately construct a shared option. A guard returned by `and_then` is evaluated when that particular provisional progression activates. Its builder receives a short-lived activation view and returns an explicit residual operation; the view is closed immediately afterwards. The residual is then retained while the same progression is searched, suspended or reconstructed. This resembles CML pre-synchronisation preparation while accounting for Fibers' multi-step speculative worlds.
 
 The main difference is CML's single selected synchronisation point. Work may be arranged before or after that point, but a compound protocol must still decide which communication constitutes commitment. `fibers.and_then` keeps earlier state changes and exchanges provisional until the complete continuation and all recruited participants close.
 
@@ -123,7 +123,7 @@ Both systems admit a search-and-backtracking account: apparently completed commu
 
 `fibers` extends this shape in four principal directions.
 
-First, it has native versioned resource transitions rather than a core centred on synchronous channels. Secondly, it has side-by-side products as well as monadic sequence. Thirdly, it distinguishes independent `all` from interacting `tensor`. Fourthly, its bounded implementation exposes `Unknown` rather than treating a failure to complete search as a semantic refutation.
+First, it has native versioned resource transitions rather than a core centred on synchronous channels. Secondly, it has side-by-side products as well as monadic sequence. Thirdly, it distinguishes independent `each` from interacting `together`. Fourthly, its bounded implementation exposes `Unknown` rather than treating a failure to complete search as a semantic refutation.
 
 ### Choice and priority
 
@@ -170,8 +170,8 @@ Reagent choice is deliberately left-biased in order to support algorithms such a
 The principal algebraic distinction introduced by `fibers` is the split between two product modes:
 
 ```text
-all       every lane must succeed without positive sibling supply
-tensor    every lane must succeed and compatible siblings may supply one another
+each      every lane must succeed and stand on its own
+together  every lane must succeed and compatible siblings may support one another
 ```
 
 Reagent pairing makes constituent reactions atomic together. `fibers` additionally makes the isolation-versus-interaction boundary explicit and asks each store algebra to provide separate sequential, independent-parallel and interacting-parallel composition rules.
@@ -194,7 +194,7 @@ Reagents are designed for authors of scalable concurrent data structures. The au
 
 Reagents are stronger in the intended domain of parallel, lock-free implementation and persistent reusable catalysts. `fibers` is stronger in its direct vocabulary for proof-bearing fallback, explicit bounded-search incompleteness, custody movements and the distinction between independent and interacting conjunction.
 
-A formal relationship between Reagent pairing and `Op.all`/`Op.tensor` remains open work.
+A formal relationship between Reagent pairing and `Op.each`/`Op.together` remains open work.
 
 ## 5. The distinctive fibres algebra
 
@@ -204,8 +204,8 @@ The compact public basis can be read as:
 choice      unordered disjunction: any compatible alternative is acceptable
 or_else     justified priority: fallback requires a valid refutation
 and_then    transactional causality: later proof may retract earlier work
-all         independent conjunction: no positive sibling supply
-tensor      interacting conjunction: compatible sibling hand-off is visible
+each      independent conjunction: every lane stands on its own
+together  interacting conjunction: compatible sibling hand-off is visible
 ```
 
 The corresponding search outcomes are:
@@ -237,7 +237,7 @@ The timeout is admitted only after both socket alternatives have been completely
 ### Joint requirements without hand-off
 
 ```lua
-Op.all({ account_a:take_op(1), account_b:take_op(1) })
+Op.each({ account_a:take_op(1), account_b:take_op(1) })
 ```
 
 Both withdrawals must be supported by the parent world; one lane cannot fund the other.
@@ -245,7 +245,7 @@ Both withdrawals must be supported by the parent world; one lane cannot fund the
 ### Intentional transactional hand-off
 
 ```lua
-Op.tensor({ slots:give_op(1), slots:take_op(1) })
+Op.together({ slots:give_op(1), slots:take_op(1) })
 ```
 
 Compatible sibling supply may participate in the same committed world.
@@ -274,7 +274,7 @@ The present system does not yet provide:
 The most useful formal development would therefore concentrate on:
 
 1. translations of CML and Transactional Events into the compact option language;
-2. a precise relationship between Reagent pairing and `all`/`tensor`;
+2. a precise relationship between Reagent pairing and `each`/`together`;
 3. laws for unordered `choice`, proof-certified `or_else` and occurrence-sensitive defeat;
 4. soundness and completeness statements for `Hit`, `Retry` and `Unknown`;
 5. a separation example showing why independent and interacting product modes are both necessary.

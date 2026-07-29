@@ -60,10 +60,10 @@ local function assert_key(map, key, expected)
   end
 end
 
-local function test_counter_all_allocates_existing_stock()
+local function test_counter_each_allocates_existing_stock()
   local rt, c, rows = new_runtime(), Counter.new(2)
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ c:take_op(1), c:take_op(1) }))
+    rows = rt:perform(Op.each({ c:take_op(1), c:take_op(1) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -71,20 +71,20 @@ local function test_counter_all_allocates_existing_stock()
   assert_eq(c.value, 0)
 end
 
-local function test_counter_all_give_does_not_supply_take()
+local function test_counter_each_give_does_not_supply_take()
   local rt, c, rows = new_runtime(), Counter.new(0)
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ c:give_op(1), c:take_op(1):or_else(Op.always('none')) }))
+    rows = rt:perform(Op.each({ c:give_op(1), c:take_op(1):or_else(Op.always('none')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'none')
   assert_eq(c.value, 1)
 end
 
-local function test_counter_tensor_give_supplies_take()
+local function test_counter_together_give_supplies_take()
   local rt, c, rows = new_runtime(), Counter.new(0)
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ c:give_op(1), c:take_op(1) }))
+    rows = rt:perform(Op.together({ c:give_op(1), c:take_op(1) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], true)
@@ -94,7 +94,7 @@ end
 local function test_counter_overdraw_rejected()
   local rt, c = new_runtime({ quiet_deadlock = true }), Counter.new(1)
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ c:take_op(1), c:take_op(1) }))
+    rt:perform(Op.together({ c:take_op(1), c:take_op(1) }))
   end)
   local st = rt:run()
   if st.tag == 'found' then
@@ -106,26 +106,26 @@ end
 local function test_counter_adjust_is_additive()
   local rt, c = new_runtime(), Counter.new(2)
   rt:spawn_raw(function()
-    rt:perform(Op.all({ c:adjust_op(-1), c:adjust_op(2) }))
+    rt:perform(Op.each({ c:adjust_op(-1), c:adjust_op(2) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(c.value, 3)
 end
 
-local function test_keyed_tensor_put_supplies_get()
+local function test_keyed_together_put_supplies_get()
   local rt, m, rows = new_runtime(), Keyed.new()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ m:put_op('k', 'v'), m:get_op('k') }))
+    rows = rt:perform(Op.together({ m:put_op('k', 'v'), m:get_op('k') }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'v')
   assert_key(m, 'k', 'v')
 end
 
-local function test_keyed_all_put_does_not_supply_get()
+local function test_keyed_each_put_does_not_supply_get()
   local rt, m, rows = new_runtime(), Keyed.new()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ m:put_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.each({ m:put_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'missing')
@@ -135,7 +135,7 @@ end
 local function test_keyed_remove_and_get_share_parent_value()
   local rt, m, rows = new_runtime(), Keyed.from({ a = 'A', b = 'B' })
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ m:remove_op('a'), m:get_op('a'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.each({ m:remove_op('a'), m:get_op('a'):or_else(Op.always('missing')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -169,21 +169,21 @@ local function test_keyed_take_then_put_replaces()
 end
 
 -- This is the first operation which requires a partial claim to consume a
--- value supplied by a tensor sibling, rather than merely observe it.
-local function test_keyed_tensor_put_supplies_take()
+-- value supplied by a sibling in `together`, rather than merely observe it.
+local function test_keyed_together_put_supplies_take()
   local rt, m, rows = new_runtime(), Keyed.new()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ m:put_op('k', 'v'), m:take_op('k') }))
+    rows = rt:perform(Op.together({ m:put_op('k', 'v'), m:take_op('k') }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'v')
   assert_key(m, 'k', nil)
 end
 
-local function test_keyed_all_put_does_not_supply_take()
+local function test_keyed_each_put_does_not_supply_take()
   local rt, m, rows = new_runtime(), Keyed.new()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ m:put_op('k', 'v'), m:take_op('k'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.each({ m:put_op('k', 'v'), m:take_op('k'):or_else(Op.always('missing')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'missing')
@@ -193,7 +193,7 @@ end
 local function test_keyed_two_consumers_do_not_duplicate_one_value()
   local rt, m = new_runtime({ quiet_deadlock = true }), Keyed.from({ k = 'v' })
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ m:take_op('k'), m:take_op('k') }))
+    rt:perform(Op.together({ m:take_op('k'), m:take_op('k') }))
   end)
   local st = rt:run()
   if st.tag == 'found' then
@@ -202,10 +202,10 @@ local function test_keyed_two_consumers_do_not_duplicate_one_value()
   assert_key(m, 'k', 'v')
 end
 
-local function test_keyed_all_insert_does_not_supply_get()
+local function test_keyed_each_insert_does_not_supply_get()
   local rt, m, rows = new_runtime(), Keyed.new()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ m:insert_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.each({ m:insert_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -213,10 +213,10 @@ local function test_keyed_all_insert_does_not_supply_get()
   assert_key(m, 'k', 'v')
 end
 
-local function test_keyed_tensor_insert_supplies_get()
+local function test_keyed_together_insert_supplies_get()
   local rt, m, rows = new_runtime(), Keyed.new()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ m:insert_op('k', 'v'), m:get_op('k') }))
+    rows = rt:perform(Op.together({ m:insert_op('k', 'v'), m:get_op('k') }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -272,21 +272,21 @@ local function test_keyed_surface_is_tight()
 end
 
 local tests = {
-  test_counter_all_allocates_existing_stock,
-  test_counter_all_give_does_not_supply_take,
-  test_counter_tensor_give_supplies_take,
+  test_counter_each_allocates_existing_stock,
+  test_counter_each_give_does_not_supply_take,
+  test_counter_together_give_supplies_take,
   test_counter_overdraw_rejected,
   test_counter_adjust_is_additive,
-  test_keyed_tensor_put_supplies_get,
-  test_keyed_all_put_does_not_supply_get,
+  test_keyed_together_put_supplies_get,
+  test_keyed_each_put_does_not_supply_get,
   test_keyed_remove_and_get_share_parent_value,
   test_keyed_take_returns_value,
   test_keyed_take_then_put_replaces,
-  test_keyed_tensor_put_supplies_take,
-  test_keyed_all_put_does_not_supply_take,
+  test_keyed_together_put_supplies_take,
+  test_keyed_each_put_does_not_supply_take,
   test_keyed_two_consumers_do_not_duplicate_one_value,
-  test_keyed_all_insert_does_not_supply_get,
-  test_keyed_tensor_insert_supplies_get,
+  test_keyed_each_insert_does_not_supply_get,
+  test_keyed_together_insert_supplies_get,
   test_keyed_rejects_nil_values,
   test_keyed_insert_requires_absence,
   test_keyed_proof_conveniences,

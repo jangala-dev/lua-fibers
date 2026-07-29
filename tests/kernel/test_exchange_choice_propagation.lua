@@ -55,7 +55,7 @@ rt:spawn_raw(function()
     end
     jobs[job] = Op.choice(alternatives)
   end
-  rt:perform(Op.all(jobs))
+  rt:perform(Op.each(jobs))
 end, 'choice-propagation-dispatcher')
 
 eq(rt:run().tag, 'found')
@@ -84,7 +84,7 @@ do
     choices[i] = Op.choice(left:put_op(i), right:put_op(i))
   end
   local requests = {
-    [1] = { id = 1, op = Op.all(choices) },
+    [1] = { id = 1, op = Op.each(choices) },
     [2] = { id = 2, op = left:get_op() },
     [3] = { id = 3, op = right:get_op() },
   }
@@ -138,7 +138,7 @@ if machine == 'ledger' then
       end
       lanes[job] = Op.choice(alternatives)
     end
-    runtime:perform(Op.all(lanes))
+    runtime:perform(Op.each(lanes))
   end, 'matching-failure-dispatcher')
   eq(runtime:run().tag, 'quiescent')
   local counters = runtime:instrumentation_report().counters
@@ -172,7 +172,7 @@ if machine == 'ledger' then
       end
       lanes[job] = Op.choice(alternatives)
     end
-    runtime:perform(Op.all(lanes))
+    runtime:perform(Op.each(lanes))
   end, 'guarded-matching-failure-dispatcher')
   eq(runtime:run().tag, 'quiescent')
   local counters = runtime:instrumentation_report().counters
@@ -206,7 +206,7 @@ local function wrapped_dispatch(wrapper, label)
       end
       jobs[job] = Op.choice(alternatives)
     end
-    runtime:perform(Op.all(jobs))
+    runtime:perform(Op.each(jobs))
   end, label .. '-dispatcher')
   eq(runtime:run().tag, 'found')
   eq(runtime:run().tag, 'idle')
@@ -263,7 +263,7 @@ if machine == 'ledger' then
         end
         jobs[job] = Op.choice(alternatives)
       end
-      runtime:perform(Op.all(jobs))
+      runtime:perform(Op.each(jobs))
     end, 'guarded-choice-dispatcher')
 
     eq(runtime:run().tag, 'found')
@@ -322,7 +322,7 @@ if machine == 'ledger' then
         end
         jobs[job] = Op.choice(alternatives)
       end
-      runtime:perform(Op.all(jobs))
+      runtime:perform(Op.each(jobs))
     end, label .. '-dispatcher')
     eq(runtime:run().tag, 'found')
     eq(runtime:run().tag, 'idle')
@@ -363,7 +363,7 @@ if machine == 'ledger' then
         return Op.never()
       end)
     end
-    result = runtime:perform(Op.tensor(lanes))
+    result = runtime:perform(Op.together(lanes))
   end, 'value-routing-learning')
 
   eq(runtime:run().tag, 'found')
@@ -418,7 +418,7 @@ if machine == 'ledger' then
           return continuation(value, expected)
         end)
       end
-      result = runtime:perform(Op.tensor(lanes))
+      result = runtime:perform(Op.together(lanes))
     end, 'value-routing-provenance-' .. label)
     eq(runtime:run().tag, 'found')
     eq(runtime:run().tag, 'idle')
@@ -452,7 +452,7 @@ do
     got_b = runtime:perform(b:get_op())
   end, 'guard-supplier-completeness-get-b')
   runtime:spawn_raw(function()
-    runtime:perform(Op.all({
+    runtime:perform(Op.each({
       Op.choice(
         Op.guard(function()
           return a:put_op('a-from-first')
@@ -489,8 +489,8 @@ if machine == 'ledger' then
     for i = 1, count do
       local node, previous = i, ((i - 2) % count) + 1
       runtime:spawn_raw(function()
-        local zero = Op.all({ edges[node]:put_op(node), edges[previous]:put_op(node) })
-        local one = Op.all({ edges[node]:get_op(), edges[previous]:get_op() })
+        local zero = Op.each({ edges[node]:put_op(node), edges[previous]:put_op(node) })
+        local one = Op.each({ edges[node]:get_op(), edges[previous]:get_op() })
         runtime:perform(Op.choice(zero, one))
         done = done + 1
       end, 'binary-relation-node-' .. tostring(i))

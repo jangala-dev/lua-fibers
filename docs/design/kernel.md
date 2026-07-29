@@ -538,12 +538,12 @@ independent sibling     constraining contribution only
 unrelated segment       hidden
 ```
 
-Under `all`, positive sibling supply is hidden, but sibling constraints remain
-visible. Under `tensor`, compatible positive sibling supply is visible.
+Under `each`, positive sibling supply is hidden, but sibling constraints remain
+visible. Under `together`, compatible positive sibling supply is visible.
 
 A local absence proof inside a product must record the applicable visibility
-mode. A proof derived under `all` cannot be reused as though it had considered
-`tensor` sibling supply.
+mode. A proof derived under `each` cannot be reused as though it had considered
+`together` sibling supply.
 
 Product lanes join their summaries in stable lane order. Candidate collection
 joins root summaries in stable root order. The ledger does not decide search
@@ -629,7 +629,7 @@ Such learning is valid only while:
 
 - the same producer and consumer activations remain live;
 - the same memoised residual remains fixed;
-- all cited managed and external observations remain current.
+- every cited managed and external observations remain current.
 
 Learned facts are branch or session state, not durable retry facts. They are
 bounded and discarded or invalidated with their assumptions.
@@ -767,7 +767,7 @@ The production kernel must preserve the following.
 
 12. Every provisional write belongs to one live ledger segment.
 13. Rollback restores ledger, domain, activation and proof state exactly.
-14. `all` and `tensor` retain their distinct sibling-supply laws.
+14. `each` and `together` retain their distinct sibling-supply laws.
 15. Every candidate validates participant attempts and observed versions.
 16. Every selected fallback gate is validated.
 17. Consequences are prepared before commit and discharged only through the

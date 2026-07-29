@@ -50,7 +50,7 @@ local function log_effect(id, message)
 end
 
 fibers.run(function()
-  fibers.perform(Op.tensor({
+  fibers.perform(Op.together({
     counter:write_op(1),
     Op.emit(log_effect('counter-updated', 'counter was committed')),
   }))

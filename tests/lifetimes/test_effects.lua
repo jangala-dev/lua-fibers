@@ -85,7 +85,7 @@ local function test_duplicate_obligations_merge_to_one_discharge()
   })
   local got
   rt:spawn_raw(function()
-    got = rt:perform(Op.all({
+    got = rt:perform(Op.each({
       Op.emit(TC.tag('dup')),
       Op.emit(TC.tag('dup')),
     }))
@@ -140,7 +140,7 @@ local function test_effect_keys_preserve_lua_identity()
     lanes[i] = Op.emit(Effect.of(IdentityKind, effects[i]))
   end
 
-  local st = one_perform(Op.all(lanes))
+  local st = one_perform(Op.each(lanes))
   assert_eq(st.tag, 'found', 'typed effect keys should remain distinct')
   assert_eq(#calls, #effects, 'all distinct typed keys should discharge')
 end
@@ -168,7 +168,7 @@ end
 
 local function test_conflicting_obligations_reject_candidate_world()
   local st, vals, rt = one_perform(
-    Op.all({
+    Op.each({
       Op.emit(TC.conflict('a')),
       Op.emit(TC.conflict('b')),
     }),

@@ -15,7 +15,7 @@ Read them in order:
 | `03_ai_intention_ladder.lua` | attack, take cover, or patrol | proof-directed `or_else` rather than timeout-driven fallback |
 | `04_camera_custody.lua` | hand camera authority from a cinematic to gameplay | state change, protocol hand-off and custody movement in one transaction |
 | `05_live_event_supervision.lua` | keep a live event running when an optional effect fails | collecting supervision |
-| `06_unlock_the_moon_gate.lua` | consume a key and open a gate atomically | `all`, `and_then` and rollback-safe mechanics |
+| `06_unlock_the_moon_gate.lua` | consume a key and open a gate atomically | `each`, `and_then` and rollback-safe mechanics |
 | `07_combo_window.lua` | accept a follow-up input before the window closes | ordinary `choice` between input and time |
 
 The step-by-step Roblox guide is at

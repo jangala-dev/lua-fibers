@@ -114,7 +114,7 @@ do
   local second = Effect.interrupt(token, 'later')
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(Op.all({ Op.emit(first), Op.emit(second) }))
+    rt:perform(Op.each({ Op.emit(first), Op.emit(second) }))
   end, 'pure-effect-merge')
   run_all(rt)
   assert_eq(first.payload.reason, nil, 'merge did not mutate first payload')

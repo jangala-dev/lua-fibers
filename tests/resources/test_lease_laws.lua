@@ -40,7 +40,7 @@ local function test_readers_merge_and_writer_conflicts()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-rw')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ c:acquire_op('s', 'read', 'a'), c:acquire_op('s', 'read', 'b') }))
+    rows = rt:perform(Op.each({ c:acquire_op('s', 'read', 'a'), c:acquire_op('s', 'read', 'b') }))
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -63,7 +63,7 @@ local function test_release_supply_law()
   c.versions.s = 0
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       c:release_op('s', 'writer'),
       c:acquire_op('s', 'read', 'reader'):or_else(Op.always('blocked')),
     }))
@@ -75,7 +75,7 @@ local function test_release_supply_law()
   c.holders.s = { writer = 'write' }
   local rt2, rows2 = new_runtime()
   rt2:spawn_raw(function()
-    rows2 = rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
+    rows2 = rt2:perform(Op.together({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
   end)
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)
@@ -87,7 +87,7 @@ local function test_incompatible_acquires_do_not_jointly_commit()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-incompat')
   local rt = new_runtime({ quiet_deadlock = true })
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ c:acquire_op('s', 'read', 'r'), c:acquire_op('s', 'write', 'w') }))
+    rt:perform(Op.together({ c:acquire_op('s', 'read', 'r'), c:acquire_op('s', 'write', 'w') }))
   end)
   local st = rt:run()
   if st and st.tag == 'found' then
@@ -101,7 +101,7 @@ local function test_release_one_blocker_not_enough()
   c.holders.s = { w1 = 'write', w2 = 'write' }
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       c:release_op('s', 'w1'),
       c:acquire_op('s', 'read', 'r'):or_else(Op.always('blocked')),
     }))

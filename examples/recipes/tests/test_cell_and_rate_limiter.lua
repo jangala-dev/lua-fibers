@@ -51,14 +51,14 @@ end
 
 local function test_cell_transition_serialises_parallel_updates()
   local rt = new_runtime()
-  local s = StateMachine.new(0, 'cell-transition-all')
+  local s = StateMachine.new(0, 'cell-transition-each')
   local inc = StateMachine.update('test.cell.inc', function(v, payload)
     local next_value = v + payload.by
     return StateMachine.Ready.write(next_value, next_value)
   end)
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       s:transition_op(inc, { by = 1 }),
       s:transition_op(inc, { by = 1 }),
     }))
@@ -75,7 +75,7 @@ local function test_rate_limiter_parallel_acquire_serialises_without_double_refi
   local rl = RateLimiter.new({ capacity = 2, rate = 2, initial = 0, last = 0, name = 'rl-parallel' })
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ rl:acquire_op(1), rl:acquire_op(1) }))
+    rows = rt:perform(Op.each({ rl:acquire_op(1), rl:acquire_op(1) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -140,7 +140,7 @@ local function test_cell_transition_ordering_is_direct_and_deterministic()
   local rows
   local rt = new_runtime()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ s:transition_op(second), s:transition_op(first) }))
+    rows = rt:perform(Op.together({ s:transition_op(second), s:transition_op(first) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(s.value, 'ba')
@@ -162,7 +162,7 @@ local function test_cell_transition_ordering_controls_select_handoff()
   local rows
   local rt = new_runtime()
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ s:transition_op(take), s:transition_op(supply) }))
+    rows = rt:perform(Op.together({ s:transition_op(take), s:transition_op(supply) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 1)

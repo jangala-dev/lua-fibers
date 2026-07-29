@@ -214,8 +214,8 @@ In Fibers, an algebra is simply a small set of ways to combine options. No forma
 | `choice(a, b)` | either coherent result is acceptable |
 | `a:or_else(b)` | use `b` only with certified present absence of `a` |
 | `a:and_then(f)` | continue transactionally from the result of `a` |
-| `all({ a, b })` | satisfy both without positive supply between siblings |
-| `tensor({ a, b })` | satisfy both, allowing compatible sibling hand-off |
+| `each({ a, b })` | satisfy both, with each standing on its own |
+| `together({ a, b })` | satisfy both, allowing compatible sibling hand-off |
 | `a:map(f)` | transform a speculative result |
 | `a:wrap(f)` | run participant-local code after commitment |
 
@@ -271,12 +271,12 @@ The arena places are not consumed independently if the party cannot be admitted.
 
 Callbacks used by `map`, `and_then` and transactional resource transitions may be revisited during proof search. They must be deterministic, non-yielding and free of irreversible side effects.
 
-### Two forms of conjunction
+### `each` and `together`
 
-`all` combines requirements which must each be supportable without positive supply from their siblings:
+`each` requires every lane to complete, with each lane supportable on its own. Siblings still share one committed world and may constrain one another, but cannot supply missing readiness:
 
 ```lua
-Op.all({
+Op.each({
   camera_channels:take_op(1),
   animation_channels:take_op(1),
 })
@@ -284,25 +284,25 @@ Op.all({
 
 The camera reservation cannot create a missing animation channel, or vice versa.
 
-`tensor` permits compatible siblings to participate in an intentional transactional hand-off:
+`together` also requires every lane to complete, but permits compatible siblings to support one another through an intentional transactional hand-off:
 
 ```lua
-Op.tensor({
+Op.together({
   cue_bus:inlet():write_op('GO'),
   cue_bus:outlet():read_some_op(2),
 })
 ```
 
-Both forms still commit as one coherent world. The distinction is whether sibling options may positively make one another possible.
+Both commit as one coherent world. The question is simply: must each lane stand on its own, or may the lanes make one another possible?
 
 A practical guide is:
 
 | Situation | Use | Reason |
 |---|---|---|
-| Several requirements must each already be supportable | `all` | Siblings may constrain one another, but cannot supply missing readiness |
-| One sibling deliberately hands state or a value to another | `tensor` | Compatible positive supply is part of the intended transaction |
-| A put and take should rendezvous inside one decision | `tensor` | The producer is meant to make the consumer possible |
-| You are unsure whether sibling supply is intended | `all` | It is the more conservative conjunction |
+| Every requirement must stand on its own | `each` | Siblings may constrain one another, but cannot supply missing readiness |
+| One sibling deliberately hands state or a value to another | `together` | Compatible positive supply is part of the intended transaction |
+| A put and take should rendezvous inside one decision | `together` | The producer is meant to make the consumer possible |
+| You are unsure whether sibling support is intended | `each` | It is the more conservative conjunction |
 
 ## The three callback phases
 
@@ -574,7 +574,7 @@ Fibers is designed for readable application code, but its small surface carries 
 
 - **Transactional continuation:** `and_then` can join several communications and state changes into one all-or-nothing protocol.
 - **Certified priority:** `or_else` distinguishes a genuine proof of present absence from incomplete search.
-- **Two conjunctions:** `all` and `tensor` distinguish joint requirements from intentional transactional hand-off.
+- **Two conjunctions:** `each` means every lane stands on its own; `together` permits compatible sibling support.
 - **Occurrence-sensitive commitment:** wraps, effects and defeat obligations belong to precise dynamic option occurrences.
 - **Cross-resource decisions:** communication, state, external observations, custody changes and selected consequences can participate in one coherent commit.
 

@@ -64,7 +64,7 @@ end
 
 function Handle:close_op()
   local close = self:active_op():and_then(function()
-    return Op.all({
+    return Op.each({
       self._active:write_op(false),
       self._group._count:take_op(1),
     }):map(function()

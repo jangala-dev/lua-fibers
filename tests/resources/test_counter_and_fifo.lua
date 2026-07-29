@@ -41,12 +41,12 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
-local function test_counter_all_allocates_existing_stock()
+local function test_counter_each_allocates_existing_stock()
   local rt = new_runtime()
-  local c = Counter.new(2, 'ctr-all-take')
+  local c = Counter.new(2, 'ctr-each-take')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ c:take_op(1), c:take_op(1) }))
+    rows = rt:perform(Op.each({ c:take_op(1), c:take_op(1) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -54,12 +54,12 @@ local function test_counter_all_allocates_existing_stock()
   assert_eq(c.value, 0)
 end
 
-local function test_counter_all_give_does_not_supply_sibling_take()
+local function test_counter_each_give_does_not_supply_sibling_take()
   local rt = new_runtime()
-  local c = Counter.new(0, 'ctr-all-give-take')
+  local c = Counter.new(0, 'ctr-each-give-take')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       c:give_op(1),
       c:take_op(1):or_else(Op.always('none')),
     }))
@@ -70,12 +70,12 @@ local function test_counter_all_give_does_not_supply_sibling_take()
   assert_eq(c.value, 1)
 end
 
-local function test_counter_tensor_give_supplies_sibling_take()
+local function test_counter_together_give_supplies_sibling_take()
   local rt = new_runtime()
-  local c = Counter.new(0, 'ctr-tensor-give-take')
+  local c = Counter.new(0, 'ctr-together-give-take')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       c:give_op(1),
       c:take_op(1),
     }))
@@ -90,11 +90,11 @@ local function test_counter_overdraw_fails_as_one_world()
   local rt = new_runtime({ quiet_deadlock = true })
   local c = Counter.new(1, 'ctr-overdraw')
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ c:take_op(1), c:take_op(1) }))
+    rt:perform(Op.together({ c:take_op(1), c:take_op(1) }))
   end, 'root')
   local status = rt:run()
   if status and status.tag == 'found' then
-    fail('overdrawn counter tensor should not commit')
+    fail('overdrawn counter together should not commit')
   end
   assert_eq(c.value, 1)
 end
@@ -116,12 +116,12 @@ local function test_counter_add_is_positive_and_adjust_is_signed()
   assert_eq(c.value, 1)
 end
 
-local function test_fifo_tensor_put_supplies_get()
+local function test_fifo_together_put_supplies_get()
   local rt = new_runtime()
-  local q = FIFO.new(math.huge, 'q-tensor')
+  local q = FIFO.new(math.huge, 'q-together')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       q:put_op('x'),
       q:get_op(),
     }))
@@ -138,12 +138,12 @@ local function test_fifo_tensor_put_supplies_get()
   assert_eq(empty, 'empty')
 end
 
-local function test_fifo_all_put_does_not_supply_get()
+local function test_fifo_each_put_does_not_supply_get()
   local rt = new_runtime()
-  local q = FIFO.new(math.huge, 'q-all')
+  local q = FIFO.new(math.huge, 'q-each')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       q:put_op('x'),
       q:get_op():or_else(Op.always('empty')),
     }))
@@ -160,14 +160,14 @@ local function test_fifo_all_put_does_not_supply_get()
   assert_eq(stored, 'x')
 end
 
-local function test_fifo_all_gets_allocate_existing_stock()
+local function test_fifo_each_gets_allocate_existing_stock()
   local rt = new_runtime()
-  local q = FIFO.new(math.huge, 'q-all-existing')
+  local q = FIFO.new(math.huge, 'q-each-existing')
   local rows
   rt:spawn_raw(function()
     rt:perform(q:put_op('a'))
     rt:perform(q:put_op('b'))
-    rows = rt:perform(Op.all({ q:get_op(), q:get_op() }))
+    rows = rt:perform(Op.each({ q:get_op(), q:get_op() }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'a')
@@ -179,7 +179,7 @@ local function test_bounded_fifo_capacity_and_release()
   local q = FIFO.new(1, 'q-bounded')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({
+    rows = rt:perform(Op.together({
       q:put_op('x'),
       q:get_op(),
     }))
@@ -236,14 +236,14 @@ local function test_fifo_capacity_surface()
 end
 
 local tests = {
-  test_counter_all_allocates_existing_stock,
-  test_counter_all_give_does_not_supply_sibling_take,
-  test_counter_tensor_give_supplies_sibling_take,
+  test_counter_each_allocates_existing_stock,
+  test_counter_each_give_does_not_supply_sibling_take,
+  test_counter_together_give_supplies_sibling_take,
   test_counter_overdraw_fails_as_one_world,
   test_counter_add_is_positive_and_adjust_is_signed,
-  test_fifo_tensor_put_supplies_get,
-  test_fifo_all_put_does_not_supply_get,
-  test_fifo_all_gets_allocate_existing_stock,
+  test_fifo_together_put_supplies_get,
+  test_fifo_each_put_does_not_supply_get,
+  test_fifo_each_gets_allocate_existing_stock,
   test_bounded_fifo_capacity_and_release,
   test_fifo_put_op_construction_does_not_mutate_state,
   test_fifo_capacity_surface,

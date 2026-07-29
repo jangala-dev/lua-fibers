@@ -61,8 +61,8 @@ Derived forms include:
 never          = choice()
 map(option, f) = and_then(option, values -> always(f(values)))
 guard(f)       = activation-local delayed construction
-all(lanes)     = product(independent, lanes)
-tensor(lanes)  = product(interacting, lanes)
+each(lanes)     = product(independent, lanes)
+together(lanes) = product(interacting, lanes)
 emit(effect)   selects a typed post-commit consequence
 ```
 
@@ -121,9 +121,9 @@ Candidate {
 Commit is valid only while:
 
 ```text
-all selected participants still wait on the same attempts
-all observed versions remain current
-all negative guards remain true
+every selected participant still wait on the same attempts
+every observed version remain current
+every negative guard remain true
 deltas remain mutually compatible
 effects can be prepared as one batch
 ```
@@ -212,7 +212,7 @@ choice(a, a) need not be observationally equal to a
 
 The evaluator may abandon any locally viable branch if it conflicts with the enclosing product or another selected participant. An application which requires preference should express it with `or_else`, not textual branch order.
 
-## 8. Products, `all` and `tensor`
+## 8. Products, `each` and `together`
 
 Both product modes:
 
@@ -224,19 +224,19 @@ commit as one world
 preserve lane and nested result structure
 ```
 
-### `all`
+### `each`
 
-`all` requires independent satisfaction. A sibling change may constrain or invalidate another lane, but may not make an otherwise-unready lane ready.
+`each` requires every lane to stand on its own. A sibling change may constrain or invalidate another lane, but may not make an otherwise-unready lane ready.
 
-### `tensor`
+### `together`
 
-`tensor` additionally permits intentional sibling supply, including internal rendezvous and transactional hand-off.
+`together` permits compatible sibling support, including internal rendezvous and transactional hand-off.
 
 The shared rule is:
 
 ```text
-all sibling changes participate in final-world consistency
-only tensor exposes compatible positive sibling supply
+every sibling change participates in final-world consistency
+only `together` exposes compatible positive sibling supply
 ```
 
 A sibling change is classified relative to a partial option:
@@ -247,29 +247,29 @@ constraining  ready before, unready after
 neutral       readiness unchanged
 ```
 
-Under `all`, only positive supply is hidden. Constraining and neutral changes remain visible. Under `tensor`, compatible supply is visible.
+Under `each`, only positive supply is hidden. Constraining and neutral changes remain visible. Under `together`, compatible supply is visible.
 
 Examples:
 
 ```lua
 -- Joint allocation from committed stock.
-Op.all({ counter:take_op(1), counter:take_op(1) })
+Op.each({ counter:take_op(1), counter:take_op(1) })
 
 -- Sibling deletion constrains the pop; the pop must skip the deleted entry.
-Op.all({ index:remove_op('a'), index:pop_first_op() })
+Op.each({ index:remove_op('a'), index:pop_first_op() })
 
--- Sibling addition may supply a take only in tensor.
-Op.tensor({ counter:give_op(1), counter:take_op(1) })
+-- Sibling addition may supply a take only within `together`.
+Op.together({ counter:give_op(1), counter:take_op(1) })
 
--- Sibling put may supply a get only in tensor.
-Op.tensor({ keyed:put_op('k', 'v'), keyed:get_op('k') })
+-- Sibling put may supply a get only within `together`.
+Op.together({ keyed:put_op('k', 'v'), keyed:get_op('k') })
 ```
 
 Product identities are represented as product rows:
 
 ```text
-all({})    ≈ always(empty rows)
-tensor({}) ≈ always(empty rows)
+each({})     ≈ always(empty rows)
+together({}) ≈ always(empty rows)
 ```
 
 Singleton products are equivalent to their lane modulo row packaging.
@@ -321,7 +321,7 @@ Consequently, host-language sharing is not semantic sharing:
 
 ```lua
 local g = Op.guard(f)
-Op.tensor({ g, g }) -- evaluates f twice
+Op.together({ g, g }) -- evaluates f twice
 ```
 
 Explicit construction sharing is expressed with one outer guard:
@@ -329,7 +329,7 @@ Explicit construction sharing is expressed with one outer guard:
 ```lua
 Op.guard(function()
   local prepared = f()
-  return Op.tensor({ prepared, prepared })
+  return Op.together({ prepared, prepared })
 end) -- evaluates f once
 ```
 
@@ -541,7 +541,7 @@ Laws:
 ```text
 losing worlds discharge no effects
 key, merge and prepare are pure and replayable
-all effects are merged and prepared before state installation
+every effect is merged and prepared before state installation
 only effects with the same kind object and raw key are merged
 distinct effects retain stable first-occurrence order
 prepared effects discharge once after state installation
@@ -619,8 +619,8 @@ always(v):and_then(k) ≈ k(v)
 option:map(f) ≈ option:and_then(v -> always(f(v)))
 choice() ≈ never
 choice(a, b) ≈ choice(b, a) for admissible committed worlds
-all({}) ≈ always(empty rows)
-tensor({}) ≈ always(empty rows)
+each({}) ≈ always(empty rows)
+together({}) ≈ always(empty rows)
 Unknown(primary) never enables primary:or_else(fallback)
 losing worlds install no deltas and discharge no effects
 ```
@@ -633,7 +633,7 @@ choice occurrence identity is not idempotent when defeat obligations are observa
 or_else is not choice
 or_else is not timeout
 Retry is not failure to solve quickly
-all is not tensor
+`each` is not `together`
 wrap is not and_then
 effects are not location writes
 runtime transactions are not durable transactions
@@ -647,7 +647,7 @@ The current ledger machine and copy-on-branch reference machine consume the same
 global exchange and witness backtracking
 nested product and continuation locality
 proof-directed fallback and stale validation
-all/tensor supply laws
+`each`/`together` supply laws
 external interests
 custody and Closure
 Flow and stream losing-branch safety
@@ -662,8 +662,8 @@ option       proof search for a compatible committed world
 Hit             constructive proof that a world exists
 Retry           exhaustive present refutation under managed facts
 Unknown         incomplete bounded search
-all             joint commit without positive sibling supply
-tensor          joint commit with compatible sibling hand-off
+each        joint commit with every lane standing on its own
+together    joint commit with compatible sibling hand-off
 choice          unordered disjunction of acceptable committed worlds
 or_else         fallback guarded by a valid preferred-side refutation
 location delta  speculative state component

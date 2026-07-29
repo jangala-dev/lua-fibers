@@ -45,24 +45,24 @@ local function seed()
   }
 end
 
-local function index_all_hides_better_insert()
+local function index_each_hides_better_insert()
   local x = Index.from(seed())
   local r = rt()
   local rows
   r:spawn_raw(function()
-    rows = r:perform(Op.all({ x:insert_op('z', 0, 'Z'), x:pop_first_op() }))
+    rows = r:perform(Op.each({ x:insert_op('z', 0, 'Z'), x:pop_first_op() }))
   end)
   found(r:run())
   eq(rows[2][1].key, 'a')
   eq(x.entries.z.value, 'Z')
   eq(x.entries.a, nil)
 end
-local function index_tensor_uses_better_insert()
+local function index_together_uses_better_insert()
   local x = Index.from(seed())
   local r = rt()
   local rows
   r:spawn_raw(function()
-    rows = r:perform(Op.tensor({ x:insert_op('z', 0, 'Z'), x:pop_first_op() }))
+    rows = r:perform(Op.together({ x:insert_op('z', 0, 'Z'), x:pop_first_op() }))
   end)
   found(r:run())
   eq(rows[2][1].key, 'z')
@@ -74,7 +74,7 @@ local function index_mixed_extrema_are_distinct()
   local r = rt()
   local rows
   r:spawn_raw(function()
-    rows = r:perform(Op.tensor({ x:pop_first_op(), x:pop_last_op(), x:pop_first_op() }))
+    rows = r:perform(Op.together({ x:pop_first_op(), x:pop_last_op(), x:pop_first_op() }))
   end)
   found(r:run())
   eq(rows[1][1].key, 'a')
@@ -86,7 +86,7 @@ local function index_duplicate_insert_conflicts()
   local x = Index.new()
   local r = rt({ quiet_deadlock = true })
   r:spawn_raw(function()
-    r:perform(Op.tensor({ x:insert_op('k', 1, 'A'), x:insert_op('k', 2, 'B') }))
+    r:perform(Op.together({ x:insert_op('k', 1, 'A'), x:insert_op('k', 2, 'B') }))
   end)
   not_found(r:run(), 'duplicate insert committed')
   eq(next(x.entries), nil)
@@ -96,7 +96,7 @@ local function lease_three_readers_form_clique()
   local r = rt()
   local rows
   r:spawn_raw(function()
-    rows = r:perform(Op.all({
+    rows = r:perform(Op.each({
       l:acquire_op('s', 'read', 'a'),
       l:acquire_op('s', 'read', 'b'),
       l:acquire_op('s', 'read', 'c'),
@@ -111,27 +111,27 @@ local function lease_requires_symmetric_compatibility()
   local l = Lease.new({ a = { b = true }, b = {} })
   local r = rt({ quiet_deadlock = true })
   r:spawn_raw(function()
-    r:perform(Op.tensor({ l:acquire_op('s', 'a', 'x'), l:acquire_op('s', 'b', 'y') }))
+    r:perform(Op.together({ l:acquire_op('s', 'a', 'x'), l:acquire_op('s', 'b', 'y') }))
   end)
   not_found(r:run(), 'asymmetric compatibility was accepted')
 end
-local function lease_tensor_same_owner_is_ordered_upgrade()
+local function lease_together_same_owner_is_ordered_upgrade()
   local l = Lease.new({ read = { read = true }, write = {} })
   local r = rt()
   local rows
   r:spawn_raw(function()
-    rows = r:perform(Op.tensor({ l:acquire_op('s', 'read', 'x'), l:acquire_op('s', 'write', 'x') }))
+    rows = r:perform(Op.together({ l:acquire_op('s', 'read', 'x'), l:acquire_op('s', 'write', 'x') }))
   end)
   found(r:run())
   eq(rows[1][1], true)
   eq(rows[2][1], true)
   eq(l.holders.s.x, 'write')
 end
-local function lease_all_same_owner_conflicts()
+local function lease_each_same_owner_conflicts()
   local l = Lease.new({ read = { read = true }, write = {} })
   local r = rt({ quiet_deadlock = true })
   r:spawn_raw(function()
-    r:perform(Op.all({ l:acquire_op('s', 'read', 'x'), l:acquire_op('s', 'write', 'x') }))
+    r:perform(Op.each({ l:acquire_op('s', 'read', 'x'), l:acquire_op('s', 'write', 'x') }))
   end)
   not_found(r:run(), 'independent overwrite committed')
 end
@@ -141,7 +141,7 @@ local function lease_one_release_does_not_remove_other_blocker()
   local r = rt()
   local rows
   r:spawn_raw(function()
-    rows = r:perform(Op.tensor({
+    rows = r:perform(Op.together({
       l:release_op('s', 'w1'),
       l:acquire_op('s', 'read', 'r'):or_else(Op.always('blocked')),
     }))
@@ -152,14 +152,14 @@ local function lease_one_release_does_not_remove_other_blocker()
   eq(l.holders.s.w2, 'write')
 end
 for _, t in ipairs({
-  index_all_hides_better_insert,
-  index_tensor_uses_better_insert,
+  index_each_hides_better_insert,
+  index_together_uses_better_insert,
   index_mixed_extrema_are_distinct,
   index_duplicate_insert_conflicts,
   lease_three_readers_form_clique,
   lease_requires_symmetric_compatibility,
-  lease_tensor_same_owner_is_ordered_upgrade,
-  lease_all_same_owner_conflicts,
+  lease_together_same_owner_is_ordered_upgrade,
+  lease_each_same_owner_conflicts,
   lease_one_release_does_not_remove_other_blocker,
 }) do
   t()

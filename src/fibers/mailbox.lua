@@ -65,7 +65,7 @@ end
 
 local function drop_oldest(mailbox, value)
   local put = mailbox._messages:put_op(value)
-  local replace = Op.tensor({
+  local replace = Op.together({
     mailbox._messages:get_op(),
     mailbox._messages:put_op(value),
     drop_op(mailbox),

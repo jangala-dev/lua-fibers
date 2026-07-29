@@ -42,7 +42,7 @@ local function build_case()
   for i = 1, lanes do
     lane_ops[i] = Op.always(i)
   end
-  local product = Op.all(lane_ops)
+  local product = Op.each(lane_ops)
   local operation = Op.always(true)
   for i = 1, cells do
     local read = reads[i]

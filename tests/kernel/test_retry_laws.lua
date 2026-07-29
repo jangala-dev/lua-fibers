@@ -131,15 +131,18 @@ do
   assert_eq(called, false, 'and_then continuation must not run when the prefix is absent')
 end
 
--- tensor permits internal rendezvous, while all does not.
+-- together permits internal rendezvous, while each does not.
 do
   local ch = Rendezvous.new('absence-law-rendezvous')
   assert_falsy(
-    absent(Op.tensor({ ch:get_op(), ch:put_op('payload') })),
-    'tensor-internal rendezvous is a current world'
+    absent(Op.together({ ch:get_op(), ch:put_op('payload') })),
+    'an internal rendezvous in together is a current world'
   )
-  assert_truthy(absent(Op.all({ ch:get_op(), ch:put_op('payload') })), 'all cannot close its own rendezvous')
-  assert_truthy(absent(Op.tensor({ ch:get_op() })), 'unpaired tensor rendezvous is absent')
+  assert_truthy(
+    absent(Op.each({ ch:get_op(), ch:put_op('payload') })),
+    'each cannot close its own rendezvous'
+  )
+  assert_truthy(absent(Op.together({ ch:get_op() })), 'an unpaired rendezvous in together is absent')
 end
 
 -- Resources do not author Retry proofs. An external wait contributes a

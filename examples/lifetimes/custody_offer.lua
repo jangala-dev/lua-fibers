@@ -77,7 +77,7 @@ rt:spawn_raw(function()
 
   -- Now the receiver accepts.  Its acceptance is composed with its own registry
   -- and audit updates.  These updates commit iff custody moves.
-  local rows = rt:perform(Op.tensor({
+  local rows = rt:perform(Op.together({
     request:offer_op(session, supervisor),
     supervisor:accept_op(),
     registry:write_op({ custodian = 'supervisor', task = session.name }),

@@ -17,7 +17,7 @@ The tutorial has four stages:
    broadcast hazard changes.
 2. **Transactional composition (`11`–`15`)** — game AI preference, callback
    phases, typed committed effects, robot trajectory defeat obligations, and the
-   distinction between `all` and `tensor`.
+   distinction between `each` and `together`.
 3. **Lifetimes (`16`–`19`)** — emergency-controller failure, collecting desktop
    supervisors, plugin streams and game-camera custody.
 4. **Systems work (`20`–`28`)** — pipes, sockets, resolution, datagrams,

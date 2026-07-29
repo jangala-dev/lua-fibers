@@ -22,7 +22,7 @@ local moon_gate = Cell.new('locked', 'moon-gate')
 local first, second
 
 local function unlock_op()
-  return Op.all({
+  return Op.each({
     silver_keys:take_op(1),
     moon_gate:expect_op('locked'),
   })

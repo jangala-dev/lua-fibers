@@ -67,7 +67,7 @@ local function scenario(machine)
   local s = Cell.new(0)
   local out
   r:spawn_raw(function()
-    out = r:perform(Op.tensor({
+    out = r:perform(Op.together({
       Op.choice(s:write_op(1), s:write_op(2)),
       s:write_op(2),
     }))

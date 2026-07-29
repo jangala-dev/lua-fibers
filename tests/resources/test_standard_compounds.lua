@@ -46,7 +46,7 @@ local function test_counter_directional_waits()
   local rows
 
   run(function(runtime)
-    rows = runtime:perform(Op.tensor({
+    rows = runtime:perform(Op.together({
       counter:take_op(),
       counter:zero_op(),
     }))
@@ -77,7 +77,7 @@ local function test_pulse_is_counter_plus_close_state()
   local rows, ended, reason, version
 
   run(function(runtime)
-    rows = runtime:perform(Op.tensor({
+    rows = runtime:perform(Op.together({
       pulse:signal_op(),
       pulse:changed_op(0),
     }))
@@ -126,7 +126,7 @@ local function test_semaphore_is_bounded_counter_vocabulary()
 
   run(function(runtime)
     runtime:perform(semaphore:acquire_op(2))
-    runtime:perform(Op.tensor({
+    runtime:perform(Op.together({
       semaphore:release_op(),
       semaphore:acquire_op(),
     }))

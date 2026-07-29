@@ -58,24 +58,24 @@ local function assert_key(map, key, expected)
   end
 end
 
-local function test_keyed_tensor_put_supplies_get()
+local function test_keyed_together_put_supplies_get()
   local rt = new_runtime()
-  local m = Keyed.new('keyed-tensor')
+  local m = Keyed.new('keyed-together')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ m:put_op('k', 'v'), m:get_op('k') }))
+    rows = rt:perform(Op.together({ m:put_op('k', 'v'), m:get_op('k') }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'v')
   assert_key(m, 'k', 'v')
 end
 
-local function test_keyed_all_put_does_not_supply_get()
+local function test_keyed_each_put_does_not_supply_get()
   local rt = new_runtime()
-  local m = Keyed.new('keyed-all')
+  local m = Keyed.new('keyed-each')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ m:put_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.each({ m:put_op('k', 'v'), m:get_op('k'):or_else(Op.always('missing')) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'missing')
@@ -84,10 +84,10 @@ end
 
 local function test_keyed_remove_and_get_share_parent_value()
   local rt = new_runtime()
-  local m = Keyed.from({ a = 'A', b = 'B' }, 'keyed-remove-all')
+  local m = Keyed.from({ a = 'A', b = 'B' }, 'keyed-remove-each')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ m:remove_op('a'), m:get_op('a'):or_else(Op.always('missing')) }))
+    rows = rt:perform(Op.each({ m:remove_op('a'), m:get_op('a'):or_else(Op.always('missing')) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -113,7 +113,7 @@ local function test_lease_readers_merge_and_writer_conflicts()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-rw')
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ c:acquire_op('s', 'read', 'a'), c:acquire_op('s', 'read', 'b') }))
+    rows = rt:perform(Op.each({ c:acquire_op('s', 'read', 'a'), c:acquire_op('s', 'read', 'b') }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -131,14 +131,14 @@ local function test_lease_readers_merge_and_writer_conflicts()
   end
 end
 
-local function test_lease_tensor_release_supplies_acquire_but_all_does_not()
+local function test_lease_together_release_supplies_acquire_but_each_does_not()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-release')
   c.holders.s = { writer = 'write' }
   c.versions.s = 0
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({
+    rows = rt:perform(Op.each({
       c:release_op('s', 'writer'),
       c:acquire_op('s', 'read', 'reader'):or_else(Op.always('blocked')),
     }))
@@ -152,7 +152,7 @@ local function test_lease_tensor_release_supplies_acquire_but_all_does_not()
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
-    rows2 = rt2:perform(Op.tensor({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
+    rows2 = rt2:perform(Op.together({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)
@@ -163,7 +163,7 @@ local function test_priority_queue_order_and_handoff_laws()
   local rt = new_runtime()
   local pq = PriorityQueue.new(math.huge, 'pq-order')
   rt:spawn_raw(function()
-    rt:perform(Op.all({ pq:put_op(10, 'low'), pq:put_op(1, 'high') }))
+    rt:perform(Op.each({ pq:put_op(10, 'low'), pq:put_op(1, 'high') }))
   end, 'seed')
   assert_status(rt:run(), 'found')
   local rt2 = new_runtime()
@@ -179,7 +179,7 @@ local function test_priority_queue_order_and_handoff_laws()
   local rt3 = new_runtime()
   local rows
   rt3:spawn_raw(function()
-    rows = rt3:perform(Op.tensor({ pq2:put_op(0, 'urgent'), pq2:get_op() }))
+    rows = rt3:perform(Op.together({ pq2:put_op(0, 'urgent'), pq2:get_op() }))
   end, 'root')
   assert_status(rt3:run(), 'found')
   assert_eq(rows[2][1], 'urgent')
@@ -191,11 +191,11 @@ local function test_priority_queue_order_and_handoff_laws()
   assert_status(rt_empty:run(), 'found')
   assert_eq(empty, 'empty')
 
-  local pq3 = PriorityQueue.new(math.huge, 'pq-all')
+  local pq3 = PriorityQueue.new(math.huge, 'pq-each')
   local rt4 = new_runtime()
   local rows4
   rt4:spawn_raw(function()
-    rows4 = rt4:perform(Op.all({ pq3:put_op(0, 'urgent'), pq3:get_op():or_else(Op.always('empty')) }))
+    rows4 = rt4:perform(Op.each({ pq3:put_op(0, 'urgent'), pq3:get_op():or_else(Op.always('empty')) }))
   end, 'root')
   assert_status(rt4:run(), 'found')
   assert_eq(rows4[2][1], 'empty')
@@ -240,23 +240,23 @@ local function test_pool_acquire_release_and_retirement()
   assert_eq(retired[1].item, 'A')
 end
 
-local function test_pool_all_add_does_not_supply_acquire_but_tensor_does()
+local function test_pool_each_add_does_not_supply_acquire_but_together_does()
   local pool = Pool.new({ name = 'pool-law' })
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ pool:add_op('x', 'X'), pool:acquire_op('u'):or_else(Op.always('empty')) }))
+    rows = rt:perform(Op.each({ pool:add_op('x', 'X'), pool:acquire_op('u'):or_else(Op.always('empty')) }))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'empty')
   assert_eq(perform_op(pool.items:get_op('x')).item, 'X')
   assert_eq(pool.idle.entries.x.value, 'x')
 
-  local pool2 = Pool.new({ name = 'pool-tensor' })
+  local pool2 = Pool.new({ name = 'pool-together' })
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
-    rows2 = rt2:perform(Op.tensor({ pool2:add_op('x', 'X'), pool2:acquire_op('u') }))
+    rows2 = rt2:perform(Op.together({ pool2:add_op('x', 'X'), pool2:acquire_op('u') }))
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1].item, 'X')
@@ -313,13 +313,13 @@ local function test_keyed_take_then_put_replaces()
   assert_key(m, 'a', 'A2')
 end
 
-local function test_pool_close_constrains_acquire_under_tensor_and_all()
+local function test_pool_close_constrains_acquire_under_together_and_each()
   local pool = Pool.new({ name = 'pool-close-law' })
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(pool:add_op('a', 'A'):and_then(function()
-      return Op.tensor({
+      return Op.together({
         pool:close_op('shutdown'),
         pool:acquire_op('u'):or_else(Op.always('closed')),
       })
@@ -331,12 +331,12 @@ local function test_pool_close_constrains_acquire_under_tensor_and_all()
   assert_eq(perform_op(pool.items:get_op('a')).item, 'A')
   assert_eq(pool.idle.entries.a.value, 'a')
 
-  local pool2 = Pool.new({ name = 'pool-close-law-all' })
+  local pool2 = Pool.new({ name = 'pool-close-law-each' })
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
     rows2 = rt2:perform(pool2:add_op('a', 'A'):and_then(function()
-      return Op.all({
+      return Op.each({
         pool2:close_op('shutdown'),
         pool2:acquire_op('u'):or_else(Op.always('closed')),
       })
@@ -350,18 +350,18 @@ local function test_pool_close_constrains_acquire_under_tensor_and_all()
 end
 
 local tests = {
-  test_keyed_tensor_put_supplies_get,
-  test_keyed_all_put_does_not_supply_get,
+  test_keyed_together_put_supplies_get,
+  test_keyed_each_put_does_not_supply_get,
   test_keyed_remove_and_get_share_parent_value,
   test_keyed_take_returns_value,
   test_keyed_take_then_put_replaces,
   test_lease_readers_merge_and_writer_conflicts,
-  test_lease_tensor_release_supplies_acquire_but_all_does_not,
+  test_lease_together_release_supplies_acquire_but_each_does_not,
   test_priority_queue_order_and_handoff_laws,
   test_pool_acquire_release_and_retirement,
-  test_pool_all_add_does_not_supply_acquire_but_tensor_does,
+  test_pool_each_add_does_not_supply_acquire_but_together_does,
   test_pool_retire_leased_defers_until_release,
-  test_pool_close_constrains_acquire_under_tensor_and_all,
+  test_pool_close_constrains_acquire_under_together_and_each,
 }
 
 for i = 1, #tests do

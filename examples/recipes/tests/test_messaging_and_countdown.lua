@@ -116,13 +116,13 @@ local function test_pulse_losing_signal_branch_does_not_mutate()
   assert_eq(version, 0)
 end
 
-local function test_countdown_latch_wait_and_tensor_drain()
+local function test_countdown_latch_wait_and_together_drain()
   local wg = CountdownLatch.new()
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.tensor({ wg:add_op(1), wg:done_op(), wg:wait_op() }))
-  end, 'wg-tensor')
+    rows = rt:perform(Op.together({ wg:add_op(1), wg:done_op(), wg:wait_op() }))
+  end, 'wg-together')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], true)
@@ -132,13 +132,13 @@ local function test_countdown_latch_wait_and_tensor_drain()
   assert_eq(wg.state.value.generation, 1)
 end
 
-local function test_countdown_latch_all_done_does_not_supply_wait()
+local function test_countdown_latch_each_done_does_not_supply_wait()
   local wg = CountdownLatch.new({ count = 1, generation = 1 })
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
-    rows = rt:perform(Op.all({ wg:done_op(), wg:wait_op():or_else(Op.always('blocked')) }))
-  end, 'wg-all')
+    rows = rt:perform(Op.each({ wg:done_op(), wg:wait_op():or_else(Op.always('blocked')) }))
+  end, 'wg-each')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'blocked')
@@ -174,7 +174,7 @@ local function test_mailbox_buffered_fifo_close_and_drain()
   local tx, rx = FibersMailbox.new(2)
   local rt = new_runtime()
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ tx:send_op('a'), tx:send_op('b'), tx:close_op('eof') }))
+    rt:perform(Op.together({ tx:send_op('a'), tx:send_op('b'), tx:close_op('eof') }))
   end, 'mb-fill-close')
   assert_status(rt:run(), 'found')
 
@@ -403,8 +403,8 @@ local tests = {
   test_pulse_waits_and_close_wakes,
   test_pulse_losing_signal_branch_does_not_mutate,
   test_pulse_signal_after_close_is_noop,
-  test_countdown_latch_wait_and_tensor_drain,
-  test_countdown_latch_all_done_does_not_supply_wait,
+  test_countdown_latch_wait_and_together_drain,
+  test_countdown_latch_each_done_does_not_supply_wait,
   test_countdown_latch_negative_count_is_absent,
   test_mailbox_rendezvous_send_recv,
   test_mailbox_buffered_fifo_close_and_drain,

@@ -432,7 +432,7 @@ A mechanic such as “consume the silver key and open the Moon Gate” should no
 lose the key if the gate cannot change state.
 
 ```luau
-local unlockMoonGate = Op.all({
+local unlockMoonGate = Op.each({
     inventory.silverKeys:take_op(1),
     moonGate.state:expect_op("locked"),
 }):and_then(function()

@@ -52,7 +52,7 @@ local function test_parallel_lease_and_read_do_not_duplicate_bytes()
   local rows, queued, leased, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
-    rows = fibers.perform(Op.tensor({
+    rows = fibers.perform(Op.together({
       outlet:lease_some_op(3, 'holder'),
       outlet:read_some_op(3),
     }))
@@ -76,7 +76,7 @@ local function test_parallel_ack_then_return_returns_only_unacked_tail()
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abcdef'))
     lease = fibers.perform(outlet:lease_some_op(3, 'holder'))
-    rows = fibers.perform(Op.tensor({
+    rows = fibers.perform(Op.together({
       lease:ack_op(1),
       lease:release_op(),
     }))
@@ -103,7 +103,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   local same_world = Flow.new(nil, 'adv-same-world-close')
   local same_rows
   local st_same = fibers.try_run(function()
-    same_rows = fibers.perform(Op.tensor({
+    same_rows = fibers.perform(Op.together({
       same_world:inlet():close_op(),
       same_world:outlet():read_some_op(1):or_else(Op.always('not-yet-eof')),
     }))
@@ -146,14 +146,14 @@ local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
   assert_eq(ack_err, FlowErrors.NO_LEASE)
 end
 
-local function test_capacity_release_handoff_tensor_but_not_all()
-  local flow = Flow.new(3, 'adv-capacity-all')
+local function test_capacity_release_handoff_together_but_not_each()
+  local flow = Flow.new(3, 'adv-capacity-each')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, rows, got
   local st = fibers.try_run(function()
     fibers.perform(inlet:write_op('abc'))
     lease = fibers.perform(outlet:lease_some_op(3, 'holder'))
-    rows = fibers.perform(Op.all({
+    rows = fibers.perform(Op.each({
       lease:ack_op(3),
       inlet:write_op('def'):or_else(Op.always('blocked')),
     }))
@@ -161,16 +161,16 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(rows[1][1], true)
-  assert_eq(rows[2][1], 'blocked', 'all should not let ack capacity supply sibling write')
+  assert_eq(rows[2][1], 'blocked', 'each should not let ack capacity supply sibling write')
   assert_eq(got, 'empty')
 
-  local flow2 = Flow.new(3, 'adv-capacity-tensor')
+  local flow2 = Flow.new(3, 'adv-capacity-together')
   local inlet2, outlet2 = flow2:inlet(), flow2:outlet()
   local lease2, rows2, got2
   local st2 = fibers.try_run(function()
     fibers.perform(inlet2:write_op('abc'))
     lease2 = fibers.perform(outlet2:lease_some_op(3, 'holder'))
-    rows2 = fibers.perform(Op.tensor({
+    rows2 = fibers.perform(Op.together({
       lease2:ack_op(3),
       inlet2:write_op('def'),
     }))
@@ -178,7 +178,7 @@ local function test_capacity_release_handoff_tensor_but_not_all()
   end).runtime_status
   assert_status(st2, 'found')
   assert_eq(rows2[1][1], true)
-  assert_eq(rows2[2][1], 3, 'tensor should allow capacity handoff')
+  assert_eq(rows2[2][1], 3, 'together should allow capacity handoff')
   assert_eq(got2, 'def')
 end
 
@@ -214,7 +214,7 @@ local tests = {
   test_parallel_ack_then_return_returns_only_unacked_tail,
   test_input_close_and_read_empty_is_eof_but_queued_data_drains_first,
   test_shutdown_while_lease_active_settles_and_invalidates_lease,
-  test_capacity_release_handoff_tensor_but_not_all,
+  test_capacity_release_handoff_together_but_not_each,
   test_stream_memory_backpressure_with_small_capacity,
 }
 

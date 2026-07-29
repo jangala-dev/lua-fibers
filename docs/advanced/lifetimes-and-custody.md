@@ -28,7 +28,7 @@ Closure
 ```
 
 Admission, movement, granting and closure all produce `Op` values. They therefore
-compose with the same `choice`, `and_then`, `or_else`, `all` and `tensor` algebra
+compose with the same `choice`, `and_then`, `or_else`, `each` and `together` algebra
 as messages, timers and resource transitions.
 
 ## 1. Lifetime views
@@ -152,7 +152,7 @@ The subtree retains its internal parentage.
 When both sides must participate, use offer and acceptance:
 
 ```lua
-local moved = fibers.perform(Op.tensor({
+local moved = fibers.perform(Op.together({
   source:offer_op(stream, destination, { purpose = 'request-body' }),
   destination:accept_op(function(offer)
     return offer.item == stream

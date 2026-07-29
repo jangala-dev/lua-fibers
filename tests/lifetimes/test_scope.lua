@@ -72,7 +72,7 @@ rt4:spawn_raw(function()
   handed = rt4:perform(from:spawn_op(function()
     return 'custody-transfer'
   end))
-  local rows = rt4:perform(Op.tensor({
+  local rows = rt4:perform(Op.together({
     from:offer_op(handed, to),
     to:accept_op(),
   }))
@@ -102,7 +102,7 @@ rt_match:spawn_raw(function()
   task_b = rt_match:perform(match_from_b:spawn_op(function()
     return 'b'
   end, { name = 'task-b' }))
-  rejected_result = rt_match:perform(Op.tensor({
+  rejected_result = rt_match:perform(Op.together({
     match_from_a:offer_op(task_a, match_to),
     accept_matching(match_to, function(offer)
       return offer.from_scope == match_from_b
@@ -112,7 +112,7 @@ rt_match:spawn_raw(function()
       return 'unexpected'
     end)
     :or_else(Op.always('rejected')))
-  local rows = rt_match:perform(Op.tensor({
+  local rows = rt_match:perform(Op.together({
     match_from_b:offer_op(task_b, match_to),
     accept_matching(match_to, function(offer)
       return offer.from_scope == match_from_b and offer.item_kind == 'task'
@@ -173,7 +173,7 @@ do
     task_b = rt_filter:perform(from_b:spawn_op(function()
       return 'b'
     end, { name = 'filter-task-b' }))
-    both_result = rt_filter:perform(Op.tensor({
+    both_result = rt_filter:perform(Op.together({
       from_a:offer_op(task_a, to),
       from_b:offer_op(task_b, to),
       to:accept_op(function(offer)
@@ -184,7 +184,7 @@ do
         return 'unexpected'
       end)
       :or_else(Op.always('blocked')))
-    local rows = rt_filter:perform(Op.tensor({
+    local rows = rt_filter:perform(Op.together({
       from_b:offer_op(task_b, to),
       to:accept_op(function(offer)
         return offer.from_scope == from_b

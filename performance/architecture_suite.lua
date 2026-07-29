@@ -209,17 +209,17 @@ add('triple swap with decoy', function(profile, machine)
   local ab, bc, ca = Rendezvous.new('arch-ab'), Rendezvous.new('arch-bc'), Rendezvous.new('arch-ca')
   local a, b, c
   rt:spawn_raw(function()
-    a = rt:perform(Op.all({ ab:put_op('A'), ca:get_op() }):map(function(rows)
+    a = rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }):map(function(rows)
       return rows[2][1]
     end))
   end)
   rt:spawn_raw(function()
-    b = rt:perform(Op.all({ bc:put_op('B'), ab:get_op() }):map(function(rows)
+    b = rt:perform(Op.each({ bc:put_op('B'), ab:get_op() }):map(function(rows)
       return rows[2][1]
     end))
   end)
   rt:spawn_raw(function()
-    c = rt:perform(Op.all({ ca:put_op('C'), bc:get_op() }):map(function(rows)
+    c = rt:perform(Op.each({ ca:put_op('C'), bc:get_op() }):map(function(rows)
       return rows[2][1]
     end))
   end)

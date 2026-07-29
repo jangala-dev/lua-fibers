@@ -4,8 +4,8 @@
 --   choice       either coherent world is acceptable
 --   and_then     continue transactionally from a provisional result
 --   or_else      use the fallback only after valid present refutation
---   all          satisfy every lane without positive sibling supply
---   tensor       satisfy every lane with compatible sibling hand-off
+--   each         satisfy every lane, with each standing on its own
+--   together     satisfy every lane, allowing compatible sibling support
 --   wrap         continue in the participant after commitment
 --
 -- Options are inert, opaque library values: construct, combine and perform
@@ -361,17 +361,17 @@ end
 
 -- Independent conjunction. Every lane must be supportable from the common
 -- parent world; one sibling may constrain another but cannot supply it.
-function Op.all(xs)
-  return product(xs, 'independent', 'all')
+function Op.each(xs)
+  return product(xs, 'independent', 'each')
 end
 
-function Op.named_all(entries)
-  local parsed = parse_named_entries(entries, 'named_all')
+function Op.named_each(entries)
+  local parsed = parse_named_entries(entries, 'named_each')
   local lanes = {}
   for i = 1, #parsed do
     lanes[i] = parsed[i][2]
   end
-  return Op.all(lanes):map(function(rows)
+  return Op.each(lanes):map(function(rows)
     local out = {}
     local raw = {}
     out._rows = raw
@@ -387,8 +387,8 @@ end
 
 -- Interacting conjunction. Compatible siblings may supply one another, such as
 -- a scene cue written in one lane and read in another.
-function Op.tensor(xs)
-  return product(xs, 'interacting', 'tensor')
+function Op.together(xs)
+  return product(xs, 'interacting', 'together')
 end
 
 -- Transform provisional values during search. fn is pure, non-yielding and may

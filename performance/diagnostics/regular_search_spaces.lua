@@ -110,7 +110,7 @@ end
 
 -- A batch dispatcher atomically assigns N jobs to N currently idle workers.
 -- Every job can run on every worker.  It is a complete bipartite matching
--- expressed using ordinary choice, all, and rendezvous operations.
+-- expressed using ordinary choice, each, and rendezvous operations.
 local function batch_dispatch(options)
   local n = options.size
   local rt = new_runtime(options)
@@ -133,7 +133,7 @@ local function batch_dispatch(options)
       end
       jobs[job] = Op.choice(alternatives)
     end
-    rt:perform(Op.all(jobs))
+    rt:perform(Op.each(jobs))
   end, 'search-dispatch-batch')
 
   local status, driver_calls = drive(rt)
@@ -169,13 +169,13 @@ local function replicated_ring(options)
     local node = i
     local previous = ((i - 2) % n) + 1
     rt:spawn_raw(function()
-      local p = Op.all({
+      local p = Op.each({
         primary[node]:put_op(node),
         primary[previous]:get_op(),
       }):map(function(rows)
         return 'primary', rows[2][1]
       end)
-      local b = Op.all({
+      local b = Op.each({
         backup[node]:put_op(node),
         backup[previous]:get_op(),
       }):map(function(rows)
@@ -307,7 +307,7 @@ local function fixed_ring(options)
     local node = i
     local previous = ((i - 2) % n) + 1
     rt:spawn_raw(function()
-      local rows = rt:perform(Op.all({
+      local rows = rt:perform(Op.each({
         links[node]:put_op(node),
         links[previous]:get_op(),
       }))

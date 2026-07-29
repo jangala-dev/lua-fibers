@@ -69,7 +69,7 @@ local update = fibers.perform(status_updates:get_op())
 ```
 
 Use direct methods for ordinary sequential code. Use `_op` when an action must
-participate in `choice`, `or_else`, `and_then`, `all` or `tensor`. Detailed
+participate in `choice`, `or_else`, `and_then`, `each` or `together`. Detailed
 guidance is in [`direct-and-options.md`](direct-and-options.md).
 
 ## Options
@@ -131,25 +131,25 @@ local intention = fibers.perform(
 
 ### Products
 
-`all` combines independent requirements in one commit:
+`each` combines independent requirements in one commit:
 
 ```lua
-local reservations = fibers.perform(Op.all({
+local reservations = fibers.perform(Op.each({
   camera_channels:take_op(1),
   animation_channels:take_op(1),
 }))
 ```
 
-`tensor` additionally permits compatible sibling hand-off:
+`together` additionally permits compatible sibling hand-off:
 
 ```lua
-fibers.perform(Op.tensor({
+fibers.perform(Op.together({
   cue_bus:inlet():write_op('GO'),
   cue_bus:outlet():read_some_op(2),
 }))
 ```
 
-Use `all` when each lane must be satisfiable without positive supply from its siblings. Use `tensor` when lanes intentionally communicate or transfer transactional stock.
+Use `each` when every lane must stand on its own. Use `together` when lanes intentionally communicate or transfer transactional stock.
 
 ## Channels
 
