@@ -9,10 +9,7 @@ local HostError = require('fibers.host.error')
 local Completion = require('fibers.resource.completion')
 local IO = require('fibers.host.io')
 local Mailbox = require('fibers.mailbox')
-local Lifetime = require('fibers.lifetime')
-local Task = require('fibers.task')
-local Scope = require('fibers.scope')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 
@@ -633,7 +630,6 @@ local function new_file_op(path, mode, opts, label, temporary)
   next_file = next_file + 1
   local name = opts.name or ('file-' .. tostring(next_file))
   local tx, rx = Mailbox.new(opts.queue_limit or 32, name .. ':requests')
-  local driver_parent = IO.require_scope(scope, label)
   local file = setmetatable({
     kind = 'regular_file',
     name = name,
@@ -649,14 +645,12 @@ local function new_file_op(path, mode, opts, label, temporary)
     temporary = temporary == true,
     auto_unlink = false,
   }, RegularFile)
-  Lifetime.define(file, {
+  local admission = IO.admit_driven_lifetime_op(scope, file, {
+    label = label,
     name = name,
     role = 'regular_file',
     closure = file_closure(file),
-  })
-  local private_scope = Scope.for_lifetime(file._lifetime)
-  file.driver = Task._new(function()
-    return private_scope:run(function()
+    run = function()
       local ok, err = Protected.pcall(drive_file, file, opts)
       if ok then
         return
@@ -690,16 +684,8 @@ local function new_file_op(path, mode, opts, label, temporary)
       if not Runtime.is_cancelled(err) then
         error(failure, 0)
       end
-    end)
-  end, name, driver_parent, { lifetime = file._lifetime, closure = driver_parent.closure })
-  local admission = scope
-    :admit_op(file)
-    :and_then(function()
-      return file.driver:spawn_effect_op()
-    end, false)
-    :map(function()
-      return file
-    end)
+    end,
+  })
   return admission, file
 end
 
@@ -745,7 +731,7 @@ function File.tmpfile(opts)
 end
 
 function Job:result_op()
-  return self.task:await_op()
+  return self.driver:await_op()
 end
 function Job:result()
   return perform(self:result_op())
@@ -756,23 +742,16 @@ local function path_job_op(action, fn, opts)
   local scope = IO.current_scope(opts, 'file.submit_' .. action .. '_op')
   next_job = next_job + 1
   local name = opts.name or ('file-' .. action .. '-' .. tostring(next_job))
-  local parent_scope = IO.require_scope(scope, 'file.submit_' .. action .. '_op')
   local job = setmetatable({ name = name }, Job)
-  Lifetime.define(job, { name = name, role = 'file_job', closure = Closure.none() })
-  local private_scope = Scope.for_lifetime(job._lifetime)
-  job.task = Task._new(function()
-    return private_scope:run(function()
+  local submission = IO.admit_driven_lifetime_op(scope, job, {
+    label = 'file.submit_' .. action .. '_op',
+    name = name,
+    role = 'file_job',
+    closure = Closure.none(),
+    run = function()
       return fn(opts)
-    end)
-  end, name, parent_scope, { lifetime = job._lifetime, closure = parent_scope.closure })
-  local submission = scope
-    :admit_op(job)
-    :and_then(function()
-      return job.task:spawn_effect_op()
-    end, false)
-    :map(function()
-      return job
-    end)
+    end,
+  })
   return submission, job
 end
 

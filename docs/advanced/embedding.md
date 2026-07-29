@@ -302,6 +302,12 @@ The read side reserves Flow capacity before calling the host. The write side lea
 
 Readiness remains a hint. A host call may still return `would_block`; the reactor then releases the read-space reservation or retains the write-data lease as appropriate and waits for refreshed readiness.
 
+Direct `read_ready_op()` and `write_ready_op()` use belong at the HostHandle or
+host-adapter boundary. Higher-level facilities should consume reactor-owned Flow,
+Offer or Completion state instead. The sole built-in facility exception is the
+current datagram send path, pending a separate bounded payload-submission and
+custody contract.
+
 The small ManualHost provides deterministic time and readiness. In-memory pipe and socket simulation lives in `tests.support.simulated_host`; custom embedders inject final host methods directly.
 
 A custom `HostHandle` supplies:
@@ -328,8 +334,8 @@ process-handle contract:
 host:start_process(spec) -> host_process, parent_endpoints | nil, nil, error
 
 host_process:pid()
-host_process:wait_op()
-host_process:reap()
+host_process:open_exit_op(scope)
+host_process:exit_op()
 host_process:signal(signal, target)
 host_process:close(reason)
 ```
@@ -342,10 +348,7 @@ and reaped before the failed call returns.
 
 A host may expose a narrower, explicit process contract when its native API lacks a required primitive. Capabilities are sparse: presence means support and absence means unsupported. The Nixio host therefore reports `process_close_fds = "known"` and `process_groups = "session"`; it omits `process_exec_proof` and `process_pass_fds`.
 
-Parent pipe endpoints are non-blocking HostHandles and enter the normal private host-hold, Stream and reactor path. The process handle itself is also audited. Exactly one
-supervisor has custody of signal decisions and reaping; `reap` returns `would_block` until
-a terminal status is authoritative and returns the same cached status after
-successful reaping.
+Parent pipe endpoints are non-blocking HostHandles and enter the normal private host-hold, Stream and reactor path. The process handle itself is also audited. Exactly one supervisor has custody of signal decisions and exit observation. `open_exit_op` admits a reactor-owned one-shot completion beneath the process Scope; `exit_op` returns the cached authoritative terminal status once the provider has reaped the process exactly once.
 
 The Linux FFI family uses pidfds where available and timer-polled `waitpid` otherwise. The test-only SimulatedHost provides deterministic process completion and signalling. A host with no usable process contract omits `capabilities.process` and the `start_process` method.
 
@@ -393,7 +396,9 @@ state and idempotent integration.
 
 ## Protected calls and runtime phases
 
-Use `fibers.pcall` and `fibers.xpcall` inside fibres when protected code may suspend. They provide yieldable protection on Lua 5.1 as well as later versions.
+Applications may use `fibers.pcall` and `fibers.xpcall`. Reusable libraries
+may import `fibers.protected` without depending on the root lifecycle façade.
+Both forms provide yieldable protection on Lua 5.1 as well as later versions.
 
 `perform` is forbidden from:
 

@@ -653,7 +653,7 @@ custody and Closure
 Flow and stream losing-branch safety
 ```
 
-Fairness and uniform probability between perpetually available alternatives are not currently promised. `choice_seed` makes traversal reproducible for the same programme, request sequence and external inputs. Search budgets are optional controls and must never alter fallback semantics.
+Fairness and uniform probability between perpetually available alternatives are not currently promised. `choice_seed` makes traversal reproducible for the same programme, request sequence and external inputs. Search budgets are optional controls and must never alter fallback semantics. Across pending roots, positive-before-fallback is scoped to conservative dependency components: unrelated ready or `Unknown` work does not form a global barrier, while work which may change the preferred proof remains in the same component.
 
 ## 22. Summary
 

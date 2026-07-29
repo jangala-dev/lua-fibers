@@ -9,9 +9,10 @@ Options may describe acquisition, admission, custody movement, closure requests
 and readiness observations. They must not create, accept, connect, read, write or
 close host objects while an option is being searched.
 
-A committed driver task performs the authoritative host action. Readiness is
-only a hint that such an action may make progress; `read`, `write`, `accept` and
-`finish_connect` may still return `would_block`.
+After commitment, either a facility driver or the indexed reactor performs the
+authoritative host action. Readiness is only a hint that such an action may make
+progress; `read`, `write`, `accept`, `finish_connect` and process-exit probes may
+still return `would_block`.
 
 ## Continuous handle coverage
 
@@ -65,10 +66,10 @@ The built-in audit applies this rule as follows:
 | Facility | Completion observed by `closed_op` |
 |---|---|
 | Regular file | host file terminal state and private file-driver Scope |
-| Process | cached process terminal state, reaping, generated Streams, bridges and supervisor Scope |
+| Process | cached process terminal state, reactor-owned exit completion, generated Streams, bridges and supervisor Scope |
 | Resolver query | both address-family completions and private resolver-driver Scope |
 | Direct and named dial | dial lifecycle terminal state and private dial-driver Scope |
-| Listener | listener terminal state and accept-driver Scope |
+| Listener | listener terminal state, accepted-handle hold and accept-source registration |
 | Datagram | datagram terminal state and private driver Scope |
 | Duplex Stream | both Flow endpoints, reactor registrations and host handle |
 | Flow endpoint | managed Flow terminal state and retirement of outstanding byte custody |
@@ -113,6 +114,7 @@ Process
 ├── launch host hold
 ├── generated standard Streams
 ├── optional Stream bridge tasks
+├── reactor-owned exit completion
 └── cached terminal status
 ```
 
@@ -129,9 +131,9 @@ and reaping. These invariants apply:
 - `result_op` becomes ready only after exactly-once reaping;
 - repeated result observations return the same tagged status;
 - Scope Closure cannot finish successfully while it has custody of an unreaped child;
-- generated pipe Streams remain beneath the Process driver scope;
+- generated pipe Streams and the exit completion remain beneath the Process supervisor Scope;
 - supplied Streams remain in caller custody and are bridged rather than silently moved;
-- `closed_op` proves Closure of the host handle, Streams, bridges and driver.
+- `closed_op` proves Closure of the host handle, exit completion, Streams, bridges and supervisor.
 
 Native bindings should use a stable process identity, such as a pidfd, where
 available. A fallback process strategy must serialise signal and reap decisions so a

@@ -116,7 +116,7 @@ function Common.ready_source_smoke(name, host, key, mode)
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
-    if mode == 'write' or mode == 'wr' then
+    if mode == 'write' then
       seen, seen_key, seen_mode = rt:perform(src:writable_op())
     else
       seen, seen_key, seen_mode = rt:perform(src:readable_op())
@@ -127,11 +127,7 @@ function Common.ready_source_smoke(name, host, key, mode)
   Common.assert_status(st, 'found', name .. ' ready-source runner')
   Common.assert_eq(seen, true, name .. ' should deliver readiness')
   Common.assert_eq(seen_key, key, name .. ' should preserve readiness key')
-  Common.assert_eq(
-    seen_mode,
-    (mode == 'write' or mode == 'wr') and 'write' or mode,
-    name .. ' should deliver readiness mode'
-  )
+  Common.assert_eq(seen_mode, mode, name .. ' should deliver readiness mode')
 end
 
 function Common.readiness_beats_timeout_smoke(name, host, pipe)
@@ -278,7 +274,7 @@ function Common.socket_churn_smoke(name, host, count)
     end, name .. ':server')
 
     for i = 1, count do
-      local dial = socket.dial_ipv4(address.host, address.port, {
+      local dial = socket.dial(socket.ipv4_address(address.host, address.port), {
         name = name .. ':dial:' .. tostring(i),
       })
       local connection = assert(dial:result())

@@ -6,7 +6,7 @@
 -- which the driver applies through ordinary Ops.
 
 local Runtime = require('fibers.runtime')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Exit = require('fibers.task').Exit
 local ScopeResult = require('fibers.scope.result')
 local Lifetime = require('fibers.lifetime')

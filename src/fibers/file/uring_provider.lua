@@ -7,8 +7,7 @@
 local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
 local IO = require('fibers.host.io')
-local Op = require('fibers.op')
-local Runtime = require('fibers.runtime')
+local Reactor = require('fibers.host.reactor')
 local perform = require('fibers.perform')
 
 local Provider = {}
@@ -276,6 +275,25 @@ function Provider.new(runtime, opts)
     return nil, err
   end
   self.handle = handle
+  self.reactor = Reactor.for_runtime(runtime)
+  self.completion_entry = self.reactor:callback({
+    name = 'file-io-uring-completions',
+    mode = 'read',
+    handle = handle,
+    callback = function(registered_handle)
+      if type(registered_handle.clear_readable) == 'function' then
+        registered_handle:clear_readable()
+      end
+      self:_drain()
+      return true
+    end,
+  })
+  local registered, register_err = runtime:_perform_current(self.completion_entry:register_op(), nil, true)
+  if not registered then
+    self.completion_entry = nil
+    self:shutdown()
+    return nil, register_err
+  end
   return self
 end
 
@@ -287,6 +305,10 @@ function Provider:shutdown()
     return true
   end
   self.closed = true
+  if self.completion_entry and not self.completion_entry.retired then
+    self.reactor:_retire_entry(self.completion_entry, 'io_uring closed')
+  end
+  self.completion_entry = nil
   if self.handle then
     self.handle:close('io_uring closed')
     self.handle = nil
@@ -344,7 +366,7 @@ end
 function Provider:_drain()
   local head = tonumber(self.cq_head[0])
   local tail = tonumber(self.cq_tail[0])
-  local rt = Runtime.current()
+  local rt = self.runtime
   while head ~= tail do
     local index = head % (tonumber(self.cq_mask[0]) + 1)
     local cqe = ptr_add(self.ffi, self.cqes, index * 16)
@@ -363,20 +385,6 @@ end
 
 function Provider:_await(req)
   self:_drain()
-  while req.completion:is_pending() do
-    local which = perform(Op.choice(
-      req.completion:terminal_op():map(function()
-        return 'done'
-      end),
-      self.handle:read_ready_op():map(function()
-        return 'ring'
-      end)
-    ))
-    if which == 'ring' then
-      self.handle:clear_readable()
-      self:_drain()
-    end
-  end
   return perform(req.completion:result_op())
 end
 

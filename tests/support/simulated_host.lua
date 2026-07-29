@@ -1,10 +1,11 @@
 -- Deterministic in-memory operating-system simulation for tests.
 
+local Op = require('fibers.op')
 local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.diagnostics.io')
 local perform = require('fibers.perform')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local WaitSet = require('fibers.host.wait_set')
 local Address = require('fibers.socket.address')
 
@@ -420,18 +421,11 @@ local function manual_process(Fd)
         end
       end
     end,
-    wait = function(self)
-      return self.exit_completion:terminal_op()
+    open_exit = function(self)
+      return Op.always(self)
     end,
-    reap = function(self)
-      local terminal = self.exit_completion:state_value()
-      if terminal.kind ~= 'succeeded' then
-        return nil, HostError.would_block('process', 'reap', { pid = self._pid })
-      end
-      if not self.reaped then
-        self.status, self.reaped = terminal.values and terminal.values[1] or terminal.value, true
-      end
-      return self.status
+    exit = function(self)
+      return self.exit_completion:result_op()
     end,
     signal = function(self, number, target)
       self.signals[#self.signals + 1] = { signal = number, target = target }
@@ -455,10 +449,12 @@ local function manual_process(Fd)
   })
 
   function Class:complete_op(status)
-    return self.exit_completion:publish_success_op(status or ProcessCore.exited(0)):wrap(function(ok, err)
+    status = status or ProcessCore.exited(0)
+    return self.exit_completion:publish_success_op(status):wrap(function(ok, err)
       if not ok then
         return nil, err
       end
+      self.status, self.reaped = status, true
       for _, handle in pairs(self.child_endpoints or {}) do
         if handle then
           handle:close('manual process exit')
@@ -732,6 +728,31 @@ function Simulated.new(opts)
         return base_resolve(self, endpoint, options)
       end
     or false
+
+  -- A deterministic host policy for Happy Eyeballs tests.  Production hosts may
+  -- use routing and source-address information; the simulated host declares its
+  -- simpler IPv6-then-IPv4 policy explicitly rather than relying on a
+  -- coordinator-side guess.
+  function host:sort_destination_addresses(addresses)
+    local ranked = {}
+    for i = 1, #addresses do
+      ranked[i] = { address = addresses[i], index = i }
+    end
+    table.sort(ranked, function(left, right)
+      local lf = left.address.kind == 'inet6' and 0 or 1
+      local rf = right.address.kind == 'inet6' and 0 or 1
+      if lf ~= rf then
+        return lf < rf
+      end
+      return left.index < right.index
+    end)
+    local out = {}
+    for i = 1, #ranked do
+      out[i] = ranked[i].address
+    end
+    return out
+  end
+  host.capabilities.happy_eyeballs_destination_ordering = 'simulated'
 
   host.start_process = processes
       and function(self, spec)

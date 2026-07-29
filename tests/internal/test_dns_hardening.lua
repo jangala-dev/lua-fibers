@@ -10,7 +10,6 @@ package.path = table.concat({
 local Resolver = require('fibers.dns.resolver')
 local Codec = require('fibers.dns.codec')
 local Address = require('fibers.socket.address')
-local Policy = require('fibers.internal.socket.happy_eyeballs_policy')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -96,33 +95,6 @@ do
     {}
   )
   assert_eq(decision.kind, 'invalid')
-end
-
--- Keep one slot available for the other unfinished address family.
-do
-  local race = {
-    endpoint = Address.name('example.test', 443),
-    maximum_candidates = 2,
-    first_family_count = 1,
-    opts = {},
-  }
-  local current = {
-    families = {
-      inet6 = { done = false, addresses = {} },
-      inet4 = { done = false, addresses = {} },
-    },
-    unattempted = {},
-    seen = {},
-    attempts = {},
-  }
-  local ordered, added, err, dropped = Policy.order_candidates(race, current, 'inet6', {
-    Address.ipv6('2001:db8::1', 443),
-    Address.ipv6('2001:db8::2', 443),
-  })
-  assert(err == nil, tostring(err))
-  assert_eq(#ordered, 1)
-  assert_eq(#added, 1)
-  assert_eq(dropped, 1)
 end
 
 print('tests/internal/test_dns_hardening.lua: ok')

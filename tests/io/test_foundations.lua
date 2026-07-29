@@ -20,6 +20,7 @@ local HostError = require('fibers.host.error')
 local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
 local HostHold = require('fibers.internal.lifetime.host_hold')
+local Connection = require('fibers.socket.connection')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -132,6 +133,65 @@ do
     assert_eq(host_hold:release('value', value), value)
   end)
   assert_eq(closed, 0)
+end
+
+-- Failure while converting one held accepted handle closes only that key;
+-- sibling offers in the shared source hold remain valid.
+do
+  local first_closed, second_closed = 0, 0
+  fibers.run(function(scope)
+    local hold = HostHold.new('keyed-discard-host-hold')
+    fibers.perform(scope:admit_op(hold))
+
+    local first = Handle.new({
+      name = 'invalid-accepted-handle',
+      capabilities = { read = false, write = true, close = true, readiness = true },
+      write = function(_, bytes)
+        return #bytes
+      end,
+      close = function()
+        first_closed = first_closed + 1
+        return true
+      end,
+    })
+    local second = Handle.new({
+      name = 'queued-sibling-handle',
+      capabilities = { close = true, readiness = true },
+      close = function()
+        second_closed = second_closed + 1
+        return true
+      end,
+    })
+
+    assert_eq(
+      hold:hold('first', first, function(value, reason)
+        return value:close(reason)
+      end),
+      first
+    )
+    assert_eq(
+      hold:hold('second', second, function(value, reason)
+        return value:close(reason)
+      end),
+      second
+    )
+
+    local connection, err = Connection.from_host_hold(fibers.current_runtime(), scope, hold, 'first', first, {
+      name = 'invalid-accepted-connection',
+      action = 'open_accepted_stream',
+    })
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err), 'conversion failure should be normalised as a HostError')
+    assert_truthy(tostring(err):match('read capability'), 'conversion failure should retain its cause')
+    assert_eq(first_closed, 1, 'failed selected handle should close exactly once')
+    assert_eq(second_closed, 0, 'sibling held handle must remain open')
+    assert_eq(hold.values.second.value, second)
+    assert_eq(hold.closed, false)
+
+    assert_eq(hold:release('second', second), second)
+    assert_eq(second:close('test complete'), true)
+  end)
+  assert_eq(second_closed, 1)
 end
 
 -- Completion can expose pending as an option for single-winner protocols.

@@ -480,7 +480,30 @@ A fallback candidate carries the local gate. Candidate validation checks that:
 - no relevant opaque or external supplier has appeared;
 - every participant remains on the same pending attempt.
 
-### 10.5 Root retry
+### 10.5 Runtime arbitration is component-scoped
+
+The serial runtime may have several pending roots. Positive-before-fallback is
+not a global priority rule across those roots. Once the runnable frontier is
+visible, the driver partitions pending requests by conservative dependency
+components and arbitrates each component independently:
+
+- a positive candidate in the same component precedes its fallback;
+- `Unknown` in the same component keeps that fallback dormant;
+- positive or `Unknown` work in an independent component does not delay it.
+
+This preserves local fallback liveness: a perpetually ready unrelated fibre
+cannot starve a certified fallback. Component construction remains
+conservative. Declared continuation dependencies are included when deciding
+which work could invalidate a preferred-side refutation. Observing a Task,
+Scope, Dial, resolver family or similar Lifetime terminal state also contributes
+a directional causal dependency on pending work within that Lifetime's Scope.
+Producer operations do not thereby become mutually dependent; they are recruited
+only when an actual observer could be advanced by them.
+
+The rule narrows scheduling, not proof. A fallback still carries and validates
+the same local absence gate before commit.
+
+### 10.6 Root retry
 
 If both preferred and fallback scopes are locally absent, the root may return
 `Retry` only when the complete local proof can be projected into a durable

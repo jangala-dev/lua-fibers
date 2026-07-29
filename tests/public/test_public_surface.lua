@@ -47,6 +47,7 @@ local FibersPulse = require('fibers.pulse')
 local FibersSemaphore = require('fibers.semaphore')
 local FibersLatch = require('fibers.latch')
 local FibersRefCount = require('fibers.resource.ref_count')
+local FibersProtected = require('fibers.protected')
 
 local function fail(msg)
   error(msg, 2)
@@ -92,6 +93,9 @@ do
   assert_eq(type(Op.choice), 'function', 'Op exports option composition')
   assert_eq(type(fibers.spawn), 'function', 'root exports structured spawn')
   assert_eq(type(fibers.now), 'function', 'root exports contextual time')
+  assert_eq(type(FibersProtected.pcall), 'function', 'Protected exposes yieldable pcall')
+  assert_eq(type(FibersProtected.xpcall), 'function', 'Protected exposes yieldable xpcall')
+  assert_eq(FibersProtected.running, nil, 'Protected does not expose runtime coroutine identity')
   assert_eq(type(FibersRuntime.drive), 'function', 'Runtime exports host-driving lifecycle')
   assert_eq(fibers.always, nil, 'root does not export option constructors')
   assert_eq(fibers.choice, nil, 'root does not export option combinators')
@@ -145,14 +149,29 @@ do
   assert_eq(require('fibers.socket'), FibersSocket, 'Socket facilities have a direct named module')
   assert_eq(require('fibers.dns'), FibersDNS, 'DNS facilities have a direct named module')
   assert_eq(type(FibersSocket.dns_resolver), 'function', 'Socket exposes the Fibers DNS resolver')
+  assert_eq(type(FibersSocket.dial_op), 'function', 'Socket exposes endpoint-dispatched Dial construction')
   assert_eq(
-    type(FibersSocket.dial_name_op),
+    type(FibersSocket.dial),
     'function',
-    'Socket exposes Happy Eyeballs named Dial construction'
+    'Socket exposes direct endpoint-dispatched Dial construction'
   )
-  assert_eq(type(FibersSocket.dial_name), 'function', 'Socket exposes direct named Dial construction')
-  assert_eq(type(FibersSocket.connect_name), 'function', 'Socket exposes Happy Eyeballs named connection')
-  assert_eq(type(FibersSocket.NamedDial), 'table', 'Socket exposes the NamedDial lifecycle')
+  assert_eq(type(FibersSocket.connect), 'function', 'Socket exposes endpoint-dispatched connection')
+  for _, name in ipairs({
+    'dial_name_op',
+    'dial_name',
+    'connect_name',
+    'NamedDial',
+    'dial_ipv4_op',
+    'dial_ipv4',
+    'dial_ipv6_op',
+    'dial_ipv6',
+    'dial_inet_op',
+    'dial_inet',
+    'dial_unix_op',
+    'dial_unix',
+  }) do
+    assert_eq(FibersSocket[name], nil, 'Socket has no compatibility alias ' .. name)
+  end
   assert_eq(type(FibersDNS.new), 'function', 'DNS exposes resolver construction')
   assert_eq(require('fibers.process'), FibersProcess, 'Process facilities have a direct named module')
   assert_eq(fibers.file, nil, 'root does not export file facilities')

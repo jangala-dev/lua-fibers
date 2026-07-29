@@ -18,7 +18,7 @@ local Codec = require('fibers.dns.codec')
 local Config = require('fibers.dns.config')
 local File = require('fibers.file')
 local IO = require('fibers.host.io')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 
 local Resolver = {}
@@ -292,18 +292,9 @@ local function minimum(a, b)
 end
 
 local function perform_before(op, deadline)
-  local kind, a, b, c = perform(Op.choice(
-    op:map(function(x, y, z)
-      return 'ready', x, y, z
-    end),
-    Sleep.sleep_until_op(deadline):map(function()
-      return 'timeout'
-    end)
-  ))
-  if kind == 'timeout' then
+  return perform(op:or_else(Sleep.sleep_until_op(deadline):map(function()
     return nil, error_value('timeout', 'ETIMEDOUT', 'DNS TCP transaction timed out')
-  end
-  return a, b, c
+  end)))
 end
 
 local function close_quietly(value, reason)
@@ -528,16 +519,14 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
   local deadline = rt:now() + timeout
   local last_protocol
   while true do
-    local kind, packet, receive_err = perform(
-      Op.choice(
-        socket:receive_from_op({ max_size = opts.maximum_message_size or 65535 }):map(function(value, err)
-          return 'packet', value, err
-        end),
-        Sleep.sleep_until_op(deadline):map(function()
-          return 'timeout'
-        end)
-      )
-    )
+    local kind, packet, receive_err = perform(socket
+      :receive_from_op({ max_size = opts.maximum_message_size or 65535 })
+      :map(function(value, err)
+        return 'packet', value, err
+      end)
+      :or_else(Sleep.sleep_until_op(deadline):map(function()
+        return 'timeout'
+      end)))
 
     if kind == 'timeout' then
       close_quietly(socket, 'DNS UDP timeout')
@@ -936,21 +925,34 @@ function Resolver:_resolve_candidate(name, port, family, opts)
   if not scope then
     error('DNS resolution requires a current Fibers scope', 2)
   end
-  local tasks = {}
+  local task_entries = {}
   for i = 1, #qtypes do
     local qtype = qtypes[i]
-    tasks[i] = scope:spawn(function()
-      return self:resolve_type(name, qtype, opts)
-    end, self.name .. ':' .. Codec.type_name(qtype))
+    local family_name = qtype == Codec.TYPE_AAAA and 'inet6' or 'inet4'
+    task_entries[#task_entries + 1] = {
+      family_name,
+      scope:spawn_op(function()
+        return self:resolve_type(name, qtype, opts)
+      end, self.name .. ':' .. Codec.type_name(qtype)),
+    }
   end
+  local tasks = perform(Op.named_all(task_entries))
+
+  local outcome_entries = {}
+  for i = 1, #task_entries do
+    local family_name = task_entries[i][1]
+    outcome_entries[i] = { family_name, tasks[family_name]:outcome_op() }
+  end
+  local outcomes = perform(Op.named_all(outcome_entries))
 
   local addresses, errors, seen = {}, {}, {}
-  for i = 1, #tasks do
-    local values, err = tasks[i]:await()
+  for i = 1, #task_entries do
+    local family_name = task_entries[i][1]
+    local values, err = outcomes[family_name]:raise()
     if values then
-      local kind = qtypes[i] == Codec.TYPE_AAAA and 'inet6' or 'inet4'
       for j = 1, #values do
-        local address = kind == 'inet6' and Address.ipv6(values[j], port) or Address.ipv4(values[j], port)
+        local address = family_name == 'inet6' and Address.ipv6(values[j], port)
+          or Address.ipv4(values[j], port)
         local key = Address.key(address)
         if not seen[key] then
           seen[key] = true

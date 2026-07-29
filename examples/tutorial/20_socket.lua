@@ -18,7 +18,7 @@ fibers.run(function(scope)
   local address = listener:local_address()
 
   local client = scope:spawn(function()
-    local dial = assert(socket.dial_inet(address.host, address.port))
+    local dial = assert(socket.dial(socket.inet_address(address.host, address.port)))
     local connection = assert(dial:result())
     connection:write('ping\n')
     assert(connection:read_line() == 'pong')

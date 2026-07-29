@@ -41,10 +41,15 @@ do
     assert_truthy(local_address.port ~= 0)
 
     local client_task = fibers.spawn(function()
-      local dial =
-        fibers.perform(socket.dial_inet_op(local_address.host, local_address.port, { name = 'echo-client' }))
+      local dial = fibers.perform(
+        socket.dial_op(socket.inet_address(local_address.host, local_address.port), { name = 'echo-client' })
+      )
       local client, dial_err = fibers.perform(dial:result_op())
       assert_truthy(client, tostring(dial_err))
+      local report = fibers.perform(dial:report_op())
+      assert_eq(report.kind, 'dial')
+      assert_eq(report.strategy, 'direct')
+      assert_eq(report.status, 'connected')
       assert_eq(fibers.perform(client:write_op('ping\n')), 5)
       local response, read_err = fibers.perform(client:read_line_op())
       assert_eq(response, 'pong', tostring(read_err))
@@ -68,7 +73,7 @@ end
 do
   local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   fibers.run(function()
-    local dial = fibers.perform(socket.dial_inet_op('127.0.0.1', 6553))
+    local dial = fibers.perform(socket.dial_op(socket.inet_address('127.0.0.1', 6553)))
     local connection, err = fibers.perform(dial:result_op())
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'system'))

@@ -23,7 +23,7 @@ local Lifetime = require('fibers.lifetime')
 local Task = require('fibers.task')
 local Scope = require('fibers.scope')
 local Closure = require('fibers.closure')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
 local Exit = Task.Exit
 local perform = require('fibers.perform')
@@ -153,9 +153,7 @@ function Process:launch_failed_op()
 end
 
 function Process:launch_result_op()
-  return self:launch_succeeded_op():or_else(self:launch_failed_op():map(function(err)
-    return nil, err
-  end))
+  return self.launch_completion:result_op()
 end
 
 function Process:result_op()
@@ -293,51 +291,47 @@ function Process:communicate(opts)
   if stderr_stream == stdout_stream then
     stderr_stream = nil
   end
-  local stdout_task = stdout_stream
-      and scope:spawn(function()
-        return stdout_stream:read_all({ max = stdout_limit })
-      end, { name = self.name .. ':communicate-stdout' })
-    or nil
-  local stderr_task = stderr_stream
-      and scope:spawn(function()
-        return stderr_stream:read_all({ max = stderr_limit })
-      end, { name = self.name .. ':communicate-stderr' })
-    or nil
+  local tasks = perform(Op.named_all({
+    stdout = stdout_stream and scope:spawn_op(function()
+      return stdout_stream:read_all({ max = stdout_limit })
+    end, { name = self.name .. ':communicate-stdout' }) or Op.always(nil),
+    stderr = stderr_stream and scope:spawn_op(function()
+      return stderr_stream:read_all({ max = stderr_limit })
+    end, { name = self.name .. ':communicate-stderr' }) or Op.always(nil),
+  }))
+  local stdout_task, stderr_task = tasks.stdout, tasks.stderr
 
   local complete_op = Op.named_all({
     stdout = stdout_task and stdout_task:body_result_op() or Op.always(nil),
     stderr = stderr_task and stderr_task:body_result_op() or Op.always(nil),
     status = self:result_op(),
-  }):map(function(parts)
-    return { kind = 'complete', parts = parts }
-  end)
+  })
 
-  local failure_options = {}
-  local function add_failure(name, task)
-    if not task then
-      return
-    end
-    failure_options[#failure_options + 1] = task:body_result_op():and_then(function(exit)
+  local alternatives = { complete = complete_op }
+  local function failure_op(task)
+    return task:body_result_op():and_then(function(exit)
       local _, task_err = Exit.unwrap(exit)
       if task_err ~= nil then
-        return Op.always({ kind = 'output_failure', stream = name, error = task_err })
+        return Op.always(task_err)
       end
       return Op.never()
     end)
   end
-  add_failure('stdout', stdout_task)
-  add_failure('stderr', stderr_task)
-
-  local selected_op = complete_op
-  if #failure_options > 0 then
-    selected_op = Op.choice(complete_op, Op.choice(failure_options))
+  if stdout_task then
+    alternatives.stdout_failed = failure_op(stdout_task)
   end
-  local selected = rt:_perform_current(selected_op, nil, true)
-  if selected.kind == 'output_failure' then
-    return fail('communicate ' .. selected.stream .. ' failed', selected.error)
+  if stderr_task then
+    alternatives.stderr_failed = failure_op(stderr_task)
   end
 
-  local parts = selected.parts
+  local event, value = rt:_perform_current(Op.named_choice(alternatives), nil, true)
+  if event == 'stdout_failed' then
+    return fail('communicate stdout failed', value)
+  elseif event == 'stderr_failed' then
+    return fail('communicate stderr failed', value)
+  end
+
+  local parts = value
   local stdout, stdout_err
   if stdout_task then
     stdout, stdout_err = Exit.unwrap(parts.stdout)
@@ -445,52 +439,10 @@ local function publish_exit(rt, proc, status)
   IO.masked_perform(rt, proc.exit_completion:publish_success_op(status))
 end
 
-local function run_reaper(proc, rt)
-  while true do
-    local ready, wait_err = perform(proc.host_process:wait_op())
-    if not ready and wait_err ~= nil then
-      local err = HostError.normalise(wait_err, {
-        domain = 'process',
-        action = 'wait',
-        pid = proc._pid,
-      })
-      IO.masked_perform(rt, proc.reap_completion:publish_failure_op(err))
-      return
-    end
-    local status, reap_err = proc.host_process:reap()
-    if status then
-      IO.masked_perform(rt, proc.reap_completion:publish_success_op(status))
-      return
-    end
-    if not HostError.is_would_block(reap_err) then
-      local err = HostError.normalise(reap_err, {
-        domain = 'process',
-        action = 'reap',
-        pid = proc._pid,
-      })
-      IO.masked_perform(rt, proc.reap_completion:publish_failure_op(err))
-      return
-    end
-  end
-end
-
-local function reap_event_op(proc)
-  return proc.reap_completion:result_op():map(function(status, err)
-    return { kind = 'exit', status = status, error = err }
-  end)
-end
-
-local function wait_reap_until(proc, deadline)
-  local event = perform(Op.choice(
-    reap_event_op(proc),
-    Sleep.sleep_until_op(deadline):map(function()
-      return { kind = 'timeout' }
-    end)
-  ))
-  if event.kind == 'timeout' then
+local function wait_exit_until(proc, deadline)
+  return perform(proc.host_process:exit_op():or_else(Sleep.sleep_until_op(deadline):map(function()
     return nil, 'timeout'
-  end
-  return event.status, event.error
+  end)))
 end
 
 local function close_stream(stream, reason, abort)
@@ -589,6 +541,20 @@ local function supervise(proc, driver_scope, opts)
   IOAudit.transfer(host_process, proc, { kind = 'process_handle', role = 'process' })
   host_hold:release('process', host_process)
 
+  local exit_opened, exit_open_err = perform(host_process:open_exit_op(driver_scope))
+  if not exit_opened then
+    publish_launch_failure(
+      rt,
+      proc,
+      HostError.normalise(exit_open_err, {
+        domain = 'process',
+        action = 'open_exit_completion',
+        pid = proc._pid,
+      })
+    )
+    return
+  end
+
   for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
     local handle = endpoints[which]
     if handle then
@@ -673,26 +639,19 @@ local function supervise(proc, driver_scope, opts)
     end
   end
 
-  proc.reaper = driver_scope:spawn(function()
-    return run_reaper(proc, rt)
-  end, { name = proc.name .. ':reaper' })
-
   publish_state(rt, proc, { kind = 'running', pid = proc._pid })
   IO.masked_perform(rt, proc.launch_completion:publish_success_op(proc))
 
   local status
-  while not status and not proc.lifecycle:is_close_requested() do
-    local event = perform(Op.choice(
-      reap_event_op(proc),
-      proc.lifecycle:close_requested_op():map(function()
-        return { kind = 'close' }
-      end)
-    ))
-    if event.kind == 'exit' then
-      status = event.status
+  if not proc.lifecycle:is_close_requested() then
+    local event, value, err = perform(Op.named_choice({
+      { 'exit', proc.host_process:exit_op() },
+      { 'close', proc.lifecycle:close_requested_op() },
+    }))
+    if event == 'exit' then
+      status = value
       if not status then
-        IO.masked_perform(rt, proc.exit_completion:publish_failure_op(event.error))
-        break
+        IO.masked_perform(rt, proc.exit_completion:publish_failure_op(err))
       end
     end
   end
@@ -714,15 +673,15 @@ local function supervise(proc, driver_scope, opts)
       })
     end
     local deadline = rt:now() + spec.shutdown.grace
-    local reap_err
-    status, reap_err = wait_reap_until(proc, deadline)
-    if not status and reap_err == 'timeout' then
+    local exit_err
+    status, exit_err = wait_exit_until(proc, deadline)
+    if not status and exit_err == 'timeout' then
       host_process:signal(spec.shutdown.kill_signal, spec.shutdown.target)
-      status, reap_err = perform(proc.reap_completion:result_op())
+      status, exit_err = perform(proc.host_process:exit_op())
     end
     if not status then
-      IO.masked_perform(rt, proc.exit_completion:publish_failure_op(reap_err))
-      proc._close_error = proc._close_error or reap_err
+      IO.masked_perform(rt, proc.exit_completion:publish_failure_op(exit_err))
+      proc._close_error = proc._close_error or exit_err
     end
   end
 
@@ -735,12 +694,6 @@ local function supervise(proc, driver_scope, opts)
   end
   local reason = proc.lifecycle:close_reason() or 'process closed'
   publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason, status = status })
-  if proc.reaper then
-    local _, reaper_err = proc.reaper:await()
-    if reaper_err ~= nil then
-      proc._close_error = proc._close_error or reaper_err
-    end
-  end
   local closed, close_err = finish_close(proc, reason)
   proc._close_error = proc._close_error or close_err
   if closed and not proc._close_error then
@@ -805,7 +758,6 @@ function Command:launch_op(opts)
       lifecycle = Lifecycle.new(name),
       launch_completion = Completion.new(name .. ':launch'),
       exit_completion = Completion.new(name .. ':exit'),
-      reap_completion = Completion.new(name .. ':reap'),
       closed_completion = Completion.new(name .. ':closed'),
       _communicating = false,
       host_hold = HostHold.new(name .. ':host-hold'),

@@ -164,8 +164,8 @@ do
   assert_truthy(st.waits and #st.waits == 1, 'unhandled external absence should retain one wake interest')
 end
 
--- Runtime priority law: any non-absence world still beats an
--- absence-certified fallback world in another root.
+-- Driver turns retain scheduler order, but positive-before-fallback is a
+-- dependency-component rule rather than a runtime-wide priority rule.
 do
   local got_a, got_b
   local rt = Runtime.new()
@@ -180,11 +180,32 @@ do
     first.tag == 'pending' or first.tag == 'quiescent',
     'first step should expose the fallback root without committing it'
   )
-  assert_status(rt:step(), 'found', 'ordinary progress commits before fallback')
-  assert_eq(got_b, 'progress', 'ordinary progress should commit first')
-  assert_eq(got_a, nil, 'absence fallback remains pending for a later turn')
-  assert_status(rt:step(), 'found', 'fallback may commit once no ordinary progress remains')
+  assert_status(rt:step(), 'found', 'the next independent component follows scheduler order')
+  assert_eq(got_b, 'progress')
+  assert_eq(got_a, nil)
+  assert_status(rt:step(), 'found')
   assert_eq(got_a, 'fallback')
+end
+
+-- A perpetually ready independent component must not starve a certified local
+-- fallback. Before component-scoped arbitration this fallback committed only
+-- after the unrelated producer had drained its complete ready loop.
+do
+  local unrelated_commits = 0
+  local fallback_after
+  local rt = Runtime.new()
+  rt:spawn_raw(function()
+    rt:perform(Op.never():or_else(Op.always('fallback')))
+    fallback_after = unrelated_commits
+  end, 'independent-fallback')
+  rt:spawn_raw(function()
+    for _ = 1, 1000 do
+      rt:perform(Op.always(true))
+      unrelated_commits = unrelated_commits + 1
+    end
+  end, 'independent-positive-loop')
+  assert_status(rt:run(), 'found')
+  assert_eq(fallback_after, 0, 'independent positive work must not delay local fallback')
 end
 
 print('tests/test_retry_laws.lua: ok')

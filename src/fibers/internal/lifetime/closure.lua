@@ -16,7 +16,7 @@ local Lifetime = require('fibers.lifetime')
 local Runtime = require('fibers.runtime')
 local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 
 local Closure = {}
 local unpack_ = table.unpack or unpack

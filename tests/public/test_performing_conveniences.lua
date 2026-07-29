@@ -111,8 +111,6 @@ do
     'listen_unix',
     'udp',
     'dial',
-    'dial_inet',
-    'dial_unix',
   }, 'socket')
   assert_twins(Stream, { 'merge_lines' }, 'stream module')
   assert_twins(Sleep, { 'sleep', 'sleep_until' }, 'Sleep')
@@ -201,10 +199,11 @@ do
     assert_twins(listener, { 'accept', 'close', 'closed' }, 'listener')
     local address = listener:local_address()
     local client_task = fibers.spawn(function()
-      local dial = assert(socket.dial_inet(address.host, address.port, {
+      local dial = assert(socket.dial(socket.inet_address(address.host, address.port), {
         name = 'direct-client',
       }))
-      assert_twins(dial, { 'connected', 'failed', 'result', 'close' }, 'dial')
+      assert_twins(dial, { 'result', 'report', 'close', 'closed' }, 'dial')
+      assert_absent(dial, { 'connected', 'failed', 'connect_result' }, 'dial')
       local client = assert(dial:result())
       client:write('ping\n')
       assert_eq(client:read_line(), 'pong')

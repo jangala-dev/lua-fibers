@@ -2,9 +2,29 @@
 
 local HostError = require('fibers.host.error')
 local IO = require('fibers.host.io')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 
 local Connection = {}
+
+local OPTION_KEYS = {
+  'nodelay',
+  'capacity',
+  'read_capacity',
+  'write_capacity',
+  'chunk_size',
+  'read_chunk_size',
+  'write_chunk_size',
+}
+
+function Connection.options(source, fields)
+  local out = IO.copy_table(fields)
+  for _, key in ipairs(OPTION_KEYS) do
+    if source and source[key] ~= nil then
+      out[key] = source[key]
+    end
+  end
+  return out
+end
 
 local function address_from(handle, method_name, field_name)
   if type(handle[method_name]) == 'function' then
@@ -42,13 +62,26 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
     connection = Connection.open(rt, scope, handle, opts)
   end)
   if not opened then
-    host_hold:close(open_err)
-    return nil,
-      HostError.normalise(open_err, {
-        domain = 'socket',
-        action = opts.action or 'open_connection',
-        address = opts.address,
-      })
+    local failure = HostError.normalise(open_err, {
+      domain = 'socket',
+      action = opts.action or 'open_connection',
+      address = opts.address,
+    })
+    local discarded, discard_err = host_hold:discard(key, handle, failure)
+    if not discarded then
+      return nil,
+        HostError.protocol(
+          'socket',
+          opts.action or 'open_connection',
+          'connection opening and handle disposal failed',
+          {
+            address = opts.address,
+            errors = { failure, discard_err },
+            cause = failure,
+          }
+        )
+    end
+    return nil, failure
   end
 
   local local_address = opts.local_address

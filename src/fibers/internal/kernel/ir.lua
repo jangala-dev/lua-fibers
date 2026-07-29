@@ -328,15 +328,17 @@ describe_mode = function(op, seen, mode)
     end
   elseif kind == 'and_then' then
     metadata_merge(out, describe_mode(op.p, seen, mode))
-    if mode == 'full' and not op.derived_map then
+    if mode ~= 'active' and not op.derived_map then
       local prefix_active_dynamic = describe_mode(op.p, {}, 'active').dynamic == true
       if op.continuation_footprint ~= nil then
         metadata_merge(out, metadata_from_hint(op.continuation_footprint, seen))
       else
         out.dynamic = true
       end
-      -- The continuation belongs to the full declaration but is dormant until
-      -- the prefix yields.
+      -- The continuation is dormant for ordinary active recruitment, but its
+      -- declared dependencies remain part of preferred-side component
+      -- arbitration: a fallback may only be certified after operations capable
+      -- of enabling that continuation have had a chance to progress.
       out.active_dynamic = prefix_active_dynamic
     end
   end

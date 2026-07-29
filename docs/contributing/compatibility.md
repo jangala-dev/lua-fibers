@@ -23,13 +23,14 @@ Compatibility paths cover standard-library and coroutine differences:
 
 ```text
 unpack                 table.unpack or the Lua 5.1 global unpack
-yieldable protection   coroutine-backed fibers.pcall and fibers.xpcall
+yieldable protection   coroutine-backed fibers.protected pcall and xpcall
 coroutine identity     normalised in fibers.internal.protected
 bit operations         confined to optional native host backends
 ```
 
-Code which may suspend must use `fibers.pcall`, `fibers.xpcall`, or the internal
-protected-call helper. Native Lua 5.1 `pcall` and `xpcall` cannot yield across
+Code which may suspend must use `fibers.pcall`, `fibers.xpcall`, or
+`fibers.protected`. Only Runtime identity plumbing should import the internal
+protected-call implementation. Native Lua 5.1 `pcall` and `xpcall` cannot yield across
 their C boundary.
 
 ## Development matrix

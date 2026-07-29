@@ -1,7 +1,6 @@
 -- Explicit transactional lifecycle resource for outbound socket dials.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
 local StateMachine = require('fibers.resource.machine')
 local HostError = require('fibers.host.error')
 local Common = require('fibers.socket.lifecycle')
@@ -158,18 +157,6 @@ function Dial:publish_failure_op(err, fatal, report)
     fatal = fatal == true,
     report = report,
   })
-end
-
-function Dial:connected_state_op()
-  return wait_for(self.state, function(state)
-    if state.kind == 'connected' then
-      return Op.always(state)
-    end
-    if state.kind == 'starting' then
-      return nil, true
-    end
-    return nil, false
-  end)
 end
 
 function Dial:take_op()

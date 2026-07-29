@@ -39,16 +39,25 @@ local function yield_turns(n)
 end
 
 local function wait_for_queue(listener, count)
-  while true do
-    local rows = {}
-    for _, entry in pairs(listener.queue._items.entries) do
-      rows[#rows + 1] = entry
-    end
-    if #rows >= count then
-      return rows
-    end
+  while listener.offers._queue:length() < count do
     yield_turns(1)
   end
+  local state = listener.offers._queue._location.value
+  local rows, node = {}, state.front
+  while node do
+    rows[#rows + 1] = { value = node.value[1] }
+    node = node.next
+  end
+  local back = {}
+  node = state.back
+  while node do
+    back[#back + 1] = node.value[1]
+    node = node.next
+  end
+  for i = #back, 1, -1 do
+    rows[#rows + 1] = { value = back[i] }
+  end
+  return rows
 end
 
 -- Acceptance transfers the complete Stream subtree into the accepting scope.
@@ -58,7 +67,7 @@ do
   fibers.run(function(root)
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'ownership-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'ownership-client' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'ownership-client' })
     local client = dial:result()
 
     fibers.scope({ name = 'connection-handler' }, function(handler)
@@ -100,7 +109,7 @@ do
       scope = scope,
     })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, {
+    local dial = socket.dial(socket.inet_address(address.host, address.port), {
       name = 'scope-custody-dial',
       scope = scope,
     })
@@ -113,9 +122,9 @@ do
   end, { host = host })
 end
 
--- Listener and Dial are each one running Lifetime held by its caller. Their execution and
--- private Scope are views of the domain Lifetime rather than separate
--- driver Lifetimes.
+-- Listener and Dial are each one Lifetime root held by their caller. Listener
+-- readiness is reactor-owned and therefore needs no running body; Dial retains
+-- a body because Happy Eyeballs is a genuine protocol process.
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
@@ -123,7 +132,11 @@ do
     fibers.scope({ name = 'listener-origin' }, function(origin)
       listener = socket.listen_inet('127.0.0.1', 0, { name = 'moved-listener' })
       assert_eq(Lifetime.of(listener), listener:lifetime())
-      assert_truthy(listener:lifetime().has_body, 'Listener Lifetime should carry its running body')
+      assert_eq(
+        listener:lifetime().has_body,
+        false,
+        'Listener Lifetime should not carry a ceremonial driver body'
+      )
       local listener_roots = fibers.perform(origin:children_op())
       assert_eq(#listener_roots, 1, "Listener should be the one root in its caller's custody")
       assert_eq(listener_roots[1], listener)
@@ -139,7 +152,7 @@ do
     local address = listener:local_address()
     local dial
     fibers.scope({ name = 'dial-origin' }, function(origin)
-      dial = socket.dial_inet(address.host, address.port, { name = 'moved-dial' })
+      dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'moved-dial' })
       assert_eq(Lifetime.of(dial), dial:lifetime())
       assert_truthy(dial:lifetime().has_body, 'Dial Lifetime should carry its running body')
       local dial_roots = fibers.perform(origin:children_op())
@@ -172,8 +185,10 @@ do
       accept_capacity = 1,
     })
     local address = listener:local_address()
-    local c1 = socket.dial_inet(address.host, address.port, { name = 'full-queue-client-1' }):result()
-    local c2 = socket.dial_inet(address.host, address.port, { name = 'full-queue-client-2' }):result()
+    local c1 =
+      socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-1' }):result()
+    local c2 =
+      socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-2' }):result()
 
     local rows = wait_for_queue(listener, 1)
     yield_turns(2) -- allow the driver to reach the second, blocked queue insertion
@@ -194,7 +209,8 @@ do
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'close-race-listener' })
     local address = listener:local_address()
-    local client = socket.dial_inet(address.host, address.port, { name = 'close-race-client' }):result()
+    local client =
+      socket.dial(socket.inet_address(address.host, address.port), { name = 'close-race-client' }):result()
     wait_for_queue(listener, 1)
 
     fibers.perform(listener.lifecycle:request_stop_op('simulated terminal listener'))
@@ -220,8 +236,9 @@ do
     local address = listener:local_address()
 
     fibers.scope({ name = 'untaken-dial-scope' }, function()
-      dial_ref = socket.dial_inet(address.host, address.port, { name = 'untaken-dial' })
-      local connected_state = fibers.perform(dial_ref.lifecycle:connected_state_op())
+      dial_ref = socket.dial(socket.inet_address(address.host, address.port), { name = 'untaken-dial' })
+      fibers.perform(dial_ref:report_op())
+      local connected_state = dial_ref:state_value()
       connection_ref = connected_state.connection
       assert_truthy(connection_ref, 'dial should have a successful untaken connection')
       assert_eq(
@@ -249,7 +266,7 @@ do
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'taken-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'taken-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'taken-dial' })
 
     fibers.scope({ name = 'dial-target' }, function(target)
       local connection = dial:result()
@@ -273,7 +290,7 @@ do
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'single-take-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'single-take-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'single-take-dial' })
     local first = dial:result()
     local second, err = dial:result()
     assert_eq(second, nil)
@@ -292,7 +309,7 @@ do
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'early-close-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'early-close-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'early-close-dial' })
     assert_eq(dial:close('closed immediately'), true)
     assert_eq(dial:closed(), true)
     local connection, err = dial:result()
@@ -310,8 +327,8 @@ do
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'closed-result-listener' })
     local address = listener:local_address()
-    local dial = socket.dial_inet(address.host, address.port, { name = 'closed-result-dial' })
-    fibers.perform(dial.lifecycle:connected_state_op())
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'closed-result-dial' })
+    fibers.perform(dial:report_op())
 
     assert_eq(dial:close('caller abandoned dial'), true)
     assert_eq(dial:closed(), true)
@@ -335,7 +352,8 @@ do
       accept_capacity = 1,
     })
     local address = listener_ref:local_address()
-    local client = socket.dial_inet(address.host, address.port, { name = 'owner-seal-client' }):result()
+    local client =
+      socket.dial(socket.inet_address(address.host, address.port), { name = 'owner-seal-client' }):result()
     queued_ref = wait_for_queue(listener_ref, 1)[1].value
     client:close('owner-seal test complete')
     -- Return without closing the listener.
@@ -388,7 +406,7 @@ do
   end
 
   local result = fibers.try_run(function()
-    local dial = socket.dial_inet('127.0.0.1', 9, { name = 'throwing-dial-host' })
+    local dial = socket.dial(socket.inet_address('127.0.0.1', 9), { name = 'throwing-dial-host' })
     local connection, err = dial:result()
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'protocol'), 'adapter defect should publish a protocol result')
@@ -462,7 +480,7 @@ do
     local listener = fibers.perform(listen)
     assert_eq(listener.name, 'snapshotted-listener')
     assert_eq(listener.address.host, '127.0.0.1')
-    assert_eq(listener.queue.capacity, 1)
+    assert_eq(listener.offers.capacity, 1)
     listener:close('snapshot test complete')
     listener:closed()
   end, { host = host })

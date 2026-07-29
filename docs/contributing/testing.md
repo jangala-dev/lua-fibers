@@ -50,7 +50,7 @@ make test-luau
 ```
 
 `make test-roblox-fake` runs the Roblox adapter against the deterministic
-fake engine. The older `make test-roblox` name remains an alias.
+fake engine.
 
 `tests/embedding/test_roblox.lua` is a portable fake-engine conformance test,
 not a Studio example. It intentionally runs in the stock-Lua matrix as well

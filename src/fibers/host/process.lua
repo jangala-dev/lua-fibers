@@ -2,8 +2,6 @@
 
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.diagnostics.io')
-local Op = require('fibers.op')
-local Sleep = require('fibers.sleep')
 
 local M = {}
 
@@ -41,7 +39,7 @@ function M.start(host, spec)
     return nil, nil, invalid_contract(host, 'endpoints')
   end
 
-  local required = { 'wait_op', 'reap', 'signal', 'close' }
+  local required = { 'open_exit_op', 'exit_op', 'signal', 'close' }
   for i = 1, #required do
     local name = required[i]
     if type(process[name]) ~= 'function' then
@@ -129,6 +127,8 @@ do
   end
 
   function M.class(spec)
+    local open_exit = assert(spec.open_exit, 'process class requires open_exit')
+    local exit = assert(spec.exit, 'process class requires exit')
     local Process = {}
     Process.__index = Process
 
@@ -145,17 +145,13 @@ do
       return self._pid
     end
 
-    function Process:wait_op()
-      if spec.wait then
-        return spec.wait(self)
-      end
-      if self.status then
-        return Op.always(true)
-      end
-      return Sleep.sleep_op(self.poll_interval)
+    function Process:open_exit_op(scope)
+      return open_exit(self, scope)
     end
 
-    Process.reap = assert(spec.reap, 'process class requires reap')
+    function Process:exit_op()
+      return exit(self)
+    end
 
     function Process:signal(value, target)
       if self.reaped then

@@ -14,9 +14,6 @@ local Kind = Facility.kind('readiness')
 
 local function mode(x, level)
   x = x or 'read'
-  if x == 'wr' then
-    x = 'write'
-  end
   if x ~= 'read' and x ~= 'write' then
     error('readiness mode must be read or write', level or 3)
   end

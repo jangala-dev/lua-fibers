@@ -7,7 +7,7 @@ local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.diagnostics.io')
 local Process = require('fibers.host.process')
 local Op = require('fibers.op')
-local Sleep = require('fibers.sleep')
+local HostOffer = require('fibers.host.offer')
 
 local Reaper = {}
 local ACTION =
@@ -435,13 +435,37 @@ function Reaper.new(spec)
         self.status_handle:bind_runtime(rt)
       end
     end,
-    wait = function(self)
-      if self.reaped or self.buffer:find('\n', 1, true) then
-        return Op.always(true)
+    open_exit = function(self, scope)
+      if not self.exit_source then
+        self.exit_source = HostOffer.new({
+          name = self.name .. ':exit',
+          domain = 'process',
+          action = 'reap',
+          role = 'process_exit_completion',
+          one_shot = true,
+          capacity = 1,
+          handle = self.status_handle,
+          mode = self.status_handle and 'read' or 'poll',
+          poll_interval = self.poll_interval,
+          pull = function()
+            return reap_process(self)
+          end,
+        })
       end
-      return self.status_handle and self.status_handle:read_ready_op() or Sleep.sleep_op(self.poll_interval)
+      return self.exit_source:open_op(scope)
     end,
-    reap = reap_process,
+    exit = function(self)
+      if self.reaped and self.status then
+        return Op.always(self.status)
+      end
+      if not self.exit_source then
+        return Op.always(
+          nil,
+          HostError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
+        )
+      end
+      return self.exit_source:result_op()
+    end,
     signal = function(self, number, target)
       local destination = target == 'group' and -math.abs(self.group_id or self._pid) or self._pid
       local ok, errno, message = spec.kill(destination, number)

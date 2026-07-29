@@ -155,13 +155,4 @@ do
   end, { host = host })
 end
 
--- Host names are not silently passed to the numeric socket backend.
-do
-  local ok, err = pcall(function()
-    socket.dial_inet_op('example.test', 443)
-  end)
-  assert_eq(ok, false)
-  assert_truthy(string.find(tostring(err), 'use socket.resolve', 1, true) ~= nil)
-end
-
 print('tests/io/test_resolver.lua: ok')

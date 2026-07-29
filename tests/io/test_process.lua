@@ -301,7 +301,7 @@ do
           process_closed = true
           return true
         end,
-        -- deliberately missing wait_op, reap and signal
+        -- deliberately missing open_exit_op, exit_op and signal
       }, {
         stdout = {
           close = function()
@@ -318,7 +318,7 @@ do
     assert(proc == nil)
     assert(HostError.is(err, 'protocol'))
     assert_eq(err.action, 'start_process')
-    assert_eq(err.missing, 'wait_op')
+    assert_eq(err.missing, 'open_exit_op')
   end, { host = host })
   assert(process_closed, 'invalid provider process handle should be closed')
   assert(endpoint_closed, 'invalid provider endpoints should be closed')

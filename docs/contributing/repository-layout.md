@@ -40,6 +40,7 @@ src/fibers/
     authoring.lua          trusted facility compilation materials
 
   effect.lua               committed obligation kinds and effects
+  protected.lua            public yieldable pcall and xpcall for library code
   lifetime/
     store.lua              Runtime-local custody forest
 
@@ -51,6 +52,8 @@ src/fibers/
   file/                    evented files, pipes and provider implementations
   process/                 Command and Process Lifetime facility
   socket/                  addresses, Listener, Dial, UDP and shared protocols
+    dial/                   shared Dial handle plus direct and named strategies
+      named/                Happy Eyeballs coordination state
   host/                    host contracts, reactor and native bindings
 
   internal/
@@ -91,6 +94,7 @@ Types, constructors and option combinators use their one canonical module:
 
 ```lua
 local Op = require('fibers.op')
+local Protected = require('fibers.protected')
 local Channel = require('fibers.channel')
 local Stream = require('fibers.stream')
 local Flow = require('fibers.resource.flow')

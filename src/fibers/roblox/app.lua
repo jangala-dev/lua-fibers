@@ -8,7 +8,7 @@
 
 local WaitSet = require('fibers.host.wait_set')
 local Closure = require('fibers.closure')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local ScopeResult = require('fibers.scope.result')

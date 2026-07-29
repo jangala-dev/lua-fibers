@@ -19,9 +19,6 @@ local next_id = 0
 
 local function normalise_mode(mode)
   mode = mode or 'read'
-  if mode == 'wr' then
-    mode = 'write'
-  end
   if mode ~= 'read' and mode ~= 'write' then
     error('readiness mode must be read or write', 3)
   end

@@ -291,10 +291,14 @@ The public application vocabulary remains small. Advanced custody, Grants and Cl
 
 ## Protected calls
 
-Use `fibers.pcall` and `fibers.xpcall` when protected code may suspend:
+Applications may use `fibers.pcall` and `fibers.xpcall`. Reusable libraries
+which should not depend on the root lifecycle façade may import
+`fibers.protected`:
 
 ```lua
-local ok, value = fibers.pcall(function()
+local Protected = require('fibers.protected')
+
+local ok, value = Protected.pcall(function()
   return fibers.perform(op)
 end)
 ```

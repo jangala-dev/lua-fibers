@@ -396,6 +396,8 @@ function Runtime.new(opts)
     _driver_fallback_candidates = {},
     _driver_fallback_focuses = {},
     _driver_fallback_indices = {},
+    _driver_component_processed = {},
+    _driver_component_context = {},
     search_session_pool = opts.search_session_pool ~= false,
     search_session_pool_limit = math.max(0, math.floor(opts.search_session_pool_limit or 64)),
     _frontier_growing = false,
@@ -703,7 +705,10 @@ function Runtime:_index_request(request)
   local metadata = request.metadata or IR.metadata(request.op)
   request.metadata = metadata
   local dependency_metadata
-  if self.machine_name == 'ledger' and request._contains_or_else then
+  if request._contains_or_else then
+    -- Driver dependency components are part of runtime fallback arbitration,
+    -- not a production-solver optimisation. Every evaluator therefore indexes
+    -- the complete preferred footprint in the same way.
     dependency_metadata = IR.preferred_metadata(request._active_root_residual or request.op)
   else
     dependency_metadata = IR.active_metadata(metadata)
@@ -1033,7 +1038,7 @@ function Runtime:_component_requests(focus_id)
         local metadata = focus.metadata or IR.metadata(focus.op)
         focus.metadata = metadata
         needs_choice_generation = (metadata.node_kinds or {}).choice ~= nil
-        local needs_preferred_component = self.machine_name == 'ledger' and focus._contains_or_else == true
+        local needs_preferred_component = focus._contains_or_else == true
         promote = (needs_choice_generation or needs_preferred_component) and #self.pending > 1
       end
     end
@@ -1877,38 +1882,16 @@ function Runtime:_step_impl(opts)
   -- background services and independent Lifetimes to progress behind a blocked root.
   local count = #self.pending
   local start = ((self._step_cursor or 0) % count) + 1
+  local ids = reuse_table(self, '_driver_ids')
+  for i = 1, count do
+    ids[i] = self.pending[i].id
+  end
   local refs = reuse_table(self, '_driver_refs')
-  local any_unknown = false
-  for offset = 0, count - 1 do
-    local idx = ((start + offset - 1) % count) + 1
-    local request = self.pending[idx]
-    local focus = request and request.id
-    if focus and self.pending_by_id[focus] then
-      local context = self:_component_context(focus)
-      local candidate, ref, unknown = self:_find_candidate(focus, search_limit, context)
-      refs[#refs + 1] = ref
-      any_unknown = any_unknown or unknown == true
-      if candidate then
-        local ok = self:_commit_hit(candidate)
-        if not ok and self.pending_by_id[focus] then
-          self.stats.refreshes = self.stats.refreshes + 1
-          if self.instrumentation then
-            self.instrumentation:inc('refreshes')
-          end
-          candidate, ref, unknown = self:_find_candidate(focus, search_limit)
-          refs[#refs + 1] = ref
-          any_unknown = any_unknown or unknown == true
-          if candidate then
-            ok = self:_commit_hit(candidate)
-          end
-        end
-        if ok then
-          self._step_cursor = idx
-          self._bounded_credit = 0
-          return { tag = 'found', kind = 'commit', value = true }
-        end
-      end
-    end
+  local committed_index, any_unknown = self:_scan_driver_components(ids, start, search_limit, refs)
+  if committed_index then
+    self._step_cursor = committed_index
+    self._bounded_credit = 0
+    return { tag = 'found', kind = 'commit', value = true }
   end
   self._step_cursor = start
   return self:_pending_status(refs, any_unknown)
@@ -1923,13 +1906,181 @@ local function discard_candidates(values, keep)
   end
 end
 
+-- Search one dependency component at a time. A fallback is delayed only by
+-- positive or Unknown work which belongs to the same component and can
+-- therefore invalidate its preferred-side refutation. Independent components
+-- retain ordinary scheduler order rather than participating in a runtime-wide
+-- positive-before-fallback barrier.
+function Runtime:_scan_driver_components(ids, start, search_limit, refs)
+  local processed = reuse_table(self, '_driver_component_processed')
+  local positions = reuse_table(self, '_driver_component_positions')
+  local indices = reuse_table(self, '_driver_component_indices')
+  local members = reuse_table(self, '_driver_component_members')
+  local member_context = self._driver_component_context
+  local fallback_candidates = reuse_table(self, '_driver_fallback_candidates')
+  local fallback_focuses = reuse_table(self, '_driver_fallback_focuses')
+  local fallback_indices = reuse_table(self, '_driver_fallback_indices')
+  local any_unknown = false
+
+  -- Record the cyclic scheduler order once. Component membership is obtained
+  -- from the dependency index, so isolated components do not require rescanning
+  -- the complete pending frontier.
+  for offset = 0, #ids - 1 do
+    local index = ((start + offset - 1) % #ids) + 1
+    local id = ids[index]
+    positions[id], indices[id] = offset + 1, index
+  end
+
+  local function clear_component_scratch()
+    clear_table(members)
+    clear_table(positions)
+    clear_table(indices)
+    clear_table(processed)
+  end
+
+  for component_offset = 0, #ids - 1 do
+    local component_index = ((start + component_offset - 1) % #ids) + 1
+    local component_focus = ids[component_index]
+    if self.pending_by_id[component_focus] and not processed[component_focus] then
+      local base_context = self:_component_context(component_focus)
+      local requests, component = base_context.requests, base_context.component
+      local component_unknown = false
+
+      clear_table(members)
+      local component_ids = component and component.ids
+      if component_ids then
+        for i = 1, #component_ids do
+          local id = component_ids[i]
+          if positions[id] and requests[id] and self.pending_by_id[id] then
+            members[#members + 1] = id
+          end
+        end
+      else
+        for id in pairs(requests) do
+          if positions[id] and self.pending_by_id[id] then
+            members[#members + 1] = id
+          end
+        end
+      end
+      table.sort(members, function(a, b)
+        return positions[a] < positions[b]
+      end)
+
+      clear_table(fallback_candidates)
+      clear_table(fallback_focuses)
+      clear_table(fallback_indices)
+
+      for i = 1, #members do
+        local focus = members[i]
+        local member_index = indices[focus]
+        processed[focus] = true
+        member_context.focus_id = focus
+        member_context.requests = requests
+        member_context.component = component
+
+        local candidate, ref, unknown = self:_find_candidate(focus, search_limit, member_context)
+        refs[#refs + 1] = ref
+        component_unknown = component_unknown or unknown == true
+        any_unknown = any_unknown or unknown == true
+
+        if candidate and candidate.absence_gate then
+          local n = #fallback_candidates + 1
+          fallback_candidates[n] = candidate
+          fallback_focuses[n] = focus
+          fallback_indices[n] = member_index
+        elseif candidate then
+          local ok = self:_commit_hit(candidate)
+          if not ok and self.pending_by_id[focus] then
+            self.stats.refreshes = self.stats.refreshes + 1
+            if self.instrumentation then
+              self.instrumentation:inc('refreshes')
+            end
+            candidate, ref, unknown = self:_find_candidate(focus, search_limit)
+            refs[#refs + 1] = ref
+            component_unknown = component_unknown or unknown == true
+            any_unknown = any_unknown or unknown == true
+            if candidate and candidate.absence_gate then
+              local n = #fallback_candidates + 1
+              fallback_candidates[n] = candidate
+              fallback_focuses[n] = focus
+              fallback_indices[n] = member_index
+            elseif candidate then
+              ok = self:_commit_hit(candidate)
+            end
+          end
+          if ok then
+            discard_candidates(fallback_candidates)
+            clear_table(fallback_candidates)
+            clear_component_scratch()
+            return member_index, any_unknown
+          end
+        end
+      end
+
+      if not component_unknown then
+        for i = 1, #fallback_candidates do
+          local focus, candidate = fallback_focuses[i], fallback_candidates[i]
+          if self.pending_by_id[focus] then
+            local ok = self:_commit_hit(candidate)
+            if not ok and self.pending_by_id[focus] then
+              self.stats.refreshes = self.stats.refreshes + 1
+              if self.instrumentation then
+                self.instrumentation:inc('refreshes')
+              end
+              candidate, ref, unknown = self:_find_candidate(focus, search_limit)
+              refs[#refs + 1] = ref
+              component_unknown = component_unknown or unknown == true
+              any_unknown = any_unknown or unknown == true
+              if candidate and not unknown then
+                -- The preferred side may have become ready while the fallback
+                -- was retained. Commit that positive world rather than forcing
+                -- another driver turn.
+                ok = self:_commit_hit(candidate)
+              end
+            end
+            if ok then
+              discard_candidates(fallback_candidates, candidate)
+              clear_table(fallback_candidates)
+              clear_component_scratch()
+              return fallback_indices[i], any_unknown
+            end
+            if component_unknown then
+              break
+            end
+          end
+        end
+      end
+
+      discard_candidates(fallback_candidates)
+      clear_table(fallback_candidates)
+    end
+  end
+
+  clear_component_scratch()
+  return nil, any_unknown
+end
+
 function Runtime:_clear_driver_scratch(keep_candidate)
   discard_candidates(self._driver_fallback_candidates, keep_candidate)
   clear_table(self._driver_refs)
   clear_table(self._driver_fallback_candidates)
   clear_table(self._driver_fallback_focuses)
   clear_table(self._driver_fallback_indices)
+  clear_table(self._driver_component_processed)
+  if self._driver_component_positions then
+    clear_table(self._driver_component_positions)
+  end
+  if self._driver_component_indices then
+    clear_table(self._driver_component_indices)
+  end
+  if self._driver_component_members then
+    clear_table(self._driver_component_members)
+  end
   local context = self._component_context_scratch
+  if context then
+    context.focus_id, context.requests, context.component = nil, nil, nil
+  end
+  context = self._driver_component_context
   if context then
     context.focus_id, context.requests, context.component = nil, nil, nil
   end
@@ -1944,9 +2095,10 @@ function Runtime:_run_impl(opts)
   local committed = false
   local last_refs, last_unknown = {}, false
 
-  -- Start fibres in scheduler order. Closed positive worlds may commit before
-  -- later fibres are entered; absence-certified fallbacks wait until all
-  -- currently runnable fibres have exposed their attempts.
+  -- Start fibres in scheduler order. Closed single-participant positive worlds
+  -- may commit during admission. Fallback arbitration is deferred until the
+  -- pending frontier is visible, then applied independently per dependency
+  -- component rather than across the complete runtime.
   while true do
     local fiber = self:_start_one()
     if not fiber then
@@ -1985,83 +2137,11 @@ function Runtime:_run_impl(opts)
 
     local progressed = false
     local refs = reuse_table(self, '_driver_refs')
-    local fallback_candidates = reuse_table(self, '_driver_fallback_candidates')
-    local fallback_focuses = reuse_table(self, '_driver_fallback_focuses')
-    local fallback_indices = reuse_table(self, '_driver_fallback_indices')
-    local any_unknown = false
     local start = ((self._run_cursor or 0) % #ids) + 1
-    for offset = 0, #ids - 1 do
-      local i = ((start + offset - 1) % #ids) + 1
-      local focus = ids[i]
-      if self.pending_by_id[focus] then
-        local context = self:_component_context(focus)
-        local candidate, ref, unknown = self:_find_candidate(focus, nil, context)
-        refs[#refs + 1] = ref
-        any_unknown = any_unknown or unknown == true
-        if candidate and candidate.absence_gate then
-          -- A certified fallback is valid only after every currently eligible
-          -- focus has failed to produce positive work. Remember the first one
-          -- but continue the lazy scan; this preserves the established rule that
-          -- a concurrent admission, writer or task start commits before absence.
-          local n = #fallback_candidates + 1
-          fallback_candidates[n], fallback_focuses[n], fallback_indices[n] = candidate, focus, i
-        elseif candidate then
-          local ok = self:_commit_hit(candidate)
-          if not ok and self.pending_by_id[focus] then
-            self.stats.refreshes = self.stats.refreshes + 1
-            if self.instrumentation then
-              self.instrumentation:inc('refreshes')
-            end
-            candidate, ref, unknown = self:_find_candidate(focus)
-            refs[#refs + 1] = ref
-            any_unknown = any_unknown or unknown == true
-            if candidate and not candidate.absence_gate then
-              ok = self:_commit_hit(candidate)
-            end
-          end
-          if ok then
-            committed, progressed = true, true
-            self._run_cursor = i
-            discard_candidates(fallback_candidates)
-            clear_table(fallback_candidates)
-            break
-          end
-        end
-      end
-    end
-    if not progressed and not any_unknown then
-      for i = 1, #fallback_candidates do
-        local focus, candidate = fallback_focuses[i], fallback_candidates[i]
-        if self.pending_by_id[focus] then
-          local ok = self:_commit_hit(candidate)
-          if not ok and self.pending_by_id[focus] then
-            self.stats.refreshes = self.stats.refreshes + 1
-            if self.instrumentation then
-              self.instrumentation:inc('refreshes')
-            end
-            candidate, ref, unknown = self:_find_candidate(focus)
-            refs[#refs + 1] = ref
-            any_unknown = any_unknown or unknown == true
-            if unknown then
-              break
-            end
-            if candidate and candidate.absence_gate then
-              ok = self:_commit_hit(candidate)
-            end
-          end
-          if ok then
-            committed, progressed = true, true
-            self._run_cursor = fallback_indices[i]
-            discard_candidates(fallback_candidates, candidate)
-            clear_table(fallback_candidates)
-            break
-          end
-        end
-      end
-    end
-    if not progressed then
-      discard_candidates(fallback_candidates)
-      clear_table(fallback_candidates)
+    local committed_index, any_unknown = self:_scan_driver_components(ids, start, nil, refs)
+    if committed_index then
+      committed, progressed = true, true
+      self._run_cursor = committed_index
     end
     last_refs, last_unknown = refs, any_unknown
 

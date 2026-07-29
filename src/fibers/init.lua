@@ -4,7 +4,7 @@
 -- operations are interpreted by the currently running fibre. Types,
 -- constructors and option combinators live in their named modules.
 
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')

@@ -7,7 +7,7 @@ local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.diagnostics.io')
 local Process = require('fibers.host.process')
 local Op = require('fibers.op')
-local Sleep = require('fibers.sleep')
+local HostOffer = require('fibers.host.offer')
 
 local Direct = {}
 
@@ -134,16 +134,37 @@ function Direct.new(spec)
 
   local ProcessClass = Core.class({
     signals = signals,
-    wait = function(self)
-      if self.status then
-        return Op.always(true)
+    open_exit = function(self, scope)
+      if not self.exit_source then
+        self.exit_source = HostOffer.new({
+          name = self.name .. ':exit',
+          domain = 'process',
+          action = 'reap',
+          role = 'process_exit_completion',
+          one_shot = true,
+          capacity = 1,
+          handle = self.pidfd,
+          mode = self.pidfd and 'read' or 'poll',
+          poll_interval = self.poll_interval,
+          pull = function()
+            return reap_process(self)
+          end,
+        })
       end
-      if self.pidfd then
-        return self.pidfd:read_ready_op()
-      end
-      return Sleep.sleep_op(self.poll_interval)
+      return self.exit_source:open_op(scope)
     end,
-    reap = reap_process,
+    exit = function(self)
+      if self.reaped and self.status then
+        return Op.always(self.status)
+      end
+      if not self.exit_source then
+        return Op.always(
+          nil,
+          HostError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
+        )
+      end
+      return self.exit_source:result_op()
+    end,
     signal = signal_process,
     close = function(self, reason)
       if self.pidfd then

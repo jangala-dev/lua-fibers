@@ -402,6 +402,17 @@ For reads, the reactor reserves Flow capacity before performing the authoritativ
 host call. For writes, it leases committed bytes before the call. `would_block`
 releases read capacity or retains write custody as appropriate.
 
+The same index services bounded host-owned offers used by accepted connections,
+connection completions, process exits and received datagrams. An offer source
+reserves capacity before its authoritative non-blocking host call and publishes a
+completed value through an external `EventQueue`. A committed `next_op()` both
+claims the value and returns capacity; its post-commit reactor-demand effect
+rearms the source. Unclaimed values remain under the source Lifetime and are
+disposed during retirement. Offer sources add registrations, not tasks. Providers
+which already have request-indexed completions, such as `io_uring`, may instead
+register one bounded non-yielding reactor callback which drains their shared
+completion queue and publishes the existing per-request Completion values.
+
 The `HostHandle` contract is:
 
 ```text
@@ -413,7 +424,10 @@ handle:shutdown_write(reason)  -- optional
 handle:close(reason)           -- mandatory
 ```
 
-`read` and `write` must be non-blocking. Readiness is only a hint. The reactor
+`read` and `write` must be non-blocking. Facility-supplied offer pulls are
+stricter: they are bounded, non-yielding callbacks which receive the registered
+handle explicitly and may perform one authoritative host interaction. They may
+not perform Fibers operations or spawn work. Readiness is only a hint. The reactor
 accepts these read results:
 
 ```text

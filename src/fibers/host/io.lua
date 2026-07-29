@@ -8,8 +8,10 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 local Task = require('fibers.task')
+local Scope = require('fibers.scope')
+local Lifetime = require('fibers.lifetime')
 local HostError = require('fibers.host.error')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 
 local IO = {}
 
@@ -64,10 +66,41 @@ function IO.require_scope(value, label)
   error(label .. ' must be a Scope', 3)
 end
 
-function IO.new_driver_task(scope, name, fn)
-  return Task._new(function(task_handle)
-    return scope:_run_child_body(fn, task_handle, { name = name })
-  end, name)
+-- Define, admit and start a domain Lifetime whose body runs in a private
+-- Scope.  This is the common ownership protocol used by host-backed facilities:
+-- the public value and its driver are two views of one Lifetime, and admission
+-- and task start commit together.
+function IO.admit_driven_lifetime_op(scope, value, spec)
+  spec = spec or {}
+  scope = IO.require_scope(scope, spec.label or 'driven Lifetime admission')
+  if type(spec.run) ~= 'function' then
+    error('driven Lifetime admission requires spec.run', 2)
+  end
+
+  Lifetime.define(value, {
+    name = assert(spec.name, 'driven Lifetime admission requires spec.name'),
+    role = assert(spec.role, 'driven Lifetime admission requires spec.role'),
+    closure = assert(spec.closure, 'driven Lifetime admission requires spec.closure'),
+    children = spec.children,
+  })
+  for _, state in ipairs(spec.causal_states or {}) do
+    Lifetime._mark_causal_state(value, state)
+  end
+
+  local private_scope = Scope.for_lifetime(value._lifetime)
+  local driver = Task._new(function()
+    return private_scope:run(spec.run)
+  end, spec.name, scope, { lifetime = value._lifetime, closure = scope.closure })
+  value.driver = driver
+
+  return scope
+    :admit_op(value)
+    :and_then(function()
+      return driver:spawn_effect_op()
+    end, false)
+    :map(function()
+      return value
+    end)
 end
 
 local function driver_exit_error(exit)

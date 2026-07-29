@@ -1,212 +1,116 @@
--- Scoped stream sockets.
---
--- This public facade contains address constructors and the practical Listener
--- and Dial entry points. Their implementations live in focused submodules.
+-- Scoped stream and datagram sockets.
 
 local Address = require('fibers.socket.address')
-local ListenerModule = require('fibers.socket.listener')
-local DialModule = require('fibers.socket.dial')
-local DatagramModule = require('fibers.socket.datagram')
-local ResolverModule = require('fibers.socket.resolver')
-local HappyEyeballsModule = require('fibers.socket.happy_eyeballs')
+local Listener = require('fibers.socket.listener')
+local Dial = require('fibers.socket.dial')
+local Datagram = require('fibers.socket.datagram')
+local Resolver = require('fibers.socket.resolver')
 local DNS = require('fibers.dns')
 local HostError = require('fibers.host.error')
-local IO = require('fibers.host.io')
 local perform = require('fibers.perform')
 
 local Socket = {
-  Listener = ListenerModule.Listener,
-  Dial = DialModule.Dial,
-  Query = ResolverModule.Query,
-  NamedDial = HappyEyeballsModule.NamedDial,
-  DatagramSocket = DatagramModule.DatagramSocket,
+  Listener = Listener.Listener,
+  Dial = Dial.Dial,
+  Query = Resolver.Query,
+  DatagramSocket = Datagram.DatagramSocket,
   Error = HostError,
   DNSResolver = DNS.Resolver,
+
+  ipv4_address = Address.ipv4,
+  ipv6_address = Address.ipv6,
+  name_endpoint = Address.name,
+  inet_address = Address.inet,
+  unix_address = Address.unix,
+  address_key = Address.key,
+  address_equal = Address.equal,
+  format_address = Address.display,
+  address_is_wildcard = Address.is_wildcard,
+  address_with_port = Address.with_port,
 }
 
 function Socket.dns_resolver(opts)
   return DNS.new(opts)
 end
 
-function Socket.ipv4_address(host, port)
-  return Address.ipv4(host, port)
+local function numeric(address, label)
+  if Address.is_name(address) then
+    error(label .. ' requires a numeric IPv4 or IPv6 address', 3)
+  end
+  return address
 end
-
-function Socket.ipv6_address(host, port, opts)
-  return Address.ipv6(host, port, opts)
-end
-
-function Socket.name_endpoint(host, service, opts)
-  return Address.name(host, service, opts)
-end
-
-function Socket.inet_address(host, port, opts)
-  return Address.inet(host, port, opts)
-end
-
-function Socket.unix_address(path)
-  return Address.unix(path)
-end
-
-Socket.address_key = Address.key
-Socket.address_equal = Address.equal
-Socket.format_address = Address.display
-Socket.address_is_wildcard = Address.is_wildcard
-Socket.address_with_port = Address.with_port
 
 function Socket.listen_op(address, opts)
-  return ListenerModule.listen_op(Address.validate(address, 'socket.listen_op'), opts)
+  return Listener.listen_op(Address.validate(address, 'socket.listen_op'), opts)
 end
 
 function Socket.listen_ipv4_op(host, port, opts)
-  return ListenerModule.listen_op(Address.ipv4(host, port), opts)
+  return Listener.listen_op(Address.ipv4(host, port), opts)
 end
 
 function Socket.listen_ipv6_op(host, port, opts)
-  return ListenerModule.listen_op(Address.ipv6(host, port, opts), opts)
+  return Listener.listen_op(Address.ipv6(host, port, opts), opts)
 end
 
 function Socket.listen_inet_op(host, port, opts)
-  local address = Address.inet(host, port, opts)
-  if Address.is_name(address) then
-    error('socket.listen_inet_op requires a numeric IPv4 or IPv6 address', 2)
-  end
-  return ListenerModule.listen_op(address, opts)
+  return Listener.listen_op(numeric(Address.inet(host, port, opts), 'socket.listen_inet_op'), opts)
 end
 
 function Socket.listen_unix_op(path, opts)
-  return ListenerModule.listen_op(Address.unix(path), opts)
+  return Listener.listen_op(Address.unix(path), opts)
 end
 
 function Socket.udp_op(address, opts)
-  return DatagramModule.udp_op(Address.validate(address, 'socket.udp_op'), opts)
+  return Datagram.udp_op(Address.validate(address, 'socket.udp_op'), opts)
 end
 
 function Socket.udp_ipv4_op(host, port, opts)
-  return DatagramModule.udp_op(Address.ipv4(host, port), opts)
+  return Datagram.udp_op(Address.ipv4(host, port), opts)
 end
 
 function Socket.udp_ipv6_op(host, port, opts)
-  return DatagramModule.udp_op(Address.ipv6(host, port, opts), opts)
+  return Datagram.udp_op(Address.ipv6(host, port, opts), opts)
 end
 
 function Socket.resolve_op(endpoint, opts)
-  return ResolverModule.resolve_op(Address.validate(endpoint, 'socket.resolve_op'), opts)
+  return Resolver.resolve_op(Address.validate(endpoint, 'socket.resolve_op'), opts)
 end
 
 function Socket.resolve_name_op(host, service, opts)
-  return ResolverModule.resolve_op(Address.name(host, service, opts), opts)
+  return Socket.resolve_op(Address.name(host, service, opts), opts)
 end
 
-function Socket.dial_name_op(host, service, opts)
-  return HappyEyeballsModule.dial_op(Address.name(host, service, opts), opts)
+-- One Dial constructor dispatches by endpoint kind. Name endpoints select the
+-- Happy Eyeballs strategy; numeric and Unix endpoints use the direct strategy.
+function Socket.dial_op(endpoint, opts)
+  return Dial.dial_op(Address.validate(endpoint, 'socket.dial_op'), opts)
 end
 
-function Socket.dial_op(address, opts)
-  return DialModule.dial_op(Address.validate(address, 'socket.dial_op'), opts)
-end
-
-function Socket.dial_ipv4_op(host, port, opts)
-  opts = IO.copy_table(opts)
-  if opts.bind_host ~= nil or opts.bind_port ~= nil then
-    opts.local_address = Address.ipv4(opts.bind_host or '0.0.0.0', opts.bind_port or 0)
+local function performing(name)
+  Socket[name] = function(...)
+    return perform(Socket[name .. '_op'](...))
   end
-  return DialModule.dial_op(Address.ipv4(host, port), opts)
 end
 
-function Socket.dial_ipv6_op(host, port, opts)
-  opts = IO.copy_table(opts)
-  if opts.bind_host ~= nil or opts.bind_port ~= nil then
-    opts.local_address = Address.ipv6(opts.bind_host or '::', opts.bind_port or 0, opts)
-  end
-  return DialModule.dial_op(Address.ipv6(host, port, opts), opts)
+for _, name in ipairs({
+  'listen',
+  'listen_ipv4',
+  'listen_ipv6',
+  'listen_inet',
+  'listen_unix',
+  'udp',
+  'udp_ipv4',
+  'udp_ipv6',
+  'resolve',
+  'resolve_name',
+  'dial',
+}) do
+  performing(name)
 end
 
-function Socket.dial_inet_op(host, port, opts)
-  opts = IO.copy_table(opts)
-  if opts.bind_host ~= nil or opts.bind_port ~= nil then
-    opts.local_address = Address.inet(opts.bind_host or '0.0.0.0', opts.bind_port or 0)
-  end
-  local address = Address.inet(host, port, opts)
-  if Address.is_name(address) then
-    error('socket.dial_inet_op requires a resolved IPv4 or IPv6 address; use socket.resolve first', 2)
-  end
-  return DialModule.dial_op(address, opts)
-end
-
-function Socket.dial_unix_op(path, opts)
-  return DialModule.dial_op(Address.unix(path), opts)
-end
-
-function Socket.listen(address, opts)
-  return perform(Socket.listen_op(address, opts))
-end
-
-function Socket.listen_ipv4(host, port, opts)
-  return perform(Socket.listen_ipv4_op(host, port, opts))
-end
-
-function Socket.listen_ipv6(host, port, opts)
-  return perform(Socket.listen_ipv6_op(host, port, opts))
-end
-
-function Socket.listen_inet(host, port, opts)
-  return perform(Socket.listen_inet_op(host, port, opts))
-end
-
-function Socket.listen_unix(path, opts)
-  return perform(Socket.listen_unix_op(path, opts))
-end
-
-function Socket.udp(address, opts)
-  return perform(Socket.udp_op(address, opts))
-end
-
-function Socket.udp_ipv4(host, port, opts)
-  return perform(Socket.udp_ipv4_op(host, port, opts))
-end
-
-function Socket.udp_ipv6(host, port, opts)
-  return perform(Socket.udp_ipv6_op(host, port, opts))
-end
-
-function Socket.resolve(endpoint, opts)
-  return perform(Socket.resolve_op(endpoint, opts))
-end
-
-function Socket.resolve_name(host, service, opts)
-  return perform(Socket.resolve_name_op(host, service, opts))
-end
-
-function Socket.dial_name(host, service, opts)
-  return perform(Socket.dial_name_op(host, service, opts))
-end
-
-function Socket.connect_name(host, service, opts)
-  opts = IO.copy_table(opts)
-  local target = opts.target or opts.scope
-  local dial = perform(Socket.dial_name_op(host, service, opts))
-  return dial:connect(target)
-end
-
-function Socket.dial(address, opts)
-  return perform(Socket.dial_op(address, opts))
-end
-
-function Socket.dial_ipv4(host, port, opts)
-  return perform(Socket.dial_ipv4_op(host, port, opts))
-end
-
-function Socket.dial_ipv6(host, port, opts)
-  return perform(Socket.dial_ipv6_op(host, port, opts))
-end
-
-function Socket.dial_inet(host, port, opts)
-  return perform(Socket.dial_inet_op(host, port, opts))
-end
-
-function Socket.dial_unix(path, opts)
-  return perform(Socket.dial_unix_op(path, opts))
+function Socket.connect(endpoint, opts)
+  local target = opts and opts.scope
+  return perform(Socket.dial_op(endpoint, opts)):connect(target)
 end
 
 return Socket

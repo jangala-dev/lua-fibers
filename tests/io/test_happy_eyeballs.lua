@@ -57,17 +57,51 @@ do
       close_server(listener, connection)
     end, 'happy-eyeballs-v6-server')
 
-    local connection, report = socket.connect_name('dual.test', actual.port)
+    local connection, report = socket.connect(socket.name_endpoint('dual.test', actual.port))
     assert_truthy(connection, tostring(report))
+    assert_eq(report.kind, 'dial')
+    assert_eq(report.strategy, 'happy_eyeballs_v2')
     assert_eq(report.status, 'connected')
     assert_eq(report.winner.family, 'inet6')
     assert_eq(#report.attempts, 1)
     assert_eq(report.attempts[1].address.port, actual.port)
+    assert_eq(report.destination_ordering, 'host')
+    assert_eq(report.maximum_active_attempts, report.maximum_candidates)
+    assert_eq(report.capacity_limited, false)
     connection:close('Happy Eyeballs client complete')
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
   result.runtime:assert_io_quiescent('Happy Eyeballs IPv6 winner')
+end
+
+-- RFC-conforming operation requires one global destination-ordering policy.
+-- Hosts without one fail explicitly; stable resolver order remains available
+-- only through a deliberate non-RFC opt-out.
+do
+  local host = SimulatedHost.new({
+    sockets = true,
+    resolver_records = {
+      ['ordering-required.test'] = { { kind = 'inet4', host = '127.0.0.1' } },
+    },
+  })
+  host.sort_destination_addresses = false
+
+  fibers.run(function()
+    local connection, err = socket.connect(socket.name_endpoint('ordering-required.test', 6553))
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'unsupported'))
+    assert_eq(err.action, 'sort_destination_addresses')
+    assert_eq(err.endpoint.host, 'ordering-required.test')
+
+    local stable_connection, stable_err =
+      socket.connect(socket.name_endpoint('ordering-required.test', 6553), {
+        destination_ordering = 'stable',
+      })
+    assert_eq(stable_connection, nil)
+    assert_truthy(HostError.is(stable_err, 'connect_failed'))
+    assert_eq(stable_err.report.destination_ordering, 'stable')
+  end, { host = host })
 end
 
 -- A global destination policy may prefer IPv4.  Both DNS family completions
@@ -90,7 +124,7 @@ do
       listener6:close('IPv4-first fixture complete')
     end, 'happy-eyeballs-v4-first-server')
 
-    local connection, report = socket.connect_name('ipv4-first.test', port, {
+    local connection, report = socket.connect(socket.name_endpoint('ipv4-first.test', port), {
       order_destinations = function(addresses)
         table.sort(addresses, function(left, right)
           if left.kind ~= right.kind then
@@ -127,7 +161,7 @@ do
       close_server(listener, connection)
     end, 'happy-eyeballs-v4-server')
 
-    local connection, report = socket.connect_name('fallback.test', actual.port, {
+    local connection, report = socket.connect(socket.name_endpoint('fallback.test', actual.port), {
       attempt_delay = 1.0,
     })
     assert_truthy(connection, tostring(report))
@@ -169,7 +203,7 @@ local function dynamic_resolution_case(aaaa_delay, resolution_delay, expected_fa
         return { socket.ipv4_address('127.0.0.1', endpoint.service) }
       end,
     }
-    local connection, report = socket.connect_name('dynamic.test', port, {
+    local connection, report = socket.connect(socket.name_endpoint('dynamic.test', port), {
       resolver = resolver,
       resolution_delay = resolution_delay,
       attempt_delay = 0.250,
@@ -203,12 +237,13 @@ do
   local dial_factory
   dial_factory = function(host, address, opts)
     if address.kind == 'inet6' then
-      local handle = { _connect_pending = true, _connect_complete = false }
+      local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
+      local readiness_key = {}
+      function handle:readiness_key()
+        return readiness_key
+      end
       function handle:bind_runtime(runtime)
         self.runtime = runtime
-      end
-      function handle:write_ready_op()
-        return Sleep.sleep_op(100)
       end
       function handle:finish_connect()
         return nil, nil, HostError.would_block('socket', 'connect', { address = address })
@@ -247,7 +282,7 @@ do
       end,
     }
 
-    local connection, report = socket.connect_name('stagger.test', port, {
+    local connection, report = socket.connect(socket.name_endpoint('stagger.test', port), {
       resolver = resolver,
       attempt_delay = 0.250,
     })
@@ -258,7 +293,7 @@ do
     assert_eq(report.attempts[1].started_at, 0)
     assert_eq(report.families.inet4.finished_at, 0.100)
     assert_eq(report.attempts[2].started_at, 0.250)
-    assert_eq(pending_closed, true, 'the losing pending socket is closed before connect_name returns')
+    assert_eq(pending_closed, true, 'the losing pending socket is closed before connect returns')
     connection:close('stagger client complete')
     server:await()
   end, { host = host })
@@ -287,7 +322,7 @@ do
       close_server(listener, connection)
     end, 'happy-eyeballs-first-family-server')
 
-    local connection, report = socket.connect_name('first-family.test', port, {
+    local connection, report = socket.connect(socket.name_endpoint('first-family.test', port), {
       first_family_count = 2,
       attempt_delay = 1.0,
     })
@@ -323,9 +358,8 @@ do
       close_server(listener, connection)
     end, 'happy-eyeballs-sorted-server')
 
-    local connection, report = socket.connect_name('sorted.test', port, {
-      sort_addresses = function(addresses, family)
-        assert_eq(family, 'inet6')
+    local connection, report = socket.connect(socket.name_endpoint('sorted.test', port), {
+      order_destinations = function(addresses)
         table.sort(addresses, function(left, right)
           return left.host < right.host
         end)
@@ -366,7 +400,7 @@ do
       end,
     }
 
-    local dial_op = socket.dial_name_op('inert.test', port, {
+    local dial_op = socket.dial_op(socket.name_endpoint('inert.test', port), {
       resolver = resolver,
       timeout = 0.500,
     })
@@ -399,9 +433,11 @@ do
     end
     handle._connect_pending = true
     handle._connect_complete = false
-    function handle:write_ready_op()
-      return Sleep.sleep_op(0.250)
-    end
+    handle:clear_writable()
+    fibers.spawn(function()
+      Sleep.sleep(0.250)
+      handle:mark_writable()
+    end, 'happy-eyeballs-boundary-readiness')
     function handle:finish_connect()
       self._connect_pending = false
       self._connect_complete = true
@@ -424,7 +460,7 @@ do
       listener6:close('boundary fixture complete')
     end, 'happy-eyeballs-boundary-server')
 
-    local connection, report = socket.connect_name('boundary.test', port, {
+    local connection, report = socket.connect(socket.name_endpoint('boundary.test', port), {
       attempt_delay = 0.250,
     })
     assert_truthy(connection, tostring(report))
@@ -450,7 +486,7 @@ do
     },
   })
   fibers.run(function()
-    local connection, err = socket.connect_name('dead.test', 6553, { attempt_delay = 1.0 })
+    local connection, err = socket.connect(socket.name_endpoint('dead.test', 6553), { attempt_delay = 1.0 })
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'connect_failed'))
     assert_truthy(err.report)
@@ -482,7 +518,8 @@ do
     return base_start_dial(self, address, opts)
   end
   fibers.run(function()
-    local value = fibers.perform(Op.always('winner'):or_else(socket.dial_name_op('unused.test', 80)))
+    local value =
+      fibers.perform(Op.always('winner'):or_else(socket.dial_op(socket.name_endpoint('unused.test', 80))))
     assert_eq(value, 'winner')
   end, { host = host })
   assert_eq(resolve_calls, 0)
@@ -510,7 +547,7 @@ do
       close_server(listener, connection)
     end, 'happy-eyeballs-stable-order-server')
 
-    local connection, report = socket.connect_name('stable-order.test', port, {
+    local connection, report = socket.connect(socket.name_endpoint('stable-order.test', port), {
       order_destinations = function(addresses)
         if not observed or #addresses > #observed then
           observed = {}
@@ -538,7 +575,7 @@ end
 do
   local host = SimulatedHost.new({ sockets = true, resolver_records = {} })
   fibers.run(function()
-    local ok, err = pcall(socket.dial_name_op, 'invalid-delay.test', 80, {
+    local ok, err = pcall(socket.dial_op, socket.name_endpoint('invalid-delay.test', 80), {
       attempt_delay = 0.009,
     })
     assert_eq(ok, false)
@@ -560,7 +597,7 @@ do
     },
   })
   fibers.run(function()
-    local connection, err = socket.connect_name('candidate-bound.test', 6553, {
+    local connection, err = socket.connect(socket.name_endpoint('candidate-bound.test', 6553), {
       attempt_delay = 0.010,
       maximum_candidates = 2,
     })
@@ -573,18 +610,77 @@ do
   end, { host = host })
 end
 
+-- The general profile has no second four-attempt ceiling. Every retained
+-- destination may start at its stagger time even while earlier sockets remain
+-- black-holed.
+do
+  local dial_calls, closed = 0, 0
+  local function pending_dial(_host, address)
+    dial_calls = dial_calls + 1
+    local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
+    local readiness_key = {}
+    function handle:readiness_key()
+      return readiness_key
+    end
+    function handle:bind_runtime(runtime)
+      self.runtime = runtime
+    end
+    function handle:finish_connect()
+      return nil, nil, HostError.would_block('socket', 'connect', { address = address })
+    end
+    function handle:close()
+      closed = closed + 1
+      return true
+    end
+    return handle
+  end
+
+  local host = SimulatedHost.new({
+    sockets = true,
+    resolver_records = {
+      ['default-active-bound.test'] = {
+        { kind = 'inet6', host = '::1' },
+        { kind = 'inet4', host = '127.0.0.1' },
+        { kind = 'inet6', host = '::2' },
+        { kind = 'inet4', host = '127.0.0.2' },
+        { kind = 'inet6', host = '::3' },
+      },
+    },
+    dial_factory = pending_dial,
+  })
+  local result = fibers.try_run(function()
+    local connection, err = socket.connect(socket.name_endpoint('default-active-bound.test', 443), {
+      attempt_delay = 0.010,
+      timeout = 0.055,
+    })
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'system'))
+    assert_eq(err.code, 'ETIMEDOUT')
+    assert_eq(dial_calls, 5, 'every retained candidate should start before the overall deadline')
+    assert_eq(#err.attempts, 5)
+    assert_eq(err.report.maximum_active_attempts, err.report.maximum_candidates)
+    assert_eq(err.report.capacity_limited, false)
+    assert_eq(err.report.unattempted_count, 0)
+    assert_eq(err.report.blocked_by_attempt_capacity, false)
+    assert_eq(closed, 5)
+  end, { host = host })
+  assert_truthy(result.ok, result:tostring())
+  result.runtime:assert_io_quiescent('Happy Eyeballs default active attempts')
+end
+
 -- Pending attempts are bounded. The default-connect-timeout option supplies the
 -- deadline, and timeout diagnostics contain summaries rather than live Dials.
 do
   local dial_calls, closed = 0, 0
   local function pending_dial(_host, address)
     dial_calls = dial_calls + 1
-    local handle = { _connect_pending = true, _connect_complete = false }
+    local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
+    local readiness_key = {}
+    function handle:readiness_key()
+      return readiness_key
+    end
     function handle:bind_runtime(runtime)
       self.runtime = runtime
-    end
-    function handle:write_ready_op()
-      return Sleep.sleep_op(100)
     end
     function handle:finish_connect()
       return nil, nil, HostError.would_block('socket', 'connect', { address = address })
@@ -609,10 +705,10 @@ do
     dial_factory = pending_dial,
   })
   local result = fibers.try_run(function()
-    local connection, err = socket.connect_name('active-bound.test', 443, {
+    local connection, err = socket.connect(socket.name_endpoint('active-bound.test', 443), {
       attempt_delay = 0.010,
       maximum_active_attempts = 2,
-      default_connect_timeout = 0.030,
+      timeout = 0.030,
     })
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'system'))
@@ -623,10 +719,79 @@ do
     assert_eq(err.attempts[1].dial, nil)
     assert_eq(err.attempts[2].dial, nil)
     assert_eq(err.report.maximum_active_attempts, 2)
+    assert_eq(err.report.capacity_limited, true)
+    assert_eq(err.report.unattempted_count, 2)
+    assert_eq(err.report.active_attempts, 2)
+    assert_eq(err.report.blocked_by_attempt_capacity, true)
+    assert_eq(err.blocked_by_attempt_capacity, true)
     assert_eq(closed, 2, 'bounded pending Dials should close before return')
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
   result.runtime:assert_io_quiescent('Happy Eyeballs active attempt bound')
+end
+
+-- A deliberately bounded host profile can recover liveness by giving each
+-- attempt its own absolute deadline. Slots are released after timeout, so later
+-- candidates are still admitted even when earlier sockets black-hole.
+do
+  local dial_calls, closed = 0, 0
+  local function pending_dial(_host, address)
+    dial_calls = dial_calls + 1
+    local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
+    local readiness_key = {}
+    function handle:readiness_key()
+      return readiness_key
+    end
+    function handle:bind_runtime(runtime)
+      self.runtime = runtime
+    end
+    function handle:finish_connect()
+      return nil, nil, HostError.would_block('socket', 'connect', { address = address })
+    end
+    function handle:close()
+      closed = closed + 1
+      return true
+    end
+    return handle
+  end
+
+  local host = SimulatedHost.new({
+    sockets = true,
+    resolver_records = {
+      ['attempt-timeout.test'] = {
+        { kind = 'inet6', host = '::1' },
+        { kind = 'inet4', host = '127.0.0.1' },
+        { kind = 'inet6', host = '::2' },
+      },
+    },
+    dial_factory = pending_dial,
+  })
+  local result = fibers.try_run(function()
+    local connection, err = socket.connect(socket.name_endpoint('attempt-timeout.test', 443), {
+      attempt_delay = 0.010,
+      maximum_active_attempts = 1,
+      attempt_timeout = 0.015,
+      timeout = 0.100,
+    })
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'connect_failed'))
+    assert_eq(dial_calls, 3, 'per-attempt deadlines should release the slot for every candidate')
+    assert_eq(closed, 3)
+    assert_eq(#err.attempts, 3)
+    for i = 1, #err.attempts do
+      assert_eq(err.attempts[i].status, 'failed')
+      assert_eq(err.attempts[i].error.code, 'ETIMEDOUT')
+      assert_truthy(err.attempts[i].deadline ~= nil)
+    end
+    assert_eq(err.report.maximum_active_attempts, 1)
+    assert_eq(err.report.attempt_timeout, 0.015)
+    assert_eq(err.report.capacity_limited, true)
+    assert_eq(err.report.unattempted_count, 0)
+    assert_eq(err.report.active_attempts, 0)
+    assert_eq(err.report.blocked_by_attempt_capacity, false)
+  end, { host = host })
+  assert_truthy(result.ok, result:tostring())
+  result.runtime:assert_io_quiescent('Happy Eyeballs per-attempt timeout')
 end
 
 print('tests/io/test_happy_eyeballs.lua: ok')

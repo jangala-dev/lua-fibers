@@ -1,6 +1,6 @@
-# Happy Eyeballs v2 named connections
+# Happy Eyeballs v2 connection strategy
 
-`socket.connect_name` combines incremental A and AAAA resolution with staggered
+`socket.connect` on a name endpoint combines incremental A and AAAA resolution with staggered
 IPv6 and IPv4 connection attempts. Resolution, candidate arrival, attempt
 completion and delay expiry remain independent events. The first successful
 Stream moves into the caller's Scope; the private race Scope closes every
@@ -9,9 +9,10 @@ resolver query, losing Dial and losing Stream before the call returns.
 ```lua
 local socket = require('fibers.socket')
 
-local connection, report = socket.connect_name('example.org', 443, {
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
   resolution_delay = 0.050,
   attempt_delay = 0.250,
+  order_destinations = application_destination_order,
 })
 assert(connection, report)
 ```
@@ -53,20 +54,24 @@ succeeds at the exact stagger deadline suppresses a second launch.
 Candidate admission composes the Scalar selection, `socket.dial_op` admission
 and the active-attempt state update in one option. The transaction allocates no
 file descriptor speculatively: the numeric Dial starts its non-blocking socket
-work only after admission commits. Attempt completion similarly combines the
-Dial's custody transfer with the winner or failure state transition.
+work only after admission commits. Each numeric attempt exposes its definitive
+connect result as a one-shot reactor-owned external offer. Attempt completion
+then combines the Dial's custody transfer with the winner or failure state
+transition. Because completion is an observed external fact rather than a
+future task supplier, a result already visible at the stagger or attempt deadline
+correctly defeats the fallback timer.
 
-The effectful coordinator is deliberately small. Pure ordering and reporting
-policy is kept in `fibers.internal.socket.happy_eyeballs_policy`; the race module
-contains the transitions and the prioritised expression above.
+The public facility is the ordinary `Dial`; Happy Eyeballs is the strategy selected
+for a name endpoint. Its implementation lives under `fibers.socket.dial.named`,
+with the transactional coordinator in `fibers.socket.dial.named.state`. These are
+socket-subsystem implementation modules rather than runtime internals.
 
-## Named Dials under custody
+## One Dial type under custody
 
-`socket.dial_name_op` admits a `NamedDial` Lifetime and starts its private driver
-after the option commits:
+`socket.dial_op` admits the ordinary `Dial` Lifetime and selects the named strategy from the endpoint kind:
 
 ```lua
-local dial = fibers.perform(socket.dial_name_op('example.org', 443))
+local dial = fibers.perform(socket.dial_op(socket.name_endpoint('example.org', 443)))
 local connection, report = dial:connect()
 assert(connection, report)
 ```
@@ -83,10 +88,10 @@ local closed, close_err = fibers.perform(dial:closed_op())
 
 `connected_op` is success-only. `failed_op` observes terminal failure.
 `result_op` combines them through certified fallback. A successful connection
-which has not yet been collected remains in the named Dial's private Scope custody.
+which has not yet been collected remains in the Dial's private Scope custody.
 Closing the Dial cancels resolution and every outstanding numeric Dial.
 
-There is deliberately no `connect_name_op`. Starting the private driver is a
+There is deliberately no `connect_op`. Starting the private driver is a
 committed effect; its later connection result cannot be required by the same
 transaction which admits that driver. The public split is therefore the same as
 other effectful facilities: an option admits the handle under custody, then its result
@@ -94,7 +99,7 @@ operations participate in subsequent choices.
 
 ## Resolver integration
 
-The named Dial consumes `Query:family_finished_op` independently for `inet6`
+The named strategy consumes `Query:family_finished_op` independently for `inet6`
 and `inet4`. It does not wait for the resolver's combined terminal list.
 Candidates therefore remain dynamic, including addresses which arrive after one
 or more connection attempts have started.
@@ -108,13 +113,13 @@ local resolver = socket.dns_resolver({
   },
 })
 
-local connection, report = socket.connect_name('example.org', 443, {
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
   resolver = resolver,
 })
 ```
 
 The DNS selection options accepted by `socket.resolve_name` are also accepted by
-`socket.connect_name`: `dns`, `nameservers`, `nameserver`,
+`socket.connect` for a name endpoint: `dns`, `nameservers`, `nameserver`,
 `resolver_options` and `require_nonblocking`.
 
 ## Candidate policy
@@ -129,16 +134,27 @@ Routing and source-address-sensitive RFC 6724 policy is injected rather than
 guessed by the coordinator:
 
 ```lua
-local connection, report = socket.connect_name('example.org', 443, {
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
   order_destinations = function(addresses, endpoint, opts)
     return application_destination_order(addresses, endpoint, opts)
   end,
 })
 ```
 
-A host may instead provide `sort_destination_addresses`. The older
-`sort_addresses(addresses, family, endpoint, opts)` hook remains as a
-per-family compatibility policy when no global policy is supplied.
+A host may instead provide `sort_destination_addresses`. One of these global
+policies is required by default: the coordinator does not invent a portable
+RFC 6724 ranking from address family alone. A host which cannot supply routing
+and source-address-aware ordering may opt in explicitly to stable resolver
+order:
+
+```lua
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
+  destination_ordering = 'stable',
+})
+```
+
+This is reported as `destination_ordering = 'stable'` and is an intentional
+non-RFC fallback, not an implicit claim of RFC 6724 compliance.
 
 Ordering callbacks participate in guarded option construction. They therefore
 must be immediate, deterministic, non-yielding and side-effect free. Fibers
@@ -164,9 +180,10 @@ The principal options are:
   timeout = 10.0,
   -- timeout = false, -- disable the deadline
   -- deadline = absolute_monotonic_time,
-  default_connect_timeout = 30.0,
   maximum_candidates = 64,
-  maximum_active_attempts = 4,
+  -- By default maximum_active_attempts equals maximum_candidates.
+  -- maximum_active_attempts = 4, -- explicit bounded-host profile
+  -- attempt_timeout = 2.0,       -- releases a bounded slot after this interval
 
   nodelay = true,
   local_address_inet6 = socket.ipv6_address('::', 0),
@@ -174,21 +191,31 @@ The principal options are:
 
   resolver = resolver,
   resolver_options = {},
-  dial_options = {},
 }
 ```
 
-A relative `timeout` begins when the admitted named-Dial driver starts. When no
-explicit timeout or deadline is supplied, `default_connect_timeout` applies and
-defaults to 30 seconds; set `timeout = false` or `default_connect_timeout = false`
-to disable it. An absolute `deadline` uses the Runtime's monotonic clock. RFC
+A relative `timeout` begins when the admitted Dial driver starts and defaults to
+30 seconds when omitted. Set `timeout = false` to disable it. An absolute `deadline` uses the Runtime's monotonic clock. RFC
 8305's 10 millisecond minimum connection-attempt delay is enforced.
 
 `maximum_candidates` bounds retained DNS destinations and defaults to 64; the
-report records any dropped candidates. `maximum_active_attempts` bounds pending
-numeric Dials and defaults to four. Family-specific local addresses avoid
-applying an IPv4 bind address to an IPv6 attempt or the reverse. Ordinary Stream
-capacity and chunk-size options are forwarded to each numeric Dial.
+report records any dropped candidates. In the general profile,
+`maximum_active_attempts` defaults to that same bound, so a black-holed earlier
+connection does not prevent later candidates from being launched at their
+stagger times merely because four attempts are already pending. A constrained
+host may set a smaller explicit bound.
+
+A smaller active-attempt bound is an explicit resource/liveness trade-off. Use
+`attempt_timeout` to give every numeric Dial an absolute per-attempt deadline; a
+timed-out Dial fails, closes and releases its slot so the next candidate can be
+admitted. Without an attempt timeout, a full set of black-holed attempts may
+hold every slot until the overall deadline. Reports expose
+`capacity_limited`, `unattempted_count`, `active_attempts` and
+`blocked_by_attempt_capacity` so this condition is observable.
+
+Family-specific local addresses avoid applying an IPv4 bind address to an IPv6
+attempt or the reverse. Ordinary Stream capacity and chunk-size options are
+forwarded to each numeric Dial.
 
 ## Reports and failures
 
@@ -196,8 +223,13 @@ Success returns a report alongside the Stream:
 
 ```lua
 {
-  kind = 'happy_eyeballs_v2',
+  kind = 'dial',
+  strategy = 'happy_eyeballs_v2',
   status = 'connected',
+  destination_ordering = 'host',
+  maximum_candidates = 64,
+  maximum_active_attempts = 64,
+  capacity_limited = false,
   winner = {
     address = address,
     family = 'inet6',
@@ -219,7 +251,7 @@ Success returns a report alongside the Stream:
 }
 ```
 
-On terminal failure, `connect_name` returns `nil, err`; the same report is
+On terminal failure, `connect` returns `nil, err`; the same report is
 available as `err.report`. Individual attempt errors are retained. Resolver
 errors are returned directly when no connection attempt could be made;
 otherwise terminal exhaustion is reported as `connect_failed` with the attempt
@@ -233,7 +265,7 @@ conformance tests rather than as a persistent serialisation format.
 The internal custody tree is:
 
 ```text
-NamedDial
+Dial (strategy: happy_eyeballs_v2)
 └── private driver scope
     ├── resolver Query
     ├── numeric Dial 1
@@ -242,7 +274,7 @@ NamedDial
 ```
 
 The winning numeric Dial first moves its Stream into the private driver scope.
-Collecting the named result then moves that Stream into the caller's target
+Collecting the Dial result then moves that Stream into the caller's target
 scope. Every other resource remains in the private tree and is closed through
 ordinary Closure. This prevents a late successful attempt from leaking a
 socket after another attempt has already won.

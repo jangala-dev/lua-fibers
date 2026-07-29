@@ -12,10 +12,7 @@ local Completion = require('fibers.resource.completion')
 local HostError = require('fibers.host.error')
 local DNSResolver = require('fibers.dns.resolver')
 local IO = require('fibers.host.io')
-local Lifetime = require('fibers.lifetime')
-local Task = require('fibers.task')
-local Scope = require('fibers.scope')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 
@@ -55,10 +52,7 @@ function Query:family_failed_op(family)
 end
 
 function Query:family_result_op(family)
-  local completion = family_completion(self, family)
-  return completion:success_op():or_else(completion:failure_op():map(function(err)
-    return nil, err
-  end))
+  return family_completion(self, family):result_op()
 end
 
 function Query:family_finished_op(family)
@@ -73,6 +67,13 @@ local function terminal_values(state)
   end
   local values = state.values
   return values and values[1] or state.value
+end
+
+function Query:_families_op()
+  return Op.named_all({
+    inet6 = self:family_finished_op('inet6'),
+    inet4 = self:family_finished_op('inet4'),
+  })
 end
 
 local function combine_family_states(query, families)
@@ -110,10 +111,7 @@ local function combine_family_states(query, families)
 end
 
 function Query:result_op()
-  return Op.named_all({
-    inet6 = self:family_finished_op('inet6'),
-    inet4 = self:family_finished_op('inet4'),
-  }):map(function(families)
+  return self:_families_op():map(function(families)
     return combine_family_states(self, families)
   end)
 end
@@ -137,10 +135,7 @@ function Query:failed_op()
 end
 
 function Query:state_op()
-  return Op.named_all({
-    inet6 = self:family_finished_op('inet6'),
-    inet4 = self:family_finished_op('inet4'),
-  }):map(function(families)
+  return self:_families_op():map(function(families)
     local addresses, err = combine_family_states(self, families)
     if addresses then
       return { kind = 'succeeded', value = addresses, families = families }
@@ -168,10 +163,7 @@ function Query:close_op(reason)
 end
 
 function Query:closed_op()
-  local terminal = Op.named_all({
-    inet6 = self:family_finished_op('inet6'),
-    inet4 = self:family_finished_op('inet4'),
-  }):map(function()
+  local terminal = self:_families_op():map(function()
     return true
   end)
   return IO.closed_after_driver_op(self.driver, terminal)
@@ -485,7 +477,6 @@ function Module.resolve_op(endpoint, opts)
   local scope = IO.current_scope(opts, 'socket.resolve_op')
   next_query = next_query + 1
   local name = opts.name or ('resolver-query-' .. tostring(next_query))
-  local driver_parent = IO.require_scope(scope, 'socket.resolve_op')
   local query = setmetatable({
     kind = 'resolver_query',
     name = name,
@@ -494,16 +485,18 @@ function Module.resolve_op(endpoint, opts)
       inet6 = Completion.new(name .. ':inet6'),
       inet4 = Completion.new(name .. ':inet4'),
     },
-    driver = nil,
   }, Query)
-  Lifetime.define(query, {
+
+  return IO.admit_driven_lifetime_op(scope, query, {
+    label = 'socket.resolve_op',
     name = name,
     role = 'resolver_query',
     closure = query_closure(query),
-  })
-  local private_scope = Scope.for_lifetime(query._lifetime)
-  query.driver = Task._new(function()
-    return private_scope:run(function()
+    causal_states = {
+      query.family_completions.inet6.state,
+      query.family_completions.inet4.state,
+    },
+    run = function()
       local ok, err = Protected.pcall(drive, query, opts)
       if ok then
         return
@@ -513,17 +506,8 @@ function Module.resolve_op(endpoint, opts)
         return
       end
       error(err, 0)
-    end)
-  end, name, driver_parent, { lifetime = query._lifetime, closure = driver_parent.closure })
-
-  return scope
-    :admit_op(query)
-    :and_then(function()
-      return query.driver:spawn_effect_op()
-    end, false)
-    :map(function()
-      return query
-    end)
+    end,
+  })
 end
 
 function Query:family_addresses(family)

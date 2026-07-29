@@ -14,6 +14,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
+local Scalar = require('fibers.resource.scalar')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
@@ -151,10 +152,9 @@ if result ~= 'a' and result ~= 'b' then
   error('bounded search did not resume to a valid result', 2)
 end
 
--- A locally certified fallback must not commit while another eligible focus is
--- still Unknown. The removed preferred-only driver phase formerly enforced
--- this globally; the ordinary driver now applies the same rule when selecting
--- negative candidates.
+-- Unknown blocks fallback only inside the dependency component whose preferred
+-- absence it may invalidate. An unrelated expensive proof must not impose a
+-- runtime-wide liveness barrier.
 do
   local unknown_rt = Runtime.new({
     machine = 'ledger',
@@ -165,15 +165,15 @@ do
   local fallback_result
   unknown_rt:spawn_raw(function()
     fallback_result = unknown_rt:perform(Op.never():or_else(Op.always('fallback')))
-  end, 'unknown-blocks-fallback')
+  end, 'independent-unknown-fallback')
 
   local worker_count, workers = 8, {}
   for worker = 1, worker_count do
-    workers[worker] = Rendezvous.new('unknown-worker-' .. tostring(worker))
+    workers[worker] = Rendezvous.new('independent-unknown-worker-' .. tostring(worker))
     local index = worker
     unknown_rt:spawn_raw(function()
       unknown_rt:perform(workers[index]:get_op())
-    end, 'unknown-worker-' .. tostring(worker))
+    end, 'independent-unknown-worker-' .. tostring(worker))
   end
   unknown_rt:spawn_raw(function()
     local jobs = {}
@@ -185,13 +185,56 @@ do
       jobs[job] = Op.choice(choices)
     end
     unknown_rt:perform(Op.all(jobs))
-  end, 'unknown-positive-focus')
+  end, 'independent-unknown-positive-focus')
 
-  local unknown_status = unknown_rt:run()
-  eq(unknown_status.tag, 'pending')
-  eq(unknown_status.kind, 'budget')
-  eq(unknown_status.reason, 'search_quantum')
-  eq(fallback_result, nil, 'Unknown positive work must keep fallback uncommitted')
+  local first = unknown_rt:run()
+  eq(first.tag, 'found')
+  eq(fallback_result, 'fallback', 'independent Unknown work must not block local fallback')
+  local remaining = unknown_rt:run()
+  eq(remaining.tag, 'pending')
+  eq(remaining.kind, 'budget')
+end
+
+-- The same bounded uncertainty still blocks fallback when it belongs to the
+-- same dependency component. The declared gate read recruits the expensive
+-- positive focus because it could invalidate the gate-based absence proof.
+do
+  local unknown_rt = Runtime.new({
+    machine = 'ledger',
+    search_limit = 10,
+    plan_reuse = false,
+    instrumentation = true,
+  })
+  local gate = Scalar.new('closed', 'component-unknown-gate')
+  local fallback_result
+  unknown_rt:spawn_raw(function()
+    fallback_result = unknown_rt:perform(gate:expect_op('open'):or_else(Op.always('fallback')))
+  end, 'component-unknown-fallback')
+
+  local worker_count, workers = 8, {}
+  for worker = 1, worker_count do
+    workers[worker] = Rendezvous.new('component-unknown-worker-' .. tostring(worker))
+    local index = worker
+    unknown_rt:spawn_raw(function()
+      unknown_rt:perform(workers[index]:get_op())
+    end, 'component-unknown-worker-' .. tostring(worker))
+  end
+  unknown_rt:spawn_raw(function()
+    local jobs = { gate:read_op() }
+    for job = 1, worker_count do
+      local choices = {}
+      for worker = 1, worker_count do
+        choices[worker] = workers[worker]:put_op(job)
+      end
+      jobs[#jobs + 1] = Op.choice(choices)
+    end
+    unknown_rt:perform(Op.all(jobs))
+  end, 'component-unknown-positive-focus')
+
+  local status = unknown_rt:run()
+  eq(status.tag, 'pending')
+  eq(status.kind, 'budget')
+  eq(fallback_result, nil, 'same-component Unknown must keep fallback uncommitted')
   local snapshot = unknown_rt:instrumentation_report()
   if (snapshot.counters.fallback_transitions or 0) == 0 then
     error('test did not construct a fallback candidate', 2)

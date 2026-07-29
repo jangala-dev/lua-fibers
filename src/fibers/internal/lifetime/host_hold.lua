@@ -9,6 +9,7 @@ local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local HostError = require('fibers.host.error')
 local IOAudit = require('fibers.diagnostics.io')
+local Protected = require('fibers.protected')
 
 local HostHold = {}
 HostHold.__index = HostHold
@@ -124,6 +125,41 @@ function HostHold:release(key, expected)
   self.taken[key] = true
   IOAudit.release(rec.value, self)
   return rec.value
+end
+
+-- Remove and close one held value without disturbing sibling entries.  This is
+-- used when conversion of one host-owned offer into its public Lifetime fails:
+-- the failed value must be resolved, but the source hold must remain live for
+-- other queued offers.
+function HostHold:discard(key, expected, reason)
+  local rec = self.values[key]
+  if not rec then
+    return nil, HostError.protocol('host_hold', 'discard', 'host-hold key is empty', { key = key })
+  end
+  if expected ~= nil and rec.value ~= expected then
+    return nil, HostError.protocol('host_hold', 'discard', 'host-hold value mismatch', { key = key })
+  end
+
+  self.values[key] = nil
+  self.taken[key] = true
+  IOAudit.release(rec.value, self)
+
+  local called, ok, err = Protected.pcall(close_value, rec.value, rec.close, reason or 'host value discarded')
+  if not called then
+    return nil,
+      HostError.protocol('host_hold', 'discard', 'held value close raised', {
+        key = key,
+        cause = ok,
+      })
+  end
+  if not ok then
+    return nil,
+      HostError.protocol('host_hold', 'discard', 'held value failed to close', {
+        key = key,
+        cause = err,
+      })
+  end
+  return true
 end
 
 function HostHold:release_all()

@@ -99,4 +99,4 @@ This is a stub resolver which depends on a configured recursive server. It does
 not perform iterative recursion, DNSSEC validation, mDNS, LLMNR, DNS over TLS or
 DNS over HTTPS. It currently resolves numeric service ports only. Address
 ordering and connection racing remain responsibilities of
-[`socket.connect_name`](happy-eyeballs.md) rather than the DNS layer.
+[`socket.connect`](happy-eyeballs.md) rather than the DNS layer.

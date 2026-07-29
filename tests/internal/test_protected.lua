@@ -24,14 +24,33 @@ local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local FibersTask = require('fibers.task')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
+local ProtectedInternal = require('fibers.internal.protected')
 
 local expected_native = rawget(_G, '__FIBERS_PROTECTED_EXPECT_NATIVE')
 if expected_native ~= nil then
   test('selected protected-call path matches the isolated runner', function()
-    eq(Protected.using_native(), expected_native)
+    eq(ProtectedInternal.using_native(), expected_native)
   end)
 end
+
+test('fibers.protected exposes the same yieldable call contract for libraries', function()
+  local protected_ok, got
+  local st = fibers.try_run(function()
+    local ch = FibersRendezvous.new('protected-module-rendezvous')
+    fibers.spawn(function()
+      fibers.perform(ch:put_op('module-ok'))
+    end, 'module-sender')
+
+    protected_ok, got = Protected.pcall(function()
+      return fibers.perform(ch:get_op())
+    end)
+  end).runtime_status
+
+  eq(st.tag, 'found')
+  eq(protected_ok, true)
+  eq(got, 'module-ok')
+end)
 
 test('fibers.pcall permits perform to suspend and resume', function()
   local protected_ok, got

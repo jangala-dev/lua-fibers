@@ -382,7 +382,7 @@ Scalar also supports typed state-machine transitions for facilities whose rules 
 
 `fibers.pulse` provides coalescing change notification. `fibers.mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies.
 
-`fibers.resource.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. All host-backed directions in one Runtime share one indexed poller and one lazily created reactor rather than allocating one task per direction.
+`fibers.resource.flow` is the transactional byte-building block: it provides backpressure, exact and incrementally scanned delimiter reads, closure, data leases and producer-side capacity leases. `fibers.stream` builds readable, writable or duplex facilities from one or two Flows. Committed Flow changes notify host service through a deduplicated post-commit effect. The same indexed reactor publishes bounded host-owned offers for accepted connections, connection completions and received datagrams. All host-backed directions and offer sources in one Runtime share one poller and one lazily created reactor rather than allocating one task per registration.
 
 ### Pipes
 
@@ -477,7 +477,7 @@ connection attempt from observing or composing its eventual result:
 local socket = require('fibers.socket')
 
 local listener = assert(socket.listen_ipv4('127.0.0.1', 8080))
-local dial = socket.dial_ipv4('127.0.0.1', 8080)
+local dial = socket.dial(socket.ipv4_address('127.0.0.1', 8080))
 local connection, err = dial:result()
 ```
 
@@ -495,10 +495,14 @@ local dial = socket.dial(addresses[1])
 The ordinary named connection API consumes A and AAAA results incrementally and
 runs staggered Happy Eyeballs v2 attempts. Attempt outcomes, DNS completions and
 admission timers form one prioritised option expression over a transactional
-race state:
+race state. Destination ordering comes from a required host or application
+policy; bounded hosts may combine an explicit active-attempt limit with a
+per-attempt timeout so black-holed sockets release capacity:
 
 ```lua
-local connection, report = socket.connect_name('example.org', 443)
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
+  order_destinations = application_destination_order,
+})
 assert(connection, report)
 ```
 

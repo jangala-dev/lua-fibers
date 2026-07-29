@@ -152,7 +152,7 @@ function Index:atom(kind, object, qualifier)
   return self.pool:intern(kind, object, qualifier)
 end
 
-function Index:_plan(metadata)
+function Index:_plan(metadata, request)
   local memberships, component_atoms, wide_pairs = {}, {}, {}
   local membership_seen, component_seen = {}, {}
   add_unique(memberships, membership_seen, self.all_requests)
@@ -185,6 +185,31 @@ function Index:_plan(metadata)
     if supplies.any then
       add_unique(memberships, membership_seen, self:atom('supply', location, 'any'))
     end
+
+    -- A Lifetime outcome is not merely another scalar: an operation currently
+    -- running inside that Lifetime's Scope may causally advance it through
+    -- several intermediate commits before the outcome is published.  Model the
+    -- observer side as a directional exchange.  The opposite producer role is
+    -- attached below to pending requests in the corresponding Scope.
+    local completion = rawget(location, '_fibers_causal_lifetime')
+      or rawget(location, '_fibers_completion_lifetime')
+    if completion ~= nil then
+      add_unique(memberships, membership_seen, self:atom('exchange', completion, 'get'))
+      add_unique(component_atoms, component_seen, self:atom('exchange', completion, 'put'))
+    end
+  end
+
+  -- Every pending operation in a Scope is a possible next causal step towards
+  -- that Scope Lifetime's terminal outcome.  Producers use one directional
+  -- role, so they are not connected to one another in ordinary component
+  -- searches.  They are recruited only when an outcome observer contributes
+  -- the opposite role.  This preserves local fallback liveness whilst retaining
+  -- the positive-before-fallback rule for genuine completion dependencies.
+  local scope = request and request.scope
+  local completion = scope and scope._lifetime
+  if completion ~= nil then
+    add_unique(memberships, membership_seen, self:atom('exchange', completion, 'put'))
+    add_unique(component_atoms, component_seen, self:atom('exchange', completion, 'get'))
   end
 
   for resource in pairs(metadata.resources or {}) do
@@ -203,7 +228,7 @@ function Index:add(request, metadata)
   end
   metadata = metadata or request.metadata or IR.metadata(request.op)
   request.metadata = request.metadata or IR.metadata(request.op)
-  local plan = self:_plan(metadata)
+  local plan = self:_plan(metadata, request)
   plan.metadata = metadata
   request._dependency_plan = plan
   self.size = self.size + 1

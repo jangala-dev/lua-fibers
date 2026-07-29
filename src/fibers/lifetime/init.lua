@@ -135,6 +135,13 @@ function Lifetime.new(name, opts)
     closure_state = opts.closure_state or initial_closure_state(),
     offers = opts.offers,
   }, Node)
+  -- The dependency index uses this marker to connect an observer of a
+  -- Lifetime's terminal outcome to the currently pending operations which can
+  -- make that outcome true.  This is a directional causal edge, not a
+  -- transactional data dependency: producers in the same Scope do not become
+  -- mutually dependent unless an outcome observer is present.
+  node.outcome._location._fibers_completion_lifetime = node
+
   if node.value ~= nil then
     if type(node.value) ~= 'table' then
       error('a Lifetime domain value must be a table', 2)
@@ -163,6 +170,20 @@ end
 
 function Lifetime.require(value, level)
   return node_for(value, level or 3)
+end
+
+-- Mark a transactional state location as an observable consequence of a
+-- Lifetime's running body.  Component arbitration uses this directional causal
+-- relation to let the responsible body make progress before an observer takes a
+-- certified fallback.  It does not merge unrelated producer requests.
+function Lifetime._mark_causal_state(value, state)
+  local node = node_for(value, 3)
+  local location = state and state._location
+  if not location then
+    error('Lifetime causal state must expose a transactional location', 2)
+  end
+  location._fibers_causal_lifetime = node
+  return state
 end
 
 -- Attach exactly one dormant Lifetime to a domain value. Definitions are

@@ -11,7 +11,7 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
-local Protected = require('fibers.internal.protected')
+local Protected = require('fibers.protected')
 local Keyed = require('fibers.resource.keyed')
 
 local Phase = {}

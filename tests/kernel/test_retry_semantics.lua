@@ -1,8 +1,8 @@
 -- Adversarial Retry-proof tests for semantic or_else fallbacks over resources.
 --
--- These cases are deliberately not rendezvous-only.  They make a fallback tempting
--- while another root can still make the preferred resource/task/flow path true
--- by committing first.  A too-local or_else commits "fallback" in these tests.
+-- These cases are deliberately not rendezvous-only. They make a fallback tempting
+-- while causally related work can still make the preferred resource, task or Flow
+-- path true. An under-recruited dependency component commits "fallback" here.
 
 package.path = table.concat({
   './src/?.lua',

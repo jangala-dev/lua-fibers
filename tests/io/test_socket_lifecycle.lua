@@ -22,7 +22,7 @@ local ListenerLifecycle = Lifecycle.define({
   start_failed_reason = 'listener start failed',
   closed_reason = 'listener closed',
 })
-local DialLifecycle = require('fibers.socket.dial_lifecycle')
+local DialLifecycle = require('fibers.socket.dial.lifecycle')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then

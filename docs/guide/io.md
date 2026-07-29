@@ -145,9 +145,10 @@ stream:read_op('*a', { max = 1024 * 1024 })
 
 ## Processes
 
-`fibers.process` separates an captured command specification from the running Process Lifetime. A Process is one Lifetime shared by its domain, Task and private
-Scope views; direct-wait, reaper and other host strategies sit beneath one
-validated provider boundary:
+`fibers.process` separates a captured command specification from the running
+Process Lifetime. A Process is one Lifetime shared by its domain, Task and
+private Scope views; pidfd, status-pipe and polling exit strategies sit beneath
+one validated provider boundary:
 
 ```lua
 local process = require('fibers.process')
@@ -283,8 +284,10 @@ proc:closed_op()
 The direct `terminate()`, `kill()` and `signal()` methods perform their request
 options. `close(reason)` performs `request_close_op(reason)` and then waits for
 `closed_op()`. The supervisor closes stdin, waits for the grace interval,
-escalates where necessary, reaps the child, and finishes its Streams and driver Task. Scope Closure invokes the same protocol, and inability to signal, reap
-or close remains visible in the scope report.
+escalates where necessary, observes the reactor-owned exit completion, and
+finishes its Streams and supervisor Task. Scope Closure invokes the same
+protocol, and inability to signal, reap or close remains visible in the scope
+report.
 
 Commands which may create descendants should normally request a new process
 group and target that group during shutdown:
@@ -357,11 +360,11 @@ construction.
 Outbound connection establishment is deliberately two-stage:
 
 ```lua
-local dial = socket.dial_inet('127.0.0.1', 8080)
+local dial = socket.dial(socket.inet_address('127.0.0.1', 8080))
 local connection, err = dial:result()
 
 -- Explicit composable form:
-local selected_dial = fibers.perform(socket.dial_inet_op('127.0.0.1', 8080))
+local selected_dial = fibers.perform(socket.dial_op(socket.inet_address('127.0.0.1', 8080)))
 local selected, selected_err = fibers.perform(selected_dial:result_op())
 ```
 
@@ -466,49 +469,61 @@ not yet validate DNSSEC.
 Named connections use the two independently closed family results directly:
 
 ```lua
-local connection, report = socket.connect_name('example.org', 443, {
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
   resolver = resolver,
   resolution_delay = 0.050,
   attempt_delay = 0.250,
   maximum_candidates = 64,
-  maximum_active_attempts = 4,
+  -- maximum_active_attempts defaults to maximum_candidates
+  -- maximum_active_attempts = 4, -- bounded-host override
+  -- attempt_timeout = 2.0,
 })
 assert(connection, report)
 ```
 
-`socket.connect_name` implements the Happy Eyeballs v2 coordination loop as a
+`socket.connect` on a name endpoint implements the Happy Eyeballs v2 coordination loop as a
 Machine. Attempt outcomes, DNS completions and timer/admission
 progress are composed as `outcomes:or_else(sources:or_else(progress))`. New
 addresses may join the globally ordered unattempted set after numeric Dials have
-begun. The first successful Stream moves into the caller's scope, and the call
-returns only after
-the private race has closed every losing query, Dial and Stream. Use
-`socket.dial_name_op` when admission itself must participate in a choice, then
-select from the returned `NamedDial` lifecycle. See
+begun. A host or application global destination-ordering policy is required by
+default; `destination_ordering = 'stable'` is the explicit portable non-RFC
+fallback. The general profile does not impose a second four-attempt cap:
+`maximum_active_attempts` defaults to `maximum_candidates`. Constrained profiles
+may lower it and use `attempt_timeout` to release slots held by black-holed
+connections. The first successful Stream moves into the caller's scope, and the
+call returns only after
+the private race has closed every losing query, Dial and Stream. Use `socket.dial_op` when admission itself must participate in a choice, then
+select from the returned `Dial` lifecycle. See
 [`docs/guide/happy-eyeballs.md`](happy-eyeballs.md).
 
-Explicit option forms include:
+The general entry points dispatch by endpoint kind:
+
+```lua
+socket.dial_op(endpoint, opts)
+socket.dial(endpoint, opts)
+socket.connect(endpoint, opts)
+```
+
+Convenience forms include:
 
 ```lua
 socket.listen_ipv4_op(host, port, opts)
 socket.listen_ipv6_op(host, port, opts)
 socket.listen_unix_op(path, opts)
 
-socket.dial_ipv4_op(host, port, opts)
-socket.dial_ipv6_op(host, port, opts)
-socket.dial_unix_op(path, opts)
+socket.dial_op(socket.ipv4_address(host, port), opts)
+socket.dial_op(socket.ipv6_address(host, port), opts)
+socket.dial_op(socket.unix_address(path), opts)
 
 socket.resolve_name_op(host, service, opts)
-socket.dial_name_op(host, service, opts)
+socket.dial_op(socket.name_endpoint(host, service), opts)
 ```
 
-Source binding fields from the earlier API remain accepted by the numeric dial
-helpers:
+Source binding is explicit through a numeric address:
 
 ```lua
 {
-  bind_host = '127.0.0.1',
-  bind_port = 0,
+  local_address = socket.ipv4_address('127.0.0.1', 0),
 }
 ```
 
@@ -559,19 +574,24 @@ a sequence watermark when it is constructed and waits until every preceding
 datagram has either been accepted by the host or failed. UDP messages are
 indivisible: a host which reports a partial send has violated the host contract.
 
-`receive_from_op` removes one complete message from a bounded incoming queue.
-When that queue is full the driver stops calling `recvfrom`, bounding user-space
-memory. A caller may supply a smaller `max_size`; Fibers then returns the prefix
-and marks the record as truncated. Linux FFI hosts use kernel truncation
-reporting and preserve the original wire size. The initial luaposix and Nixio
-adapters preserve datagram boundaries but declare that exact kernel truncation
-metadata is unavailable through their present APIs.
+`receive_from_op` claims one complete message from a bounded reactor-owned
+packet source. The reactor reserves a source slot before calling `recvfrom`,
+drains authoritatively until the host reports `would_block`, and disarms the
+readiness registration while capacity is exhausted. Consuming a packet returns
+its slot and emits fresh reactor demand in the same committed world. User-space
+memory is therefore bounded before the irreversible host call. A caller may
+supply a smaller `max_size`; Fibers then returns the prefix and marks the record
+as truncated. Linux FFI hosts use kernel truncation reporting and preserve the
+original wire size. The initial luaposix and Nixio adapters preserve datagram
+boundaries but declare that exact kernel truncation metadata is unavailable
+through their present APIs.
 
-The socket owns one driver task, its host handle, both bounded queues and its
-completion state. Host `sendto` and `recvfrom` calls occur only in driver fibre
-phase after construction has committed. Readiness remains a hint: an
-authoritative call may still return `would_block`. Closing retires pending sends,
-closes the host handle and joins the driver before `closed_op` succeeds.
+The socket owns one driver task for outgoing sends and Closure, its host handle,
+a bounded send queue and the packet source. `sendto` occurs in the driver;
+`recvfrom` is serviced by the Runtime's single indexed reactor. Readiness remains
+a hint: either authoritative call may still return `would_block`. Closing retires
+the packet source and pending sends, closes the host handle and joins the driver
+before `closed_op` succeeds.
 
 The test-only SimulatedHost can deliver, drop and truncate packets without
 real timing. It is used by both semantic evaluators. Native conformance covers
@@ -580,11 +600,15 @@ repeated socket churn.
 
 ## Custody and host support
 
-Newly acquired handles enter private host holds before any fibre can yield. Accepted and dialled Streams remain in each resource Lifetime's private Scope until a
-caller commits their custody transfer. Listener and Dial Task, Scope and domain views share one Lifetime; no driver Task is a separate structural child of the public root.
-Resource Closure requests root shutdown before requesting its children, then
-joins and finishes those children before closing the root.
-Readiness and bounded-queue waits remain cancellable.
+Newly acquired handles enter private host holds before any fibre can yield.
+Accepted descriptors are placed in an accept-source hold before the reactor
+publishes their offer; unclaimed offers remain under that source's Lifetime and
+are closed during source retirement. Connected Streams remain in each Dial's
+private Scope until a caller commits their custody transfer. Listener and Dial
+Task, Scope and domain views share one Lifetime; no driver Task is a separate
+structural child of the public root. Resource Closure requests root shutdown
+before requesting its children, then joins and finishes those children before
+closing the root. Readiness and bounded-offer waits remain cancellable.
 
 The test-only `SimulatedHost` implements pipes, virtual sockets and resolver
 records. `ManualHost` itself provides only deterministic time, readiness and injected final host methods.
@@ -599,15 +623,6 @@ module load order.
 Regular files and processes require additional host-job and supervision layers.
 They should not be implemented by treating regular descriptors as safely
 non-blocking readiness resources.
-
-
-### Datagram service fairness
-
-Datagram drivers use a bounded read/write service policy.
-`service_quantum` defaults to one, so continuously ready receive and send work
-alternate after each successful host action. A larger positive integer permits
-that many successful actions from the preferred direction before preference
-changes.
 
 ## Connection metadata and address values
 

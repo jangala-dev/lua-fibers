@@ -16,8 +16,8 @@ local SimulatedHost = require('tests.support.simulated_host')
 local socket = require('fibers.socket')
 local Address = require('fibers.socket.address')
 local Completion = require('fibers.resource.completion')
-local DialLifecycle = require('fibers.socket.dial_lifecycle')
-local Race = require('fibers.internal.socket.happy_eyeballs_race')
+local DialLifecycle = require('fibers.socket.dial.lifecycle')
+local DialState = require('fibers.socket.dial.named.state')
 local clock = Clock.default()
 
 local function assert_eq(actual, expected, message)
@@ -111,7 +111,7 @@ do
   local host = SimulatedHost.new()
   local result = fibers.try_run(function()
     local endpoint = Address.name('example.test', 443)
-    local race = Race.new(endpoint, {
+    local race = DialState.new(endpoint, {
       name = 'reference-candidates',
       host = host,
       resolution_delay = 0.050,
