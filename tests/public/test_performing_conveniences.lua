@@ -59,17 +59,10 @@ local function assert_twins(value, names, label)
   end
 end
 
-local function assert_absent(value, names, label)
-  for i = 1, #names do
-    local name = names[i]
-    assert_eq(value[name], nil, (label or 'value') .. ':' .. name .. ' should remain option-only')
-  end
-end
-
 assert_eq(fibers.perform, perform, 'contextual prelude exposes the shared perform function')
 
--- Public naming policy: selected conveniences are exact names with only _op
--- removed. Advanced resource operations remain option-only.
+-- Selected public operations have direct performing conveniences with the same
+-- name minus the `_op` suffix.
 do
   local rendezvous = channel.new()
   local queue = channel.new(1)
@@ -95,7 +88,6 @@ do
   }, 'pulse')
   assert_twins(tx, { 'send', 'clone', 'close', 'why', 'dropped' }, 'mailbox sender')
   assert_twins(rx, { 'recv', 'why', 'dropped' }, 'mailbox receiver')
-  assert_eq(rx.receive, nil, 'recv has no long alias')
   assert_twins(a, {
     'read_some',
     'read_exactly',
@@ -115,7 +107,6 @@ do
   }, 'stream')
   assert_twins(file, { 'pipe', 'tmpfile' }, 'file')
   assert_twins(process.command('true'), { 'launch' }, 'command')
-  assert_eq(process.command('true').start_op, nil, 'command:start is deliberately procedural')
   assert_twins(socket, {
     'listen',
     'listen_inet',
@@ -125,13 +116,6 @@ do
   }, 'socket')
   assert_twins(Stream, { 'merge_lines' }, 'stream module')
   assert_twins(Sleep, { 'sleep', 'sleep_until' }, 'Sleep')
-
-  assert_absent(cell, { 'snapshot', 'select', 'value_op', 'until_op' }, 'cell')
-  assert_absent(pulse, { 'snapshot' }, 'pulse')
-  assert_absent(tx, { 'snapshot' }, 'mailbox sender')
-  assert_absent(rx, { 'snapshot' }, 'mailbox receiver')
-  assert_absent(a, { 'inspect' }, 'stream')
-  assert_absent(socket, { 'connect_inet', 'connect_unix' }, 'socket')
 
   assert_twins(Counter.new(), {
     'read',
@@ -157,17 +141,12 @@ do
   }, 'index')
   local keyed = Keyed.new()
   assert_twins(keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' }, 'keyed')
-  assert_absent(keyed, { 'peek', 'put_absent', 'remove_present' }, 'keyed')
-  assert_eq(keyed.entries, nil, 'keyed entries remain private')
-  assert_eq(keyed.versions, nil, 'keyed versions remain private')
-  assert_eq(keyed.version, nil, 'keyed aggregate version remains private')
   assert_twins(Lease.new(), { 'acquire', 'release' }, 'lease')
   local ref_count, handle = RefCount.new()
   assert_twins(ref_count, { 'count', 'zero' }, 'ref count')
   assert_twins(handle, { 'active', 'inactive', 'clone', 'close' }, 'ref-count handle')
   local flow = Flow.new()
   assert_twins(flow, { 'abort', 'closed' }, 'flow')
-  assert_absent(flow, { 'inspect' }, 'flow')
   assert_twins(flow:inlet(), {
     'write',
     'write_some',
@@ -220,7 +199,6 @@ do
     assert_eq(sender:await(), nil)
 
     assert_twins(sender, { 'await', 'request_cancel' }, 'task')
-    assert_absent(sender, { 'exit', 'state', 'cancel' }, 'task')
 
     local state = Cell.new('idle', 'state')
     assert_eq(state:read(), 'idle')
@@ -292,7 +270,6 @@ do
         name = 'direct-client',
       }))
       assert_twins(dial, { 'result', 'report', 'close', 'closed' }, 'dial')
-      assert_absent(dial, { 'connected', 'failed', 'connect_result' }, 'dial')
       local client = assert(dial:result())
       client:write('ping\n')
       assert_eq(client:read_line(), 'pong')
@@ -338,16 +315,6 @@ do
       'request_close',
       'closed',
     }, 'process')
-    assert_eq(child.inspect_op, nil, 'process inspection is not a public operation')
-    assert_eq(child.inspect, nil, 'process inspection has no direct convenience')
-    assert_eq(child.communicate_op, nil, 'communicate is deliberately procedural')
-    assert_eq(child.close_op, nil, 'close is deliberately request plus wait')
-    assert_eq(child.request_signal_op, nil, 'long signal option alias is absent')
-    assert_eq(child.request_signal, nil, 'long signal direct alias is absent')
-    assert_eq(child.request_terminate_op, nil, 'long terminate option alias is absent')
-    assert_eq(child.request_terminate, nil, 'long terminate direct alias is absent')
-    assert_eq(child.request_kill_op, nil, 'long kill option alias is absent')
-    assert_eq(child.request_kill, nil, 'long kill direct alias is absent')
     local captured = assert(child:communicate({ stdout_limit = 16, stderr_limit = 16 }))
     assert_eq(captured.status.code, 0)
     assert_truthy(child:close())

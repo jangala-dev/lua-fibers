@@ -24,11 +24,6 @@ local function assert_eq(actual, expected, msg)
     fail((msg or 'assert_eq failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual))
   end
 end
-local function assert_nil(actual, msg)
-  if actual ~= nil then
-    fail((msg or 'assert_nil failed') .. ': got ' .. tostring(actual))
-  end
-end
 local function assert_status(status, tag, msg)
   if not status or status.tag ~= tag then
     fail(
@@ -261,16 +256,6 @@ local function test_keyed_proof_conveniences()
   assert_eq(perform_op(map:contains_op('present')), false)
 end
 
-local function test_keyed_surface_is_tight()
-  local map = Keyed.new()
-  assert_nil(map.peek_op)
-  assert_nil(map.put_absent_op)
-  assert_nil(map.remove_present_op)
-  assert_nil(map.entries)
-  assert_nil(map.versions)
-  assert_nil(map.version)
-end
-
 local tests = {
   test_counter_each_allocates_existing_stock,
   test_counter_each_give_does_not_supply_take,
@@ -290,7 +275,6 @@ local tests = {
   test_keyed_rejects_nil_values,
   test_keyed_insert_requires_absence,
   test_keyed_proof_conveniences,
-  test_keyed_surface_is_tight,
 }
 
 for i = 1, #tests do

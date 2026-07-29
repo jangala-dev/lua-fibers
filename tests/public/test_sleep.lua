@@ -43,7 +43,6 @@ end
 do
   assert_eq(type(Sleep.sleep_until_op), 'function', 'sleep_until_op export')
   assert_eq(type(Sleep.sleep_op), 'function', 'sleep_op export')
-  assert_eq(Sleep.now_op, nil, 'sleep must not expose clock observation')
   assert_eq(Clock.default(), Clock.default(), 'default clock identity is stable')
   assert_eq(type(Clock.default().now_op), 'function', 'clock now_op export')
   assert_eq(type(Clock.default().at_op), 'function', 'clock at_op export')

@@ -295,15 +295,9 @@ do
   )
 end
 
--- Grant is the sole public non-custodial authority concept. Grant creation and
--- close tokens remain private implementation paths.
+-- Grant construction remains an authority-bearing Scope operation.
 do
-  assert_eq(Grant, require('fibers.grant'), 'Grant has a named module')
   assert_eq(Grant.new, nil, 'Grant construction should occur only through Scope:grant_op')
-  assert_eq(fibers.Claim, nil, 'public close-token aliases should be absent')
-  assert_eq(pcall(require, 'fibers.lifetime.custody'), false, 'Custody has no facade module')
-  local atoms_ok = pcall(require, 'fibers.atoms')
-  assert_eq(atoms_ok, false, 'the obsolete atoms aggregate is absent')
 end
 
 print('tests/test_scope_grants.lua: ok')

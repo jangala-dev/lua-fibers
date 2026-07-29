@@ -127,7 +127,6 @@ do
   local token = Interrupt.new('capability-safe-token')
   assert_eq(token.raise, nil, 'interrupt token has no public raise method')
   assert_eq(token.clear, nil, 'interrupt token has no public clear method')
-  assert_eq(require('fibers').interrupt, nil, 'interrupt module is not part of top-level public surface')
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(Op.emit(Effect.interrupt(token, 'stop')))
@@ -171,17 +170,11 @@ do
   assert_eq(err.kind, 'phase_error', 'host arrival in prepare is a phase error')
 end
 
--- Scope exposes custody operations directly. Internal close tokens and
--- unaccounted release are absent from the public surface.
+-- Internal close-token and unaccounted-release authority is not available to Scope users.
 do
   local scope = Scope.new('lifetime-surface')
   local item = { name = 'lifetime-surface-item' }
   Lifetime.inert(item)
-  assert_eq(scope.custody, nil, 'Custody should not be a facade object')
-  assert_eq(type(scope.move_op), 'function', 'Scope should expose explicit movement')
-  assert_eq(type(scope.offer_op), 'function', 'Scope should expose negotiated transfer')
-  assert_eq(type(scope.grant_op), 'function', 'Scope should expose Grant creation')
-  assert_eq(type(scope.can_op), 'function', 'Scope should expose authority checks')
   assert_eq(scope.claim_op, nil, 'close tokens should remain private')
   assert_eq(scope.resolve_op, nil, 'Scope should not expose generic token resolution')
   assert_eq(scope.release_op, nil, 'Scope should not expose unaccounted release')

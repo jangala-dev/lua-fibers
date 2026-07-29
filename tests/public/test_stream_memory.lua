@@ -58,8 +58,6 @@ do
   local flow = Flow.new(16, 'primitive-flow')
   assert_eq(flow:inlet(), flow:inlet(), 'flow inlet handle should be stable')
   assert_eq(flow:outlet(), flow:outlet(), 'flow outlet handle should be stable')
-  assert_nil(flow.writer, 'primitive Flow should not expose writer alias')
-  assert_nil(flow.reader, 'primitive Flow should not expose reader alias')
   local got
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('flow\n'))
@@ -522,18 +520,12 @@ do
   assert_status(st, 'found')
   assert_eq(line, 'abc')
   assert_eq(tail, 'def')
-  assert_nil(flow.reservoir, 'Flow should not expose an internal reservoir object')
-  assert_nil(Flow.Lease, 'lease implementation classes are not public')
-  assert_nil(Flow.SpaceLease, 'space lease implementation classes are not public')
-  assert_nil(Flow.Reservoir, 'reservoir implementation is not public')
-  assert_nil(Flow.Errors, 'internal error vocabulary is not public')
   assert_eq(Flow.Error.EOF, 'eof')
-  assert_nil(Flow.Claim, 'the retired Claim type should not be part of the public Flow facility')
 end
 
 print('tests/test_stream_memory.lua: ok')
 
--- Migration helpers retain option semantics.
+-- Stream convenience operations retain the same option semantics.
 do
   fibers.run(function()
     local a, b = Stream.memory_pair({ capacity = 64 })

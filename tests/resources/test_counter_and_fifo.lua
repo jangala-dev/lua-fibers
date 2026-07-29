@@ -225,7 +225,6 @@ end
 local function test_fifo_capacity_surface()
   local unbounded = FIFO.new(math.huge, 'unbounded')
   assert_eq(unbounded.capacity, math.huge)
-  assert_eq(FIFO.unbounded, nil, 'FIFO has one capacity-directed constructor')
 
   if pcall(FIFO.new, -1) then
     fail('negative FIFO capacity should fail')

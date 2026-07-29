@@ -130,11 +130,6 @@ local function test_canonical_algebra_vocabulary()
     'together is the canonical interacting product term'
   )
   assert_eq(type(Op.named_each), 'function', 'named_each is the canonical named independent product')
-  assert_eq(Op.all, nil, 'all compatibility constructor is removed')
-  assert_eq(Op.tensor, nil, 'tensor compatibility constructor is removed')
-  assert_eq(Op.named_all, nil, 'named_all compatibility constructor is removed')
-  assert_eq(Op.pure, nil, 'pure compatibility constructor is removed')
-  assert_eq(Op.always().otherwise, nil, 'otherwise compatibility method is removed')
 end
 
 local function test_always_and_never()

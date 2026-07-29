@@ -131,22 +131,20 @@ do
   truthy(status.tag == 'quiescent' or status.tag == 'idle')
 end
 
--- The built-in spawn effect no longer clears obsolete owner.fn/owner.scope
--- fields. Ownership transfer is expressed solely through _take_spawn_body.
+-- A committed spawn effect takes its body exactly once during discharge.
 do
   local runtime = Runtime.new()
-  local ran = false
-  local owner = {
-    fn = 'retained-fn-field',
-    scope = 'retained-scope-field',
-    _lifetime = {
-      body = function()
-        ran = true
-      end,
-    },
-  }
+  local ran = 0
+  local take_calls = 0
+  local owner = { _lifetime = {
+    body = function()
+      ran = ran + 1
+    end,
+  } }
   function owner:_take_spawn_body(committed_runtime)
     eq(committed_runtime, runtime)
+    take_calls = take_calls + 1
+    eq(take_calls, 1, 'spawn discharge must take the body exactly once')
     local body = self._lifetime.body
     self._lifetime.body = nil
     return body
@@ -156,10 +154,9 @@ do
     runtime:perform(Op.emit(Effect.spawn(nil, 'phase-owned-spawn', nil, nil, owner)))
   end, 'phase-owned-spawn-driver')
   local status = run_to_rest(runtime)
-  eq(owner.fn, 'retained-fn-field', 'spawn discharge must not clear stale owner.fn')
-  eq(owner.scope, 'retained-scope-field', 'spawn discharge must not clear stale owner.scope')
-  eq(owner._lifetime.body, nil, 'committed discharge consumes the declared body')
-  eq(ran, true, 'committed body runs')
+  eq(take_calls, 1, 'committed discharge takes the body')
+  eq(owner._lifetime.body, nil, 'committed discharge consumes the body')
+  eq(ran, 1, 'committed body runs once')
   truthy(status.tag == 'quiescent' or status.tag == 'idle')
 end
 

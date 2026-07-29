@@ -35,7 +35,7 @@ end
 
 -- launch_op is synchronisation-local and admits a fresh Process without waiting
 -- for the external launch handshake. start is the direct launch-plus-handshake
--- convenience, while multi-phase procedures deliberately have no _op twin.
+-- convenience.
 do
   local starts = 0
   local host = SimulatedHost.new({
@@ -48,7 +48,6 @@ do
   })
 
   local command = process.command({ 'guarded-launch', stdout = 'pipe', stderr = 'pipe' })
-  assert(command.start_op == nil, 'start is intentionally not an option')
 
   fibers.run(function()
     local skipped = fibers.perform(Op.always('skip'):or_else(command:launch_op()))
@@ -68,8 +67,6 @@ do
     assert(second:result())
     assert(first:close())
     assert(second:close())
-    assert(first.communicate_op == nil, 'communicate is a direct multi-phase procedure')
-    assert(first.close_op == nil, 'close is request plus completed Closure')
   end, { host = host })
 
   assert_eq(starts, 2, 'each committed launch starts exactly one host process')

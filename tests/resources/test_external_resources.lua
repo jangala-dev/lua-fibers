@@ -282,8 +282,6 @@ do
     end,
   }
   local feed = ExternalFeed.for_resource(rt, resource)
-  assert_eq(feed.deliver, nil, 'ExternalFeed should not expose deliver alias')
-  assert_eq(feed.push, nil, 'ExternalFeed should not expose push alias')
   feed:set('value')
   assert_eq(resource.value, 'value')
   feed:clear()
@@ -294,12 +292,6 @@ do
     other:deliver(feed, 'wrong-runtime')
   end)
   assert_eq(ok, false, 'external feed must remain bound to its runtime')
-end
-
--- Source-named compatibility entry points are absent.
-do
-  local rt = Runtime.new()
-  assert_eq(rt.events_source, nil, 'events_source compatibility method is removed')
 end
 
 -- Standard externally fed resources remain distinct kinds and feed lookup is stable.

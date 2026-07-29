@@ -85,14 +85,10 @@ assert(rows[1][1] == 1)
 assert(rows[2][1] == true)
 assert(cell.value == 1)
 
--- Canonical metadata contains only the supply set, never compatibility fields.
+-- Producer metadata records its positive supply direction.
 local producer_meta = IR.metadata(cell:transition_op(producer))
 local access = assert(producer_meta.locations[cell._location])
 assert(access.supplies and access.supplies.any)
-assert(access.supply == nil)
-assert(access.supply_up == nil)
-assert(access.supply_down == nil)
-assert(access.supply_any == nil)
 
 local Store = require('fibers.internal.kernel.ledger')
 local location = Store.new_location({ name = 'canonical-witness', algebra = 'machine', value = 0 })

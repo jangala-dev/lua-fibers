@@ -780,41 +780,7 @@ do
   end, nil, 'backend_protocol_error')
 end
 
--- Stream ownership movement uses the general lifetime API; Stream exposes no transfer aliases.
-do
-  local a = Stream.memory_pair({ name = 'no-endpoint-transfer' })
-  assert_nil(a.transfer_reader_op)
-  assert_nil(a.transfer_writer_op)
-  assert_nil(a.transfer_op)
-end
-
--- The version 1 Stream module and instance surface have no constructor or
--- lifecycle aliases.
-do
-  assert_nil(Stream.open_backend_op)
-  assert_nil(Stream.open_backend_in_op)
-  assert_nil(Stream.open_handle_op)
-  assert_nil(Stream.open_handle_in_op)
-  assert_nil(Stream.open_reader_backend_op)
-  assert_nil(Stream.open_writer_backend_op)
-  assert_nil(Stream.open_duplex_backend_op)
-  assert_nil(Stream.Duplex)
-  assert_nil(Stream.HostStream)
-  assert_nil(Stream.backend)
-
-  local a = Stream.memory_pair({ name = 'public-stream-surface' })
-  assert_nil(a.shutdown_op)
-  assert_nil(a.exit_op)
-  assert_nil(a.transfer_op)
-  assert_nil(a.read_flow_handle)
-  assert_nil(a.write_flow_handle)
-  assert_truthy(type(a.close_op) == 'function')
-  assert_truthy(type(a.abort_op) == 'function')
-  assert_truthy(type(a.abort_write_op) == 'function')
-end
-
--- Host Stream construction requires explicit capabilities and rejects legacy
--- option spellings.
+-- Host Stream construction requires explicit read and write capabilities.
 do
   local backend = FakeHandle.new({ name = 'explicit-stream-options' })
   local owner = FibersScope.new('explicit-stream-options-owner')
@@ -823,17 +789,6 @@ do
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('explicit boolean', 1, true))
-
-  ok, err = pcall(function()
-    Stream.open_op(backend, {
-      scope = owner,
-      read = true,
-      write = true,
-      capacity = 32,
-    })
-  end)
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):find('does not accept capacity', 1, true))
 end
 
 print('tests/embedding/test_stream_reactor.lua: ok')

@@ -132,88 +132,34 @@ do
   assert_eq(got, 'abc')
 end
 
--- The version 1 Flow surface is intentionally alias-free.
+-- Public data and space leases are ordinary capabilities with explicit release.
 do
-  local flow = Flow.new(8, 'public-flow-surface')
+  local flow = Flow.new(8, 'public-flow-leases')
   local inlet, outlet = flow:inlet(), flow:outlet()
-  assert_nil(flow.reservoir, 'Flow should not expose an internal reservoir object')
-
-  for _, name in ipairs({
-    'append_op',
-    'append_some_op',
-    'reserve_op',
-    'drain_op',
-    'drained_op',
-    'shutdown_op',
-    'exit_op',
-    'error_op',
-  }) do
-    assert_nil(inlet[name], 'Inlet should not expose ' .. name)
-  end
-
-  for _, name in ipairs({
-    'read_op',
-    'peek_op',
-    'peek_some_op',
-    'read_including_op',
-    'lease_op',
-    'return_lease_op',
-    'ack_lease_op',
-    'fail_write_op',
-    'shutdown_op',
-    'exit_op',
-    'error_op',
-  }) do
-    assert_nil(outlet[name], 'Outlet should not expose ' .. name)
-  end
-
-  assert_nil(flow.inspect_op)
-  assert_nil(flow.close_op)
-  assert_nil(flow.shutdown_op)
-  assert_nil(flow.drained_op)
-  assert_nil(flow.exit_op)
-  assert_nil(Flow.Lease)
-  assert_nil(Flow.SpaceLease)
-  assert_nil(Flow.Reservoir)
-  assert_nil(Flow.Errors)
   assert_eq(Flow.Error.EOF, 'eof')
   assert_eq(Flow.Error.BROKEN_PIPE, 'broken_pipe')
 
-  local data_lease, space_lease
+  local data_lease, space_lease, data_released, space_released
   fibers.run(function()
     fibers.perform(inlet:write_op('x'))
     data_lease = fibers.perform(outlet:lease_some_op(1, 'consumer'))
-    fibers.perform(data_lease:release_op())
+    data_released = fibers.perform(data_lease:release_op())
     space_lease = fibers.perform(inlet:reserve_some_op(1, 'producer'))
-    fibers.perform(space_lease:release_op())
+    space_released = fibers.perform(space_lease:release_op())
   end)
 
-  assert_nil(data_lease.return_op)
-  assert_nil(data_lease.bytes_value)
-  assert_nil(data_lease.length_value)
-  assert_nil(space_lease.capacity_value)
+  assert_eq(data_released, true)
+  assert_eq(space_released, true)
 end
 
--- Option records use only the version 1 field names.
+-- Option records reject fields outside their documented contract.
 do
   local flow = Flow.new(16, 'public-flow-options')
   local ok, err = pcall(function()
-    flow:outlet():read_line_op({ limit = 4 })
+    flow:outlet():read_line_op({ unexpected = true })
   end)
   assert_eq(ok, false)
-  assert_truthy(tostring(err):find('does not accept limit', 1, true))
-
-  ok, err = pcall(function()
-    flow:outlet():read_line_op({ sep = '\n' })
-  end)
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):find('does not accept sep', 1, true))
-
-  ok, err = pcall(function()
-    flow:outlet():read_all_op({ unlimited = true })
-  end)
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):find('does not accept unlimited', 1, true))
+  assert_truthy(tostring(err):find('does not accept unexpected', 1, true))
 end
 
 print('tests/public/test_flow.lua: ok')

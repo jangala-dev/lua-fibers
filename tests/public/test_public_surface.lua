@@ -13,9 +13,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Effect = require('fibers.effect')
 local Sleep = require('fibers.sleep')
-local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersHost = require('fibers.host')
 local FibersFlow = require('fibers.resource.flow')
@@ -38,6 +36,7 @@ local FibersEffect = require('fibers.effect')
 local FibersTask = require('fibers.task')
 local FibersClosure = require('fibers.closure')
 local FibersGrant = require('fibers.grant')
+local FibersScope = require('fibers.scope')
 local FibersRoblox = require('fibers.roblox')
 local FibersRobloxHost = require('fibers.host.roblox')
 local FibersRobloxSubscription = require('fibers.roblox.subscription')
@@ -68,6 +67,13 @@ local function assert_status(st, tag, msg)
   end
 end
 
+local function assert_functions(label, value, names)
+  for i = 1, #names do
+    local name = names[i]
+    assert_eq(type(value[name]), 'function', label .. '.' .. name)
+  end
+end
+
 local function wait_until(cell, pred)
   return cell:wait_until_op(pred)
 end
@@ -83,126 +89,241 @@ local function modify_when(cell, pred, update)
   end)
 end
 
--- The root module is deliberately a small application language. Specialised
--- facilities and advanced interfaces are imported from their named modules.
+-- Compact positive specification of the supported public entry points. Tests
+-- below exercise their behaviour; this table deliberately records no discarded
+-- aliases or development names.
 do
-  local closure = require('fibers.closure')
-  assert_eq(type(fibers.run), 'function', 'root exports root lifecycle run')
-  assert_eq(type(fibers.try_run), 'function', 'root exports checked root lifecycle run')
-  assert_eq(type(fibers.perform), 'function', 'root exports perform')
-  assert_eq(type(Op.choice), 'function', 'Op exports option composition')
-  assert_eq(type(fibers.spawn), 'function', 'root exports structured spawn')
-  assert_eq(type(fibers.now), 'function', 'root exports contextual time')
-  assert_eq(type(FibersProtected.pcall), 'function', 'Protected exposes yieldable pcall')
-  assert_eq(type(FibersProtected.xpcall), 'function', 'Protected exposes yieldable xpcall')
-  assert_eq(FibersProtected.running, nil, 'Protected does not expose runtime coroutine identity')
-  assert_eq(type(FibersRuntime.drive), 'function', 'Runtime exports host-driving lifecycle')
-  assert_eq(fibers.always, nil, 'root does not export option constructors')
-  assert_eq(fibers.choice, nil, 'root does not export option combinators')
-  assert_eq(fibers.sleep, nil, 'root does not export Sleep')
-  assert_eq(fibers.after_commit, nil, 'root does not export Effect constructors')
-  assert_eq(Effect.after_commit, nil, 'Effect.after_commit has been superseded by Op.emit')
-  assert_eq(Effect.wake, nil, 'unused wake effects are not public')
-  assert_eq(Effect.WakeKind, nil, 'unused wake effect kind is not public')
-  assert_eq(fibers.Op, nil, 'root does not export the Op module')
-  assert_eq(fibers.Runtime, nil, 'root does not export Runtime')
-  assert_eq(fibers.Cell, nil, 'root does not export Cell')
-  assert_eq(fibers.Machine, nil, 'root does not export Machine')
-  assert_eq(fibers.Stream, nil, 'root does not export Stream')
-  assert_eq(fibers.Flow, nil, 'root does not export Flow')
-  assert_eq(fibers.host, nil, 'root does not export host adapters')
-  assert_eq(fibers.closure, nil, 'root does not export the Closure module')
-  assert_eq(require('fibers.closure'), FibersClosure, 'Closure has a direct named module')
-  assert_eq(require('fibers.grant'), FibersGrant, 'Grant has a direct named module')
-  assert_eq(pcall(require, 'fibers.policy'), false, 'the former Policy module is absent')
-  assert_eq(pcall(require, 'fibers.lifetime.settlement'), false, 'Settlement is not a peer public concept')
-  assert_eq(pcall(require, 'fibers.lifetime.custody'), false, 'Custody has no facade object')
-  assert_eq(pcall(require, 'fibers.lifetime.capture'), false, 'host capture remains private')
-  assert_eq(require('fibers.op'), FibersOp, 'Op has a direct named module')
-  assert_eq(FibersOp.consequence, nil, 'emit has no long alias')
-  assert_eq(require('fibers.resource.cell'), FibersCell, 'Cell has a direct named module')
-  assert_eq(pcall(require, 'fibers.resource.scalar'), false, 'the former Scalar module is absent')
-  assert_eq(require('fibers.resource.machine'), FibersMachine, 'Machine has a direct named module')
-  assert_eq(type(FibersMachine.update), 'function', 'Machine exposes update transitions')
-  assert_eq(type(FibersMachine.select), 'function', 'Machine exposes select transitions')
-  assert_eq(type(FibersMachine.query), 'function', 'Machine exposes query transitions')
-  assert_eq(FibersMachine.transition, nil, 'Machine has no table-spec transition constructor')
-  assert_eq(FibersMachine.kind, nil, 'Machine does not register transition tables')
-  assert_eq(FibersMachine.kind_from, nil, 'Machine does not register generated transition tables')
-  assert_eq(require('fibers.resource.flow'), FibersFlow, 'Flow has one canonical resource module')
-  assert_eq(require('fibers.resource.fifo'), FibersFIFO, 'FIFO has one canonical resource module')
-  assert_eq(pcall(require, 'fibers.queue'), false, 'the former Queue module is absent')
-  assert_eq(pcall(require, 'fibers.resource.queue'), false, 'the former resource Queue module is absent')
-  assert_eq(require('fibers.semaphore'), FibersSemaphore, 'Semaphore is a standard compound')
-  assert_eq(require('fibers.latch'), FibersLatch, 'Latch is a standard compound')
-  assert_eq(require('fibers.resource.ref_count'), FibersRefCount, 'RefCount is a resource-building compound')
-  assert_eq(pcall(require, 'fibers.ref_count'), false, 'RefCount has no top-level alias')
-  assert_eq(pcall(require, 'fibers.wait_group'), false, 'WaitGroup is absent')
-  assert_eq(pcall(require, 'fibers.priority_queue'), false, 'PriorityQueue remains a recipe')
-  assert_eq(require('fibers.file'), FibersFile, 'File facilities have a direct named module')
-  assert_eq(type(FibersFile.open), 'function', 'File exposes evented regular-file opening')
-  assert_eq(type(FibersFile.tmpfile), 'function', 'File exposes owned temporary files')
-  assert_eq(type(FibersFile.submit_open_op), 'function', 'File exposes explicit open submission')
-  assert_eq(type(FibersFile.submit_read_all_op), 'function', 'File exposes explicit path-job submission')
-  assert_eq(type(FibersFile.read_all), 'function', 'File exposes bounded evented reads')
-  assert_eq(type(FibersFile.write_all), 'function', 'File exposes evented writes')
-  assert_eq(type(FibersFile.mkdir_p), 'function', 'File exposes evented directory creation')
-  assert_eq(require('fibers.socket'), FibersSocket, 'Socket facilities have a direct named module')
-  assert_eq(require('fibers.dns'), FibersDNS, 'DNS facilities have a direct named module')
-  assert_eq(type(FibersSocket.dns_resolver), 'function', 'Socket exposes the Fibers DNS resolver')
-  assert_eq(type(FibersSocket.dial_op), 'function', 'Socket exposes endpoint-dispatched Dial construction')
-  assert_eq(
-    type(FibersSocket.dial),
-    'function',
-    'Socket exposes direct endpoint-dispatched Dial construction'
-  )
-  assert_eq(type(FibersSocket.connect), 'function', 'Socket exposes endpoint-dispatched connection')
-  for _, name in ipairs({
-    'dial_name_op',
-    'dial_name',
-    'connect_name',
-    'NamedDial',
-    'dial_ipv4_op',
-    'dial_ipv4',
-    'dial_ipv6_op',
-    'dial_ipv6',
-    'dial_inet_op',
-    'dial_inet',
-    'dial_unix_op',
-    'dial_unix',
-  }) do
-    assert_eq(FibersSocket[name], nil, 'Socket has no compatibility alias ' .. name)
+  local surfaces = {
+    {
+      'fibers',
+      fibers,
+      {
+        'run',
+        'try_run',
+        'perform',
+        'spawn',
+        'spawn_raw',
+        'scope',
+        'try_scope',
+        'mask',
+        'now',
+        'current_runtime',
+        'current_scope',
+        'pcall',
+        'xpcall',
+      },
+    },
+    {
+      'Op',
+      Op,
+      {
+        'always',
+        'never',
+        'choice',
+        'named_choice',
+        'each',
+        'named_each',
+        'together',
+        'and_then',
+        'or_else',
+        'guard',
+        'map',
+        'wrap',
+        'on_defeat',
+        'emit',
+        'is_op',
+        'dependencies',
+        'certify_symmetry',
+      },
+    },
+    { 'Protected', FibersProtected, { 'pcall', 'xpcall' } },
+    { 'Runtime', FibersRuntime, { 'new', 'drive' } },
+    { 'Effect', FibersEffect, { 'kind', 'of', 'is_kind', 'is_effect' } },
+    {
+      'Machine',
+      FibersMachine,
+      {
+        'new',
+        'rule',
+        'update',
+        'select',
+        'select_when',
+        'query',
+        'query_when',
+        'transition_op',
+      },
+    },
+    {
+      'Cell',
+      FibersCell,
+      {
+        'new',
+        'read_op',
+        'changed_op',
+        'expect_op',
+        'write_op',
+        'select_op',
+        'wait_until_op',
+        'match_op',
+      },
+    },
+    { 'Flow', FibersFlow, { 'new' } },
+    {
+      'File',
+      FibersFile,
+      {
+        'open',
+        'open_op',
+        'tmpfile',
+        'tmpfile_op',
+        'pipe',
+        'pipe_op',
+        'read_all',
+        'read_all_op',
+        'write_all',
+        'write_all_op',
+        'mkdir',
+        'mkdir_op',
+        'mkdir_p',
+        'mkdir_p_op',
+        'rename',
+        'rename_op',
+        'unlink',
+        'unlink_op',
+        'submit_open_op',
+        'submit_read_all_op',
+      },
+    },
+    {
+      'Socket',
+      FibersSocket,
+      {
+        'listen',
+        'listen_op',
+        'listen_inet',
+        'listen_inet_op',
+        'listen_ipv4',
+        'listen_ipv4_op',
+        'listen_ipv6',
+        'listen_ipv6_op',
+        'listen_unix',
+        'listen_unix_op',
+        'dial',
+        'dial_op',
+        'connect',
+        'udp',
+        'udp_op',
+        'udp_ipv4',
+        'udp_ipv4_op',
+        'udp_ipv6',
+        'udp_ipv6_op',
+        'resolve',
+        'resolve_op',
+        'resolve_name',
+        'resolve_name_op',
+        'dns_resolver',
+      },
+    },
+    { 'DNS', FibersDNS, { 'new' } },
+    { 'Process', FibersProcess, { 'command', 'shell', 'redirect', 'succeeded', 'describe_status' } },
+    {
+      'Host',
+      FibersHost,
+      {
+        'default',
+        'select',
+        'available',
+        'pure',
+        'manual',
+        'roblox',
+        'luajit_linux',
+        'cffi_linux',
+        'luaposix',
+        'nixio',
+      },
+    },
+    {
+      'Roblox',
+      FibersRoblox,
+      {
+        'run',
+        'try_run',
+        'prepare',
+        'attach',
+        'new_host',
+        'events',
+        'latest',
+        'pulse',
+        'bind_to_close',
+      },
+    },
+    {
+      'Lifetime',
+      FibersLifetime,
+      {
+        'define',
+        'new',
+        'inert',
+        'resource',
+        'task',
+        'of',
+        'is',
+        'require',
+      },
+    },
+    {
+      'Closure',
+      FibersClosure,
+      {
+        'none',
+        'running',
+        'nursery',
+        'supervisor',
+        'protocol',
+        'propagation',
+        'combine',
+        'normalize',
+        'request_then_wait',
+        'require_ok',
+        'is_failure',
+      },
+    },
+    { 'Grant', FibersGrant, { 'is', 'closed', 'closed_op', 'has_right', 'inspect' } },
+    { 'Channel', FibersChannel, { 'new' } },
+    { 'Mailbox', FibersMailbox, { 'new', 'reject_newest', 'drop_oldest' } },
+    { 'Pulse', FibersPulse, { 'new' } },
+    { 'Counter', FibersCounter, { 'new', 'bounded', 'range' } },
+    { 'FIFO', FibersFIFO, { 'new' } },
+    { 'Rendezvous', FibersRendezvous, { 'new' } },
+    { 'Lease', FibersLease, { 'new' } },
+    { 'Signal', FibersSignal, { 'new' } },
+    { 'EventQueue', FibersEventQueue, { 'new' } },
+    { 'Clock', FibersClock, { 'new', 'default' } },
+    { 'Readiness', FibersReadiness, { 'new' } },
+    { 'Semaphore', FibersSemaphore, { 'new' } },
+    { 'Latch', FibersLatch, { 'new' } },
+    { 'RefCount', FibersRefCount, { 'new' } },
+  }
+
+  for i = 1, #surfaces do
+    assert_functions(surfaces[i][1], surfaces[i][2], surfaces[i][3])
   end
-  assert_eq(type(FibersDNS.new), 'function', 'DNS exposes resolver construction')
-  assert_eq(require('fibers.process'), FibersProcess, 'Process facilities have a direct named module')
-  assert_eq(fibers.file, nil, 'root does not export file facilities')
-  assert_eq(fibers.socket, nil, 'root does not export socket facilities')
-  assert_eq(fibers.process, nil, 'root does not export process facilities')
-  assert_eq(type(FibersSocket.udp_op), 'function', 'Socket exposes UDP option construction')
-  assert_eq(type(FibersSocket.udp), 'function', 'Socket exposes direct UDP construction')
-  assert_eq(FibersSocket.datagram_op, nil, 'long UDP option alias is absent')
-  assert_eq(FibersSocket.datagram, nil, 'long UDP direct alias is absent')
-  assert_eq(FibersSocket.datagram_ipv4_op, nil, 'long IPv4 UDP option alias is absent')
-  assert_eq(FibersSocket.datagram_ipv4, nil, 'long IPv4 UDP direct alias is absent')
-  assert_eq(FibersSocket.datagram_ipv6_op, nil, 'long IPv6 UDP option alias is absent')
-  assert_eq(FibersSocket.datagram_ipv6, nil, 'long IPv6 UDP direct alias is absent')
-  assert_eq(fibers.uninterruptible, nil, 'mask has no long alias')
-  assert_eq(FibersHost.Reactor, require('fibers.host.reactor'), 'Host exposes the reactor')
-  assert_eq(type(FibersHost.roblox), 'function', 'Host exposes the Roblox family constructor')
-  assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox integration exposes its host')
-  assert_eq(
-    FibersRoblox.Subscription,
-    FibersRobloxSubscription,
-    'Roblox integration exposes owned subscriptions'
-  )
-  assert_eq(type(FibersRoblox.events), 'function', 'Roblox integration exposes queued signal events')
-  assert_eq(type(FibersRoblox.latest), 'function', 'Roblox integration exposes latest-value signal events')
-  assert_eq(type(FibersRoblox.pulse), 'function', 'Roblox integration exposes coalesced signal pulses')
-  assert_eq(type(FibersRoblox.bind_to_close), 'function', 'Roblox integration exposes root shutdown binding')
-  assert_eq(require('fibers.resource.rendezvous'), FibersRendezvous, 'Rendezvous is in the resource toolkit')
-  assert_eq(require('fibers.resource.signal'), FibersSignal, 'Signal is an external-fed resource')
-  assert_eq(type(FibersLifetime.define), 'function', 'Lifetime defines continuing custody')
-  assert_eq(require('fibers.effect'), FibersEffect, 'Effect describes committed obligations')
+
+  assert_eq(FibersHost.Reactor, require('fibers.host.reactor'), 'Host.Reactor')
+  assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox.Host')
+  assert_eq(FibersRoblox.Subscription, FibersRobloxSubscription, 'Roblox.Subscription')
+
+  local scope = FibersScope.new('public-scope-surface')
+  assert_functions('Scope', scope, {
+    'spawn_op',
+    'move_op',
+    'offer_op',
+    'accept_op',
+    'grant_op',
+    'can_op',
+    'custody_op',
+    'subtree_op',
+  })
 end
 
 -- The root lifecycle preserves Lua multiple returns, including nil values.
@@ -291,7 +412,6 @@ do
   assert_eq(type(clock.now_op), 'function', 'Clock exposes now_op')
   assert_eq(type(clock.at_op), 'function', 'Clock exposes at_op')
   assert_eq(type(clock.after_op), 'function', 'Clock exposes after_op')
-  assert_eq(Sleep.now_op, nil, 'Sleep does not duplicate clock observation')
 end
 
 -- Clocks are ordinary resources backed by host time.
@@ -337,7 +457,6 @@ do
       }
     end,
   })
-  assert_eq(Kind.order, nil, 'EffectKind has no global numeric ordering field')
   local effect = FibersEffect.of(Kind, { key = 'once' })
   local st = fibers.try_run(function()
     fibers.perform(Op.emit(effect))
@@ -418,20 +537,6 @@ do
   assert_eq(a, 'x')
   assert_eq(b, nil)
   assert_eq(c, 'z')
-end
-
-do
-  local Scope = require('fibers.scope')
-  local scope = Scope.new('public-lifetime-surface')
-  assert(scope.custody == nil, 'Custody is a law, not a facade object')
-  assert(type(scope.offer_op) == 'function')
-  assert(type(scope.accept_op) == 'function')
-  assert(type(scope.grant_op) == 'function')
-  assert(type(scope.can_op) == 'function')
-  assert(type(scope.custody_op) == 'function')
-  assert(type(scope.subtree_op) == 'function')
-  assert(scope.borrow_op == nil and scope.authorise_op == nil)
-  assert(scope.claim_op == nil, 'close tokens remain private')
 end
 
 print('tests/public/test_public_surface.lua: ok')
