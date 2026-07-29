@@ -34,7 +34,7 @@ The implementation follows the Happy Eyeballs v2 coordination model:
 
 ## The race as an option algebra
 
-One Scalar machine contains the closed-family flags, globally ordered
+One Cell machine contains the closed-family flags, globally ordered
 unattempted candidates, admitted numeric Dials, stagger deadline and winner.
 Each coordinator iteration describes one serial scheduling step:
 
@@ -51,7 +51,7 @@ The ordering is semantic rather than source-order bias. A launch through
 DNS completion was ready in the same world. Consequently, a connection which
 succeeds at the exact stagger deadline suppresses a second launch.
 
-Candidate admission composes the Scalar selection, `socket.dial_op` admission
+Candidate admission composes the Cell selection, `socket.dial_op` admission
 and the active-attempt state update in one option. The transaction allocates no
 file descriptor speculatively: the numeric Dial starts its non-blocking socket
 work only after admission commits. Each numeric attempt exposes its definitive

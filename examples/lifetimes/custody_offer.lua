@@ -22,7 +22,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Scope = require('fibers.scope')
 local Closure = require('fibers.closure')
@@ -42,17 +42,17 @@ local function append_log(log, line)
   return { text = (log.text == '' and line or (log.text .. '\n' .. line)) }
 end
 
-local function append_log_op(scalar, line)
-  return scalar:read_op():and_then(function(log)
-    return scalar:write_op(append_log(log, line))
+local function append_log_op(cell, line)
+  return cell:read_op():and_then(function(log)
+    return cell:write_op(append_log(log, line))
   end)
 end
 
 local request = Scope.new('request')
 local supervisor = Scope.new('supervisor')
 local resume = Rendezvous.new('resume-session')
-local registry = Scalar.new({ custodian = 'request', task = '-' }, 'registry')
-local audit = Scalar.new({ text = '' }, 'audit')
+local registry = Cell.new({ custodian = 'request', task = '-' }, 'registry')
+local audit = Cell.new({ text = '' }, 'audit')
 
 local result = {}
 local rt = Runtime.new()

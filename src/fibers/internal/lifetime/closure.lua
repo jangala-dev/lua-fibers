@@ -17,6 +17,7 @@ local Runtime = require('fibers.runtime')
 local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 local Protected = require('fibers.protected')
+local perform = require('fibers.perform')
 
 local Closure = {}
 local unpack_ = table.unpack or unpack
@@ -46,7 +47,7 @@ end, function(state)
 end)
 
 -- Effect identity makes recovery authority linear across interacting product
--- lanes as well as across time. The scalar records persistent consumption; the
+-- lanes as well as across time. The cell records persistent consumption; the
 -- same-key committed effect rejects any candidate world containing two uses.
 local RecoveryClaimKind
 RecoveryClaimKind = Effect.kind({
@@ -163,7 +164,7 @@ local function recovery_claim_op(failure)
   end
 
   -- The positive claim and the certified-absence branch refer to the same
-  -- transactional scalar. Two recovery operations in one world can therefore
+  -- transactional cell. Two recovery operations in one world can therefore
   -- neither both claim the authority nor combine one claim with a stale branch.
   local claim = recovery.authority:transition_op(ClaimRecovery):or_else(Op.always(STALE_RECOVERY))
   return claim:and_then(function(claimed)
@@ -195,8 +196,16 @@ function ClosureFailure:retry_op()
   return recovery_op(self, Closure._retry_token_op)
 end
 
+function ClosureFailure:retry()
+  return perform(self:retry_op())
+end
+
 function ClosureFailure:force_op()
   return recovery_op(self, Closure._force_token_op)
+end
+
+function ClosureFailure:force()
+  return perform(self:force_op())
 end
 
 function ClosureFailure:inspect()

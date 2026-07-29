@@ -15,7 +15,7 @@ local Op = require('fibers.op')
 local IR = require('fibers.internal.kernel.ir')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local BranchPolicy = require('fibers.internal.kernel.domain')
 local fibers = require('fibers')
@@ -115,8 +115,8 @@ end
 do
   local Dependencies = require('fibers.internal.kernel.dependencies')
   local index = Dependencies.Index.new()
-  local scalar = StateMachine.new(0, 'retired-location-atom')
-  local request = { id = 1, op = scalar:write_op(1) }
+  local cell = StateMachine.new(0, 'retired-location-atom')
+  local request = { id = 1, op = cell:write_op(1) }
   request.metadata = IR.metadata(request.op)
   index:add(request)
   local location, access
@@ -311,12 +311,12 @@ do
   end
 end
 
--- A sole non-supplying scalar query is likewise a forced claim resolution.
+-- A sole non-supplying cell query is likewise a forced claim resolution.
 local claim_rt = Runtime.new({ instrumentation = true })
-local scalar = StateMachine.new(7, 'forced-claim')
+local cell = StateMachine.new(7, 'forced-claim')
 local claim_result
 claim_rt:spawn_raw(function()
-  claim_result = claim_rt:perform(scalar:expect_op(7))
+  claim_result = claim_rt:perform(cell:expect_op(7))
 end)
 eq(claim_rt:run().tag, 'found')
 eq(claim_result, true)
@@ -388,14 +388,14 @@ local function symmetric_failure(machine, enabled)
     dependency_index_threshold = 1,
   })
   local channel = Rendezvous.new('certified-symmetry-' .. machine)
-  local scalar = Scalar.new(0, 'certified-symmetry-state-' .. machine)
+  local cell = Cell.new(0, 'certified-symmetry-state-' .. machine)
   for _ = 1, 8 do
     rt:spawn_raw(function()
       rt:perform(channel:put_op(1):certify_symmetry('equivalent-producer'))
     end)
   end
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ channel:get_op(), scalar:write_op(1), scalar:write_op(2) }))
+    rt:perform(Op.tensor({ channel:get_op(), cell:write_op(1), cell:write_op(2) }))
   end)
   eq(rt:run().tag, 'quiescent')
   return rt:instrumentation_report().counters
@@ -442,14 +442,14 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
 end
 
 local invalidation = Runtime.new({ instrumentation = true, plan_reuse_threshold = 1 })
-local invalidation_scalar = StateMachine.new(0, 'reuse-invalidation')
+local invalidation_cell = StateMachine.new(0, 'reuse-invalidation')
 local observed = false
 invalidation:spawn_raw(function()
-  observed = invalidation:perform(invalidation_scalar:expect_op(1))
+  observed = invalidation:perform(invalidation_cell:expect_op(1))
 end)
 eq(invalidation:run().tag, 'quiescent')
 invalidation:spawn_raw(function()
-  invalidation:perform(invalidation_scalar:write_op(1))
+  invalidation:perform(invalidation_cell:write_op(1))
 end)
 local invalidation_status
 repeat
@@ -461,10 +461,10 @@ truthy(observed, 'relevant location change did not invalidate a cached certifica
 -- sessions or a component coordinator.
 do
   local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
-  local scalar = StateMachine.new(0, 'per-focus-certificate-retry')
+  local cell = StateMachine.new(0, 'per-focus-certificate-retry')
   for i = 1, 8 do
     rt:spawn_raw(function()
-      rt:perform(scalar:expect_op(1))
+      rt:perform(cell:expect_op(1))
     end, 'per-focus-certificate-' .. tostring(i))
   end
   eq(rt:run().tag, 'quiescent')

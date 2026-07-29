@@ -4,7 +4,7 @@ local Closure = require('fibers.closure')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local EventQueue = require('fibers.resource.event_queue')
 
 local cases = {}
@@ -66,19 +66,19 @@ add('simple', 'kernel', 'always perform', 4000, function(ctx, n)
   return n
 end)
 
-add('simple', 'scalar', 'serial read write', 1200, function(ctx, n)
+add('simple', 'cell', 'serial read write', 1200, function(ctx, n)
   local rt = ctx:runtime()
-  local scalar = Scalar.new(0, 'perf-scalar')
-  local write_dependencies = Op.dependencies(scalar:write_op(0))
+  local cell = Cell.new(0, 'perf-cell')
+  local write_dependencies = Op.dependencies(cell:write_op(0))
   rt:spawn_raw(function()
     for _ = 1, n do
-      rt:perform(scalar:read_op():and_then(function(value)
-        return scalar:write_op(value + 1)
+      rt:perform(cell:read_op():and_then(function(value)
+        return cell:write_op(value + 1)
       end, write_dependencies))
     end
-  end, 'perf-scalar-fibre')
+  end, 'perf-cell-fibre')
   drain(rt)
-  assert_eq(scalar.value, n)
+  assert_eq(cell.value, n)
   return n
 end)
 
@@ -154,18 +154,18 @@ end)
 
 add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
   local rt = ctx:runtime()
-  local scalar = Scalar.new(0, 'perf-choice-conflict')
+  local cell = Cell.new(0, 'perf-choice-conflict')
   local fallbacks = 0
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.tensor({
-        scalar
+        cell
           :write_op(1)
           :map(function()
             return 'write'
           end)
           :choice(Op.always('fallback')),
-        scalar:write_op(2),
+        cell:write_op(2),
       }))
       if rows[1][1] == 'fallback' then
         fallbacks = fallbacks + 1
@@ -174,7 +174,7 @@ add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
   end, 'perf-choice-conflict-fibre')
   drain(rt)
   assert_eq(fallbacks, n)
-  assert_eq(scalar.value, 2)
+  assert_eq(cell.value, 2)
   return n
 end)
 

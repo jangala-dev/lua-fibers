@@ -4,6 +4,7 @@
 -- absence, as it does in ordinary Lua tables.
 
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 local Op = require('fibers.op')
 
 local Keyed = {}
@@ -103,15 +104,27 @@ function Keyed:get_op(key)
   return operations(self, key).get
 end
 
+function Keyed:get(key)
+  return perform(self:get_op(key))
+end
+
 function Keyed:take_op(key)
   require_key(key, 'take')
   return operations(self, key).take
+end
+
+function Keyed:take(key)
+  return perform(self:take_op(key))
 end
 
 function Keyed:put_op(key, value)
   require_key(key, 'put')
   require_value(value)
   return Facility.occurrence(operations(self, key).put, value)
+end
+
+function Keyed:put(key, value)
+  return perform(self:put_op(key, value))
 end
 
 function Keyed:insert_op(key, value)
@@ -131,15 +144,26 @@ function Keyed:insert_op(key, value)
   )
 end
 
+function Keyed:insert(key, value)
+  return perform(self:insert_op(key, value))
+end
+
 function Keyed:contains_op(key)
   return self:get_op(key):map(yes):or_else(FALSE)
+end
+
+function Keyed:contains(key)
+  return perform(self:contains_op(key))
 end
 
 function Keyed:remove_op(key)
   return self:take_op(key):map(yes):or_else(FALSE)
 end
 
+function Keyed:remove(key)
+  return perform(self:remove_op(key))
+end
+
 Keyed.Kind = Kind
-Facility.performing(Keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' })
 
 return Keyed

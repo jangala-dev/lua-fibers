@@ -8,12 +8,12 @@ package.path = table.concat({
   package.path,
 }, ';')
 
--- Scalar provides direct state operations and composable transactional forms.
+-- Cell provides direct state operations and composable transactional forms.
 
 local fibers = require('fibers')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
-local incident_level = Scalar.new(0, 'incident-level')
+local incident_level = Cell.new(0, 'incident-level')
 local escalated_level
 
 fibers.run(function()

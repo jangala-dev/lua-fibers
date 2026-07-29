@@ -14,7 +14,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local channel = require('fibers.channel')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 
 local perform = fibers.perform
@@ -33,12 +33,12 @@ local outcome
 
 fibers.run(function()
   local field_unit = {
-    online = Scalar.new(unit_is_online, 'water-survey-unit:online'),
+    online = Cell.new(unit_is_online, 'water-survey-unit:online'),
     commands = channel.new(),
     reports = channel.new(),
   }
   local stop_requests = channel.new()
-  local safety_interlock = Scalar.new('clear', 'deployment-safety')
+  local safety_interlock = Cell.new('clear', 'deployment-safety')
   local battery_reserve = Counter.new(1, 'battery-reserve')
 
   if unit_is_online then

@@ -14,7 +14,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -54,18 +54,18 @@ do
   assert_eq(sender_result, true)
 end
 
--- Two plans are deliberately built from the same scalar version.  The second
+-- Two plans are deliberately built from the same cell version.  The second
 -- must fail validation, be rebuilt against the new value, and retain primary
 -- preference rather than selecting the fallback.
 do
   local rt = Runtime.new()
-  local scalar = Scalar.new(0, 'stale-primary')
+  local cell = Cell.new(0, 'stale-primary')
   local first_result, second_result
   local guard_calls = 0
 
   local function increment_result(label)
-    return scalar:read_op():and_then(function(old)
-      return scalar:write_op(old + 1):and_then(function()
+    return cell:read_op():and_then(function(old)
+      return cell:write_op(old + 1):and_then(function()
         return Op.always(label, old + 1)
       end)
     end)
@@ -99,7 +99,7 @@ do
 
   assert_eq(first_result, 1)
   assert_eq(second_result, 'primary:2')
-  assert_eq(scalar.value, 2)
+  assert_eq(cell.value, 2)
   assert_eq(guard_calls, 1, 'guard memo survives stale refresh')
 end
 

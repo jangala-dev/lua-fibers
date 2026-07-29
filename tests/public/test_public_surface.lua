@@ -23,7 +23,7 @@ local FibersFile = require('fibers.file')
 local FibersSocket = require('fibers.socket')
 local FibersDNS = require('fibers.dns')
 local FibersProcess = require('fibers.process')
-local FibersScalar = require('fibers.resource.scalar')
+local FibersCell = require('fibers.resource.cell')
 local FibersMachine = require('fibers.resource.machine')
 local FibersCounter = require('fibers.resource.counter')
 local FibersFIFO = require('fibers.resource.fifo')
@@ -68,15 +68,15 @@ local function assert_status(st, tag, msg)
   end
 end
 
-local function wait_until(scalar, pred)
-  return scalar:value_op(pred)
+local function wait_until(cell, pred)
+  return cell:wait_until_op(pred)
 end
 
-local function modify_when(scalar, pred, update)
-  return scalar:select_op(function(value)
+local function modify_when(cell, pred, update)
+  return cell:select_op(function(value)
     if pred(value) then
       local new = update(value)
-      return scalar:write_op(new):map(function()
+      return cell:write_op(new):map(function()
         return new, value
       end)
     end
@@ -106,7 +106,7 @@ do
   assert_eq(Effect.WakeKind, nil, 'unused wake effect kind is not public')
   assert_eq(fibers.Op, nil, 'root does not export the Op module')
   assert_eq(fibers.Runtime, nil, 'root does not export Runtime')
-  assert_eq(fibers.Scalar, nil, 'root does not export Scalar')
+  assert_eq(fibers.Cell, nil, 'root does not export Cell')
   assert_eq(fibers.Machine, nil, 'root does not export Machine')
   assert_eq(fibers.Stream, nil, 'root does not export Stream')
   assert_eq(fibers.Flow, nil, 'root does not export Flow')
@@ -120,7 +120,8 @@ do
   assert_eq(pcall(require, 'fibers.lifetime.capture'), false, 'host capture remains private')
   assert_eq(require('fibers.op'), FibersOp, 'Op has a direct named module')
   assert_eq(FibersOp.consequence, nil, 'emit has no long alias')
-  assert_eq(require('fibers.resource.scalar'), FibersScalar, 'Scalar has a direct named module')
+  assert_eq(require('fibers.resource.cell'), FibersCell, 'Cell has a direct named module')
+  assert_eq(pcall(require, 'fibers.resource.scalar'), false, 'the former Scalar module is absent')
   assert_eq(require('fibers.resource.machine'), FibersMachine, 'Machine has a direct named module')
   assert_eq(type(FibersMachine.update), 'function', 'Machine exposes update transitions')
   assert_eq(type(FibersMachine.select), 'function', 'Machine exposes select transitions')
@@ -234,25 +235,25 @@ do
   assert_eq(got, 'hello')
 end
 
--- Scalars provide transactional facts. Predicates wait directly through value_op.
+-- Cells provide transactional facts. Predicates wait directly through wait_until_op.
 do
-  local scalar = FibersScalar.new(false, 'flag')
+  local cell = FibersCell.new(false, 'flag')
   local seen
   local st = fibers.try_run(function()
     fibers.spawn(function()
-      seen = fibers.perform(wait_until(scalar, function(v)
+      seen = fibers.perform(wait_until(cell, function(v)
         return v == true
       end))
     end, 'waiter')
-    fibers.perform(scalar:write_op(true))
+    fibers.perform(cell:write_op(true))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(seen, true)
 end
 
--- Capacity-like state transitions are ordinary scalar composition.
+-- Capacity-like state transitions are ordinary cell composition.
 do
-  local c = FibersScalar.new(1, 'credits')
+  local c = FibersCell.new(1, 'credits')
   local new, old
   local st = fibers.try_run(function()
     new, old = fibers.perform(modify_when(c, function(v)
@@ -371,7 +372,7 @@ end
 -- The public resource-toolkit pieces compose in one ordinary programme.
 do
   local inbox = FibersRendezvous.new('atom-kit-inbox')
-  local flag = FibersScalar.new(false, 'atom-kit-flag')
+  local flag = FibersCell.new(false, 'atom-kit-flag')
   local received, joined
 
   local st = fibers.try_run(function(scope)

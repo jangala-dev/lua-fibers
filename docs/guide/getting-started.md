@@ -7,7 +7,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
 local channel = require('fibers.channel')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Pulse = require('fibers.pulse')
 local Mailbox = require('fibers.mailbox')
 local Stream = require('fibers.stream')
@@ -177,10 +177,10 @@ The lower-level synchronous exchange resource remains available as `fibers.resou
 
 ## Transactional state
 
-Use `Scalar` for one replaceable fact:
+Use `Cell` for one replaceable fact:
 
 ```lua
-local quest = Scalar.new({ stage = 'find_key', clues = 1 }, 'moon-gate-quest')
+local quest = Cell.new({ stage = 'find_key', clues = 1 }, 'moon-gate-quest')
 
 local advance = quest:read_op():and_then(function(current)
   if current.stage ~= 'find_key' or current.clues < 1 then
@@ -190,7 +190,19 @@ local advance = quest:read_op():and_then(function(current)
 end)
 
 fibers.perform(advance)
+
+local current = quest:wait_until(function(value)
+  return value.stage == 'open_gate'
+end)
+
+local clue_count = quest:match(function(value)
+  if value.stage == 'open_gate' then
+    return true, value.clues
+  end
+end)
 ```
+
+`wait_until` returns the complete satisfying value. `match` returns values projected by its matcher after the leading truthy result. Use `wait_until_op` and `match_op` when the wait must compose with another operation.
 
 For an ordered state machine, define a typed transition:
 

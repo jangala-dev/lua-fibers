@@ -133,7 +133,7 @@ the outside world may be admitted as changing condition, not only discrete event
 Implementation sentence:
 
 ```text
-weather folds externally fed resources into scalar conditions with validity facts
+weather folds externally fed resources into cell conditions with validity facts
 ```
 
 Possible use:

@@ -1,4 +1,5 @@
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 
 local Index = {}
 Index.__index = function(self, key)
@@ -90,6 +91,10 @@ function Index:insert_op(key, rank, value)
   end
   return Facility.op(self, Kind, insert_program(self, key, rank, value, 0))
 end
+
+function Index:insert(key, rank, value)
+  return perform(self:insert_op(key, rank, value))
+end
 function Index:insert_auto_op(rank, value)
   if rank == nil then
     error('index insert_auto requires a rank', 2)
@@ -98,10 +103,18 @@ function Index:insert_auto_op(rank, value)
   local key = self._fibers_id .. ':auto:' .. tostring(next_append_id)
   return Facility.op(self, Kind, insert_program(self, key, rank, value, next_append_id))
 end
+
+function Index:insert_auto(rank, value)
+  return perform(self:insert_auto_op(rank, value))
+end
 function Index:append_op(value)
   next_append_id = next_append_id + 1
   local key = self._fibers_id .. ':append:' .. tostring(next_append_id)
   return Facility.op(self, Kind, insert_program(self, key, math.huge, value, next_append_id))
+end
+
+function Index:append(value)
+  return perform(self:append_op(value))
 end
 function Index:remove_op(key)
   if key == nil then
@@ -119,22 +132,34 @@ function Index:remove_op(key)
     })
   )
 end
+
+function Index:remove(key)
+  return perform(self:remove_op(key))
+end
 function Index:pop_first_op()
   return self._pop_first_op
+end
+
+function Index:pop_first()
+  return perform(self:pop_first_op())
 end
 function Index:pop_last_op()
   return self._pop_last_op
 end
+
+function Index:pop_last()
+  return perform(self:pop_last_op())
+end
 function Index:changed_op(version)
   return Facility.occurrence(self._changed_descriptor, version)
+end
+
+function Index:changed(version)
+  return perform(self:changed_op(version))
 end
 function Index:append_footprint()
   return self._append_footprint
 end
 
 Index.Kind = Kind
-Facility.performing(
-  Index,
-  { 'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last', 'changed' }
-)
 return Index

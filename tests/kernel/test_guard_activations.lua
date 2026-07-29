@@ -15,7 +15,7 @@ package.path = table.concat({
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Sleep = require('fibers.sleep')
 local Clock = require('fibers.resource.clock')
@@ -241,12 +241,12 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   -- the earlier progression remains pending behind a guarded option.
   do
     local rt = Runtime.new({ machine = machine })
-    local scalar = Scalar.new(0, 'guard-activation-version')
+    local cell = Cell.new(0, 'guard-activation-version')
     local gate = Rendezvous.new('guard-activation-gate')
     local calls, value, activation_number = 0, nil, nil
 
     rt:spawn_raw(function()
-      value, activation_number = rt:perform(scalar:read_op():and_then(function(observed)
+      value, activation_number = rt:perform(cell:read_op():and_then(function(observed)
         return Op.guard(function()
           calls = calls + 1
           return gate:get_op():map(function()
@@ -257,7 +257,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     end, 'guard-version-waiter')
 
     rt:spawn_raw(function()
-      rt:perform(scalar:write_op(1))
+      rt:perform(cell:write_op(1))
     end, 'guard-version-writer')
 
     found(rt:run(), machine .. ': writer should commit')
@@ -294,10 +294,10 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
   -- it.  If that proof changes, the fallback guard is prepared afresh.
   do
     local rt = Runtime.new({ machine = machine })
-    local scalar = Scalar.new(0, 'guard-fallback-version')
+    local cell = Cell.new(0, 'guard-fallback-version')
     local gate = Rendezvous.new('guard-fallback-gate')
     local calls, result = 0, nil
-    local preferred = scalar:changed_op(0):and_then(function()
+    local preferred = cell:changed_op(0):and_then(function()
       return Op.never()
     end)
     local fallback = Op.guard(function()
@@ -321,7 +321,7 @@ for _, machine in ipairs({ 'ledger', 'reference' }) do
     eq(calls, 1, machine .. ': initial Retry proof should activate one fallback guard')
 
     rt:spawn_raw(function()
-      rt:perform(scalar:write_op(1))
+      rt:perform(cell:write_op(1))
     end, 'guard-fallback-version-writer')
     local refreshed = rt:run()
     eq(

@@ -35,7 +35,7 @@ explicit because it contains deliberate proof-search stress cases.
 ### Simple
 
 - `always perform`: kernel, coroutine and commit floor;
-- `serial read write`: versioned scalar read/write transactions;
+- `serial read write`: versioned cell read/write transactions;
 - `two fibre ping pong`: ordinary two-party rendezvous;
 - `preloaded event queue`: external delivery and consumption.
 

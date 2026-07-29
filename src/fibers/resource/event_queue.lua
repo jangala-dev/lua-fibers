@@ -2,6 +2,7 @@
 
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.host.external')
 
@@ -131,6 +132,10 @@ function EventQueue:next_op()
   return self._next_op
 end
 
+function EventQueue:next()
+  return perform(self:next_op())
+end
+
 function EventQueue:_drain_op()
   return self._drain_cached_op
 end
@@ -140,6 +145,5 @@ function EventQueue:length()
 end
 
 EventQueue.Kind = Kind
-Facility.performing(EventQueue, { 'next' })
 
 return EventQueue

@@ -8,6 +8,7 @@
 local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
+local perform = require('fibers.perform')
 
 local Grant = {}
 Grant.__index = Grant
@@ -222,6 +223,10 @@ function Grant:closed_op()
   return Lifetime.require(self):closed_op():map(function()
     return self
   end)
+end
+
+function Grant:closed()
+  return perform(self:closed_op())
 end
 
 function Grant:inspect()

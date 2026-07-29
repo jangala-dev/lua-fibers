@@ -1,7 +1,7 @@
--- Coalescing broadcast notification from Counter + Scalar.
+-- Coalescing broadcast notification from Counter + Cell.
 
 local Counter = require('fibers.resource.counter')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
 
@@ -29,12 +29,16 @@ function Pulse.new(initial, name)
   initial = non_negative_integer(initial or 0, 'pulse initial version', 2)
   return setmetatable({
     _version = Counter.new(initial, child_name(name, 'version')),
-    _status = Scalar.new(OPEN, child_name(name, 'status')),
+    _status = Cell.new(OPEN, child_name(name, 'status')),
   }, Pulse)
 end
 
 function Pulse:version_op()
   return self._version:read_op()
+end
+
+function Pulse:version()
+  return perform(self:version_op())
 end
 
 function Pulse:why_op()
@@ -43,8 +47,16 @@ function Pulse:why_op()
   end)
 end
 
+function Pulse:why()
+  return perform(self:why_op())
+end
+
 function Pulse:is_closed_op()
   return self._status:read_op():map(closed)
+end
+
+function Pulse:is_closed()
+  return perform(self:is_closed_op())
 end
 
 function Pulse:signal_op()
@@ -55,7 +67,7 @@ function Pulse:signal_op()
     return rows[2][1]
   end)
 
-  return signal:or_else(self._status:value_op(closed):map(function()
+  return signal:or_else(self._status:wait_until_op(closed):map(function()
     return nil
   end))
 end
@@ -67,7 +79,7 @@ function Pulse:close_op(reason)
     end)
   end)
 
-  return close:or_else(self._status:value_op(closed):map(function()
+  return close:or_else(self._status:wait_until_op(closed):map(function()
     return true
   end))
 end
@@ -79,7 +91,7 @@ function Pulse:changed_op(last_seen)
     return version, nil
   end)
 
-  local ended = self._status:value_op(closed):map(function(status)
+  local ended = self._status:wait_until_op(closed):map(function(status)
     return nil, status.reason
   end)
 

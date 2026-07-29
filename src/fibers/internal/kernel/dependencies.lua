@@ -186,7 +186,7 @@ function Index:_plan(metadata, request)
       add_unique(memberships, membership_seen, self:atom('supply', location, 'any'))
     end
 
-    -- A Lifetime outcome is not merely another scalar: an operation currently
+    -- A Lifetime outcome is not merely another cell: an operation currently
     -- running inside that Lifetime's Scope may causally advance it through
     -- several intermediate commits before the outcome is published.  Model the
     -- observer side as a directional exchange.  The opposite producer role is

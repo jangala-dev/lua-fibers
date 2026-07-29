@@ -14,7 +14,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -47,12 +47,12 @@ assert_eq(got, 'x')
 assert_eq(sent, true)
 
 -- bounded solve should be non-mutating on budget exhaustion
-local scalar = Scalar.new(0, 'budget-scalar')
+local cell = Cell.new(0, 'budget-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
-    local update = scalar:read_op():and_then(function(v)
-      return scalar:write_op(v + 1)
+    local update = cell:read_op():and_then(function(v)
+      return cell:write_op(v + 1)
     end)
     rt2:perform(Op.never():or_else(update))
   end, 'u' .. i)
@@ -60,7 +60,7 @@ end
 rt2:_pump() -- start all fibres without solving
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending', 'budget status')
-assert_eq(scalar.value, 0, 'pending budget does not mutate')
+assert_eq(cell.value, 0, 'pending budget does not mutate')
 local committed = false
 for i = 1, 20 do
   local s = rt2:step({ max_work = 1000 })
@@ -72,7 +72,7 @@ for i = 1, 20 do
   end
 end
 assert_eq(committed, true, 'eventual bounded commit')
-assert_eq(scalar.value, 4)
+assert_eq(cell.value, 4)
 print('tests/test_runtime.lua: step ok')
 
 package.path = table.concat({
@@ -90,7 +90,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -133,18 +133,18 @@ assert_eq(got, 'x')
 assert_eq(sent, true)
 
 -- Budget exhaustion must not mutate resources before a committable world is found.
-local scalar = Scalar.new(0, 'cursor-scalar')
+local cell = Cell.new(0, 'cursor-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
-    rt2:perform(scalar:read_op():and_then(function(v)
-      return scalar:write_op(v + 1)
+    rt2:perform(cell:read_op():and_then(function(v)
+      return cell:write_op(v + 1)
     end))
   end, 'u' .. i)
 end
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending')
-assert_eq(scalar.value, 0, 'pending cursor step does not commit')
+assert_eq(cell.value, 0, 'pending cursor step does not commit')
 local commits = 0
 for i = 1, 200 do
   st = rt2:step({ max_work = 3 })
@@ -156,7 +156,7 @@ for i = 1, 200 do
   end
 end
 assert_eq(commits, 4)
-assert_eq(scalar.value, 4)
+assert_eq(cell.value, 4)
 print('tests/test_runtime.lua: cursor ok')
 
 package.path = table.concat({

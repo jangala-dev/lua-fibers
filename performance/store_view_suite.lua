@@ -13,7 +13,7 @@ package.path = table.concat({
 
 local Runtime = require('fibers.runtime')
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Clock = require('performance.clock')
 
 local cells = tonumber(os.getenv('FIBERS_STORE_CELLS') or '16')
@@ -32,10 +32,10 @@ end
 
 local function build_case()
   local rt = Runtime.new()
-  local scalars, reads = {}, {}
+  local cells, reads = {}, {}
   for i = 1, cells do
-    scalars[i] = Scalar.new(i, 'store-view-cell-' .. tostring(i))
-    reads[i] = scalars[i]:read_op()
+    cells[i] = Cell.new(i, 'store-view-cell-' .. tostring(i))
+    reads[i] = cells[i]:read_op()
   end
 
   local lane_ops = {}

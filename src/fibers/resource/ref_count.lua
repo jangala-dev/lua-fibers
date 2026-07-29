@@ -1,5 +1,5 @@
 local Counter = require('fibers.resource.counter')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
 
@@ -17,7 +17,7 @@ local function handle(group, active)
   group._next_id = group._next_id + 1
   return setmetatable({
     _group = group,
-    _active = Scalar.new(active, child_name(group._name, 'handle-' .. group._next_id)),
+    _active = Cell.new(active, child_name(group._name, 'handle-' .. group._next_id)),
   }, Handle)
 end
 
@@ -87,6 +87,10 @@ end
 
 function Handle:active()
   return perform(self:active_op())
+end
+
+function Handle:inactive()
+  return perform(self:inactive_op())
 end
 
 function Handle:clone()

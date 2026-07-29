@@ -12,14 +12,14 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
 local client, server = Stream.memory_pair({ name = 'negotiated-stream', capacity = 128 })
 local negotiator = Scope.new('negotiator')
 local responder = Scope.new('responder')
-local protocol = Scalar.new('unknown', 'protocol-state')
+local protocol = Cell.new('unknown', 'protocol-state')
 local reply, responder_has_custody
 
 local function negotiate_op(stream)

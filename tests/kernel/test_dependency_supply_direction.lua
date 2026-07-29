@@ -33,7 +33,7 @@ assert(not IR.metadata_may_supply(pop_meta, pop_intent))
 assert(IR.metadata_may_supply(pop_meta, put_intent))
 assert(not IR.metadata_may_supply(put_meta, put_intent))
 
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
@@ -71,23 +71,23 @@ local observer = StateMachine.query('directional-observer', function(value)
   end
   return StateMachine.Ready.same(value)
 end, 100)
-local scalar = StateMachine.new(0, 'directional-separation')
+local cell = StateMachine.new(0, 'directional-separation')
 local rows
 local rt = Runtime.new()
 rt:spawn_raw(function()
   rows = rt:perform(Op.tensor({
-    scalar:transition_op(observer),
-    scalar:transition_op(producer),
+    cell:transition_op(observer),
+    cell:transition_op(producer),
   }))
 end, 'directional-separation')
 assert(rt:run().tag == 'found')
 assert(rows[1][1] == 1)
 assert(rows[2][1] == true)
-assert(scalar.value == 1)
+assert(cell.value == 1)
 
 -- Canonical metadata contains only the supply set, never compatibility fields.
-local producer_meta = IR.metadata(scalar:transition_op(producer))
-local access = assert(producer_meta.locations[scalar._location])
+local producer_meta = IR.metadata(cell:transition_op(producer))
+local access = assert(producer_meta.locations[cell._location])
 assert(access.supplies and access.supplies.any)
 assert(access.supply == nil)
 assert(access.supply_up == nil)
@@ -122,7 +122,7 @@ local declared_up = IR.metadata_hint({
     },
   },
 })
-local arbitrary_write = IR.metadata(Scalar.new(0, 'arbitrary-write'):write_op(1))
+local arbitrary_write = IR.metadata(Cell.new(0, 'arbitrary-write'):write_op(1))
 local covers_arbitrary = IR.metadata_covers(declared_up, arbitrary_write)
 assert(not covers_arbitrary, 'directional declaration must not cover explicit any supply')
 

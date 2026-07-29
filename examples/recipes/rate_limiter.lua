@@ -1,6 +1,6 @@
 -- Token-bucket rate limiter built on typed Machine transitions.
 --
--- The limiter is deliberately a scalar state-machine facility.  Refill and
+-- The limiter is deliberately a cell state-machine facility.  Refill and
 -- token consumption happen in named transitions, avoiding double-refill races.
 
 local Op = require('fibers.op')

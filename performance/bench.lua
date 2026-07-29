@@ -44,7 +44,7 @@ local Closure = require('fibers.closure')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local EventQueue = require('fibers.resource.event_queue')
 local Clock = require('fibers.resource.clock')
 local Lifetime = require('fibers.lifetime')
@@ -268,38 +268,38 @@ add('local', 'wrap post commit', 1500, function(n)
   return n
 end)
 
-add('scalar', 'serial read write', 1200, function(n)
+add('cell', 'serial read write', 1200, function(n)
   local rt = Runtime.new()
-  local scalar = Scalar.new(0, 'bench-scalar-serial')
+  local cell = Cell.new(0, 'bench-cell-serial')
   rt:spawn_raw(function()
     for _ = 1, n do
-      rt:perform(scalar:read_op():and_then(function(v)
-        return scalar:write_op(v + 1)
+      rt:perform(cell:read_op():and_then(function(v)
+        return cell:write_op(v + 1)
       end))
     end
-  end, 'bench-scalar-serial')
+  end, 'bench-cell-serial')
   run_rt(rt)
-  assert_eq(scalar.value, n)
+  assert_eq(cell.value, n)
   return n
 end)
 
-add('scalar', 'changed wait wake', 400, function(n)
+add('cell', 'changed wait wake', 400, function(n)
   local rt = Runtime.new()
-  local scalar = Scalar.new(0, 'bench-scalar-changed')
+  local cell = Cell.new(0, 'bench-cell-changed')
   local observed = 0
   rt:spawn_raw(function()
-    local version = scalar.version
+    local version = cell.version
     for _ = 1, n do
-      local value, next_version = rt:perform(scalar:changed_op(version))
+      local value, next_version = rt:perform(cell:changed_op(version))
       observed = value
       version = next_version
     end
-  end, 'bench-scalar-waiter')
+  end, 'bench-cell-waiter')
   rt:spawn_raw(function()
     for i = 1, n do
-      rt:perform(scalar:write_op(i))
+      rt:perform(cell:write_op(i))
     end
-  end, 'bench-scalar-writer')
+  end, 'bench-cell-writer')
   run_rt(rt)
   assert_eq(observed, n)
   return n
@@ -346,11 +346,11 @@ add('rendezvous', 'tensor internal rendezvous', 700, function(n)
   return n
 end)
 
-add('product', 'all independent scalars', 900, function(n)
+add('product', 'all independent cells', 900, function(n)
   local rt = Runtime.new()
-  local a = Scalar.new(0, 'bench-all-a')
-  local b = Scalar.new(0, 'bench-all-b')
-  local c = Scalar.new(0, 'bench-all-c')
+  local a = Cell.new(0, 'bench-all-a')
+  local b = Cell.new(0, 'bench-all-b')
+  local c = Cell.new(0, 'bench-all-c')
   local seen = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -401,18 +401,18 @@ end)
 
 add('product', 'choice conflict backtrack', 450, function(n)
   local rt = Runtime.new()
-  local scalar = Scalar.new(0, 'bench-choice-conflict')
+  local cell = Cell.new(0, 'bench-choice-conflict')
   local wins = 0
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.tensor({
-        scalar
+        cell
           :write_op(1)
           :map(function()
             return 'write-1'
           end)
           :choice(Op.always('no-write')),
-        scalar:write_op(2),
+        cell:write_op(2),
       }))
       if rows[1][1] == 'no-write' and rows[2][1] == true then
         wins = wins + 1
@@ -421,7 +421,7 @@ add('product', 'choice conflict backtrack', 450, function(n)
   end, 'bench-choice-conflict')
   run_rt(rt)
   assert_eq(wins, n)
-  assert_eq(scalar.value, 2)
+  assert_eq(cell.value, 2)
   return n
 end)
 
@@ -453,14 +453,14 @@ add('product', 'or_else waits for partner', 350, function(n)
   return n
 end)
 
-add('product', 'dependent scalar updaters', 180, function(n)
+add('product', 'dependent cell updaters', 180, function(n)
   local total_commits = n * 4
   local rt = Runtime.new()
-  local scalar = Scalar.new(0, 'bench-dependent-scalar')
+  local cell = Cell.new(0, 'bench-dependent-cell')
   local returns = {}
   local function update_op()
-    return scalar:read_op():and_then(function(old)
-      return scalar:write_op(old + 1):and_then(function()
+    return cell:read_op():and_then(function(old)
+      return cell:write_op(old + 1):and_then(function()
         return Op.always(old)
       end)
     end)
@@ -474,7 +474,7 @@ add('product', 'dependent scalar updaters', 180, function(n)
     end, 'bench-dependent-' .. tostring(i))
   end
   run_rt(rt)
-  assert_eq(scalar.value, total_commits)
+  assert_eq(cell.value, total_commits)
   assert_eq(#returns, total_commits)
   return total_commits
 end)

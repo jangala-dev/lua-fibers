@@ -15,7 +15,7 @@ package.path = table.concat({
 
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
 local Clock = require('performance.clock')
 
@@ -127,14 +127,14 @@ end)
 add('certified symmetric suppliers', function(profile)
   local rt = runtime(profile, { dependency_index_threshold = 1 })
   local channel = Rendezvous.new('adv-symmetry')
-  local scalar = Scalar.new(0, 'adv-symmetry-state')
+  local cell = Cell.new(0, 'adv-symmetry-state')
   for _ = 1, 10 do
     rt:spawn_raw(function()
       rt:perform(channel:put_op(1):certify_symmetry('equivalent-producer'))
     end)
   end
   rt:spawn_raw(function()
-    rt:perform(Op.tensor({ channel:get_op(), scalar:write_op(1), scalar:write_op(2) }))
+    rt:perform(Op.tensor({ channel:get_op(), cell:write_op(1), cell:write_op(2) }))
   end)
   assert(drain(rt).tag == 'quiescent')
   return rt, 'retry:10'

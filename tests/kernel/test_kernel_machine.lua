@@ -15,7 +15,7 @@ local IR = require('fibers.internal.kernel.ir')
 local Store = require('fibers.internal.kernel.ledger')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local function eq(a, b, m)
   if a ~= b then
@@ -64,7 +64,7 @@ end
 -- The ledger machine and reference machine must agree on a backtracking world.
 local function scenario(machine)
   local r = Runtime.new({ machine = machine })
-  local s = Scalar.new(0)
+  local s = Cell.new(0)
   local out
   r:spawn_raw(function()
     out = r:perform(Op.tensor({

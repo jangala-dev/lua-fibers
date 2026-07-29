@@ -18,7 +18,7 @@ package.path = table.concat({
 
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Op = require('fibers.op')
 local fibers = require('fibers')
@@ -166,13 +166,13 @@ add('binary rendezvous sequence', function(profile, machine)
   return rt, 'sum:' .. tostring(total)
 end)
 
-add('forced scalar query sequence', function(profile, machine)
+add('forced cell query sequence', function(profile, machine)
   local rt = runtime(profile, machine)
-  local scalar = StateMachine.new(9, 'arch-forced-scalar')
+  local cell = StateMachine.new(9, 'arch-forced-cell')
   local total, n = 0, 80
   rt:spawn_raw(function()
     for _ = 1, n do
-      if rt:perform(scalar:expect_op(9)) then
+      if rt:perform(cell:expect_op(9)) then
         total = total + 1
       end
     end

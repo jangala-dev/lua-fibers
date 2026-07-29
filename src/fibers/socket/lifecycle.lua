@@ -1,7 +1,7 @@
 -- Shared transactional lifecycle machine for listener-like socket resources.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local HostError = require('fibers.host.error')
 

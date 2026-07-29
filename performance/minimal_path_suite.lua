@@ -26,7 +26,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Clock = require('performance.clock')
 
 local function env_number(name, default)
@@ -79,59 +79,59 @@ local cases = {
     end,
   },
   {
-    name = 'scalar_read',
+    name = 'cell_read',
     operations = function(n)
       return n
     end,
     run = function(n, instrumented)
       local rt = runtime(instrumented)
-      local scalar = Scalar.new(7, 'minimal-scalar')
-      local operation = scalar:read_op()
+      local cell = Cell.new(7, 'minimal-cell')
+      local operation = cell:read_op()
       local total = 0
       rt:spawn_raw(function()
         for _ = 1, n do
           total = total + rt:perform(operation)
         end
-      end, 'minimal-scalar-reader')
+      end, 'minimal-cell-reader')
       drain(rt)
       assert(total == n * 7)
       return rt
     end,
   },
   {
-    name = 'scalar_write_prepared',
+    name = 'cell_write_prepared',
     operations = function(n)
       return n
     end,
     run = function(n, instrumented)
       local rt = runtime(instrumented)
-      local scalar = Scalar.new(0, 'minimal-scalar-write-prepared')
-      local operation = scalar:write_op(1)
+      local cell = Cell.new(0, 'minimal-cell-write-prepared')
+      local operation = cell:write_op(1)
       rt:spawn_raw(function()
         for _ = 1, n do
           rt:perform(operation)
         end
-      end, 'minimal-scalar-writer-prepared')
+      end, 'minimal-cell-writer-prepared')
       drain(rt)
-      assert(scalar.value == 1)
+      assert(cell.value == 1)
       return rt
     end,
   },
   {
-    name = 'scalar_write_dynamic',
+    name = 'cell_write_dynamic',
     operations = function(n)
       return n
     end,
     run = function(n, instrumented)
       local rt = runtime(instrumented)
-      local scalar = Scalar.new(0, 'minimal-scalar-write-dynamic')
+      local cell = Cell.new(0, 'minimal-cell-write-dynamic')
       rt:spawn_raw(function()
         for i = 1, n do
-          rt:perform(scalar:write_op(i))
+          rt:perform(cell:write_op(i))
         end
-      end, 'minimal-scalar-writer-dynamic')
+      end, 'minimal-cell-writer-dynamic')
       drain(rt)
-      assert(scalar.value == n)
+      assert(cell.value == n)
       return rt
     end,
   },

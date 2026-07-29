@@ -14,11 +14,13 @@ package.path = table.concat({
 -- Load facilities before the facade: direct methods must not depend on facade
 -- load order or dynamic prototype mutation.
 local channel = require('fibers.channel')
+local Closure = require('fibers.closure')
 local file = require('fibers.file')
+local Grant = require('fibers.grant')
 local mailbox = require('fibers.mailbox')
 local Pulse = require('fibers.pulse')
 local process = require('fibers.process')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local socket = require('fibers.socket')
 local Stream = require('fibers.stream')
 local perform = require('fibers.perform')
@@ -33,6 +35,7 @@ local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
 local Lease = require('fibers.resource.lease')
 local Flow = require('fibers.resource.flow')
+local RefCount = require('fibers.resource.ref_count')
 local Signal = require('fibers.resource.signal')
 local EventQueue = require('fibers.resource.event_queue')
 
@@ -71,7 +74,7 @@ do
   local rendezvous = channel.new()
   local queue = channel.new(1)
   local unbounded = channel.new(math.huge)
-  local scalar = Scalar.new('idle')
+  local cell = Cell.new('idle')
   local pulse = Pulse.new()
   local tx, rx = mailbox.new(1)
   local a = Stream.memory_pair()
@@ -80,10 +83,18 @@ do
   assert_twins(queue, { 'get', 'put' }, 'buffered channel')
   assert_twins(unbounded, { 'get', 'put' }, 'unbounded channel')
   assert(unbounded.capacity == math.huge, 'math.huge should select an unbounded FIFO')
-  assert_twins(scalar, { 'read', 'changed', 'expect', 'write' }, 'scalar')
-  assert_twins(pulse, { 'signal', 'close', 'changed', 'next' }, 'pulse')
-  assert_twins(tx, { 'send', 'clone', 'close' }, 'mailbox sender')
-  assert_twins(rx, { 'recv' }, 'mailbox receiver')
+  assert_twins(cell, { 'read', 'changed', 'expect', 'write', 'wait_until', 'match' }, 'cell')
+  assert_twins(pulse, {
+    'version',
+    'why',
+    'is_closed',
+    'signal',
+    'close',
+    'changed',
+    'next',
+  }, 'pulse')
+  assert_twins(tx, { 'send', 'clone', 'close', 'why', 'dropped' }, 'mailbox sender')
+  assert_twins(rx, { 'recv', 'why', 'dropped' }, 'mailbox receiver')
   assert_eq(rx.receive, nil, 'recv has no long alias')
   assert_twins(a, {
     'read_some',
@@ -115,10 +126,10 @@ do
   assert_twins(Stream, { 'merge_lines' }, 'stream module')
   assert_twins(Sleep, { 'sleep', 'sleep_until' }, 'Sleep')
 
-  assert_absent(scalar, { 'snapshot' }, 'scalar')
-  assert_absent(pulse, { 'snapshot', 'version', 'why', 'is_closed' }, 'pulse')
-  assert_absent(tx, { 'why', 'dropped', 'snapshot' }, 'mailbox sender')
-  assert_absent(rx, { 'why', 'dropped', 'snapshot' }, 'mailbox receiver')
+  assert_absent(cell, { 'snapshot', 'select', 'value_op', 'until_op' }, 'cell')
+  assert_absent(pulse, { 'snapshot' }, 'pulse')
+  assert_absent(tx, { 'snapshot' }, 'mailbox sender')
+  assert_absent(rx, { 'snapshot' }, 'mailbox receiver')
   assert_absent(a, { 'inspect' }, 'stream')
   assert_absent(socket, { 'connect_inet', 'connect_unix' }, 'socket')
 
@@ -151,10 +162,37 @@ do
   assert_eq(keyed.versions, nil, 'keyed versions remain private')
   assert_eq(keyed.version, nil, 'keyed aggregate version remains private')
   assert_twins(Lease.new(), { 'acquire', 'release' }, 'lease')
+  local ref_count, handle = RefCount.new()
+  assert_twins(ref_count, { 'count', 'zero' }, 'ref count')
+  assert_twins(handle, { 'active', 'inactive', 'clone', 'close' }, 'ref-count handle')
   local flow = Flow.new()
-  assert_absent(flow, { 'inspect', 'abort', 'closed' }, 'flow')
-  assert_absent(flow:inlet(), { 'write', 'flush', 'close' }, 'flow inlet')
-  assert_absent(flow:outlet(), { 'read_some', 'read_line', 'close' }, 'flow outlet')
+  assert_twins(flow, { 'abort', 'closed' }, 'flow')
+  assert_absent(flow, { 'inspect' }, 'flow')
+  assert_twins(flow:inlet(), {
+    'write',
+    'write_some',
+    'reserve_some',
+    'flush',
+    'close',
+    'closed',
+    'fail',
+  }, 'flow inlet')
+  assert_twins(flow:outlet(), {
+    'read_some',
+    'read_exactly',
+    'peek_exactly',
+    'read_until',
+    'read_line',
+    'read_all',
+    'drop',
+    'splice_to',
+    'lease_some',
+    'close',
+    'closed',
+    'fail',
+  }, 'flow outlet')
+  assert_twins(Grant, { 'closed' }, 'grant')
+  assert_twins(Closure.Failure, { 'retry', 'force' }, 'closure failure')
   assert_twins(Signal.new(), { 'wait' }, 'external signal')
   assert_twins(EventQueue.new(), { 'next' }, 'external event queue')
 end
@@ -184,10 +222,61 @@ do
     assert_twins(sender, { 'await', 'request_cancel' }, 'task')
     assert_absent(sender, { 'exit', 'state', 'cancel' }, 'task')
 
-    local state = Scalar.new('idle', 'state')
+    local state = Cell.new('idle', 'state')
     assert_eq(state:read(), 'idle')
     state:write('running')
     assert_eq(state:expect('running'), true)
+    assert_eq(
+      state:wait_until(function(value)
+        return value == 'running'
+      end),
+      'running'
+    )
+    local matched, length = state:match(function(value)
+      if value == 'running' then
+        return true, 'matched:' .. value, #value
+      end
+    end)
+    assert_eq(matched, 'matched:running')
+    assert_eq(length, 7)
+
+    local pulse = Pulse.new(0, 'direct-pulse')
+    assert_eq(pulse:version(), 0)
+    assert_eq(pulse:is_closed(), false)
+    assert_eq(pulse:why(), nil)
+    assert_eq(pulse:signal(), 1)
+    assert_eq(pulse:version(), 1)
+    assert_truthy(pulse:close('done'))
+    assert_eq(pulse:is_closed(), true)
+    assert_eq(pulse:why(), 'done')
+
+    local direct_tx, direct_rx = mailbox.new(1, 'direct-mailbox')
+    assert_eq(direct_tx:dropped(), 0)
+    assert_eq(direct_rx:dropped(), 0)
+    assert_eq(direct_tx:why(), nil)
+    assert_truthy(direct_tx:close('done'))
+    assert_eq(direct_rx:why(), 'done')
+
+    local ref_count, ref_handle = RefCount.new('direct-ref-count')
+    assert_eq(ref_count:count(), 1)
+    assert_truthy(ref_handle:active())
+    assert_truthy(ref_handle:close())
+    assert_truthy(ref_handle:inactive())
+    assert_truthy(ref_count:zero())
+
+    local flow = Flow.new(8, 'direct-flow')
+    local inlet, outlet = flow:inlet(), flow:outlet()
+    assert_eq(inlet:write('ab'), 2)
+    local data_lease = outlet:lease_some(1, 'consumer')
+    assert_twins(data_lease, { 'ack', 'release', 'fail' }, 'flow data lease')
+    assert_eq(data_lease:bytes(), 'a')
+    assert_truthy(data_lease:ack())
+    local space_lease = inlet:reserve_some(2, 'producer')
+    assert_twins(space_lease, { 'commit', 'release', 'fail' }, 'flow space lease')
+    assert_eq(space_lease:commit('cd'), 2)
+    assert_eq(outlet:read_exactly(3), 'bcd')
+    assert_truthy(inlet:close())
+    assert_truthy(inlet:closed())
 
     local reader, writer = file.pipe({ name = 'direct-pipe' })
     writer:write('one', ' ', 'line\n')

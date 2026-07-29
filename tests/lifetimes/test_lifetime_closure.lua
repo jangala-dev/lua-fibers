@@ -197,14 +197,14 @@ do
   )
 
   fibers.run(function()
-    fibers.perform(nested_failure:force_op())
+    nested_failure:force()
   end)
   eq(Lifetime.of(bad):current_state().closure_phase, 'closed')
   eq(#child_scope:_store():current_records(child_scope, false), 0)
   eq(task:lifetime():current_state().closure_phase, 'closure_failed')
 
   fibers.run(function()
-    fibers.perform(parent_failure:retry_op())
+    parent_failure:retry()
   end)
   task_state = task:lifetime():current_state()
   eq(task_state.closure_phase, 'closed')

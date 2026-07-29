@@ -584,11 +584,11 @@ local function none()
 end
 
 local function is_wait(value)
-  return type(value) == 'table' and value._fibers_scalar_wait == true
+  return type(value) == 'table' and value._fibers_cell_wait == true
 end
 
 local function is_ready(value)
-  return type(value) == 'table' and value._fibers_scalar_ready == true
+  return type(value) == 'table' and value._fibers_cell_ready == true
 end
 
 local function machine_outcome(program, value, context, occurrence_payload)

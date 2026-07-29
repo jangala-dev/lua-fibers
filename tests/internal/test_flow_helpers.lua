@@ -243,7 +243,7 @@ end
 
 -- Flow mutations notify the host reactor through a committed, deduplicated
 -- effect.  Blocked or losing mutations do not produce a notification, and Flow
--- no longer patches Scalar's private location apply function.
+-- no longer patches Cell's private location apply function.
 do
   local flow = Flow.new(8, 'flow-change-effect')
   assert_nil(flow._state_observers)

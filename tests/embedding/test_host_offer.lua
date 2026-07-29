@@ -1,5 +1,10 @@
 package.path = table.concat({
-  './src/?.lua', './src/?/init.lua', './src/?/?.lua', './?.lua', './?/init.lua', package.path,
+  './src/?.lua',
+  './src/?/init.lua',
+  './src/?/?.lua',
+  './?.lua',
+  './?/init.lua',
+  package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -13,7 +18,9 @@ local Runtime = require('fibers.runtime')
 local FakeHandle = require('tests.support.fake_handle')
 
 local function assert_eq(a, b, message)
-  if a ~= b then error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
+  if a ~= b then
+    error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
+  end
 end
 
 local function readiness_handle(host, name)
@@ -21,7 +28,9 @@ local function readiness_handle(host, name)
     name = name,
     key = {},
     host = host,
-    close = function() return true end,
+    close = function()
+      return true
+    end,
   })
 end
 
@@ -133,7 +142,9 @@ do
       end,
     })
     fibers.perform(source:open_op(scope))
-    while source._queue:length() < 2 do Sleep.sleep(0) end
+    while source._queue:length() < 2 do
+      Sleep.sleep(0)
+    end
     fibers.perform(source:close_op('exercise disposal failures'))
 
     local terminal_ok
@@ -153,7 +164,6 @@ do
   assert_eq(#terminal_err.errors, 2)
 end
 
-
 -- Polling offer sources give providers without a readiness handle the same
 -- cached one-shot completion contract without a dedicated task.
 do
@@ -167,7 +177,9 @@ do
       poll_interval = 0.01,
       pull = function()
         pulls = pulls + 1
-        if pulls < 3 then return nil, HostError.would_block('test', 'poll') end
+        if pulls < 3 then
+          return nil, HostError.would_block('test', 'poll')
+        end
         return 'complete'
       end,
     })

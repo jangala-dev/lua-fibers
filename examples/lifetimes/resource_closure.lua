@@ -17,10 +17,10 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Lifetime = require('fibers.lifetime')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Closure = require('fibers.closure')
 
-local closed = Scalar.new(false, 'demo-handle-closed')
+local closed = Cell.new(false, 'demo-handle-closed')
 local handle = { name = 'demo-handle' }
 Lifetime.define(handle, {
   role = 'demo-handle',

@@ -61,7 +61,7 @@ name length and compression-pointer depth. Malformed or unrelated datagrams are
 discarded while the transaction deadline remains open.
 
 Resolver configuration, hosts data and `/dev/urandom` are read through
-`fibers.file`; the DNS path does not call `io.open`. A small Scalar once-gate
+`fibers.file`; the DNS path does not call `io.open`. A small Cell once-gate
 serialises each lazy file load, so concurrent A and AAAA producers share one
 non-blocking read and cancellation reopens an unfinished load.
 

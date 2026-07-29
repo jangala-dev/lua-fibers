@@ -15,10 +15,10 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local silver_keys = Counter.new(1, 'silver-keys')
-local moon_gate = Scalar.new('locked', 'moon-gate')
+local moon_gate = Cell.new('locked', 'moon-gate')
 local first, second
 
 local function unlock_op()

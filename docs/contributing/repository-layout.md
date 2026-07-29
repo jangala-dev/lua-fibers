@@ -18,19 +18,19 @@ src/fibers/
 
   channel.lua              capacity-directed FIFO/Rendezvous façade
   semaphore.lua            capacity vocabulary over Counter
-  latch.lua                set-once value over Scalar
-  mailbox.lua              Channel + RefCount + Scalar + Counter
-  pulse.lua                Counter epoch + Scalar closure
+  latch.lua                set-once value over Cell
+  mailbox.lua              Channel + RefCount + Cell + Counter
+  pulse.lua                Counter epoch + Cell closure
   sleep.lua                direct and composable time waits
   stream.lua               public readable, writable and duplex interfaces
 
   resource/                lower-level resources and transactional laws
-    scalar.lua             versioned replacement
+    cell.lua               versioned replacement
     counter.lua            additive bounded quantity
     index.lua              ordered witnessed collection
     fifo.lua               FIFO composition from Index + Counter
     rendezvous.lua         synchronous exchange
-    ref_count.lua          idempotent handles over Counter + Scalar
+    ref_count.lua          idempotent handles over Counter + Cell
     machine.lua            explicit serial state relation
     event_queue.lua        external-authorisation boundary
     flow/                  transactional transfer atom, leases and rope storage
@@ -102,7 +102,7 @@ local FIFO = require('fibers.resource.fifo')
 ```
 
 There is no `fibers.resource` façade and no duplicate top-level façade for
-Flow or Scalar. Top-level placement denotes common application
+Flow or Cell. Top-level placement denotes common application
 vocabulary; `resource/` denotes lower-level transactional construction.
 
 Low-level primitive constructors are positional and do not accept options

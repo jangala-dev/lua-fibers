@@ -13,7 +13,7 @@ package.path = table.concat({
 -- transactional hand-off.
 
 local fibers = require('fibers')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
@@ -23,7 +23,7 @@ local director_end, gameplay_end = Stream.memory_pair({
 })
 local cinematic = Scope.new('opening-cinematic')
 local gameplay = Scope.new('player-gameplay')
-local camera_mode = Scalar.new('cinematic', 'camera-mode')
+local camera_mode = Cell.new('cinematic', 'camera-mode')
 local acknowledgement, gameplay_has_custody
 
 local result = fibers.try_run(function()

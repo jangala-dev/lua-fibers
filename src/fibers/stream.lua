@@ -132,13 +132,44 @@ local function endpoint(self, side, level)
   return value
 end
 
-for _, name in ipairs({ 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all' }) do
-  Duplex[name .. '_op'] = function(self, ...)
-    return endpoint(self, 'read')[name .. '_op'](endpoint(self, 'read'), ...)
-  end
-  Duplex[name] = function(self, ...)
-    return perform(self[name .. '_op'](self, ...))
-  end
+function Duplex:read_some_op(n)
+  return endpoint(self, 'read'):read_some_op(n)
+end
+
+function Duplex:read_some(n)
+  return perform(self:read_some_op(n))
+end
+
+function Duplex:read_exactly_op(n)
+  return endpoint(self, 'read'):read_exactly_op(n)
+end
+
+function Duplex:read_exactly(n)
+  return perform(self:read_exactly_op(n))
+end
+
+function Duplex:read_until_op(separator, opts)
+  return endpoint(self, 'read'):read_until_op(separator, opts)
+end
+
+function Duplex:read_until(separator, opts)
+  return perform(self:read_until_op(separator, opts))
+end
+
+function Duplex:read_line_op(opts)
+  return endpoint(self, 'read'):read_line_op(opts)
+end
+
+function Duplex:read_line(opts)
+  return perform(self:read_line_op(opts))
+end
+
+function Duplex:read_all_op(opts)
+  return endpoint(self, 'read'):read_all_op(opts)
+end
+
+function Duplex:read_all(opts)
+  return perform(self:read_all_op(opts))
 end
 
 function Duplex:read_op(spec, opts)
@@ -186,10 +217,16 @@ end
 function Duplex:flush_op()
   return endpoint(self, 'write'):flush_op()
 end
-for _, name in ipairs({ 'write', 'write_some', 'flush' }) do
-  Duplex[name] = function(self, ...)
-    return perform(self[name .. '_op'](self, ...))
-  end
+function Duplex:write(...)
+  return perform(self:write_op(...))
+end
+
+function Duplex:write_some(bytes)
+  return perform(self:write_some_op(bytes))
+end
+
+function Duplex:flush()
+  return perform(self:flush_op())
 end
 
 local function flow_of(value)
@@ -213,11 +250,25 @@ end
 function Duplex:shutdown_read_op(reason)
   return retire_direction(self, 'read', reason, 'immediate', false)
 end
+
+function Duplex:shutdown_read(reason)
+  return perform(self:shutdown_read_op(reason))
+end
+
 function Duplex:shutdown_write_op(reason)
   return retire_direction(self, 'write', reason, 'drain', false)
 end
+
+function Duplex:shutdown_write(reason)
+  return perform(self:shutdown_write_op(reason))
+end
+
 function Duplex:abort_write_op(reason)
   return retire_direction(self, 'write', reason, 'abort', true)
+end
+
+function Duplex:abort_write(reason)
+  return perform(self:abort_write_op(reason))
 end
 
 local function close_request(self, reason, abort_write)
@@ -254,9 +305,19 @@ function Duplex:close_op(reason)
     return self._writer and runtime:_perform_current(self._writer:flush_op(), nil, true) or true
   end)
 end
+
+function Duplex:close(reason)
+  return perform(self:close_op(reason))
+end
+
 function Duplex:abort_op(reason)
   return wait_after_commit(self, close_request(self, reason, true))
 end
+
+function Duplex:abort(reason)
+  return perform(self:abort_op(reason))
+end
+
 function Duplex:closed_op()
   local operations = {}
   if self._reader then
@@ -278,10 +339,9 @@ function Duplex:closed_op()
     return true
   end)
 end
-for _, name in ipairs({ 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' }) do
-  Duplex[name] = function(self, ...)
-    return perform(self[name .. '_op'](self, ...))
-  end
+
+function Duplex:closed()
+  return perform(self:closed_op())
 end
 
 function Stream.memory_pair(opts)

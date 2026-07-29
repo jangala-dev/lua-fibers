@@ -1,4 +1,5 @@
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 local Keyspace = Facility.Keyspace
 
 local Lease = {}
@@ -68,6 +69,10 @@ function Lease:acquire_op(subject, mode, holder)
     })
   )
 end
+
+function Lease:acquire(subject, mode, holder)
+  return perform(self:acquire_op(subject, mode, holder))
+end
 function Lease:release_op(subject, holder)
   if subject == nil then
     error('lease release requires subject', 2)
@@ -88,6 +93,9 @@ function Lease:release_op(subject, holder)
   )
 end
 
+function Lease:release(subject, holder)
+  return perform(self:release_op(subject, holder))
+end
+
 Lease.Kind = Kind
-Facility.performing(Lease, { 'acquire', 'release' })
 return Lease

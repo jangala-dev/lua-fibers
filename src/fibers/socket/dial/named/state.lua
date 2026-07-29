@@ -1,11 +1,11 @@
 -- Transactional state for the named-dial Happy Eyeballs v2 strategy.
 --
 -- DNS completions, attempt results, clock observations, capacity claims and Dial
--- admission are composed as options over one Scalar machine. Irreversible socket
+-- admission are composed as options over one Cell machine. Irreversible socket
 -- work remains inside numeric Dial Lifetimes and begins only after commit.
 
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Counter = require('fibers.resource.counter')
 local Clock = require('fibers.resource.clock')

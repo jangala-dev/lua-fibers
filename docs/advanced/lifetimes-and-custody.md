@@ -416,10 +416,10 @@ if failure then
   local report = failure:inspect()
 
   -- Continue ordinary Closure from retained progress.
-  fibers.perform(failure:retry_op())
+  failure:retry()
 
   -- Or apply the optional force phase.
-  -- fibers.perform(failure:force_op())
+  -- failure:force()
 end
 ```
 

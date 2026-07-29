@@ -1,4 +1,5 @@
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 
 local Rendezvous = {}
 Rendezvous.__index = Rendezvous
@@ -16,9 +17,16 @@ end
 function Rendezvous:get_op()
   return self._get_op
 end
+
+function Rendezvous:get()
+  return perform(self:get_op())
+end
 function Rendezvous:put_op(value)
   return Facility.occurrence(self._put_descriptor, value)
 end
+
+function Rendezvous:put(value)
+  return perform(self:put_op(value))
+end
 Rendezvous.Kind = Kind
-Facility.performing(Rendezvous, { 'get', 'put' })
 return Rendezvous

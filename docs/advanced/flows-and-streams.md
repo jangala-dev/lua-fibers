@@ -22,6 +22,8 @@ HostReactor
 
 Every method ending in `_op` constructs an **option**. It does not act until the
 option is submitted to `perform` and selected as part of a committed world.
+Each public operation listed below also has a direct twin with `_op` removed;
+the direct method performs that option in the current fibre.
 
 ## Flow
 
@@ -209,9 +211,9 @@ Its complete surface is:
 ```lua
 lease:bytes()
 lease:length()
-lease:ack_op(count)
-lease:release_op()
-lease:fail_op(error)
+lease:ack_op(count)       lease:ack(count)
+lease:release_op()        lease:release()
+lease:fail_op(error)      lease:fail(error)
 ```
 
 A partial acknowledgement consumes only the acknowledged prefix. The lease
@@ -240,9 +242,9 @@ Its complete surface is:
 
 ```lua
 space:capacity()
-space:commit_op(bytes)
-space:release_op()
-space:fail_op(error)
+space:commit_op(bytes)   space:commit(bytes)
+space:release_op()        space:release()
+space:fail_op(error)      space:fail(error)
 ```
 
 Reserved capacity counts against the Flow limit. `commit_op` publishes no more
@@ -395,7 +397,7 @@ state-changing Flow option selects a deduplicated `flow_changed` effect in the
 same candidate world. The effect is discharged only after that world commits;
 losing and rolled-back alternatives therefore produce no notification. Its
 discharge enqueues the Flow identity, and the reactor refreshes only the indexed
-registrations attached to that Flow. Flow does not patch Scalar locations or
+registrations attached to that Flow. Flow does not patch Cell locations or
 expose a public observer API.
 
 For reads, the reactor reserves Flow capacity before performing the authoritative

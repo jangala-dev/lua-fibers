@@ -76,6 +76,7 @@ do
     read_auth = fibers.perform(maybe(holder:can_op(h, 'read')))
     write_auth = fibers.perform(maybe(holder:can_op(h, 'write')))
     fibers.perform(holder:close_op(grant, 'revoked'))
+    assert_eq(grant:closed(), grant, 'Grant:closed should return the closed Grant')
     after_revoke = fibers.perform(maybe(holder:can_op(h, 'read')))
     fibers.perform(owner:close_op(h, 'done'))
   end)

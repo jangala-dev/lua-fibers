@@ -49,10 +49,10 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
-local function test_scalar_transition_serialises_parallel_updates()
+local function test_cell_transition_serialises_parallel_updates()
   local rt = new_runtime()
-  local s = StateMachine.new(0, 'scalar-transition-all')
-  local inc = StateMachine.update('test.scalar.inc', function(v, payload)
+  local s = StateMachine.new(0, 'cell-transition-all')
+  local inc = StateMachine.update('test.cell.inc', function(v, payload)
     local next_value = v + payload.by
     return StateMachine.Ready.write(next_value, next_value)
   end)
@@ -129,8 +129,8 @@ local function test_rate_limiter_available_is_observational()
   assert_near(rl.state.value.last, 0)
 end
 
-local function test_scalar_transition_ordering_is_direct_and_deterministic()
-  local s = StateMachine.new('', 'scalar-ordering')
+local function test_cell_transition_ordering_is_direct_and_deterministic()
+  local s = StateMachine.new('', 'cell-ordering')
   local first = StateMachine.update('test.order.first', function(v)
     return StateMachine.Ready.write(v .. 'b', 'first')
   end)
@@ -148,8 +148,8 @@ local function test_scalar_transition_ordering_is_direct_and_deterministic()
   assert_eq(rows[2][1], 'first')
 end
 
-local function test_scalar_transition_ordering_controls_select_handoff()
-  local s = StateMachine.new(0, 'scalar-select-ordering')
+local function test_cell_transition_ordering_controls_select_handoff()
+  local s = StateMachine.new(0, 'cell-select-ordering')
   local supply = StateMachine.update('test.order.supply', function(v)
     return StateMachine.Ready.write(v + 1, true)
   end)
@@ -170,8 +170,8 @@ local function test_scalar_transition_ordering_controls_select_handoff()
   assert_eq(s.value, 0)
 end
 
-local function test_scalar_transition_payload_validation()
-  local s = StateMachine.new(0, 'scalar-validation')
+local function test_cell_transition_payload_validation()
+  local s = StateMachine.new(0, 'cell-validation')
   local checked = StateMachine.update(
     'test.validation',
     function(v, payload)
@@ -197,7 +197,7 @@ local function test_scalar_transition_payload_validation()
 end
 
 local tests = {
-  test_scalar_transition_serialises_parallel_updates,
+  test_cell_transition_serialises_parallel_updates,
   test_rate_limiter_parallel_acquire_serialises_without_double_refill,
   test_rate_limiter_waits_until_enough_tokens,
   test_rate_limiter_try_acquire_reports_deadline,
@@ -207,4 +207,4 @@ local tests = {
 for i = 1, #tests do
   tests[i]()
 end
-print('examples/recipes/tests/test_scalar_and_rate_limiter.lua: ok')
+print('examples/recipes/tests/test_cell_and_rate_limiter.lua: ok')

@@ -97,7 +97,7 @@ Use a typed effect when the work belongs to the committed world. Use `wrap` when
 Prefer:
 
 - Channel for application communication;
-- Scalar for replaceable state;
+- Cell for replaceable state;
 - Counter for quantities and epochs;
 - Index for ordered witnessed collections;
 - Rendezvous for synchronous exchange;

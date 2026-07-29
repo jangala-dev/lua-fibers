@@ -152,7 +152,7 @@ when no alternative remains in the current conservative component.
 In the architectural suite:
 
 - an 80-step binary rendezvous sequence falls from 322 to 161 branches; and
-- an 80-step scalar-query sequence falls from 80 claim branches to zero.
+- an 80-step cell-query sequence falls from 80 claim branches to zero.
 
 ## 7. Most-constrained branch policy
 
@@ -196,7 +196,7 @@ The current tiered run gives the following representative results:
 | Workload | Median | p99 upper bound | Maximum steps |
 |---|---:|---:|---:|
 | always perform | 17.2 us/op | 1 | 1 |
-| scalar read/write | 28.5 us/op | 1 | 1 |
+| cell read/write | 28.5 us/op | 1 | 1 |
 | two-fibre rendezvous | 95.8 us/op | 4 | 3 |
 | internal then external rendezvous | 183.4 us/op | 4 | 4 |
 | task spawn, await and Closure | 1.50 ms/op | 8 | 5 |
@@ -209,7 +209,7 @@ Compared with the preceding instrumented baseline, the strongest changes are:
 - triple swap: 79 to 37 maximum steps and roughly 3.18 to 2.24 ms/op;
 - nursery fanout seven: 28 to 8 maximum steps and roughly 1.92 to 1.13 ms/op;
 - choice-conflict backtracking: roughly 71.9 to 64.8 us/op; and
-- scalar read/write: roughly 29.5 to 28.5 us/op.
+- cell read/write: roughly 29.5 to 28.5 us/op.
 
 Some common cases are slower relative to the earlier archived run, notably
 two-party rendezvous, the interacting product, Flow and contended producers.

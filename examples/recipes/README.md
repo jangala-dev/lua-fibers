@@ -5,4 +5,4 @@ These modules are tested examples of composing the supported public resource too
 - `rate_limiter.lua` — Machine transitions and transactional time;
 - `countdown_latch.lua` — a count-to-zero state machine;
 - `priority_queue.lua` — Index and Counter composition;
-- `resource_pool.lua` — Index, Keyed, Lease, Scalar and effects.
+- `resource_pool.lua` — Index, Keyed, Lease, Cell and effects.

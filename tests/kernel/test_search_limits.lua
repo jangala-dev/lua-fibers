@@ -14,7 +14,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
@@ -205,7 +205,7 @@ do
     plan_reuse = false,
     instrumentation = true,
   })
-  local gate = Scalar.new('closed', 'component-unknown-gate')
+  local gate = Cell.new('closed', 'component-unknown-gate')
   local fallback_result
   unknown_rt:spawn_raw(function()
     fallback_result = unknown_rt:perform(gate:expect_op('open'):or_else(Op.always('fallback')))

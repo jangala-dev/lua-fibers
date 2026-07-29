@@ -368,15 +368,27 @@ All three forms expose `put_op` and `get_op` and compose with the same algebra.
 ### Transactional state
 
 ```lua
-local Scalar = require('fibers.resource.scalar')
-local state = Scalar.new('idle', 'state')
+local Cell = require('fibers.resource.cell')
+local state = Cell.new('idle', 'state')
 
 fibers.perform(state:expect_op('idle'):and_then(function()
   return state:write_op('running')
 end))
+
+local running = state:wait_until(function(value)
+  return value == 'running'
+end)
+
+local label = state:match(function(value)
+  if value == 'running' then
+    return true, 'state:' .. value
+  end
+end)
 ```
 
-Scalar also supports typed state-machine transitions for facilities whose rules should be defined once and reused.
+`wait_until` returns the complete satisfying value. `match` waits for a matcher to return a truthy first result, then returns its remaining projected values. Their `_op` forms compose with choices, products and transactional sequencing.
+
+Cell also supports typed state-machine transitions for facilities whose rules should be defined once and reused.
 
 ### Notification, messaging and byte flow
 

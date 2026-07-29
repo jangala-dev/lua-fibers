@@ -1,5 +1,6 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
 local Interest = require('fibers.host.external').Interest
 
@@ -50,6 +51,10 @@ function Clock:now_op()
   return Facility.external_wait(self, Kind, self._location, Now)
 end
 
+function Clock:now()
+  return perform(self:now_op())
+end
+
 function Clock:at_op(deadline)
   deadline = finite_number(deadline, 'Clock:at_op deadline')
   return Facility.external_wait(self, Kind, self._location, At, {
@@ -61,6 +66,10 @@ function Clock:at_op(deadline)
   })
 end
 
+function Clock:at(deadline)
+  return perform(self:at_op(deadline))
+end
+
 -- Relative time is surface syntax. Each guard activation takes one stable
 -- activation-time observation and elaborates to an explicit absolute wait.
 function Clock:after_op(delay)
@@ -70,6 +79,9 @@ function Clock:after_op(delay)
   end)
 end
 
-Facility.performing(Clock, { 'now', 'at', 'after' })
+function Clock:after(delay)
+  return perform(self:after_op(delay))
+end
+
 Clock.Kind = Kind
 return Clock

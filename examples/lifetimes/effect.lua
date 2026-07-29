@@ -19,10 +19,10 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Effect = require('fibers.effect')
 local log = {}
-local counter = Scalar.new(0, 'counter')
+local counter = Cell.new(0, 'counter')
 
 local LogKind
 LogKind = Effect.kind({

@@ -1,5 +1,6 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.host.external')
 
@@ -59,7 +60,10 @@ function Signal:wait_op()
   return self._wait_op
 end
 
+function Signal:wait()
+  return perform(self:wait_op())
+end
+
 Signal.Kind = Kind
-Facility.performing(Signal, { 'wait' })
 
 return Signal

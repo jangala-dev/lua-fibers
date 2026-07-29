@@ -40,11 +40,11 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
-local function test_scalar_select_tensor_supply_but_all_non_handoff()
-  local supply = StateMachine.update('test.scalar.supply', function(v)
+local function test_cell_select_tensor_supply_but_all_non_handoff()
+  local supply = StateMachine.update('test.cell.supply', function(v)
     return StateMachine.Ready.write(v + 1, true)
   end)
-  local take = StateMachine.select('test.scalar.take', function(v)
+  local take = StateMachine.select('test.cell.take', function(v)
     if v <= 0 then
       return StateMachine.Wait
     end
@@ -173,7 +173,7 @@ local function test_flow_lease_ack_and_return()
 end
 
 local tests = {
-  test_scalar_select_tensor_supply_but_all_non_handoff,
+  test_cell_select_tensor_supply_but_all_non_handoff,
   test_flow_sequential_write_read,
   test_flow_tensor_write_read_handoff,
   test_flow_all_write_does_not_supply_read,
@@ -185,4 +185,4 @@ local tests = {
 for i = 1, #tests do
   tests[i]()
 end
-print('tests/test_flow_scalar_state_machine.lua: ok')
+print('tests/test_flow_cell_state_machine.lua: ok')

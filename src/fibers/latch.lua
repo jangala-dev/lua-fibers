@@ -1,5 +1,5 @@
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local perform = require('fibers.perform')
 
 local Latch = {}
@@ -17,7 +17,7 @@ local function decode(value)
 end
 
 function Latch.new(name)
-  return setmetatable({ _state = Scalar.new(EMPTY, name) }, Latch)
+  return setmetatable({ _state = Cell.new(EMPTY, name) }, Latch)
 end
 
 function Latch:set_op(value)
@@ -28,7 +28,7 @@ function Latch:set_op(value)
   end)
 
   return set:or_else(self._state
-    :value_op(function(current)
+    :wait_until_op(function(current)
       return current ~= EMPTY
     end)
     :map(function()
@@ -38,7 +38,7 @@ end
 
 function Latch:get_op()
   return self._state
-    :value_op(function(value)
+    :wait_until_op(function(value)
       return value ~= EMPTY
     end)
     :map(decode)

@@ -15,7 +15,7 @@ local Inspect = require('tests.support.flow_inspect')
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
-local FibersScalar = require('fibers.resource.scalar')
+local FibersCell = require('fibers.resource.cell')
 local FibersScope = require('fibers.scope')
 local FibersStream = require('fibers.stream')
 
@@ -217,7 +217,7 @@ end
 -- Transactional request/response: consume request, update state, append response.
 do
   local a, b = Stream.memory_pair({ name = 'request-response' })
-  local state = FibersScalar.new(0, 'state')
+  local state = FibersCell.new(0, 'state')
   local response
   local function handle_one_op(stream)
     return stream:reader():read_line_op():and_then(function(line)
@@ -343,7 +343,7 @@ do
   assert_eq(got, 'ab')
 end
 
--- Parallel writes to a scalar-state-machine flow serialise in transition order.
+-- Parallel writes to a cell-state-machine flow serialise in transition order.
 do
   local a, b = Stream.memory_pair({ name = 'parallel-write-serial' })
   local got
@@ -357,7 +357,7 @@ do
   assert_eq(
     Inspect.data(b:reader().flow),
     'ab',
-    'parallel stream writes are ordered by scalar transition order'
+    'parallel stream writes are ordered by cell transition order'
   )
 end
 

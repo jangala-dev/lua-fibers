@@ -1,5 +1,5 @@
 -- Mixed claim/exchange law: global search must reconsider a participant's
--- branch so a quantitative claim, rendezvous and scalar constraint can close
+-- branch so a quantitative claim, rendezvous and cell constraint can close
 -- in one committed world.
 package.path = table.concat({
   './src/?.lua',
@@ -16,11 +16,11 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Runtime = require('fibers.runtime')
 
 local rt = Runtime.new()
-local c, ch, s = Counter.new(0), Rendezvous.new('claim-backtrack'), Scalar.new(0)
+local c, ch, s = Counter.new(0), Rendezvous.new('claim-backtrack'), Cell.new(0)
 local taken, sent
 rt:spawn_raw(function()
   local rows = rt:perform(Op.all({ c:take_op(1), ch:get_op(), s:write_op(2) }))

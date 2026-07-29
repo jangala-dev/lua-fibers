@@ -55,17 +55,14 @@ do
   rt:spawn_raw(function()
     scope:run(function(s)
       local h = { name = 'compound-failure-owned' }
-      Lifetime.define(
-        h,
-        {
-          closure = {
-            name = 'boom',
-            finish_op = function()
-              error('closure boom')
-            end,
-          },
-        }
-      )
+      Lifetime.define(h, {
+        closure = {
+          name = 'boom',
+          finish_op = function()
+            error('closure boom')
+          end,
+        },
+      })
       fibers.perform(s:admit_op(h))
       error('body boom')
     end)
@@ -171,19 +168,16 @@ do
   local state
   rt:spawn_raw(function()
     scope:run(function(s)
-      Lifetime.define(
-        h,
-        {
-          closure = {
-            name = 'wait',
-            finish_op = function()
-              return settled:wait_op():map(function()
-                return true
-              end)
-            end,
-          },
-        }
-      )
+      Lifetime.define(h, {
+        closure = {
+          name = 'wait',
+          finish_op = function()
+            return settled:wait_op():map(function()
+              return true
+            end)
+          end,
+        },
+      })
       rt:perform(s:admit_op(h))
     end)
   end, 'hardening-settling-root', scope)

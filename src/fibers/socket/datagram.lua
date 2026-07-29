@@ -15,7 +15,7 @@ local Lifecycle = require('fibers.socket.lifecycle')
 local HostOffer = require('fibers.host.offer')
 local Closure = require('fibers.closure')
 local FIFO = require('fibers.resource.fifo')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
@@ -80,7 +80,7 @@ local Fail = StateMachine.isolated_update('socket.datagram.fail_send', function(
 end)
 
 local function wait_flush(state, target)
-  return Scalar.select_op(state, function(value)
+  return Cell.select_op(state, function(value)
     if value.completed_seq >= target then
       return Op.always(true)
     end

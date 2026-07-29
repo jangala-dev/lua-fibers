@@ -14,7 +14,7 @@ package.path = table.concat({
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 
 local function truthy(value, message)

@@ -16,14 +16,14 @@ package.path = table.concat({
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
-local FibersScalar = require('fibers.resource.scalar')
+local FibersCell = require('fibers.resource.cell')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
 local FibersEffect = require('fibers.effect')
 local Runtime = FibersRuntime
 local Op = FibersOp
-local Scalar = FibersScalar
+local Cell = FibersCell
 local Rendezvous = FibersRendezvous
 local Effect = FibersEffect
 local Interrupt = { new = require('fibers.runtime')._new_interrupt }
@@ -74,17 +74,17 @@ do
 end
 
 do
-  local scalar = Scalar.new(nil, 'opaque-scalar')
+  local cell = Cell.new(nil, 'opaque-cell')
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    rt:perform(scalar:write_op(value))
-    got = rt:perform(scalar:read_op())
-  end, 'opaque-scalar-fibre')
+    rt:perform(cell:write_op(value))
+    got = rt:perform(cell:read_op())
+  end, 'opaque-cell-fibre')
   run_all(rt)
-  assert_eq(got, value, 'scalar stores user table opaquely')
-  assert_eq(got.x, 42, 'scalar preserves keyed fields')
+  assert_eq(got, value, 'cell stores user table opaquely')
+  assert_eq(got.x, 42, 'cell preserves keyed fields')
 end
 
 -- EventQueue consumption is journalled: a losing branch does not steal an occurrence.

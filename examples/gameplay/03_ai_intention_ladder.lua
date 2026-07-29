@@ -14,10 +14,10 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Op = require('fibers.op')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
-local intruder_visible = Scalar.new(false, 'intruder-visible')
-local cover_available = Scalar.new(true, 'cover-available')
+local intruder_visible = Cell.new(false, 'intruder-visible')
+local cover_available = Cell.new(true, 'cover-available')
 local first_decision, second_decision
 
 local function choose_intention_op()

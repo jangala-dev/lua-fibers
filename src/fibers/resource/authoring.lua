@@ -9,7 +9,6 @@ local IR = require('fibers.internal.kernel.ir')
 local Ledger = require('fibers.internal.kernel.ledger')
 local Algebra = require('fibers.internal.kernel.algebra')
 local Supply = require('fibers.internal.kernel.supply')
-local perform = require('fibers.perform')
 
 local M = { ABSENT = Algebra.ABSENT }
 
@@ -238,7 +237,7 @@ local VERSIONED_RESULT = M.result.project(function(value, program)
   return { value = value, version = program.location.version }
 end)
 
-local CELL_WAIT = { _fibers_scalar_wait = true }
+local CELL_WAIT = { _fibers_cell_wait = true }
 local CELL_EXPECT = {
   type = 'machine',
   serial = true,
@@ -255,7 +254,7 @@ local CELL_EXPECT = {
     if current ~= expected then
       return CELL_WAIT
     end
-    return { _fibers_scalar_ready = true, writes = false, pack = Op._pack(true) }
+    return { _fibers_cell_ready = true, writes = false, pack = Op._pack(true) }
   end,
 }
 
@@ -332,16 +331,16 @@ local function pack(...)
   return { n = select('#', ...), ... }
 end
 
-function M.versioned_until(resource, predicate, dependencies)
+function M.versioned_match(resource, matcher, dependencies)
   return M.versioned_select(resource, function(value)
-    local result = pack(predicate(value))
+    local result = pack(matcher(value))
     if result[1] then
       return Op.always(unpack_(result, 2, result.n))
     end
   end, dependencies)
 end
 
-function M.versioned_value(resource, predicate, dependencies)
+function M.versioned_wait_until(resource, predicate, dependencies)
   return M.versioned_select(resource, function(value)
     if predicate(value) then
       return Op.always(value)
@@ -365,16 +364,6 @@ function M.external_wait(resource, kind, location, transition, opts)
       absence_check = opts.absence_check,
     })
   )
-end
-
-function M.performing(class, names)
-  for i = 1, #names do
-    local name = names[i]
-    class[name] = function(self, ...)
-      return perform(self[name .. '_op'](self, ...))
-    end
-  end
-  return class
 end
 
 function M.normalise_supply(value, label, level)

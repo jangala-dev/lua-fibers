@@ -14,7 +14,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local EventQueue = require('fibers.resource.event_queue')
 local Readiness = require('fibers.host.readiness')
@@ -48,11 +48,11 @@ do
   local rendezvous = Rendezvous.new('minimal-cached-rendezvous')
   eq(rendezvous:get_op(), rendezvous:get_op(), 'rendezvous get option should be cached')
 
-  local scalar = Scalar.new(0, 'minimal-cached-scalar')
-  eq(scalar:read_op(), scalar:read_op(), 'scalar read option should be cached')
+  local cell = Cell.new(0, 'minimal-cached-cell')
+  eq(cell:read_op(), cell:read_op(), 'cell read option should be cached')
   truthy(
-    scalar:read_op().program and scalar:read_op().program._fibers_program,
-    'cached scalar read should use a primitive descriptor'
+    cell:read_op().program and cell:read_op().program._fibers_program,
+    'cached cell read should use a primitive descriptor'
   )
 
   local counter = Counter.new(0, 'minimal-cached-counter')

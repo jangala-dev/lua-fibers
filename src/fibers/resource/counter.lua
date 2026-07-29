@@ -1,4 +1,5 @@
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 local Op = require('fibers.op')
 
 local Counter = {}
@@ -71,8 +72,16 @@ function Counter:read_op()
   return self._read_op
 end
 
+function Counter:read()
+  return perform(self:read_op())
+end
+
 function Counter:changed_op(version)
   return Facility.occurrence(self._changed_descriptor, version)
+end
+
+function Counter:changed(version)
+  return perform(self:changed_op(version))
 end
 
 function Counter:adjust_op(amount)
@@ -87,12 +96,20 @@ function Counter:adjust_op(amount)
   })
 end
 
+function Counter:adjust(amount)
+  return perform(self:adjust_op(amount))
+end
+
 function Counter:add_op(amount)
   integer(amount, 'counter addition', 2)
   if amount < 0 then
     error('counter addition must be non-negative', 2)
   end
   return self:adjust_op(amount)
+end
+
+function Counter:add(amount)
+  return perform(self:add_op(amount))
 end
 
 function Counter:bump_op()
@@ -103,8 +120,16 @@ function Counter:bump_op()
   })
 end
 
+function Counter:bump()
+  return perform(self:bump_op())
+end
+
 function Counter:give_op(amount)
   return self:add_op(amount or 1)
+end
+
+function Counter:give(amount)
+  return perform(self:give_op(amount))
 end
 
 function Counter:take_op(amount)
@@ -129,6 +154,10 @@ function Counter:take_op(amount)
   )
 end
 
+function Counter:take(amount)
+  return perform(self:take_op(amount))
+end
+
 local function predicate_op(self, predicate, threshold, demand)
   integer(threshold, 'counter threshold', 3)
   return Facility.op(
@@ -147,31 +176,34 @@ function Counter:at_least_op(value)
   return predicate_op(self, 'ge', value, 'up')
 end
 
+function Counter:at_least(value)
+  return perform(self:at_least_op(value))
+end
+
 function Counter:at_most_op(value)
   return predicate_op(self, 'le', value, 'down')
+end
+
+function Counter:at_most(value)
+  return perform(self:at_most_op(value))
 end
 
 function Counter:equal_op(value)
   return predicate_op(self, 'eq', value)
 end
 
+function Counter:equal(value)
+  return perform(self:equal_op(value))
+end
+
 function Counter:zero_op()
   return self:equal_op(0)
 end
 
+function Counter:zero()
+  return perform(self:zero_op())
+end
+
 Counter.Kind = Kind
-Facility.performing(Counter, {
-  'read',
-  'changed',
-  'adjust',
-  'add',
-  'bump',
-  'give',
-  'take',
-  'at_least',
-  'at_most',
-  'equal',
-  'zero',
-})
 
 return Counter

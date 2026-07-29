@@ -9,7 +9,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local CommandModule = require('fibers.process.command')
 local HostError = require('fibers.host.error')
@@ -40,14 +40,14 @@ local request_close = StateMachine.isolated_update('process.request_close', func
   return Ready.write({ requested = true, reason = reason or 'process closed' }, true, reason)
 end)
 
-local function wait_for(scalar, predicate)
-  return Scalar.until_op(scalar, predicate)
+local function wait_for(cell, predicate)
+  return Cell.match_op(cell, predicate)
 end
 
 function Lifecycle.new(name)
   return setmetatable({
     name = name,
-    state = Scalar.new({ kind = 'created' }, name .. ':state'),
+    state = Cell.new({ kind = 'created' }, name .. ':state'),
     close_request = StateMachine.new({ requested = false, reason = nil }, name .. ':close-request'),
   }, Lifecycle)
 end

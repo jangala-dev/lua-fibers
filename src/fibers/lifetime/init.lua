@@ -8,7 +8,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 
@@ -38,8 +38,8 @@ local function is_done(value)
   return type(value) == 'table' and value.status == 'done'
 end
 
-local function wait_for(scalar, pred)
-  return Scalar.value_op(scalar, pred)
+local function wait_for(cell, pred)
+  return Cell.wait_until_op(cell, pred)
 end
 
 local function initial_closure_state()
@@ -130,8 +130,8 @@ function Lifetime.new(name, opts)
     cancellation = opts.cancellation
       or StateMachine.new({ requested = false, cancelled = false }, node_name .. '-cancellation'),
     interrupt = opts.interrupt or Runtime._new_interrupt(node_name .. '-interrupt'),
-    body_result = opts.body_result or Scalar.new(pending(), node_name .. '-body-result'),
-    outcome = opts.outcome or Scalar.new(pending(), node_name .. '-outcome'),
+    body_result = opts.body_result or Cell.new(pending(), node_name .. '-body-result'),
+    outcome = opts.outcome or Cell.new(pending(), node_name .. '-outcome'),
     closure_state = opts.closure_state or initial_closure_state(),
     offers = opts.offers,
   }, Node)
@@ -423,19 +423,19 @@ function Node:cancellation_op()
   return self.cancellation:read_op()
 end
 
-local function publish_once_op(scalar, result)
-  return scalar:read_op():and_then(function(value)
+local function publish_once_op(cell, result)
+  return cell:read_op():and_then(function(value)
     if is_done(value) then
       return Op.always(false, value.result)
     end
-    return scalar:write_op({ status = 'done', result = result }):map(function()
+    return cell:write_op({ status = 'done', result = result }):map(function()
       return true, result
     end)
   end)
 end
 
-local function completed_op(scalar)
-  return wait_for(scalar, is_done):map(function(value)
+local function completed_op(cell)
+  return wait_for(cell, is_done):map(function(value)
     return value.result
   end)
 end

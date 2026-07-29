@@ -1,8 +1,8 @@
--- Closeable mailbox from Channel + RefCount + Scalar + Counter.
+-- Closeable mailbox from Channel + RefCount + Cell + Counter.
 
 local Channel = require('fibers.channel')
 local RefCount = require('fibers.resource.ref_count')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
 local perform = require('fibers.perform')
@@ -41,7 +41,7 @@ local function remember_reason_op(mailbox, reason)
   end)
 
   return remember:or_else(mailbox._reason
-    :value_op(function(value)
+    :wait_until_op(function(value)
       return value ~= NO_REASON
     end)
     :map(function()
@@ -88,7 +88,7 @@ local function new_mailbox(capacity, name, accept, full)
     _accept = accept,
     _messages = Channel.new(capacity, child_name(name, 'messages')),
     _senders = refs,
-    _reason = Scalar.new(NO_REASON, child_name(name, 'reason')),
+    _reason = Cell.new(NO_REASON, child_name(name, 'reason')),
     _dropped = Counter.new(0, child_name(name, 'dropped')),
   }, Mailbox)
 
@@ -154,8 +154,16 @@ function Tx:why_op()
   return reason_op(self._mailbox)
 end
 
+function Tx:why()
+  return perform(self:why_op())
+end
+
 function Tx:dropped_op()
   return self._mailbox._dropped:read_op()
+end
+
+function Tx:dropped()
+  return perform(self:dropped_op())
 end
 
 function Rx:recv_op()
@@ -172,8 +180,16 @@ function Rx:why_op()
   return reason_op(self._mailbox)
 end
 
+function Rx:why()
+  return perform(self:why_op())
+end
+
 function Rx:dropped_op()
   return self._mailbox._dropped:read_op()
+end
+
+function Rx:dropped()
+  return perform(self:dropped_op())
 end
 
 function Tx:send(value)

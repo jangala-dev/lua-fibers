@@ -242,7 +242,7 @@ Ordinary operations should remain on the lightweight direct path. This includes,
 where unambiguous:
 
 - `always`;
-- exact scalar and version reads;
+- exact cell and version reads;
 - one exact primitive transition;
 - one exact rendezvous;
 - deterministic `map`, `wrap` and `and_then` progression;

@@ -19,7 +19,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local TC = require('tests.support.effect_helpers')
 
 local function new_runtime(opts)
@@ -39,10 +39,10 @@ local function new_runtime(opts)
   return rt
 end
 
-local function update_scalar(scalar, fn)
-  return scalar:read_op():and_then(function(old)
+local function update_cell(cell, fn)
+  return cell:read_op():and_then(function(old)
     local new = fn(old)
-    return scalar:write_op(new):map(function()
+    return cell:write_op(new):map(function()
       return new, old
     end)
   end)
@@ -146,7 +146,7 @@ end
 
 local function test_map_and_and_then_are_transactional()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'and-then-scalar')
+  local cell = Cell.new(0, 'and-then-cell')
   local got
 
   rt:spawn_raw(function()
@@ -155,32 +155,32 @@ local function test_map_and_and_then_are_transactional()
         return v + 3
       end)
       :and_then(function(v)
-        return scalar:write_op(v):and_then(function()
-          return scalar:read_op()
+        return cell:write_op(v):and_then(function()
+          return cell:read_op()
         end)
       end))
   end, 'map-and-then')
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 5, 'and_then sees tentative state established earlier in the transaction')
-  assert_eq(scalar.value, 5, 'transaction commits final scalar state')
+  assert_eq(cell.value, 5, 'transaction commits final cell state')
 end
 
 local function test_and_then_is_all_or_nothing()
   local rt = new_runtime({ quiet_deadlock = true })
-  local scalar = Scalar.new(0, 'and-then-abort-scalar')
+  local cell = Cell.new(0, 'and-then-abort-cell')
   local ch = Rendezvous.new('and-then-abort-rendezvous')
   local got
 
   rt:spawn_raw(function()
-    got = rt:perform(scalar:write_op(7):and_then(function()
+    got = rt:perform(cell:write_op(7):and_then(function()
       return ch:get_op()
     end))
   end, 'and-then-blocked')
 
   local status = rt:run()
   assert_uncommitted_status(status, 'blocked second step prevents entire sequence from committing')
-  assert_eq(scalar.value, 0, 'first step of blocked and_then sequence is not committed')
+  assert_eq(cell.value, 0, 'first step of blocked and_then sequence is not committed')
   assert_eq(got, nil, 'participant is not resumed')
 end
 
@@ -368,17 +368,17 @@ end
 
 local function test_or_else_retries_stale_primary_instead_of_committing_fallback()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'or-else-stale-primary-scalar')
+  local cell = Cell.new(0, 'or-else-stale-primary-cell')
   local a, b
 
   rt:spawn_raw(function()
-    a = rt:perform(update_scalar(scalar, function(v)
+    a = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
   end, 'stale-primary-first-updater')
 
   rt:spawn_raw(function()
-    b = rt:perform(update_scalar(scalar, function(v)
+    b = rt:perform(update_cell(cell, function(v)
         return v + 1
       end)
       :map(function()
@@ -388,7 +388,7 @@ local function test_or_else_retries_stale_primary_instead_of_committing_fallback
   end, 'stale-primary-preferred-updater')
 
   assert_status(rt:run(), 'found')
-  assert_eq(scalar.value, 2, 'primary update is retried against fresh state')
+  assert_eq(cell.value, 2, 'primary update is retried against fresh state')
   assert_eq(a, 1)
   assert_eq(b, 'primary', 'fallback is not used merely because the parked primary became stale')
 end
@@ -413,7 +413,7 @@ local function test_guard_is_delayed_and_participates_in_search()
 end
 
 local function test_wrap_is_post_commit_and_not_transactional_sequence()
-  local scalar = Scalar.new(0, 'wrap-phase-scalar')
+  local cell = Cell.new(0, 'wrap-phase-cell')
   local timeline = {}
   local got
   local discharged = {}
@@ -422,7 +422,7 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
       test_tag = function(tag)
         if #discharged == 0 then
           timeline[#timeline + 1] = 'discharge'
-          assert_eq(scalar.value, 9, 'resource state is committed before effects are observed')
+          assert_eq(cell.value, 9, 'resource state is committed before effects are observed')
         end
         discharged[#discharged + 1] = tag
       end,
@@ -430,11 +430,11 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
   })
 
   local op = Op.emit(TC.tag('wrap.before')):and_then(function()
-    return scalar:write_op(9):and_then(function()
+    return cell:write_op(9):and_then(function()
       return Op.emit(TC.tag('wrap.after')):and_then(function()
         return Op.always('value'):wrap(function(v)
           timeline[#timeline + 1] = 'wrap'
-          assert_eq(scalar.value, 9, 'wrap runs after commit')
+          assert_eq(cell.value, 9, 'wrap runs after commit')
           return v .. ':wrapped'
         end)
       end)
@@ -523,40 +523,40 @@ local function test_tensor_all_and_internal_rendezvous_topology()
   end
 end
 
-local function test_contending_scalar_updates_retry()
+local function test_contending_cell_updates_retry()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'contended-scalar')
+  local cell = Cell.new(0, 'contended-cell')
   local a, b
 
   rt:spawn_raw(function()
-    a = rt:perform(update_scalar(scalar, function(v)
+    a = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
-  end, 'scalar-update-a')
+  end, 'cell-update-a')
   rt:spawn_raw(function()
-    b = rt:perform(update_scalar(scalar, function(v)
+    b = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
-  end, 'scalar-update-b')
+  end, 'cell-update-b')
 
   assert_status(rt:run(), 'found')
-  assert_eq(scalar.value, 2, 'both contending updates eventually commit')
+  assert_eq(cell.value, 2, 'both contending updates eventually commit')
   assert_eq(a, 1)
   assert_eq(b, 2)
 end
 
-local function test_conflicting_parallel_scalar_writes_do_not_commit_partially()
+local function test_conflicting_parallel_cell_writes_do_not_commit_partially()
   local rt = new_runtime({ quiet_deadlock = true })
-  local scalar = Scalar.new(0, 'conflicting-parallel-scalar')
+  local cell = Cell.new(0, 'conflicting-parallel-cell')
   local got
 
   rt:spawn_raw(function()
-    got = rt:perform(Op.tensor({ scalar:write_op(1), scalar:write_op(2) }))
+    got = rt:perform(Op.tensor({ cell:write_op(1), cell:write_op(2) }))
   end, 'parallel-conflict')
 
   local status = rt:run()
   assert_uncommitted_status(status, 'conflicting parallel writes cannot commit')
-  assert_eq(scalar.value, 0, 'conflicting write transaction leaves scalar unchanged')
+  assert_eq(cell.value, 0, 'conflicting write transaction leaves cell unchanged')
   assert_eq(got, nil, 'participant is not resumed')
 end
 
@@ -649,12 +649,12 @@ local function test_deferred_map_and_and_then_after_rendezvous()
   do
     local rt = new_runtime()
     local ch = Rendezvous.new('deferred-and_then-rendezvous')
-    local scalar = Scalar.new('unset', 'deferred-and_then-scalar')
+    local cell = Cell.new('unset', 'deferred-and_then-cell')
     local got
     rt:spawn_raw(function()
       got = rt:perform(ch:get_op():and_then(function(v)
-        return scalar:write_op(v):and_then(function()
-          return scalar:read_op():map(function(current)
+        return cell:write_op(v):and_then(function()
+          return cell:read_op():map(function(current)
             return current .. ':done'
           end)
         end)
@@ -664,18 +664,18 @@ local function test_deferred_map_and_and_then_after_rendezvous()
       rt:perform(ch:put_op('message'))
     end, 'deferred-and_then-sender')
     assert_status(rt:run(), 'found')
-    assert_eq(scalar.value, 'message')
+    assert_eq(cell.value, 'message')
     assert_eq(got, 'message:done', 'and_then after rendezvous participates in the same transaction')
   end
 end
 
 local function test_choice_discards_loser_resource_state_even_when_loser_is_locally_possible()
   local rt = new_runtime({ choice_seed = 2 })
-  local scalar = Scalar.new(0, 'choice-loser-resource-scalar')
+  local cell = Cell.new(0, 'choice-loser-resource-cell')
   local got
 
   local winner = Op.always('winner')
-  local loser = scalar:write_op(99):map(function()
+  local loser = cell:write_op(99):map(function()
     return 'loser'
   end)
 
@@ -684,19 +684,19 @@ local function test_choice_discards_loser_resource_state_even_when_loser_is_loca
   end, 'choice-loser-resource')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner', 'the replay seed selects the non-mutating occurrence')
-  assert_eq(scalar.value, 0, 'unselected choice branch does not commit its resource effects')
+  assert_eq(cell.value, 0, 'unselected choice branch does not commit its resource effects')
 end
 
 local function test_choice_blocked_branch_does_not_partially_commit_before_right_branch_wins()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'choice-blocked-left-scalar')
+  local cell = Cell.new(0, 'choice-blocked-left-cell')
   local ch = Rendezvous.new('choice-blocked-left-rendezvous')
   local got
 
-  local blocked_left = scalar:write_op(1):and_then(function()
+  local blocked_left = cell:write_op(1):and_then(function()
     return ch:get_op()
   end)
-  local right = scalar:write_op(2):map(function()
+  local right = cell:write_op(2):map(function()
     return 'right'
   end)
 
@@ -705,23 +705,23 @@ local function test_choice_blocked_branch_does_not_partially_commit_before_right
   end, 'choice-blocked-left')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'right')
-  assert_eq(scalar.value, 2, 'blocked losing branch does not leak earlier transactional writes')
+  assert_eq(cell.value, 2, 'blocked losing branch does not leak earlier transactional writes')
 end
 
-local function test_tensor_is_parallel_not_sequential_for_scalar_views()
+local function test_tensor_is_parallel_not_sequential_for_cell_views()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'tensor-view-scalar')
+  local cell = Cell.new(0, 'tensor-view-cell')
   local rows
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
-      scalar:write_op(1),
-      scalar:read_op(),
+      cell:write_op(1),
+      cell:read_op(),
     }))
-  end, 'tensor-scalar-views')
+  end, 'tensor-cell-views')
 
   assert_status(rt:run(), 'found')
-  assert_eq(scalar.value, 1, 'tensor commits the selected write')
+  assert_eq(cell.value, 1, 'tensor commits the selected write')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 0, 'sibling tensor lane sees the shared pre-transaction view, not a sequential write')
 end
@@ -746,11 +746,11 @@ end
 local function test_or_else_primary_rendezvous_beats_fallback_when_partner_exists()
   local rt = new_runtime()
   local ch = Rendezvous.new('or-else-external-primary')
-  local scalar = Scalar.new(0, 'or-else-external-primary-scalar')
+  local cell = Cell.new(0, 'or-else-external-primary-cell')
   local got
 
   rt:spawn_raw(function()
-    got = rt:perform(ch:get_op():or_else(scalar:write_op(99):map(function()
+    got = rt:perform(ch:get_op():or_else(cell:write_op(99):map(function()
       return 'fallback'
     end)))
   end, 'or-else-external-receiver')
@@ -760,19 +760,19 @@ local function test_or_else_primary_rendezvous_beats_fallback_when_partner_exist
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'from-sender')
-  assert_eq(scalar.value, 0, 'fallback branch is not committed when primary rendezvous can commit')
+  assert_eq(cell.value, 0, 'fallback branch is not committed when primary rendezvous can commit')
 end
 
 local function test_or_else_blocked_primary_discards_partial_state_before_fallback()
   local rt = new_runtime()
   local ch = Rendezvous.new('or-else-blocked-primary-rendezvous')
-  local scalar = Scalar.new(0, 'or-else-blocked-primary-scalar')
+  local cell = Cell.new(0, 'or-else-blocked-primary-cell')
   local got
 
-  local primary = scalar:write_op(1):and_then(function()
+  local primary = cell:write_op(1):and_then(function()
     return ch:get_op()
   end)
-  local fallback = scalar:write_op(2):map(function()
+  local fallback = cell:write_op(2):map(function()
     return 'fallback'
   end)
 
@@ -781,40 +781,40 @@ local function test_or_else_blocked_primary_discards_partial_state_before_fallba
   end, 'or-else-blocked-primary')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
-  assert_eq(scalar.value, 2, 'fallback commits without leaking the blocked primary write')
+  assert_eq(cell.value, 2, 'fallback commits without leaking the blocked primary write')
 end
 
 local function test_choice_backtracks_around_product_conflict()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'choice-product-conflict-scalar')
+  local cell = Cell.new(0, 'choice-product-conflict-cell')
   local rows
 
   rt:spawn_raw(function()
     rows = rt:perform(Op.tensor({
-      scalar
+      cell
         :write_op(1)
         :map(function()
           return 'write-1'
         end)
         :choice(Op.always('no-write')),
-      scalar:write_op(2),
+      cell:write_op(2),
     }))
   end, 'choice-product-conflict')
 
   assert_status(rt:run(), 'found')
-  assert_eq(scalar.value, 2, 'search backtracks from a locally possible branch that conflicts in the product')
+  assert_eq(cell.value, 2, 'search backtracks from a locally possible branch that conflicts in the product')
   assert_eq(rows[1][1], 'no-write')
   assert_eq(rows[2][1], true)
 end
 
 local function test_guard_memo_survives_refresh_of_stale_frontier()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'guard-refresh-scalar')
+  local cell = Cell.new(0, 'guard-refresh-cell')
   local guard_calls = 0
   local a, b
 
   rt:spawn_raw(function()
-    a = rt:perform(update_scalar(scalar, function(v)
+    a = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
   end, 'guard-refresh-first-updater')
@@ -822,14 +822,14 @@ local function test_guard_memo_survives_refresh_of_stale_frontier()
   rt:spawn_raw(function()
     b = rt:perform(Op.guard(function()
       guard_calls = guard_calls + 1
-      return update_scalar(scalar, function(v)
+      return update_cell(cell, function(v)
         return v + 1
       end)
     end))
   end, 'guard-refresh-guarded-updater')
 
   assert_status(rt:run(), 'found')
-  assert_eq(scalar.value, 2)
+  assert_eq(cell.value, 2)
   assert_eq(a, 1)
   assert_eq(b, 2)
   assert_eq(
@@ -876,7 +876,7 @@ local function test_multiple_wraps_run_in_order_after_discharge()
 end
 
 local function test_wrap_may_perform_new_transaction_after_commit()
-  local scalar = Scalar.new(0, 'wrap-nested-perform-scalar')
+  local cell = Cell.new(0, 'wrap-nested-perform-cell')
   local timeline = {}
   local got
   local rt = new_runtime({
@@ -888,10 +888,10 @@ local function test_wrap_may_perform_new_transaction_after_commit()
   })
 
   local outer = Op.emit(TC.tag('outer')):and_then(function()
-    return scalar:write_op(1):and_then(function()
+    return cell:write_op(1):and_then(function()
       return Op.always('a'):wrap(function(v)
         timeline[#timeline + 1] = 'wrap-start'
-        assert_eq(scalar.value, 1, 'wrap runs after the outer resource commit')
+        assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
         local y = rt:perform(Op.emit(TC.tag('inner')):and_then(function()
           return Op.always('b')
         end))
@@ -908,7 +908,7 @@ local function test_wrap_may_perform_new_transaction_after_commit()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'ab')
-  assert_eq(scalar.value, 1)
+  assert_eq(cell.value, 1)
   assert_eq(
     table.concat(timeline, ','),
     'discharge:outer,wrap-start,discharge:inner,wrap-end,resume',
@@ -917,11 +917,11 @@ local function test_wrap_may_perform_new_transaction_after_commit()
 end
 
 local function test_wrap_failure_does_not_rollback_committed_resources()
-  local scalar = Scalar.new(0, 'wrap-failure-scalar')
+  local cell = Cell.new(0, 'wrap-failure-cell')
   local rt = new_runtime()
 
   rt:spawn_raw(function()
-    rt:perform(scalar:write_op(5):and_then(function()
+    rt:perform(cell:write_op(5):and_then(function()
       return Op.always('x'):wrap(function()
         error('wrap boom')
       end)
@@ -933,7 +933,7 @@ local function test_wrap_failure_does_not_rollback_committed_resources()
   end)
   assert_eq(ok, false, 'wrap failure is reported to the caller')
   assert_truthy(tostring(err):match('wrap boom'), 'wrap failure reports the original error')
-  assert_eq(scalar.value, 5, 'committed resource state is not rolled back by wrap failure')
+  assert_eq(cell.value, 5, 'committed resource state is not rolled back by wrap failure')
 end
 
 local function test_product_lane_wraps_apply_inside_out_after_commit()
@@ -1187,10 +1187,10 @@ local tests = {
   test_tensor_lane_wraps_apply_after_internal_rendezvous,
   test_map_and_and_then_reject_options_containing_wraps,
   test_tensor_all_and_internal_rendezvous_topology,
-  test_tensor_is_parallel_not_sequential_for_scalar_views,
+  test_tensor_is_parallel_not_sequential_for_cell_views,
   test_choice_backtracks_around_product_conflict,
-  test_contending_scalar_updates_retry,
-  test_conflicting_parallel_scalar_writes_do_not_commit_partially,
+  test_contending_cell_updates_retry,
+  test_conflicting_parallel_cell_writes_do_not_commit_partially,
   test_canonical_te_triple_swap,
   test_triple_swap_does_not_partially_commit_when_a_party_is_missing,
 }
@@ -1212,7 +1212,7 @@ print('tests/test_op.lua: core algebra contract ok')
 --   fibers.op
 --   fibers.runtime
 --   fibers.resource.rendezvous
---   fibers.resource.scalar
+--   fibers.resource.cell
 
 package.path = table.concat({
   './src/?.lua',
@@ -1230,7 +1230,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 local TC = require('tests.support.effect_helpers')
 
 local function new_runtime(opts)
@@ -1250,10 +1250,10 @@ local function new_runtime(opts)
   return rt
 end
 
-local function update_scalar(scalar, fn)
-  return scalar:read_op():and_then(function(old)
+local function update_cell(cell, fn)
+  return cell:read_op():and_then(function(old)
     local new = fn(old)
-    return scalar:write_op(new):map(function()
+    return cell:write_op(new):map(function()
       return new, old
     end)
   end)
@@ -1385,24 +1385,24 @@ end
 
 local function test_or_else_primary_second_candidate_beats_fallback()
   local rt = new_runtime()
-  local scalar = Scalar.new('init', 'primary-second-candidate-scalar')
+  local cell = Cell.new('init', 'primary-second-candidate-cell')
   local bad = Rendezvous.new('primary-second-bad')
   local good = Rendezvous.new('primary-second-good')
   local got, bad_sender, good_sender
 
   local bad_primary = bad:get_op():and_then(function(v)
-    return scalar:write_op('bad'):and_then(function()
+    return cell:write_op('bad'):and_then(function()
       return Op.always('bad:' .. tostring(v))
     end)
   end)
   local good_primary = good:get_op():and_then(function(v)
-    return scalar:write_op('good'):and_then(function()
+    return cell:write_op('good'):and_then(function()
       return Op.always('good:' .. tostring(v))
     end)
   end)
   local primary = Op.choice(bad_primary, good_primary)
   local fallback = Op.emit(TC.tag('bad.fallback')):and_then(function()
-    return scalar:write_op('fallback'):and_then(function()
+    return cell:write_op('fallback'):and_then(function()
       return Op.always('fallback')
     end)
   end)
@@ -1411,7 +1411,7 @@ local function test_or_else_primary_second_candidate_beats_fallback()
     got = rt:perform(primary:or_else(fallback))
   end, 'receiver')
   rt:spawn_raw(function()
-    bad_sender = rt:perform(Op.all({ bad:put_op('payload'), scalar:write_op('conflict') }))
+    bad_sender = rt:perform(Op.all({ bad:put_op('payload'), cell:write_op('conflict') }))
   end, 'bad-conflicting-sender')
   rt:spawn_raw(function()
     good_sender = rt:perform(good:put_op('payload'))
@@ -1421,7 +1421,7 @@ local function test_or_else_primary_second_candidate_beats_fallback()
   assert_eq(got, 'good:payload', 'second primary candidate commits before fallback')
   assert_eq(good_sender, true)
   assert_falsy(bad_sender, 'conflicting primary partner does not commit')
-  assert_eq(scalar.value, 'good')
+  assert_eq(cell.value, 'good')
   assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
 end
 
@@ -1457,12 +1457,12 @@ end
 -- Rendezvous and resource compatibility must be solved together.
 local function test_or_else_primary_resource_conflict_backtracks_partner_branch()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'primary-resource-conflict-scalar')
+  local cell = Cell.new(0, 'primary-resource-conflict-cell')
   local ch = Rendezvous.new('primary-resource-conflict-rendezvous')
   local receiver, partner
 
   local primary = ch:get_op():and_then(function(v)
-    return scalar:write_op(1):and_then(function()
+    return cell:write_op(1):and_then(function()
       return Op.always('primary:' .. tostring(v))
     end)
   end)
@@ -1476,8 +1476,8 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
   rt:spawn_raw(function()
     partner = rt:perform(
       Op.choice(
-        Op.all({ ch:put_op('bad'), scalar:write_op(2) }),
-        Op.all({ ch:put_op('good'), scalar:write_op(1) })
+        Op.all({ ch:put_op('bad'), cell:write_op(2) }),
+        Op.all({ ch:put_op('good'), cell:write_op(1) })
       )
     )
   end, 'partner')
@@ -1485,20 +1485,20 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
   assert_status(rt:run(), 'found')
   assert_eq(receiver, 'primary:good', 'runtime backtracks through a conflicting partner branch')
   assert_truthy(partner ~= nil, 'compatible partner branch commits')
-  assert_eq(scalar.value, 1)
+  assert_eq(cell.value, 1)
   assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
 end
 
 local function test_or_else_absent_primary_discards_tentative_writes()
   local rt = new_runtime()
-  local scalar = Scalar.new('initial', 'absent-primary-discards-writes-scalar')
+  local cell = Cell.new('initial', 'absent-primary-discards-writes-cell')
   local ch = Rendezvous.new('absent-primary-discards-writes-rendezvous')
   local got
 
-  local primary = scalar:write_op('primary'):and_then(function()
+  local primary = cell:write_op('primary'):and_then(function()
     return ch:get_op()
   end)
-  local fallback = scalar:write_op('fallback'):and_then(function()
+  local fallback = cell:write_op('fallback'):and_then(function()
     return Op.always('fallback')
   end)
 
@@ -1508,7 +1508,7 @@ local function test_or_else_absent_primary_discards_tentative_writes()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
-  assert_eq(scalar.value, 'fallback', 'tentative write in absent primary is discarded')
+  assert_eq(cell.value, 'fallback', 'tentative write in absent primary is discarded')
 end
 
 local function test_nested_or_else_uses_nearest_available_world()
@@ -1812,14 +1812,14 @@ local function test_triple_swap_with_decoy_does_not_greedily_partially_commit()
   assert_eq(decoy, nil, 'decoy partial communication is not committed')
 end
 
-local function test_dependent_scalar_updates_are_serialisable_under_observation()
+local function test_dependent_cell_updates_are_serialisable_under_observation()
   local rt = new_runtime()
-  local scalar = Scalar.new(0, 'dependent-observation-scalar')
+  local cell = Cell.new(0, 'dependent-observation-cell')
   local returns = {}
 
   local function op()
-    return scalar:read_op():and_then(function(old)
-      return scalar:write_op(old + 1):and_then(function()
+    return cell:read_op():and_then(function(old)
+      return cell:write_op(old + 1):and_then(function()
         return Op.always(old)
       end)
     end)
@@ -1832,7 +1832,7 @@ local function test_dependent_scalar_updates_are_serialisable_under_observation(
   end
 
   assert_status(rt:run(), 'found')
-  assert_eq(scalar.value, 3, 'all dependent increments commit')
+  assert_eq(cell.value, 3, 'all dependent increments commit')
   assert_set_eq(returns, { 0, 1, 2 }, 'each dependent transaction observed a serial old value')
 end
 
@@ -1900,8 +1900,8 @@ local tests = {
     test_triple_swap_with_decoy_does_not_greedily_partially_commit,
   },
   {
-    'dependent scalar updates are serialisable under observation',
-    test_dependent_scalar_updates_are_serialisable_under_observation,
+    'dependent cell updates are serialisable under observation',
+    test_dependent_cell_updates_are_serialisable_under_observation,
   },
 }
 

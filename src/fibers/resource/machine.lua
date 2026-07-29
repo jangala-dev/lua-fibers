@@ -1,6 +1,6 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local Machine = {}
 Machine.__index = function(self, key)
@@ -10,7 +10,7 @@ Machine.__index = function(self, key)
   if key == 'version' then
     return self._location.version
   end
-  return Machine[key] or Scalar[key]
+  return Machine[key] or Cell[key]
 end
 
 local Kind = Facility.kind('machine')
@@ -20,15 +20,15 @@ local MODES = {
   query = { total = false, writes = false },
 }
 
-local WAIT = { _fibers_scalar_wait = true }
+local WAIT = { _fibers_cell_wait = true }
 local Ready = {}
 
 function Ready.write(value, ...)
-  return { _fibers_scalar_ready = true, writes = true, value = value, pack = Op._pack(...) }
+  return { _fibers_cell_ready = true, writes = true, value = value, pack = Op._pack(...) }
 end
 
 function Ready.same(...)
-  return { _fibers_scalar_ready = true, writes = false, pack = Op._pack(...) }
+  return { _fibers_cell_ready = true, writes = false, pack = Op._pack(...) }
 end
 
 Machine.Wait = WAIT

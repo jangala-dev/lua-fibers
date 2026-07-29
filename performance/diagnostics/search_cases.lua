@@ -13,7 +13,7 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 local function report(name, rt)
   local s = rt.stats
@@ -67,14 +67,14 @@ do
   report('or_else partner backtracking', rt)
 end
 
--- A locally preferred choice conflicts when parallel scalar deltas are merged.
+-- A locally preferred choice conflicts when parallel cell deltas are merged.
 do
   local rt = Runtime.new()
-  local scalar = Scalar.new(0)
+  local cell = Cell.new(0)
   rt:spawn_raw(function()
     rt:perform(Op.tensor({
-      scalar:write_op(1):choice(Op.always('no-write')),
-      scalar:write_op(2),
+      cell:write_op(1):choice(Op.always('no-write')),
+      cell:write_op(2),
     }))
   end)
   assert(rt:run().tag == 'found')

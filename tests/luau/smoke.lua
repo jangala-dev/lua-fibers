@@ -5,7 +5,7 @@ local fibers = require('fibers')
 local Host = require('fibers.host')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
-local Scalar = require('fibers.resource.scalar')
+local Cell = require('fibers.resource.cell')
 
 -- ManualHost exercises the embeddable runtime without filesystem or process
 -- facilities from the standalone Luau sandbox.
@@ -29,9 +29,9 @@ end
 -- The application-facing root lifecycle should work for immediately committable work;
 -- no host sleep or native I/O is required.
 fibers.run(function()
-  local scalar = Scalar.new(0, 'luau-scalar')
-  assert(fibers.perform(scalar:write_op(1)) == true)
-  assert(fibers.perform(scalar:read_op()) == 1)
+  local cell = Cell.new(0, 'luau-cell')
+  assert(fibers.perform(cell:write_op(1)) == true)
+  assert(fibers.perform(cell:read_op()) == 1)
 end)
 
 -- Luau may allow a protected function to yield while still prohibiting a
