@@ -200,8 +200,9 @@ do
   local backend = FakeHandle.new({ name = 'write-backend' })
   local stream, flushed
   rt:spawn_raw(function()
-    stream =
-      rt:perform(Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'write-stream' }))
+    stream = rt:perform(
+      Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'write-stream' })
+    )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
   end, 'root')
@@ -535,7 +536,9 @@ do
   local backend = FakeHandle.new({ name = 'nested-Closure-backend' })
   fibers.run(function()
     fibers.scope(function()
-      fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'nested-Closure-stream' }))
+      fibers.perform(
+        Stream.open_op(backend, { read = true, write = true, name = 'nested-Closure-stream' })
+      )
     end)
     assert_eq(backend.close_count, 1, 'nested scope should wait for backend closure')
   end)

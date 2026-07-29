@@ -149,14 +149,28 @@ end
 local function add_active_next(state, task_id)
   local task = state.tasks[task_id]
   setv(state, task, 'status', 'active')
+
+  -- drain_active advances active_head before evaluating a task. Reuse that
+  -- consumed slot to put the continuation at the front in O(1), leaving every
+  -- task which was already pending in the same relative order. The former
+  -- append-and-swap moved the old head to the tail and made neighbouring
+  -- product observations depend on the presence of an or_else occurrence.
+  local head = state.active_head
+  if head > 1 then
+    setv(state, state, 'active_head', head - 1)
+    setv(state, state.active, head - 1, task_id)
+    return
+  end
+
+  -- Defensive path for callers outside the normal consumed-task discipline.
+  -- It is not expected in the current machine, but retains correct stable
+  -- ordering if add_active_next is reused later.
   local position = #state.active + 1
   pushv(state, state.active, task_id)
-  local head = state.active_head
-  if head < position then
-    local next_id = state.active[head]
-    setv(state, state.active, head, task_id)
-    setv(state, state.active, position, next_id)
+  for i = position, 2, -1 do
+    setv(state, state.active, i, state.active[i - 1])
   end
+  setv(state, state.active, 1, task_id)
 end
 
 local complete_task

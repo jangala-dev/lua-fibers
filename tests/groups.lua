@@ -105,6 +105,7 @@ return {
     'tests/kernel/test_guard_activations.lua',
     'tests/kernel/test_instrumentation.lua',
     'tests/kernel/test_invariants.lua',
+    'tests/kernel/test_join_and_active_order_regressions.lua',
     'tests/kernel/test_kernel_machine.lua',
     'tests/kernel/test_ledger_kernel.lua',
     'tests/kernel/test_minimal_lazy_path.lua',

@@ -368,7 +368,13 @@ function M.join_segments(parent, children, mode, trail, writers)
   for i = 1, #children do
     local child = children[i]
     for loc, rec in pairs(child.values) do
-      if not M.find_value(parent, loc) then
+      if child.delta[loc] then
+        -- A writable child cell already contains its own patch.  Observe the
+        -- common parent world here; the merged child patch is staged exactly
+        -- once below.  Copying rec.value would apply non-idempotent patches
+        -- twice when the parent had not previously materialised the location.
+        M.cell(parent, loc, trail)
+      elseif not M.find_value(parent, loc) then
         local observed = { value = rec.value, version = rec.version }
         if trail then
           trail:set(parent.values, loc, observed)

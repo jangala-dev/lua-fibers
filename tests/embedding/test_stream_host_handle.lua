@@ -233,7 +233,10 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(stream_handle, { scope = owner, read = true, write = true, name = 'socket-read-stream' })
+      Stream.open_op(
+        stream_handle,
+        { scope = owner, read = true, write = true, name = 'socket-read-stream' }
+      )
     )
     got = rt:perform(stream:reader():read_exactly_op(3))
   end, 'socket-reader')
