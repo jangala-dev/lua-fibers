@@ -102,6 +102,7 @@ return {
   },
   kernel = {
     'tests/kernel/test_claim_closure.lua',
+    'tests/kernel/test_compact_authoring.lua',
     'tests/kernel/test_dependency_supply_direction.lua',
     'tests/kernel/test_demand_frontier_matching.lua',
     'tests/kernel/test_exchange_choice_propagation.lua',
@@ -125,7 +126,7 @@ return {
     'tests/kernel/test_store_rollback.lua',
     'tests/kernel/test_trail_journal.lua',
     'tests/kernel/test_validation_paths.lua',
-    'tests/kernel/test_witness_validation.lua',
+    'tests/kernel/test_cursor_validation.lua',
   },
   internal = {
     'tests/internal/test_context.lua',

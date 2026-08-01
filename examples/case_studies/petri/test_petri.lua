@@ -70,8 +70,7 @@ do
   local net = Petri.new()
   local result
   run(function()
-    result =
-      fibers.perform(Op.each({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback')))
+    result = fibers.perform(Op.each({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
   assert(count(net:marking(), 'p') == 0)

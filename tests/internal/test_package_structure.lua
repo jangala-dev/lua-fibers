@@ -1,11 +1,5 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua', './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local saved_runtime = package.loaded['fibers.runtime']
@@ -17,10 +11,7 @@ package.loaded['fibers.diagnostics.search'] = nil
 package.loaded['fibers.diagnostics.io'] = nil
 package.loaded['fibers.io.auto'] = nil
 local Runtime = require('fibers.runtime')
-assert(
-  package.loaded['fibers.diagnostics.search'] == nil,
-  'core Runtime must not eagerly load search diagnostics'
-)
+assert(package.loaded['fibers.diagnostics.search'] == nil, 'core Runtime must not eagerly load search diagnostics')
 assert(package.loaded['fibers.diagnostics.io'] == nil, 'core Runtime must not eagerly load I/O diagnostics')
 assert(package.loaded['fibers.io.auto'] == nil, 'core Runtime must not load backend discovery')
 package.loaded['fibers.runtime'] = saved_runtime or Runtime

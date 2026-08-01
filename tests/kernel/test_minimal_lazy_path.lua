@@ -127,7 +127,7 @@ do
   local rt = Runtime.new({
     host = host,
     instrumentation = true,
-  })
+      })
   local clock = Clock.new('minimal-timer')
   local fired
   rt:spawn_raw(function()

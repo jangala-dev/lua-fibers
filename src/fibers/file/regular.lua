@@ -374,9 +374,12 @@ function RegularFile:close_op(reason)
     return self:closed_op()
   end
   local request = new_request('close', { reason = reason })
-  return self.tx:send_op(request):and_then(self.tx:close_op(reason or 'file close requested')):wrap(function()
-    return self:closed()
-  end)
+  return self.tx
+    :send_op(request)
+    :and_then(self.tx:close_op(reason or 'file close requested'))
+    :wrap(function()
+      return self:closed()
+    end)
 end
 
 function RegularFile:submit_read_all_op(opts)
@@ -609,38 +612,22 @@ local function new_file_op(path, mode, opts, label, temporary)
     closure = file_closure(file),
     run = function()
       local ok, err = Protected.pcall(drive_file, file, opts)
-      if ok then
-        return
-      end
+      if ok then return end
       local rt = Runtime.current()
       local failure = Runtime.is_cancelled(err)
-          and IOError.closed(
-            'file',
-            'driver',
-            { path = file.path, reason = err.reason or 'file driver cancelled' }
-          )
+          and IOError.closed('file', 'driver', { path = file.path, reason = err.reason or 'file driver cancelled' })
         or IO.protocol_error('file', 'driver', err, { path = file.path })
-      if file.backend then
-        Protected.pcall(file.backend.close, file.backend, failure)
-      end
+      if file.backend then Protected.pcall(file.backend.close, file.backend, failure) end
       if file.auto_unlink then
         Protected.pcall(function()
           local provider = Provider.for_runtime(rt, opts)
-          if provider then
-            provider:unlink(file.path, opts)
-          end
+          if provider then provider:unlink(file.path, opts) end
         end)
       end
-      if file.ready_completion:is_pending() then
-        publish(rt, file.ready_completion, false, failure)
-      end
+      if file.ready_completion:is_pending() then publish(rt, file.ready_completion, false, failure) end
       IO.masked_perform(rt, file.tx:close_op(failure))
-      if file.closed_completion:is_pending() then
-        publish(rt, file.closed_completion, false, failure)
-      end
-      if not Runtime.is_cancelled(err) then
-        error(failure, 0)
-      end
+      if file.closed_completion:is_pending() then publish(rt, file.closed_completion, false, failure) end
+      if not Runtime.is_cancelled(err) then error(failure, 0) end
     end,
   })
   return admission, file
@@ -696,9 +683,7 @@ local function path_job_op(action, fn, opts)
     name = name,
     role = 'file_job',
     closure = Closure.none(),
-    run = function()
-      return fn(opts)
-    end,
+    run = function() return fn(opts) end,
   })
   return submission, job
 end
@@ -854,32 +839,14 @@ function File.mkdir_p_op(path, opts)
   return job_result(submission, job)
 end
 
+
 File.RegularFile = RegularFile
 File.Request = Request
 File.Job = Job
 File.Error = IOError
 Direct.install(Request, { 'result' })
-Direct.install(
-  RegularFile,
-  {
-    'ready',
-    'read',
-    'read_exactly',
-    'read_all',
-    'write_all',
-    'read_line',
-    'seek',
-    'flush',
-    'rename',
-    'sync',
-    'close',
-    'closed',
-  }
-)
+Direct.install(RegularFile, { 'ready', 'read', 'read_exactly', 'read_all', 'write_all', 'read_line', 'seek', 'flush', 'rename', 'sync', 'close', 'closed' })
 Direct.install(Job, { 'result' })
-Direct.install_static(
-  File,
-  { 'open', 'tmpfile', 'read_all', 'write_all', 'rename', 'unlink', 'mkdir', 'mkdir_p' }
-)
+Direct.install_static(File, { 'open', 'tmpfile', 'read_all', 'write_all', 'rename', 'unlink', 'mkdir', 'mkdir_p' })
 
 return File

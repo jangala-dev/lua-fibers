@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 local fibers = require('fibers')
 local Lifetime = require('fibers.lifetime')

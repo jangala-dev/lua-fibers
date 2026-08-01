@@ -80,6 +80,7 @@ function NativeError.new(opts)
     return tostring(prefix), nil
   end
 
+
   return Error
 end
 

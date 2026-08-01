@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Op = require('fibers.op')
@@ -15,10 +10,7 @@ local Signal = require('fibers.resource.signal')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -26,14 +18,10 @@ local function status(actual, expected, message)
   eq(actual and actual.tag, expected, message)
 end
 
-local pack = table.pack or function(...)
-  return { n = select('#', ...), ... }
-end
+local pack = table.pack or function(...) return { n = select('#', ...), ... } end
 local function one_perform(op, opts)
   local rt, values = Runtime.new(opts or {}), { n = 0 }
-  rt:spawn_raw(function()
-    values = pack(rt:perform(op))
-  end, 'one')
+  rt:spawn_raw(function() values = pack(rt:perform(op)) end, 'one')
   return rt:run(), values, rt
 end
 
@@ -80,12 +68,8 @@ end
 do
   local channel, rt = Rendezvous.new('residual-primary'), Runtime.new()
   local got, sent
-  rt:spawn_raw(function()
-    got = rt:perform(channel:get_op():or_else(Op.always('fallback')))
-  end, 'receiver')
-  rt:spawn_raw(function()
-    sent = rt:perform(channel:put_op('payload'))
-  end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(channel:get_op():or_else(Op.always('fallback'))) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(channel:put_op('payload')) end, 'sender')
   status(rt:run(), 'found')
   eq(got, 'payload')
   eq(sent, true)
@@ -96,16 +80,9 @@ do
   local wanted, dead = Rendezvous.new('residual-wanted'), Rendezvous.new('residual-dead')
   local rt, receiver, partner = Runtime.new(), nil, nil
   rt:spawn_raw(function()
-    receiver = rt:perform(wanted
-      :get_op()
-      :map(function(v)
-        return 'primary:' .. v
-      end)
-      :or_else(Op.always('fallback')))
+    receiver = rt:perform(wanted:get_op():map(function(v) return 'primary:' .. v end):or_else(Op.always('fallback')))
   end, 'receiver')
-  rt:spawn_raw(function()
-    partner = rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok')))
-  end, 'partner')
+  rt:spawn_raw(function() partner = rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok'))) end, 'partner')
   status(rt:run(), 'found')
   eq(receiver, 'primary:ok')
   eq(partner, true)
@@ -120,9 +97,7 @@ do
   local st
   for _ = 1, 80 do
     st = rt:step({ max_work = 1 })
-    if st.tag == 'found' then
-      break
-    end
+    if st.tag == 'found' then break end
   end
   status(st, 'found')
   eq(got, 'fallback')
@@ -131,18 +106,12 @@ end
 do
   local channel, rt = Rendezvous.new('cursor-residual-with-sender'), Runtime.new()
   local got, sent
-  rt:spawn_raw(function()
-    got = rt:perform(channel:get_op():or_else(Op.always('fallback')))
-  end, 'receiver')
-  rt:spawn_raw(function()
-    sent = rt:perform(channel:put_op('payload'))
-  end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(channel:get_op():or_else(Op.always('fallback'))) end, 'receiver')
+  rt:spawn_raw(function() sent = rt:perform(channel:put_op('payload')) end, 'sender')
   local st
   for _ = 1, 120 do
     st = rt:step({ max_work = 1 })
-    if st.tag == 'found' then
-      break
-    end
+    if st.tag == 'found' then break end
   end
   status(st, 'found')
   eq(got, 'payload')

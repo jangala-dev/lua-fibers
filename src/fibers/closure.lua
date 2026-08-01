@@ -40,9 +40,7 @@ local propagation_booleans = {
 }
 
 local function copy_propagation(target, source, label)
-  if source == nil then
-    return target
-  end
+  if source == nil then return target end
   if type(source) ~= 'table' then
     error((label or 'Closure propagation') .. ' must be a table', 3)
   end
@@ -104,7 +102,8 @@ function Boundary:on_cancel_requested(_parent, _state, reason)
 end
 
 function Boundary:on_body_result(_parent, _state, ok, primary)
-  return ok and { seal = true, cancel_children = false }
+  return ok
+    and { seal = true, cancel_children = false }
     or { seal = true, cancel_children = true, reason = primary }
 end
 
@@ -153,12 +152,8 @@ function Closure.supervisor(opts)
 end
 
 function Supervisor:on_child_outcome(_parent, state, _child, exit)
-  if
-    type(exit) == 'table'
-    and exit.tag == 'failed'
-    and self.child_failure == 'fail_at_exit'
-    and not state.first_child_failure
-  then
+  if type(exit) == 'table' and exit.tag == 'failed' and self.child_failure == 'fail_at_exit'
+      and not state.first_child_failure then
     state.first_child_failure = state.child_failures[#state.child_failures]
   end
   return {}

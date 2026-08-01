@@ -24,6 +24,7 @@ local EffectKind = (function()
   local EffectKind = {}
   EffectKind.__index = EffectKind
 
+
   local function assert_field(spec, name, ty)
     if type(spec[name]) ~= ty then
       error('EffectKind.new requires ' .. name .. ' :: ' .. ty, 3)
@@ -80,6 +81,7 @@ local EffectKind = (function()
 end)()
 
 local Effect = {}
+
 
 function Effect.kind(spec)
   return EffectKind.new(spec)

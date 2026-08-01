@@ -16,15 +16,9 @@ HostHold.__index = HostHold
 local next_id = 0
 
 local function close_value(value, close, reason)
-  if value == nil then
-    return true
-  end
-  if close then
-    return close(value, reason)
-  end
-  if type(value.close) == 'function' then
-    return value:close(reason)
-  end
+  if value == nil then return true end
+  if close then return close(value, reason) end
+  if type(value.close) == 'function' then return value:close(reason) end
   return true
 end
 
@@ -46,9 +40,7 @@ function HostHold.new(name)
       finish_op = function(_ctx, record, close)
         return Op.always(true):wrap(function()
           local ok, err = record.item:close(close.reason or 'lifetime closure')
-          if not ok then
-            error(err, 0)
-          end
+          if not ok then error(err, 0) end
           return true
         end)
       end,
@@ -91,9 +83,7 @@ function HostHold:hold_many(entries)
     end
     local key = entry.key or entry.name or entry[1]
     local value = entry.value
-    if value == nil then
-      value = entry[2]
-    end
+    if value == nil then value = entry[2] end
     local close = entry.close or entry[3]
     local got, err = self:hold(key, value, close)
     if not got then
@@ -146,18 +136,16 @@ function HostHold:discard(key, expected, reason)
 
   local called, ok, err = Protected.pcall(close_value, rec.value, rec.close, reason or 'host value discarded')
   if not called then
-    return nil,
-      IOError.protocol('host_hold', 'discard', 'held value close raised', {
-        key = key,
-        cause = ok,
-      })
+    return nil, IOError.protocol('host_hold', 'discard', 'held value close raised', {
+      key = key,
+      cause = ok,
+    })
   end
   if not ok then
-    return nil,
-      IOError.protocol('host_hold', 'discard', 'held value failed to close', {
-        key = key,
-        cause = err,
-      })
+    return nil, IOError.protocol('host_hold', 'discard', 'held value failed to close', {
+      key = key,
+      cause = err,
+    })
   end
   return true
 end
@@ -178,9 +166,7 @@ function HostHold:release_all()
 end
 
 function HostHold:close(reason)
-  if self.closed then
-    return true
-  end
+  if self.closed then return true end
   self.closed = true
   local errors = {}
   for i = #self.order, 1, -1 do
@@ -190,16 +176,13 @@ function HostHold:close(reason)
     if rec then
       IOAudit.release(rec.value, self)
       local ok, err = close_value(rec.value, rec.close, reason)
-      if not ok then
-        errors[#errors + 1] = { key = key, error = err }
-      end
+      if not ok then errors[#errors + 1] = { key = key, error = err } end
     end
   end
   if #errors > 0 then
-    return nil,
-      IOError.protocol('host_hold', 'close', 'one or more held values failed to close', {
-        errors = errors,
-      })
+    return nil, IOError.protocol('host_hold', 'close', 'one or more held values failed to close', {
+      errors = errors,
+    })
   end
   return true
 end

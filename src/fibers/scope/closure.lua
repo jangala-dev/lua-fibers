@@ -23,9 +23,7 @@ local Driver = {}
 local CloseReasonKind
 CloseReasonKind = Effect.kind({
   name = 'closure.close_reason',
-  key = function(payload)
-    return payload.state
-  end,
+  key = function(payload) return payload.state end,
   merge = function(a, b)
     return { state = a.state, reason = a.reason ~= nil and a.reason or b.reason }
   end,
@@ -136,13 +134,10 @@ local function apply_decision(scope, state, decision, reason)
   end
   if decision.seal or decision.cancel_body or decision.cancel_children then
     local close_reason = decision.reason or reason or 'scope Closure close'
-    perform_masked(
-      scope,
-      scope:begin_close_op(close_reason, {
-        cancel_body = decision.cancel_body == true,
-        cancel_children = decision.cancel_children == true,
-      })
-    )
+    perform_masked(scope, scope:begin_close_op(close_reason, {
+      cancel_body = decision.cancel_body == true,
+      cancel_children = decision.cancel_children == true,
+    }))
     state.close_reason = state.close_reason or close_reason
   end
 end
@@ -167,14 +162,10 @@ function Driver.record_child_outcome(scope, child, exit, opts)
   end
   -- Custody at closure decides which Lifetime receives the consequence.
   local custodian = scope:_store():current_custodian(child)
-  if custodian ~= scope._lifetime then
-    return false
-  end
+  if custodian ~= scope._lifetime then return false end
   local state = state_for(scope)
   local entry, fresh = record_entry(state, child, exit)
-  if fresh and state.active and not (opts and opts.defer) then
-    apply_child_entry(scope, state, entry)
-  end
+  if fresh and state.active and not (opts and opts.defer) then apply_child_entry(scope, state, entry) end
   return fresh, entry
 end
 
@@ -194,11 +185,12 @@ function Driver.request_cancel_op(scope, reason)
       return Op.always(false, recorded_reason)
     end
     if close_op then
-      return close_op:and_then(
-        Op.emit(record_close_reason_effect(state, decision.reason or recorded_reason)):map(function()
+      return close_op:and_then(Op.emit(record_close_reason_effect(
+          state,
+          decision.reason or recorded_reason
+        )):map(function()
           return true, recorded_reason
-        end)
-      )
+        end))
     end
     return Op.always(true, recorded_reason)
   end))
@@ -282,9 +274,7 @@ local function append_closure_failures(out, value, seen)
   for _, field in ipairs(FAILURE_LIST_FIELDS) do
     local values = value[field]
     if type(values) == 'table' then
-      for i = 1, #values do
-        append_closure_failures(out, values[i], seen)
-      end
+      for i = 1, #values do append_closure_failures(out, values[i], seen) end
     end
   end
   for _, field in ipairs(FAILURE_VALUE_FIELDS) do
@@ -367,13 +357,10 @@ local function default_result(scope, state, body_ok, body_results, closure_failu
   return ScopeResult.ok(tail_pack(body_results), report_for(scope, nil, secondaries, fields))
 end
 
+
 local function result_exit(result)
-  if not ScopeResult.is(result) then
-    return Exit.returned(result)
-  end
-  if result.ok then
-    return Exit.returned(result:unpack())
-  end
+  if not ScopeResult.is(result) then return Exit.returned(result) end
+  if result.ok then return Exit.returned(result:unpack()) end
   if result.reason == 'cancelled' then
     local cancellation = result.primary
     if Runtime.is_cancelled and Runtime.is_cancelled(cancellation) then
@@ -385,9 +372,7 @@ local function result_exit(result)
 end
 
 local function completed_exit(node)
-  if not node or not node.has_body then
-    return nil
-  end
+  if not node or not node.has_body then return nil end
   local boundary = node.outcome and node.outcome.value
   if type(boundary) == 'table' and boundary.status == 'done' then
     return result_exit(boundary.result)
@@ -406,30 +391,26 @@ local function account_existing_children(scope, state)
       apply_child_entry(scope, state, entry)
     end
   end
-  for i = 1, #state.child_exits do
-    apply_child_entry(scope, state, state.child_exits[i])
-  end
+  for i = 1, #state.child_exits do apply_child_entry(scope, state, state.child_exits[i]) end
 end
 
 local function stage_custodian_outcome(scope, result)
   local custodian = scope:_store():current_custodian(scope._lifetime)
-  if not custodian or custodian == scope._lifetime then
-    return nil
-  end
+  if not custodian or custodian == scope._lifetime then return nil end
   local parent = require('fibers.scope').for_lifetime(custodian)
-  local fresh, entry =
-    Driver.record_child_outcome(parent, scope._lifetime, result_exit(result), { defer = true })
-  if not fresh then
-    return nil
-  end
+  local fresh, entry = Driver.record_child_outcome(
+    parent,
+    scope._lifetime,
+    result_exit(result),
+    { defer = true }
+  )
+  if not fresh then return nil end
   return { parent = parent, entry = entry }
 end
 
 local function capture_failure(out, fn)
   local ok, err = Protected.pcall(fn)
-  if not ok then
-    out[#out + 1] = err
-  end
+  if not ok then out[#out + 1] = err end
 end
 
 function Driver.run(scope, fn, closure)
@@ -467,18 +448,13 @@ function Driver.run(scope, fn, closure)
     local decision = call_closure(closure, 'on_body_result', scope._lifetime, state, body_ok, body_primary)
       or (body_ok and { seal = true } or { seal = true, cancel_children = true })
     if decision.seal or decision.cancel_children then
-      perform_masked(
-        scope,
-        scope:begin_close_op(decision.reason or close_reason, {
-          cancel_body = false,
-          cancel_children = decision.cancel_children == true,
-        })
-      )
+      perform_masked(scope, scope:begin_close_op(decision.reason or close_reason, {
+        cancel_body = false,
+        cancel_children = decision.cancel_children == true,
+      }))
     end
   end)
-  capture_failure(closure_failures, function()
-    retire_roots(scope, close_reason)
-  end)
+  capture_failure(closure_failures, function() retire_roots(scope, close_reason) end)
 
   state.active = false
 
@@ -488,13 +464,8 @@ function Driver.run(scope, fn, closure)
     staged = stage_custodian_outcome(scope, result)
   end)
   if not stage_ok and result.ok then
-    result = failed_result(
-      scope,
-      'closure_contract_failed',
-      stage_err,
-      {},
-      { reason = 'closure_contract_failed' }
-    )
+    result = failed_result(scope, 'closure_contract_failed', stage_err, {},
+      { reason = 'closure_contract_failed' })
     staged = nil
   end
 
@@ -512,13 +483,8 @@ function Driver.run(scope, fn, closure)
       apply_child_entry(staged.parent, state_for(staged.parent), staged.entry)
     end)
     if not apply_ok and result.ok then
-      result = failed_result(
-        scope,
-        'closure_contract_failed',
-        apply_err,
-        {},
-        { reason = 'closure_contract_failed' }
-      )
+      result = failed_result(scope, 'closure_contract_failed', apply_err, {},
+        { reason = 'closure_contract_failed' })
       -- The published outcome remains the original value. Contract functions
       -- are required to be pure and non-throwing; this branch is diagnostic.
     end
@@ -532,13 +498,8 @@ function Driver.run(scope, fn, closure)
   end
   if not pop_ok then
     local primary = result.ok and pop_err or result.primary
-    result = failed_result(
-      scope,
-      result.ok and 'closure_failed' or result.reason,
-      primary,
-      { pop_err },
-      { reason = 'scope_pop_failed' }
-    )
+    result = failed_result(scope, result.ok and 'closure_failed' or result.reason,
+      primary, { pop_err }, { reason = 'scope_pop_failed' })
   end
   return result
 end

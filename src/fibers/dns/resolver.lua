@@ -525,14 +525,13 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
   local deadline = rt:now() + timeout
   local last_protocol
   while true do
-    local kind, packet, receive_err = perform(socket
-      :receive_from_op({ max_size = opts.maximum_message_size or 65535 })
-      :map(function(value, err)
+    local kind, packet, receive_err = perform(
+      socket:receive_from_op({ max_size = opts.maximum_message_size or 65535 }):map(function(value, err)
         return 'packet', value, err
-      end)
-      :or_else(Sleep.sleep_until_op(deadline):map(function()
+      end):or_else(Sleep.sleep_until_op(deadline):map(function()
         return 'timeout'
-      end)))
+      end))
+    )
 
     if kind == 'timeout' then
       close_quietly(socket, 'DNS UDP timeout')
@@ -546,7 +545,8 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
     end
     if not packet then
       close_quietly(socket, 'DNS UDP receive failed')
-      return nil, IOError.normalise(receive_err, { domain = 'dns', action = 'udp_receive', server = server })
+      return nil,
+        IOError.normalise(receive_err, { domain = 'dns', action = 'udp_receive', server = server })
     end
     local decision = classify_udp_packet(packet, server, id, name, qtype, opts)
     if decision.kind == 'answer' then
@@ -954,8 +954,7 @@ function Resolver:_resolve_candidate(name, port, family, opts)
     local values, err = outcomes[family_name]:raise()
     if values then
       for j = 1, #values do
-        local address = family_name == 'inet6' and Address.ipv6(values[j], port)
-          or Address.ipv4(values[j], port)
+        local address = family_name == 'inet6' and Address.ipv6(values[j], port) or Address.ipv4(values[j], port)
         local key = Address.key(address)
         if not seen[key] then
           seen[key] = true

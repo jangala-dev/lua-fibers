@@ -32,8 +32,8 @@ end
 local function error_detail(binding, errno, fallback)
   local errors = binding.errors or {}
   return fallback
-    or (errors.message and errors.message(errno))
-    or (errno and ('errno ' .. tostring(errno)) or 'native operation failed'),
+      or (errors.message and errors.message(errno))
+      or (errno and ('errno ' .. tostring(errno)) or 'native operation failed'),
     errors.name and errors.name(errno)
 end
 
@@ -157,8 +157,7 @@ local function make_fd(binding)
     local number = raw.number and raw.number(value) or nil
     local handle = Handle.new({
       name = opts.name or (binding.name .. '-fd-' .. tostring(number or poll_value)),
-      key = opts.key
-        or { family = binding.family, poll = poll_value, number = number, generation = generation },
+      key = opts.key or { family = binding.family, poll = poll_value, number = number, generation = generation },
       handle = value,
       host = opts.host,
       read = operations.read,
@@ -347,15 +346,25 @@ local function make_network(binding, Fd)
         end
         return nil, nil, socket_error('accept', accept_errno, accept_message, { address = self.address })
       end
-      local child, child_err =
-        wrap(child_raw, host, (opts.name or 'listener') .. ':accepted', endpoint.family)
+      local child, child_err = wrap(
+        child_raw,
+        host,
+        (opts.name or 'listener') .. ':accepted',
+        endpoint.family
+      )
       if not child then
         close_raw(child_raw)
         return nil, nil, child_err
       end
       if not net.is_unix(endpoint.family) and opts.nodelay ~= false then
-        local set, nodelay_err =
-          option(child_raw, 'tcp', 'nodelay', true, 'setsockopt_nodelay', { address = self.address })
+        local set, nodelay_err = option(
+          child_raw,
+          'tcp',
+          'nodelay',
+          true,
+          'setsockopt_nodelay',
+          { address = self.address }
+        )
         if not set then
           child:close(nodelay_err)
           return nil, nil, nodelay_err
@@ -397,13 +406,10 @@ local function make_network(binding, Fd)
         return close_failed(handle, local_err)
       end
       if local_endpoint.family ~= endpoint.family then
-        return close_failed(
-          handle,
-          IOError.invalid_argument('socket', 'bind', {
-            address = opts.local_address,
-            message = 'local and peer address families differ',
-          })
-        )
+        return close_failed(handle, IOError.invalid_argument('socket', 'bind', {
+          address = opts.local_address,
+          message = 'local and peer address families differ',
+        }))
       end
       local bound, bind_errno, bind_message = net.bind(value, local_endpoint.native)
       if not bound then
@@ -458,7 +464,7 @@ local function make_network(binding, Fd)
     return handle
   end
 
-  if net.datagram then
+    if net.datagram then
     local function datagram_error(action, errno, message, fields)
       if is_error(binding, 'again', errno) then
         return IOError.would_block('datagram', action, fields)
@@ -521,9 +527,8 @@ local function make_network(binding, Fd)
           return nil, datagram_error('recv_from', recv_errno, recv_message, { address = self.address })
         end
         flags = flags or {}
-        if
-          not (type(binding.capabilities) == 'table' and binding.capabilities.datagram_truncation == true)
-        then
+        if not (type(binding.capabilities) == 'table'
+          and binding.capabilities.datagram_truncation == true) then
           flags.truncation_unknown = true
           flags.receive_limit = flags.receive_limit or maximum
         end
@@ -536,13 +541,12 @@ local function make_network(binding, Fd)
           return nil, target_err
         end
         if target.family ~= endpoint.family then
-          return nil,
-            IOError.protocol(
-              'datagram',
-              'send_to',
-              'source and destination address families differ',
-              { source = self.address, destination = destination }
-            )
+          return nil, IOError.protocol(
+            'datagram',
+            'send_to',
+            'source and destination address families differ',
+            { source = self.address, destination = destination }
+          )
         end
         local count, send_errno, send_message = net.send(raw_of(self), data, target.native)
         if count == nil then
@@ -552,6 +556,7 @@ local function make_network(binding, Fd)
       end
       return handle
     end
+
   end
   return Network
 end
@@ -578,15 +583,14 @@ local function make_resolver(binding)
       end
     end
     if #out == 0 then
-      return nil,
-        IOError.system(
-          'resolver',
-          'resolve',
-          'name resolved to no usable stream addresses',
-          'EAI_NONAME',
-          nil,
-          { endpoint = endpoint }
-        )
+      return nil, IOError.system(
+        'resolver',
+        'resolve',
+        'name resolved to no usable stream addresses',
+        'EAI_NONAME',
+        nil,
+        { endpoint = endpoint }
+      )
     end
     return out
   end
@@ -655,7 +659,8 @@ function Posix.define(binding)
   local features = {
     fd = Fd.is_supported(),
     network = Network,
-    socket = Network and (Network.supports_ipv4() or Network.supports_ipv6() or Network.supports_unix())
+    socket = Network
+      and (Network.supports_ipv4() or Network.supports_ipv6() or Network.supports_unix())
       or false,
     datagram = Network and Network.create_datagram ~= nil or false,
     resolver = resolver ~= nil,
@@ -673,8 +678,8 @@ function Posix.define(binding)
     else
       ok = features.fd
     end
-    return not not ok,
-      ok and nil or reason or binding.reason or ('required ' .. binding.name .. ' functions unavailable')
+    return not not ok, ok and nil or reason or binding.reason
+      or ('required ' .. binding.name .. ' functions unavailable')
   end
 
   Module.is_supported = probe
@@ -702,6 +707,7 @@ function Posix.define(binding)
     }, Host)
     return host
   end
+
 
   function Host:sleep(seconds)
     return binding.time.sleep(seconds)

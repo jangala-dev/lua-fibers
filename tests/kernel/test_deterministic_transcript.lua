@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Effect = require('fibers.effect')
@@ -15,19 +10,13 @@ local Runtime = require('fibers.runtime')
 
 local function scenario()
   local transcript = {}
-  local function record(value)
-    transcript[#transcript + 1] = value
-  end
+  local function record(value) transcript[#transcript + 1] = value end
 
   local TraceKind
   TraceKind = Effect.kind({
     name = 'deterministic-transcript',
-    key = function(payload)
-      return payload.value
-    end,
-    merge = function(left, _right)
-      return left
-    end,
+    key = function(payload) return payload.value end,
+    merge = function(left, _right) return left end,
     prepare = function(_runtime, payload)
       return {
         kind = TraceKind,
@@ -38,9 +27,7 @@ local function scenario()
       }
     end,
   })
-  local function effect(value)
-    return Effect.of(TraceKind, { value = value })
-  end
+  local function effect(value) return Effect.of(TraceKind, { value = value }) end
 
   local exchange = Rendezvous.new('deterministic-transcript')
   local runtime = Runtime.new({ choice_seed = 7 })
@@ -56,22 +43,18 @@ local function scenario()
   end, 'transcript-put')
 
   runtime:spawn_raw(function()
-    local result = runtime:perform(
-      Op.choice(
-        Op.always('left'):on_defeat(effect('left-defeated')),
-        Op.each({ Op.always('right'), Op.emit(effect('right-committed')) }):map(function(rows)
-          return rows[1][1]
-        end)
-      )
-    )
+    local result = runtime:perform(Op.choice(
+      Op.always('left'):on_defeat(effect('left-defeated')),
+      Op.each({ Op.always('right'), Op.emit(effect('right-committed')) }):map(function(rows)
+        return rows[1][1]
+      end)
+    ))
     record('choice:' .. tostring(result))
   end, 'transcript-choice')
 
   while true do
     local status = runtime:run()
-    if status.tag ~= 'found' then
-      break
-    end
+    if status.tag ~= 'found' then break end
   end
   return table.concat(transcript, '|')
 end
@@ -80,10 +63,7 @@ local expected = scenario()
 for i = 1, 40 do
   local actual = scenario()
   if actual ~= expected then
-    error(
-      string.format('deterministic transcript changed on run %d: expected %s, got %s', i, expected, actual),
-      0
-    )
+    error(string.format('deterministic transcript changed on run %d: expected %s, got %s', i, expected, actual), 0)
   end
 end
 

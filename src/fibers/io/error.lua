@@ -32,7 +32,9 @@ function Error.new(kind, fields)
 end
 
 function Error.is(err, kind)
-  return type(err) == 'table' and err._fibers_io_error == true and (kind == nil or err.kind == kind)
+  return type(err) == 'table'
+    and err._fibers_io_error == true
+    and (kind == nil or err.kind == kind)
 end
 
 function Error.unsupported(domain, action, fields)

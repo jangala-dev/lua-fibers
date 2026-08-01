@@ -56,6 +56,7 @@ local diagnostics = env_number('FIBERS_PERF_DIAGNOSTICS', 1) ~= 0
 local trace = env_number('FIBERS_PERF_TRACE', 0) ~= 0
 local slow_search_limit = math.max(1, math.floor(env_number('FIBERS_PERF_SLOW_SEARCHES', 8)))
 
+
 local selected_tiers = {}
 for tier in string.gmatch(tiers_text, '[^,%s]+') do
   selected_tiers[tier] = true
@@ -235,8 +236,7 @@ end
 function Context:report()
   local out
   for i = 1, #self.runtimes do
-    out =
-      merge_snapshot(out, (self.runtimes[i].instrumentation and self.runtimes[i].instrumentation:report()))
+    out = merge_snapshot(out, (self.runtimes[i].instrumentation and self.runtimes[i].instrumentation:report()))
   end
   return out or { counters = {}, maxima = {}, histograms = {}, slow_searches = {} }
 end
@@ -291,23 +291,12 @@ for _, case in ipairs(cases) do
       median_retained_kb = median(retained),
       diagnostic_seconds = diagnostic_run and diagnostic_run.elapsed or nil,
       diagnostics = diag,
-      search_calls_per_search = (counters.searches or 0) > 0
-          and (counters.search_calls or 0) / counters.searches
+      search_calls_per_search = (counters.searches or 0) > 0 and (counters.search_calls or 0) / counters.searches
         or 0,
-      branches_per_search = (counters.searches or 0) > 0 and (counters.branches or 0) / counters.searches
-        or 0,
-      p50_search_steps_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_steps_per_search,
-        0.50
-      ),
-      p95_search_steps_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_steps_per_search,
-        0.95
-      ),
-      p99_search_steps_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_steps_per_search,
-        0.99
-      ),
+      branches_per_search = (counters.searches or 0) > 0 and (counters.branches or 0) / counters.searches or 0,
+      p50_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_search, 0.50),
+      p95_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_search, 0.95),
+      p99_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_search, 0.99),
       p95_search_cpu_us_upper = histogram_quantile_upper(
         diag and diag.histograms.search_cpu_us_per_search,
         0.95

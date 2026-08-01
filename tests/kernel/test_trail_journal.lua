@@ -58,46 +58,28 @@ assert(record.value == 0 and #values == 0)
 do
   local add = {
     name = 'test-add',
-    apply = function(_, value, patch)
-      return value + patch.delta
-    end,
-    stage = function(_, patch)
-      return patch
-    end,
+    apply = function(_, value, patch) return value + patch.delta end,
+    stage = function(_, patch) return patch end,
     join = function(_, left, right)
       return { delta = (left and left.delta or 0) + (right and right.delta or 0) }
     end,
-    constraint = function(_, patch)
-      return patch
-    end,
-    supplies = function()
-      return {}
-    end,
+    constraint = function(_, patch) return patch end,
+    supplies = function() return {} end,
   }
   local fail = {
     name = 'test-fail',
-    apply = function()
-      error('deliberate commit calculation failure', 0)
-    end,
+    apply = function() error('deliberate commit calculation failure', 0) end,
     stage = add.stage,
     join = add.join,
     constraint = add.constraint,
     supplies = add.supplies,
   }
   local callback_calls = 0
-  local a = Journal.new_location({
-    algebra = add,
-    value = 10,
-    apply = function()
-      callback_calls = callback_calls + 1
-    end,
-  })
+  local a = Journal.new_location({ algebra = add, value = 10, apply = function() callback_calls = callback_calls + 1 end })
   local b = Journal.new_location({ algebra = add, value = 20 })
   local writes = { [a] = { delta = 1 }, [b] = { delta = 2 } }
   local order = {}
-  for location in pairs(writes) do
-    order[#order + 1] = location
-  end
+  for location in pairs(writes) do order[#order + 1] = location end
   order[2].algebra = fail
 
   local ok = pcall(Journal.commit, writes)

@@ -82,10 +82,19 @@ function Handle.new(opts)
   local capabilities = {
     read = capability('read', type(opts.read) == 'function'),
     write = capability('write', type(opts.write) == 'function'),
-    shutdown_read = capability('shutdown_read', type(opts.shutdown_read) == 'function'),
-    shutdown_write = capability('shutdown_write', type(opts.shutdown_write) == 'function'),
+    shutdown_read = capability(
+      'shutdown_read',
+      type(opts.shutdown_read) == 'function'
+    ),
+    shutdown_write = capability(
+      'shutdown_write',
+      type(opts.shutdown_write) == 'function'
+    ),
     close = capability('close', type(opts.close) == 'function'),
-    set_nonblocking = capability('set_nonblocking', type(opts.set_nonblocking) == 'function'),
+    set_nonblocking = capability(
+      'set_nonblocking',
+      type(opts.set_nonblocking) == 'function'
+    ),
     readiness = capability('readiness', true),
   }
   local handle = setmetatable({

@@ -1,7 +1,6 @@
 -- Single-assignment completion state for deferred host work.
 
 local Op = require('fibers.op')
-local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 
@@ -38,7 +37,7 @@ function Completion:state_value()
 end
 
 function Completion:publish_success_op(...)
-  return self.state:transition_op(Publish, { kind = 'succeeded', values = Values.pack(...) })
+  return self.state:transition_op(Publish, { kind = 'succeeded', values = Facility.pack(...) })
 end
 
 function Completion:publish_failure_op(error)
@@ -51,17 +50,13 @@ end
 
 function Completion:terminal_op()
   return self.state:select_op(function(state)
-    if state.kind ~= 'pending' then
-      return Op.always(state)
-    end
+    if state.kind ~= 'pending' then return Op.always(state) end
   end)
 end
 
 function Completion:pending_op()
   return self.state:select_op(function(state)
-    if state.kind == 'pending' then
-      return Op.always(true)
-    end
+    if state.kind == 'pending' then return Op.always(true) end
     return Op.never()
   end)
 end
@@ -71,9 +66,7 @@ function Completion:result_op()
     if state.kind == 'succeeded' then
       return unpack_(state.values, 1, state.values.n)
     end
-    if state.kind == 'failed' then
-      return nil, state.error
-    end
+    if state.kind == 'failed' then return nil, state.error end
     return nil, state.reason
   end)
 end
@@ -83,23 +76,15 @@ function Completion:success_op()
     if state.kind == 'succeeded' then
       return Op.always(unpack_(state.values, 1, state.values.n))
     end
-    if state.kind ~= 'pending' then
-      return Op.never()
-    end
+    if state.kind ~= 'pending' then return Op.never() end
   end)
 end
 
 function Completion:failure_op()
   return self.state:select_op(function(state)
-    if state.kind == 'failed' then
-      return Op.always(state.error)
-    end
-    if state.kind == 'cancelled' then
-      return Op.always(state.reason)
-    end
-    if state.kind == 'succeeded' then
-      return Op.never()
-    end
+    if state.kind == 'failed' then return Op.always(state.error) end
+    if state.kind == 'cancelled' then return Op.always(state.reason) end
+    if state.kind == 'succeeded' then return Op.never() end
   end)
 end
 

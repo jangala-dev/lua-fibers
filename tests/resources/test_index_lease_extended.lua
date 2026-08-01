@@ -45,12 +45,8 @@ end
 local function seed_lease(lease, subject, holders)
   local r = rt()
   local ops = {}
-  for holder, mode in pairs(holders) do
-    ops[#ops + 1] = lease:acquire_op(subject, mode, holder)
-  end
-  r:spawn_raw(function()
-    r:perform(#ops == 1 and ops[1] or Op.each(ops))
-  end)
+  for holder, mode in pairs(holders) do ops[#ops + 1] = lease:acquire_op(subject, mode, holder) end
+  r:spawn_raw(function() r:perform(#ops == 1 and ops[1] or Op.each(ops)) end)
   found(r:run(), 'lease seed')
 end
 

@@ -79,6 +79,7 @@ do
   assert_eq(#fired, 0)
 end
 
+
 -- Mapping is a transparent speculative value transform. It does not hide a
 -- defeat obligation attached to the mapped occurrence.
 do
@@ -86,14 +87,12 @@ do
   local got
   local rt = Runtime.new({ choice_seed = 2 })
   rt:spawn_raw(function()
-    got = rt:perform(
-      Op.choice(
-        Op.always('winner'),
-        Op.always('loser'):on_defeat(defeat('mapped-loser')):map(function(value)
-          return value
-        end)
-      )
-    )
+    got = rt:perform(Op.choice(
+      Op.always('winner'),
+      Op.always('loser'):on_defeat(defeat('mapped-loser')):map(function(value)
+        return value
+      end)
+    ))
   end, 'defeat-map')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner')

@@ -14,17 +14,11 @@ local function copy_map(values)
 end
 
 Lease.__index = function(self, key)
-  if key == 'version' then
-    return self._space:version()
-  end
+  if key == 'version' then return self._space:version() end
   if key == 'holders' then
-    return self._space:snapshot(copy_map, function(value)
-      return type(value) == 'table' and next(value) ~= nil
-    end)
+    return self._space:snapshot(copy_map, function(value) return type(value) == 'table' and next(value) ~= nil end)
   end
-  if key == 'versions' then
-    return self._space:versions_snapshot()
-  end
+  if key == 'versions' then return self._space:versions_snapshot() end
   return Lease[key]
 end
 
@@ -54,26 +48,24 @@ function Lease:acquire_op(subject, mode, holder)
     error('lease acquire requires holder', 2)
   end
   local location = self:_location(subject)
-  return Facility.op(Facility.transition({
-    location = location,
-    resource = self,
-    demand = 'down',
-    accepts_supply = true,
-    supplies = 'up',
-    writes = true,
-    step = function(holders)
-      for other, held_mode in pairs(holders or {}) do
-        if other ~= holder then
-          local forward = self.compat[mode] and self.compat[mode][held_mode] == true
-          local reverse = self.compat[held_mode] and self.compat[held_mode][mode] == true
-          if not (mode == held_mode or forward and reverse) then
-            return nil
+  return Facility.op(Facility.rule.change({
+      location = location,
+      resource = self,
+      demand = 'down',
+      visibility = 'together',
+      supply = 'up',
+      step = function(holders)
+        for other, held_mode in pairs(holders or {}) do
+          if other ~= holder then
+            local forward = self.compat[mode] and self.compat[mode][held_mode] == true
+            local reverse = self.compat[held_mode] and self.compat[held_mode][mode] == true
+            if not (mode == held_mode or forward and reverse) then return nil end
           end
         end
-      end
-      return Facility.outcome(Facility.change.map_put(holder, mode, 'overwrite'), true)
-    end,
-  }))
+        return Facility.outcome(Facility.patch.map_put(holder, mode, 'overwrite'), true)
+      end,
+    })
+  )
 end
 
 function Lease:release_op(subject, holder)
@@ -83,21 +75,20 @@ function Lease:release_op(subject, holder)
   if holder == nil then
     error('lease release requires holder', 2)
   end
-  return Facility.op(Facility.transition({
-    location = self:_location(subject),
-    resource = self,
-    demand = 'up',
-    accepts_supply = true,
-    supplies = 'down',
-    writes = true,
-    step = function(holders)
-      if holders[holder] == nil then
-        return nil
-      end
-      return Facility.outcome(Facility.change.map_remove(holder), true)
-    end,
-  }))
+  return Facility.op(Facility.rule.change({
+      location = self:_location(subject),
+      resource = self,
+      demand = 'up',
+      visibility = 'together',
+      supply = 'down',
+      step = function(holders)
+        if holders[holder] == nil then return nil end
+        return Facility.outcome(Facility.patch.map_remove(holder), true)
+      end,
+    })
+  )
 end
+
 
 Lease.Kind = Kind
 Direct.install(Lease, { 'acquire', 'release' })

@@ -23,18 +23,10 @@ local handle = Handle.new({
   host = host,
   name = 'example-duplex',
   key = { read = input:readiness_key(), write = output:readiness_key() },
-  read = function(_, maximum)
-    return input:read(maximum)
-  end,
-  write = function(_, bytes)
-    return output:write(bytes)
-  end,
-  shutdown_read = function(_, reason)
-    return input:shutdown_read(reason)
-  end,
-  shutdown_write = function(_, reason)
-    return output:shutdown_write(reason)
-  end,
+  read = function(_, maximum) return input:read(maximum) end,
+  write = function(_, bytes) return output:write(bytes) end,
+  shutdown_read = function(_, reason) return input:shutdown_read(reason) end,
+  shutdown_write = function(_, reason) return output:shutdown_write(reason) end,
   ready = function(_, mode)
     return mode == 'write' and output:write_ready_op() or input:read_ready_op()
   end,
@@ -44,9 +36,7 @@ local handle = Handle.new({
   end,
   close = function(_, reason)
     local ok, err = input:close(reason)
-    if not ok then
-      return nil, err
-    end
+    if not ok then return nil, err end
     return output:close(reason)
   end,
 })

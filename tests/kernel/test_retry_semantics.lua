@@ -48,11 +48,8 @@ do
   Lifetime.inert(item)
   local got
   local st = fibers.try_run(function()
-    got = fibers.perform(scope
-      :can_op(item, 'use')
-      :map(function()
-        return 'primary'
-      end)
+    got = fibers.perform(scope:can_op(item, 'use')
+      :map(function() return 'primary' end)
       :or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
@@ -69,11 +66,8 @@ do
   local got, admitted
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
-    got = rt:perform(scope
-      :can_op(item, 'use')
-      :map(function()
-        return 'primary'
-      end)
+    got = rt:perform(scope:can_op(item, 'use')
+      :map(function() return 'primary' end)
       :or_else(Op.always('fallback')))
   end, 'authority-or-fallback')
   rt:spawn_raw(function()
@@ -85,18 +79,14 @@ do
   assert_eq(got, 'primary')
   assert_eq(Lifetime.of(item):current_state().custodian, scope:lifetime())
   local record
-  rt:spawn_raw(function()
-    record = rt:perform(scope:custody_op(item))
-  end, 'inspect-custody')
+  rt:spawn_raw(function() record = rt:perform(scope:custody_op(item)) end, 'inspect-custody')
   rt:run()
   assert_truthy(record and record.phase == 'live', 'admission should establish live custody')
 end
 
 -- A dormant running Lifetime has no outcome and therefore permits fallback.
 do
-  local life = Lifetime.task(function()
-    return 'unused'
-  end, { name = 'absence-dormant-running' })
+  local life = Lifetime.task(function() return 'unused' end, { name = 'absence-dormant-running' })
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(life:outcome_op():or_else(Op.always('fallback')))
@@ -110,9 +100,7 @@ end
 do
   local got
   local st = fibers.try_run(function(scope)
-    local task = fibers.perform(scope:spawn_op(function()
-      return 'done'
-    end, { name = 'absence-child' }))
+    local task = fibers.perform(scope:spawn_op(function() return 'done' end, { name = 'absence-child' }))
     got = fibers.perform(task:await_op():or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')

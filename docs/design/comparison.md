@@ -54,7 +54,7 @@ CSP is consequently stronger as a behavioural specification and refinement theor
 
 A CSP author normally builds a resource or protocol as another process expression. Adding a new observable event is easy at the model level, but giving it new host-level optional behaviour generally belongs to the CSP implementation or to a translation into existing processes.
 
-`fibers` instead exposes a fixed trusted executable-leaf protocol. A facility author supplies a transition, witness cursor, exchange or observation leaf while the common kernel executes the public Op graph directly and owns search, rollback, validation and commit.
+`fibers` instead exposes a small trusted executable-leaf protocol. A facility author supplies an inspect rule, change rule or linear exchange while the common kernel executes the public Op graph directly and owns search, rollback, validation and commit. Enumerable alternatives are cursors on the same state-rule forms; externally supplied facts are versioned managed locations updated by authorised feeds.
 
 ### Expressivity
 

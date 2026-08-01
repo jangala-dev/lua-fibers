@@ -126,12 +126,7 @@ print(
 )
 print('request has custody after?          ' .. yn(result.request_has_custody_after))
 print('supervisor has custody after?       ' .. yn(result.supervisor_has_custody_after))
-print(
-  'registry custodian after commit: '
-    .. result.registry_after.custodian
-    .. ' / '
-    .. result.registry_after.task
-)
+print('registry custodian after commit: ' .. result.registry_after.custodian .. ' / ' .. result.registry_after.task)
 print('task await result:            ' .. tostring(result.await[1]))
 print('supervisor has custody after close? ' .. yn(result.supervisor_has_custody_after_close))
 print('request sealed?              ' .. yn(result.request_state.sealed))

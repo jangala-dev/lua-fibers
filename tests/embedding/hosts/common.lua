@@ -125,7 +125,11 @@ function Common.ready_source_smoke(name, host, key, mode)
   Common.assert_status(st, 'found', name .. ' ready-source runner')
   Common.assert_eq(seen, true, name .. ' should deliver readiness')
   Common.assert_eq(seen_key, key, name .. ' should preserve readiness key')
-  Common.assert_eq(seen_mode, mode, name .. ' should deliver readiness mode')
+  Common.assert_eq(
+    seen_mode,
+    mode,
+    name .. ' should deliver readiness mode'
+  )
 end
 
 function Common.readiness_beats_timeout_smoke(name, host, pipe)
@@ -183,7 +187,7 @@ end
 
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
-  local HostHandles = require('tests.support.host_handles')
+local HostHandles = require('tests.support.host_handles')
   local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
   local handle = HostHandles.duplex(r, w, { host = host, name = name .. ':duplex' })

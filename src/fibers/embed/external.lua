@@ -1,34 +1,48 @@
 local Proof = require('fibers.internal.proof')
--- Host protocol for external observations and retry interests.
 
--- Runtime-bound capability for externally mutating a transactional resource.
+-- Authorised host delivery into versioned managed locations.
 
 local External = {}
 local Feed = {}
 Feed.__index = Feed
 
-function Feed.new(runtime, resource, apply, clear)
-  if type(resource) ~= 'table' then
-    error('Feed requires a resource', 2)
-  end
-  apply = apply or resource._fibers_external_deliver
-  clear = clear or resource._fibers_external_clear
-  if type(apply) ~= 'function' then
-    error('resource does not support external delivery', 2)
-  end
+local function descriptor(resource)
+  return type(resource) == 'table' and rawget(resource, '_fibers_external_feed_spec') or nil
+end
+
+function External.attach(resource, location, deliver, clear)
+  if type(resource) ~= 'table' then error('external feed requires a resource', 2) end
+  if type(location) ~= 'table' then error('external feed requires a managed location', 2) end
+  if type(deliver) ~= 'function' then error('external feed requires a delivery function', 2) end
+  resource._fibers_external_feed_spec = {
+    location = location,
+    deliver = deliver,
+    clear = clear,
+  }
+  return resource
+end
+
+local function publish(spec, resource, fn, ...)
+  if type(fn) ~= 'function' then error('resource does not support this external mutation', 3) end
+  local value = fn(spec.location.value, resource, ...)
+  rawset(spec.location, 'value', value)
+  rawset(spec.location, 'version', (spec.location.version or 0) + 1)
+  return value
+end
+
+function Feed.new(runtime, resource)
+  local spec = descriptor(resource)
+  if not spec then error('resource does not support external delivery', 2) end
   return setmetatable({
     _fibers_external_feed = true,
     runtime = runtime,
     resource = resource,
-    apply = apply,
-    clear_apply = clear,
+    spec = spec,
   }, Feed)
 end
 
 function Feed.for_resource(runtime, resource)
-  if not runtime then
-    return Feed.new(runtime, resource)
-  end
+  if not runtime then return Feed.new(runtime, resource) end
   local cache = rawget(runtime, '_external_feeds')
   if not cache then
     cache = setmetatable({}, { __mode = 'kv' })
@@ -47,14 +61,11 @@ function Feed.is_feed(value)
 end
 
 function Feed:_deliver(...)
-  return self.apply(self.resource, ...)
+  return publish(self.spec, self.resource, self.spec.deliver, ...)
 end
 
 function Feed:_clear(...)
-  if type(self.clear_apply) ~= 'function' then
-    error('resource does not support external clear', 2)
-  end
-  return self.clear_apply(self.resource, ...)
+  return publish(self.spec, self.resource, self.spec.clear, ...)
 end
 
 function Feed:set(...)
@@ -77,6 +88,20 @@ function Feed:writable(value)
   return self:set('write', value == nil and true or value)
 end
 
+function External.unsafe_deliver(resource, ...)
+  local spec = descriptor(resource)
+  if not spec then error('resource does not support external delivery', 2) end
+  return publish(spec, resource, spec.deliver, ...)
+end
+
+function External.unsafe_clear(resource, ...)
+  local spec = descriptor(resource)
+  if not spec or type(spec.clear) ~= 'function' then
+    error('resource does not support external clear', 2)
+  end
+  return publish(spec, resource, spec.clear, ...)
+end
+
 -- Host-actionable retry interests.
 --
 -- Interests are not evidence that retry is justified.  RetryProof frontiers
@@ -86,22 +111,14 @@ end
 local Interest = {}
 
 local INTEREST_DETAIL = {
-  external_kind = true,
-  readiness_key = true,
-  mode = true,
-  feed = true,
-  poller = true,
+  external_kind = true, readiness_key = true, mode = true, feed = true, poller = true,
 }
 local DRIVE_OPTIONS = { host = true, run = true, max_iterations = true, host_options = true }
 
 local function validate_keys(value, allowed, label, level)
-  if value ~= nil and type(value) ~= 'table' then
-    error(label .. ' must be a table', level or 3)
-  end
+  if value ~= nil and type(value) ~= 'table' then error(label .. ' must be a table', level or 3) end
   for key in pairs(value or {}) do
-    if not allowed[key] then
-      error(label .. ' does not accept ' .. tostring(key), level or 3)
-    end
+    if not allowed[key] then error(label .. ' does not accept ' .. tostring(key), level or 3) end
   end
 end
 local next_id = 0
@@ -150,7 +167,7 @@ function Interest.external(resource, interest, detail)
   validate_keys(detail, INTEREST_DETAIL, 'external interest detail', 2)
   detail.resource = resource
   detail.interest = interest or 'ready'
-  detail.external_kind = detail.external_kind or detail.kind or resource and resource.kind
+  detail.external_kind = detail.external_kind or resource and resource.kind
   detail.primitive = 'external-resource'
   return make('external', key, detail)
 end
@@ -196,19 +213,11 @@ end
 
 External.Feed, External.Interest = Feed, Interest
 
+
 local function optional(module_name, feature)
   local ok, module = pcall(require, module_name)
-  if ok then
-    return module
-  end
-  error(
-    (feature or module_name)
-      .. ' requires optional package module '
-      .. module_name
-      .. ': '
-      .. tostring(module),
-    3
-  )
+  if ok then return module end
+  error((feature or module_name) .. ' requires optional package module ' .. module_name .. ': ' .. tostring(module), 3)
 end
 
 function External.external_feed(runtime, resource)
@@ -218,12 +227,8 @@ end
 local function mutate(runtime, feed, action, expectation, dirty_reason, apply, ...)
   runtime:_check_not_failed(3)
   runtime:_require_driver_call(action, 3)
-  if not Feed.is_feed(feed) then
-    error(expectation, 3)
-  end
-  if feed.runtime ~= runtime then
-    error('external feed belongs to another runtime', 3)
-  end
+  if not Feed.is_feed(feed) then error(expectation, 3) end
+  if feed.runtime ~= runtime then error('external feed belongs to another runtime', 3) end
   apply(feed, ...)
   local engine = runtime.engine
   engine.epoch = engine.epoch + 1
@@ -232,27 +237,13 @@ local function mutate(runtime, feed, action, expectation, dirty_reason, apply, .
 end
 
 function External.deliver(runtime, feed, ...)
-  return mutate(
-    runtime,
-    feed,
-    'external delivery',
-    'External.deliver expects an ExternalFeed',
-    'external-delivery',
-    Feed._deliver,
-    ...
-  )
+  return mutate(runtime, feed, 'external delivery', 'External.deliver expects an ExternalFeed',
+    'external-delivery', Feed._deliver, ...)
 end
 
 function External.clear(runtime, feed, ...)
-  return mutate(
-    runtime,
-    feed,
-    'clear external resource',
-    'External.clear expects an ExternalFeed',
-    'external-clear',
-    Feed._clear,
-    ...
-  )
+  return mutate(runtime, feed, 'clear external resource',
+    'External.clear expects an ExternalFeed', 'external-clear', Feed._clear, ...)
 end
 
 function External.signal(runtime, name)
@@ -287,9 +278,7 @@ function External.drive(runtime, opts)
       last_found = status
     elseif status and status.tag == 'pending' then
       local interests = status.interests or {}
-      if not host or type(host.block) ~= 'function' then
-        error('runtime host must implement block', 2)
-      end
+      if not host or type(host.block) ~= 'function' then error('runtime host must implement block', 2) end
       local progressed, reason = host:block(runtime, interests, status, opts.host_options or {})
       if not progressed then
         status.host_reason = reason

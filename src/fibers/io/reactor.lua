@@ -22,9 +22,7 @@ local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
 
 local unpack_ = table.unpack or unpack
-local function pack_(...)
-  return { n = select('#', ...), ... }
-end
+local function pack_(...) return { n = select('#', ...), ... } end
 
 local Reactor = {}
 Reactor.__index = Reactor
@@ -43,9 +41,7 @@ local function optional_shutdown(handle, name, reason)
 end
 
 local function handle_key(handle, mode)
-  if not handle or type(handle.readiness_key) ~= 'function' then
-    return nil
-  end
+  if not handle or type(handle.readiness_key) ~= 'function' then return nil end
   local key = handle:readiness_key()
   if type(key) == 'table' and (key.read ~= nil or key.write ~= nil) then
     return key[mode]
@@ -110,11 +106,10 @@ local function call_nonyielding_pull(reactor, fn, ...)
   end
   if resumed[2] ~= PULL_DONE then
     reactor._pull_worker = nil
-    return false,
-      runtime:_make_error('phase_error', 'host reactor pull may not yield', {
-        phase = 'host_reactor_pull',
-        action = 'pull',
-      })
+    return false, runtime:_make_error('phase_error', 'host reactor pull may not yield', {
+      phase = 'host_reactor_pull',
+      action = 'pull',
+    })
   end
 
   local result = request.result
@@ -131,20 +126,13 @@ ControlKind = Effect.kind({
   name = 'host_reactor_control',
   key = control_key,
   merge = function(a, b)
-    if a.action == b.action then
-      return a
-    end
-    if a.action == 'demand' then
-      return b
-    end
-    if b.action == 'demand' then
-      return a
-    end
-    return nil,
-      {
-        kind = 'effect_conflict',
-        message = 'reactor registration and retirement cannot commit together',
-      }
+    if a.action == b.action then return a end
+    if a.action == 'demand' then return b end
+    if b.action == 'demand' then return a end
+    return nil, {
+      kind = 'effect_conflict',
+      message = 'reactor registration and retirement cannot commit together',
+    }
   end,
   prepare = function(rt, payload)
     if payload.reactor.runtime ~= rt then
@@ -190,9 +178,7 @@ function Entry.new(reactor, spec)
   local id = 'reaction-' .. tostring(next_entry)
   local service = spec.service or 'flow'
   local handle
-  if type(spec.handle) ~= 'function' then
-    handle = spec.handle
-  end
+  if type(spec.handle) ~= 'function' then handle = spec.handle end
   local key = handle and handle_key(handle, spec.mode) or nil
   if service == 'flow' and key == nil then
     error('reactor-backed direction requires a readiness key', 3)
@@ -247,11 +233,15 @@ function Entry.new(reactor, spec)
       name = entry.name,
       role = 'host_reaction',
       children = hidden_endpoint and { hidden_endpoint } or nil,
-      closure = Closure.request_then_wait(function(_ctx, record, close)
-        return record.item:retire_op(close.reason, record.item.mode == 'write' and 'abort' or 'immediate')
-      end, function(_ctx, record)
-        return record.item:retired_op()
-      end, { name = 'host_reaction', finish_result = Closure.require_ok('reactor retirement failed') }),
+      closure = Closure.request_then_wait(
+        function(_ctx, record, close)
+          return record.item:retire_op(close.reason, record.item.mode == 'write' and 'abort' or 'immediate')
+        end,
+        function(_ctx, record)
+          return record.item:retired_op()
+        end,
+        { name = 'host_reaction', finish_result = Closure.require_ok('reactor retirement failed') }
+      ),
     })
     IOAudit.created(entry, { kind = 'reactor_registration' })
   end
@@ -384,41 +374,24 @@ end
 function Reactor:_attach_handle(rt, entry)
   local handle = entry.handle
   local stream = entry.stream
-  if stream and stream._reactor_handle_attached then
-    return
-  end
+  if stream and stream._reactor_handle_attached then return end
   if entry.service == 'flow' and type(handle.attach_stream) == 'function' then
     handle:attach_stream(stream)
   end
-  if type(handle.bind_runtime) == 'function' then
-    handle:bind_runtime(rt)
-  end
-  if stream then
-    stream._reactor_handle_attached = true
-  end
+  if type(handle.bind_runtime) == 'function' then handle:bind_runtime(rt) end
+  if stream then stream._reactor_handle_attached = true end
 end
 
 function Reactor:_register_committed(rt, entry)
-  if entry.retired then
-    error('cannot register a retired reactor entry', 2)
-  end
-  if entry.registered then
-    return entry
-  end
+  if entry.retired then error('cannot register a retired reactor entry', 2) end
+  if entry.registered then return entry end
   if entry.mode ~= 'poll' and not entry.handle then
-    entry.handle = type(entry.handle_provider) == 'function' and entry.handle_provider()
-      or entry.handle_provider
+    entry.handle = type(entry.handle_provider) == 'function' and entry.handle_provider() or entry.handle_provider
   end
   if entry.mode ~= 'poll' then
-    if not entry.handle then
-      error('reactor registration has no host handle', 2)
-    end
-    if entry.key == nil then
-      entry.key = handle_key(entry.handle, entry.mode)
-    end
-    if entry.key == nil then
-      error('reactor registration requires a readiness key', 2)
-    end
+    if not entry.handle then error('reactor registration has no host handle', 2) end
+    if entry.key == nil then entry.key = handle_key(entry.handle, entry.mode) end
+    if entry.key == nil then error('reactor registration requires a readiness key', 2) end
     self:_attach_handle(rt, entry)
   end
   entry.registered = true
@@ -477,9 +450,7 @@ function Reactor:_disarm(entry)
 end
 
 function Reactor:_refresh(entry)
-  if not entry or entry.retired or not entry.registered then
-    return
-  end
+  if not entry or entry.retired or not entry.registered then return end
   if entry.service == 'offer' then
     if entry.closing then
       self:_retire_entry(entry, entry.close_reason or 'closing')
@@ -544,26 +515,20 @@ local function combine_error(current, err)
 end
 
 function Reactor:_retire_entry(entry, reason)
-  if entry.retired then
-    return entry.retire_error == nil, entry.retire_error
-  end
+  if entry.retired then return entry.retire_error == nil, entry.retire_error end
   self:_disarm(entry)
   if entry.key ~= nil then
     local registrations = self.by_key[key_id(entry.key)]
     if registrations then
       registrations[entry.id] = nil
-      if next(registrations) == nil then
-        self.by_key[key_id(entry.key)] = nil
-      end
+      if next(registrations) == nil then self.by_key[key_id(entry.key)] = nil end
     end
   end
   if entry.flow then
     local flow_entries = self.flow_entries[entry.flow]
     if flow_entries then
       flow_entries[entry._fibers_id] = nil
-      if next(flow_entries) == nil then
-        self.flow_entries[entry.flow] = nil
-      end
+      if next(flow_entries) == nil then self.flow_entries[entry.flow] = nil end
     end
   end
 
@@ -585,23 +550,17 @@ function Reactor:_retire_entry(entry, reason)
   elseif entry.service == 'flow' then
     if entry.lease then
       local ok, err = masked_perform(self.runtime, entry.lease:release_op())
-      if not ok and err ~= Errors.NO_LEASE then
-        retire_error = combine_error(retire_error, err)
-      end
+      if not ok and err ~= Errors.NO_LEASE then retire_error = combine_error(retire_error, err) end
       entry.lease = nil
     end
 
     if entry.mode == 'read' then
       local ok, err = optional_shutdown(entry.handle, 'shutdown_read', reason)
-      if not ok then
-        retire_error = combine_error(retire_error, err or Errors.READ_ERROR)
-      end
+      if not ok then retire_error = combine_error(retire_error, err or Errors.READ_ERROR) end
       masked_perform(self.runtime, entry.flow:inlet():close_op(reason))
     elseif entry.mode == 'write' then
       local ok, err = optional_shutdown(entry.handle, 'shutdown_write', reason)
-      if not ok then
-        retire_error = combine_error(retire_error, err or Errors.WRITE_ERROR)
-      end
+      if not ok then retire_error = combine_error(retire_error, err or Errors.WRITE_ERROR) end
       masked_perform(self.runtime, entry.flow:outlet():close_op(reason))
     end
   end
@@ -615,15 +574,11 @@ function Reactor:_retire_entry(entry, reason)
   local stream = entry.stream
   if stream then
     stream._reactor_live = math.max(0, (stream._reactor_live or 1) - 1)
-    if retire_error then
-      stream._close_error = combine_error(stream._close_error, retire_error)
-    end
+    if retire_error then stream._close_error = combine_error(stream._close_error, retire_error) end
     if stream._reactor_live == 0 and not stream._handle_closed then
       stream._handle_closed = true
       local ok, err = stream.handle:close(reason)
-      if not ok then
-        stream._close_error = combine_error(stream._close_error, err or Errors.FLOW_ERROR)
-      end
+      if not ok then stream._close_error = combine_error(stream._close_error, err or Errors.FLOW_ERROR) end
     end
   end
 
@@ -633,9 +588,7 @@ end
 
 local function release_offer_slot(reactor, source)
   local ok, err = masked_perform(reactor.runtime, source._slots:give_op())
-  if not ok then
-    return nil, err
-  end
+  if not ok then return nil, err end
   return true
 end
 
@@ -663,10 +616,9 @@ function Reactor:_service_offer(entry)
   local ok, value, err = call_nonyielding_pull(self, source._pull, entry.handle)
   if not ok then
     release_offer_slot(self, source)
-    local failure = IOError.is(value) and value
-      or IOError.protocol(source.domain, source.action, tostring(value), {
-        cause = value,
-      })
+    local failure = IOError.is(value) and value or IOError.protocol(source.domain, source.action, tostring(value), {
+      cause = value,
+    })
     entry.retire_state = { kind = 'failed', error = failure }
     return self:_retire_entry(entry, 'offer source pull failed')
   end
@@ -683,9 +635,7 @@ function Reactor:_service_offer(entry)
     -- capacity is exhausted or the host reports would-block. This avoids losing
     -- already-buffered accepts or datagrams when a backend clears its readiness
     -- hint on every syscall.
-    if entry.armed then
-      self:hint(entry.key, entry.mode)
-    end
+    if entry.armed then self:hint(entry.key, entry.mode) end
     return true
   end
 
@@ -839,12 +789,7 @@ function Reactor:_service_callback(entry)
   local ok, serviced, err = call_nonyielding_pull(self, entry.callback, entry.handle)
   if not ok then
     entry.retire_error = IOError.is(serviced) and serviced
-      or IOError.protocol(
-        'host',
-        'reactor_callback',
-        tostring(serviced),
-        { cause = serviced, name = entry.name }
-      )
+      or IOError.protocol('host', 'reactor_callback', tostring(serviced), { cause = serviced, name = entry.name })
     return self:_retire_entry(entry, 'reactor callback raised')
   end
   if serviced == nil or serviced == false then
@@ -870,12 +815,8 @@ function Reactor:_service_ready(id, generation)
   entry.service_count = entry.service_count + 1
   entry.last_service_sequence = self.service_count
   IOAudit.service(entry)
-  if entry.service == 'offer' then
-    return self:_service_offer(entry)
-  end
-  if entry.service == 'callback' then
-    return self:_service_callback(entry)
-  end
+  if entry.service == 'offer' then return self:_service_offer(entry) end
+  if entry.service == 'callback' then return self:_service_callback(entry) end
   if entry.mode == 'read' then
     return self:_service_read(entry)
   elseif entry.mode == 'write' then
@@ -917,9 +858,7 @@ function Reactor:_next_poll_deadline()
   local deadline
   for _, entry in pairs(self.entries) do
     if entry.armed and not entry.retired and entry.mode == 'poll' and entry.next_poll ~= nil then
-      if deadline == nil or entry.next_poll < deadline then
-        deadline = entry.next_poll
-      end
+      if deadline == nil or entry.next_poll < deadline then deadline = entry.next_poll end
     end
   end
   return deadline
@@ -945,19 +884,11 @@ function Reactor:_service_due_polls()
   local now = self.runtime:now()
   local due = {}
   for _, entry in pairs(self.entries) do
-    if
-      entry.armed
-      and not entry.retired
-      and entry.mode == 'poll'
-      and entry.next_poll ~= nil
-      and entry.next_poll <= now
-    then
+    if entry.armed and not entry.retired and entry.mode == 'poll' and entry.next_poll ~= nil and entry.next_poll <= now then
       due[#due + 1] = entry
     end
   end
-  table.sort(due, function(a, b)
-    return a.id < b.id
-  end)
+  table.sort(due, function(a, b) return a.id < b.id end)
   for i = 1, #due do
     local entry = due[i]
     if entry.armed and not entry.retired then

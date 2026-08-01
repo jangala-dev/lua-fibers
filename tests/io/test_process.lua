@@ -282,6 +282,7 @@ do
   end, { host = host })
 end
 
+
 -- All host strategies cross one validated provider boundary beneath the Process
 -- Lifetime. An invalid provider handle fails as a structured protocol error and
 -- any returned host values are closed immediately.
@@ -291,9 +292,7 @@ do
     processes = true,
     process_factory = function()
       return {
-        pid = function()
-          return 991
-        end,
+        pid = function() return 991 end,
         close = function()
           process_closed = true
           return true

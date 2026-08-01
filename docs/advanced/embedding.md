@@ -305,7 +305,7 @@ handle:close(reason)
 ```
 
 Every configured host-backed direction in one Runtime registers with the same
-indexed HostReactor readiness index and lazily created HostReactor. Candidateted Flow changes arm or
+indexed HostReactor readiness index and lazily created HostReactor. Committed Flow changes arm or
 disarm registrations; the host delivers only ready registration identities.
 Linux epoll events carry a fresh registration epoch rather than a raw
 descriptor. The host validates that epoch before delivering the reaction id and

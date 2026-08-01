@@ -1038,7 +1038,8 @@ function M.load(module_name, name, opts)
   opts = opts or {}
   opts.name, opts.ffi, opts.bit, opts.C = name, ffi, bit, ffi.C
   local binding, binding_reason = M.new(opts)
-  return binding and Posix.define(binding) or Posix.unavailable('fibers.io.' .. name, binding_reason)
+  return binding and Posix.define(binding)
+    or Posix.unavailable('fibers.io.' .. name, binding_reason)
 end
 
 return M

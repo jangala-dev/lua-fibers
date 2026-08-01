@@ -35,9 +35,7 @@ end
 
 local function copy_array(values)
   local out = {}
-  for i = 1, #values do
-    out[i] = values[i]
-  end
+  for i = 1, #values do out[i] = values[i] end
   return out
 end
 
@@ -56,9 +54,7 @@ local function copy_searches(searches)
 end
 
 local function feed(search, bytes, base)
-  if search.match ~= nil or bytes == '' then
-    return
-  end
+  if search.match ~= nil or bytes == '' then return end
   local pattern, prefix, matched = search.pattern, search.prefix, search.matched
   for i = 1, #bytes do
     local byte = bytes:sub(i, i)
@@ -85,9 +81,7 @@ local function each(self, visit)
     local offset = first and self.offset or 0
     first = false
     local bytes = current.bytes:sub(offset + 1)
-    if bytes ~= '' then
-      visit(bytes)
-    end
+    if bytes ~= '' then visit(bytes) end
     current = current.next
   end
 
@@ -97,9 +91,7 @@ local function each(self, visit)
     back[#back + 1] = current.bytes
     current = current.next
   end
-  for i = #back, 1, -1 do
-    visit(back[i])
-  end
+  for i = #back, 1, -1 do visit(back[i]) end
 end
 
 local function clear_searches(self)
@@ -125,9 +117,7 @@ local function cache(self, pattern, search)
 end
 
 local function ensure_front(self)
-  if self.front or not self.back then
-    return
-  end
+  if self.front or not self.back then return end
   self.front, self.back = reverse(self.back), nil
 end
 
@@ -141,9 +131,7 @@ local function search_for(self, pattern)
   search = { pattern = pattern, prefix = prefix_table(pattern), matched = 0, scanned = 0 }
   local base = 0
   each(self, function(bytes)
-    if search.match == nil then
-      feed(search, bytes, base)
-    end
+    if search.match == nil then feed(search, bytes, base) end
     base = base + #bytes
   end)
   cache(self, pattern, search)
@@ -159,9 +147,7 @@ function Rope.new(bytes)
     searches = {},
     search_order = {},
   }, Rope)
-  if bytes and bytes ~= '' then
-    rope:append(bytes)
-  end
+  if bytes and bytes ~= '' then rope:append(bytes) end
   return rope
 end
 
@@ -186,13 +172,9 @@ end
 
 function Rope:append(bytes)
   assert(type(bytes) == 'string', 'Rope:append expects a string')
-  if bytes == '' then
-    return self
-  end
+  if bytes == '' then return self end
   local base = self.len
-  for _, search in pairs(self.searches) do
-    feed(search, bytes, base)
-  end
+  for _, search in pairs(self.searches) do feed(search, bytes, base) end
   self.back = node(bytes, self.back)
   self.len = self.len + #bytes
   return self
@@ -200,9 +182,7 @@ end
 
 function Rope:prepend(bytes)
   assert(type(bytes) == 'string', 'Rope:prepend expects a string')
-  if bytes == '' then
-    return self
-  end
+  if bytes == '' then return self end
   clear_searches(self)
   ensure_front(self)
   local front = self.front
@@ -218,9 +198,7 @@ end
 function Rope:take(n)
   assert(type(n) == 'number' and n >= 0 and n % 1 == 0, 'Rope:take expects a non-negative integer')
   n = math.min(n, self.len)
-  if n == 0 then
-    return ''
-  end
+  if n == 0 then return '' end
 
   clear_searches(self)
   local out, remaining = {}, n

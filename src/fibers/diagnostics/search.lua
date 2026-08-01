@@ -9,9 +9,7 @@ Instrumentation.__index = Instrumentation
 
 local function copy_map(source)
   local out = {}
-  for key, value in pairs(source or {}) do
-    out[key] = value
-  end
+  for key, value in pairs(source or {}) do out[key] = value end
   return out
 end
 
@@ -29,19 +27,11 @@ local function default_clock()
 end
 
 local function histogram_bucket(value)
-  if value == nil then
-    return 'nil'
-  end
-  if value <= 0 then
-    return '0'
-  end
+  if value == nil then return 'nil' end
+  if value <= 0 then return '0' end
   local upper = 1
-  while upper < value do
-    upper = upper * 2
-  end
-  if upper == 1 then
-    return '1'
-  end
+  while upper < value do upper = upper * 2 end
+  if upper == 1 then return '1' end
   return tostring(math.floor(upper / 2) + 1) .. '-' .. tostring(upper)
 end
 
@@ -70,9 +60,7 @@ end
 
 function Instrumentation:max(name, value)
   local old = self.maxima[name]
-  if old == nil or value > old then
-    self.maxima[name] = value
-  end
+  if old == nil or value > old then self.maxima[name] = value end
   return value
 end
 
@@ -108,9 +96,7 @@ end
 
 function Instrumentation:resume_search(search)
   local record = self.active_searches[search]
-  if record and not record.active_started then
-    record.active_started = self.clock()
-  end
+  if record and not record.active_started then record.active_started = self.clock() end
 end
 
 function Instrumentation:pause_search(search)
@@ -121,10 +107,9 @@ function Instrumentation:pause_search(search)
   end
 end
 
+
 local function retain_slow_search(self, search)
-  if self.slow_search_limit <= 0 then
-    return
-  end
+  if self.slow_search_limit <= 0 then return end
   local row = copy_map(search)
   row.started, row.active_started, row.active_elapsed = nil, nil, nil
   local searches = self.slow_searches
@@ -135,19 +120,13 @@ local function retain_slow_search(self, search)
     end
     return (left.elapsed or 0) > (right.elapsed or 0)
   end)
-  while #searches > self.slow_search_limit do
-    searches[#searches] = nil
-  end
+  while #searches > self.slow_search_limit do searches[#searches] = nil end
 end
 
 function Instrumentation:finish_search(key, outcome, summary)
   local search = self.active_searches[key]
-  if not search then
-    return
-  end
-  for name, value in pairs(summary or {}) do
-    search[name] = value
-  end
+  if not search then return end
+  for name, value in pairs(summary or {}) do search[name] = value end
   self:pause_search(key)
   self.active_searches[key] = nil
   search.outcome = outcome or 'retry'
@@ -157,13 +136,8 @@ function Instrumentation:finish_search(key, outcome, summary)
   self:inc('search_calls', search.search_steps or 0)
   self:inc('component_roots_total', search.component_size or 0)
   self:inc('frontier_roots_total', search.total_pending or 0)
-  self:inc(
-    'component_roots_excluded',
-    math.max(0, (search.total_pending or 0) - (search.component_size or 0))
-  )
-  if search.component_global then
-    self:inc('component_global_searches')
-  end
+  self:inc('component_roots_excluded', math.max(0, (search.total_pending or 0) - (search.component_size or 0)))
+  if search.component_global then self:inc('component_global_searches') end
 
   self:max('component_size', search.component_size or 0)
   self:max('search_steps_per_search', search.search_steps or 0)
@@ -182,9 +156,7 @@ end
 
 function Instrumentation:report()
   local histograms = {}
-  for name, values in pairs(self.histograms) do
-    histograms[name] = copy_map(values)
-  end
+  for name, values in pairs(self.histograms) do histograms[name] = copy_map(values) end
   return {
     counters = copy_map(self.counters),
     maxima = copy_map(self.maxima),

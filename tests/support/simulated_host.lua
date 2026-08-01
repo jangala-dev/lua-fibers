@@ -523,17 +523,11 @@ Binding.process = manual_process
 
 Binding.capabilities = { datagram_truncation = true }
 Binding.time = {
-  now = function()
-    return 0
-  end,
-  sleep = function()
-    return true
-  end,
+  now = function() return 0 end,
+  sleep = function() return true end,
 }
 Binding.poll = {
-  wait = function()
-    return nil, 'simulated-poll-unused'
-  end,
+  wait = function() return nil, 'simulated-poll-unused' end,
 }
 
 local Posix = require('fibers.io.posix')
@@ -567,9 +561,7 @@ function Simulated.new(opts)
   host.listener_factory = opts.listener_factory
   host.dial_factory = opts.dial_factory
   host.process_factory = opts.process_factory
-  host.now = function()
-    return host._now
-  end
+  host.now = function() return host._now end
 
   local pipes = opts.pipes == true or host.pipe_factory ~= nil
   local sockets = opts.sockets == true
@@ -578,9 +570,7 @@ function Simulated.new(opts)
   local resolver = opts.resolver ~= false
 
   host.capabilities = { time = true, readiness = true, file = true, file_backend = 'memory' }
-  if pipes then
-    host.capabilities.pipe = true
-  end
+  if pipes then host.capabilities.pipe = true end
   if sockets then
     host.capabilities.socket = true
     host.capabilities.socket_ipv4 = true
@@ -591,12 +581,8 @@ function Simulated.new(opts)
     host.capabilities.datagram = true
     host.capabilities.datagram_truncation = true
   end
-  if resolver then
-    host.capabilities.resolver = true
-  end
-  if processes then
-    host.capabilities.process = true
-  end
+  if resolver then host.capabilities.resolver = true end
+  if processes then host.capabilities.process = true end
 
   host.file_storage = require('fibers.file.memory_provider').new({
     files = opts.files,
@@ -626,18 +612,12 @@ function Simulated.new(opts)
     return true
   end
 
-  function host:readable(key)
-    return self:set_readiness(key, 'read', true)
-  end
-  function host:writable(key)
-    return self:set_readiness(key, 'write', true)
-  end
+  function host:readable(key) return self:set_readiness(key, 'read', true) end
+  function host:writable(key) return self:set_readiness(key, 'write', true) end
 
   function host:clear_readiness(key, mode)
     local record = self.ready[tostring(key)]
-    if not record then
-      return true
-    end
+    if not record then return true end
     if mode == nil then
       self.ready[tostring(key)] = nil
     else
@@ -669,65 +649,43 @@ function Simulated.new(opts)
       peer = Address.validate(peer or Address.ipv4('127.0.0.1', 53)),
       fields = fields,
     }
-    if raw.handle then
-      raw.handle:mark_readable()
-    end
+    if raw.handle then raw.handle:mark_readable() end
     return true
   end
 
-  host.create_pipe = pipes
-      and function(self, options)
-        if self.pipe_factory then
-          return self.pipe_factory(self, options or {})
-        end
-        return base_create_pipe(self, options)
-      end
-    or false
+  host.create_pipe = pipes and function(self, options)
+    if self.pipe_factory then return self.pipe_factory(self, options or {}) end
+    return base_create_pipe(self, options)
+  end or false
 
-  host.create_listener = sockets
-      and function(self, address, options)
-        if self.listener_factory then
-          return self.listener_factory(self, address, options or {})
-        end
-        return base_create_listener(self, address, options)
-      end
-    or false
+  host.create_listener = sockets and function(self, address, options)
+    if self.listener_factory then return self.listener_factory(self, address, options or {}) end
+    return base_create_listener(self, address, options)
+  end or false
 
-  host._manual_dial_socket = sockets
-      and function(self, address, options)
-        local handle, err = base_start_dial(self, address, options)
-        if not handle then
-          return nil, nil, err
-        end
-        local connected, peer, finish_err = handle:finish_connect()
-        if not connected then
-          handle:close(finish_err or 'manual dial did not complete')
-          return nil, nil, finish_err
-        end
-        return connected, peer
-      end
-    or false
+  host._manual_dial_socket = sockets and function(self, address, options)
+    local handle, err = base_start_dial(self, address, options)
+    if not handle then return nil, nil, err end
+    local connected, peer, finish_err = handle:finish_connect()
+    if not connected then
+      handle:close(finish_err or 'manual dial did not complete')
+      return nil, nil, finish_err
+    end
+    return connected, peer
+  end or false
 
-  host.start_dial = sockets
-      and function(self, address, options)
-        if self.dial_factory then
-          return self.dial_factory(self, address, options or {})
-        end
-        return base_start_dial(self, address, options)
-      end
-    or false
+  host.start_dial = sockets and function(self, address, options)
+    if self.dial_factory then return self.dial_factory(self, address, options or {}) end
+    return base_start_dial(self, address, options)
+  end or false
 
-  host.create_datagram = datagrams
-      and function(self, address, options)
-        return base_create_datagram(self, address, options)
-      end
-    or false
+  host.create_datagram = datagrams and function(self, address, options)
+    return base_create_datagram(self, address, options)
+  end or false
 
-  host.resolve = resolver
-      and function(self, endpoint, options)
-        return base_resolve(self, endpoint, options)
-      end
-    or false
+  host.resolve = resolver and function(self, endpoint, options)
+    return base_resolve(self, endpoint, options)
+  end or false
 
   -- A deterministic host policy for Happy Eyeballs tests.  Production hosts may
   -- use routing and source-address information; the simulated host declares its
@@ -741,36 +699,26 @@ function Simulated.new(opts)
     table.sort(ranked, function(left, right)
       local lf = left.address.kind == 'inet6' and 0 or 1
       local rf = right.address.kind == 'inet6' and 0 or 1
-      if lf ~= rf then
-        return lf < rf
-      end
+      if lf ~= rf then return lf < rf end
       return left.index < right.index
     end)
     local out = {}
-    for i = 1, #ranked do
-      out[i] = ranked[i].address
-    end
+    for i = 1, #ranked do out[i] = ranked[i].address end
     return out
   end
   host.capabilities.happy_eyeballs_destination_ordering = 'simulated'
 
-  host.start_process = processes
-      and function(self, spec)
-        if self.process_factory then
-          return self.process_factory(self, spec)
-        end
-        return base_start_process(self, spec)
-      end
-    or false
+  host.start_process = processes and function(self, spec)
+    if self.process_factory then return self.process_factory(self, spec) end
+    return base_start_process(self, spec)
+  end or false
 
   function host:file_provider()
     return self.file_storage
   end
 
   function host:block(runtime, waits, _status, options)
-    if self.closed then
-      error('simulated host is closed', 2)
-    end
+    if self.closed then error('simulated host is closed', 2) end
     local set, delivered = WaitSet.build(waits), false
     for i = 1, #set.records do
       local record = set.records[i]
@@ -781,14 +729,10 @@ function Simulated.new(opts)
         self:is_ready(record.key, 'write')
       ) or delivered
     end
-    if delivered then
-      return true, 'readiness'
-    end
+    if delivered then return true, 'readiness' end
     if set.deadline ~= nil then
       if self.auto_advance_time and (options or {}).auto_advance_time ~= false then
-        if self._now < set.deadline then
-          self._now = set.deadline
-        end
+        if self._now < set.deadline then self._now = set.deadline end
         return true, 'time'
       end
       return nil, 'time-not-ready'

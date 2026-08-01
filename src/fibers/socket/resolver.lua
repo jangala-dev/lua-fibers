@@ -33,6 +33,7 @@ local function query_closure(query)
   })
 end
 
+
 local FAMILIES = { 'inet6', 'inet4' }
 
 local function family_completion(query, family, level)
@@ -46,6 +47,7 @@ function Query:family_addresses_op(family)
   return family_completion(self, family):success_op()
 end
 
+
 function Query:family_failed_op(family)
   return family_completion(self, family):failure_op()
 end
@@ -57,6 +59,7 @@ end
 function Query:family_finished_op(family)
   return family_completion(self, family):terminal_op()
 end
+
 
 local function terminal_values(state)
   if state.kind ~= 'succeeded' then
@@ -153,8 +156,8 @@ function Query:close_op(reason)
     publishes[#publishes + 1] = self.family_completions[FAMILIES[i]]:publish_cancelled_op(err)
   end
   return cancel:and_then(Op.each(publishes):map(function()
-    return true
-  end))
+      return true
+    end))
 end
 
 function Query:closed_op()
@@ -192,12 +195,17 @@ local function normalise_addresses(values, endpoint, allow_empty, expected_famil
     end
     if expected_family and address.kind ~= expected_family then
       return nil,
-        IOError.protocol('resolver', 'resolve_family', 'resolver returned an address from the wrong family', {
-          endpoint = endpoint,
-          expected_family = expected_family,
-          actual_family = address.kind,
-          index = i,
-        })
+        IOError.protocol(
+          'resolver',
+          'resolve_family',
+          'resolver returned an address from the wrong family',
+          {
+            endpoint = endpoint,
+            expected_family = expected_family,
+            actual_family = address.kind,
+            index = i,
+          }
+        )
     end
     local key = Address.key(address)
     if not seen[key] then
@@ -480,9 +488,7 @@ function Module.resolve_op(endpoint, opts)
     },
     run = function()
       local ok, err = Protected.pcall(drive, query, opts)
-      if ok then
-        return
-      end
+      if ok then return end
       if Runtime.is_cancelled(err) then
         publish_cancelled(Runtime.current(), query, err.reason or 'resolver query cancelled')
         return
@@ -492,20 +498,16 @@ function Module.resolve_op(endpoint, opts)
   })
 end
 
+
+
+
+
+
+
+
+
+
 Module.Query = Query
-Direct.install(
-  Query,
-  {
-    'family_addresses',
-    'family_failed',
-    'family_result',
-    'family_finished',
-    'addresses',
-    'failed',
-    'result',
-    'close',
-    'closed',
-  }
-)
+Direct.install(Query, { 'family_addresses', 'family_failed', 'family_result', 'family_finished', 'addresses', 'failed', 'result', 'close', 'closed' })
 
 return Module

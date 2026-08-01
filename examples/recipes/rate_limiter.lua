@@ -49,13 +49,11 @@ local function normalise_amount(self, n)
 end
 
 local Refill = StateMachine.update('rate_limiter.refill', function(state, payload, ctx)
-  local next_state = refill_state(payload, state, ctx:now())
-  return Ready.write(next_state, next_state.tokens, next_state.last)
+    local next_state = refill_state(payload, state, ctx:now())
+    return Ready.write(next_state, next_state.tokens, next_state.last)
 end)
 
-local TryAcquire = StateMachine.update(
-  'rate_limiter.try_acquire',
-  function(state, payload, ctx)
+local TryAcquire = StateMachine.update('rate_limiter.try_acquire', function(state, payload, ctx)
     local now = ctx:now()
     local next_state = refill_state(payload, state, now)
     local n = payload.n
@@ -66,9 +64,7 @@ local TryAcquire = StateMachine.update(
     local needed = n - next_state.tokens
     local deadline = now + needed / payload.rate
     return Ready.write(next_state, false, deadline, next_state.tokens)
-  end,
-  nil,
-  function(payload)
+  end, nil, function(payload)
     finite_number(payload.n, 'rate limiter amount')
     if payload.n <= 0 then
       error('rate limiter amount must be positive', 3)
@@ -76,8 +72,7 @@ local TryAcquire = StateMachine.update(
     if payload.n > payload.capacity then
       error('rate limiter amount exceeds capacity', 3)
     end
-  end
-)
+  end)
 
 local function bucket_payload(self, extra)
   local p = { capacity = self.capacity, rate = self.rate }

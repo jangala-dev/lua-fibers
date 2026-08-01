@@ -20,35 +20,25 @@ local PRIVATE_STATE = {}
 
 local function state(grant, level)
   local value = type(grant) == 'table' and rawget(grant, PRIVATE_STATE) or nil
-  if type(value) ~= 'table' then
-    error('invalid Grant', (level or 1) + 1)
-  end
+  if type(value) ~= 'table' then error('invalid Grant', (level or 1) + 1) end
   return value
 end
 
 local function copy_table(value)
   local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = item
-  end
+  for key, item in pairs(value or {}) do out[key] = item end
   return out
 end
 
 local function copy_list(value)
   local out = {}
-  for i = 1, #(value or {}) do
-    out[i] = value[i]
-  end
+  for i = 1, #(value or {}) do out[i] = value[i] end
   return out
 end
 
 local function list_rights(rights)
-  if rights == nil then
-    return { 'use' }
-  end
-  if type(rights) == 'string' then
-    return { rights }
-  end
+  if rights == nil then return { 'use' } end
+  if type(rights) == 'string' then return { rights } end
   if type(rights) ~= 'table' then
     error('Grant rights must be a string, dense array, or string-keyed set', 3)
   end
@@ -60,9 +50,7 @@ local function list_rights(rights)
         error('Grant rights array indices must be positive integers', 3)
       end
       numeric = numeric + 1
-      if key > max_index then
-        max_index = key
-      end
+      if key > max_index then max_index = key end
       if type(value) ~= 'string' then
         error('Grant rights array must contain strings', 3)
       end
@@ -79,26 +67,18 @@ local function list_rights(rights)
     if named > 0 or numeric ~= max_index then
       error('Grant rights array must be dense and contain no named entries', 3)
     end
-    for i = 1, max_index do
-      out[i] = rights[i]
-    end
+    for i = 1, max_index do out[i] = rights[i] end
   else
     for right, enabled in pairs(rights) do
-      if enabled then
-        out[#out + 1] = right
-      end
+      if enabled then out[#out + 1] = right end
     end
     table.sort(out)
   end
-  if #out == 0 then
-    error('Grant rights must not be empty', 3)
-  end
+  if #out == 0 then error('Grant rights must not be empty', 3) end
 
   local seen = {}
   for i = 1, #out do
-    if seen[out[i]] then
-      error('Grant rights must not contain duplicates', 3)
-    end
+    if seen[out[i]] then error('Grant rights must not contain duplicates', 3) end
     seen[out[i]] = true
   end
   return out
@@ -106,9 +86,7 @@ end
 
 local function rights_set(list)
   local out = {}
-  for i = 1, #list do
-    out[list[i]] = true
-  end
+  for i = 1, #list do out[list[i]] = true end
   return out
 end
 
@@ -117,9 +95,7 @@ function Grant._new(grantor, holder, subject, rights, opts)
     error('Grant options must be a table', 2)
   end
   opts = opts or {}
-  if subject == nil then
-    error('Grant creation expects a subject', 2)
-  end
+  if subject == nil then error('Grant creation expects a subject', 2) end
   if type(grantor) ~= 'table' or grantor._fibers_scope ~= true then
     error('Grant creation expects a grantor Scope', 2)
   end
@@ -146,9 +122,7 @@ function Grant._new(grantor, holder, subject, rights, opts)
       error('unsupported Grant term ' .. tostring(key), 2)
     end
   end
-  if terms.transferable == nil then
-    terms.transferable = false
-  end
+  if terms.transferable == nil then terms.transferable = false end
   if type(terms.transferable) ~= 'boolean' then
     error('Grant term transferable must be a boolean', 2)
   end
@@ -208,9 +182,7 @@ end
 function Grant:has_right(right)
   right = right or 'use'
   local rights = state(self, 2).rights
-  if rights[right] or rights['*'] then
-    return true
-  end
+  if rights[right] or rights['*'] then return true end
   if right == 'use' then
     return rights.read or rights.write or rights.observe or rights.use or rights['*'] or false
   end
@@ -222,6 +194,7 @@ function Grant:closed_op()
     return self
   end)
 end
+
 
 function Grant:inspect()
   local value = state(self, 2)

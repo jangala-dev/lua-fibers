@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Runtime = require('fibers.runtime')
@@ -13,17 +8,12 @@ local Rendezvous = require('fibers.resource.rendezvous')
 local Op = require('fibers.op')
 
 local function truthy(value, message)
-  if not value then
-    error(message or 'expected truthy value', 2)
-  end
+  if not value then error(message or 'expected truthy value', 2) end
 end
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -33,12 +23,8 @@ eq((plain.instrumentation and plain.instrumentation:report()), nil, 'instrumenta
 local rt = Runtime.new({ instrumentation = { slow_search_limit = 4 } })
 local channel = Rendezvous.new('instrumentation-test')
 local got
-rt:spawn_raw(function()
-  got = rt:perform(channel:get_op())
-end, 'instrumented-get')
-rt:spawn_raw(function()
-  rt:perform(channel:put_op('ok'))
-end, 'instrumented-put')
+rt:spawn_raw(function() got = rt:perform(channel:get_op()) end, 'instrumented-get')
+rt:spawn_raw(function() rt:perform(channel:put_op('ok')) end, 'instrumented-put')
 eq(rt:run().tag, 'found')
 eq(got, 'ok')
 
@@ -65,9 +51,7 @@ bounded:spawn_raw(function()
 end, 'bounded-instrumentation')
 for _ = 1, 20 do
   local status = bounded:step({ max_work = 1 })
-  if status.tag == 'found' then
-    break
-  end
+  if status.tag == 'found' then break end
 end
 bounded:run()
 truthy(value == 'a' or value == 'b')

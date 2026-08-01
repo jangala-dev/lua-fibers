@@ -59,8 +59,7 @@ for fanout = min_size, max_size do
       closure = Closure.nursery({ name = 'seed-sweep-closure' }),
     })
     local elapsed = Clock.now() - started
-    local snapshot = result.runtime
-        and (result.runtime.instrumentation and result.runtime.instrumentation:report())
+    local snapshot = result.runtime and (result.runtime.instrumentation and result.runtime.instrumentation:report())
       or { counters = {}, maxima = {} }
     local c, m = snapshot.counters or {}, snapshot.maxima or {}
     local status = result.ok and 'ok' or tostring(result.reason or 'failed')

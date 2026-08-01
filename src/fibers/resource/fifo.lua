@@ -27,8 +27,7 @@ local function finish(fifo)
 end
 
 function FIFO.new(capacity, name)
-  if
-    type(capacity) ~= 'number'
+  if type(capacity) ~= 'number'
     or capacity < 0
     or capacity ~= capacity
     or (capacity ~= math.huge and capacity % 1 ~= 0)
@@ -48,17 +47,13 @@ end
 
 function FIFO:put_op(item)
   local put = self._items:append_op(item)
-  if not self._slots then
-    return put
-  end
+  if not self._slots then return put end
   return Op.together({ self._slots:take_op(), put }):map(truth)
 end
 
 function FIFO:get_op()
   local get = self._items:pop_first_op()
-  if not self._slots then
-    return get:map(value)
-  end
+  if not self._slots then return get:map(value) end
 
   return get:and_then(Op.guard(function(entry)
     return self._slots:give_op():map(function()
@@ -66,6 +61,8 @@ function FIFO:get_op()
     end)
   end))
 end
+
+
 
 Direct.install(FIFO, { 'put', 'get' })
 

@@ -1,7 +1,6 @@
 -- Externally fed persistent FIFO.
 
 local Op = require('fibers.op')
-local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.embed.external')
@@ -9,9 +8,7 @@ local Direct = require('fibers.internal.direct')
 
 local EventQueue = {}
 EventQueue.__index = function(self, key)
-  if key == 'version' then
-    return self._location.version
-  end
+  if key == 'version' then return self._location.version end
   return EventQueue[key]
 end
 
@@ -37,29 +34,26 @@ local function normalise(state)
   end
 end
 
-local function deliver(queue, ...)
-  local state = queue._location.value
-  local node = { value = Values.pack(...) }
+local function deliver(state, _, ...)
+  local node = { value = Facility.pack(...) }
   if state.count == 0 then
-    return Facility.publish(queue._location, { front = node, count = 1, head = state.head })
+    return { front = node, count = 1, head = state.head }
   end
   node.next = state.back
-  return Facility.publish(queue._location, {
+  return {
     front = state.front,
     back = node,
     count = state.count + 1,
     head = state.head,
-  })
+  }
 end
 
-local function clear(queue)
-  Facility.publish(queue._location, { count = 0, head = queue._location.value.head })
+local function clear(state)
+  return { count = 0, head = state.head }
 end
 
 local Next = StateMachine.isolated_select('event_queue.next', function(current)
-  if current.count == 0 then
-    return StateMachine.Wait
-  end
+  if current.count == 0 then return StateMachine.Wait end
   local state = clone(current)
   normalise(state)
   local node = assert(state.front, 'event queue count without front node')
@@ -70,9 +64,7 @@ local Next = StateMachine.isolated_select('event_queue.next', function(current)
 end)
 
 local Drain = StateMachine.isolated_select('event_queue.drain', function(current)
-  if current.count == 0 then
-    return StateMachine.Wait
-  end
+  if current.count == 0 then return StateMachine.Wait end
   local state, values = clone(current), {}
   normalise(state)
   local node = state.front
@@ -103,27 +95,20 @@ local function interest(queue, runtime)
 end
 
 local function option(queue, transition)
-  return Facility.external_wait(queue, queue._location, transition, {
-    interest = function(runtime)
-      return interest(queue, runtime)
-    end,
-    absence_check = function()
-      return queue._location.value.count == 0
-    end,
-  })
+  return Facility.op(StateMachine._compile(queue._location, queue, transition, {
+    wake = function(runtime) return interest(queue, runtime) end,
+  }))
 end
 
 function EventQueue.new(name, interest_factory)
-  local queue =
-    Facility.identity(setmetatable({ _interest_factory = interest_factory }, EventQueue), Kind, name)
+  local queue = Facility.identity(setmetatable({ _interest_factory = interest_factory }, EventQueue), Kind, name)
   queue._location = Facility.location(queue, 'queue', {
     algebra = 'machine',
     domain = 'external',
     value = { count = 0, head = 1 },
     clone_value = clone,
   })
-  queue._fibers_external_deliver = deliver
-  queue._fibers_external_clear = clear
+  External.attach(queue, queue._location, deliver, clear)
   queue._next_op = option(queue, Next)
   queue._drain_cached_op = option(queue, Drain)
   return queue
@@ -132,6 +117,7 @@ end
 function EventQueue:next_op()
   return self._next_op
 end
+
 
 function EventQueue:_drain_op()
   return self._drain_cached_op

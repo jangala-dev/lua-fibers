@@ -48,9 +48,7 @@ end
 
 local function copy_list(xs)
   local out = {}
-  for i = 1, #(xs or {}) do
-    out[i] = xs[i]
-  end
+  for i = 1, #(xs or {}) do out[i] = xs[i] end
   return out
 end
 
@@ -73,9 +71,7 @@ local function walk_construction_tree(root, visit)
     end
 
     seen[node], active[node] = true, true
-    if visit then
-      visit(node, parent)
-    end
+    if visit then visit(node, parent) end
     local children = node._construction_children or {}
     for i = 1, #children do
       local child = children[i]
@@ -96,17 +92,13 @@ local function normalise_closure(protocol, label)
 end
 
 local function node_of(value)
-  if Lifetime.is(value) then
-    return value
-  end
+  if Lifetime.is(value) then return value end
   return type(value) == 'table' and Lifetime.is(value._lifetime) and value._lifetime or nil
 end
 
 local function node_for(value, level)
   local node = node_of(value)
-  if node then
-    return node
-  end
+  if node then return node end
   error('expected a Lifetime or a value carrying a Lifetime', level or 3)
 end
 
@@ -154,9 +146,7 @@ function Lifetime.new(name, opts)
   for i = 1, #(opts.children or {}) do
     node:add_child(opts.children[i])
   end
-  if opts.runtime then
-    node:bind_runtime(opts.runtime)
-  end
+  if opts.runtime then node:bind_runtime(opts.runtime) end
   return node
 end
 
@@ -214,9 +204,7 @@ function Lifetime.inert(value, opts)
 end
 
 function Lifetime.task(body, opts)
-  if type(body) ~= 'function' then
-    error('Lifetime.task expects a function', 2)
-  end
+  if type(body) ~= 'function' then error('Lifetime.task expects a function', 2) end
   opts = opts or {}
   return Lifetime.new(opts.name, {
     body = body,
@@ -237,9 +225,7 @@ function Node:add_child(value)
   if not child then
     error('Lifetime:add_child expects a Lifetime or a value carrying one; use Lifetime.inert explicitly', 2)
   end
-  if child == self then
-    error('a Lifetime cannot own itself', 2)
-  end
+  if child == self then error('a Lifetime cannot own itself', 2) end
   local ancestor = self
   while ancestor do
     if ancestor == child then
@@ -254,9 +240,7 @@ function Node:add_child(value)
     error('Lifetime child already has a structural parent', 2)
   end
   for i = 1, #self._construction_children do
-    if self._construction_children[i] == child then
-      return child
-    end
+    if self._construction_children[i] == child then return child end
   end
   child._construction_parent = self
   self._construction_children[#self._construction_children + 1] = child
@@ -314,17 +298,13 @@ function Node:bind_runtime(runtime)
   -- the managed-state transition has committed.
   walk_construction_tree(self, function(node)
     node:_bind_runtime_committed(runtime)
-    if node.standalone_boundary then
-      runtime:_lifetime_store():activate_boundary(node)
-    end
+    if node.standalone_boundary then runtime:_lifetime_store():activate_boundary(node) end
   end)
   return self
 end
 
 function Node:record_map()
-  if self._admitted then
-    error('cannot reconstruct records for an admitted Lifetime', 2)
-  end
+  if self._admitted then error('cannot reconstruct records for an admitted Lifetime', 2) end
   local out = {}
   walk_construction_tree(self, function(node, parent)
     local rec = {
@@ -349,9 +329,7 @@ end
 function Node:current_state()
   if self.runtime then
     local state = self.runtime:_lifetime_store():current_state(self)
-    if state then
-      return state
-    end
+    if state then return state end
   end
   return {
     lifetime = self,
@@ -373,12 +351,12 @@ function Node:closed_op()
       return phase == 'closed' and Op.always(node) or Op.never()
     end
     return node.runtime:_lifetime_store():node_state_op(node):and_then(Op.guard(function(state)
-      if state.closure_phase == 'closed' then
-        return Op.always(node)
-      end
-      return node.runtime:_lifetime_store():changed_op(node, state.version):and_then(Op.guard(function(...)
-        return wait(...)
-      end))
+      if state.closure_phase == 'closed' then return Op.always(node) end
+      return node.runtime:_lifetime_store():changed_op(node, state.version):and_then(
+        Op.guard(function(...)
+          return wait(...)
+        end)
+      )
     end))
   end
   return wait()
@@ -392,16 +370,12 @@ function Node:request_close_op(reason)
 end
 
 function Node:_closing_op(reason)
-  if not self.runtime then
-    error('cannot mark an unbound Lifetime closing', 2)
-  end
+  if not self.runtime then error('cannot mark an unbound Lifetime closing', 2) end
   return self.runtime:_lifetime_store():mark_closing_op(self, reason)
 end
 
 function Node:_mark_closure_failed_op(err, reason)
-  if not self.runtime then
-    error('cannot fail an unbound Lifetime', 2)
-  end
+  if not self.runtime then error('cannot fail an unbound Lifetime', 2) end
   return self.runtime:_lifetime_store():mark_closure_failed_op(self, err, reason)
 end
 
@@ -416,18 +390,14 @@ end
 function Node:request_cancel_op(reason)
   local node = self
   local close_op = self:request_close_op(reason)
-  return close_op:and_then(
-    node.cancellation
+  return close_op:and_then(node.cancellation
       :transition_op(RequestCancel, { reason = reason })
       :and_then(Op.guard(function(first, recorded_reason)
-        if not first then
-          return Op.always(false, recorded_reason)
-        end
+        if not first then return Op.always(false, recorded_reason) end
         return Op.emit(Effect.interrupt(node.interrupt, recorded_reason)):map(function()
           return true, recorded_reason
         end)
-      end))
-  )
+      end)))
 end
 
 function Node:cancel_requested_op()
@@ -444,9 +414,7 @@ end
 
 local function publish_once_op(cell, result)
   return cell:read_op():and_then(Op.guard(function(value)
-    if is_done(value) then
-      return Op.always(false, value.result)
-    end
+    if is_done(value) then return Op.always(false, value.result) end
     return cell:write_op({ status = 'done', result = result }):map(function()
       return true, result
     end)
@@ -454,9 +422,7 @@ local function publish_once_op(cell, result)
 end
 
 local function completed_op(cell)
-  return wait_for(cell, is_done):map(function(value)
-    return value.result
-  end)
+  return wait_for(cell, is_done):map(function(value) return value.result end)
 end
 
 function Node:publish_body_result_op(result)
@@ -479,8 +445,7 @@ function Node:inspect_op()
   local cancellation = self.cancellation:read_op()
   local body_result = self.body_result:read_op()
   local outcome = self.outcome:read_op()
-  local topology = self.runtime and self.runtime:_lifetime_store():node_state_op(self)
-    or Op.always(self:current_state())
+  local topology = self.runtime and self.runtime:_lifetime_store():node_state_op(self) or Op.always(self:current_state())
   return topology:and_then(Op.guard(function(state)
     return cancellation:and_then(Op.guard(function(cancel)
       return body_result:and_then(Op.guard(function(body)

@@ -57,12 +57,8 @@ local function connect_completion(dial, handle, driver_scope)
         return { handle = registered_handle, peer = dial.endpoint }
       end
       local connected, peer, err = registered_handle:finish_connect()
-      if connected then
-        return { handle = connected, peer = peer }
-      end
-      if IOError.is_would_block(err) then
-        return nil, err
-      end
+      if connected then return { handle = connected, peer = peer } end
+      if IOError.is_would_block(err) then return nil, err end
       return nil,
         IOError.normalise(err, {
           domain = 'socket',
@@ -77,9 +73,7 @@ end
 
 local function await_connect(dial, source, deadline)
   local completed = source:result_op()
-  if deadline == nil then
-    return perform(completed)
-  end
+  if deadline == nil then return perform(completed) end
 
   local selected, err = perform(completed:or_else(Clock.default():at_op(deadline):map(function()
     return false
@@ -88,9 +82,7 @@ local function await_connect(dial, source, deadline)
     local timeout = timeout_error(dial, deadline)
     perform(source:close_op(timeout))
     local closed, close_err = perform(source:closed_op())
-    if not closed then
-      return nil, close_err
-    end
+    if not closed then return nil, close_err end
     return nil, timeout
   end
   return selected, err
@@ -134,12 +126,8 @@ function Direct.run(dial, driver_scope, opts)
   end
 
   local held, hold_err = host_hold:hold('socket', handle, close_socket)
-  if not held then
-    error(hold_err, 0)
-  end
-  if type(handle.bind_runtime) == 'function' then
-    handle:bind_runtime(rt)
-  end
+  if not held then error(hold_err, 0) end
+  if type(handle.bind_runtime) == 'function' then handle:bind_runtime(rt) end
 
   local completion = connect_completion(dial, handle, driver_scope)
   local completed, finish_err = await_connect(dial, completion, opts.connect_deadline)
@@ -160,9 +148,7 @@ function Direct.run(dial, driver_scope, opts)
 
   local connection, connection_err =
     Connection.from_host_hold(rt, driver_scope, host_hold, 'socket', handle, connection_opts)
-  if not connection then
-    error(connection_err, 0)
-  end
+  if not connection then error(connection_err, 0) end
 
   return connection, nil, report(dial, 'connected', started_at, rt:now())
 end

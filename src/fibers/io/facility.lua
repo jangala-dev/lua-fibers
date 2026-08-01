@@ -68,10 +68,11 @@ function IO.admit_driven_lifetime_op(scope, value, spec)
   end, spec.name, scope, { lifetime = value._lifetime, closure = scope.closure })
   value.driver = driver
 
-  return scope:admit_op(value):and_then(driver:spawn_effect_op()):map(function()
-    return value
-  end)
+  return scope:admit_op(value)
+    :and_then(driver:spawn_effect_op())
+    :map(function() return value end)
 end
+
 
 local function driver_exit_error(exit)
   if type(exit) ~= 'table' then
@@ -108,16 +109,12 @@ function IO.closed_after_driver_op(task, terminal_op, opts)
   if not Op.is_op(terminal_op) then
     error('closed_after_driver_op expects a terminal Op', 2)
   end
-  if task == nil then
-    return terminal_op
-  end
+  if task == nil then return terminal_op end
 
   return task:body_result_op():and_then(Op.guard(function(exit)
     if opts.require_returned == true then
       local err = driver_exit_error(exit)
-      if err ~= nil then
-        return Op.always(nil, err)
-      end
+      if err ~= nil then return Op.always(nil, err) end
     end
     return terminal_op
   end))

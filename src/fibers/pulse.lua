@@ -37,15 +37,18 @@ function Pulse:version_op()
   return self._version:read_op()
 end
 
+
 function Pulse:why_op()
   return self._status:read_op():map(function(status)
     return closed(status) and status.reason or nil
   end)
 end
 
+
 function Pulse:is_closed_op()
   return self._status:read_op():map(closed)
 end
+
 
 function Pulse:signal_op()
   local signal = Op.each({
@@ -61,8 +64,7 @@ function Pulse:signal_op()
 end
 
 function Pulse:close_op(reason)
-  local close =
-    self._status:expect_op(OPEN):and_then(self._status:write_op({ reason = reason }):map(function()
+  local close = self._status:expect_op(OPEN):and_then(self._status:write_op({ reason = reason }):map(function()
       return true
     end))
 
@@ -90,6 +92,10 @@ function Pulse:next_op()
     return self:changed_op(version)
   end))
 end
+
+
+
+
 
 Direct.install(Pulse, { 'version', 'why', 'is_closed', 'signal', 'close', 'changed', 'next' })
 

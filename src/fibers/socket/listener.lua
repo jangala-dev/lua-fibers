@@ -70,9 +70,7 @@ end
 
 local function accept_to_scope_op(listener, target_scope)
   local accepted = listener.offers:result_op():wrap(function(offer, source_err)
-    if not offer then
-      return nil, source_err
-    end
+    if not offer then return nil, source_err end
     local rt = Runtime.current()
     local connection, err = Connection.from_host_hold(
       rt,
@@ -111,19 +109,13 @@ function Listener:close_op(reason)
   return self.lifecycle:request_stop_op(reason):wrap(function(first, state)
     if self.offers then
       local requested, request_err = perform(self.offers:close_op(reason))
-      if not requested then
-        return nil, request_err
-      end
+      if not requested then return nil, request_err end
       local source_closed, source_err = perform(self.offers:closed_op())
-      if not source_closed then
-        return nil, source_err
-      end
+      if not source_closed then return nil, source_err end
       local owns_source = perform(self.private_scope:has_custody_op(self.offers))
       if owns_source then
         local retired, retire_err = perform(self.private_scope:close_op(self.offers, reason))
-        if not retired then
-          return nil, retire_err
-        end
+        if not retired then return nil, retire_err end
       end
     end
     return true, state
@@ -132,14 +124,10 @@ end
 
 function Listener:closed_op()
   local terminal = self.lifecycle:terminal_op()
-  if not self.offers then
-    return terminal:map(listener_close_result)
-  end
+  if not self.offers then return terminal:map(listener_close_result) end
   local source_closed = self.offers:closed_op()
   return source_closed:and_then(Op.guard(function(ok, source_err)
-    if not ok then
-      return Op.always(nil, source_err)
-    end
+    if not ok then return Op.always(nil, source_err) end
     return terminal:map(listener_close_result)
   end))
 end
@@ -163,9 +151,7 @@ local function retire_listener(listener, rt, source_state)
     end
   end
   IO.masked_perform(rt, listener.lifecycle:stopped_op(reason, err, fatal or close_error ~= nil))
-  if close_error then
-    return nil, close_error
-  end
+  if close_error then return nil, close_error end
   return true
 end
 
@@ -176,33 +162,26 @@ local function accepted_offers(listener, opts)
     action = 'accept',
     role = 'socket_accept_source',
     capacity = opts.accept_capacity or 32,
-    handle = function()
-      return listener:host_handle()
-    end,
+    handle = function() return listener:host_handle() end,
     mode = 'read',
     pull = function(registered_handle)
       local handle, peer, accept_err = registered_handle:accept()
-      if not handle then
-        return nil, accept_err
-      end
+      if not handle then return nil, accept_err end
 
       listener.accepted_seq = listener.accepted_seq + 1
       local key = 'accepted-' .. tostring(listener.accepted_seq)
       local held, hold_err = listener.accepted_hold:hold(key, handle, close_socket)
-      if not held then
-        error(hold_err, 0)
-      end
+      if not held then error(hold_err, 0) end
       return { key = key, handle = handle, peer = peer }
     end,
     dispose = function(offer, reason)
-      if type(offer) ~= 'table' then
-        return
-      end
-      local discarded, discard_err =
-        listener.accepted_hold:discard(offer.key, offer.handle, reason or 'accepted offer discarded')
-      if not discarded then
-        error(discard_err, 0)
-      end
+      if type(offer) ~= 'table' then return end
+      local discarded, discard_err = listener.accepted_hold:discard(
+        offer.key,
+        offer.handle,
+        reason or 'accepted offer discarded'
+      )
+      if not discarded then error(discard_err, 0) end
     end,
     closed_error = function(err)
       return IOError.closed('socket', 'accept', {
@@ -257,9 +236,7 @@ function Module.listen_op(address, opts)
       closed_reason = 'listener lifecycle no longer accepts activation',
       closed_message = 'listener closed before activation',
     })
-    if not active then
-      return nil, activation_err
-    end
+    if not active then return nil, activation_err end
 
     listener.offers = accepted_offers(listener, opts)
     local opened, open_err = perform(listener.offers:open_op(private_scope))
@@ -279,6 +256,8 @@ function Listener:accept(target)
   target = target or IO.current_scope({}, 'Listener:accept')
   return perform(self:accept_op(target))
 end
+
+
 
 Module.Listener = Listener
 Direct.install(Listener, { 'close', 'closed' })

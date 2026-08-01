@@ -5,10 +5,7 @@ local Op = Ref.Op
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'assertion failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'assertion failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -95,9 +92,10 @@ end
 
 -- Effects are inert obligations selected with the world.
 do
-  local result = Ref.evaluate(
-    Op.choice(Op.emit('left'):and_then(Op.always('left')), Op.emit('right'):and_then(Op.always('right')))
-  )
+  local result = Ref.evaluate(Op.choice(
+    Op.emit('left'):and_then(Op.always('left')),
+    Op.emit('right'):and_then(Op.always('right'))
+  ))
   eq(result.tag, 'Hit')
   eq(#result.worlds, 2)
   local seen = {}
@@ -112,9 +110,7 @@ end
 -- A search boundary is Unknown, never Retry.
 do
   local op = Op.always('end')
-  for i = 1, 12 do
-    op = Op.choice(op, Op.always(i))
-  end
+  for i = 1, 12 do op = Op.choice(op, Op.always(i)) end
   local result = Ref.evaluate(op, { max_steps = 2 })
   eq(result.tag, 'Unknown')
 end

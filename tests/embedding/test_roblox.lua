@@ -90,9 +90,7 @@ end
 -- Manual prepare needs neither a scheduler nor a BindableEvent bridge.
 do
   local host = Roblox.new_host({
-    now = function()
-      return 0
-    end,
+    now = function() return 0 end,
     task = false,
     make_event = false,
   })
@@ -275,7 +273,7 @@ do
   assert_eq(status.state, 'pending')
   assert_eq(status.reason, 'proof-capacity')
   assert_eq(status.capacity_reason, 'search_total_limit')
-  assert_truthy(not status.needs_immediate_resume)
+assert_truthy(not status.needs_immediate_resume)
   app:close()
   host:close()
   scheduler:run_until_idle()

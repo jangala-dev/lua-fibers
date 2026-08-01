@@ -83,7 +83,7 @@ Facilities must place each callback in one of three phases.
 | Phase | Facility callbacks | Requirements |
 |---|---|---|
 | Speculative search | guards, `map`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
-| Candidateted-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
+| Candidate-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
 | Participant continuation | `wrap` | Runs after commit in the resumed fibre. It may perform, spawn and interact with the outside world. |
 
 `prepare` must not reserve host capacity or acquire an external resource. It may inspect only the effect payload, captured runtime configuration and managed facts already represented by the candidate. A refusal based on untracked volatile host state is invalid because it could admit an `or_else` fallback without a revalidatable proof. Model such capacity or readiness as a managed resource, then put the irreversible host action in `discharge`.
@@ -122,3 +122,11 @@ These recipes are tested but are not part of the installed version 1 surface.
 ## Closed executable-leaf protocol
 
 The public Op graph is executed directly. Trusted primitive leaves and the transactional store remain implementation details under `fibers.internal`. New leaf kinds or trusted transition behaviour require repository-level review and are covered by `../contributing/trusted-resource-leaves.md`.
+
+
+## Ordered finite-map selection
+
+Ordered `Index` entries use `(rank, sequence)` as their complete semantic order.
+Every insertion option receives a monotonic sequence when it is constructed, and
+imported entries must provide unique `(rank, sequence)` pairs. Resource keys and
+their textual presentation do not participate in ordering.

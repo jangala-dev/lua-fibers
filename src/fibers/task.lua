@@ -52,9 +52,7 @@ function Exit.status(x)
 end
 
 function Exit.unwrap(x)
-  if not Exit.is(x) then
-    error('Exit.unwrap expects an Exit value', 2)
-  end
+  if not Exit.is(x) then error('Exit.unwrap expects an Exit value', 2) end
   if x.tag == 'returned' then
     local vals = x.values or { n = 0 }
     return unpack_(vals, 1, vals.n or #vals)
@@ -67,15 +65,9 @@ function Exit.unwrap(x)
 end
 
 function Exit:tostring()
-  if self.tag == 'returned' then
-    return 'Exit.returned'
-  end
-  if self.tag == 'cancelled' then
-    return 'Exit.cancelled: ' .. tostring(self.reason)
-  end
-  if self.tag == 'failed' then
-    return 'Exit.failed: ' .. tostring(self.error)
-  end
+  if self.tag == 'returned' then return 'Exit.returned' end
+  if self.tag == 'cancelled' then return 'Exit.cancelled: ' .. tostring(self.reason) end
+  if self.tag == 'failed' then return 'Exit.failed: ' .. tostring(self.error) end
   return 'Exit.' .. tostring(self.tag)
 end
 Exit.__tostring = Exit.tostring
@@ -87,20 +79,14 @@ end
 local Task = {}
 Task.__index = function(self, key)
   local method = Task[key]
-  if method ~= nil then
-    return method
-  end
+  if method ~= nil then return method end
   local life = rawget(self, '_lifetime')
-  if key == 'name' then
-    return life and life.name
-  end
+  if key == 'name' then return life and life.name end
   return nil
 end
 
 function Task._new(fn, name, parent_scope, opts)
-  if type(fn) ~= 'function' then
-    error('Task creation expects a function', 2)
-  end
+  if type(fn) ~= 'function' then error('Task creation expects a function', 2) end
   opts = opts or {}
   local life = opts.lifetime
   if life ~= nil and not Lifetime.is(life) then
@@ -112,9 +98,7 @@ function Task._new(fn, name, parent_scope, opts)
       closure = Closure.running(opts.closure or (parent_scope and parent_scope.closure)),
     })
   else
-    if life.body and life.body ~= fn then
-      error('Lifetime already has another body', 2)
-    end
+    if life.body and life.body ~= fn then error('Lifetime already has another body', 2) end
     life.body = fn
     life.has_body = true
     local propagation = opts.closure or (parent_scope and parent_scope.closure)
@@ -139,9 +123,7 @@ function Task:_spawn_body(fn)
   local task = self
   return function()
     local rt = Runtime.current()
-    if not rt then
-      error('task started without a current runtime', 2)
-    end
+    if not rt then error('task started without a current runtime', 2) end
     local results = pack(Protected.pcall(fn, task))
     fn = nil
     local exit
@@ -183,9 +165,7 @@ end
 
 function Task:spawn_effect_op()
   local task = self
-  return Op.emit(self:_spawn_effect()):map(function()
-    return task
-  end)
+  return Op.emit(self:_spawn_effect()):map(function() return task end)
 end
 
 function Task:body_result_op()
@@ -201,9 +181,7 @@ end
 
 function Task:await_op()
   return self:outcome_op():wrap(function(result)
-    if ScopeResult.is(result) then
-      return result:raise()
-    end
+    if ScopeResult.is(result) then return result:raise() end
     return result
   end)
 end
@@ -233,6 +211,8 @@ function Task:state_op()
     }
   end)
 end
+
+
 
 Direct.install(Task, { 'await', 'request_cancel' })
 

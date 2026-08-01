@@ -68,30 +68,25 @@ local function operations(self, key)
   end
 
   cached = {
-    get = Facility.op(Facility.transition({
+    get = Facility.op(Facility.rule.inspect({
       location = location,
       resource = self,
       demand = 'up',
-      accepts_supply = true,
+      visibility = 'together',
       step = function(value)
-        if value == ABSENT then
-          return nil
-        end
+        if value == ABSENT then return nil end
         return Facility.outcome(nil, value)
       end,
     })),
-    take = Facility.op(Facility.transition({
+    take = Facility.op(Facility.rule.change({
       location = location,
       resource = self,
       demand = 'up',
-      accepts_supply = true,
-      supplies = 'down',
-      writes = true,
+      visibility = 'together',
+      supply = 'down',
       step = function(value)
-        if value == ABSENT then
-          return nil
-        end
-        return Facility.outcome(Facility.change.take(), value)
+        if value == ABSENT then return nil end
+        return Facility.outcome(Facility.patch.take(), value)
       end,
     })),
     put = Facility.presence_put(location, Facility.result.boolean, self),
@@ -106,10 +101,12 @@ function Keyed:get_op(key)
   return operations(self, key).get
 end
 
+
 function Keyed:take_op(key)
   require_key(key, 'take')
   return operations(self, key).take
 end
+
 
 function Keyed:put_op(key, value)
   require_key(key, 'put')
@@ -117,33 +114,34 @@ function Keyed:put_op(key, value)
   return Facility.bind(operations(self, key).put, value)
 end
 
+
 function Keyed:insert_op(key, value)
   require_key(key, 'insert')
   require_value(value)
 
-  return Facility.op(Facility.transition({
+  return Facility.op(Facility.rule.change({
     location = self._space:location(key),
     resource = self,
     demand = 'down',
-    accepts_supply = true,
-    supplies = 'up',
-    writes = true,
+    visibility = 'together',
+    supply = 'up',
     step = function(current)
-      if current ~= ABSENT then
-        return nil
-      end
-      return Facility.outcome(Facility.change.put(value), true)
+      if current ~= ABSENT then return nil end
+      return Facility.outcome(Facility.patch.put(value), true)
     end,
   }))
 end
+
 
 function Keyed:contains_op(key)
   return self:get_op(key):map(yes):or_else(FALSE)
 end
 
+
 function Keyed:remove_op(key)
   return self:take_op(key):map(yes):or_else(FALSE)
 end
+
 
 Keyed.Kind = Kind
 

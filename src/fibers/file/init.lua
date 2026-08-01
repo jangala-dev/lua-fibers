@@ -138,22 +138,23 @@ function File.pipe_op(opts)
     write_stream = nil,
   }
 
-  return scope:admit_op(start.host_hold):wrap(function()
-    local rt = Runtime.current()
-    if not rt then
-      error('file.pipe_op committed without a current runtime', 2)
-    end
-    return start_pipe(rt, start, {
-      host = opts.host,
-      name = name,
-      capacity = opts.capacity,
-      read_capacity = opts.read_capacity,
-      write_capacity = opts.write_capacity,
-      chunk_size = opts.chunk_size,
-      read_chunk_size = opts.read_chunk_size,
-      write_chunk_size = opts.write_chunk_size,
-    })
-  end)
+  return scope:admit_op(start.host_hold)
+    :wrap(function()
+      local rt = Runtime.current()
+      if not rt then
+        error('file.pipe_op committed without a current runtime', 2)
+      end
+      return start_pipe(rt, start, {
+        host = opts.host,
+        name = name,
+        capacity = opts.capacity,
+        read_capacity = opts.read_capacity,
+        write_capacity = opts.write_capacity,
+        chunk_size = opts.chunk_size,
+        read_chunk_size = opts.read_chunk_size,
+        write_chunk_size = opts.write_chunk_size,
+      })
+    end)
 end
 
 File.Error = IOError

@@ -40,9 +40,7 @@ local STALE_RECOVERY = {}
 local ClaimRecovery = StateMachine.isolated_select_when('closure.claim_recovery', function(state)
   return state == RECOVERY_AVAILABLE
 end, function(state)
-  if state ~= RECOVERY_AVAILABLE then
-    return StateMachine.Wait
-  end
+  if state ~= RECOVERY_AVAILABLE then return StateMachine.Wait end
   return StateMachine.Ready.write(RECOVERY_CONSUMED, true)
 end)
 
@@ -52,9 +50,7 @@ end)
 local RecoveryClaimKind
 RecoveryClaimKind = Effect.kind({
   name = 'closure.recovery_claim',
-  key = function(payload)
-    return payload.authority
-  end,
+  key = function(payload) return payload.authority end,
   merge = function()
     return nil, { kind = 'effect_conflict', message = 'duplicate closure recovery authority' }
   end,
@@ -63,9 +59,7 @@ RecoveryClaimKind = Effect.kind({
       kind = RecoveryClaimKind,
       key = payload.authority,
       payload = payload,
-      discharge = function()
-        return true
-      end,
+      discharge = function() return true end,
     }
   end,
 })
@@ -100,14 +94,8 @@ local function closure_failure_message(token, failures, mark_error)
 end
 
 local PROGRESS_FIELDS = {
-  'item',
-  'request_state',
-  'request_error',
-  'force_state',
-  'force_error',
-  'close_state',
-  'closure_error',
-  'state',
+  'item', 'request_state', 'request_error', 'force_state', 'force_error',
+  'close_state', 'closure_error', 'state',
 }
 
 local function copy_progress(entries, public)
@@ -159,21 +147,18 @@ local function recovery_claim_op(failure)
   if not token or not recovery.authority or recovery.authority.value ~= RECOVERY_AVAILABLE then
     error('Closure failure no longer has recovery authority', 3)
   end
-  if not token.context then
-    error('Closure recovery context is unavailable', 3)
-  end
+  if not token.context then error('Closure recovery context is unavailable', 3) end
 
   -- The positive claim and the certified-absence branch refer to the same
   -- transactional cell. Two recovery operations in one world can therefore
   -- neither both claim the authority nor combine one claim with a stale branch.
-  local claim = recovery.authority:transition_op(ClaimRecovery):or_else(Op.always(STALE_RECOVERY))
+  local claim = recovery.authority
+    :transition_op(ClaimRecovery)
+    :or_else(Op.always(STALE_RECOVERY))
   return claim:and_then(Op.guard(function(claimed)
     local effect = Effect.of(RecoveryClaimKind, { authority = recovery.authority })
-    return Op.emit(effect):map(function()
-      return claimed
-    end)
-  end)),
-    token
+    return Op.emit(effect):map(function() return claimed end)
+  end)), token
 end
 
 local function stale_recovery_op()
@@ -185,9 +170,7 @@ end
 local function recovery_op(failure, recover)
   local claim, token = recovery_claim_op(failure)
   return claim:and_then(Op.guard(function(claimed)
-    if claimed == STALE_RECOVERY then
-      return stale_recovery_op()
-    end
+    if claimed == STALE_RECOVERY then return stale_recovery_op() end
     return recover(token.context, token)
   end))
 end
@@ -196,32 +179,26 @@ function ClosureFailure:retry_op()
   return recovery_op(self, Closure._retry_token_op)
 end
 
+
 function ClosureFailure:force_op()
   return recovery_op(self, Closure._force_token_op)
 end
+
 
 function ClosureFailure:inspect()
   local failures = {}
   for i = 1, #(self.failures or {}) do
     local entry = self.failures[i]
     failures[i] = {
-      item = entry.item,
-      phase = entry.phase,
-      error = entry.error,
-      blocked = entry.blocked,
-      blocker = entry.blocker,
+      item = entry.item, phase = entry.phase, error = entry.error,
+      blocked = entry.blocked, blocker = entry.blocker,
     }
   end
   return {
-    kind = self.kind,
-    item = self.item,
-    custodian = self.custodian,
-    purpose = self.purpose,
-    reason = self.reason,
-    progress = copy_progress(self.progress),
-    failures = failures,
-    error = self.error,
-    message = self.message,
+    kind = self.kind, item = self.item, custodian = self.custodian,
+    purpose = self.purpose, reason = self.reason,
+    progress = copy_progress(self.progress), failures = failures,
+    error = self.error, message = self.message,
   }
 end
 
@@ -267,12 +244,8 @@ local function ensure_op(op, label)
 end
 
 local PROTOCOL_FIELDS = {
-  'request_op',
-  'finish_op',
-  'force_op',
-  'request_result',
-  'finish_result',
-  'force_result',
+  'request_op', 'finish_op', 'force_op',
+  'request_result', 'finish_result', 'force_result',
 }
 
 local function capture_protocol(protocol, label)
@@ -320,6 +293,7 @@ function Closure.protocol(protocol, label)
   return captured
 end
 
+
 function Closure.none()
   return Closure.protocol()
 end
@@ -355,6 +329,7 @@ function Closure.request_then_wait(request_op, finish_op, opts)
   })
 end
 
+
 function Closure.running()
   return Closure.request_then_wait(function(_ctx, record, reason)
     if reason == Lifetime.CloseReason.NORMAL then
@@ -367,6 +342,7 @@ function Closure.running()
     end)
   end, { name = 'running_lifetime' })
 end
+
 
 local function protocol_for(record)
   return record.closure
@@ -439,11 +415,7 @@ local function run_step(ctx, token, entry, field, state_field, error_field, phas
     return true
   end
   local ok, err = Protected.pcall(function()
-    local result = pack(
-      perform_masked(
-        ensure_op(step(ctx, entry.record, step_context(token, phase)), protocol.name .. '.' .. field)
-      )
-    )
+    local result = pack(perform_masked(ensure_op(step(ctx, entry.record, step_context(token, phase)), protocol.name .. '.' .. field)))
     local result_field = field:gsub('_op$', '_result')
     local check_result = protocol[result_field]
     if check_result then
@@ -531,10 +503,8 @@ local function collect_failures(token)
     local entry = progress[i]
     if entry.close_state == 'blocked' then
       failures[#failures + 1] = {
-        item = entry.item,
-        phase = 'close',
-        error = 'blocked by unresolved descendant',
-        blocked = true,
+        item = entry.item, phase = 'close',
+        error = 'blocked by unresolved descendant', blocked = true,
       }
     end
   end
@@ -563,9 +533,7 @@ end
 
 local function resolve_failed_op(ctx, token, failures)
   require_context(ctx)
-  return ctx
-    :_store()
-    :_resolve_close_token_op(token, 'fail', { failures = failures, progress = token.progress })
+  return ctx:_store():_resolve_close_token_op(token, 'fail', { failures = failures, progress = token.progress })
 end
 
 local function resolve_finish_op(ctx, token)
@@ -581,9 +549,7 @@ local function containment_description(blocker)
     for i = 1, math.min(#descendants, 3) do
       local entry = descendants[i]
       shown[#shown + 1] = tostring(entry.path or item_name(entry.item))
-        .. ' ['
-        .. tostring(entry.closure_phase or entry.custody_phase or 'unknown')
-        .. ']'
+        .. ' [' .. tostring(entry.closure_phase or entry.custody_phase or 'unknown') .. ']'
     end
     message = message .. ': ' .. table.concat(shown, ', ')
     if #descendants > #shown then

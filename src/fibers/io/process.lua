@@ -5,6 +5,7 @@ local IOAudit = require('fibers.internal.io_audit')
 
 local M = {}
 
+
 local function close_returned(value, reason)
   if value and type(value.close) == 'function' then
     pcall(value.close, value, reason)
@@ -12,15 +13,10 @@ local function close_returned(value, reason)
 end
 
 local function invalid_contract(host, missing)
-  return IOError.protocol(
-    'host',
-    'start_process',
-    'host process provider returned an invalid process handle',
-    {
-      host = host and host.name or nil,
-      missing = missing,
-    }
-  )
+  return IOError.protocol('host', 'start_process', 'host process provider returned an invalid process handle', {
+    host = host and host.name or nil,
+    missing = missing,
+  })
 end
 
 -- One host-independent launch boundary. Direct waitpid providers, reaper-process

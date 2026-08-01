@@ -110,9 +110,7 @@ function Journal:accept(mark)
   end
 
   if parent == 0 then
-    for n = #entries, stop + 1, -1 do
-      entries[n] = nil
-    end
+    for n = #entries, stop + 1, -1 do entries[n] = nil end
   end
   self.current = parent
   self.marks[mark], self.parents[mark] = nil, nil
@@ -127,23 +125,15 @@ function Journal:rollback(mark)
     local target = entries[n - 3]
     local key = entries[n - 2]
     local old = entries[n - 1]
-    if old == NIL then
-      old = nil
-    end
+    if old == NIL then old = nil end
     local old_stamp = entries[n]
     if kind == 1 then
       target[key] = old
       local stamps = self.field_stamps and self.field_stamps[target]
-      if stamps then
-        stamps[key] = old_stamp ~= 0 and old_stamp or nil
-      end
+      if stamps then stamps[key] = old_stamp ~= 0 and old_stamp or nil end
     else
-      for i = #target, old + 1, -1 do
-        target[i] = nil
-      end
-      if self.push_stamps then
-        self.push_stamps[target] = old_stamp ~= 0 and old_stamp or nil
-      end
+      for i = #target, old + 1, -1 do target[i] = nil end
+      if self.push_stamps then self.push_stamps[target] = old_stamp ~= 0 and old_stamp or nil end
     end
     entries[n - 4], entries[n - 3], entries[n - 2], entries[n - 1], entries[n] = nil, nil, nil, nil, nil
   end
@@ -158,6 +148,7 @@ function Journal:reset()
   self.field_stamps, self.push_stamps = nil, nil
   self.observed, self.writers, self.segments = nil, nil, nil
 end
+
 
 function Journal.new_location(opts)
   opts = opts or {}
@@ -210,12 +201,8 @@ end
 
 local function inherited_value(segment, location)
   local cached = segment.values[location]
-  if cached ~= nil then
-    return cached
-  end
-  if segment.parent then
-    return Journal.read(segment.parent, location)
-  end
+  if cached ~= nil then return cached end
+  if segment.parent then return Journal.read(segment.parent, location) end
   return location.value
 end
 
@@ -233,9 +220,7 @@ local function stage_summary(segment, location, patch)
   local journal = segment.journal
   local old = segment.delta[location]
   local summary = Algebra.stage(location, old, patch, journal)
-  if summary ~= old then
-    journal:set(segment.delta, location, summary)
-  end
+  if summary ~= old then journal:set(segment.delta, location, summary) end
 end
 
 function Journal.stage(segment, location, patch)
@@ -249,15 +234,11 @@ end
 
 local function writers_for(journal, location)
   local writers = journal.writers[location]
-  if writers then
-    return writers
-  end
+  if writers then return writers end
   writers = {}
   for i = 1, #journal.segments do
     local segment = journal.segments[i]
-    if not segment.retired and rawget(segment.delta, location) then
-      writers[#writers + 1] = segment
-    end
+    if not segment.retired and rawget(segment.delta, location) then writers[#writers + 1] = segment end
   end
   journal.writers[location] = writers
   return writers
@@ -393,5 +374,6 @@ function Journal.commit(writes)
     rawset(prepared[i], 'version', prepared[i + 2])
   end
 end
+
 
 return Journal

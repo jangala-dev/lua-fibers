@@ -143,9 +143,7 @@ function Queue:wake(reason)
 end
 
 function Queue:mark_done(value)
-  if self._done then
-    return value
-  end
+  if self._done then return value end
   self._done = true
   self._done_value = value
   if type(self.on_done) == 'function' then
@@ -168,9 +166,7 @@ function Queue:block()
 end
 
 function Queue:close()
-  if self._closed then
-    return true
-  end
+  if self._closed then return true end
   self._closed = true
   self._wake_callback = nil
   self._queue = {}

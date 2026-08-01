@@ -1,17 +1,10 @@
 local Op = require('fibers.op')
-local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
-local Witness = require('fibers.resource.witness')
-local Substrate = require('fibers.internal.kernel.journal')
 
 local Petri = {}
 Petri.__index = function(self, key)
-  if key == '_state' then
-    return self._location and self._location.value
-  end
-  if key == 'version' then
-    return self._location and self._location.version or 0
-  end
+  if key == '_state' then return self._location and self._location.value end
+  if key == 'version' then return self._location and self._location.version or 0 end
   return Petri[key]
 end
 local Kind = { name = 'petri' }
@@ -152,19 +145,16 @@ function Petri.new(marking, name)
     _fibers_id = 'petri-' .. tostring(next_net_id),
     _fibers_kind = Kind,
   }, Petri)
-  net._location = Substrate.new_location({
-    name = net.name .. ':marking',
+  net._location = Facility.location(net, 'marking', {
     algebra = 'machine',
     domain = 'plain',
     value = state,
-    owner = net,
   })
   return net
 end
 
 function Petri:transition(spec)
   assert(type(spec) == 'table', 'Petri transition expects a table')
-  assert(spec.supply == nil, 'Petri transition no longer accepts supply; use accepts_supply and supplies')
   local transition = {
     _petri_transition = true,
     net = self,
@@ -174,8 +164,8 @@ function Petri:transition(spec)
     produce = spec.produce,
     result = spec.result,
     order = spec.order or 0,
-    accepts_supply = spec.accepts_supply ~= false,
-    supplies = spec.supplies or 'any',
+    visibility = spec.visibility or 'together',
+    supply = spec.supply or 'any',
   }
   return transition
 end
@@ -207,15 +197,15 @@ local function binding_cursor(transition, state, payload)
       end
       local result
       if transition.result then
-        result = Values.pack(transition.result(bindings, payload, successor))
+        result = Facility.pack(transition.result(bindings, payload, successor))
       else
         local copy = {}
         for k, v in pairs(bindings) do
           copy[k] = v
         end
-        result = Values.pack(copy)
+        result = Facility.pack(copy)
       end
-      coroutine.yield({ value = successor, result = result, writes = true })
+      coroutine.yield(Facility.outcome_packed(Facility.patch.machine(successor), result))
     end
     local function search(i)
       if i > #inputs then
@@ -272,12 +262,11 @@ function Petri:fire_op(transition, payload)
   if type(transition) ~= 'table' or transition._petri_transition ~= true or transition.net ~= self then
     error('Petri fire expects a transition belonging to this net', 2)
   end
-  local program = Witness.spec({
+  local program = Facility.rule.change({
     location = self._location,
-    group = self._location,
-    order = transition.order,
-    accepts_supply = transition.accepts_supply,
-    supplies = transition.supplies,
+    serial_order = transition.order,
+    visibility = transition.visibility,
+    supply = transition.supply,
     payload = payload or {},
     cursor = function(state, actual_payload)
       return binding_cursor(transition, state, actual_payload)
@@ -317,23 +306,23 @@ function Petri:take_op(place, predicate)
 end
 
 function Petri:marking_op()
-  return Facility.op(Witness.spec({
-    location = self._location,
-    accepts_supply = false,
-    supplies = 'none',
-    cursor = function(state)
-      local done = false
-      return {
-        next = function()
-          if done then
-            return nil
-          end
-          done = true
-          return { writes = false, result = Values.pack(marking_of(state)) }
-        end,
-      }
-    end,
-  }))
+  return Facility.op(Facility.rule.inspect({
+      location = self._location,
+      visibility = 'own',
+      cursor = function(state)
+        local done = false
+        return {
+          next = function()
+            if done then
+              return nil
+            end
+            done = true
+            return Facility.outcome(nil, marking_of(state))
+          end,
+        }
+      end,
+    })
+  )
 end
 
 function Petri:marking()

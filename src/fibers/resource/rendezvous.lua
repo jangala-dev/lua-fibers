@@ -7,8 +7,8 @@ local Kind = Facility.kind('rendezvous')
 
 function Rendezvous.new(name)
   local self = Facility.identity(setmetatable({}, Rendezvous), Kind, name)
-  self._get_op = Facility.op(Facility.exchange({ resource = self, role = 'get' }))
-  self._put_spec = Facility.exchange({ resource = self, role = 'put' })
+  self._get_op = Facility.op(Facility.rule.exchange({ resource = self, role = 'get' }))
+  self._put_spec = Facility.rule.exchange({ resource = self, role = 'put' })
   return self
 end
 function Rendezvous:get_op()

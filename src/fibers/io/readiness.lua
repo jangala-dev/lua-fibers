@@ -1,7 +1,8 @@
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
-local Interest = require('fibers.embed.external').Interest
-local ExternalFeed = require('fibers.embed.external').Feed
+local External = require('fibers.embed.external')
+local Interest = External.Interest
+local ExternalFeed = External.Feed
 
 local Readiness = {}
 Readiness.__index = function(self, key)
@@ -23,32 +24,29 @@ end
 local function clone_state(s)
   return { read = not not s.read, write = not not s.write }
 end
-local function deliver(r, ...)
+local function deliver(current, r, ...)
   local n, first = select('#', ...), ...
   local selected, value
   if type(first) == 'string' then
     selected, value = mode(first, 3), select(2, ...)
-    if n <= 1 then
-      value = true
-    end
+    if n <= 1 then value = true end
   else
     selected, value = mode(r.mode, 3), first
-    if n == 0 then
-      value = true
-    end
+    if n == 0 then value = true end
   end
-  local state = clone_state(r._location.value)
+  local state = clone_state(current)
   state[selected] = value ~= false and value ~= nil
-  Facility.publish(r._location, state)
+  return state
 end
-local function clear(r, selected)
-  local state = clone_state(r._location.value)
+
+local function clear(current, _, selected)
+  local state = clone_state(current)
   if selected == nil then
     state.read, state.write = false, false
   else
     state[mode(selected, 3)] = false
   end
-  Facility.publish(r._location, state)
+  return state
 end
 
 function Readiness.new(key, initial_mode, name)
@@ -66,8 +64,7 @@ function Readiness.new(key, initial_mode, name)
     value = { read = false, write = false },
     clone_value = clone_state,
   })
-  r._fibers_external_deliver = deliver
-  r._fibers_external_clear = clear
+  External.attach(r, r._location, deliver, clear)
   r._read_op, r._write_op = false, false
   return r
 end
@@ -85,8 +82,8 @@ function Readiness:readiness_op(selected)
     end
     return StateMachine.Ready.same(true, key, selected)
   end)
-  local option = Facility.external_wait(self, self._location, transition, {
-    interest = function(rt)
+  local option = Facility.op(StateMachine._compile(self._location, self, transition, {
+    wake = function(rt)
       return Interest.external(r, selected .. ':' .. tostring(key), {
         external_kind = 'readiness',
         readiness_key = key,
@@ -94,10 +91,7 @@ function Readiness:readiness_op(selected)
         feed = ExternalFeed.for_resource(rt, r),
       })
     end,
-    absence_check = function()
-      return not r._location.value[selected]
-    end,
-  })
+  }))
   self[field] = option
   return option
 end

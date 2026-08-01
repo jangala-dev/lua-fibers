@@ -19,9 +19,7 @@ function M.install_static(target, names)
   for i = 1, #names do
     local name = names[i]
     local op_name = name .. '_op'
-    target[name] = function(...)
-      return perform(target[op_name](...))
-    end
+    target[name] = function(...) return perform(target[op_name](...)) end
   end
   return target
 end

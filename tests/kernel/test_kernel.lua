@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Op = require('fibers.op')
@@ -15,19 +10,14 @@ local Journal = require('fibers.internal.kernel.journal')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
 local function retained_sessions(runtime)
   local count = 0
   for i = 1, #runtime.engine.pending do
-    if runtime.engine.pending[i]._retained_search then
-      count = count + 1
-    end
+    if runtime.engine.pending[i]._retained_search then count = count + 1 end
   end
   return count
 end
@@ -66,9 +56,7 @@ eq(rt.engine.proof_graph, nil, 'closed positive work should not allocate a front
 
 local blocked = Runtime.new()
 local blocked_channel = Rendezvous.new('lazy-frontier-index')
-blocked:spawn_raw(function()
-  blocked:perform(blocked_channel:get_op())
-end)
+blocked:spawn_raw(function() blocked:perform(blocked_channel:get_op()) end)
 local blocked_status = blocked:run().tag
 assert(blocked_status == 'pending' or blocked_status == 'quiescent')
 eq(type(blocked.engine.proof_graph), 'table', 'blocked proof should allocate a frontier index')
@@ -76,9 +64,7 @@ eq(type(blocked.engine.proof_graph), 'table', 'blocked proof should allocate a f
 local function dispatch(opts, count)
   opts = opts or {}
   opts.choice_seed = 2
-  if opts.instrumentation == nil then
-    opts.instrumentation = true
-  end
+  if opts.instrumentation == nil then opts.instrumentation = true end
   local runtime = Runtime.new(opts)
   local workers = {}
   for worker = 1, count do
@@ -92,9 +78,7 @@ local function dispatch(opts, count)
     local jobs = {}
     for job = 1, count do
       local choices = {}
-      for worker = 1, count do
-        choices[worker] = workers[worker]:put_op(job)
-      end
+      for worker = 1, count do choices[worker] = workers[worker]:put_op(job) end
       jobs[job] = Op.choice(choices)
     end
     runtime:perform(Op.each(jobs))
@@ -155,15 +139,11 @@ local function replicated_ring(count)
       local p = Op.each({
         primary[node]:put_op(node),
         primary[previous]:get_op(),
-      }):map(function(rows)
-        return 'primary', rows[2][1]
-      end)
+      }):map(function(rows) return 'primary', rows[2][1] end)
       local b = Op.each({
         backup[node]:put_op(node),
         backup[previous]:get_op(),
-      }):map(function(rows)
-        return 'backup', rows[2][1]
-      end)
+      }):map(function(rows) return 'backup', rows[2][1] end)
       results[node] = { runtime:perform(Op.choice(p, b)) }
     end, 'small-ring-node-' .. tostring(i))
   end
@@ -176,9 +156,7 @@ eq(ring_status.tag, 'found')
 eq(ring:run().tag, 'idle')
 local route = ring_results[1] and ring_results[1][1]
 eq(route == 'primary' or route == 'backup', true, 'ring did not choose a route')
-for i = 1, #ring_results do
-  eq(ring_results[i][1], route, 'ring route diverged')
-end
+for i = 1, #ring_results do eq(ring_results[i][1], route, 'ring route diverged') end
 local ring_counters = (ring.instrumentation and ring.instrumentation:report()).counters
 eq((ring_counters.search_calls or math.huge) < 100, true, 'ranked ring expanded excessively')
 

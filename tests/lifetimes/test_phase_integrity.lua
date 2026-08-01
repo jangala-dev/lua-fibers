@@ -3,13 +3,8 @@
 -- committed effects may move ownership only after managed-state commit.
 
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Op = require('fibers.op')
@@ -21,24 +16,17 @@ local Closure = require('fibers.closure')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'assertion failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'assertion failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
 local function truthy(value, message)
-  if not value then
-    error(message or 'expected truthy value', 2)
-  end
+  if not value then error(message or 'expected truthy value', 2) end
 end
 
 local function run_to_rest(runtime)
   local status
-  repeat
-    status = runtime:run()
-  until status.tag ~= 'found'
+  repeat status = runtime:run() until status.tag ~= 'found'
   return status
 end
 
@@ -54,7 +42,9 @@ do
   first_runtime:spawn_raw(function()
     local admission = first_scope:admit_op(value)
     eq(node.runtime, nil, 'admission construction must remain runtime-neutral')
-    fallback = first_runtime:perform(admission:and_then(Op.never()):or_else(Op.always('fallback')))
+    fallback = first_runtime:perform(admission
+      :and_then(Op.never())
+      :or_else(Op.always('fallback')))
     eq(node.runtime, nil, 'defeated admission must not bind a runtime')
     eq(node._admitted, false, 'defeated admission must remain dormant')
   end, 'phase-admission-first-driver')
@@ -70,19 +60,13 @@ do
   second_runtime:spawn_raw(function()
     local admission = second_scope:admit_op(value)
     node:add_child(late_child)
-    eq(
-      late_child._lifetime.runtime,
-      nil,
-      'a child added after construction remains unaffiliated before commit'
-    )
+    eq(late_child._lifetime.runtime, nil,
+      'a child added after construction remains unaffiliated before commit')
     eq(second_runtime:perform(admission), value)
     eq(node.runtime, second_runtime, 'committed admission binds the selected runtime')
     eq(node._admitted, true, 'committed admission makes the Lifetime live')
-    eq(
-      late_child._lifetime.runtime,
-      second_runtime,
-      'admission reads the current dormant graph at performance'
-    )
+    eq(late_child._lifetime.runtime, second_runtime,
+      'admission reads the current dormant graph at performance')
     eq(late_child._lifetime._admitted, true, 'late dormant child is admitted atomically')
     second_runtime:perform(Closure.close_op(second_scope, value, 'phase-admission-done'))
   end, 'phase-admission-second-driver')
@@ -104,7 +88,9 @@ do
       return 'spawned'
     end, { name = 'phase-spawn-task' })
 
-    fallback = runtime:perform(spawn:and_then(Op.never()):or_else(Op.always('fallback')))
+    fallback = runtime:perform(spawn
+      :and_then(Op.never())
+      :or_else(Op.always('fallback')))
     eq(starts, 0, 'defeated spawn must not start or consume its body')
 
     task = runtime:perform(spawn)
@@ -125,11 +111,7 @@ do
   local runtime = Runtime.new()
   local ran = 0
   local take_calls = 0
-  local owner = { _lifetime = {
-    body = function()
-      ran = ran + 1
-    end,
-  } }
+  local owner = { _lifetime = { body = function() ran = ran + 1 end } }
   function owner:_take_spawn_body(committed_runtime)
     eq(committed_runtime, runtime)
     take_calls = take_calls + 1
@@ -158,27 +140,21 @@ do
 
   runtime:spawn_raw(function()
     local cancel_option = scope:request_cancel_op('lost-cancellation')
-    eq(
-      scope:lifetime().closure_state.close_reason,
-      nil,
-      'constructing cancellation must not mutate closure_state'
-    )
-    eq(scope:lifetime().closure_state.closure, nil, 'constructing cancellation must not cache Closure state')
-    local losing = cancel_option:and_then(Op.never()):or_else(Op.always('fallback'))
+    eq(scope:lifetime().closure_state.close_reason, nil,
+      'constructing cancellation must not mutate closure_state')
+    eq(scope:lifetime().closure_state.closure, nil,
+      'constructing cancellation must not cache Closure state')
+    local losing = cancel_option
+      :and_then(Op.never())
+      :or_else(Op.always('fallback'))
     fallback = runtime:perform(losing)
-    eq(
-      scope:lifetime().closure_state.close_reason,
-      nil,
-      'defeated cancellation must not mutate closure_state'
-    )
+    eq(scope:lifetime().closure_state.close_reason, nil,
+      'defeated cancellation must not mutate closure_state')
     eq(scope.interrupt.raised, false, 'defeated cancellation must not raise the interrupt')
 
     committed = runtime:perform(scope:request_cancel_op('committed-cancellation'))
-    eq(
-      scope:lifetime().closure_state.close_reason,
-      'committed-cancellation',
-      'committed cancellation records its close reason post-commit'
-    )
+    eq(scope:lifetime().closure_state.close_reason, 'committed-cancellation',
+      'committed cancellation records its close reason post-commit')
   end, 'phase-cancel-driver')
 
   local status = run_to_rest(runtime)

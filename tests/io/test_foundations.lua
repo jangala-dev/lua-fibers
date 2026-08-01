@@ -142,35 +142,17 @@ do
     local first = Handle.new({
       name = 'invalid-accepted-handle',
       capabilities = { read = false, write = true, close = true, readiness = true },
-      write = function(_, bytes)
-        return #bytes
-      end,
-      close = function()
-        first_closed = first_closed + 1
-        return true
-      end,
+      write = function(_, bytes) return #bytes end,
+      close = function() first_closed = first_closed + 1; return true end,
     })
     local second = Handle.new({
       name = 'queued-sibling-handle',
       capabilities = { close = true, readiness = true },
-      close = function()
-        second_closed = second_closed + 1
-        return true
-      end,
+      close = function() second_closed = second_closed + 1; return true end,
     })
 
-    assert_eq(
-      hold:hold('first', first, function(value, reason)
-        return value:close(reason)
-      end),
-      first
-    )
-    assert_eq(
-      hold:hold('second', second, function(value, reason)
-        return value:close(reason)
-      end),
-      second
-    )
+    assert_eq(hold:hold('first', first, function(value, reason) return value:close(reason) end), first)
+    assert_eq(hold:hold('second', second, function(value, reason) return value:close(reason) end), second)
 
     local connection, err = Connection.from_host_hold(fibers.current_runtime(), scope, hold, 'first', first, {
       name = 'invalid-accepted-connection',

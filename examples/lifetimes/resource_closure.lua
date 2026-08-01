@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 -- Resource-author Closure in miniature. A resource is born with a dormant
@@ -27,7 +22,7 @@ Lifetime.define(handle, {
       return closed:write_op({
         closed = true,
         resource = entry.item,
-        reason = close.reason,
+                reason = close.reason,
       })
     end,
   }),

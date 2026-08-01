@@ -33,10 +33,7 @@ local available = ok_poll
   and bit ~= nil
 
 if not available then
-  return Posix.unavailable(
-    'fibers.io.luaposix',
-    'requires luaposix poll, time, errno, unistd, fcntl and socket modules'
-  )
+  return Posix.unavailable('fibers.io.luaposix', 'requires luaposix poll, time, errno, unistd, fcntl and socket modules')
 end
 
 local names = {}

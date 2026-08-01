@@ -33,20 +33,14 @@ local function named_strategy()
 end
 
 local function copy_error(err)
-  if not IOError.is(err) then
-    return err
-  end
+  if not IOError.is(err) then return err end
   local out = {}
-  for key, value in pairs(err) do
-    out[key] = value
-  end
+  for key, value in pairs(err) do out[key] = value end
   return setmetatable(out, getmetatable(err))
 end
 
 local function attach_report(err, report)
-  if report == nil then
-    return err
-  end
+  if report == nil then return err end
   local out = copy_error(err)
   if not IOError.is(out) then
     out = IOError.system('socket', 'dial', tostring(err), nil, nil)
@@ -67,9 +61,7 @@ local function dial_closure(dial)
 end
 
 local function closed_result(state)
-  if state.fatal and state.error then
-    return nil, state.error
-  end
+  if state.fatal and state.error then return nil, state.error end
   return true
 end
 
@@ -88,9 +80,7 @@ local function cancelled_error(dial, err)
 end
 
 local function unexpected_error(dial, err)
-  if IOError.is(err) then
-    return err, false
-  end
+  if IOError.is(err) then return err, false end
   return IO.protocol_error('socket', 'dial_driver', err, terminal_fields(dial)), true
 end
 
@@ -103,23 +93,18 @@ local function driver(dial, driver_scope)
     if Runtime.is_cancelled(thrown) then
       local closed = cancelled_error(dial, thrown)
       local cancelled_report = dial._strategy.terminal_report
-          and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now())
+        and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now())
         or nil
       IO.masked_perform(
         rt,
-        dial.lifecycle:closed_op(
-          thrown.reason or 'dial cancelled',
-          attach_report(closed, cancelled_report),
-          false,
-          cancelled_report
-        )
+        dial.lifecycle:closed_op(thrown.reason or 'dial cancelled', attach_report(closed, cancelled_report), false, cancelled_report)
       )
       return
     end
 
     local failure, fatal = unexpected_error(dial, thrown)
     local failure_report = dial._strategy.terminal_report
-        and dial._strategy.terminal_report(dial, 'failed', failure, rt:now())
+      and dial._strategy.terminal_report(dial, 'failed', failure, rt:now())
       or nil
     failure = attach_report(failure, failure_report)
     local state = dial.lifecycle:state_value()
@@ -145,9 +130,7 @@ local function driver(dial, driver_scope)
   local published, state =
     IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_scope, report))
   if not published then
-    if state.kind == 'closing' or state.kind == 'closed' then
-      return
-    end
+    if state.kind == 'closing' or state.kind == 'closed' then return end
     error(
       IOError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connection', {
         endpoint = dial.endpoint,
@@ -166,10 +149,8 @@ local function driver(dial, driver_scope)
       local state_now = dial.lifecycle:state_value()
       local closed = cancelled_error(dial, release_state)
       local cancelled_report = state_now.report
-        or (
-          dial._strategy.terminal_report
-          and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now())
-        )
+        or (dial._strategy.terminal_report
+          and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now()))
       IO.masked_perform(
         rt,
         dial.lifecycle:closed_op(
@@ -203,9 +184,7 @@ end
 local function take_to_scope_op(dial, scope, include_report)
   return dial.lifecycle:take_op():and_then(Op.guard(function(connection, source_scope, report)
     return source_scope:move_op(connection, scope):map(function()
-      if include_report then
-        return connection, report
-      end
+      if include_report then return connection, report end
       return connection
     end)
   end))
@@ -244,9 +223,7 @@ function Dial:close_op(reason)
   local cancel = self.driver and self.driver:request_cancel_op(reason) or Op.always(true)
   return self.lifecycle:request_close_op(reason):and_then(Op.guard(function(first)
     if first and self.driver then
-      return cancel:map(function()
-        return true
-      end)
+      return cancel:map(function() return true end)
     end
     return Op.always(true)
   end))
@@ -276,6 +253,9 @@ function Dial:connect(target)
   return connection, result
 end
 
+
+
+
 local function new_op(endpoint, opts, strategy)
   opts = opts or {}
   local scope = IO.current_scope(opts, 'socket.dial_op')
@@ -297,9 +277,7 @@ local function new_op(endpoint, opts, strategy)
     role = 'socket_dial',
     closure = dial_closure(dial),
     causal_states = { dial.lifecycle.state },
-    run = function(driver_scope)
-      return driver(dial, driver_scope)
-    end,
+    run = function(driver_scope) return driver(dial, driver_scope) end,
   })
 end
 

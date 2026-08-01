@@ -31,9 +31,13 @@ local function negotiate_op(stream)
           return 'ping'
         end)
     end
-    return stream:writer():write_op('BAD\n'):and_then(stream:close_op('bad protocol')):map(function()
-      return nil, 'bad_protocol'
-    end)
+    return stream
+      :writer()
+      :write_op('BAD\n')
+      :and_then(stream:close_op('bad protocol'))
+      :map(function()
+        return nil, 'bad_protocol'
+      end)
   end))
 end
 

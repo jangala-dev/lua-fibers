@@ -106,9 +106,7 @@ local function test_pulse_losing_signal_branch_does_not_mutate()
   assert_eq(got, 'skip')
   local rt2 = new_runtime()
   local version
-  rt2:spawn_raw(function()
-    version = rt2:perform(p:version_op())
-  end, 'pulse-version')
+  rt2:spawn_raw(function() version = rt2:perform(p:version_op()) end, 'pulse-version')
   assert_status(rt2:run(), 'found')
   assert_eq(version, 0)
 end

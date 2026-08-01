@@ -1,11 +1,10 @@
 -- Lazy per-key committed locations for trusted resource implementations.
 
-local Journal = require('fibers.internal.kernel.journal')
-local Algebra = require('fibers.internal.kernel.algebra')
+local Facility = require('fibers.resource.authoring')
 
 local Keyspace = {}
 Keyspace.__index = Keyspace
-Keyspace.ABSENT = Algebra.ABSENT
+Keyspace.ABSENT = Facility.ABSENT
 
 function Keyspace.new(owner, spec)
   spec = spec or {}
@@ -25,24 +24,16 @@ end
 
 function Keyspace:location(key)
   local location = self.locations[key]
-  if location then
-    return location
-  end
+  if location then return location end
 
   local initial = self.initial[key]
   self.initial[key] = nil
-  if initial == nil and self.absent then
-    initial = self.absent
-  end
-  if self.clone_initial then
-    initial = self.clone_initial(initial)
-  end
-  location = Journal.new_location({
-    name = self.owner.name .. ':' .. tostring(key),
+  if initial == nil and self.absent then initial = self.absent end
+  if self.clone_initial then initial = self.clone_initial(initial) end
+  location = Facility.location(self.owner, key, {
     algebra = self.algebra,
     domain = self.domain,
     value = initial,
-    owner = self.owner,
     key = key,
     clone_value = self.clone_value,
     put_equal = self.put_equal,
@@ -54,12 +45,8 @@ end
 
 function Keyspace:keys()
   local keys = {}
-  for key in pairs(self.initial) do
-    keys[key] = true
-  end
-  for key in pairs(self.locations) do
-    keys[key] = true
-  end
+  for key in pairs(self.initial) do keys[key] = true end
+  for key in pairs(self.locations) do keys[key] = true end
   return keys
 end
 
@@ -72,18 +59,12 @@ function Keyspace:version()
 end
 
 function Keyspace:snapshot(decode, include)
-  decode = decode or function(value)
-    return value
-  end
-  include = include or function(value)
-    return value ~= self.absent
-  end
+  decode = decode or function(value) return value end
+  include = include or function(value) return value ~= self.absent end
   local values = {}
   for key in pairs(self:keys()) do
     local value = self:location(key).value
-    if include(value, key) then
-      values[key] = decode(value, key)
-    end
+    if include(value, key) then values[key] = decode(value, key) end
   end
   return values
 end
@@ -99,12 +80,8 @@ end
 function Keyspace:observation(spec)
   spec = spec or {}
   local field = spec.field or 'entries'
-  local decode = spec.decode or function(value)
-    return value
-  end
-  local include = spec.include or function()
-    return true
-  end
+  local decode = spec.decode or function(value) return value end
+  local include = spec.include or function() return true end
   local space = self
   return {
     collect = function(_, read)
@@ -113,9 +90,7 @@ function Keyspace:observation(spec)
         local location = space:location(key)
         local value = read(location)
         version = version + (location.version or 0)
-        if include(value, key) then
-          values[key] = decode(value, key)
-        end
+        if include(value, key) then values[key] = decode(value, key) end
       end
       return { [field] = values, version = version }
     end,

@@ -28,9 +28,7 @@ local function copy_state(st)
   }
 end
 
-local Add = StateMachine.select(
-  'countdown_latch.add',
-  function(st, payload)
+local Add = StateMachine.select('countdown_latch.add', function(st, payload)
     st = copy_state(st)
     local n = payload.n
     local new_count = st.count + n
@@ -42,19 +40,16 @@ local Add = StateMachine.select(
       generation = generation + 1
     end
     return Ready.write({ count = new_count, generation = generation }, true, new_count, generation)
-  end,
-  0,
-  function(payload)
-    integer(payload.n, 'countdown_latch add amount', 3)
-  end
-)
+end, 0, function(payload)
+  integer(payload.n, 'countdown_latch add amount', 3)
+end)
 
 local WaitForZero = StateMachine.select('countdown_latch.wait', function(st)
-  st = copy_state(st)
-  if st.count == 0 then
-    return Ready.write(st, true, st.generation)
-  end
-  return Wait
+    st = copy_state(st)
+    if st.count == 0 then
+      return Ready.write(st, true, st.generation)
+    end
+    return Wait
 end, 100)
 
 function CountdownLatch.new(opts, name)

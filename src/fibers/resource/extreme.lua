@@ -1,7 +1,6 @@
 -- Deterministic minimum/maximum selection over finite-map locations.
 
 local Facility = require('fibers.resource.authoring')
-local Operation = require('fibers.internal.operation')
 
 local Extreme = {}
 
@@ -21,13 +20,10 @@ local function select_extreme(opts, value)
         if seq ~= best_seq then
           better = maximum and seq > best_seq or not maximum and seq < best_seq
         else
-          local text, best_text = tostring(key), tostring(best.key)
-          better = maximum and text > best_text or not maximum and text < best_text
+          error('extreme selection requires unique (rank, sequence) pairs', 2)
         end
       end
-      if better then
-        best = { key = key, entry = entry }
-      end
+      if better then best = { key = key, entry = entry } end
     end
   end
   return best
@@ -35,26 +31,23 @@ end
 
 function Extreme.spec(opts)
   assert(opts.order == 'min' or opts.order == 'max', 'extreme selection requires min or max order')
-  return Facility.transition({
+  return Facility.rule.change({
     location = opts.location,
-    group = opts.group,
     demand = opts.demand or 'up',
-    accepts_supply = true,
-    supplies = 'down',
-    writes = true,
-    order = opts.transition_order or 0,
-    step = function(value, _, _, _, leaf)
+    visibility = 'together',
+    supply = 'down',
+    step = function(value)
       local witness = select_extreme(opts, value)
-      if not witness then
-        return nil
-      end
-      return {
-        patch = { kind = 'finite_map', ops = { { op = 'take', key = witness.key } } },
-        writes = true,
-        result = Operation.result_pack(leaf, witness.entry),
-      }
+      if not witness then return nil end
+      local patch = Facility.patch.map_remove(witness.key)
+      patch.ops[1].op = 'take'
+      return Facility.outcome_result(
+        patch,
+        opts.result or Facility.result.value,
+        witness.entry,
+        { location = opts.location, resource = opts.resource }
+      )
     end,
-    result = opts.result or Facility.result.value,
   })
 end
 

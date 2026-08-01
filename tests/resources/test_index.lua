@@ -362,6 +362,43 @@ local function test_each_remove_constrains_sibling_pop_without_supplying()
   assert_eq(ix.entries.c.value, 'C')
 end
 
+
+local function test_equal_rank_entries_use_insertion_sequence_without_tostring()
+  local rt = new_runtime()
+  local ix = Index.new('idx-equal-rank-sequence')
+  local key_a = setmetatable({}, { __tostring = function() error('key tostring must not order Index entries') end })
+  local key_b = setmetatable({}, { __tostring = function() error('key tostring must not order Index entries') end })
+  local rows
+
+  rt:spawn_raw(function()
+    rt:perform(ix:insert_op(key_a, 1, 'A'))
+    rt:perform(ix:insert_op(key_b, 1, 'B'))
+    rows = rt:perform(Op.together({
+      ix:pop_first_op(),
+      ix:pop_first_op(),
+    }))
+  end, 'root')
+
+  assert_status(rt:run(), 'found')
+  assert_eq(rows[1][1].key, key_a)
+  assert_eq(rows[1][1].value, 'A')
+  assert_eq(rows[2][1].key, key_b)
+  assert_eq(rows[2][1].value, 'B')
+end
+
+local function test_import_rejects_ambiguous_rank_sequence()
+  local ok, err = pcall(function()
+    Index.from({
+      { key = 'a', rank = 1, seq = 4, value = 'A' },
+      { key = 'b', rank = 1, seq = 4, value = 'B' },
+    }, 'idx-ambiguous-order')
+  end)
+  if ok then fail('ambiguous Index ordering should be rejected') end
+  if not tostring(err):find('unique %(rank, sequence%) pairs') then
+    fail('unexpected ambiguous-order error: ' .. tostring(err))
+  end
+end
+
 local tests = {
   test_two_parallel_pop_first_claims_get_distinct_concrete_values,
   test_parallel_pop_last_claims_get_distinct_tail_values,
@@ -378,6 +415,8 @@ local tests = {
   test_together_insert_supplies_pop_and_consumes_insert,
   test_each_parallel_pops_allocate_shared_committed_stock,
   test_each_remove_constrains_sibling_pop_without_supplying,
+  test_equal_rank_entries_use_insertion_sequence_without_tostring,
+  test_import_rejects_ambiguous_rank_sequence,
 }
 
 for i = 1, #tests do

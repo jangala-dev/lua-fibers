@@ -164,9 +164,7 @@ do
     Lifetime.inert(h)
     fibers.scope({ closure = FibersClosure.nursery({ allow_outward_move = false }) }, function(inner)
       fibers.perform(inner:admit_op(h))
-      local ok, err = pcall(function()
-        fibers.perform(inner:move_op(h, root))
-      end)
+      local ok, err = pcall(function() fibers.perform(inner:move_op(h, root)) end)
       denied = not ok and tostring(err):match('denied') ~= nil
     end)
   end)

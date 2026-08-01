@@ -25,6 +25,7 @@ local function copy(value)
   return out
 end
 
+
 local function positive_integer(value, fallback, name)
   if value == nil then
     return fallback
@@ -60,9 +61,7 @@ end
 local function public_status(self, fields)
   fields = fields or {}
   fields._fibers_embed_status = true
-  if self._status_marker then
-    fields[self._status_marker] = true
-  end
+  if self._status_marker then fields[self._status_marker] = true end
   fields.application = self
   fields.runtime = self.runtime
   fields.scope = self.scope
@@ -81,9 +80,7 @@ end
 
 local function unsupported_interest(self, interests)
   local supports = self.supports_interest or self.host.supports_interest
-  if type(supports) ~= 'function' then
-    return nil
-  end
+  if type(supports) ~= 'function' then return nil end
   for i = 1, #(interests or {}) do
     local interest = interests[i]
     local ok, reason = supports(self.host, interest, self)
@@ -104,15 +101,9 @@ function Application.new(fn, opts)
     error('Embed.Application option runtime was removed; use runtime_options', 2)
   end
   for _, key in ipairs({
-    'choice_seed',
-    'search_limit',
-    'search_total_limit',
-    'search_trail_limit',
-    'search_depth_limit',
-    'cycle_work_limit',
-    'cycle_focus_limit',
-    'instrumentation',
-    'quiet_deadlock',
+    'choice_seed', 'search_limit', 'search_total_limit', 'search_trail_limit',
+    'search_depth_limit', 'cycle_work_limit', 'cycle_focus_limit',
+    'instrumentation', 'quiet_deadlock',
   }) do
     if opts[key] ~= nil then
       error('Embed.Application runtime option ' .. key .. ' must be inside runtime_options', 2)
@@ -157,9 +148,7 @@ function Application.new(fn, opts)
     on_status = opts.on_status,
   }, Application)
 
-  if self._application_marker then
-    self[self._application_marker] = true
-  end
+  if self._application_marker then self[self._application_marker] = true end
   host.application = self
   runtime:spawn_raw(function()
     self._root_result = scope:try_run(fn)
@@ -238,16 +227,10 @@ function Application:_complete(runtime_status, runtime_error)
   result.scope = self.scope
   self._result = result
   self._settled = true
-  if type(self._detach_scheduler) == 'function' then
-    self:_detach_scheduler()
-  end
-  if type(self.host.mark_done) == 'function' then
-    self.host:mark_done(result)
-  end
+  if type(self._detach_scheduler) == 'function' then self:_detach_scheduler() end
+  if type(self.host.mark_done) == 'function' then self.host:mark_done(result) end
   if self._owns_host then
-    if type(self.host.close) == 'function' then
-      self.host:close()
-    end
+    if type(self.host.close) == 'function' then self.host:close() end
   end
 
   return public_status(self, {
@@ -260,19 +243,20 @@ end
 
 local function advance_limits(self, opts)
   opts = opts or {}
-  for _, key in ipairs({
-    'max_steps_per_turn',
-    'max_work_per_step',
-    'max_external_per_turn',
-    'max_seconds_per_turn',
-  }) do
+  for _, key in ipairs({ 'max_steps_per_turn', 'max_work_per_step', 'max_external_per_turn', 'max_seconds_per_turn' }) do
     if opts[key] ~= nil then
       error('Application:advance option ' .. key .. ' was removed; use the short per-call name', 3)
     end
   end
-  local max_steps = positive_integer(opts.max_steps, self.max_steps_per_turn, 'advance max_steps')
-  local max_work = positive_integer(opts.max_work, self.max_work_per_step, 'advance max_work')
-  local max_external = positive_integer(opts.max_external, self.max_external_per_turn, 'advance max_external')
+  local max_steps =
+    positive_integer(opts.max_steps, self.max_steps_per_turn, 'advance max_steps')
+  local max_work =
+    positive_integer(opts.max_work, self.max_work_per_step, 'advance max_work')
+  local max_external = positive_integer(
+    opts.max_external,
+    self.max_external_per_turn,
+    'advance max_external'
+  )
 
   local horizon = opts.horizon
   if horizon ~= nil then
@@ -281,7 +265,11 @@ local function advance_limits(self, opts)
       error('advance horizon must be a number', 3)
     end
   else
-    local seconds = non_negative_number(opts.max_seconds, self.max_seconds_per_turn, 'advance max_seconds')
+    local seconds = non_negative_number(
+      opts.max_seconds,
+      self.max_seconds_per_turn,
+      'advance max_seconds'
+    )
     horizon = self:now() + seconds
   end
   return max_steps, max_work, max_external, horizon
@@ -327,9 +315,7 @@ function Application:advance(opts)
 
   local max_steps, max_work, max_external, horizon = advance_limits(self, opts)
   self._advancing = true
-  if type(self.host.consume_wake) == 'function' then
-    self.host:consume_wake('advance')
-  end
+  if type(self.host.consume_wake) == 'function' then self.host:consume_wake('advance') end
 
   local external_count = 0
   local ok_external, external_or_error = Protected.pcall(function()
@@ -344,9 +330,7 @@ function Application:advance(opts)
   end
   external_count = external_or_error or 0
   if external_count > 0 then
-    if type(self.host.consume_wake) == 'function' then
-      self.host:consume_wake('external')
-    end
+    if type(self.host.consume_wake) == 'function' then self.host:consume_wake('external') end
   end
 
   local last_status
@@ -417,9 +401,7 @@ function Application:advance(opts)
         end
         external_count = external_count + (delivered or 0)
         if (delivered or 0) > 0 then
-          if type(self.host.consume_wake) == 'function' then
-            self.host:consume_wake('external')
-          end
+          if type(self.host.consume_wake) == 'function' then self.host:consume_wake('external') end
         end
         immediate = (delivered or 0) > 0
       elseif deadline ~= nil and deadline <= self:now() then
@@ -463,13 +445,10 @@ function Application:advance(opts)
   })
 end
 
+
 function Application:close()
-  if self._closed then
-    return true
-  end
-  if type(self._detach_scheduler) == 'function' then
-    self:_detach_scheduler()
-  end
+  if self._closed then return true end
+  if type(self._detach_scheduler) == 'function' then self:_detach_scheduler() end
   self._closed = true
   if self._owns_host and type(self.host.close) == 'function' then
     self.host:close()

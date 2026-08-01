@@ -170,18 +170,13 @@ end
 
 local function test_cell_transition_payload_validation()
   local s = StateMachine.new(0, 'cell-validation')
-  local checked = StateMachine.update(
-    'test.validation',
-    function(v, payload)
-      return StateMachine.Ready.write(v + payload.n, true)
-    end,
-    nil,
-    function(payload)
-      if type(payload.n) ~= 'number' or payload.n <= 0 then
-        error('n must be positive', 2)
-      end
+  local checked = StateMachine.update('test.validation', function(v, payload)
+    return StateMachine.Ready.write(v + payload.n, true)
+  end, nil, function(payload)
+    if type(payload.n) ~= 'number' or payload.n <= 0 then
+      error('n must be positive', 2)
     end
-  )
+  end)
   local ok = pcall(function()
     s:transition_op(checked, { n = 0 })
   end)

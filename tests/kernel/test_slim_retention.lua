@@ -87,14 +87,10 @@ do
     end, 'temporary-owner', scope)
     while true do
       local st = rt:run()
-      if st.tag == 'idle' or st.tag == 'quiescent' then
-        break
-      end
+      if st.tag == 'idle' or st.tag == 'quiescent' then break end
     end
     local snapshot
-    rt:spawn_raw(function()
-      snapshot = rt:perform(scope:inspect_op())
-    end, 'empty-store-snapshot')
+    rt:spawn_raw(function() snapshot = rt:perform(scope:inspect_op()) end, 'empty-store-snapshot')
     rt:run()
     eq(snapshot.custody_count, 0, 'completed Scope should retain no Lifetime records under custody')
     rt, scope, item, snapshot = nil, nil, nil, nil

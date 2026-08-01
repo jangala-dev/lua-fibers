@@ -42,12 +42,8 @@ end
 local function seed_lease(lease, subject, holders)
   local rt = new_runtime()
   local ops = {}
-  for holder, mode in pairs(holders) do
-    ops[#ops + 1] = lease:acquire_op(subject, mode, holder)
-  end
-  rt:spawn_raw(function()
-    rt:perform(#ops == 1 and ops[1] or Op.each(ops))
-  end, 'lease-seed')
+  for holder, mode in pairs(holders) do ops[#ops + 1] = lease:acquire_op(subject, mode, holder) end
+  rt:spawn_raw(function() rt:perform(#ops == 1 and ops[1] or Op.each(ops)) end, 'lease-seed')
   assert_status(rt:run(), 'found', 'lease seed')
 end
 
@@ -322,9 +318,9 @@ local function test_pool_close_constrains_acquire_under_together_and_each()
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(pool:add_op('a', 'A'):and_then(Op.together({
-      pool:close_op('shutdown'),
-      pool:acquire_op('u'):or_else(Op.always('closed')),
-    })))
+        pool:close_op('shutdown'),
+        pool:acquire_op('u'):or_else(Op.always('closed')),
+      })))
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'closed')
@@ -337,9 +333,9 @@ local function test_pool_close_constrains_acquire_under_together_and_each()
   local rows2
   rt2:spawn_raw(function()
     rows2 = rt2:perform(pool2:add_op('a', 'A'):and_then(Op.each({
-      pool2:close_op('shutdown'),
-      pool2:acquire_op('u'):or_else(Op.always('closed')),
-    })))
+        pool2:close_op('shutdown'),
+        pool2:acquire_op('u'):or_else(Op.always('closed')),
+      })))
   end, 'root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], 'closed')
@@ -347,6 +343,7 @@ local function test_pool_close_constrains_acquire_under_together_and_each()
   assert_eq(perform_op(pool2.items:get_op('a')).item, 'A')
   assert_eq(pool2.idle.entries.a.value, 'a')
 end
+
 
 local tests = {
   test_keyed_together_put_supplies_get,

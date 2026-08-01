@@ -32,19 +32,15 @@ local function reason_op(mailbox)
 end
 
 local function remember_reason_op(mailbox, reason)
-  if reason == nil then
-    return Op.always(true)
-  end
+  if reason == nil then return Op.always(true) end
 
   local remember = mailbox._reason:expect_op(NO_REASON):and_then(mailbox._reason:write_op(reason))
 
-  return remember:or_else(mailbox._reason
-    :wait_until_op(function(value)
-      return value ~= NO_REASON
-    end)
-    :map(function()
-      return true
-    end))
+  return remember:or_else(mailbox._reason:wait_until_op(function(value)
+    return value ~= NO_REASON
+  end):map(function()
+    return true
+  end))
 end
 
 local function drop_op(mailbox)
@@ -119,8 +115,8 @@ function Tx:send_op(value)
   local send = self._handle:active_op():and_then(put)
 
   local inactive = self._handle:inactive_op():and_then(reason_op(mailbox):map(function(reason)
-    return nil, reason
-  end))
+      return nil, reason
+    end))
 
   return send:or_else(inactive)
 end
@@ -135,9 +131,7 @@ end
 function Tx:close_op(reason)
   local mailbox = self._mailbox
   return self._handle:close_op():and_then(Op.guard(function(closed)
-    if not closed then
-      return Op.always(true)
-    end
+    if not closed then return Op.always(true) end
     return remember_reason_op(mailbox, reason):map(function()
       return true
     end)
@@ -148,15 +142,17 @@ function Tx:why_op()
   return reason_op(self._mailbox)
 end
 
+
 function Tx:dropped_op()
   return self._mailbox._dropped:read_op()
 end
 
+
 function Rx:recv_op()
   local mailbox = self._mailbox
   local closed = mailbox._senders:zero_op():and_then(reason_op(mailbox):map(function(reason)
-    return nil, reason
-  end))
+      return nil, reason
+    end))
   return mailbox._messages:get_op():or_else(closed)
 end
 
@@ -164,9 +160,17 @@ function Rx:why_op()
   return reason_op(self._mailbox)
 end
 
+
 function Rx:dropped_op()
   return self._mailbox._dropped:read_op()
 end
+
+
+
+
+
+
+
 
 Mailbox.Tx = Tx
 Mailbox.Rx = Rx

@@ -35,12 +35,8 @@ end
 local function seed_lease(lease, subject, holders)
   local rt = new_runtime()
   local ops = {}
-  for holder, mode in pairs(holders) do
-    ops[#ops + 1] = lease:acquire_op(subject, mode, holder)
-  end
-  rt:spawn_raw(function()
-    rt:perform(#ops == 1 and ops[1] or Op.each(ops))
-  end)
+  for holder, mode in pairs(holders) do ops[#ops + 1] = lease:acquire_op(subject, mode, holder) end
+  rt:spawn_raw(function() rt:perform(#ops == 1 and ops[1] or Op.each(ops)) end)
   assert_status(rt:run(), 'found', 'lease seed')
 end
 
@@ -134,6 +130,7 @@ local function test_inspection_snapshots_are_detached()
   assert_eq(c.versions.s + 100, versions.s, 'version snapshot must be detached')
   assert_eq(c.version, version, 'snapshot mutation must not change aggregate version')
 end
+
 
 for _, t in ipairs({
   test_readers_merge_and_writer_conflicts,

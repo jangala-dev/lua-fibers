@@ -35,11 +35,10 @@ local function merge_fields(first, second)
   for key, value in pairs(second) do
     local present = merged[key]
     if present ~= nil and present ~= value then
-      return nil,
-        {
-          kind = 'effect_conflict',
-          message = 'conflicting radio setting: ' .. tostring(key),
-        }
+      return nil, {
+        kind = 'effect_conflict',
+        message = 'conflicting radio setting: ' .. tostring(key),
+      }
     end
     merged[key] = value
   end
@@ -66,11 +65,10 @@ ApplyRadioConfig = Effect.kind({
     -- Pure and replayable: reject unsupported candidate worlds, but do not
     -- reserve the driver or touch the radio here.
     if payload.config.channel > driver_capabilities.highest_channel then
-      return nil,
-        {
-          kind = 'unsupported_radio_channel',
-          channel = payload.config.channel,
-        }
+      return nil, {
+        kind = 'unsupported_radio_channel',
+        channel = payload.config.channel,
+      }
     end
 
     return {
@@ -113,7 +111,9 @@ fibers.run(function()
   -- The complete left branch is defeated.  Neither its Cell write nor either
   -- driver obligation survives into the fallback world.
   fallback = fibers.perform(
-    configure_radio_op(6, 4):and_then(Op.never()):or_else(Op.always('kept existing configuration'))
+    configure_radio_op(6, 4)
+      :and_then(Op.never())
+      :or_else(Op.always('kept existing configuration'))
   )
 
   assert(desired.value.channel == 1 and desired.value.power == 1)
@@ -122,7 +122,10 @@ fibers.run(function()
   -- Channel 99 is rejected by pure effect preparation.  Search considers the
   -- other coherent world, whose two same-key obligations merge and discharge
   -- as one driver call.
-  committed = fibers.perform(Op.choice(configure_radio_op(99, 2), configure_radio_op(11, 3)))
+  committed = fibers.perform(Op.choice(
+    configure_radio_op(99, 2),
+    configure_radio_op(11, 3)
+  ))
 end)
 
 assert(fallback == 'kept existing configuration')

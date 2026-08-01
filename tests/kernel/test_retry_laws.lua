@@ -135,10 +135,7 @@ do
     absent(Op.together({ ch:get_op(), ch:put_op('payload') })),
     'an internal rendezvous in together is a current world'
   )
-  assert_truthy(
-    absent(Op.each({ ch:get_op(), ch:put_op('payload') })),
-    'each cannot close its own rendezvous'
-  )
+  assert_truthy(absent(Op.each({ ch:get_op(), ch:put_op('payload') })), 'each cannot close its own rendezvous')
   assert_truthy(absent(Op.together({ ch:get_op() })), 'an unpaired rendezvous in together is absent')
 end
 
@@ -161,10 +158,7 @@ do
   end, 'signal-wait')
   local st = pending:run()
   assert_status(st, 'pending')
-  assert_truthy(
-    st.interests and #st.interests == 1,
-    'unhandled external absence should retain one wake interest'
-  )
+  assert_truthy(st.interests and #st.interests == 1, 'unhandled external absence should retain one wake interest')
 end
 
 -- Driver turns retain scheduler order, but positive-before-fallback is a

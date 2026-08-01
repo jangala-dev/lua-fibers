@@ -1,6 +1,5 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local StateMachine = require('fibers.resource.machine')
 local Interest = require('fibers.embed.external').Interest
 local Direct = require('fibers.internal.direct')
 
@@ -27,22 +26,10 @@ function Clock.new(name)
   return c
 end
 
--- The default monotonic clock used by the sleep vocabulary and facilities which
--- do not need an explicitly injected clock.
 function Clock.default()
-  if not default_clock then
-    default_clock = Clock.new('default-clock')
-  end
+  if not default_clock then default_clock = Clock.new('default-clock') end
   return default_clock
 end
-
-local At = StateMachine.isolated_query('clock.at', function(_, deadline, context)
-  local now = context.now()
-  if now < deadline then
-    return StateMachine.Wait
-  end
-  return StateMachine.Ready.same(now)
-end)
 
 function Clock:now_op()
   return Facility.op(self._now_spec)
@@ -50,16 +37,20 @@ end
 
 function Clock:at_op(deadline)
   deadline = finite_number(deadline, 'Clock:at_op deadline')
-  return Facility.external_wait(self, self._location, At, {
+  return Facility._clock_wait({
+    location = self._location,
     payload = deadline,
-    interest = Interest.timer(deadline, self),
-    absence_check = function(rt)
-      return rt:now() < deadline
+    resource = self,
+    wake = Interest.timer(deadline, self),
+    absence_check = function(rt) return rt:now() < deadline end,
+    step = function(_, target, context)
+      local now = context.now()
+      if now < target then return nil end
+      return Facility.outcome(nil, now)
     end,
   })
 end
 
--- Relative time is explicit algebra over one activation-local observation.
 function Clock:after_op(delay)
   delay = finite_number(delay, 'Clock:after_op delay')
   return self:now_op():and_then(Op.guard(function(now)

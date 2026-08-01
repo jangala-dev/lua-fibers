@@ -171,7 +171,10 @@ do
   deliver(rt, q, 'kept')
   local got, remaining
   rt:spawn_raw(function()
-    got = rt:perform(Op.choice(q:next_op():and_then(Op.never()), Op.always('winner')))
+    got = rt:perform(Op.choice(
+      q:next_op():and_then(Op.never()),
+      Op.always('winner')
+    ))
     remaining = rt:perform(q:next_op())
   end, 'events-loser-consumer')
   assert_status(rt:run(), 'found')
@@ -264,16 +267,18 @@ end
 
 -- External feeds are resource-generic capabilities rather than resource-kind checks.
 do
-  local ExternalFeed = require('fibers.embed.external').Feed
+  local ExternalModule = require('fibers.embed.external')
+  local ExternalFeed = ExternalModule.Feed
+  local Facility = require('fibers.resource.authoring')
   local rt = Runtime.new()
-  local resource = {
-    _fibers_external_deliver = function(self, value)
-      self.value = value
-    end,
-    _fibers_external_clear = function(self)
-      self.value = nil
-    end,
-  }
+  local resource = { name = 'generic-external-resource' }
+  local location = Facility.location(resource, 'value', { algebra = 'replace', value = nil })
+  ExternalModule.attach(
+    resource,
+    location,
+    function(_, _, value) resource.value = value; return value end,
+    function() resource.value = nil; return nil end
+  )
   local feed = ExternalFeed.for_resource(rt, resource)
   feed:set('value')
   assert_eq(resource.value, 'value')
@@ -286,6 +291,7 @@ do
   end)
   assert_eq(ok, false, 'external feed must remain bound to its runtime')
 end
+
 
 -- Standard externally fed resources remain distinct kinds and feed lookup is stable.
 do

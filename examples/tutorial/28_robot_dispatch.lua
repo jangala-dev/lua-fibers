@@ -21,9 +21,9 @@ local perform = fibers.perform
 local spawn = fibers.spawn
 
 local function mission_op(field_unit, mission)
-  return field_unit.online
-    :expect_op(true)
-    :and_then(field_unit.commands:put_op(mission):and_then(field_unit.reports:get_op()))
+  return field_unit.online:expect_op(true):and_then(
+    field_unit.commands:put_op(mission):and_then(field_unit.reports:get_op())
+  )
 end
 
 local unit_is_online = true

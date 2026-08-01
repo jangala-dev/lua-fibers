@@ -122,10 +122,7 @@ do
   assert_eq(pure.family, 'pure')
 
   local available = AutoIO.available()
-  assert_truthy(
-    type(available) == 'table' and #available > 0,
-    'AutoIO.available should list native I/O backends'
-  )
+  assert_truthy(type(available) == 'table' and #available > 0, 'AutoIO.available should list native I/O backends')
 
   assert_eq(manual.create_pipe, nil, 'manual host should expose only injected facilities')
 

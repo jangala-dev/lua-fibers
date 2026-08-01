@@ -16,9 +16,7 @@ local DEFAULT_CONNECT_TIMEOUT = 30.0
 local DEFAULT_MAXIMUM_CANDIDATES = 64
 
 local function finite_nonnegative(value, fallback, name, level)
-  if value == nil then
-    return fallback
-  end
+  if value == nil then return fallback end
   value = tonumber(value)
   if not value or value ~= value or value == math.huge or value == -math.huge or value < 0 then
     error(name .. ' must be a finite non-negative number', level or 3)
@@ -27,9 +25,7 @@ local function finite_nonnegative(value, fallback, name, level)
 end
 
 local function positive_integer(value, fallback, name, level)
-  if value == nil then
-    return fallback
-  end
+  if value == nil then return fallback end
   value = tonumber(value)
   if not value or value ~= math.floor(value) or value < 1 then
     error(name .. ' must be a positive integer', level or 3)
@@ -82,8 +78,7 @@ local function destination_ordering(opts, host)
   if host and type(host.sort_destination_addresses) == 'function' then
     return function(addresses, endpoint, options)
       return host:sort_destination_addresses(addresses, endpoint, options)
-    end,
-      'host'
+    end, 'host'
   end
   error(
     IOError.unsupported('socket', 'sort_destination_addresses', {
@@ -143,8 +138,9 @@ function Named.run(dial, driver_scope, opts)
   dial.started_at = started_at
 
   local strategy = State.new(dial.endpoint, strategy_opts, host, started_at)
-  local query =
-    perform(Resolver.resolve_op(dial.endpoint, resolver_options(dial, driver_scope, strategy_opts, host)))
+  local query = perform(
+    Resolver.resolve_op(dial.endpoint, resolver_options(dial, driver_scope, strategy_opts, host))
+  )
 
   while true do
     local action = perform(strategy:step_op(query, driver_scope))
@@ -153,7 +149,8 @@ function Named.run(dial, driver_scope, opts)
         nil,
         strategy:report('connected', nil, action.completed_at, action.state)
     elseif action.kind == 'failed' or action.kind == 'deadline' then
-      local err = action.kind == 'deadline' and strategy:deadline_error(action.state)
+      local err = action.kind == 'deadline'
+          and strategy:deadline_error(action.state)
         or strategy:terminal_error(action.state)
       return nil, err, strategy:report('failed', err, action.completed_at, action.state)
     end

@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Op = require('fibers.op')
@@ -14,28 +9,21 @@ local Rendezvous = require('fibers.resource.rendezvous')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
 local function retained_sessions(runtime)
   local count = 0
   for i = 1, #runtime.engine.pending do
-    if runtime.engine.pending[i]._retained_search then
-      count = count + 1
-    end
+    if runtime.engine.pending[i]._retained_search then count = count + 1 end
   end
   return count
 end
 
 local function rejects(opts, name)
   local ok = pcall(Runtime.new, opts)
-  if ok then
-    error(name .. ' should reject a non-positive limit', 2)
-  end
+  if ok then error(name .. ' should reject a non-positive limit', 2) end
 end
 
 rejects({ search_total_limit = 0 }, 'search_total_limit')
@@ -51,17 +39,13 @@ local function atomic_dispatch(opts, n)
   for worker = 1, n do
     workers[worker] = Rendezvous.new('search-limit-worker-' .. worker)
     local id = worker
-    rt:spawn_raw(function()
-      rt:perform(workers[id]:get_op())
-    end, 'worker-' .. id)
+    rt:spawn_raw(function() rt:perform(workers[id]:get_op()) end, 'worker-' .. id)
   end
   rt:spawn_raw(function()
     local jobs = {}
     for job = 1, n do
       local alternatives = {}
-      for worker = 1, n do
-        alternatives[worker] = workers[worker]:put_op(job)
-      end
+      for worker = 1, n do alternatives[worker] = workers[worker]:put_op(job) end
       jobs[job] = Op.choice(alternatives)
     end
     rt:perform(Op.each(jobs))
@@ -81,8 +65,7 @@ for _, row in ipairs({
   eq(retained_sessions(rt), 0, 'hard limits must not retain unresumable sessions')
 end
 
-local rt, st =
-  atomic_dispatch({ search_total_limit = 1000, search_depth_limit = 100, search_trail_limit = 10000 }, 7)
+local rt, st = atomic_dispatch({ search_total_limit = 1000, search_depth_limit = 100, search_trail_limit = 10000 }, 7)
 eq(st.tag, 'found', 'generous hard limits should preserve valid search')
 eq(rt:run().tag, 'idle')
 
@@ -98,9 +81,7 @@ do
   local focus_rt = Runtime.new({ cycle_focus_limit = 2 })
   for i = 1, 8 do
     local blocked = Rendezvous.new('cycle-focus-' .. i)
-    focus_rt:spawn_raw(function()
-      focus_rt:perform(blocked:get_op())
-    end, 'focus-' .. i)
+    focus_rt:spawn_raw(function() focus_rt:perform(blocked:get_op()) end, 'focus-' .. i)
   end
   local focus_status = focus_rt:run()
   eq(focus_status.tag, 'pending')
@@ -110,18 +91,14 @@ end
 
 do
   local bounded, result = Runtime.new(), nil
-  bounded:spawn_raw(function()
-    result = bounded:perform(Op.choice(Op.always('a'), Op.always('b')))
-  end, 'bounded')
+  bounded:spawn_raw(function() result = bounded:perform(Op.choice(Op.always('a'), Op.always('b'))) end, 'bounded')
   eq(bounded:step({ max_work = 1 }).kind, 'started')
   local budget = bounded:step({ max_work = 1 })
   eq(budget.tag, 'pending')
   eq(budget.kind, 'budget')
   eq(budget.reason, 'search_quantum')
   for _ = 1, 20 do
-    if bounded:step({ max_work = 1 }).tag == 'found' then
-      break
-    end
+    if bounded:step({ max_work = 1 }).tag == 'found' then break end
   end
   bounded:run()
   assert(result == 'a' or result == 'b')

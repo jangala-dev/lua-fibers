@@ -23,42 +23,21 @@ end
 local Scope = {}
 Scope.__index = function(self, key)
   local method = Scope[key]
-  if method ~= nil then
-    return method
-  end
+  if method ~= nil then return method end
   local life = rawget(self, '_lifetime')
-  if not life then
-    return nil
-  end
-  if key == 'name' then
-    return life.name
-  end
-  if key == 'runtime' then
-    return life.runtime
-  end
-  if key == 'closure' then
-    return life.closure
-  end
-  if key == 'offers' then
-    return life.offers
-  end
-  if key == 'interrupt' then
-    return life.interrupt
-  end
-  if key == 'cancellation' then
-    return life.cancellation
-  end
+  if not life then return nil end
+  if key == 'name' then return life.name end
+  if key == 'runtime' then return life.runtime end
+  if key == 'closure' then return life.closure end
+  if key == 'offers' then return life.offers end
+  if key == 'interrupt' then return life.interrupt end
+  if key == 'cancellation' then return life.cancellation end
   return nil
 end
 Scope.__newindex = function(self, key, value)
-  if
-    key == 'runtime'
-    or key == 'closure'
-    or key == 'offers'
-    or key == 'interrupt'
-    or key == 'cancellation'
-    or key == 'parent'
-  then
+  if key == 'runtime' or key == 'closure' or key == 'offers'
+      or key == 'interrupt' or key == 'cancellation'
+      or key == 'parent' then
     error('Scope capability fields are read-only views of its Lifetime', 2)
   end
   rawset(self, key, value)
@@ -102,9 +81,7 @@ end
 
 local function item_kind(item)
   local life = Lifetime.of(item)
-  if not life then
-    return nil
-  end
+  if not life then return nil end
   return life.has_body and 'task' or 'resource'
 end
 
@@ -133,9 +110,7 @@ function Scope.new(name, opts)
       standalone_boundary = true,
     })
   end
-  if opts.runtime then
-    lifetime:bind_runtime(opts.runtime)
-  end
+  if opts.runtime then lifetime:bind_runtime(opts.runtime) end
   lifetime.closure = Closure.combine(lifetime.closure, opts.closure)
   lifetime.offers = lifetime.offers or opts.offers or new_offers((name or id) .. '-offers')
   return setmetatable({
@@ -145,6 +120,7 @@ function Scope.new(name, opts)
     _fibers_scope = true,
   }, Scope)
 end
+
 
 function Scope.for_lifetime(lifetime)
   if not Lifetime.is(lifetime) then
@@ -166,9 +142,7 @@ function Scope:parent_scope()
     parent = lifetime.runtime:_lifetime_store():current_custodian(lifetime)
   end
   parent = parent or lifetime:_construction_parent_node()
-  if not parent or parent == lifetime then
-    return nil
-  end
+  if not parent or parent == lifetime then return nil end
   return Scope.for_lifetime(parent)
 end
 
@@ -178,13 +152,9 @@ end
 
 function Scope:_bind_runtime(runtime)
   runtime = runtime or self._lifetime.runtime or Runtime.current()
-  if not runtime then
-    error('Scope requires a current Runtime', 2)
-  end
+  if not runtime then error('Scope requires a current Runtime', 2) end
   local parent = self:parent_scope()
-  if parent then
-    parent:_bind_runtime(runtime)
-  end
+  if parent then parent:_bind_runtime(runtime) end
   self._lifetime:bind_runtime(runtime)
   return runtime
 end
@@ -253,19 +223,17 @@ function Scope:spawn_op(fn, opts)
   end
   opts = type(opts) == 'string' and { name = opts } or (opts or {})
   local parent = self
-  local task = Task._new(
-    function(task_handle)
-      return parent:_run_child_body(fn, task_handle, opts)
-    end,
-    opts.name,
-    self,
-    {
-      closure = Closure.running(opts.closure or self.closure),
-    }
-  )
-  return self:admit_op(task):and_then(task:spawn_effect_op()):map(function()
-    return task
-  end)
+  local task = Task._new(function(task_handle)
+    return parent:_run_child_body(fn, task_handle, opts)
+  end, opts.name, self, {
+    closure = Closure.running(opts.closure or self.closure),
+  })
+  return self
+    :admit_op(task)
+    :and_then(task:spawn_effect_op())
+    :map(function()
+      return task
+    end)
 end
 
 function Scope:spawn(fn, opts)
@@ -305,8 +273,8 @@ function Scope:offer_op(item, target, terms)
   }
   local put_offer = target_sc.offers:put_op(offer)
   return self:move_op(item, target_sc):and_then(put_offer:map(function()
-    return offer
-  end))
+      return offer
+    end))
 end
 
 function Scope:accept_op(filter)
@@ -358,10 +326,10 @@ local function grant_can_op(scope, item, right)
   end))
 end
 
+
 function Scope:can_op(item, right)
   right = right or 'use'
-  return self
-    :_store()
+  return self:_store()
     :custody_can_op(self, item, right, { allow_closing = (self._closure_depth or 0) > 0 })
     :and_then(Op.guard(function(ok, phase)
       if ok then
@@ -409,9 +377,11 @@ function Scope:grant_op(item, holder, rights, opts)
       return ok and Op.always(true) or Op.never()
     end))
   end
-  return Op.each(ops):and_then(holder:admit_op(grant)):map(function()
-    return grant
-  end)
+  return Op.each(ops)
+    :and_then(holder:admit_op(grant))
+    :map(function()
+      return grant
+    end)
 end
 
 function Scope:close_op(item, reason)
@@ -574,9 +544,7 @@ end
 Scope.Report = ScopeReport
 Scope.is = is_scope
 function Scope.require(value, label)
-  if is_scope(value) then
-    return value
-  end
+  if is_scope(value) then return value end
   error((label or 'value') .. ' must be a Scope', 2)
 end
 function Scope.is_report(x)

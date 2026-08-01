@@ -4,12 +4,8 @@ local Direct = require('fibers.internal.direct')
 
 local Counter = {}
 Counter.__index = function(self, key)
-  if key == 'value' then
-    return self._location.value
-  end
-  if key == 'version' then
-    return self._location.version
-  end
+  if key == 'value' then return self._location.value end
+  if key == 'version' then return self._location.version end
   return Counter[key]
 end
 
@@ -25,9 +21,7 @@ end
 local function create(initial, minimum, maximum, name)
   integer(initial, 'counter initial value', 3)
   integer(minimum, 'counter minimum', 3)
-  if maximum ~= nil then
-    integer(maximum, 'counter maximum', 3)
-  end
+  if maximum ~= nil then integer(maximum, 'counter maximum', 3) end
   if initial < minimum or maximum and initial > maximum then
     error('counter initial value is outside its range', 3)
   end
@@ -52,9 +46,7 @@ end
 
 function Counter.bounded(capacity, name)
   integer(capacity, 'counter capacity', 2)
-  if capacity < 0 then
-    error('counter capacity must be non-negative', 2)
-  end
+  if capacity < 0 then error('counter capacity must be non-negative', 2) end
   return create(capacity, 0, capacity, name)
 end
 
@@ -66,75 +58,67 @@ function Counter:read_op()
   return self._read_op
 end
 
+
 function Counter:changed_op(version)
   return Facility.bind(self._changed_spec, version)
 end
 
+
 function Counter:adjust_op(amount)
   integer(amount, 'counter adjustment', 2)
-  if amount == 0 then
-    return Op.always(self.value)
-  end
-  return Facility.op(
-    Facility.write(self._location, Facility.change.add(amount), Facility.result.boolean, self)
-  )
+  if amount == 0 then return Op.always(self.value) end
+  return Facility.op(Facility.write(self._location, Facility.patch.add(amount), Facility.result.boolean, self))
 end
+
 
 function Counter:add_op(amount)
   integer(amount, 'counter addition', 2)
-  if amount < 0 then
-    error('counter addition must be non-negative', 2)
-  end
+  if amount < 0 then error('counter addition must be non-negative', 2) end
   return self:adjust_op(amount)
 end
 
+
 function Counter:bump_op()
-  return Facility.op(Facility.write(self._location, Facility.change.add(1), Facility.result.value, self))
+  return Facility.op(Facility.write(self._location, Facility.patch.add(1), Facility.result.value, self))
 end
+
 
 function Counter:give_op(amount)
   return self:add_op(amount or 1)
 end
 
+
 function Counter:take_op(amount)
   amount = amount or 1
   integer(amount, 'counter take', 2)
-  if amount < 0 then
-    error('counter take must be non-negative', 2)
-  end
-  if amount == 0 then
-    return Op.always(self.value)
-  end
-  return Facility.op(Facility.transition({
+  if amount < 0 then error('counter take must be non-negative', 2) end
+  if amount == 0 then return Op.always(self.value) end
+  return Facility.op(Facility.rule.change({
     location = self._location,
     resource = self,
     demand = 'up',
-    accepts_supply = true,
-    supplies = 'down',
-    writes = true,
+    visibility = 'together',
+    supply = 'down',
     step = function(current)
-      if current < self.min + amount then
-        return nil
-      end
-      return Facility.outcome(Facility.change.add(-amount), true)
+      if current < self.min + amount then return nil end
+      return Facility.outcome(Facility.patch.add(-amount), true)
     end,
   }))
 end
 
+
 local function predicate_op(self, predicate, threshold, demand)
   integer(threshold, 'counter threshold', 3)
-  return Facility.op(Facility.transition({
+  return Facility.op(Facility.rule.inspect({
     location = self._location,
     resource = self,
     demand = demand,
-    accepts_supply = true,
+    visibility = 'together',
     step = function(current)
       local ready = predicate == 'ge' and current >= threshold
         or predicate == 'le' and current <= threshold
         or predicate == 'eq' and current == threshold
-      if not ready then
-        return nil
-      end
+      if not ready then return nil end
       return Facility.outcome(nil, current)
     end,
   }))
@@ -144,23 +128,24 @@ function Counter:at_least_op(value)
   return predicate_op(self, 'ge', value, 'up')
 end
 
+
 function Counter:at_most_op(value)
   return predicate_op(self, 'le', value, 'down')
 end
+
 
 function Counter:equal_op(value)
   return predicate_op(self, 'eq', value)
 end
 
+
 function Counter:zero_op()
   return self:equal_op(0)
 end
 
+
 Counter.Kind = Kind
 
-Direct.install(
-  Counter,
-  { 'read', 'changed', 'adjust', 'add', 'bump', 'give', 'take', 'at_least', 'at_most', 'equal', 'zero' }
-)
+Direct.install(Counter, { 'read', 'changed', 'adjust', 'add', 'bump', 'give', 'take', 'at_least', 'at_most', 'equal', 'zero' })
 
 return Counter

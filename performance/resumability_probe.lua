@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Runtime = require('fibers.runtime')
@@ -22,17 +17,13 @@ local function run(count, max_work)
   for i = 1, count do
     workers[i] = Rendezvous.new('resume-probe-' .. count .. '-' .. i)
     local worker = workers[i]
-    rt:spawn_raw(function()
-      rt:perform(worker:get_op())
-    end)
+    rt:spawn_raw(function() rt:perform(worker:get_op()) end)
   end
   rt:spawn_raw(function()
     local jobs = {}
     for job = 1, count do
       local alternatives = {}
-      for worker = 1, count do
-        alternatives[worker] = workers[worker]:put_op(job)
-      end
+      for worker = 1, count do alternatives[worker] = workers[worker]:put_op(job) end
       jobs[job] = Op.choice(alternatives)
     end
     rt:perform(Op.each(jobs))
@@ -43,9 +34,7 @@ local function run(count, max_work)
     for _ = 1, 100000 do
       turns = turns + 1
       local status = rt:step({ max_work = max_work })
-      if status.tag == 'found' then
-        break
-      end
+      if status.tag == 'found' then break end
     end
     rt:run()
   else

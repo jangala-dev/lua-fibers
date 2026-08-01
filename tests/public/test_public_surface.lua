@@ -94,201 +94,60 @@ end
 -- aliases or development names.
 do
   local surfaces = {
-    {
-      'fibers',
-      fibers,
-      {
-        'run',
-        'try_run',
-        'perform',
-        'spawn',
-        'spawn_raw',
-        'scope',
-        'try_scope',
-        'mask',
-        'now',
-        'current_runtime',
-        'current_scope',
-        'pcall',
-        'xpcall',
-      },
-    },
-    {
-      'Op',
-      Op,
-      {
-        'always',
-        'never',
-        'choice',
-        'named_choice',
-        'each',
-        'named_each',
-        'together',
-        'and_then',
-        'or_else',
-        'guard',
-        'map',
-        'wrap',
-        'on_defeat',
-        'emit',
-        'is_op',
-      },
-    },
+    { 'fibers', fibers, {
+      'run', 'try_run', 'perform', 'spawn', 'spawn_raw', 'scope', 'try_scope',
+      'mask', 'now', 'current_runtime', 'current_scope', 'pcall', 'xpcall',
+    } },
+    { 'Op', Op, {
+      'always', 'never', 'choice', 'named_choice', 'each', 'named_each', 'together',
+      'and_then', 'or_else', 'guard', 'map', 'wrap', 'on_defeat', 'emit',
+      'is_op',
+    } },
     { 'Protected', FibersProtected, { 'pcall', 'xpcall' } },
     { 'Runtime', FibersRuntime, { 'new' } },
-    {
-      'External',
-      External,
-      { 'drive', 'external_feed', 'deliver', 'clear', 'signal', 'events', 'readiness' },
-    },
+    { 'External', External, { 'drive', 'external_feed', 'deliver', 'clear', 'signal', 'events', 'readiness' } },
     { 'Effect', FibersEffect, { 'kind', 'of', 'is_kind', 'is_effect' } },
-    {
-      'Machine',
-      FibersMachine,
-      {
-        'new',
-        'rule',
-        'update',
-        'select',
-        'select_when',
-        'query',
-        'query_when',
-        'transition_op',
-      },
-    },
-    {
-      'Cell',
-      FibersCell,
-      {
-        'new',
-        'read_op',
-        'changed_op',
-        'expect_op',
-        'write_op',
-        'select_op',
-        'wait_until_op',
-        'match_op',
-      },
-    },
+    { 'Machine', FibersMachine, {
+      'new', 'rule', 'update', 'select', 'select_when',
+      'query', 'query_when', 'transition_op',
+    } },
+    { 'Cell', FibersCell, {
+      'new', 'read_op', 'changed_op', 'expect_op', 'write_op', 'select_op',
+      'wait_until_op', 'match_op',
+    } },
     { 'Flow', FibersFlow, { 'new' } },
-    {
-      'File',
-      FibersFile,
-      {
-        'open',
-        'open_op',
-        'tmpfile',
-        'tmpfile_op',
-        'pipe',
-        'pipe_op',
-        'read_all',
-        'read_all_op',
-        'write_all',
-        'write_all_op',
-        'mkdir',
-        'mkdir_op',
-        'mkdir_p',
-        'mkdir_p_op',
-        'rename',
-        'rename_op',
-        'unlink',
-        'unlink_op',
-        'submit_open_op',
-        'submit_read_all_op',
-      },
-    },
-    {
-      'Socket',
-      FibersSocket,
-      {
-        'listen',
-        'listen_op',
-        'listen_inet',
-        'listen_inet_op',
-        'listen_ipv4',
-        'listen_ipv4_op',
-        'listen_ipv6',
-        'listen_ipv6_op',
-        'listen_unix',
-        'listen_unix_op',
-        'dial',
-        'dial_op',
-        'connect',
-        'udp',
-        'udp_op',
-        'udp_ipv4',
-        'udp_ipv4_op',
-        'udp_ipv6',
-        'udp_ipv6_op',
-        'resolve',
-        'resolve_op',
-        'resolve_name',
-        'resolve_name_op',
-        'dns_resolver',
-      },
-    },
+    { 'File', FibersFile, {
+      'open', 'open_op', 'tmpfile', 'tmpfile_op', 'pipe', 'pipe_op',
+      'read_all', 'read_all_op', 'write_all', 'write_all_op',
+      'mkdir', 'mkdir_op', 'mkdir_p', 'mkdir_p_op', 'rename', 'rename_op',
+      'unlink', 'unlink_op', 'submit_open_op', 'submit_read_all_op',
+    } },
+    { 'Socket', FibersSocket, {
+      'listen', 'listen_op', 'listen_inet', 'listen_inet_op',
+      'listen_ipv4', 'listen_ipv4_op', 'listen_ipv6', 'listen_ipv6_op',
+      'listen_unix', 'listen_unix_op', 'dial', 'dial_op', 'connect',
+      'udp', 'udp_op', 'udp_ipv4', 'udp_ipv4_op', 'udp_ipv6', 'udp_ipv6_op',
+      'resolve', 'resolve_op', 'resolve_name', 'resolve_name_op', 'dns_resolver',
+    } },
     { 'DNS', FibersDNS, { 'new' } },
     { 'Process', FibersProcess, { 'command', 'shell', 'redirect', 'succeeded', 'describe_status' } },
-    {
-      'AutoIO',
-      FibersAutoIO,
-      {
-        'default',
-        'select',
-        'available',
-        'luajit_linux',
-        'cffi_linux',
-        'luaposix',
-        'nixio',
-      },
-    },
+    { 'AutoIO', FibersAutoIO, {
+      'default', 'select', 'available',
+      'luajit_linux', 'cffi_linux', 'luaposix', 'nixio',
+    } },
     { 'ManualHost', FibersManualHost, { 'new', 'is_supported' } },
     { 'PureHost', FibersPureHost, { 'new' } },
-    {
-      'Roblox',
-      FibersRoblox,
-      {
-        'run',
-        'try_run',
-        'prepare',
-        'attach',
-        'new_host',
-        'events',
-        'latest',
-        'pulse',
-        'bind_to_close',
-      },
-    },
-    {
-      'Lifetime',
-      FibersLifetime,
-      {
-        'define',
-        'new',
-        'inert',
-        'resource',
-        'task',
-        'of',
-        'is',
-        'require',
-      },
-    },
-    {
-      'Closure',
-      FibersClosure,
-      {
-        'none',
-        'running',
-        'nursery',
-        'supervisor',
-        'protocol',
-        'propagation',
-        'combine',
-        'request_then_wait',
-        'require_ok',
-        'is_failure',
-      },
-    },
+    { 'Roblox', FibersRoblox, {
+      'run', 'try_run', 'prepare', 'attach', 'new_host', 'events', 'latest',
+      'pulse', 'bind_to_close',
+    } },
+    { 'Lifetime', FibersLifetime, {
+      'define', 'new', 'inert', 'resource', 'task', 'of', 'is', 'require',
+    } },
+    { 'Closure', FibersClosure, {
+      'none', 'running', 'nursery', 'supervisor', 'protocol', 'propagation',
+      'combine', 'request_then_wait', 'require_ok', 'is_failure',
+    } },
     { 'Grant', FibersGrant, { 'is', 'closed', 'closed_op', 'has_right', 'inspect' } },
     { 'Channel', FibersChannel, { 'new' } },
     { 'Mailbox', FibersMailbox, { 'new', 'reject_newest', 'drop_oldest' } },
@@ -321,14 +180,8 @@ do
 
   local scope = FibersScope.new('public-scope-surface')
   assert_functions('Scope', scope, {
-    'spawn_op',
-    'move_op',
-    'offer_op',
-    'accept_op',
-    'grant_op',
-    'can_op',
-    'custody_op',
-    'subtree_op',
+    'spawn_op', 'move_op', 'offer_op', 'accept_op', 'grant_op', 'can_op',
+    'custody_op', 'subtree_op',
   })
 end
 
@@ -489,9 +342,7 @@ do
   assert_status(st, 'found')
   assert_truthy(FibersTask.is(task), 'spawn should return a Task capability')
   assert_eq(value, 7)
-  for _ = 1, 4 do
-    collectgarbage('collect')
-  end
+  for _ = 1, 4 do collectgarbage('collect') end
   assert_eq(weak.marker, nil, 'closed Task should not retain body captures')
 end
 
@@ -508,17 +359,13 @@ do
     end, 'sender')
 
     local task = fibers.perform(scope:spawn_op(function()
-      local value = fibers.perform(wait_until(flag, function(v)
-        return v == true
-      end))
+      local value = fibers.perform(wait_until(flag, function(v) return v == true end))
       return value and 42 or 0
     end, 'worker'))
 
     received = fibers.perform(Op.choice(
       inbox:get_op(),
-      Sleep.sleep_op(1):map(function()
-        return 'timeout'
-      end)
+      Sleep.sleep_op(1):map(function() return 'timeout' end)
     ))
 
     joined = { value = fibers.perform(task:await_op()) }
@@ -545,5 +392,6 @@ do
   assert_eq(b, nil)
   assert_eq(c, 'z')
 end
+
 
 print('tests/public/test_public_surface.lua: ok')

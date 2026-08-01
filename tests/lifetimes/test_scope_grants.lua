@@ -210,6 +210,7 @@ do
   assert_eq(duplicate, false, 'duplicate Grant rights should be rejected')
 end
 
+
 -- Grant authority and transfer terms are captured at construction. Public Lua
 -- fields and inspection snapshots cannot be used to escalate authority.
 do
@@ -243,6 +244,7 @@ do
   assert_eq(inspected_write, false, 'mutating an inspection snapshot must not alter the Grant')
 end
 
+
 -- Granted authority may be exercised by a holder but cannot be copied onwards.
 -- Version 1 permits Grant issuance only by the subject's current custodian.
 do
@@ -253,12 +255,9 @@ do
     local leaf = FibersScope.new('grant-no-subdelegation-leaf', { runtime = FibersRuntime.current() })
     fibers.perform(owner:admit_op(h))
     local upstream = fibers.perform(owner:grant_op(h, holder, { 'read' }))
-    delegated = fibers.perform(holder
-      :grant_op(h, leaf, { 'read' })
-      :map(function()
-        return true
-      end)
-      :or_else(Op.always(false)))
+    delegated = fibers.perform(holder:grant_op(h, leaf, { 'read' }):map(function()
+      return true
+    end):or_else(Op.always(false)))
     fibers.perform(holder:close_op(upstream, 'cleanup'))
     fibers.perform(owner:close_op(h, 'done'))
   end)
@@ -271,31 +270,16 @@ do
   local owner = FibersScope.new('grant-term-owner', { runtime = rt })
   local holder = FibersScope.new('grant-term-holder', { runtime = rt })
   local h = Lifetimes.resource('grant-term-subject')
-  assert_eq(
-    pcall(function()
-      owner:grant_op(h, holder, 'read', { terms = 'bad' })
-    end),
-    false
-  )
-  assert_eq(
-    pcall(function()
-      owner:grant_op(h, holder, 'read', { terms = { transferable = 'yes' } })
-    end),
-    false
-  )
-  assert_eq(
-    pcall(function()
-      owner:grant_op(h, holder, 'read', { terms = { delegable = true } })
-    end),
-    false
-  )
-  assert_eq(
-    pcall(function()
-      owner:grant_op(h, { 'read' }, { holder = holder })
-    end),
-    false,
-    'legacy grant argument order is removed'
-  )
+  assert_eq(pcall(function() owner:grant_op(h, holder, 'read', { terms = 'bad' }) end), false)
+  assert_eq(pcall(function()
+    owner:grant_op(h, holder, 'read', { terms = { transferable = 'yes' } })
+  end), false)
+  assert_eq(pcall(function()
+    owner:grant_op(h, holder, 'read', { terms = { delegable = true } })
+  end), false)
+  assert_eq(pcall(function()
+    owner:grant_op(h, { 'read' }, { holder = holder })
+  end), false, 'legacy grant argument order is removed')
 end
 
 -- Grant construction remains an authority-bearing Scope operation.

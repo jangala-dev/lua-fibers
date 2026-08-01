@@ -17,24 +17,14 @@ local Search = {}
 Search.__index = Search
 local EMPTY = {}
 local ORDER_MOD, ORDER_MUL = 2147483647, 48271
-local function order_residue(value)
-  return math.floor(tonumber(value) or 0) % ORDER_MOD
-end
-local function order_step(state, salt)
-  return (state * ORDER_MUL + order_residue(salt)) % ORDER_MOD
-end
+local function order_residue(value) return math.floor(tonumber(value) or 0) % ORDER_MOD end
+local function order_step(state, salt) return (state * ORDER_MUL + order_residue(salt)) % ORDER_MOD end
 local function choice_indices(engine, task, occurrence, count, generation)
   local order = {}
-  for i = 1, count do
-    order[i] = i
-  end
-  if count < 2 then
-    return order
-  end
+  for i = 1, count do order[i] = i end
+  if count < 2 then return order end
   local state = order_residue(engine.choice_seed)
-  if state == 0 then
-    state = 1
-  end
+  if state == 0 then state = 1 end
   state = order_step(state, engine.epoch or 0)
   state = order_step(state, generation or engine.pending_generation or 0)
   state = order_step(state, task.root.request.order or 0)
@@ -53,9 +43,7 @@ local function frontier_active(intent)
 end
 
 local function frontier_rule(intent)
-  if intent and intent.kind == 'transition' then
-    return Operation.transition_behaviour(intent.spec)
-  end
+  if intent and intent.kind == 'transition' then return Operation.transition_behaviour(intent.spec) end
 end
 
 local BULK_MATCH_THRESHOLD = 32
@@ -80,9 +68,7 @@ local function bipartite_matching(left, edge_map, edge_field, right_field)
     return false
   end
   for i = 1, #left do
-    if not augment(left[i], {}) then
-      return nil
-    end
+    if not augment(left[i], {}) then return nil end
   end
   return selected
 end
@@ -92,14 +78,10 @@ local function maximum_exchange_matching(resources)
   for r = 1, #resources do
     local info = resources[r]
     if not info.adjacency then
-      for i = 1, #info.puts do
-        matching[#matching + 1] = { info.puts[i], info.gets[i] }
-      end
+      for i = 1, #info.puts do matching[#matching + 1] = { info.puts[i], info.gets[i] } end
     else
       local selected = bipartite_matching(info.puts, info.adjacency)
-      if not selected then
-        return false
-      end
+      if not selected then return false end
       for i = 1, #info.puts do
         local put = info.puts[i]
         matching[#matching + 1] = { put, selected[put] }
@@ -127,24 +109,16 @@ local function exchange_frontier(state, compatible, closed)
     for resource, bucket in pairs(state.exchange_buckets or EMPTY) do
       local put_count, get_count = 0, 0
       for i = 1, #(bucket.put or EMPTY) do
-        if frontier_active(bucket.put[i]) then
-          put_count = put_count + 1
-        end
+        if frontier_active(bucket.put[i]) then put_count = put_count + 1 end
       end
       for i = 1, #(bucket.get or EMPTY) do
-        if frontier_active(bucket.get[i]) then
-          get_count = get_count + 1
-        end
+        if frontier_active(bucket.get[i]) then get_count = get_count + 1 end
       end
       if put_count + get_count > 0 then
         if put_count ~= get_count then
           return {
-            selected = nil,
-            selected_degree = 0,
-            partners = {},
-            zero_domains = 0,
-            active = state.active_intent_count or 0,
-            balanced = false,
+            selected = nil, selected_degree = 0, partners = {}, zero_domains = 0,
+            active = state.active_intent_count or 0, balanced = false,
           }
         end
         local info = { puts = {}, gets = {} }
@@ -163,9 +137,7 @@ local function exchange_frontier(state, compatible, closed)
       gets = info.gets
       for i = 1, #raw_gets do
         local get = frontier_active(raw_gets[i])
-        if get then
-          gets[#gets + 1] = get
-        end
+        if get then gets[#gets + 1] = get end
       end
     end
 
@@ -187,23 +159,17 @@ local function exchange_frontier(state, compatible, closed)
             if compatible(put, get) then
               degree[put] = (degree[put] or 0) + 1
               degree[get] = (degree[get] or 0) + 1
-              if neighbours then
-                neighbours[#neighbours + 1] = get
-              end
+              if neighbours then neighbours[#neighbours + 1] = get end
             elseif info and not info.adjacency then
               -- Every previous row and the current row prefix was complete.
               info.adjacency = {}
               for p = 1, #info.puts - 1 do
                 local all = {}
-                for g = 1, #gets do
-                  all[g] = gets[g]
-                end
+                for g = 1, #gets do all[g] = gets[g] end
                 info.adjacency[info.puts[p]] = all
               end
               neighbours = {}
-              for g = 1, j - 1 do
-                neighbours[g] = gets[g]
-              end
+              for g = 1, j - 1 do neighbours[g] = gets[g] end
               info.adjacency[put] = neighbours
             end
           end
@@ -221,9 +187,7 @@ local function exchange_frontier(state, compatible, closed)
         end
       end
     end
-    if closed and put_count ~= get_count then
-      balanced = false
-    end
+    if closed and put_count ~= get_count then balanced = false end
   end
 
   local selected, selected_degree, zero_domains = nil, nil, 0
@@ -235,11 +199,7 @@ local function exchange_frontier(state, compatible, closed)
           local n = degree[intent] or 0
           if n == 0 then
             zero_domains = zero_domains + 1
-          elseif
-            not selected_degree
-            or n < selected_degree
-            or (n == selected_degree and intent.serial < selected.serial)
-          then
+          elseif not selected_degree or n < selected_degree or (n == selected_degree and intent.serial < selected.serial) then
             selected, selected_degree = intent, n
           end
         end
@@ -252,22 +212,16 @@ local function exchange_frontier(state, compatible, closed)
     local info = by_resource and by_resource[selected.resource]
     if info and not info.adjacency then
       local values = selected.role == 'put' and info.gets or info.puts
-      for i = 1, #values do
-        partners[i] = values[i]
-      end
+      for i = 1, #values do partners[i] = values[i] end
     elseif info and selected.role == 'put' then
       local neighbours = info.adjacency[selected] or EMPTY
-      for i = 1, #neighbours do
-        partners[i] = neighbours[i]
-      end
+      for i = 1, #neighbours do partners[i] = neighbours[i] end
     else
       local bucket = state.exchange_buckets[selected.resource]
       local ids = bucket and bucket[selected.role == 'put' and 'get' or 'put'] or EMPTY
       for i = 1, #ids do
         local partner = frontier_active(ids[i])
-        if partner and compatible(selected, partner) then
-          partners[#partners + 1] = partner
-        end
+        if partner and compatible(selected, partner) then partners[#partners + 1] = partner end
       end
     end
   end
@@ -277,13 +231,9 @@ local function exchange_frontier(state, compatible, closed)
     matching = maximum_exchange_matching(resources)
   end
   return {
-    selected = selected,
-    selected_degree = selected_degree or 0,
-    partners = partners,
-    zero_domains = zero_domains,
-    active = active_exchange,
-    balanced = balanced,
-    matching = matching,
+    selected = selected, selected_degree = selected_degree or 0, partners = partners,
+    zero_domains = zero_domains, active = active_exchange,
+    balanced = balanced, matching = matching,
   }
 end
 
@@ -300,21 +250,14 @@ local function claim_frontier(state)
           groups[#groups + 1] = group
         end
         group.intents[#group.intents + 1] = intent
-        if not rule.serial then
-          group.all_machine = false
-        end
-        if not rule.serial or rule.accepts_supply then
-          group.accepts_supply = true
-        end
+        if not rule.serial then group.all_machine = false end
+        if not rule.serial or rule.accepts_supply then group.accepts_supply = true end
       end
     end
   end
   table.sort(groups, function(a, b)
-    if #a.intents ~= #b.intents then
-      return #a.intents < #b.intents
-    end
-    local ai, bi =
-      a.intents[1] and a.intents[1].serial or math.huge, b.intents[1] and b.intents[1].serial or math.huge
+    if #a.intents ~= #b.intents then return #a.intents < #b.intents end
+    local ai, bi = a.intents[1] and a.intents[1].serial or math.huge, b.intents[1] and b.intents[1].serial or math.huge
     return ai < bi
   end)
   return groups
@@ -324,9 +267,7 @@ local function indexed_active(intents)
   local values = {}
   for i = 1, #(intents or EMPTY) do
     local intent = frontier_active(intents[i])
-    if intent then
-      values[#values + 1] = intent
-    end
+    if intent then values[#values + 1] = intent end
   end
   return values
 end
@@ -339,10 +280,7 @@ local function analyse_frontier(state, compatible, closed_exchange)
   end)
   local exchange = exchange_frontier(state, compatible, closed_exchange)
   return {
-    exchange = exchange,
-    witnesses = witnesses,
-    claims = claim_frontier(state),
-    choices = choices,
+    exchange = exchange, witnesses = witnesses, claims = claim_frontier(state), choices = choices,
     accepts_participant_supply = exchange.active > 0 or (state.accepts_supply_count or 0) > 0,
   }
 end
@@ -354,19 +292,9 @@ local function leaf_kind(leaf)
 end
 local PACK_TRUE = pack_(true)
 local ACT = {
-  annotated = {},
-  and_then_prefix = {},
-  and_then_result = {},
-  choice = {},
-  exchange = {},
-  fallback = {},
-  guard = {},
-  map = {},
-  preferred = {},
-  product_lane = {},
-  product_result = {},
-  transition = {},
-  witness = {},
+  annotated = {}, and_then_prefix = {}, and_then_result = {}, choice = {}, exchange = {},
+  fallback = {}, guard = {}, map = {}, preferred = {}, product_lane = {}, product_result = {},
+  transition = {}, witness = {},
 }
 
 local function unpack_pack(p)
@@ -450,17 +378,13 @@ local function product_wrap(lane_outcomes)
       wraps[i] = wrap
     end
   end
-  if not wraps then
-    return nil
-  end
+  if not wraps then return nil end
 
   return function(packed)
     local rows = packed[1]
     for i = 1, count do
       local wrap = wraps[i]
-      if wrap then
-        rows[i] = wrap(rows[i])
-      end
+      if wrap then rows[i] = wrap(rows[i]) end
     end
     return pack_(rows)
   end
@@ -492,15 +416,8 @@ local function finish_group_lane(state, task, frame, outcome)
   end
   local parent = group.parent_task
   local activation_parts = {}
-  for i = 1, group.count do
-    activation_parts[i] = group.lane_outcomes[i].activation
-  end
-  setv(
-    state,
-    parent,
-    'activation',
-    Activation.child_array(group.activation, ACT.product_result, activation_parts)
-  )
+  for i = 1, group.count do activation_parts[i] = group.lane_outcomes[i].activation end
+  setv(state, parent, 'activation', Activation.child_array(group.activation, ACT.product_result, activation_parts))
   setv(state, parent, 'status', 'active')
   return complete_task(state, parent, new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes)))
 end
@@ -529,9 +446,7 @@ complete_task = function(state, task, outcome)
       end
       outcome = new_outcome(
         task,
-        pack_(
-          state.engine.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))
-        ),
+        pack_(state.engine.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))),
         nil
       )
     elseif frame.kind == 'bind' then
@@ -562,20 +477,12 @@ complete_task = function(state, task, outcome)
 end
 
 local function add_root(state, request, required_intents)
-  if not request or not request.pending or state.roots[request] then
-    return request and request.pending or false
-  end
-  if not request.activation_root then
-    request.activation_root = Activation.new_request(request.order)
-  end
+  if not request or not request.pending or state.roots[request] then return request and request.pending or false end
+  if not request.activation_root then request.activation_root = Activation.new_request(request.order) end
 
   local root = {
-    serial = request.activation_root.id,
-    request = request,
-    expr = request.op,
-    frames = {},
-    scope_path = nil,
-    status = 'active',
+    serial = request.activation_root.id, request = request, expr = request.op,
+    frames = {}, scope_path = nil, status = 'active',
     activation = request.activation_root,
     required_intents = required_intents and copy_array(required_intents) or nil,
   }
@@ -588,14 +495,8 @@ end
 
 local function start_product(state, task, op)
   local group = {
-    parent_task = task,
-    parent_segment = task.segment,
-    mode = op.mode,
-    count = #op.lanes,
-    lane_segments = {},
-    lane_outcomes = {},
-    completed = 0,
-    activation = task.activation,
+    parent_task = task, parent_segment = task.segment, mode = op.mode, count = #op.lanes,
+    lane_segments = {}, lane_outcomes = {}, completed = 0, activation = task.activation,
   }
   setv(state, task, 'status', 'waiting_group')
 
@@ -605,13 +506,9 @@ local function start_product(state, task, op)
     group.lane_segments[i] = segment
     local activation = Activation.child(task.activation, ACT.product_lane, i)
     local child = {
-      serial = activation.id,
-      root = task.root,
-      expr = op.lanes[i],
+      serial = activation.id, root = task.root, expr = op.lanes[i],
       frames = { { kind = 'group_lane', group = group, lane = i } },
-      segment = segment,
-      scope_path = path,
-      status = 'active',
+      segment = segment, scope_path = path, status = 'active',
       activation = activation,
       guard_input_pack = task.guard_input_pack,
     }
@@ -641,9 +538,7 @@ end
 
 local function root_requires(root, intent)
   for i = 1, #(root and root.required_intents or EMPTY) do
-    if root.required_intents[i] == intent then
-      return true
-    end
+    if root.required_intents[i] == intent then return true end
   end
   return false
 end
@@ -662,9 +557,7 @@ local function active_intents(state, out)
       out[n] = intent
     end
   end
-  for i = #out, n + 1, -1 do
-    out[i] = nil
-  end
+  for i = #out, n + 1, -1 do out[i] = nil end
   return out
 end
 
@@ -693,9 +586,7 @@ local function index_intent(state, intent)
       end
       pushv(state, ids, intent)
     end
-    if rule.accepts_supply then
-      bump(state, state, 'accepts_supply_count')
-    end
+    if rule.accepts_supply then bump(state, state, 'accepts_supply_count') end
   end
 end
 
@@ -726,6 +617,7 @@ local function block_intent(state, task, occurrence, observed_version)
   intent.task, intent.root, intent.request, intent.spec = task, task.root, task.root.request, leaf
   intent.payload, intent.activation = occurrence.arg, task.activation
   intent.resource, intent.role, intent.value = leaf.resource, leaf.role, occurrence.arg
+  intent.name = leaf.name
   intent.scope_path = task.scope_path
   intent.active = true
   intent.interest = type(leaf.interest) == 'function' and leaf.interest(state.engine.runtime, leaf)
@@ -744,8 +636,7 @@ local function block_choice(state, task, expr)
     serial = serial,
     kind = 'choice',
     task = task,
-    root = task.root,
-    request = task.root.request,
+    root = task.root, request = task.root.request,
     expr = expr,
     order = choice_indices(
       state.engine,
@@ -767,44 +658,22 @@ local function block_choice(state, task, expr)
 end
 
 local function match_intents(state, a, b)
-  if not a or not b or not a.active or not b.active then
-    return false
-  end
+  if not a or not b or not a.active or not b.active then return false end
   local satisfy_a = root_requires(a.root, b)
   local satisfy_b = root_requires(b.root, a)
   remove_intents(state, { a, b })
-  if satisfy_a then
-    setv(state, a.root, 'required_intents', nil)
-  end
-  if satisfy_b then
-    setv(state, b.root, 'required_intents', nil)
-  end
+  if satisfy_a then setv(state, a.root, 'required_intents', nil) end
+  if satisfy_b then setv(state, b.root, 'required_intents', nil) end
   local put = a.role == 'put' and a or b
   local get = a.role == 'get' and a or b
   local put_task = put.task
   local get_task = get.task
   local left, right = a.activation, b.activation
-  if Activation.less(right, left) then
-    left, right = right, left
-  end
-  setv(
-    state,
-    put_task,
-    'activation',
-    Activation.child(put_task.activation, ACT.exchange, left, right, a.resource)
-  )
-  setv(
-    state,
-    get_task,
-    'activation',
-    Activation.child(get_task.activation, ACT.exchange, left, right, a.resource)
-  )
-  if not complete_task(state, put_task, new_outcome(put_task, PACK_TRUE)) then
-    return false
-  end
-  if not complete_task(state, get_task, new_outcome(get_task, pack_(put.value))) then
-    return false
-  end
+  if Activation.less(right, left) then left, right = right, left end
+  setv(state, put_task, 'activation', Activation.child(put_task.activation, ACT.exchange, left, right, a.resource))
+  setv(state, get_task, 'activation', Activation.child(get_task.activation, ACT.exchange, left, right, a.resource))
+  if not complete_task(state, put_task, new_outcome(put_task, PACK_TRUE)) then return false end
+  if not complete_task(state, get_task, new_outcome(get_task, pack_(put.value))) then return false end
   return true
 end
 
@@ -813,9 +682,7 @@ local function transition_context(state)
   if not context then
     context = {}
     context.runtime = state.engine.runtime
-    context.now = function()
-      return state.engine.runtime:now()
-    end
+    context.now = function() return state.engine.runtime:now() end
     state.transition_context = context
   end
   return context
@@ -830,13 +697,11 @@ local function transition_outcome(state, leaf, value, phase, payload)
 end
 
 local function stage_outcome(state, task, leaf, outcome)
-  local patch
-  if outcome.writes then
-    if outcome.machine then
-      bump(state, state, 'next_machine_serial')
-    end
-    patch = Operation.transition_patch(leaf, outcome, state.next_machine_serial)
+  local source = outcome.patch
+  if source and source.kind == 'machine_value' then
+    bump(state, state, 'next_machine_serial')
   end
+  local patch = Operation.transition_patch(leaf, outcome, state.next_machine_serial)
   if patch then
     Journal.stage(task.segment, leaf.location, patch)
   else
@@ -872,20 +737,15 @@ local function selected_intents(intents)
   local selected = {}
   for i = 1, #intents do
     local intent = intents[i]
-    if intent and intent.active then
-      selected[#selected + 1] = intent
-    end
+    if intent and intent.active then selected[#selected + 1] = intent end
   end
-  table.sort(selected, function(a, b)
-    return a.serial < b.serial
-  end)
+  table.sort(selected, function(a, b) return a.serial < b.serial end)
   return selected
 end
 
 local function resolve_serial_transitions(state, selected)
   table.sort(selected, function(left, right)
-    local a, b =
-      Operation.transition_behaviour(left.spec).order, Operation.transition_behaviour(right.spec).order
+    local a, b = Operation.transition_behaviour(left.spec).order, Operation.transition_behaviour(right.spec).order
     return a ~= b and a < b or a == b and (left.serial or 0) < (right.serial or 0)
   end)
   local resolved = {}
@@ -959,12 +819,8 @@ local function resolve_witness(state, intent, outcome, alternative_index)
     task,
     'activation',
     Activation.child(
-      task.activation,
-      ACT.witness,
-      intent.activation,
-      intent.spec.location,
-      intent.observed_version or intent.spec.location.version or 0,
-      alternative_index or 1
+      task.activation, ACT.witness, intent.activation, intent.spec.location,
+      intent.observed_version or intent.spec.location.version or 0, alternative_index or 1
     )
   )
   local packed = outcome.result
@@ -994,9 +850,7 @@ local function resolve_claim_set(state, group, intents)
   for intent in pairs(selected) do
     expanded[#expanded + 1] = intent
   end
-  table.sort(expanded, function(a, b)
-    return a.serial < b.serial
-  end)
+  table.sort(expanded, function(a, b) return a.serial < b.serial end)
   return resolve_transitions(state, expanded)
 end
 
@@ -1004,85 +858,54 @@ local function final_candidate(state)
   local participant_count, participant_1, participant_2, participants = 0
   for request in pairs(state.roots) do
     participant_count = participant_count + 1
-    if participant_count == 1 then
-      participant_1 = request
-    elseif participant_count == 2 then
-      participant_2 = request
+    if participant_count == 1 then participant_1 = request
+    elseif participant_count == 2 then participant_2 = request
     else
       participants = participants or { participant_1, participant_2 }
       participants[participant_count] = request
     end
   end
-  local function earlier(a, b)
-    return a.order < b.order
-  end
-  if participants then
-    table.sort(participants, earlier)
-  elseif participant_count == 2 and earlier(participant_2, participant_1) then
-    participant_1, participant_2 = participant_2, participant_1
-  end
+  local function earlier(a, b) return a.order < b.order end
+  if participants then table.sort(participants, earlier)
+  elseif participant_count == 2 and earlier(participant_2, participant_1) then participant_1, participant_2 = participant_2, participant_1 end
 
   local observations, writes, collect_err
   if participant_count == 1 then
     local root = state.roots[participant_1]
-    if not root.done or (state.active_intent_count or 0) > 0 then
-      return nil
-    end
+    if not root.done or (state.active_intent_count or 0) > 0 then return nil end
     observations = next(state.journal.observed) and state.journal.observed or nil
     writes = next(root.segment.delta) and root.segment.delta or nil
   else
     local root_views = {}
     local function add_participant(index, request)
       local root = state.roots[request]
-      if not root.done then
-        return false
-      end
+      if not root.done then return false end
       root_views[index] = root.segment
       return true
     end
     if participants then
-      for i = 1, participant_count do
-        if not add_participant(i, participants[i]) then
-          return nil
-        end
-      end
+      for i = 1, participant_count do if not add_participant(i, participants[i]) then return nil end end
     else
-      if participant_1 and not add_participant(1, participant_1) then
-        return nil
-      end
-      if participant_2 and not add_participant(2, participant_2) then
-        return nil
-      end
+      if participant_1 and not add_participant(1, participant_1) then return nil end
+      if participant_2 and not add_participant(2, participant_2) then return nil end
     end
-    if (state.active_intent_count or 0) > 0 then
-      return nil
-    end
+    if (state.active_intent_count or 0) > 0 then return nil end
     observations, writes, collect_err = state.journal:collect_candidate(root_views)
-    if collect_err then
-      return nil
-    end
+    if collect_err then return nil end
   end
   observations = observations and next(observations) and observations or nil
   writes = writes and next(writes) and writes or nil
   for loc, patch in pairs(writes or EMPTY) do
     if loc.domain == 'counter' then
       local final, owner = Algebra.apply(loc, loc.value, patch), loc.owner
-      if owner.min ~= nil and final < owner.min then
-        return nil
-      end
-      if owner.max ~= nil and final > owner.max then
-        return nil
-      end
+      if owner.min ~= nil and final < owner.min then return nil end
+      if owner.max ~= nil and final > owner.max then return nil end
     end
   end
 
   local candidate = Candidate.new({
-    participant_count = participant_count,
-    participant_1 = participant_1,
-    participant_2 = participant_2,
-    participants = participants,
-    observations = observations,
-    writes = writes,
+    participant_count = participant_count, participant_1 = participant_1, participant_2 = participant_2,
+    participants = participants, observations = observations, writes = writes,
     effects = state.effects and #state.effects > 0 and copy_array(state.effects) or nil,
     absence_gate = state.absence_gate,
   })
@@ -1097,13 +920,10 @@ local function final_candidate(state)
     candidate.outcome_2 = participant_2 and state.roots[participant_2].outcome or nil
   end
   if candidate.absence_gate then
-    Proof.ensure(state.engine)
-    Proof.acknowledge(state.engine, state)
+    Proof.ensure(state.engine); Proof.acknowledge(state.engine, state)
     candidate.absence_gate.snapshot = Proof.capture(state.engine, state, candidate.absence_gate)
   end
-  if not candidate:prepare(state.engine) then
-    return nil
-  end
+  if not candidate:prepare(state.engine) then return nil end
   return candidate
 end
 
@@ -1124,16 +944,6 @@ local function execute_leaf(state, task, occurrence)
     local request = root and root.request
     local value = Activation.clock(state.engine, request, occurrence, task.activation)
     advance_activation(state, task, leaf)
-    return complete_task(state, task, new_outcome(task, Operation.result_pack(leaf, value)))
-  end
-
-  if kind == 'observe' then
-    local resource = leaf.resource
-    local view = task.segment
-    local value = leaf.observation.collect(resource, function(location)
-      return Journal.read(view, location)
-    end)
-    advance_activation(state, task, leaf, resource.version or 0)
     return complete_task(state, task, new_outcome(task, Operation.result_pack(leaf, value)))
   end
 
@@ -1182,9 +992,7 @@ local function execute_leaf(state, task, occurrence)
 end
 
 local function frontier_supply_score(frontier, intents)
-  if not frontier then
-    return 0
-  end
+  if not frontier then return 0 end
   local score = 0
   for i = 1, #(intents or EMPTY) do
     local demand = intents[i]
@@ -1192,9 +1000,7 @@ local function frontier_supply_score(frontier, intents)
       local roles = frontier.exchanges and frontier.exchanges[demand.resource]
       local latent = frontier.latent_exchanges and frontier.latent_exchanges[demand.resource]
       local opposite = demand.role == 'put' and 'get' or demand.role == 'get' and 'put' or nil
-      if opposite and ((roles and roles[opposite]) or (latent and latent[opposite])) then
-        score = score + 1
-      end
+      if opposite and ((roles and roles[opposite]) or (latent and latent[opposite])) then score = score + 1 end
     end
   end
   return score
@@ -1224,9 +1030,7 @@ local function has_supplier(state, intents)
     local request = state.all_requests[i]
     if request.pending and not state.roots[request] then
       local score = supplier_score(state, request, intents)
-      if score > 0 then
-        return true
-      end
+      if score > 0 then return true end
     end
   end
   return false
@@ -1277,17 +1081,14 @@ local function exchange_partner_available(state, task, resource, role)
     kind = 'exchange',
     resource = resource,
     role = role,
-    root = task.root,
-    request = task.root.request,
+    root = task.root, request = task.root.request,
     scope_path = task.scope_path,
   }
   local bucket = state.exchange_buckets and state.exchange_buckets[resource]
   local opposite = role == 'put' and 'get' or 'put'
   for i = 1, #(bucket and bucket[opposite] or EMPTY) do
     local current = bucket[opposite][i]
-    if current and current.active and intents_compatible(synthetic, current) then
-      return true
-    end
+    if current and current.active and intents_compatible(synthetic, current) then return true end
   end
   return has_supplier(state, { synthetic })
 end
@@ -1303,9 +1104,7 @@ local function alternative_rank(state, intent, choice_index, rank_partners)
     local supplied, certainty = Operation.supply_score(metadata, required)
     if supplied > 0 then
       score = score + 1000 + supplied * 20
-      if certainty == Operation.SUPPLY_EXACT then
-        score = score + 5
-      end
+      if certainty == Operation.SUPPLY_EXACT then score = score + 5 end
     elseif metadata.dynamic then
       score = score + 500
     else
@@ -1337,9 +1136,7 @@ local function alternative_rank(state, intent, choice_index, rank_partners)
       end
     end
     score = score + available * 25
-    if available < needed then
-      score = score - (needed - available) * 200
-    end
+    if available < needed then score = score - (needed - available) * 200 end
   end
 
   return score
@@ -1347,21 +1144,14 @@ end
 
 local function single_exchange_shape(metadata)
   metadata = Operation.active_shape(metadata)
-  if
-    metadata.dynamic
-    or metadata.external
-    or next(metadata.locations or EMPTY)
-    or next(metadata.resources or EMPTY)
-  then
+  if metadata.dynamic or metadata.external or next(metadata.locations or EMPTY) or next(metadata.resources or EMPTY) then
     return nil
   end
   local found_resource, found_role
   for resource, roles in pairs(metadata.exchanges or EMPTY) do
     for role, enabled in pairs(roles) do
       if enabled then
-        if found_resource ~= nil then
-          return nil
-        end
+        if found_resource ~= nil then return nil end
         found_resource, found_role = resource, role
       end
     end
@@ -1373,9 +1163,7 @@ end
 -- This is an ordering propagator only: every alternative remains in the normal
 -- exhaustive order after the preferred edge, and failure never proves Retry.
 local function supplier_matching_preferences(state, choices)
-  if #choices < 3 then
-    return nil
-  end
+  if #choices < 3 then return nil end
 
   local suppliers = {}
   for i = 1, #(state.all_requests or EMPTY) do
@@ -1386,10 +1174,7 @@ local function supplier_matching_preferences(state, choices)
       local resource, role = single_exchange_shape(metadata)
       if resource and (role == 'put' or role == 'get') then
         local by_role = suppliers[resource]
-        if not by_role then
-          by_role = { put = {}, get = {} }
-          suppliers[resource] = by_role
-        end
+        if not by_role then by_role = { put = {}, get = {} }; suppliers[resource] = by_role end
         by_role[role][#by_role[role] + 1] = request
       end
     end
@@ -1408,28 +1193,20 @@ local function supplier_matching_preferences(state, choices)
         edges[#edges + 1] = { supplier = ids[j], choice_index = choice_index, order = position }
       end
     end
-    if #edges == 0 then
-      return nil
-    end
+    if #edges == 0 then return nil end
     table.sort(edges, function(a, b)
-      if a.order ~= b.order then
-        return a.order < b.order
-      end
+      if a.order ~= b.order then return a.order < b.order end
       return a.supplier.order < b.supplier.order
     end)
     rows[#rows + 1] = { choice = choice, edges = edges }
   end
   table.sort(rows, function(a, b)
-    if #a.edges ~= #b.edges then
-      return #a.edges < #b.edges
-    end
+    if #a.edges ~= #b.edges then return #a.edges < #b.edges end
     return a.choice.serial < b.choice.serial
   end)
 
   local matching = bipartite_matching(rows, nil, 'edges', 'supplier')
-  if not matching then
-    return nil
-  end
+  if not matching then return nil end
   local selected = {}
   for i = 1, #rows do
     local row, edge = rows[i], matching[rows[i]]
@@ -1439,48 +1216,34 @@ local function supplier_matching_preferences(state, choices)
 end
 
 local function ranked_choice_order(state, intent, rank_partners, preferred_index)
-  if not intent.required_intents and not rank_partners then
-    return intent.order
-  end
+  if not intent.required_intents and not rank_partners then return intent.order end
   local order = copy_array(intent.order)
   local base_position = {}
-  for i = 1, #order do
-    base_position[order[i]] = i
-  end
+  for i = 1, #order do base_position[order[i]] = i end
   local scores = {}
   for i = 1, #order do
     local choice_index = order[i]
     scores[choice_index] = alternative_rank(state, intent, choice_index, rank_partners)
-    if preferred_index == choice_index then
-      scores[choice_index] = scores[choice_index] + 10000
-    end
+    if preferred_index == choice_index then scores[choice_index] = scores[choice_index] + 10000 end
   end
   table.sort(order, function(a, b)
     local sa, sb = scores[a], scores[b]
-    if sa ~= sb then
-      return sa > sb
-    end
+    if sa ~= sb then return sa > sb end
     return base_position[a] < base_position[b]
   end)
   return order
 end
 
 local function resolve_choice(state, intent, choice_index)
-  if not intent then
-    return false
-  end
+  if not intent then return false end
   local expr, task = intent.expr, intent.task
-  if not choice_index or not task then
-    return false
-  end
+  if not choice_index or not task then return false end
   remove_intents(state, { intent })
   local effects = ensure_table(state, 'effects')
   for i = 1, #(expr.choices or {}) do
     if i ~= choice_index then
       local defeats = collect_defeat_effects(expr.choices[i])
-      for j = 1, #defeats do
-        pushv(state, effects, defeats[j])
-      end
+      for j = 1, #defeats do pushv(state, effects, defeats[j]) end
     end
   end
   setv(state, task, 'expr', expr.choices[choice_index])
@@ -1501,12 +1264,8 @@ local function hard_stop(state, reason)
 end
 
 local function await_search_budget(state)
-  if not state.resumable then
-    return
-  end
-  while state.work_remaining <= 0 do
-    state:yield_search('search_quantum')
-  end
+  if not state.resumable then return end
+  while state.work_remaining <= 0 do state:yield_search('search_quantum') end
 end
 
 local function note_search_step(state)
@@ -1515,14 +1274,10 @@ local function note_search_step(state)
   await_search_budget(state)
 
   while engine._cycle_budget and not engine:charge('work') do
-    if not resumable then
-      return false
-    end
+    if not resumable then return false end
     state:yield_search(engine._last_search_unknown_reason or 'cycle_work_limit')
   end
-  if resumable then
-    state.work_remaining = state.work_remaining - 1
-  end
+  if resumable then state.work_remaining = state.work_remaining - 1 end
 
   state.steps = state.steps + 1
   if engine.search_total_limit and state.steps > engine.search_total_limit then
@@ -1558,6 +1313,7 @@ local function explore(state, apply)
   state.journal:rollback(mark)
   return nil, refutation, unknown
 end
+
 
 local function propagate(state, fn)
   local mark = state.journal:mark()
@@ -1613,9 +1369,7 @@ local function prefer(state, task, expr)
   )
   add_active(state, task)
   local fallback, fallback_refutation, fallback_unknown = search(state)
-  if fallback then
-    return fallback, fallback_refutation, fallback_unknown
-  end
+  if fallback then return fallback, fallback_refutation, fallback_unknown end
   -- The preferred branch has been discarded as an active wait, but a newly
   -- admitted compatible participant must invalidate the Retry and cause the
   -- operation to be reconsidered. Preserve only that latent membership
@@ -1682,13 +1436,9 @@ local function recruit_supplier(state, refutation)
       local candidate, ref, unknown = explore(state, function()
         return add_root(state, request, intents)
       end)
-      if candidate then
-        return candidate
-      end
+      if candidate then return candidate end
       refutation = merge_refutation(refutation, ref)
-      if unknown then
-        return nil, refutation, true
-      end
+      if unknown then return nil, refutation, true end
     end
   end
   return nil, merge_refutation(refutation, terminal_refutation(state)), false
@@ -1718,10 +1468,7 @@ local function resolve_frontier(state)
 
   local exchange_only = #intents > 0
   for i = 1, #intents do
-    if intents[i].kind ~= 'exchange' then
-      exchange_only = false
-      break
-    end
+    if intents[i].kind ~= 'exchange' then exchange_only = false; break end
   end
   local closed_exchange = exchange_only and not has_supplier(state, intents)
   local frontier = analyse_frontier(state, intents_compatible, closed_exchange)
@@ -1732,9 +1479,7 @@ local function resolve_frontier(state)
       return nil, terminal_refutation(state), false
     end
     if exchange.selected and exchange.selected_degree == 1 and #exchange.partners == 1 then
-      if match_intents(state, exchange.selected, exchange.partners[1]) then
-        return PROPAGATED
-      end
+      if match_intents(state, exchange.selected, exchange.partners[1]) then return PROPAGATED end
       return nil, terminal_refutation(state), false
     end
   end
@@ -1742,26 +1487,18 @@ local function resolve_frontier(state)
   local refutation
   if closed_exchange then
     local complete_matching = exchange.matching
-    if complete_matching == false then
-      return nil, terminal_refutation(state), false
-    end
+    if complete_matching == false then return nil, terminal_refutation(state), false end
     if complete_matching then
       local candidate, matching_refutation, matching_unknown = explore(state, function()
         for i = 1, #complete_matching do
           local pair = complete_matching[i]
-          if not match_intents(state, pair[1], pair[2]) then
-            return false
-          end
+          if not match_intents(state, pair[1], pair[2]) then return false end
         end
         return true
       end)
-      if candidate then
-        return candidate
-      end
+      if candidate then return candidate end
       refutation = merge_refutation(refutation, matching_refutation)
-      if matching_unknown then
-        return nil, refutation, true
-      end
+      if matching_unknown then return nil, refutation, true end
     end
   end
   for i = 1, #exchange.partners do
@@ -1806,11 +1543,9 @@ local function resolve_frontier(state)
     local all_machine = group.all_machine
     local accepts_supply = group.accepts_supply
     if all_machine and not accepts_supply then
-      if
-        propagate(state, function()
-          return resolve_claim_set(state, group, group.intents)
-        end)
-      then
+      if propagate(state, function()
+        return resolve_claim_set(state, group, group.intents)
+      end) then
         return PROPAGATED
       end
       return nil, merge_refutation(refutation, terminal_refutation(state)), false
@@ -1854,9 +1589,7 @@ local function resolve_frontier(state)
   end
   if frontier.accepts_participant_supply and not obligated_supplier_present then
     local candidate, supplied_refutation, supplied_unknown = recruit_supplier(state, refutation)
-    if candidate or supplied_unknown then
-      return candidate, supplied_refutation, supplied_unknown
-    end
+    if candidate or supplied_unknown then return candidate, supplied_refutation, supplied_unknown end
     refutation = supplied_refutation
   end
 
@@ -1874,13 +1607,9 @@ local function resolve_frontier(state)
       local candidate, branch_refutation, unknown = explore(state, function()
         return resolve_choice(state, choice, choice_index)
       end)
-      if candidate then
-        return candidate
-      end
+      if candidate then return candidate end
       refutation = merge_refutation(refutation, branch_refutation)
-      if unknown then
-        return nil, refutation, true
-      end
+      if unknown then return nil, refutation, true end
     end
   end
 
@@ -1907,15 +1636,12 @@ search = function(state)
     end
 
     local candidate = final_candidate(state)
-    if candidate then
-      return candidate
-    end
+    if candidate then return candidate end
     local result, refutation, unknown = resolve_frontier(state)
-    if result ~= PROPAGATED then
-      return result, refutation, unknown
-    end
+    if result ~= PROPAGATED then return result, refutation, unknown end
   end
 end
+
 
 local function publish_frontiers(state, result)
   -- During an unbounded driver pass, a completed Retry while more ready fibres
@@ -1928,13 +1654,9 @@ local function publish_frontiers(state, result)
   end
   Proof.ensure(state.engine)
   local published = Proof.frontiers(state.intents, state.roots, result and result.certificate)
-  for request, frontier in pairs(published) do
-    Proof.publish(state.engine, request, frontier)
-  end
+  for request, frontier in pairs(published) do Proof.publish(state.engine, request, frontier) end
   local snapshot = Proof.capture(state.engine, state, result and result.certificate, published)
-  if state.resumable then
-    state.frontier_snapshot = snapshot
-  end
+  if state.resumable then state.frontier_snapshot = snapshot end
   local focus = published[state.focus]
   if focus and result and result.retry then
     focus.retry = true
@@ -1945,9 +1667,7 @@ local function publish_frontiers(state, result)
 end
 
 local function new_state(engine, requests, focus, component, provisional_admission)
-  if not requests[focus] then
-    return nil
-  end
+  if not requests[focus] then return nil end
   local instrumentation = engine.instrumentation
   local journal = Journal.new()
   local state = setmetatable({
@@ -1980,24 +1700,16 @@ end
 
 local function finish_profile(state, candidate, outcome)
   local instrumentation = state.engine.instrumentation
-  if not instrumentation then
-    return
-  end
+  if not instrumentation then return end
   instrumentation:finish_search(state, outcome, { search_steps = state.steps })
 end
 
 local function new_search(engine, requests, focus, component, provisional_admission)
   local state = new_state(engine, requests, focus, component, provisional_admission)
-  if not state then
-    return nil
-  end
+  if not state then return nil end
   state.resumable, state.hard_limit, state.work_remaining = true, false, 0
-  if engine.instrumentation then
-    engine.instrumentation:pause_search(state)
-  end
-  state.thread = coroutine.create(function()
-    return search(state)
-  end)
+  if engine.instrumentation then engine.instrumentation:pause_search(state) end
+  state.thread = coroutine.create(function() return search(state) end)
   return state
 end
 
@@ -2007,28 +1719,18 @@ function Search:yield_search(reason)
 end
 
 function Search:advance(max_work)
-  if not self.thread then
-    error('search is closed', 2)
-  end
+  if not self.thread then error('search is closed', 2) end
   self.work_remaining = math.max(0, math.floor(max_work or self.engine.search_limit))
   self.unknown_reason = nil
   local instrumentation = self.engine.instrumentation
-  if instrumentation then
-    instrumentation:resume_search(self)
-  end
+  if instrumentation then instrumentation:resume_search(self) end
   local resumed = { coroutine.resume(self.thread) }
-  if instrumentation then
-    instrumentation:pause_search(self)
-  end
-  if not resumed[1] then
-    error(resumed[2], 0)
-  end
+  if instrumentation then instrumentation:pause_search(self) end
+  if not resumed[1] then error(resumed[2], 0) end
 
   if coroutine.status(self.thread) ~= 'dead' then
     publish_frontiers(self, { unknown = true })
-    if instrumentation then
-      instrumentation:inc('retained_search_suspensions')
-    end
+    if instrumentation then instrumentation:inc('retained_search_suspensions') end
     self.unknown_reason = resumed[3] or self.unknown_reason or 'search_quantum'
     return nil, resumed[2], true
   end
@@ -2046,40 +1748,28 @@ function Search:advance(max_work)
 end
 
 function Search:discard(reason)
-  if not self.thread then
-    return
-  end
+  if not self.thread then return end
   if coroutine.status(self.thread) ~= 'dead' then
     finish_profile(self, nil, reason or 'invalidated')
   end
   self.thread = nil
-  if self.journal and self.journal.reset then
-    self.journal:reset()
-  end
-  if self.candidate then
-    self.candidate._search = nil
-  end
+  if self.journal and self.journal.reset then self.journal:reset() end
+  if self.candidate then self.candidate._search = nil end
   self.candidate, self.frontier_snapshot = nil, nil
 end
 
 function M.search(engine, requests, focus, search_limit, component, provisional_admission)
   if search_limit == nil and not engine.explicit_search_limit then
     local state = new_state(engine, requests, focus, component, provisional_admission)
-    if not state then
-      return nil
-    end
+    if not state then return nil end
     local candidate, refutation, unknown = search(state)
-    if not candidate then
-      publish_frontiers(state, { retry = not unknown, certificate = refutation })
-    end
+    if not candidate then publish_frontiers(state, { retry = not unknown, certificate = refutation }) end
     finish_profile(state, candidate, candidate and 'found' or (unknown and 'unknown' or 'retry'))
     return candidate, refutation, unknown
   end
 
   local state = new_search(engine, requests, focus, component, provisional_admission)
-  if not state then
-    return nil
-  end
+  if not state then return nil end
   local candidate, refutation, unknown = state:advance(search_limit or engine.search_limit)
   return candidate, refutation, unknown, state
 end

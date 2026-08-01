@@ -141,12 +141,17 @@ local function validate_addresses(values, family, endpoint)
     local address = address_or_err
     if address.kind ~= family then
       return nil,
-        IOError.protocol('socket', 'dial_order', 'resolver returned an address from the wrong family', {
-          endpoint = endpoint,
-          expected_family = family,
-          actual_family = address.kind,
-          index = i,
-        })
+        IOError.protocol(
+          'socket',
+          'dial_order',
+          'resolver returned an address from the wrong family',
+          {
+            endpoint = endpoint,
+            expected_family = family,
+            actual_family = address.kind,
+            index = i,
+          }
+        )
     end
     local key = Address.key(address)
     if not seen[key] then
@@ -183,19 +188,29 @@ local function validate_global_order(values, expected, endpoint)
     local key = Address.key(address_or_err)
     if not available[key] then
       return nil,
-        IOError.protocol('socket', 'dial_order', 'ordering callback returned an unknown destination', {
-          endpoint = endpoint,
-          index = i,
-          address = address_or_err,
-        })
+        IOError.protocol(
+          'socket',
+          'dial_order',
+          'ordering callback returned an unknown destination',
+          {
+            endpoint = endpoint,
+            index = i,
+            address = address_or_err,
+          }
+        )
     end
     if used[key] then
       return nil,
-        IOError.protocol('socket', 'dial_order', 'ordering callback returned a duplicate destination', {
-          endpoint = endpoint,
-          index = i,
-          address = address_or_err,
-        })
+        IOError.protocol(
+          'socket',
+          'dial_order',
+          'ordering callback returned a duplicate destination',
+          {
+            endpoint = endpoint,
+            index = i,
+            address = address_or_err,
+          }
+        )
     end
     used[key] = true
     out[#out + 1] = available[key]
@@ -356,6 +371,7 @@ local function attempt_records(state)
   end
   return attempts
 end
+
 
 local default_clock = Clock.default()
 local unpack_ = table.unpack or unpack
@@ -578,7 +594,7 @@ function State:_attempt_result_ops(current, scope)
       options[#options + 1] = Op.named_each({
         result = result,
         completed_at = now_op(),
-      }):and_then(Op.guard(function(observed)
+    }):and_then(Op.guard(function(observed)
         local normalised
         if not observed.result.connection then
           normalised = IOError.normalise(copy_error_fields(observed.result.error), {
@@ -712,14 +728,14 @@ end
 function State:step_op(query, scope)
   -- The residual operation is derived from the actual transactional view.
   return Op.named_each({
-    state = self.state:read_op(),
-    available_slots = self.attempt_slots:read_op(),
-    now = now_op(),
-  }):and_then(Op.guard(function(view)
-    local outcomes = self:_attempt_result_ops(view.state, scope)
-    local resolutions = self:_resolution_ops(view.state, query)
-    local progress = self:_progress_op(view.state, scope, view.now, view.available_slots)
-    return outcomes:or_else(resolutions:or_else(progress))
+      state = self.state:read_op(),
+      available_slots = self.attempt_slots:read_op(),
+      now = now_op(),
+    }):and_then(Op.guard(function(view)
+      local outcomes = self:_attempt_result_ops(view.state, scope)
+      local resolutions = self:_resolution_ops(view.state, query)
+      local progress = self:_progress_op(view.state, scope, view.now, view.available_slots)
+      return outcomes:or_else(resolutions:or_else(progress))
   end))
 end
 
@@ -849,6 +865,7 @@ function State:report(status, err, completed_at, state)
   end
   return report
 end
+
 
 State.error_summary = error_summary
 return State

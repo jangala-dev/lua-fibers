@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -13,15 +8,9 @@ local Lifetime = require('fibers.lifetime')
 local Task = require('fibers.task')
 
 local function eq(a, b, msg)
-  if a ~= b then
-    error((msg or 'assertion failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
-  end
+  if a ~= b then error((msg or 'assertion failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
 end
-local function truthy(v, msg)
-  if not v then
-    error(msg or 'expected truthy', 2)
-  end
-end
+local function truthy(v, msg) if not v then error(msg or 'expected truthy', 2) end end
 
 -- Task and Scope are different capabilities over one node.
 do
@@ -44,9 +33,7 @@ end
 do
   local task, body_exit, outcome
   fibers.run(function(scope)
-    task = fibers.perform(scope:spawn_op(function()
-      return 'value'
-    end, 'outcomes'))
+    task = fibers.perform(scope:spawn_op(function() return 'value' end, 'outcomes'))
     body_exit = fibers.perform(task:body_result_op())
     outcome = fibers.perform(task:outcome_op())
   end)

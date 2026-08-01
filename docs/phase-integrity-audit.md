@@ -70,12 +70,12 @@ ordinary committed execution phase.
 ### Admission affiliated dormant Lifetimes during construction
 
 `Scope:admit_op` now performs a read-only compatibility check. Runtime identity,
-boundary attachment and the clearing of dormant construction topology occur in
-the LifetimeStore apply hook after the admission transition commits. Defeated,
-abandoned and never-performed admission values leave the Lifetime dormant and
-unaffiliated. The transition re-reads the dormant construction graph when it is
-performed, so a child added after operation construction is included in the
-atomic admission rather than being stranded by an early snapshot.
+boundary attachment and the clearing of dormant construction topology are carried
+by the LifetimeStore's typed committed consequence after the admission state has
+been installed. Defeated, abandoned and never-performed admission values leave the
+Lifetime dormant and unaffiliated. The transition re-reads the dormant construction
+graph when it is performed, so a child added after operation construction is
+included in the atomic admission rather than being stranded by an early snapshot.
 
 ### Cancellation exit nested the runtime cancellation object
 
@@ -121,7 +121,7 @@ or committed host facts and do not reserve, publish or mutate them.
 Effect `key`, `merge` and `prepare` callbacks are read-only and non-yielding.
 Their discharge behaviour is:
 
-| Kind | Candidateted action |
+| Kind | Committed action |
 | --- | --- |
 | `interrupt` | raises the selected interrupt token |
 | `spawn` | transfers one dormant Task body and creates the committed fibre |

@@ -225,11 +225,7 @@ do
     local NixioHost = require('fibers.io.nixio')
     local host = NixioHost.new()
     local delivered = {}
-    local rt = {
-      now = function()
-        return 0
-      end,
-    }
+    local rt = { now = function() return 0 end }
     local read_feed, write_feed = {}, {}
     function read_feed:set(mode, value)
       delivered[#delivered + 1] = { feed = self, mode = mode, value = value }

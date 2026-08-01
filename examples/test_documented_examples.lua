@@ -37,17 +37,12 @@ end)
 
 -- Programming-guide Machine transition.
 fibers.run(function()
-  local Increment = StateMachine.update(
-    'counter.increment',
-    function(value, payload)
-      local next_value = value + payload.by
-      return StateMachine.Ready.write(next_value, next_value)
-    end,
-    nil,
-    function(payload)
-      assert(type(payload.by) == 'number', 'by must be a number')
-    end
-  )
+  local Increment = StateMachine.update('counter.increment', function(value, payload)
+    local next_value = value + payload.by
+    return StateMachine.Ready.write(next_value, next_value)
+  end, nil, function(payload)
+    assert(type(payload.by) == 'number', 'by must be a number')
+  end)
 
   local counter = StateMachine.new(0, 'counter')
   assert(fibers.perform(counter:transition_op(Increment, { by = 1 })) == 1)
@@ -121,6 +116,7 @@ fibers.run(function()
   assert(fibers.perform(b:reader():read_line_op()) == 'hello')
 end)
 
+
 -- Lifetime guide: custody, Grants and Closure use the ordinary Op algebra.
 fibers.run(function(source)
   local worker = FibersScope.new('documented-grant-worker', {
@@ -135,12 +131,11 @@ fibers.run(function(source)
   assert(authorised == resource)
 
   fibers.perform(worker:close_op(grant, 'example complete'))
-  local after_close = fibers.perform(worker
-    :can_op(resource, 'read')
-    :map(function()
+  local after_close = fibers.perform(
+    worker:can_op(resource, 'read'):map(function()
       return true
-    end)
-    :or_else(FibersOp.always(false)))
+    end):or_else(FibersOp.always(false))
+  )
   assert(after_close == false)
 
   fibers.perform(source:move_op(resource, worker))

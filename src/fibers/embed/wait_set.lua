@@ -160,7 +160,12 @@ function WaitSet.deliver(runtime, record, readable, writable)
     local registration = item.registration
     local ready = registration.mode == 'write' and writable or readable
     if ready and item.wait.poller:_host_delivered(registration) then
-      item.wait.feed:set(registration.id, registration.generation, registration.mode, registration.key)
+      item.wait.feed:set(
+        registration.id,
+        registration.generation,
+        registration.mode,
+        registration.key
+      )
       delivered = true
     end
   end

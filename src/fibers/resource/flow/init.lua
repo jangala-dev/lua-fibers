@@ -9,7 +9,6 @@ local Facility = require('fibers.resource.authoring')
 local Lifetime = require('fibers.lifetime')
 local Machine = require('fibers.resource.machine')
 local Op = require('fibers.op')
-local Values = require('fibers.internal.values')
 local Errors = require('fibers.resource.flow.errors')
 local Rope = require('fibers.resource.flow.rope')
 local Direct = require('fibers.internal.direct')
@@ -27,9 +26,7 @@ local Kind = Facility.kind('flow')
 -- Values --------------------------------------------------------------------
 
 local function bytes(value, level)
-  if type(value) ~= 'string' then
-    error('flow bytes must be a string', level or 3)
-  end
+  if type(value) ~= 'string' then error('flow bytes must be a string', level or 3) end
   return value
 end
 
@@ -38,9 +35,7 @@ local function count(value, default, label, positive)
   if type(value) ~= 'number' or value ~= value or value < 0 or value ~= math.floor(value) then
     error((label or 'flow byte count') .. ' must be a non-negative integer', 3)
   end
-  if positive and value == 0 then
-    error((label or 'flow byte count') .. ' must be positive', 3)
-  end
+  if positive and value == 0 then error((label or 'flow byte count') .. ' must be positive', 3) end
   return value
 end
 
@@ -51,9 +46,7 @@ end
 local function options(opts, allowed, label)
   opts = opts or {}
   for key in pairs(opts) do
-    if not allowed[key] then
-      error(label .. ' does not accept ' .. tostring(key), 3)
-    end
+    if not allowed[key] then error(label .. ' does not accept ' .. tostring(key), 3) end
   end
   return opts
 end
@@ -77,23 +70,16 @@ local function lease(flow, record)
   }, Lease)
 end
 
-function Lease:bytes()
-  return self._bytes
-end
-function Lease:length()
-  return #self._bytes
-end
-function Lease:ack_op(n)
-  return self.flow:_ack_lease_op(self, n)
-end
+function Lease:bytes() return self._bytes end
+function Lease:length() return #self._bytes end
+function Lease:ack_op(n) return self.flow:_ack_lease_op(self, n) end
 
-function Lease:release_op()
-  return self.flow:_return_lease_op(self)
-end
 
-function Lease:fail_op(err)
-  return self.flow:_fail_lease_op(self, err)
-end
+function Lease:release_op() return self.flow:_return_lease_op(self) end
+
+
+function Lease:fail_op(err) return self.flow:_fail_lease_op(self, err) end
+
 
 local function space_lease(flow, record)
   return setmetatable({
@@ -105,20 +91,15 @@ local function space_lease(flow, record)
   }, SpaceLease)
 end
 
-function SpaceLease:capacity()
-  return self._capacity
-end
-function SpaceLease:commit_op(value)
-  return self.flow:_commit_space_op(self, value)
-end
+function SpaceLease:capacity() return self._capacity end
+function SpaceLease:commit_op(value) return self.flow:_commit_space_op(self, value) end
 
-function SpaceLease:release_op()
-  return self.flow:_release_space_op(self)
-end
 
-function SpaceLease:fail_op(err)
-  return self.flow:_fail_space_op(self, err)
-end
+function SpaceLease:release_op() return self.flow:_release_space_op(self) end
+
+
+function SpaceLease:fail_op(err) return self.flow:_fail_space_op(self, err) end
+
 
 -- State ---------------------------------------------------------------------
 
@@ -139,12 +120,8 @@ end
 
 local function copy_state(state, clone_rope)
   local out = {}
-  for key, value in pairs(state) do
-    out[key] = value
-  end
-  if clone_rope then
-    out.rope = state.rope:clone()
-  end
+  for key, value in pairs(state) do out[key] = value end
+  if clone_rope then out.rope = state.rope:clone() end
   return out
 end
 
@@ -179,15 +156,9 @@ local function clear_retained(state)
 end
 
 local function write_error(state)
-  if state.output_error then
-    return state.output_error
-  end
-  if not state.input_open then
-    return Errors.CLOSED
-  end
-  if not state.output_open then
-    return Errors.BROKEN_PIPE
-  end
+  if state.output_error then return state.output_error end
+  if not state.input_open then return Errors.CLOSED end
+  if not state.output_open then return Errors.BROKEN_PIPE end
 end
 
 local function find_until(state, sep)
@@ -200,12 +171,8 @@ end
 local Changed
 Changed = Effect.kind({
   name = 'flow_changed',
-  key = function(payload)
-    return payload.flow._fibers_id
-  end,
-  merge = function(first)
-    return first
-  end,
+  key = function(payload) return payload.flow._fibers_id end,
+  merge = function(first) return first end,
   validate_payload = function(_, payload)
     if type(payload.flow) ~= 'table' or payload.flow._fibers_id == nil then
       return nil, { kind = 'invalid_effect_payload', message = 'flow_changed effect requires a Flow' }
@@ -232,13 +199,11 @@ local function transition(flow, rule, payload)
   payload = payload or {}
   payload.flow = flow
   local option = flow._state:transition_op(rule, payload)
-  if rule.mode == 'query' then
-    return option
-  end
+  if rule.mode == 'query' then return option end
   return option:and_then(Op.guard(function(...)
-    local result = Values.pack(...)
+    local result = Facility.pack(...)
     return Op.emit(Effect.of(Changed, { flow = flow })):map(function()
-      return Values.unpack(result, 1, result.n)
+      return Facility.unpack(result, 1, result.n)
     end)
   end))
 end
@@ -261,19 +226,15 @@ local T = {}
 
 T.write = select_when('write', function(state, payload)
   local value = payload.bytes
-  return write_error(state) ~= nil or #value > payload.flow.capacity or #value <= free(payload.flow, state)
+  return write_error(state) ~= nil
+    or #value > payload.flow.capacity
+    or #value <= free(payload.flow, state)
 end, function(state, payload)
   local err = write_error(state)
-  if err then
-    return Ready.same(nil, err)
-  end
+  if err then return Ready.same(nil, err) end
   local value = payload.bytes
-  if #value > payload.flow.capacity then
-    return Ready.same(nil, Errors.CAPACITY)
-  end
-  if #value > free(payload.flow, state) then
-    return Wait
-  end
+  if #value > payload.flow.capacity then return Ready.same(nil, Errors.CAPACITY) end
+  if #value > free(payload.flow, state) then return Wait end
   local next = copy_state(state, true)
   next.rope:append(value)
   return Ready.write(next, #value)
@@ -281,13 +242,9 @@ end, 100)
 
 T.write_some = update('write_some', function(state, payload)
   local value, err = payload.bytes, write_error(state)
-  if err then
-    return Ready.same(nil, value, err)
-  end
+  if err then return Ready.same(nil, value, err) end
   local room = free(payload.flow, state)
-  if room <= 0 or value == '' then
-    return Ready.same(0, value)
-  end
+  if room <= 0 or value == '' then return Ready.same(0, value) end
   local n = math.min(#value, room)
   local next = copy_state(state, true)
   next.rope:append(value:sub(1, n))
@@ -297,17 +254,13 @@ end, 100)
 T.read_some = select_when('read_some', function(state, payload)
   return state.input_error ~= nil or state.rope:length() > 0 or committed_closed(payload.flow, 'input')
 end, function(state, payload)
-  if state.input_error then
-    return Ready.same(nil, state.input_error)
-  end
+  if state.input_error then return Ready.same(nil, state.input_error) end
   local available = state.rope:length()
   if available > 0 then
     local next = copy_state(state, true)
     return Ready.write(next, next.rope:take(math.min(payload.n, available)))
   end
-  if committed_closed(payload.flow, 'input') then
-    return Ready.same(nil, Errors.EOF)
-  end
+  if committed_closed(payload.flow, 'input') then return Ready.same(nil, Errors.EOF) end
   return Wait
 end, 50)
 
@@ -316,45 +269,29 @@ T.read_exactly = select_when('read_exactly', function(state, payload)
     or state.rope:length() >= payload.n
     or committed_closed(payload.flow, 'input')
 end, function(state, payload)
-  if state.input_error then
-    return Ready.same(nil, state.input_error)
-  end
+  if state.input_error then return Ready.same(nil, state.input_error) end
   local available = state.rope:length()
   if available >= payload.n then
     local next = copy_state(state, true)
     return Ready.write(next, next.rope:take(payload.n))
   end
-  if not committed_closed(payload.flow, 'input') then
-    return Wait
-  end
-  if available == 0 then
-    return Ready.same(nil, Errors.EOF, '')
-  end
+  if not committed_closed(payload.flow, 'input') then return Wait end
+  if available == 0 then return Ready.same(nil, Errors.EOF, '') end
   local next = copy_state(state, true)
   return Ready.write(next, nil, Errors.EOF, next.rope:take(available))
 end, 50)
 
 T.read_until = select_when('read_until', function(state, payload)
-  if state.input_error then
-    return true
-  end
+  if state.input_error then return true end
   local finish = find_until(state, payload.sep)
-  if finish then
-    return true
-  end
-  if state.rope:length() > payload.limit and not state.rope:ends_with_prefix(payload.sep) then
-    return true
-  end
+  if finish then return true end
+  if state.rope:length() > payload.limit and not state.rope:ends_with_prefix(payload.sep) then return true end
   return committed_closed(payload.flow, 'input')
 end, function(state, payload)
-  if state.input_error then
-    return Ready.same(nil, state.input_error)
-  end
+  if state.input_error then return Ready.same(nil, state.input_error) end
   local finish, data_len = find_until(state, payload.sep)
   if finish then
-    if data_len > payload.limit then
-      return Ready.same(nil, payload.err)
-    end
+    if data_len > payload.limit then return Ready.same(nil, payload.err) end
     local next = copy_state(state, true)
     local out = next.rope:take(finish)
     return Ready.write(next, payload.include and out or out:sub(1, #out - #payload.sep))
@@ -363,17 +300,11 @@ end, function(state, payload)
   if available > payload.limit and not state.rope:ends_with_prefix(payload.sep) then
     return Ready.same(nil, payload.err)
   end
-  if not committed_closed(payload.flow, 'input') then
-    return Wait
-  end
-  if available == 0 then
-    return Ready.same(nil, Errors.EOF)
-  end
+  if not committed_closed(payload.flow, 'input') then return Wait end
+  if available == 0 then return Ready.same(nil, Errors.EOF) end
   local next = copy_state(state, true)
   local partial = next.rope:take(available)
-  if payload.line then
-    return Ready.write(next, partial)
-  end
+  if payload.line then return Ready.write(next, partial) end
   return Ready.write(next, nil, Errors.EOF, partial)
 end, 50)
 
@@ -381,23 +312,15 @@ T.read_all = select_when('read_all', function(state, payload)
   return state.rope:length() > payload.max or committed_closed(payload.flow, 'input')
 end, function(state, payload)
   local available = state.rope:length()
-  if available > payload.max then
-    return Ready.same(nil, Errors.TOO_LARGE)
-  end
-  if not committed_closed(payload.flow, 'input') then
-    return Wait
-  end
-  if available == 0 then
-    return Ready.same('')
-  end
+  if available > payload.max then return Ready.same(nil, Errors.TOO_LARGE) end
+  if not committed_closed(payload.flow, 'input') then return Wait end
+  if available == 0 then return Ready.same('') end
   local next = copy_state(state, true)
   return Ready.write(next, next.rope:take(available))
 end, 50)
 
 T.peek = query('peek', function(state, payload)
-  if state.rope:length() < payload.n then
-    return Wait
-  end
+  if state.rope:length() < payload.n then return Wait end
   return Ready.same(state.rope:peek(payload.n))
 end, 100)
 
@@ -406,21 +329,15 @@ T.drop = select_when('drop', function(state, payload)
     or state.rope:length() >= payload.n
     or committed_closed(payload.flow, 'input')
 end, function(state, payload)
-  if state.input_error then
-    return Ready.same(nil, state.input_error)
-  end
+  if state.input_error then return Ready.same(nil, state.input_error) end
   local available = state.rope:length()
   if available >= payload.n then
     local next = copy_state(state, true)
     next.rope:take(payload.n)
     return Ready.write(next, payload.n)
   end
-  if not committed_closed(payload.flow, 'input') then
-    return Wait
-  end
-  if available == 0 then
-    return Ready.same(nil, Errors.EOF, 0)
-  end
+  if not committed_closed(payload.flow, 'input') then return Wait end
+  if available == 0 then return Ready.same(nil, Errors.EOF, 0) end
   local next = copy_state(state, true)
   next.rope:take(available)
   return Ready.write(next, nil, Errors.EOF, available)
@@ -436,9 +353,7 @@ end, function(state, payload)
     return Ready.same(nil, Errors.LEASE_ALREADY_ACTIVE)
   end
   if state.rope:is_empty() then
-    if committed_closed(payload.flow, 'input') then
-      return Ready.same(nil, Errors.CLOSED_AND_DRAINED)
-    end
+    if committed_closed(payload.flow, 'input') then return Ready.same(nil, Errors.CLOSED_AND_DRAINED) end
     return Wait
   end
   local next = copy_state(state, true)
@@ -454,15 +369,9 @@ end, 50)
 
 T.ack_lease = update('ack_lease', function(state, payload)
   local current = state.lease
-  if not current or current.id ~= payload.lease.id then
-    return Ready.same(false, Errors.NO_LEASE)
-  end
-  if payload.n > #current.bytes then
-    return Ready.same(false, Errors.LEASE_ACK_TOO_LARGE)
-  end
-  if payload.n == 0 then
-    return Ready.same(true, 0)
-  end
+  if not current or current.id ~= payload.lease.id then return Ready.same(false, Errors.NO_LEASE) end
+  if payload.n > #current.bytes then return Ready.same(false, Errors.LEASE_ACK_TOO_LARGE) end
+  if payload.n == 0 then return Ready.same(true, 0) end
   local next = copy_state(state)
   local remaining = current.bytes:sub(payload.n + 1)
   if remaining == '' then
@@ -475,22 +384,16 @@ end)
 
 T.return_lease = update('return_lease', function(state, payload)
   local current = state.lease
-  if not current or current.id ~= payload.lease.id then
-    return Ready.same(false, Errors.NO_LEASE)
-  end
+  if not current or current.id ~= payload.lease.id then return Ready.same(false, Errors.NO_LEASE) end
   local next = copy_state(state, current.bytes ~= '')
-  if current.bytes ~= '' then
-    next.rope:prepend(current.bytes)
-  end
+  if current.bytes ~= '' then next.rope:prepend(current.bytes) end
   next.lease = nil
   return Ready.write(next, true, #current.bytes)
 end)
 
 T.fail_lease = update('fail_lease', function(state, payload)
   local current = state.lease
-  if not current or current.id ~= payload.lease.id then
-    return Ready.same(false, Errors.NO_LEASE)
-  end
+  if not current or current.id ~= payload.lease.id then return Ready.same(false, Errors.NO_LEASE) end
   local next = copy_state(state)
   next.lease = nil
   next.settled_error = payload.err or Errors.FLOW_ERROR
@@ -501,9 +404,7 @@ T.reserve = select_when('reserve', function(state, payload)
   return write_error(state) ~= nil or state.space ~= nil or free(payload.flow, state) > 0
 end, function(state, payload)
   local err = write_error(state)
-  if err then
-    return Ready.same(nil, err)
-  end
+  if err then return Ready.same(nil, err) end
   if state.space then
     if payload.holder ~= nil and state.space.holder == payload.holder then
       return Ready.same(space_lease(payload.flow, state.space))
@@ -511,9 +412,7 @@ end, function(state, payload)
     return Ready.same(nil, Errors.SPACE_LEASE_ALREADY_ACTIVE)
   end
   local room = free(payload.flow, state)
-  if room <= 0 then
-    return Wait
-  end
+  if room <= 0 then return Wait end
   local next = copy_state(state)
   next.next_space = state.next_space + 1
   next.space = {
@@ -527,25 +426,17 @@ end, 90)
 
 T.commit_space = update('commit_space', function(state, payload)
   local current = state.space
-  if not current or current.id ~= payload.lease.id then
-    return Ready.same(nil, Errors.NO_SPACE_LEASE)
-  end
-  if #payload.bytes > current.capacity then
-    return Ready.same(nil, Errors.SPACE_COMMIT_TOO_LARGE)
-  end
+  if not current or current.id ~= payload.lease.id then return Ready.same(nil, Errors.NO_SPACE_LEASE) end
+  if #payload.bytes > current.capacity then return Ready.same(nil, Errors.SPACE_COMMIT_TOO_LARGE) end
   local next = copy_state(state, payload.bytes ~= '')
   next.space = nil
-  if payload.bytes ~= '' then
-    next.rope:append(payload.bytes)
-  end
+  if payload.bytes ~= '' then next.rope:append(payload.bytes) end
   return Ready.write(next, #payload.bytes)
 end)
 
 T.release_space = update('release_space', function(state, payload)
   local current = state.space
-  if not current or current.id ~= payload.lease.id then
-    return Ready.same(false, Errors.NO_SPACE_LEASE)
-  end
+  if not current or current.id ~= payload.lease.id then return Ready.same(false, Errors.NO_SPACE_LEASE) end
   local next = copy_state(state)
   next.space = nil
   return Ready.write(next, true, current.capacity)
@@ -553,9 +444,7 @@ end)
 
 T.fail_space = update('fail_space', function(state, payload)
   local current = state.space
-  if not current or current.id ~= payload.lease.id then
-    return Ready.same(false, Errors.NO_SPACE_LEASE)
-  end
+  if not current or current.id ~= payload.lease.id then return Ready.same(false, Errors.NO_SPACE_LEASE) end
   local next = copy_state(state)
   next.space = nil
   fail_endpoint(next, 'input', payload.err or Errors.READ_ERROR)
@@ -563,28 +452,20 @@ T.fail_space = update('fail_space', function(state, payload)
 end)
 
 T.flush = query('flush', function(state)
-  if state.settled_error then
-    return Ready.same(nil, state.settled_error)
-  end
-  if retained(state) == 0 then
-    return Ready.same(true)
-  end
+  if state.settled_error then return Ready.same(nil, state.settled_error) end
+  if retained(state) == 0 then return Ready.same(true) end
   return Wait
 end, 100)
 
 T.close_input = update('close_input', function(state)
-  if not state.input_open then
-    return Ready.same(true)
-  end
+  if not state.input_open then return Ready.same(true) end
   local next = copy_state(state)
   close_endpoint(next, 'input')
   return Ready.write(next, true)
 end)
 
 T.input_closed = query('input_closed', function(_, payload)
-  if committed_closed(payload.flow, 'input') then
-    return Ready.same(true)
-  end
+  if committed_closed(payload.flow, 'input') then return Ready.same(true) end
   return Wait
 end, 100)
 
@@ -599,16 +480,12 @@ T.shutdown_output = update('shutdown_output', function(state, payload)
   fail_endpoint(next, 'output', state.output_error or Errors.BROKEN_PIPE)
   local pending = retained(state)
   clear_retained(next)
-  if pending > 0 then
-    next.settled_error = payload.err
-  end
+  if pending > 0 then next.settled_error = payload.err end
   return Ready.write(next, true)
 end)
 
 T.output_closed = query('output_closed', function(_, payload)
-  if committed_closed(payload.flow, 'output') then
-    return Ready.same(true)
-  end
+  if committed_closed(payload.flow, 'output') then return Ready.same(true) end
   return Wait
 end, 100)
 
@@ -617,16 +494,12 @@ T.fail_write = update('fail_write', function(state, payload)
   fail_endpoint(next, 'output', payload.err)
   local pending = retained(state)
   clear_retained(next)
-  if pending > 0 then
-    next.settled_error = payload.err
-  end
+  if pending > 0 then next.settled_error = payload.err end
   return Ready.write(next, false, payload.err)
 end)
 
 T.shutdown = update('shutdown', function(state)
-  if not state.input_open and not state.output_open and retained(state) == 0 then
-    return Ready.same(true)
-  end
+  if not state.input_open and not state.output_open and retained(state) == 0 then return Ready.same(true) end
   local next = copy_state(state)
   close_endpoint(next, 'input')
   close_endpoint(next, 'output')
@@ -635,12 +508,8 @@ T.shutdown = update('shutdown', function(state)
 end)
 
 T.closed = query('closed', function(state)
-  if state.input_open or state.output_open or retained(state) ~= 0 then
-    return Wait
-  end
-  if state.settled_error then
-    return Ready.same(nil, state.settled_error)
-  end
+  if state.input_open or state.output_open or retained(state) ~= 0 then return Wait end
+  if state.settled_error then return Ready.same(nil, state.settled_error) end
   return Ready.same(true)
 end, 100)
 
@@ -650,20 +519,18 @@ local function define_endpoint(endpoint, role, right)
   Lifetime.define(endpoint, {
     role = role,
     rights = { [right] = true, use = true },
-    closure = Closure.request_then_wait(function(_, record)
-      return record.item:close_op()
-    end, function(_, record)
-      return record.item:closed_op()
-    end, { name = role, finish_result = Closure.require_ok(role .. ' closure failed') }),
+    closure = Closure.request_then_wait(
+      function(_, record) return record.item:close_op() end,
+      function(_, record) return record.item:closed_op() end,
+      { name = role, finish_result = Closure.require_ok(role .. ' closure failed') }
+    ),
   })
 end
 
 local function live(handle, body)
   local lifetime = Lifetime.of(handle)
   local phase = lifetime and lifetime:current_state().closure_phase
-  if phase == 'closed' or phase == 'closure_failed' then
-    return Op.always(nil, Errors.RETIRED)
-  end
+  if phase == 'closed' or phase == 'closure_failed' then return Op.always(nil, Errors.RETIRED) end
   return body()
 end
 
@@ -671,20 +538,16 @@ end
 
 function Inlet:write_op(value)
   value = bytes(value, 2)
-  if value == '' then
-    return Op.always(0)
-  end
-  return live(self, function()
-    return transition(self.flow, T.write, { bytes = value })
-  end)
+  if value == '' then return Op.always(0) end
+  return live(self, function() return transition(self.flow, T.write, { bytes = value }) end)
 end
+
 
 function Inlet:write_some_op(value)
   value = bytes(value, 2)
-  return live(self, function()
-    return transition(self.flow, T.write_some, { bytes = value })
-  end)
+  return live(self, function() return transition(self.flow, T.write_some, { bytes = value }) end)
 end
+
 
 function Inlet:reserve_some_op(n, holder, meta)
   n = count(n, 1, 'flow space reservation size', true)
@@ -693,53 +556,43 @@ function Inlet:reserve_some_op(n, holder, meta)
   end)
 end
 
-function Inlet:flush_op()
-  return transition(self.flow, T.flush)
-end
 
-function Inlet:close_op()
-  return transition(self.flow, T.close_input)
-end
+function Inlet:flush_op() return transition(self.flow, T.flush) end
 
-function Inlet:closed_op()
-  return transition(self.flow, T.input_closed)
-end
+
+function Inlet:close_op() return transition(self.flow, T.close_input) end
+
+
+function Inlet:closed_op() return transition(self.flow, T.input_closed) end
+
 
 function Inlet:fail_op(err)
   return transition(self.flow, T.fail_input, { err = err or Errors.READ_ERROR })
 end
 
+
 -- Outlet --------------------------------------------------------------------
 
 function Outlet:read_some_op(n)
   n = count(n, 1, 'flow read size')
-  if n == 0 then
-    return Op.always('')
-  end
-  return live(self, function()
-    return transition(self.flow, T.read_some, { n = n })
-  end)
+  if n == 0 then return Op.always('') end
+  return live(self, function() return transition(self.flow, T.read_some, { n = n }) end)
 end
+
 
 function Outlet:read_exactly_op(n)
   n = count(n, 0, 'flow exact read size')
-  if n == 0 then
-    return Op.always('')
-  end
-  return live(self, function()
-    return transition(self.flow, T.read_exactly, { n = n })
-  end)
+  if n == 0 then return Op.always('') end
+  return live(self, function() return transition(self.flow, T.read_exactly, { n = n }) end)
 end
+
 
 function Outlet:peek_exactly_op(n)
   n = count(n, 1, 'flow peek size')
-  if n == 0 then
-    return Op.always('')
-  end
-  return live(self, function()
-    return transition(self.flow, T.peek, { n = n })
-  end)
+  if n == 0 then return Op.always('') end
+  return live(self, function() return transition(self.flow, T.peek, { n = n }) end)
 end
+
 
 function Outlet:read_until_op(sep, opts)
   opts = options(opts, { include = true, max = true }, 'read_until_op options')
@@ -754,6 +607,7 @@ function Outlet:read_until_op(sep, opts)
   end)
 end
 
+
 function Outlet:read_line_op(opts)
   opts = options(opts, { terminator = true, keep_terminator = true, max = true }, 'read_line_op options')
   return live(self, function()
@@ -767,25 +621,22 @@ function Outlet:read_line_op(opts)
   end)
 end
 
+
 function Outlet:read_all_op(opts)
   opts = options(opts, { max = true }, 'read_all_op options')
-  if opts.max == nil then
-    error('read_all_op expects opts.max', 2)
-  end
+  if opts.max == nil then error('read_all_op expects opts.max', 2) end
   return live(self, function()
     return transition(self.flow, T.read_all, { max = count(opts.max, nil, 'flow read_all max') })
   end)
 end
 
+
 function Outlet:drop_op(n)
   n = count(n, 0, 'flow drop size')
-  if n == 0 then
-    return Op.always(0)
-  end
-  return live(self, function()
-    return transition(self.flow, T.drop, { n = n })
-  end)
+  if n == 0 then return Op.always(0) end
+  return live(self, function() return transition(self.flow, T.drop, { n = n }) end)
 end
+
 
 function Outlet:splice_to_op(inlet, n)
   n = count(n, 0, 'flow splice size')
@@ -799,6 +650,7 @@ function Outlet:splice_to_op(inlet, n)
   end))
 end
 
+
 function Outlet:lease_some_op(n, holder, meta)
   n = count(n, 1, 'flow lease size', true)
   return live(self, function()
@@ -806,18 +658,20 @@ function Outlet:lease_some_op(n, holder, meta)
   end)
 end
 
+
 function Outlet:close_op(reason)
   return transition(self.flow, T.shutdown_output, { err = reason or Errors.CLOSED })
 end
 
-function Outlet:closed_op()
-  return transition(self.flow, T.output_closed)
-end
+
+function Outlet:closed_op() return transition(self.flow, T.output_closed) end
+
 
 function Outlet:fail_op(err)
   err = err or Errors.WRITE_ERROR
   return transition(self.flow, T.fail_write, { err = err })
 end
+
 
 -- Lease operations ----------------------------------------------------------
 
@@ -872,76 +726,52 @@ function Flow.new(limit, name)
   return flow
 end
 
-function Flow:inlet()
-  return self._inlet
-end
-function Flow:outlet()
-  return self._outlet
-end
-function Flow:abort_op()
-  return transition(self, T.shutdown)
-end
+function Flow:inlet() return self._inlet end
+function Flow:outlet() return self._outlet end
+function Flow:abort_op() return transition(self, T.shutdown) end
 
-function Flow:closed_op()
-  return transition(self, T.closed)
-end
+
+function Flow:closed_op() return transition(self, T.closed) end
+
 
 -- Host reactor contract -----------------------------------------------------
 
 function Flow:_read_serviceable()
   local state = self._state.value
   return state
-      and not state.input_error
-      and not state.output_error
-      and state.input_open
-      and state.output_open
-      and not state.space
-      and free(self, state) > 0
+    and not state.input_error
+    and not state.output_error
+    and state.input_open
+    and state.output_open
+    and not state.space
+    and free(self, state) > 0
     or false
 end
 
 function Flow:_write_serviceable()
   local state = self._state.value
   return state
-      and not state.output_error
-      and state.output_open
-      and (state.lease ~= nil or not state.rope:is_empty())
+    and not state.output_error
+    and state.output_open
+    and (state.lease ~= nil or not state.rope:is_empty())
     or false
 end
 
 function Flow:_read_terminal_reason()
   local state = self._state.value
-  if not state then
-    return nil
-  end
-  if not state.output_open then
-    return 'reader_closed'
-  end
-  if state.input_error then
-    return state.input_error
-  end
-  if state.output_error then
-    return state.output_error
-  end
-  if not state.input_open then
-    return Errors.EOF
-  end
+  if not state then return nil end
+  if not state.output_open then return 'reader_closed' end
+  if state.input_error then return state.input_error end
+  if state.output_error then return state.output_error end
+  if not state.input_open then return Errors.EOF end
 end
 
 function Flow:_write_terminal_reason(draining)
   local state = self._state.value
-  if not state then
-    return nil
-  end
-  if state.output_error then
-    return state.output_error
-  end
-  if not state.output_open then
-    return Errors.BROKEN_PIPE
-  end
-  if state.input_error then
-    return state.input_error
-  end
+  if not state then return nil end
+  if state.output_error then return state.output_error end
+  if not state.output_open then return Errors.BROKEN_PIPE end
+  if state.input_error then return state.input_error end
   if not state.input_open and not state.lease and state.rope:is_empty() then
     return draining and Errors.CLOSED_AND_DRAINED or Errors.CLOSED
   end
@@ -959,23 +789,7 @@ Flow.Error = {
 Direct.install(Lease, { 'ack', 'release', 'fail' })
 Direct.install(SpaceLease, { 'commit', 'release', 'fail' })
 Direct.install(Inlet, { 'write', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail' })
-Direct.install(
-  Outlet,
-  {
-    'read_some',
-    'read_exactly',
-    'peek_exactly',
-    'read_until',
-    'read_line',
-    'read_all',
-    'drop',
-    'splice_to',
-    'lease_some',
-    'close',
-    'closed',
-    'fail',
-  }
-)
+Direct.install(Outlet, { 'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line', 'read_all', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail' })
 Direct.install(Flow, { 'abort', 'closed' })
 
 return Flow

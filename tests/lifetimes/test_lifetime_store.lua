@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local fibers = require('fibers')
@@ -15,15 +10,9 @@ local Scope = require('fibers.scope')
 local Closure = require('fibers.closure')
 
 local function eq(a, b, msg)
-  if a ~= b then
-    error((msg or 'assertion failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2)
-  end
+  if a ~= b then error((msg or 'assertion failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
 end
-local function truthy(v, msg)
-  if not v then
-    error(msg or 'expected truthy', 2)
-  end
-end
+local function truthy(v, msg) if not v then error(msg or 'expected truthy', 2) end end
 
 local function resource(name, children)
   local value = { name = name }
@@ -60,6 +49,7 @@ do
   eq(before:current_state().custodian, nil)
 end
 
+
 -- Lifetime definitions are one-shot and structural children must be explicit.
 do
   local value = resource('one-shot-definition')
@@ -87,9 +77,7 @@ end
 do
   local a, b = resource('cycle-a'), resource('cycle-b')
   Lifetime.of(a):add_child(b)
-  local ok, err = pcall(function()
-    Lifetime.of(b):add_child(a)
-  end)
+  local ok, err = pcall(function() Lifetime.of(b):add_child(a) end)
   eq(ok, false)
   truthy(tostring(err):match('acyclic tree'))
 
@@ -97,9 +85,7 @@ do
   Lifetime.of(c):add_child(d)
   Lifetime.of(d)._construction_children[1] = Lifetime.of(c)
   Lifetime.of(c)._construction_parent = Lifetime.of(d)
-  ok, err = pcall(function()
-    Lifetime.of(c):bind_runtime(Runtime.new())
-  end)
+  ok, err = pcall(function() Lifetime.of(c):bind_runtime(Runtime.new()) end)
   eq(ok, false)
   truthy(tostring(err):match('acyclic tree'))
   eq(Lifetime.of(c).runtime, nil, 'failed validation must not partially bind the root')
@@ -164,10 +150,7 @@ end
 do
   local started = false
   fibers.run(function(scope)
-    local op = scope:spawn_op(function()
-      started = true
-      return 'ok'
-    end, 'inert-start')
+    local op = scope:spawn_op(function() started = true; return 'ok' end, 'inert-start')
     eq(started, false)
     local task = fibers.perform(op)
     eq(fibers.perform(task:await_op()), 'ok')
@@ -183,14 +166,10 @@ do
   local s2 = Scope.new('runtime-two', { runtime = rt2, closure = Closure.nursery() })
   local item = resource('runtime-local')
   local admitted
-  rt1:spawn_raw(function()
-    admitted = rt1:perform(s1:admit_op(item))
-  end, 'admit-one', s1)
+  rt1:spawn_raw(function() admitted = rt1:perform(s1:admit_op(item)) end, 'admit-one', s1)
   rt1:run()
   eq(admitted, item)
-  local ok, err = pcall(function()
-    item._lifetime:bind_runtime(rt2)
-  end)
+  local ok, err = pcall(function() item._lifetime:bind_runtime(rt2) end)
   eq(ok, false)
   truthy(tostring(err):match('another Runtime'))
   eq(s2._lifetime.runtime, rt2)

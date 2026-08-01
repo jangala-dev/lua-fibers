@@ -101,9 +101,7 @@ end
 do
   local rejected = pcall(function()
     Lifetime.define({ name = 'function-protocol-rejected' }, {
-      closure = function()
-        return Op.always(true)
-      end,
+      closure = function() return Op.always(true) end,
     })
   end)
   assert_eq(rejected, false, 'function Closure protocols should be rejected')

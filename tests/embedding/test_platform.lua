@@ -1,11 +1,5 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua', './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Platform = require('fibers.io.platform')
@@ -20,9 +14,7 @@ local function provider(name, family, methods, capabilities)
     wait_domain = family,
     capabilities = capabilities or {},
   }
-  for key, value in pairs(methods or {}) do
-    out[key] = value
-  end
+  for key, value in pairs(methods or {}) do out[key] = value end
   function out:close()
     closed[#closed + 1] = self.name
     return true
@@ -45,28 +37,18 @@ local sockets = provider('sockets', 'numeric-fd', {
   end,
 }, { socket_ipv4 = true, socket_unix = true })
 local files_and_processes = provider('system', 'numeric-fd', {
-  create_pipe = function(self)
-    return self.name .. ':reader', self.name .. ':writer'
-  end,
-  file_provider = function(self)
-    return self.name .. ':files'
-  end,
-  start_process = function(self, spec)
-    return self.name .. ':' .. spec.command
-  end,
+  create_pipe = function(self) return self.name .. ':reader', self.name .. ':writer' end,
+  file_provider = function(self) return self.name .. ':files' end,
+  start_process = function(self, spec) return self.name .. ':' .. spec.command end,
 }, { file_backend = 'worker', process_groups = 'session' })
 local resolver = provider('resolver', 'callback', {
-  resolve = function(self, endpoint)
-    return { self.name .. ':' .. endpoint.host }
-  end,
+  resolve = function(self, endpoint) return { self.name .. ':' .. endpoint.host } end,
 }, { resolver_blocking = false })
+
 
 assert(Platform.compose == nil, 'Platform.compose should be removed')
 local legacy_ok, legacy_err = pcall(Platform.new, { driver = driver })
-assert(
-  not legacy_ok and tostring(legacy_err):match('does not accept'),
-  'legacy top-level platform slots should fail'
-)
+assert(not legacy_ok and tostring(legacy_err):match('does not accept'), 'legacy top-level platform slots should fail')
 legacy_ok, legacy_err = pcall(Platform.new, { providers = { driver = driver } })
 assert(not legacy_ok and tostring(legacy_err):match('does not accept'), 'legacy provider aliases should fail')
 
@@ -97,16 +79,11 @@ assert(platform:provider('socket') == sockets)
 assert(platform:close())
 assert(#closed == 4, 'each distinct owned provider should close once')
 
+
 local complete = provider('complete', 'numeric-fd', {
-  now = function()
-    return 4
-  end,
-  block = function()
-    return nil, 'not-ready'
-  end,
-  create_listener = function()
-    return 'complete-listener'
-  end,
+  now = function() return 4 end,
+  block = function() return nil, 'not-ready' end,
+  create_listener = function() return 'complete-listener' end,
 })
 local from_complete = Platform.from(complete, { owns_providers = false })
 assert(from_complete:now() == 4)
@@ -114,9 +91,7 @@ assert(from_complete:create_listener() == 'complete-listener')
 assert(from_complete:close())
 
 local incompatible = provider('incompatible', 'opaque-handle', {
-  create_listener = function()
-    return true
-  end,
+  create_listener = function() return true end,
 })
 local ok, err = pcall(Platform.new, {
   providers = { clock = driver, wait = driver, socket = incompatible },

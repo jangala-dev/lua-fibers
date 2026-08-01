@@ -352,9 +352,7 @@ function tests.file_close_waits_for_private_lifetime_descendants()
 
   function provider:open(path, mode, opts)
     local backend, err = original_open(self, path, mode, opts)
-    if not backend then
-      return nil, err
-    end
+    if not backend then return nil, err end
     local original_close = backend.close
     function backend:close(reason)
       fibers.spawn(function()

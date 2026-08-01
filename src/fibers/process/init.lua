@@ -311,18 +311,12 @@ function Process:communicate(opts)
   local function failure_op(task)
     return task:body_result_op():and_then(Op.guard(function(exit)
       local _, task_err = Exit.unwrap(exit)
-      if task_err ~= nil then
-        return Op.always(task_err)
-      end
+      if task_err ~= nil then return Op.always(task_err) end
       return Op.never()
     end))
   end
-  if stdout_task then
-    alternatives.stdout_failed = failure_op(stdout_task)
-  end
-  if stderr_task then
-    alternatives.stderr_failed = failure_op(stderr_task)
-  end
+  if stdout_task then alternatives.stdout_failed = failure_op(stdout_task) end
+  if stderr_task then alternatives.stderr_failed = failure_op(stderr_task) end
 
   local event, value = rt:_perform_current(Op.named_choice(alternatives), nil, true)
   if event == 'stdout_failed' then
@@ -352,6 +346,7 @@ function Process:communicate(opts)
   end
   return { status = parts.status, stdout = stdout, stderr = stderr }
 end
+
 
 local function stream_bridge(source, destination, opts)
   opts = opts or {}
@@ -781,11 +776,12 @@ function Command:launch_op(opts)
       end)
     end, name, parent_scope, { lifetime = proc._lifetime, closure = parent_scope.closure })
 
-    return scope:admit_op(proc):and_then(proc._task:spawn_effect_op()):map(function()
-      return proc
-    end)
+    return scope:admit_op(proc)
+      :and_then(proc._task:spawn_effect_op())
+      :map(function() return proc end)
   end)
 end
+
 
 function Command:start(opts)
   local proc, launch_err = self:launch(opts)
@@ -831,19 +827,6 @@ Module.Process = Process
 Module.Error = IOError
 
 Direct.install(Command, { 'launch' })
-Direct.install(
-  Process,
-  {
-    'launch_succeeded',
-    'launch_failed',
-    'launch_result',
-    'result',
-    'signal',
-    'terminate',
-    'kill',
-    'request_close',
-    'closed',
-  }
-)
+Direct.install(Process, { 'launch_succeeded', 'launch_failed', 'launch_result', 'result', 'signal', 'terminate', 'kill', 'request_close', 'closed' })
 
 return Module

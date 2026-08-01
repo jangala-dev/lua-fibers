@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Op = require('fibers.op')
@@ -14,10 +9,7 @@ local Rendezvous = require('fibers.resource.rendezvous')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -27,12 +19,8 @@ end
 
 local function exchange_lanes(channel, puts, gets)
   local lanes = {}
-  for _ = 1, puts do
-    lanes[#lanes + 1] = channel:put_op(true)
-  end
-  for _ = 1, gets do
-    lanes[#lanes + 1] = channel:get_op()
-  end
+  for _ = 1, puts do lanes[#lanes + 1] = channel:put_op(true) end
+  for _ = 1, gets do lanes[#lanes + 1] = channel:get_op() end
   return lanes
 end
 
@@ -63,9 +51,7 @@ do
   local function chain(length, fail)
     local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 64 })
     local channels = {}
-    for i = 1, length do
-      channels[i] = Rendezvous.new('demand-chain-' .. i)
-    end
+    for i = 1, length do channels[i] = Rendezvous.new('demand-chain-' .. i) end
 
     for i = 1, length do
       local index = i
@@ -82,9 +68,7 @@ do
 
     local result
     runtime:spawn_raw(function()
-      local preferred = channels[1]:put_op(0):map(function()
-        return 'preferred'
-      end)
+      local preferred = channels[1]:put_op(0):map(function() return 'preferred' end)
       result = runtime:perform(preferred:or_else(Op.always('fallback')))
     end, 'chain-focus')
     local status = runtime:run()
@@ -143,9 +127,7 @@ do
 
   local result
   runtime:spawn_raw(function()
-    local preferred = Op.each(exchange_lanes(channel, 8, 8)):map(function()
-      return 'preferred'
-    end)
+    local preferred = Op.each(exchange_lanes(channel, 8, 8)):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
   end, 'perfect-root-a')
 
@@ -168,12 +150,8 @@ do
   runtime:spawn_raw(function()
     local lanes = { Op.together(exchange_lanes(complete, 8, 8)) }
     local constrained_lanes = exchange_lanes(constrained, 4, 4)
-    for i = 1, #constrained_lanes do
-      lanes[#lanes + 1] = constrained_lanes[i]
-    end
-    local preferred = Op.each(lanes):map(function()
-      return 'preferred'
-    end)
+    for i = 1, #constrained_lanes do lanes[#lanes + 1] = constrained_lanes[i] end
+    local preferred = Op.each(lanes):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
   end, 'mixed-root-a')
 
@@ -187,15 +165,11 @@ do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 32 })
   local channel = Rendezvous.new('closed-frontier-matching-backtrack')
   local lanes = {}
-  for i = 1, 16 do
-    lanes[#lanes + 1] = channel:put_op(i)
-  end
+  for i = 1, 16 do lanes[#lanes + 1] = channel:put_op(i) end
   for i = 1, 16 do
     if i == 1 then
       lanes[#lanes + 1] = channel:get_op():and_then(Op.guard(function(value)
-        if value == 16 then
-          return Op.never()
-        end
+        if value == 16 then return Op.never() end
         return Op.always(value)
       end))
     else
@@ -205,9 +179,7 @@ do
 
   local result
   runtime:spawn_raw(function()
-    local preferred = Op.together(lanes):map(function()
-      return 'preferred'
-    end)
+    local preferred = Op.together(lanes):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
   end, 'matching-backtrack-focus')
 

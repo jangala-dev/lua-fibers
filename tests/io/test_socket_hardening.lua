@@ -35,9 +35,7 @@ local function yield_turns(n)
 end
 
 local function wait_for_queue(listener, count)
-  while listener.offers._queue:length() < count do
-    yield_turns(1)
-  end
+  while listener.offers._queue:length() < count do yield_turns(1) end
   local state = listener.offers._queue._location.value
   local rows, node = {}, state.front
   while node do
@@ -50,9 +48,7 @@ local function wait_for_queue(listener, count)
     back[#back + 1] = node.value[1]
     node = node.next
   end
-  for i = #back, 1, -1 do
-    rows[#rows + 1] = { value = back[i] }
-  end
+  for i = #back, 1, -1 do rows[#rows + 1] = { value = back[i] } end
   return rows
 end
 
@@ -68,11 +64,7 @@ do
 
     fibers.scope({ name = 'connection-handler' }, function(handler)
       accepted = listener:accept()
-      assert_eq(
-        Lifetime.of(accepted):current_state().custodian,
-        handler:lifetime(),
-        'accepted Stream should move into handler scope'
-      )
+      assert_eq(Lifetime.of(accepted):current_state().custodian, handler:lifetime(), 'accepted Stream should move into handler scope')
       assert_truthy(
         Lifetime.of(accepted:reader()):current_state().custodian == handler:lifetime(),
         'reader child should move with Stream subtree'
@@ -83,11 +75,7 @@ do
       )
     end)
 
-    assert_eq(
-      Lifetime.of(accepted):current_state().custodian,
-      nil,
-      'handler Closure should release the accepted Stream'
-    )
+    assert_eq(Lifetime.of(accepted):current_state().custodian, nil, 'handler Closure should release the accepted Stream')
     assert_truthy(accepted.handle.closed, 'handler Closure should close the accepted host handle')
     client:close('custody test complete')
     listener:close('custody test complete')
@@ -128,21 +116,13 @@ do
     fibers.scope({ name = 'listener-origin' }, function(origin)
       listener = socket.listen_inet('127.0.0.1', 0, { name = 'moved-listener' })
       assert_eq(Lifetime.of(listener), listener:lifetime())
-      assert_eq(
-        listener:lifetime().has_body,
-        false,
-        'Listener Lifetime should not carry a ceremonial driver body'
-      )
+      assert_eq(listener:lifetime().has_body, false, 'Listener Lifetime should not carry a ceremonial driver body')
       local listener_roots = fibers.perform(origin:children_op())
-      assert_eq(#listener_roots, 1, "Listener should be the one root in its caller's custody")
+      assert_eq(#listener_roots, 1, "Listener should be the one root in its caller\'s custody")
       assert_eq(listener_roots[1], listener)
       fibers.perform(origin:move_op(listener, root))
       assert_eq(Lifetime.of(listener):current_state().custodian, root:lifetime())
-      assert_eq(
-        Lifetime.of(listener):current_state().custodian,
-        root:lifetime(),
-        'Listener move should reparent one Lifetime root'
-      )
+      assert_eq(Lifetime.of(listener):current_state().custodian, root:lifetime(), 'Listener move should reparent one Lifetime root')
     end)
 
     local address = listener:local_address()
@@ -152,15 +132,11 @@ do
       assert_eq(Lifetime.of(dial), dial:lifetime())
       assert_truthy(dial:lifetime().has_body, 'Dial Lifetime should carry its running body')
       local dial_roots = fibers.perform(origin:children_op())
-      assert_eq(#dial_roots, 1, "Dial should be the one root in its caller's custody")
+      assert_eq(#dial_roots, 1, "Dial should be the one root in its caller\'s custody")
       assert_eq(dial_roots[1], dial)
       fibers.perform(origin:move_op(dial, root))
       assert_eq(Lifetime.of(dial):current_state().custodian, root:lifetime())
-      assert_eq(
-        Lifetime.of(dial):current_state().custodian,
-        root:lifetime(),
-        'Dial move should reparent one Lifetime root'
-      )
+      assert_eq(Lifetime.of(dial):current_state().custodian, root:lifetime(), 'Dial move should reparent one Lifetime root')
     end)
 
     local client = dial:result()
@@ -181,10 +157,8 @@ do
       accept_capacity = 1,
     })
     local address = listener:local_address()
-    local c1 =
-      socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-1' }):result()
-    local c2 =
-      socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-2' }):result()
+    local c1 = socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-1' }):result()
+    local c2 = socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-2' }):result()
 
     local rows = wait_for_queue(listener, 1)
     yield_turns(2) -- allow the driver to reach the second, blocked queue insertion
@@ -205,8 +179,7 @@ do
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, { name = 'close-race-listener' })
     local address = listener:local_address()
-    local client =
-      socket.dial(socket.inet_address(address.host, address.port), { name = 'close-race-client' }):result()
+    local client = socket.dial(socket.inet_address(address.host, address.port), { name = 'close-race-client' }):result()
     wait_for_queue(listener, 1)
 
     fibers.perform(listener.lifecycle:request_stop_op('simulated terminal listener'))
@@ -237,21 +210,11 @@ do
       local connected_state = dial_ref:state_value()
       connection_ref = connected_state.connection
       assert_truthy(connection_ref, 'dial should have a successful untaken connection')
-      assert_eq(
-        Lifetime.of(connection_ref):current_state().custodian,
-        connected_state.source_scope:lifetime()
-      )
-      assert_eq(
-        fibers.perform(Op.always('not taken'):or_else(dial_ref:connected_op(fibers.current_scope()))),
-        'not taken'
-      )
+      assert_eq(Lifetime.of(connection_ref):current_state().custodian, connected_state.source_scope:lifetime())
+      assert_eq(fibers.perform(Op.always('not taken'):or_else(dial_ref:connected_op(fibers.current_scope()))), 'not taken')
     end)
 
-    assert_eq(
-      Lifetime.of(connection_ref):current_state().custodian,
-      nil,
-      'Dial Closure should close an untaken connection'
-    )
+    assert_eq(Lifetime.of(connection_ref):current_state().custodian, nil, 'Dial Closure should close an untaken connection')
     assert_truthy(connection_ref.handle.closed, 'Dial Closure should close untaken connection')
     listener:close('untaken test complete')
     listener:closed()
@@ -269,11 +232,7 @@ do
 
     fibers.scope({ name = 'dial-target' }, function(target)
       local connection = dial:result()
-      assert_eq(
-        Lifetime.of(connection):current_state().custodian,
-        target:lifetime(),
-        'Dial result should move connection into caller scope'
-      )
+      assert_eq(Lifetime.of(connection):current_state().custodian, target:lifetime(), 'Dial result should move connection into caller scope')
       assert_eq(dial:closed(), true, 'Dial driver should finish after custody transfer')
     end)
 
@@ -351,8 +310,7 @@ do
       accept_capacity = 1,
     })
     local address = listener_ref:local_address()
-    local client =
-      socket.dial(socket.inet_address(address.host, address.port), { name = 'owner-seal-client' }):result()
+    local client = socket.dial(socket.inet_address(address.host, address.port), { name = 'owner-seal-client' }):result()
     queued_ref = wait_for_queue(listener_ref, 1)[1].value
     client:close('owner-seal test complete')
     -- Return without closing the listener.

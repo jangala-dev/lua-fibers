@@ -20,9 +20,7 @@ end
 
 local function copy(value)
   local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = item
-  end
+  for key, item in pairs(value or {}) do out[key] = item end
   return out
 end
 

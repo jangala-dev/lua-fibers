@@ -101,7 +101,11 @@ end
 
 local function test_canonical_algebra_vocabulary()
   assert_eq(Op.always().kind, 'always', 'always is the canonical value term')
-  assert_eq(Op.always():and_then(Op.always()).kind, 'and_then', 'and_then is the canonical sequencing term')
+  assert_eq(
+    Op.always():and_then(Op.always()).kind,
+    'and_then',
+    'and_then is the canonical sequencing term'
+  )
   assert_eq(
     Op.guard(function()
       return Op.always()
@@ -115,11 +119,7 @@ local function test_canonical_algebra_vocabulary()
     'or_else is the canonical residual fallback term'
   )
   assert_eq(Op.each({ Op.always() }).kind, 'product', 'each is the canonical independent product term')
-  assert_eq(
-    Op.together({ Op.always() }).kind,
-    'product',
-    'together is the canonical interacting product term'
-  )
+  assert_eq(Op.together({ Op.always() }).kind, 'product', 'together is the canonical interacting product term')
 
   local each_varargs = Op.each(Op.always('a'), Op.always('b'))
   assert_eq(#each_varargs.lanes, 2, 'each accepts Op varargs')
@@ -202,14 +202,14 @@ local function test_choice_selects_one_world_and_discards_loser()
   local got
 
   local winner = Op.emit(TC.tag('choice.winner')):and_then(Op.always('winner'):wrap(function(v)
-    wraps[#wraps + 1] = 'winner-wrap'
-    return v
-  end))
+      wraps[#wraps + 1] = 'winner-wrap'
+      return v
+    end))
 
   local loser = Op.emit(TC.tag('choice.loser')):and_then(Op.always('loser'):wrap(function(v)
-    wraps[#wraps + 1] = 'loser-wrap'
-    return v
-  end))
+      wraps[#wraps + 1] = 'loser-wrap'
+      return v
+    end))
 
   rt:spawn_raw(function()
     got = rt:perform(Op.choice(winner, loser))
@@ -424,11 +424,15 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
   })
 
   local op = Op.emit(TC.tag('wrap.before')):and_then(
-    cell:write_op(9):and_then(Op.emit(TC.tag('wrap.after')):and_then(Op.always('value'):wrap(function(v)
-      timeline[#timeline + 1] = 'wrap'
-      assert_eq(cell.value, 9, 'wrap runs after commit')
-      return v .. ':wrapped'
-    end)))
+    cell:write_op(9):and_then(
+      Op.emit(TC.tag('wrap.after')):and_then(
+        Op.always('value'):wrap(function(v)
+          timeline[#timeline + 1] = 'wrap'
+          assert_eq(cell.value, 9, 'wrap runs after commit')
+          return v .. ':wrapped'
+        end)
+      )
+    )
   )
 
   rt:spawn_raw(function()
@@ -642,8 +646,8 @@ local function test_deferred_map_and_and_then_after_rendezvous()
     rt:spawn_raw(function()
       got = rt:perform(ch:get_op():and_then(Op.guard(function(v)
         return cell:write_op(v):and_then(cell:read_op():map(function(current)
-          return current .. ':done'
-        end))
+            return current .. ':done'
+          end))
       end)))
     end, 'deferred-and_then-receiver')
     rt:spawn_raw(function()
@@ -707,11 +711,7 @@ local function test_together_is_parallel_not_sequential_for_cell_views()
   assert_status(rt:run(), 'found')
   assert_eq(cell.value, 1, 'together commits the selected write')
   assert_eq(rows[1][1], true)
-  assert_eq(
-    rows[2][1],
-    0,
-    'sibling lane in together sees the shared pre-transaction view, not a sequential write'
-  )
+  assert_eq(rows[2][1], 0, 'sibling lane in together sees the shared pre-transaction view, not a sequential write')
 end
 
 local function test_together_or_else_prefers_internal_rendezvous_over_fallback()
@@ -872,12 +872,12 @@ local function test_wrap_may_perform_new_transaction_after_commit()
   })
 
   local outer = Op.emit(TC.tag('outer')):and_then(cell:write_op(1):and_then(Op.always('a'):wrap(function(v)
-    timeline[#timeline + 1] = 'wrap-start'
-    assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
-    local y = rt:perform(Op.emit(TC.tag('inner')):and_then(Op.always('b')))
-    timeline[#timeline + 1] = 'wrap-end'
-    return v .. y
-  end)))
+        timeline[#timeline + 1] = 'wrap-start'
+        assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
+        local y = rt:perform(Op.emit(TC.tag('inner')):and_then(Op.always('b')))
+        timeline[#timeline + 1] = 'wrap-end'
+        return v .. y
+      end)))
 
   rt:spawn_raw(function()
     got = rt:perform(outer)
@@ -900,8 +900,8 @@ local function test_wrap_failure_does_not_rollback_committed_resources()
 
   rt:spawn_raw(function()
     rt:perform(cell:write_op(5):and_then(Op.always('x'):wrap(function()
-      error('wrap boom')
-    end)))
+        error('wrap boom')
+      end)))
   end, 'wrap-failure')
 
   local ok, err = pcall(function()
@@ -927,21 +927,21 @@ local function test_product_lane_wraps_apply_inside_out_after_commit()
 
   rt:spawn_raw(function()
     got = rt:perform(Op.emit(TC.tag('outer')):and_then(Op.each({
-      ch_a:get_op():wrap(function(v)
-        timeline[#timeline + 1] = 'wrap-a'
-        local suffix = rt:perform(Op.emit(TC.tag('inner-a')):and_then(Op.always('!')))
-        return v .. suffix
-      end),
-      ch_b:get_op():wrap(function(v)
-        timeline[#timeline + 1] = 'wrap-b'
-        local suffix = rt:perform(Op.emit(TC.tag('inner-b')):and_then(Op.always('?')))
-        return v .. suffix
-      end),
-    }):wrap(function(rows)
-      timeline[#timeline + 1] = 'wrap-outer'
-      rows.outer = true
-      return rows
-    end)))
+        ch_a:get_op():wrap(function(v)
+          timeline[#timeline + 1] = 'wrap-a'
+          local suffix = rt:perform(Op.emit(TC.tag('inner-a')):and_then(Op.always('!')))
+          return v .. suffix
+        end),
+        ch_b:get_op():wrap(function(v)
+          timeline[#timeline + 1] = 'wrap-b'
+          local suffix = rt:perform(Op.emit(TC.tag('inner-b')):and_then(Op.always('?')))
+          return v .. suffix
+        end),
+      }):wrap(function(rows)
+        timeline[#timeline + 1] = 'wrap-outer'
+        rows.outer = true
+        return rows
+      end)))
     timeline[#timeline + 1] = 'resume'
   end, 'wrapped-product-receiver')
 
@@ -1362,8 +1362,7 @@ local function test_or_else_primary_second_candidate_beats_fallback()
     return cell:write_op('good'):and_then(Op.always('good:' .. tostring(v)))
   end))
   local primary = Op.choice(bad_primary, good_primary)
-  local fallback = Op.emit(TC.tag('bad.fallback'))
-    :and_then(cell:write_op('fallback'):and_then(Op.always('fallback')))
+  local fallback = Op.emit(TC.tag('bad.fallback')):and_then(cell:write_op('fallback'):and_then(Op.always('fallback')))
 
   rt:spawn_raw(function()
     got = rt:perform(primary:or_else(fallback))
@@ -1630,11 +1629,7 @@ local function test_each_lane_and_then_after_external_rendezvous_is_lane_local()
   end, 'each-lane-and_then-external-sender')
 
   assert_status(rt:run(), 'found')
-  assert_eq(
-    rows[1][1],
-    'got:payload',
-    'each lane and_then sees the value supplied by an external participant'
-  )
+  assert_eq(rows[1][1], 'got:payload', 'each lane and_then sees the value supplied by an external participant')
   assert_eq(rows[2][1], 'side', 'each sibling lane is preserved')
   assert_eq(sender, true, 'external rendezvous partner commits')
 end
@@ -1871,22 +1866,16 @@ end
 
 print('tests/test_op.lua: subtle algebra contract ok')
 
+
+
 -- Public constructors reject malformed callbacks and operands immediately.
 do
   assert(not pcall(Op.guard, 'not-a-function'))
   local base = Op.always('x')
-  assert(not pcall(function()
-    return base:map('not-a-function')
-  end))
-  assert(not pcall(function()
-    return base:and_then('not-an-op')
-  end))
-  assert(not pcall(function()
-    return base:wrap('not-a-function')
-  end))
-  assert(not pcall(function()
-    return base:or_else('not-an-op')
-  end))
+  assert(not pcall(function() return base:map('not-a-function') end))
+  assert(not pcall(function() return base:and_then('not-an-op') end))
+  assert(not pcall(function() return base:wrap('not-a-function') end))
+  assert(not pcall(function() return base:or_else('not-an-op') end))
 end
 
 -- Named combinators accept maps from string names to operations only.
@@ -1915,9 +1904,7 @@ do
   first.kind = 'choice'
   empty_first.vals.n = 1
   empty_first.vals[1] = 'mutated'
-  local value = fibers.run(function()
-    return fibers.perform(second)
-  end)
+  local value = fibers.run(function() return fibers.perform(second) end)
   assert_eq(value, true)
   local count = fibers.run(function()
     local values = { n = 0 }

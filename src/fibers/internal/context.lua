@@ -37,9 +37,7 @@ end
 
 function Context.push_scope(runtime, scope)
   local fiber = runtime and runtime._current_fiber
-  if not fiber then
-    error('scope entry requires current fibre', 2)
-  end
+  if not fiber then error('scope entry requires current fibre', 2) end
   local stack = fiber.scope_stack or {}
   fiber.scope_stack = stack
   stack[#stack + 1] = scope
@@ -50,13 +48,9 @@ end
 
 function Context.pop_scope(runtime, token)
   local fiber = runtime and runtime._current_fiber
-  if not token or token.fiber ~= fiber then
-    error('scope token mismatch', 2)
-  end
+  if not token or token.fiber ~= fiber then error('scope token mismatch', 2) end
   local stack = fiber.scope_stack or {}
-  if #stack ~= token.depth or stack[#stack] ~= token.scope then
-    error('scope stack mismatch', 2)
-  end
+  if #stack ~= token.depth or stack[#stack] ~= token.scope then error('scope stack mismatch', 2) end
   stack[#stack] = nil
   fiber.scope = stack[#stack]
   current_scope = fiber.scope

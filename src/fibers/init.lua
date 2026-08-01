@@ -13,6 +13,7 @@ local ScopeOutcome = require('fibers.scope.outcome')
 
 local M = { perform = perform }
 
+
 local function runtime_options(opts, host)
   local runtime_opts = {}
   for key, value in pairs(opts or {}) do

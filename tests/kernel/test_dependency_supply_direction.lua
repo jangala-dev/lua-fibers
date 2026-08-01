@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Counter = require('fibers.resource.counter')
@@ -42,11 +37,9 @@ assert(not Operation.may_supply(Operation.shape(put), put_intent))
 -- Supplying a sibling and accepting sibling supply are separate declarations.
 local producer = StateMachine.rule('directional-producer', 'update', function(value)
   return StateMachine.Ready.write(value + 1, true)
-end, false, 'any')
+end, 'own', 'any')
 local observer = StateMachine.query('directional-observer', function(value)
-  if value < 1 then
-    return StateMachine.Wait
-  end
+  if value < 1 then return StateMachine.Wait end
   return StateMachine.Ready.same(value)
 end, 100)
 local cell = StateMachine.new(0, 'directional-separation')
@@ -70,7 +63,7 @@ assert(access.supplies and access.supplies.any)
 rejected(function()
   StateMachine.rule(nil, 'update', function(value)
     return StateMachine.Ready.write(value, true)
-  end, true, { any = true, up = true })
+  end, 'together', { any = true, up = true })
 end, 'cannot combine any')
 
 -- Dynamic residual dependencies are discovered by execution. A fallback may
@@ -81,22 +74,16 @@ do
   local sound_rt = Runtime.new({ choice_seed = 1 })
   sound_rt:spawn_raw(function()
     local preferred = Op.always():and_then(Op.guard(function()
-      return actual:expect_op(1):map(function()
-        return 'preferred'
-      end)
+      return actual:expect_op(1):map(function() return 'preferred' end)
     end))
     result = sound_rt:perform(preferred:or_else(Op.always('fallback')))
   end, 'dynamic-residual-consumer')
 
   for i = 1, 4 do
     local unrelated = Rendezvous.new('dynamic-residual-unrelated-' .. i)
-    sound_rt:spawn_raw(function()
-      sound_rt:perform(unrelated:get_op())
-    end, 'unrelated-' .. i)
+    sound_rt:spawn_raw(function() sound_rt:perform(unrelated:get_op()) end, 'unrelated-' .. i)
   end
-  sound_rt:spawn_raw(function()
-    sound_rt:perform(actual:write_op(1))
-  end, 'dynamic-residual-supplier')
+  sound_rt:spawn_raw(function() sound_rt:perform(actual:write_op(1)) end, 'dynamic-residual-supplier')
 
   assert(sound_rt:run().tag == 'found')
   assert(result == 'preferred', 'execution-derived dependency admitted fallback')

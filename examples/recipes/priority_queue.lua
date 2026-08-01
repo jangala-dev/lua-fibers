@@ -16,7 +16,8 @@ end
 
 function PriorityQueue.new(capacity, name)
   assert(
-    capacity == math.huge or type(capacity) == 'number' and capacity >= 0 and capacity % 1 == 0,
+    capacity == math.huge
+      or type(capacity) == 'number' and capacity >= 0 and capacity % 1 == 0,
     'priority queue capacity must be a non-negative integer or math.huge'
   )
 
@@ -29,9 +30,7 @@ end
 
 function PriorityQueue:put_op(priority, value)
   local put = self._items:insert_auto_op(priority, value)
-  if not self._slots then
-    return put
-  end
+  if not self._slots then return put end
   return Op.together({ self._slots:take_op(), put }):map(function()
     return true
   end)
@@ -40,9 +39,7 @@ end
 function PriorityQueue:get_op()
   local get = self._items:pop_first_op()
   if not self._slots then
-    return get:map(function(entry)
-      return entry.value, entry.rank
-    end)
+    return get:map(function(entry) return entry.value, entry.rank end)
   end
   return get:and_then(Op.guard(function(entry)
     return self._slots:give_op():map(function()

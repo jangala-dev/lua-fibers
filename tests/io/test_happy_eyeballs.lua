@@ -91,10 +91,9 @@ do
     assert_eq(err.action, 'sort_destination_addresses')
     assert_eq(err.endpoint.host, 'ordering-required.test')
 
-    local stable_connection, stable_err =
-      socket.connect(socket.name_endpoint('ordering-required.test', 6553), {
-        destination_ordering = 'stable',
-      })
+    local stable_connection, stable_err = socket.connect(socket.name_endpoint('ordering-required.test', 6553), {
+      destination_ordering = 'stable',
+    })
     assert_eq(stable_connection, nil)
     assert_truthy(HostError.is(stable_err, 'connect_failed'))
     assert_eq(stable_err.report.destination_ordering, 'stable')
@@ -236,9 +235,7 @@ do
     if address.kind == 'inet6' then
       local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
       local readiness_key = {}
-      function handle:readiness_key()
-        return readiness_key
-      end
+      function handle:readiness_key() return readiness_key end
       function handle:bind_runtime(runtime)
         self.runtime = runtime
       end
@@ -515,8 +512,7 @@ do
     return base_start_dial(self, address, opts)
   end
   fibers.run(function()
-    local value =
-      fibers.perform(Op.always('winner'):or_else(socket.dial_op(socket.name_endpoint('unused.test', 80))))
+    local value = fibers.perform(Op.always('winner'):or_else(socket.dial_op(socket.name_endpoint('unused.test', 80))))
     assert_eq(value, 'winner')
   end, { host = host })
   assert_eq(resolve_calls, 0)
@@ -616,9 +612,7 @@ do
     dial_calls = dial_calls + 1
     local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
     local readiness_key = {}
-    function handle:readiness_key()
-      return readiness_key
-    end
+    function handle:readiness_key() return readiness_key end
     function handle:bind_runtime(runtime)
       self.runtime = runtime
     end
@@ -673,9 +667,7 @@ do
     dial_calls = dial_calls + 1
     local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
     local readiness_key = {}
-    function handle:readiness_key()
-      return readiness_key
-    end
+    function handle:readiness_key() return readiness_key end
     function handle:bind_runtime(runtime)
       self.runtime = runtime
     end
@@ -736,9 +728,7 @@ do
     dial_calls = dial_calls + 1
     local handle = { _connect_pending = true, _connect_complete = false, readiness = {} }
     local readiness_key = {}
-    function handle:readiness_key()
-      return readiness_key
-    end
+    function handle:readiness_key() return readiness_key end
     function handle:bind_runtime(runtime)
       self.runtime = runtime
     end

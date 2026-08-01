@@ -100,46 +100,46 @@ local roots = { {}, {}, {}, [{}] = true }
 local projection_task = { root = roots[3], scope_path = {} }
 local projection_journal = S.new()
 projection_journal.segments = {
-  [2] = {
-    id = 2,
-    root = roots[2],
-    scope_path = {},
-    values = {},
-    delta = { [projection_location] = p2 },
-    retired = false,
-    journal = projection_journal,
-  },
-  [3] = {
-    id = 3,
-    root = roots[3],
-    scope_path = {},
-    values = {},
-    delta = {},
-    retired = false,
-    journal = projection_journal,
-  },
-  [1] = {
-    id = 1,
-    root = roots[1],
-    scope_path = {},
-    values = {},
-    delta = { [projection_location] = p1 },
-    retired = false,
-    journal = projection_journal,
-  },
-  [99] = {
-    id = 99,
-    root = {},
-    scope_path = {},
-    values = {},
-    delta = setmetatable({}, {
-      __index = function()
-        error('projection scanned an unrelated segment')
-      end,
-    }),
-    retired = false,
-    journal = projection_journal,
-  },
+    [2] = {
+      id = 2,
+      root = roots[2],
+      scope_path = {},
+      values = {},
+      delta = { [projection_location] = p2 },
+      retired = false,
+      journal = projection_journal,
+    },
+    [3] = {
+      id = 3,
+      root = roots[3],
+      scope_path = {},
+      values = {},
+      delta = {},
+      retired = false,
+      journal = projection_journal,
+    },
+    [1] = {
+      id = 1,
+      root = roots[1],
+      scope_path = {},
+      values = {},
+      delta = { [projection_location] = p1 },
+      retired = false,
+      journal = projection_journal,
+    },
+    [99] = {
+      id = 99,
+      root = {},
+      scope_path = {},
+      values = {},
+      delta = setmetatable({}, {
+        __index = function()
+          error('projection scanned an unrelated segment')
+        end,
+      }),
+      retired = false,
+      journal = projection_journal,
+    },
 }
 projection_task.segment = projection_journal.segments[3]
 local projected = S.project(projection_task, projection_location)
@@ -161,24 +161,24 @@ local extreme_value = {
   a = { rank = 1, seq = 2, value = 'a' },
   b = { rank = 1, seq = 1, value = 'b' },
   c = { rank = 2, seq = 1, value = 'c' },
-  d = { rank = 2, seq = 1, value = 'd' },
+  d = { rank = 2, seq = 2, value = 'd' },
 }
 local minimum_leaf = Extreme.spec({
-  location = fm,
-  order = 'min',
-  rank_field = 'rank',
-  seq_field = 'seq',
-  result = Facility.result.value,
-})
+    location = fm,
+    order = 'min',
+    rank_field = 'rank',
+    seq_field = 'seq',
+    result = Facility.result.value,
+  })
 local minimum = Operation.transition_cursor(minimum_leaf, extreme_value, {}, nil):next()
 eq(minimum.result[1].value, 'b', 'minimum selection order changed')
 local maximum_leaf = Extreme.spec({
-  location = fm,
-  order = 'max',
-  rank_field = 'rank',
-  seq_field = 'seq',
-  result = Facility.result.value,
-})
+    location = fm,
+    order = 'max',
+    rank_field = 'rank',
+    seq_field = 'seq',
+    result = Facility.result.value,
+  })
 local maximum = Operation.transition_cursor(maximum_leaf, extreme_value, {}, nil):next()
 eq(maximum.result[1].value, 'd', 'maximum selection order changed')
 

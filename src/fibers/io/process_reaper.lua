@@ -61,7 +61,13 @@ function Reaper.new(spec)
       local current, errno, message = spec.environment()
       if not current then
         return nil,
-          IOError.system('process', 'environment', message or spec.message(errno), spec.name_of(errno), errno)
+          IOError.system(
+            'process',
+            'environment',
+            message or spec.message(errno),
+            spec.name_of(errno),
+            errno
+          )
       end
       for name, value in pairs(current) do
         out[tostring(name)] = tostring(value)
@@ -449,14 +455,9 @@ function Reaper.new(spec)
       return self.exit_source:open_op(scope)
     end,
     exit = function(self)
-      if self.reaped and self.status then
-        return Op.always(self.status)
-      end
+      if self.reaped and self.status then return Op.always(self.status) end
       if not self.exit_source then
-        return Op.always(
-          nil,
-          IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
-        )
+        return Op.always(nil, IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid }))
       end
       return self.exit_source:result_op()
     end,

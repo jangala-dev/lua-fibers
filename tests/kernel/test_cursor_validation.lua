@@ -9,7 +9,6 @@ package.path = table.concat({
 }, ';')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
-local Witness = require('fibers.resource.witness')
 local Runtime = require('fibers.runtime')
 local Petri = require('examples.case_studies.petri.petri')
 local Calendar = require('examples.case_studies.calendar.calendar')
@@ -70,38 +69,31 @@ do
   assert(result == 'primary')
 end
 
--- Trusted witness leaves have one cursor form; eager enumerate is not accepted.
+-- Trusted cursor rules have one cursor form; eager enumerate is not accepted.
 do
   local ok, err = pcall(function()
-    Witness.spec({
-      location = {},
-      accepts_supply = false,
-      supplies = 'none',
+    Facility.rule.inspect({
+      location = { algebra = { name = 'machine' } },
       enumerate = function()
         return {}
       end,
     })
   end)
   assert(ok == false)
-  assert(tostring(err):find('do not accept enumerate', 1, true))
+  assert(tostring(err):find('does not accept enumerate', 1, true))
 end
+
 
 do
   local ok, err = pcall(function()
-    Witness.spec({
-      location = {},
+    Facility.rule.inspect({
+      location = { algebra = { name = 'machine' } },
       argument = {},
-      cursor = function()
-        return {
-          next = function()
-            return nil
-          end,
-        }
-      end,
+      cursor = function() return { next = function() return nil end } end,
     })
   end)
   assert(ok == false)
-  assert(tostring(err):find('do not accept argument', 1, true))
+  assert(tostring(err):find('does not accept argument', 1, true))
 end
 
-print('tests/test_witness_validation.lua: ok')
+print('tests/test_cursor_validation.lua: ok')

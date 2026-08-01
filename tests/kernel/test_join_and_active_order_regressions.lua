@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Op = require('fibers.op')
@@ -15,18 +10,13 @@ local Journal = require('fibers.internal.kernel.journal')
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual), 2)
   end
 end
 
 local function perform(build)
   local rt, result = Runtime.new({ choice_seed = 1 }), nil
-  rt:spawn_raw(function()
-    result = rt:perform(build())
-  end, 'regression-root')
+  rt:spawn_raw(function() result = rt:perform(build()) end, 'regression-root')
   eq(rt:run().tag, 'found')
   return result
 end
@@ -68,9 +58,7 @@ local function observed_with(mode, lane_order, sibling_kind)
   else
     sibling = Op.always(2):or_else(Op.never()):or_else(counter:at_least_op(3))
   end
-  local rows = perform(function()
-    return (mode == 'together' and Op.together or Op.each)({ inner, sibling })
-  end)
+  local rows = perform(function() return (mode == 'together' and Op.together or Op.each)({ inner, sibling }) end)
   local inner_rows = rows[1][1]
   local observed_row = inner_rows[lane_order == 'take-observe' and 2 or 1]
   return observed_row[1], counter.value

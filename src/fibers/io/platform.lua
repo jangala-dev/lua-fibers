@@ -23,9 +23,8 @@ local SLOTS = {
 }
 
 local SLOT_SET = {}
-for i = 1, #SLOTS do
-  SLOT_SET[SLOTS[i]] = true
-end
+for i = 1, #SLOTS do SLOT_SET[SLOTS[i]] = true end
+
 
 local PLATFORM_OPTIONS = {
   providers = true,
@@ -96,9 +95,7 @@ local function provider_for(opts, slot)
 end
 
 local function domain_of(provider)
-  if type(provider) ~= 'table' then
-    return nil
-  end
+  if type(provider) ~= 'table' then return nil end
   return provider.wait_domain or provider.readiness_domain or provider.family
 end
 
@@ -108,12 +105,8 @@ local function compatibility_key(left, right)
 end
 
 local function domains_compatible(opts, left, right, slot, provider)
-  if left == nil or right == nil or left == right then
-    return true
-  end
-  if opts.allow_mixed_wait_domains == true then
-    return true
-  end
+  if left == nil or right == nil or left == right then return true end
+  if opts.allow_mixed_wait_domains == true then return true end
   local policy = opts.compatible_wait_domains
   if type(policy) == 'function' then
     return policy(left, right, slot, provider) == true
@@ -143,12 +136,8 @@ end
 local function copy_capability(dst, provider, name, fallback)
   local capabilities = type(provider) == 'table' and provider.capabilities or nil
   local value = capabilities and capabilities[name]
-  if value == nil then
-    value = fallback
-  end
-  if value ~= nil and value ~= false then
-    dst[name] = value
-  end
+  if value == nil then value = fallback end
+  if value ~= nil and value ~= false then dst[name] = value end
 end
 
 local function add_unique(out, seen, value)
@@ -215,9 +204,7 @@ function Platform.new(opts)
   end
 
   for method, slot in pairs(METHOD_SLOTS) do
-    if method ~= 'now' then
-      install_method(platform, method, providers[slot])
-    end
+    if method ~= 'now' then install_method(platform, method, providers[slot]) end
   end
   for i = 1, #EMBED_METHODS do
     install_method(platform, EMBED_METHODS[i], providers.wait)
@@ -231,18 +218,14 @@ function Platform.new(opts)
     'readiness',
     type(platform.set_readiness) == 'function' or nil
   )
-  if platform.create_pipe then
-    platform.capabilities.pipe = true
-  end
+  if platform.create_pipe then platform.capabilities.pipe = true end
   if platform.create_listener or platform.start_dial then
     platform.capabilities.socket = true
     for _, name in ipairs({ 'socket_ipv4', 'socket_ipv6', 'socket_unix' }) do
       copy_capability(platform.capabilities, providers.socket, name)
     end
   end
-  if platform.create_datagram then
-    platform.capabilities.datagram = true
-  end
+  if platform.create_datagram then platform.capabilities.datagram = true end
   if platform.resolve then
     platform.capabilities.resolver = true
     copy_capability(platform.capabilities, providers.resolver, 'resolver_blocking')
@@ -258,9 +241,7 @@ function Platform.new(opts)
     copy_capability(platform.capabilities, providers.file, 'file_backend')
   end
   for name, value in pairs(opts.capabilities or {}) do
-    if value ~= false and value ~= nil then
-      platform.capabilities[name] = value
-    end
+    if value ~= false and value ~= nil then platform.capabilities[name] = value end
   end
 
   local close_order, seen = {}, {}
@@ -282,11 +263,10 @@ function Platform.new(opts)
   return platform
 end
 
+
 function Platform.from(provider, opts)
   local out = {}
-  for key, value in pairs(opts or {}) do
-    out[key] = value
-  end
+  for key, value in pairs(opts or {}) do out[key] = value end
   out.backend = provider
   return Platform.new(out)
 end
@@ -299,13 +279,9 @@ function Platform:provider(slot)
 end
 
 function Platform:close()
-  if self._closed then
-    return true
-  end
+  if self._closed then return true end
   self._closed = true
-  if not self._owns_providers then
-    return true
-  end
+  if not self._owns_providers then return true end
   local failures = {}
   for i = 1, #self._close_order do
     local provider = self._close_order[i]
@@ -318,9 +294,7 @@ function Platform:close()
       end
     end
   end
-  if #failures > 0 then
-    return nil, failures
-  end
+  if #failures > 0 then return nil, failures end
   return true
 end
 

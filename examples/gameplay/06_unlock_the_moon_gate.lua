@@ -27,8 +27,8 @@ local function unlock_op()
     moon_gate:expect_op('locked'),
   })
     :and_then(moon_gate:write_op('open'):map(function()
-      return 'the Moon Gate opened'
-    end))
+        return 'the Moon Gate opened'
+      end))
     :or_else(Op.always('the gate remains as it is'))
 end
 

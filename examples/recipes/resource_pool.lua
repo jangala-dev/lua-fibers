@@ -66,14 +66,14 @@ local function retiring_state(state, reason)
 end
 
 local CheckOpen = StateMachine.update('pool.check_open', function(open)
-  if open == true then
-    return Ready.write(true, true)
-  end
-  return Ready.write(open, false)
+    if open == true then
+      return Ready.write(true, true)
+    end
+    return Ready.write(open, false)
 end, 100)
 
 local Close = StateMachine.update('pool.close', function()
-  return Ready.write(false, true)
+    return Ready.write(false, true)
 end)
 
 local function require_open(pool)
@@ -106,7 +106,9 @@ function Pool:add_op(key, item)
     error('pool add requires key', 2)
   end
   return require_open(self):and_then(
-    self.items:insert_op(key, item_state(item)):and_then(self.idle:insert_op(key, math.huge, key))
+    self.items:insert_op(key, item_state(item)):and_then(
+      self.idle:insert_op(key, math.huge, key)
+    )
   )
 end
 
@@ -115,16 +117,16 @@ function Pool:acquire_op(holder)
     error('pool acquire requires holder', 2)
   end
   return require_open(self):and_then(self.idle:pop_first_op():and_then(Op.guard(function(entry)
-    local key = entry.value
-    return self.items:get_op(key):and_then(Op.guard(function(state)
-      if type(state) ~= 'table' then
-        return Op.never()
-      end
-      return self.leases:acquire_op(key, 'lease', holder):map(function()
-        return { pool = self, key = key, item = state.item, holder = holder }
-      end)
-    end))
-  end)))
+      local key = entry.value
+      return self.items:get_op(key):and_then(Op.guard(function(state)
+        if type(state) ~= 'table' then
+          return Op.never()
+        end
+        return self.leases:acquire_op(key, 'lease', holder):map(function()
+          return { pool = self, key = key, item = state.item, holder = holder }
+        end)
+      end))
+    end)))
 end
 
 function Pool:release_op(lease)

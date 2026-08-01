@@ -74,13 +74,7 @@ do
   assert(unbounded.capacity == math.huge, 'math.huge should select an unbounded FIFO')
   assert_twins(cell, { 'read', 'changed', 'expect', 'write', 'wait_until', 'match' }, 'cell')
   assert_twins(pulse, {
-    'version',
-    'why',
-    'is_closed',
-    'signal',
-    'close',
-    'changed',
-    'next',
+    'version', 'why', 'is_closed', 'signal', 'close', 'changed', 'next',
   }, 'pulse')
   assert_twins(tx, { 'send', 'clone', 'close', 'why', 'dropped' }, 'mailbox sender')
   assert_twins(rx, { 'recv', 'why', 'dropped' }, 'mailbox receiver')
@@ -113,27 +107,13 @@ do
   assert_twins(Stream, { 'merge_lines' }, 'stream module')
   assert_twins(Sleep, { 'sleep', 'sleep_until' }, 'Sleep')
 
+
   assert_twins(Counter.new(), {
-    'read',
-    'changed',
-    'adjust',
-    'add',
-    'bump',
-    'give',
-    'take',
-    'at_least',
-    'at_most',
-    'equal',
-    'zero',
+    'read', 'changed', 'adjust', 'add', 'bump', 'give', 'take',
+    'at_least', 'at_most', 'equal', 'zero',
   }, 'counter')
   assert_twins(Index.new(), {
-    'insert',
-    'insert_auto',
-    'append',
-    'remove',
-    'pop_first',
-    'pop_last',
-    'changed',
+    'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last', 'changed',
   }, 'index')
   local keyed = Keyed.new()
   assert_twins(keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' }, 'keyed')
@@ -144,27 +124,11 @@ do
   local flow = Flow.new()
   assert_twins(flow, { 'abort', 'closed' }, 'flow')
   assert_twins(flow:inlet(), {
-    'write',
-    'write_some',
-    'reserve_some',
-    'flush',
-    'close',
-    'closed',
-    'fail',
+    'write', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail',
   }, 'flow inlet')
   assert_twins(flow:outlet(), {
-    'read_some',
-    'read_exactly',
-    'peek_exactly',
-    'read_until',
-    'read_line',
-    'read_all',
-    'drop',
-    'splice_to',
-    'lease_some',
-    'close',
-    'closed',
-    'fail',
+    'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line',
+    'read_all', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail',
   }, 'flow outlet')
   assert_twins(Grant, { 'closed' }, 'grant')
   assert_twins(Closure.Failure, { 'retry', 'force' }, 'closure failure')
@@ -200,12 +164,9 @@ do
     assert_eq(state:read(), 'idle')
     state:write('running')
     assert_eq(state:expect('running'), true)
-    assert_eq(
-      state:wait_until(function(value)
-        return value == 'running'
-      end),
-      'running'
-    )
+    assert_eq(state:wait_until(function(value)
+      return value == 'running'
+    end), 'running')
     local matched, length = state:match(function(value)
       if value == 'running' then
         return true, 'matched:' .. value, #value

@@ -8,17 +8,8 @@ local Engine = require('fibers.internal.engine')
 
 local function require_optional(module_name, feature)
   local ok, module = pcall(require, module_name)
-  if ok then
-    return module
-  end
-  error(
-    (feature or module_name)
-      .. ' requires optional package module '
-      .. module_name
-      .. ': '
-      .. tostring(module),
-    3
-  )
+  if ok then return module end
+  error((feature or module_name) .. ' requires optional package module ' .. module_name .. ': ' .. tostring(module), 3)
 end
 
 -- Internal perform-boundary interruption tokens.
@@ -170,13 +161,9 @@ function Runtime:_require_driver_call(action, level)
 end
 
 local function finish_phase_call(self, name, kind, fatal, committed, result)
-  if result[1] then
-    return unpack_(result, 2, result.n)
-  end
+  if result[1] then return unpack_(result, 2, result.n) end
   local err = result[2]
-  if type(err) == 'table' and err._fibers_error and not fatal then
-    error(err, 0)
-  end
+  if type(err) == 'table' and err._fibers_error and not fatal then error(err, 0) end
   if fatal then
     return self:_fatal(kind or 'effect_error', err, { phase = name, committed = committed, level = 0 })
   end
@@ -283,6 +270,7 @@ function Runtime:now()
   end
   return 0
 end
+
 
 local function spawn_unchecked(self, fn, name, scope)
   if type(fn) ~= 'function' then
@@ -419,15 +407,14 @@ function Runtime:_start_one()
   return fiber
 end
 
+
 local function driver_call(self, action, opts)
   self:_check_not_failed(2)
   self:_require_driver_call(action, 2)
   local result = phase_pcall(self, 'driver', self.engine.advance, self.engine, action, opts)
   if not result[1] then
     local err = result[2]
-    if
-      type(err) == 'table' and (err._fibers_error or err._fibers_scope_report or err._fibers_closure_failure)
-    then
+    if type(err) == 'table' and (err._fibers_error or err._fibers_scope_report or err._fibers_closure_failure) then
       error(err, 0)
     end
     return self:_fail('runtime_error', err, { phase = action, level = 0 })
@@ -435,12 +422,8 @@ local function driver_call(self, action, opts)
   return unpack_(result, 2, result.n)
 end
 
-function Runtime:step(opts)
-  return driver_call(self, 'step', opts)
-end
-function Runtime:run(opts)
-  return driver_call(self, 'run', opts)
-end
+function Runtime:step(opts) return driver_call(self, 'step', opts) end
+function Runtime:run(opts) return driver_call(self, 'run', opts) end
 
 Runtime._new_interrupt = new_interrupt
 return Runtime

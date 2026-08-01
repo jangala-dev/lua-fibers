@@ -34,6 +34,7 @@ function Socket.dns_resolver(opts)
   return DNS.new(opts)
 end
 
+
 local function numeric(address, label)
   if Address.is_name(address) then
     error(label .. ' requires a numeric IPv4 or IPv6 address', 3)
@@ -105,5 +106,6 @@ function Socket.connect(endpoint, opts)
   local target = opts and opts.scope
   return perform(Socket.dial_op(endpoint, opts)):connect(target)
 end
+
 
 return Socket

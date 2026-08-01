@@ -18,9 +18,7 @@ local DEFAULT_ORDER = { 'luajit_linux', 'cffi_linux', 'luaposix', 'nixio' }
 
 local function load_backend(name)
   local module_name = BACKEND_MODULES[name]
-  if not module_name then
-    error('unknown I/O backend ' .. tostring(name), 3)
-  end
+  if not module_name then error('unknown I/O backend ' .. tostring(name), 3) end
   return require(module_name)
 end
 
@@ -54,9 +52,7 @@ function Auto.available()
       reason = reason,
     }
   end
-  table.sort(out, function(a, b)
-    return a.name < b.name
-  end)
+  table.sort(out, function(a, b) return a.name < b.name end)
   return out
 end
 

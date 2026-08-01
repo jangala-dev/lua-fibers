@@ -1,5 +1,3 @@
-local Op = require('fibers.op')
-local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.embed.external')
@@ -7,28 +5,23 @@ local Direct = require('fibers.internal.direct')
 
 local Signal = {}
 Signal.__index = function(self, key)
-  if key == 'version' then
-    return self._location.version
-  end
+  if key == 'version' then return self._location.version end
   return Signal[key]
 end
 
 local Kind = Facility.kind('signal')
-local unpack_ = table.unpack or unpack
 
 local Wait = StateMachine.isolated_query('signal.wait', function(state)
-  if not state.ready then
-    return StateMachine.Wait
-  end
-  return StateMachine.Ready.same(unpack_(state.values, 1, state.values.n))
+  if not state.ready then return StateMachine.Wait end
+  return StateMachine.Ready.same(Facility.unpack(state.values, 1, state.values.n))
 end)
 
-local function deliver(signal, ...)
-  Facility.publish(signal._location, { ready = true, values = Values.pack(...) })
+local function deliver(_, _, ...)
+  return { ready = true, values = Facility.pack(...) }
 end
 
-local function clear(signal)
-  Facility.publish(signal._location, { ready = false })
+local function clear()
+  return { ready = false }
 end
 
 function Signal.new(name)
@@ -41,19 +34,15 @@ function Signal.new(name)
       return { ready = state.ready, values = state.values }
     end,
   })
-  signal._fibers_external_deliver = deliver
-  signal._fibers_external_clear = clear
-  signal._wait_op = Facility.external_wait(signal, signal._location, Wait, {
-    interest = function(runtime)
+  External.attach(signal, signal._location, deliver, clear)
+  signal._wait_op = Facility.op(StateMachine._compile(signal._location, signal, Wait, {
+    wake = function(runtime)
       return External.Interest.external(signal, 'ready', {
         external_kind = 'signal',
         feed = External.Feed.for_resource(runtime, signal),
       })
     end,
-    absence_check = function()
-      return not signal._location.value.ready
-    end,
-  })
+  }))
   return signal
 end
 

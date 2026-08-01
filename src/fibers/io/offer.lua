@@ -24,29 +24,20 @@ local next_id = 0
 local unpack_ = table.unpack or unpack
 
 local function source_error(source, state)
-  if state and state.kind == 'failed' then
-    return state.error
-  end
-  return source.error
-    or IOError.closed(source.domain, source.action, {
-      reason = state and state.reason or source.reason or 'offer source completed',
-    })
+  if state and state.kind == 'failed' then return state.error end
+  return source.error or IOError.closed(source.domain, source.action, {
+    reason = state and state.reason or source.reason or 'offer source completed',
+  })
 end
 
 local function aggregate_error(source, message, ...)
   local compact = {}
   for i = 1, select('#', ...) do
     local err = select(i, ...)
-    if err ~= nil then
-      compact[#compact + 1] = err
-    end
+    if err ~= nil then compact[#compact + 1] = err end
   end
-  if #compact == 0 then
-    return nil
-  end
-  if #compact == 1 then
-    return compact[1]
-  end
+  if #compact == 0 then return nil end
+  if #compact == 1 then return compact[1] end
   return IOError.protocol(source.domain, source.action, message, { errors = compact })
 end
 
@@ -112,17 +103,13 @@ function Offer.new(spec)
   })
 
   local rt = Runtime.current()
-  if not rt then
-    error('HostOfferSource.new requires a current runtime', 2)
-  end
+  if not rt then error('HostOfferSource.new requires a current runtime', 2) end
   local reactor = Reactor.for_runtime(rt)
   source._entry = reactor:offer({
     name = source.name,
     mode = source.mode,
     source = source,
-    handle = source.mode == 'poll' and nil or function()
-      return source:_handle()
-    end,
+    handle = source.mode == 'poll' and nil or function() return source:_handle() end,
     poll_interval = source.poll_interval,
   })
   return source
@@ -130,16 +117,14 @@ end
 
 function Offer:_handle()
   local value = self._handle_provider
-  if type(value) == 'function' then
-    value = value()
-  end
+  if type(value) == 'function' then value = value() end
   return value
 end
 
 function Offer:open_op(scope)
-  return scope:admit_op(self):and_then(self._entry:register_op()):map(function()
-    return self
-  end)
+  return scope:admit_op(self)
+    :and_then(self._entry:register_op())
+    :map(function() return self end)
 end
 
 function Offer:next_op()
@@ -148,9 +133,7 @@ function Offer:next_op()
   local demand = self._entry:demand_op()
   local resume = Op.each({ release, demand })
   return offer:and_then(Op.guard(function(value)
-    return resume:map(function()
-      return value
-    end)
+    return resume:map(function() return value end)
   end))
 end
 
@@ -178,14 +161,10 @@ function Offer:closed_op()
 end
 
 function Offer:_publish_terminal(state)
-  if self.state then
-    return false
-  end
+  if self.state then return false end
   self.state = state
   self.reason = state.reason or self.reason
-  if state.error then
-    self.error = state.error
-  end
+  if state.error then self.error = state.error end
   UnsafeExternalMutation.deliver(self._terminal, state)
   return true
 end
@@ -218,17 +197,12 @@ function Offer:_drain_unclaimed(rt, reason)
   end
 
   if #packed > 0 then
-    local restored, restore_err =
-      Protected.pcall(rt._perform_current, rt, self._slots:give_op(#packed), nil, true)
-    if not restored then
-      errors[#errors + 1] = restore_err
-    end
+    local restored, restore_err = Protected.pcall(rt._perform_current, rt, self._slots:give_op(#packed), nil, true)
+    if not restored then errors[#errors + 1] = restore_err end
   end
 
   local err = aggregate_error(self, 'one or more unclaimed offers failed to retire cleanly', unpack_(errors))
-  if err then
-    return nil, err
-  end
+  if err then return nil, err end
   return true
 end
 
@@ -237,9 +211,7 @@ function Offer:_reactor_retired(rt, state, preserve_offers)
   local cleanup_error
   if not preserve_offers then
     local clean, err = self:_drain_unclaimed(rt, state.reason)
-    if not clean then
-      cleanup_error = err
-    end
+    if not clean then cleanup_error = err end
   end
 
   local terminal_state = state
@@ -274,9 +246,7 @@ function Offer:_reactor_retired(rt, state, preserve_offers)
   -- Terminal publication is unconditional with respect to disposal or owner
   -- retirement outcome: observers must always learn that the source has stopped.
   self:_publish_terminal(terminal_state)
-  if cleanup_error or retired_error then
-    return nil, terminal_state.error
-  end
+  if cleanup_error or retired_error then return nil, terminal_state.error end
   return true
 end
 

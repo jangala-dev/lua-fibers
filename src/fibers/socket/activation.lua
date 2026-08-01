@@ -18,7 +18,11 @@ function Activation.create(owner, spec)
   local host = spec.host or (rt and rt.host)
   local create = host and host[spec.host_method]
   if type(create) ~= 'function' then
-    return fail(rt, spec.lifecycle, IOError.unsupported('host', spec.action, { address = spec.address }))
+    return fail(
+      rt,
+      spec.lifecycle,
+      IOError.unsupported('host', spec.action, { address = spec.address })
+    )
   end
 
   local called, handle, err = Protected.pcall(create, host, spec.address, spec.options)
@@ -28,24 +32,16 @@ function Activation.create(owner, spec)
     error(failure, 0)
   end
   if not handle then
-    return fail(
-      rt,
-      spec.lifecycle,
-      IOError.normalise(err, {
-        domain = spec.domain,
-        action = spec.action,
-        address = spec.address,
-      })
-    )
+    return fail(rt, spec.lifecycle, IOError.normalise(err, {
+      domain = spec.domain,
+      action = spec.action,
+      address = spec.address,
+    }))
   end
 
   local held, hold_err = spec.hold:hold(spec.hold_key, handle, spec.close)
-  if not held then
-    return fail(rt, spec.lifecycle, hold_err, true)
-  end
-  if type(handle.bind_runtime) == 'function' then
-    handle:bind_runtime(rt)
-  end
+  if not held then return fail(rt, spec.lifecycle, hold_err, true) end
+  if type(handle.bind_runtime) == 'function' then handle:bind_runtime(rt) end
 
   local local_address = type(handle.local_address) == 'function' and handle:local_address() or spec.address
   IOAudit.transfer(handle, owner, { kind = 'host_handle', role = spec.role })
@@ -55,7 +51,10 @@ function Activation.create(owner, spec)
     return fail(rt, spec.lifecycle, release_err, true)
   end
 
-  local activated = IO.masked_perform(rt, spec.lifecycle:activate_op(handle, local_address or spec.address))
+  local activated = IO.masked_perform(
+    rt,
+    spec.lifecycle:activate_op(handle, local_address or spec.address)
+  )
   if not activated then
     spec.close(handle, spec.closed_reason)
     return nil,

@@ -42,9 +42,7 @@ end
 
 local function attach_direction(stream, side, reactor, handle, registrations, children)
   local ep = endpoint(stream, side)
-  if not ep then
-    return
-  end
+  if not ep then return end
   local registration = reactor:direction({
     name = stream.name .. ':' .. side,
     mode = side,
@@ -106,12 +104,10 @@ local function open_in_op(scope, handle, opts)
   attach_direction(stream, 'read', reactor, handle, registrations, children)
   attach_direction(stream, 'write', reactor, handle, registrations, children)
   stream._reactor_live = #children
-  for i = 1, #children do
-    stream._lifetime:add_child(children[i])
-  end
+  for i = 1, #children do stream._lifetime:add_child(children[i]) end
   return scope:admit_op(stream):and_then(Op.named_each(registrations):map(function()
-    return stream
-  end))
+      return stream
+    end))
 end
 
 function HostStream.open_op(handle, opts)

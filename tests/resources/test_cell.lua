@@ -107,6 +107,7 @@ local function test_wait_until_and_match_contracts()
   H.assert_eq(label, 'ready')
 end
 
+
 local function test_shared_version_leaf_keeps_occurrence_state_separate()
   local Rendezvous = require('fibers.resource.rendezvous')
   local rt = Runtime.new()

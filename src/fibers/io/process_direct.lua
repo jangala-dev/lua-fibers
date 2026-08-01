@@ -154,14 +154,9 @@ function Direct.new(spec)
       return self.exit_source:open_op(scope)
     end,
     exit = function(self)
-      if self.reaped and self.status then
-        return Op.always(self.status)
-      end
+      if self.reaped and self.status then return Op.always(self.status) end
       if not self.exit_source then
-        return Op.always(
-          nil,
-          IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid })
-        )
+        return Op.always(nil, IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid }))
       end
       return self.exit_source:result_op()
     end,

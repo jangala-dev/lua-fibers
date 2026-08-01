@@ -23,6 +23,7 @@ local function validate_options(opts, allowed, label)
   end
 end
 
+
 local function compose(opts)
   opts = opts or {}
   next_id = next_id + 1
@@ -41,19 +42,13 @@ local function compose(opts)
     _handle_closed = false,
   }, Duplex)
   local children = {}
-  if opts.reader then
-    children[#children + 1] = opts.reader
-  end
-  if opts.writer then
-    children[#children + 1] = opts.writer
-  end
+  if opts.reader then children[#children + 1] = opts.reader end
+  if opts.writer then children[#children + 1] = opts.writer end
   Lifetime.define(stream, {
     role = opts.kind or 'stream',
     closure = opts.closure or Closure.protocol({
       name = 'stream',
-      finish_op = function(_ctx, record)
-        return record.item:closed_op()
-      end,
+      finish_op = function(_ctx, record) return record.item:closed_op() end,
       finish_result = Closure.require_ok('stream closure failed'),
     }),
     children = children,
@@ -135,21 +130,26 @@ function Duplex:read_some_op(n)
   return endpoint(self, 'read'):read_some_op(n)
 end
 
+
 function Duplex:read_exactly_op(n)
   return endpoint(self, 'read'):read_exactly_op(n)
 end
+
 
 function Duplex:read_until_op(separator, opts)
   return endpoint(self, 'read'):read_until_op(separator, opts)
 end
 
+
 function Duplex:read_line_op(opts)
   return endpoint(self, 'read'):read_line_op(opts)
 end
 
+
 function Duplex:read_all_op(opts)
   return endpoint(self, 'read'):read_all_op(opts)
 end
+
 
 function Duplex:read_op(spec, opts)
   if type(spec) == 'number' then
@@ -194,9 +194,12 @@ function Duplex:flush_op()
   return endpoint(self, 'write'):flush_op()
 end
 
+
+
 local function flow_of(value)
   return value and value.flow
 end
+
 
 local function retire_direction(self, side, reason, policy, abort)
   local ep = side_endpoint(self, side)
@@ -216,13 +219,16 @@ function Duplex:shutdown_read_op(reason)
   return retire_direction(self, 'read', reason, 'immediate', false)
 end
 
+
 function Duplex:shutdown_write_op(reason)
   return retire_direction(self, 'write', reason, 'drain', false)
 end
 
+
 function Duplex:abort_write_op(reason)
   return retire_direction(self, 'write', reason, 'abort', true)
 end
+
 
 local function close_request(self, reason, abort_write)
   local operations = {}
@@ -259,9 +265,11 @@ function Duplex:close_op(reason)
   end)
 end
 
+
 function Duplex:abort_op(reason)
   return wait_after_commit(self, close_request(self, reason, true))
 end
+
 
 function Duplex:closed_op()
   local operations = {}
@@ -285,6 +293,7 @@ function Duplex:closed_op()
   end)
 end
 
+
 function Stream.memory_pair(opts)
   opts = opts or {}
   validate_options(opts, { name = true, capacity = true }, 'Stream.memory_pair options')
@@ -294,6 +303,7 @@ function Stream.memory_pair(opts)
   return Stream.compose(ba, ab, { name = name .. ':a', mode = 'memory' }),
     Stream.compose(ab, ba, { name = name .. ':b', mode = 'memory' })
 end
+
 
 function Stream.merge_lines_op(streams, opts)
   local entries = {}
@@ -311,25 +321,6 @@ function Stream.merge_lines_op(streams, opts)
 end
 Direct.install_static(Stream, { 'merge_lines' })
 
-Direct.install(
-  Duplex,
-  {
-    'read_some',
-    'read_exactly',
-    'read_until',
-    'read_line',
-    'read_all',
-    'read',
-    'write',
-    'write_some',
-    'flush',
-    'shutdown_read',
-    'shutdown_write',
-    'abort_write',
-    'close',
-    'abort',
-    'closed',
-  }
-)
+Direct.install(Duplex, { 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all', 'read', 'write', 'write_some', 'flush', 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' })
 
 return Stream

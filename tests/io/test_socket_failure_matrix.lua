@@ -116,13 +116,12 @@ do
   local result = fibers.try_run(function()
     local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'pending-timeout-listener' })
     local dial = socket.dial(listener:local_address(), { name = 'pending-timeout-dial' })
-    local value, err =
-      fibers.perform(Op.choice(
-        dial:result_op(fibers.current_scope()),
-        Sleep.sleep_op(0.01):map(function()
-          return nil, { kind = 'timeout' }
-        end)
-      ))
+    local value, err = fibers.perform(Op.choice(
+      dial:result_op(fibers.current_scope()),
+      Sleep.sleep_op(0.01):map(function()
+        return nil, { kind = 'timeout' }
+      end)
+    ))
     assert_eq(value, nil)
     assert_eq(err.kind, 'timeout')
     assert_eq(dial:close('timeout won'), true)
@@ -155,13 +154,12 @@ do
       handle._allow_finish = true
       handle:mark_writable()
     end, 'delayed-connect-completion')
-    local connection, err =
-      fibers.perform(Op.choice(
-        dial:result_op(fibers.current_scope()),
-        Sleep.sleep_op(1):map(function()
-          return nil, { kind = 'timeout' }
-        end)
-      ))
+    local connection, err = fibers.perform(Op.choice(
+      dial:result_op(fibers.current_scope()),
+      Sleep.sleep_op(1):map(function()
+        return nil, { kind = 'timeout' }
+      end)
+    ))
     assert_truthy(connection, tostring(err))
     assert_truthy(connection:local_address())
     assert_truthy(connection:peer_address())

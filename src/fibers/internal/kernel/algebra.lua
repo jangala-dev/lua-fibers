@@ -2,6 +2,7 @@
 
 local M = {}
 
+
 local VALID = { up = true, down = true, any = true }
 
 local function fail(label, message, level)
@@ -68,6 +69,8 @@ function M.may_supply(value, demand)
   end
   return value[demand] == true
 end
+
+
 
 M.ABSENT = setmetatable({}, {
   __tostring = function()

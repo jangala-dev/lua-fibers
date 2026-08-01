@@ -3,9 +3,7 @@
 local M = {}
 
 local function state(value)
-  if value and value._state then
-    return value._state.value
-  end
+  if value and value._state then return value._state.value end
   return value
 end
 
@@ -39,26 +37,18 @@ function M.retained(value)
 end
 
 function M.free(flow)
-  if flow.capacity == math.huge then
-    return math.huge
-  end
+  if flow.capacity == math.huge then return math.huge end
   return flow.capacity - M.retained(flow)
 end
 
 function M.chunk_count(value)
   local s = state(value)
   local rope = s and s.rope or value
-  if not rope or rope:length() == 0 then
-    return 0
-  end
+  if not rope or rope:length() == 0 then return 0 end
   local n, node = 0, rope.front
-  while node do
-    n, node = n + 1, node.next
-  end
+  while node do n, node = n + 1, node.next end
   node = rope.back
-  while node do
-    n, node = n + 1, node.next
-  end
+  while node do n, node = n + 1, node.next end
   return n
 end
 

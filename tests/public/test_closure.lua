@@ -135,6 +135,8 @@ do
   assert_truthy(entered, 'custom Closure should receive the Lifetime body result')
 end
 
+
+
 -- Closure contracts are captured when a Lifetime is defined. Mutating the
 -- original public protocol afterwards does not change the admitted Lifetime.
 do
@@ -161,16 +163,9 @@ end
 
 -- Closure constructors reject malformed contracts at the public boundary.
 do
-  assert(not pcall(Closure.protocol, {
-    name = 7,
-    finish_op = function()
-      return Op.always(true)
-    end,
-  }))
+  assert(not pcall(Closure.protocol, { name = 7, finish_op = function() return Op.always(true) end }))
   assert(not pcall(Closure.protocol, { finish_op = true }))
-  assert(not pcall(Closure.request_then_wait, function()
-    return Op.always(true)
-  end, function()
+  assert(not pcall(Closure.request_then_wait, function() return Op.always(true) end, function()
     return Op.always(true)
   end, 'not-options'))
   assert(not pcall(Closure.running, { on_body_result = true }))

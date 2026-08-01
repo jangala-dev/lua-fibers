@@ -65,9 +65,7 @@ local function require_event(event, label)
 end
 
 local function safe_cancel(task_api, token)
-  if token ~= nil then
-    pcall(task_api.cancel, token)
-  end
+  if token ~= nil then pcall(task_api.cancel, token) end
 end
 
 local function safe_destroy(event)
@@ -106,13 +104,9 @@ function RobloxHost.new(opts)
     on_external_error = opts.on_external_error,
   })
   self._task = opts.task
-  if self._task == nil then
-    self._task = default_task()
-  end
+  if self._task == nil then self._task = default_task() end
   self._make_event = opts.make_event
-  if self._make_event == nil then
-    self._make_event = default_make_event
-  end
+  if self._make_event == nil then self._make_event = default_make_event end
   self._done_event = opts.done_event
   if self._done_event ~= nil then
     self._done_event = require_event(self._done_event, 'Roblox done event')
@@ -122,17 +116,13 @@ end
 
 function RobloxHost:require_task()
   local task_api = self._task
-  if task_api == nil then
-    task_api = default_task()
-  end
+  if task_api == nil then task_api = default_task() end
   self._task = require_task(task_api)
   return self._task
 end
 
 function RobloxHost:_completion_event()
-  if self._done_event ~= nil then
-    return self._done_event
-  end
+  if self._done_event ~= nil then return self._done_event end
   if type(self._make_event) ~= 'function' then
     error('Roblox completion waiting requires Instance.new or opts.make_event', 2)
   end
@@ -156,9 +146,7 @@ end
 function RobloxHost:mark_done(value)
   local was_done = self._done == true
   Queue.mark_done(self, value)
-  if not was_done and self._done_event then
-    self._done_event:Fire(value)
-  end
+  if not was_done and self._done_event then self._done_event:Fire(value) end
   return value
 end
 
@@ -172,15 +160,11 @@ end
 
 ---Wait from a convenience caller or shutdown callback until closure.
 function RobloxHost:wait_done(timeout)
-  if self._done then
-    return true, self._done_value
-  end
+  if self._done then return true, self._done_value end
   local task_api = self:require_task()
   local done_event = self:_completion_event()
   timeout = tonumber(timeout)
-  if timeout ~= nil and timeout < 0 then
-    timeout = 0
-  end
+  if timeout ~= nil and timeout < 0 then timeout = 0 end
 
   local timed_out = false
   local timer
@@ -192,19 +176,13 @@ function RobloxHost:wait_done(timeout)
   end
   done_event.Event:Wait()
   safe_cancel(task_api, timer)
-  if self._done then
-    return true, self._done_value
-  end
-  if timed_out then
-    return false, 'deadline'
-  end
+  if self._done then return true, self._done_value end
+  if timed_out then return false, 'deadline' end
   return false, 'runtime-not-done'
 end
 
 function RobloxHost:close()
-  if self._closed then
-    return true
-  end
+  if self._closed then return true end
   self._closed = true
   self._wake_callback = nil
   self:mark_done(self._done_value)
@@ -215,9 +193,7 @@ function RobloxHost:close()
   if done_event then
     local task_api = self._task
     if type(task_api) == 'table' and type(task_api.defer) == 'function' then
-      task_api.defer(function()
-        safe_destroy(done_event)
-      end)
+      task_api.defer(function() safe_destroy(done_event) end)
     else
       safe_destroy(done_event)
     end

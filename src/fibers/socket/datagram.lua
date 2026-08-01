@@ -171,6 +171,7 @@ local function datagram_closure(socket)
   })
 end
 
+
 function Datagram:state_op()
   return self.lifecycle:state_op()
 end
@@ -207,14 +208,14 @@ function Datagram:send_to_op(data, address)
       })
     )
   end
-  local send = self.lifecycle
-    :available_op()
-    :and_then(self.sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
+  local send = self.lifecycle:available_op():and_then(
+    self.sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
       if not ok then
         return nil, seq
       end
       return true
-    end))
+    end)
+  )
   return send:or_else(self.lifecycle:unavailable_op():map(function(state)
     return nil, terminal_error(state, 'send_to')
   end))
@@ -329,10 +330,9 @@ local function normalise_packet(socket, packet)
   if packet.peer ~= nil then
     local ok, peer = pcall(Address.validate, packet.peer, 'received datagram peer')
     if not ok then
-      return nil,
-        IOError.protocol('datagram', 'receive_from', 'host returned an invalid peer address', {
-          cause = peer,
-        })
+      return nil, IOError.protocol('datagram', 'receive_from', 'host returned an invalid peer address', {
+        cause = peer,
+      })
     end
     packet.peer = peer
   end
@@ -349,19 +349,13 @@ local function packet_source(socket, capacity)
     action = 'receive_from',
     role = 'datagram_packet_source',
     capacity = capacity,
-    handle = function()
-      return socket:host_handle()
-    end,
+    handle = function() return socket:host_handle() end,
     mode = 'read',
     pull = function(registered_handle)
       local packet, err = registered_handle:recv_from(socket.max_datagram_size)
-      if not packet then
-        return nil, err
-      end
+      if not packet then return nil, err end
       local normalised, packet_err = normalise_packet(socket, packet)
-      if not normalised then
-        error(packet_err, 0)
-      end
+      if not normalised then error(packet_err, 0) end
       return normalised
     end,
     closed_error = function(err)
@@ -388,9 +382,7 @@ local function service_send(socket, handle, record)
     perform(socket.sends:complete_op(record.seq))
     return nil
   end
-  if IOError.is_would_block(err) then
-    return record
-  end
+  if IOError.is_would_block(err) then return record end
   err = IOError.normalise(err, {
     domain = 'datagram',
     action = 'send_to',
@@ -419,9 +411,7 @@ local function driver(socket, driver_scope)
   local ok, driver_err = Protected.pcall(function()
     local handle, start_err = perform(socket.lifecycle:start_result_op())
     if not handle then
-      if start_err then
-        IO.masked_perform(rt, socket.sends:close_op(start_err))
-      end
+      if start_err then IO.masked_perform(rt, socket.sends:close_op(start_err)) end
       return
     end
 
@@ -430,9 +420,7 @@ local function driver(socket, driver_scope)
     while true do
       local event, value, err = perform(next_driver_event(socket, handle, pending))
       if event == 'terminal' then
-        if not value then
-          error(err, 0)
-        end
+        if not value then error(err, 0) end
         break
       end
       pending = service_send(socket, handle, value)
@@ -499,9 +487,7 @@ function Module.udp_op(address, opts)
     role = 'datagram_socket',
     closure = datagram_closure(socket),
     children = { socket.host_hold },
-    run = function(driver_scope)
-      return driver(socket, driver_scope)
-    end,
+    run = function(driver_scope) return driver(socket, driver_scope) end,
   }):wrap(function()
     return Activation.create(socket, {
       host = opts.host,
@@ -520,6 +506,11 @@ function Module.udp_op(address, opts)
     })
   end)
 end
+
+
+
+
+
 
 Module.DatagramSocket = Datagram
 Direct.install(Datagram, { 'send_to', 'receive_from', 'flush', 'close', 'closed' })

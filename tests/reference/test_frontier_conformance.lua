@@ -1,11 +1,6 @@
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?/init.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?/init.lua', package.path,
 }, ';')
 
 local Ref = require('reference.evaluator')
@@ -18,10 +13,8 @@ local unpack_ = table.unpack or unpack
 
 local function eq(actual, expected, message)
   if actual ~= expected then
-    error(
-      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
-      2
-    )
+    error((message or 'values differ') .. ': expected ' .. tostring(expected)
+      .. ', got ' .. tostring(actual), 2)
   end
 end
 
@@ -31,23 +24,15 @@ end
 
 local function reference_lanes(resource, puts, gets)
   local lanes = {}
-  for i = 1, puts do
-    lanes[#lanes + 1] = RefOp.put(resource, i)
-  end
-  for _ = 1, gets do
-    lanes[#lanes + 1] = RefOp.get(resource)
-  end
+  for i = 1, puts do lanes[#lanes + 1] = RefOp.put(resource, i) end
+  for _ = 1, gets do lanes[#lanes + 1] = RefOp.get(resource) end
   return lanes
 end
 
 local function production_lanes(channel, puts, gets)
   local lanes = {}
-  for i = 1, puts do
-    lanes[#lanes + 1] = channel:put_op(i)
-  end
-  for _ = 1, gets do
-    lanes[#lanes + 1] = channel:get_op()
-  end
+  for i = 1, puts do lanes[#lanes + 1] = channel:put_op(i) end
+  for _ = 1, gets do lanes[#lanes + 1] = channel:get_op() end
   return lanes
 end
 
@@ -80,16 +65,12 @@ for puts = 1, 4 do
     local resource = 'reference-complete-' .. puts .. '-' .. gets
     local expected = puts == gets and 'preferred' or 'fallback'
     local reference = RefOp.together(unpack_(reference_lanes(resource, puts, gets)))
-      :map(function()
-        return 'preferred'
-      end)
+      :map(function() return 'preferred' end)
       :or_else(RefOp.always('fallback'))
 
     local channel = Rendezvous.new(resource)
     local production = Op.together(production_lanes(channel, puts, gets))
-      :map(function()
-        return 'preferred'
-      end)
+      :map(function() return 'preferred' end)
       :or_else(Op.always('fallback'))
 
     eq(reference_result(reference, resource), expected, resource .. ' reference result')
@@ -110,25 +91,20 @@ for a_puts = 0, 3 do
         if total <= 8 and a_puts + a_gets > 0 and b_puts + b_gets > 0 then
           generated = generated + 1
           local label = table.concat({ 'reference-constrained', a_puts, a_gets, b_puts, b_gets }, '-')
-          local expected = a_puts == b_gets and b_puts == a_gets and 'preferred' or 'fallback'
+          local expected = a_puts == b_gets and b_puts == a_gets
+            and 'preferred' or 'fallback'
 
           local reference = RefOp.together(
             ref_each(reference_lanes(label, a_puts, a_gets)),
             ref_each(reference_lanes(label, b_puts, b_gets))
-          )
-            :map(function()
-              return 'preferred'
-            end)
+          ):map(function() return 'preferred' end)
             :or_else(RefOp.always('fallback'))
 
           local channel = Rendezvous.new(label)
           local production = Op.together({
             Op.each(production_lanes(channel, a_puts, a_gets)),
             Op.each(production_lanes(channel, b_puts, b_gets)),
-          })
-            :map(function()
-              return 'preferred'
-            end)
+          }):map(function() return 'preferred' end)
             :or_else(Op.always('fallback'))
 
           eq(reference_result(reference, label), expected, label .. ' reference result')
@@ -146,48 +122,36 @@ eq(generated, 190, 'generated constrained frontier count')
 do
   local label = 'reference-matching-backtrack'
   local reference_lanes_ = {}
-  for i = 1, 4 do
-    reference_lanes_[#reference_lanes_ + 1] = RefOp.put(label, i)
-  end
+  for i = 1, 4 do reference_lanes_[#reference_lanes_ + 1] = RefOp.put(label, i) end
   for i = 1, 4 do
     local lane = RefOp.get(label)
     if i == 1 then
       lane = lane:and_then(RefOp.guard(function(value)
-        if value == 4 then
-          return RefOp.never()
-        end
+        if value == 4 then return RefOp.never() end
         return RefOp.always(value)
       end))
     end
     reference_lanes_[#reference_lanes_ + 1] = lane
   end
   local reference = RefOp.together(unpack_(reference_lanes_))
-    :map(function()
-      return 'preferred'
-    end)
+    :map(function() return 'preferred' end)
     :or_else(RefOp.always('fallback'))
 
   local channel = Rendezvous.new(label)
   local production_lanes_ = {}
-  for i = 1, 4 do
-    production_lanes_[#production_lanes_ + 1] = channel:put_op(i)
-  end
+  for i = 1, 4 do production_lanes_[#production_lanes_ + 1] = channel:put_op(i) end
   for i = 1, 4 do
     local lane = channel:get_op()
     if i == 1 then
       lane = lane:and_then(Op.guard(function(value)
-        if value == 4 then
-          return Op.never()
-        end
+        if value == 4 then return Op.never() end
         return Op.always(value)
       end))
     end
     production_lanes_[#production_lanes_ + 1] = lane
   end
   local production = Op.together(production_lanes_)
-    :map(function()
-      return 'preferred'
-    end)
+    :map(function() return 'preferred' end)
     :or_else(Op.always('fallback'))
 
   eq(reference_result(reference, label), 'preferred')

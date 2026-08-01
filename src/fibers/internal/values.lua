@@ -16,16 +16,10 @@ function Values.is(value)
 end
 
 function Values.equal(left, right)
-  if left == right then
-    return true
-  end
-  if type(left) ~= 'table' or type(right) ~= 'table' then
-    return false
-  end
+  if left == right then return true end
+  if type(left) ~= 'table' or type(right) ~= 'table' then return false end
   local ln, rn = left.n or #left, right.n or #right
-  if ln ~= rn then
-    return false
-  end
+  if ln ~= rn then return false end
   for i = 1, ln do
     local a, b = left[i], right[i]
     if a ~= b and not (type(a) == 'number' and type(b) == 'number' and a ~= a and b ~= b) then

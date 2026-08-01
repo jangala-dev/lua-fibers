@@ -6,6 +6,7 @@ local Protected = require('fibers.protected')
 
 local Connection = {}
 
+
 local OPTION_KEYS = {
   'nodelay',
   'capacity',
@@ -19,9 +20,7 @@ local OPTION_KEYS = {
 function Connection.options(source, fields)
   local out = IO.copy_table(fields)
   for _, key in ipairs(OPTION_KEYS) do
-    if source and source[key] ~= nil then
-      out[key] = source[key]
-    end
+    if source and source[key] ~= nil then out[key] = source[key] end
   end
   return out
 end
@@ -69,17 +68,11 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
     })
     local discarded, discard_err = host_hold:discard(key, handle, failure)
     if not discarded then
-      return nil,
-        IOError.protocol(
-          'socket',
-          opts.action or 'open_connection',
-          'connection opening and handle disposal failed',
-          {
-            address = opts.address,
-            errors = { failure, discard_err },
-            cause = failure,
-          }
-        )
+      return nil, IOError.protocol('socket', opts.action or 'open_connection', 'connection opening and handle disposal failed', {
+        address = opts.address,
+        errors = { failure, discard_err },
+        cause = failure,
+      })
     end
     return nil, failure
   end

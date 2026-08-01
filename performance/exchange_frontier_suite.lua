@@ -2,13 +2,8 @@
 -- and closed exchange-frontier matching.
 
 package.path = table.concat({
-  './src/?.lua',
-  './src/?/init.lua',
-  './src/?/?.lua',
-  './?.lua',
-  './?/init.lua',
-  './?/?.lua',
-  package.path,
+  './src/?.lua', './src/?/init.lua', './src/?/?.lua',
+  './?.lua', './?/init.lua', './?/?.lua', package.path,
 }, ';')
 
 local Runtime = require('fibers.runtime')
@@ -20,12 +15,8 @@ local rows = {}
 
 local function exchange_lanes(channel, puts, gets)
   local lanes = {}
-  for _ = 1, puts do
-    lanes[#lanes + 1] = channel:put_op(true)
-  end
-  for _ = 1, gets do
-    lanes[#lanes + 1] = channel:get_op()
-  end
+  for _ = 1, puts do lanes[#lanes + 1] = channel:put_op(true) end
+  for _ = 1, gets do lanes[#lanes + 1] = channel:get_op() end
   return lanes
 end
 
@@ -69,9 +60,7 @@ measure('failing_suppliers', 64, function()
   runtime:spawn_raw(function()
     result = runtime:perform(channel:put_op(true):or_else(Op.always('fallback')))
   end, 'focus')
-  return runtime, function()
-    return result
-  end
+  return runtime, function() return result end
 end, 'fallback')
 
 measure('role_imbalance', 64, function()
@@ -79,11 +68,11 @@ measure('role_imbalance', 64, function()
   local channel = Rendezvous.new('frontier-perf-imbalance')
   local result
   runtime:spawn_raw(function()
-    result = runtime:perform(Op.together(exchange_lanes(channel, 64, 65)):or_else(Op.always('fallback')))
+    result = runtime:perform(
+      Op.together(exchange_lanes(channel, 64, 65)):or_else(Op.always('fallback'))
+    )
   end, 'focus')
-  return runtime, function()
-    return result
-  end
+  return runtime, function() return result end
 end, 'fallback')
 
 measure('hall_deficient', 64, function()
@@ -97,9 +86,7 @@ measure('hall_deficient', 64, function()
     local preferred = Op.each(exchange_lanes(channel, 65, 64))
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
   end, 'root-a')
-  return runtime, function()
-    return result
-  end
+  return runtime, function() return result end
 end, 'fallback')
 
 measure('perfect_constrained', 64, function()
@@ -110,14 +97,10 @@ measure('perfect_constrained', 64, function()
   end, 'root-b')
   local result
   runtime:spawn_raw(function()
-    local preferred = Op.each(exchange_lanes(channel, 64, 64)):map(function()
-      return 'preferred'
-    end)
+    local preferred = Op.each(exchange_lanes(channel, 64, 64)):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
   end, 'root-a')
-  return runtime, function()
-    return result
-  end
+  return runtime, function() return result end
 end, 'preferred')
 
 measure('complete_internal', 128, function()
@@ -125,21 +108,15 @@ measure('complete_internal', 128, function()
   local channel = Rendezvous.new('frontier-perf-complete')
   local result
   runtime:spawn_raw(function()
-    result = runtime:perform(Op.together(exchange_lanes(channel, 128, 128)):map(function()
-      return 'preferred'
-    end))
+    result = runtime:perform(Op.together(exchange_lanes(channel, 128, 128)):map(function() return 'preferred' end))
   end, 'focus')
-  return runtime, function()
-    return result
-  end
+  return runtime, function() return result end
 end, 'preferred')
 
 measure('failing_supplier_chain', 64, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 256 })
   local channels = {}
-  for i = 1, 64 do
-    channels[i] = Rendezvous.new('frontier-perf-chain-' .. i)
-  end
+  for i = 1, 64 do channels[i] = Rendezvous.new('frontier-perf-chain-' .. i) end
   for i = 1, 64 do
     local index = i
     runtime:spawn_raw(function()
@@ -156,30 +133,19 @@ measure('failing_supplier_chain', 64, function()
   runtime:spawn_raw(function()
     result = runtime:perform(channels[1]:put_op(0):or_else(Op.always('fallback')))
   end, 'focus')
-  return runtime, function()
-    return result
-  end
+  return runtime, function() return result end
 end, 'fallback')
 
 local headers = {
-  'case',
-  'scale',
-  'result',
-  'status',
-  'seconds',
-  'searches',
-  'search_calls',
-  'max_search_steps',
-  'max_component',
+  'case', 'scale', 'result', 'status', 'seconds',
+  'searches', 'search_calls', 'max_search_steps', 'max_component',
 }
 local lines = { table.concat(headers, ',') }
 for i = 1, #rows do
   local values = {}
   for j = 1, #headers do
     local value = rows[i][headers[j]]
-    if headers[j] == 'seconds' then
-      value = string.format('%.6f', value)
-    end
+    if headers[j] == 'seconds' then value = string.format('%.6f', value) end
     values[j] = tostring(value)
   end
   lines[#lines + 1] = table.concat(values, ',')

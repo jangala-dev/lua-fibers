@@ -33,6 +33,7 @@ if expected_native ~= nil then
   end)
 end
 
+
 test('fibers.protected exposes the same yieldable call contract for libraries', function()
   local protected_ok, got
   local st = fibers.try_run(function()

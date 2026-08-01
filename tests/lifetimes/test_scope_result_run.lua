@@ -100,25 +100,24 @@ do
   local r = fibers.try_run(function()
     fibers.scope(function(scope)
       local h = { name = 'failing-settle' }
-      Lifetime.define(
-        h,
-        {
-          closure = {
-            name = 'fail',
-            finish_op = function()
-              error('closure failed', 0)
-            end,
-          },
-        }
-      )
+      Lifetime.define(h, { closure = {
+        name = 'fail',
+        finish_op = function() error('closure failed', 0) end,
+      } })
       fibers.perform(scope:admit_op(h))
       return 'body-value'
     end)
   end)
   assert_eq(r.ok, false)
   assert_truthy(r.reason == 'body_error' or r.reason == 'closure_failed')
-  assert_truthy(tostring(r.report or r.primary):match('closure failed'), 'closure failure should be reported')
-  assert_truthy(Closure.is_failure(r.closure_failure), 'checked result should retain recovery authority')
+  assert_truthy(
+    tostring(r.report or r.primary):match('closure failed'),
+    'closure failure should be reported'
+  )
+  assert_truthy(
+    Closure.is_failure(r.closure_failure),
+    'checked result should retain recovery authority'
+  )
   assert_eq(r.closure_failures[1], r.closure_failure)
   assert_eq(r.report.closure_failures[1], r.closure_failure)
   assert_eq(r.report.closure_failure_count, 1)

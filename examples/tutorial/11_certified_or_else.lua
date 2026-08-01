@@ -22,9 +22,12 @@ local squad_orders = channel.new()
 local first_order, second_order, delivered_order
 
 local function flank_op()
-  return stamina:take_op(1):and_then(squad_orders:put_op('flank the eastern stair')):map(function()
-    return 'flanking'
-  end)
+  return stamina
+    :take_op(1)
+    :and_then(squad_orders:put_op('flank the eastern stair'))
+    :map(function()
+      return 'flanking'
+    end)
 end
 
 fibers.run(function(scope)
