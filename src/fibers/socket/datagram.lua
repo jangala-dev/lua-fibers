@@ -19,6 +19,7 @@ local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local DatagramLifecycle = Lifecycle.define({
   prefix = 'socket.datagram',
@@ -520,25 +521,7 @@ function Module.udp_op(address, opts)
   end)
 end
 
-function Datagram:send_to(data, address)
-  return perform(self:send_to_op(data, address))
-end
-
-function Datagram:receive_from(opts)
-  return perform(self:receive_from_op(opts))
-end
-
-function Datagram:flush()
-  return perform(self:flush_op())
-end
-
-function Datagram:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Datagram:closed()
-  return perform(self:closed_op())
-end
-
 Module.DatagramSocket = Datagram
+Direct.install(Datagram, { 'send_to', 'receive_from', 'flush', 'close', 'closed' })
+
 return Module

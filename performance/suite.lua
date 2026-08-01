@@ -18,9 +18,6 @@ package.path = table.concat({
   join_path(root, 'src/?.lua'),
   join_path(root, 'src/?/init.lua'),
   join_path(root, 'src/?/?.lua'),
-  join_path(root, 'reference/?.lua'),
-  join_path(root, 'reference/?/init.lua'),
-  join_path(root, 'reference/?/?.lua'),
   join_path(root, '?.lua'),
   join_path(root, '?/init.lua'),
   join_path(root, '?/?.lua'),
@@ -54,22 +51,10 @@ local tiers_text = env('FIBERS_PERF_TIERS', 'simple,moderate')
 local case_filter = env('FIBERS_PERF_CASE', arg and arg[1] or '')
 local format = env('FIBERS_PERF_FORMAT', 'text')
 local output_path = env('FIBERS_PERF_OUTPUT', '')
-local machine = env('FIBERS_PERF_MACHINE', 'ledger')
 local choice_seed = math.floor(env_number('FIBERS_PERF_SEED', 1))
 local diagnostics = env_number('FIBERS_PERF_DIAGNOSTICS', 1) ~= 0
 local trace = env_number('FIBERS_PERF_TRACE', 0) ~= 0
-local slow_plan_limit = math.max(1, math.floor(env_number('FIBERS_PERF_SLOW_PLANS', 8)))
-local advanced_profile = env('FIBERS_PERF_ADVANCED', 'full')
-
-local function apply_advanced_profile(opts)
-  if advanced_profile == 'off' or advanced_profile == 'baseline' then
-    opts.certified_symmetry = false
-    opts.plan_reuse = false
-  elseif advanced_profile ~= 'full' then
-    error('FIBERS_PERF_ADVANCED must be full or off')
-  end
-  return opts
-end
+local slow_search_limit = math.max(1, math.floor(env_number('FIBERS_PERF_SLOW_SEARCHES', 8)))
 
 local selected_tiers = {}
 for tier in string.gmatch(tiers_text, '[^,%s]+') do
@@ -169,7 +154,7 @@ function Context:instrumentation_options()
   return {
     trace = trace,
     trace_limit = 512,
-    slow_plan_limit = slow_plan_limit,
+    slow_search_limit = slow_search_limit,
     clock = Clock.now,
   }
 end
@@ -180,10 +165,8 @@ function Context:runtime(opts)
   for k, v in pairs(opts) do
     rt_opts[k] = v
   end
-  rt_opts.machine = rt_opts.machine or machine
   rt_opts.choice_seed = rt_opts.choice_seed or choice_seed
   rt_opts.instrumentation = self:instrumentation_options()
-  apply_advanced_profile(rt_opts)
   local rt = Runtime.new(rt_opts)
   self.runtimes[#self.runtimes + 1] = rt
   return rt
@@ -194,10 +177,9 @@ function Context:run_options(opts)
   for k, v in pairs(opts or {}) do
     out[k] = v
   end
-  out.machine = out.machine or machine
   out.choice_seed = out.choice_seed or choice_seed
   out.instrumentation = self:instrumentation_options()
-  return apply_advanced_profile(out)
+  return out
 end
 
 function Context:add_runtime(rt)
@@ -216,7 +198,7 @@ local function merge_snapshot(dst, src)
   if not src then
     return dst
   end
-  dst = dst or { counters = {}, maxima = {}, histograms = {}, slow_plans = {} }
+  dst = dst or { counters = {}, maxima = {}, histograms = {}, slow_searches = {} }
   for k, v in pairs(src.counters or {}) do
     dst.counters[k] = (dst.counters[k] or 0) + v
   end
@@ -235,17 +217,17 @@ local function merge_snapshot(dst, src)
       target[bucket] = (target[bucket] or 0) + count
     end
   end
-  for i = 1, #(src.slow_plans or {}) do
-    dst.slow_plans[#dst.slow_plans + 1] = src.slow_plans[i]
+  for i = 1, #(src.slow_searches or {}) do
+    dst.slow_searches[#dst.slow_searches + 1] = src.slow_searches[i]
   end
-  table.sort(dst.slow_plans, function(a, b)
+  table.sort(dst.slow_searches, function(a, b)
     if (a.search_steps or 0) ~= (b.search_steps or 0) then
       return (a.search_steps or 0) > (b.search_steps or 0)
     end
     return (a.elapsed or 0) > (b.elapsed or 0)
   end)
-  while #dst.slow_plans > slow_plan_limit do
-    dst.slow_plans[#dst.slow_plans] = nil
+  while #dst.slow_searches > slow_search_limit do
+    dst.slow_searches[#dst.slow_searches] = nil
   end
   return dst
 end
@@ -253,9 +235,10 @@ end
 function Context:report()
   local out
   for i = 1, #self.runtimes do
-    out = merge_snapshot(out, self.runtimes[i]:instrumentation_report())
+    out =
+      merge_snapshot(out, (self.runtimes[i].instrumentation and self.runtimes[i].instrumentation:report()))
   end
-  return out or { counters = {}, maxima = {}, histograms = {}, slow_plans = {} }
+  return out or { counters = {}, maxima = {}, histograms = {}, slow_searches = {} }
 end
 
 local function run_once(case, n, instrumented)
@@ -294,7 +277,6 @@ for _, case in ipairs(cases) do
     local diag = diagnostic_run and diagnostic_run.diagnostics or nil
     local counters = diag and diag.counters or {}
     local maxima = diag and diag.maxima or {}
-    local request_total = (counters.requests_dynamic or 0) + (counters.requests_analysable or 0)
     results[#results + 1] = {
       tier = case.tier,
       group = case.group,
@@ -309,21 +291,32 @@ for _, case in ipairs(cases) do
       median_retained_kb = median(retained),
       diagnostic_seconds = diagnostic_run and diagnostic_run.elapsed or nil,
       diagnostics = diag,
-      search_calls_per_plan = (counters.plans or 0) > 0 and (counters.search_calls or 0) / counters.plans
+      search_calls_per_search = (counters.searches or 0) > 0
+          and (counters.search_calls or 0) / counters.searches
         or 0,
-      branches_per_plan = (counters.plans or 0) > 0 and (counters.branches or 0) / counters.plans or 0,
-      p50_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_plan, 0.50),
-      p95_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_plan, 0.95),
-      p99_search_steps_upper = histogram_quantile_upper(diag and diag.histograms.search_steps_per_plan, 0.99),
+      branches_per_search = (counters.searches or 0) > 0 and (counters.branches or 0) / counters.searches
+        or 0,
+      p50_search_steps_upper = histogram_quantile_upper(
+        diag and diag.histograms.search_steps_per_search,
+        0.50
+      ),
+      p95_search_steps_upper = histogram_quantile_upper(
+        diag and diag.histograms.search_steps_per_search,
+        0.95
+      ),
+      p99_search_steps_upper = histogram_quantile_upper(
+        diag and diag.histograms.search_steps_per_search,
+        0.99
+      ),
       p95_search_cpu_us_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_cpu_us_per_plan,
+        diag and diag.histograms.search_cpu_us_per_search,
         0.95
       ),
       p99_search_cpu_us_upper = histogram_quantile_upper(
-        diag and diag.histograms.search_cpu_us_per_plan,
+        diag and diag.histograms.search_cpu_us_per_search,
         0.99
       ),
-      max_search_steps = maxima.search_steps_per_plan or 0,
+      max_search_steps = maxima.search_steps_per_search or 0,
       max_search_depth = maxima.search_depth or 0,
       max_pending = maxima.pending_requests or 0,
       component_fraction = (counters.frontier_roots_total or 0) > 0
@@ -331,7 +324,6 @@ for _, case in ipairs(cases) do
         or 1,
       forced_exchanges = counters.forced_exchanges or 0,
       forced_claims = counters.forced_claims or 0,
-      dynamic_request_fraction = request_total > 0 and (counters.requests_dynamic or 0) / request_total or 0,
     }
   end
 end
@@ -416,7 +408,6 @@ local document = {
   schema = 'fibers-performance-v1',
   generated_at = os.date and os.date('!%Y-%m-%dT%H:%M:%SZ') or nil,
   lua_version = _VERSION,
-  machine = machine,
   choice_seed = choice_seed,
   scale = scale,
   repeats = repeats,
@@ -430,9 +421,8 @@ local function render_text()
   local lines = {}
   lines[#lines + 1] = 'fibers tiered performance suite'
   lines[#lines + 1] = string.format(
-    'lua=%s machine=%s seed=%d scale=%s repeats=%d tiers=%s diagnostics=%s clock=%s',
+    'lua=%s seed=%d scale=%s repeats=%d tiers=%s diagnostics=%s clock=%s',
     tostring(_VERSION),
-    machine,
     choice_seed,
     tostring(scale),
     repeats,
@@ -441,7 +431,7 @@ local function render_text()
     Clock.name
   )
   lines[#lines + 1] = string.format(
-    '%-9s %-13s %-35s %10s %11s %11s %9s %10s %8s %7s %7s',
+    '%-9s %-13s %-35s %10s %11s %11s %9s %10s %8s %7s',
     'tier',
     'group',
     'case',
@@ -451,13 +441,12 @@ local function render_text()
     'p99<=',
     'max steps',
     'branches',
-    'comp%',
-    'dyn%'
+    'comp%'
   )
   lines[#lines + 1] = string.rep('-', 147)
   for _, r in ipairs(results) do
     lines[#lines + 1] = string.format(
-      '%-9s %-13s %-35s %10d %11.3f %11.3f %9d %10d %8.1f %6.1f%% %6.1f%%',
+      '%-9s %-13s %-35s %10d %11.3f %11.3f %9d %10d %8.1f %6.1f%%',
       r.tier,
       r.group,
       r.name,
@@ -466,9 +455,8 @@ local function render_text()
       r.median_us_per_op,
       r.p99_search_steps_upper,
       r.max_search_steps,
-      r.branches_per_plan,
-      r.component_fraction * 100,
-      r.dynamic_request_fraction * 100
+      r.branches_per_search,
+      r.component_fraction * 100
     )
   end
   lines[#lines + 1] = ''
@@ -487,14 +475,13 @@ end
 local function render_csv()
   local lines = {
     'tier,group,name,iterations,operations,median_seconds,min_seconds,max_seconds,'
-      .. 'median_us_per_op,median_retained_kb,diagnostic_seconds,plans,search_calls,'
-      .. 'search_calls_per_plan,branches_per_plan,p50_search_steps_upper,'
+      .. 'median_us_per_op,median_retained_kb,diagnostic_seconds,searches,search_calls,'
+      .. 'search_calls_per_search,branches_per_search,p50_search_steps_upper,'
       .. 'p95_search_steps_upper,p99_search_steps_upper,p95_search_cpu_us_upper,'
       .. 'p99_search_cpu_us_upper,max_search_steps,max_search_depth,max_pending,'
       .. 'claim_branches,recruit_branches,footprint_checks,footprint_matches,'
       .. 'component_fraction,forced_exchanges,forced_claims,'
-      .. 'requests_analysable,requests_dynamic,dynamic_request_fraction,'
-      .. 'component_roots_excluded,plan_reuse_eligible',
+      .. 'component_roots_excluded',
   }
   for _, r in ipairs(results) do
     local c = r.diagnostics and r.diagnostics.counters or {}
@@ -510,10 +497,10 @@ local function render_csv()
       string.format('%.6f', r.median_us_per_op),
       string.format('%.3f', r.median_retained_kb),
       r.diagnostic_seconds and string.format('%.9f', r.diagnostic_seconds) or '',
-      c.plans or 0,
+      c.searches or 0,
       c.search_calls or 0,
-      string.format('%.3f', r.search_calls_per_plan),
-      string.format('%.3f', r.branches_per_plan),
+      string.format('%.3f', r.search_calls_per_search),
+      string.format('%.3f', r.branches_per_search),
       r.p50_search_steps_upper,
       r.p95_search_steps_upper,
       r.p99_search_steps_upper,
@@ -529,11 +516,7 @@ local function render_csv()
       string.format('%.6f', r.component_fraction),
       r.forced_exchanges,
       r.forced_claims,
-      c.requests_analysable or 0,
-      c.requests_dynamic or 0,
-      string.format('%.6f', r.dynamic_request_fraction),
       c.component_roots_excluded or 0,
-      c.plan_reuse_eligible or 0,
     }
     for i = 1, #row do
       row[i] = csv_quote(row[i])

@@ -1,10 +1,12 @@
 ---Lifetime-backed adaptation of an RBXScriptSignal into a Fibers event source.
 
+local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Subscription = {}
 Subscription.__index = Subscription
@@ -135,7 +137,7 @@ function Subscription.new(signal, opts)
   end
 
   local name = opts.name or ('roblox-' .. mode)
-  local resource, feed = runtime:events(name)
+  local resource, feed = External.events(runtime, name)
   local self = setmetatable({
     name = name,
     mode = mode,
@@ -186,9 +188,6 @@ function Subscription:next_op()
 end
 
 ---Wait directly for the next queued or retained observation.
-function Subscription:next()
-  return perform(self:next_op())
-end
 
 ---Return the number of observations currently pending in Fibers.
 function Subscription:length()
@@ -224,5 +223,7 @@ function Subscription:close(reason)
   end
   return self.scope:perform(self:close_op(reason))
 end
+
+Direct.install(Subscription, { 'next' })
 
 return Subscription

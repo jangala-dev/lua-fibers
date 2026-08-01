@@ -214,8 +214,8 @@ In Fibers, an algebra is simply a small set of ways to combine options. No forma
 | `choice(a, b)` | either coherent result is acceptable |
 | `a:or_else(b)` | use `b` only with certified present absence of `a` |
 | `a:and_then(b)` | satisfy `a`, then `b`, in one transaction |
-| `each({ a, b })` | satisfy both, with each standing on its own |
-| `together({ a, b })` | satisfy both, allowing compatible sibling hand-off |
+| `each(a, b)` or `each({ a, b })` | satisfy both, with each standing on its own |
+| `together(a, b)` or `together({ a, b })` | satisfy both, allowing compatible sibling hand-off |
 | `a:map(f)` | transform a speculative result |
 | `a:wrap(f)` | run participant-local code after commitment |
 
@@ -576,14 +576,14 @@ Fibers is designed for readable application code, but its small surface carries 
 - **Occurrence-sensitive commitment:** wraps, effects and defeat obligations belong to precise dynamic option occurrences.
 - **Cross-resource decisions:** communication, state, external observations, custody changes and selected consequences can participate in one coherent commit.
 
-The implementation searches for a compatible resource world, validates the facts on which that world depends, and commits it through one serial authority. A separate repository-local reference evaluator runs the same semantic test corpus using a simpler strategy.
+The implementation searches for a compatible resource world, validates the facts on which that world depends, and commits it through one serial authority. One execution-frontier kernel uses a mutable speculative store, a first-write rollback journal and resource-local versioned frontiers. Bounded embedding retains the Lua search stack, witness cursors and guard activations in a coroutine rather than replaying proof prefixes. The public Runtime is only the fibre scheduler and execution boundary: request arbitration belongs to the driver, while candidate representation, validation, effects and settlement remain private to the kernel.
 
 Readers interested in CSP, Concurrent ML, Transactional Events, Reagents or transactional memory may wish to begin with:
 
 - [`docs/design/comparison.md`](docs/design/comparison.md)
 - [`docs/advanced/option-algebra.md`](docs/advanced/option-algebra.md)
 - [`docs/design/kernel.md`](docs/design/kernel.md)
-- [`reference/README.md`](reference/README.md)
+- [`docs/design/execution-frontiers.md`](docs/design/execution-frontiers.md)
 
 The project does not presently claim a denotational semantics, a mechanised proof, a published encoding result, fairness for unordered choice, or lock-free parallel commit. The comparison document states the present strengths and limits directly.
 
@@ -605,7 +605,7 @@ Fibers coordinates work within one cooperative runtime domain. It is not a durab
 
 ## Project status and compatibility
 
-Version 1 is an advanced work in progress. The core algebra, runtime, resource substrate, lifetime model and reference evaluator are substantial, but the public API and packaging are still being settled.
+Version 1 is an advanced work in progress. The core algebra, execution-frontier runtime, resource substrate and lifetime model are substantial, but the public API and packaging are still being settled.
 
 The production source uses the Lua 5.1 grammar. The development matrix covers:
 
@@ -664,8 +664,9 @@ Until the first packaged release, add `src` to the Lua module path or vendor `sr
 ### Extending and contributing
 
 - [Facility authoring](docs/advanced/facility-authoring.md)
-- [Parallel ledger kernel](docs/design/ledger-kernel.md)
-- [Trusted resource programmes](docs/contributing/trusted-resource-programmes.md)
+- [Execution-frontier kernel](docs/design/kernel.md)
+- [Execution frontiers](docs/design/execution-frontiers.md)
+- [Trusted executable resource leaves](docs/contributing/trusted-resource-leaves.md)
 - [Repository layout](docs/contributing/repository-layout.md)
 - [Lua compatibility](docs/contributing/compatibility.md)
 - [Test profiles](docs/contributing/testing.md)

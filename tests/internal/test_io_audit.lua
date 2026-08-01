@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -18,7 +15,7 @@ local SimulatedHost = require('tests.support.simulated_host')
 local Handle = require('fibers.io.handle')
 local HostError = require('fibers.io.error')
 local IOAudit = require('fibers.diagnostics.io')
-IOAudit.install(require('tests.support.io_audit_observer'))
+IOAudit.install(require('fibers.diagnostics.io_observer'))
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -46,13 +43,13 @@ do
     writer:write('x')
     writer:flush()
     assert_eq(reader:read(1), 'x')
-    during = fibers.current_runtime():io_audit()
+    during = IOAudit.report(fibers.current_runtime())
     assert_truthy((during.counts.in_custody or 0) >= 2, 'pipe handles should be in Stream custody')
     assert_eq((during.counts.registered or 0), 2, 'directional pipe Streams should have two registrations')
   end, { host = SimulatedHost.new({ pipes = true }) })
   assert_truthy(result.ok, result:tostring())
-  assert_eq(#result.runtime:io_audit().items, 0, 'Closure should leave no live I/O records')
-  assert_truthy(result.runtime:assert_io_quiescent('audited pipe'))
+  assert_eq(#IOAudit.report(result.runtime).items, 0, 'Closure should leave no live I/O records')
+  assert_truthy(IOAudit.assert_clean(result.runtime, { label = 'audited pipe' }))
 end
 
 -- Listener, accepted connection and Dial handles all enter custody and
@@ -77,8 +74,8 @@ do
     listener:closed()
   end, { host = SimulatedHost.new({ sockets = true }) })
   assert_truthy(result.ok, result:tostring())
-  assert_eq(#result.runtime:io_audit().items, 0, 'socket tree should close completely')
-  result.runtime:assert_io_quiescent('audited sockets')
+  assert_eq(#IOAudit.report(result.runtime).items, 0, 'socket tree should close completely')
+  IOAudit.assert_clean(result.runtime, { label = 'audited sockets' })
 end
 
 -- Close failures remain visible as failed lifecycle records.

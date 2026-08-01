@@ -366,5 +366,5 @@ Petri and Calendar are trusted kernel case studies under `examples/case_studies/
 - `../advanced/flows-and-streams.md` — Flow leases, Streams and the shared reactor
 - `../advanced/embedding.md` — direct runtime driving and hosts
 - `../advanced/facility-authoring.md` — composing supported public facilities
-- `../contributing/trusted-resource-programmes.md` — closed kernel resource programmes
+- `../contributing/trusted-resource-leaves.md` — closed kernel resource programmes
 - `../design/kernel.md` — kernel representation and execution

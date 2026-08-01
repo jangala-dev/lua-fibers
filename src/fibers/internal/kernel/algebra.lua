@@ -2,6 +2,73 @@
 
 local M = {}
 
+local VALID = { up = true, down = true, any = true }
+
+local function fail(label, message, level)
+  error((label or 'supply declaration') .. ' ' .. message, (level or 1) + 1)
+end
+
+function M.normalise_supply(value, label, level)
+  if value == nil then
+    fail(label, 'requires an explicit supplies declaration', (level or 1) + 1)
+  end
+
+  if value == 'none' then
+    return {}
+  elseif value == 'up' then
+    return { up = true }
+  elseif value == 'down' then
+    return { down = true }
+  elseif value == 'any' then
+    return { any = true }
+  end
+
+  if type(value) ~= 'table' then
+    fail(label, 'must be none, up, down, any, or a supply set', (level or 1) + 1)
+  end
+
+  local out = {}
+  for key, present in pairs(value) do
+    if not VALID[key] then
+      fail(label, 'contains unknown direction ' .. tostring(key), (level or 1) + 1)
+    end
+    if present ~= true and present ~= false and present ~= nil then
+      fail(label, 'direction ' .. tostring(key) .. ' must be boolean', (level or 1) + 1)
+    end
+    if present then
+      out[key] = true
+    end
+  end
+  if out.any and (out.up or out.down) then
+    fail(label, 'cannot combine any with directional entries', (level or 1) + 1)
+  end
+  return out
+end
+
+function M.merge_supply(dst, src)
+  dst = dst or {}
+  for key in pairs(src or {}) do
+    if VALID[key] then
+      dst[key] = true
+    end
+  end
+  return dst
+end
+
+function M.supply_empty(value)
+  return not (value and (value.up or value.down or value.any))
+end
+
+function M.may_supply(value, demand)
+  if M.supply_empty(value) then
+    return false
+  end
+  if value.any or demand == nil then
+    return true
+  end
+  return value[demand] == true
+end
+
 M.ABSENT = setmetatable({}, {
   __tostring = function()
     return '<absent>'

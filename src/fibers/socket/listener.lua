@@ -17,6 +17,7 @@ local HostOffer = require('fibers.io.offer')
 local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local ListenerLifecycle = Lifecycle.define({
   prefix = 'socket.listener',
@@ -94,14 +95,7 @@ local function accept_to_scope_op(listener, target_scope)
 end
 
 function Listener:accept_op(target)
-  local listener = self
-  return IO.with_target_scope_op(
-    target,
-    'Listener:accept_op expects a target Scope, or a current Scope',
-    function(scope)
-      return accept_to_scope_op(listener, scope)
-    end
-  )
+  return accept_to_scope_op(self, IO.require_scope(target, 'Listener:accept_op target'))
 end
 
 local function listener_close_result(state)
@@ -282,16 +276,11 @@ function Module.listen_op(address, opts)
 end
 
 function Listener:accept(target)
+  target = target or IO.current_scope({}, 'Listener:accept')
   return perform(self:accept_op(target))
 end
 
-function Listener:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Listener:closed()
-  return perform(self:closed_op())
-end
-
 Module.Listener = Listener
+Direct.install(Listener, { 'close', 'closed' })
+
 return Module

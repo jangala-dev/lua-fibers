@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -16,26 +13,25 @@ local Rendezvous = require('fibers.resource.rendezvous')
 local Cell = require('fibers.resource.cell')
 
 local function report(name, rt)
-  local s = rt.stats
+  local s = (rt.instrumentation and rt.instrumentation:report()).counters
   io.write(
     string.format(
-      '%-34s plans=%d search_calls=%d clones=%d commits=%d '
+      '%-34s sessions=%d search_calls=%d commits=%d '
         .. 'validation_failures=%d refreshes=%d fallback_commits=%d\n',
       name,
-      s.plans,
-      s.search_calls,
-      s.state_clones,
-      s.commits,
-      s.validation_failures,
-      s.refreshes,
-      s.fallback_commits
+      (s.searches or 0),
+      (s.search_calls or 0),
+      (s.commits or 0),
+      (s.validation_failures or 0),
+      (s.refreshes or 0),
+      (s.fallback_commits or 0)
     )
   )
 end
 
 -- Global cycle with a locally attractive decoy.
 do
-  local rt = Runtime.new()
+  local rt = Runtime.new({ instrumentation = true })
   local ab, bc, ca = Rendezvous.new('ab'), Rendezvous.new('bc'), Rendezvous.new('ca')
   rt:spawn_raw(function()
     rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }))
@@ -55,7 +51,7 @@ end
 
 -- Preferred rendezvous requires another participant to abandon its first branch.
 do
-  local rt = Runtime.new()
+  local rt = Runtime.new({ instrumentation = true })
   local wanted, dead = Rendezvous.new('wanted'), Rendezvous.new('dead')
   rt:spawn_raw(function()
     rt:perform(wanted:get_op():or_else(Op.always('fallback')))
@@ -69,7 +65,7 @@ end
 
 -- A locally preferred choice conflicts when parallel cell deltas are merged.
 do
-  local rt = Runtime.new()
+  local rt = Runtime.new({ instrumentation = true })
   local cell = Cell.new(0)
   rt:spawn_raw(function()
     rt:perform(Op.together({
@@ -83,7 +79,7 @@ end
 
 -- Deferred continuation after an internal rendezvous introduces a further partner.
 do
-  local rt = Runtime.new()
+  local rt = Runtime.new({ instrumentation = true })
   local inside, outside = Rendezvous.new('inside'), Rendezvous.new('outside')
   rt:spawn_raw(function()
     rt:perform(Op.together({

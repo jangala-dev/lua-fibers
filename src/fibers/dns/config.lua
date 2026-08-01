@@ -134,7 +134,7 @@ end
 
 function Config.load(opts)
   opts = opts or {}
-  local explicit = opts.nameservers or (opts.nameserver and { opts.nameserver })
+  local explicit = opts.nameservers
   local config = {
     nameservers = {},
     search = copy_list(opts.search),

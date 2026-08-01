@@ -514,7 +514,6 @@ function Codec.decode_message(data, opts)
       opt = rr
     end
   end
-  message.header_rcode = message.rcode
   message.edns = opt
   if opt then
     message.rcode = opt.extended_rcode * 16 + message.rcode

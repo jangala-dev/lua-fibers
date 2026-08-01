@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -291,6 +288,13 @@ do
       owner:grant_op(h, holder, 'read', { terms = { delegable = true } })
     end),
     false
+  )
+  assert_eq(
+    pcall(function()
+      owner:grant_op(h, { 'read' }, { holder = holder })
+    end),
+    false,
+    'legacy grant argument order is removed'
   )
 end
 

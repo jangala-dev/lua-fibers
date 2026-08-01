@@ -5,9 +5,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -32,7 +29,7 @@ local search_limit = math.max(1, math.floor(env_number('FIBERS_SWEEP_SEARCH_LIMI
 local output = os.getenv('FIBERS_SWEEP_OUTPUT') or ''
 
 local lines = {
-  'fanout,seed,status,elapsed_seconds,plans,search_calls,branches,rollbacks,'
+  'fanout,seed,status,elapsed_seconds,searches,search_calls,branches,rollbacks,'
     .. 'trail_entries,intent_pairs_scanned,compatible_pairs,claim_branches,recruit_branches,'
     .. 'exclude_branches,footprint_checks,footprint_matches,footprint_dynamic_matches,'
     .. 'footprint_exchange_matches,footprint_location_matches,max_search_steps,'
@@ -58,11 +55,12 @@ for fanout = min_size, max_size do
       name = 'seed-sweep',
       choice_seed = seed,
       search_limit = search_limit,
-      instrumentation = { slow_plan_limit = 1, clock = Clock.now },
+      instrumentation = { slow_search_limit = 1, clock = Clock.now },
       closure = Closure.nursery({ name = 'seed-sweep-closure' }),
     })
     local elapsed = Clock.now() - started
-    local snapshot = result.runtime and result.runtime:instrumentation_report()
+    local snapshot = result.runtime
+        and (result.runtime.instrumentation and result.runtime.instrumentation:report())
       or { counters = {}, maxima = {} }
     local c, m = snapshot.counters or {}, snapshot.maxima or {}
     local status = result.ok and 'ok' or tostring(result.reason or 'failed')
@@ -74,7 +72,7 @@ for fanout = min_size, max_size do
       seed,
       status,
       string.format('%.9f', elapsed),
-      c.plans or 0,
+      c.searches or 0,
       c.search_calls or 0,
       c.branches or 0,
       c.rollbacks or 0,
@@ -89,7 +87,7 @@ for fanout = min_size, max_size do
       c.footprint_dynamic_matches or 0,
       c.footprint_exchange_matches or 0,
       c.footprint_location_matches or 0,
-      m.search_steps_per_plan or 0,
+      m.search_steps_per_search or 0,
       m.search_depth or 0,
       m.intents or 0,
       m.roots or 0,
@@ -103,7 +101,7 @@ for fanout = min_size, max_size do
         seed,
         status,
         elapsed,
-        m.search_steps_per_plan or 0
+        m.search_steps_per_search or 0
       )
     )
   end

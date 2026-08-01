@@ -61,14 +61,26 @@ local resolver = provider('resolver', 'callback', {
   end,
 }, { resolver_blocking = false })
 
+assert(Platform.compose == nil, 'Platform.compose should be removed')
+local legacy_ok, legacy_err = pcall(Platform.new, { driver = driver })
+assert(
+  not legacy_ok and tostring(legacy_err):match('does not accept'),
+  'legacy top-level platform slots should fail'
+)
+legacy_ok, legacy_err = pcall(Platform.new, { providers = { driver = driver } })
+assert(not legacy_ok and tostring(legacy_err):match('does not accept'), 'legacy provider aliases should fail')
+
 local platform = Platform.new({
   name = 'mixed',
-  driver = driver,
-  sockets = sockets,
-  pipe = files_and_processes,
-  files = files_and_processes,
-  processes = files_and_processes,
-  resolver = resolver,
+  providers = {
+    clock = driver,
+    wait = driver,
+    socket = sockets,
+    pipe = files_and_processes,
+    file = files_and_processes,
+    process = files_and_processes,
+    resolver = resolver,
+  },
 })
 
 assert(platform:now() == 12)
@@ -106,12 +118,13 @@ local incompatible = provider('incompatible', 'opaque-handle', {
     return true
   end,
 })
-local ok, err = pcall(Platform.new, { driver = driver, sockets = incompatible })
+local ok, err = pcall(Platform.new, {
+  providers = { clock = driver, wait = driver, socket = incompatible },
+})
 assert(not ok and tostring(err):match('cannot combine wait domain'))
 
 local allowed = Platform.new({
-  driver = driver,
-  sockets = incompatible,
+  providers = { clock = driver, wait = driver, socket = incompatible },
   owns_providers = false,
   compatible_wait_domains = { ['numeric-fd:opaque-handle'] = true },
 })

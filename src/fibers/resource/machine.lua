@@ -1,6 +1,8 @@
-local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
 local Cell = require('fibers.resource.cell')
+
+local unpack_ = table.unpack or unpack
 
 local Machine = {}
 Machine.__index = function(self, key)
@@ -24,11 +26,11 @@ local WAIT = { _fibers_cell_wait = true }
 local Ready = {}
 
 function Ready.write(value, ...)
-  return { _fibers_cell_ready = true, writes = true, value = value, pack = Op._pack(...) }
+  return { _fibers_cell_ready = true, writes = true, value = value, pack = Values.pack(...) }
 end
 
 function Ready.same(...)
-  return { _fibers_cell_ready = true, writes = false, pack = Op._pack(...) }
+  return { _fibers_cell_ready = true, writes = false, pack = Values.pack(...) }
 end
 
 Machine.Wait = WAIT
@@ -55,44 +57,31 @@ local function rule(name, mode, step, accepts_supply, supplies, order, ready, va
   }
 end
 
-function Machine.update(name, step, order, validate)
-  return rule(name, 'update', step, true, 'any', order, nil, validate)
+local function define_rule_constructor(method, mode, accepts_supply, supplies, with_ready)
+  if with_ready then
+    Machine[method] = function(name, ready, step, order, validate)
+      return rule(name, mode, step, accepts_supply, supplies, order, ready, validate)
+    end
+  else
+    Machine[method] = function(name, step, order, validate)
+      return rule(name, mode, step, accepts_supply, supplies, order, nil, validate)
+    end
+  end
 end
 
-function Machine.isolated_update(name, step, order, validate)
-  return rule(name, 'update', step, false, 'none', order, nil, validate)
-end
-
-function Machine.select(name, step, order, validate)
-  return rule(name, 'select', step, true, 'any', order, nil, validate)
-end
-
-function Machine.select_when(name, ready, step, order, validate)
-  return rule(name, 'select', step, true, 'any', order, ready, validate)
-end
-
-function Machine.isolated_select(name, step, order, validate)
-  return rule(name, 'select', step, false, 'none', order, nil, validate)
-end
-
-function Machine.isolated_select_when(name, ready, step, order, validate)
-  return rule(name, 'select', step, false, 'none', order, ready, validate)
-end
-
-function Machine.query(name, step, order, validate)
-  return rule(name, 'query', step, true, 'none', order, nil, validate)
-end
-
-function Machine.query_when(name, ready, step, order, validate)
-  return rule(name, 'query', step, true, 'none', order, ready, validate)
-end
-
-function Machine.isolated_query(name, step, order, validate)
-  return rule(name, 'query', step, false, 'none', order, nil, validate)
-end
-
-function Machine.isolated_query_when(name, ready, step, order, validate)
-  return rule(name, 'query', step, false, 'none', order, ready, validate)
+for _, spec in ipairs({
+  { 'update', 'update', true, 'any' },
+  { 'isolated_update', 'update', false, 'none' },
+  { 'select', 'select', true, 'any' },
+  { 'select_when', 'select', true, 'any', true },
+  { 'isolated_select', 'select', false, 'none' },
+  { 'isolated_select_when', 'select', false, 'none', true },
+  { 'query', 'query', true, 'none' },
+  { 'query_when', 'query', true, 'none', true },
+  { 'isolated_query', 'query', false, 'none' },
+  { 'isolated_query_when', 'query', false, 'none', true },
+}) do
+  define_rule_constructor(unpack_(spec))
 end
 
 -- Low-level form for transitions with unusual supply contracts.
@@ -106,8 +95,8 @@ end)
 
 function Machine.new(value, name)
   local machine = Facility.identity(setmetatable({}, Machine), Kind, name)
-  Facility.cell(machine, Kind, value, 'machine')
-  machine._transition_descriptors = setmetatable({}, { __mode = 'kv' })
+  Facility.cell(machine, value, 'machine')
+  machine._transition_specs = setmetatable({}, { __mode = 'kv' })
   return machine
 end
 
@@ -120,13 +109,12 @@ function Machine:transition_op(transition, payload)
   if transition.validate then
     transition.validate(payload)
   end
-  local descriptor = self._transition_descriptors[transition]
-  if not descriptor then
-    descriptor =
-      Facility.descriptor(self, Kind, 'transition', Facility.machine(self._location, transition, nil, self))
-    self._transition_descriptors[transition] = descriptor
+  local spec = self._transition_specs[transition]
+  if not spec then
+    spec = Facility.machine_transition({ location = self._location, resource = self }, transition)
+    self._transition_specs[transition] = spec
   end
-  return Facility.occurrence(descriptor, payload)
+  return Facility.bind(spec, payload)
 end
 
 Machine.Kind = Kind

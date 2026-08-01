@@ -29,12 +29,12 @@ or resolver task still under that query's custody. Each address family is also
 observable independently:
 
 ```lua
-local ipv6 = fibers.perform(query:family_ready_op('inet6'))
+local ipv6 = fibers.perform(query:family_addresses_op('inet6'))
 local ipv4_state = fibers.perform(query:family_finished_op('inet4'))
 local all_addresses, err = fibers.perform(query:result_op())
 ```
 
-`family_ready_op` is success-only and becomes refutable when that family closes
+`family_addresses_op` is success-only and becomes refutable when that family closes
 without addresses. `family_finished_op` observes either terminal result. A and
 AAAA therefore form two asynchronous producers with explicit closure, suitable
 for direct consumption by a Happy Eyeballs coordinator.
@@ -69,8 +69,7 @@ Transaction ids are taken from an injected `random_u16` callback when supplied,
 then from `/dev/urandom` through `fibers.file`. Resolution fails by default when
 neither secure source is available. A process-local weak fallback exists only
 for constrained or deterministic environments which explicitly set
-`allow_weak_random = true` (`require_secure_random = false` remains a compatibility
-alias).
+`allow_weak_random = true`.
 
 `maximum_cache_entries` bounds the resolver cache and defaults to 1024. Set it
 to zero to disable caching. Eviction is deterministic first-in, first-out after
@@ -84,14 +83,13 @@ An explicit resolver always wins:
 socket.resolve_name('example.org', 443, { resolver = resolver })
 ```
 
-The shorthand options `dns = true`, `nameservers = {...}` and `nameserver = ...`
+The shorthand options `dns = true` and `nameservers = {...}`
 construct a resolver for that query. Where a native host advertises
 `resolver_blocking = true` and provides both datagram and stream sockets, the
 socket resolver creates one DNS resolver per Runtime and reuses its cache.
 
-If automatic DNS configuration is unavailable, the historical host resolver is
-used as a compatibility fallback. Set `require_nonblocking = true` to return a
-configuration error instead.
+If automatic DNS configuration is unavailable, resolution returns a configuration
+error. Supply an explicit resolver where the host resolver is required.
 
 ## Deliberate limits
 

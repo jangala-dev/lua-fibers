@@ -9,18 +9,46 @@
 local Platform = {}
 Platform.__index = Platform
 
-local SLOT_ALIASES = {
-  clock = { 'clock', 'time' },
-  wait = { 'wait', 'driver', 'poller' },
-  readiness = { 'readiness' },
-  pipe = { 'pipe', 'pipes' },
-  socket = { 'socket', 'sockets', 'network' },
-  datagram = { 'datagram', 'datagrams' },
-  resolver = { 'resolver', 'dns' },
-  process = { 'process', 'processes' },
-  file = { 'file', 'files' },
-  descriptor = { 'descriptor', 'fd' },
+local SLOTS = {
+  'clock',
+  'wait',
+  'readiness',
+  'pipe',
+  'socket',
+  'datagram',
+  'resolver',
+  'process',
+  'file',
+  'descriptor',
 }
+
+local SLOT_SET = {}
+for i = 1, #SLOTS do
+  SLOT_SET[SLOTS[i]] = true
+end
+
+local PLATFORM_OPTIONS = {
+  providers = true,
+  backend = true,
+  allow_mixed_wait_domains = true,
+  compatible_wait_domains = true,
+  kind = true,
+  name = true,
+  family = true,
+  owns_providers = true,
+  capabilities = true,
+}
+
+local function validate_keys(value, allowed, label, level)
+  if value ~= nil and type(value) ~= 'table' then
+    error(label .. ' must be a table', level or 3)
+  end
+  for key in pairs(value or {}) do
+    if not allowed[key] then
+      error(label .. ' does not accept ' .. tostring(key), level or 3)
+    end
+  end
+end
 
 local METHOD_SLOTS = {
   now = 'clock',
@@ -62,19 +90,9 @@ local WAIT_BOUND_SLOTS = {
   'descriptor',
 }
 
-local function first(value, names)
-  for i = 1, #names do
-    local found = value[names[i]]
-    if found ~= nil then
-      return found
-    end
-  end
-end
-
 local function provider_for(opts, slot)
   local providers = opts.providers or {}
-  local base = opts.backend or opts.host or opts.default
-  return first(providers, SLOT_ALIASES[slot]) or first(opts, SLOT_ALIASES[slot]) or base
+  return providers[slot] or opts.backend
 end
 
 local function domain_of(provider)
@@ -142,8 +160,11 @@ end
 
 function Platform.new(opts)
   opts = opts or {}
+  validate_keys(opts, PLATFORM_OPTIONS, 'fibers.io.platform options', 2)
+  validate_keys(opts.providers, SLOT_SET, 'fibers.io.platform providers', 2)
   local providers = {}
-  for slot in pairs(SLOT_ALIASES) do
+  for i = 1, #SLOTS do
+    local slot = SLOTS[i]
     providers[slot] = provider_for(opts, slot)
   end
 
@@ -261,8 +282,6 @@ function Platform.new(opts)
   return platform
 end
 
-Platform.compose = Platform.new
-
 function Platform.from(provider, opts)
   local out = {}
   for key, value in pairs(opts or {}) do
@@ -273,7 +292,7 @@ function Platform.from(provider, opts)
 end
 
 function Platform:provider(slot)
-  if SLOT_ALIASES[slot] == nil then
+  if not SLOT_SET[slot] then
     error('unknown Fibers platform provider slot ' .. tostring(slot), 2)
   end
   return self.providers[slot]

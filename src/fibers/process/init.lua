@@ -27,6 +27,7 @@ local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
 local Exit = Task.Exit
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Lifecycle = {}
 Lifecycle.__index = Lifecycle
@@ -644,8 +645,8 @@ local function supervise(proc, driver_scope, opts)
   local status
   if not proc.lifecycle:is_close_requested() then
     local event, value, err = perform(Op.named_choice({
-      { 'exit', proc.host_process:exit_op() },
-      { 'close', proc.lifecycle:close_requested_op() },
+      exit = proc.host_process:exit_op(),
+      close = proc.lifecycle:close_requested_op(),
     }))
     if event == 'exit' then
       status = value
@@ -786,10 +787,6 @@ function Command:launch_op(opts)
   end)
 end
 
-function Command:launch(opts)
-  return perform(self:launch_op(opts))
-end
-
 function Command:start(opts)
   local proc, launch_err = self:launch(opts)
   if not proc then
@@ -805,39 +802,12 @@ function Command:start(opts)
   return proc
 end
 
-function Process:launch_succeeded()
-  return perform(self:launch_succeeded_op())
-end
-function Process:launch_failed()
-  return perform(self:launch_failed_op())
-end
-function Process:launch_result()
-  return perform(self:launch_result_op())
-end
-function Process:result()
-  return perform(self:result_op())
-end
-function Process:signal(signal, target)
-  return perform(self:signal_op(signal, target))
-end
-function Process:terminate()
-  return perform(self:terminate_op())
-end
-function Process:kill()
-  return perform(self:kill_op())
-end
-function Process:request_close(reason)
-  return perform(self:request_close_op(reason))
-end
 function Process:close(reason)
   local ok, err = self:request_close(reason)
   if not ok then
     return nil, err
   end
   return self:closed()
-end
-function Process:closed()
-  return perform(self:closed_op())
 end
 function Module.succeeded(status)
   return type(status) == 'table' and status.kind == 'exited' and status.code == 0
@@ -859,5 +829,21 @@ end
 Module.Command = Command
 Module.Process = Process
 Module.Error = IOError
+
+Direct.install(Command, { 'launch' })
+Direct.install(
+  Process,
+  {
+    'launch_succeeded',
+    'launch_failed',
+    'launch_result',
+    'result',
+    'signal',
+    'terminate',
+    'kill',
+    'request_close',
+    'closed',
+  }
+)
 
 return Module

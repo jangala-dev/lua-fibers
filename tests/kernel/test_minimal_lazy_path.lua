@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
@@ -37,8 +35,12 @@ local function truthy(value, message)
   end
 end
 
+local function counter(runtime, name)
+  return runtime.instrumentation and (runtime.instrumentation.counters[name] or 0) or 0
+end
+
 -- Public value options are fresh opaque occurrences so unsupported mutation
--- remains local. Trusted resource programmes may still cache primitive options
+-- remains local. Trusted executable leaves may still cache primitive options
 -- whose descriptors are owned by the facility.
 do
   truthy(Op.always() ~= Op.always(), 'empty always operation should be fresh')
@@ -51,9 +53,13 @@ do
   local cell = Cell.new(0, 'minimal-cached-cell')
   eq(cell:read_op(), cell:read_op(), 'cell read option should be cached')
   truthy(
-    cell:read_op().program and cell:read_op().program._fibers_program,
-    'cached cell read should use a primitive descriptor'
+    cell:read_op().spec and cell:read_op().spec._fibers_leaf_spec,
+    'cached cell read should use an executable leaf specification'
   )
+  local write = cell:write_op(7)
+  eq(write.kind, 'primitive', 'cell write should be an executable primitive Op')
+  eq(write.spec.kind, 'patch', 'cell write should carry its executable leaf directly')
+  eq(write.arg.value, 7, 'cell write occurrence should carry its pre-bound argument')
 
   local counter = Counter.new(0, 'minimal-cached-counter')
   eq(counter:read_op(), counter:read_op(), 'counter read option should be cached')
@@ -74,7 +80,7 @@ end
 -- outstanding request directly on the fibre.  No per-perform hand-off object
 -- or response record is retained.
 do
-  local rt = Runtime.new({ machine = 'ledger', instrumentation = true })
+  local rt = Runtime.new({ instrumentation = true })
   local total = 0
   local fiber = rt:spawn_raw(function()
     for i = 1, 20 do
@@ -83,17 +89,18 @@ do
   end, 'minimal-direct-perform')
   eq(rt:run().tag, 'found')
   eq(total, 210)
-  eq(fiber.id, nil, 'completed fibre retained a request id')
+  eq(fiber.order, nil, 'completed fibre retained a request id')
   eq(fiber.op, nil, 'completed fibre retained an operation')
   eq(fiber.activation_root, nil, 'completed fibre retained an activation root')
-  eq(next(fiber.guard_residuals), nil, 'completed fibre retained guard residuals')
+  eq(fiber.guard_residuals, nil, 'fibre retained obsolete guard storage')
+  eq(fiber.clock_values, nil, 'fibre retained obsolete clock storage')
   eq(rt._handoff_pool, nil, 'runtime should not allocate a perform hand-off pool')
 end
 
 -- Precise external dependencies survive unrelated deliveries, while the
 -- resource actually named by the retained refutation invalidates it.
 do
-  local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
+  local rt = Runtime.new({ instrumentation = true })
   local awaited = Signal.new('minimal-awaited-signal')
   local unrelated = Signal.new('minimal-unrelated-signal')
   local value
@@ -101,16 +108,16 @@ do
     value = rt:perform(awaited:wait_op())
   end, 'minimal-signal-waiter')
   eq(rt:run().tag, 'pending')
-  local plans = rt.stats.plans
+  local searches = counter(rt, 'searches')
 
-  rt:deliver(rt:external_feed(unrelated), 'other')
+  External.deliver(rt, External.external_feed(rt, unrelated), 'other')
   eq(rt:run().tag, 'pending')
-  eq(rt.stats.plans, plans, 'unrelated external delivery invalidated retained work')
+  eq(counter(rt, 'searches'), searches, 'unrelated external delivery invalidated retained work')
 
-  rt:deliver(rt:external_feed(awaited), 'ready')
+  External.deliver(rt, External.external_feed(rt, awaited), 'ready')
   eq(rt:run().tag, 'found')
   eq(value, 'ready')
-  truthy(rt.stats.plans > plans, 'matching external resource did not invalidate retained work')
+  truthy(counter(rt, 'searches') > searches, 'matching external resource did not invalidate retained work')
 end
 
 -- Timer dependencies remain valid strictly before their deadline and invalidate
@@ -118,10 +125,8 @@ end
 do
   local host = ManualHost.new({ now = 0 })
   local rt = Runtime.new({
-    machine = 'ledger',
     host = host,
     instrumentation = true,
-    plan_reuse_threshold = 1,
   })
   local clock = Clock.new('minimal-timer')
   local fired
@@ -129,16 +134,16 @@ do
     fired = rt:perform(clock:at_op(10))
   end, 'minimal-timer-waiter')
   eq(rt:run().tag, 'pending')
-  local plans = rt.stats.plans
+  local searches = counter(rt, 'searches')
   eq(rt:run().tag, 'pending')
-  eq(rt.stats.plans, plans, 'unchanged timer was searched again')
+  eq(counter(rt, 'searches'), searches, 'unchanged timer was searched again')
   host._now = 9
   eq(rt:run().tag, 'pending')
-  eq(rt.stats.plans, plans, 'timer invalidated before its deadline')
+  eq(counter(rt, 'searches'), searches, 'timer invalidated before its deadline')
   host._now = 10
   eq(rt:run().tag, 'found')
   eq(fired, 10)
-  truthy(rt.stats.plans > plans, 'timer did not invalidate at its deadline')
+  truthy(counter(rt, 'searches') > searches, 'timer did not invalidate at its deadline')
 end
 
 print('tests/test_minimal_lazy_path.lua: ok')

@@ -2,14 +2,12 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
+local External = require('fibers.embed.external')
 local WaitSet = require('fibers.embed.wait_set')
 local Inspect = require('tests.support.flow_inspect')
 
@@ -65,7 +63,7 @@ end
 -- Runtime-bound readiness feeds invalidate bounded search and deliver stable key/mode values.
 do
   local rt = Runtime.new()
-  local src, feed = rt:readiness('handle-1', 'readiness-bounded')
+  local src, feed = External.readiness(rt, 'handle-1', 'readiness-bounded')
   local ok, key, mode
   rt:spawn_raw(function()
     ok, key, mode = rt:perform(src:readable_op())
@@ -74,10 +72,11 @@ do
   for _ = 1, 8 do
     st = rt:step({ max_work = 1 })
   end
-  local waits = (st and st.waits or {})
+  local waits = (st and st.interests or {})
   local rw = WaitSet.readiness_waits(waits)
   assert_eq(#rw, 1, 'one readiness wait expected')
   assert_eq(rw[1].readiness_key, 'handle-1')
+  assert_eq(rw[1].resource_key, nil, 'readiness interests expose only readiness_key')
   assert_eq(rw[1].mode, 'read')
   feed:readable()
   drive_until(rt, function()
@@ -90,7 +89,7 @@ end
 -- Read and write readiness modes are independent.
 do
   local rt = Runtime.new()
-  local src, feed = rt:readiness('handle-2', 'readiness-modes')
+  local src, feed = External.readiness(rt, 'handle-2', 'readiness-modes')
   local read_seen, write_seen
   rt:spawn_raw(function()
     read_seen = rt:perform(src:readable_op())
@@ -114,7 +113,7 @@ end
 -- Clearing readiness removes the latched readiness fact.
 do
   local rt = Runtime.new()
-  local src, feed = rt:readiness('handle-3', 'readiness-clear')
+  local src, feed = External.readiness(rt, 'handle-3', 'readiness-clear')
   feed:readable()
   feed:clear('read')
   local seen
@@ -165,7 +164,7 @@ end
 -- Readiness is level-like: if left set, more than one waiter can observe it in separate commits.
 do
   local rt = Runtime.new()
-  local src, feed = rt:readiness('handle-5', 'readiness-level')
+  local src, feed = External.readiness(rt, 'handle-5', 'readiness-level')
   local a, b
   feed:readable()
   rt:spawn_raw(function()
@@ -298,7 +297,7 @@ end
 do
   for i = 1, 24 do
     local rt = Runtime.new()
-    local src, feed = rt:readiness('handle-stress-' .. tostring(i), 'readiness-bounded-stress')
+    local src, feed = External.readiness(rt, 'handle-stress-' .. tostring(i), 'readiness-bounded-stress')
     local ok, key, mode
     rt:spawn_raw(function()
       ok, key, mode = rt:perform(src:readable_op())

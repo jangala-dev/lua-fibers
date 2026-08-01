@@ -1,9 +1,19 @@
 local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
-local Store = require('fibers.internal.kernel.ledger')
+local Witness = require('fibers.resource.witness')
+local Journal = require('fibers.internal.kernel.journal')
 
 local Calendar = {}
-Calendar.__index = Calendar
+Calendar.__index = function(self, key)
+  if key == '_state' then
+    return self._location and self._location.value
+  end
+  if key == 'version' then
+    return self._location and self._location.version or 0
+  end
+  return Calendar[key]
+end
 local Kind = { name = 'calendar' }
 local next_calendar_id = 0
 
@@ -243,18 +253,13 @@ function Calendar.new(initial, name)
     name = name or ('calendar-' .. next_calendar_id),
     _fibers_id = 'calendar-' .. next_calendar_id,
     _fibers_kind = Kind,
-    _state = state,
-    version = 0,
   }, Calendar)
-  calendar._location = Store.new_location({
+  calendar._location = Journal.new_location({
     name = calendar.name .. ':schedule',
     algebra = 'machine',
     domain = 'plain',
     value = state,
     owner = calendar,
-    apply = function(v, loc)
-      calendar._state, calendar.version = v, loc.version
-    end,
   })
   return calendar
 end
@@ -298,9 +303,9 @@ local function slot_cursor(state, spec, writes)
               root = insert(state.root, record),
               by_id = map_set(state.by_id, record.id, record),
             }
-            return { value = successor, result = Op._pack(clone_record(record)), writes = true }
+            return { value = successor, result = Values.pack(clone_record(record)), writes = true }
           end
-          return { result = Op._pack(clone_record(record)), writes = false }
+          return { result = Values.pack(clone_record(record)), writes = false }
         end
       end
     end,
@@ -320,36 +325,28 @@ end
 function Calendar:reserve_op(spec)
   validate_spec(spec)
   local frozen = frozen_spec(spec)
-  return Facility.op(
-    self,
-    Kind,
-    Facility.witness({
-      location = self._location,
-      group = self._location,
-      accepts_supply = true,
-      supplies = 'any',
-      cursor = function(state)
-        return slot_cursor(state, frozen, true)
-      end,
-    })
-  )
+  return Facility.op(Witness.spec({
+    location = self._location,
+    group = self._location,
+    accepts_supply = true,
+    supplies = 'any',
+    cursor = function(state)
+      return slot_cursor(state, frozen, true)
+    end,
+  }))
 end
 function Calendar:find_op(spec)
   validate_spec(spec)
   local frozen = frozen_spec(spec)
-  return Facility.op(
-    self,
-    Kind,
-    Facility.witness({
-      location = self._location,
-      group = self._location,
-      accepts_supply = true,
-      supplies = 'any',
-      cursor = function(state)
-        return slot_cursor(state, frozen, false)
-      end,
-    })
-  )
+  return Facility.op(Witness.spec({
+    location = self._location,
+    group = self._location,
+    accepts_supply = true,
+    supplies = 'any',
+    cursor = function(state)
+      return slot_cursor(state, frozen, false)
+    end,
+  }))
 end
 function Calendar:reserve_at_op(resources, start, finish, payload)
   return self:reserve_op({
@@ -362,64 +359,56 @@ function Calendar:reserve_at_op(resources, start, finish, payload)
   })
 end
 function Calendar:cancel_op(id)
-  return Facility.op(
-    self,
-    Kind,
-    Facility.witness({
-      location = self._location,
-      group = self._location,
-      accepts_supply = true,
-      supplies = 'any',
-      cursor = function(state)
-        local done = false
-        return {
-          next = function()
-            if done then
-              return nil
-            end
-            done = true
-            local old = map_get(state.by_id, id)
-            if not old then
-              return nil
-            end
-            local successor = {
-              next_id = state.next_id,
-              root = remove(state.root, old.start, old.id),
-              by_id = map_set(state.by_id, id, nil),
-            }
-            return { value = successor, result = Op._pack(clone_record(old)), writes = true }
-          end,
-        }
-      end,
-    })
-  )
+  return Facility.op(Witness.spec({
+    location = self._location,
+    group = self._location,
+    accepts_supply = true,
+    supplies = 'any',
+    cursor = function(state)
+      local done = false
+      return {
+        next = function()
+          if done then
+            return nil
+          end
+          done = true
+          local old = map_get(state.by_id, id)
+          if not old then
+            return nil
+          end
+          local successor = {
+            next_id = state.next_id,
+            root = remove(state.root, old.start, old.id),
+            by_id = map_set(state.by_id, id, nil),
+          }
+          return { value = successor, result = Values.pack(clone_record(old)), writes = true }
+        end,
+      }
+    end,
+  }))
 end
 function Calendar:reservations_op()
-  return Facility.op(
-    self,
-    Kind,
-    Facility.witness({
-      location = self._location,
-      accepts_supply = false,
-      supplies = 'none',
-      cursor = function(state)
-        local done = false
-        return {
-          next = function()
-            if done then
-              return nil
-            end
-            done = true
-            local out = {}
-            each(state.root, function(r)
-              out[r.id] = clone_record(r)
-            end)
-            return { writes = false, result = Op._pack(out) }
-          end,
-        }
-      end,
-    })
-  )
+  return Facility.op(Witness.spec({
+    location = self._location,
+    accepts_supply = false,
+    supplies = 'none',
+    cursor = function(state)
+      local done = false
+      return {
+        next = function()
+          if done then
+            return nil
+          end
+          done = true
+          local out = {}
+          each(state.root, function(r)
+            out[r.id] = clone_record(r)
+          end)
+          return { writes = false, result = Values.pack(out) }
+        end,
+      }
+    end,
+  }))
 end
 function Calendar:reservations()
   local out = {}

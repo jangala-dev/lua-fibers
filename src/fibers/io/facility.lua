@@ -6,6 +6,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local Context = require('fibers.internal.context')
 local Stream = require('fibers.io.stream')
 local Task = require('fibers.task')
 local Scope = require('fibers.scope')
@@ -24,46 +25,20 @@ function IO.copy_table(value)
 end
 
 function IO.scope_of(value)
-  if value and value._fibers_scope and type(value.admit_op) == 'function' then
-    return value
-  end
-  return nil
-end
-
--- Elaborate an optional Scope target without exposing ambient Scope authority
--- through the public guard API. An explicit target remains statically known; an
--- omitted target is resolved once for the performing occurrence.
-function IO.with_target_scope_op(target, message, build)
-  if target ~= nil then
-    local scope = IO.scope_of(target)
-    if not scope then
-      error(message, 3)
-    end
-    return build(scope)
-  end
-  return Op._contextual_guard(function(_, scope)
-    if not scope then
-      error(message, 2)
-    end
-    return build(scope)
-  end)
+  return Scope.is(value) and value or nil
 end
 
 function IO.current_scope(opts, label)
   opts = opts or {}
-  local scope = opts.scope or Runtime.current_scope()
-  if not IO.scope_of(scope) then
+  local scope = opts.scope or Context.current_scope()
+  if not Scope.is(scope) then
     error(label .. ' requires opts.scope or a current Scope', 3)
   end
   return scope
 end
 
 function IO.require_scope(value, label)
-  local scope = IO.scope_of(value)
-  if scope then
-    return scope
-  end
-  error(label .. ' must be a Scope', 3)
+  return Scope.require(value, label)
 end
 
 -- Define, admit and start a domain Lifetime whose body runs in a private

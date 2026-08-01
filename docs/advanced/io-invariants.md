@@ -156,11 +156,13 @@ The audit is observational and does not affect production semantics. It uses
 weak references so inspection cannot retain resources.
 
 ```lua
-local audit = runtime:io_audit({
+local IO = require('fibers.diagnostics.io')
+IO.enable()
+local audit = IO.report(runtime, {
   include_history = true,
 })
 
-runtime:assert_io_quiescent('after server shutdown')
+IO.assert_clean(runtime, { label = 'after server shutdown' })
 ```
 
 The audit reports live handle and registration states, close attempts,

@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -16,7 +13,7 @@ local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 local Clock = require('performance.clock')
 
-local cells = tonumber(os.getenv('FIBERS_STORE_CELLS') or '16')
+local cell_count = tonumber(os.getenv('FIBERS_STORE_CELLS') or '16')
 local lanes = tonumber(os.getenv('FIBERS_STORE_LANES') or '16')
 local rounds = tonumber(os.getenv('FIBERS_STORE_ROUNDS') or '200')
 local repeats = tonumber(os.getenv('FIBERS_STORE_REPEATS') or '5')
@@ -33,7 +30,7 @@ end
 local function build_case()
   local rt = Runtime.new()
   local cells, reads = {}, {}
-  for i = 1, cells do
+  for i = 1, cell_count do
     cells[i] = Cell.new(i, 'store-view-cell-' .. tostring(i))
     reads[i] = cells[i]:read_op()
   end
@@ -44,7 +41,7 @@ local function build_case()
   end
   local product = Op.each(lane_ops)
   local operation = Op.always(true)
-  for i = 1, cells do
+  for i = 1, cell_count do
     local read = reads[i]
     operation = operation:and_then(read)
   end
@@ -89,7 +86,7 @@ io.write(
   string.format(
     '%s,%d,%d,%d,%d,%.6f,%.3f\n',
     Clock.name,
-    cells,
+    cell_count,
     lanes,
     rounds,
     repeats,

@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
@@ -118,12 +116,13 @@ do
   local result = fibers.try_run(function()
     local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'pending-timeout-listener' })
     local dial = socket.dial(listener:local_address(), { name = 'pending-timeout-dial' })
-    local value, err = fibers.perform(Op.choice(
-      dial:result_op(),
-      Sleep.sleep_op(0.01):map(function()
-        return nil, { kind = 'timeout' }
-      end)
-    ))
+    local value, err =
+      fibers.perform(Op.choice(
+        dial:result_op(fibers.current_scope()),
+        Sleep.sleep_op(0.01):map(function()
+          return nil, { kind = 'timeout' }
+        end)
+      ))
     assert_eq(value, nil)
     assert_eq(err.kind, 'timeout')
     assert_eq(dial:close('timeout won'), true)
@@ -136,7 +135,7 @@ do
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
   assert_truthy(get_pending().closed, 'pending host handle should close after Dial abandonment')
-  result.runtime:assert_io_quiescent('pending dial timeout')
+  IOAudit.assert_clean(result.runtime, { label = 'pending dial timeout' })
 end
 
 -- A delayed authoritative connect completion wins when readiness arrives before
@@ -156,12 +155,13 @@ do
       handle._allow_finish = true
       handle:mark_writable()
     end, 'delayed-connect-completion')
-    local connection, err = fibers.perform(Op.choice(
-      dial:result_op(),
-      Sleep.sleep_op(1):map(function()
-        return nil, { kind = 'timeout' }
-      end)
-    ))
+    local connection, err =
+      fibers.perform(Op.choice(
+        dial:result_op(fibers.current_scope()),
+        Sleep.sleep_op(1):map(function()
+          return nil, { kind = 'timeout' }
+        end)
+      ))
     assert_truthy(connection, tostring(err))
     assert_truthy(connection:local_address())
     assert_truthy(connection:peer_address())
@@ -171,7 +171,7 @@ do
     listener:closed()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('delayed dial success')
+  IOAudit.assert_clean(result.runtime, { label = 'delayed dial success' })
 end
 
 -- A pending accept is released by listener closure with a structured terminal
@@ -192,7 +192,7 @@ do
     listener:closed()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('blocked accept closure')
+  IOAudit.assert_clean(result.runtime, { label = 'blocked accept closure' })
 end
 
 -- Binding an occupied address is a normal expected host failure.
@@ -208,7 +208,7 @@ do
     first:closed()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('address conflict')
+  IOAudit.assert_clean(result.runtime, { label = 'address conflict' })
 end
 
 -- Stream half-close preserves queued output and produces EOF; closing the peer's
@@ -238,7 +238,7 @@ do
     listener:closed()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('half-close')
+  IOAudit.assert_clean(result.runtime, { label = 'half-close' })
 end
 
 print('tests/io/test_socket_failure_matrix.lua: ok')

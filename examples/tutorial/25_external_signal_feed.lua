@@ -12,11 +12,12 @@ package.path = table.concat({
 -- interrupt or host callback invalidates the relevant proof frontier and wakes
 -- the Fibers runtime without running application logic re-entrantly.
 
+local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local ManualHost = require('fibers.embed.manual')
 
 local runtime = Runtime.new({ host = ManualHost.new() })
-local signal, feed = runtime:signal('door-sensor')
+local signal, feed = External.signal(runtime, 'door-sensor')
 local result
 
 runtime:spawn_raw(function()

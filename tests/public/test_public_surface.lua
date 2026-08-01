@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
@@ -134,11 +132,15 @@ do
         'on_defeat',
         'emit',
         'is_op',
-        'certify_symmetry',
       },
     },
     { 'Protected', FibersProtected, { 'pcall', 'xpcall' } },
-    { 'Runtime', FibersRuntime, { 'new', 'drive' } },
+    { 'Runtime', FibersRuntime, { 'new' } },
+    {
+      'External',
+      External,
+      { 'drive', 'external_feed', 'deliver', 'clear', 'signal', 'events', 'readiness' },
+    },
     { 'Effect', FibersEffect, { 'kind', 'of', 'is_kind', 'is_effect' } },
     {
       'Machine',
@@ -282,7 +284,6 @@ do
         'protocol',
         'propagation',
         'combine',
-        'normalize',
         'request_then_wait',
         'require_ok',
         'is_failure',
@@ -308,6 +309,12 @@ do
   for i = 1, #surfaces do
     assert_functions(surfaces[i][1], surfaces[i][2], surfaces[i][3])
   end
+
+  assert_eq(FibersClosure.normalize, nil, 'Closure.normalize removed')
+  assert_eq(FibersScope.is_scope, nil, 'Scope.is_scope removed')
+  assert_eq(FibersSocket.Query.family_ready_op, nil, 'Query.family_ready_op removed')
+  assert_eq(FibersSocket.Query.family_state_op, nil, 'Query.family_state_op removed')
+  assert_eq(FibersSocket.Query.family_ready, nil, 'Query.family_ready removed')
 
   assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox.Host')
   assert_eq(FibersRoblox.Subscription, FibersRobloxSubscription, 'Roblox.Subscription')
@@ -391,14 +398,15 @@ end
 -- A Signal is a public waitable external resource.
 do
   local rt = FibersRuntime.new()
-  local signal, feed = rt:signal('signal')
+  local signal, feed = External.signal(rt, 'signal')
   local got
   rt:spawn_raw(function()
     got = rt:perform(signal:wait_op())
   end, 'signal-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
-  local waits = (st.waits or {})
+  local waits = (st.interests or {})
+  assert_eq(st.waits, nil, 'pending status exposes only interests')
   assert_eq(waits[1].kind, 'external')
   feed:set('ready')
   st = rt:step()

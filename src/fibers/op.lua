@@ -1,4 +1,4 @@
--- Public option language for Fibers. Runtime supplies proof search and commit.
+-- Public option language for Fibers. The kernel driver supplies proof search and commit.
 --
 -- Application code should read in ordinary terms:
 --   choice       either coherent world is acceptable
@@ -23,27 +23,17 @@ local function is_effect(value)
     and value.kind._fibers_effect_kind == true
 end
 
-local Op = {}
-Op.__index = Op
+local Values = require('fibers.internal.values')
+local Operation = require('fibers.internal.operation')
 
-local unpack_ = table.unpack or unpack
-local next_op_id = 0
-
-local function pack_(...)
-  local n = select('#', ...)
-  return { _fibers_pack = true, n = n, ... }
-end
+local Op = Operation.class
 
 local function op(kind, fields)
-  next_op_id = next_op_id + 1
-  local t = fields or {}
-  t.kind = kind
-  t._id = next_op_id
-  return setmetatable(t, Op)
+  return Operation.new(kind, fields)
 end
 
-local function is_op(x)
-  return type(x) == 'table' and getmetatable(x) == Op
+local function is_op(value)
+  return Operation.is(value)
 end
 
 local function is_dense_array(x)
@@ -64,65 +54,47 @@ local function is_dense_array(x)
   return highest == count
 end
 
-local function append_choice_arg(out, x, level)
-  level = level or 2
-  if is_op(x) then
-    if x.kind == 'choice' then
-      for i = 1, #(x.choices or {}) do
-        out[#out + 1] = x.choices[i]
+local function append_op_arg(out, value, label, flatten_choice, level)
+  if is_op(value) then
+    if flatten_choice and value.kind == 'choice' then
+      for i = 1, #(value.choices or {}) do
+        out[#out + 1] = value.choices[i]
       end
     else
-      out[#out + 1] = x
+      out[#out + 1] = value
     end
     return
   end
-  if type(x) == 'table' then
-    if not is_dense_array(x) then
-      error('choice expects Op values or dense arrays of Op values', level)
+  if type(value) == 'table' then
+    if not is_dense_array(value) then
+      error(label .. ' expects Op values or dense arrays of Op values', level)
     end
-    for i = 1, #x do
-      append_choice_arg(out, x[i], level + 1)
+    for i = 1, #value do
+      append_op_arg(out, value[i], label, flatten_choice, level + 1)
     end
     return
   end
-  error('choice expects Op values or dense arrays of Op values', level)
+  error(label .. ' expects Op values or dense arrays of Op values', level)
 end
 
 local function parse_named_entries(entries, label)
   if type(entries) ~= 'table' then
-    error(label .. ' expects a table', 3)
-  end
-  local out = {}
-  local n = #entries
-  if n > 0 then
-    for i = 1, n do
-      local e = entries[i]
-      if type(e) ~= 'table' or e[1] == nil or not is_op(e[2]) then
-        error(label .. ' expects entries shaped { name, op }', 3)
-      end
-      out[#out + 1] = { e[1], e[2] }
-    end
-    for k in pairs(entries) do
-      if type(k) ~= 'number' or k < 1 or k > n or k ~= math.floor(k) then
-        error(label .. ' expects either ordered { name, op } entries or a map of Op values', 3)
-      end
-    end
-    return out
+    error(label .. ' expects a map of Op values', 3)
   end
 
   local keys = {}
-  for k, v in pairs(entries) do
-    if type(k) ~= 'string' then
-      error(label .. ' map form requires string keys; use ordered { name, op } entries for other labels', 3)
+  for key, value in pairs(entries) do
+    if type(key) ~= 'string' or not is_op(value) then
+      error(label .. ' expects a map from string names to Op values', 3)
     end
-    if not is_op(v) then
-      error(label .. ' expects a map of Op values', 3)
-    end
-    keys[#keys + 1] = k
+    keys[#keys + 1] = key
   end
+
   table.sort(keys)
+  local out = {}
   for i = 1, #keys do
-    out[#out + 1] = { keys[i], entries[keys[i]] }
+    local key = keys[i]
+    out[i] = { key, entries[key] }
   end
   return out
 end
@@ -132,47 +104,14 @@ local function empty_rows()
 end
 
 local function row_value(row)
-  if type(row) == 'table' and row._fibers_pack and row.n == 1 then
+  if Values.is(row) and row.n == 1 then
     return row[1]
   end
   return row
 end
 
-local function contains_wrap(x)
-  if not x then
-    return false
-  end
-  if x._contains_wrap ~= nil then
-    return x._contains_wrap
-  end
-
-  local found = false
-  if x.kind == 'annotated' then
-    found = x.post ~= nil or contains_wrap(x.p)
-  elseif x.kind == 'map' then
-    found = contains_wrap(x.p)
-  elseif x.kind == 'and_then' then
-    found = contains_wrap(x.p) or contains_wrap(x.q)
-  elseif x.kind == 'or_else' then
-    found = contains_wrap(x.p) or contains_wrap(x.q)
-  elseif x.kind == 'product' then
-    for i = 1, #(x.lanes or {}) do
-      if contains_wrap(x.lanes[i]) then
-        found = true
-        break
-      end
-    end
-  elseif x.kind == 'choice' then
-    for i = 1, #(x.choices or {}) do
-      if contains_wrap(x.choices[i]) then
-        found = true
-        break
-      end
-    end
-  end
-
-  x._contains_wrap = found
-  return found
+local function contains_wrap(value)
+  return value ~= nil and value.has_wrap == true
 end
 
 local function assert_not_wrapped(self, name)
@@ -189,12 +128,11 @@ local function copy_list(xs)
   return out
 end
 
-local function annotated(inner, post, defeat, symmetry_key)
-  local base, existing_post, existing_symmetry, defeats
+local function annotated(inner, post, defeat)
+  local base, existing_post, defeats
   if inner.kind == 'annotated' then
     base = inner.p
     existing_post = inner.post
-    existing_symmetry = inner.symmetry_key
     defeats = copy_list(inner.defeats)
   else
     base = inner
@@ -210,10 +148,6 @@ local function annotated(inner, post, defeat, symmetry_key)
     post = post or existing_post
   end
 
-  if symmetry_key ~= nil and existing_symmetry ~= nil and symmetry_key ~= existing_symmetry then
-    error('an option occurrence may carry only one certified symmetry key', 3)
-  end
-  symmetry_key = symmetry_key ~= nil and symmetry_key or existing_symmetry
   if defeat then
     table.insert(defeats, 1, defeat)
   end
@@ -221,19 +155,14 @@ local function annotated(inner, post, defeat, symmetry_key)
     p = base,
     post = post,
     defeats = #defeats > 0 and defeats or nil,
-    symmetry_key = symmetry_key,
-    _contains_wrap = post ~= nil or contains_wrap(base),
   })
-  if base._contains_or_else == true then
-    node._contains_or_else = true
-  end
   return node
 end
 
 function Op.always(...)
   -- Return a fresh public option occurrence. Small shared singleton tables make
   -- unsupported mutation non-local and are not worth the minor allocation win.
-  return op('always', { vals = pack_(...) })
+  return op('always', { vals = Values.pack(...) })
 end
 
 function Op.never()
@@ -258,17 +187,6 @@ function Op.guard(fn)
   return op('guard', { fn = fn })
 end
 
--- Trusted facilities occasionally need one activation-local Runtime or Scope
--- fact while elaborating a public operation. Keep that authority out of the
--- public guard callback contract and pass it directly without an activation
--- object.
-function Op._contextual_guard(fn)
-  if type(fn) ~= 'function' then
-    error('_contextual_guard expects a function', 2)
-  end
-  return op('guard', { fn = fn, contextual = true })
-end
-
 -- A typed defeat obligation is discharged if this option occurrence is
 -- entered as a competing branch and another incompatible branch commits.
 -- Retry, fallback and incomplete search are not defeat.
@@ -276,7 +194,7 @@ function Op:on_defeat(effect)
   if not is_effect(effect) then
     error('on_defeat expects a typed Effect', 2)
   end
-  return annotated(self, nil, effect, nil)
+  return annotated(self, nil, effect)
 end
 
 -- Unordered permission: any coherent branch may commit. Source position does
@@ -285,7 +203,7 @@ end
 function Op.choice(...)
   local xs = {}
   for i = 1, select('#', ...) do
-    append_choice_arg(xs, select(i, ...), 2)
+    append_op_arg(xs, select(i, ...), 'choice', true, 2)
   end
   if #xs == 0 then
     return Op.never()
@@ -293,14 +211,7 @@ function Op.choice(...)
   if #xs == 1 then
     return xs[1]
   end
-  local node = op('choice', { choices = xs })
-  for i = 1, #xs do
-    if xs[i]._contains_or_else == true then
-      node._contains_or_else = true
-      break
-    end
-  end
-  return node
+  return op('choice', { choices = xs })
 end
 
 -- Choice with a result label. Useful when the branch names are already the
@@ -317,38 +228,22 @@ function Op.named_choice(entries)
   return Op.choice(branches)
 end
 
-local function product(xs, mode, label)
-  local message = label .. ' expects a dense array of Op values'
-  if not is_dense_array(xs) then
-    error(message, 3)
-  end
-
+local function product(mode, label, ...)
   local lanes = {}
-  for i = 1, #xs do
-    local lane = xs[i]
-    if not is_op(lane) then
-      error(message, 3)
-    end
-    lanes[i] = lane
+  for i = 1, select('#', ...) do
+    append_op_arg(lanes, select(i, ...), label, false, 3)
   end
 
   if #lanes == 0 then
     return Op.always(empty_rows())
   end
-  local node = op('product', { lanes = lanes, mode = mode })
-  for i = 1, #lanes do
-    if lanes[i]._contains_or_else == true then
-      node._contains_or_else = true
-      break
-    end
-  end
-  return node
+  return op('product', { lanes = lanes, mode = mode })
 end
 
 -- Independent conjunction. Every lane must be supportable from the common
 -- parent world; one sibling may constrain another but cannot supply it.
-function Op.each(xs)
-  return product(xs, 'independent', 'each')
+function Op.each(...)
+  return product('independent', 'each', ...)
 end
 
 function Op.named_each(entries)
@@ -373,8 +268,8 @@ end
 
 -- Interacting conjunction. Compatible siblings may supply one another, such as
 -- a scene cue written in one lane and read in another.
-function Op.together(xs)
-  return product(xs, 'interacting', 'together')
+function Op.together(...)
+  return product('interacting', 'together', ...)
 end
 
 -- Transform provisional values during search. fn is pure, non-yielding and may
@@ -384,11 +279,7 @@ function Op:map(fn)
     error('map expects a function', 2)
   end
   assert_not_wrapped(self, 'map')
-  local node = op('map', { p = self, fn = fn })
-  if self._contains_or_else == true then
-    node._contains_or_else = true
-  end
-  return node
+  return op('map', { p = self, fn = fn })
 end
 
 -- Continue transactionally with another operation. Earlier communication,
@@ -399,11 +290,7 @@ function Op:and_then(next_op)
     error('and_then expects an Op; use Op.guard for a dynamic right-hand operation', 2)
   end
   assert_not_wrapped(self, 'and_then')
-  local node = op('and_then', { p = self, q = next_op })
-  if self._contains_or_else == true or next_op._contains_or_else == true then
-    node._contains_or_else = true
-  end
-  return node
+  return op('and_then', { p = self, q = next_op })
 end
 
 -- Proof-directed preference. The fallback is entered only after the preferred
@@ -412,9 +299,7 @@ function Op:or_else(q)
   if not is_op(q) then
     error('or_else expects an Op', 2)
   end
-  local node = op('or_else', { p = self, q = q })
-  node._contains_or_else = true
-  return node
+  return op('or_else', { p = self, q = q })
 end
 
 -- Resume participant-local code after commitment. Unlike speculative callbacks,
@@ -423,72 +308,9 @@ function Op:wrap(fn)
   if type(fn) ~= 'function' then
     error('wrap expects a function', 2)
   end
-  return annotated(self, fn, nil, nil)
-end
-
--- Explicitly certify that pending occurrences carrying the same key are
--- observationally interchangeable for search.  The certificate covers the
--- complete option occurrence, including the fibre continuation after it
--- commits; the solver never infers this property automatically.
-function Op:certify_symmetry(key)
-  if key == nil then
-    error('certify_symmetry expects a non-nil key', 2)
-  end
-  return annotated(self, nil, nil, key)
-end
-
-function Op._symmetry_key(value)
-  return is_op(value) and value.kind == 'annotated' and value.symmetry_key or nil
-end
-
--- Trusted primitive occurrence. Programme descriptors are stable and shared; payload
--- binding happens exactly once here, producing the canonical fields consumed by
--- both machines.
-function Op._primitive(program, payload)
-  if not (type(program) == 'table' and program._fibers_program == true) then
-    error('primitive requires a trusted programme', 2)
-  end
-
-  local binding = program.bind
-  if binding == nil then
-    local cached = program._op
-    if cached then
-      return cached
-    end
-    local occurrence = { program = program }
-    if program.kind == 'patch' then
-      occurrence.patch = program.patch
-    elseif program.kind == 'version_wait' then
-      occurrence.version = program.version
-    elseif program.kind == 'exchange' then
-      occurrence.value = program.value
-    elseif program.kind == 'transition' then
-      occurrence.payload = program.payload
-    end
-    cached = op('primitive', occurrence)
-    program._op = cached
-    return cached
-  end
-
-  local occurrence = { program = program }
-  if binding == 'replace' then
-    occurrence.patch = { kind = 'replace', value = payload }
-  elseif binding == 'presence_put' then
-    occurrence.patch = { kind = 'presence', ops = { { op = 'put', value = payload } } }
-  elseif binding == 'version' then
-    occurrence.version = payload
-  elseif binding == 'value' then
-    occurrence.value = payload
-  elseif binding == 'payload' then
-    occurrence.payload = payload
-  else
-    error('unknown trusted programme binding ' .. tostring(binding), 2)
-  end
-  return op('primitive', occurrence)
+  return annotated(self, fn, nil)
 end
 
 Op.is_op = is_op
-Op._pack = pack_
-Op._unpack = unpack_
 
 return Op

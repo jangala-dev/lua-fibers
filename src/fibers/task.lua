@@ -12,7 +12,8 @@ local Effect = require('fibers.effect')
 local Protected = require('fibers.protected')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
-local ScopeResult = require('fibers.scope.result')
+local ScopeResult = require('fibers.scope.outcome').Result
+local Direct = require('fibers.internal.direct')
 
 local unpack_ = table.unpack or unpack
 
@@ -233,13 +234,7 @@ function Task:state_op()
   end)
 end
 
-function Task:await()
-  return perform(self:await_op())
-end
-
-function Task:request_cancel(reason)
-  return perform(self:request_cancel_op(reason))
-end
+Direct.install(Task, { 'await', 'request_cancel' })
 
 Task.Exit = Exit
 return Task

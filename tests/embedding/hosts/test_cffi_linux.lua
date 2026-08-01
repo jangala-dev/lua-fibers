@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -112,14 +109,12 @@ do
   host:close()
 end
 
--- Keep real kernel timing out of the semantic reference evaluator; the
+-- Keep real kernel timing out of portable semantic tests; the
 -- deterministic SimulatedHost socket and resolver contracts still run there.
-if os.getenv('FIBERS_MACHINE') ~= 'reference' then
-  local socket_host = LinuxHost.new()
-  Common.native_socket_smoke('cffi_linux', socket_host)
-  Common.native_datagram_smoke('cffi_linux', socket_host)
-  Common.native_resolver_smoke('cffi_linux', socket_host)
-  socket_host:close()
-end
+local socket_host = LinuxHost.new()
+Common.native_socket_smoke('cffi_linux', socket_host)
+Common.native_datagram_smoke('cffi_linux', socket_host)
+Common.native_resolver_smoke('cffi_linux', socket_host)
+socket_host:close()
 
 print('tests/hosts/test_cffi_linux.lua: ok')

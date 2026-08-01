@@ -8,6 +8,7 @@ local Resolver = require('fibers.socket.resolver')
 local DNS = require('fibers.dns')
 local IOError = require('fibers.io.error')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Socket = {
   Listener = Listener.Listener,
@@ -86,13 +87,7 @@ function Socket.dial_op(endpoint, opts)
   return Dial.dial_op(Address.validate(endpoint, 'socket.dial_op'), opts)
 end
 
-local function performing(name)
-  Socket[name] = function(...)
-    return perform(Socket[name .. '_op'](...))
-  end
-end
-
-for _, name in ipairs({
+Direct.install_static(Socket, {
   'listen',
   'listen_ipv4',
   'listen_ipv6',
@@ -104,9 +99,7 @@ for _, name in ipairs({
   'resolve',
   'resolve_name',
   'dial',
-}) do
-  performing(name)
-end
+})
 
 function Socket.connect(endpoint, opts)
   local target = opts and opts.scope

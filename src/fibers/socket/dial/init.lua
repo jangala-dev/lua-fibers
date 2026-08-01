@@ -13,6 +13,7 @@ local DialLifecycle = require('fibers.socket.dial.lifecycle')
 local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Module = {}
 local Dial = {}
@@ -211,13 +212,7 @@ local function take_to_scope_op(dial, scope, include_report)
 end
 
 local function transfer_op(dial, target, include_report)
-  return IO.with_target_scope_op(
-    target,
-    'Dial connection transfer expects a target Scope, or a current Scope',
-    function(scope)
-      return take_to_scope_op(dial, scope, include_report)
-    end
-  )
+  return take_to_scope_op(dial, IO.require_scope(target, 'Dial connection transfer target'), include_report)
 end
 
 function Dial:connected_op(target)
@@ -262,12 +257,14 @@ function Dial:closed_op()
 end
 
 function Dial:result(target)
+  target = target or IO.current_scope({}, 'Dial:result')
   return perform(self:result_op(target))
 end
 
 -- Strong convenience: a returned connection has moved to the target and every
 -- losing descendant of the selected strategy has closed.
 function Dial:connect(target)
+  target = target or IO.current_scope({}, 'Dial:connect')
   local connection, result = perform(result_with_report_op(self, target))
   local closed, close_err = self:closed()
   if not closed then
@@ -277,18 +274,6 @@ function Dial:connect(target)
     return nil, close_err
   end
   return connection, result
-end
-
-function Dial:report()
-  return perform(self:report_op())
-end
-
-function Dial:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Dial:closed()
-  return perform(self:closed_op())
 end
 
 local function new_op(endpoint, opts, strategy)
@@ -325,4 +310,6 @@ function Module.dial_op(endpoint, opts)
 end
 
 Module.Dial = Dial
+Direct.install(Dial, { 'report', 'close', 'closed' })
+
 return Module

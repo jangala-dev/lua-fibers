@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -12,6 +9,7 @@ package.path = table.concat({
 }, ';')
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local Witness = require('fibers.resource.witness')
 local Runtime = require('fibers.runtime')
 local Petri = require('examples.case_studies.petri.petri')
 local Calendar = require('examples.case_studies.calendar.calendar')
@@ -25,22 +23,22 @@ do
     receiver_result = rt:perform(net:take_op('p'):or_else(Op.always('fallback')))
   end)
   rt:_resume_fiber(receiver)
-  local receiver_id = rt.pending[1].id
-  local fallback = assert(rt:_find_candidate(receiver_id))
-  assert(fallback.absence_gate ~= nil)
+  local receiver_request = rt.engine.pending[1]
+  local fallback = assert(rt.engine:find_candidate(receiver_request))
+  assert(fallback:is_fallback())
 
   local producer = rt:spawn_raw(function()
     rt:perform(net:put_op('p', 'primary'))
   end)
   rt:_resume_fiber(producer)
-  local producer_id = rt.pending[2].id
-  local production = assert(rt:_find_candidate(producer_id))
-  assert(rt:_commit_hit(production))
-  assert(rt:_commit_hit(fallback) == false)
+  local producer_request = rt.engine.pending[2]
+  local production = assert(rt.engine:find_candidate(producer_request))
+  assert(production:settle(rt.engine))
+  assert(fallback:settle(rt.engine) == false)
 
-  local refreshed = assert(rt:_find_candidate(receiver_id))
-  assert(refreshed.absence_gate == nil)
-  assert(rt:_commit_hit(refreshed))
+  local refreshed = assert(rt.engine:find_candidate(receiver_request))
+  assert(not refreshed:is_fallback())
+  assert(refreshed:settle(rt.engine))
   assert(receiver_result == 'primary')
 end
 
@@ -54,59 +52,28 @@ do
     result = type(r) == 'table' and 'primary' or r
   end)
   rt:_resume_fiber(reserver)
-  local reserver_id = rt.pending[1].id
-  local fallback = assert(rt:_find_candidate(reserver_id))
-  assert(fallback.absence_gate ~= nil)
+  local reserver_request = rt.engine.pending[1]
+  local fallback = assert(rt.engine:find_candidate(reserver_request))
+  assert(fallback:is_fallback())
 
   local canceller = rt:spawn_raw(function()
     rt:perform(cal:cancel_op(1))
   end)
   rt:_resume_fiber(canceller)
-  local cancel_id = rt.pending[2].id
-  assert(rt:_commit_hit(assert(rt:_find_candidate(cancel_id))))
-  assert(rt:_commit_hit(fallback) == false)
+  local cancel_request = rt.engine.pending[2]
+  assert(assert(rt.engine:find_candidate(cancel_request)):settle(rt.engine))
+  assert(fallback:settle(rt.engine) == false)
 
-  local refreshed = assert(rt:_find_candidate(reserver_id))
-  assert(refreshed.absence_gate == nil)
-  assert(rt:_commit_hit(refreshed))
+  local refreshed = assert(rt.engine:find_candidate(reserver_request))
+  assert(not refreshed:is_fallback())
+  assert(refreshed:settle(rt.engine))
   assert(result == 'primary')
 end
 
--- Binary relation witnesses are centrally rechecked. Altering one relation
--- in an odd-cycle witness removes the contradiction and must be rejected.
-do
-  local Domain = require('fibers.internal.kernel.domain')
-  local Rendezvous = require('fibers.resource.rendezvous')
-  local count, edges, requests, ids = 5, {}, {}, {}
-  for i = 1, count do
-    edges[i] = Rendezvous.new('binary-witness-edge-' .. tostring(i))
-  end
-  for i = 1, count do
-    local previous = ((i - 2) % count) + 1
-    requests[i] = {
-      id = i,
-      op = Op.choice(
-        Op.each({ edges[i]:put_op(i), edges[previous]:put_op(i) }),
-        Op.each({ edges[i]:get_op(), edges[previous]:get_op() })
-      ),
-    }
-    ids[i] = i
-  end
-  local component = { ids = ids }
-  local witness = assert(Domain.exact_binary_relation_failure(requests, component))
-  assert(Domain.verify_exact_binary_relation_failure(requests, component, witness))
-  local generic = assert(Domain.exact_negative_failure(requests, component))
-  assert(generic.kind == witness.kind)
-  assert(Domain.verify_exact_negative_failure(requests, component, generic))
-  assert(not Domain.verify_exact_negative_failure(requests, component, { kind = 'unknown' }))
-  witness.relations[1].parity = 1 - witness.relations[1].parity
-  assert(not Domain.verify_exact_binary_relation_failure(requests, component, witness))
-end
-
--- Trusted witness programmes have one cursor form; eager enumerate is not accepted.
+-- Trusted witness leaves have one cursor form; eager enumerate is not accepted.
 do
   local ok, err = pcall(function()
-    Facility.witness({
+    Witness.spec({
       location = {},
       accepts_supply = false,
       supplies = 'none',
@@ -116,7 +83,25 @@ do
     })
   end)
   assert(ok == false)
-  assert(tostring(err):find('requires cursor', 1, true))
+  assert(tostring(err):find('do not accept enumerate', 1, true))
+end
+
+do
+  local ok, err = pcall(function()
+    Witness.spec({
+      location = {},
+      argument = {},
+      cursor = function()
+        return {
+          next = function()
+            return nil
+          end,
+        }
+      end,
+    })
+  end)
+  assert(ok == false)
+  assert(tostring(err):find('do not accept argument', 1, true))
 end
 
 print('tests/test_witness_validation.lua: ok')

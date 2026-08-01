@@ -1,7 +1,7 @@
 -- Structural proof-engine profile for external-resource workloads.
 --
 -- This is deliberately diagnostic rather than a headline throughput suite. It
--- runs the ordinary production lazy machine with instrumentation enabled and
+-- runs the execution-frontier kernel with instrumentation enabled and
 -- reports the amount and shape of proof work required by each validated case.
 --
 -- Controls:
@@ -162,7 +162,7 @@ local columns = {
   'case',
   'units',
   'elapsed_ms',
-  'plans',
+  'searches',
   'commits',
   'search_calls',
   'branches',
@@ -174,7 +174,6 @@ local columns = {
   'rollbacks',
   'trail_entries',
   'trail_coalesced',
-  'option_nodes',
   'dependency_locations',
   'dependency_resources',
   'dependency_exchanges',
@@ -202,21 +201,21 @@ for _, case in ipairs(cases) do
     end, {
       host = case.host(),
       instrumentation = {
-        slow_plan_limit = show_slow and 8 or 0,
+        slow_search_limit = show_slow and 8 or 0,
         trace = trace,
         trace_limit = trace and 2048 or 0,
       },
     })
     assert(result.ok, tostring(result.primary))
     local elapsed = Clock.now() - started
-    local snapshot = result.runtime:instrumentation_report()
+    local snapshot = (result.runtime.instrumentation and result.runtime.instrumentation:report())
     local counters = snapshot.counters or {}
     local commits = counters.commits or 0
     local row = {
       case = case.name,
       units = units,
       elapsed_ms = elapsed * 1000,
-      plans = counters.plans or 0,
+      searches = counters.searches or 0,
       commits = commits,
       search_calls = counters.search_calls or 0,
       branches = counters.branches or 0,
@@ -228,25 +227,21 @@ for _, case in ipairs(cases) do
       rollbacks = counters.rollbacks or 0,
       trail_entries = counters.trail_entries or 0,
       trail_coalesced = (counters.trail_set_coalesced or 0) + (counters.trail_push_coalesced or 0),
-      option_nodes = counters.option_nodes or 0,
       dependency_locations = counters.dependency_locations or 0,
       dependency_resources = counters.dependency_resources or 0,
       dependency_exchanges = counters.dependency_exchanges or 0,
       max_component = (snapshot.maxima or {}).component_size or 0,
-      plan_reuse_hits = counters.plan_reuse_hits or 0,
-      plan_reuse_invalidations = counters.plan_reuse_invalidations or 0,
-      search_session_resumes = counters.search_session_resumes or 0,
-      invalid_request = counters.search_session_invalidation_request or 0,
-      invalid_bucket = counters.search_session_invalidation_bucket or 0,
-      invalid_location = counters.search_session_invalidation_location or 0,
-      invalid_resource = counters.search_session_invalidation_resource or 0,
-      invalid_external = counters.search_session_invalidation_external_generation or 0,
-      invalid_epoch = counters.search_session_invalidation_runtime_epoch or 0,
-      invalid_timer = counters.search_session_invalidation_timer or 0,
+      retained_search_resumes = counters.retained_search_resumes or 0,
+      invalid_request = counters.retained_search_invalidation_request or 0,
+      invalid_bucket = counters.retained_search_invalidation_bucket or 0,
+      invalid_location = counters.retained_search_invalidation_location or 0,
+      invalid_resource = counters.retained_search_invalidation_resource or 0,
+      invalid_epoch = counters.retained_search_invalidation_runtime_epoch or 0,
+      invalid_timer = counters.retained_search_invalidation_timer or 0,
       search_per_commit = ratio(counters.search_calls or 0, commits),
       branches_per_commit = ratio(counters.branches or 0, commits),
       trail_per_commit = ratio(counters.trail_entries or 0, commits),
-      slow_plans = snapshot.slow_plans,
+      slow_searches = snapshot.slow_searches,
     }
     rows[#rows + 1] = row
   end
@@ -271,10 +266,10 @@ else
   for _, row in ipairs(rows) do
     print(
       string.format(
-        '%-22s %7.1f ms  plans=%-4d commits=%-4d search/commit=%6.1f branches/commit=%6.1f trail/commit=%7.1f',
+        '%-22s %7.1f ms  searches=%-4d commits=%-4d search/commit=%6.1f branches/commit=%6.1f trail/commit=%7.1f',
         row.case,
         row.elapsed_ms,
-        row.plans,
+        row.searches,
         row.commits,
         row.search_per_commit,
         row.branches_per_commit,
@@ -283,7 +278,7 @@ else
     )
     print(
       string.format(
-        '  claims=%d closure=%d/%d/%d forced=%d rollbacks=%d coalesced=%d nodes=%d deps(loc=%d,res=%d,exchange=%d) max_component=%d',
+        '  claims=%d closure=%d/%d/%d forced=%d rollbacks=%d coalesced=%d deps(loc=%d,res=%d,exchange=%d) max_component=%d',
         row.claim_branches,
         row.claim_closure_branches,
         row.claim_closure_successes,
@@ -291,7 +286,6 @@ else
         row.forced_claims,
         row.rollbacks,
         row.trail_coalesced,
-        row.option_nodes,
         row.dependency_locations,
         row.dependency_resources,
         row.dependency_exchanges,
@@ -300,24 +294,21 @@ else
     )
     print(
       string.format(
-        '  reuse(hit=%d invalid=%d resume=%d) invalid(req=%d,bucket=%d,loc=%d,res=%d,ext=%d,epoch=%d,timer=%d)',
-        row.plan_reuse_hits,
-        row.plan_reuse_invalidations,
-        row.search_session_resumes,
+        '  retained(resume=%d) invalid(req=%d,bucket=%d,loc=%d,res=%d,epoch=%d,timer=%d)',
+        row.retained_search_resumes,
         row.invalid_request,
         row.invalid_bucket,
         row.invalid_location,
         row.invalid_resource,
-        row.invalid_external,
         row.invalid_epoch,
         row.invalid_timer
       )
     )
     if show_slow then
-      for i, plan in ipairs(row.slow_plans or {}) do
+      for i, plan in ipairs(row.slow_searches or {}) do
         print(
           string.format(
-            '    slow[%d] steps=%d branches=%d claims=%d closure=%d/%d/%d forced=%d roots=%d nodes=%d dynamic=%d outcome=%s',
+            '    slow[%d] steps=%d branches=%d claims=%d closure=%d/%d/%d forced=%d roots=%d dynamic=%d outcome=%s',
             i,
             plan.search_steps or 0,
             plan.branches or 0,
@@ -327,30 +318,11 @@ else
             plan.claim_closure_failures or 0,
             plan.forced_claims or 0,
             plan.component_size or 0,
-            plan.option_nodes or 0,
             plan.option_dynamic_roots or 0,
             tostring(plan.outcome)
           )
         )
         if trace and i == 1 then
-          for _, request in ipairs(plan.request_summaries or {}) do
-            local kinds = {}
-            for kind, count in pairs(request.kinds or {}) do
-              kinds[#kinds + 1] = tostring(kind) .. ':' .. tostring(count)
-            end
-            table.sort(kinds)
-            print(
-              string.format(
-                '      request id=%s name=%s dynamic=%s external=%s nodes=%s kinds=%s',
-                tostring(request.id),
-                tostring(request.name),
-                tostring(request.dynamic),
-                tostring(request.external),
-                tostring(request.nodes),
-                table.concat(kinds, '|')
-              )
-            )
-          end
           for _, event in ipairs(plan.events or {}) do
             if event.kind == 'claim_group' or event.kind == 'claim_branch' then
               print(

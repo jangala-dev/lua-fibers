@@ -2,16 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
-require('fibers.diagnostics.io').install(require('tests.support.io_audit_observer'))
+require('fibers.diagnostics.io').install(require('fibers.diagnostics.io_observer'))
 
 local Harness = require('tests.support.harness')
 local groups = require('tests.groups')

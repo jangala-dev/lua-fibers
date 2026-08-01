@@ -9,9 +9,10 @@ local Facility = require('fibers.resource.authoring')
 local Lifetime = require('fibers.lifetime')
 local Machine = require('fibers.resource.machine')
 local Op = require('fibers.op')
-local perform = require('fibers.perform')
+local Values = require('fibers.internal.values')
 local Errors = require('fibers.resource.flow.errors')
 local Rope = require('fibers.resource.flow.rope')
+local Direct = require('fibers.internal.direct')
 
 local Ready, Wait = Machine.Ready, Machine.Wait
 local INF = math.huge
@@ -86,24 +87,12 @@ function Lease:ack_op(n)
   return self.flow:_ack_lease_op(self, n)
 end
 
-function Lease:ack(n)
-  return perform(self:ack_op(n))
-end
-
 function Lease:release_op()
   return self.flow:_return_lease_op(self)
 end
 
-function Lease:release()
-  return perform(self:release_op())
-end
-
 function Lease:fail_op(err)
   return self.flow:_fail_lease_op(self, err)
-end
-
-function Lease:fail(err)
-  return perform(self:fail_op(err))
 end
 
 local function space_lease(flow, record)
@@ -123,24 +112,12 @@ function SpaceLease:commit_op(value)
   return self.flow:_commit_space_op(self, value)
 end
 
-function SpaceLease:commit(value)
-  return perform(self:commit_op(value))
-end
-
 function SpaceLease:release_op()
   return self.flow:_release_space_op(self)
 end
 
-function SpaceLease:release()
-  return perform(self:release_op())
-end
-
 function SpaceLease:fail_op(err)
   return self.flow:_fail_space_op(self, err)
-end
-
-function SpaceLease:fail(err)
-  return perform(self:fail_op(err))
 end
 
 -- State ---------------------------------------------------------------------
@@ -259,9 +236,9 @@ local function transition(flow, rule, payload)
     return option
   end
   return option:and_then(Op.guard(function(...)
-    local result = Op._pack(...)
+    local result = Values.pack(...)
     return Op.emit(Effect.of(Changed, { flow = flow })):map(function()
-      return Op._unpack(result, 1, result.n)
+      return Values.unpack(result, 1, result.n)
     end)
   end))
 end
@@ -270,10 +247,6 @@ end
 
 local function update(name, step, order, validate)
   return Machine.update('flow.' .. name, step, order, validate)
-end
-
-local function select_(name, step, order)
-  return Machine.select('flow.' .. name, step, order)
 end
 
 local function select_when(name, ready, step, order)
@@ -706,19 +679,11 @@ function Inlet:write_op(value)
   end)
 end
 
-function Inlet:write(value)
-  return perform(self:write_op(value))
-end
-
 function Inlet:write_some_op(value)
   value = bytes(value, 2)
   return live(self, function()
     return transition(self.flow, T.write_some, { bytes = value })
   end)
-end
-
-function Inlet:write_some(value)
-  return perform(self:write_some_op(value))
 end
 
 function Inlet:reserve_some_op(n, holder, meta)
@@ -728,40 +693,20 @@ function Inlet:reserve_some_op(n, holder, meta)
   end)
 end
 
-function Inlet:reserve_some(n, holder, meta)
-  return perform(self:reserve_some_op(n, holder, meta))
-end
-
 function Inlet:flush_op()
   return transition(self.flow, T.flush)
-end
-
-function Inlet:flush()
-  return perform(self:flush_op())
 end
 
 function Inlet:close_op()
   return transition(self.flow, T.close_input)
 end
 
-function Inlet:close()
-  return perform(self:close_op())
-end
-
 function Inlet:closed_op()
   return transition(self.flow, T.input_closed)
 end
 
-function Inlet:closed()
-  return perform(self:closed_op())
-end
-
 function Inlet:fail_op(err)
   return transition(self.flow, T.fail_input, { err = err or Errors.READ_ERROR })
-end
-
-function Inlet:fail(err)
-  return perform(self:fail_op(err))
 end
 
 -- Outlet --------------------------------------------------------------------
@@ -776,10 +721,6 @@ function Outlet:read_some_op(n)
   end)
 end
 
-function Outlet:read_some(n)
-  return perform(self:read_some_op(n))
-end
-
 function Outlet:read_exactly_op(n)
   n = count(n, 0, 'flow exact read size')
   if n == 0 then
@@ -790,10 +731,6 @@ function Outlet:read_exactly_op(n)
   end)
 end
 
-function Outlet:read_exactly(n)
-  return perform(self:read_exactly_op(n))
-end
-
 function Outlet:peek_exactly_op(n)
   n = count(n, 1, 'flow peek size')
   if n == 0 then
@@ -802,10 +739,6 @@ function Outlet:peek_exactly_op(n)
   return live(self, function()
     return transition(self.flow, T.peek, { n = n })
   end)
-end
-
-function Outlet:peek_exactly(n)
-  return perform(self:peek_exactly_op(n))
 end
 
 function Outlet:read_until_op(sep, opts)
@@ -821,10 +754,6 @@ function Outlet:read_until_op(sep, opts)
   end)
 end
 
-function Outlet:read_until(sep, opts)
-  return perform(self:read_until_op(sep, opts))
-end
-
 function Outlet:read_line_op(opts)
   opts = options(opts, { terminator = true, keep_terminator = true, max = true }, 'read_line_op options')
   return live(self, function()
@@ -838,10 +767,6 @@ function Outlet:read_line_op(opts)
   end)
 end
 
-function Outlet:read_line(opts)
-  return perform(self:read_line_op(opts))
-end
-
 function Outlet:read_all_op(opts)
   opts = options(opts, { max = true }, 'read_all_op options')
   if opts.max == nil then
@@ -852,10 +777,6 @@ function Outlet:read_all_op(opts)
   end)
 end
 
-function Outlet:read_all(opts)
-  return perform(self:read_all_op(opts))
-end
-
 function Outlet:drop_op(n)
   n = count(n, 0, 'flow drop size')
   if n == 0 then
@@ -864,10 +785,6 @@ function Outlet:drop_op(n)
   return live(self, function()
     return transition(self.flow, T.drop, { n = n })
   end)
-end
-
-function Outlet:drop(n)
-  return perform(self:drop_op(n))
 end
 
 function Outlet:splice_to_op(inlet, n)
@@ -882,10 +799,6 @@ function Outlet:splice_to_op(inlet, n)
   end))
 end
 
-function Outlet:splice_to(inlet, n)
-  return perform(self:splice_to_op(inlet, n))
-end
-
 function Outlet:lease_some_op(n, holder, meta)
   n = count(n, 1, 'flow lease size', true)
   return live(self, function()
@@ -893,33 +806,17 @@ function Outlet:lease_some_op(n, holder, meta)
   end)
 end
 
-function Outlet:lease_some(n, holder, meta)
-  return perform(self:lease_some_op(n, holder, meta))
-end
-
 function Outlet:close_op(reason)
   return transition(self.flow, T.shutdown_output, { err = reason or Errors.CLOSED })
-end
-
-function Outlet:close(reason)
-  return perform(self:close_op(reason))
 end
 
 function Outlet:closed_op()
   return transition(self.flow, T.output_closed)
 end
 
-function Outlet:closed()
-  return perform(self:closed_op())
-end
-
 function Outlet:fail_op(err)
   err = err or Errors.WRITE_ERROR
   return transition(self.flow, T.fail_write, { err = err })
-end
-
-function Outlet:fail(err)
-  return perform(self:fail_op(err))
 end
 
 -- Lease operations ----------------------------------------------------------
@@ -985,16 +882,8 @@ function Flow:abort_op()
   return transition(self, T.shutdown)
 end
 
-function Flow:abort()
-  return perform(self:abort_op())
-end
-
 function Flow:closed_op()
   return transition(self, T.closed)
-end
-
-function Flow:closed()
-  return perform(self:closed_op())
 end
 
 -- Host reactor contract -----------------------------------------------------
@@ -1066,5 +955,27 @@ Flow.Error = {
   LINE_TOO_LONG = Errors.LINE_TOO_LONG,
   RETIRED = Errors.RETIRED,
 }
+
+Direct.install(Lease, { 'ack', 'release', 'fail' })
+Direct.install(SpaceLease, { 'commit', 'release', 'fail' })
+Direct.install(Inlet, { 'write', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail' })
+Direct.install(
+  Outlet,
+  {
+    'read_some',
+    'read_exactly',
+    'peek_exactly',
+    'read_until',
+    'read_line',
+    'read_all',
+    'drop',
+    'splice_to',
+    'lease_some',
+    'close',
+    'closed',
+    'fail',
+  }
+)
+Direct.install(Flow, { 'abort', 'closed' })
 
 return Flow

@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local Op = require('fibers.op')
@@ -71,7 +69,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs IPv6 winner')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs IPv6 winner' })
 end
 
 -- RFC-conforming operation requires one global destination-ordering policy.
@@ -141,7 +139,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs global destination ordering')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs global destination ordering' })
 end
 
 -- An immediate failure accelerates the next family rather than waiting for the
@@ -174,7 +172,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs accelerated fallback')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs accelerated fallback' })
 end
 
 local function dynamic_resolution_case(aaaa_delay, resolution_delay, expected_family)
@@ -220,7 +218,7 @@ local function dynamic_resolution_case(aaaa_delay, resolution_delay, expected_fa
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('dynamic Happy Eyeballs')
+  IOAudit.assert_clean(result.runtime, { label = 'dynamic Happy Eyeballs' })
 end
 
 -- If A arrives first, IPv4 waits only for the configured resolution delay.
@@ -297,7 +295,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs staggered attempt')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs staggered attempt' })
 end
 
 -- first_family_count permits a bounded run from the initially preferred
@@ -334,7 +332,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs first-family count')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs first-family count' })
 end
 
 -- Destination ordering can be injected without placing socket work in a
@@ -372,7 +370,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs destination ordering')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs destination ordering' })
 end
 
 -- A relative timeout starts when the admitted driver begins, not when an inert
@@ -413,7 +411,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs inert timeout')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs inert timeout' })
 end
 
 -- A connection success ready at the stagger deadline has semantic priority
@@ -470,7 +468,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs timer boundary')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs timer boundary' })
 end
 
 -- Certified exhaustion reports every failed attempt.
@@ -566,7 +564,7 @@ do
     server:await()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs stable ordering input')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs stable ordering input' })
 end
 
 -- RFC 8305's absolute 10 millisecond attempt-delay floor is validated before
@@ -664,7 +662,7 @@ do
     assert_eq(closed, 5)
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs default active attempts')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs default active attempts' })
 end
 
 -- Pending attempts are bounded. The default-connect-timeout option supplies the
@@ -726,7 +724,7 @@ do
     assert_eq(closed, 2, 'bounded pending Dials should close before return')
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs active attempt bound')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs active attempt bound' })
 end
 
 -- A deliberately bounded host profile can recover liveness by giving each
@@ -790,7 +788,7 @@ do
     assert_eq(err.report.blocked_by_attempt_capacity, false)
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  result.runtime:assert_io_quiescent('Happy Eyeballs per-attempt timeout')
+  IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs per-attempt timeout' })
 end
 
 print('tests/io/test_happy_eyeballs.lua: ok')

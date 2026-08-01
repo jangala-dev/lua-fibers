@@ -7,6 +7,7 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
@@ -93,7 +94,7 @@ do
     service:await()
   end, { host = host })
   assert_truthy(report.ok, report:tostring())
-  report.runtime:assert_io_quiescent('DNS UDP and cache')
+  IOAudit.assert_clean(report.runtime, { label = 'DNS UDP and cache' })
 end
 
 -- Family completion is published independently, providing the dynamic source
@@ -266,7 +267,7 @@ do
     tcp_service:await()
   end, { host = host })
   assert_truthy(report.ok, report:tostring())
-  report.runtime:assert_io_quiescent('DNS TCP fallback')
+  IOAudit.assert_clean(report.runtime, { label = 'DNS TCP fallback' })
 end
 
 -- Timeouts advance to the next configured server rather than repeatedly using
@@ -415,7 +416,7 @@ do
     query:close('file-backed hosts result collected')
   end, { host = host })
   assert_truthy(report.ok, report:tostring())
-  report.runtime:assert_io_quiescent('DNS fibers.file configuration')
+  IOAudit.assert_clean(report.runtime, { label = 'DNS fibers.file configuration' })
 end
 
 -- Secure transaction identifiers may be supplied by the non-blocking file
@@ -464,7 +465,7 @@ do
     service:await()
   end, { host = host })
   assert_truthy(report.ok, report:tostring())
-  report.runtime:assert_io_quiescent('DNS fibers.file entropy')
+  IOAudit.assert_clean(report.runtime, { label = 'DNS fibers.file entropy' })
 end
 
 -- Secure entropy is the default policy. Missing entropy fails before any DNS
@@ -491,7 +492,7 @@ do
     assert_eq(resolver.secure_ids, false)
   end, { host = host })
   assert_truthy(report.ok, report:tostring())
-  report.runtime:assert_io_quiescent('DNS strict entropy default')
+  IOAudit.assert_clean(report.runtime, { label = 'DNS strict entropy default' })
 end
 
 -- The resolver cache has a deterministic FIFO bound. Re-reading the oldest
@@ -532,6 +533,16 @@ do
     assert_eq(#resolver.cache_order, 2)
   end, { host = host })
   assert_truthy(report.ok, report:tostring())
+end
+
+-- Removed pre-v1 resolver options are rejected rather than translated.
+do
+  local ok, err = pcall(socket.dns_resolver, { require_secure_random = false })
+  assert_eq(ok, false)
+  assert_truthy(tostring(err):find('allow_weak_random', 1, true))
+  ok, err = pcall(socket.dns_resolver, { nameserver = socket.ipv4_address('192.0.2.53', 53) })
+  assert_eq(ok, false)
+  assert_truthy(tostring(err):find('nameservers', 1, true))
 end
 
 print('tests/io/test_dns_resolver.lua: ok')

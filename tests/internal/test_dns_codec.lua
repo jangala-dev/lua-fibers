@@ -55,6 +55,7 @@ local response = Codec.encode_response({
   },
 })
 local message = assert(Codec.decode_message(response))
+assert_eq(message.header_rcode, nil, 'decoded messages expose only rcode')
 assert_eq(message.qr, true)
 assert_eq(message.answers[1].target, 'edge.example.test')
 assert_eq(message.answers[2].address, '192.0.2.4')

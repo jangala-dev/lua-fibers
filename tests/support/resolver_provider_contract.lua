@@ -1,3 +1,4 @@
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local socket = require('fibers.socket')
 
@@ -23,7 +24,7 @@ function Contract.exercise(name, host)
     assert(query:close(name .. ' resolver contract'))
   end, { host = host })
   assert_truthy(report.ok, name .. ' resolver contract failed: ' .. report:tostring())
-  report.runtime:assert_io_quiescent(name .. ' resolver contract')
+  IOAudit.assert_clean(report.runtime, { label = name .. ' resolver contract' })
   return true
 end
 

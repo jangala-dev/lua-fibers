@@ -9,8 +9,8 @@ local Task = require('fibers.task')
 local Grant = require('fibers.grant')
 local Runtime = require('fibers.runtime')
 local Protected = require('fibers.protected')
-local ScopeReport = require('fibers.scope.report')
-local ScopeResult = require('fibers.scope.result')
+local ScopeOutcome = require('fibers.scope.outcome')
+local ScopeReport, ScopeResult = ScopeOutcome.Report, ScopeOutcome.Result
 local Closure = require('fibers.closure')
 local ScopeClosure = require('fibers.scope.closure')
 local Lifetime = require('fibers.lifetime')
@@ -162,8 +162,8 @@ end
 function Scope:parent_scope()
   local lifetime = self._lifetime
   local parent
-  if lifetime.runtime and lifetime.runtime.lifetimes then
-    parent = lifetime.runtime.lifetimes:current_custodian(lifetime)
+  if lifetime.runtime then
+    parent = lifetime.runtime:_lifetime_store():current_custodian(lifetime)
   end
   parent = parent or lifetime:_construction_parent_node()
   if not parent or parent == lifetime then
@@ -190,7 +190,7 @@ function Scope:_bind_runtime(runtime)
 end
 
 function Scope:_store()
-  return self:_bind_runtime().lifetimes
+  return self:_bind_runtime():_lifetime_store()
 end
 
 function Scope:admit_op(value)
@@ -201,7 +201,7 @@ function Scope:admit_op(value)
   end
   local runtime = self:_bind_runtime()
   node:assert_runtime_compatible(runtime)
-  return runtime.lifetimes:admit_op(self, node):map(function()
+  return runtime:_lifetime_store():admit_op(self, node):map(function()
     return value
   end)
 end
@@ -380,22 +380,14 @@ function Scope:can_op(item, right)
     end))
 end
 
-local function parse_grant_args(self, a, b, c)
-  local holder, rights, opts
-  if is_scope(a) then
-    holder, rights, opts = a, b, c or {}
-  else
-    rights, opts = a, b or {}
-    holder = opts.holder or opts.scope or self
-  end
+function Scope:grant_op(item, holder, rights, opts)
   if not is_scope(holder) then
-    error('Scope:grant_op expects a holder Scope', 3)
+    error('Scope:grant_op expects a holder Scope', 2)
   end
-  return holder, rights, opts or {}
-end
-
-function Scope:grant_op(item, holder_or_rights, rights_or_opts, maybe_opts)
-  local holder, rights, opts = parse_grant_args(self, holder_or_rights, rights_or_opts, maybe_opts)
+  opts = opts or {}
+  if type(opts) ~= 'table' then
+    error('Scope:grant_op options must be a table', 2)
+  end
   local runtime = self:_bind_runtime()
   holder:_bind_runtime(runtime)
   if holder.runtime ~= runtime then
@@ -580,7 +572,13 @@ function Scope:run(fn)
 end
 
 Scope.Report = ScopeReport
-Scope.is_scope = is_scope
+Scope.is = is_scope
+function Scope.require(value, label)
+  if is_scope(value) then
+    return value
+  end
+  error((label or 'value') .. ' must be a Scope', 2)
+end
 function Scope.is_report(x)
   return ScopeReport.is(x)
 end

@@ -3,20 +3,18 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 
 local function deliver(rt, resource, ...)
-  return rt:external_feed(resource):set(...)
+  return External.external_feed(rt, resource):set(...)
 end
 local Signal = require('fibers.resource.signal')
 local EventQueue = require('fibers.resource.event_queue')
@@ -61,7 +59,7 @@ do
   local st = rt:run()
   assert_status(st, 'pending')
   assert_eq(got, nil)
-  assert(st.waits and #st.waits == 1, 'expected one wake interest')
+  assert(st.interests and #st.interests == 1, 'expected one wake interest')
 end
 
 -- Ready now beats fallback.
@@ -116,7 +114,7 @@ do
   end, 'clock-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
-  assert(st.waits and #st.waits == 1, 'expected one time wait')
+  assert(st.interests and #st.interests == 1, 'expected one time wait')
   now = 5
   st = rt:step()
   assert_status(st, 'found')
@@ -284,7 +282,7 @@ do
 
   local other = Runtime.new()
   local ok = pcall(function()
-    other:deliver(feed, 'wrong-runtime')
+    External.deliver(other, feed, 'wrong-runtime')
   end)
   assert_eq(ok, false, 'external feed must remain bound to its runtime')
 end
@@ -301,8 +299,8 @@ do
 
   local rt = Runtime.new()
   assert_eq(
-    rt:external_feed(signal),
-    rt:external_feed(signal),
+    External.external_feed(rt, signal),
+    External.external_feed(rt, signal),
     'feed capability should be cached per runtime/resource'
   )
 end

@@ -1,5 +1,5 @@
 local Cell = require('fibers.resource.cell')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Latch = {}
 Latch.__index = Latch
@@ -47,16 +47,6 @@ function Latch:is_set_op()
   end)
 end
 
-function Latch:set(value)
-  return perform(self:set_op(value))
-end
-
-function Latch:get()
-  return perform(self:get_op())
-end
-
-function Latch:is_set()
-  return perform(self:is_set_op())
-end
+Direct.install(Latch, { 'set', 'get', 'is_set' })
 
 return Latch

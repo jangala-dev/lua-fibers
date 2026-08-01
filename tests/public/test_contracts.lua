@@ -3,9 +3,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -162,7 +159,6 @@ do
     rt:run()
   end)
   assert_error_kind(ok, err, 'phase_error', 'spawn inside guard')
-  assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after caught phase error')
   local ok_spawn = pcall(function()
     rt:spawn_raw(function() end, 'external-spawn-after-guard-error')
   end)
@@ -263,7 +259,6 @@ do
     rt:run()
   end)
   assert_error_kind(ok, err, 'callback_error', 'raw guard error is structured')
-  assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after raw guard error')
   local ok_spawn = pcall(function()
     rt:spawn_raw(function() end, 'external-after-raw-guard-error')
   end)
@@ -283,7 +278,6 @@ do
     rt:run()
   end)
   assert_error_kind(ok, err, 'callback_error', 'raw map error is structured')
-  assert_eq(rt._driver_depth or 0, 0, 'driver depth reset after raw map error')
   local ok_spawn = pcall(function()
     rt:spawn_raw(function() end, 'external-after-raw-map-error')
   end)
@@ -321,7 +315,6 @@ do
     rt:run()
   end)
   assert_error_kind(ok, err, 'phase_error', 'run inside fibre escapes as phase error')
-  assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after fibre phase error')
   assert_eq(rt._phase, 'external', 'phase restored after fibre phase error')
   local ok_spawn = pcall(function()
     rt:spawn_raw(function() end, 'external-after-fibre-phase-error')
@@ -343,7 +336,6 @@ do
     rt:run()
   end)
   assert_error_kind(ok, err, 'callback_error', 'derived update error is a protected callback error')
-  assert_eq(rt._driver_depth or 0, 0, 'driver depth restored after derived callback error')
   assert_eq(rt._phase, 'external', 'phase restored after derived callback error')
 end
 

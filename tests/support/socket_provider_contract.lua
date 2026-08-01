@@ -1,3 +1,4 @@
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local Sleep = require('fibers.sleep')
 local socket = require('fibers.socket')
@@ -97,7 +98,7 @@ function Contract.exercise(name, host, address, opts)
   end, { host = host, max_iterations = opts.max_iterations or 20000 })
 
   assert_truthy(result.ok, name .. ' provider contract failed: ' .. tostring(result.primary or result))
-  result.runtime:assert_io_quiescent(name .. ' provider contract')
+  IOAudit.assert_clean(result.runtime, { label = name .. ' provider contract' })
   assert_truthy(accepted_local, name .. ' accepted connection should expose local address')
   -- An unbound Unix-domain client is unnamed, so the accepted side has no
   -- pathname to report for its peer. Internet socket peers remain mandatory.

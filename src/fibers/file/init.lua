@@ -8,7 +8,7 @@ local IOError = require('fibers.io.error')
 local HostHold = require('fibers.io.internal.host_hold')
 local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 local Regular = require('fibers.file.regular')
 
 local File = {}
@@ -185,8 +185,6 @@ File.submit_mkdir_p_op = Regular.submit_mkdir_p_op
 File.mkdir_p_op = Regular.mkdir_p_op
 File.mkdir_p = Regular.mkdir_p
 
-function File.pipe(opts)
-  return perform(File.pipe_op(opts))
-end
+Direct.install_static(File, { 'pipe' })
 
 return File

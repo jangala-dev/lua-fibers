@@ -4,15 +4,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Op = require('fibers.op')
 local StateMachine = require('fibers.resource.machine')
 local RateLimiter = require('examples.recipes.rate_limiter')
@@ -92,7 +90,7 @@ local function test_rate_limiter_waits_until_enough_tokens()
   rt:spawn_raw(function()
     ok = rt:perform(rl:acquire_op(1))
   end, 'root')
-  assert_status(rt:drive({ host = host }), 'found')
+  assert_status(External.drive(rt, { host = host }), 'found')
   assert_eq(ok, true)
   assert_near(host._now, 1)
   assert_near(rl.state.value.tokens, 0)

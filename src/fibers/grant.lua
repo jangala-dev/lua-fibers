@@ -6,7 +6,7 @@
 -- represented explicitly by the subject facility or another transactional resource.
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Grant = {}
 Grant.__index = Grant
@@ -223,10 +223,6 @@ function Grant:closed_op()
   end)
 end
 
-function Grant:closed()
-  return perform(self:closed_op())
-end
-
 function Grant:inspect()
   local value = state(self, 2)
   return {
@@ -240,5 +236,7 @@ function Grant:inspect()
     meta = copy_table(value.meta),
   }
 end
+
+Direct.install(Grant, { 'closed' })
 
 return Grant

@@ -3,9 +3,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -57,7 +54,8 @@ for i = 1, 4 do
     rt2:perform(Op.never():or_else(update))
   end, 'u' .. i)
 end
-rt2:_pump() -- start all fibres without solving
+while rt2:_start_one() do
+end -- expose all attempts without solving
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending', 'budget status')
 assert_eq(cell.value, 0, 'pending budget does not mutate')
@@ -79,9 +77,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -163,9 +158,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',

@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Handle = require('fibers.io.handle')
 local SimulatedHost = require('examples.support.simulated_host')
 local Scope = require('fibers.scope')
@@ -69,7 +67,7 @@ runtime:spawn_raw(function()
 end, 'example-user')
 
 assert(input_writer:write('hello') == 5)
-runtime:drive({ host = host, max_iterations = 80 })
+External.drive(runtime, { host = host, max_iterations = 80 })
 assert(got == 'hello' and flushed == true)
 assert(output_reader:read(4) == 'pong')
 print('examples/embedding/host_handle_stream.lua: ok')

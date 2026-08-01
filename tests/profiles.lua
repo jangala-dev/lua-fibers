@@ -12,6 +12,7 @@ return {
     'io',
     'kernel',
     'internal',
+    'reference',
     'case_studies',
     'performance',
   },
@@ -25,6 +26,7 @@ return {
     'io',
     'kernel',
     'internal',
+    'reference',
     'case_studies',
   },
 
@@ -39,6 +41,7 @@ return {
     'io',
     'kernel',
     'internal',
+    'reference',
     'case_studies',
     'performance',
   },

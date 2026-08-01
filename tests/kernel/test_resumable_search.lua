@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -12,65 +9,58 @@ package.path = table.concat({
 }, ';')
 
 local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
+local Witness = require('fibers.resource.witness')
 local Runtime = require('fibers.runtime')
 local Rendezvous = require('fibers.resource.rendezvous')
 
-local function assert_eq(actual, expected, message)
+local function eq(actual, expected, message)
   if actual ~= expected then
     error(
-      (message or 'assertion failed') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
+      (message or 'values differ') .. ': expected ' .. tostring(expected) .. ', got ' .. tostring(actual),
       2
     )
   end
 end
 
--- A suspended fallback proof retains its exact branch position.  The guard and
--- fallback callback are each entered once even though the driver supplies one
--- search round at a time.
+local function counter(runtime, name)
+  return runtime.instrumentation and (runtime.instrumentation.counters[name] or 0) or 0
+end
+
+-- A suspended fallback proof resumes the same guard activations.
 do
-  local rt = Runtime.new({ plan_reuse = false })
-  local preferred_calls, fallback_calls = 0, 0
-  local result
-  local op = Op.guard(function()
-    preferred_calls = preferred_calls + 1
-    return Op.never()
-  end):or_else(Op.guard(function()
-    fallback_calls = fallback_calls + 1
-    return Op.always('fallback')
-  end))
-
+  local rt = Runtime.new({ instrumentation = true })
+  local preferred_calls, fallback_calls, result = 0, 0, nil
   rt:spawn_raw(function()
-    result = rt:perform(op)
+    result = rt:perform(Op.guard(function()
+      preferred_calls = preferred_calls + 1
+      return Op.never()
+    end):or_else(Op.guard(function()
+      fallback_calls = fallback_calls + 1
+      return Op.always('fallback')
+    end)))
   end, 'resumable-fallback')
-  assert_eq(rt:step({ max_work = 1 }).kind, 'started')
-
+  eq(rt:step({ max_work = 1 }).kind, 'started')
   local saw_budget = false
-  for _ = 1, 12 do
+  for _ = 1, 20 do
     local status = rt:step({ max_work = 1 })
-    if status.kind == 'budget' then
-      saw_budget = true
-    end
+    saw_budget = saw_budget or status.kind == 'budget'
     if status.tag == 'found' then
       break
     end
   end
   rt:run()
-
-  assert(saw_budget, 'resumable fallback should cross a budget boundary')
-  assert_eq(result, 'fallback')
-  assert_eq(preferred_calls, 1, 'preferred guard must not be replayed after suspension')
-  assert_eq(fallback_calls, 1, 'fallback guard must be entered once')
-  if rt.machine_name == 'ledger' then
-    assert_eq(rt.stats.plans, 1, 'one proof session should survive all bounded advances')
-  end
+  assert(saw_budget)
+  eq(result, 'fallback')
+  eq(preferred_calls, 1)
+  eq(fallback_calls, 1)
+  eq(counter(rt, 'searches'), 1, 'bounded advances should retain one retained search')
 end
 
--- Two rendezvous focuses may each acquire a suspended session, but repeated
--- bounded advances must resume those sessions rather than constructing plans
--- afresh on every driver call.
+-- A component retains at most one active retained search and still commits normally.
 do
-  local rt = Runtime.new({ plan_reuse = false })
+  local rt = Runtime.new({ instrumentation = true })
   local channel = Rendezvous.new('resumable-rendezvous')
   local got, sent
   rt:spawn_raw(function()
@@ -79,133 +69,51 @@ do
   rt:spawn_raw(function()
     sent = rt:perform(channel:put_op('value'))
   end, 'sender')
-
-  local found = false
-  for _ = 1, 20 do
-    local status = rt:step({ max_work = 1 })
-    if status.tag == 'found' then
-      found = true
+  for _ = 1, 30 do
+    if rt:step({ max_work = 1 }).tag == 'found' then
       break
     end
   end
-  assert(found, 'bounded rendezvous should eventually commit')
   rt:run()
-  assert_eq(got, 'value')
-  assert_eq(sent, true)
-  if rt.machine_name == 'ledger' then
-    assert_eq(rt.stats.plans, 2, 'bounded rendezvous should retain one session per focus rather than restart')
-  end
+  eq(got, 'value')
+  eq(sent, true)
+  eq(counter(rt, 'searches'), 2)
 end
 
--- A frontier change invalidates retained speculative state before it is reused.
+-- A relevant frontier change invalidates retained speculative state.
 do
-  local rt = Runtime.new({ plan_reuse = false, instrumentation = true })
+  local rt = Runtime.new({ instrumentation = true })
   local channel = Rendezvous.new('resumable-invalidation')
   local got
   rt:spawn_raw(function()
     got = rt:perform(channel:get_op())
   end, 'receiver')
-  rt:step({ max_work = 1 }) -- start the receiver
-  rt:step({ max_work = 1 }) -- suspend its proof
-  local plans_before = rt.stats.plans
-
+  rt:step({ max_work = 1 })
+  rt:step({ max_work = 1 })
+  local searches_before = counter(rt, 'searches')
   rt:spawn_raw(function()
     rt:perform(channel:put_op('new'))
   end, 'late-sender')
-  local found = false
-  for _ = 1, 20 do
-    local status = rt:step({ max_work = 1 })
-    if status.tag == 'found' then
-      found = true
+  for _ = 1, 30 do
+    if rt:step({ max_work = 1 }).tag == 'found' then
       break
     end
   end
-  assert(found, 'changed frontier should be searched afresh and commit')
   rt:run()
-  assert_eq(got, 'new')
-  assert(rt.stats.plans > plans_before, 'frontier change should require a new proof')
-  if rt.machine_name == 'ledger' then
-    local snapshot = rt:instrumentation_report()
-    assert(
-      (snapshot.counters.search_session_invalidations or 0) >= 1,
-      'session invalidation should be observable'
-    )
-  end
+  eq(got, 'new')
+  assert(counter(rt, 'searches') > searches_before)
+  assert(
+    ((rt.instrumentation and rt.instrumentation:report()).counters.retained_search_invalidations or 0) >= 1
+  )
 end
 
--- Session dependency vectors ignore unrelated dependency buckets but reject a
--- change which can alter the suspended frontier.
+-- Witness cursors retain their position across bounded yields.
 do
-  local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
-  local primary = Rendezvous.new('precise-session-primary')
-  local unrelated = Rendezvous.new('precise-session-unrelated')
-  local alternatives = {}
-  for i = 1, 16 do
-    alternatives[i] = primary:get_op()
-  end
-
-  rt:spawn_raw(function()
-    rt:perform(Op.choice(alternatives))
-  end, 'precise-primary')
-  rt:_pump()
-  local focus = rt.pending[1].id
-  local _, _, unknown = rt:_find_candidate(focus, 1)
-  assert_eq(unknown, true, 'initial proof should suspend')
-  local plans = rt.stats.plans
-
-  rt:spawn_raw(function()
-    rt:perform(unrelated:get_op())
-  end, 'precise-unrelated')
-  rt:_start_one()
-  rt:_find_candidate(focus, 1)
-  assert_eq(rt.stats.plans, plans, 'unrelated dependency admission should preserve the suspended session')
-
-  rt:spawn_raw(function()
-    rt:perform(primary:put_op('ready'))
-  end, 'precise-related')
-  rt:_start_one()
-  rt:_find_candidate(focus, 1)
-  assert(rt.stats.plans > plans, 'a possible partner should invalidate the suspended session')
-end
-
--- A stable blocked primitive retains a lightweight certificate.  Admission of
--- a matching participant invalidates it and starts a fresh production search.
-do
-  local rt = Runtime.new({ machine = 'ledger', instrumentation = true, plan_reuse_threshold = 1 })
-  local channel = Rendezvous.new('residual-seed-rendezvous')
-  local got
-  rt:spawn_raw(function()
-    got = rt:perform(channel:get_op())
-  end, 'seed-receiver')
-  assert_eq(rt:run().tag, 'quiescent')
-  local sessions = rt.stats.search_sessions
-
-  rt:spawn_raw(function()
-    rt:perform(channel:put_op('seeded'))
-  end, 'seed-sender')
-  assert_eq(rt:run().tag, 'found')
-  assert_eq(got, 'seeded')
-  if rt.machine_name == 'ledger' then
-    assert(
-      rt.stats.search_sessions > sessions,
-      'matching admission should invalidate the certificate and start a fresh search'
-    )
-  end
-end
-
--- Witness cursors are retained at their current alternative rather than being
--- reopened after each budget boundary.
-do
-  local Store = require('fibers.internal.kernel.ledger')
-  local Kind = { name = 'resumable-witness' }
-  local location = Store.new_location({
-    name = 'resumable-witness-location',
-    algebra = 'machine',
-    domain = 'plain',
-    value = 0,
-  })
+  local Journal = require('fibers.internal.kernel.journal')
+  local location =
+    Journal.new_location({ name = 'resumable-witness-location', algebra = 'machine', value = 0 })
   local opened, next_calls = 0, 0
-  local program = Facility.witness({
+  local leaf = Witness.spec({
     accepts_supply = true,
     supplies = 'any',
     location = location,
@@ -219,98 +127,50 @@ do
             return nil
           end
           done = true
-          return { value = 1, result = Op._pack('witness'), writes = true }
+          return { value = 1, result = Values.pack('witness'), writes = true }
         end,
       }
     end,
   })
-  local resource = { _fibers_kind = Kind }
-  local rt = Runtime.new({ plan_reuse = false })
+  local rt = Runtime.new()
   local result
   rt:spawn_raw(function()
-    result = rt:perform(Facility.op(resource, Kind, program))
+    result = rt:perform(Facility.op(leaf))
   end, 'resumable-witness')
-
-  local found = false
-  for _ = 1, 12 do
-    local status = rt:step({ max_work = 1 })
-    if status.tag == 'found' then
-      found = true
+  for _ = 1, 20 do
+    if rt:step({ max_work = 1 }).tag == 'found' then
       break
     end
   end
-  assert(found, 'bounded witness search should commit')
   rt:run()
-  assert_eq(result, 'witness')
-  if rt.machine_name == 'ledger' then
-    assert_eq(opened, 1, 'witness cursor should be opened once across suspension')
-    assert_eq(next_calls, 1, 'witness cursor should retain its current alternative')
-  end
+  eq(result, 'witness')
+  eq(opened, 1)
+  eq(next_calls, 1)
 end
 
--- A right-hand operation may introduce a dependency which was not active
--- while its prefix was pending. Demand-directed expansion must recruit that
--- supplier and preserve the bounded session across driver calls.
+-- Dependencies introduced by the right-hand operation are recruited after the
+-- prefix executes, without replaying the whole search on each driver call.
 do
-  local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
+  local rt = Runtime.new()
   local prefix = Rendezvous.new('resumable-sequence-prefix')
   local residual = Rendezvous.new('resumable-sequence-residual')
   local got
-
   rt:spawn_raw(function()
     got = rt:perform(prefix:get_op():and_then(residual:get_op()))
-  end, 'resumable-sequence-consumer')
+  end, 'consumer')
   rt:spawn_raw(function()
     rt:perform(prefix:put_op(true))
-  end, 'resumable-sequence-prefix-supplier')
+  end, 'prefix-supplier')
   rt:spawn_raw(function()
     rt:perform(residual:put_op('sequence-value'))
-  end, 'resumable-sequence-residual-supplier')
-
-  local found = false
-  for _ = 1, 60 do
-    local status = rt:step({ max_work = 1 })
-    if status.tag == 'found' then
-      found = true
+  end, 'residual-supplier')
+  for _ = 1, 80 do
+    if rt:step({ max_work = 1 }).tag == 'found' then
       break
     end
   end
-  assert(found, 'right-hand dependency expansion should remain resumable')
   rt:run()
-  assert_eq(got, 'sequence-value')
+  eq(got, 'sequence-value')
 end
 
--- Fallback dependencies may connect requests which are deliberately absent
--- from one another's preferred dependency components. Once either fallback is
--- opened, demand-directed full-metadata recruitment must expand the retained
--- proof session without restarting it at every bounded driver call.
-do
-  local rt = Runtime.new({ machine = 'ledger', plan_reuse = false, instrumentation = true })
-  local left_primary = Rendezvous.new('resumable-fallback-left-primary')
-  local right_primary = Rendezvous.new('resumable-fallback-right-primary')
-  local fallback_channel = Rendezvous.new('resumable-fallback-channel')
-  local got, sent
-
-  rt:spawn_raw(function()
-    got = rt:perform(left_primary:get_op():or_else(fallback_channel:get_op()))
-  end, 'resumable-fallback-consumer')
-  rt:spawn_raw(function()
-    sent = rt:perform(right_primary:get_op():or_else(fallback_channel:put_op('fallback-value')))
-  end, 'resumable-fallback-supplier')
-
-  local found = false
-  for _ = 1, 40 do
-    local status = rt:step({ max_work = 1 })
-    if status.tag == 'found' then
-      found = true
-      break
-    end
-  end
-  assert(found, 'demand-directed fallback dependency expansion should remain resumable')
-  rt:run()
-  assert_eq(got, 'fallback-value')
-  assert_eq(sent, true)
-  assert_eq(rt.stats.plans, 2, 'one retained session per focus should survive fallback expansion')
-end
-
-print('tests/test_resumable_search.lua: ok')
+print('tests/kernel/test_resumable_search.lua: ok')

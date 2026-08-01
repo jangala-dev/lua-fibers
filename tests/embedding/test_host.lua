@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -87,7 +84,7 @@ do
   assert_status(st, 'pending')
   assert_eq(st.host_reason, 'unsupported-waits')
   assert_truthy(
-    st.waits and st.waits[1] and st.waits[1].kind == 'external',
+    st.interests and st.interests[1] and st.interests[1].kind == 'external',
     'pending status should report external wait'
   )
 end

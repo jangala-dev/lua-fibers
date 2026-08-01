@@ -2,18 +2,16 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 local Facility = require('fibers.resource.authoring')
-local S = require('fibers.internal.kernel.ledger')
+local Extreme = require('fibers.resource.extreme')
+local S = require('fibers.internal.kernel.journal')
 local A = require('fibers.internal.kernel.algebra')
-local IR = require('fibers.internal.kernel.ir')
+local Operation = require('fibers.internal.operation')
 
 local function fail(msg)
   error(msg, 2)
@@ -92,54 +90,59 @@ local interacting = A.join(overwrite, p1, p2, 'interacting')
 eq(A.apply(overwrite, {}, interacting).x, 'b', 'interacting overwrite is ordered')
 
 local lazy_writer_location = S.new_location({ algebra = 'replace', value = 0 })
-local lazy_writer_view = S.new_segment(1, {}, nil, 1)
-local lazy_writers = {}
-S.stage(lazy_writer_view, lazy_writer_location, { kind = 'replace', value = 1 }, nil, lazy_writers)
-assert(next(lazy_writers) == nil, 'ordinary writes should not activate the projection index')
+local lazy_journal = S.new()
+local lazy_writer_view = lazy_journal:new_segment(1, {}, nil)
+S.stage(lazy_writer_view, lazy_writer_location, { kind = 'replace', value = 1 })
+assert(next(lazy_journal.writers) == nil, 'ordinary writes should not activate the projection index')
 
 local projection_location = S.new_location({ algebra = 'finite_map', value = {}, put_equal = true })
-local projection_task = { root_id = 3, segment_id = 3, scope_path = {} }
-local projection_state = {
-  segments = {
-    [2] = {
-      id = 2,
-      root_id = 2,
-      scope_path = {},
-      values = {},
-      delta = { [projection_location] = p2 },
-      retired = false,
-    },
-    [3] = {
-      id = 3,
-      root_id = 3,
-      scope_path = {},
-      values = {},
-      delta = {},
-      retired = false,
-    },
-    [1] = {
-      id = 1,
-      root_id = 1,
-      scope_path = {},
-      values = {},
-      delta = { [projection_location] = p1 },
-      retired = false,
-    },
-    [99] = {
-      id = 99,
-      root_id = 99,
-      scope_path = {},
-      values = {},
-      delta = setmetatable({}, {
-        __index = function()
-          error('projection scanned an unrelated segment')
-        end,
-      }),
-      retired = false,
-    },
+local roots = { {}, {}, {}, [{}] = true }
+local projection_task = { root = roots[3], scope_path = {} }
+local projection_journal = S.new()
+projection_journal.segments = {
+  [2] = {
+    id = 2,
+    root = roots[2],
+    scope_path = {},
+    values = {},
+    delta = { [projection_location] = p2 },
+    retired = false,
+    journal = projection_journal,
+  },
+  [3] = {
+    id = 3,
+    root = roots[3],
+    scope_path = {},
+    values = {},
+    delta = {},
+    retired = false,
+    journal = projection_journal,
+  },
+  [1] = {
+    id = 1,
+    root = roots[1],
+    scope_path = {},
+    values = {},
+    delta = { [projection_location] = p1 },
+    retired = false,
+    journal = projection_journal,
+  },
+  [99] = {
+    id = 99,
+    root = {},
+    scope_path = {},
+    values = {},
+    delta = setmetatable({}, {
+      __index = function()
+        error('projection scanned an unrelated segment')
+      end,
+    }),
+    retired = false,
+    journal = projection_journal,
   },
 }
-local projected = S.project(projection_state, projection_task, projection_location)
+projection_task.segment = projection_journal.segments[3]
+local projected = S.project(projection_task, projection_location)
 eq(projected.x, 'b', 'external projection must follow deterministic view order')
 
 local machine = S.new_location({ algebra = 'machine', value = 0 })
@@ -160,27 +163,23 @@ local extreme_value = {
   c = { rank = 2, seq = 1, value = 'c' },
   d = { rank = 2, seq = 1, value = 'd' },
 }
-local minimum = IR.evaluate_claim(
-  Facility.select({
-    location = fm,
-    order = 'min',
-    rank_field = 'rank',
-    seq_field = 'seq',
-    result = Facility.result.value,
-  }),
-  extreme_value
-)
+local minimum_leaf = Extreme.spec({
+  location = fm,
+  order = 'min',
+  rank_field = 'rank',
+  seq_field = 'seq',
+  result = Facility.result.value,
+})
+local minimum = Operation.transition_cursor(minimum_leaf, extreme_value, {}, nil):next()
 eq(minimum.result[1].value, 'b', 'minimum selection order changed')
-local maximum = IR.evaluate_claim(
-  Facility.select({
-    location = fm,
-    order = 'max',
-    rank_field = 'rank',
-    seq_field = 'seq',
-    result = Facility.result.value,
-  }),
-  extreme_value
-)
+local maximum_leaf = Extreme.spec({
+  location = fm,
+  order = 'max',
+  rank_field = 'rank',
+  seq_field = 'seq',
+  result = Facility.result.value,
+})
+local maximum = Operation.transition_cursor(maximum_leaf, extreme_value, {}, nil):next()
 eq(maximum.result[1].value, 'd', 'maximum selection order changed')
 
 print('tests/test_store_algebra.lua: ok')

@@ -3,7 +3,7 @@
 local Counter = require('fibers.resource.counter')
 local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Pulse = {}
 Pulse.__index = Pulse
@@ -37,26 +37,14 @@ function Pulse:version_op()
   return self._version:read_op()
 end
 
-function Pulse:version()
-  return perform(self:version_op())
-end
-
 function Pulse:why_op()
   return self._status:read_op():map(function(status)
     return closed(status) and status.reason or nil
   end)
 end
 
-function Pulse:why()
-  return perform(self:why_op())
-end
-
 function Pulse:is_closed_op()
   return self._status:read_op():map(closed)
-end
-
-function Pulse:is_closed()
-  return perform(self:is_closed_op())
 end
 
 function Pulse:signal_op()
@@ -103,20 +91,6 @@ function Pulse:next_op()
   end))
 end
 
-function Pulse:signal()
-  return perform(self:signal_op())
-end
-
-function Pulse:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Pulse:changed(last_seen)
-  return perform(self:changed_op(last_seen))
-end
-
-function Pulse:next()
-  return perform(self:next_op())
-end
+Direct.install(Pulse, { 'version', 'why', 'is_closed', 'signal', 'close', 'changed', 'next' })
 
 return Pulse

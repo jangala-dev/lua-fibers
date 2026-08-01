@@ -451,9 +451,6 @@ function tests.worker_file_provider_is_evented()
 end
 
 function tests.native_evented_file_provider_when_available()
-  if os.getenv('FIBERS_MACHINE') == 'reference' then
-    return
-  end
   local host = AutoIO.default()
   if not (host.capabilities and host.capabilities.file) then
     if host.close then

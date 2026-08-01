@@ -1,3 +1,4 @@
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local Flow = require('fibers.resource.flow')
 local Closure = require('fibers.closure')
@@ -105,7 +106,7 @@ end)
 add('simple', 'external', 'preloaded event queue', 1200, function(ctx, n)
   local rt = ctx:runtime()
   local queue = EventQueue.new('perf-events')
-  local feed = rt:external_feed(queue)
+  local feed = External.external_feed(rt, queue)
   for i = 1, n do
     feed:set(i)
   end

@@ -5,7 +5,7 @@ local RefCount = require('fibers.resource.ref_count')
 local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Mailbox = {}
 local Tx = {}
@@ -148,16 +148,8 @@ function Tx:why_op()
   return reason_op(self._mailbox)
 end
 
-function Tx:why()
-  return perform(self:why_op())
-end
-
 function Tx:dropped_op()
   return self._mailbox._dropped:read_op()
-end
-
-function Tx:dropped()
-  return perform(self:dropped_op())
 end
 
 function Rx:recv_op()
@@ -172,35 +164,14 @@ function Rx:why_op()
   return reason_op(self._mailbox)
 end
 
-function Rx:why()
-  return perform(self:why_op())
-end
-
 function Rx:dropped_op()
   return self._mailbox._dropped:read_op()
 end
 
-function Rx:dropped()
-  return perform(self:dropped_op())
-end
-
-function Tx:send(value)
-  return perform(self:send_op(value))
-end
-
-function Tx:clone()
-  return perform(self:clone_op())
-end
-
-function Tx:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Rx:recv()
-  return perform(self:recv_op())
-end
-
 Mailbox.Tx = Tx
 Mailbox.Rx = Rx
+
+Direct.install(Tx, { 'why', 'dropped', 'send', 'clone', 'close' })
+Direct.install(Rx, { 'why', 'dropped', 'recv' })
 
 return Mailbox

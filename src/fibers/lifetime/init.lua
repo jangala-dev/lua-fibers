@@ -92,7 +92,7 @@ local function walk_construction_tree(root, visit)
 end
 
 local function normalise_closure(protocol, label)
-  return require('fibers.closure').normalize(protocol, label)
+  return require('fibers.closure').protocol(protocol, label)
 end
 
 local function node_of(value)
@@ -282,9 +282,10 @@ function Node:_on_retired(reason)
 end
 
 function Node:assert_runtime_compatible(runtime)
-  if type(runtime) ~= 'table' or not runtime.lifetimes then
-    error('Lifetime runtime compatibility requires a Runtime with a LifetimeStore', 2)
+  if type(runtime) ~= 'table' or type(runtime._lifetime_store) ~= 'function' then
+    error('Lifetime runtime compatibility requires a Runtime', 2)
   end
+  runtime:_lifetime_store()
   walk_construction_tree(self, function(node)
     if node.runtime and node.runtime ~= runtime then
       error('Lifetime already belongs to another Runtime', 3)
@@ -301,7 +302,7 @@ function Node:_bind_runtime_committed(runtime)
     error('Lifetime already belongs to another Runtime', 2)
   end
   self.runtime = runtime
-  runtime.lifetimes:attach_boundary(self, self.name)
+  runtime:_lifetime_store():attach_boundary(self, self.name)
   return self
 end
 
@@ -310,11 +311,11 @@ function Node:bind_runtime(runtime)
 
   -- Explicit binding remains an immediate operation used for active roots and
   -- host-created boundaries. Admission uses _bind_runtime_committed only after
-  -- the ledger transition has committed.
+  -- the managed-state transition has committed.
   walk_construction_tree(self, function(node)
     node:_bind_runtime_committed(runtime)
     if node.standalone_boundary then
-      runtime.lifetimes:activate_boundary(node)
+      runtime:_lifetime_store():activate_boundary(node)
     end
   end)
   return self
@@ -346,8 +347,8 @@ function Node:record_map()
 end
 
 function Node:current_state()
-  if self.runtime and self.runtime.lifetimes then
-    local state = self.runtime.lifetimes:current_state(self)
+  if self.runtime then
+    local state = self.runtime:_lifetime_store():current_state(self)
     if state then
       return state
     end
@@ -371,11 +372,11 @@ function Node:closed_op()
       local phase = node._terminal_phase or 'dormant'
       return phase == 'closed' and Op.always(node) or Op.never()
     end
-    return node.runtime.lifetimes:node_state_op(node):and_then(Op.guard(function(state)
+    return node.runtime:_lifetime_store():node_state_op(node):and_then(Op.guard(function(state)
       if state.closure_phase == 'closed' then
         return Op.always(node)
       end
-      return node.runtime.lifetimes:changed_op(node, state.version):and_then(Op.guard(function(...)
+      return node.runtime:_lifetime_store():changed_op(node, state.version):and_then(Op.guard(function(...)
         return wait(...)
       end))
     end))
@@ -387,21 +388,21 @@ function Node:request_close_op(reason)
   if not self.runtime then
     return Op.always(false, self._terminal_reason or reason)
   end
-  return self.runtime.lifetimes:request_close_op(self, reason)
+  return self.runtime:_lifetime_store():request_close_op(self, reason)
 end
 
 function Node:_closing_op(reason)
   if not self.runtime then
     error('cannot mark an unbound Lifetime closing', 2)
   end
-  return self.runtime.lifetimes:mark_closing_op(self, reason)
+  return self.runtime:_lifetime_store():mark_closing_op(self, reason)
 end
 
 function Node:_mark_closure_failed_op(err, reason)
   if not self.runtime then
     error('cannot fail an unbound Lifetime', 2)
   end
-  return self.runtime.lifetimes:mark_closure_failed_op(self, err, reason)
+  return self.runtime:_lifetime_store():mark_closure_failed_op(self, err, reason)
 end
 
 function Node:_mark_closed_op(reason)
@@ -409,7 +410,7 @@ function Node:_mark_closed_op(reason)
     self:_on_retired(reason)
     return Op.always(true)
   end
-  return self.runtime.lifetimes:mark_closed_op(self, reason)
+  return self.runtime:_lifetime_store():mark_closed_op(self, reason)
 end
 
 function Node:request_cancel_op(reason)
@@ -478,7 +479,7 @@ function Node:inspect_op()
   local cancellation = self.cancellation:read_op()
   local body_result = self.body_result:read_op()
   local outcome = self.outcome:read_op()
-  local topology = self.runtime and self.runtime.lifetimes:node_state_op(self)
+  local topology = self.runtime and self.runtime:_lifetime_store():node_state_op(self)
     or Op.always(self:current_state())
   return topology:and_then(Op.guard(function(state)
     return cancellation:and_then(Op.guard(function(cancel)

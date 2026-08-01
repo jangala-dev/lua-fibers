@@ -927,12 +927,12 @@ end
 
 function Reactor:_wait_option()
   local alternatives = {
-    { 'control', self.control:next_op() },
-    { 'ready', self.ready:next_op() },
+    control = self.control:next_op(),
+    ready = self.ready:next_op(),
   }
   local deadline = self:_next_poll_deadline()
   if deadline ~= nil then
-    alternatives[#alternatives + 1] = { 'poll', Sleep.sleep_until_op(deadline) }
+    alternatives.poll = Sleep.sleep_until_op(deadline)
   end
   -- Control arrivals and host readiness are temporal alternatives. A host may
   -- deliver readiness after this option has suspended, so certified fallback is

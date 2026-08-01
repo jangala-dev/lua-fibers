@@ -1,5 +1,8 @@
 local Facility = require('fibers.resource.authoring')
-local perform = require('fibers.perform')
+local Op = require('fibers.op')
+local Operation = require('fibers.internal.operation')
+local Values = require('fibers.internal.values')
+local Direct = require('fibers.internal.direct')
 
 local Cell = {}
 Cell.__index = function(self, key)
@@ -14,62 +17,65 @@ end
 
 local Kind = Facility.kind('cell')
 
+local function select_op(resource, select)
+  local function loop()
+    return resource._state_op:and_then(Op.guard(function(state)
+      local option, wait = select(state.value)
+      if option ~= nil then
+        return option
+      end
+      if wait == false then
+        return Op.never()
+      end
+      return Operation.bind(resource._changed_spec, state.version):and_then(Op.guard(loop))
+    end))
+  end
+  return loop()
+end
+
 function Cell.new(value, name)
   local cell = Facility.identity(setmetatable({}, Cell), Kind, name)
-  return Facility.cell(cell, Kind, value)
+  return Facility.cell(cell, value)
 end
 
 function Cell:read_op()
   return self._read_op
 end
 
-function Cell:read()
-  return perform(self:read_op())
-end
-
 function Cell:changed_op(version)
-  return Facility.occurrence(self._changed_descriptor, version)
-end
-
-function Cell:changed(version)
-  return perform(self:changed_op(version))
+  return Facility.bind(self._changed_spec, version)
 end
 
 function Cell:expect_op(value)
-  return Facility.occurrence(self._expect_descriptor, value)
-end
-
-function Cell:expect(value)
-  return perform(self:expect_op(value))
+  return Facility.bind(self._expect_spec, value)
 end
 
 function Cell:write_op(value)
-  return Facility.occurrence(self._write_descriptor, value)
-end
-
-function Cell:write(value)
-  return perform(self:write_op(value))
+  return Facility.bind(self._write_spec, value)
 end
 
 function Cell:select_op(select)
-  return Facility.versioned_select(self, select)
+  return select_op(self, select)
 end
 
 function Cell:wait_until_op(predicate)
-  return Facility.versioned_wait_until(self, predicate)
-end
-
-function Cell:wait_until(predicate)
-  return perform(self:wait_until_op(predicate))
+  return select_op(self, function(value)
+    if predicate(value) then
+      return Op.always(value)
+    end
+  end)
 end
 
 function Cell:match_op(matcher)
-  return Facility.versioned_match(self, matcher)
+  return select_op(self, function(value)
+    local result = Values.pack(matcher(value))
+    if result[1] then
+      return Op.always(Values.unpack(result, 2, result.n))
+    end
+  end)
 end
 
-function Cell:match(matcher)
-  return perform(self:match_op(matcher))
-end
+Direct.install(Cell, { 'read', 'changed', 'expect', 'write', 'wait_until', 'match' })
 
 Cell.Kind = Kind
 

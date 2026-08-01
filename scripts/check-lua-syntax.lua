@@ -9,7 +9,6 @@ for i = 1, #arg do paths[#paths + 1] = arg[i] end
 if #paths == 0 then
   local roots = {
     'src',
-    'reference',
     'examples',
     'performance',
     'scripts',

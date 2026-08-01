@@ -1,7 +1,9 @@
+local Proof = require('fibers.internal.proof')
 -- Host protocol for external observations and retry interests.
 
 -- Runtime-bound capability for externally mutating a transactional resource.
 
+local External = {}
 local Feed = {}
 Feed.__index = Feed
 
@@ -56,11 +58,11 @@ function Feed:_clear(...)
 end
 
 function Feed:set(...)
-  return self.runtime:deliver(self, ...)
+  return External.deliver(self.runtime, self, ...)
 end
 
 function Feed:clear(...)
-  return self.runtime:clear_external(self, ...)
+  return External.clear(self.runtime, self, ...)
 end
 
 function Feed:ready(mode, value)
@@ -82,6 +84,26 @@ end
 -- observed fact may change.
 
 local Interest = {}
+
+local INTEREST_DETAIL = {
+  external_kind = true,
+  readiness_key = true,
+  mode = true,
+  feed = true,
+  poller = true,
+}
+local DRIVE_OPTIONS = { host = true, run = true, max_iterations = true, host_options = true }
+
+local function validate_keys(value, allowed, label, level)
+  if value ~= nil and type(value) ~= 'table' then
+    error(label .. ' must be a table', level or 3)
+  end
+  for key in pairs(value or {}) do
+    if not allowed[key] then
+      error(label .. ' does not accept ' .. tostring(key), level or 3)
+    end
+  end
+end
 local next_id = 0
 
 local function stable_resource_id(resource)
@@ -125,13 +147,7 @@ function Interest.external(resource, interest, detail)
   local rid = stable_resource_id(resource)
   local key = tostring(rid) .. ':' .. tostring(interest or 'ready')
   detail = detail or {}
-  if detail.resource_key == nil and detail.key ~= nil then
-    detail.resource_key = detail.key
-  end
-  -- Compatibility for existing readiness host adapters.
-  if detail.readiness_key == nil and detail.key ~= nil then
-    detail.readiness_key = detail.key
-  end
+  validate_keys(detail, INTEREST_DETAIL, 'external interest detail', 2)
   detail.resource = resource
   detail.interest = interest or 'ready'
   detail.external_kind = detail.external_kind or detail.kind or resource and resource.kind
@@ -167,8 +183,7 @@ function Interest.summarise(list)
         primitive = interest.primitive,
         resource = interest.resource,
         feed = interest.feed,
-        resource_key = interest.resource_key,
-        readiness_key = interest.readiness_key or interest.resource_key,
+        readiness_key = interest.readiness_key,
         external_kind = interest.external_kind,
         poller = interest.poller,
       }
@@ -179,5 +194,115 @@ function Interest.summarise(list)
   return out
 end
 
-local External = { Feed = Feed, Interest = Interest }
+External.Feed, External.Interest = Feed, Interest
+
+local function optional(module_name, feature)
+  local ok, module = pcall(require, module_name)
+  if ok then
+    return module
+  end
+  error(
+    (feature or module_name)
+      .. ' requires optional package module '
+      .. module_name
+      .. ': '
+      .. tostring(module),
+    3
+  )
+end
+
+function External.external_feed(runtime, resource)
+  return Feed.for_resource(runtime, resource)
+end
+
+local function mutate(runtime, feed, action, expectation, dirty_reason, apply, ...)
+  runtime:_check_not_failed(3)
+  runtime:_require_driver_call(action, 3)
+  if not Feed.is_feed(feed) then
+    error(expectation, 3)
+  end
+  if feed.runtime ~= runtime then
+    error('external feed belongs to another runtime', 3)
+  end
+  apply(feed, ...)
+  local engine = runtime.engine
+  engine.epoch = engine.epoch + 1
+  Proof.touch_resource(engine, feed.resource, dirty_reason)
+  return feed.resource
+end
+
+function External.deliver(runtime, feed, ...)
+  return mutate(
+    runtime,
+    feed,
+    'external delivery',
+    'External.deliver expects an ExternalFeed',
+    'external-delivery',
+    Feed._deliver,
+    ...
+  )
+end
+
+function External.clear(runtime, feed, ...)
+  return mutate(
+    runtime,
+    feed,
+    'clear external resource',
+    'External.clear expects an ExternalFeed',
+    'external-clear',
+    Feed._clear,
+    ...
+  )
+end
+
+function External.signal(runtime, name)
+  local resource = require('fibers.resource.signal').new(name)
+  return resource, Feed.for_resource(runtime, resource)
+end
+
+function External.events(runtime, name)
+  local resource = require('fibers.resource.event_queue').new(name)
+  return resource, Feed.for_resource(runtime, resource)
+end
+
+function External.readiness(runtime, key, name)
+  local resource = optional('fibers.io.readiness', 'External.readiness').new(key, nil, name)
+  return resource, Feed.for_resource(runtime, resource)
+end
+
+function External.drive(runtime, opts)
+  opts = opts or {}
+  validate_keys(opts, DRIVE_OPTIONS, 'External.drive options', 2)
+  local host = opts.host or runtime.host
+  local run_opts = opts.run
+  local max_iterations = opts.max_iterations
+  local iterations, last_found = 0, nil
+  while true do
+    iterations = iterations + 1
+    if max_iterations and iterations > max_iterations then
+      return { tag = 'pending', reason = 'runtime drive iteration budget exhausted' }
+    end
+    local status = runtime:run(run_opts)
+    if status and status.tag == 'found' then
+      last_found = status
+    elseif status and status.tag == 'pending' then
+      local interests = status.interests or {}
+      if not host or type(host.block) ~= 'function' then
+        error('runtime host must implement block', 2)
+      end
+      local progressed, reason = host:block(runtime, interests, status, opts.host_options or {})
+      if not progressed then
+        status.host_reason = reason
+        status.reason = status.reason or reason
+        status.interests = interests
+        return status
+      end
+    elseif status and (status.tag == 'idle' or status.tag == 'quiescent') then
+      return last_found or status
+    else
+      return status
+    end
+  end
+end
+
 return External

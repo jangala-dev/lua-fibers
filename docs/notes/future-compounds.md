@@ -166,7 +166,7 @@ scope inspection, stream diagnostics, phase debugging, live resource maps
 ```
 
 Events are not the source of truth.  A mirror should be a maintained view under custody
-of the underlying ledger.
+of the underlying speculative store.
 
 ## Phase
 

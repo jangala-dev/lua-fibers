@@ -67,7 +67,7 @@ end
 
 local modules = {}
 local errors = {}
-for _, root in ipairs({ 'src', 'reference' }) do
+for _, root in ipairs({ 'src' }) do
   local paths = list_files('find ' .. shell_quote(root) .. " -type f -name '*.lua' -print")
   check_unambiguous_paths(paths, root, errors)
   for _, path in ipairs(paths) do
@@ -80,7 +80,7 @@ for _, root in ipairs({ 'src', 'reference' }) do
   end
 end
 
-for _, root in ipairs({ 'src', 'reference', 'tests', 'examples', 'performance', 'scripts' }) do
+for _, root in ipairs({ 'src', 'tests', 'examples', 'performance', 'scripts' }) do
   for _, path in ipairs(list_files('find ' .. shell_quote(root) .. " -type f -name '*.lua' -print")) do
     local text = read_file(path)
     local line = 1

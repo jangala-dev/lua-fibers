@@ -1,14 +1,8 @@
 local Facility = require('fibers.resource.authoring')
-local perform = require('fibers.perform')
-local Keyspace = Facility.Keyspace
+local Keyspace = require('fibers.resource.keyspace')
+local Direct = require('fibers.internal.direct')
 
 local Lease = {}
-Lease.__index = function(self, key)
-  if key == 'version' then
-    return self._space.version
-  end
-  return Lease[key]
-end
 local Kind = Facility.kind('lease')
 
 local function copy_map(values)
@@ -19,26 +13,30 @@ local function copy_map(values)
   return out
 end
 
+Lease.__index = function(self, key)
+  if key == 'version' then
+    return self._space:version()
+  end
+  if key == 'holders' then
+    return self._space:snapshot(copy_map, function(value)
+      return type(value) == 'table' and next(value) ~= nil
+    end)
+  end
+  if key == 'versions' then
+    return self._space:versions_snapshot()
+  end
+  return Lease[key]
+end
+
 function Lease.new(compat, name)
   local lease = Facility.identity(setmetatable({ compat = compat or { lease = {} } }, Lease), Kind, name)
-  local holders, versions = {}, {}
   lease._space = Keyspace.new(lease, {
-    values = holders,
-    versions = versions,
     algebra = 'finite_map',
     domain = 'finite_map',
     clone_initial = copy_map,
     put_equal = true,
     remove_idempotent = true,
-    refresh = function(space, subject, location)
-      if space.values[subject] ~= location.value then
-        location.value = copy_map(space.values[subject])
-        location.version = (location.version or 0) + 1
-        space.versions[subject] = location.version
-      end
-    end,
   })
-  lease.holders, lease.versions, lease._locations = holders, versions, lease._space.locations
   return lease
 end
 function Lease:_location(subject)
@@ -56,23 +54,28 @@ function Lease:acquire_op(subject, mode, holder)
     error('lease acquire requires holder', 2)
   end
   local location = self:_location(subject)
-  return Facility.op(
-    self,
-    Kind,
-    Facility.admit({
-      location = location,
-      demand = 'down',
-      key = holder,
-      value = mode,
-      compatibility = self.compat,
-      result = Facility.result.boolean,
-    })
-  )
+  return Facility.op(Facility.transition({
+    location = location,
+    resource = self,
+    demand = 'down',
+    accepts_supply = true,
+    supplies = 'up',
+    writes = true,
+    step = function(holders)
+      for other, held_mode in pairs(holders or {}) do
+        if other ~= holder then
+          local forward = self.compat[mode] and self.compat[mode][held_mode] == true
+          local reverse = self.compat[held_mode] and self.compat[held_mode][mode] == true
+          if not (mode == held_mode or forward and reverse) then
+            return nil
+          end
+        end
+      end
+      return Facility.outcome(Facility.change.map_put(holder, mode, 'overwrite'), true)
+    end,
+  }))
 end
 
-function Lease:acquire(subject, mode, holder)
-  return perform(self:acquire_op(subject, mode, holder))
-end
 function Lease:release_op(subject, holder)
   if subject == nil then
     error('lease release requires subject', 2)
@@ -80,22 +83,23 @@ function Lease:release_op(subject, holder)
   if holder == nil then
     error('lease release requires holder', 2)
   end
-  return Facility.op(
-    self,
-    Kind,
-    Facility.claim({
-      location = self:_location(subject),
-      demand = 'up',
-      query = { kind = 'predicate', predicate = 'map_present', key = holder },
-      change = Facility.change.map_remove(holder),
-      result = Facility.result.boolean,
-    })
-  )
-end
-
-function Lease:release(subject, holder)
-  return perform(self:release_op(subject, holder))
+  return Facility.op(Facility.transition({
+    location = self:_location(subject),
+    resource = self,
+    demand = 'up',
+    accepts_supply = true,
+    supplies = 'down',
+    writes = true,
+    step = function(holders)
+      if holders[holder] == nil then
+        return nil
+      end
+      return Facility.outcome(Facility.change.map_remove(holder), true)
+    end,
+  }))
 end
 
 Lease.Kind = Kind
+Direct.install(Lease, { 'acquire', 'release' })
+
 return Lease

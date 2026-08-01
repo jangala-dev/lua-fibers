@@ -232,7 +232,7 @@ live fibres and frame bytes
 option nodes or typed composition depth
 participants and pending performs
 search frames and trail entries
-ledger locations and writes
+managed locations and provisional writes
 effects and custody records
 retained proof sessions
 ```
@@ -330,7 +330,7 @@ tools, protocol demonstrations and differential testing of application logic.
 An allocated `no_std + alloc` or `std` implementation should retain dynamic
 option graphs, flexible participant sets and rich diagnostics. It is the most
 suitable first Rust port because it can be compared closely with the Lua
-production and reference evaluators before fixed-capacity representation choices
+the Lua execution-frontier semantics before fixed-capacity representation choices
 are frozen.
 
 WASI and server hosts can map asynchronous functions, streams, sockets and HTTP
@@ -347,7 +347,7 @@ job integration. They should not replace the Fibers evaluator.
 ```text
 Kotlin CoroutineDispatcher / CoroutineScope
 └── Fibers runtime
-    ├── option evaluator and ledger
+    ├── operation evaluator and speculative store
     ├── Lifetimes and Closure
     └── internal Fibers continuations
 ```

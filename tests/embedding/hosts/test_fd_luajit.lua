@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Common = require('tests.embedding.hosts.common')
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
@@ -41,7 +39,7 @@ local ok, err = pcall(function()
   rt:spawn_raw(function()
     seen = rt:perform(src:readable_op())
   end, 'fd-readiness')
-  local st = rt:drive({ host = host, max_iterations = 40 })
+  local st = External.drive(rt, { host = host, max_iterations = 40 })
   Common.assert_status(st, 'found', 'fd readiness should be delivered')
   Common.assert_eq(seen, true, 'fd readiness result')
   local b, rerr = r:read(1)

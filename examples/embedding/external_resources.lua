@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -16,6 +13,7 @@ package.path = table.concat({
 -- This example uses Signal and Clock resources with an explicit Runtime so the
 -- host remains in control of time and stepping.
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
@@ -28,7 +26,7 @@ local rt = Runtime.new({ host = {
 } })
 
 local clock = Clock.new('clock')
-local signal, signal_feed = rt:signal('reload-signal')
+local signal, signal_feed = External.signal(rt, 'reload-signal')
 local result
 
 rt:spawn_raw(function()

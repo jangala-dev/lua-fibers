@@ -3,15 +3,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
@@ -64,7 +62,7 @@ do
   local weak = setmetatable({}, { __mode = 'v' })
   do
     local resource = Signal.new('temporary-feed-resource')
-    local feed = rt:external_feed(resource)
+    local feed = External.external_feed(rt, resource)
     weak[1], weak[2] = resource, feed
   end
   collect()

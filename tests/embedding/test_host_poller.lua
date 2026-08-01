@@ -2,21 +2,19 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local IOAudit = require('fibers.diagnostics.io')
 local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.io.stream')
 local Scope = require('fibers.scope')
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
-require('fibers.diagnostics.io').install(require('tests.support.io_audit_observer'))
+require('fibers.diagnostics.io').install(require('fibers.diagnostics.io_observer'))
 
 local function fail(msg)
   error(msg, 2)
@@ -67,13 +65,13 @@ do
   )
   rt:run()
   assert_eq(reads, 0, 'stale readiness must not invoke the backend')
-  local audit = rt:io_audit()
+  local audit = IOAudit.report(rt)
   assert_eq(audit.stats.stale_ready, 1, 'stale readiness should be observable')
   rt:spawn_raw(function()
     rt:perform(stream:abort_op('test complete'))
   end, 'close')
   rt:run()
-  rt:assert_io_quiescent('stale readiness test')
+  IOAudit.assert_clean(rt, { label = 'stale readiness test' })
 end
 
 -- The shared external event queue is the poller hot FIFO.
@@ -149,12 +147,13 @@ do
   assert_truthy(plan.records[1].read and plan.records[1].write)
 
   local delivered = {}
-  local rt = {
-    deliver = function(_, feed, ...)
-      delivered[#delivered + 1] = { feed = feed, values = { ... } }
-    end,
-  }
-  assert_truthy(WaitSet.deliver(rt, plan.records[1], true, true))
+  function readiness_feed:set(...)
+    delivered[#delivered + 1] = { feed = self, values = { ... } }
+  end
+  function poller_feed:set(...)
+    delivered[#delivered + 1] = { feed = self, values = { ... } }
+  end
+  assert_truthy(WaitSet.deliver(nil, plan.records[1], true, true))
   assert_eq(#delivered, 2)
   assert_eq(delivered[1].feed, readiness_feed)
   assert_eq(delivered[2].feed, poller_feed)
@@ -230,11 +229,14 @@ do
       now = function()
         return 0
       end,
-      deliver = function(_, feed, mode, value)
-        delivered[#delivered + 1] = { feed = feed, mode = mode, value = value }
-      end,
     }
     local read_feed, write_feed = {}, {}
+    function read_feed:set(mode, value)
+      delivered[#delivered + 1] = { feed = self, mode = mode, value = value }
+    end
+    function write_feed:set(mode, value)
+      delivered[#delivered + 1] = { feed = self, mode = mode, value = value }
+    end
     local waits = {
       {
         kind = 'external',

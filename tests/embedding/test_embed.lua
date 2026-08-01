@@ -8,9 +8,11 @@ package.path = table.concat({
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Embed = require('fibers.embed')
 local Sleep = require('fibers.sleep')
 local fibers = require('fibers')
+local Runtime = require('fibers.runtime')
 
 local function eq(actual, expected, message)
   assert(
@@ -69,7 +71,7 @@ do
   local app = Embed.Application.new(function()
     local runtime = fibers.current_runtime()
     local events
-    events, feed = runtime:events('embedded-events')
+    events, feed = External.events(runtime, 'embedded-events')
     received = fibers.perform(events:next_op())
   end, { host = host, owns_host = false, max_seconds_per_turn = 100 })
 
@@ -82,6 +84,26 @@ do
   status = advance_until_wait_or_settled(app)
   eq(status.state, 'settled')
   eq(received, 'queued')
+  app:close()
+  host:close()
+end
+
+do
+  local host = require('fibers.embed.manual').new()
+  local ok, err = pcall(require('fibers.embed.application').new, function() end, {
+    host = host,
+    owns_host = false,
+    runtime = {},
+  })
+  assert(not ok and tostring(err):match('runtime_options'))
+  local app = require('fibers.embed.application').new(function()
+    require('fibers.perform')(require('fibers.op').never())
+  end, { host = host, owns_host = false })
+  ok, err = pcall(app.advance, app, { max_steps_per_turn = 1 })
+  assert(not ok and tostring(err):match('short per%-call name'))
+  local rt = Runtime.new({ host = host })
+  ok, err = pcall(External.drive, rt, { host = host, max_driver_iterations = 1 })
+  assert(not ok and tostring(err):match('does not accept'))
   app:close()
   host:close()
 end

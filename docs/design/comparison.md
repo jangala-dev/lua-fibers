@@ -54,7 +54,7 @@ CSP is consequently stronger as a behavioural specification and refinement theor
 
 A CSP author normally builds a resource or protocol as another process expression. Adding a new observable event is easy at the model level, but giving it new host-level optional behaviour generally belongs to the CSP implementation or to a translation into existing processes.
 
-`fibers` instead exposes a fixed internal programme language for trusted facilities. A facility author supplies a transition, witness cursor, exchange or observation while the common kernel owns search, rollback, validation and commit.
+`fibers` instead exposes a fixed trusted executable-leaf protocol. A facility author supplies a transition, witness cursor, exchange or observation leaf while the common kernel executes the public Op graph directly and owns search, rollback, validation and commit.
 
 ### Expressivity
 
@@ -87,7 +87,7 @@ The main difference is CML's single selected synchronisation point. Work may be 
 
 CML is effective for application-level event abstraction. Buffered channels, remote calls and selectable protocols can be built from channels and event combinators. Implementing a new base event with its own polling, blocking and cancellation behaviour is more closely tied to the runtime selection mechanism.
 
-In `fibers`, trusted primitive authors do not implement their own scheduler protocol. They compile facilities to the closed IR and provide lawful callbacks. This is broader than ordinary CML event composition, but it imposes purity, determinism and completeness obligations on facility code.
+In `fibers`, trusted primitive authors do not implement their own scheduler protocol. They construct trusted executable leaves and provide lawful callbacks. This is broader than ordinary CML event composition, but it imposes purity, determinism and completeness obligations on facility code.
 
 ### Expressivity
 
@@ -162,7 +162,7 @@ Approximate correspondences are:
 | choice `+` | `choice`, but with different bias |
 | sequencing `>>` | `and_then` |
 | pairing `*` | product |
-| `postCommit` | consequence or wrap, depending on custody |
+| `postCandidate` | consequence or wrap, depending on custody |
 | blocking partial update | a primitive whose complete absence contributes `Retry` |
 
 Reagent choice is deliberately left-biased in order to support algorithms such as elimination backoff. `Op.choice` is instead unordered. A correctness-relevant preference is stated using `or_else`; a throughput preference which does not require refutation should remain runtime policy rather than changing the denotation of the option.
@@ -288,4 +288,4 @@ Primary sources used for this comparison:
 - Kevin Donnelly and Matthew Fluet, “Transactional Events”, ICFP 2006: <https://www.cs.cornell.edu/people/fluet/research/tx-events/ICFP06/icfp06.pdf>
 - Aaron Turon, “Reagents: Expressing and Composing Fine-Grained Concurrency”, PLDI 2012: <https://aturon.github.io/academic/pldi-2012-reagents.pdf>
 
-The reference list is deliberately limited to primary material. The terminology used for `fibers` is defined in `../advanced/option-algebra.md` and `../contributing/trusted-resource-programmes.md`.
+The reference list is deliberately limited to primary material. The terminology used for `fibers` is defined in `../advanced/option-algebra.md` and `../contributing/trusted-resource-leaves.md`.

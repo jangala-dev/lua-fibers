@@ -1,5 +1,6 @@
 local Facility = require('fibers.resource.authoring')
-local perform = require('fibers.perform')
+local Extreme = require('fibers.resource.extreme')
+local Direct = require('fibers.internal.direct')
 
 local Index = {}
 Index.__index = function(self, key)
@@ -37,28 +38,17 @@ local function create(entries, name)
     remove_idempotent = true,
   })
   index._initial_entries = nil
-  index._pop_first_op = Facility.op(
-    index,
-    Kind,
-    Facility.select({
-      location = index._location,
-      order = 'min',
-      result = ENTRY_RESULT,
-    })
-  )
-  index._pop_last_op = Facility.op(
-    index,
-    Kind,
-    Facility.select({
-      location = index._location,
-      order = 'max',
-      result = ENTRY_RESULT,
-    })
-  )
-  index._changed_descriptor = Facility.descriptor(index, Kind, 'version_wait', {
+  index._pop_first_op = Facility.op(Extreme.spec({
     location = index._location,
-    bind = 'version',
-  })
+    order = 'min',
+    result = ENTRY_RESULT,
+  }))
+  index._pop_last_op = Facility.op(Extreme.spec({
+    location = index._location,
+    order = 'max',
+    result = ENTRY_RESULT,
+  }))
+  index._changed_spec = Facility.version_wait(index._location, index)
   return index
 end
 
@@ -70,14 +60,21 @@ function Index.from(entries, name)
   return create(entries, name)
 end
 
-local function insert_program(index, key, rank, value, seq)
+local function insert_leaf(index, key, rank, value, seq)
   local entry = { key = key, rank = rank, value = value, seq = seq or 0 }
-  return Facility.claim({
+  return Facility.transition({
     location = index._location,
+    resource = index,
     demand = 'down',
-    query = { kind = 'predicate', predicate = 'map_absent', key = key },
-    change = Facility.change.map_put(key, entry, 'insert'),
-    result = Facility.result.boolean,
+    accepts_supply = true,
+    supplies = 'up',
+    writes = true,
+    step = function(entries)
+      if entries[key] ~= nil then
+        return nil
+      end
+      return Facility.outcome(Facility.change.map_put(key, entry, 'insert'), true)
+    end,
   })
 end
 
@@ -88,73 +85,57 @@ function Index:insert_op(key, rank, value)
   if rank == nil then
     error('index insert requires a rank', 2)
   end
-  return Facility.op(self, Kind, insert_program(self, key, rank, value, 0))
+  return Facility.op(insert_leaf(self, key, rank, value, 0))
 end
 
-function Index:insert(key, rank, value)
-  return perform(self:insert_op(key, rank, value))
-end
 function Index:insert_auto_op(rank, value)
   if rank == nil then
     error('index insert_auto requires a rank', 2)
   end
   next_append_id = next_append_id + 1
   local key = self._fibers_id .. ':auto:' .. tostring(next_append_id)
-  return Facility.op(self, Kind, insert_program(self, key, rank, value, next_append_id))
+  return Facility.op(insert_leaf(self, key, rank, value, next_append_id))
 end
 
-function Index:insert_auto(rank, value)
-  return perform(self:insert_auto_op(rank, value))
-end
 function Index:append_op(value)
   next_append_id = next_append_id + 1
   local key = self._fibers_id .. ':append:' .. tostring(next_append_id)
-  return Facility.op(self, Kind, insert_program(self, key, math.huge, value, next_append_id))
+  return Facility.op(insert_leaf(self, key, math.huge, value, next_append_id))
 end
 
-function Index:append(value)
-  return perform(self:append_op(value))
-end
 function Index:remove_op(key)
   if key == nil then
     error('index remove requires a key', 2)
   end
-  return Facility.op(
-    self,
-    Kind,
-    Facility.claim({
-      location = self._location,
-      demand = 'up',
-      query = { kind = 'predicate', predicate = 'map_present', key = key },
-      change = Facility.change.map_remove(key),
-      result = Facility.result.boolean,
-    })
-  )
+  return Facility.op(Facility.transition({
+    location = self._location,
+    resource = self,
+    demand = 'up',
+    accepts_supply = true,
+    supplies = 'down',
+    writes = true,
+    step = function(entries)
+      if entries[key] == nil then
+        return nil
+      end
+      return Facility.outcome(Facility.change.map_remove(key), true)
+    end,
+  }))
 end
 
-function Index:remove(key)
-  return perform(self:remove_op(key))
-end
 function Index:pop_first_op()
   return self._pop_first_op
 end
 
-function Index:pop_first()
-  return perform(self:pop_first_op())
-end
 function Index:pop_last_op()
   return self._pop_last_op
 end
 
-function Index:pop_last()
-  return perform(self:pop_last_op())
-end
 function Index:changed_op(version)
-  return Facility.occurrence(self._changed_descriptor, version)
+  return Facility.bind(self._changed_spec, version)
 end
 
-function Index:changed(version)
-  return perform(self:changed_op(version))
-end
 Index.Kind = Kind
+Direct.install(Index, { 'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last', 'changed' })
+
 return Index

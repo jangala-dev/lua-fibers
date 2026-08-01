@@ -703,8 +703,6 @@ function Posix.define(binding)
     return host
   end
 
-  Module.platform = Module.new
-
   function Host:sleep(seconds)
     return binding.time.sleep(seconds)
   end

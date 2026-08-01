@@ -1,55 +1,16 @@
-# Performance and semantic invariants
+# Performance-suite invariants
 
-Architectural performance work is accepted only when it preserves the option
-algebra and improves measured work rather than merely one elapsed-time sample.
+Performance changes are acceptable only when the semantic suite remains green.
 
-## Semantic invariants
+The principal invariants are:
 
-For every optimisation and every fixed input:
-
-- the set of valid committed outcomes is unchanged;
-- `Retry`, `Unknown` and certified negative proofs retain their meaning;
-- speculative writes and effects remain isolated until commit;
-- occurrence identity, product-lane compatibility and Closure truth are
-  preserved;
-- trail and reference evaluators agree on validating scenarios;
-- a fixed machine, seed and frontier remains replayable;
-- `Unknown` is never converted into a cached refutation;
-- per-plan memoisation stores only refutations;
-- cross-cycle positive reuse is restricted to effect-free, non-negative plans;
-- opaque and external components remain outside reusable caches; and
-- symmetry is applied only under an explicit complete-occurrence certificate.
-
-Branch heuristics may select a different member of the existing valid outcome
-set. Tests therefore compare exact results where the programme has one valid
-answer and compare order-independent digests where several schedules are valid.
-
-## Performance invariants
-
-The suite records both ordinary throughput and solver shape:
-
-- median microseconds per logical operation;
-- p50, p95, p99 and maximum search steps;
-- maximum per-plan search CPU time as a proxy for event-loop monopolisation;
-- component size as a fraction of the complete pending frontier;
-- branches, rollbacks, trail pressure and intent-pair scans;
-- forced exchanges and claims;
-- opaque versus analysable pending requests;
-- retained Lua heap after collection;
-- certificate-reuse hits, invalidations and ineligibility reasons; and
-- certified symmetry reductions.
-
-A change which improves the median while materially worsening p99 or maximum
-search cost is not treated as a general improvement. Structural thresholds are
-preferred to tight wall-clock thresholds in shared continuous-integration
-runners.
-
-## Workload classes
-
-The principal suite retains simple, moderate and complex application-shaped
-work. `performance/architecture_suite.lua` separately exercises the current
-architectural mechanisms against both evaluators. Historical policy comparisons
-remain under `docs/notes/performance/history/`.
-`performance/advanced_suite.lua` isolates the cache, memoisation, symmetry and
-cross-cycle reuse passes from one another and retains ordinary rendezvous as a
-fixed-cost control.
+1. every benchmark validates its committed result;
+2. a hard capacity limit yields `Unknown`, never `Retry`;
+3. a soft quantum resumes retained execution rather than replaying guard or witness work;
+4. an unchanged complete frontier avoids repeated proof search;
+5. a relevant version, membership or external-resource change invalidates the affected frontier;
+6. an unrelated change does not invalidate independent frontiers;
+7. demand-directed recruitment preserves every connected participant world;
+8. a closed frontier may prove absence only from exact balance, domain or matching facts;
+9. a suggested complete matching may change search order but not the set of admissible worlds;
+10. instrumentation is excluded from headline timing samples.

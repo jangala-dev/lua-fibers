@@ -1,315 +1,64 @@
 # Fibers performance suite
 
-This directory contains a validating performance suite for the prospective v1
-runtime. It is intended for local optimisation and continuous-integration
-regression checks of the Lua implementation.
+The performance programmes validate the execution-frontier kernel while measuring local throughput and search behaviour. Timed samples run without instrumentation; each case may then run once with instrumentation to explain the result.
 
-The suite separates two activities:
-
-1. headline timings, collected with instrumentation disabled; and
-2. one diagnostic run, collected separately with proof-search instrumentation.
-
-This separation is important. Instrumentation is useful for explaining a result,
-but its table updates, clock reads and retained slow-plan records should not be
-included in the throughput figure being explained.
-
-## Quick use
-
-From the repository root:
+## Main suite
 
 ```sh
 texlua performance/suite.lua
 FIBERS_PERF_TIERS=all texlua performance/suite.lua
 FIBERS_PERF_FORMAT=csv FIBERS_PERF_OUTPUT=results.csv texlua performance/suite.lua
-FIBERS_PERF_FORMAT=json FIBERS_PERF_OUTPUT=results.json texlua performance/suite.lua
 ```
 
-The suite also runs with `lua` and `luajit`, subject to the normal library and
-host requirements.
-
-The default run includes the simple and moderate tiers. The complex tier is
-explicit because it contains deliberate proof-search stress cases.
-
-## Workload tiers
-
-### Simple
-
-- `always perform`: kernel, coroutine and commit floor;
-- `serial read write`: versioned cell read/write transactions;
-- `two fibre ping pong`: ordinary two-party rendezvous;
-- `preloaded event queue`: external delivery and consumption.
-
-### Moderate
-
-- `internal then external rendezvous`: interacting product followed by an
-  external partner;
-- `choice conflict backtracking`: a small conflicting product with fallback;
-- `sequential write read`: Flow state transitions and buffering;
-- `spawn await closure`: structured task creation, completion and Closure.
-
-### Complex
-
-- `triple swap with decoy`: global coordination with an unproductive partner;
-- `contended producers`: many pending senders sharing one rendezvous;
-- `nursery rendezvous fanout seven`: structured custody and rendezvous under a
-  deliberately awkward frontier.
-
-Every case validates its result. A fast but incorrect run fails the suite.
-
-## Controls
+Controls:
 
 ```text
-FIBERS_PERF_SCALE             multiplier for each case's iteration count
-FIBERS_PERF_REPEATS           timed samples; median is reported
-FIBERS_PERF_WARMUP            0 disables warm-up runs
-FIBERS_PERF_TIERS             simple, moderate, complex, or all
-FIBERS_PERF_CASE              literal substring filter
-FIBERS_PERF_FORMAT            text, csv, or json
-FIBERS_PERF_OUTPUT            optional output file
-FIBERS_PERF_MACHINE           ledger or reference
-FIBERS_PERF_SEED              deterministic choice seed
-FIBERS_PERF_DIAGNOSTICS       0 disables the separate diagnostic pass
-FIBERS_PERF_TRACE             1 retains capped events for the slowest plans
-FIBERS_PERF_SLOW_PLANS        number of slow-plan summaries to retain
-FIBERS_PERF_ADVANCED          full or off; A/B the passes 8--10 defaults
+FIBERS_PERF_SCALE          workload multiplier
+FIBERS_PERF_REPEATS        timed samples; the median is reported
+FIBERS_PERF_WARMUP         0 disables warm-up runs
+FIBERS_PERF_TIERS          simple, moderate, complex, or all
+FIBERS_PERF_CASE           literal case-name filter
+FIBERS_PERF_FORMAT         text, csv, or json
+FIBERS_PERF_OUTPUT         optional output file
+FIBERS_PERF_SEED           deterministic choice seed
+FIBERS_PERF_DIAGNOSTICS    0 disables the separate diagnostic pass
+FIBERS_PERF_TRACE          1 retains capped search events
+FIBERS_PERF_SLOW_SEARCHES     number of slow-search summaries retained
 ```
 
-Use the same interpreter, host, CPU policy and environment when comparing two
-runs. The figures are local regression measurements, not cross-machine claims.
+Every workload validates its result. Measurements are local regression evidence, not cross-machine claims.
 
-## I/O-shaped proof profile
-
-External-resource drivers are used as forcing cases for the production lazy
-machine:
+## Focused probes
 
 ```sh
+texlua performance/frontier_suite.lua
+texlua performance/exchange_frontier_suite.lua
+texlua performance/resumability_probe.lua
+texlua performance/store_view_suite.lua
+texlua performance/io_baselines.lua
 make profile-proof-io
-FIBERS_PROOF_SLOW=1 make profile-proof-io
 ```
 
-The profile reports search, branch, claim-closure, rollback, trail, dependency
-shape and retained-session invalidation reasons per commit. The programme and current findings are recorded in
-[`docs/notes/performance/PROOF-ENGINE-PROGRAMME.md`](../docs/notes/performance/PROOF-ENGINE-PROGRAMME.md).
+The frontier suite checks selective invalidation and exact Retry retention. The exchange-frontier suite records the bounded-search cliffs for participant recruitment, role imbalance, perfect matching and Hall-deficient graphs. The resumability probe compares one-shot and bounded execution of the same search. The store-view suite measures speculative state projection. I/O programmes exercise host-facing paths without changing kernel semantics.
 
-## Runtime instrumentation
+## Instrumentation
 
 Instrumentation is opt-in:
 
 ```lua
 local Runtime = require('fibers.runtime')
 
-local rt = Runtime.new({
+local runtime = Runtime.new({
   instrumentation = {
-    slow_plan_limit = 16,
+    slow_search_limit = 16,
     trace = false,
   },
 })
 
--- Run work, then inspect a detached report.
-local report = rt:instrumentation_report()
-rt:reset_instrumentation()
+local report = runtime.instrumentation:report()
+runtime.instrumentation:reset()
 ```
 
-An ordinary runtime has `instrumentation == nil` and pays only guarded checks at
-instrumentation sites. Timings in `suite.lua` use this ordinary path.
+Reports contain cumulative counters, maxima, histograms, slow-search summaries and optional capped trace events. Important measures include search calls, branches, rollbacks, trail entries, frontier invalidations, retained-search resumes, candidate validation and commit activity.
 
-The report contains:
-
-- cumulative counters;
-- high-water marks;
-- power-of-two histograms;
-- summaries of the slowest plans;
-- optional capped plan events.
-
-Important counters include search calls, branches, rollbacks, trail entries,
-intent-pair scans, compatible exchange pairs, claim branches, recruitment and
-exclusion branches, footprint matches, machine-transition work, commits,
-validation failures and fibre activity.
-
-Important distributions include search steps per plan, search CPU time per plan,
-participants per candidate, roots, intents and trail entries. The suite derives
-p50, p95 and p99 upper bounds from these histograms and reports the exact maximum
-separately.
-
-
-## Architectural structure suite
-
-The first seven architectural stages are exercised separately:
-
-```sh
-texlua performance/architecture_suite.lua
-FIBERS_ARCH_FORMAT=csv FIBERS_ARCH_OUTPUT=architecture.csv \
-  texlua performance/architecture_suite.lua
-```
-
-The suite runs the current architecture against both trail and reference
-evaluators. It checks one validating digest per case and reports component
-fraction, forced reductions, opaque requests, duplicate diagnostic states and
-search work. Historical policy comparisons remain under
-`docs/notes/performance/history/`. Set `FIBERS_ARCH_FANOUT8=1` to include fanout
-eight explicitly; it remains opt-in so the structural suite stays compact.
-
-The acceptance rules are recorded in `performance/INVARIANTS.md`.
-
-
-## Advanced symmetry and certificate-reuse suite
-
-The remaining architectural passes have a separate validating comparison:
-
-```sh
-texlua performance/advanced_suite.lua
-FIBERS_ADV_MACHINE=reference texlua performance/advanced_suite.lua
-FIBERS_ADV_FORMAT=csv FIBERS_ADV_OUTPUT=advanced.csv \
-  texlua performance/advanced_suite.lua
-```
-
-It runs four profiles over the same validating scenarios:
-
-- `baseline`: symmetry and certificate reuse disabled;
-- `symmetry`: certified symmetry only;
-- `reuse`: cross-cycle certificate reuse only; and
-- `full`: certified symmetry and cross-cycle certificate reuse.
-
-The cases cover repeated blocked alternatives, repeated no-supplier worlds,
-certified homogeneous suppliers, unchanged blocked driver cycles, ordinary
-binary rendezvous and the triple-swap stress case. CSV output includes search
-calls, branches, footprint checks, symmetry pruning and certificate reuse.
-
-Controls are:
-
-```text
-FIBERS_ADV_REPEATS        timed samples; median is reported
-FIBERS_ADV_FORMAT         text or csv
-FIBERS_ADV_OUTPUT         optional output file
-FIBERS_ADV_MACHINE        ledger or reference
-FIBERS_ADV_CASE           literal substring filter
-```
-
-The safety model and current measurements are recorded in
-`docs/notes/performance/PERFORMANCE-PASSES-8-10.md`.
-
-## Sparse ledger-segment suite
-
-Product lanes use sparse parent-linked ledger segments. The focused store
-benchmark first observes a configurable number of locations in a parent segment,
-then forks a configurable product.  It reports both elapsed time and
-GC-disabled transient allocation per round:
-
-```sh
-texlua performance/store_view_suite.lua
-FIBERS_STORE_CELLS=32 FIBERS_STORE_LANES=16 FIBERS_STORE_ROUNDS=500 \
-  texlua performance/store_view_suite.lua
-```
-
-The benchmark validates its result.  It is intended to detect regressions in
-segment forking, sparse summary staging and product joining rather than general
-proof-search changes.
-
-## Application-shaped search diagnostics
-
-`performance/diagnostics/regular_search_spaces.lua` contains the atomic worker-dispatch, replicated-ring, priority-fallback, idle-service and decomposed control workloads used to check proof-search cliffs. Each invocation emits one CSV row and validates its result:
-
-```sh
-texlua performance/diagnostics/regular_search_spaces.lua \
-  --case batch-dispatch --size 16 --seed 1
-
-texlua performance/diagnostics/regular_search_spaces.lua \
-  --case replicated-ring --size 24 --seed 7 \
-  --search-total-limit 100000 --search-trail-limit 500000
-```
-
-Run several seeds for choice-bearing cases. Search-call counts are generally more reproducible than wall-clock timings.
-
-## Seed sweep
-
-Choice ordering can expose or hide combinatorial search. Sweep the known
-structured rendezvous shape rather than relying on one favourable seed:
-
-```sh
-texlua performance/seed_sweep.lua
-FIBERS_SWEEP_MIN_SIZE=4 FIBERS_SWEEP_MAX_SIZE=8 \
-FIBERS_SWEEP_MIN_SEED=1 FIBERS_SWEEP_MAX_SEED=16 \
-FIBERS_SWEEP_OUTPUT=seed-sweep.csv \
-texlua performance/seed_sweep.lua
-```
-
-The default sweep remains deliberately small for routine regression work.  The
-current architecture keeps the measured fanout 4--16 family to a maximum of
-eight search steps, but larger and mixed workloads should remain separate CI
-jobs so a future change cannot reintroduce a seed-dependent cliff unnoticed.
-
-## Regression comparison
-
-Create two CSV runs with identical settings, then compare them:
-
-```sh
-FIBERS_PERF_FORMAT=csv FIBERS_PERF_OUTPUT=baseline.csv texlua performance/suite.lua
-# change the implementation
-FIBERS_PERF_FORMAT=csv FIBERS_PERF_OUTPUT=candidate.csv texlua performance/suite.lua
-texlua performance/compare.lua baseline.csv candidate.csv 10 25
-```
-
-The final two arguments are the permitted percentage regressions for median
-microseconds per operation and p99 search-step upper bound. The command exits
-non-zero when either threshold is exceeded.
-
-For continuous integration, use several repetitions, pin the machine and choice
-seed, and run the seed sweep as a separate job. Performance CI on shared hosts
-should use generous timing thresholds while keeping strict structural thresholds
-for search steps and branch counts.
-
-
-## External-resource baselines
-
-`io_baselines.lua` records focused, validating baselines for the I/O substrate:
-
-```sh
-lua performance/io_baselines.lua
-FIBERS_IO_BENCH_SCALE=2 FIBERS_IO_BENCH_REPEATS=5 \
-  lua performance/io_baselines.lua
-FIBERS_IO_BENCH_CASE=datagram lua performance/io_baselines.lua
-```
-
-It measures private host-hold cost, memory Stream throughput, accepted
-connections, datagram throughput and idle reactor registration.  The default
-uses `ManualHost` so it is deterministic and available across the interpreter
-matrix.  Native binding throughput and leak tests remain separate stress jobs.
-
-## Validating benchmark harness
-
-`bench.lua` is the broad, validating local-regression harness. Run it from the
-repository root:
-
-```sh
-lua performance/bench.lua
-luajit performance/bench.lua
-texlua performance/bench.lua
-```
-
-Controls include `FIBERS_BENCH_SCALE`, `FIBERS_BENCH_REPEATS`,
-`FIBERS_BENCH_CASE` and `FIBERS_BENCH_FORMAT`.
-
-The focused compatibility diagnostics are retained under
-`performance/diagnostics/`:
-
-```text
-flow.lua            Flow sequential and interacting-product throughput
-petri_calendar.lua  constant-state and growing-state behaviour
-lifetime.lua        Runtime-local Lifetime-store growth
-search_cases.lua    search calls, rollbacks, trail entries and refresh statistics
-```
-
-These scripts are not part of the validating benchmark harness. The reference
-evaluator may be selected with `FIBERS_MACHINE=reference` for differential
-measurements.
-
-## Interpretation
-
-A timing regression with unchanged search steps usually points to allocation,
-store, coroutine or host overhead. A step-count regression is generally more
-serious: it indicates a changed search shape and is likely to become much larger
-at a slightly greater frontier.
-
-Do not optimise only the mean. For this runtime the primary solver health
-measures are p95, p99 and maximum search steps, branches, rollback entries and
-retained trail pressure across several choice seeds.
+Use the same interpreter, host, CPU policy and environment when comparing runs.

@@ -119,8 +119,8 @@ local connection, report = socket.connect(socket.name_endpoint('example.org', 44
 ```
 
 The DNS selection options accepted by `socket.resolve_name` are also accepted by
-`socket.connect` for a name endpoint: `dns`, `nameservers`, `nameserver`,
-`resolver_options` and `require_nonblocking`.
+`socket.connect` for a name endpoint: `dns` and `nameservers` through
+`resolver_options`.
 
 ## Candidate policy
 

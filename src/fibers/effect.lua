@@ -24,8 +24,6 @@ local EffectKind = (function()
   local EffectKind = {}
   EffectKind.__index = EffectKind
 
-  local next_kind_id = 0
-
   local function assert_field(spec, name, ty)
     if type(spec[name]) ~= ty then
       error('EffectKind.new requires ' .. name .. ' :: ' .. ty, 3)
@@ -39,21 +37,14 @@ local EffectKind = (function()
     assert_field(spec, 'merge', 'function')
     assert_field(spec, 'prepare', 'function')
 
-    next_kind_id = next_kind_id + 1
     local kind = {
       _fibers_effect_kind = true,
-      _fibers_kind_id = next_kind_id,
       name = spec.name,
       key = spec.key,
       merge = spec.merge,
       prepare = spec.prepare,
-      failure = spec.failure or 'fatal',
       validate_payload = spec.validate_payload,
     }
-
-    if kind.failure ~= 'fatal' then
-      error('unsupported effect failure policy: ' .. tostring(kind.failure), 2)
-    end
 
     return setmetatable(kind, EffectKind)
   end
@@ -90,14 +81,6 @@ end)()
 
 local Effect = {}
 
-local function shallow_copy(t)
-  local out = {}
-  for k, v in pairs(t or {}) do
-    out[k] = v
-  end
-  return out
-end
-
 function Effect.kind(spec)
   return EffectKind.new(spec)
 end
@@ -119,7 +102,7 @@ end
 local InterruptKind
 local function interrupt_key(payload)
   local token = payload.token
-  return token and (token._fibers_id or token.name) or tostring(token)
+  return payload.token
 end
 
 InterruptKind = EffectKind.new({
@@ -151,7 +134,6 @@ function Effect.interrupt(token, reason)
 end
 
 local SpawnKind
-local next_spawn = 0
 local function spawn_key(payload)
   return payload.id or payload.owner or payload.name or payload.fn
 end
@@ -198,18 +180,9 @@ SpawnKind = EffectKind.new({
 })
 
 function Effect.spawn(fn, name, id, scope, owner)
-  local identity = id or owner
-  if identity == nil then
-    next_spawn = next_spawn + 1
-    identity = 'spawn-' .. tostring(next_spawn)
-  end
-  return Effect.of(SpawnKind, {
-    fn = fn,
-    name = name,
-    id = identity,
-    scope = scope,
-    owner = owner,
-  })
+  local payload = { fn = fn, name = name, scope = scope, owner = owner }
+  payload.id = id or owner or payload
+  return Effect.of(SpawnKind, payload)
 end
 
 Effect.InterruptKind = InterruptKind

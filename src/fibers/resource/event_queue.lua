@@ -1,10 +1,11 @@
 -- Externally fed persistent FIFO.
 
 local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
-local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.embed.external')
+local Direct = require('fibers.internal.direct')
 
 local EventQueue = {}
 EventQueue.__index = function(self, key)
@@ -38,7 +39,7 @@ end
 
 local function deliver(queue, ...)
   local state = queue._location.value
-  local node = { value = Op._pack(...) }
+  local node = { value = Values.pack(...) }
   if state.count == 0 then
     return Facility.publish(queue._location, { front = node, count = 1, head = state.head })
   end
@@ -102,7 +103,7 @@ local function interest(queue, runtime)
 end
 
 local function option(queue, transition)
-  return Facility.external_wait(queue, Kind, queue._location, transition, {
+  return Facility.external_wait(queue, queue._location, transition, {
     interest = function(runtime)
       return interest(queue, runtime)
     end,
@@ -132,10 +133,6 @@ function EventQueue:next_op()
   return self._next_op
 end
 
-function EventQueue:next()
-  return perform(self:next_op())
-end
-
 function EventQueue:_drain_op()
   return self._drain_cached_op
 end
@@ -143,6 +140,8 @@ end
 function EventQueue:length()
   return self._location.value.count
 end
+
+Direct.install(EventQueue, { 'next' })
 
 EventQueue.Kind = Kind
 

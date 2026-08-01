@@ -1,6 +1,7 @@
 -- Single-assignment completion state for deferred host work.
 
 local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 
@@ -37,7 +38,7 @@ function Completion:state_value()
 end
 
 function Completion:publish_success_op(...)
-  return self.state:transition_op(Publish, { kind = 'succeeded', values = Op._pack(...) })
+  return self.state:transition_op(Publish, { kind = 'succeeded', values = Values.pack(...) })
 end
 
 function Completion:publish_failure_op(error)

@@ -7,6 +7,7 @@
 -- handles directly, and hosts use the readiness key exposed by the handle
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
+local External = require('fibers.embed.external')
 local Readiness = require('fibers.io.readiness')
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local IOError = require('fibers.io.error')
@@ -135,7 +136,7 @@ function Handle:bind_runtime(rt)
   self.runtime = rt
   IOAudit.bind(self, rt)
   if not self.feed then
-    self.feed = rt:external_feed(self.readiness)
+    self.feed = External.external_feed(rt, self.readiness)
   end
   local bind = self._bind_runtime
   if bind then

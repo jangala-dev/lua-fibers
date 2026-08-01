@@ -1,8 +1,9 @@
 local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
-local perform = require('fibers.perform')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.embed.external')
+local Direct = require('fibers.internal.direct')
 
 local Signal = {}
 Signal.__index = function(self, key)
@@ -23,7 +24,7 @@ local Wait = StateMachine.isolated_query('signal.wait', function(state)
 end)
 
 local function deliver(signal, ...)
-  Facility.publish(signal._location, { ready = true, values = Op._pack(...) })
+  Facility.publish(signal._location, { ready = true, values = Values.pack(...) })
 end
 
 local function clear(signal)
@@ -42,7 +43,7 @@ function Signal.new(name)
   })
   signal._fibers_external_deliver = deliver
   signal._fibers_external_clear = clear
-  signal._wait_op = Facility.external_wait(signal, Kind, signal._location, Wait, {
+  signal._wait_op = Facility.external_wait(signal, signal._location, Wait, {
     interest = function(runtime)
       return External.Interest.external(signal, 'ready', {
         external_kind = 'signal',
@@ -60,9 +61,7 @@ function Signal:wait_op()
   return self._wait_op
 end
 
-function Signal:wait()
-  return perform(self:wait_op())
-end
+Direct.install(Signal, { 'wait' })
 
 Signal.Kind = Kind
 

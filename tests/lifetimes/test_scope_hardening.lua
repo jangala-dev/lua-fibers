@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
@@ -163,7 +161,7 @@ end
 -- progress, without depending on a lifecycle phase enum.
 do
   local rt = FibersRuntime.new()
-  local settled, feed = rt:signal('hardening-settled')
+  local settled, feed = External.signal(rt, 'hardening-settled')
   local scope = FibersScope.new('hardening-settling', { runtime = rt, closure = FibersClosure.nursery() })
   local h = { name = 'hardening-settling-owned' }
   local state

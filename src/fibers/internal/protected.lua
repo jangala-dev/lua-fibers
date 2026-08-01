@@ -225,8 +225,4 @@ else
   M.xpcall = fallback_xpcall
 end
 
-function M.using_native()
-  return USE_NATIVE
-end
-
 return M

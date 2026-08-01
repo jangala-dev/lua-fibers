@@ -2,14 +2,12 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
+local External = require('fibers.embed.external')
 local WaitSet = require('fibers.embed.wait_set')
 local Inspect = require('tests.support.flow_inspect')
 
@@ -49,7 +47,7 @@ local function assert_status(st, tag, msg)
 end
 
 local function run(rt, host, iters)
-  return rt:drive({ host = host, max_iterations = iters or 80 })
+  return External.drive(rt, { host = host, max_iterations = iters or 80 })
 end
 
 local function drive_until(rt, host, pred, label, iters)
@@ -208,7 +206,7 @@ do
   end, 'manual-readiness')
   local st = run(rt, host, 5)
   assert_status(st, 'pending')
-  local waits = (st.waits or {})
+  local waits = (st.interests or {})
   local rw = WaitSet.readiness_waits(waits)
   assert_eq(#rw, 1)
   assert_eq(rw[1].readiness_key, 'manual-key')

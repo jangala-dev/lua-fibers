@@ -73,7 +73,7 @@ luajit -joff tests/run_all.lua
 ```
 
 These checks should be combined with environment-specific native-host tests.
-The reference solver is repository-only and is deliberately outside `src/`.
+The reference evaluator is repository-only and is deliberately outside `src/`. It is included in the stock-Lua semantic matrix; `make test-reference` runs it directly.
 
 ## Native I/O capabilities
 
@@ -106,10 +106,8 @@ groups remain unsupported.
 Hosts with synchronous `getaddrinfo` advertise `resolver_blocking = true`.
 The public socket resolver prefers Fibers' own DNS-over-UDP/TCP implementation
 when such a host also provides stream and datagram sockets. This keeps network
-resolution off the runtime thread while preserving the host resolver as a
-compatibility fallback when no DNS configuration can be found. Applications
-which cannot permit that fallback set `require_nonblocking = true` or supply an
-explicit `socket.dns_resolver`.
+resolution off the runtime thread. Missing DNS configuration is reported as an
+error; applications may instead supply an explicit resolver.
 
 The test-only SimulatedHost supplies virtual pipes, sockets, datagrams and
 resolver records for semantic tests. Its native resolver is non-blocking and is

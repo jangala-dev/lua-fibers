@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -43,6 +40,18 @@ local function seed()
       value = 'C',
     },
   }
+end
+
+local function seed_lease(lease, subject, holders)
+  local r = rt()
+  local ops = {}
+  for holder, mode in pairs(holders) do
+    ops[#ops + 1] = lease:acquire_op(subject, mode, holder)
+  end
+  r:spawn_raw(function()
+    r:perform(#ops == 1 and ops[1] or Op.each(ops))
+  end)
+  found(r:run(), 'lease seed')
 end
 
 local function index_each_hides_better_insert()
@@ -137,7 +146,7 @@ local function lease_each_same_owner_conflicts()
 end
 local function lease_one_release_does_not_remove_other_blocker()
   local l = Lease.new({ read = { read = true }, write = {} })
-  l.holders.s = { w1 = 'write', w2 = 'write' }
+  seed_lease(l, 's', { w1 = 'write', w2 = 'write' })
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -148,7 +157,7 @@ local function lease_one_release_does_not_remove_other_blocker()
   end)
   found(r:run())
   eq(rows[2][1], 'blocked')
-  eq(l.holders.s.w1, nil)
+  eq((l.holders.s or {}).w1, nil)
   eq(l.holders.s.w2, 'write')
 end
 for _, t in ipairs({

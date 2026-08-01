@@ -4,25 +4,14 @@
 -- operations are interpreted by the currently running fibre. Types,
 -- constructors and option combinators live in their named modules.
 
+local External = require('fibers.embed.external')
 local Protected = require('fibers.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
+local ScopeOutcome = require('fibers.scope.outcome')
 
 local M = { perform = perform }
-
-local function closure_failures_from(err)
-  if type(err) ~= 'table' then
-    return {}
-  end
-  if err._fibers_closure_failure == true then
-    return { err }
-  end
-  if type(err.cause) == 'table' and err.cause._fibers_closure_failure == true then
-    return { err.cause }
-  end
-  return {}
-end
 
 local function runtime_options(opts, host)
   local runtime_opts = {}
@@ -52,7 +41,7 @@ function M.try_run(fn, opts)
     error('fibers.try_run expects a function', 2)
   end
   local Closure = require('fibers.closure')
-  local ScopeResult = require('fibers.scope.result')
+  local ScopeResult = ScopeOutcome.Result
   local host = default_host(opts)
   local rt = Runtime.new(runtime_options(opts, host))
   local scope = Scope.new(
@@ -66,7 +55,7 @@ function M.try_run(fn, opts)
       result = scope:try_run(fn)
       return result
     end, opts.name or 'root', scope)
-    runtime_status = rt:drive({
+    runtime_status = External.drive(rt, {
       host = host,
       run = opts.run,
       host_options = opts.host_options,
@@ -86,7 +75,7 @@ function M.try_run(fn, opts)
     return result
   end
   if not ok then
-    local closure_failures = closure_failures_from(err)
+    local closure_failures = ScopeOutcome.closure_failures(err)
     return ScopeResult.fail({
       reason = 'runtime_error',
       primary = err,

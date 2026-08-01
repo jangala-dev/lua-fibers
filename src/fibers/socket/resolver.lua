@@ -15,6 +15,7 @@ local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Module = {}
 local Query = {}
@@ -45,8 +46,6 @@ function Query:family_addresses_op(family)
   return family_completion(self, family):success_op()
 end
 
-Query.family_ready_op = Query.family_addresses_op
-
 function Query:family_failed_op(family)
   return family_completion(self, family):failure_op()
 end
@@ -58,8 +57,6 @@ end
 function Query:family_finished_op(family)
   return family_completion(self, family):terminal_op()
 end
-
-Query.family_state_op = Query.family_finished_op
 
 local function terminal_values(state)
   if state.kind ~= 'succeeded' then
@@ -229,13 +226,13 @@ end
 
 local function select_backend(rt, host, opts)
   if type(opts.resolver) == 'table' and type(opts.resolver.resolve) == 'function' then
-    return opts.resolver, true
+    return opts.resolver
   end
   if type(opts.dns) == 'table' and type(opts.dns.resolve) == 'function' then
-    return opts.dns, true
+    return opts.dns
   end
-  if opts.dns == true or type(opts.dns) == 'table' or opts.nameservers or opts.nameserver then
-    return DNSResolver.new(dns_options(opts, host)), true
+  if opts.dns == true or type(opts.dns) == 'table' or opts.nameservers then
+    return DNSResolver.new(dns_options(opts, host))
   end
 
   local capabilities = host and host.capabilities or {}
@@ -248,9 +245,9 @@ local function select_backend(rt, host, opts)
     if not rt._fibers_dns_resolver or rt._fibers_dns_resolver.host ~= host then
       rt._fibers_dns_resolver = DNSResolver.new(dns_options(opts, host))
     end
-    return rt._fibers_dns_resolver, false
+    return rt._fibers_dns_resolver
   end
-  return nil, false
+  return nil
 end
 
 local function host_resolve(host, endpoint, opts)
@@ -415,21 +412,7 @@ end
 local function drive(query, opts)
   local rt = Runtime.current()
   local host = opts.host or (rt and rt.host)
-  local backend, explicit = select_backend(rt, host, opts)
-
-  if
-    backend
-    and not explicit
-    and opts.require_nonblocking ~= true
-    and type(backend.configuration) == 'function'
-    and type(backend.has_static_name) == 'function'
-    and not backend:has_static_name(query.endpoint.host)
-  then
-    local config = backend:configuration()
-    if not config then
-      backend = nil
-    end
-  end
+  local backend = select_backend(rt, host, opts)
 
   local ok, addresses, err = Protected.pcall(function()
     if backend and type(backend.resolve_family) == 'function' then
@@ -463,6 +446,12 @@ end
 
 function Module.resolve_op(endpoint, opts)
   opts = IO.copy_table(opts)
+  if opts.nameserver ~= nil then
+    error('socket.resolve_op option nameserver was removed; use nameservers', 2)
+  end
+  if opts.require_nonblocking ~= nil then
+    error('socket.resolve_op option require_nonblocking was removed', 2)
+  end
   endpoint = Address.validate(endpoint, 'socket.resolve_op')
   if not Address.is_name(endpoint) then
     error('socket.resolve_op expects a name endpoint', 2)
@@ -503,43 +492,20 @@ function Module.resolve_op(endpoint, opts)
   })
 end
 
-function Query:family_addresses(family)
-  return perform(self:family_addresses_op(family))
-end
-
-Query.family_ready = Query.family_addresses
-
-function Query:family_failed(family)
-  return perform(self:family_failed_op(family))
-end
-
-function Query:family_result(family)
-  return perform(self:family_result_op(family))
-end
-
-function Query:family_finished(family)
-  return perform(self:family_finished_op(family))
-end
-
-function Query:addresses()
-  return perform(self:addresses_op())
-end
-
-function Query:failed()
-  return perform(self:failed_op())
-end
-
-function Query:result()
-  return perform(self:result_op())
-end
-
-function Query:close(reason)
-  return perform(self:close_op(reason))
-end
-
-function Query:closed()
-  return perform(self:closed_op())
-end
-
 Module.Query = Query
+Direct.install(
+  Query,
+  {
+    'family_addresses',
+    'family_failed',
+    'family_result',
+    'family_finished',
+    'addresses',
+    'failed',
+    'result',
+    'close',
+    'closed',
+  }
+)
+
 return Module

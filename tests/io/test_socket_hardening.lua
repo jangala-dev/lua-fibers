@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -244,7 +241,10 @@ do
         Lifetime.of(connection_ref):current_state().custodian,
         connected_state.source_scope:lifetime()
       )
-      assert_eq(fibers.perform(Op.always('not taken'):or_else(dial_ref:connected_op())), 'not taken')
+      assert_eq(
+        fibers.perform(Op.always('not taken'):or_else(dial_ref:connected_op(fibers.current_scope()))),
+        'not taken'
+      )
     end)
 
     assert_eq(

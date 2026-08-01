@@ -1,14 +1,11 @@
 -- Regression tests for speculative phase integrity across admission, spawning and
 -- cancellation. Losing or unresolved worlds must not mutate retained objects;
--- committed effects may move ownership only after the ledger commit.
+-- committed effects may move ownership only after managed-state commit.
 
 package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',

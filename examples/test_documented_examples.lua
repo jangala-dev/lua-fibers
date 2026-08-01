@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local FibersRuntime = require('fibers.runtime')
 local StateMachine = require('fibers.resource.machine')
@@ -103,7 +101,7 @@ end)
 -- External feeds are driver actions, not fibre actions.
 do
   local rt = FibersRuntime.new({ host = ManualHost.new() })
-  local signal, feed = rt:signal('shutdown')
+  local signal, feed = External.signal(rt, 'shutdown')
   local result
 
   rt:spawn_raw(function()

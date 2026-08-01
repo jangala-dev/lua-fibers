@@ -1,9 +1,19 @@
 local Op = require('fibers.op')
+local Values = require('fibers.internal.values')
 local Facility = require('fibers.resource.authoring')
-local Substrate = require('fibers.internal.kernel.ledger')
+local Witness = require('fibers.resource.witness')
+local Substrate = require('fibers.internal.kernel.journal')
 
 local Petri = {}
-Petri.__index = Petri
+Petri.__index = function(self, key)
+  if key == '_state' then
+    return self._location and self._location.value
+  end
+  if key == 'version' then
+    return self._location and self._location.version or 0
+  end
+  return Petri[key]
+end
 local Kind = { name = 'petri' }
 local next_net_id = 0
 
@@ -141,8 +151,6 @@ function Petri.new(marking, name)
     name = name or ('petri-' .. tostring(next_net_id)),
     _fibers_id = 'petri-' .. tostring(next_net_id),
     _fibers_kind = Kind,
-    _state = state,
-    version = 0,
   }, Petri)
   net._location = Substrate.new_location({
     name = net.name .. ':marking',
@@ -150,10 +158,6 @@ function Petri.new(marking, name)
     domain = 'plain',
     value = state,
     owner = net,
-    apply = function(v, loc)
-      net._state = v
-      net.version = loc.version
-    end,
   })
   return net
 end
@@ -203,13 +207,13 @@ local function binding_cursor(transition, state, payload)
       end
       local result
       if transition.result then
-        result = Op._pack(transition.result(bindings, payload, successor))
+        result = Values.pack(transition.result(bindings, payload, successor))
       else
         local copy = {}
         for k, v in pairs(bindings) do
           copy[k] = v
         end
-        result = Op._pack(copy)
+        result = Values.pack(copy)
       end
       coroutine.yield({ value = successor, result = result, writes = true })
     end
@@ -268,7 +272,7 @@ function Petri:fire_op(transition, payload)
   if type(transition) ~= 'table' or transition._petri_transition ~= true or transition.net ~= self then
     error('Petri fire expects a transition belonging to this net', 2)
   end
-  local program = Facility.witness({
+  local program = Witness.spec({
     location = self._location,
     group = self._location,
     order = transition.order,
@@ -279,7 +283,7 @@ function Petri:fire_op(transition, payload)
       return binding_cursor(transition, state, actual_payload)
     end,
   })
-  return Facility.op(self, Kind, program)
+  return Facility.op(program)
 end
 
 function Petri:put_op(place, value)
@@ -313,27 +317,23 @@ function Petri:take_op(place, predicate)
 end
 
 function Petri:marking_op()
-  return Facility.op(
-    self,
-    Kind,
-    Facility.witness({
-      location = self._location,
-      accepts_supply = false,
-      supplies = 'none',
-      cursor = function(state)
-        local done = false
-        return {
-          next = function()
-            if done then
-              return nil
-            end
-            done = true
-            return { writes = false, result = Op._pack(marking_of(state)) }
-          end,
-        }
-      end,
-    })
-  )
+  return Facility.op(Witness.spec({
+    location = self._location,
+    accepts_supply = false,
+    supplies = 'none',
+    cursor = function(state)
+      local done = false
+      return {
+        next = function()
+          if done then
+            return nil
+          end
+          done = true
+          return { writes = false, result = Values.pack(marking_of(state)) }
+        end,
+      }
+    end,
+  }))
 end
 
 function Petri:marking()

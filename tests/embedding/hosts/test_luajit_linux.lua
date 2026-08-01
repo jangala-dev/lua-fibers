@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -101,28 +98,26 @@ do
   host:close()
 end
 
--- Real kernel readiness is validated with the production evaluator.  The
--- reference evaluator remains the differential oracle for deterministic option
+-- Real kernel readiness is validated separately from portable host simulation.  The
+-- portable semantic suite covers deterministic option
 -- semantics; combining it with wall-clock readiness races makes that suite
 -- needlessly nondeterministic.
-if os.getenv('FIBERS_MACHINE') ~= 'reference' then
-  local socket_host = LinuxHost.new()
-  if type(rawget(_G, 'jit')) ~= 'table' then
-    Common.assert_eq(
-      socket_host.capabilities.resolver,
-      false,
-      'compatibility ffi must not advertise unsafe getaddrinfo traversal'
-    )
-  end
-  Common.native_socket_smoke('luajit_linux', socket_host)
-  Common.native_datagram_smoke('luajit_linux', socket_host)
-  -- The texlua test environment exposes a compatibility ffi implementation
-  -- but not LuaJIT itself; its getaddrinfo pointer lifetime is unsafe. Exercise
-  -- the native resolver here only on the intended LuaJIT runtime.
-  if type(rawget(_G, 'jit')) == 'table' then
-    Common.native_resolver_smoke('luajit_linux', socket_host)
-  end
-  socket_host:close()
+local socket_host = LinuxHost.new()
+if type(rawget(_G, 'jit')) ~= 'table' then
+  Common.assert_eq(
+    socket_host.capabilities.resolver,
+    false,
+    'compatibility ffi must not advertise unsafe getaddrinfo traversal'
+  )
 end
+Common.native_socket_smoke('luajit_linux', socket_host)
+Common.native_datagram_smoke('luajit_linux', socket_host)
+-- The texlua test environment exposes a compatibility ffi implementation
+-- but not LuaJIT itself; its getaddrinfo pointer lifetime is unsafe. Exercise
+-- the native resolver here only on the intended LuaJIT runtime.
+if type(rawget(_G, 'jit')) == 'table' then
+  Common.native_resolver_smoke('luajit_linux', socket_host)
+end
+socket_host:close()
 
 print('tests/hosts/test_luajit_linux.lua: ok')

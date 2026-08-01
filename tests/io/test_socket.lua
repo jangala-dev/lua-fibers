@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -44,7 +41,7 @@ do
       local dial = fibers.perform(
         socket.dial_op(socket.inet_address(local_address.host, local_address.port), { name = 'echo-client' })
       )
-      local client, dial_err = fibers.perform(dial:result_op())
+      local client, dial_err = fibers.perform(dial:result_op(fibers.current_scope()))
       assert_truthy(client, tostring(dial_err))
       local report = fibers.perform(dial:report_op())
       assert_eq(report.kind, 'dial')
@@ -56,7 +53,7 @@ do
       assert_eq(fibers.perform(client:close_op('client complete')), true)
     end, 'socket-client')
 
-    local server, accept_err = fibers.perform(listener:accept_op())
+    local server, accept_err = fibers.perform(listener:accept_op(fibers.current_scope()))
     assert_truthy(server, tostring(accept_err))
     local request, read_err = fibers.perform(server:read_line_op())
     assert_eq(request, 'ping', tostring(read_err))
@@ -74,7 +71,7 @@ do
   local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   fibers.run(function()
     local dial = fibers.perform(socket.dial_op(socket.inet_address('127.0.0.1', 6553)))
-    local connection, err = fibers.perform(dial:result_op())
+    local connection, err = fibers.perform(dial:result_op(fibers.current_scope()))
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'system'))
     assert_eq(err.code, 'ECONNREFUSED')

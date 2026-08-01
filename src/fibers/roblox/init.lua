@@ -8,6 +8,7 @@
 ---RBXScriptSignal callbacks only queue external facts. They never invoke the
 ---proof engine recursively.
 
+local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local Host = require('fibers.roblox.host')
 local Application = require('fibers.roblox.app')
@@ -174,7 +175,7 @@ function Roblox.bind_to_close(scope_or_opts, maybe_opts)
 
   local reason = opts.reason or 'Roblox server closing'
   local deadline = opts.deadline or 25
-  local shutdown_events, shutdown_feed = runtime:events(opts.name or 'roblox-shutdown')
+  local shutdown_events, shutdown_feed = External.events(runtime, opts.name or 'roblox-shutdown')
 
   local monitor = scope:spawn(function()
     local requested_reason = perform(shutdown_events:next_op())

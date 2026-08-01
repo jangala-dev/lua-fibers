@@ -4,15 +4,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local FibersOp = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
@@ -45,6 +43,15 @@ local function assert_falsy(v, msg)
   if v then
     fail((msg or 'expected falsy') .. ': got ' .. tostring(v))
   end
+end
+
+-- Runtime owns fibre scheduling, not candidate representation or settlement.
+do
+  local rt = Runtime.new()
+  assert_eq(rt._find_candidate, nil, 'candidate search belongs to the kernel driver')
+  assert_eq(rt._validate_hit, nil, 'candidate validation is not a Runtime concern')
+  assert_eq(rt._prepare_hit_effects, nil, 'effect preparation is not a Runtime concern')
+  assert_eq(rt._commit_hit, nil, 'candidate settlement is not a Runtime concern')
 end
 
 local function run_all(rt)
@@ -90,7 +97,7 @@ end
 -- EventQueue consumption is journalled: a losing branch does not steal an occurrence.
 do
   local rt = Runtime.new({ choice_seed = 2 })
-  local q, feed = rt:events('journalled-source-events')
+  local q, feed = External.events(rt, 'journalled-source-events')
   feed:set('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()
@@ -158,7 +165,7 @@ do
     end,
   })
   local rt = Runtime.new()
-  local _sig, feed = rt:signal('bad-prepare-signal')
+  local _sig, feed = External.signal(rt, 'bad-prepare-signal')
   rt:spawn_raw(function()
     rt:perform(Op.emit(Effect.of(BadKind, { feed = feed })))
   end, 'bad-prepare')

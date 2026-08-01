@@ -92,12 +92,6 @@ return {
     },
   },
   {
-    name = 'fibers-reference',
-    description = 'Independent reference evaluator and conformance support',
-    requires = { 'fibers-core' },
-    source_root = 'reference',
-  },
-  {
     name = 'fibers-full',
     description = 'Convenience dependency roll-up',
     requires = {

@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -87,7 +84,7 @@ do
   end)
   local st = rt:run()
   assert_eq(st.tag, 'pending')
-  local waits = (st.waits or {})
+  local waits = (st.interests or {})
   local rw = WaitSet.readiness_waits(waits)
   assert_eq(#rw, 1, 'one readiness wait expected')
   assert_eq(rw[1].resource, src, 'interest should carry resource object')

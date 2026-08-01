@@ -72,7 +72,6 @@ end
 -- the private engine but form part of this one public concept.
 for _, name in ipairs({
   'protocol',
-  'normalize',
   'none',
   'request_then_wait',
   'require_ok',
@@ -94,26 +93,42 @@ end
 -- either input. The local request/finish/force operations remain authoritative;
 -- the second argument contributes only pure propagation and admission rules.
 function Closure.combine(local_contract, propagation)
-  local local_closure = Engine.normalize(local_contract, 'local closure')
+  local local_closure = Engine.protocol(local_contract, 'local closure')
   return copy_propagation(local_closure, propagation, 'Closure.combine propagation')
 end
 
-local Nursery = {}
-Nursery.__index = Nursery
+local Boundary = {}
 
-function Closure.nursery(opts)
+function Boundary:on_cancel_requested(_parent, _state, reason)
+  return { seal = true, cancel_children = true, reason = reason }
+end
+
+function Boundary:on_body_result(_parent, _state, ok, primary)
+  return ok and { seal = true, cancel_children = false }
+    or { seal = true, cancel_children = true, reason = primary }
+end
+
+local function boundary(kind, opts, default_name)
   if opts ~= nil and type(opts) ~= 'table' then
-    error('Closure.nursery options must be a table', 2)
+    error('Closure.' .. kind .. ' options must be a table', 3)
   end
   opts = opts or {}
   if opts.name ~= nil and type(opts.name) ~= 'string' then
-    error('Closure.nursery name must be a string', 2)
+    error('Closure.' .. kind .. ' name must be a string', 3)
   end
   local contract = Closure.running()
-  contract.name = opts.name or 'nursery'
+  contract.name = opts.name or default_name
   contract.permit_unstructured = opts.allow_unstructured == true
   contract.permit_outward_move = opts.allow_outward_move ~= false
   contract.permit_admission = opts.allow_admission ~= false
+  return contract, opts
+end
+
+local Nursery = setmetatable({}, { __index = Boundary })
+Nursery.__index = Nursery
+
+function Closure.nursery(opts)
+  local contract = boundary('nursery', opts, 'nursery')
   return setmetatable(contract, Nursery)
 end
 
@@ -124,59 +139,29 @@ function Nursery:on_child_outcome(_parent, _state, _child, exit)
   return {}
 end
 
-function Nursery:on_cancel_requested(_parent, _state, reason)
-  return { seal = true, cancel_children = true, reason = reason }
-end
-
-function Nursery:on_body_result(_parent, _state, ok, primary)
-  if ok then
-    return { seal = true, cancel_children = false }
-  end
-  return { seal = true, cancel_children = true, reason = primary }
-end
-
-local Supervisor = {}
+local Supervisor = setmetatable({}, { __index = Boundary })
 Supervisor.__index = Supervisor
 
 function Closure.supervisor(opts)
-  if opts ~= nil and type(opts) ~= 'table' then
-    error('Closure.supervisor options must be a table', 2)
-  end
-  opts = opts or {}
-  if opts.name ~= nil and type(opts.name) ~= 'string' then
-    error('Closure.supervisor name must be a string', 2)
-  end
-  local mode = opts.child_failure or 'fail_at_exit'
+  local contract, options = boundary('supervisor', opts, 'supervisor')
+  local mode = options.child_failure or 'fail_at_exit'
   if mode ~= 'fail_at_exit' and mode ~= 'collect' and mode ~= 'ignore' then
     error('supervisor child_failure must be fail_at_exit, collect, or ignore', 2)
   end
-  local contract = Closure.running()
-  contract.name = opts.name or 'supervisor'
   contract.child_failure = mode
-  contract.permit_unstructured = opts.allow_unstructured == true
-  contract.permit_outward_move = opts.allow_outward_move ~= false
-  contract.permit_admission = opts.allow_admission ~= false
   return setmetatable(contract, Supervisor)
 end
 
 function Supervisor:on_child_outcome(_parent, state, _child, exit)
-  if type(exit) == 'table' and exit.tag == 'failed' and self.child_failure == 'fail_at_exit' then
-    if not state.first_child_failure then
-      state.first_child_failure = state.child_failures[#state.child_failures]
-    end
+  if
+    type(exit) == 'table'
+    and exit.tag == 'failed'
+    and self.child_failure == 'fail_at_exit'
+    and not state.first_child_failure
+  then
+    state.first_child_failure = state.child_failures[#state.child_failures]
   end
   return {}
-end
-
-function Supervisor:on_cancel_requested(_parent, _state, reason)
-  return { seal = true, cancel_children = true, reason = reason }
-end
-
-function Supervisor:on_body_result(_parent, _state, ok, primary)
-  if ok then
-    return { seal = true, cancel_children = false }
-  end
-  return { seal = true, cancel_children = true, reason = primary }
 end
 
 return Closure

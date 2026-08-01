@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -249,38 +246,36 @@ do
   end, {
     host = host,
     owns_host = false,
-    search_total_limit = 5,
+    runtime_options = { search_total_limit = 5 },
     max_steps_per_turn = 100,
     max_seconds_per_turn = 100,
   })
 
-  if app.runtime.machine_name ~= 'reference' then
-    local workers = {}
-    for i = 1, 8 do
-      workers[i] = Rendezvous.new('roblox-capacity-worker-' .. tostring(i))
-      local index = i
-      app.runtime:spawn_raw(function()
-        app.runtime:perform(workers[index]:get_op())
-      end, 'roblox-capacity-worker-' .. tostring(i))
-    end
+  local workers = {}
+  for i = 1, 8 do
+    workers[i] = Rendezvous.new('roblox-capacity-worker-' .. tostring(i))
+    local index = i
     app.runtime:spawn_raw(function()
-      local jobs = {}
-      for job = 1, 8 do
-        local alternatives = {}
-        for worker = 1, 8 do
-          alternatives[worker] = workers[worker]:put_op(job)
-        end
-        jobs[job] = Op.choice(alternatives)
-      end
-      app.runtime:perform(Op.each(jobs))
-    end, 'roblox-capacity-dispatcher')
-
-    local status = app:advance()
-    assert_eq(status.state, 'pending')
-    assert_eq(status.reason, 'proof-capacity')
-    assert_eq(status.capacity_reason, 'search_total_limit')
-    assert_truthy(not status.needs_immediate_resume)
+      app.runtime:perform(workers[index]:get_op())
+    end, 'roblox-capacity-worker-' .. tostring(i))
   end
+  app.runtime:spawn_raw(function()
+    local jobs = {}
+    for job = 1, 8 do
+      local alternatives = {}
+      for worker = 1, 8 do
+        alternatives[worker] = workers[worker]:put_op(job)
+      end
+      jobs[job] = Op.choice(alternatives)
+    end
+    app.runtime:perform(Op.each(jobs))
+  end, 'roblox-capacity-dispatcher')
+
+  local status = app:advance()
+  assert_eq(status.state, 'pending')
+  assert_eq(status.reason, 'proof-capacity')
+  assert_eq(status.capacity_reason, 'search_total_limit')
+  assert_truthy(not status.needs_immediate_resume)
   app:close()
   host:close()
   scheduler:run_until_idle()

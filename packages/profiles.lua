@@ -32,7 +32,8 @@ local function combine(...)
   return out
 end
 
-local core = combine({ 'fibers', 'fibers.op', 'fibers.embed' }, portable_resources)
+local core_surface = combine({ 'fibers', 'fibers.op', 'fibers.embed' }, portable_resources)
+local core = core_surface
 local io_public = {
   'fibers.io',
   'fibers.file',

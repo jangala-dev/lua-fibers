@@ -1,5 +1,5 @@
--- Deliberate runtime-selected dependencies. Exact-closure builds do not include
--- these automatically; profiles must select the desired implementation.
+-- Optional modules loaded deliberately at runtime. Exact-closure builds include
+-- them only when selected by a deployment profile.
 
 return {
   ['fibers.runtime'] = {

@@ -1,187 +1,51 @@
 # Repository layout
 
-The source tree is organised by semantic responsibility. A public concept has one
-canonical import path; the root `fibers` module is a lifecycle and contextual
-prelude rather than a catalogue of the package tree.
-
 ```text
-src/fibers/
-  init.lua                 root lifecycle plus current-fibre operations:
-                           run, spawn, perform, now and nested scopes
-  op.lua                   inert option algebra
-  runtime.lua              embedded runtime, host driving and serial commit
-  lifetime.lua             Lifetime construction and node capabilities
-  grant.lua                non-custodial authority Lifetimes
-  closure.lua              public Closure contract and propagation
-  scope/                   custody/admission view and boundary Closure
-  task.lua                 execution/control view of a Lifetime
+src/fibers/                 production library
+  internal/kernel/          sole transactional evaluator
+  resource/                 portable managed facilities
+  lifetime/                 custody, grants and closure
+  embed/                    bounded host driving
+  io/, socket/, process/    host-neutral facilities and adapters
+  roblox/                   Roblox integration
 
-  channel.lua              capacity-directed FIFO/Rendezvous façade
-  semaphore.lua            capacity vocabulary over Counter
-  latch.lua                set-once value over Cell
-  mailbox.lua              Channel + RefCount + Cell + Counter
-  pulse.lua                Counter epoch + Cell closure
-  sleep.lua                direct and composable time waits
-  stream.lua               portable Flow-backed Stream values and memory pairs
-
-  resource/                lower-level resources and transactional laws
-    cell.lua               versioned replacement
-    counter.lua            additive bounded quantity
-    index.lua              ordered witnessed collection
-    fifo.lua               FIFO composition from Index + Counter
-    rendezvous.lua         synchronous exchange
-    ref_count.lua          idempotent handles over Counter + Cell
-    machine.lua            explicit serial state relation
-    event_queue.lua        external-authorisation boundary
-    flow/                  transactional transfer atom, leases and rope storage
-    completion.lua         one-shot completion law
-    keyed.lua              independent keyed presence slots
-    lease.lua              transactional leasing law
-    authoring.lua          trusted facility compilation materials
-
-  effect.lua               committed obligation kinds and effects
-  protected.lua            public yieldable pcall and xpcall for library code
-  lifetime/
-    store.lua              Runtime-local custody forest
-
-  internal/lifetime/
-    closure.lua            ordered Closure engine, retry and force
-    host_hold.lua          private post-commit handle coverage
-  diagnostics/             optional I/O audit and proof-search observation
-
-  file/                    evented files, pipes and provider implementations
-  process/                 Command and Process Lifetime facility
-  socket/                  addresses, Listener, Dial, UDP and shared protocols
-    dial/                   shared Dial handle plus direct and named strategies
-      named/                Happy Eyeballs coordination state
-  embed/                   bounded driving, external feeds and host callback queue
-  io/                      I/O contracts, reactor and native backend implementations
-  net/                     host-neutral network value types
-  roblox/                  Roblox scheduling and engine adapters
-
-  internal/
-    protected.lua          cross-version yieldable protected calls
-    kernel/                closed production proof and transaction kernel
-
-examples/tutorial/         ordinary application use
-examples/recipes/          tested facilities, including PriorityQueue, built from supported modules
-examples/embedding/        host and runtime integration
-examples/lifetimes/        advanced custody and Closure examples
-examples/case_studies/     trusted kernel programmes, not installed APIs
-
-docs/notes/                design notes and work-in-progress prototypes
-reference/                 independent differential evaluator
-performance/               benchmarks and architectural invariants
-tests/                     core tests grouped by semantic contract
+tests/                      semantic, kernel, host and stress tests
+examples/                   tutorials, recipes and case studies
+performance/                validating local performance programmes
+packages/                   exact-closure package catalogue and profiles
+scripts/                    checks, builders and generated-target tooling
+docs/                       guides, design and contributor material
 ```
 
-## Public imports
+The kernel is deliberately internal. Public code imports `fibers`, `fibers.op`, facilities, lifetimes or host adapters rather than evaluator modules.
 
-The root module contains the root lifecycle and operations interpreted by the
-currently running fibre:
-
-```lua
-local fibers = require('fibers')
-
-fibers.run(fn, opts)
-fibers.try_run(fn, opts)
-fibers.perform(op)
-fibers.spawn(fn, name)
-fibers.now()
-fibers.pcall(fn, ...)
-fibers.scope(fn)
-fibers.try_scope(fn)
-```
-
-Types, constructors and option combinators use their one canonical module:
-
-```lua
-local Op = require('fibers.op')
-local Protected = require('fibers.protected')
-local Channel = require('fibers.channel')
-local Stream = require('fibers.stream')
-local Flow = require('fibers.resource.flow')
-local FIFO = require('fibers.resource.fifo')
-```
-
-There is no `fibers.resource` façade and no duplicate top-level façade for
-Flow or Cell. Top-level placement denotes common application
-vocabulary; `resource/` denotes lower-level transactional construction.
-
-Low-level primitive constructors are positional and do not accept options
-tables or injected sub-resources. Semantic values come first; an optional
-diagnostic name follows:
-
-```lua
-Channel.new(capacity, name)
-FIFO.new(capacity, name) -- math.huge is unbounded
-Counter.new(initial, name)
-Counter.bounded(capacity, name) / Counter.range(initial, minimum, maximum, name)
-Pulse.new(initial_version, name)
-Flow.new(capacity, name)
-```
-
-Distinct laws use distinct constructors rather than string switches, for
-example `Mailbox.new`, `Mailbox.reject_newest` and `Mailbox.drop_oldest`.
-Policy-heavy runtimes, hosts and adapters may still use option records where
-the fields form a genuine configuration object.
-
-## Module placement rule
-
-A source file should answer one of these questions clearly:
-
-- Which public concept does it define?
-- Which subsystem defines this shared protocol?
-- Which correctness boundary of the kernel does it protect?
-
-A small implementation used by one module is merged into that module. A separate
-private module is retained only when it is substantial, shared within the
-subsystem or independently testable as a correctness boundary. Global
-`fibers.internal` is reserved for the closed kernel and the cross-version
-protected-call implementation.
-
-## Flow and Stream
-
-`fibers.resource.flow` is the transactional transfer atom. It can be composed
-to build buffering, tees, encoders and other transfer structures.
-`fibers.stream` assembles one or more Flows into a persistent portable interface.
-It has no static dependency on the host reactor. `fibers.io.stream` adds transactional
-opening over host handles. Files, processes and sockets provide those host-backed
-Streams, while core-only programmes may construct memory-backed Streams directly.
-
-The dependency direction is one-way:
-
-```text
-Op → resource primitives → Flow → portable Stream → I/O Stream → File / Process / Socket
-```
-
-## Test groups
-
-`tests/groups.lua` defines convenient public, composition, resources, lifetimes,
-embedding, kernel, internal, case-study and performance runs. Tests for recipes,
-documented examples and case studies live beside those examples and are included
-by the same groups. These
-lists organise targeted commands; semantic tests do not inspect repository
-layout. Run one group with:
+## Main commands
 
 ```sh
-lua tests/run_group.lua public
+make test
+make test-kernel
+make test-matrix
+make test-native
+make test-stress
+make examples
+make check
 ```
 
-The default suite and the reference evaluator run remain:
+`make test` runs the ordinary semantic suite. `make test-matrix` repeats interpreter-sensitive semantics across available Lua versions, LuaJIT, TexLua and generated Luau. Native providers and sustained churn remain separate.
 
-```sh
-lua tests/run_all.lua
-FIBERS_MACHINE=reference lua tests/run_all.lua
-```
+## Package closure
 
-## Portable module shape
+`scripts/build-profile.lua` computes the static closure of selected public entries. Named profiles are conveniences; arbitrary repeated `--entry` arguments are supported. Dynamic native probing is confined to `fibers.io.auto`.
 
-Shared Lua and Luau modules use an unambiguous filesystem convention. Leaf
-modules use `name.lua`. A module that also contains child modules uses
-`name/init.lua`. A source tree must not contain both `name.lua` and `name/`, or
-both `.lua` and `.luau` forms of the same module.
+## Internal dependency direction
 
-This is a filesystem rule only; logical names such as `fibers.scope` and
-`fibers.scope.result` are unchanged. `scripts/check-modules.lua` checks duplicate logical modules, ambiguous module
-paths and unresolved static Fibers imports. Package ownership is described by `packages/catalogue.lua`; named deployment examples live in `packages/profiles.lua`. `scripts/build-profile.lua` emits an exact static module closure and a package-size report.
+- `Operation` is immutable and does not depend on the scheduler;
+- `Runtime` owns fibres, the ready queue and public execution phases;
+- `Engine` owns pending operations, arbitration and commit authority;
+- `Search` owns one speculative execution and its resumable state;
+- `Journal` owns speculative managed state and rollback;
+- `Proof` is a dynamic absence value; Engine owns its reverse invalidation graph;
+- host adapters publish versioned facts rather than entering Search recursively;
+- diagnostics observe through hooks and do not alter semantics.
+
+`make check-modules` validates static imports and ambiguous module paths. `make check-packages` validates package boundaries and exact-closure profiles.

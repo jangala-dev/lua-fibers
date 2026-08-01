@@ -35,8 +35,7 @@ public API rather than altering their table representation. The runtime protects
 its managed stores and validates supported operations, but deliberately does not
 attempt to prevent trusted Lua code from using raw or debug access.
 
-Named map forms use string keys so that ordering is portable and deterministic.
-Use ordered `{ name, option }` entries when a non-string label is required.
+Named combinators accept maps from string names to options. Keys are sorted so ordering is portable and deterministic.
 
 ## 2. Canonical option language
 
@@ -45,7 +44,7 @@ The public API elaborates to nine canonical forms:
 ```text
 option ::=
     always(values)
-  | primitive(programme)
+  | primitive(leaf, argument?)
   | choice(option₁, ..., optionₙ)
   | guard(builder)
   | map(option, transform)
@@ -61,8 +60,8 @@ Derived forms include:
 
 ```text
 never           = choice()
-each(lanes)     = product(independent, lanes)
-together(lanes) = product(interacting, lanes)
+each(lanes...)    = product(independent, lanes)
+together(lanes...) = product(interacting, lanes)
 emit(effect)   selects a typed post-commit consequence
 ```
 
@@ -100,7 +99,7 @@ validation conflict is not Retry
 one exhausted primitive query is not necessarily Retry
 ```
 
-The production ledger machine retains its explicit alternative stack when a bounded search returns `Unknown`. A later bounded call resumes the same proof while its pending frontier, committed observations and external epoch remain unchanged. The copy-on-branch reference evaluator deliberately restarts and remains the semantic oracle.
+When bounded search returns `Unknown`, the execution-frontier kernel retains its Lua search coroutine, rollback journal, guard activations and witness cursors. A later bounded call resumes the same proof while its versioned frontier remains unchanged.
 
 ## 4. Candidate proof and commit
 
@@ -118,7 +117,7 @@ Candidate {
 }
 ```
 
-Commit is valid only while:
+Candidate is valid only while:
 
 ```text
 every selected participant still wait on the same attempts
@@ -133,10 +132,11 @@ The commit sequence is:
 ```text
 1. validate versions, attempts and negative guards
 2. prepare the complete effect batch
-3. install location deltas
-4. discharge commit and defeat effects
-5. resume selected fibres with raw packed results
-6. run each participant's wraps inside its returning perform call
+3. calculate all final location values without committed mutation
+4. raw-install all location values and versions
+5. discharge commit and defeat effects
+6. resume selected fibres with raw packed results
+7. run each participant's wraps inside its returning perform call
 ```
 
 Effect discharge occurs after state installation. A discharge failure is fatal because the state commit cannot be rolled back.
@@ -434,9 +434,9 @@ an option which was never entered
 
 Defeat effects are prepared and discharged with the winning world's effect batch.
 
-## 14. Fixed primitive substrate
+## 14. Executable primitive leaves
 
-Trusted facilities compile to fixed primitive programme forms:
+Trusted facilities construct immutable executable leaf specifications:
 
 ```text
 read
@@ -450,7 +450,7 @@ linear exchange
 snapshot
 ```
 
-The kernel owns:
+Each leaf contains the immutable behaviour needed for its primitive operation. The current perform/session owns all mutable activation, frontier and rollback state. The kernel owns:
 
 ```text
 search and alternative ordering
@@ -640,7 +640,7 @@ runtime transactions are not durable transactions
 
 ## 21. Implementation obligations
 
-The current ledger machine and copy-on-branch reference machine consume the same option IR while maintaining independent speculative-state representations. The test suite exercises:
+The execution-frontier kernel executes the immutable Op graph and trusted leaves through one speculative-state representation. The test suite exercises:
 
 ```text
 global exchange and witness backtracking

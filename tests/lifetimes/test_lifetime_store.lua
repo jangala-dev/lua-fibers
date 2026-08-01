@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -32,6 +29,18 @@ local function resource(name, children)
   local value = { name = name }
   Lifetime.inert(value, { name = name, children = children })
   return value
+end
+
+-- The lifetime forest is demand-driven. Closed algebraic work does not pay for
+-- it; the first lifetime operation creates one store which is then retained.
+do
+  local runtime = Runtime.new()
+  eq(runtime.lifetimes, nil, 'bare Runtime must not allocate a LifetimeStore')
+  local item = resource('lazy-store')
+  Lifetime.of(item):bind_runtime(runtime)
+  local store = runtime.lifetimes
+  truthy(store, 'binding a Lifetime creates the Runtime-local store')
+  eq(runtime:_lifetime_store(), store, 'the Runtime reuses its LifetimeStore')
 end
 
 -- A dormant Lifetime becomes live only through committed admission and the

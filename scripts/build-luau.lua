@@ -189,7 +189,6 @@ local function resolve_profile(name, stack)
   end
   return {
     name = name,
-    machine = raw.machine or profile.machine or 'ledger',
     tests = kept,
     module_entries = entries,
   }
@@ -267,17 +266,8 @@ local function transform(text)
   return text
 end
 
-local function transform_source(name, text, machine)
-  text = transform(text)
-  if name == 'fibers.runtime' then
-    local count
-    text, count = text:gsub('local requested = opts%.machine',
-      'local requested = opts.machine or ' .. string.format('%q', machine), 1)
-    if count ~= 1 then
-      fail("cannot set generated Luau runtime's default machine")
-    end
-  end
-  return text
+local function transform_source(_, text)
+  return transform(text)
 end
 
 local function strip_loader(text, path)
@@ -324,7 +314,7 @@ local function generated_path(path, auxiliary)
   if auxiliary then
     return 'src/' .. path:gsub('%.lua$', '.luau')
   end
-  return 'src/' .. path:gsub('^src/', ''):gsub('^reference/', ''):gsub('%.lua$', '.luau')
+  return 'src/' .. path:gsub('^src/', ''):gsub('%.lua$', '.luau')
 end
 
 local function profile_dependencies(test_paths, source, auxiliary)
@@ -450,12 +440,9 @@ then
 end
 
 local profile = resolve_profile(profile_name)
-if profile.machine ~= 'ledger' and profile.machine ~= 'reference' then
-  fail('invalid Luau machine: ' .. tostring(profile.machine))
-end
 validate_profile(profile)
 
-local source = collect_modules({ 'src', 'reference' }, false)
+local source = collect_modules({ 'src' }, false)
 local auxiliary = collect_modules({ 'tests', 'examples' }, true)
 local test_entries, selected_aux = profile_dependencies(profile.tests, source, auxiliary)
 local entries = {}
@@ -477,7 +464,7 @@ mkdir(output)
 
 for _, name in ipairs(sorted_keys(selected)) do
   local path = source[name]
-  write_file(output .. '/' .. generated_path(path, false), transform_source(name, read_file(path), profile.machine))
+  write_file(output .. '/' .. generated_path(path, false), transform_source(name, read_file(path)))
 end
 for _, name in ipairs(sorted_keys(selected_aux)) do
   local path = auxiliary[name]

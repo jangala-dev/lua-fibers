@@ -65,18 +65,6 @@ for source, path in pairs(modules) do
   end
 end
 
--- The reference source tree is owned wholly by fibers-reference.
-for _, path in ipairs(list_files('reference')) do
-  local source = module_name(path, 'reference')
-  local text = read_file(path)
-  for dependency in text:gmatch("require%s*%(%s*['\"](fibers[^'\"]*)['\"]%s*%)") do
-    local target_owner = owner_of(dependency) or 'fibers-reference'
-    if target_owner ~= 'fibers-core' and target_owner ~= 'fibers-reference' then
-      errors[#errors + 1] = source .. ' (fibers-reference) depends on disallowed package ' .. target_owner
-    end
-  end
-end
-
 if #errors > 0 then
   table.sort(errors)
   io.stderr:write('package dependency errors:\n')

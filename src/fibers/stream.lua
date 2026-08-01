@@ -9,7 +9,7 @@ local Flow = require('fibers.resource.flow')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local Runtime = require('fibers.runtime')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Stream, Duplex = {}, {}
 Duplex.__index = Duplex
@@ -135,40 +135,20 @@ function Duplex:read_some_op(n)
   return endpoint(self, 'read'):read_some_op(n)
 end
 
-function Duplex:read_some(n)
-  return perform(self:read_some_op(n))
-end
-
 function Duplex:read_exactly_op(n)
   return endpoint(self, 'read'):read_exactly_op(n)
-end
-
-function Duplex:read_exactly(n)
-  return perform(self:read_exactly_op(n))
 end
 
 function Duplex:read_until_op(separator, opts)
   return endpoint(self, 'read'):read_until_op(separator, opts)
 end
 
-function Duplex:read_until(separator, opts)
-  return perform(self:read_until_op(separator, opts))
-end
-
 function Duplex:read_line_op(opts)
   return endpoint(self, 'read'):read_line_op(opts)
 end
 
-function Duplex:read_line(opts)
-  return perform(self:read_line_op(opts))
-end
-
 function Duplex:read_all_op(opts)
   return endpoint(self, 'read'):read_all_op(opts)
-end
-
-function Duplex:read_all(opts)
-  return perform(self:read_all_op(opts))
 end
 
 function Duplex:read_op(spec, opts)
@@ -187,9 +167,6 @@ function Duplex:read_op(spec, opts)
     return self:read_all_op(opts)
   end
   error("stream read_op expects a byte count, '*l', '*L' or '*a'", 2)
-end
-function Duplex:read(spec, opts)
-  return perform(self:read_op(spec, opts))
 end
 
 local function write_bytes(...)
@@ -216,17 +193,6 @@ end
 function Duplex:flush_op()
   return endpoint(self, 'write'):flush_op()
 end
-function Duplex:write(...)
-  return perform(self:write_op(...))
-end
-
-function Duplex:write_some(bytes)
-  return perform(self:write_some_op(bytes))
-end
-
-function Duplex:flush()
-  return perform(self:flush_op())
-end
 
 local function flow_of(value)
   return value and value.flow
@@ -250,24 +216,12 @@ function Duplex:shutdown_read_op(reason)
   return retire_direction(self, 'read', reason, 'immediate', false)
 end
 
-function Duplex:shutdown_read(reason)
-  return perform(self:shutdown_read_op(reason))
-end
-
 function Duplex:shutdown_write_op(reason)
   return retire_direction(self, 'write', reason, 'drain', false)
 end
 
-function Duplex:shutdown_write(reason)
-  return perform(self:shutdown_write_op(reason))
-end
-
 function Duplex:abort_write_op(reason)
   return retire_direction(self, 'write', reason, 'abort', true)
-end
-
-function Duplex:abort_write(reason)
-  return perform(self:abort_write_op(reason))
 end
 
 local function close_request(self, reason, abort_write)
@@ -305,16 +259,8 @@ function Duplex:close_op(reason)
   end)
 end
 
-function Duplex:close(reason)
-  return perform(self:close_op(reason))
-end
-
 function Duplex:abort_op(reason)
   return wait_after_commit(self, close_request(self, reason, true))
-end
-
-function Duplex:abort(reason)
-  return perform(self:abort_op(reason))
 end
 
 function Duplex:closed_op()
@@ -339,10 +285,6 @@ function Duplex:closed_op()
   end)
 end
 
-function Duplex:closed()
-  return perform(self:closed_op())
-end
-
 function Stream.memory_pair(opts)
   opts = opts or {}
   validate_options(opts, { name = true, capacity = true }, 'Stream.memory_pair options')
@@ -356,20 +298,38 @@ end
 function Stream.merge_lines_op(streams, opts)
   local entries = {}
   for name, stream in pairs(streams or {}) do
-    entries[#entries + 1] =
-      { name, stream:read_line_op(opts):map(function(line, err)
-        return name, line, err
-      end) }
+    entries[name] = stream:read_line_op(opts):map(function(line, err)
+      return name, line, err
+    end)
   end
-  if #entries == 0 then
+  if next(entries) == nil then
     return Op.never()
   end
   return Op.named_choice(entries):map(function(_, source, line, err)
     return source, line, err
   end)
 end
-function Stream.merge_lines(streams, opts)
-  return perform(Stream.merge_lines_op(streams, opts))
-end
+Direct.install_static(Stream, { 'merge_lines' })
+
+Direct.install(
+  Duplex,
+  {
+    'read_some',
+    'read_exactly',
+    'read_until',
+    'read_line',
+    'read_all',
+    'read',
+    'write',
+    'write_some',
+    'flush',
+    'shutdown_read',
+    'shutdown_write',
+    'abort_write',
+    'close',
+    'abort',
+    'closed',
+  }
+)
 
 return Stream

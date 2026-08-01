@@ -1,3 +1,4 @@
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
@@ -103,7 +104,7 @@ do
     captured_result = captured
   end, { host = host })
   assert(report.ok, report:tostring())
-  report.runtime:assert_io_quiescent('manual process contract')
+  IOAudit.assert_clean(report.runtime, { label = 'manual process contract' })
   assert_eq(captured_result.status.code, 0)
 end
 

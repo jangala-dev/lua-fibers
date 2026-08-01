@@ -4,9 +4,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -110,7 +107,36 @@ local function test_wait_until_and_match_contracts()
   H.assert_eq(label, 'ready')
 end
 
+local function test_shared_version_leaf_keeps_occurrence_state_separate()
+  local Rendezvous = require('fibers.resource.rendezvous')
+  local rt = Runtime.new()
+  local cell = Cell.new(0, 'shared-version-leaf-cell')
+  local first_done = Rendezvous.new('shared-version-leaf-first-done')
+  local first_value, first_version, second_value, second_version
+
+  rt:spawn_raw(function()
+    first_value, first_version = rt:perform(cell:changed_op(0))
+    rt:perform(first_done:put_op(true))
+  end, 'shared-version-leaf-first')
+
+  rt:spawn_raw(function()
+    second_value, second_version = rt:perform(cell:changed_op(1))
+  end, 'shared-version-leaf-second')
+
+  rt:spawn_raw(function()
+    rt:perform(cell:write_op(1))
+    rt:perform(first_done:get_op())
+  end, 'shared-version-leaf-writer')
+
+  H.assert_status(rt:run(), 'found')
+  H.assert_eq(first_value, 1)
+  H.assert_eq(first_version, 1)
+  H.assert_eq(second_value, 0)
+  H.assert_eq(second_version, 0)
+end
+
 local tests = {
+  test_shared_version_leaf_keeps_occurrence_state_separate,
   test_wait_until_and_match_contracts,
   test_resource_observation_retries_independent_cell_updates,
   test_resource_observation_retries_primary_before_or_else_fallback,

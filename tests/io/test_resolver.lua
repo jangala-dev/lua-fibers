@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -152,6 +149,17 @@ do
     server:await()
     listener:close('test complete')
   end, { host = host })
+end
+
+-- Removed pre-v1 socket resolver options are not accepted.
+do
+  local endpoint = socket.name_endpoint('removed-options.test', 80)
+  local ok, err = pcall(socket.resolve_op, endpoint, { require_nonblocking = true })
+  assert_eq(ok, false)
+  assert_truthy(tostring(err):find('require_nonblocking', 1, true))
+  ok, err = pcall(socket.resolve_op, endpoint, { nameserver = '192.0.2.53' })
+  assert_eq(ok, false)
+  assert_truthy(tostring(err):find('nameservers', 1, true))
 end
 
 print('tests/io/test_resolver.lua: ok')

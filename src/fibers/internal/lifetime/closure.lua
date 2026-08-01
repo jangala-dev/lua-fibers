@@ -17,7 +17,7 @@ local Runtime = require('fibers.runtime')
 local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 local Protected = require('fibers.protected')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Closure = {}
 local unpack_ = table.unpack or unpack
@@ -196,16 +196,8 @@ function ClosureFailure:retry_op()
   return recovery_op(self, Closure._retry_token_op)
 end
 
-function ClosureFailure:retry()
-  return perform(self:retry_op())
-end
-
 function ClosureFailure:force_op()
   return recovery_op(self, Closure._force_token_op)
-end
-
-function ClosureFailure:force()
-  return perform(self:force_op())
 end
 
 function ClosureFailure:inspect()
@@ -304,7 +296,7 @@ function Closure.require_ok(message)
   end
 end
 
-function Closure.normalize(protocol, label)
+function Closure.protocol(protocol, label)
   local protocol_label = label or 'Closure protocol'
   if protocol == nil then
     protocol = {
@@ -328,10 +320,8 @@ function Closure.normalize(protocol, label)
   return captured
 end
 
-Closure.protocol = Closure.normalize
-
 function Closure.none()
-  return Closure.normalize()
+  return Closure.protocol()
 end
 
 function Closure.request_then_wait(request_op, finish_op, opts)
@@ -724,5 +714,7 @@ end
 function Closure.close_op(ctx, item, reason, after_finish)
   return Closure._close_item_op(ctx, item, { type = 'retire', reason = reason }, after_finish)
 end
+
+Direct.install(ClosureFailure, { 'retry', 'force' })
 
 return Closure

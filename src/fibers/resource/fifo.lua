@@ -3,7 +3,7 @@
 local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
 local Counter = require('fibers.resource.counter')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local FIFO = {}
 FIFO.__index = FIFO
@@ -67,12 +67,6 @@ function FIFO:get_op()
   end))
 end
 
-function FIFO:put(item)
-  return perform(self:put_op(item))
-end
-
-function FIFO:get()
-  return perform(self:get_op())
-end
+Direct.install(FIFO, { 'put', 'get' })
 
 return FIFO

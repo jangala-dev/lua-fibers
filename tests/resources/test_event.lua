@@ -4,20 +4,18 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 
 local function deliver(rt, resource, ...)
-  return rt:external_feed(resource):set(...)
+  return External.external_feed(rt, resource):set(...)
 end
 local Signal = require('fibers.resource.signal')
 local Rendezvous = require('fibers.resource.rendezvous')
@@ -44,7 +42,7 @@ local function test_not_ready_without_fallback_reports_pending_wake_interest()
   local st = rt:run()
   H.assert_status(st, 'pending')
   H.assert_eq(got, nil)
-  H.assert_truthy(st.waits and #st.waits == 1, 'expected one wake interest')
+  H.assert_truthy(st.interests and #st.interests == 1, 'expected one wake interest')
 end
 
 local function test_ready_now_beats_fallback()

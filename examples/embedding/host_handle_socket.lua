@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
@@ -93,13 +91,13 @@ rt:spawn_raw(function()
 end, 'root')
 
 -- Opening the stream registers both directions with the shared reactor; the read then waits for host readiness.
-rt:drive({ host = host, max_iterations = 20 })
+External.drive(rt, { host = host, max_iterations = 20 })
 assert(stream ~= nil)
 assert(got == nil)
 
 socket:feed('ping')
 host:writable(socket.key)
-rt:drive({ host = host, max_iterations = 120 })
+External.drive(rt, { host = host, max_iterations = 120 })
 
 assert(got == 'ping')
 assert(flushed == true)

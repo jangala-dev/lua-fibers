@@ -353,9 +353,8 @@ acceptance they remain in the Listener Lifetime's private Scope custody. `accept
 dequeues a connection and moves its complete Stream subtree into the accepting
 scope in the same commit. If the option loses a choice, neither action occurs.
 Queued input has certified priority over terminal listener closure. When a
-transfer option will be stored or performed by another fibre, pass its target
-target Scope explicitly; an omitted target is the current scope at option
-construction.
+transfer option will be stored or performed by another fibre, pass its target Scope explicitly. Direct methods use the current Scope when
+the target is omitted; inert operation constructors require the target explicitly.
 
 Outbound connection establishment is deliberately two-stage:
 
@@ -365,17 +364,17 @@ local connection, err = dial:result()
 
 -- Explicit composable form:
 local selected_dial = fibers.perform(socket.dial_op(socket.inet_address('127.0.0.1', 8080)))
-local selected, selected_err = fibers.perform(selected_dial:result_op())
+local selected, selected_err = fibers.perform(selected_dial:result_op(fibers.current_scope()))
 ```
 
 The split allows the eventual connection result to participate correctly in
-`choice`, timeouts and Happy Eyeballs races. `dial:connected_op()` is a
-success-only option and becomes refutable after terminal failure or closure. A
+`choice`, timeouts and Happy Eyeballs races.
+`dial:connected_op(fibers.current_scope())` is a success-only option and becomes refutable after terminal failure or closure. A
 successful but untaken connection remains in the Dial Lifetime's private Scope custody;
 claiming it moves the complete Stream subtree into the caller's scope. As with
 `accept_op`, pass an explicit target when a result option is intended for a
 different fibre or scope.
-`dial:result_op()` returns either the transferred connection or its structured
+`dial:result_op(fibers.current_scope())` returns either the transferred connection or its structured
 error. `dial:closed_op()` observes execution termination and completed custody
 disposition.
 
@@ -423,7 +422,7 @@ Resolution is deliberately two-stage. `socket.resolve_op` admits a query Lifetim
 and starts its driver after commitment. `query:addresses_op()` is success-only
 and becomes refutable after terminal failure; `query:result_op()` combines it
 with the failure result through certified fallback. A and AAAA completion is
-also published independently through `query:family_ready_op(family)` and
+also published independently through `query:family_addresses_op(family)` and
 `query:family_finished_op(family)`. This leaves the query alive as two dynamic,
 explicitly closed address sources for Happy Eyeballs coordination rather than
 hiding DNS inside one blocking dial call.
@@ -449,10 +448,10 @@ local query = socket.resolve_name('example.org', 443, {
 
 When a native host advertises only a blocking resolver but supplies Fibers
 stream and datagram sockets, `socket.resolve` prefers the DNS implementation.
-An explicit `resolver`, `dns = true`, `nameservers`, or `name_server` option also
-selects it. The host resolver remains available for deterministic SimulatedHost
-records and as a compatibility fallback when DNS configuration is unavailable;
-`require_nonblocking = true` disables that fallback.
+An explicit `resolver`, `dns = true`, or `nameservers` option also
+selects it. The host resolver remains available when selected explicitly or when the host
+does not provide the socket capabilities needed by the Fibers DNS resolver. Missing
+DNS configuration is otherwise reported as an error.
 
 The default DNS configuration is read from `/etc/resolv.conf`, local static
 names are read from `/etc/hosts`, and transaction-id entropy may be read from
@@ -665,13 +664,16 @@ has closed:
 ```lua
 local result = fibers.try_run(main, { host = host })
 assert(result.ok, result:tostring())
-result.runtime:assert_io_quiescent('application shutdown')
+local IO = require('fibers.diagnostics.io')
+IO.enable()
+IO.assert_clean(result.runtime, { label = 'application shutdown' })
 ```
 
 For diagnostics:
 
 ```lua
-local audit = fibers.current_runtime():io_audit({
+local IO = require('fibers.diagnostics.io')
+local audit = IO.report(fibers.current_runtime(), {
   include_history = true,
 })
 ```

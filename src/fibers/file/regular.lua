@@ -12,6 +12,7 @@ local Mailbox = require('fibers.mailbox')
 local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Algorithms = {}
 
@@ -238,9 +239,6 @@ end
 function Request:result_op()
   return self.completion:result_op()
 end
-function Request:result()
-  return perform(self:result_op())
-end
 
 local function file_closure(file)
   return Closure.request_then_wait(function(_ctx, _record, reason)
@@ -414,44 +412,8 @@ local function write_parts(...)
   return table.concat(parts)
 end
 
-function RegularFile:ready()
-  return perform(self:ready_op())
-end
-function RegularFile:read(count)
-  return perform(self:read_op(count))
-end
-function RegularFile:read_exactly(count)
-  return perform(self:read_exactly_op(count))
-end
 function RegularFile:write(...)
   return perform(self:write_op(write_parts(...)))
-end
-function RegularFile:write_all(bytes)
-  return perform(self:write_all_op(bytes))
-end
-function RegularFile:seek(whence, offset)
-  return perform(self:seek_op(whence, offset))
-end
-function RegularFile:read_line(keep)
-  return perform(self:read_line_op(keep))
-end
-function RegularFile:read_all(opts)
-  return perform(self:read_all_op(opts))
-end
-function RegularFile:rename(path)
-  return perform(self:rename_op(path))
-end
-function RegularFile:flush()
-  return perform(self:flush_op())
-end
-function RegularFile:sync(opts)
-  return perform(self:sync_op(opts))
-end
-function RegularFile:close(reason)
-  return perform(self:close_op(reason))
-end
-function RegularFile:closed()
-  return perform(self:closed_op())
 end
 
 local function publish(rt, completion, ok, ...)
@@ -718,18 +680,9 @@ function File.tmpfile_op(opts)
     return file
   end)
 end
-function File.open(path, mode, opts)
-  return perform(File.open_op(path, mode, opts))
-end
-function File.tmpfile(opts)
-  return perform(File.tmpfile_op(opts))
-end
 
 function Job:result_op()
   return self.driver:await_op()
-end
-function Job:result()
-  return perform(self:result_op())
 end
 
 local function path_job_op(action, fn, opts)
@@ -901,27 +854,32 @@ function File.mkdir_p_op(path, opts)
   return job_result(submission, job)
 end
 
-function File.read_all(path, opts)
-  return perform(File.read_all_op(path, opts))
-end
-function File.write_all(path, bytes, opts)
-  return perform(File.write_all_op(path, bytes, opts))
-end
-function File.rename(from, to, opts)
-  return perform(File.rename_op(from, to, opts))
-end
-function File.unlink(path, opts)
-  return perform(File.unlink_op(path, opts))
-end
-function File.mkdir(path, opts)
-  return perform(File.mkdir_op(path, opts))
-end
-function File.mkdir_p(path, opts)
-  return perform(File.mkdir_p_op(path, opts))
-end
-
 File.RegularFile = RegularFile
 File.Request = Request
 File.Job = Job
 File.Error = IOError
+Direct.install(Request, { 'result' })
+Direct.install(
+  RegularFile,
+  {
+    'ready',
+    'read',
+    'read_exactly',
+    'read_all',
+    'write_all',
+    'read_line',
+    'seek',
+    'flush',
+    'rename',
+    'sync',
+    'close',
+    'closed',
+  }
+)
+Direct.install(Job, { 'result' })
+Direct.install_static(
+  File,
+  { 'open', 'tmpfile', 'read_all', 'write_all', 'rename', 'unlink', 'mkdir', 'mkdir_p' }
+)
+
 return File

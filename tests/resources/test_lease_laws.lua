@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -35,6 +32,18 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
+local function seed_lease(lease, subject, holders)
+  local rt = new_runtime()
+  local ops = {}
+  for holder, mode in pairs(holders) do
+    ops[#ops + 1] = lease:acquire_op(subject, mode, holder)
+  end
+  rt:spawn_raw(function()
+    rt:perform(#ops == 1 and ops[1] or Op.each(ops))
+  end)
+  assert_status(rt:run(), 'found', 'lease seed')
+end
+
 local function test_readers_merge_and_writer_conflicts()
   local rt = new_runtime()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-rw')
@@ -59,8 +68,7 @@ end
 
 local function test_release_supply_law()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-release')
-  c.holders.s = { writer = 'write' }
-  c.versions.s = 0
+  seed_lease(c, 's', { writer = 'write' })
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({
@@ -70,9 +78,9 @@ local function test_release_supply_law()
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'blocked')
-  assert_nil(c.holders.s.writer)
+  assert_nil((c.holders.s or {}).writer)
 
-  c.holders.s = { writer = 'write' }
+  seed_lease(c, 's', { writer = 'write' })
   local rt2, rows2 = new_runtime()
   rt2:spawn_raw(function()
     rows2 = rt2:perform(Op.together({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
@@ -80,7 +88,7 @@ local function test_release_supply_law()
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)
   assert_eq(c.holders.s.reader, 'read')
-  assert_nil(c.holders.s.writer)
+  assert_nil((c.holders.s or {}).writer)
 end
 
 local function test_incompatible_acquires_do_not_jointly_commit()
@@ -98,7 +106,7 @@ end
 
 local function test_release_one_blocker_not_enough()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-two-blockers')
-  c.holders.s = { w1 = 'write', w2 = 'write' }
+  seed_lease(c, 's', { w1 = 'write', w2 = 'write' })
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
@@ -108,8 +116,23 @@ local function test_release_one_blocker_not_enough()
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'blocked')
-  assert_nil(c.holders.s.w1)
+  assert_nil((c.holders.s or {}).w1)
   assert_eq(c.holders.s.w2, 'write')
+end
+
+local function test_inspection_snapshots_are_detached()
+  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-snapshots')
+  seed_lease(c, 's', { reader = 'read' })
+
+  local holders = c.holders
+  local versions = c.versions
+  local version = c.version
+  holders.s.reader = 'write'
+  versions.s = versions.s + 100
+
+  assert_eq(c.holders.s.reader, 'read', 'holder snapshot must not mutate managed state')
+  assert_eq(c.versions.s + 100, versions.s, 'version snapshot must be detached')
+  assert_eq(c.version, version, 'snapshot mutation must not change aggregate version')
 end
 
 for _, t in ipairs({
@@ -117,6 +140,7 @@ for _, t in ipairs({
   test_release_supply_law,
   test_incompatible_acquires_do_not_jointly_commit,
   test_release_one_blocker_not_enough,
+  test_inspection_snapshots_are_detached,
 }) do
   t()
 end

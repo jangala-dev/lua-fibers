@@ -11,7 +11,8 @@ local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
-local ScopeResult = require('fibers.scope.result')
+local ScopeOutcome = require('fibers.scope.outcome')
+local ScopeResult = ScopeOutcome.Result
 
 local Application = {}
 Application.__index = Application
@@ -22,19 +23,6 @@ local function copy(value)
     out[key] = item
   end
   return out
-end
-
-local function closure_failures_from(err)
-  if type(err) ~= 'table' then
-    return {}
-  end
-  if err._fibers_closure_failure == true then
-    return { err }
-  end
-  if type(err.cause) == 'table' and err.cause._fibers_closure_failure == true then
-    return { err.cause }
-  end
-  return {}
 end
 
 local function positive_integer(value, fallback, name)
@@ -64,30 +52,7 @@ local function non_negative_number(value, fallback, name)
 end
 
 local function runtime_options(opts, host)
-  local out = copy(opts.runtime_options or opts.runtime)
-  -- Preserve the established top-level runtime controls for convenience.
-  for _, key in ipairs({
-    'machine',
-    'choice_seed',
-    'search_limit',
-    'search_total_limit',
-    'search_trail_limit',
-    'search_depth_limit',
-    'cycle_work_limit',
-    'cycle_focus_limit',
-    'instrumentation',
-    'quiet_deadlock',
-    'dependency_index',
-    'dependency_index_threshold',
-    'component_search',
-    'normalise_search',
-    'certified_symmetry',
-    'resumable_search',
-  }) do
-    if opts[key] ~= nil and out[key] == nil then
-      out[key] = opts[key]
-    end
-  end
+  local out = copy(opts.runtime_options)
   out.host = host
   return out
 end
@@ -110,7 +75,7 @@ local function public_status(self, fields)
 end
 
 local function earliest_deadline(status)
-  local interests = status and (status.interests or status.waits) or {}
+  local interests = status and status.interests or {}
   return WaitSet.build(interests).deadline, interests
 end
 
@@ -135,6 +100,24 @@ end
 
 function Application.new(fn, opts)
   opts = opts or {}
+  if opts.runtime ~= nil then
+    error('Embed.Application option runtime was removed; use runtime_options', 2)
+  end
+  for _, key in ipairs({
+    'choice_seed',
+    'search_limit',
+    'search_total_limit',
+    'search_trail_limit',
+    'search_depth_limit',
+    'cycle_work_limit',
+    'cycle_focus_limit',
+    'instrumentation',
+    'quiet_deadlock',
+  }) do
+    if opts[key] ~= nil then
+      error('Embed.Application runtime option ' .. key .. ' must be inside runtime_options', 2)
+    end
+  end
   if type(fn) ~= 'function' then
     error((opts.label or 'Embed.prepare') .. ' expects a root function', 2)
   end
@@ -230,7 +213,7 @@ function Application:_complete(runtime_status, runtime_error)
 
   local result = self._root_result
   if runtime_error ~= nil then
-    local closure_failures = closure_failures_from(runtime_error)
+    local closure_failures = ScopeOutcome.closure_failures(runtime_error)
     result = ScopeResult.fail({
       reason = 'runtime_error',
       primary = runtime_error,
@@ -277,15 +260,19 @@ end
 
 local function advance_limits(self, opts)
   opts = opts or {}
-  local max_steps =
-    positive_integer(opts.max_steps or opts.max_steps_per_turn, self.max_steps_per_turn, 'advance max_steps')
-  local max_work =
-    positive_integer(opts.max_work or opts.max_work_per_step, self.max_work_per_step, 'advance max_work')
-  local max_external = positive_integer(
-    opts.max_external or opts.max_external_per_turn,
-    self.max_external_per_turn,
-    'advance max_external'
-  )
+  for _, key in ipairs({
+    'max_steps_per_turn',
+    'max_work_per_step',
+    'max_external_per_turn',
+    'max_seconds_per_turn',
+  }) do
+    if opts[key] ~= nil then
+      error('Application:advance option ' .. key .. ' was removed; use the short per-call name', 3)
+    end
+  end
+  local max_steps = positive_integer(opts.max_steps, self.max_steps_per_turn, 'advance max_steps')
+  local max_work = positive_integer(opts.max_work, self.max_work_per_step, 'advance max_work')
+  local max_external = positive_integer(opts.max_external, self.max_external_per_turn, 'advance max_external')
 
   local horizon = opts.horizon
   if horizon ~= nil then
@@ -294,11 +281,7 @@ local function advance_limits(self, opts)
       error('advance horizon must be a number', 3)
     end
   else
-    local seconds = non_negative_number(
-      opts.max_seconds or opts.max_seconds_per_turn,
-      self.max_seconds_per_turn,
-      'advance max_seconds'
-    )
+    local seconds = non_negative_number(opts.max_seconds, self.max_seconds_per_turn, 'advance max_seconds')
     horizon = self:now() + seconds
   end
   return max_steps, max_work, max_external, horizon

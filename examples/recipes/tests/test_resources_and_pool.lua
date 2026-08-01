@@ -4,9 +4,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -40,6 +37,18 @@ local function assert_status(st, tag, msg)
 end
 local function new_runtime(opts)
   return Runtime.new(opts or {})
+end
+
+local function seed_lease(lease, subject, holders)
+  local rt = new_runtime()
+  local ops = {}
+  for holder, mode in pairs(holders) do
+    ops[#ops + 1] = lease:acquire_op(subject, mode, holder)
+  end
+  rt:spawn_raw(function()
+    rt:perform(#ops == 1 and ops[1] or Op.each(ops))
+  end, 'lease-seed')
+  assert_status(rt:run(), 'found', 'lease seed')
 end
 
 local function perform_op(op)
@@ -133,8 +142,7 @@ end
 
 local function test_lease_together_release_supplies_acquire_but_each_does_not()
   local c = Lease.new({ read = { read = true }, write = {} }, 'lease-release')
-  c.holders.s = { writer = 'write' }
-  c.versions.s = 0
+  seed_lease(c, 's', { writer = 'write' })
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
@@ -145,10 +153,9 @@ local function test_lease_together_release_supplies_acquire_but_each_does_not()
   end, 'root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'blocked')
-  assert_nil(c.holders.s.writer)
+  assert_nil((c.holders.s or {}).writer)
 
-  c.holders.s = { writer = 'write' }
-  c.versions.s = c.versions.s or 0
+  seed_lease(c, 's', { writer = 'write' })
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
@@ -217,14 +224,14 @@ local function test_pool_acquire_release_and_retirement()
   assert_status(rt:run(), 'found')
   assert_eq(lease.key, 'a')
   assert_eq(lease.item, 'A')
-  assert_eq(pool.leases.holders.a.u1, 'lease')
+  assert_eq((pool.leases.holders.a or {}).u1, 'lease')
 
   local rt2 = new_runtime()
   rt2:spawn_raw(function()
     rt2:perform(pool:release_op(lease))
   end, 'root')
   assert_status(rt2:run(), 'found')
-  assert_nil(pool.leases.holders.a.u1)
+  assert_nil((pool.leases.holders.a or {}).u1)
   assert_eq(perform_op(pool.items:get_op('a')).item, 'A')
   assert_eq(pool.idle.entries.a.value, 'a')
 

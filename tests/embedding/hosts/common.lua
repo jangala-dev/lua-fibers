@@ -2,15 +2,13 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
@@ -65,7 +63,7 @@ end
 
 local function run_host(name, host, max_iterations)
   return function(rt)
-    return rt:drive({ host = host, max_iterations = max_iterations or 40 })
+    return External.drive(rt, { host = host, max_iterations = max_iterations or 40 })
   end
 end
 
@@ -210,7 +208,7 @@ function Common.handle_stream_pipe_smoke(name, host, Fd)
     rt:perform(stream:abort_op('test complete'))
   end, name .. ':flow')
 
-  local st = rt:drive({ host = host, max_iterations = 200 })
+  local st = External.drive(rt, { host = host, max_iterations = 200 })
   Common.assert_status(st, 'found', name .. ' stream pipe runner')
   Common.assert_eq(flushed, true, name .. ' stream flush should succeed')
   Common.assert_eq(got, 'hello', name .. ' stream should loop bytes through pipe')

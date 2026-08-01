@@ -63,11 +63,14 @@ local FFI = require('fibers.io.luajit_linux').new()
 local Posix = require('fibers.io.luaposix').new()
 
 local platform = IO.Platform.new({
-  driver = FFI,
-  sockets = FFI,
-  files = Posix,
-  processes = Posix,
-  resolver = application_resolver,
+  providers = {
+    clock = FFI,
+    wait = FFI,
+    socket = FFI,
+    file = Posix,
+    process = Posix,
+    resolver = application_resolver,
+  },
 })
 ```
 

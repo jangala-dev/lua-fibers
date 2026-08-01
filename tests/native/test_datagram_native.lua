@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -13,10 +10,6 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local socket = require('fibers.socket')
-
-if os.getenv('FIBERS_MACHINE') == 'reference' then
-  return { status = 'skip', reason = 'native host tests use the production evaluator' }
-end
 
 local ok_mod, LinuxHost = pcall(require, 'fibers.io.luajit_linux')
 if not ok_mod or not LinuxHost.is_supported() then

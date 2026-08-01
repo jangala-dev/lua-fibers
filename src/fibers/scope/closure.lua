@@ -6,16 +6,17 @@
 -- which the driver applies through ordinary Ops.
 
 local Runtime = require('fibers.runtime')
+local Context = require('fibers.internal.context')
 local Protected = require('fibers.protected')
 local Exit = require('fibers.task').Exit
-local ScopeResult = require('fibers.scope.result')
+local ScopeResult = require('fibers.scope.outcome').Result
 local Lifetime = require('fibers.lifetime')
 local Op = require('fibers.op')
 local Effect = require('fibers.effect')
 
 local Driver = {}
 
--- Closure bookkeeping is retained ordinary state rather than ledger-managed
+-- Closure bookkeeping is retained ordinary state rather than transaction-managed
 -- state.  Record it through a committed effect so request_cancel_op remains a
 -- fully transactional Op: speculative exploration and losing branches leave the
 -- Closure object untouched, while downstream and_then composition remains valid.
@@ -446,7 +447,7 @@ function Driver.run(scope, fn, closure)
   state.active = true
   state.closure = closure
 
-  local token = rt.push_scope and rt:push_scope(scope) or nil
+  local token = Context.push_scope(rt, scope)
   local setup_ok, setup_err = Protected.pcall(function()
     account_existing_children(scope, state)
   end)
@@ -524,9 +525,9 @@ function Driver.run(scope, fn, closure)
   end
 
   local pop_ok, pop_err = true, nil
-  if token and rt.pop_scope then
+  if token then
     pop_ok, pop_err = Protected.pcall(function()
-      return rt:pop_scope(token)
+      return Context.pop_scope(rt, token)
     end)
   end
   if not pop_ok then

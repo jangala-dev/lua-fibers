@@ -36,7 +36,7 @@ rt:step({ max_work = n })
 
 `Runtime:run` starts ready fibres and searches all pending focuses until at least one transaction commits or no further immediate progress is found.
 
-`Runtime:step` applies a bounded search allowance. The production ledger machine retains an incomplete search and resumes its exact alternative stack on a later call while the observed frontier and committed dependencies remain unchanged. A relevant admission, commit or external delivery invalidates the retained session. The reference evaluator continues to restart bounded searches.
+`Runtime:step` applies a bounded search allowance. The execution-frontier kernel retains the same semantic position through a Lua coroutine, including its rollback trail, witness cursors and branch loops. A later call resumes the exact proof while its observed locations, resource generations and participant buckets remain unchanged. A relevant admission, commit or external delivery invalidates only affected sessions.
 
 Current status shapes are:
 
@@ -72,7 +72,7 @@ A budget-pending status is optional `Unknown`, not semantic `Retry`, and cannot 
 { tag = 'pending', kind = 'budget', reason = 'search_quantum', ... }
 ```
 
-The production ledger machine also accepts three optional hard limits:
+The kernel also accepts three optional hard limits:
 
 ```lua
 local rt = Runtime.new({
@@ -84,7 +84,7 @@ local rt = Runtime.new({
 
 A hard limit returns the same budget status with `reason` set to `search_total_limit`, `search_depth_limit` or `search_trail_limit`. The incomplete session is discarded because repeating it with the same hard limit cannot make progress; a later driver call starts a fresh proof. These limits do not establish `Retry` and therefore cannot enable a fallback.
 
-The trail limit is checked between reduction rounds. One deterministic reduction may therefore take the live journal modestly beyond the configured value before the runtime reports the limit. Hard limits are disabled by default and currently apply to the production ledger machine, not the repository reference evaluator.
+The trail limit is checked between reduction rounds. One deterministic reduction may therefore take the live journal modestly beyond the configured value before the runtime reports the limit. Hard limits are disabled by default.
 
 ## Root lifecycle
 
@@ -98,7 +98,7 @@ end, {
 })
 ```
 
-`fibers.run` delegates host integration to `Runtime:drive`. The driver repeatedly calls `Runtime:run`; when the runtime reports actionable pending interests, it calls the host's blocking hook and re-enters the runtime after the host reports progress.
+`fibers.run` delegates host integration to `fibers.embed.external.drive`. The embedding loop repeatedly calls `Runtime:run`; when the runtime reports actionable pending interests, it calls the host's blocking hook and re-enters the runtime after the host reports progress.
 
 An embedding which already owns an event loop should normally drive `Runtime:run` or `Runtime:step` itself.
 
@@ -139,7 +139,7 @@ host:block(runtime, interests, status, opts) -> progressed, reason
 
 `Runtime:now` calls the host's time function. Time should be monotonic for timer semantics unless the application deliberately supplies another model.
 
-`host:block` may block, poll, register interests or decline them. If it returns no progress, `Runtime:drive` returns the pending status with the host reason attached; `fibers.try_run` reports that as a checked root-lifecycle failure.
+`host:block` may block, poll, register interests or decline them. If it returns no progress, `fibers.embed.external.drive` returns the pending status with the host reason attached; `fibers.try_run` reports that as a checked root-lifecycle failure.
 
 Portable and embedded hosts are selected directly from their semantic owner:
 
@@ -305,7 +305,7 @@ handle:close(reason)
 ```
 
 Every configured host-backed direction in one Runtime registers with the same
-indexed HostReactor readiness index and lazily created HostReactor. Committed Flow changes arm or
+indexed HostReactor readiness index and lazily created HostReactor. Candidateted Flow changes arm or
 disarm registrations; the host delivers only ready registration identities.
 Linux epoll events carry a fresh registration epoch rather than a raw
 descriptor. The host validates that epoch before delivering the reaction id and
@@ -488,13 +488,15 @@ audit while diagnosing integration failures:
 
 ```lua
 local registrations = rt.host_reactor and rt.host_reactor:registration_count() or 0
-local audit = rt:io_audit({ include_history = true })
+local IO = require('fibers.diagnostics.io')
+IO.enable()
+local audit = IO.report(rt, { include_history = true })
 ```
 
 After an I/O tree held in custody has closed, contract tests should call:
 
 ```lua
-rt:assert_io_quiescent('embedding shutdown')
+IO.assert_clean(rt, { label = 'embedding shutdown' })
 ```
 
 This verifies that no HostHandle remains live, no reactor registration remains

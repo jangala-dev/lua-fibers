@@ -85,12 +85,10 @@ function Readiness:readiness_op(selected)
     end
     return StateMachine.Ready.same(true, key, selected)
   end)
-  local option = Facility.external_wait(self, Kind, self._location, transition, {
+  local option = Facility.external_wait(self, self._location, transition, {
     interest = function(rt)
       return Interest.external(r, selected .. ':' .. tostring(key), {
         external_kind = 'readiness',
-        key = key,
-        resource_key = key,
         readiness_key = key,
         mode = selected,
         feed = ExternalFeed.for_resource(rt, r),

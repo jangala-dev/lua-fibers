@@ -55,7 +55,7 @@ local function attach_direction(stream, side, reactor, handle, registrations, ch
   })
   stream[side .. '_registration'] = registration
   children[#children + 1] = registration
-  registrations[#registrations + 1] = { side .. '_registration', registration:register_op() }
+  registrations[side .. '_registration'] = registration:register_op()
 end
 
 local function open_in_op(scope, handle, opts)
@@ -105,7 +105,7 @@ local function open_in_op(scope, handle, opts)
   local registrations, children = {}, {}
   attach_direction(stream, 'read', reactor, handle, registrations, children)
   attach_direction(stream, 'write', reactor, handle, registrations, children)
-  stream._reactor_live = #registrations
+  stream._reactor_live = #children
   for i = 1, #children do
     stream._lifetime:add_child(children[i])
   end

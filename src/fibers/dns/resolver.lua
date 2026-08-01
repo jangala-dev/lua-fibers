@@ -7,6 +7,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local Context = require('fibers.internal.context')
 local Sleep = require('fibers.sleep')
 local StateMachine = require('fibers.resource.machine')
 local Address = require('fibers.net.address')
@@ -256,7 +257,7 @@ local function next_id(self)
     return value
   end
   self.secure_ids = false
-  local allow_weak = self.opts.allow_weak_random == true or self.opts.require_secure_random == false
+  local allow_weak = self.opts.allow_weak_random == true
   if not allow_weak then
     return nil,
       IOError.unsupported('dns', 'secure_random', {
@@ -304,6 +305,12 @@ end
 
 function Resolver.new(opts)
   opts = copy_table(opts)
+  if opts.require_secure_random ~= nil then
+    error('require_secure_random was removed; use allow_weak_random', 2)
+  end
+  if opts.nameserver ~= nil then
+    error('nameserver was removed; use nameservers', 2)
+  end
   local maximum_cache_entries = opts.maximum_cache_entries
   if maximum_cache_entries == nil then
     maximum_cache_entries = 1024
@@ -336,7 +343,7 @@ function Resolver.new(opts)
     random_u16 = opts.random_u16,
     secure_ids = nil,
   }, Resolver)
-  if opts.nameservers or opts.nameserver or opts.resolv_conf then
+  if opts.nameservers or opts.resolv_conf then
     local config, err = Config.load(opts)
     self.config, self.config_error = config, err
     self.config_load = StateMachine.new('loaded', 'dns:config-load')
@@ -565,7 +572,7 @@ function Resolver:_tcp_exchange(server, wire, id, name, qtype, timeout, opts)
     return nil, IOError.normalise(dial_err, { domain = 'dns', action = 'tcp_dial', server = server })
   end
   local deadline = Runtime.current():now() + (tonumber(opts.tcp_timeout) or timeout or 5.0)
-  local connection, connect_err = perform_before(dial:result_op(), deadline)
+  local connection, connect_err = perform_before(dial:result_op(Context.current_scope()), deadline)
   if not connection then
     close_quietly(dial, 'DNS TCP dial failed')
     return nil, IOError.normalise(connect_err, { domain = 'dns', action = 'tcp_dial', server = server })
@@ -923,29 +930,27 @@ function Resolver:_resolve_candidate(name, port, family, opts)
   if not scope then
     error('DNS resolution requires a current Fibers scope', 2)
   end
-  local task_entries = {}
+  local task_entries, families = {}, {}
   for i = 1, #qtypes do
     local qtype = qtypes[i]
     local family_name = qtype == Codec.TYPE_AAAA and 'inet6' or 'inet4'
-    task_entries[#task_entries + 1] = {
-      family_name,
-      scope:spawn_op(function()
-        return self:resolve_type(name, qtype, opts)
-      end, self.name .. ':' .. Codec.type_name(qtype)),
-    }
+    families[i] = family_name
+    task_entries[family_name] = scope:spawn_op(function()
+      return self:resolve_type(name, qtype, opts)
+    end, self.name .. ':' .. Codec.type_name(qtype))
   end
   local tasks = perform(Op.named_each(task_entries))
 
   local outcome_entries = {}
-  for i = 1, #task_entries do
-    local family_name = task_entries[i][1]
-    outcome_entries[i] = { family_name, tasks[family_name]:outcome_op() }
+  for i = 1, #families do
+    local family_name = families[i]
+    outcome_entries[family_name] = tasks[family_name]:outcome_op()
   end
   local outcomes = perform(Op.named_each(outcome_entries))
 
   local addresses, errors, seen = {}, {}, {}
-  for i = 1, #task_entries do
-    local family_name = task_entries[i][1]
+  for i = 1, #families do
+    local family_name = families[i]
     local values, err = outcomes[family_name]:raise()
     if values then
       for j = 1, #values do

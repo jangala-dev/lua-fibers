@@ -6,9 +6,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -123,6 +120,26 @@ local function test_canonical_algebra_vocabulary()
     'product',
     'together is the canonical interacting product term'
   )
+
+  local each_varargs = Op.each(Op.always('a'), Op.always('b'))
+  assert_eq(#each_varargs.lanes, 2, 'each accepts Op varargs')
+  assert_eq(each_varargs.lanes[1].vals[1], 'a', 'each preserves vararg order')
+  assert_eq(each_varargs.lanes[2].vals[1], 'b', 'each preserves vararg order')
+
+  local together_mixed = Op.together(Op.always('a'), { Op.always('b'), { Op.always('c') } })
+  assert_eq(#together_mixed.lanes, 3, 'together accepts mixed varargs and dense arrays')
+  assert_eq(together_mixed.lanes[1].vals[1], 'a', 'together preserves mixed argument order')
+  assert_eq(together_mixed.lanes[2].vals[1], 'b', 'together preserves mixed argument order')
+  assert_eq(together_mixed.lanes[3].vals[1], 'c', 'together preserves mixed argument order')
+
+  local nested_product = Op.each(Op.each(Op.always('inner')), Op.always('outer'))
+  assert_eq(#nested_product.lanes, 2, 'each does not flatten nested product operations')
+  assert_eq(nested_product.lanes[1].kind, 'product', 'nested product remains one lane')
+
+  local empty_each = Op.each()
+  local empty_together = Op.together()
+  assert_eq(empty_each.kind, 'always', 'empty each accepts no arguments')
+  assert_eq(empty_together.kind, 'always', 'empty together accepts no arguments')
   assert_eq(type(Op.named_each), 'function', 'named_each is the canonical named independent product')
 end
 
@@ -1036,7 +1053,7 @@ local function test_choice_rejects_sparse_or_named_tables()
   assert_eq(ok_sparse, false, 'plain choice should not accept sparse arrays')
 end
 
-local function test_each_and_together_require_dense_arrays_of_ops()
+local function test_each_and_together_require_ops_or_dense_arrays()
   local constructors = {
     { name = 'each', fn = Op.each },
     { name = 'together', fn = Op.together },
@@ -1058,8 +1075,8 @@ local function test_each_and_together_require_dense_arrays_of_ops()
       local ok, err = pcall(constructor.fn, case.value)
       assert_eq(ok, false, constructor.name .. ' should reject ' .. case.description)
       assert_truthy(
-        tostring(err):find(constructor.name .. ' expects a dense array of Op values', 1, true),
-        constructor.name .. ' should report its dense Op-array contract'
+        tostring(err):find(constructor.name .. ' expects Op values or dense arrays of Op values', 1, true),
+        constructor.name .. ' should report its Op or dense-array contract'
       )
     end
   end
@@ -1080,8 +1097,8 @@ end
 
 local function test_named_choice_tags_the_winning_branch()
   local op = Op.named_choice({
-    { 'left', Op.never() },
-    { 'right', Op.always('value', 7) },
+    left = Op.never(),
+    right = Op.always('value', 7),
   })
   local status, values = one_perform(op)
   assert_status(status, 'found')
@@ -1092,8 +1109,8 @@ end
 
 local function test_named_each_returns_record_values_and_raw_rows()
   local op = Op.named_each({
-    { 'a', Op.always('A') },
-    { 'b', Op.always('B', 2) },
+    a = Op.always('A'),
+    b = Op.always('B', 2),
   })
   local status, values = one_perform(op)
   assert_status(status, 'found')
@@ -1109,7 +1126,7 @@ local tests = {
   test_choice_normalises_nested_lists_and_choice_nodes,
   test_choice_seed_replays_unordered_selection,
   test_choice_rejects_sparse_or_named_tables,
-  test_each_and_together_require_dense_arrays_of_ops,
+  test_each_and_together_require_ops_or_dense_arrays,
   test_each_and_together_copy_their_validated_lanes,
   test_named_choice_tags_the_winning_branch,
   test_named_each_returns_record_values_and_raw_rows,
@@ -1169,9 +1186,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -1875,17 +1889,17 @@ do
   end))
 end
 
--- Named map forms use string keys for portable deterministic ordering. Ordered
--- entries remain available when a non-string label is deliberately required.
+-- Named combinators accept maps from string names to operations only.
 do
   assert(not pcall(function()
     return Op.named_choice({ [1] = Op.always('numeric-map-key') })
   end))
-  local label, value = fibers.run(function()
-    return fibers.perform(Op.named_choice({ { 1, Op.always('ordered') } }))
-  end)
-  assert_eq(label, 1)
-  assert_eq(value, 'ordered')
+  assert(not pcall(function()
+    return Op.named_choice({ { 'ordered', Op.always('value') } })
+  end))
+  assert(not pcall(function()
+    return Op.named_each({ { 'ordered', Op.always('value') } })
+  end))
 end
 
 -- Small public always-options are fresh opaque occurrences. Unsupported mutation

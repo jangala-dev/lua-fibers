@@ -1,3 +1,4 @@
+local IOAudit = require('fibers.diagnostics.io')
 local fibers = require('fibers')
 local process = require('fibers.process')
 
@@ -104,7 +105,7 @@ function Contract.exercise(name, host)
     assert(stopped.kind == 'signalled', name .. ' group termination')
   end, { host = host })
   assert_truthy(report.ok, name .. ' process contract failed: ' .. report:tostring())
-  report.runtime:assert_io_quiescent(name .. ' process contract')
+  IOAudit.assert_clean(report.runtime, { label = name .. ' process contract' })
   return true
 end
 

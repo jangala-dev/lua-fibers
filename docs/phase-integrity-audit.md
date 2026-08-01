@@ -49,7 +49,7 @@ The following are not permitted before commit:
 
 `Task:_spawn_effect` previously cleared the retained task body while the spawn
 right-hand operation was being explored. The effect now carries the Task as its owner.
-Effect preparation only validates that a dormant body exists. After the ledger
+Effect preparation only validates that a dormant body exists. After the managed-state
 commit, discharge calls `Task:_take_spawn_body`, creates the runnable wrapper,
 clears the dormant body and asks the runtime to allocate the committed fibre.
 No body, wrapper factory or fibre frame is moved or allocated by speculative
@@ -121,7 +121,7 @@ or committed host facts and do not reserve, publish or mutate them.
 Effect `key`, `merge` and `prepare` callbacks are read-only and non-yielding.
 Their discharge behaviour is:
 
-| Kind | Committed action |
+| Kind | Candidateted action |
 | --- | --- |
 | `interrupt` | raises the selected interrupt token |
 | `spawn` | transfers one dormant Task body and creates the committed fibre |

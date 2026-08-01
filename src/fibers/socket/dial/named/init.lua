@@ -130,10 +130,8 @@ local function resolver_options(dial, driver_scope, opts, host)
   out.resolver = opts.resolver or out.resolver
   out.dns = opts.dns ~= nil and opts.dns or out.dns
   out.nameservers = opts.nameservers or out.nameservers
-  out.nameserver = opts.nameserver or out.nameserver
   out.name = dial.name .. ':resolve'
   out.family = 'unspec'
-  out.require_nonblocking = opts.require_nonblocking
   return out
 end
 

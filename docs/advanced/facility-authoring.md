@@ -83,7 +83,7 @@ Facilities must place each callback in one of three phases.
 | Phase | Facility callbacks | Requirements |
 |---|---|---|
 | Speculative search | guards, `map`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
-| Committed-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
+| Candidateted-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
 | Participant continuation | `wrap` | Runs after commit in the resumed fibre. It may perform, spawn and interact with the outside world. |
 
 `prepare` must not reserve host capacity or acquire an external resource. It may inspect only the effect payload, captured runtime configuration and managed facts already represented by the candidate. A refusal based on untracked volatile host state is invalid because it could admit an `or_else` fallback without a revalidatable proof. Model such capacity or readiness as a managed resource, then put the irreversible host action in `discharge`.
@@ -119,6 +119,6 @@ The repository contains complete examples under `examples/recipes/`:
 
 These recipes are tested but are not part of the installed version 1 surface.
 
-## Closed kernel protocol
+## Closed executable-leaf protocol
 
-The kernel IR and store are implementation details under `fibers.internal.kernel`. New trusted resource programmes require repository-level review and are covered by `../contributing/trusted-resource-programmes.md`.
+The public Op graph is executed directly. Trusted primitive leaves and the transactional store remain implementation details under `fibers.internal`. New leaf kinds or trusted transition behaviour require repository-level review and are covered by `../contributing/trusted-resource-leaves.md`.

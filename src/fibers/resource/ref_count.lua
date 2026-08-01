@@ -1,7 +1,7 @@
 local Counter = require('fibers.resource.counter')
 local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local RefCount = {}
 local Handle = {}
@@ -70,30 +70,9 @@ function Handle:close_op()
   end))
 end
 
-function RefCount:count()
-  return perform(self:count_op())
-end
-
-function RefCount:zero()
-  return perform(self:zero_op())
-end
-
-function Handle:active()
-  return perform(self:active_op())
-end
-
-function Handle:inactive()
-  return perform(self:inactive_op())
-end
-
-function Handle:clone()
-  return perform(self:clone_op())
-end
-
-function Handle:close()
-  return perform(self:close_op())
-end
-
 RefCount.Handle = Handle
+
+Direct.install(RefCount, { 'count', 'zero' })
+Direct.install(Handle, { 'active', 'inactive', 'clone', 'close' })
 
 return RefCount

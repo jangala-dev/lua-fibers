@@ -29,15 +29,13 @@ package.path = table.concat({
   join_path(root, 'src/?.lua'),
   join_path(root, 'src/?/init.lua'),
   join_path(root, 'src/?/?.lua'),
-  join_path(root, 'reference/?.lua'),
-  join_path(root, 'reference/?/init.lua'),
-  join_path(root, 'reference/?/?.lua'),
   join_path(root, '?.lua'),
   join_path(root, '?/init.lua'),
   join_path(root, '?/?.lua'),
   package.path,
 }, ';')
 
+local External = require('fibers.embed.external')
 local fibers = require('fibers')
 local Flow = require('fibers.resource.flow')
 local Closure = require('fibers.closure')
@@ -520,7 +518,7 @@ end)
 add('external', 'queue preloaded consume', 1000, function(n)
   local rt = Runtime.new()
   local q = EventQueue.new('bench-external-events')
-  local feed = rt:external_feed(q)
+  local feed = External.external_feed(rt, q)
   for i = 1, n do
     feed:set(i)
   end
@@ -538,7 +536,7 @@ end)
 add('external', 'external arrival driver loop', 250, function(n)
   local rt = Runtime.new()
   local q = EventQueue.new('bench-external-driver')
-  local feed = rt:external_feed(q)
+  local feed = External.external_feed(rt, q)
   local sum = 0
   rt:spawn_raw(function()
     for _ = 1, n do

@@ -5,9 +5,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -164,7 +161,10 @@ do
   end, 'signal-wait')
   local st = pending:run()
   assert_status(st, 'pending')
-  assert_truthy(st.waits and #st.waits == 1, 'unhandled external absence should retain one wake interest')
+  assert_truthy(
+    st.interests and #st.interests == 1,
+    'unhandled external absence should retain one wake interest'
+  )
 end
 
 -- Driver turns retain scheduler order, but positive-before-fallback is a

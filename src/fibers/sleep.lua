@@ -4,7 +4,7 @@
 -- names as a small convenience facade.
 
 local Clock = require('fibers.resource.clock')
-local perform = require('fibers.perform')
+local Direct = require('fibers.internal.direct')
 
 local Sleep = {}
 local clock = Clock.default()
@@ -21,12 +21,6 @@ function Sleep.sleep_op(delay)
   return clock:after_op(delay):map(sleep_result)
 end
 
-function Sleep.sleep_until(deadline)
-  return perform(Sleep.sleep_until_op(deadline))
-end
-
-function Sleep.sleep(delay)
-  return perform(Sleep.sleep_op(delay))
-end
+Direct.install_static(Sleep, { 'sleep_until', 'sleep' })
 
 return Sleep

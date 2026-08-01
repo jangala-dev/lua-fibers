@@ -8,9 +8,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -23,7 +20,6 @@ local FibersRuntime = require('fibers.runtime')
 local Lifetime = require('fibers.lifetime')
 local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
-local Certificate = require('fibers.internal.kernel.certificate')
 
 local function fail(msg)
   error(msg, 2)
@@ -150,25 +146,6 @@ do
   assert_status(st, 'found')
   assert_eq(n, 3)
   assert_eq(got, 'abc')
-end
-
--- Branch-local absence is promoted explicitly before runtime retention or
--- revalidation.  Mixing durable and local facts remains local until capture.
-do
-  local rt = FibersRuntime.new()
-  local local_proof = Certificate.from_intents({})
-  assert_truthy(Certificate.is_local(local_proof), 'terminal absence should remain branch-local')
-  local valid, reason = Certificate.valid(local_proof, rt)
-  assert_eq(valid, false)
-  assert_eq(reason, 'local-absence')
-
-  local durable =
-    assert(Certificate.capture(rt, {}, { ids = {}, dependencies = {}, dynamic = 0 }, local_proof))
-  assert_truthy(Certificate.is_durable(durable), 'runtime capture should produce a durable retry certificate')
-  assert_eq(Certificate.valid(durable, rt), true)
-
-  local mixed = Certificate.merge(Certificate.copy(durable), local_proof)
-  assert_truthy(Certificate.is_local(mixed), 'mixed proof facts must remain local until recaptured')
 end
 
 print('tests/test_retry_semantics.lua: ok')

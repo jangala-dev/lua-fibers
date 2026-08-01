@@ -2,9 +2,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -33,28 +30,27 @@ do
     receiver_result = rt:perform(ch:get_op():or_else(Op.always('fallback')))
   end, 'receiver')
   rt:_resume_fiber(receiver)
-  local receiver_id = rt.pending[#rt.pending].id
+  local receiver_request = rt.engine.pending[#rt.engine.pending]
 
-  local fallback_plan = assert(rt:_find_candidate(receiver_id))
-  assert_eq(fallback_plan.absence_gate ~= nil, true, 'initial plan should be fallback')
+  local fallback_plan = assert(rt.engine:find_candidate(receiver_request))
+  assert_eq(fallback_plan:is_fallback(), true, 'initial plan should be fallback')
 
   local sender = rt:spawn_raw(function()
     sender_result = rt:perform(ch:put_op('primary'))
   end, 'sender')
   rt:_resume_fiber(sender)
 
-  local committed = rt:_commit_hit(fallback_plan)
+  local committed = fallback_plan:settle(rt.engine)
   assert_eq(committed, false, 'stale negative plan must not commit')
-  assert_eq(rt.stats.validation_failures, 1, 'negative-frontier validation failure recorded')
 
-  local refreshed = assert(rt:_find_candidate(receiver_id))
-  assert_eq(refreshed.absence_gate ~= nil, false, 'refreshed plan should use primary')
-  assert(rt:_commit_hit(refreshed))
+  local refreshed = assert(rt.engine:find_candidate(receiver_request))
+  assert_eq(refreshed:is_fallback(), false, 'refreshed plan should use primary')
+  assert(refreshed:settle(rt.engine))
   assert_eq(receiver_result, 'primary')
   assert_eq(sender_result, true)
 end
 
--- Two plans are deliberately built from the same cell version.  The second
+-- Two candidates are deliberately built from the same cell version.  The second
 -- must fail validation, be rebuilt against the new value, and retain primary
 -- preference rather than selecting the fallback.
 do
@@ -83,17 +79,17 @@ do
 
   rt:_resume_fiber(first)
   rt:_resume_fiber(second)
-  local first_id, second_id = rt.pending[1].id, rt.pending[2].id
-  local first_plan = assert(rt:_find_candidate(first_id))
-  local second_plan = assert(rt:_find_candidate(second_id))
+  local first_request, second_request = rt.engine.pending[1], rt.engine.pending[2]
+  local first_plan = assert(rt.engine:find_candidate(first_request))
+  local second_plan = assert(rt.engine:find_candidate(second_request))
   assert_eq(guard_calls, 1, 'guard constructed once while planning')
 
-  assert(rt:_commit_hit(first_plan))
-  assert_eq(rt:_commit_hit(second_plan), false, 'second snapshot plan should be stale')
+  assert(first_plan:settle(rt.engine))
+  assert_eq(second_plan:settle(rt.engine), false, 'second snapshot plan should be stale')
 
-  local refreshed = assert(rt:_find_candidate(second_id))
-  assert_eq(refreshed.absence_gate ~= nil, false, 'stale primary refresh must remain primary')
-  assert(rt:_commit_hit(refreshed))
+  local refreshed = assert(rt.engine:find_candidate(second_request))
+  assert_eq(refreshed:is_fallback(), false, 'stale primary refresh must remain primary')
+  assert(refreshed:settle(rt.engine))
 
   assert_eq(first_result, 1)
   assert_eq(second_result, 'primary:2')

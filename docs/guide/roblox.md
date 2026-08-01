@@ -686,7 +686,7 @@ absence.
 Do not play sounds, create Instances, fire remotes or mutate unmanaged tables
 inside `map`, guards, transition steps or effect preparation.
 
-### Commit irreversible work deliberately
+### Candidate irreversible work deliberately
 
 Use a typed effect for selected runtime obligations, or `wrap` for
 participant-local post-commit work.

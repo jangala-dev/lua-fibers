@@ -7,9 +7,6 @@ package.path = table.concat({
   './src/?.lua',
   './src/?/init.lua',
   './src/?/?.lua',
-  './reference/?.lua',
-  './reference/?/init.lua',
-  './reference/?/?.lua',
   './?.lua',
   './?/init.lua',
   './?/?.lua',
@@ -26,7 +23,6 @@ local function parse_args(values)
     case = 'priority-fallback',
     size = 8,
     seed = 1,
-    machine = 'ledger',
     search_limit = 1000000,
     search_total_limit = nil,
     search_depth_limit = nil,
@@ -44,9 +40,6 @@ local function parse_args(values)
       i = i + 2
     elseif key == '--seed' then
       out.seed = assert(tonumber(values[i + 1]), '--seed requires a number')
-      i = i + 2
-    elseif key == '--machine' then
-      out.machine = assert(values[i + 1], '--machine requires a value')
       i = i + 2
     elseif key == '--no-instrumentation' then
       out.instrumentation = false
@@ -84,7 +77,6 @@ end
 
 local function new_runtime(options)
   return Runtime.new({
-    machine = options.machine,
     choice_seed = options.seed,
     search_limit = options.search_limit,
     search_total_limit = options.search_total_limit,
@@ -92,7 +84,7 @@ local function new_runtime(options)
     search_trail_limit = options.search_trail_limit,
     instrumentation = options.instrumentation and {
       clock = Clock.now,
-      slow_plan_limit = 4,
+      slow_search_limit = 4,
       trace = false,
     } or nil,
   })
@@ -345,7 +337,7 @@ collectgarbage('collect')
 local started = Clock.now()
 local rt, status, valid, driver_calls, digest = scenario(options)
 local elapsed = Clock.now() - started
-local snapshot = rt:instrumentation_report() or {}
+local snapshot = (rt.instrumentation and rt.instrumentation:report()) or {}
 local c, m = snapshot.counters or {}, snapshot.maxima or {}
 local fields = {
   options.case,
@@ -357,7 +349,7 @@ local fields = {
   valid and 'ok' or 'invalid',
   string.format('%.9f', elapsed),
   driver_calls,
-  c.plans or 0,
+  c.searches or 0,
   c.search_calls or 0,
   c.branches or 0,
   c.rollbacks or 0,
@@ -366,7 +358,7 @@ local fields = {
   c.exclude_branches or 0,
   c.footprint_checks or 0,
   c.footprint_matches or 0,
-  m.search_steps_per_plan or 0,
+  m.search_steps_per_search or 0,
   m.search_depth or 0,
   m.component_size or 0,
   m.roots or 0,

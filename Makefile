@@ -6,30 +6,21 @@ TEXLUA ?= texlua
 LUAU ?= luau
 LUAU_ANALYZE ?= luau-analyze
 LUAU_BUILD_DIR ?= build/luau
-LUAU_REFERENCE_BUILD_DIR ?= build/luau-reference
 
-REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./reference/?.lua;./reference/?/init.lua;./reference/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;;
+REPO_LUA_PATH := ./src/?.lua;./src/?/init.lua;./src/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;;
 export LUA_PATH := $(REPO_LUA_PATH)
 
-.PHONY: test test-ledger test-reference test-public test-composition test-resources \
-	test-lifetimes test-io test-embedding test-roblox-fake test-kernel test-internal test-case-studies \
-	test-performance test-native test-stress test-full test-matrix \
-	test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 test-luajit \
-	test-luajit-interpreter test-texlua build-luau build-luau-reference \
-	check-luau-build check-luau check-luau-portable check-luau-reference \
-	test-luau test-luau-smoke test-luau-portable test-luau-reference examples \
-	bench bench-ledger bench-io profile-proof-io performance check-format \
-	check-links check-modules check-scripts check
-
+.PHONY: test test-public test-composition test-resources test-lifetimes test-io \
+	test-embedding test-roblox-fake test-kernel test-internal test-reference test-case-studies \
+	test-native test-stress test-full test-matrix test-lua51 test-lua52 test-lua53 \
+	test-lua54 test-lua55 test-luajit test-luajit-interpreter test-texlua \
+	build-luau check-luau-build check-luau test-luau test-luau-smoke \
+	test-luau-portable examples bench bench-io profile-proof-io profile-exchange-frontier performance \
+	check-format check-links check-modules check-scripts check build-profile \
+	check-packages build-packages
 
 test:
 	$(LUA) tests/run_all.lua
-
-test-ledger:
-	FIBERS_MACHINE=ledger $(LUA) tests/run_all.lua
-
-test-reference:
-	FIBERS_MACHINE=reference FIBERS_TEST_PROFILE=matrix $(LUA) tests/run_all.lua
 
 test-public:
 	$(LUA) tests/run_group.lua public
@@ -58,11 +49,11 @@ test-kernel:
 test-internal:
 	$(LUA) tests/run_group.lua internal
 
+test-reference:
+	$(LUA) tests/run_group.lua reference
+
 test-case-studies:
 	$(LUA) tests/run_group.lua case_studies
-
-test-performance:
-	$(LUA) tests/run_group.lua performance
 
 test-lua51:
 	FIBERS_TEST_PROFILE=matrix lua5.1 tests/run_all.lua
@@ -91,30 +82,19 @@ test-texlua:
 build-luau:
 	$(LUA) scripts/build-luau.lua --output "$(LUAU_BUILD_DIR)"
 
-build-luau-reference:
-	$(LUA) scripts/build-luau.lua --profile reference --output "$(LUAU_REFERENCE_BUILD_DIR)"
+check-luau-build: build-luau
 
-check-luau-build: build-luau build-luau-reference
-
-check-luau-portable: build-luau
+check-luau: build-luau
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
 	$(LUAU_ANALYZE) "$(LUAU_BUILD_DIR)/tests/portable.luau"
 
-check-luau-reference: build-luau-reference
-	$(LUAU_ANALYZE) "$(LUAU_REFERENCE_BUILD_DIR)/tests/reference.luau"
-
-check-luau: check-luau-portable check-luau-reference
-
-test-luau-smoke: check-luau-portable
+test-luau-smoke: check-luau
 	$(LUAU) "$(LUAU_BUILD_DIR)/tests/smoke.luau"
 
-test-luau-portable: check-luau-portable
+test-luau-portable: check-luau
 	$(LUAU) "$(LUAU_BUILD_DIR)/tests/portable.luau"
 
-test-luau-reference: check-luau-reference
-	$(LUAU) "$(LUAU_REFERENCE_BUILD_DIR)/tests/reference.luau"
-
-test-luau: test-luau-smoke test-luau-portable test-luau-reference
+test-luau: test-luau-smoke test-luau-portable
 
 test-native:
 	$(LUA) tests/run_group.lua native
@@ -127,7 +107,7 @@ test-native:
 test-stress:
 	$(LUA) tests/run_group.lua stress
 
-test-full: test-matrix test-native test-stress test-reference examples
+test-full: test-matrix test-native test-stress examples
 
 test-matrix: test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 \
 	test-luajit test-luajit-interpreter test-texlua test-luau
@@ -145,14 +125,14 @@ examples:
 bench:
 	$(LUAJIT) performance/bench.lua
 
-bench-ledger:
-	FIBERS_MACHINE=ledger $(LUAJIT) performance/bench.lua
-
 bench-io:
 	$(LUA) performance/io_baselines.lua
 
 profile-proof-io:
 	$(LUA) performance/proof_engine_io.lua
+
+profile-exchange-frontier:
+	$(LUA) performance/exchange_frontier_suite.lua
 
 performance:
 	$(LUAJIT) performance/suite.lua
@@ -175,11 +155,8 @@ check-modules:
 	$(LUA) scripts/check-modules.lua
 
 check-scripts:
-	@for file in scripts/*.sh .devcontainer/*.sh; do sh -n "$$file"; done
-	$(LUA) scripts/check-lua-syntax.lua scripts/*.lua packages/*.lua tests/run_*.lua tests/luau/*.lua performance/*.lua
-	$(MAKE) -f .devcontainer/Makefile validate-pins
-
-.PHONY: build-profile check-packages
+	@for file in scripts/*.sh; do sh -n "$$file"; done
+	$(LUA) scripts/check-lua-syntax.lua
 
 PROFILE ?= core
 PROFILE_OUTPUT ?= build/profile-$(PROFILE)
@@ -195,7 +172,6 @@ check-packages:
 	$(LUA) scripts/build-profile.lua --entry fibers.stream --report /tmp/fibers-profile-custom-stream.txt >/dev/null
 	$(LUA) scripts/build-profile.lua --entry fibers.io.nixio --report /tmp/fibers-profile-custom-nixio.txt >/dev/null
 
-.PHONY: build-packages
 PACKAGES_OUTPUT ?= build/packages
 build-packages:
 	$(LUA) scripts/build-packages.lua --output "$(PACKAGES_OUTPUT)"
