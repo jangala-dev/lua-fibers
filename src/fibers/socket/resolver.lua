@@ -1,7 +1,7 @@
 -- Asynchronous resolver queries as running Lifetimes.
 --
 -- The host decides how resolution is performed. A simple host may execute a
--- blocking resolver call in the committed driver fibre and advertises that fact
+-- blocking resolver call in the committed driver fiber and advertises that fact
 -- through its capability table; embedded hosts may provide a worker or native
 -- asynchronous resolver instead.
 

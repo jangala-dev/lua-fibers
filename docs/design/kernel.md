@@ -181,7 +181,7 @@ The implementation has five state-owning roles:
 
 ```text
 fibers/runtime.lua
-  Runtime     fibres, ready queue, public phases and errors
+  Runtime     fibers, ready queue, public phases and errors
 
 fibers/internal/engine.lua
   Engine      pending requests, arbitration, Proof indexing and commit authority

@@ -23,7 +23,7 @@ HostReactor
 Every method ending in `_op` constructs an **option**. It does not act until the
 option is submitted to `perform` and selected as part of a committed world.
 Each public operation listed below also has a direct twin with `_op` removed;
-the direct method performs that option in the current fibre.
+the direct method performs that option in the current fiber.
 
 ## Flow
 

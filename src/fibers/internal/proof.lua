@@ -108,7 +108,7 @@ end
 
 -- Record whether a preferred-side absence proof depends on the current
 -- participant frontier. Closed proofs such as `never` cannot be invalidated by
--- admitting another fibre; exchange, location and resource frontiers can.
+-- admitting another fiber; exchange, location and resource frontiers can.
 function M.mark_absence_gate_frontier(certificate)
   for i = 1, #(certificate or {}) do
     local kind = certificate[i].kind

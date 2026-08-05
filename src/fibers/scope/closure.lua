@@ -1,7 +1,7 @@
 -- Lifetime Closure boundary driver.
 --
 -- Child completion is committed directly into the current owning Lifetime.
--- There is no closure-monitor fibre and no separate custody event queue. Task and Scope
+-- There is no closure-monitor fiber and no separate custody event queue. Task and Scope
 -- views share the same Lifetime node; Closure decisions are pure descriptions
 -- which the driver applies through ordinary Ops.
 

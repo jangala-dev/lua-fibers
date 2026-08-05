@@ -37,7 +37,7 @@ end
 
 function Context.push_scope(runtime, scope)
   local fiber = runtime and runtime._current_fiber
-  if not fiber then error('scope entry requires current fibre', 2) end
+  if not fiber then error('scope entry requires current fiber', 2) end
   local stack = fiber.scope_stack or {}
   fiber.scope_stack = stack
   stack[#stack + 1] = scope

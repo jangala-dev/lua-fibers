@@ -1,7 +1,7 @@
 -- Root lifecycle and contextual operations for Fibers programmes.
 --
 -- `run` and `try_run` establish a Runtime and root Scope. The remaining
--- operations are interpreted by the currently running fibre. Types,
+-- operations are interpreted by the currently running fiber. Types,
 -- constructors and option combinators live in their named modules.
 
 local External = require('fibers.embed.external')
@@ -128,7 +128,7 @@ end
 function M.now()
   local rt = Runtime.current()
   if not rt then
-    error('fibers.now must be called from a running fibre', 2)
+    error('fibers.now must be called from a running fiber', 2)
   end
   return rt:now()
 end
@@ -136,7 +136,7 @@ end
 function M.spawn_raw(fn)
   local rt = Runtime.current()
   if not rt then
-    error('fibers.spawn_raw must be called from a running fibre', 2)
+    error('fibers.spawn_raw must be called from a running fiber', 2)
   end
   local scope = current_scope()
   if scope then
@@ -159,7 +159,7 @@ end
 function M.spawn(fn, opts)
   local scope = current_scope()
   if not scope or type(scope.spawn) ~= 'function' then
-    error('fibers.spawn requires a current scope; use Runtime:spawn_raw for unstructured fibres', 2)
+    error('fibers.spawn requires a current scope; use Runtime:spawn_raw for unstructured fibers', 2)
   end
   return scope:spawn(fn, opts)
 end
@@ -169,16 +169,16 @@ local function pack(...)
   return { n = select('#', ...), ... }
 end
 
--- Assert that fn completes without the current fibre relinquishing its
+-- Assert that fn completes without the current fiber relinquishing its
 -- scheduler turn. Immediate performs are permitted; an operation which would
--- park the fibre or allow another fibre to run raises before that hand-off.
+-- park the fiber or allow another fiber to run raises before that hand-off.
 function M.without_suspension(fn, ...)
   if type(fn) ~= 'function' then
     error('fibers.without_suspension expects a function', 2)
   end
   local rt = Runtime.current()
   if not rt then
-    error('fibers.without_suspension must be called from a running fibre', 2)
+    error('fibers.without_suspension must be called from a running fiber', 2)
   end
   local token = rt:_enter_execution_contract({
     suspension = 'forbidden',
@@ -220,7 +220,7 @@ function M.try_scope(opts, fn)
   end
   local rt = Runtime.current()
   if not rt then
-    error('fibers.try_scope must be called from a running fibre', 2)
+    error('fibers.try_scope must be called from a running fiber', 2)
   end
   local parent = current_scope()
   local scope = Scope.new({

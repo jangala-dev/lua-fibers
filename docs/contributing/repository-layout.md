@@ -40,7 +40,7 @@ make check
 ## Internal dependency direction
 
 - `Operation` is immutable and does not depend on the scheduler;
-- `Runtime` owns fibres, the ready queue and public execution phases;
+- `Runtime` owns fibers, the ready queue and public execution phases;
 - `Engine` owns pending operations, arbitration and commit authority;
 - `Search` owns one speculative execution and its resumable state;
 - `Journal` owns speculative managed state and rollback;

@@ -1,4 +1,4 @@
--- Dynamic execution contracts for the currently resumed runtime fibre.
+-- Dynamic execution contracts for the currently resumed runtime fiber.
 --
 -- This is deliberately small. Public APIs may impose a concrete contract such
 -- as "suspension is forbidden" without introducing a general policy framework.
@@ -8,7 +8,7 @@ local Execution = {}
 local function current_fiber(runtime, level)
   local fiber = runtime and runtime._current_fiber
   if not fiber then
-    error('execution contract requires a currently resumed fibre', level or 3)
+    error('execution contract requires a currently resumed fiber', level or 3)
   end
   return fiber
 end

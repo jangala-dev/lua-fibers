@@ -33,7 +33,7 @@ local function current_context(opts)
   opts = opts or {}
   local runtime = opts.runtime or Runtime.current()
   if not runtime then
-    error('Roblox adapter requires a running fibre or opts.runtime', 3)
+    error('Roblox adapter requires a running fiber or opts.runtime', 3)
   end
   local scope = opts.scope or (Runtime.current_scope and Runtime.current_scope())
   if type(scope) ~= 'table' or scope._fibers_scope ~= true then
@@ -50,7 +50,7 @@ end
 ---
 ---Each firing is queued, including nil-bearing argument lists. The connection is
 ---under the current Scope's custody and disconnects during closure. Create
----subscriptions from committed fibre code, not a speculative callback.
+---subscriptions from committed fiber code, not a speculative callback.
 function Roblox.events(signal, opts)
   opts = copy(opts)
   opts.mode = 'events'
@@ -154,7 +154,7 @@ end
 
 ---Cancel a scope when DataModel:BindToClose fires and wait for closure.
 ---
----Call this from the root fibre. The hidden monitor is an ordinary child Lifetime
+---Call this from the root fiber. The hidden monitor is an ordinary child Lifetime
 ---task. The Roblox callback publishes a host fact; the attached application then
 ---advances through ordinary bounded turns until closure or the declared
 ---shutdown deadline.

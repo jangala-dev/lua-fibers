@@ -33,7 +33,7 @@ truthy(snap and snap.counters, 'missing instrumentation snapshot')
 truthy((snap.counters.searches or 0) > 0, 'searches were not recorded')
 truthy((snap.counters.search_calls or 0) >= 0, 'search-call counter is invalid')
 truthy((snap.counters.commits or 0) > 0, 'commits were not recorded')
-eq(snap.counters.fibres_spawned, 2, 'fibre creation count is wrong')
+eq(snap.counters.fibers_spawned, 2, 'fiber creation count is wrong')
 truthy((snap.maxima.pending_requests or 0) >= 1, 'pending request high-water mark missing')
 truthy(#(snap.slow_searches or {}) > 0, 'slow-search summaries missing')
 local labelled_search
@@ -44,7 +44,7 @@ for i = 1, #(snap.slow_searches or {}) do
     break
   end
 end
-truthy(labelled_search, 'search summaries should retain option and fibre labels')
+truthy(labelled_search, 'search summaries should retain option and fiber labels')
 truthy(type(snap.histograms.search_steps_per_search) == 'table', 'search histogram missing')
 
 rt.instrumentation:reset()

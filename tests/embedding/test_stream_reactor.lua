@@ -64,7 +64,7 @@ local function drive_until(rt, pred, label)
   fail(label or 'runtime did not reach expected state')
 end
 
--- Opening a backend stream is transactional. A losing open starts no reactor fibre.
+-- Opening a backend stream is transactional. A losing open starts no reactor fiber.
 do
   local backend = FakeHandle.new({ name = 'losing-open-backend' })
   local owner = FibersScope.new():label('losing-open-owner')
@@ -82,7 +82,7 @@ do
   end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
-  assert_nil(backend.runtime, 'losing open should not start or bind reactor fibres')
+  assert_nil(backend.runtime, 'losing open should not start or bind reactor fibers')
   assert_nil(backend.stream, 'losing open should not attach backend to an uncommitted stream')
 end
 
@@ -117,7 +117,7 @@ do
   assert_truthy(type(a.write_op) == 'function', 'duplex should forward writer options')
 end
 
--- All host-backed directions in one runtime share one reactor fibre.
+-- All host-backed directions in one runtime share one reactor fiber.
 do
   local rt = FibersRuntime.new()
   local owner = FibersScope.new():label('shared-reactor-owner')
@@ -462,7 +462,7 @@ do
 end
 
 -- Closing a host stream retires both reactions, closes the backend once and
--- allows the shared reactor fibre to stop when no registrations remain.
+-- allows the shared reactor fiber to stop when no registrations remain.
 do
   local rt = FibersRuntime.new()
   local owner = FibersScope.new():label('reactor-retirement-owner')

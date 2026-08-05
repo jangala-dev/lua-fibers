@@ -855,7 +855,7 @@ local function test_multiple_wraps_run_in_order_after_discharge()
   assert_eq(
     table.concat(timeline, ','),
     'discharge,wrap1,wrap2,resume',
-    'multiple wraps run in order after discharge and before fibre continuation'
+    'multiple wraps run in order after discharge and before fiber continuation'
   )
 end
 

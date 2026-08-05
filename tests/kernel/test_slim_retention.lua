@@ -41,8 +41,8 @@ do
       end):label('short')
     end
     local st = rt:run()
-    eq(st.tag, 'idle', 'short-fibre batch should drain')
-    eq(rt._live_fibers, 0, 'runtime must not retain completed fibres as live')
+    eq(st.tag, 'idle', 'short-fiber batch should drain')
+    eq(rt._live_fibers, 0, 'runtime must not retain completed fibers as live')
     eq(rt._ready_head, 1, 'ready queue head should reset')
     eq(rt._ready_tail, 0, 'ready queue tail should reset')
     eq(next(rt._ready_fibers), nil, 'ready queue backing table should be empty')

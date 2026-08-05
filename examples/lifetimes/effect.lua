@@ -12,7 +12,7 @@ package.path = table.concat({
 --
 -- Effects are the public form of typed transaction effects.  They are
 -- discharged iff the selected world commits, after resource commit and before
--- selected fibres resume.
+-- selected fibers resume.
 
 local fibers = require('fibers')
 local Op = require('fibers.op')

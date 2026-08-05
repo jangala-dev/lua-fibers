@@ -1,8 +1,8 @@
 -- Runtime lifecycle behaviour tests.
 --
--- These tests deliberately avoid inspecting runtime queues or fibre records.
+-- These tests deliberately avoid inspecting runtime queues or fiber records.
 -- They assert externally-observable behaviour: idle reporting, transaction
--- progress, and that completed raw fibres do not remain reachable merely
+-- progress, and that completed raw fibers do not remain reachable merely
 -- because the Runtime is long-lived.
 
 package.path = table.concat({
@@ -66,14 +66,14 @@ do
   end):label('one-shot')
 
   local found, last = drive(rt)
-  assert_truthy(found, 'runtime should commit the one-shot fibre')
+  assert_truthy(found, 'runtime should commit the one-shot fiber')
   assert_eq(ran, true)
   assert_eq(last.tag, 'idle', 'drained runtime is idle')
 end
 
--- Completed raw fibres do not stay alive through the Runtime.  The test keeps
--- the Runtime object and drops all other strong references to per-fibre marker
--- tables.  If the Runtime archives completed fibre stacks, the weak entries
+-- Completed raw fibers do not stay alive through the Runtime.  The test keeps
+-- the Runtime object and drops all other strong references to per-fiber marker
+-- tables.  If the Runtime archives completed fiber stacks, the weak entries
 -- will remain live.
 do
   local rt = Runtime.new()
@@ -89,11 +89,11 @@ do
   end
 
   local found, last = drive(rt)
-  assert_truthy(found, 'short fibres should commit')
-  assert_eq(last.tag, 'idle', 'runtime should drain after short fibres')
+  assert_truthy(found, 'short fibers should commit')
+  assert_eq(last.tag, 'idle', 'runtime should drain after short fibers')
   collect()
   for i = 1, 40 do
-    assert_eq(weak[i], nil, 'completed fibre marker should be collectable')
+    assert_eq(weak[i], nil, 'completed fiber marker should be collectable')
   end
 end
 

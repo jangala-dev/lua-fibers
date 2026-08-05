@@ -48,7 +48,7 @@ subscriptions and bounded `BindToClose` Closure.
 Roblox task scheduler or Actor VM
 └── one Fibers runtime
     ├── proof and commit engine
-    ├── lightweight internal Luau fibres
+    ├── lightweight internal Luau fibers
     ├── Lifetime forest, capability views and Closure
     └── RBXScriptSignal and engine-resource adapters
 ```
@@ -105,11 +105,11 @@ fibers-std         desktop and server host facilities
 
 The core should be a pollable state machine. It should not require Tokio,
 Embassy or a browser executor and should not create one host task per Fibers
-fibre.
+fiber.
 
-### Internal Rust fibres
+### Internal Rust fibers
 
-A Fibers fibre is an ordinary Rust async function or async block stored and
+A Fibers fiber is an ordinary Rust async function or async block stored and
 polled by the Fibers runtime:
 
 ```rust
@@ -128,7 +128,7 @@ After commitment the runtime:
 1. obtains bounded or allocated frame storage;
 2. constructs and pins the future in that storage;
 3. records Lifetime parentage and the Scope capability;
-4. places the fibre identifier on the internal ready queue;
+4. places the fiber identifier on the internal ready queue;
 5. polls it during a later or current runtime turn.
 
 This is an inversion of the usual embedded arrangement. Embassy or the browser
@@ -138,31 +138,31 @@ drives one outer Fibers runtime future; Fibers owns the inner task graph.
 host executor task or root Promise
 └── Fibers runtime Future
     ├── proof and commit engine
-    ├── ready-fibre queue
+    ├── ready-fiber queue
     ├── Lifetime forest and Scope views
     └── lightweight internal Future frames
 ```
 
 The host executor remains responsible for waking and polling the root future.
 Fibers is responsible for transactional admission, cancellation, scheduling and
-Closure of its internal fibres.
+Closure of its internal fibers.
 
 ### Waking
 
-Each internal fibre needs a small erased Waker containing at least:
+Each internal fiber needs a small erased Waker containing at least:
 
 ```text
 runtime reference
-fibre slot index
+fiber slot index
 generation
 ```
 
-A wake validates the generation, marks the fibre ready and wakes the outer root
+A wake validates the generation, marks the fiber ready and wakes the outer root
 future. The generation prevents a late timer, interrupt or host callback from
 waking a different future which later reused the same slot.
 
-Fibers-native resources can normally enqueue a FibreId directly. An arbitrary
-host Future receives the same per-fibre Waker when Fibers polls it.
+Fibers-native resources can normally enqueue a FiberId directly. An arbitrary
+host Future receives the same per-fiber Waker when Fibers polls it.
 
 ### Work budgeting
 
@@ -170,7 +170,7 @@ One outer poll must perform bounded work before yielding to its host executor.
 Separate limits should cover:
 
 ```text
-internal fibre polls per turn
+internal fiber polls per turn
 proof steps per turn
 commits per turn
 Closure work per turn
@@ -182,11 +182,11 @@ Unknown with a capacity reason. These outcomes are not interchangeable.
 ## Embassy and MCU profile
 
 Fibers applications should be direct users of Embassy and MCU futures. Device
-drivers do not need to be wrapped in one Embassy task per logical Fibers fibre.
-An internal fibre may await a normal Embassy driver future sequentially:
+drivers do not need to be wrapped in one Embassy task per logical Fibers fiber.
+An internal fiber may await a normal Embassy driver future sequentially:
 
 ```rust
-async fn sensor_fibre(mut sensor: Sensor<'static>, readings: Sender<Reading>) {
+async fn sensor_fiber(mut sensor: Sensor<'static>, readings: Sender<Reading>) {
     loop {
         let reading = sensor.read().await;
         readings.put(reading).await;
@@ -208,7 +208,7 @@ perform(choice((
 The distinction is semantic, not a separate driver stack:
 
 ```text
-ordinary Embassy Future     sequential wait inside one fibre
+ordinary Embassy Future     sequential wait inside one fiber
 Fibers option adapter       participant in choice, and_then, products or fallback
 ```
 
@@ -228,7 +228,7 @@ Possible storage forms are:
 The profile should expose maxima for at least:
 
 ```text
-live fibres and frame bytes
+live fibers and frame bytes
 option nodes or typed composition depth
 participants and pending performs
 search frames and trail entries
@@ -241,7 +241,7 @@ A `#[fiber(pool_size = N)]`-style macro may generate a poll/drop descriptor and
 static frame pool for a concrete async function. A more dynamic arena may use an
 erased vtable, slot generation and fixed alignment classes.
 
-Fibre-slot availability may itself be a managed transactional resource. This
+Fiber-slot availability may itself be a managed transactional resource. This
 allows admission to compose lawfully with fallback or overload policy. Lack of
 capacity must be represented explicitly; it must not become an accidental panic
 or an unsound proof of general absence.
@@ -256,13 +256,13 @@ finishes and Closure completes or fails explicitly.
 ## Browser WASM profile
 
 The browser profile should use one root Rust Future driven by the JavaScript
-event loop. Internal Fibers fibres should not each become a JavaScript Promise or
+event loop. Internal Fibers fibers should not each become a JavaScript Promise or
 `spawn_local` task.
 
 ```text
 JavaScript event loop
 └── root Fibers Future
-    ├── internal Rust fibres
+    ├── internal Rust fibers
     ├── proof and commit engine
     ├── browser event feeds
     ├── Lifetimes and Closure

@@ -4,7 +4,7 @@
 ---supplies an absolute time horizon and a deterministic step allowance. The
 ---application advances until it settles, reaches a host-actionable wait, or
 ---exhausts the current turn. Host horizon exhaustion retains exact proof and
----fibre progress; it is not semantic Retry and cannot enable `or_else`.
+---fiber progress; it is not semantic Retry and cannot enable `or_else`.
 
 local WaitSet = require('fibers.embed.wait_set')
 local Closure = require('fibers.closure')

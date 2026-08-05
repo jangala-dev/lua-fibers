@@ -45,7 +45,7 @@ local function assert_falsy(v, msg)
   end
 end
 
--- Runtime owns fibre scheduling, not candidate representation or settlement.
+-- Runtime owns fiber scheduling, not candidate representation or settlement.
 do
   local rt = Runtime.new()
   assert_eq(rt._find_candidate, nil, 'candidate search belongs to the kernel driver')
@@ -88,7 +88,7 @@ do
   rt:spawn_raw(function()
     rt:perform(cell:write_op(value))
     got = rt:perform(cell:read_op())
-  end):label('opaque-cell-fibre')
+  end):label('opaque-cell-fiber')
   run_all(rt)
   assert_eq(got, value, 'cell stores user table opaquely')
   assert_eq(got.x, 42, 'cell preserves keyed fields')

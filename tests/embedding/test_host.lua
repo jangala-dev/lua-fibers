@@ -58,7 +58,7 @@ do
   end, { host = host }).runtime_status
 
   assert_status(st, 'found')
-  assert_truthy(done, 'sleeping fibre should resume')
+  assert_truthy(done, 'sleeping fiber should resume')
   assert_eq(slept, 4, 'pure host should sleep until the reported deadline')
   assert_eq(now, 14, 'fake clock should have advanced')
 end

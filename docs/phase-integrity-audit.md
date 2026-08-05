@@ -51,8 +51,8 @@ The following are not permitted before commit:
 right-hand operation was being explored. The effect now carries the Task as its owner.
 Effect preparation only validates that a dormant body exists. After the managed-state
 commit, discharge calls `Task:_take_spawn_body`, creates the runnable wrapper,
-clears the dormant body and asks the runtime to allocate the committed fibre.
-No body, wrapper factory or fibre frame is moved or allocated by speculative
+clears the dormant body and asks the runtime to allocate the committed fiber.
+No body, wrapper factory or fiber frame is moved or allocated by speculative
 search.
 
 ### Closure bookkeeping mutated by cancellation search
@@ -124,7 +124,7 @@ Their discharge behaviour is:
 | Kind | Committed action |
 | --- | --- |
 | `interrupt` | raises the selected interrupt token |
-| `spawn` | transfers one dormant Task body and creates the committed fibre |
+| `spawn` | transfers one dormant Task body and creates the committed fiber |
 | `closure.close_reason` | records retained Closure bookkeeping |
 | `flow_changed` | notifies the host reactor of committed Flow state change |
 | `host_reactor_control` | registers, retires or wakes a reactor entry |

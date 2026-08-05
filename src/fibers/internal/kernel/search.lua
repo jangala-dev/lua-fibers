@@ -1644,7 +1644,7 @@ end
 
 
 local function publish_frontiers(state, result)
-  -- During an unbounded driver pass, a completed Retry while more ready fibres
+  -- During an unbounded driver pass, a completed Retry while more ready fibers
   -- are still being admitted is provisional scheduler knowledge. Persisting it
   -- would build and tear down an index for the common two-party rendezvous path.
   -- Bounded sessions still publish because their retained coroutine requires a

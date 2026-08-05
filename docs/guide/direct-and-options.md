@@ -6,7 +6,7 @@ Fibers supports two views of the same ordinary action.
 local update = status_updates:get()
 ```
 
-performs the action immediately in the current fibre. The corresponding `_op`
+performs the action immediately in the current fiber. The corresponding `_op`
 method constructs an inert **option**:
 
 ```lua
@@ -52,7 +52,7 @@ task:await_op()                 task:await()
 
 ## When to use each form
 
-Use direct methods for straightforward sequential fibre code:
+Use direct methods for straightforward sequential fiber code:
 
 ```lua
 local command = commands:get()
@@ -129,7 +129,7 @@ application operation or on useful parts beneath it.
 ## Asserting that a region does not suspend
 
 `perform` is a possible suspension point, not an unconditional yield. An option
-which commits immediately allows the current fibre to continue in the same
+which commits immediately allows the current fiber to continue in the same
 uninterrupted turn.
 
 A coordinator or reducer may make that property an executable assertion:
@@ -141,7 +141,7 @@ end)
 ```
 
 The function may perform options which commit immediately. Fibers raises a
-`suspension_error` before an operation parks the fibre, permits another fibre
+`suspension_error` before an operation parks the fiber, permits another fiber
 to run first, or returns control because a configured search budget was
 exhausted.
 

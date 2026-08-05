@@ -80,13 +80,13 @@ do
   assert_eq(f, 'f', 'phase helper return 6')
 end
 
--- perform is only legal from a resumed runtime fibre.
+-- perform is only legal from a resumed runtime fiber.
 do
   local rt = Runtime.new()
   local ok, err = pcall(function()
     return rt:perform(Op.always('x'))
   end)
-  assert_error_kind(ok, err, 'phase_error', 'perform outside fibre')
+  assert_error_kind(ok, err, 'phase_error', 'perform outside fiber')
 end
 
 -- perform inside guard is rejected because guard runs during search.
@@ -132,7 +132,7 @@ do
   assert_error_kind(ok, err, 'phase_error', 'perform inside sequencing guard')
 end
 
--- Spawn is allowed from external driver code and from a resumed fibre, but not
+-- Spawn is allowed from external driver code and from a resumed fiber, but not
 -- from runtime internals.
 do
   local rt = Runtime.new()
@@ -140,10 +140,10 @@ do
   rt:spawn_raw(function()
     rt:spawn_raw(function()
       child_ran = true
-    end):label('spawned-from-fibre-child')
-  end):label('spawned-from-fibre-parent')
+    end):label('spawned-from-fiber-child')
+  end):label('spawned-from-fiber-parent')
   rt:run()
-  assert_eq(child_ran, true, 'spawn from resumed fibre is allowed')
+  assert_eq(child_ran, true, 'spawn from resumed fiber is allowed')
 end
 
 -- spawn inside guard is rejected because guard is runtime search work, not external code.
@@ -199,7 +199,7 @@ do
   )
 end
 
--- wrap runs in the resumed fibre and may perform a fresh post-commit transaction.
+-- wrap runs in the resumed fiber and may perform a fresh post-commit transaction.
 do
   local rt = Runtime.new()
   local got
@@ -213,7 +213,7 @@ do
   assert_eq(got, 'xy', 'wrap may perform')
 end
 
--- step and run are external driver calls, not fibre calls.
+-- step and run are external driver calls, not fiber calls.
 do
   local rt = Runtime.new()
   local step_ok, step_err, run_ok, run_err
@@ -226,8 +226,8 @@ do
     end)
   end):label('driver-guard')
   rt:run()
-  assert_error_kind(step_ok, step_err, 'phase_error', 'step inside fibre')
-  assert_error_kind(run_ok, run_err, 'phase_error', 'run inside fibre')
+  assert_error_kind(step_ok, step_err, 'phase_error', 'step inside fiber')
+  assert_error_kind(run_ok, run_err, 'phase_error', 'run inside fiber')
 end
 
 -- A wrap failure happens after commit and must not roll back committed resources.
@@ -304,22 +304,22 @@ do
   assert_error_kind(ok_run, run_err, 'effect_error', 'failed runtime rejects later run')
 end
 
--- An uncaught phase error from a fibre must not leave later external calls
+-- An uncaught phase error from a fiber must not leave later external calls
 -- misclassified as runtime-internal calls.
 do
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:run()
-  end):label('fibre-calls-run')
+  end):label('fiber-calls-run')
   local ok, err = pcall(function()
     rt:run()
   end)
-  assert_error_kind(ok, err, 'phase_error', 'run inside fibre escapes as phase error')
-  assert_eq(rt._phase, 'external', 'phase restored after fibre phase error')
+  assert_error_kind(ok, err, 'phase_error', 'run inside fiber escapes as phase error')
+  assert_eq(rt._phase, 'external', 'phase restored after fiber phase error')
   local ok_spawn = pcall(function()
-    rt:spawn_raw(function() end):label('external-after-fibre-phase-error')
+    rt:spawn_raw(function() end):label('external-after-fiber-phase-error')
   end)
-  assert_eq(ok_spawn, true, 'external spawn after fibre phase error is allowed')
+  assert_eq(ok_spawn, true, 'external spawn after fiber phase error is allowed')
 end
 
 -- Cell updates expressed as algebra protect user callback errors

@@ -1,5 +1,5 @@
 -- Labels are semantically inert diagnostic metadata, and execution contracts
--- may assert that a dynamic region does not relinquish the current fibre turn.
+-- may assert that a dynamic region does not relinquish the current fiber turn.
 
 package.path = table.concat({
   './src/?.lua',

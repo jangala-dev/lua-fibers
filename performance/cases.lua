@@ -75,13 +75,13 @@ add('simple', 'cell', 'serial read write', 1200, function(ctx, n)
         return cell:write_op(value + 1)
       end)))
     end
-  end):label('perf-cell-fibre')
+  end):label('perf-cell-fiber')
   drain(rt)
   assert_eq(cell.value, n)
   return n
 end)
 
-add('simple', 'rendezvous', 'two fibre ping pong', 700, function(ctx, n)
+add('simple', 'rendezvous', 'two fiber ping pong', 700, function(ctx, n)
   local rt = ctx:runtime()
   local request = Rendezvous.new():label('perf-ping')
   local reply = Rendezvous.new():label('perf-pong')
@@ -169,7 +169,7 @@ add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
         fallbacks = fallbacks + 1
       end
     end
-  end):label('perf-choice-conflict-fibre')
+  end):label('perf-choice-conflict-fiber')
   drain(rt)
   assert_eq(fallbacks, n)
   assert_eq(cell.value, 2)
@@ -186,7 +186,7 @@ add('moderate', 'flow', 'sequential write read', 280, function(ctx, n)
       rt:perform(inlet:write_op('abcdefgh'))
       total = total + #rt:perform(outlet:read_exactly_op(8))
     end
-  end):label('perf-flow-fibre')
+  end):label('perf-flow-fiber')
   drain(rt)
   assert_eq(total, n * 8)
   return n * 2

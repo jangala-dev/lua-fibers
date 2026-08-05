@@ -38,7 +38,7 @@ do
   end, { host = host }).runtime_status
 
   Common.assert_status(st, 'found')
-  Common.assert_truthy(done, 'sleeping fibre should resume')
+  Common.assert_truthy(done, 'sleeping fiber should resume')
   Common.assert_eq(slept, 4, 'pure host should sleep until the reported deadline')
   Common.assert_eq(now, 14, 'fake clock should have advanced')
 end

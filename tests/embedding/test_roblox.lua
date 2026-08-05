@@ -201,11 +201,11 @@ do
   scheduler:run_until_idle()
 end
 
--- A temporary quiescent result does not hide other fibres already ready to run.
+-- A temporary quiescent result does not hide other fibers already ready to run.
 do
   local scheduler = FakeTask.new()
   local host = new_host(scheduler)
-  local side_fibre_ran = false
+  local side_fiber_ran = false
   local app = Roblox.prepare(function()
     fibers.perform(Op.never())
   end, {
@@ -215,7 +215,7 @@ do
     max_seconds_per_turn = 100,
   })
   app.runtime:spawn_raw(function()
-    side_fibre_ran = true
+    side_fiber_ran = true
   end):label('ready-behind-quiescent-root')
 
   local first = app:advance()
@@ -224,12 +224,12 @@ do
   assert_truthy(not app:is_settled(), 'ready work must prevent premature quiescent completion')
 
   for _ = 1, 4 do
-    if side_fibre_ran then
+    if side_fiber_ran then
       break
     end
     app:advance()
   end
-  assert_truthy(side_fibre_ran, 'the ready side fibre should receive a later bounded turn')
+  assert_truthy(side_fiber_ran, 'the ready side fiber should receive a later bounded turn')
   app:close()
   host:close()
   scheduler:run_until_idle()
@@ -323,13 +323,13 @@ do
     end, { host = host, owns_host = false })
     assert_truthy(result.ok, 'timer programme should succeed')
   end)
-  assert_truthy(woke, 'timer should resume the Fibers fibre')
+  assert_truthy(woke, 'timer should resume the Fibers fiber')
   assert_eq(scheduler.now, 12, 'fake Roblox clock should reach the deadline')
   host:close()
   scheduler:run_until_idle()
 end
 
--- Immediate engine signals are queued rather than re-entering a running fibre.
+-- Immediate engine signals are queued rather than re-entering a running fiber.
 do
   local scheduler = FakeTask.new()
   local host = new_host(scheduler)

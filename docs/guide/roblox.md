@@ -74,7 +74,7 @@ end)
 ```
 
 `advance` never waits for Roblox. Reaching its horizon or deterministic turn
-budget retains the exact unfinished fibre and proof state for a later call. It
+budget retains the exact unfinished fiber and proof state for a later call. It
 does not establish `Retry` and cannot admit an `or_else` fallback.
 
 Most applications can place a scheduling policy above this boundary:
@@ -138,7 +138,7 @@ creates an event-attached application and yields this script while Roblox
 continues to own scheduling. Larger systems will usually retain the
 `Application` returned by `attach` or drive `prepare` manually.
 
-A fibre is still an ordinary Luau function. Direct methods suspend where the
+A fiber is still an ordinary Luau function. Direct methods suspend where the
 scene naturally waits. The scope accounts for every child before it returns.
 
 This is the first promise Fibers should make to a gameplay programmer:
@@ -518,7 +518,7 @@ notifications where the number of coalesced firings is less important than the
 fact that something changed.
 
 Signal subscription is an immediate committed host action. Construct it in the
-body of a running fibre or another post-commit path, not inside `guard`, `map`,
+body of a running fiber or another post-commit path, not inside `guard`, `map`,
 effect preparation or another callback which Fibers may replay. The
 returned subscription is then an ordinary resource held in custody: `next_op()` is inert,
 `close_op()` is transactional, and Scope Closure disconnects it.
@@ -663,7 +663,7 @@ The next disciplined milestones are:
 Roblox's `task` library already schedules functions and coroutines through the
 engine scheduler: <https://create.roblox.com/docs/reference/engine/libraries/task>.
 The adapter uses that scheduler to arrange bounded future turns while retaining
-Fibers' own inner fibre, transaction and lifetime model. Roblox always owns when
+Fibers' own inner fiber, transaction and lifetime model. Roblox always owns when
 a turn begins and how much host time it may consume.
 
 ## 17. Rules worth keeping visible

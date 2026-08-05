@@ -31,7 +31,7 @@ end
 local function require_runtime(opts)
   local runtime = opts.runtime or Runtime.current()
   if not runtime then
-    error('Roblox subscription must be created from a running fibre or given opts.runtime', 3)
+    error('Roblox subscription must be created from a running fiber or given opts.runtime', 3)
   end
   return runtime
 end

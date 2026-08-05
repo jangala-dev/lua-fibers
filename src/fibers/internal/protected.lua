@@ -1,13 +1,13 @@
 -- fibers.internal.protected
 --
--- Yieldable protected calls for fibre code.
+-- Yieldable protected calls for fiber code.
 --
 -- Lua 5.1 cannot generally yield through the native pcall/xpcall boundary.
 -- This module provides coroutine-backed pcall/xpcall when needed, while using
 -- native protected calls on hosts where they are already yield-safe.
 --
 -- The transaction kernel should not use this as a general hot-path wrapper.
--- It is for ordinary fibre/user-code boundaries where performing an Op may
+-- It is for ordinary fiber/user-code boundaries where performing an Op may
 -- suspend and later resume.
 
 local M = {}
@@ -106,7 +106,7 @@ end
 local USE_NATIVE = (not force_fallback()) and probe_yieldable_pcall() and probe_yieldable_xpcall()
 
 -- Child protected-call coroutine -> caller coroutine.  Runtime uses
--- protected.running() so a fibre can still be recognised while user code is
+-- protected.running() so a fiber can still be recognised while user code is
 -- executing inside a protected-call child coroutine.
 local parent_of = setmetatable({}, { __mode = 'k' })
 

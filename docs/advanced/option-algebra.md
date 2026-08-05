@@ -135,7 +135,7 @@ The commit sequence is:
 3. calculate all final location values without committed mutation
 4. raw-install all location values and versions
 5. discharge commit and defeat effects
-6. resume selected fibres with raw packed results
+6. resume selected fibers with raw packed results
 7. run each participant's wraps inside its returning perform call
 ```
 

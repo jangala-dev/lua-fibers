@@ -183,7 +183,7 @@ end
 
 -- A guarded right-hand operation created before rendezvous closure must retain
 -- the original evaluation context. In particular, a nested guard and residual
--- or_else need the fibre attempt and residual environment.
+-- or_else need the fiber attempt and residual environment.
 do
   local rt = Runtime.new()
   local ch = Rendezvous.new():label('deferred-context-search')

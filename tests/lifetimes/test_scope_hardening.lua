@@ -94,7 +94,7 @@ do
         error('closure body failure')
       end)
     end)
-  end,  root):label('closure-hook-root-fibre')
+  end,  root):label('closure-hook-root-fiber')
   local ok = pcall(function()
     drive(rt, 100)
   end)
@@ -141,7 +141,7 @@ do
       local bytes, err = fibers.perform(stream:reader():read_some_op(1))
       read_err = err or bytes
     end)
-  end,  root):label('retired-authority-root-fibre')
+  end,  root):label('retired-authority-root-fiber')
   drive(rt, 100)
   assert_eq(
     read_err,

@@ -12,7 +12,7 @@ A facility normally:
    those options;
 4. keeps the option construction path inert and does not call `perform` inside an `_op` method;
 5. uses `each`, `together`, `choice`, sequencing and mapping to state its laws;
-6. leaves fibre and lifetime structure to callers unless custody is intrinsic to the facility.
+6. leaves fiber and lifetime structure to callers unless custody is intrinsic to the facility.
 
 ```lua
 local Counter = require('fibers.resource.counter')
@@ -84,7 +84,7 @@ Facilities must place each callback in one of three phases.
 |---|---|---|
 | Speculative search | guards, `map`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
 | Candidate-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
-| Participant continuation | `wrap` | Runs after commit in the resumed fibre. It may perform, spawn and interact with the outside world. |
+| Participant continuation | `wrap` | Runs after commit in the resumed fiber. It may perform, spawn and interact with the outside world. |
 
 `prepare` must not reserve host capacity or acquire an external resource. It may inspect only the effect payload, captured runtime configuration and managed facts already represented by the candidate. A refusal based on untracked volatile host state is invalid because it could admit an `or_else` fallback without a revalidatable proof. Model such capacity or readiness as a managed resource, then put the irreversible host action in `discharge`.
 

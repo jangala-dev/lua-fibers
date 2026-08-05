@@ -16,9 +16,9 @@ The same small vocabulary applies to:
 
 Fibers version 1 is an advanced work in progress. Its public surface is being reduced and settled before the first release.
 
-## Begin with sequential fibre code
+## Begin with sequential fiber code
 
-Fibres run ordinary Lua functions. Everyday facilities provide direct methods, so routine fibre code can be read from top to bottom:
+Fibers run ordinary Lua functions. Everyday facilities provide direct methods, so routine fiber code can be read from top to bottom:
 
 ```lua
 local fibers = require('fibers')
@@ -117,11 +117,11 @@ Two ideas organise the system:
 
 A small set of practical rules is enough to begin.
 
-### Fibres are ordinary sequential code
+### Fibers are ordinary sequential code
 
-A fibre is a cooperatively scheduled Lua function.
+A fiber is a cooperatively scheduled Lua function.
 
-Within a fibre, code remains direct and sequential:
+Within a fiber, code remains direct and sequential:
 
 ```lua
 fibers.spawn(function()
@@ -179,7 +179,7 @@ The option may:
 
 Application code uses the same `perform` boundary in each case.
 
-`perform` is a possible suspension point, not an instruction to suspend. An option which can commit immediately allows the fibre to continue immediately.
+`perform` is a possible suspension point, not an instruction to suspend. An option which can commit immediately allows the fiber to continue immediately.
 
 ### Direct methods perform their `_op` forms
 
@@ -195,7 +195,7 @@ means exactly:
 local command = fibers.perform(commands:get_op())
 ```
 
-Use direct methods for ordinary sequential fibre code.
+Use direct methods for ordinary sequential fiber code.
 
 Ask for an option when the action must participate in:
 
@@ -344,7 +344,7 @@ This means:
 
 That transaction may involve:
 
-* another currently participating fibre;
+* another currently participating fiber;
 * an alternative offered by that participant;
 * several communications;
 * provisional state changes;
@@ -596,7 +596,7 @@ Failure policy therefore belongs to the scope which owns the work.
 
 ### Cancellation is cooperative
 
-A fibre observes cancellation when it reaches a cooperating Fibers operation or another recognised cancellation point.
+A fiber observes cancellation when it reaches a cooperating Fibers operation or another recognised cancellation point.
 
 Fibers cannot safely pre-empt:
 
@@ -765,7 +765,7 @@ local coordinator = fibers.spawn(function()
 end):label('device-coordinator')
 ```
 
-`fibers.without_suspension(fn, ...)` requires the function to begin and finish without the current fibre relinquishing execution.
+`fibers.without_suspension(fn, ...)` requires the function to begin and finish without the current fiber relinquishing execution.
 
 It:
 
@@ -788,8 +788,8 @@ end)
 
 If an operation would:
 
-* park the current fibre;
-* allow another application fibre to run first;
+* park the current fiber;
+* allow another application fiber to run first;
 * return control because the configured search budget was exhausted;
 
 Fibers raises a `suspension_error` before that hand-off.
@@ -804,7 +804,7 @@ Available task, option and resource labels are included in the diagnostic.
 * a time limit;
 * protection against a foreign call which blocks without returning to Fibers.
 
-It ensures that a dynamic region remains within one uninterrupted fibre turn. The same scheduler boundary also gives instrumentation a precise unit for identifying code which retains execution for too long.
+It ensures that a dynamic region remains within one uninterrupted fiber turn. The same scheduler boundary also gives instrumentation a precise unit for identifying code which retains execution for too long.
 
 ## Everyday facilities
 
@@ -1218,7 +1218,7 @@ Wally and Rojo packaging, together with real-Studio smoke testing, remain releas
 
 Ordinary application code does not need to understand the execution kernel.
 
-This section describes why the public laws continue to hold when several fibres, resources and possible transactions interact.
+This section describes why the public laws continue to hold when several fibers, resources and possible transactions interact.
 
 ### Coherent committed worlds
 
@@ -1228,7 +1228,7 @@ A world may include:
 
 * selected communications;
 * provisional state changes;
-* several participating fibres;
+* several participating fibers;
 * task admission;
 * custody movement;
 * committed host obligations;
@@ -1248,7 +1248,7 @@ This avoids copying the complete runtime state for every alternative while prese
 
 ### Participant recruitment
 
-A transaction may require other currently participating fibres.
+A transaction may require other currently participating fibers.
 
 Fibers recruits only participants connected to the candidate operation rather than considering arbitrary runtime-wide subsets.
 

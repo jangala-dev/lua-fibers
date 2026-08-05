@@ -1,4 +1,4 @@
--- Fibre scheduler and public execution boundary.
+-- Fiber scheduler and public execution boundary.
 
 local Op = require('fibers.op')
 local Values = require('fibers.internal.values')
@@ -127,7 +127,7 @@ function Runtime:_is_current_fiber()
     return false
   end
   -- Yieldable protected calls may execute user code in a child coroutine.
-  -- Resolve that child back to the owning runtime fibre before enforcing the
+  -- Resolve that child back to the owning runtime fiber before enforcing the
   -- perform/driver phase boundary.
   local running = Protected.running(coroutine.running())
   return running == f.co
@@ -137,7 +137,7 @@ function Runtime:_require_perform_allowed(level)
   if self:_is_current_fiber() and self._phase == 'fiber' then
     return true
   end
-  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fibre', {
+  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fiber', {
     action = 'perform',
     phase = self._phase,
     level = level or 0,
@@ -302,9 +302,9 @@ local function spawn_unchecked(self, fn, scope, subject)
   self._live_fibers = self._live_fibers + 1
   local instrumentation = self.instrumentation
   if instrumentation then
-    instrumentation:inc('fibres_spawned')
-    instrumentation:max('live_fibres', self._live_fibers)
-    instrumentation:max('ready_fibres', self._ready_tail - self._ready_head + 1)
+    instrumentation:inc('fibers_spawned')
+    instrumentation:max('live_fibers', self._live_fibers)
+    instrumentation:max('ready_fibers', self._ready_tail - self._ready_head + 1)
   end
   return fiber
 end
@@ -372,7 +372,7 @@ function Runtime:_finish_fiber(fiber)
     return
   end
   fiber.done = true
-  -- A completed fibre handle remains useful for identity and diagnostics, but
+  -- A completed fiber handle remains useful for identity and diagnostics, but
   -- its coroutine and dynamic scope graph must not be retained by the runtime.
   fiber.co = nil
   fiber.scope = nil
@@ -380,7 +380,7 @@ function Runtime:_finish_fiber(fiber)
   self._live_fibers = math.max(self._live_fibers - 1, 0)
   local instrumentation = self.instrumentation
   if instrumentation then
-    instrumentation:inc('fibres_completed')
+    instrumentation:inc('fibers_completed')
   end
 end
 
@@ -388,7 +388,7 @@ function Runtime:_resume_fiber(fiber, a, b, c)
   local ok, yielded, yielded_op, yielded_interrupt
   local instrumentation = self.instrumentation
   if instrumentation then
-    instrumentation:inc('fibre_resumes')
+    instrumentation:inc('fiber_resumes')
   end
   local context_token, previous_fiber = Context.enter(self, fiber.scope), self._current_fiber
   self._current_fiber = fiber

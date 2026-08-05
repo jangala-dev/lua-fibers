@@ -373,7 +373,7 @@ function tests.file_close_waits_for_private_lifetime_descendants()
   assert(result.ok, result:tostring())
 end
 
-function tests.file_driver_does_not_stop_other_fibres()
+function tests.file_driver_does_not_stop_other_fibers()
   local provider = memory_provider({ ['/slow'] = 'ready' })
   local original_open = provider.open
   function provider:open(path, mode, opts)

@@ -39,7 +39,7 @@ The arrows indicate inherited questions and increasingly rich composition, not d
 
 CSP is an algebra of continuing process behaviours. Prefix, choice, parallel composition, hiding and recursion describe possible observations over time. Mature CSP models support reasoning about traces, refusals, deadlock and divergence, with refinement used to compare specifications and implementations.
 
-A `fibers` option has a different extent. It describes one attempted atomic transition rather than the complete future behaviour of a process. Persistent behaviour is written as fibres which repeatedly perform options, whereas persistence is intrinsic to a recursive CSP process.
+A `fibers` option has a different extent. It describes one attempted atomic transition rather than the complete future behaviour of a process. Persistent behaviour is written as fibers which repeatedly perform options, whereas persistence is intrinsic to a recursive CSP process.
 
 CSP parallel composition and a `fibers` product should not be identified:
 
@@ -196,7 +196,7 @@ Reagents are stronger in the intended domain of parallel, lock-free implementati
 
 A formal relationship between Reagent pairing and `Op.each`/`Op.together` remains open work.
 
-## 5. The distinctive fibres algebra
+## 5. The distinctive fibers algebra
 
 The compact public basis can be read as:
 

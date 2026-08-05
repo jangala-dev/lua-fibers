@@ -23,7 +23,7 @@ local host = ManualHost.new() -- deterministic time and readiness
 local rt = Runtime.new({ host = host })
 
 rt:spawn_raw(function()
-  -- embedded root fibre
+  -- embedded root fiber
 end):label('root')
 ```
 
@@ -34,7 +34,7 @@ rt:run(opts)
 rt:step({ max_work = n })
 ```
 
-`Runtime:run` starts ready fibres and searches all pending focuses until at least one transaction commits or no further immediate progress is found.
+`Runtime:run` starts ready fibers and searches all pending focuses until at least one transaction commits or no further immediate progress is found.
 
 `Runtime:step` applies a bounded search allowance. The execution-frontier kernel retains the same semantic position through a Lua coroutine, including its rollback trail, witness cursors and branch loops. A later call resumes the exact proof while its observed locations, resource generations and participant buckets remain unchanged. A relevant admission, commit or external delivery invalidates only affected sessions.
 
@@ -310,7 +310,7 @@ disarm registrations; the host delivers only ready registration identities.
 Linux epoll events carry a fresh registration epoch rather than a raw
 descriptor. The host validates that epoch before delivering the reaction id and
 generation. The reactor then performs one bounded authoritative `read` or
-`write` call in fibre phase.
+`write` call in fiber phase.
 
 The read side reserves Flow capacity before calling the host. The write side leases a committed byte prefix before calling the host. These space and data leases preserve backpressure and exact byte custody across irreversible calls.
 
@@ -424,7 +424,7 @@ transition and witness callbacks
 effect preparation and discharge
 ```
 
-Only fibre-phase code may suspend through `perform`.
+Only fiber-phase code may suspend through `perform`.
 
 ## Native host bindings
 

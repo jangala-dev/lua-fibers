@@ -157,7 +157,7 @@ end
 
 -- The task body remains dormant while spawn is explored. Effect preparation
 -- may inspect its availability, but only committed discharge may move it into a
--- runnable fibre frame.
+-- runnable fiber frame.
 function Task:_spawn_effect()
   local life = self._lifetime
   return Effect.spawn(nil, life._fibers_id, nil, self)

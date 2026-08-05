@@ -27,7 +27,7 @@ local function assert_truthy(v, msg)
   end
 end
 
--- Inline scopes are same-fibre resource boundaries. Owned roots admitted inside
+-- Inline scopes are same-fiber resource boundaries. Owned roots admitted inside
 -- the scope are retired on normal exit without per-resource defer/finaliser code.
 do
   local retired = 0

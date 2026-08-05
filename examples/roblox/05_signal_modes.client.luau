@@ -70,7 +70,7 @@ actionSignal:Fire('light-attack')
 actionSignal:Fire('heavy-attack')
 actionSignal:Fire('dodge')
 
--- Only 60 remains pending when the fibre asks for the latest health value.
+-- Only 60 remains pending when the fiber asks for the latest health value.
 healthSignal:Fire(100)
 healthSignal:Fire(75)
 healthSignal:Fire(60)

@@ -77,7 +77,7 @@ do
 end
 
 -- Perform uses a shared multi-value coroutine protocol and stores the one
--- outstanding request directly on the fibre.  No per-perform hand-off object
+-- outstanding request directly on the fiber.  No per-perform hand-off object
 -- or response record is retained.
 do
   local rt = Runtime.new({ instrumentation = true })
@@ -89,11 +89,11 @@ do
   end):label('minimal-direct-perform')
   eq(rt:run().tag, 'found')
   eq(total, 210)
-  eq(fiber.order, nil, 'completed fibre retained a request id')
-  eq(fiber.op, nil, 'completed fibre retained an operation')
-  eq(fiber.activation_root, nil, 'completed fibre retained an activation root')
-  eq(fiber.guard_residuals, nil, 'fibre retained obsolete guard storage')
-  eq(fiber.clock_values, nil, 'fibre retained obsolete clock storage')
+  eq(fiber.order, nil, 'completed fiber retained a request id')
+  eq(fiber.op, nil, 'completed fiber retained an operation')
+  eq(fiber.activation_root, nil, 'completed fiber retained an activation root')
+  eq(fiber.guard_residuals, nil, 'fiber retained obsolete guard storage')
+  eq(fiber.clock_values, nil, 'fiber retained obsolete clock storage')
   eq(rt._handoff_pool, nil, 'runtime should not allocate a perform hand-off pool')
 end
 

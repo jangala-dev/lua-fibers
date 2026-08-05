@@ -93,7 +93,7 @@ fibers.run(function()
   assert(fibers.perform(calendar:cancel_op(booking.id)).id == booking.id)
 end)
 
--- External feeds are driver actions, not fibre actions.
+-- External feeds are driver actions, not fiber actions.
 do
   local rt = FibersRuntime.new({ host = ManualHost.new() })
   local signal, feed = External.signal(rt)

@@ -738,7 +738,7 @@ function Command:launch_op(opts)
     error("group shutdown requires process_group = 'new', a numeric group, or new_session", 2)
   end
 
-  -- Custody comes from the surrounding fibre context and is resolved when the
+  -- Custody comes from the surrounding fiber context and is resolved when the
   -- option is constructed. The Process itself is fresh per guard activation.
   local scope = IO.current_scope(opts, 'Command:launch_op')
   local parent_scope = IO.require_scope(scope, 'Command:launch_op')

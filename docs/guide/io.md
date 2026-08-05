@@ -353,7 +353,7 @@ acceptance they remain in the Listener Lifetime's private Scope custody. `accept
 dequeues a connection and moves its complete Stream subtree into the accepting
 scope in the same commit. If the option loses a choice, neither action occurs.
 Queued input has certified priority over terminal listener closure. When a
-transfer option will be stored or performed by another fibre, pass its target Scope explicitly. Direct methods use the current Scope when
+transfer option will be stored or performed by another fiber, pass its target Scope explicitly. Direct methods use the current Scope when
 the target is omitted; inert operation constructors require the target explicitly.
 
 Outbound connection establishment is deliberately two-stage:
@@ -373,7 +373,7 @@ The split allows the eventual connection result to participate correctly in
 successful but untaken connection remains in the Dial Lifetime's private Scope custody;
 claiming it moves the complete Stream subtree into the caller's scope. As with
 `accept_op`, pass an explicit target when a result option is intended for a
-different fibre or scope.
+different fiber or scope.
 `dial:result_op(fibers.current_scope())` returns either the transferred connection or its structured
 error. `dial:closed_op()` observes execution termination and completed custody
 disposition.
@@ -599,7 +599,7 @@ repeated socket churn.
 
 ## Custody and host support
 
-Newly acquired handles enter private host holds before any fibre can yield.
+Newly acquired handles enter private host holds before any fiber can yield.
 Accepted descriptors are placed in an accept-source hold before the reactor
 publishes their offer; unclaimed offers remain under that source's Lifetime and
 are closed during source retirement. Connected Streams remain in each Dial's

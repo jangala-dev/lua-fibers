@@ -290,7 +290,7 @@ do
   end, { host = host })
 end
 
--- The extracted helper retains the explicit running-fibre boundary and wording.
+-- The extracted helper retains the explicit running-fiber boundary and wording.
 do
   local ok, err = pcall(function()
     return perform(Op.always(true))

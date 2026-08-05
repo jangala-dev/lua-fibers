@@ -70,7 +70,7 @@ test('fibers.pcall permits perform to suspend and resume', function()
   eq(got, 'hello')
 end)
 
-test('fibers.pcall catches ordinary fibre errors', function()
+test('fibers.pcall catches ordinary fiber errors', function()
   local protected_ok, err
   local st = fibers.try_run(function()
     protected_ok, err = fibers.pcall(function()
