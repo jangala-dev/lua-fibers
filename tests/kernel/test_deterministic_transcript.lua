@@ -29,18 +29,18 @@ local function scenario()
   })
   local function effect(value) return Effect.of(TraceKind, { value = value }) end
 
-  local exchange = Rendezvous.new('deterministic-transcript')
+  local exchange = Rendezvous.new():label('deterministic-transcript')
   local runtime = Runtime.new({ choice_seed = 7 })
 
   runtime:spawn_raw(function()
     local value = runtime:perform(exchange:get_op())
     record('get:' .. tostring(value))
-  end, 'transcript-get')
+  end):label('transcript-get')
 
   runtime:spawn_raw(function()
     runtime:perform(exchange:put_op('payload'))
     record('put')
-  end, 'transcript-put')
+  end):label('transcript-put')
 
   runtime:spawn_raw(function()
     local result = runtime:perform(Op.choice(
@@ -50,7 +50,7 @@ local function scenario()
       end)
     ))
     record('choice:' .. tostring(result))
-  end, 'transcript-choice')
+  end):label('transcript-choice')
 
   while true do
     local status = runtime:run()

@@ -23,11 +23,11 @@ local outer = fibers.try_run(function()
   }, function()
     fibers.spawn(function()
       error('thumbnail decoder rejected an optional preview', 0)
-    end, 'optional-thumbnailer')
+    end):label('optional-thumbnailer')
 
     local search_index = fibers.spawn(function()
       return 'workspace index healthy'
-    end, 'search-index')
+    end):label('search-index')
 
     return search_index:await()
   end)

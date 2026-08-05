@@ -63,7 +63,7 @@ do
   local ran = false
   rt:spawn_raw(function()
     ran = rt:perform(Op.always(true))
-  end, 'one-shot')
+  end):label('one-shot')
 
   local found, last = drive(rt)
   assert_truthy(found, 'runtime should commit the one-shot fibre')
@@ -84,7 +84,7 @@ do
     rt:spawn_raw(function()
       rt:perform(Op.always(true))
       return marker
-    end, 'short-' .. tostring(i))
+    end):label('short-' .. tostring(i))
     marker = nil
   end
 
@@ -101,17 +101,17 @@ end
 -- not by inspecting the runtime's waiting frontier.
 do
   local rt = Runtime.new()
-  local ch = Rendezvous.new('frontier-rendezvous')
+  local ch = Rendezvous.new():label('frontier-rendezvous')
   local got
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op())
-  end, 'receiver')
+  end):label('receiver')
   local st = rt:run()
   assert_eq(st.tag, 'quiescent', 'receiver has no compatible transaction until a sender arrives')
 
   rt:spawn_raw(function()
     rt:perform(ch:put_op('x'))
-  end, 'sender')
+  end):label('sender')
   local found, last = drive(rt)
   assert_truthy(found, 'sender and receiver should rendezvous')
   assert_eq(got, 'x')

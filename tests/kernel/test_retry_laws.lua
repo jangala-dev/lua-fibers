@@ -46,7 +46,7 @@ local function absent(op)
   local rt = Runtime.new()
   rt:spawn_raw(function()
     got = rt:perform(op:or_else(Op.always(ABSENT)))
-  end, 'absence-probe')
+  end):label('absence-probe')
   local status = rt:run()
   assert_status(status, 'found', 'absence probe should commit either primary or fallback')
   return got == ABSENT
@@ -109,7 +109,7 @@ do
         return v
       end)
       :or_else(Op.always('fallback')))
-  end, 'wrap-absence-fallback')
+  end):label('wrap-absence-fallback')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
   assert_eq(wrapped, false, 'wrap on absent primary must not run')
@@ -130,7 +130,7 @@ end
 
 -- together permits internal rendezvous, while each does not.
 do
-  local ch = Rendezvous.new('absence-law-rendezvous')
+  local ch = Rendezvous.new():label('absence-law-rendezvous')
   assert_falsy(
     absent(Op.together({ ch:get_op(), ch:put_op('payload') })),
     'an internal rendezvous in together is a current world'
@@ -143,19 +143,19 @@ end
 -- kernel-owned wake interest, and or_else may consume its exhaustive current
 -- absence without retaining the discarded primary interest afterwards.
 do
-  local signal = Signal.new('retry-law-signal')
+  local signal = Signal.new():label('retry-law-signal')
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function()
     got = rt:perform(signal:wait_op():or_else(Op.always('fallback')))
-  end, 'signal-fallback')
+  end):label('signal-fallback')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
 
   local pending = Runtime.new()
   pending:spawn_raw(function()
     pending:perform(signal:wait_op())
-  end, 'signal-wait')
+  end):label('signal-wait')
   local st = pending:run()
   assert_status(st, 'pending')
   assert_truthy(st.interests and #st.interests == 1, 'unhandled external absence should retain one wake interest')
@@ -167,11 +167,11 @@ do
   local got_a, got_b
   local rt = Runtime.new()
   rt:spawn_raw(function()
-    got_a = rt:perform(Rendezvous.new('absence-law-no-partner'):get_op():or_else(Op.always('fallback')))
-  end, 'fallback-root')
+    got_a = rt:perform(Rendezvous.new():label('absence-law-no-partner'):get_op():or_else(Op.always('fallback')))
+  end):label('fallback-root')
   rt:spawn_raw(function()
     got_b = rt:perform(Op.always('progress'))
-  end, 'progress-root')
+  end):label('progress-root')
   local first = rt:step()
   assert_truthy(
     first.tag == 'pending' or first.tag == 'quiescent',
@@ -194,13 +194,13 @@ do
   rt:spawn_raw(function()
     rt:perform(Op.never():or_else(Op.always('fallback')))
     fallback_after = unrelated_commits
-  end, 'independent-fallback')
+  end):label('independent-fallback')
   rt:spawn_raw(function()
     for _ = 1, 1000 do
       rt:perform(Op.always(true))
       unrelated_commits = unrelated_commits + 1
     end
-  end, 'independent-positive-loop')
+  end):label('independent-positive-loop')
   assert_status(rt:run(), 'found')
   assert_eq(fallback_after, 0, 'independent positive work must not delay local fallback')
 end

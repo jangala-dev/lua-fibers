@@ -48,7 +48,7 @@ end
 do
   local signal
   local st = fibers.try_run(function()
-    signal = FibersSignal.new('unsupported-host-source')
+    signal = FibersSignal.new():label('unsupported-host-source')
     fibers.perform(signal:wait_op())
   end, {
     host = PureHost.new({

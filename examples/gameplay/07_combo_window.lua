@@ -24,7 +24,7 @@ fibers.run(function(scope)
   scope:spawn(function()
     Sleep.sleep(1)
     follow_up:put('crescent uppercut')
-  end, 'simulate-player-input')
+  end):label('simulate-player-input')
 
   selected, move = fibers.perform(Op.named_choice({
     input = follow_up:get_op(),

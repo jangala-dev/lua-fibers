@@ -45,7 +45,7 @@ do
   local h = Lifetimes.resource('authority-owned')
   local live_auth, closed_auth
   fibers.run(function()
-    owner = FibersScope.new('authority-owner', { runtime = FibersRuntime.current() })
+    owner = FibersScope.new( { runtime = FibersRuntime.current() }):label('authority-owner')
     fibers.perform(owner:admit_op(h))
     live_auth = fibers.perform(maybe(owner:can_op(h, 'write')))
     fibers.perform(owner:close_op(h, 'done'))
@@ -63,8 +63,8 @@ do
   local grant, subject_owner, grant_owner, read_auth, write_auth, after_revoke
   fibers.run(function()
     local rt = FibersRuntime.current()
-    owner = FibersScope.new('grant-owner', { runtime = rt })
-    holder = FibersScope.new('grant-holder', { runtime = rt })
+    owner = FibersScope.new( { runtime = rt }):label('grant-owner')
+    holder = FibersScope.new( { runtime = rt }):label('grant-holder')
     fibers.perform(owner:admit_op(h))
     grant = fibers.perform(owner:grant_op(h, holder, { 'read' }))
     subject_owner = Lifetime.of(h):current_state().custodian
@@ -103,10 +103,10 @@ end
 -- Flow endpoints are domain capabilities. A Grant supplies read authority
 -- without moving the endpoint Lifetime.
 do
-  local flow = FibersFlow.new(8, 'flow-authority')
+  local flow = FibersFlow.new(8):label('flow-authority')
   local direct_auth, granted_auth, granted_byte, granted_err, write_err
   fibers.run(function(owner)
-    local holder = FibersScope.new('flow-grant-holder', { runtime = FibersRuntime.current() })
+    local holder = FibersScope.new( { runtime = FibersRuntime.current() }):label('flow-grant-holder')
     fibers.perform(Op.each({ owner:admit_op(flow:inlet()), owner:admit_op(flow:outlet()) }))
     local _n, err = fibers.perform(flow:inlet():write_op('ab'))
     write_err = err
@@ -129,7 +129,7 @@ do
   local h = Lifetimes.resource('closed-grant-subject')
   local before_close, after_close
   fibers.run(function(owner)
-    local holder = FibersScope.new('closed-subject-holder', { runtime = FibersRuntime.current() })
+    local holder = FibersScope.new( { runtime = FibersRuntime.current() }):label('closed-subject-holder')
     fibers.perform(owner:admit_op(h))
     local grant = fibers.perform(owner:grant_op(h, holder, { 'read' }))
     before_close = fibers.perform(maybe(holder:can_op(h, 'read')))
@@ -146,8 +146,8 @@ do
   local h = Lifetimes.resource('grant-transfer-subject')
   local default_rejected, explicit_moved
   fibers.run(function(owner)
-    local first = FibersScope.new('grant-transfer-first', { runtime = FibersRuntime.current() })
-    local second = FibersScope.new('grant-transfer-second', { runtime = FibersRuntime.current() })
+    local first = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-transfer-first')
+    local second = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-transfer-second')
     fibers.perform(owner:admit_op(h))
     local fixed = fibers.perform(owner:grant_op(h, first, { 'read' }))
     default_rejected = not pcall(function()
@@ -173,9 +173,9 @@ do
   local h = Lifetimes.resource('grant-direction-subject')
   local parent_auth, child_auth, sibling_auth
   fibers.run(function(owner)
-    local parent = FibersScope.new('grant-direction-parent', { runtime = FibersRuntime.current() })
-    local sibling = FibersScope.new('grant-direction-sibling', { runtime = FibersRuntime.current() })
-    local ready = Completion.new('grant-direction-ready')
+    local parent = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-direction-parent')
+    local sibling = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-direction-sibling')
+    local ready = Completion.new():label('grant-direction-ready')
     fibers.perform(owner:admit_op(h))
     local child_task = fibers.perform(parent:spawn_op(function(child)
       fibers.perform(owner:grant_op(h, child, { 'read' }))
@@ -197,8 +197,8 @@ end
 -- rejected at construction rather than interpreted through Lua length rules.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('grant-validation-owner', { runtime = rt })
-  local holder = FibersScope.new('grant-validation-holder', { runtime = rt })
+  local owner = FibersScope.new( { runtime = rt }):label('grant-validation-owner')
+  local holder = FibersScope.new( { runtime = rt }):label('grant-validation-holder')
   local h = Lifetimes.resource('grant-validation-subject')
   local sparse = pcall(function()
     owner:grant_op(h, holder, { [1] = 'read', [3] = 'write' })
@@ -217,8 +217,8 @@ do
   local h = Lifetimes.resource('grant-immutable-subject')
   local write_auth, moved, inspected_write
   fibers.run(function(owner)
-    local holder = FibersScope.new('grant-immutable-holder', { runtime = FibersRuntime.current() })
-    local destination = FibersScope.new('grant-immutable-destination', { runtime = FibersRuntime.current() })
+    local holder = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-immutable-holder')
+    local destination = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-immutable-destination')
     fibers.perform(owner:admit_op(h))
     local grant = fibers.perform(owner:grant_op(h, holder, { 'read' }))
 
@@ -251,8 +251,8 @@ do
   local h = Lifetimes.resource('grant-no-subdelegation-subject')
   local delegated
   fibers.run(function(owner)
-    local holder = FibersScope.new('grant-no-subdelegation-holder', { runtime = FibersRuntime.current() })
-    local leaf = FibersScope.new('grant-no-subdelegation-leaf', { runtime = FibersRuntime.current() })
+    local holder = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-no-subdelegation-holder')
+    local leaf = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-no-subdelegation-leaf')
     fibers.perform(owner:admit_op(h))
     local upstream = fibers.perform(owner:grant_op(h, holder, { 'read' }))
     delegated = fibers.perform(holder:grant_op(h, leaf, { 'read' }):map(function()
@@ -267,8 +267,8 @@ end
 -- Grant option and term errors are reported at construction.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('grant-term-owner', { runtime = rt })
-  local holder = FibersScope.new('grant-term-holder', { runtime = rt })
+  local owner = FibersScope.new( { runtime = rt }):label('grant-term-owner')
+  local holder = FibersScope.new( { runtime = rt }):label('grant-term-holder')
   local h = Lifetimes.resource('grant-term-subject')
   assert_eq(pcall(function() owner:grant_op(h, holder, 'read', { terms = 'bad' }) end), false)
   assert_eq(pcall(function()

@@ -33,7 +33,7 @@ end
 
 -- Lease methods remain callable and expose the leased bytes directly.
 do
-  local flow = require('fibers.resource.flow').new(10, 'lease-method-flow')
+  local flow = require('fibers.resource.flow').new(10):label('lease-method-flow')
   local lease, len
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -50,7 +50,7 @@ end
 -- Flow.  A second holder cannot acquire a lease until the first is acked,
 -- returned, failed, or settled.
 do
-  local flow = require('fibers.resource.flow').new(10, 'single-active-lease-flow')
+  local flow = require('fibers.resource.flow').new(10):label('single-active-lease-flow')
   local first, second, second_err, after_ack
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -71,7 +71,7 @@ end
 -- Queued bytes are stored as a rope of chunks rather than a single mutable
 -- concatenated string.  The public observation remains a byte stream.
 do
-  local flow = require('fibers.resource.flow').new(64, 'rope-backed-flow')
+  local flow = require('fibers.resource.flow').new(64):label('rope-backed-flow')
   local chunks, data, got
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('ab'))

@@ -52,14 +52,10 @@ local WaitForZero = StateMachine.select('countdown_latch.wait', function(st)
     return Wait
 end, 100)
 
-function CountdownLatch.new(opts, name)
+function CountdownLatch.new(opts)
   opts = opts or {}
-  if type(opts) == 'string' then
-    opts = { name = opts }
-  end
   next_id = next_id + 1
   local id = 'countdown_latch-' .. tostring(next_id)
-  local wname = opts.name or name or id
   local count = opts.count or 0
   local generation = opts.generation or 0
   integer(count, 'countdown_latch initial count', 2)
@@ -71,9 +67,20 @@ function CountdownLatch.new(opts, name)
     error('countdown_latch initial generation must be non-negative', 2)
   end
   return setmetatable({
-    name = wname,
-    state = opts.state or StateMachine.new({ count = count, generation = generation }, wname .. ':state'),
+    _fibers_id = id,
+    state = opts.state or StateMachine.new({ count = count, generation = generation }),
   }, CountdownLatch)
+end
+
+function CountdownLatch:label(...)
+  if select('#', ...) == 0 then return self._label end
+  local value = select(1, ...)
+  if value ~= nil and (type(value) ~= 'string' or value == '') then
+    error('CountdownLatch:label expects a non-empty string or nil', 2)
+  end
+  self._label = value
+  self.state:label(value and value .. ':state' or nil)
+  return self
 end
 
 function CountdownLatch:add_op(n)

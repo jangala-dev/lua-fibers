@@ -50,7 +50,7 @@ local function seeded_index(name)
     { key = 'a', rank = 1, value = 'A' },
     { key = 'b', rank = 2, value = 'B' },
     { key = 'c', rank = 3, value = 'C' },
-  }, name)
+  }):label(name)
 end
 
 local function test_two_parallel_pop_first_claims_get_distinct_concrete_values()
@@ -67,7 +67,7 @@ local function test_two_parallel_pop_first_claims_get_distinct_concrete_values()
         return e.key, e.value
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'a')
@@ -93,7 +93,7 @@ local function test_parallel_pop_last_claims_get_distinct_tail_values()
         return e.key
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'c')
@@ -115,7 +115,7 @@ local function test_remove_plus_pop_skips_removed_head()
         return e.key
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -136,7 +136,7 @@ local function test_pop_first_and_then_receives_concrete_lua_entry()
       assert_eq(e.key, 'a')
       return Op.always('got:' .. e.value)
     end)))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(out, 'got:A')
@@ -144,7 +144,7 @@ end
 
 local function test_pop_then_reinsert_same_key_is_sequential_replacement()
   local rt = new_runtime()
-  local ix = Index.from({ { key = 'a', rank = 1, value = 'A' } }, 'idx-pop-reinsert')
+  local ix = Index.from({ { key = 'a', rank = 1, value = 'A' } }):label('idx-pop-reinsert')
   local out
 
   rt:spawn_raw(function()
@@ -153,7 +153,7 @@ local function test_pop_then_reinsert_same_key_is_sequential_replacement()
         return e.key
       end)
     end)))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(out, 'a')
@@ -166,12 +166,12 @@ end
 
 local function test_empty_index_claim_uses_absence_fallback()
   local rt = new_runtime()
-  local ix = Index.new('idx-empty')
+  local ix = Index.new():label('idx-empty')
   local out
 
   rt:spawn_raw(function()
     out = rt:perform(ix:pop_first_op():or_else(Op.always('empty')))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(out, 'empty')
@@ -179,7 +179,7 @@ end
 
 local function test_insert_plus_pop_first_consumes_same_world_insert()
   local rt = new_runtime()
-  local ix = Index.new('idx-insert-pop-empty')
+  local ix = Index.new():label('idx-insert-pop-empty')
   local rows
 
   rt:spawn_raw(function()
@@ -189,7 +189,7 @@ local function test_insert_plus_pop_first_consumes_same_world_insert()
         return e.key, e.value
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -210,7 +210,7 @@ local function test_insert_plus_pop_first_uses_projected_order()
         return e.key
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'z')
@@ -233,7 +233,7 @@ local function test_insert_plus_two_pops_allocates_insert_then_existing()
         return e.key
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'z')
@@ -245,7 +245,7 @@ end
 
 local function test_absence_sees_projected_insert()
   local rt = new_runtime()
-  local ix = Index.new('idx-absence-insert')
+  local ix = Index.new():label('idx-absence-insert')
   local rows
 
   rt:spawn_raw(function()
@@ -253,7 +253,7 @@ local function test_absence_sees_projected_insert()
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():or_else(Op.always('empty')),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -263,7 +263,7 @@ end
 
 local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
   local rt = new_runtime({ quiet_deadlock = true })
-  local ix = Index.from({ { key = 'a', rank = 1, value = 'A' } }, 'idx-one-entry-two-ends')
+  local ix = Index.from({ { key = 'a', rank = 1, value = 'A' } }):label('idx-one-entry-two-ends')
   local rows
 
   rt:spawn_raw(function()
@@ -271,7 +271,7 @@ local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
       ix:pop_first_op(),
       ix:pop_last_op(),
     }))
-  end, 'root')
+  end):label('root')
 
   local status = rt:run()
   if status and status.tag == 'found' then
@@ -282,7 +282,7 @@ end
 
 local function test_each_insert_does_not_supply_pop_but_commits_insert()
   local rt = new_runtime()
-  local ix = Index.new('idx-each-insert-pop')
+  local ix = Index.new():label('idx-each-insert-pop')
   local rows
 
   rt:spawn_raw(function()
@@ -290,7 +290,7 @@ local function test_each_insert_does_not_supply_pop_but_commits_insert()
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():or_else(Op.always('empty')),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -300,7 +300,7 @@ end
 
 local function test_together_insert_supplies_pop_and_consumes_insert()
   local rt = new_runtime()
-  local ix = Index.new('idx-together-insert-pop-law')
+  local ix = Index.new():label('idx-together-insert-pop-law')
   local rows
 
   rt:spawn_raw(function()
@@ -308,7 +308,7 @@ local function test_together_insert_supplies_pop_and_consumes_insert()
       ix:insert_op('z', 0, 'Z'),
       ix:pop_first_op():or_else(Op.always('empty')),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -330,7 +330,7 @@ local function test_each_parallel_pops_allocate_shared_committed_stock()
         return e.key
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'a')
@@ -352,7 +352,7 @@ local function test_each_remove_constrains_sibling_pop_without_supplying()
         return e.key
       end),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
@@ -365,7 +365,7 @@ end
 
 local function test_equal_rank_entries_use_insertion_sequence_without_tostring()
   local rt = new_runtime()
-  local ix = Index.new('idx-equal-rank-sequence')
+  local ix = Index.new():label('idx-equal-rank-sequence')
   local key_a = setmetatable({}, { __tostring = function() error('key tostring must not order Index entries') end })
   local key_b = setmetatable({}, { __tostring = function() error('key tostring must not order Index entries') end })
   local rows
@@ -377,7 +377,7 @@ local function test_equal_rank_entries_use_insertion_sequence_without_tostring()
       ix:pop_first_op(),
       ix:pop_first_op(),
     }))
-  end, 'root')
+  end):label('root')
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1].key, key_a)
@@ -391,7 +391,7 @@ local function test_import_rejects_ambiguous_rank_sequence()
     Index.from({
       { key = 'a', rank = 1, seq = 4, value = 'A' },
       { key = 'b', rank = 1, seq = 4, value = 'B' },
-    }, 'idx-ambiguous-order')
+    }):label('idx-ambiguous-order')
   end)
   if ok then fail('ambiguous Index ordering should be rejected') end
   if not tostring(err):find('unique %(rank, sequence%) pairs') then

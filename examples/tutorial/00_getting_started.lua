@@ -22,7 +22,7 @@ fibers.run(function(scope)
   scope:spawn(function()
     local command = commands:get()
     results:put('completed ' .. command)
-  end, 'command-worker')
+  end):label('command-worker')
 
   commands:put('refresh configuration')
   result = results:get()

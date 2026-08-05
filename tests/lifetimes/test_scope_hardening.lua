@@ -47,8 +47,8 @@ end
 -- remains primary; cleanup failure is retained as a structured secondary.
 do
   local rt = FibersRuntime.new()
-  local scope = FibersScope.new('compound-failure-scope', { runtime = rt, closure = FibersClosure.nursery() })
-  rt:spawn_raw(function()
+  local scope = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('compound-failure-scope')
+  rt:_spawn_raw(function()
     scope:run(function(s)
       local h = { name = 'compound-failure-owned' }
       Lifetime.define(h, { closure = {
@@ -58,7 +58,7 @@ do
       fibers.perform(s:admit_op(h))
       error('body boom')
     end)
-  end, 'compound-failure-root', scope)
+  end,  scope):label('compound-failure-root')
   local ok, err = pcall(function()
     drive(rt, 100)
   end)
@@ -87,14 +87,14 @@ do
     end,
   }
   local rt = FibersRuntime.new()
-  local root = FibersScope.new('closure-hook-root', { runtime = rt, closure = FibersClosure.nursery() })
-  rt:spawn_raw(function()
+  local root = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('closure-hook-root')
+  rt:_spawn_raw(function()
     root:run(function()
       fibers.scope({ closure = FibersClosure.running(closure) }, function()
         error('closure body failure')
       end)
     end)
-  end, 'closure-hook-root-fibre', root)
+  end,  root):label('closure-hook-root-fibre')
   local ok = pcall(function()
     drive(rt, 100)
   end)
@@ -129,8 +129,8 @@ end
 do
   local stream, read_err
   local rt = FibersRuntime.new()
-  local root = FibersScope.new('retired-authority-root', { runtime = rt, closure = FibersClosure.nursery() })
-  rt:spawn_raw(function()
+  local root = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('retired-authority-root')
+  rt:_spawn_raw(function()
     root:run(function()
       fibers.scope(function()
         local backend = FakeHandle.new({ name = 'retired-authority-backend', input = 'x' })
@@ -141,7 +141,7 @@ do
       local bytes, err = fibers.perform(stream:reader():read_some_op(1))
       read_err = err or bytes
     end)
-  end, 'retired-authority-root-fibre', root)
+  end,  root):label('retired-authority-root-fibre')
   drive(rt, 100)
   assert_eq(
     read_err,
@@ -154,11 +154,12 @@ end
 -- progress, without depending on a lifecycle phase enum.
 do
   local rt = FibersRuntime.new()
-  local settled, feed = External.signal(rt, 'hardening-settled')
-  local scope = FibersScope.new('hardening-settling', { runtime = rt, closure = FibersClosure.nursery() })
+  local settled, feed = External.signal(rt)
+  settled:label('hardening-settled')
+  local scope = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('hardening-settling')
   local h = { name = 'hardening-settling-owned' }
   local state
-  rt:spawn_raw(function()
+  rt:_spawn_raw(function()
     scope:run(function(s)
       Lifetime.define(h, { closure = {
         name = 'wait',
@@ -168,7 +169,7 @@ do
       } })
       rt:perform(s:admit_op(h))
     end)
-  end, 'hardening-settling-root', scope)
+  end,  scope):label('hardening-settling-root')
 
   local st
   for _ = 1, 20 do
@@ -179,7 +180,7 @@ do
   end
   rt:spawn_raw(function()
     state = rt:perform(scope:inspect_op())
-  end, 'hardening-settling-monitor')
+  end):label('hardening-settling-monitor')
   for _ = 1, 20 do
     st = rt:run()
     if state then

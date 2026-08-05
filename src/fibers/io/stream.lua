@@ -21,8 +21,8 @@ local function validate_options(opts, allowed, label)
 end
 
 local function host_stream(name, opts)
-  local read_flow = opts.read and Flow.new(opts.read_capacity, name .. ':rx') or nil
-  local write_flow = opts.write and Flow.new(opts.write_capacity, name .. ':tx') or nil
+  local read_flow = opts.read and Flow.new(opts.read_capacity):label(name .. ':rx') or nil
+  local write_flow = opts.write and Flow.new(opts.write_capacity):label(name .. ':tx') or nil
   local stream = Stream.compose(read_flow, write_flow, {
     name = name,
     mode = opts.read and opts.write and 'duplex' or (opts.read and 'reader' or 'writer'),

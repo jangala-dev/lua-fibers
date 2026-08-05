@@ -63,7 +63,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('prebind-ready-owner')
+  local owner = Scope.new():label('prebind-ready-owner')
   local written, flushed = '', false
   local handle = Handle.new({
     host = host,
@@ -84,7 +84,7 @@ do
     )
     rt:perform(stream:writer():write_op('ready'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'prebind-ready-writer')
+  end):label('prebind-ready-writer')
   drive_until(rt, host, function()
     return flushed == true
   end, 'pre-bind writable hint should drive the first reactor write')
@@ -95,7 +95,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('handle-read-owner')
+  local owner = Scope.new():label('handle-read-owner')
   local handle = FakeHandle.new({ host = host, key = 'fake-read-handle' })
   local stream, got
 
@@ -104,7 +104,7 @@ do
       Stream.open_op(handle, { scope = owner, name = 'handle-read-stream', read = true, write = false })
     )
     got = rt:perform(stream:reader():read_exactly_op(4))
-  end, 'handle-reader')
+  end):label('handle-reader')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
@@ -121,7 +121,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('handle-write-owner')
+  local owner = Scope.new():label('handle-write-owner')
   local handle = FakeHandle.new({ host = host, key = 'fake-write-handle', write_blocked = true })
   local stream, flushed
 
@@ -131,7 +131,7 @@ do
     )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'handle-writer')
+  end):label('handle-writer')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')

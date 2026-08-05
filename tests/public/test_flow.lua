@@ -49,7 +49,7 @@ end
 -- A capacity lease reserves producer-side room before an irreversible source
 -- obtains bytes, then atomically publishes the bytes into the Flow.
 do
-  local flow = Flow.new(4, 'public-space-lease')
+  local flow = Flow.new(4):label('public-space-lease')
   local lease, partial, rest, committed, got
   local st = fibers.try_run(function()
     lease = fibers.perform(flow:inlet():reserve_some_op(3, 'host-reader'))
@@ -69,23 +69,23 @@ end
 -- Reserved capacity blocks other producers until it is committed or released.
 do
   local rt = Runtime.new()
-  local flow = Flow.new(3, 'public-space-backpressure')
+  local flow = Flow.new(3):label('public-space-backpressure')
   local lease, written
   rt:spawn_raw(function()
     lease = rt:perform(flow:inlet():reserve_some_op(3, 'external-source'))
-  end, 'reserve')
+  end):label('reserve')
   assert_eq(rt:run().tag, 'found')
 
   rt:spawn_raw(function()
     written = rt:perform(flow:inlet():write_op('x'))
-  end, 'writer')
+  end):label('writer')
   local pending = rt:run()
   assert_eq(pending.tag, 'quiescent')
   assert_nil(written, 'writer should wait while capacity is reserved')
 
   rt:spawn_raw(function()
     rt:perform(lease:release_op())
-  end, 'release')
+  end):label('release')
   drive_until(rt, function()
     return written == 1
   end, 'releasing capacity should admit the writer')
@@ -95,7 +95,7 @@ end
 -- A producer cannot publish more bytes than it reserved; the reservation
 -- remains live until explicitly released or failed.
 do
-  local flow = Flow.new(3, 'public-space-overcommit')
+  local flow = Flow.new(3):label('public-space-overcommit')
   local lease, n, err, released
   local st = fibers.try_run(function()
     lease = fibers.perform(flow:inlet():reserve_some_op(2, 'external-source'))
@@ -110,7 +110,7 @@ end
 
 -- A losing reservation option leaves no retained capacity behind.
 do
-  local flow = Flow.new(3, 'public-space-losing-choice')
+  local flow = Flow.new(3):label('public-space-losing-choice')
   local result, written, got
   local st = fibers.try_run(function()
     result =
@@ -131,7 +131,7 @@ end
 
 -- Public data and space leases are ordinary capabilities with explicit release.
 do
-  local flow = Flow.new(8, 'public-flow-leases')
+  local flow = Flow.new(8):label('public-flow-leases')
   local inlet, outlet = flow:inlet(), flow:outlet()
   assert_eq(Flow.Error.EOF, 'eof')
   assert_eq(Flow.Error.BROKEN_PIPE, 'broken_pipe')
@@ -151,7 +151,7 @@ end
 
 -- Option records reject fields outside their documented contract.
 do
-  local flow = Flow.new(16, 'public-flow-options')
+  local flow = Flow.new(16):label('public-flow-options')
   local ok, err = pcall(function()
     flow:outlet():read_line_op({ unexpected = true })
   end)

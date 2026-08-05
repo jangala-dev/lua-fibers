@@ -409,7 +409,7 @@ local function drive_dns(query, backend, opts, rt)
       end
       publish_family(rt, query, family, addresses, err)
       return addresses, err
-    end, query.name .. ':' .. family)
+    end):label(query.name .. ':' .. family)
   end
 
   -- The two family completions are authoritative. The driver waits on their
@@ -472,8 +472,8 @@ function Module.resolve_op(endpoint, opts)
     name = name,
     endpoint = endpoint,
     family_completions = {
-      inet6 = Completion.new(name .. ':inet6'),
-      inet4 = Completion.new(name .. ':inet4'),
+      inet6 = Completion.new():label(name .. ':inet6'),
+      inet4 = Completion.new():label(name .. ':inet4'),
     },
   }, Query)
 

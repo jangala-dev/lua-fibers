@@ -44,7 +44,7 @@ local function assert_status(st, tag, msg)
 end
 
 local function test_parallel_lease_and_read_do_not_duplicate_bytes()
-  local flow = Flow.new(nil, 'adv-lease-read')
+  local flow = Flow.new(nil):label('adv-lease-read')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows, queued, leased, got
   local st = fibers.try_run(function()
@@ -67,7 +67,7 @@ local function test_parallel_lease_and_read_do_not_duplicate_bytes()
 end
 
 local function test_parallel_ack_then_return_returns_only_unacked_tail()
-  local flow = Flow.new(nil, 'adv-ack-return')
+  local flow = Flow.new(nil):label('adv-ack-return')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, rows, got
   local st = fibers.try_run(function()
@@ -87,7 +87,7 @@ local function test_parallel_ack_then_return_returns_only_unacked_tail()
 end
 
 local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_first()
-  local empty = Flow.new(nil, 'adv-empty-close')
+  local empty = Flow.new(nil):label('adv-empty-close')
   local eof, eof_err
   local st = fibers.try_run(function()
     fibers.perform(empty:inlet():close_op())
@@ -97,7 +97,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   assert_eq(eof, nil)
   assert_eq(eof_err, FlowErrors.EOF)
 
-  local same_world = Flow.new(nil, 'adv-same-world-close')
+  local same_world = Flow.new(nil):label('adv-same-world-close')
   local same_rows
   local st_same = fibers.try_run(function()
     same_rows = fibers.perform(Op.together({
@@ -108,7 +108,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
   assert_status(st_same, 'found')
   assert_eq(same_rows[2][1], 'not-yet-eof', 'same-world close should not fabricate EOF for an empty read')
 
-  local flow = Flow.new(nil, 'adv-close-drain')
+  local flow = Flow.new(nil):label('adv-close-drain')
   local data, eof, eof_err
   local st2 = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc'))
@@ -123,7 +123,7 @@ local function test_input_close_and_read_empty_is_eof_but_queued_data_drains_fir
 end
 
 local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
-  local flow = Flow.new(nil, 'adv-shutdown-lease')
+  local flow = Flow.new(nil):label('adv-shutdown-lease')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, retained, leased, queued, ack_ok, ack_err
   local st = fibers.try_run(function()
@@ -144,7 +144,7 @@ local function test_shutdown_while_lease_active_settles_and_invalidates_lease()
 end
 
 local function test_capacity_release_handoff_together_but_not_each()
-  local flow = Flow.new(3, 'adv-capacity-each')
+  local flow = Flow.new(3):label('adv-capacity-each')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, rows, got
   local st = fibers.try_run(function()
@@ -161,7 +161,7 @@ local function test_capacity_release_handoff_together_but_not_each()
   assert_eq(rows[2][1], 'blocked', 'each should not let ack capacity supply sibling write')
   assert_eq(got, 'empty')
 
-  local flow2 = Flow.new(3, 'adv-capacity-together')
+  local flow2 = Flow.new(3):label('adv-capacity-together')
   local inlet2, outlet2 = flow2:inlet(), flow2:outlet()
   local lease2, rows2, got2
   local st2 = fibers.try_run(function()
@@ -187,20 +187,20 @@ local function test_stream_memory_backpressure_with_small_capacity()
   local first, second, read
   rt:spawn_raw(function()
     first = rt:perform(writer:write_op('abc'))
-  end, 'first-write')
+  end):label('first-write')
   assert_status(rt:run(), 'found')
   assert_eq(first, 3)
 
   rt:spawn_raw(function()
     second = rt:perform(writer:write_op('def'))
-  end, 'blocked-write')
+  end):label('blocked-write')
   local pending = rt:run()
   assert_eq(pending.tag, 'quiescent', 'capacity retry has no external wake interest')
   assert_nil(second)
 
   rt:spawn_raw(function()
     read = rt:perform(reader:read_some_op(3))
-  end, 'reader')
+  end):label('reader')
   assert_status(rt:run(), 'found')
   assert_eq(read, 'abc')
   assert_eq(second, 3, 'second write should complete after read releases capacity')

@@ -1,10 +1,20 @@
 local Counter = require('fibers.resource.counter')
+local Label = require('fibers.internal.label')
 
 local Semaphore = {}
 Semaphore.__index = Semaphore
+local next_id = 0
 
-function Semaphore.new(capacity, name)
-  return setmetatable({ _counter = Counter.bounded(capacity, name) }, Semaphore)
+function Semaphore.new(capacity)
+  next_id = next_id + 1
+  local id = 'semaphore-' .. tostring(next_id)
+  local semaphore = Label.attach(setmetatable({
+    _fibers_id = id,
+    name = id,
+    _counter = Counter.bounded(capacity),
+  }, Semaphore))
+  Label.child(semaphore._counter, semaphore, 'capacity')
+  return semaphore
 end
 
 function Semaphore:acquire_op(amount)

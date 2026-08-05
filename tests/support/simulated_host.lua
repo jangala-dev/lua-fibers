@@ -505,7 +505,7 @@ local function manual_process(Fd)
         _pid = pid,
         spec = spec,
         host = host,
-        exit_completion = Completion.new(name .. ':exit'),
+        exit_completion = Completion.new():label(name .. ':exit'),
         child_endpoints = child,
         signals = {},
         reaped = false,

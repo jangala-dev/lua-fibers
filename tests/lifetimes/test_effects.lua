@@ -59,7 +59,7 @@ local function one_perform(op, opts)
   local vals = { n = 0 }
   rt:spawn_raw(function()
     vals = pack_(rt:perform(op))
-  end, 'one-perform')
+  end):label('one-perform')
   return rt:run(), vals, rt
 end
 
@@ -86,7 +86,7 @@ local function test_duplicate_obligations_merge_to_one_discharge()
       Op.emit(TC.tag('dup')),
       Op.emit(TC.tag('dup')),
     }))
-  end, 'duplicate-effect')
+  end):label('duplicate-effect')
 
   local st = rt:run()
   assert_eq(st.tag, 'found')
@@ -206,7 +206,7 @@ local function test_prepare_refusal_is_candidate_rejection_not_runtime_failure()
   local ok = pcall(function()
     rt:spawn_raw(function()
       rt:perform(Op.always('still-usable'))
-    end, 'after-prepare-refusal')
+    end):label('after-prepare-refusal')
   end)
   assert_eq(ok, true, 'runtime remains externally usable after structured refusal')
 end
@@ -257,11 +257,11 @@ local function test_prepare_refusal_backtracks_to_other_worlds()
 end
 
 local function test_discharge_failure_is_fatal_after_resource_commit()
-  local cell = Cell.new(0, 'discharge-fatal-cell')
+  local cell = Cell.new(0):label('discharge-fatal-cell')
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(cell:write_op(1):and_then(Op.emit(TC.discharge_fatal())))
-  end, 'discharge-fatal')
+  end):label('discharge-fatal')
 
   local ok, err = pcall(function()
     rt:run()

@@ -47,10 +47,10 @@ do
   truthy(Op.always(true) ~= Op.always(true), 'true always operation should be fresh')
   truthy(Op.always(false) ~= Op.always(false), 'false always operation should be fresh')
 
-  local rendezvous = Rendezvous.new('minimal-cached-rendezvous')
+  local rendezvous = Rendezvous.new():label('minimal-cached-rendezvous')
   eq(rendezvous:get_op(), rendezvous:get_op(), 'rendezvous get option should be cached')
 
-  local cell = Cell.new(0, 'minimal-cached-cell')
+  local cell = Cell.new(0):label('minimal-cached-cell')
   eq(cell:read_op(), cell:read_op(), 'cell read option should be cached')
   truthy(
     cell:read_op().spec and cell:read_op().spec._fibers_leaf_spec,
@@ -61,18 +61,18 @@ do
   eq(write.spec.kind, 'patch', 'cell write should carry its executable leaf directly')
   eq(write.arg.value, 7, 'cell write occurrence should carry its pre-bound argument')
 
-  local counter = Counter.new(0, 'minimal-cached-counter')
+  local counter = Counter.new(0):label('minimal-cached-counter')
   eq(counter:read_op(), counter:read_op(), 'counter read option should be cached')
 
-  local queue = EventQueue.new('minimal-cached-events')
+  local queue = EventQueue.new():label('minimal-cached-events')
   eq(queue:next_op(), queue:next_op(), 'event queue next option should be cached')
   eq(queue:_drain_op(), queue:_drain_op(), 'event queue drain option should be cached')
 
-  local readiness = Readiness.new(1, 'read', 'minimal-cached-readiness')
+  local readiness = Readiness.new(1, 'read'):label('minimal-cached-readiness')
   eq(readiness:readable_op(), readiness:readable_op(), 'read readiness option should be cached')
   eq(readiness:writable_op(), readiness:writable_op(), 'write readiness option should be cached')
 
-  local signal = Signal.new('minimal-cached-signal')
+  local signal = Signal.new():label('minimal-cached-signal')
   eq(signal:wait_op(), signal:wait_op(), 'signal wait option should be cached')
 end
 
@@ -86,7 +86,7 @@ do
     for i = 1, 20 do
       total = total + rt:perform(Op.always(i))
     end
-  end, 'minimal-direct-perform')
+  end):label('minimal-direct-perform')
   eq(rt:run().tag, 'found')
   eq(total, 210)
   eq(fiber.order, nil, 'completed fibre retained a request id')
@@ -101,12 +101,12 @@ end
 -- resource actually named by the retained refutation invalidates it.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local awaited = Signal.new('minimal-awaited-signal')
-  local unrelated = Signal.new('minimal-unrelated-signal')
+  local awaited = Signal.new():label('minimal-awaited-signal')
+  local unrelated = Signal.new():label('minimal-unrelated-signal')
   local value
   rt:spawn_raw(function()
     value = rt:perform(awaited:wait_op())
-  end, 'minimal-signal-waiter')
+  end):label('minimal-signal-waiter')
   eq(rt:run().tag, 'pending')
   local searches = counter(rt, 'searches')
 
@@ -128,11 +128,11 @@ do
     host = host,
     instrumentation = true,
       })
-  local clock = Clock.new('minimal-timer')
+  local clock = Clock.new():label('minimal-timer')
   local fired
   rt:spawn_raw(function()
     fired = rt:perform(clock:at_op(10))
-  end, 'minimal-timer-waiter')
+  end):label('minimal-timer-waiter')
   eq(rt:run().tag, 'pending')
   local searches = counter(rt, 'searches')
   eq(rt:run().tag, 'pending')

@@ -246,18 +246,18 @@ function External.clear(runtime, feed, ...)
     'External.clear expects an ExternalFeed', 'external-clear', Feed._clear, ...)
 end
 
-function External.signal(runtime, name)
-  local resource = require('fibers.resource.signal').new(name)
+function External.signal(runtime)
+  local resource = require('fibers.resource.signal').new()
   return resource, Feed.for_resource(runtime, resource)
 end
 
-function External.events(runtime, name)
-  local resource = require('fibers.resource.event_queue').new(name)
+function External.events(runtime)
+  local resource = require('fibers.resource.event_queue').new()
   return resource, Feed.for_resource(runtime, resource)
 end
 
-function External.readiness(runtime, key, name)
-  local resource = optional('fibers.io.readiness', 'External.readiness').new(key, nil, name)
+function External.readiness(runtime, key)
+  local resource = optional('fibers.io.readiness', 'External.readiness').new(key)
   return resource, Feed.for_resource(runtime, resource)
 end
 

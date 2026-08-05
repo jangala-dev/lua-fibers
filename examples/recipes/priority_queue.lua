@@ -6,26 +6,38 @@ local perform = require('fibers.perform')
 local PriorityQueue = {}
 PriorityQueue.__index = PriorityQueue
 
-local function child_name(name, suffix)
-  return name and name .. ':' .. suffix or nil
+local function child_label(label, suffix)
+  return label and label .. ':' .. suffix or nil
 end
 
-local function create(name)
-  return setmetatable({ _items = Index.new(child_name(name, 'items')) }, PriorityQueue)
+local function create()
+  return setmetatable({ _items = Index.new() }, PriorityQueue)
 end
 
-function PriorityQueue.new(capacity, name)
+function PriorityQueue.new(capacity)
   assert(
     capacity == math.huge
       or type(capacity) == 'number' and capacity >= 0 and capacity % 1 == 0,
     'priority queue capacity must be a non-negative integer or math.huge'
   )
 
-  local queue = create(name)
+  local queue = create()
   if capacity ~= math.huge then
-    queue._slots = Counter.bounded(capacity, child_name(name, 'slots'))
+    queue._slots = Counter.bounded(capacity)
   end
   return queue
+end
+
+function PriorityQueue:label(...)
+  if select('#', ...) == 0 then return self._label end
+  local value = select(1, ...)
+  if value ~= nil and (type(value) ~= 'string' or value == '') then
+    error('PriorityQueue:label expects a non-empty string or nil', 2)
+  end
+  self._label = value
+  self._items:label(child_label(value, 'items'))
+  if self._slots then self._slots:label(child_label(value, 'slots')) end
+  return self
 end
 
 function PriorityQueue:put_op(priority, value)

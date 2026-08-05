@@ -78,7 +78,7 @@ local handle = HostHandle.new({
 })
 
 local rt = Runtime.new({ host = host })
-local scope = Scope.new('example-socket-scope', { runtime = rt })
+local scope = Scope.new({ runtime = rt }):label('example-socket-scope')
 local stream, got, flushed
 
 rt:spawn_raw(function()
@@ -88,7 +88,7 @@ rt:spawn_raw(function()
   got = rt:perform(stream:reader():read_exactly_op(4))
   rt:perform(stream:writer():write_op('pong'))
   flushed = rt:perform(stream:writer():flush_op())
-end, 'root')
+end):label('root')
 
 -- Opening the stream registers both directions with the shared reactor; the read then waits for host readiness.
 External.drive(rt, { host = host, max_iterations = 20 })

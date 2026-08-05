@@ -12,6 +12,7 @@ local Operation = require('fibers.internal.operation')
 local Values = require('fibers.internal.values')
 local Journal = require('fibers.internal.kernel.journal')
 local Algebra = require('fibers.internal.kernel.algebra')
+local Label = require('fibers.internal.label')
 
 local M = {}
 
@@ -41,14 +42,14 @@ function M.kind(name)
   return { name = assert(name, 'facility kind requires a name') }
 end
 
-function M.identity(resource, kind, name)
+function M.identity(resource, kind)
   local prefix = kind.name
   local id = (ids[prefix] or 0) + 1
   ids[prefix] = id
-  resource.name = name or (prefix .. '-' .. tostring(id))
   resource._fibers_id = prefix .. '-' .. tostring(id)
+  resource.name = resource._fibers_id
   resource._fibers_kind = kind
-  return resource
+  return Label.attach(resource)
 end
 
 function M.location(owner, suffix, opts)

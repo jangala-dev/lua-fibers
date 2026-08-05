@@ -17,7 +17,7 @@ local Op = require('fibers.op')
 local channel = require('fibers.channel')
 local Counter = require('fibers.resource.counter')
 
-local stamina = Counter.new(1, 'captain-stamina')
+local stamina = Counter.new(1):label('captain-stamina')
 local squad_orders = channel.new()
 local first_order, second_order, delivered_order
 
@@ -36,7 +36,7 @@ fibers.run(function(scope)
 
   scope:spawn(function()
     delivered_order = squad_orders:get()
-  end, 'squad-radio')
+  end):label('squad-radio')
 
   second_order = fibers.perform(flank_op():or_else(Op.always('hold position')))
 end)

@@ -119,10 +119,10 @@ function Application.new(fn, opts)
 
   local name = opts.name or 'root'
   local runtime = Runtime.new(runtime_options(opts, host))
-  local scope = Scope.new(name, {
+  local scope = Scope.new( {
     runtime = runtime,
     closure = opts.closure or Closure.nursery({ name = name }),
-  })
+  }):label(name)
 
   local self = setmetatable({
     _fibers_embed_application = true,
@@ -150,10 +150,10 @@ function Application.new(fn, opts)
 
   if self._application_marker then self[self._application_marker] = true end
   host.application = self
-  runtime:spawn_raw(function()
+  runtime:_spawn_raw(function()
     self._root_result = scope:try_run(fn)
     return self._root_result
-  end, name, scope)
+  end,  scope):label(name)
 
   return self
 end

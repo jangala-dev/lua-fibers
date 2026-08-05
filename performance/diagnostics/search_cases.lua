@@ -32,7 +32,7 @@ end
 -- Global cycle with a locally attractive decoy.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local ab, bc, ca = Rendezvous.new('ab'), Rendezvous.new('bc'), Rendezvous.new('ca')
+  local ab, bc, ca = Rendezvous.new():label('ab'), Rendezvous.new():label('bc'), Rendezvous.new():label('ca')
   rt:spawn_raw(function()
     rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }))
   end)
@@ -52,7 +52,7 @@ end
 -- Preferred rendezvous requires another participant to abandon its first branch.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local wanted, dead = Rendezvous.new('wanted'), Rendezvous.new('dead')
+  local wanted, dead = Rendezvous.new():label('wanted'), Rendezvous.new():label('dead')
   rt:spawn_raw(function()
     rt:perform(wanted:get_op():or_else(Op.always('fallback')))
   end)
@@ -80,7 +80,7 @@ end
 -- Deferred continuation after an internal rendezvous introduces a further partner.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local inside, outside = Rendezvous.new('inside'), Rendezvous.new('outside')
+  local inside, outside = Rendezvous.new():label('inside'), Rendezvous.new():label('outside')
   rt:spawn_raw(function()
     rt:perform(Op.together({
       inside:get_op():and_then(outside:get_op()),

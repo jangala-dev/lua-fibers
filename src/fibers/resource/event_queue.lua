@@ -100,8 +100,11 @@ local function option(queue, transition)
   }))
 end
 
-function EventQueue.new(name, interest_factory)
-  local queue = Facility.identity(setmetatable({ _interest_factory = interest_factory }, EventQueue), Kind, name)
+function EventQueue.new(interest_factory)
+  if interest_factory ~= nil and type(interest_factory) ~= 'function' then
+    error('EventQueue.new expects an interest factory function or nil', 2)
+  end
+  local queue = Facility.identity(setmetatable({ _interest_factory = interest_factory }, EventQueue), Kind)
   queue._location = Facility.location(queue, 'queue', {
     algebra = 'machine',
     domain = 'external',

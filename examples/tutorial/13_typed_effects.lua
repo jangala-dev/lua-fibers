@@ -18,7 +18,7 @@ local Op = require('fibers.op')
 local Effect = require('fibers.effect')
 local Cell = require('fibers.resource.cell')
 
-local desired = Cell.new({ channel = 1, power = 1 }, 'desired-radio-config')
+local desired = Cell.new({ channel = 1, power = 1 }):label('desired-radio-config')
 local driver_calls = {}
 local driver_capabilities = { highest_channel = 11 }
 

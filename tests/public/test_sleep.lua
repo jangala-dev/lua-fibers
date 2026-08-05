@@ -60,7 +60,7 @@ do
   local ok, observed
   rt:spawn_raw(function()
     ok, observed = rt:perform(Sleep.sleep_until_op(10))
-  end, 'absolute-sleeper')
+  end):label('absolute-sleeper')
   local st = rt:run()
   assert_status(st, 'pending')
   now = 10
@@ -82,7 +82,7 @@ do
   local observed
   rt:spawn_raw(function()
     observed = rt:perform(Clock.default():after_op(3))
-  end, 'clock-after')
+  end):label('clock-after')
   assert_status(rt:run(), 'pending')
   now = 10
   assert_status(rt:step(), 'found')
@@ -101,7 +101,7 @@ do
   local ok, observed
   rt:spawn_raw(function()
     ok, observed = rt:perform(Sleep.sleep_op(4))
-  end, 'relative-sleeper')
+  end):label('relative-sleeper')
   for _ = 1, 6 do
     rt:step({ max_work = 1 })
   end
@@ -133,7 +133,7 @@ do
       end),
       Op.always('ready')
     ))
-  end, 'sleep-choice')
+  end):label('sleep-choice')
   local st = rt:run()
   assert_status(st, 'found')
   assert_eq(got, 'ready')

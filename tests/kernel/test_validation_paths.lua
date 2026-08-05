@@ -23,12 +23,12 @@ end
 -- frontier changes, then re-searched so that the newly available primary wins.
 do
   local rt = Runtime.new()
-  local ch = Rendezvous.new('negative-frontier')
+  local ch = Rendezvous.new():label('negative-frontier')
   local receiver_result, sender_result
 
   local receiver = rt:spawn_raw(function()
     receiver_result = rt:perform(ch:get_op():or_else(Op.always('fallback')))
-  end, 'receiver')
+  end):label('receiver')
   rt:_resume_fiber(receiver)
   local receiver_request = rt.engine.pending[#rt.engine.pending]
 
@@ -37,7 +37,7 @@ do
 
   local sender = rt:spawn_raw(function()
     sender_result = rt:perform(ch:put_op('primary'))
-  end, 'sender')
+  end):label('sender')
   rt:_resume_fiber(sender)
 
   local committed = fallback_plan:settle(rt.engine)
@@ -55,7 +55,7 @@ end
 -- preference rather than selecting the fallback.
 do
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'stale-primary')
+  local cell = Cell.new(0):label('stale-primary')
   local first_result, second_result
   local guard_calls = 0
 
@@ -68,14 +68,14 @@ do
   local first = rt:spawn_raw(function()
     local _, value = rt:perform(increment_result('first'))
     first_result = value
-  end, 'first')
+  end):label('first')
   local second = rt:spawn_raw(function()
     local label, value = rt:perform(Op.guard(function()
       guard_calls = guard_calls + 1
       return increment_result('primary')
     end):or_else(Op.always('fallback', -1)))
     second_result = label .. ':' .. tostring(value)
-  end, 'second')
+  end):label('second')
 
   rt:_resume_fiber(first)
   rt:_resume_fiber(second)

@@ -5,6 +5,8 @@
 -- bookkeeping to individual search branches.
 
 local Instrumentation = {}
+local Operation = require('fibers.internal.operation')
+local Label = require('fibers.internal.label')
 Instrumentation.__index = Instrumentation
 
 local function copy_map(source)
@@ -79,13 +81,16 @@ function Instrumentation:begin_search(search, meta)
   self.search_serial = self.search_serial + 1
   self:inc('searches')
   meta = meta or {}
+  local focus = meta.focus
   local started = self.clock()
   self.active_searches[search] = {
     id = self.search_serial,
     started = started,
     active_started = started,
     active_elapsed = 0,
-    focus = meta.focus,
+    focus = focus,
+    operation_label = focus and Operation.diagnostic_label(focus.op) or nil,
+    fiber_label = focus and Label.describe(focus._fibers_label_subject or focus, focus.name) or nil,
     pending = meta.pending or 0,
     total_pending = meta.total_pending or meta.pending or 0,
     component_size = meta.component_size or meta.pending or 0,

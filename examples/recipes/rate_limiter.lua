@@ -109,9 +109,9 @@ function RateLimiter.new(opts)
     name = name,
     capacity = capacity,
     rate = rate,
-    clock = opts.clock or Clock.new(name .. ':clock'),
+    clock = opts.clock or Clock.new():label(name .. ':clock'),
   }, RateLimiter)
-  self.state = StateMachine.new({ tokens = initial, last = last }, name .. ':state')
+  self.state = StateMachine.new({ tokens = initial, last = last }):label(name .. ':state')
   return self
 end
 

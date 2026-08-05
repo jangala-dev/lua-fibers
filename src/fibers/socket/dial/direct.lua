@@ -105,7 +105,7 @@ function Direct.run(dial, driver_scope, opts)
   local rt = Runtime.current()
   local started_at = rt:now()
   dial.started_at = started_at
-  local host_hold = HostHold.new(dial.name .. ':host-hold')
+  local host_hold = HostHold.new():label(dial.name .. ':host-hold')
   perform(driver_scope:admit_op(host_hold))
 
   local host = opts.host or rt.host

@@ -67,7 +67,7 @@ end
 -- Opening a backend stream is transactional. A losing open starts no reactor fibre.
 do
   local backend = FakeHandle.new({ name = 'losing-open-backend' })
-  local owner = FibersScope.new('losing-open-owner')
+  local owner = FibersScope.new():label('losing-open-owner')
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(
@@ -89,14 +89,14 @@ end
 -- HostHandle Streams expose stable reader and writer capabilities.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('compound-owner')
+  local owner = FibersScope.new():label('compound-owner')
   local backend = FakeHandle.new({ name = 'compound-backend' })
   local stream
   rt:spawn_raw(function()
     stream = rt:perform(
       Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'compound-stream' })
     )
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_truthy(stream, 'open_op should return a stream')
   assert_eq(stream.handle, backend, 'HostStream should retain its HostHandle')
@@ -120,7 +120,7 @@ end
 -- All host-backed directions in one runtime share one reactor fibre.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('shared-reactor-owner')
+  local owner = FibersScope.new():label('shared-reactor-owner')
   local backend_a = FakeHandle.new({ name = 'shared-reactor-a' })
   local backend_b = FakeHandle.new({ name = 'shared-reactor-b' })
   local stream_a, stream_b
@@ -129,7 +129,7 @@ do
       rt:perform(Stream.open_op(backend_a, { scope = owner, read = true, write = true, name = 'shared-a' }))
     stream_b =
       rt:perform(Stream.open_op(backend_b, { scope = owner, read = true, write = true, name = 'shared-b' }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_truthy(rt.host_reactor, 'runtime should own a host reactor')
   assert_eq(stream_a.reactor, rt.host_reactor)
@@ -143,14 +143,14 @@ end
 -- the incoming Flow buffer.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('read-owner')
+  local owner = FibersScope.new():label('read-owner')
   local backend = FakeHandle.new({ name = 'read-backend' })
   local stream, got
   rt:spawn_raw(function()
     stream =
       rt:perform(Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'read-stream' }))
     got = rt:perform(stream:reader():read_exactly_op(3))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_nil(got)
   backend:feed_read('abc')
@@ -163,7 +163,7 @@ end
 -- The read reaction honours input Flow buffer capacity.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('capacity-read-owner')
+  local owner = FibersScope.new():label('capacity-read-owner')
   local backend = FakeHandle.new({ name = 'capacity-read-backend' })
   local stream, first, second
   rt:spawn_raw(function()
@@ -177,7 +177,7 @@ do
     }))
     first = rt:perform(stream:reader():read_exactly_op(2))
     second = rt:perform(stream:reader():read_exactly_op(2))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   backend:feed_read('abcd')
   drive_until(rt, function()
@@ -193,7 +193,7 @@ end
 -- Writes append to the outgoing queue and the write reaction sends committed bytes to the backend.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('write-owner')
+  local owner = FibersScope.new():label('write-owner')
   local backend = FakeHandle.new({ name = 'write-backend' })
   local stream, flushed
   rt:spawn_raw(function()
@@ -202,7 +202,7 @@ do
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'root')
+  end):label('root')
   drive_until(rt, function()
     return flushed == true
   end, 'write should flush')
@@ -212,7 +212,7 @@ end
 -- Losing writes to a host-backed stream discharge nothing to the backend.
 do
   local rt = FibersRuntime.new({ choice_seed = 3 })
-  local owner = FibersScope.new('losing-write-owner')
+  local owner = FibersScope.new():label('losing-write-owner')
   local backend = FakeHandle.new({ name = 'losing-write-backend' })
   local stream, got
   rt:spawn_raw(function()
@@ -225,7 +225,7 @@ do
         return 'loser'
       end)
     ))
-  end, 'root')
+  end):label('root')
   drive_until(rt, function()
     return got == 'winner'
   end, 'losing write choice')
@@ -235,7 +235,7 @@ end
 -- Partial host writes preserve ordering and are acknowledged exactly.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('partial-write-owner')
+  local owner = FibersScope.new():label('partial-write-owner')
   local backend = FakeHandle.new({ name = 'partial-write-backend', write_chunk_size = 2 })
   local stream, flushed
   rt:spawn_raw(function()
@@ -247,7 +247,7 @@ do
     )
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'root')
+  end):label('root')
   drive_until(rt, function()
     return flushed == true
   end, 'partial writes should eventually flush')
@@ -257,7 +257,7 @@ end
 -- Would-block preserves an in-flight lease; flush waits until the lease is acknowledged.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('would-block-owner')
+  local owner = FibersScope.new():label('would-block-owner')
   local backend = FakeHandle.new({
     name = 'would-block-backend',
     readiness = 'manual',
@@ -271,7 +271,7 @@ do
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'root')
+  end):label('root')
   -- A stale writable hint lets the reactor reserve bytes before the authoritative
   -- host write reports would_block.
   backend:mark_writable()
@@ -303,7 +303,7 @@ end
 -- EOF becomes committed stream state.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('eof-owner')
+  local owner = FibersScope.new():label('eof-owner')
   local backend = FakeHandle.new({ name = 'eof-backend' })
   local stream, first, second, err
   rt:spawn_raw(function()
@@ -311,7 +311,7 @@ do
       rt:perform(Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'eof-stream' }))
     first = rt:perform(stream:reader():read_exactly_op(3))
     second, err = rt:perform(stream:reader():read_some_op(1))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   backend:feed_read('abc')
   backend:feed_eof()
@@ -326,7 +326,7 @@ end
 -- shutdown_write drains pending/in-flight data before shutting down the backend write side.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('shutdown-write-owner')
+  local owner = FibersScope.new():label('shutdown-write-owner')
   local backend = FakeHandle.new({ name = 'shutdown-write-backend', write_blocked = true })
   local stream, done
   rt:spawn_raw(function()
@@ -336,7 +336,7 @@ do
     rt:perform(stream:writer():write_op('abc'))
     rt:perform(stream:shutdown_write_op())
     done = rt:perform(stream:writer():flush_op())
-  end, 'root')
+  end):label('root')
   for _ = 1, 10 do
     if
       stream
@@ -358,7 +358,7 @@ end
 -- Host write errors become committed stream write errors.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('write-error-owner')
+  local owner = FibersScope.new():label('write-error-owner')
   local backend = FakeHandle.new({ name = 'write-error-backend' })
   backend:fail_writes('connection_reset')
   local stream, flushed, flush_err, n, err
@@ -369,7 +369,7 @@ do
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
     n, err = rt:perform(stream:writer():write_op('d'))
-  end, 'root')
+  end):label('root')
   drive_until(rt, function()
     return err == 'connection_reset'
   end, 'write error should commit')
@@ -382,7 +382,7 @@ end
 -- A reactor lease keeps byte capacity reserved until the host acknowledges it.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('lease-capacity-owner')
+  local owner = FibersScope.new():label('lease-capacity-owner')
   local backend = FakeHandle.new({
     name = 'lease-capacity-backend',
     readiness = 'manual',
@@ -399,7 +399,7 @@ do
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'writer1')
+  end):label('writer1')
   backend:mark_writable()
   for _ = 1, 10 do
     if
@@ -426,7 +426,7 @@ do
   )
   rt:spawn_raw(function()
     second_done = rt:perform(stream:writer():write_op('d'))
-  end, 'writer2')
+  end):label('writer2')
   assert_status(rt:run(), 'pending')
   assert_nil(second_done, 'second write should wait while leased bytes hold capacity')
   assert_nil(flushed, 'flush should wait while lease is blocked')
@@ -440,7 +440,7 @@ end
 -- The read reaction notices reader shutdown even while backend readability never arrives.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('blocked-read-close-owner')
+  local owner = FibersScope.new():label('blocked-read-close-owner')
   local backend = FakeHandle.new({ name = 'blocked-read-close-backend', read_blocked = true })
   local stream
   rt:spawn_raw(function()
@@ -450,11 +450,11 @@ do
         { scope = owner, read = true, write = true, name = 'blocked-read-close-stream' }
       )
     )
-  end, 'open-blocked-read')
+  end):label('open-blocked-read')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function()
     rt:perform(stream:shutdown_read_op('close_reader'))
-  end, 'close-reader')
+  end):label('close-reader')
   drive_until(rt, function()
     return backend.shutdown_read_reason == 'close_reader'
   end, 'read reaction should notice reader shutdown')
@@ -465,7 +465,7 @@ end
 -- allows the shared reactor fibre to stop when no registrations remain.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('reactor-retirement-owner')
+  local owner = FibersScope.new():label('reactor-retirement-owner')
   local backend = FakeHandle.new({ name = 'reactor-retirement-backend', read_blocked = true })
   local stream, closed
   rt:spawn_raw(function()
@@ -477,7 +477,7 @@ do
     )
     rt:perform(stream:abort_op('finished'))
     closed = rt:perform(stream:closed_op())
-  end, 'root')
+  end):label('root')
   drive_until(rt, function()
     return closed == true and rt.host_reactor and rt.host_reactor.running == false
   end, 'stream closure should retire the reactor registrations')
@@ -491,7 +491,7 @@ end
 -- Directional host Streams allocate only the supported Flow and reaction.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('directional-owner')
+  local owner = FibersScope.new():label('directional-owner')
   local read_backend = FakeHandle.new({ name = 'directional-reader' })
   local write_backend = FakeHandle.new({ name = 'directional-writer' })
   local reader, writer
@@ -508,7 +508,7 @@ do
       read = false,
       write = true,
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_truthy(reader:is_readable())
   assert_eq(reader:is_writable(), false)
@@ -522,7 +522,7 @@ do
   rt:spawn_raw(function()
     rt:perform(reader:abort_op('test complete'))
     rt:perform(writer:abort_op('test complete'))
-  end, 'close-directional')
+  end):label('close-directional')
   drive_until(rt, function()
     return rt.host_reactor:registration_count() == 0
   end, 'directional streams should retire')
@@ -544,7 +544,7 @@ end
 -- Unsupported directions are absent and direct use is a programming error.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('direction-errors-owner')
+  local owner = FibersScope.new():label('direction-errors-owner')
   local backend = FakeHandle.new({ name = 'direction-errors-backend' })
   local reader
   rt:spawn_raw(function()
@@ -554,7 +554,7 @@ do
       read = true,
       write = false,
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   local ok, err = pcall(function()
     reader:write_op('no')
@@ -563,7 +563,7 @@ do
   assert_truthy(tostring(err):find('not writable', 1, true))
   rt:spawn_raw(function()
     rt:perform(reader:abort_op('test complete'))
-  end, 'close')
+  end):label('close')
   drive_until(rt, function()
     return rt.host_reactor:registration_count() == 0
   end)
@@ -572,7 +572,7 @@ end
 -- Backend close errors are retained and reported by closed_op.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('close-error-owner')
+  local owner = FibersScope.new():label('close-error-owner')
   local backend = FakeHandle.new({ name = 'close-error-backend' })
   function backend:close(reason)
     self.close_count = self.close_count + 1
@@ -589,7 +589,7 @@ do
     }))
     rt:perform(stream:abort_op('done'))
     closed, close_err = rt:perform(stream:closed_op())
-  end, 'root')
+  end):label('root')
   drive_until(rt, function()
     return close_err ~= nil
   end, 'close error should be observable')
@@ -601,7 +601,7 @@ end
 -- never accept the retained bytes. Drain remains the explicit graceful mode.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('abort-write-owner')
+  local owner = FibersScope.new():label('abort-write-owner')
   local backend = FakeHandle.new({
     name = 'abort-write-backend',
     write_blocked = true,
@@ -618,7 +618,7 @@ do
     rt:perform(stream:write_op('never-written'))
     rt:perform(stream:abort_write_op('cancelled'))
     closed, close_err = rt:perform(stream:closed_op())
-  end, 'abort-writer')
+  end):label('abort-writer')
   drive_until(rt, function()
     return closed == true
   end, 'abort shutdown should complete without host writability')
@@ -630,7 +630,7 @@ end
 
 -- Backend capabilities are validated before ownership or registrations commit.
 do
-  local owner = FibersScope.new('backend-contract-owner')
+  local owner = FibersScope.new():label('backend-contract-owner')
   local ok, err = pcall(function()
     Stream.open_op(
       require('fibers.io.handle').new({
@@ -678,7 +678,7 @@ end
 -- A backend readiness_key method may return distinct direction keys.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('direction-key-owner')
+  local owner = FibersScope.new():label('direction-key-owner')
   local backend = require('fibers.io.handle').new({
     name = 'direction-key-backend',
     key = { read = 'direction-read-key', write = 'direction-write-key' },
@@ -700,14 +700,14 @@ do
       read = true,
       write = true,
     }))
-  end, 'direction-key-open')
+  end):label('direction-key-open')
   assert_status(rt:run(), 'found')
   assert_eq(stream.read_registration.key, 'direction-read-key')
   assert_eq(stream.write_registration.key, 'direction-write-key')
   rt:spawn_raw(function()
     rt:perform(stream:close_op('done'))
     rt:perform(stream:closed_op())
-  end, 'direction-key-close')
+  end):label('direction-key-close')
   drive_until(rt, function()
     return backend.closed == true or rt.host_reactor:registration_count() == 0
   end)
@@ -715,7 +715,7 @@ end
 
 local function run_read_contract_case(name, read_result, expected_bytes, expected_err)
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new(name .. '-owner')
+  local owner = FibersScope.new():label(name .. '-owner')
   local backend = FakeHandle.new({
     name = name .. '-backend',
     readiness = 'manual',
@@ -734,7 +734,7 @@ local function run_read_contract_case(name, read_result, expected_bytes, expecte
       read_chunk_size = 16,
     }))
     bytes, err = rt:perform(stream:read_some_op(16))
-  end, name)
+  end):label(name)
   drive_until(rt, function()
     return bytes ~= nil or err ~= nil
   end, name .. ' should produce a terminal read result')
@@ -783,7 +783,7 @@ end
 -- Host Stream construction requires explicit read and write capabilities.
 do
   local backend = FakeHandle.new({ name = 'explicit-stream-options' })
-  local owner = FibersScope.new('explicit-stream-options-owner')
+  local owner = FibersScope.new():label('explicit-stream-options-owner')
   local ok, err = pcall(function()
     Stream.open_op(backend, { scope = owner, name = 'missing-directions' })
   end)

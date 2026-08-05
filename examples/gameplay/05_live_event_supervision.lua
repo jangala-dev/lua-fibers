@@ -24,15 +24,15 @@ local outer = fibers.try_run(function()
   }, function(scope)
     scope:spawn(function()
       error('firework launcher 3 did not answer', 0)
-    end, 'optional-fireworks')
+    end):label('optional-fireworks')
 
     local moonrise = scope:spawn(function()
       return 'the artificial moon rose over the harbour'
-    end, 'headline-moonrise')
+    end):label('headline-moonrise')
 
     scope:spawn(function()
       return 'crowd ambience complete'
-    end, 'crowd-ambience')
+    end):label('crowd-ambience')
 
     return moonrise:await()
   end)

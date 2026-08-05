@@ -82,7 +82,7 @@ do
         child.stdout:write('hello')
         child.stderr:write('warning')
         proc:complete({ kind = 'exited', code = 0, success = true })
-      end, 'manual-child')
+      end):label('manual-child')
     end,
   })
 
@@ -130,7 +130,7 @@ do
           end
         end
         proc:complete({ kind = 'exited', code = 0, success = true })
-      end, 'manual-echo-child')
+      end):label('manual-echo-child')
     end,
   })
 
@@ -164,7 +164,7 @@ do
         child.stdout:write('out')
         child.stderr:write('err')
         proc:complete({ kind = 'exited', code = 0, success = true })
-      end, 'manual-combined-output-child')
+      end):label('manual-combined-output-child')
     end,
   })
 
@@ -193,7 +193,7 @@ do
       fibers.spawn(function()
         child.stdout:write('redirected')
         proc:complete({ kind = 'exited', code = 0, success = true })
-      end, 'manual-redirect-child')
+      end):label('manual-redirect-child')
     end,
   })
 
@@ -252,7 +252,7 @@ do
       fibers.spawn(function()
         child.stdout:write(string.rep('x', 256))
         proc:complete({ kind = 'exited', code = 0, success = true })
-      end, 'manual-large-output-child')
+      end):label('manual-large-output-child')
     end,
   })
 

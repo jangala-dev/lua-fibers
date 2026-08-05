@@ -11,15 +11,15 @@ local Cell = require('fibers.resource.cell')
 -- facilities from the standalone Luau sandbox.
 do
   local rt = Runtime.new({ host = ManualHost.new() })
-  local channel = Rendezvous.new('luau-smoke')
+  local channel = Rendezvous.new():label('luau-smoke')
   local received
 
   rt:spawn_raw(function()
     received = rt:perform(channel:get_op())
-  end, 'receiver')
+  end):label('receiver')
   rt:spawn_raw(function()
     rt:perform(channel:put_op('ok'))
-  end, 'sender')
+  end):label('sender')
 
   local status = rt:run()
   assert(status.tag == 'found')
@@ -29,7 +29,7 @@ end
 -- The application-facing root lifecycle should work for immediately committable work;
 -- no host sleep or native I/O is required.
 fibers.run(function()
-  local cell = Cell.new(0, 'luau-cell')
+  local cell = Cell.new(0):label('luau-cell')
   assert(fibers.perform(cell:write_op(1)) == true)
   assert(fibers.perform(cell:read_op()) == 1)
 end)
@@ -38,10 +38,10 @@ end)
 -- yielding xpcall error handler.  Fibers must select its coroutine-backed
 -- implementation in that case.
 fibers.run(function()
-  local channel = Rendezvous.new('luau-xpcall-handler')
+  local channel = Rendezvous.new():label('luau-xpcall-handler')
   fibers.spawn(function()
     fibers.perform(channel:put_op('handled'))
-  end, 'handler-sender')
+  end):label('handler-sender')
 
   local ok, value = fibers.xpcall(function()
     error('luau-handler-error')

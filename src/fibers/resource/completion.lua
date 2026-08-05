@@ -3,6 +3,7 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
+local Label = require('fibers.internal.label')
 
 local Completion = {}
 Completion.__index = Completion
@@ -22,9 +23,10 @@ local Publish = StateMachine.isolated_update('completion.publish', function(curr
   return Ready.write(state, true)
 end)
 
-function Completion.new(name)
-  local completion = Facility.identity(setmetatable({}, Completion), Kind, name)
-  completion.state = StateMachine.new({ kind = 'pending' }, completion.name .. ':state')
+function Completion.new()
+  local completion = Facility.identity(setmetatable({}, Completion), Kind)
+  completion.state = StateMachine.new({ kind = 'pending' })
+  Label.child(completion.state, completion, 'state')
   return completion
 end
 

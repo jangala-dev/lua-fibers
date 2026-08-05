@@ -156,11 +156,11 @@ function Phase:scope(name, opts)
   if parent == nil then
     parent = self.parent or (Runtime.current_scope and Runtime.current_scope())
   end
-  scope = Scope.new((self.name or 'phase') .. ':' .. name, {
+  scope = Scope.new( {
     runtime = rt,
     parent = parent,
     closure = opts.closure or self.closure or (is_scope(parent) and parent.closure or nil),
-  })
+  }):label((self.name or 'phase') .. ':' .. name)
   scope.phase_cycle = self
   scope.phase_name = name
   self.scopes[name] = scope
@@ -174,7 +174,7 @@ function Phase:facts_for(name)
   self:phase(name)
   local facts = self.facts[name]
   if not facts then
-    facts = Keyed.new((self.name or 'phase') .. ':' .. name .. ':facts')
+    facts = Keyed.new():label((self.name or 'phase') .. ':' .. name .. ':facts')
     self.facts[name] = facts
   end
   return facts

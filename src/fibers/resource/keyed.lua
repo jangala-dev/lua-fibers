@@ -31,7 +31,7 @@ local function require_value(value)
   end
 end
 
-local function create(entries, name)
+local function create(entries)
   if type(entries) ~= 'table' then
     error('keyed entries must be a table', 3)
   end
@@ -42,7 +42,7 @@ local function create(entries, name)
     values[key] = value
   end
 
-  local keyed = Facility.identity(setmetatable({}, Keyed), Kind, name)
+  local keyed = Facility.identity(setmetatable({}, Keyed), Kind)
   keyed._space = Keyspace.new(keyed, {
     values = values,
     algebra = 'presence',
@@ -52,12 +52,12 @@ local function create(entries, name)
   return keyed
 end
 
-function Keyed.new(name)
-  return create({}, name)
+function Keyed.new()
+  return create({})
 end
 
-function Keyed.from(entries, name)
-  return create(entries, name)
+function Keyed.from(entries)
+  return create(entries)
 end
 
 local function operations(self, key)

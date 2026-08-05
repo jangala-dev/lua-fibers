@@ -38,7 +38,7 @@ do
     for i = 1, 25 do
       handles[i] = rt:spawn_raw(function()
         return batch, i
-      end, 'short')
+      end):label('short')
     end
     local st = rt:run()
     eq(st.tag, 'idle', 'short-fibre batch should drain')
@@ -61,7 +61,7 @@ do
   local rt = Runtime.new()
   local weak = setmetatable({}, { __mode = 'v' })
   do
-    local resource = Signal.new('temporary-feed-resource')
+    local resource = Signal.new():label('temporary-feed-resource')
     local feed = External.external_feed(rt, resource)
     weak[1], weak[2] = resource, feed
   end
@@ -76,21 +76,21 @@ do
   local weak = setmetatable({}, { __mode = 'v' })
   do
     local rt = Runtime.new()
-    local scope = Scope.new('temporary-scope', { runtime = rt })
+    local scope = Scope.new( { runtime = rt }):label('temporary-scope')
     local item = { name = 'temporary-item' }
     Lifetime.inert(item)
     weak[1], weak[2], weak[3] = scope, item, rt
-    rt:spawn_raw(function()
+    rt:_spawn_raw(function()
       scope:run(function(s)
         rt:perform(s:admit_op(item))
       end)
-    end, 'temporary-owner', scope)
+    end,  scope):label('temporary-owner')
     while true do
       local st = rt:run()
       if st.tag == 'idle' or st.tag == 'quiescent' then break end
     end
     local snapshot
-    rt:spawn_raw(function() snapshot = rt:perform(scope:inspect_op()) end, 'empty-store-snapshot')
+    rt:spawn_raw(function() snapshot = rt:perform(scope:inspect_op()) end):label('empty-store-snapshot')
     rt:run()
     eq(snapshot.custody_count, 0, 'completed Scope should retain no Lifetime records under custody')
     rt, scope, item, snapshot = nil, nil, nil, nil

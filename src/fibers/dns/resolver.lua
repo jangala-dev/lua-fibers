@@ -338,15 +338,15 @@ function Resolver.new(opts)
     hosts = hosts,
     hosts_loaded = hosts_loaded,
     hosts_error = nil,
-    hosts_load = StateMachine.new(hosts_loaded and 'loaded' or 'idle', 'dns:hosts-load'),
-    config_load = StateMachine.new('idle', 'dns:config-load'),
+    hosts_load = StateMachine.new(hosts_loaded and 'loaded' or 'idle'):label('dns:hosts-load'),
+    config_load = StateMachine.new('idle'):label('dns:config-load'),
     random_u16 = opts.random_u16,
     secure_ids = nil,
   }, Resolver)
   if opts.nameservers or opts.resolv_conf then
     local config, err = Config.load(opts)
     self.config, self.config_error = config, err
-    self.config_load = StateMachine.new('loaded', 'dns:config-load')
+    self.config_load = StateMachine.new('loaded'):label('dns:config-load')
   end
   return self
 end
@@ -937,7 +937,7 @@ function Resolver:_resolve_candidate(name, port, family, opts)
     families[i] = family_name
     task_entries[family_name] = scope:spawn_op(function()
       return self:resolve_type(name, qtype, opts)
-    end, self.name .. ':' .. Codec.type_name(qtype))
+    end, { label = self.name .. ':' .. Codec.type_name(qtype) })
   end
   local tasks = perform(Op.named_each(task_entries))
 

@@ -298,8 +298,8 @@ function Stream.memory_pair(opts)
   opts = opts or {}
   validate_options(opts, { name = true, capacity = true }, 'Stream.memory_pair options')
   local name = opts.name or 'memory-flow'
-  local ab = Flow.new(opts.capacity, name .. ':a->b')
-  local ba = Flow.new(opts.capacity, name .. ':b->a')
+  local ab = Flow.new(opts.capacity):label(name .. ':a->b')
+  local ba = Flow.new(opts.capacity):label(name .. ':b->a')
   return Stream.compose(ba, ab, { name = name .. ':a', mode = 'memory' }),
     Stream.compose(ab, ba, { name = name .. ':b', mode = 'memory' })
 end

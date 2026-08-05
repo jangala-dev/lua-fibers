@@ -21,14 +21,14 @@ end
 
 -- external loop stepping
 local rt = Runtime.new()
-local ch = Rendezvous.new('step-ch')
+local ch = Rendezvous.new():label('step-ch')
 local got, sent
 rt:spawn_raw(function()
   got = rt:perform(ch:get_op())
-end, 'r')
+end):label('r')
 rt:spawn_raw(function()
   sent = rt:perform(ch:put_op('x'))
-end, 's')
+end):label('s')
 local seen_found = false
 for i = 1, 10 do
   local st = rt:step()
@@ -44,7 +44,7 @@ assert_eq(got, 'x')
 assert_eq(sent, true)
 
 -- bounded solve should be non-mutating on budget exhaustion
-local cell = Cell.new(0, 'budget-cell')
+local cell = Cell.new(0):label('budget-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
@@ -52,7 +52,7 @@ for i = 1, 4 do
       return cell:write_op(v + 1)
     end))
     rt2:perform(Op.never():or_else(update))
-  end, 'u' .. i)
+  end):label('u' .. i)
 end
 while rt2:_start_one() do end -- expose all attempts without solving
 local st = rt2:step({ max_work = 1 })
@@ -100,14 +100,14 @@ end
 -- A low budget should preserve a live cursor across pending calls rather than
 -- starting algebra search from scratch each tick.
 local rt = Runtime.new()
-local ch = Rendezvous.new('cursor-rendezvous')
+local ch = Rendezvous.new():label('cursor-rendezvous')
 local got, sent
 rt:spawn_raw(function()
   got = rt:perform(ch:get_op())
-end, 'r')
+end):label('r')
 rt:spawn_raw(function()
   sent = rt:perform(ch:put_op('x'))
-end, 's')
+end):label('s')
 
 local saw_pending = false
 local found = false
@@ -127,14 +127,14 @@ assert_eq(got, 'x')
 assert_eq(sent, true)
 
 -- Budget exhaustion must not mutate resources before a committable world is found.
-local cell = Cell.new(0, 'cursor-cell')
+local cell = Cell.new(0):label('cursor-cell')
 local rt2 = Runtime.new()
 for i = 1, 4 do
   rt2:spawn_raw(function()
     rt2:perform(cell:read_op():and_then(Op.guard(function(v)
       return cell:write_op(v + 1)
     end)))
-  end, 'u' .. i)
+  end):label('u' .. i)
 end
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending')
@@ -186,7 +186,7 @@ end
 -- or_else need the fibre attempt and residual environment.
 do
   local rt = Runtime.new()
-  local ch = Rendezvous.new('deferred-context-search')
+  local ch = Rendezvous.new():label('deferred-context-search')
   local got, sent
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op():and_then(Op.guard(function(v)
@@ -194,10 +194,10 @@ do
         return Op.never():or_else(Op.always('fallback:' .. v))
       end)
     end)))
-  end, 'receiver')
+  end):label('receiver')
   rt:spawn_raw(function()
     sent = rt:perform(ch:put_op('x'))
-  end, 'sender')
+  end):label('sender')
   local st = rt:run()
   assert_status(st, 'found')
   assert_eq(got, 'fallback:x')
@@ -207,7 +207,7 @@ end
 -- The bounded cursor exercises the same deferred path through cursor.lua.
 do
   local rt = Runtime.new()
-  local ch = Rendezvous.new('deferred-context-cursor')
+  local ch = Rendezvous.new():label('deferred-context-cursor')
   local got, sent, st
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op():and_then(Op.guard(function(v)
@@ -215,10 +215,10 @@ do
         return Op.never():or_else(Op.always('cursor-fallback:' .. v))
       end)
     end)))
-  end, 'receiver')
+  end):label('receiver')
   rt:spawn_raw(function()
     sent = rt:perform(ch:put_op('y'))
-  end, 'sender')
+  end):label('sender')
   for _ = 1, 160 do
     st = rt:step({ max_work = 1 })
     if st.tag == 'found' then

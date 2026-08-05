@@ -15,9 +15,9 @@ local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
 local client, server = Stream.memory_pair({ name = 'negotiated-stream', capacity = 128 })
-local negotiator = Scope.new('negotiator')
-local responder = Scope.new('responder')
-local protocol = Cell.new('unknown', 'protocol-state')
+local negotiator = Scope.new():label('negotiator')
+local responder = Scope.new():label('responder')
+local protocol = Cell.new('unknown'):label('protocol-state')
 local reply, responder_has_custody
 
 local function negotiate_op(stream)

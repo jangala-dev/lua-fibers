@@ -48,14 +48,14 @@ rt:spawn_raw(function()
   result = rt:perform(Op.always(2):and_then(Op.guard(function(value)
     return Op.always(value * 3)
   end)))
-end, 'small-kernel-basic')
+end):label('small-kernel-basic')
 eq(rt:run().tag, 'found')
 eq(result, 6)
 eq(rt:run().tag, 'idle')
 eq(rt.engine.proof_graph, nil, 'closed positive work should not allocate a frontier index')
 
 local blocked = Runtime.new()
-local blocked_channel = Rendezvous.new('lazy-frontier-index')
+local blocked_channel = Rendezvous.new():label('lazy-frontier-index')
 blocked:spawn_raw(function() blocked:perform(blocked_channel:get_op()) end)
 local blocked_status = blocked:run().tag
 assert(blocked_status == 'pending' or blocked_status == 'quiescent')
@@ -68,11 +68,11 @@ local function dispatch(opts, count)
   local runtime = Runtime.new(opts)
   local workers = {}
   for worker = 1, count do
-    workers[worker] = Rendezvous.new('small-limit-worker-' .. tostring(worker))
+    workers[worker] = Rendezvous.new():label('small-limit-worker-' .. tostring(worker))
     local index = worker
     runtime:spawn_raw(function()
       runtime:perform(workers[index]:get_op())
-    end, 'small-limit-worker-' .. tostring(worker))
+    end):label('small-limit-worker-' .. tostring(worker))
   end
   runtime:spawn_raw(function()
     local jobs = {}
@@ -82,7 +82,7 @@ local function dispatch(opts, count)
       jobs[job] = Op.choice(choices)
     end
     runtime:perform(Op.each(jobs))
-  end, 'small-limit-dispatcher')
+  end):label('small-limit-dispatcher')
   return runtime, runtime:run()
 end
 
@@ -130,8 +130,8 @@ local function replicated_ring(count)
   })
   local primary, backup, results = {}, {}, {}
   for i = 1, count do
-    primary[i] = Rendezvous.new('small-ring-primary-' .. tostring(i))
-    backup[i] = Rendezvous.new('small-ring-backup-' .. tostring(i))
+    primary[i] = Rendezvous.new():label('small-ring-primary-' .. tostring(i))
+    backup[i] = Rendezvous.new():label('small-ring-backup-' .. tostring(i))
   end
   for i = 1, count do
     local node, previous = i, ((i - 2) % count) + 1
@@ -145,7 +145,7 @@ local function replicated_ring(count)
         backup[previous]:get_op(),
       }):map(function(rows) return 'backup', rows[2][1] end)
       results[node] = { runtime:perform(Op.choice(p, b)) }
-    end, 'small-ring-node-' .. tostring(i))
+    end):label('small-ring-node-' .. tostring(i))
   end
   local status = runtime:run()
   return runtime, status, results

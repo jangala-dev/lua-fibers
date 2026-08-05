@@ -15,7 +15,7 @@ local function run(count, max_work)
   local rt = Runtime.new({ choice_seed = 7, instrumentation = true })
   local workers = {}
   for i = 1, count do
-    workers[i] = Rendezvous.new('resume-probe-' .. count .. '-' .. i)
+    workers[i] = Rendezvous.new():label('resume-probe-' .. count .. '-' .. i)
     local worker = workers[i]
     rt:spawn_raw(function() rt:perform(worker:get_op()) end)
   end

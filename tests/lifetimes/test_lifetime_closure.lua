@@ -37,7 +37,7 @@ end
 local function resource(name, log, children, opts)
   local value = { name = name }
   Lifetime.define(value, {
-    name = name,
+    label = name,
     closure = protocol(name, log, opts),
     children = children,
   })
@@ -113,7 +113,7 @@ do
       bad = resource('nested-bad', log, nil, bad_opts)
       fibers.perform(child:admit_op(bad))
       return 'body-complete'
-    end, { name = 'nested-child' }))
+    end, { label = 'nested-child' }))
     fibers.perform(task:outcome_op())
   end)
 
@@ -179,7 +179,7 @@ end
 -- Low-level state marking is private runtime machinery rather than ordinary
 -- Lifetime capability surface.
 do
-  local node = Lifetime.new('private-transition-surface')
+  local node = Lifetime.new():label('private-transition-surface')
   eq(node.mark_closed_op, nil)
   eq(node.mark_closure_failed_op, nil)
   eq(node.closing_op, nil)

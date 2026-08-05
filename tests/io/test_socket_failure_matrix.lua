@@ -146,14 +146,14 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       connection:close('server accepted delayed connection')
-    end, 'delayed-success-server')
+    end):label('delayed-success-server')
     local dial = socket.dial(listener:local_address(), { name = 'delayed-success-dial' })
     scope:spawn(function()
       Sleep.sleep(0.01)
       local handle = assert(get_pending(), 'pending handle should exist')
       handle._allow_finish = true
       handle:mark_writable()
-    end, 'delayed-connect-completion')
+    end):label('delayed-connect-completion')
     local connection, err = fibers.perform(Op.choice(
       dial:result_op(fibers.current_scope()),
       Sleep.sleep_op(1):map(function()
@@ -181,7 +181,7 @@ do
     local accepted, accept_err
     local waiter = scope:spawn(function()
       accepted, accept_err = listener:accept()
-    end, 'blocked-accept')
+    end):label('blocked-accept')
     Sleep.sleep(0)
     listener:close('close blocked accept')
     waiter:await()
@@ -222,7 +222,7 @@ do
       connection:shutdown_read('server accepts no client data')
       connection:shutdown_write('server output complete')
       connection:closed()
-    end, 'half-close-server')
+    end):label('half-close-server')
     local client = assert(socket.dial(listener:local_address()):result())
     local bytes, read_err = client:read_all({ max = 16 })
     assert_eq(bytes, 'tail', tostring(read_err))

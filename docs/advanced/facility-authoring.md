@@ -21,8 +21,8 @@ local perform = require('fibers.perform')
 local Latch = {}
 Latch.__index = Latch
 
-function Latch.new(count, name)
-  return setmetatable({ remaining = Counter.new(count or 0, name) }, Latch)
+function Latch.new(count)
+  return setmetatable({ remaining = Counter.new(count or 0) }, Latch)
 end
 
 function Latch:count_down_op(amount)

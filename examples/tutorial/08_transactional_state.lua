@@ -14,7 +14,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 
-local incident_level = Cell.new(0, 'incident-level')
+local incident_level = Cell.new(0):label('incident-level')
 local escalated_level
 
 fibers.run(function()

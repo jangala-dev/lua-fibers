@@ -15,14 +15,14 @@ local fibers = require('fibers')
 local channel = require('fibers.channel')
 local Counter = require('fibers.resource.counter')
 
-local uplink_slots = Counter.new(1, 'satellite-uplink-slots')
+local uplink_slots = Counter.new(1):label('satellite-uplink-slots')
 local telemetry_sessions = channel.new()
 local admitted_clinic, outcome
 
 fibers.run(function(scope)
   scope:spawn(function()
     admitted_clinic = telemetry_sessions:get()
-  end, 'telemetry-router')
+  end):label('telemetry-router')
 
   outcome = fibers.perform(uplink_slots
     :take_op(1)

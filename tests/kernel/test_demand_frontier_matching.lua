@@ -29,17 +29,17 @@ end
 -- continuation refutes the resulting world.
 do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 64 })
-  local channel = Rendezvous.new('demand-frontier-failing-suppliers')
+  local channel = Rendezvous.new():label('demand-frontier-failing-suppliers')
   for i = 1, 24 do
     runtime:spawn_raw(function()
       runtime:perform(channel:get_op():and_then(Op.never()))
-    end, 'failing-supplier-' .. i)
+    end):label('failing-supplier-' .. i)
   end
 
   local result
   runtime:spawn_raw(function()
     result = runtime:perform(channel:put_op(true):or_else(Op.always('fallback')))
-  end, 'supplier-focus')
+  end):label('supplier-focus')
 
   found(runtime:run(), 'failing suppliers should be exhaustively refuted within the declared bound')
   eq(result, 'fallback')
@@ -51,7 +51,7 @@ do
   local function chain(length, fail)
     local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 64 })
     local channels = {}
-    for i = 1, length do channels[i] = Rendezvous.new('demand-chain-' .. i) end
+    for i = 1, length do channels[i] = Rendezvous.new():label('demand-chain-' .. i) end
 
     for i = 1, length do
       local index = i
@@ -63,14 +63,14 @@ do
           supplier = supplier:and_then(Op.never())
         end
         runtime:perform(supplier)
-      end, 'chain-supplier-' .. i)
+      end):label('chain-supplier-' .. i)
     end
 
     local result
     runtime:spawn_raw(function()
       local preferred = channels[1]:put_op(0):map(function() return 'preferred' end)
       result = runtime:perform(preferred:or_else(Op.always('fallback')))
-    end, 'chain-focus')
+    end):label('chain-focus')
     local status = runtime:run()
     return result, status
   end
@@ -88,12 +88,12 @@ end
 -- should not consume the ordinary pairing search budget.
 do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 16 })
-  local channel = Rendezvous.new('closed-frontier-imbalance')
+  local channel = Rendezvous.new():label('closed-frontier-imbalance')
   local result
   runtime:spawn_raw(function()
     local preferred = Op.together(exchange_lanes(channel, 16, 17))
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'imbalanced-focus')
+  end):label('imbalanced-focus')
   found(runtime:run())
   eq(result, 'fallback')
 end
@@ -102,16 +102,16 @@ end
 -- independent roots form a Hall-deficient graph with no perfect matching.
 do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 16 })
-  local channel = Rendezvous.new('closed-frontier-hall-deficient')
+  local channel = Rendezvous.new():label('closed-frontier-hall-deficient')
   runtime:spawn_raw(function()
     runtime:perform(Op.each(exchange_lanes(channel, 7, 8)))
-  end, 'hall-root-b')
+  end):label('hall-root-b')
 
   local result
   runtime:spawn_raw(function()
     local preferred = Op.each(exchange_lanes(channel, 9, 8))
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'hall-root-a')
+  end):label('hall-root-a')
 
   found(runtime:run(), 'a closed Hall-deficient frontier should prove absence')
   eq(result, 'fallback')
@@ -120,16 +120,16 @@ end
 -- The same closed-frontier representation must retain successful matching.
 do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 16 })
-  local channel = Rendezvous.new('closed-frontier-perfect')
+  local channel = Rendezvous.new():label('closed-frontier-perfect')
   runtime:spawn_raw(function()
     runtime:perform(Op.each(exchange_lanes(channel, 8, 8)))
-  end, 'perfect-root-b')
+  end):label('perfect-root-b')
 
   local result
   runtime:spawn_raw(function()
     local preferred = Op.each(exchange_lanes(channel, 8, 8)):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'perfect-root-a')
+  end):label('perfect-root-a')
 
   found(runtime:run(), 'a closed frontier with a perfect matching should commit')
   eq(result, 'preferred')
@@ -140,11 +140,11 @@ end
 -- adjacency, and both must contribute to the same committed world.
 do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 32 })
-  local complete = Rendezvous.new('closed-frontier-mixed-complete')
-  local constrained = Rendezvous.new('closed-frontier-mixed-constrained')
+  local complete = Rendezvous.new():label('closed-frontier-mixed-complete')
+  local constrained = Rendezvous.new():label('closed-frontier-mixed-constrained')
   runtime:spawn_raw(function()
     runtime:perform(Op.each(exchange_lanes(constrained, 4, 4)))
-  end, 'mixed-root-b')
+  end):label('mixed-root-b')
 
   local result
   runtime:spawn_raw(function()
@@ -153,7 +153,7 @@ do
     for i = 1, #constrained_lanes do lanes[#lanes + 1] = constrained_lanes[i] end
     local preferred = Op.each(lanes):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'mixed-root-a')
+  end):label('mixed-root-a')
 
   found(runtime:run(), 'mixed complete and constrained resources should commit together')
   eq(result, 'preferred')
@@ -163,7 +163,7 @@ end
 -- ordinary exhaustive pairing remains available and may find another world.
 do
   local runtime = Runtime.new({ quiet_deadlock = true, search_total_limit = 32 })
-  local channel = Rendezvous.new('closed-frontier-matching-backtrack')
+  local channel = Rendezvous.new():label('closed-frontier-matching-backtrack')
   local lanes = {}
   for i = 1, 16 do lanes[#lanes + 1] = channel:put_op(i) end
   for i = 1, 16 do
@@ -181,7 +181,7 @@ do
   runtime:spawn_raw(function()
     local preferred = Op.together(lanes):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'matching-backtrack-focus')
+  end):label('matching-backtrack-focus')
 
   found(runtime:run(), 'failure of the suggested matching must not remove other worlds')
   eq(result, 'preferred')

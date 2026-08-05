@@ -25,22 +25,22 @@ do
   local descendant_finished = false
   local observed
   fibers.run(function(scope)
-    local terminal = Completion.new('driver-closure-terminal')
-    local release_descendant = Completion.new('driver-closure-release-descendant')
+    local terminal = Completion.new():label('driver-closure-terminal')
+    local release_descendant = Completion.new():label('driver-closure-release-descendant')
     local driver = fibers.perform(scope:spawn_op(function(driver_scope)
       driver_scope:spawn(function()
         fibers.perform(release_descendant:success_op())
         descendant_finished = true
-      end, 'delayed-driver-descendant')
+      end):label('delayed-driver-descendant')
       fibers.perform(terminal:publish_success_op('terminal'))
       return true
-    end, { name = 'conformance-driver' }))
+    end, { label = 'conformance-driver' }))
 
     scope:spawn(function()
       fibers.perform(terminal:success_op())
       assert(not descendant_finished, 'private descendant finished before the public terminal event')
       fibers.perform(release_descendant:publish_success_op(true))
-    end, 'release-delayed-driver-descendant')
+    end):label('release-delayed-driver-descendant')
 
     observed = fibers.perform(IO.closed_after_driver_op(driver, terminal:success_op(), {
       require_returned = true,

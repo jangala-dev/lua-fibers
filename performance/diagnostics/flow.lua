@@ -13,7 +13,7 @@ local Flow = require('fibers.resource.flow')
 
 local n = tonumber(arg[1]) or 2000
 local mode = arg[2] or 'sequential'
-local flow = Flow.new(64, 'bench-flow')
+local flow = Flow.new(64):label('bench-flow')
 local inlet, outlet = flow:inlet(), flow:outlet()
 local total = 0
 fibers.run(function()

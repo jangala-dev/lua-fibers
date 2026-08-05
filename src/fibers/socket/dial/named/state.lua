@@ -568,8 +568,8 @@ function State.new(endpoint, opts, host, started_at)
     attempt_timeout = opts.attempt_timeout,
     destination_ordering = opts.destination_ordering,
     order_destinations = opts.order_destinations,
-    attempt_slots = Counter.bounded(opts.maximum_active_attempts, name .. ':attempt-slots'),
-    state = StateMachine.new(state, name .. ':state'),
+    attempt_slots = Counter.bounded(opts.maximum_active_attempts):label(name .. ':attempt-slots'),
+    state = StateMachine.new(state):label(name .. ':state'),
   }, State)
 end
 

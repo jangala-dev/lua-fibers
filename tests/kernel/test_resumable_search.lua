@@ -31,7 +31,7 @@ do
       fallback_calls = fallback_calls + 1
       return Op.always('fallback')
     end)))
-  end, 'resumable-fallback')
+  end):label('resumable-fallback')
   eq(rt:step({ max_work = 1 }).kind, 'started')
   local saw_budget = false
   for _ = 1, 20 do
@@ -50,10 +50,10 @@ end
 -- A component retains at most one active retained search and still commits normally.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local channel = Rendezvous.new('resumable-rendezvous')
+  local channel = Rendezvous.new():label('resumable-rendezvous')
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(channel:get_op()) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(channel:put_op('value')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(channel:get_op()) end):label('receiver')
+  rt:spawn_raw(function() sent = rt:perform(channel:put_op('value')) end):label('sender')
   for _ = 1, 30 do
     if rt:step({ max_work = 1 }).tag == 'found' then break end
   end
@@ -66,13 +66,13 @@ end
 -- A relevant frontier change invalidates retained speculative state.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local channel = Rendezvous.new('resumable-invalidation')
+  local channel = Rendezvous.new():label('resumable-invalidation')
   local got
-  rt:spawn_raw(function() got = rt:perform(channel:get_op()) end, 'receiver')
+  rt:spawn_raw(function() got = rt:perform(channel:get_op()) end):label('receiver')
   rt:step({ max_work = 1 })
   rt:step({ max_work = 1 })
   local searches_before = counter(rt, 'searches')
-  rt:spawn_raw(function() rt:perform(channel:put_op('new')) end, 'late-sender')
+  rt:spawn_raw(function() rt:perform(channel:put_op('new')) end):label('late-sender')
   for _ = 1, 30 do
     if rt:step({ max_work = 1 }).tag == 'found' then break end
   end
@@ -106,7 +106,7 @@ do
   })
   local rt = Runtime.new()
   local result
-  rt:spawn_raw(function() result = rt:perform(Facility.op(leaf)) end, 'resumable-witness')
+  rt:spawn_raw(function() result = rt:perform(Facility.op(leaf)) end):label('resumable-witness')
   for _ = 1, 20 do
     if rt:step({ max_work = 1 }).tag == 'found' then break end
   end
@@ -120,12 +120,12 @@ end
 -- prefix executes, without replaying the whole search on each driver call.
 do
   local rt = Runtime.new()
-  local prefix = Rendezvous.new('resumable-sequence-prefix')
-  local residual = Rendezvous.new('resumable-sequence-residual')
+  local prefix = Rendezvous.new():label('resumable-sequence-prefix')
+  local residual = Rendezvous.new():label('resumable-sequence-residual')
   local got
-  rt:spawn_raw(function() got = rt:perform(prefix:get_op():and_then(residual:get_op())) end, 'consumer')
-  rt:spawn_raw(function() rt:perform(prefix:put_op(true)) end, 'prefix-supplier')
-  rt:spawn_raw(function() rt:perform(residual:put_op('sequence-value')) end, 'residual-supplier')
+  rt:spawn_raw(function() got = rt:perform(prefix:get_op():and_then(residual:get_op())) end):label('consumer')
+  rt:spawn_raw(function() rt:perform(prefix:put_op(true)) end):label('prefix-supplier')
+  rt:spawn_raw(function() rt:perform(residual:put_op('sequence-value')) end):label('residual-supplier')
   for _ = 1, 80 do
     if rt:step({ max_work = 1 }).tag == 'found' then break end
   end

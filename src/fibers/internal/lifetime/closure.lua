@@ -129,7 +129,7 @@ function ClosureFailure.new(token, failures, mark_error)
   }, ClosureFailure)
   local recovery = {
     token = token,
-    authority = StateMachine.new(RECOVERY_AVAILABLE, token.id .. '-recovery'),
+    authority = StateMachine.new(RECOVERY_AVAILABLE):label(token.id .. '-recovery'),
   }
   rawset(failure, RECOVERY_STATE, function()
     return recovery

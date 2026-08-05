@@ -16,7 +16,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
 
-local arena_places = Counter.new(4, 'moon-arena-places')
+local arena_places = Counter.new(4):label('moon-arena-places')
 local started = 0
 local first_match, second_attempt
 
@@ -24,7 +24,7 @@ local function start_match_op(scope, party_name, party_size)
   return arena_places:take_op(party_size):and_then(scope:spawn_op(function()
       started = started + 1
       return party_name .. ' entered the Moon Arena'
-    end, { name = 'match:' .. party_name }))
+    end, { label = 'match:' .. party_name }))
 end
 
 fibers.run(function(scope)

@@ -232,7 +232,7 @@ local function new_request(kind, args)
   next_request = next_request + 1
   local name = 'file-request-' .. tostring(next_request)
   return setmetatable(
-    { kind = kind, args = args or {}, completion = Completion.new(name), name = name },
+    { kind = kind, args = args or {}, completion = Completion.new():label(name), name = name },
     Request
   )
 end
@@ -589,7 +589,8 @@ local function new_file_op(path, mode, opts, label, temporary)
   local scope = IO.current_scope(opts, label)
   next_file = next_file + 1
   local name = opts.name or ('file-' .. tostring(next_file))
-  local tx, rx = Mailbox.new(opts.queue_limit or 32, name .. ':requests')
+  local tx, rx = Mailbox.new(opts.queue_limit or 32)
+  tx:label(name .. ':requests')
   local file = setmetatable({
     kind = 'regular_file',
     name = name,
@@ -597,8 +598,8 @@ local function new_file_op(path, mode, opts, label, temporary)
     mode = mode,
     tx = tx,
     rx = rx,
-    ready_completion = Completion.new(name .. ':ready'),
-    closed_completion = Completion.new(name .. ':closed'),
+    ready_completion = Completion.new():label(name .. ':ready'),
+    closed_completion = Completion.new():label(name .. ':closed'),
     backend = nil,
     driver = nil,
     provider_opts = opts,

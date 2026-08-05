@@ -199,11 +199,11 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local src = FibersReadiness.new('manual-key', 'read', 'manual-key-readiness')
+  local src = FibersReadiness.new('manual-key', 'read'):label('manual-key-readiness')
   local seen, key, mode
   rt:spawn_raw(function()
     seen, key, mode = rt:perform(src:readable_op())
-  end, 'manual-readiness')
+  end):label('manual-readiness')
   local st = run(rt, host, 5)
   assert_status(st, 'pending')
   local waits = (st.interests or {})
@@ -223,7 +223,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('socket-read-owner')
+  local owner = Scope.new():label('socket-read-owner')
   local handle = make_socket(host, 'socket-read')
   local stream_handle = wrap_handle(host, handle)
   local stream, got
@@ -236,7 +236,7 @@ do
       )
     )
     got = rt:perform(stream:reader():read_exactly_op(3))
-  end, 'socket-reader')
+  end):label('socket-reader')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
@@ -252,7 +252,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('socket-write-owner')
+  local owner = Scope.new():label('socket-write-owner')
   local handle = make_socket(host, 'socket-write')
   handle.write_blocked = true
   local stream_handle = wrap_handle(host, handle)
@@ -267,7 +267,7 @@ do
     )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'socket-writer')
+  end):label('socket-writer')
 
   local st = run(rt, host, 80)
   assert_status(st, 'pending')
@@ -292,7 +292,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('socket-partial-owner')
+  local owner = Scope.new():label('socket-partial-owner')
   local handle = make_socket(host, 'socket-partial')
   handle.write_chunk_size = 2
   host:writable(handle.key)
@@ -308,7 +308,7 @@ do
     )
     rt:perform(stream:writer():write_op('abcdef'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'socket-partial-writer')
+  end):label('socket-partial-writer')
 
   drive_until(rt, host, function()
     return flushed == true
@@ -321,7 +321,7 @@ end
 do
   local host = ManualHost.new({ auto_advance_time = false })
   local rt = Runtime.new({ host = host })
-  local owner = Scope.new('socket-eof-owner')
+  local owner = Scope.new():label('socket-eof-owner')
   local handle = make_socket(host, 'socket-eof')
   local stream_handle = wrap_handle(host, handle)
   local stream, first, second, err
@@ -332,7 +332,7 @@ do
     )
     first = rt:perform(stream:reader():read_some_op(8))
     second, err = rt:perform(stream:reader():read_some_op(8))
-  end, 'socket-eof-reader')
+  end):label('socket-eof-reader')
 
   assert_status(run(rt, host, 80), 'pending')
   handle:feed('xy')

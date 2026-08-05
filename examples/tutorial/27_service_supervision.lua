@@ -24,7 +24,7 @@ local selected, detail, engine_exit
 fibers.run(function(scope)
   local dispatch_commands = channel.new()
   local shutdown = channel.new()
-  local idle = Signal.new('dispatch-engine-idle')
+  local idle = Signal.new():label('dispatch-engine-idle')
 
   local engine = scope:spawn(function()
     while true do
@@ -33,12 +33,12 @@ fibers.run(function(scope)
         return 'dispatch engine stopped normally'
       end
     end
-  end, 'dispatch-engine')
+  end):label('dispatch-engine')
 
   scope:spawn(function()
     Sleep.sleep(1)
     shutdown:put('operations-centre maintenance')
-  end, 'service-operator')
+  end):label('service-operator')
 
   selected, detail = fibers.perform(Op.named_choice({
     engine_exit = engine:body_result_op(),

@@ -18,15 +18,15 @@ local Pulse = require('fibers.pulse')
 local observed = {}
 
 fibers.run(function(scope)
-  local hazard_changed = Pulse.new(0, 'shelter-hazard-changed')
+  local hazard_changed = Pulse.new(0):label('shelter-hazard-changed')
 
   local radio = scope:spawn(function()
     return hazard_changed:changed(0)
-  end, 'shelter-radio')
+  end):label('shelter-radio')
 
   local beacon = scope:spawn(function()
     return hazard_changed:changed(0)
-  end, 'warning-beacon')
+  end):label('warning-beacon')
 
   assert(hazard_changed:signal() == 1)
   observed[1] = radio:await()

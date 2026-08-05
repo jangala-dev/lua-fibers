@@ -22,7 +22,7 @@ fibers.run(function(scope)
     connection:write('ping\n')
     assert(connection:read_line() == 'pong')
     connection:close('client complete')
-  end, 'client')
+  end):label('client')
 
   local connection = assert(listener:accept())
   assert(connection:read_line() == 'ping')

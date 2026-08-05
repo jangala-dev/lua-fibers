@@ -18,11 +18,11 @@ local sensor, radio
 fibers.run(function(scope)
   local sensor_task = scope:spawn(function()
     return 'temperature sensor calibrated'
-  end, 'calibrate-temperature-sensor')
+  end):label('calibrate-temperature-sensor')
 
   local radio_task = scope:spawn(function()
     return 'mesh radio configured'
-  end, 'configure-mesh-radio')
+  end):label('configure-mesh-radio')
 
   sensor = sensor_task:await()
   radio = radio_task:await()

@@ -7,6 +7,7 @@
 -- registrations, duplicate transfers, and failed closure.
 
 local Audit = {}
+local Label = require('fibers.internal.label')
 
 local records = setmetatable({}, { __mode = 'k' })
 local runtime_values = setmetatable({}, { __mode = 'k' })
@@ -44,7 +45,7 @@ end
 
 local function label(value)
   if type(value) == 'table' then
-    return value.name or value._fibers_id or value.kind or tostring(value)
+    return Label.describe(value, value.kind or tostring(value))
   end
   return tostring(value)
 end

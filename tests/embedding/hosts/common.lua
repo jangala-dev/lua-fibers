@@ -72,12 +72,12 @@ function Common.readiness_smoke(name, host, pipe)
   Common.assert_truthy(type(pipe.write_byte) == 'function', name .. ' pipe must expose write_byte')
 
   local rt = FibersRuntime.new({ host = host })
-  local src = FibersReadiness.new(pipe.read_key, 'read', name .. '-readiness')
+  local src = FibersReadiness.new(pipe.read_key, 'read'):label(name .. '-readiness')
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
     seen, seen_key, seen_mode = rt:perform(src:readable_op())
-  end, name .. '-reader')
+  end):label(name .. '-reader')
 
   local ok, err = pipe.write_byte('x')
   Common.assert_truthy(ok, name .. ' pipe write failed: ' .. tostring(err))
@@ -93,12 +93,12 @@ function Common.write_readiness_smoke(name, host, pipe)
   Common.assert_truthy(pipe and pipe.write_key ~= nil, name .. ' pipe must expose write_key')
 
   local rt = FibersRuntime.new({ host = host })
-  local src = FibersReadiness.new(pipe.write_key, 'write', name .. '-write-readiness')
+  local src = FibersReadiness.new(pipe.write_key, 'write'):label(name .. '-write-readiness')
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
     seen, seen_key, seen_mode = rt:perform(src:writable_op())
-  end, name .. '-writer-ready')
+  end):label(name .. '-writer-ready')
 
   local st = run_host(name, host)(rt)
   Common.assert_status(st, 'found', name .. ' write readiness runner')
@@ -110,7 +110,7 @@ end
 function Common.ready_source_smoke(name, host, key, mode)
   mode = mode or 'read'
   local rt = FibersRuntime.new({ host = host })
-  local src = FibersReadiness.new(key, mode, name .. '-ready-source')
+  local src = FibersReadiness.new(key, mode):label(name .. '-ready-source')
   local seen, seen_key, seen_mode
 
   rt:spawn_raw(function()
@@ -119,7 +119,7 @@ function Common.ready_source_smoke(name, host, key, mode)
     else
       seen, seen_key, seen_mode = rt:perform(src:readable_op())
     end
-  end, name .. '-ready-source-waiter')
+  end):label(name .. '-ready-source-waiter')
 
   local st = run_host(name, host)(rt)
   Common.assert_status(st, 'found', name .. ' ready-source runner')
@@ -137,7 +137,7 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
   Common.assert_truthy(type(pipe.write_byte) == 'function', name .. ' pipe must expose write_byte')
 
   local rt = FibersRuntime.new({ host = host })
-  local src = FibersReadiness.new(pipe.read_key, 'read', name .. '-choice-readiness')
+  local src = FibersReadiness.new(pipe.read_key, 'read'):label(name .. '-choice-readiness')
   local winner
 
   rt:spawn_raw(function()
@@ -152,7 +152,7 @@ function Common.readiness_beats_timeout_smoke(name, host, pipe)
         return 'timeout'
       end)
     ))
-  end, name .. '-readiness-v-timeout')
+  end):label(name .. '-readiness-v-timeout')
 
   local ok, err = pipe.write_byte('x')
   Common.assert_truthy(ok, name .. ' pipe write failed: ' .. tostring(err))
@@ -166,7 +166,7 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
   Common.assert_truthy(pipe and pipe.read_key ~= nil, name .. ' pipe must expose read_key')
 
   local rt = FibersRuntime.new({ host = host })
-  local src = FibersReadiness.new(pipe.read_key, 'read', name .. '-timeout-readiness')
+  local src = FibersReadiness.new(pipe.read_key, 'read'):label(name .. '-timeout-readiness')
   local winner
 
   rt:spawn_raw(function()
@@ -178,7 +178,7 @@ function Common.timeout_beats_unready_smoke(name, host, pipe)
       :or_else(Sleep.sleep_op(0.01):map(function()
         return 'timeout'
       end)))
-  end, name .. '-timeout-v-readiness')
+  end):label(name .. '-timeout-v-readiness')
 
   local st = run_host(name, host, 80)(rt)
   Common.assert_status(st, 'found', name .. ' timeout should complete')
@@ -192,7 +192,7 @@ local HostHandles = require('tests.support.host_handles')
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
   local handle = HostHandles.duplex(r, w, { host = host, name = name .. ':duplex' })
   local rt = FibersRuntime.new({ host = host })
-  local owner = FibersScope.new(name .. ':owner')
+  local owner = FibersScope.new():label(name .. ':owner')
   local got, flushed, stream
 
   rt:spawn_raw(function()
@@ -210,7 +210,7 @@ local HostHandles = require('tests.support.host_handles')
     flushed = rt:perform(stream:writer():flush_op())
     got = rt:perform(stream:reader():read_exactly_op(5))
     rt:perform(stream:abort_op('test complete'))
-  end, name .. ':flow')
+  end):label(name .. ':flow')
 
   local st = External.drive(rt, { host = host, max_iterations = 200 })
   Common.assert_status(st, 'found', name .. ' stream pipe runner')
@@ -238,7 +238,7 @@ function Common.socket_echo_smoke(name, host, address)
       Common.assert_eq(connection:write('pong\n'), 5, name .. ' server write')
       Common.assert_eq(connection:flush(), true, name .. ' server flush')
       connection:close('server complete')
-    end, name .. ':server')
+    end):label(name .. ':server')
 
     local dial = socket.dial(actual, { name = name .. ':dial' })
     local connection, dial_err = dial:result()
@@ -272,7 +272,7 @@ function Common.socket_churn_smoke(name, host, count)
         connection:flush()
         connection:close('server churn complete')
       end
-    end, name .. ':server')
+    end):label(name .. ':server')
 
     for i = 1, count do
       local dial = socket.dial(socket.ipv4_address(address.host, address.port), {

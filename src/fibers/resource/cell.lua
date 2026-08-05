@@ -48,8 +48,8 @@ function Cell._init(resource, value, algebra)
   return resource
 end
 
-function Cell.new(value, name)
-  local cell = Facility.identity(setmetatable({}, Cell), Kind, name)
+function Cell.new(value)
+  local cell = Facility.identity(setmetatable({}, Cell), Kind)
   return Cell._init(cell, value)
 end
 

@@ -22,8 +22,8 @@ end
 -- an unchanged runtime must not prove the same absence again.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local ch = Rendezvous.new('persistent-frontier-retry')
-  rt:spawn_raw(function() rt:perform(ch:get_op()) end, 'blocked')
+  local ch = Rendezvous.new():label('persistent-frontier-retry')
+  rt:spawn_raw(function() rt:perform(ch:get_op()) end):label('blocked')
   local first = rt:run().tag
   assert(first == 'pending' or first == 'quiescent')
   local calls = counter(rt, 'search_calls')
@@ -38,15 +38,15 @@ end
 -- A new possible supplier invalidates only roots indexed on the affected fact.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local left, right = Cell.new(0, 'frontier-left'), Cell.new(0, 'frontier-right')
-  rt:spawn_raw(function() rt:perform(left:expect_op(1)) end, 'left-waiter')
-  rt:spawn_raw(function() rt:perform(right:expect_op(1)) end, 'right-waiter')
+  local left, right = Cell.new(0):label('frontier-left'), Cell.new(0):label('frontier-right')
+  rt:spawn_raw(function() rt:perform(left:expect_op(1)) end):label('left-waiter')
+  rt:spawn_raw(function() rt:perform(right:expect_op(1)) end):label('right-waiter')
   local blocked = rt:run().tag
   assert(blocked == 'pending' or blocked == 'quiescent')
   local left_request, right_request = rt.engine.pending[1], rt.engine.pending[2]
   eq(rt.engine.proof_graph.dirty[left_request] ~= nil, false)
   eq(rt.engine.proof_graph.dirty[right_request] ~= nil, false)
-  rt:spawn_raw(function() rt:perform(left:write_op(1)) end, 'left-supplier')
+  rt:spawn_raw(function() rt:perform(left:write_op(1)) end):label('left-supplier')
   -- Admission publishes only potential structure; it should invalidate the
   -- compatible left waiter without disturbing the independent right waiter.
   rt:_start_one()
@@ -59,17 +59,17 @@ end
 -- the preferred world rather than leave the completed Retry cached.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local ch = Rendezvous.new('persistent-frontier-latent-preferred')
+  local ch = Rendezvous.new():label('persistent-frontier-latent-preferred')
   local got
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op():or_else(Op.never()))
-  end, 'latent-receiver')
+  end):label('latent-receiver')
   local blocked = rt:run().tag
   assert(blocked == 'pending' or blocked == 'quiescent')
   local receiver = rt.engine.pending[1]
   local frontier = assert(receiver._proof)
   assert(frontier.latent_exchanges[ch] and frontier.latent_exchanges[ch].get)
-  rt:spawn_raw(function() rt:perform(ch:put_op('primary')) end, 'late-sender')
+  rt:spawn_raw(function() rt:perform(ch:put_op('primary')) end):label('late-sender')
   eq(rt:run().tag, 'found')
   eq(got, 'primary', 'late compatible participant should invalidate latent Retry')
 end
@@ -78,9 +78,9 @@ end
 -- frontier remains unchanged.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local ch = Rendezvous.new('persistent-frontier-session')
-  rt:spawn_raw(function() rt:perform(ch:get_op()) end, 'receiver')
-  rt:spawn_raw(function() rt:perform(ch:put_op('value')) end, 'sender')
+  local ch = Rendezvous.new():label('persistent-frontier-session')
+  rt:spawn_raw(function() rt:perform(ch:get_op()) end):label('receiver')
+  rt:spawn_raw(function() rt:perform(ch:put_op('value')) end):label('sender')
   rt:step({ max_work = 1 })
   rt:step({ max_work = 1 })
   rt:step({ max_work = 1 })

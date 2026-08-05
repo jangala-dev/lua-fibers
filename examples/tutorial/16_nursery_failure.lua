@@ -19,15 +19,15 @@ local Signal = require('fibers.resource.signal')
 local warning_task, incident_cancelled
 
 local result = fibers.try_run(function()
-  local incident_never_finishes = Signal.new('incident-never-finishes')
+  local incident_never_finishes = Signal.new():label('incident-never-finishes')
 
   warning_task = fibers.spawn(function()
     fibers.perform(incident_never_finishes:wait_op())
-  end, 'public-warning-feed')
+  end):label('public-warning-feed')
 
   fibers.spawn(function()
     error('flood model lost its active catchment state', 0)
-  end, 'flood-controller')
+  end):label('flood-controller')
 
   local ok, err = fibers.pcall(function()
     fibers.perform(incident_never_finishes:wait_op())

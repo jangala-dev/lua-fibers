@@ -266,7 +266,7 @@ local function new_op(endpoint, opts, strategy)
     name = name,
     endpoint = endpoint,
     strategy = strategy.name,
-    lifecycle = DialLifecycle.new(name, endpoint),
+    lifecycle = DialLifecycle.new(endpoint):label(name),
     _strategy = strategy,
     _options = opts,
   }, Dial)

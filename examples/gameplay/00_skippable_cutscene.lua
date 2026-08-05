@@ -24,17 +24,17 @@ fibers.run(function(scope)
   local camera = scope:spawn(function()
     Sleep.sleep(10)
     return 'camera track complete'
-  end, 'cinematic-camera')
+  end):label('cinematic-camera')
 
   local dialogue = scope:spawn(function()
     Sleep.sleep(8)
     return 'dialogue complete'
-  end, 'cinematic-dialogue')
+  end):label('cinematic-dialogue')
 
   local animation = scope:spawn(function()
     Sleep.sleep(6)
     return 'character animation complete'
-  end, 'cinematic-animation')
+  end):label('cinematic-animation')
 
   selected, reason = fibers.perform(Op.named_choice({
     finished = Sleep.sleep_op(6):map(function()

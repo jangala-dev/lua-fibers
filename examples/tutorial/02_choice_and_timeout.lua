@@ -24,7 +24,7 @@ fibers.run(function(scope)
   scope:spawn(function()
     Sleep.sleep(2)
     confirmations:put('river sensor confirmed')
-  end, 'late-sensor-confirmation')
+  end):label('late-sensor-confirmation')
 
   result = fibers.perform(Op.choice(
     confirmations:get_op(),

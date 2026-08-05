@@ -63,11 +63,12 @@ end
 -- Runtime-bound readiness feeds invalidate bounded search and deliver stable key/mode values.
 do
   local rt = Runtime.new()
-  local src, feed = External.readiness(rt, 'handle-1', 'readiness-bounded')
+  local src, feed = External.readiness(rt, 'handle-1')
+  src:label('readiness-bounded')
   local ok, key, mode
   rt:spawn_raw(function()
     ok, key, mode = rt:perform(src:readable_op())
-  end, 'readiness-waiter')
+  end):label('readiness-waiter')
   local st
   for _ = 1, 8 do
     st = rt:step({ max_work = 1 })
@@ -89,14 +90,15 @@ end
 -- Read and write readiness modes are independent.
 do
   local rt = Runtime.new()
-  local src, feed = External.readiness(rt, 'handle-2', 'readiness-modes')
+  local src, feed = External.readiness(rt, 'handle-2')
+  src:label('readiness-modes')
   local read_seen, write_seen
   rt:spawn_raw(function()
     read_seen = rt:perform(src:readable_op())
-  end, 'read-waiter')
+  end):label('read-waiter')
   rt:spawn_raw(function()
     write_seen = rt:perform(src:writable_op())
-  end, 'write-waiter')
+  end):label('write-waiter')
   assert_status(rt:run(), 'pending')
   feed:writable()
   drive_until(rt, function()
@@ -113,13 +115,14 @@ end
 -- Clearing readiness removes the latched readiness fact.
 do
   local rt = Runtime.new()
-  local src, feed = External.readiness(rt, 'handle-3', 'readiness-clear')
+  local src, feed = External.readiness(rt, 'handle-3')
+  src:label('readiness-clear')
   feed:readable()
   feed:clear('read')
   local seen
   rt:spawn_raw(function()
     seen = rt:perform(src:readable_op())
-  end, 'clear-waiter')
+  end):label('clear-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
   assert_nil(seen)
@@ -128,7 +131,7 @@ end
 -- Readiness carries no error or close payload. Backend read/write remains authoritative.
 do
   local rt = Runtime.new()
-  local owner = FibersScope.new('readiness-authority-owner')
+  local owner = FibersScope.new():label('readiness-authority-owner')
   local backend = FakeHandle.new({
     name = 'readiness-authority-backend',
     readiness = 'manual',
@@ -145,7 +148,7 @@ do
     read_val, read_err = rt:perform(stream:reader():read_some_op(1))
     rt:perform(stream:writer():write_op('x'))
     n, write_err = rt:perform(stream:writer():flush_op())
-  end, 'authority-root')
+  end):label('authority-root')
   assert_status(rt:run(), 'found')
   backend:feed_read_error('read_reset')
   backend:mark_readable()
@@ -164,15 +167,16 @@ end
 -- Readiness is level-like: if left set, more than one waiter can observe it in separate commits.
 do
   local rt = Runtime.new()
-  local src, feed = External.readiness(rt, 'handle-5', 'readiness-level')
+  local src, feed = External.readiness(rt, 'handle-5')
+  src:label('readiness-level')
   local a, b
   feed:readable()
   rt:spawn_raw(function()
     a = rt:perform(src:readable_op())
-  end, 'level-a')
+  end):label('level-a')
   rt:spawn_raw(function()
     b = rt:perform(src:readable_op())
-  end, 'level-b')
+  end):label('level-b')
   drive_until(rt, function()
     return a == true and b == true
   end, 'level readiness should be reusable while set')
@@ -182,7 +186,7 @@ end
 -- no stream bytes appear.
 do
   local rt = Runtime.new()
-  local owner = FibersScope.new('stale-readiness-owner')
+  local owner = FibersScope.new():label('stale-readiness-owner')
   local backend =
     FakeHandle.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err, snap
@@ -191,7 +195,7 @@ do
       Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'stale-readiness-stream' })
     )
     got, err = rt:perform(stream:reader():read_some_op(1))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   backend:mark_readable()
   for _ = 1, 20 do
@@ -213,7 +217,7 @@ end
 -- Write readiness admits a reactor write reaction.
 do
   local rt = Runtime.new()
-  local owner = FibersScope.new('readiness-write-owner')
+  local owner = FibersScope.new():label('readiness-write-owner')
   local backend = FakeHandle.new({
     name = 'readiness-write-backend',
     readiness = 'manual',
@@ -227,7 +231,7 @@ do
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'root')
+  end):label('root')
   for _ = 1, 20 do
     rt:run()
     if stream and Inspect.data(stream:writer().flow) == 'abc' then
@@ -252,7 +256,7 @@ end
 -- Bounded stepping also resumes a readiness-backed write reaction after readiness arrival.
 do
   local rt = Runtime.new()
-  local owner = FibersScope.new('bounded-ready-reactor-owner')
+  local owner = FibersScope.new():label('bounded-ready-reactor-owner')
   local backend = FakeHandle.new({
     name = 'bounded-ready-reactor-backend',
     readiness = 'manual',
@@ -269,7 +273,7 @@ do
     )
     rt:perform(stream:writer():write_op('xy'))
     flushed = rt:perform(stream:writer():flush_op())
-  end, 'root')
+  end):label('root')
   for _ = 1, 80 do
     rt:step({ max_work = 1 })
     if stream and Inspect.data(stream:writer().flow) == 'xy' then
@@ -297,11 +301,12 @@ end
 do
   for i = 1, 24 do
     local rt = Runtime.new()
-    local src, feed = External.readiness(rt, 'handle-stress-' .. tostring(i), 'readiness-bounded-stress')
+    local src, feed = External.readiness(rt, 'handle-stress-' .. tostring(i))
+    src:label('readiness-bounded-stress')
     local ok, key, mode
     rt:spawn_raw(function()
       ok, key, mode = rt:perform(src:readable_op())
-    end, 'stress-readiness-waiter')
+    end):label('stress-readiness-waiter')
     for _ = 1, 8 do
       rt:step({ max_work = 1 })
     end

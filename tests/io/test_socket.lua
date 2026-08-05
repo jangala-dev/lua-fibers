@@ -50,7 +50,7 @@ do
       local response, read_err = fibers.perform(client:read_line_op())
       assert_eq(response, 'pong', tostring(read_err))
       assert_eq(fibers.perform(client:close_op('client complete')), true)
-    end, 'socket-client')
+    end):label('socket-client')
 
     local server, accept_err = fibers.perform(listener:accept_op(fibers.current_scope()))
     assert_truthy(server, tostring(accept_err))

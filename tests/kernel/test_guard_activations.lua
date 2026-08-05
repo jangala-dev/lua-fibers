@@ -42,7 +42,7 @@ local function run(op, opts)
   local result
   rt:spawn_raw(function()
     result = pack(rt:perform(op))
-  end, 'guard-activation-root')
+  end):label('guard-activation-root')
   local status = rt:run()
   found(status)
   return result, rt
@@ -155,19 +155,19 @@ local machine = 'kernel'
         end,
       },
     })
-    local gate = Rendezvous.new('guard-activation-sleep-gate')
+    local gate = Rendezvous.new():label('guard-activation-sleep-gate')
     local finished, observed = false, nil
 
     rt:spawn_raw(function()
       local _, deadline = rt:perform(gate:get_op():and_then(Sleep.sleep_op(3)))
       finished, observed = true, deadline
-    end, 'guard-activation-sleeper')
+    end):label('guard-activation-sleeper')
 
     eq(rt:run().tag, 'quiescent', machine .. ': left progression should initially block')
     now = 10
     rt:spawn_raw(function()
       rt:perform(gate:put_op(true))
-    end, 'guard-activation-sleep-release')
+    end):label('guard-activation-sleep-release')
     eq(rt:run().tag, 'pending', machine .. ': sleep should begin after left activation')
     eq(finished, false)
 
@@ -185,8 +185,8 @@ local machine = 'kernel'
   -- the earlier progression remains pending behind a guarded option.
   do
     local rt = Runtime.new()
-    local cell = Cell.new(0, 'guard-activation-version')
-    local gate = Rendezvous.new('guard-activation-gate')
+    local cell = Cell.new(0):label('guard-activation-version')
+    local gate = Rendezvous.new():label('guard-activation-gate')
     local calls, value, activation_number = 0, nil, nil
 
     rt:spawn_raw(function()
@@ -198,11 +198,11 @@ local machine = 'kernel'
           end)
         end)
       end)))
-    end, 'guard-version-waiter')
+    end):label('guard-version-waiter')
 
     rt:spawn_raw(function()
       rt:perform(cell:write_op(1))
-    end, 'guard-version-writer')
+    end):label('guard-version-writer')
 
     found(rt:run(), machine .. ': writer should commit')
     eq(calls, 2, machine .. ': a new observed version should create a new activation')
@@ -210,7 +210,7 @@ local machine = 'kernel'
 
     rt:spawn_raw(function()
       rt:perform(gate:put_op(true))
-    end, 'guard-version-release')
+    end):label('guard-version-release')
 
     found(rt:run(), machine .. ': guarded continuation should complete')
     eq(value, 1, machine .. ': continuation should use the refreshed observation')
@@ -238,8 +238,8 @@ local machine = 'kernel'
   -- it.  If that proof changes, the fallback guard is prepared afresh.
   do
     local rt = Runtime.new()
-    local cell = Cell.new(0, 'guard-fallback-version')
-    local gate = Rendezvous.new('guard-fallback-gate')
+    local cell = Cell.new(0):label('guard-fallback-version')
+    local gate = Rendezvous.new():label('guard-fallback-gate')
     local calls, result = 0, nil
     local preferred = cell:changed_op(0):and_then(Op.never())
     local fallback = Op.guard(function()
@@ -252,7 +252,7 @@ local machine = 'kernel'
 
     rt:spawn_raw(function()
       result = rt:perform(preferred:or_else(fallback))
-    end, 'guard-fallback-waiter')
+    end):label('guard-fallback-waiter')
 
     local initial = rt:run()
     eq(
@@ -264,7 +264,7 @@ local machine = 'kernel'
 
     rt:spawn_raw(function()
       rt:perform(cell:write_op(1))
-    end, 'guard-fallback-version-writer')
+    end):label('guard-fallback-version-writer')
     local refreshed = rt:run()
     eq(
       refreshed.tag == 'quiescent' or refreshed.tag == 'pending' or refreshed.tag == 'found',
@@ -275,7 +275,7 @@ local machine = 'kernel'
 
     rt:spawn_raw(function()
       rt:perform(gate:put_op(true))
-    end, 'guard-fallback-release')
+    end):label('guard-fallback-release')
     found(rt:run(), machine .. ': refreshed fallback should complete')
     eq(result, 2, machine .. ': committed fallback should use the refreshed activation')
     eq(calls, 2, machine .. ': completing the refreshed fallback must not rerun its guard')
@@ -306,7 +306,7 @@ local machine = 'kernel'
     local value
     rt:spawn_raw(function()
       value = rt:perform(guarded)
-    end, 'bounded-guard')
+    end):label('bounded-guard')
     local status
     for _ = 1, 100 do
       status = rt:step({ max_work = 1 })

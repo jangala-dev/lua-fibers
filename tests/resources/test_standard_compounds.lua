@@ -34,12 +34,12 @@ local function run(body)
   local runtime = Runtime.new()
   runtime:spawn_raw(function()
     body(runtime)
-  end, 'test')
+  end):label('test')
   found(runtime:run())
 end
 
 local function test_counter_directional_waits()
-  local counter = Counter.new(1, 'directional-counter')
+  local counter = Counter.new(1):label('directional-counter')
   local rows
 
   run(function(runtime)
@@ -55,7 +55,7 @@ local function test_counter_directional_waits()
 end
 
 local function test_latch_is_set_once()
-  local latch = Latch.new('latch')
+  local latch = Latch.new():label('latch')
   local first, second, value
 
   run(function(runtime)
@@ -70,7 +70,7 @@ local function test_latch_is_set_once()
 end
 
 local function test_pulse_is_counter_plus_close_state()
-  local pulse = Pulse.new(0, 'pulse')
+  local pulse = Pulse.new(0):label('pulse')
   local rows, ended, reason, version
 
   run(function(runtime)
@@ -92,7 +92,8 @@ local function test_pulse_is_counter_plus_close_state()
 end
 
 local function test_ref_count_clones_and_closes_once()
-  local refs, first = RefCount.new('refs')
+  local refs, first = RefCount.new()
+  refs:label('refs')
   local clone, skipped, first_close, repeat_close, count, zero
 
   run(function(runtime)
@@ -118,7 +119,7 @@ local function test_ref_count_clones_and_closes_once()
 end
 
 local function test_semaphore_is_bounded_counter_vocabulary()
-  local semaphore = Semaphore.new(2, 'semaphore')
+  local semaphore = Semaphore.new(2):label('semaphore')
   local available
 
   run(function(runtime)

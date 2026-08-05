@@ -47,7 +47,7 @@ local function test_cell_select_together_supply_but_each_non_handoff()
     end
     return StateMachine.Ready.write(v - 1, v)
   end)
-  local s = StateMachine.new(0, 'select-law')
+  local s = StateMachine.new(0):label('select-law')
   local rt = new_runtime()
   local rows
   rt:spawn_raw(function()
@@ -55,12 +55,12 @@ local function test_cell_select_together_supply_but_each_non_handoff()
       s:transition_op(supply),
       s:transition_op(take),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 1)
   assert_eq(s.value, 0)
 
-  local s2 = StateMachine.new(0, 'select-each')
+  local s2 = StateMachine.new(0):label('select-each')
   local rt2 = new_runtime()
   local rows2
   rt2:spawn_raw(function()
@@ -68,14 +68,14 @@ local function test_cell_select_together_supply_but_each_non_handoff()
       s2:transition_op(supply),
       s2:transition_op(take):or_else(Op.always('empty')),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], 'empty')
   assert_eq(s2.value, 1)
 end
 
 local function test_flow_sequential_write_read()
-  local flow = Flow.new(nil, 'flow-sequential')
+  local flow = Flow.new(nil):label('flow-sequential')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local got
   local st = fibers.try_run(function()
@@ -87,7 +87,7 @@ local function test_flow_sequential_write_read()
 end
 
 local function test_flow_together_write_read_handoff()
-  local flow = Flow.new(nil, 'flow-together')
+  local flow = Flow.new(nil):label('flow-together')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows
   local st = fibers.try_run(function()
@@ -103,7 +103,7 @@ local function test_flow_together_write_read_handoff()
 end
 
 local function test_flow_each_write_does_not_supply_read()
-  local flow = Flow.new(nil, 'flow-each')
+  local flow = Flow.new(nil):label('flow-each')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local rows
   local st = fibers.try_run(function()
@@ -123,7 +123,7 @@ local function test_flow_each_write_does_not_supply_read()
 end
 
 local function test_flow_close_constrains_write()
-  local flow = Flow.new(nil, 'flow-close')
+  local flow = Flow.new(nil):label('flow-close')
   local inlet = flow:inlet()
   local rows
   local st = fibers.try_run(function()
@@ -138,7 +138,7 @@ local function test_flow_close_constrains_write()
 end
 
 local function test_flow_capacity_and_write_some()
-  local flow = Flow.new(3, 'flow-capacity')
+  local flow = Flow.new(3):label('flow-capacity')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local ok, err, n, rest, got
   fibers.run(function()
@@ -154,7 +154,7 @@ local function test_flow_capacity_and_write_some()
 end
 
 local function test_flow_lease_ack_and_return()
-  local flow = Flow.new(nil, 'flow-lease')
+  local flow = Flow.new(nil):label('flow-lease')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local lease, ok, got
   fibers.run(function()

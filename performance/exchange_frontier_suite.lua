@@ -50,73 +50,73 @@ end
 
 measure('failing_suppliers', 64, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 256 })
-  local channel = Rendezvous.new('frontier-perf-suppliers')
+  local channel = Rendezvous.new():label('frontier-perf-suppliers')
   for i = 1, 64 do
     runtime:spawn_raw(function()
       runtime:perform(channel:get_op():and_then(Op.never()))
-    end, 'supplier-' .. i)
+    end):label('supplier-' .. i)
   end
   local result
   runtime:spawn_raw(function()
     result = runtime:perform(channel:put_op(true):or_else(Op.always('fallback')))
-  end, 'focus')
+  end):label('focus')
   return runtime, function() return result end
 end, 'fallback')
 
 measure('role_imbalance', 64, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 64 })
-  local channel = Rendezvous.new('frontier-perf-imbalance')
+  local channel = Rendezvous.new():label('frontier-perf-imbalance')
   local result
   runtime:spawn_raw(function()
     result = runtime:perform(
       Op.together(exchange_lanes(channel, 64, 65)):or_else(Op.always('fallback'))
     )
-  end, 'focus')
+  end):label('focus')
   return runtime, function() return result end
 end, 'fallback')
 
 measure('hall_deficient', 64, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 64 })
-  local channel = Rendezvous.new('frontier-perf-hall')
+  local channel = Rendezvous.new():label('frontier-perf-hall')
   runtime:spawn_raw(function()
     runtime:perform(Op.each(exchange_lanes(channel, 63, 64)))
-  end, 'root-b')
+  end):label('root-b')
   local result
   runtime:spawn_raw(function()
     local preferred = Op.each(exchange_lanes(channel, 65, 64))
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'root-a')
+  end):label('root-a')
   return runtime, function() return result end
 end, 'fallback')
 
 measure('perfect_constrained', 64, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 64 })
-  local channel = Rendezvous.new('frontier-perf-perfect')
+  local channel = Rendezvous.new():label('frontier-perf-perfect')
   runtime:spawn_raw(function()
     runtime:perform(Op.each(exchange_lanes(channel, 64, 64)))
-  end, 'root-b')
+  end):label('root-b')
   local result
   runtime:spawn_raw(function()
     local preferred = Op.each(exchange_lanes(channel, 64, 64)):map(function() return 'preferred' end)
     result = runtime:perform(preferred:or_else(Op.always('fallback')))
-  end, 'root-a')
+  end):label('root-a')
   return runtime, function() return result end
 end, 'preferred')
 
 measure('complete_internal', 128, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 64 })
-  local channel = Rendezvous.new('frontier-perf-complete')
+  local channel = Rendezvous.new():label('frontier-perf-complete')
   local result
   runtime:spawn_raw(function()
     result = runtime:perform(Op.together(exchange_lanes(channel, 128, 128)):map(function() return 'preferred' end))
-  end, 'focus')
+  end):label('focus')
   return runtime, function() return result end
 end, 'preferred')
 
 measure('failing_supplier_chain', 64, function()
   local runtime = Runtime.new({ quiet_deadlock = true, instrumentation = true, search_total_limit = 256 })
   local channels = {}
-  for i = 1, 64 do channels[i] = Rendezvous.new('frontier-perf-chain-' .. i) end
+  for i = 1, 64 do channels[i] = Rendezvous.new():label('frontier-perf-chain-' .. i) end
   for i = 1, 64 do
     local index = i
     runtime:spawn_raw(function()
@@ -127,12 +127,12 @@ measure('failing_supplier_chain', 64, function()
         supplier = supplier:and_then(Op.never())
       end
       runtime:perform(supplier)
-    end, 'supplier-' .. i)
+    end):label('supplier-' .. i)
   end
   local result
   runtime:spawn_raw(function()
     result = runtime:perform(channels[1]:put_op(0):or_else(Op.always('fallback')))
-  end, 'focus')
+  end):label('focus')
   return runtime, function() return result end
 end, 'fallback')
 

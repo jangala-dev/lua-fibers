@@ -22,8 +22,8 @@ Lease.__index = function(self, key)
   return Lease[key]
 end
 
-function Lease.new(compat, name)
-  local lease = Facility.identity(setmetatable({ compat = compat or { lease = {} } }, Lease), Kind, name)
+function Lease.new(compat)
+  local lease = Facility.identity(setmetatable({ compat = compat or { lease = {} } }, Lease), Kind)
   lease._space = Keyspace.new(lease, {
     algebra = 'finite_map',
     domain = 'finite_map',

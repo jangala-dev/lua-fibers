@@ -63,7 +63,7 @@ do
   rt:spawn_raw(function()
     rt:perform(a:writer():write_op('abc'))
     flushed, flush_err = rt:perform(a:writer():flush_op())
-  end, 'writer')
+  end):label('writer')
   for _ = 1, 10 do
     if Inspect.data(b:reader().flow) == 'abc' and flushed == nil then
       break
@@ -75,7 +75,7 @@ do
 
   rt:spawn_raw(function()
     rt:perform(b:shutdown_read_op('reader_closed'))
-  end, 'reader-close')
+  end):label('reader-close')
   drive_until(rt, function()
     return flush_err == 'reader_closed'
   end, 'peer close should settle retained bytes and fail flush with close reason')
@@ -124,7 +124,7 @@ end
 -- Backend write failure settles an active reactor write lease and wakes flush with the backend error.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('settle-backend-owner')
+  local owner = FibersScope.new():label('settle-backend-owner')
   local backend = FakeHandle.new({
     name = 'settle-backend',
     readiness = 'manual',
@@ -141,7 +141,7 @@ do
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
-  end, 'writer')
+  end):label('writer')
   backend:mark_writable()
   for _ = 1, 20 do
     if stream and Inspect.first_lease_bytes(stream:writer().flow) == 'abc' then
@@ -171,7 +171,7 @@ end
 -- the active lease is still settled by the failure path.
 do
   local rt = FibersRuntime.new()
-  local owner = FibersScope.new('settle-protocol-owner')
+  local owner = FibersScope.new():label('settle-protocol-owner')
   local backend = FakeHandle.new({ name = 'settle-protocol-backend' })
   function backend:write(bytes)
     return #bytes + 1
@@ -186,7 +186,7 @@ do
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed, flush_err = rt:perform(stream:writer():flush_op())
-  end, 'writer')
+  end):label('writer')
   drive_until(rt, function()
     return flush_err == 'backend_protocol_error'
   end, 'invalid backend write count should fail output')
@@ -200,7 +200,7 @@ end
 -- kinds of active lease.  No retained byte custody survives closed_op.
 do
   local Flow = require('fibers.resource.flow')
-  local flow = Flow.new(8, 'terminal-flow')
+  local flow = Flow.new(8):label('terminal-flow')
   local closed, close_err, stale_lease_err, stale_space_err
   fibers.run(function()
     fibers.perform(flow:inlet():write_op('abcd'))

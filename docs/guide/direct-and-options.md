@@ -70,7 +70,7 @@ local selected, detail = perform(named_choice({
 }))
 ```
 
-Options are also required for transactional sequencing, products and certified
+Options are also required for transactional sequencing, products and immediate
 fallback:
 
 ```lua
@@ -99,3 +99,53 @@ interfaces and lifecycle protocol steps generally remain option-only.
 
 The suffix remains meaningful throughout the library: `_op` always means that
 the returned value is an option and that no action has yet been performed.
+
+## Diagnostic labels
+
+Fibers values may carry optional human-readable labels:
+
+```lua
+local commands = channel.new(16)
+  :label('service-commands')
+
+local worker = scope:spawn(run_worker)
+  :label('configuration-watcher')
+```
+
+A label is non-unique diagnostic metadata. It does not affect runtime identity,
+matching, scheduling, custody or authority. Calling `:label(nil)` clears it.
+
+Options are immutable, so labelling an option returns a new option:
+
+```lua
+local receive = commands:get_op()
+local primary = receive:label('receive-primary-command')
+local fallback = receive:label('receive-fallback-command')
+```
+
+The original `receive` option is unchanged. Labels may be placed on a complete
+application operation or on useful parts beneath it.
+
+## Asserting that a region does not suspend
+
+`perform` is a possible suspension point, not an unconditional yield. An option
+which commits immediately allows the current fibre to continue in the same
+uninterrupted turn.
+
+A coordinator or reducer may make that property an executable assertion:
+
+```lua
+fibers.without_suspension(function()
+  reduce_event(state, event)
+end)
+```
+
+The function may perform options which commit immediately. Fibers raises a
+`suspension_error` before an operation parks the fibre, permits another fibre
+to run first, or returns control because a configured search budget was
+exhausted.
+
+The region preserves all Lua return values and errors and may be nested. It is
+not a transaction, lock or time limit. It does not roll back ordinary Lua
+mutation and cannot detect a foreign call which blocks without returning to
+Fibers.

@@ -6,6 +6,7 @@ local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Mailbox = {}
 local Tx = {}
@@ -16,10 +17,7 @@ Tx.__index = Tx
 Rx.__index = Rx
 
 local NO_REASON = {}
-
-local function child_name(name, suffix)
-  return name and name .. ':' .. suffix or nil
-end
+local next_id = 0
 
 local function tx(mailbox, handle)
   return setmetatable({ _mailbox = mailbox, _handle = handle }, Tx)
@@ -69,40 +67,48 @@ local function drop_oldest(mailbox, value)
   return put:or_else(replace)
 end
 
-local function new_mailbox(capacity, name, accept, full)
+local function new_mailbox(capacity, accept, full)
   capacity = capacity or 0
   if type(capacity) ~= 'number' or capacity < 0 or capacity % 1 ~= 0 then
     error('mailbox capacity must be a non-negative integer', 3)
   end
 
-  local refs, first = RefCount.new(child_name(name, 'senders'))
-  local mailbox = setmetatable({
+  next_id = next_id + 1
+  local refs, first = RefCount.new()
+  local id = 'mailbox-' .. tostring(next_id)
+  local mailbox = Label.attach(setmetatable({
+    _fibers_id = id,
+    name = id,
     capacity = capacity,
     full = full,
     _accept = accept,
-    _messages = Channel.new(capacity, child_name(name, 'messages')),
+    _messages = Channel.new(capacity),
     _senders = refs,
-    _reason = Cell.new(NO_REASON, child_name(name, 'reason')),
-    _dropped = Counter.new(0, child_name(name, 'dropped')),
-  }, Mailbox)
+    _reason = Cell.new(NO_REASON),
+    _dropped = Counter.new(0),
+  }, Mailbox))
+  Label.child(mailbox._messages, mailbox, 'messages')
+  Label.child(mailbox._senders, mailbox, 'senders')
+  Label.child(mailbox._reason, mailbox, 'reason')
+  Label.child(mailbox._dropped, mailbox, 'dropped')
 
   return tx(mailbox, first), setmetatable({ _mailbox = mailbox }, Rx)
 end
 
-function Mailbox.new(capacity, name)
-  return new_mailbox(capacity, name, block, 'block')
+function Mailbox.new(capacity)
+  return new_mailbox(capacity, block, 'block')
 end
 
-function Mailbox.reject_newest(capacity, name)
-  return new_mailbox(capacity, name, reject_newest, 'reject_newest')
+function Mailbox.reject_newest(capacity)
+  return new_mailbox(capacity, reject_newest, 'reject_newest')
 end
 
-function Mailbox.drop_oldest(capacity, name)
+function Mailbox.drop_oldest(capacity)
   capacity = capacity or 0
   if capacity == 0 then
-    return Mailbox.reject_newest(0, name)
+    return Mailbox.reject_newest(0)
   end
-  return new_mailbox(capacity, name, drop_oldest, 'drop_oldest')
+  return new_mailbox(capacity, drop_oldest, 'drop_oldest')
 end
 
 function Tx:send_op(value)
@@ -171,6 +177,17 @@ end
 
 
 
+
+
+local function endpoint_label(self, ...)
+  local mailbox = self._mailbox
+  if select('#', ...) == 0 then return Label.get(mailbox) end
+  Label.set(mailbox, select(1, ...), 2)
+  return self
+end
+
+Tx.label = endpoint_label
+Rx.label = endpoint_label
 
 Mailbox.Tx = Tx
 Mailbox.Rx = Rx

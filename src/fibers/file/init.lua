@@ -133,7 +133,7 @@ function File.pipe_op(opts)
   local scope = IO.current_scope(opts, 'file.pipe_op')
   local start = {
     scope = scope,
-    host_hold = HostHold.new(name .. ':host-hold'),
+    host_hold = HostHold.new():label(name .. ':host-hold'),
     read_stream = nil,
     write_stream = nil,
   }

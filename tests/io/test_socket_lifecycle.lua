@@ -41,7 +41,7 @@ do
   fibers.run(function()
     local address = { kind = 'inet', host = '127.0.0.1', port = 8000 }
     local handle = { name = 'listener-handle' }
-    local lifecycle = ListenerLifecycle.new('listener-law', address)
+    local lifecycle = ListenerLifecycle.new(address):label('listener-law')
 
     assert_eq(lifecycle:state_value().kind, 'starting')
     assert_eq(fibers.perform(lifecycle:unavailable_op():or_else(Op.always('available'))), 'available')
@@ -79,7 +79,7 @@ end
 -- Listener acquisition failure is a direct terminal transition.
 do
   fibers.run(function()
-    local lifecycle = ListenerLifecycle.new('listener-start-failure', { kind = 'inet' })
+    local lifecycle = ListenerLifecycle.new({ kind = 'inet' }):label('listener-start-failure')
     local err = HostError.system('socket', 'listen', 'bind failed', 'EADDRINUSE')
     local published, state = fibers.perform(lifecycle:start_failed_op(err))
     assert_eq(published, true)
@@ -94,7 +94,7 @@ end
 -- while an untaken connection exists.
 do
   fibers.run(function()
-    local lifecycle = DialLifecycle.new('dial-law', { kind = 'inet', port = 443 })
+    local lifecycle = DialLifecycle.new({ kind = 'inet', port = 443 }):label('dial-law')
     local connection = { name = 'connection' }
     local source = { name = 'source-scope' }
 
@@ -123,7 +123,7 @@ end
 -- Dial close and failure paths cannot overwrite one another after terminality.
 do
   fibers.run(function()
-    local closing = DialLifecycle.new('dial-close-law', { kind = 'inet' })
+    local closing = DialLifecycle.new({ kind = 'inet' }):label('dial-close-law')
     local first, state = fibers.perform(closing:request_close_op('caller closed'))
     assert_eq(first, true)
     assert_eq(state.kind, 'closing')
@@ -136,7 +136,7 @@ do
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'closed'))
 
-    local failed = DialLifecycle.new('dial-failure-law', { kind = 'inet' })
+    local failed = DialLifecycle.new({ kind = 'inet' }):label('dial-failure-law')
     local failure = HostError.system('socket', 'dial', 'refused', 'ECONNREFUSED')
     local published, failed_state = fibers.perform(failed:publish_failure_op(failure))
     assert_eq(published, true)

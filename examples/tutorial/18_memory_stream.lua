@@ -22,7 +22,7 @@ fibers.run(function(scope)
   scope:spawn(function()
     fibers.perform(plugin_end:writer():write_op('INDEX_READY\n'))
     fibers.perform(plugin_end:shutdown_write_op())
-  end, 'embedded-plugin')
+  end):label('embedded-plugin')
 
   line = fibers.perform(host_end:reader():read_line_op())
   eof, eof_err = fibers.perform(host_end:reader():read_some_op(1024))

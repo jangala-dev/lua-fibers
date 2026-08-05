@@ -78,7 +78,7 @@ end, function(scope)
       writer:write(chunk)
     end
     writer:shutdown_write('proof profile complete')
-  end, 'proof-memory-writer')
+  end):label('proof-memory-writer')
   local total = 0
   while total < expected do
     total = total + #assert(reader:read_some(math.min(16384, expected - total)))
@@ -105,7 +105,7 @@ end, function(scope)
       accepted = accepted + 1
       connection:close('proof profile accepted')
     end
-  end, 'proof-socket-server')
+  end):label('proof-socket-server')
   for _ = 1, count do
     local dial = Socket.dial(address)
     local connection = assert(dial:result())

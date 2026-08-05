@@ -19,7 +19,7 @@ local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 local Effect = require('fibers.effect')
 local log = {}
-local counter = Cell.new(0, 'counter')
+local counter = Cell.new(0):label('counter')
 
 local LogKind
 LogKind = Effect.kind({

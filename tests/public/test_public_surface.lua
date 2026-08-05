@@ -178,7 +178,7 @@ do
   assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox.Host')
   assert_eq(FibersRoblox.Subscription, FibersRobloxSubscription, 'Roblox.Subscription')
 
-  local scope = FibersScope.new('public-scope-surface')
+  local scope = FibersScope.new():label('public-scope-surface')
   assert_functions('Scope', scope, {
     'spawn_op', 'move_op', 'offer_op', 'accept_op', 'grant_op', 'can_op',
     'custody_op', 'subtree_op',
@@ -203,12 +203,12 @@ end
 
 -- The friendly top-level surface is enough for ordinary rendezvous use.
 do
-  local ch = FibersRendezvous.new('inbox')
+  local ch = FibersRendezvous.new():label('inbox')
   local got
   local st = fibers.try_run(function()
     fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
-    end, 'sender')
+    end):label('sender')
     got = fibers.perform(ch:get_op())
   end).runtime_status
   assert_status(st, 'found')
@@ -217,14 +217,14 @@ end
 
 -- Cells provide transactional facts. Predicates wait directly through wait_until_op.
 do
-  local cell = FibersCell.new(false, 'flag')
+  local cell = FibersCell.new(false):label('flag')
   local seen
   local st = fibers.try_run(function()
     fibers.spawn(function()
       seen = fibers.perform(wait_until(cell, function(v)
         return v == true
       end))
-    end, 'waiter')
+    end):label('waiter')
     fibers.perform(cell:write_op(true))
   end).runtime_status
   assert_status(st, 'found')
@@ -233,7 +233,7 @@ end
 
 -- Capacity-like state transitions are ordinary cell composition.
 do
-  local c = FibersCell.new(1, 'credits')
+  local c = FibersCell.new(1):label('credits')
   local new, old
   local st = fibers.try_run(function()
     new, old = fibers.perform(modify_when(c, function(v)
@@ -251,11 +251,12 @@ end
 -- A Signal is a public waitable external resource.
 do
   local rt = FibersRuntime.new()
-  local signal, feed = External.signal(rt, 'signal')
+  local signal, feed = External.signal(rt)
+  signal:label('signal')
   local got
   rt:spawn_raw(function()
     got = rt:perform(signal:wait_op())
-  end, 'signal-waiter')
+  end):label('signal-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
   local waits = (st.interests or {})
@@ -285,7 +286,7 @@ do
   local ok, observed
   rt:spawn_raw(function()
     ok, observed = rt:perform(Sleep.sleep_op(5))
-  end, 'sleeper')
+  end):label('sleeper')
   local st = rt:run()
   assert_status(st, 'pending')
   now = 5
@@ -336,7 +337,7 @@ do
     marker = nil
     task = fibers.perform(scope:spawn_op(function()
       return captured and 7 or 0
-    end, 'child'))
+    end, { label = 'child' }))
     value = fibers.perform(task:await_op())
   end).runtime_status
   assert_status(st, 'found')
@@ -348,20 +349,20 @@ end
 
 -- The public resource-toolkit pieces compose in one ordinary programme.
 do
-  local inbox = FibersRendezvous.new('atom-kit-inbox')
-  local flag = FibersCell.new(false, 'atom-kit-flag')
+  local inbox = FibersRendezvous.new():label('atom-kit-inbox')
+  local flag = FibersCell.new(false):label('atom-kit-flag')
   local received, joined
 
   local st = fibers.try_run(function(scope)
     fibers.spawn(function()
       fibers.perform(inbox:put_op('hello'))
       fibers.perform(flag:write_op(true))
-    end, 'sender')
+    end):label('sender')
 
     local task = fibers.perform(scope:spawn_op(function()
       local value = fibers.perform(wait_until(flag, function(v) return v == true end))
       return value and 42 or 0
-    end, 'worker'))
+    end, { label = 'worker' }))
 
     received = fibers.perform(Op.choice(
       inbox:get_op(),
@@ -382,7 +383,7 @@ do
   local st = fibers.try_run(function(scope)
     local task = fibers.perform(scope:spawn_op(function()
       return 'x', nil, 'z'
-    end, 'multi-return-task'))
+    end, { label = 'multi-return-task' }))
     exit = fibers.perform(task:body_result_op())
     a, b, c = fibers.perform(task:await_op())
   end).runtime_status

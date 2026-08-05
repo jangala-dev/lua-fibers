@@ -21,7 +21,7 @@ fibers.run(function(scope)
   local task = fibers.perform(scope:spawn_op(function()
     jobs_started = jobs_started + 1
     return 'workspace index ready'
-  end, { name = 'workspace-index' }))
+  end, { label = 'workspace-index' }))
 
   index_result = task:await()
 end)

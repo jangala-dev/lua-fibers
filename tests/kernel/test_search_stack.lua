@@ -26,7 +26,7 @@ local rt = Runtime.new({ instrumentation = true })
 local got
 rt:spawn_raw(function()
   got = rt:perform(op)
-end, 'deep-explicit-stack')
+end):label('deep-explicit-stack')
 local status = rt:run()
 assert(status.tag == 'found', 'deep explicit-stack search should commit')
 rt:run()

@@ -17,12 +17,12 @@ local Cell = require('fibers.resource.cell')
 local Runtime = require('fibers.runtime')
 
 local rt = Runtime.new()
-local c, ch, s = Counter.new(0), Rendezvous.new('claim-backtrack'), Cell.new(0)
+local c, ch, s = Counter.new(0), Rendezvous.new():label('claim-backtrack'), Cell.new(0)
 local taken, sent
 rt:spawn_raw(function()
   local rows = rt:perform(Op.each({ c:take_op(1), ch:get_op(), s:write_op(2) }))
   taken = rows[1][1]
-end, 'taker')
+end):label('taker')
 rt:spawn_raw(function()
   sent = rt:perform(Op.choice({
     Op.each({ c:give_op(1), ch:put_op('bad'), s:write_op(1) }):map(function()
@@ -32,7 +32,7 @@ rt:spawn_raw(function()
       return 'good'
     end),
   }))
-end, 'giver')
+end):label('giver')
 local status = rt:run()
 assert(status.tag == 'found')
 assert(taken == true and sent == 'good' and c.value == 0 and s.value == 2)

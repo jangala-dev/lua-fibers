@@ -32,13 +32,13 @@ do
   local sibling
   local body_cancelled = false
   local r = fibers.try_run(function()
-    local never = FibersSignal.new('structured-never')
+    local never = FibersSignal.new():label('structured-never')
     sibling = fibers.spawn(function()
       fibers.perform(never:wait_op())
-    end, 'blocked-sibling')
+    end):label('blocked-sibling')
     fibers.spawn(function()
       error('live child boom', 0)
-    end, 'failing-child')
+    end):label('failing-child')
     local ok, err = fibers.pcall(function()
       fibers.perform(never:wait_op())
     end)
@@ -65,14 +65,14 @@ do
     return fibers.try_scope(
       { closure = FibersClosure.supervisor({ child_failure = 'fail_at_exit' }) },
       function()
-        local ready = FibersRendezvous.new('supervisor-ready')
+        local ready = FibersRendezvous.new():label('supervisor-ready')
         fibers.spawn(function()
           error('supervised boom', 0)
-        end, 'supervised-failure')
+        end):label('supervised-failure')
         fibers.spawn(function()
           sibling_completed = true
           fibers.perform(ready:put_op(true))
-        end, 'supervised-sibling')
+        end):label('supervised-sibling')
         fibers.perform(ready:get_op())
         body_completed = true
         return 'body-value'
@@ -133,16 +133,16 @@ end
 do
   local child, grandchild
   local r = fibers.try_run(function()
-    local never = FibersSignal.new('nested-cancel-never')
+    local never = FibersSignal.new():label('nested-cancel-never')
     child = fibers.spawn(function()
       grandchild = fibers.spawn(function()
         fibers.perform(never:wait_op())
-      end, 'grandchild')
+      end):label('grandchild')
       fibers.perform(never:wait_op())
-    end, 'child-with-grandchild')
+    end):label('child-with-grandchild')
     fibers.spawn(function()
       error('parent failure', 0)
-    end, 'parent-failure')
+    end):label('parent-failure')
   end)
   assert_eq(r.ok, false)
   assert_eq(r.reason, 'child_failed')
@@ -176,10 +176,10 @@ do
   local late_started = false
   local late_result
   local r = fibers.try_run(function(scope)
-    local never = FibersSignal.new('late-admission-never')
+    local never = FibersSignal.new():label('late-admission-never')
     fibers.spawn(function()
       error('close before late admission', 0)
-    end, 'closing-child')
+    end):label('closing-child')
     local ok, err = fibers.pcall(function()
       fibers.perform(never:wait_op())
     end)
@@ -188,7 +188,7 @@ do
       late_result = fibers.perform(scope
         :spawn_op(function()
           late_started = true
-        end, 'too-late')
+        end, { label = 'too-late' })
         :map(function()
           return 'admitted'
         end)
@@ -207,10 +207,10 @@ do
     return fibers.try_scope({ closure = FibersClosure.supervisor({ child_failure = 'collect' }) }, function()
       fibers.spawn(function()
         error('first collected failure', 0)
-      end, 'first-collected')
+      end):label('first-collected')
       fibers.spawn(function()
         error('second collected failure', 0)
-      end, 'second-collected')
+      end):label('second-collected')
       return 'done'
     end)
   end)

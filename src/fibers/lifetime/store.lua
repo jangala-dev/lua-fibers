@@ -7,6 +7,7 @@ local Op = require('fibers.op')
 local Effect = require('fibers.effect')
 local Values = require('fibers.internal.values')
 local StateMachine = require('fibers.resource.machine')
+local Label = require('fibers.internal.label')
 
 local Store = {}
 Store.__index = Store
@@ -220,7 +221,7 @@ local function subtree_list(s, boundary, root, public)
 end
 
 local function node_label(node)
-  return tostring((type(node) == 'table' and (node.name or node._fibers_id)) or node)
+  return tostring(Label.describe(node, node))
 end
 
 local function boundary_descendants(s, boundary)
@@ -235,7 +236,7 @@ local function boundary_descendants(s, boundary)
     local bs = boundary_state(s, item)
     out[#out + 1] = {
       _fibers_value = true, node = item, item = view_of(item),
-      id = item._fibers_id, name = item.name, path = path,
+      id = item._fibers_id, name = Label.describe(item, item.name), path = path,
       role = rec.role, custody_phase = rec.phase,
       closure_phase = bs.closure_phase, closure_reason = bs.closure_reason,
       closure_error = bs.closure_error or rec.closure_error,
@@ -276,7 +277,7 @@ local function containment_blockers(s, token)
         node = node,
         item = view_of(node),
         id = node._fibers_id,
-        name = node.name,
+        name = Label.describe(node, node.name),
         count = bs.count,
         phase = bs.closure_phase,
         reason = bs.closure_reason,
@@ -567,7 +568,7 @@ function Store.new(runtime)
     dirty_items = {},
     removed_records = false,
   }
-  local forest = StateMachine.new(initial_state, 'lifetime-forest')
+  local forest = StateMachine.new(initial_state):label('lifetime-forest')
   forest._location.clone_value = nil
   local store = setmetatable({
     runtime = runtime,

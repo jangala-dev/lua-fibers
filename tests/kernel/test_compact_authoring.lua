@@ -70,7 +70,7 @@ assert(change_rule.supplies.any == true)
 
 -- Closed façades may retain a private proof-preserving readiness probe.
 do
-  local machine_resource = Machine.new(0, 'compact-probe')
+  local machine_resource = Machine.new(0):label('compact-probe')
   local probed = Machine.isolated_query_when(
     'compact.probe',
     function(value) return value > 0 end,
@@ -135,7 +135,7 @@ do
   })
   rt:spawn_raw(function()
     rt:perform(Facility.op(bad))
-  end, 'bad-inspect')
+  end):label('bad-inspect')
   local ran, run_err = pcall(function() rt:run() end)
   assert(ran == false)
   assert(tostring(run_err):find('inspect rule cannot stage a patch', 1, true))

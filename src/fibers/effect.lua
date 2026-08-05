@@ -137,7 +137,7 @@ end
 
 local SpawnKind
 local function spawn_key(payload)
-  return payload.id or payload.owner or payload.name or payload.fn
+  return payload.id or payload.owner or payload.fn
 end
 
 SpawnKind = EffectKind.new({
@@ -175,14 +175,14 @@ SpawnKind = EffectKind.new({
         if p.owner ~= nil then
           fn = p.owner:_take_spawn_body(discharge_rt)
         end
-        return discharge_rt:_spawn_committed(fn, p.name, p.scope)
+        return discharge_rt:_spawn_committed(fn, p.scope, p.owner)
       end,
     }
   end,
 })
 
-function Effect.spawn(fn, name, id, scope, owner)
-  local payload = { fn = fn, name = name, scope = scope, owner = owner }
+function Effect.spawn(fn, id, scope, owner)
+  local payload = { fn = fn, scope = scope, owner = owner }
   payload.id = id or owner or payload
   return Effect.of(SpawnKind, payload)
 end

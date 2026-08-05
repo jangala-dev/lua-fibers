@@ -38,7 +38,7 @@ local host = SimulatedHost.new({
       child.stdout:write('received: ' .. table.concat(input))
       child.stderr:write('diagnostic')
       proc:complete({ kind = 'exited', code = 0, success = true })
-    end, 'example-child')
+    end):label('example-child')
   end,
 })
 

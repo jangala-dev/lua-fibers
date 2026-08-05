@@ -358,7 +358,7 @@ function tests.file_close_waits_for_private_lifetime_descendants()
       fibers.spawn(function()
         Sleep.sleep(0.01)
         child_finished = true
-      end, 'file-close-descendant')
+      end):label('file-close-descendant')
       return original_close(self, reason)
     end
     return backend
@@ -390,7 +390,7 @@ function tests.file_driver_does_not_stop_other_fibres()
     local task = fibers.spawn(function()
       Sleep.sleep(0.005)
       ticked = true
-    end, 'file-ticker')
+    end):label('file-ticker')
     assert(file.read_all('/slow', {}) == 'ready')
     task:await()
     assert(ticked)
@@ -436,7 +436,7 @@ function tests.worker_file_provider_is_evented()
     local ticker = fibers.spawn(function()
       Sleep.sleep(0.005)
       ticked = true
-    end, 'file-worker-ticker')
+    end):label('file-worker-ticker')
     assert(file.read_all(path, { max = 32 }) == 'worker')
     ticker:await()
     assert(ticked)

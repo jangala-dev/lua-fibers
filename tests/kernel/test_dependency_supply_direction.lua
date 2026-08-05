@@ -19,13 +19,13 @@ local function rejected(fn, fragment)
 end
 
 -- Conservative static shape may order search, but has no proof authority.
-local counter = Counter.new(2, 'direction-counter')
+local counter = Counter.new(2):label('direction-counter')
 local take, give = counter:take_op(1), counter:give_op(1)
 local take_intent = { kind = 'transition', spec = take.spec }
 assert(not Operation.may_supply(Operation.shape(take), take_intent))
 assert(Operation.may_supply(Operation.shape(give), take_intent))
 
-local index = Index.new('direction-index')
+local index = Index.new():label('direction-index')
 local put, pop = index:append_op('value'), index:pop_first_op()
 local pop_intent = { kind = 'transition', spec = pop.spec }
 local put_intent = { kind = 'transition', spec = put.spec }
@@ -42,7 +42,7 @@ local observer = StateMachine.query('directional-observer', function(value)
   if value < 1 then return StateMachine.Wait end
   return StateMachine.Ready.same(value)
 end, 100)
-local cell = StateMachine.new(0, 'directional-separation')
+local cell = StateMachine.new(0):label('directional-separation')
 local rows
 local rt = Runtime.new()
 rt:spawn_raw(function()
@@ -50,7 +50,7 @@ rt:spawn_raw(function()
     cell:transition_op(observer),
     cell:transition_op(producer),
   }))
-end, 'directional-separation')
+end):label('directional-separation')
 assert(rt:run().tag == 'found')
 assert(rows[1][1] == 1)
 assert(rows[2][1] == true)
@@ -69,7 +69,7 @@ end, 'cannot combine any')
 -- Dynamic residual dependencies are discovered by execution. A fallback may
 -- not commit merely because the dependency was absent from the prefix shape.
 do
-  local actual = Cell.new(0, 'dynamic-residual-actual')
+  local actual = Cell.new(0):label('dynamic-residual-actual')
   local result
   local sound_rt = Runtime.new({ choice_seed = 1 })
   sound_rt:spawn_raw(function()
@@ -77,13 +77,13 @@ do
       return actual:expect_op(1):map(function() return 'preferred' end)
     end))
     result = sound_rt:perform(preferred:or_else(Op.always('fallback')))
-  end, 'dynamic-residual-consumer')
+  end):label('dynamic-residual-consumer')
 
   for i = 1, 4 do
-    local unrelated = Rendezvous.new('dynamic-residual-unrelated-' .. i)
-    sound_rt:spawn_raw(function() sound_rt:perform(unrelated:get_op()) end, 'unrelated-' .. i)
+    local unrelated = Rendezvous.new():label('dynamic-residual-unrelated-' .. i)
+    sound_rt:spawn_raw(function() sound_rt:perform(unrelated:get_op()) end):label('unrelated-' .. i)
   end
-  sound_rt:spawn_raw(function() sound_rt:perform(actual:write_op(1)) end, 'dynamic-residual-supplier')
+  sound_rt:spawn_raw(function() sound_rt:perform(actual:write_op(1)) end):label('dynamic-residual-supplier')
 
   assert(sound_rt:run().tag == 'found')
   assert(result == 'preferred', 'execution-derived dependency admitted fallback')

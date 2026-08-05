@@ -80,12 +80,12 @@ end
 
 -- Completion publishes one terminal result and wakes result waiters.
 do
-  local completion = Completion.new('completion-test')
+  local completion = Completion.new():label('completion-test')
   local observed, second
   fibers.run(function()
     fibers.spawn(function()
       observed = { fibers.perform(completion:result_op()) }
-    end, 'completion-waiter')
+    end):label('completion-waiter')
     fibers.perform(completion:publish_success_op('done'))
     local changed, conflict = fibers.perform(completion:publish_failure_op('late'))
     second = conflict and conflict.kind or changed
@@ -99,7 +99,7 @@ end
 do
   local closed = 0
   fibers.run(function(scope)
-    local host_hold = HostHold.new('settled-host-hold')
+    local host_hold = HostHold.new():label('settled-host-hold')
     fibers.perform(scope:admit_op(host_hold))
     local value = { name = 'external' }
     assert_eq(
@@ -119,7 +119,7 @@ end
 do
   local closed = 0
   fibers.run(function(scope)
-    local host_hold = HostHold.new('released-host-hold')
+    local host_hold = HostHold.new():label('released-host-hold')
     fibers.perform(scope:admit_op(host_hold))
     local value = {}
     host_hold:hold('value', value, function()
@@ -136,7 +136,7 @@ end
 do
   local first_closed, second_closed = 0, 0
   fibers.run(function(scope)
-    local hold = HostHold.new('keyed-discard-host-hold')
+    local hold = HostHold.new():label('keyed-discard-host-hold')
     fibers.perform(scope:admit_op(hold))
 
     local first = Handle.new({
@@ -175,7 +175,7 @@ end
 -- Completion can expose pending as an option for single-winner protocols.
 do
   local Completion = require('fibers.resource.completion')
-  local completion = Completion.new('pending-completion')
+  local completion = Completion.new():label('pending-completion')
   fibers.run(function()
     assert_eq(fibers.perform(completion:pending_op()), true)
     fibers.perform(completion:publish_success_op('done'))

@@ -57,7 +57,7 @@ end
 -- there is no second completion which can disagree with the lifecycle.
 do
   local result = fibers.try_run(function()
-    local lifecycle = DialLifecycle.new('reference-report', Address.name('example.test', 443))
+    local lifecycle = DialLifecycle.new(Address.name('example.test', 443)):label('reference-report')
     local connection, source_scope = {}, {}
     local report = { status = 'connected', attempt = 1 }
     local published = fibers.perform(lifecycle:publish_connected_op(connection, source_scope, report))
@@ -121,7 +121,7 @@ do
       overall_deadline = 10,
     }, host, 0)
 
-    local v6 = Completion.new('reference-v6')
+    local v6 = Completion.new():label('reference-v6')
     fibers.perform(v6:publish_success_op({
       Address.ipv6('2001:db8::1', 443),
       Address.ipv6('2001:db8::2', 443),
@@ -131,7 +131,7 @@ do
     assert_eq(#first.unattempted, 1, 'one slot remains reserved for the unfinished family')
     assert_eq(first.candidates_dropped, 1)
 
-    local v4 = Completion.new('reference-v4')
+    local v4 = Completion.new():label('reference-v4')
     fibers.perform(v4:publish_success_op({ Address.ipv4('192.0.2.20', 443) }))
     fibers.perform(race:publish_family_op('inet4', v4:state_value(), 0.010))
     local second = race.state.value

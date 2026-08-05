@@ -137,7 +137,8 @@ function Subscription.new(signal, opts)
   end
 
   local name = opts.name or ('roblox-' .. mode)
-  local resource, feed = External.events(runtime, name)
+  local resource, feed = External.events(runtime)
+  resource:label(name)
   local self = setmetatable({
     name = name,
     mode = mode,
@@ -154,7 +155,7 @@ function Subscription.new(signal, opts)
   }, Subscription)
 
   Lifetime.define(self, {
-    name = name,
+    label = name,
     role = 'roblox_subscription',
     closure = closure_protocol(self),
     meta = { mode = mode, name = name },

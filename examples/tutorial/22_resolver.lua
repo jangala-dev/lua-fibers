@@ -35,7 +35,7 @@ fibers.run(function(scope)
     connection:write('pong\n')
     connection:flush()
     connection:close('server complete')
-  end, 'resolver-example-server')
+  end):label('resolver-example-server')
 
   local query = socket.resolve_name('echo.test', local_address.port, {
     family = 'inet4',

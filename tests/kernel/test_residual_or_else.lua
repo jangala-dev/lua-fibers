@@ -21,7 +21,7 @@ end
 local pack = table.pack or function(...) return { n = select('#', ...), ... } end
 local function one_perform(op, opts)
   local rt, values = Runtime.new(opts or {}), { n = 0 }
-  rt:spawn_raw(function() values = pack(rt:perform(op)) end, 'one')
+  rt:spawn_raw(function() values = pack(rt:perform(op)) end):label('one')
   return rt:run(), values, rt
 end
 
@@ -51,7 +51,7 @@ end
 
 -- A waitable but presently unsupported preferred branch permits fallback.
 do
-  local event = Signal.new('residual-unready')
+  local event = Signal.new():label('residual-unready')
   local st, values = one_perform(event:wait_op():or_else(Op.always('fallback')))
   status(st, 'found')
   eq(values[1], 'fallback')
@@ -59,17 +59,17 @@ end
 
 -- If the fallback is also absent, discarded preferred waits do not survive.
 do
-  local event = Signal.new('residual-unready-never')
+  local event = Signal.new():label('residual-unready-never')
   local st = one_perform(event:wait_op():or_else(Op.never()), { quiet_deadlock = true })
   status(st, 'quiescent')
 end
 
 -- A visible rendezvous partner keeps the preferred world ahead of fallback.
 do
-  local channel, rt = Rendezvous.new('residual-primary'), Runtime.new()
+  local channel, rt = Rendezvous.new():label('residual-primary'), Runtime.new()
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(channel:get_op():or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(channel:put_op('payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(channel:get_op():or_else(Op.always('fallback'))) end):label('receiver')
+  rt:spawn_raw(function() sent = rt:perform(channel:put_op('payload')) end):label('sender')
   status(rt:run(), 'found')
   eq(got, 'payload')
   eq(sent, true)
@@ -77,12 +77,12 @@ end
 
 -- Partner backtracking may reveal the preferred world.
 do
-  local wanted, dead = Rendezvous.new('residual-wanted'), Rendezvous.new('residual-dead')
+  local wanted, dead = Rendezvous.new():label('residual-wanted'), Rendezvous.new():label('residual-dead')
   local rt, receiver, partner = Runtime.new(), nil, nil
   rt:spawn_raw(function()
     receiver = rt:perform(wanted:get_op():map(function(v) return 'primary:' .. v end):or_else(Op.always('fallback')))
-  end, 'receiver')
-  rt:spawn_raw(function() partner = rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok'))) end, 'partner')
+  end):label('receiver')
+  rt:spawn_raw(function() partner = rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok'))) end):label('partner')
   status(rt:run(), 'found')
   eq(receiver, 'primary:ok')
   eq(partner, true)
@@ -92,8 +92,8 @@ end
 do
   local rt, got = Runtime.new(), nil
   rt:spawn_raw(function()
-    got = rt:perform(Rendezvous.new('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
-  end, 'cursor-residual')
+    got = rt:perform(Rendezvous.new():label('cursor-residual-no-sender'):get_op():or_else(Op.always('fallback')))
+  end):label('cursor-residual')
   local st
   for _ = 1, 80 do
     st = rt:step({ max_work = 1 })
@@ -104,10 +104,10 @@ do
 end
 
 do
-  local channel, rt = Rendezvous.new('cursor-residual-with-sender'), Runtime.new()
+  local channel, rt = Rendezvous.new():label('cursor-residual-with-sender'), Runtime.new()
   local got, sent
-  rt:spawn_raw(function() got = rt:perform(channel:get_op():or_else(Op.always('fallback'))) end, 'receiver')
-  rt:spawn_raw(function() sent = rt:perform(channel:put_op('payload')) end, 'sender')
+  rt:spawn_raw(function() got = rt:perform(channel:get_op():or_else(Op.always('fallback'))) end):label('receiver')
+  rt:spawn_raw(function() sent = rt:perform(channel:put_op('payload')) end):label('sender')
   local st
   for _ = 1, 120 do
     st = rt:step({ max_work = 1 })

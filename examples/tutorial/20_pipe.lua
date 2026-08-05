@@ -21,7 +21,7 @@ fibers.run(function()
   fibers.spawn(function()
     fibers.perform(writer:write_op('hello through a pipe'))
     fibers.perform(writer:close_op('writer complete'))
-  end, 'pipe-writer')
+  end):label('pipe-writer')
 
   local bytes = assert(fibers.perform(reader:read_all_op({ max = 1024 })))
   assert(bytes == 'hello through a pipe')

@@ -4,15 +4,13 @@ local Counter = require('fibers.resource.counter')
 local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Pulse = {}
 Pulse.__index = Pulse
 
 local OPEN = {}
-
-local function child_name(name, suffix)
-  return name and name .. ':' .. suffix or nil
-end
+local next_id = 0
 
 local function closed(status)
   return status ~= OPEN
@@ -25,12 +23,19 @@ local function non_negative_integer(value, label, level)
   return value
 end
 
-function Pulse.new(initial, name)
+function Pulse.new(initial)
   initial = non_negative_integer(initial or 0, 'pulse initial version', 2)
-  return setmetatable({
-    _version = Counter.new(initial, child_name(name, 'version')),
-    _status = Cell.new(OPEN, child_name(name, 'status')),
-  }, Pulse)
+  next_id = next_id + 1
+  local id = 'pulse-' .. tostring(next_id)
+  local pulse = Label.attach(setmetatable({
+    _fibers_id = id,
+    name = id,
+    _version = Counter.new(initial),
+    _status = Cell.new(OPEN),
+  }, Pulse))
+  Label.child(pulse._version, pulse, 'version')
+  Label.child(pulse._status, pulse, 'status')
+  return pulse
 end
 
 function Pulse:version_op()

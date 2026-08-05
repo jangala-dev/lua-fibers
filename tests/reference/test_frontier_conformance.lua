@@ -51,7 +51,7 @@ local function production_result(op, label)
   local value
   runtime:spawn_raw(function()
     value = runtime:perform(op)
-  end, label)
+  end):label(label)
   local status = runtime:run()
   eq(status and status.tag, 'found', label .. ' production search should decide the finite world')
   return value
@@ -68,7 +68,7 @@ for puts = 1, 4 do
       :map(function() return 'preferred' end)
       :or_else(RefOp.always('fallback'))
 
-    local channel = Rendezvous.new(resource)
+    local channel = Rendezvous.new():label(resource)
     local production = Op.together(production_lanes(channel, puts, gets))
       :map(function() return 'preferred' end)
       :or_else(Op.always('fallback'))
@@ -100,7 +100,7 @@ for a_puts = 0, 3 do
           ):map(function() return 'preferred' end)
             :or_else(RefOp.always('fallback'))
 
-          local channel = Rendezvous.new(label)
+          local channel = Rendezvous.new():label(label)
           local production = Op.together({
             Op.each(production_lanes(channel, a_puts, a_gets)),
             Op.each(production_lanes(channel, b_puts, b_gets)),
@@ -137,7 +137,7 @@ do
     :map(function() return 'preferred' end)
     :or_else(RefOp.always('fallback'))
 
-  local channel = Rendezvous.new(label)
+  local channel = Rendezvous.new():label(label)
   local production_lanes_ = {}
   for i = 1, 4 do production_lanes_[#production_lanes_ + 1] = channel:put_op(i) end
   for i = 1, 4 do

@@ -137,7 +137,7 @@ do
       local connection = assert(listener:accept())
       assert_eq(connection:read(1), 'x')
       connection:close('server complete')
-    end, 'resolver-echo-server')
+    end):label('resolver-echo-server')
 
     local query = socket.resolve_name('echo.test', actual.port)
     local addresses = assert(query:result())

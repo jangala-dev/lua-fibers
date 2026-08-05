@@ -17,12 +17,13 @@ local Runtime = require('fibers.runtime')
 local ManualHost = require('fibers.embed.manual')
 
 local runtime = Runtime.new({ host = ManualHost.new() })
-local signal, feed = External.signal(runtime, 'door-sensor')
+local signal, feed = External.signal(runtime)
+signal:label('door-sensor')
 local result
 
 runtime:spawn_raw(function()
   result = runtime:perform(signal:wait_op())
-end, 'door-sensor-waiter')
+end):label('door-sensor-waiter')
 
 local initial = runtime:run()
 assert(initial.tag == 'pending')

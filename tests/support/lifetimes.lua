@@ -7,10 +7,10 @@ local Closure = require('fibers.closure')
 local M = {}
 
 function M.scope(runtime, name, closure)
-  return Scope.new(name or 'test-scope', {
+  return Scope.new( {
     runtime = runtime,
     closure = closure or Closure.nursery({ name = name or 'test-scope' }),
-  })
+  }):label(name or 'test-scope')
 end
 
 function M.resource(name, closure, opts)

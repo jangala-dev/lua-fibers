@@ -31,7 +31,7 @@ local function build_case()
   local rt = Runtime.new()
   local cells, reads = {}, {}
   for i = 1, cell_count do
-    cells[i] = Cell.new(i, 'store-view-cell-' .. tostring(i))
+    cells[i] = Cell.new(i):label('store-view-cell-' .. tostring(i))
     reads[i] = cells[i]:read_op()
   end
 
@@ -53,7 +53,7 @@ local function build_case()
       local rows = rt:perform(operation)
       total = total + #rows
     end
-  end, 'store-view-benchmark')
+  end):label('store-view-benchmark')
 
   return rt, function()
     assert(total == rounds * lanes, 'store-view benchmark result mismatch')

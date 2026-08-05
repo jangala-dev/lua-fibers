@@ -21,10 +21,10 @@ local plain = Runtime.new()
 eq((plain.instrumentation and plain.instrumentation:report()), nil, 'instrumentation should be opt-in')
 
 local rt = Runtime.new({ instrumentation = { slow_search_limit = 4 } })
-local channel = Rendezvous.new('instrumentation-test')
+local channel = Rendezvous.new():label('instrumentation-test')
 local got
-rt:spawn_raw(function() got = rt:perform(channel:get_op()) end, 'instrumented-get')
-rt:spawn_raw(function() rt:perform(channel:put_op('ok')) end, 'instrumented-put')
+rt:spawn_raw(function() got = rt:perform(channel:get_op():label('instrumented-get-op')) end):label('instrumented-get')
+rt:spawn_raw(function() rt:perform(channel:put_op('ok'):label('instrumented-put-op')) end):label('instrumented-put')
 eq(rt:run().tag, 'found')
 eq(got, 'ok')
 
@@ -36,6 +36,15 @@ truthy((snap.counters.commits or 0) > 0, 'commits were not recorded')
 eq(snap.counters.fibres_spawned, 2, 'fibre creation count is wrong')
 truthy((snap.maxima.pending_requests or 0) >= 1, 'pending request high-water mark missing')
 truthy(#(snap.slow_searches or {}) > 0, 'slow-search summaries missing')
+local labelled_search
+for i = 1, #(snap.slow_searches or {}) do
+  local row = snap.slow_searches[i]
+  if row.operation_label and row.fiber_label then
+    labelled_search = row
+    break
+  end
+end
+truthy(labelled_search, 'search summaries should retain option and fibre labels')
 truthy(type(snap.histograms.search_steps_per_search) == 'table', 'search histogram missing')
 
 rt.instrumentation:reset()
@@ -48,7 +57,7 @@ local bounded = Runtime.new({ instrumentation = true })
 local value
 bounded:spawn_raw(function()
   value = bounded:perform(Op.choice(Op.always('a'), Op.always('b')))
-end, 'bounded-instrumentation')
+end):label('bounded-instrumentation')
 for _ = 1, 20 do
   local status = bounded:step({ max_work = 1 })
   if status.tag == 'found' then break end

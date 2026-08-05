@@ -8,9 +8,9 @@ local Rendezvous = require('fibers.resource.rendezvous')
 
 local Channel = {}
 
-function Channel.new(capacity, name)
+function Channel.new(capacity)
   capacity = capacity == nil and 0 or capacity
-  return capacity == 0 and Rendezvous.new(name) or FIFO.new(capacity, name)
+  return capacity == 0 and Rendezvous.new() or FIFO.new(capacity)
 end
 
 return Channel

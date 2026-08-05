@@ -38,24 +38,24 @@ end
 
 -- Not ready now, but fallback is available now: fallback commits.
 do
-  local ev = Signal.new('unset')
+  local ev = Signal.new():label('unset')
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
     got = rt:perform(ev:wait_op():or_else(Op.always('fallback')))
-  end, 'fallback-on-not-ready')
+  end):label('fallback-on-not-ready')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
 end
 
 -- Not ready now, no fallback: runtime reports pending wake interests, not absence.
 do
-  local ev = Signal.new('pending')
+  local ev = Signal.new():label('pending')
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
     got = rt:perform(ev:wait_op())
-  end, 'pending-no-fallback')
+  end):label('pending-no-fallback')
   local st = rt:run()
   assert_status(st, 'pending')
   assert_eq(got, nil)
@@ -64,21 +64,21 @@ end
 
 -- Ready now beats fallback.
 do
-  local ev = Signal.new('ready')
+  local ev = Signal.new():label('ready')
   local rt = Runtime.new()
   deliver(rt, ev, 'payload')
   local got
   rt:spawn_raw(function()
     got = rt:perform(ev:wait_op():or_else(Op.always('fallback')))
-  end, 'ready-beats-fallback')
+  end):label('ready-beats-fallback')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'payload')
 end
 
 -- Ready external value still participates in the global rendezvous search.
 do
-  local ev = Signal.new('ready-with-rendezvous')
-  local ch = Rendezvous.new('external-plus-rendezvous')
+  local ev = Signal.new():label('ready-with-rendezvous')
+  local ch = Rendezvous.new():label('external-plus-rendezvous')
   local rt = Runtime.new()
   deliver(rt, ev, 'payload')
   local receiver, sender
@@ -90,10 +90,10 @@ do
         end)
       end))
       :or_else(Op.always('fallback')))
-  end, 'receiver')
+  end):label('receiver')
   rt:spawn_raw(function()
     sender = rt:perform(ch:put_op('rv'))
-  end, 'sender')
+  end):label('sender')
   assert_status(rt:run(), 'found')
   assert_eq(receiver, 'payload:rv')
   assert_eq(sender, true)
@@ -102,7 +102,7 @@ end
 -- Clock resources use host time and report a time wait while the deadline is future.
 do
   local now = 0
-  local clock = Clock.new('source-clock-test')
+  local clock = Clock.new():label('source-clock-test')
   local rt = Runtime.new({ host = {
     now = function()
       return now
@@ -111,7 +111,7 @@ do
   local observed
   rt:spawn_raw(function()
     observed = rt:perform(clock:at_op(5))
-  end, 'clock-waiter')
+  end):label('clock-waiter')
   local st = rt:run()
   assert_status(st, 'pending')
   assert(st.interests and #st.interests == 1, 'expected one time wait')
@@ -123,12 +123,12 @@ end
 
 -- ExternalFeed delivery is the host/resource boundary for bounded stepping.
 do
-  local ev = Signal.new('bounded-arrival')
+  local ev = Signal.new():label('bounded-arrival')
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
     got = rt:perform(ev:wait_op())
-  end, 'bounded-arrival-waiter')
+  end):label('bounded-arrival-waiter')
   for _ = 1, 5 do
     rt:step({ max_work = 1 })
   end
@@ -149,7 +149,7 @@ end
 
 -- Event queues consume occurrences only if the selected transaction commits.
 do
-  local q = EventQueue.new('events-source')
+  local q = EventQueue.new():label('events-source')
   local rt = Runtime.new()
   deliver(rt, q, 'a')
   deliver(rt, q, 'b', 'bee')
@@ -157,7 +157,7 @@ do
   rt:spawn_raw(function()
     first = rt:perform(q:next_op())
     second_a, second_b = rt:perform(q:next_op())
-  end, 'events-consumer')
+  end):label('events-consumer')
   assert_status(rt:run(), 'found')
   assert_eq(first, 'a')
   assert_eq(second_a, 'b')
@@ -166,7 +166,7 @@ end
 
 -- A losing events branch does not consume the occurrence.
 do
-  local q = EventQueue.new('events-loser')
+  local q = EventQueue.new():label('events-loser')
   local rt = Runtime.new()
   deliver(rt, q, 'kept')
   local got, remaining
@@ -176,7 +176,7 @@ do
       Op.always('winner')
     ))
     remaining = rt:perform(q:next_op())
-  end, 'events-loser-consumer')
+  end):label('events-loser-consumer')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner')
   assert_eq(remaining, 'kept')
@@ -185,7 +185,7 @@ end
 -- Bounded clock cursors are invalidated by observation once the observed deadline matures.
 do
   local now = 0
-  local clock = Clock.new('bounded-clock-observation')
+  local clock = Clock.new():label('bounded-clock-observation')
   local rt = Runtime.new({ host = {
     now = function()
       return now
@@ -194,7 +194,7 @@ do
   local observed
   rt:spawn_raw(function()
     observed = rt:perform(clock:at_op(5))
-  end, 'bounded-clock-waiter')
+  end):label('bounded-clock-waiter')
   for _ = 1, 5 do
     rt:step({ max_work = 1 })
   end
@@ -214,12 +214,12 @@ end
 -- bypasses the runtime-wide epoch.
 do
   local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
-  local ev = Signal.new('bounded-source-observation')
+  local ev = Signal.new():label('bounded-source-observation')
   local rt = Runtime.new()
   local got
   rt:spawn_raw(function()
     got = rt:perform(ev:wait_op())
-  end, 'bounded-source-observation-waiter')
+  end):label('bounded-source-observation-waiter')
   for _ = 1, 5 do
     rt:step({ max_work = 1 })
   end
@@ -238,7 +238,7 @@ end
 -- deadline matures before commit.
 do
   local now = 0
-  local clock = Clock.new('bounded-clock-or-else-observation')
+  local clock = Clock.new():label('bounded-clock-or-else-observation')
   local rt = Runtime.new({ host = {
     now = function()
       return now
@@ -252,7 +252,7 @@ do
         return 'time'
       end)
       :or_else(Op.always('fallback')))
-  end, 'bounded-clock-or-else')
+  end):label('bounded-clock-or-else')
   rt:step({ max_work = 1 }) -- build candidates, observing now < 5 and opening fallback
   now = 5
   local st
@@ -295,10 +295,10 @@ end
 
 -- Standard externally fed resources remain distinct kinds and feed lookup is stable.
 do
-  local signal = Signal.new('kind-signal')
-  local events = EventQueue.new('kind-events')
-  local clock = Clock.new('kind-clock')
-  local readiness = Readiness.new('fd', 'read', 'kind-readiness')
+  local signal = Signal.new():label('kind-signal')
+  local events = EventQueue.new():label('kind-events')
+  local clock = Clock.new():label('kind-clock')
+  local readiness = Readiness.new('fd', 'read'):label('kind-readiness')
   assert(signal._fibers_kind ~= events._fibers_kind)
   assert(events._fibers_kind ~= clock._fibers_kind)
   assert(clock._fibers_kind ~= readiness._fibers_kind)

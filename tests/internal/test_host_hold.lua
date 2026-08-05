@@ -18,7 +18,7 @@ local function closer(value, reason)
   return true
 end
 
-local bundle = HostHold.new('test-bundle')
+local bundle = HostHold.new():label('test-bundle')
 assert(bundle:hold('one', 'a', closer) == 'a')
 assert(bundle:hold('two', 'b', closer) == 'b')
 assert(bundle:release('one', 'a') == 'a')
@@ -26,7 +26,7 @@ assert(bundle:close('done'))
 assert(#closed == 1 and closed[1] == 'b:done')
 assert(bundle:close('again'))
 
-local refused = HostHold.new('refused')
+local refused = HostHold.new():label('refused')
 assert(refused:hold('item', 'first', closer))
 local got, err = refused:hold('item', 'second', closer)
 assert(got == nil and err and err.kind == 'protocol')
@@ -34,7 +34,7 @@ assert(closed[#closed] == 'second:host hold refused')
 assert(refused:close('cleanup'))
 
 -- Grouped acquisition order is explicit and release_all preserves that order.
-local ordered = HostHold.new('ordered')
+local ordered = HostHold.new():label('ordered')
 local ok, ordered_err = ordered:hold_many({
   { key = 'process', value = 'p', close = closer },
   { key = 'stdin', value = 'in', close = closer },
@@ -50,7 +50,7 @@ assert(ordered:is_empty())
 -- A later failure closes the refused value first, then rolls back prior
 -- acquisitions in reverse declaration order.
 closed = {}
-local rollback = HostHold.new('rollback')
+local rollback = HostHold.new():label('rollback')
 local rollback_ok, rollback_err = rollback:hold_many({
   { key = 'first', value = 'a', close = closer },
   { key = 'second', value = 'b', close = closer },
@@ -65,7 +65,7 @@ assert(rollback:is_empty())
 
 local values
 fibers.run(function()
-  local completion = Completion.new('multi-value')
+  local completion = Completion.new():label('multi-value')
   fibers.spawn(function()
     fibers.perform(completion:publish_success_op('hello', nil, 42))
   end)
@@ -76,7 +76,7 @@ assert(values[1] == 'hello' and values[2] == nil and values[3] == 42)
 
 local failure
 fibers.run(function()
-  local completion = Completion.new('failure')
+  local completion = Completion.new():label('failure')
   fibers.perform(completion:publish_failure_op('bad'))
   local value, completion_err = fibers.perform(completion:result_op())
   assert(value == nil)

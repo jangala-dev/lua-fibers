@@ -216,7 +216,7 @@ do
   })
   app.runtime:spawn_raw(function()
     side_fibre_ran = true
-  end, 'ready-behind-quiescent-root')
+  end):label('ready-behind-quiescent-root')
 
   local first = app:advance()
   assert_eq(first.state, 'pending')
@@ -251,11 +251,11 @@ do
 
   local workers = {}
   for i = 1, 8 do
-    workers[i] = Rendezvous.new('roblox-capacity-worker-' .. tostring(i))
+    workers[i] = Rendezvous.new():label('roblox-capacity-worker-' .. tostring(i))
     local index = i
     app.runtime:spawn_raw(function()
       app.runtime:perform(workers[index]:get_op())
-    end, 'roblox-capacity-worker-' .. tostring(i))
+    end):label('roblox-capacity-worker-' .. tostring(i))
   end
   app.runtime:spawn_raw(function()
     local jobs = {}
@@ -267,7 +267,7 @@ do
       jobs[job] = Op.choice(alternatives)
     end
     app.runtime:perform(Op.each(jobs))
-  end, 'roblox-capacity-dispatcher')
+  end):label('roblox-capacity-dispatcher')
 
   local status = app:advance()
   assert_eq(status.state, 'pending')

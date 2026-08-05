@@ -24,7 +24,7 @@ local report = fibers.try_run(function(scope)
       connection:flush()
       connection:close('stress server complete')
     end
-  end, 'socket-stress-server')
+  end):label('socket-stress-server')
 
   for i = 1, count do
     local dial = socket.dial(address)

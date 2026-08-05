@@ -26,7 +26,7 @@ do
     first = rt:perform(scope:_store():status_op(scope))
     rt:perform(scope:admit_op(Lifetimes.resource('changed-item')))
     changed = rt:perform(scope:_store():changed_op(scope, first.version))
-  end, 'lifetime-change')
+  end):label('lifetime-change')
   repeat
   until rt:run().tag ~= 'found'
   assert_eq(changed, first.version + 1)
@@ -52,7 +52,7 @@ end
 do
   local task
   fibers.run(function(scope)
-    task = fibers.perform(scope:spawn_op(function() end, 'cancel-fact'))
+    task = fibers.perform(scope:spawn_op(function() end, { label = 'cancel-fact' }))
     local first, reason = fibers.perform(task:request_cancel_op('first'))
     local second = fibers.perform(task:request_cancel_op('second'))
     local requested

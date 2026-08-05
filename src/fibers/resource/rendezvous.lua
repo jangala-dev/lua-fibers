@@ -5,8 +5,8 @@ local Rendezvous = {}
 Rendezvous.__index = Rendezvous
 local Kind = Facility.kind('rendezvous')
 
-function Rendezvous.new(name)
-  local self = Facility.identity(setmetatable({}, Rendezvous), Kind, name)
+function Rendezvous.new()
+  local self = Facility.identity(setmetatable({}, Rendezvous), Kind)
   self._get_op = Facility.op(Facility.rule.exchange({ resource = self, role = 'get' }))
   self._put_spec = Facility.rule.exchange({ resource = self, role = 'put' })
   return self

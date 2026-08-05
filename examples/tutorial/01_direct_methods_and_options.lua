@@ -21,7 +21,7 @@ fibers.run(function(scope)
   scope:spawn(function()
     status_updates:put('configuration loaded')
     status_updates:put('connection ready')
-  end, 'status-source')
+  end):label('status-source')
 
   first_update = status_updates:get()
 

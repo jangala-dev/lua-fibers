@@ -43,11 +43,11 @@ local function append_log_op(cell, line)
   end))
 end
 
-local request = Scope.new('request')
-local supervisor = Scope.new('supervisor')
-local resume = Rendezvous.new('resume-session')
-local registry = Cell.new({ custodian = 'request', task = '-' }, 'registry')
-local audit = Cell.new({ text = '' }, 'audit')
+local request = Scope.new():label('request')
+local supervisor = Scope.new():label('supervisor')
+local resume = Rendezvous.new():label('resume-session')
+local registry = Cell.new({ custodian = 'request', task = '-' }):label('registry')
+local audit = Cell.new({ text = '' }):label('audit')
 
 local result = {}
 local rt = Runtime.new()
@@ -55,7 +55,7 @@ rt:spawn_raw(function()
   local session = rt:perform(request:spawn_op(function()
     local msg = fibers.perform(resume:get_op())
     return 'session resumed with: ' .. msg
-  end, { name = 'session' }))
+  end, { label = 'session' }))
 
   result.spawned_custodian = rt:perform(request:has_custody_op(session)) and 'request' or 'unknown'
 
@@ -95,7 +95,7 @@ rt:spawn_raw(function()
   rt:perform(supervisor:seal_op())
   result.request_state = rt:perform(request:inspect_op())
   result.supervisor_state = rt:perform(supervisor:inspect_op())
-end, 'custody-offer-root')
+end):label('custody-offer-root')
 
 local st
 repeat

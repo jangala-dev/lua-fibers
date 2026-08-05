@@ -31,7 +31,7 @@ end
 
 -- A sealed scope accepts no new custody.
 do
-  local life = FibersScope.new('sealed-law')
+  local life = FibersScope.new():label('sealed-law')
   local h = Lifetimes.resource('sealed-law-owned')
   local result, owns
   fibers.run(function()
@@ -50,9 +50,9 @@ end
 
 -- Custody transfer is atomic and uses the public move_op calculus verb.
 do
-  local from = FibersScope.new('move-law-from')
-  local to = FibersScope.new('move-law-to')
-  local sealed = FibersScope.new('move-law-sealed')
+  local from = FibersScope.new():label('move-law-from')
+  local to = FibersScope.new():label('move-law-to')
+  local sealed = FibersScope.new():label('move-law-sealed')
   local h = Lifetimes.resource('move-law-owned')
   local moved, from_after, to_after, failed_move, still_to
   fibers.run(function()
@@ -80,7 +80,7 @@ end
 -- Closure is the only public resolution path. Internal close tokens are not
 -- exposed; successful closure retires custody and records a closed Lifetime.
 do
-  local life = FibersScope.new('closure-law')
+  local life = FibersScope.new():label('closure-law')
   local h = Lifetimes.resource('closure-owned')
   local live_phase, owner_after, closure_phase
   fibers.run(function()
@@ -108,7 +108,7 @@ do
 end
 
 do
-  local life = FibersScope.new('protocol-law')
+  local life = FibersScope.new():label('protocol-law')
   local discharged = false
   local h = Lifetimes.resource('protocol-law-owned', {
     name = 'table-protocol',

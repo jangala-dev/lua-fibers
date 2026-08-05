@@ -43,7 +43,7 @@ end
 -- With no possible custody or Grant transition, authority absence may enter
 -- fallback.
 do
-  local scope = FibersScope.new('absence-scope-alone')
+  local scope = FibersScope.new():label('absence-scope-alone')
   local item = { name = 'unowned' }
   Lifetime.inert(item)
   local got
@@ -60,7 +60,7 @@ end
 -- A concurrent admission may commit before authority fallback. The authority
 -- operation then observes live custody and takes the primary path.
 do
-  local scope = FibersScope.new('absence-scope-partner')
+  local scope = FibersScope.new():label('absence-scope-partner')
   local item = { name = 'admitted-later' }
   Lifetime.inert(item)
   local got, admitted
@@ -69,24 +69,24 @@ do
     got = rt:perform(scope:can_op(item, 'use')
       :map(function() return 'primary' end)
       :or_else(Op.always('fallback')))
-  end, 'authority-or-fallback')
+  end):label('authority-or-fallback')
   rt:spawn_raw(function()
     admitted = rt:perform(scope:admit_op(item))
-  end, 'admit-partner')
+  end):label('admit-partner')
   local st = rt:run()
   assert_status(st, 'found')
   assert_eq(admitted, item)
   assert_eq(got, 'primary')
   assert_eq(Lifetime.of(item):current_state().custodian, scope:lifetime())
   local record
-  rt:spawn_raw(function() record = rt:perform(scope:custody_op(item)) end, 'inspect-custody')
+  rt:spawn_raw(function() record = rt:perform(scope:custody_op(item)) end):label('inspect-custody')
   rt:run()
   assert_truthy(record and record.phase == 'live', 'admission should establish live custody')
 end
 
 -- A dormant running Lifetime has no outcome and therefore permits fallback.
 do
-  local life = Lifetime.task(function() return 'unused' end, { name = 'absence-dormant-running' })
+  local life = Lifetime.task(function() return 'unused' end, { label = 'absence-dormant-running' })
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(life:outcome_op():or_else(Op.always('fallback')))
@@ -100,7 +100,7 @@ end
 do
   local got
   local st = fibers.try_run(function(scope)
-    local task = fibers.perform(scope:spawn_op(function() return 'done' end, { name = 'absence-child' }))
+    local task = fibers.perform(scope:spawn_op(function() return 'done' end, { label = 'absence-child' }))
     got = fibers.perform(task:await_op():or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
@@ -109,7 +109,7 @@ end
 
 -- With no possible producer, flow read absence may enter fallback.
 do
-  local flow = FibersFlow.new(8, 'absence-flow-alone')
+  local flow = FibersFlow.new(8):label('absence-flow-alone')
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(flow:outlet():read_some_op(3):or_else(Op.always('fallback')))
@@ -121,15 +121,15 @@ end
 -- A concurrent writer must not be masked by the reader fallback.  The writer
 -- commits first; the reader then observes bytes and takes the primary path.
 do
-  local flow = FibersFlow.new(8, 'absence-flow-writer')
+  local flow = FibersFlow.new(8):label('absence-flow-writer')
   local got, n
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
     got = rt:perform(flow:outlet():read_some_op(3):or_else(Op.always('fallback')))
-  end, 'read-or-fallback')
+  end):label('read-or-fallback')
   rt:spawn_raw(function()
     n = rt:perform(flow:inlet():write_op('abc'))
-  end, 'write-partner')
+  end):label('write-partner')
   local st = rt:run()
   assert_status(st, 'found')
   assert_eq(n, 3)

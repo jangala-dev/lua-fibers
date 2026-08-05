@@ -64,16 +64,16 @@ end
 
 -- Plain user tables are opaque values, not solver structure.
 do
-  local ch = Rendezvous.new('opaque-rendezvous')
+  local ch = Rendezvous.new():label('opaque-rendezvous')
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(ch:put_op(value))
-  end, 'opaque-put')
+  end):label('opaque-put')
   rt:spawn_raw(function()
     got = rt:perform(ch:get_op())
-  end, 'opaque-get')
+  end):label('opaque-get')
   run_all(rt)
   assert_eq(got, value, 'rendezvous preserves table identity')
   assert_eq(got.x, 42, 'rendezvous preserves keyed fields')
@@ -81,14 +81,14 @@ do
 end
 
 do
-  local cell = Cell.new(nil, 'opaque-cell')
+  local cell = Cell.new(nil):label('opaque-cell')
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
   local got
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(cell:write_op(value))
     got = rt:perform(cell:read_op())
-  end, 'opaque-cell-fibre')
+  end):label('opaque-cell-fibre')
   run_all(rt)
   assert_eq(got, value, 'cell stores user table opaquely')
   assert_eq(got.x, 42, 'cell preserves keyed fields')
@@ -97,7 +97,8 @@ end
 -- EventQueue consumption is journalled: a losing branch does not steal an occurrence.
 do
   local rt = Runtime.new({ choice_seed = 2 })
-  local q, feed = External.events(rt, 'journalled-source-events')
+  local q, feed = External.events(rt)
+  q:label('journalled-source-events')
   feed:set('event-1')
   local choice_result, next_result
   rt:spawn_raw(function()
@@ -108,7 +109,7 @@ do
       end)
     ))
     next_result = rt:perform(q:next_op())
-  end, 'source-events-loser')
+  end):label('source-events-loser')
   run_all(rt)
   assert_eq(choice_result, 'winner', 'the replay seed selects the non-consuming occurrence')
   assert_eq(next_result, 'event-1', 'losing events branch did not consume occurrence')
@@ -122,7 +123,7 @@ do
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(Op.each({ Op.emit(first), Op.emit(second) }))
-  end, 'pure-effect-merge')
+  end):label('pure-effect-merge')
   run_all(rt)
   assert_eq(first.payload.reason, nil, 'merge did not mutate first payload')
   assert_eq(second.payload.reason, 'later', 'merge did not mutate second payload')
@@ -137,7 +138,7 @@ do
   local rt = Runtime.new()
   rt:spawn_raw(function()
     rt:perform(Op.emit(Effect.interrupt(token, 'stop')))
-  end, 'raise-by-effect')
+  end):label('raise-by-effect')
   run_all(rt)
   assert_truthy(token:is_raised(), 'committed interrupt effect raises token')
   assert_eq(token.reason, 'stop', 'committed interrupt effect records reason')
@@ -165,10 +166,11 @@ do
     end,
   })
   local rt = Runtime.new()
-  local _sig, feed = External.signal(rt, 'bad-prepare-signal')
+  local _sig, feed = External.signal(rt)
+  _sig:label('bad-prepare-signal')
   rt:spawn_raw(function()
     rt:perform(Op.emit(Effect.of(BadKind, { feed = feed })))
-  end, 'bad-prepare')
+  end):label('bad-prepare')
   local ok, err = pcall(function()
     rt:run()
   end)
@@ -179,7 +181,7 @@ end
 
 -- Internal close-token and unaccounted-release authority is not available to Scope users.
 do
-  local scope = Scope.new('lifetime-surface')
+  local scope = Scope.new():label('lifetime-surface')
   local item = { name = 'lifetime-surface-item' }
   Lifetime.inert(item)
   assert_eq(scope.claim_op, nil, 'close tokens should remain private')

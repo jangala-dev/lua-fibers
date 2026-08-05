@@ -16,7 +16,7 @@ local function truthy(v, msg) if not v then error(msg or 'expected truthy', 2) e
 
 local function resource(name, children)
   local value = { name = name }
-  Lifetime.inert(value, { name = name, children = children })
+  Lifetime.inert(value, { label = name, children = children })
   return value
 end
 
@@ -150,7 +150,7 @@ end
 do
   local started = false
   fibers.run(function(scope)
-    local op = scope:spawn_op(function() started = true; return 'ok' end, 'inert-start')
+    local op = scope:spawn_op(function() started = true; return 'ok' end, { label = 'inert-start' })
     eq(started, false)
     local task = fibers.perform(op)
     eq(fibers.perform(task:await_op()), 'ok')
@@ -162,11 +162,11 @@ end
 -- one Runtime does not affect another.
 do
   local rt1, rt2 = Runtime.new(), Runtime.new()
-  local s1 = Scope.new('runtime-one', { runtime = rt1, closure = Closure.nursery() })
-  local s2 = Scope.new('runtime-two', { runtime = rt2, closure = Closure.nursery() })
+  local s1 = Scope.new( { runtime = rt1, closure = Closure.nursery() }):label('runtime-one')
+  local s2 = Scope.new( { runtime = rt2, closure = Closure.nursery() }):label('runtime-two')
   local item = resource('runtime-local')
   local admitted
-  rt1:spawn_raw(function() admitted = rt1:perform(s1:admit_op(item)) end, 'admit-one', s1)
+  rt1:_spawn_raw(function() admitted = rt1:perform(s1:admit_op(item)) end,  s1):label('admit-one')
   rt1:run()
   eq(admitted, item)
   local ok, err = pcall(function() item._lifetime:bind_runtime(rt2) end)

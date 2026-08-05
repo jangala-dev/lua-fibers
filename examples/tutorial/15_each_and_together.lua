@@ -17,9 +17,9 @@ local Op = require('fibers.op')
 local Counter = require('fibers.resource.counter')
 local Flow = require('fibers.resource.flow')
 
-local motor_channels = Counter.new(1, 'motor-channels')
-local vision_channels = Counter.new(1, 'vision-channels')
-local control_bus = Flow.new(16, 'robot-control-bus')
+local motor_channels = Counter.new(1):label('motor-channels')
+local vision_channels = Counter.new(1):label('vision-channels')
+local control_bus = Flow.new(16):label('robot-control-bus')
 
 fibers.run(function()
   fibers.perform(Op.each({

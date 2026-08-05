@@ -20,6 +20,7 @@ local StateMachine = require('fibers.resource.machine')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local DatagramLifecycle = Lifecycle.define({
   prefix = 'socket.datagram',
@@ -91,17 +92,18 @@ local function wait_flush(state, target)
   end)
 end
 
-function SendState.new(name, capacity)
-  local self = setmetatable({
-    name = name,
+function SendState.new(capacity)
+  local self = Label.attach(setmetatable({
     state = StateMachine.new({
       next_seq = 0,
       completed_seq = 0,
       terminal_error = nil,
       failure_seq = nil,
-    }, name .. ':state'),
-    queue = FIFO.new(capacity or 64, name .. ':queue'),
-  }, SendState)
+    }),
+    queue = FIFO.new(capacity or 64),
+  }, SendState))
+  Label.child(self.state, self, 'state')
+  Label.child(self.queue, self, 'queue')
   return self
 end
 
@@ -474,9 +476,9 @@ function Module.udp_op(address, opts)
     kind = 'datagram_socket',
     name = name,
     address = address,
-    lifecycle = DatagramLifecycle.new(name, address),
-    host_hold = HostHold.new(name .. ':host-hold'),
-    sends = SendState.new(name .. ':sends', send_capacity),
+    lifecycle = DatagramLifecycle.new(address):label(name),
+    host_hold = HostHold.new():label(name .. ':host-hold'),
+    sends = SendState.new(send_capacity):label(name .. ':sends'),
     max_datagram_size = max_datagram_size,
   }, Datagram)
   socket.packets = packet_source(socket, receive_capacity)

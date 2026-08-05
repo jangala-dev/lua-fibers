@@ -33,7 +33,7 @@ end
 -- Stale readiness for an earlier registration generation is ignored by the reactor.
 do
   local rt = Runtime.new()
-  local owner = Scope.new('poller-generation-owner')
+  local owner = Scope.new():label('poller-generation-owner')
   local backend = FakeHandle.new({
     name = 'poller-generation-backend',
     readiness = 'manual',
@@ -53,7 +53,7 @@ do
       read = true,
       write = false,
     }))
-  end, 'root')
+  end):label('root')
   assert_eq(rt:run().tag, 'found')
   local entry = stream.read_registration
   UnsafeExternalMutation.deliver(
@@ -69,7 +69,7 @@ do
   assert_eq(audit.stats.stale_ready, 1, 'stale readiness should be observable')
   rt:spawn_raw(function()
     rt:perform(stream:abort_op('test complete'))
-  end, 'close')
+  end):label('close')
   rt:run()
   IOAudit.assert_clean(rt, { label = 'stale readiness test' })
 end
@@ -78,7 +78,7 @@ end
 do
   local EventQueue = require('fibers.resource.event_queue')
   local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
-  local q = EventQueue.new('poller-burst')
+  local q = EventQueue.new():label('poller-burst')
   local rt = Runtime.new()
   local consumed = 0
   for i = 1, 5000 do
@@ -91,7 +91,7 @@ do
       assert_eq(value, i, 'poller queue must preserve FIFO order')
       consumed = i
     end
-  end, 'poller-burst-consumer')
+  end):label('poller-burst-consumer')
   assert_eq(rt:run().tag, 'found')
   assert_eq(consumed, 5000)
   assert_eq(q:length(), 0)
@@ -104,7 +104,7 @@ do
   local drained
   rt:spawn_raw(function()
     drained = rt:perform(q:_drain_op())
-  end, 'poller-mixed-drain')
+  end):label('poller-mixed-drain')
   assert_eq(rt:run().tag, 'found')
   assert_eq(#drained, 3)
   assert_eq(drained[1][1], 'first')

@@ -32,10 +32,10 @@ do
   local r = fibers.try_run(function()
     fibers.spawn(function()
       a_done = true
-    end, 'settle-success-a')
+    end):label('settle-success-a')
     fibers.spawn(function()
       b_done = true
-    end, 'settle-success-b')
+    end):label('settle-success-b')
     return 'body-ok'
   end)
   assert_truthy(r.ok, 'successful children should settle successfully')
@@ -50,7 +50,7 @@ do
   local r = fibers.try_run(function()
     fibers.spawn(function()
       error('late child boom', 0)
-    end, 'late-failing-child')
+    end):label('late-failing-child')
     return 'body-ok'
   end)
   assert_eq(r.ok, false)
@@ -67,14 +67,14 @@ end
 do
   local waiter
   local r = fibers.try_run(function()
-    local src = FibersSignal.new('concurrent-closure-never')
+    local src = FibersSignal.new():label('concurrent-closure-never')
     waiter = fibers.spawn(function()
       fibers.perform(src:wait_op())
-    end, 'pending-sibling')
+    end):label('pending-sibling')
 
     fibers.spawn(function()
       error('sibling boom', 0)
-    end, 'failing-sibling')
+    end):label('failing-sibling')
 
     return 'body-ok'
   end)

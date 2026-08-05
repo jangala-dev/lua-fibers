@@ -53,7 +53,7 @@ function IO.admit_driven_lifetime_op(scope, value, spec)
   end
 
   Lifetime.define(value, {
-    name = assert(spec.name, 'driven Lifetime admission requires spec.name'),
+    label = assert(spec.label or spec.name, 'driven Lifetime admission requires spec.label'),
     role = assert(spec.role, 'driven Lifetime admission requires spec.role'),
     closure = assert(spec.closure, 'driven Lifetime admission requires spec.closure'),
     children = spec.children,
@@ -65,7 +65,11 @@ function IO.admit_driven_lifetime_op(scope, value, spec)
   local private_scope = Scope.for_lifetime(value._lifetime)
   local driver = Task._new(function()
     return private_scope:run(spec.run)
-  end, spec.name, scope, { lifetime = value._lifetime, closure = scope.closure })
+  end, scope, {
+    lifetime = value._lifetime,
+    closure = scope.closure,
+    label = spec.label or spec.name,
+  })
   value.driver = driver
 
   return scope:admit_op(value)

@@ -18,11 +18,11 @@ local Signal = require('fibers.resource.signal')
 local planner_exit
 
 fibers.run(function(scope)
-  local waiting_for_clearance = Signal.new('motion-clearance')
+  local waiting_for_clearance = Signal.new():label('motion-clearance')
   local planner = scope:spawn(function()
     fibers.perform(waiting_for_clearance:wait_op())
     return 'unreachable'
-  end, 'robot-motion-planner')
+  end):label('robot-motion-planner')
 
   local first, reason = planner:request_cancel('emergency stop pressed')
   assert(first == true)

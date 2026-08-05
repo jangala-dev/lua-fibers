@@ -201,7 +201,7 @@ do
       local writer_task = fibers.spawn(function()
         assert_eq(fibers.perform(writer:write_op('native')), 6)
         assert_eq(fibers.perform(writer:close_op('writer complete')), true)
-      end, 'native-pipe-writer')
+      end):label('native-pipe-writer')
       local bytes, read_err = fibers.perform(reader:read_all_op({ max = 64 }))
       assert_eq(bytes, 'native', tostring(read_err))
       assert_eq(fibers.perform(reader:close_op('reader complete')), true)

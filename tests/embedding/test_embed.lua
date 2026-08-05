@@ -52,7 +52,8 @@ do
   local app = Embed.Application.new(function()
     local runtime = fibers.current_runtime()
     local events
-    events, feed = External.events(runtime, 'embedded-events')
+    events, feed = External.events(runtime)
+    events:label('embedded-events')
     received = fibers.perform(events:next_op())
   end, { host = host, owns_host = false, max_seconds_per_turn = 100 })
 

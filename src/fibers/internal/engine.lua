@@ -6,6 +6,7 @@ local Proof = require('fibers.internal.proof')
 local Interest = require('fibers.embed.external').Interest
 local Operation = require('fibers.internal.operation')
 local Activation = require('fibers.internal.kernel.activation')
+local Label = require('fibers.internal.label')
 
 local Engine = {}
 local native_table_clear = table.clear
@@ -252,6 +253,94 @@ local function find_candidate(engine, focus, search_limit, requests, component, 
   return engine.runtime:_call_in_phase('search', 'search_error', function()
     return find_candidate_impl(engine, focus, search_limit, requests, component, provisional_admission)
   end)
+end
+
+local function suspension_error(engine, fiber, contract, reason)
+  local op_label = Operation.diagnostic_label(fiber.op)
+  local fiber_label = Label.describe(fiber._fibers_label_subject or fiber, fiber.name or fiber._fibers_id)
+  local message = 'suspension prohibited in this region'
+  if op_label then
+    message = message .. ': operation "' .. op_label .. '" would suspend'
+  end
+  return engine.runtime:_make_error('suspension_error', reason or 'operation would suspend', {
+    action = 'perform',
+    message = message,
+    operation = fiber.op,
+    operation_label = op_label,
+    fiber = fiber,
+    fiber_label = fiber_label,
+    region = contract,
+    reason = reason or 'operation would suspend',
+  })
+end
+
+local function candidate_can_resume_first(candidate, fiber, members)
+  if not candidate or candidate:participant(1) ~= fiber then return false end
+  if candidate:is_fallback() and candidate:membership_sensitive() then
+    return candidate:covers(members)
+  end
+  return true
+end
+
+local function strict_component(engine, fiber)
+  local provisional_admission = engine.runtime._ready_head <= engine.runtime._ready_tail
+  local requests, component = component_requests(engine, fiber, provisional_admission)
+  local members = {}
+  for i = 1, #engine.pending do
+    local request = engine.pending[i]
+    if request.pending and requests[request] then members[#members + 1] = request end
+  end
+  return requests, component, members, provisional_admission
+end
+
+local function resolve_without_suspension_impl(engine, fiber)
+  local runtime = engine.runtime
+  local contract = runtime:_suspension_contract(fiber)
+  if not contract or not fiber.pending then return true end
+
+  local attempts = 0
+  while fiber.pending do
+    attempts = attempts + 1
+    local requests, component, members, provisional_admission = strict_component(engine, fiber)
+    local candidate, _, unknown = find_candidate(
+      engine, fiber, nil, requests, component, provisional_admission
+    )
+
+    if candidate then
+      if candidate_can_resume_first(candidate, fiber, members) then
+        local committed = candidate:settle(engine)
+        if committed then return true end
+      end
+      candidate:discard('suspension-prohibited')
+      if attempts < 2 then
+        -- Match the ordinary driver path, which retries once after a stale or
+        -- preparation-refused candidate before concluding that progress cannot
+        -- be made in this turn.
+      else
+        unknown = false
+        break
+      end
+    elseif unknown then
+      -- Incomplete bounded search would return control to the scheduler or host.
+      -- The contract is an assertion, not permission to override that budget.
+      break
+    else
+      break
+    end
+  end
+
+  if fiber.pending then
+    local reason = engine._last_search_unknown_reason or 'operation_not_immediately_committable'
+    engine:remove_small(1, fiber)
+    Engine.resume(engine, fiber, nil, suspension_error(engine, fiber, contract, reason))
+  end
+  return false
+end
+
+function Engine:resolve_without_suspension(fiber)
+  local result = { pcall(resolve_without_suspension_impl, self, fiber) }
+  if not result[1] then error(result[2], 0) end
+  return result[2]
 end
 
 local function pending_status(engine, refs, unknown)

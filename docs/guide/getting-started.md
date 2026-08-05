@@ -23,7 +23,7 @@ Most programmes begin with `fibers.run`:
 fibers.run(function(scope)
   local configuration_task = scope:spawn(function()
     return 'configuration loaded'
-  end, 'load-configuration')
+  end):label('load-configuration')
 
   assert(configuration_task:await() == 'configuration loaded')
 end)
@@ -181,7 +181,7 @@ The lower-level synchronous exchange resource remains available as `fibers.resou
 Use `Cell` for one replaceable fact:
 
 ```lua
-local quest = Cell.new({ stage = 'find_key', clues = 1 }, 'moon-gate-quest')
+local quest = Cell.new({ stage = 'find_key', clues = 1 }):label('moon-gate-quest')
 
 local advance = quest:read_op():and_then(
   Op.guard(function(current)
@@ -217,7 +217,7 @@ end, nil, function(payload)
   assert(type(payload.by) == 'number', 'by must be a number')
 end)
 
-local counter = Machine.new(0, 'counter')
+local counter = Machine.new(0):label('counter')
 local next_value = fibers.perform(counter:transition_op(Increment, { by = 1 }))
 assert(next_value == 1)
 ```
@@ -239,8 +239,10 @@ assert(combat_rx:recv() == 'perfect parry')
 laws without string-valued constructor options:
 
 ```lua
-local latest_tx = Mailbox.reject_newest(16, 'latest-events')
-local rolling_tx = Mailbox.drop_oldest(16, 'rolling-events')
+local latest_tx = Mailbox.reject_newest(16)
+latest_tx:label('latest-events')
+local rolling_tx = Mailbox.drop_oldest(16)
+rolling_tx:label('rolling-events')
 ```
 
 ## Flows and streams
@@ -341,7 +343,7 @@ fibers.io.readiness
 
 ```lua
 local Keyed = require('fibers.resource.keyed')
-local items = Keyed.new('items')
+local items = Keyed.new():label('items')
 
 items:get_op(key)            -- require presence; keep the value
 items:take_op(key)           -- require presence; consume the value

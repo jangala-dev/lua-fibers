@@ -12,6 +12,7 @@ local Readiness = require('fibers.io.readiness')
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
+local Label = require('fibers.internal.label')
 
 local Handle = {}
 Handle.__index = Handle
@@ -102,7 +103,7 @@ function Handle.new(opts)
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness or Readiness.new(key, nil, (opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness or Readiness.new(key, nil):label((opts.name or tostring(key)) .. ':readiness'),
     feed = opts.feed,
     capabilities = capabilities,
     _read = opts.read,
@@ -117,7 +118,9 @@ function Handle.new(opts)
     runtime = nil,
     stream = nil,
     _fibers_host_handle = true,
+    _fibers_id = 'host-handle-' .. tostring(next_id),
   }, Handle)
+  Label.attach(handle, opts.name)
   IOAudit.created(handle, { kind = 'host_handle' })
   return handle
 end

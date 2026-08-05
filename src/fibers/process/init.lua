@@ -28,6 +28,7 @@ local Sleep = require('fibers.sleep')
 local Exit = Task.Exit
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Lifecycle = {}
 Lifecycle.__index = Lifecycle
@@ -45,12 +46,14 @@ local function wait_for(cell, predicate)
   return Cell.match_op(cell, predicate)
 end
 
-function Lifecycle.new(name)
-  return setmetatable({
-    name = name,
-    state = Cell.new({ kind = 'created' }, name .. ':state'),
-    close_request = StateMachine.new({ requested = false, reason = nil }, name .. ':close-request'),
-  }, Lifecycle)
+function Lifecycle.new()
+  local value = Label.attach(setmetatable({
+    state = Cell.new({ kind = 'created' }),
+    close_request = StateMachine.new({ requested = false, reason = nil }),
+  }, Lifecycle))
+  Label.child(value.state, value, 'state')
+  Label.child(value.close_request, value, 'close-request')
+  return value
 end
 
 function Lifecycle:state_op()
@@ -294,10 +297,10 @@ function Process:communicate(opts)
   local tasks = perform(Op.named_each({
     stdout = stdout_stream and scope:spawn_op(function()
       return stdout_stream:read_all({ max = stdout_limit })
-    end, { name = self.name .. ':communicate-stdout' }) or Op.always(nil),
+    end, { label = self.name .. ':communicate-stdout' }) or Op.always(nil),
     stderr = stderr_stream and scope:spawn_op(function()
       return stderr_stream:read_all({ max = stderr_limit })
-    end, { name = self.name .. ':communicate-stderr' }) or Op.always(nil),
+    end, { label = self.name .. ':communicate-stderr' }) or Op.always(nil),
   }))
   local stdout_task, stderr_task = tasks.stdout, tasks.stderr
 
@@ -588,7 +591,7 @@ local function supervise(proc, driver_scope, opts)
         flush = stdin_redirect.flush,
         close_destination = true,
       })
-    end, { name = proc.name .. ':stdin-bridge' })
+    end, { label = proc.name .. ':stdin-bridge' })
     proc.stdin_stream = nil
   else
     proc.stdin_stream = proc.stdin_pipe_stream
@@ -599,7 +602,7 @@ local function supervise(proc, driver_scope, opts)
         flush = stdout_redirect.flush,
         close_destination = stdout_redirect.close,
       })
-    end, { name = proc.name .. ':stdout-bridge' })
+    end, { label = proc.name .. ':stdout-bridge' })
     proc.stdout_stream = nil
   else
     proc.stdout_stream = proc.stdout_pipe_stream
@@ -610,7 +613,7 @@ local function supervise(proc, driver_scope, opts)
         flush = stderr_redirect.flush,
         close_destination = stderr_redirect.close,
       })
-    end, { name = proc.name .. ':stderr-bridge' })
+    end, { label = proc.name .. ':stderr-bridge' })
     proc.stderr_stream = nil
   elseif stderr_mode == 'stdout' then
     proc.stderr_stream = proc.stdout_stream
@@ -749,12 +752,12 @@ function Command:launch_op(opts)
       kind = 'process',
       name = name,
       command = command,
-      lifecycle = Lifecycle.new(name),
-      launch_completion = Completion.new(name .. ':launch'),
-      exit_completion = Completion.new(name .. ':exit'),
-      closed_completion = Completion.new(name .. ':closed'),
+      lifecycle = Lifecycle.new():label(name),
+      launch_completion = Completion.new():label(name .. ':launch'),
+      exit_completion = Completion.new():label(name .. ':exit'),
+      closed_completion = Completion.new():label(name .. ':closed'),
       _communicating = false,
-      host_hold = HostHold.new(name .. ':host-hold'),
+      host_hold = HostHold.new():label(name .. ':host-hold'),
       host_process = nil,
       stdin_stream = nil,
       stdout_stream = nil,
@@ -764,7 +767,7 @@ function Command:launch_op(opts)
       _close_error = nil,
     }, Process)
     Lifetime.define(proc, {
-      name = name,
+      label = name,
       role = 'process',
       closure = process_closure(proc),
       children = { proc.host_hold },
@@ -774,7 +777,11 @@ function Command:launch_op(opts)
       return private_scope:run(function(driver_scope)
         return driver_body(proc, driver_scope, opts)
       end)
-    end, name, parent_scope, { lifetime = proc._lifetime, closure = parent_scope.closure })
+    end, parent_scope, {
+      lifetime = proc._lifetime,
+      closure = parent_scope.closure,
+      label = name,
+    })
 
     return scope:admit_op(proc)
       :and_then(proc._task:spawn_effect_op())

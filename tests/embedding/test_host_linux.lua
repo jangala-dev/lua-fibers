@@ -78,7 +78,7 @@ end
 -- Runtime boundary.
 do
   local rt = FibersRuntime.new()
-  local src = FibersReadiness.new(42, 'read', 'fd-42')
+  local src = FibersReadiness.new(42, 'read'):label('fd-42')
   rt:spawn_raw(function()
     rt:perform(src:readable_op())
   end)

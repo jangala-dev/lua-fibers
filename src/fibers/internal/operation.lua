@@ -60,6 +60,18 @@ end
 
 Operation.class = Op
 
+
+function Operation.labels(op)
+  if not Operation.is(op) then return nil end
+  if op.kind == 'annotated' then return op.labels end
+  return nil
+end
+
+function Operation.diagnostic_label(op)
+  local labels = Operation.labels(op)
+  return labels and labels[1] or nil
+end
+
 local function copy(fields)
   local out = {}
   for key, value in pairs(fields or {}) do out[key] = value end

@@ -29,7 +29,7 @@ fibers.run(function(scope)
   scope:spawn(function()
     local command = commands:get()
     results:put('completed ' .. command)
-  end, 'command-worker')
+  end):label('command-worker')
 
   commands:put('refresh configuration')
   assert(results:get() == 'completed refresh configuration')
@@ -44,7 +44,7 @@ fibers.run(function()
     assert(type(payload.by) == 'number', 'by must be a number')
   end)
 
-  local counter = StateMachine.new(0, 'counter')
+  local counter = StateMachine.new(0):label('counter')
   assert(fibers.perform(counter:transition_op(Increment, { by = 1 })) == 1)
 end)
 
@@ -96,12 +96,13 @@ end)
 -- External feeds are driver actions, not fibre actions.
 do
   local rt = FibersRuntime.new({ host = ManualHost.new() })
-  local signal, feed = External.signal(rt, 'shutdown')
+  local signal, feed = External.signal(rt)
+  signal:label('shutdown')
   local result
 
   rt:spawn_raw(function()
     result = rt:perform(signal:wait_op())
-  end, 'waiter')
+  end):label('waiter')
 
   rt:run()
   feed:set('requested')
@@ -119,9 +120,9 @@ end)
 
 -- Lifetime guide: custody, Grants and Closure use the ordinary Op algebra.
 fibers.run(function(source)
-  local worker = FibersScope.new('documented-grant-worker', {
+  local worker = FibersScope.new( {
     runtime = source.runtime,
-  })
+  }):label('documented-grant-worker')
   local resource = { name = 'documented-resource' }
   FibersLifetime.inert(resource, { rights = { read = true } })
 

@@ -90,13 +90,13 @@ function Offer.new(spec)
     _closed_error = spec.closed_error,
     _dispose = spec.dispose,
     _retired = spec.retired,
-    _slots = Counter.bounded(capacity, name .. ':slots'),
-    _queue = EventQueue.new(name .. ':offers'),
-    _terminal = Signal.new(name .. ':terminal'),
+    _slots = Counter.bounded(capacity):label(name .. ':slots'),
+    _queue = EventQueue.new():label(name .. ':offers'),
+    _terminal = Signal.new():label(name .. ':terminal'),
   }, Offer)
 
   Lifetime.define(source, {
-    name = name,
+    label = name,
     role = source.role,
     closure = source_closure(source),
     children = spec.children,

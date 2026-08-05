@@ -42,7 +42,7 @@ end
 
 local function test_readers_merge_and_writer_conflicts()
   local rt = new_runtime()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-rw')
+  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-rw')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({ c:acquire_op('s', 'read', 'a'), c:acquire_op('s', 'read', 'b') }))
@@ -63,7 +63,7 @@ local function test_readers_merge_and_writer_conflicts()
 end
 
 local function test_release_supply_law()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-release')
+  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-release')
   seed_lease(c, 's', { writer = 'write' })
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
@@ -88,7 +88,7 @@ local function test_release_supply_law()
 end
 
 local function test_incompatible_acquires_do_not_jointly_commit()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-incompat')
+  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-incompat')
   local rt = new_runtime({ quiet_deadlock = true })
   rt:spawn_raw(function()
     rt:perform(Op.together({ c:acquire_op('s', 'read', 'r'), c:acquire_op('s', 'write', 'w') }))
@@ -101,7 +101,7 @@ local function test_incompatible_acquires_do_not_jointly_commit()
 end
 
 local function test_release_one_blocker_not_enough()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-two-blockers')
+  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-two-blockers')
   seed_lease(c, 's', { w1 = 'write', w2 = 'write' })
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
@@ -117,7 +117,7 @@ local function test_release_one_blocker_not_enough()
 end
 
 local function test_inspection_snapshots_are_detached()
-  local c = Lease.new({ read = { read = true }, write = {} }, 'lease-snapshots')
+  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-snapshots')
   seed_lease(c, 's', { reader = 'read' })
 
   local holders = c.holders

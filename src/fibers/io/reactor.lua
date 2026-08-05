@@ -211,7 +211,7 @@ function Entry.new(reactor, spec)
     id = id,
     armed = false,
   }, Entry)
-  entry.retired_signal = Signal.new((spec.name or id) .. ':retired')
+  entry.retired_signal = Signal.new():label((spec.name or id) .. ':retired')
   entry.registered = false
   entry.retired = false
   entry.closing = false
@@ -230,7 +230,7 @@ function Entry.new(reactor, spec)
       hidden_endpoint = entry.mode == 'read' and entry.flow:inlet() or entry.flow:outlet()
     end
     Lifetime.define(entry, {
-      name = entry.name,
+      label = entry.name,
       role = 'host_reaction',
       children = hidden_endpoint and { hidden_endpoint } or nil,
       closure = Closure.request_then_wait(
@@ -288,19 +288,19 @@ function Reactor.new(runtime, opts)
     by_key = {},
     flow_entries = setmetatable({}, { __mode = 'k' }),
     running = false,
-    control = EventQueue.new(id .. ':control'),
+    control = EventQueue.new():label(id .. ':control'),
     read_quantum = opts.read_quantum or 64 * 1024,
     write_quantum = opts.write_quantum or 64 * 1024,
     control_quantum = opts.control_quantum or 64,
     service_count = 0,
   }, Reactor)
-  self.ready = EventQueue.new(id .. ':ready', function(_runtime, queue, feed)
+  self.ready = EventQueue.new( function(_runtime, queue, feed)
     return Interest.external(queue, 'poll', {
       external_kind = 'poller',
       poller = self,
       feed = feed,
     })
-  end)
+  end):label(id .. ':ready')
   return self
 end
 

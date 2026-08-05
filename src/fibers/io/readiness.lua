@@ -49,14 +49,13 @@ local function clear(current, _, selected)
   return state
 end
 
-function Readiness.new(key, initial_mode, name)
+function Readiness.new(key, initial_mode)
   local r = Facility.identity(
     setmetatable({
       key = key,
       mode = mode(initial_mode or 'read', 3),
     }, Readiness),
-    Kind,
-    name
+    Kind
   )
   r._location = Facility.location(r, 'state', {
     algebra = 'machine',

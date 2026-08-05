@@ -1,5 +1,7 @@
 -- Structured reports and checked results for a lifetime boundary.
 
+local Label = require('fibers.internal.label')
+
 local unpack_ = table.unpack or unpack
 
 local Report = {}
@@ -26,7 +28,7 @@ function Report.new(scope, primary, secondaries, fields)
       or ((primary ~= nil or #secondary > 0 or fields.reason ~= nil) and 'scope_failure' or 'scope_report'),
     scope = scope,
     scope_id = scope and scope._fibers_id,
-    scope_name = scope and scope.name,
+    scope_name = scope and Label.describe(scope._lifetime or scope, scope.name),
     primary = primary,
     secondaries = secondary,
     secondary_count = #secondary,

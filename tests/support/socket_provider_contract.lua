@@ -37,7 +37,7 @@ function Contract.exercise(name, host, address, opts)
       watchdog = scope:spawn(function()
         Sleep.sleep(opts.watchdog_seconds)
         error(name .. ' provider contract timed out during ' .. stage, 0)
-      end, name .. ':watchdog')
+      end):label(name .. ':watchdog')
     end
 
     stage = 'listen'
@@ -66,7 +66,7 @@ function Contract.exercise(name, host, address, opts)
       assert_eq(connection:flush(), true, name .. ' accepted flush')
       stage = 'server close'
       assert_eq(connection:close('server complete'), true, name .. ' accepted close')
-    end, name .. ':server')
+    end):label(name .. ':server')
 
     stage = 'dial'
     local dial_opts = { name = name .. ':dial' }

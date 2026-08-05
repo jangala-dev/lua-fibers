@@ -22,18 +22,18 @@ local function close_value(value, close, reason)
   return true
 end
 
-function HostHold.new(name)
+function HostHold.new()
   next_id = next_id + 1
   local id = 'host-hold-' .. tostring(next_id)
   local self = setmetatable({
-    name = name or id,
+    name = id,
     values = {},
     order = {},
     taken = {},
     closed = false,
   }, HostHold)
   Lifetime.define(self, {
-    name = self.name,
+    label = nil,
     role = 'host_hold',
     closure = Closure.protocol({
       name = 'host_hold',

@@ -11,6 +11,7 @@ local Runtime = require('fibers.runtime')
 local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
+local Label = require('fibers.internal.label')
 
 local Lifetime = {}
 Lifetime.CloseReason = { NORMAL = 'normal' }
@@ -102,9 +103,12 @@ local function node_for(value, level)
   error('expected a Lifetime or a value carrying a Lifetime', level or 3)
 end
 
-function Lifetime.new(name, opts)
+function Lifetime.new(opts)
   opts = opts or {}
-  local node_name = name or 'lifetime'
+  if type(opts) ~= 'table' then
+    error('Lifetime.new expects an options table or nil', 2)
+  end
+  local node_name = 'lifetime'
   local node = setmetatable({
     _fibers_lifetime = true,
     _construction_parent = opts.parent and node_for(opts.parent, 3) or nil,
@@ -120,13 +124,20 @@ function Lifetime.new(name, opts)
     rights = opts.rights,
     meta = opts.meta,
     cancellation = opts.cancellation
-      or StateMachine.new({ requested = false, cancelled = false }, node_name .. '-cancellation'),
+      or StateMachine.new({ requested = false, cancelled = false }):label(node_name .. '-cancellation'),
     interrupt = opts.interrupt or Runtime._new_interrupt(node_name .. '-interrupt'),
-    body_result = opts.body_result or Cell.new(pending(), node_name .. '-body-result'),
-    outcome = opts.outcome or Cell.new(pending(), node_name .. '-outcome'),
+    body_result = opts.body_result or Cell.new(pending()):label(node_name .. '-body-result'),
+    outcome = opts.outcome or Cell.new(pending()):label(node_name .. '-outcome'),
     closure_state = opts.closure_state or initial_closure_state(),
     offers = opts.offers,
   }, Node)
+  Label.attach(node)
+  if opts.label ~= nil then Label.set(node, opts.label, 2) end
+  Label.child(node.cancellation, node, 'cancellation')
+  Label.child(node.body_result, node, 'body-result')
+  Label.child(node.outcome, node, 'outcome')
+  if type(node.offers) == 'table' then Label.child(node.offers, node, 'offers') end
+
   -- The dependency index uses this marker to connect an observer of a
   -- Lifetime's terminal outcome to the currently pending operations which can
   -- make that outcome true.  This is a directional causal edge, not a
@@ -148,6 +159,18 @@ function Lifetime.new(name, opts)
   end
   if opts.runtime then node:bind_runtime(opts.runtime) end
   return node
+end
+
+function Node:label(...)
+  if select('#', ...) == 0 then
+    return Label.get(self)
+  end
+  Label.set(self, select(1, ...), 2)
+  return self
+end
+
+function Node:diagnostic_label()
+  return Label.describe(self, self.name)
 end
 
 function Lifetime.is(value)
@@ -187,7 +210,7 @@ function Lifetime.define(value, opts)
     error('value already carries a Lifetime', 2)
   end
   opts = opts or {}
-  Lifetime.new(opts.name or value.name, {
+  local node = Lifetime.new({
     value = value,
     body = opts.body,
     closure = opts.closure,
@@ -195,7 +218,9 @@ function Lifetime.define(value, opts)
     rights = opts.rights,
     meta = opts.meta,
     children = opts.children,
+    label = opts.label,
   })
+  Label.proxy(value, node)
   return value
 end
 
@@ -206,10 +231,11 @@ end
 function Lifetime.task(body, opts)
   if type(body) ~= 'function' then error('Lifetime.task expects a function', 2) end
   opts = opts or {}
-  return Lifetime.new(opts.name, {
+  return Lifetime.new({
     body = body,
     closure = opts.closure,
     role = opts.role or 'task',
+    label = opts.label,
   })
 end
 

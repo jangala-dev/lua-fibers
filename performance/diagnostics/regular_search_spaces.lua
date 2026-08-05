@@ -109,11 +109,11 @@ local function batch_dispatch(options)
   local workers, received = {}, {}
 
   for worker = 1, n do
-    workers[worker] = Rendezvous.new('search-dispatch-worker-' .. tostring(worker))
+    workers[worker] = Rendezvous.new():label('search-dispatch-worker-' .. tostring(worker))
     local worker_id = worker
     rt:spawn_raw(function()
       received[worker_id] = rt:perform(workers[worker_id]:get_op())
-    end, 'search-dispatch-worker-' .. tostring(worker))
+    end):label('search-dispatch-worker-' .. tostring(worker))
   end
 
   rt:spawn_raw(function()
@@ -126,7 +126,7 @@ local function batch_dispatch(options)
       jobs[job] = Op.choice(alternatives)
     end
     rt:perform(Op.each(jobs))
-  end, 'search-dispatch-batch')
+  end):label('search-dispatch-batch')
 
   local status, driver_calls = drive(rt)
   local seen = {}
@@ -153,8 +153,8 @@ local function replicated_ring(options)
   local rt = new_runtime(options)
   local primary, backup, received = {}, {}, {}
   for i = 1, n do
-    primary[i] = Rendezvous.new('search-ring-primary-' .. tostring(i))
-    backup[i] = Rendezvous.new('search-ring-backup-' .. tostring(i))
+    primary[i] = Rendezvous.new():label('search-ring-primary-' .. tostring(i))
+    backup[i] = Rendezvous.new():label('search-ring-backup-' .. tostring(i))
   end
 
   for i = 1, n do
@@ -174,7 +174,7 @@ local function replicated_ring(options)
         return 'backup', rows[2][1]
       end)
       received[node] = { rt:perform(Op.choice(p, b)) }
-    end, 'search-ring-node-' .. tostring(i))
+    end):label('search-ring-node-' .. tostring(i))
   end
 
   local status, driver_calls = drive(rt)
@@ -194,7 +194,7 @@ local function priority_fallback(options)
   local rt = new_runtime(options)
   local queues = {}
   for i = 1, n do
-    queues[i] = Rendezvous.new('search-priority-' .. tostring(i))
+    queues[i] = Rendezvous.new():label('search-priority-' .. tostring(i))
   end
 
   local selected = queues[1]:get_op()
@@ -205,10 +205,10 @@ local function priority_fallback(options)
   local received
   rt:spawn_raw(function()
     received = rt:perform(selected)
-  end, 'search-priority-consumer')
+  end):label('search-priority-consumer')
   rt:spawn_raw(function()
     rt:perform(queues[n]:put_op('last-queue'))
-  end, 'search-priority-producer')
+  end):label('search-priority-producer')
 
   local status, driver_calls = drive(rt)
   local valid = status.tag == 'idle' and received == 'last-queue'
@@ -222,20 +222,20 @@ local function idle_services(options)
   local n = options.size
   local rt = new_runtime(options)
   for i = 1, n do
-    local idle = Rendezvous.new('search-idle-' .. tostring(i))
+    local idle = Rendezvous.new():label('search-idle-' .. tostring(i))
     rt:spawn_raw(function()
       rt:perform(idle:get_op())
-    end, 'search-idle-service-' .. tostring(i))
+    end):label('search-idle-service-' .. tostring(i))
   end
 
-  local active = Rendezvous.new('search-active')
+  local active = Rendezvous.new():label('search-active')
   local received
   rt:spawn_raw(function()
     received = rt:perform(active:get_op())
-  end, 'search-active-consumer')
+  end):label('search-active-consumer')
   rt:spawn_raw(function()
     rt:perform(active:put_op('ok'))
-  end, 'search-active-producer')
+  end):label('search-active-producer')
 
   local status, driver_calls = drive(rt)
   local valid = status.tag == 'quiescent' and received == 'ok'
@@ -251,11 +251,11 @@ local function incremental_dispatch(options)
   local workers, received = {}, {}
 
   for worker = 1, n do
-    workers[worker] = Rendezvous.new('search-incremental-worker-' .. tostring(worker))
+    workers[worker] = Rendezvous.new():label('search-incremental-worker-' .. tostring(worker))
     local worker_id = worker
     rt:spawn_raw(function()
       received[worker_id] = rt:perform(workers[worker_id]:get_op())
-    end, 'search-incremental-worker-' .. tostring(worker))
+    end):label('search-incremental-worker-' .. tostring(worker))
   end
 
   rt:spawn_raw(function()
@@ -266,7 +266,7 @@ local function incremental_dispatch(options)
       end
       rt:perform(Op.choice(alternatives))
     end
-  end, 'search-incremental-dispatcher')
+  end):label('search-incremental-dispatcher')
 
   local status, driver_calls = drive(rt)
   local seen = {}
@@ -293,7 +293,7 @@ local function fixed_ring(options)
   local rt = new_runtime(options)
   local links, received = {}, {}
   for i = 1, n do
-    links[i] = Rendezvous.new('search-fixed-ring-' .. tostring(i))
+    links[i] = Rendezvous.new():label('search-fixed-ring-' .. tostring(i))
   end
   for i = 1, n do
     local node = i
@@ -304,7 +304,7 @@ local function fixed_ring(options)
         links[previous]:get_op(),
       }))
       received[node] = rows[2][1]
-    end, 'search-fixed-ring-node-' .. tostring(i))
+    end):label('search-fixed-ring-node-' .. tostring(i))
   end
   local status, driver_calls = drive(rt)
   local valid = status.tag == 'idle'

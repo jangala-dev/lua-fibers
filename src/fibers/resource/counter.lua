@@ -18,7 +18,7 @@ local function integer(value, label, level)
   return value
 end
 
-local function create(initial, minimum, maximum, name)
+local function create(initial, minimum, maximum)
   integer(initial, 'counter initial value', 3)
   integer(minimum, 'counter minimum', 3)
   if maximum ~= nil then integer(maximum, 'counter maximum', 3) end
@@ -29,7 +29,7 @@ local function create(initial, minimum, maximum, name)
     error('counter minimum must not exceed maximum', 3)
   end
 
-  local counter = Facility.identity(setmetatable({ min = minimum, max = maximum }, Counter), Kind, name)
+  local counter = Facility.identity(setmetatable({ min = minimum, max = maximum }, Counter), Kind)
   counter._location = Facility.location(counter, 'value', {
     algebra = 'add',
     domain = 'counter',
@@ -40,18 +40,18 @@ local function create(initial, minimum, maximum, name)
   return counter
 end
 
-function Counter.new(initial, name)
-  return create(initial or 0, 0, nil, name)
+function Counter.new(initial)
+  return create(initial or 0, 0, nil)
 end
 
-function Counter.bounded(capacity, name)
+function Counter.bounded(capacity)
   integer(capacity, 'counter capacity', 2)
   if capacity < 0 then error('counter capacity must be non-negative', 2) end
-  return create(capacity, 0, capacity, name)
+  return create(capacity, 0, capacity)
 end
 
-function Counter.range(initial, minimum, maximum, name)
-  return create(initial, minimum, maximum, name)
+function Counter.range(initial, minimum, maximum)
+  return create(initial, minimum, maximum)
 end
 
 function Counter:read_op()

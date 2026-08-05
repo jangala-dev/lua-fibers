@@ -223,7 +223,7 @@ add('local', 'always perform', 3000, function(n)
     for _ = 1, n do
       sum = sum + rt:perform(op)
     end
-  end, 'bench-local-always')
+  end):label('bench-local-always')
   run_rt(rt)
   assert_eq(sum, n)
   return n
@@ -244,7 +244,7 @@ add('local', 'map and_then chain', 1500, function(n)
     for _ = 1, n do
       sum = sum + rt:perform(op)
     end
-  end, 'bench-local-map-and_then')
+  end):label('bench-local-map-and_then')
   run_rt(rt)
   assert_eq(sum, n * 8)
   return n
@@ -260,7 +260,7 @@ add('local', 'wrap post commit', 1500, function(n)
     for _ = 1, n do
       sum = sum + rt:perform(op)
     end
-  end, 'bench-local-wrap')
+  end):label('bench-local-wrap')
   run_rt(rt)
   assert_eq(sum, n * 2)
   return n
@@ -268,14 +268,14 @@ end)
 
 add('cell', 'serial read write', 1200, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-cell-serial')
+  local cell = Cell.new(0):label('bench-cell-serial')
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(cell:read_op():and_then(Op.guard(function(v)
         return cell:write_op(v + 1)
       end)))
     end
-  end, 'bench-cell-serial')
+  end):label('bench-cell-serial')
   run_rt(rt)
   assert_eq(cell.value, n)
   return n
@@ -283,7 +283,7 @@ end)
 
 add('cell', 'changed wait wake', 400, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-cell-changed')
+  local cell = Cell.new(0):label('bench-cell-changed')
   local observed = 0
   rt:spawn_raw(function()
     local version = cell.version
@@ -292,12 +292,12 @@ add('cell', 'changed wait wake', 400, function(n)
       observed = value
       version = next_version
     end
-  end, 'bench-cell-waiter')
+  end):label('bench-cell-waiter')
   rt:spawn_raw(function()
     for i = 1, n do
       rt:perform(cell:write_op(i))
     end
-  end, 'bench-cell-writer')
+  end):label('bench-cell-writer')
   run_rt(rt)
   assert_eq(observed, n)
   return n
@@ -309,20 +309,20 @@ end)
 
 add('rendezvous', 'external ping pong', 1000, function(n)
   local rt = Runtime.new()
-  local ch = Rendezvous.new('bench-ping-pong')
+  local ch = Rendezvous.new():label('bench-ping-pong')
   local sum, sent = 0, 0
   rt:spawn_raw(function()
     for _ = 1, n do
       sum = sum + rt:perform(ch:get_op())
     end
-  end, 'bench-ping-recv')
+  end):label('bench-ping-recv')
   rt:spawn_raw(function()
     for i = 1, n do
       if rt:perform(ch:put_op(i)) then
         sent = sent + i
       end
     end
-  end, 'bench-ping-send')
+  end):label('bench-ping-send')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
   assert_eq(sent, n * (n + 1) / 2)
@@ -331,14 +331,14 @@ end)
 
 add('rendezvous', 'internal rendezvous in together', 700, function(n)
   local rt = Runtime.new()
-  local ch = Rendezvous.new('bench-together-internal')
+  local ch = Rendezvous.new():label('bench-together-internal')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
       local rows = rt:perform(Op.together({ ch:put_op(i), ch:get_op() }))
       sum = sum + rows[2][1]
     end
-  end, 'bench-together-internal')
+  end):label('bench-together-internal')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
   return n
@@ -346,9 +346,9 @@ end)
 
 add('product', 'each independent cells', 900, function(n)
   local rt = Runtime.new()
-  local a = Cell.new(0, 'bench-each-a')
-  local b = Cell.new(0, 'bench-each-b')
-  local c = Cell.new(0, 'bench-each-c')
+  local a = Cell.new(0):label('bench-each-a')
+  local b = Cell.new(0):label('bench-each-b')
+  local c = Cell.new(0):label('bench-each-c')
   local seen = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -361,7 +361,7 @@ add('product', 'each independent cells', 900, function(n)
         seen = seen + rows[2][1]
       end
     end
-  end, 'bench-each-independent')
+  end):label('bench-each-independent')
   run_rt(rt)
   assert_eq(a.value, n)
   assert_eq(c.value, n * 2)
@@ -371,8 +371,8 @@ end)
 
 add('product', 'together with lane and_then and external rendezvous', 350, function(n)
   local rt = Runtime.new()
-  local internal = Rendezvous.new('bench-and-then-internal')
-  local external = Rendezvous.new('bench-and-then-external')
+  local internal = Rendezvous.new():label('bench-and-then-internal')
+  local external = Rendezvous.new():label('bench-and-then-external')
   local sum = 0
   rt:spawn_raw(function()
     for i = 1, n do
@@ -386,12 +386,12 @@ add('product', 'together with lane and_then and external rendezvous', 350, funct
       }))
       sum = sum + rows[1][1]
     end
-  end, 'bench-product-main')
+  end):label('bench-product-main')
   rt:spawn_raw(function()
     for i = 1, n do
       rt:perform(external:put_op(1000 + i))
     end
-  end, 'bench-product-partner')
+  end):label('bench-product-partner')
   run_rt(rt)
   assert_eq(sum, n * 1000 + n * (n + 1))
   return n
@@ -399,7 +399,7 @@ end)
 
 add('product', 'choice conflict backtrack', 450, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-choice-conflict')
+  local cell = Cell.new(0):label('bench-choice-conflict')
   local wins = 0
   rt:spawn_raw(function()
     for _ = 1, n do
@@ -416,7 +416,7 @@ add('product', 'choice conflict backtrack', 450, function(n)
         wins = wins + 1
       end
     end
-  end, 'bench-choice-conflict')
+  end):label('bench-choice-conflict')
   run_rt(rt)
   assert_eq(wins, n)
   assert_eq(cell.value, 2)
@@ -425,8 +425,8 @@ end)
 
 add('product', 'or_else waits for partner', 350, function(n)
   local rt = Runtime.new()
-  local wanted = Rendezvous.new('bench-or-else-wanted')
-  local dead = Rendezvous.new('bench-or-else-dead')
+  local wanted = Rendezvous.new():label('bench-or-else-wanted')
+  local dead = Rendezvous.new():label('bench-or-else-dead')
   local primary = 0
   rt:spawn_raw(function()
     for _ = 1, n do
@@ -440,12 +440,12 @@ add('product', 'or_else waits for partner', 350, function(n)
         primary = primary + 1
       end
     end
-  end, 'bench-or-else-receiver')
+  end):label('bench-or-else-receiver')
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(Op.choice(dead:put_op('dead'), wanted:put_op('ok')))
     end
-  end, 'bench-or-else-partner')
+  end):label('bench-or-else-partner')
   run_rt(rt)
   assert_eq(primary, n)
   return n
@@ -454,7 +454,7 @@ end)
 add('product', 'dependent cell updaters', 180, function(n)
   local total_commits = n * 4
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'bench-dependent-cell')
+  local cell = Cell.new(0):label('bench-dependent-cell')
   local returns = {}
   local function update_op()
     return cell:read_op():and_then(Op.guard(function(old)
@@ -467,7 +467,7 @@ add('product', 'dependent cell updaters', 180, function(n)
         local value = rt:perform(update_op())
         returns[#returns + 1] = value
       end
-    end, 'bench-dependent-' .. tostring(i))
+    end):label('bench-dependent-' .. tostring(i))
   end
   run_rt(rt)
   assert_eq(cell.value, total_commits)
@@ -479,28 +479,28 @@ add('product', 'triple swap with decoy', 80, function(n)
   local completed = 0
   for k = 1, n do
     local rt = Runtime.new()
-    local ab = Rendezvous.new('bench-triple-ab-' .. tostring(k))
-    local bc = Rendezvous.new('bench-triple-bc-' .. tostring(k))
-    local ca = Rendezvous.new('bench-triple-ca-' .. tostring(k))
+    local ab = Rendezvous.new():label('bench-triple-ab-' .. tostring(k))
+    local bc = Rendezvous.new():label('bench-triple-bc-' .. tostring(k))
+    local ca = Rendezvous.new():label('bench-triple-ca-' .. tostring(k))
     local a, b, c, decoy
     rt:spawn_raw(function()
       a = rt:perform(Op.each({ ab:put_op('A'), ca:get_op() }):map(function(rows)
         return rows[2][1]
       end))
-    end, 'A')
+    end):label('A')
     rt:spawn_raw(function()
       b = rt:perform(Op.each({ bc:put_op('B'), ab:get_op() }):map(function(rows)
         return rows[2][1]
       end))
-    end, 'B')
+    end):label('B')
     rt:spawn_raw(function()
       c = rt:perform(Op.each({ ca:put_op('C'), bc:get_op() }):map(function(rows)
         return rows[2][1]
       end))
-    end, 'C')
+    end):label('C')
     rt:spawn_raw(function()
       decoy = rt:perform(ab:get_op())
-    end, 'decoy')
+    end):label('decoy')
     run_rt(rt)
     assert_eq(a, 'C')
     assert_eq(b, 'A')
@@ -517,7 +517,7 @@ end)
 
 add('external', 'queue preloaded consume', 1000, function(n)
   local rt = Runtime.new()
-  local q = EventQueue.new('bench-external-events')
+  local q = EventQueue.new():label('bench-external-events')
   local feed = External.external_feed(rt, q)
   for i = 1, n do
     feed:set(i)
@@ -527,7 +527,7 @@ add('external', 'queue preloaded consume', 1000, function(n)
     for _ = 1, n do
       sum = sum + rt:perform(q:next_op())
     end
-  end, 'bench-external-events-consumer')
+  end):label('bench-external-events-consumer')
   run_rt(rt)
   assert_eq(sum, n * (n + 1) / 2)
   return n
@@ -535,14 +535,14 @@ end)
 
 add('external', 'external arrival driver loop', 250, function(n)
   local rt = Runtime.new()
-  local q = EventQueue.new('bench-external-driver')
+  local q = EventQueue.new():label('bench-external-driver')
   local feed = External.external_feed(rt, q)
   local sum = 0
   rt:spawn_raw(function()
     for _ = 1, n do
       sum = sum + rt:perform(q:next_op())
     end
-  end, 'bench-external-driver-consumer')
+  end):label('bench-external-driver-consumer')
   assert_status(rt:run(), 'pending')
   for i = 1, n do
     feed:set(i)
@@ -562,7 +562,7 @@ add('external', 'clock ready', 1000, function(n)
       return now
     end,
   } })
-  local clock = Clock.new('bench-clock')
+  local clock = Clock.new():label('bench-clock')
   local count = 0
   local op = clock:at_op(1)
   rt:spawn_raw(function()
@@ -572,7 +572,7 @@ add('external', 'clock ready', 1000, function(n)
         count = count + 1
       end
     end
-  end, 'bench-clock-ready')
+  end):label('bench-clock-ready')
   run_rt(rt)
   assert_eq(count, n)
   return n
@@ -589,7 +589,7 @@ add('effect', 'merge duplicate effects', 700, function(n)
     for _ = 1, n do
       rt:perform(op)
     end
-  end, 'bench-effect-merge')
+  end):label('bench-effect-merge')
   run_rt(rt)
   assert_eq(rt.bench_effect_total, n * 8)
   return n * 8
@@ -624,7 +624,7 @@ add('task', 'scope spawn await close', 80, function(n)
     for i = 1, n do
       local task = fibers.spawn(function()
         return i
-      end, { name = 'bench-task-' .. tostring(i) })
+      end, { label = 'bench-task-' .. tostring(i) })
       sum = sum + fibers.perform(task:await_op())
     end
   end)
@@ -636,11 +636,11 @@ end)
 add('closure', 'nursery spawn rendezvous join', 8, function(n)
   local sum = 0
   local r = fibers.try_run(function()
-    local ch = Rendezvous.new('bench-nursery-rendezvous')
+    local ch = Rendezvous.new():label('bench-nursery-rendezvous')
     for i = 1, n do
       fibers.spawn(function()
         fibers.perform(ch:put_op(i))
-      end, 'bench-nursery-child-' .. tostring(i))
+      end):label('bench-nursery-child-' .. tostring(i))
     end
     for _ = 1, n do
       sum = sum + fibers.perform(ch:get_op())
@@ -658,16 +658,16 @@ add('scope', 'custody offer', 30, function(n)
     local r = fibers.try_run(function(root)
       local rt = fibers.current_runtime()
       local request =
-        Scope.new('bench-request-' .. tostring(i), { runtime = rt, parent = root, closure = root.closure })
+        Scope.new( { runtime = rt, parent = root, closure = root.closure }):label('bench-request-' .. tostring(i))
       local supervisor =
-        Scope.new('bench-supervisor-' .. tostring(i), { runtime = rt, parent = root, closure = root.closure })
-      local resume = Rendezvous.new('bench-resume-' .. tostring(i))
+        Scope.new( { runtime = rt, parent = root, closure = root.closure }):label('bench-supervisor-' .. tostring(i))
+      local resume = Rendezvous.new():label('bench-resume-' .. tostring(i))
       local task
       request:run(function(req)
         task = fibers.perform(req:spawn_op(function()
           local msg = fibers.perform(resume:get_op())
           return msg
-        end, { name = 'bench-session-' .. tostring(i) }))
+        end, { label = 'bench-session-' .. tostring(i) }))
         local rows = fibers.perform(Op.together({
           req:offer_op(task, supervisor),
           supervisor:accept_op(),
@@ -695,14 +695,14 @@ end)
 
 add('flow', 'write only unbounded', 400, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-write-only')
+  local flow = Flow.new(nil):label('bench-flow-write-only')
   local inlet = flow:inlet()
   local total = 0
   rt:spawn_raw(function()
     for _ = 1, n do
       total = total + rt:perform(inlet:write_op('x'))
     end
-  end, 'bench-flow-write-only')
+  end):label('bench-flow-write-only')
   run_rt(rt)
   assert_eq(total, n)
   return n
@@ -710,7 +710,7 @@ end)
 
 add('flow', 'sequential write read small', 350, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-seq')
+  local flow = Flow.new(nil):label('bench-flow-seq')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -719,7 +719,7 @@ add('flow', 'sequential write read small', 350, function(n)
       local bytes = rt:perform(outlet:read_some_op(4))
       total = total + #bytes
     end
-  end, 'bench-flow-seq')
+  end):label('bench-flow-seq')
   run_rt(rt)
   assert_eq(total, n * 4)
   return n
@@ -727,7 +727,7 @@ end)
 
 add('flow', 'write/read handoff in together', 220, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-together-handoff')
+  local flow = Flow.new(nil):label('bench-flow-together-handoff')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -735,7 +735,7 @@ add('flow', 'write/read handoff in together', 220, function(n)
       local rows = rt:perform(Op.together({ inlet:write_op('abcd'), outlet:read_some_op(4) }))
       total = total + rows[1][1] + #rows[2][1]
     end
-  end, 'bench-flow-together')
+  end):label('bench-flow-together')
   run_rt(rt)
   assert_eq(total, n * 8)
   return n
@@ -743,7 +743,7 @@ end)
 
 add('flow', 'capacity release handoff', 180, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(4, 'bench-flow-capacity-release')
+  local flow = Flow.new(4):label('bench-flow-capacity-release')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local ok = 0
   rt:spawn_raw(function()
@@ -756,7 +756,7 @@ add('flow', 'capacity release handoff', 180, function(n)
       local tail = rt:perform(outlet:read_some_op(4))
       assert_eq(tail, 'wxyz')
     end
-  end, 'bench-flow-capacity')
+  end):label('bench-flow-capacity')
   run_rt(rt)
   assert_eq(ok, n)
   return n
@@ -764,7 +764,7 @@ end)
 
 add('flow', 'lease ack return', 220, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-lease')
+  local flow = Flow.new(nil):label('bench-flow-lease')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -776,7 +776,7 @@ add('flow', 'lease ack return', 220, function(n)
       local bytes = rt:perform(outlet:read_some_op(10))
       total = total + #bytes
     end
-  end, 'bench-flow-lease')
+  end):label('bench-flow-lease')
   run_rt(rt)
   assert_eq(total, n * 5)
   return n
@@ -784,7 +784,7 @@ end)
 
 add('flow', 'read until chunked', 180, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-until')
+  local flow = Flow.new(nil):label('bench-flow-until')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -795,7 +795,7 @@ add('flow', 'read until chunked', 180, function(n)
       local line = rt:perform(outlet:read_until_op('\r\n'))
       total = total + #line
     end
-  end, 'bench-flow-until')
+  end):label('bench-flow-until')
   run_rt(rt)
   assert_eq(total, n * 3)
   return n
@@ -803,7 +803,7 @@ end)
 
 add('flow', 'peek then drop', 250, function(n)
   local rt = Runtime.new()
-  local flow = Flow.new(nil, 'bench-flow-peek-drop')
+  local flow = Flow.new(nil):label('bench-flow-peek-drop')
   local inlet, outlet = flow:inlet(), flow:outlet()
   local total = 0
   rt:spawn_raw(function()
@@ -814,7 +814,7 @@ add('flow', 'peek then drop', 250, function(n)
       local r = rt:perform(outlet:read_exactly_op(3))
       total = total + #p + d + #r
     end
-  end, 'bench-flow-peek-drop')
+  end):label('bench-flow-peek-drop')
   run_rt(rt)
   assert_eq(total, n * 9)
   return n
@@ -822,8 +822,8 @@ end)
 
 add('flow', 'splice derived', 140, function(n)
   local rt = Runtime.new()
-  local src = Flow.new(nil, 'bench-flow-splice-src')
-  local dst = Flow.new(nil, 'bench-flow-splice-dst')
+  local src = Flow.new(nil):label('bench-flow-splice-src')
+  local dst = Flow.new(nil):label('bench-flow-splice-dst')
   local total = 0
   rt:spawn_raw(function()
     for _ = 1, n do
@@ -833,7 +833,7 @@ add('flow', 'splice derived', 140, function(n)
       local got = rt:perform(dst:outlet():read_exactly_op(3))
       total = total + moved + #left + #got
     end
-  end, 'bench-flow-splice')
+  end):label('bench-flow-splice')
   run_rt(rt)
   assert_eq(total, n * 9)
   return n

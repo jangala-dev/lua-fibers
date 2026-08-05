@@ -4,9 +4,12 @@ local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
 local Counter = require('fibers.resource.counter')
 local Direct = require('fibers.internal.direct')
+local Facility = require('fibers.resource.authoring')
+local Label = require('fibers.internal.label')
 
 local FIFO = {}
 FIFO.__index = FIFO
+local Kind = Facility.kind('fifo')
 
 local function return_true()
   return true
@@ -14,10 +17,6 @@ end
 
 local function entry_value(entry)
   return entry.value
-end
-
-local function child_name(name, suffix)
-  return name and (name .. ':' .. suffix)
 end
 
 local function validate_capacity(capacity)
@@ -30,15 +29,16 @@ local function validate_capacity(capacity)
   end
 end
 
-function FIFO.new(capacity, name)
+function FIFO.new(capacity)
   validate_capacity(capacity)
 
-  local items = Index.new(child_name(name, 'items'))
-  local fifo = setmetatable({
+  local items = Index.new()
+  local fifo = Facility.identity(setmetatable({
     capacity = capacity,
     _items = items,
-  }, FIFO)
+  }, FIFO), Kind)
 
+  Label.child(items, fifo, 'items')
   local take_item = items:pop_first_op()
 
   if capacity == math.huge then
@@ -46,11 +46,9 @@ function FIFO.new(capacity, name)
     return fifo
   end
 
-  local slots = Counter.bounded(
-    capacity,
-    child_name(name, 'slots')
-  )
+  local slots = Counter.bounded(capacity)
 
+  Label.child(slots, fifo, 'slots')
   local take_slot = slots:take_op()
   local give_slot = slots:give_op()
 

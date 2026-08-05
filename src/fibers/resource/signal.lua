@@ -24,8 +24,8 @@ local function clear()
   return { ready = false }
 end
 
-function Signal.new(name)
-  local signal = Facility.identity(setmetatable({}, Signal), Kind, name)
+function Signal.new()
+  local signal = Facility.identity(setmetatable({}, Signal), Kind)
   signal._location = Facility.location(signal, 'state', {
     algebra = 'machine',
     domain = 'external',

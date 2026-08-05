@@ -21,8 +21,8 @@ local function copy_entry(entry)
   return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq } or nil
 end
 
-local function create(entries, name)
-  local index = Facility.identity(setmetatable({ _initial_entries = {}, _next_seq = 0 }, Index), Kind, name)
+local function create(entries)
+  local index = Facility.identity(setmetatable({ _initial_entries = {}, _next_seq = 0 }, Index), Kind)
   local order = {}
   for i = 1, #entries do
     local entry, key = entries[i], entries[i].key or i
@@ -69,12 +69,12 @@ local function create(entries, name)
   return index
 end
 
-function Index.new(name)
-  return create({}, name)
+function Index.new()
+  return create({})
 end
 
-function Index.from(entries, name)
-  return create(entries, name)
+function Index.from(entries)
+  return create(entries)
 end
 
 local function next_sequence(index)

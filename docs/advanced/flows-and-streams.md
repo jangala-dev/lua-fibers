@@ -30,14 +30,13 @@ the direct method performs that option in the current fibre.
 ```lua
 local Flow = require('fibers.resource.flow')
 
-local flow = Flow.new(64 * 1024, 'request-body')
+local flow = Flow.new(64 * 1024):label('request-body')
 
 local inlet = flow:inlet()
 local outlet = flow:outlet()
 ```
 
-The capacity is the first argument and the optional diagnostic name is second.
-Pass `nil` for an unbounded named Flow.
+The capacity is the constructor argument; pass `nil` for an unbounded Flow. Attach optional diagnostic context separately with `:label(...)`.
 
 A Flow has one stable producer endpoint, the `Inlet`, and one stable consumer
 endpoint, the `Outlet`:

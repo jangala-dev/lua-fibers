@@ -75,7 +75,7 @@ local sensor = { name = 'sensor' }
 
 Lifetime.define(sensor, {
   closure = Closure.protocol({
-    name = 'sensor',
+    label = 'sensor',
 
     request_op = function(_scope, entry, close)
       return entry.item:request_close_op(close.reason)

@@ -17,17 +17,17 @@ local function eq(a, b, msg)
   end
 end
 
-local named_a = Flow.new(1, 'shared-debug-name')
-local named_b = Flow.new(1, 'shared-debug-name')
-eq(named_a.name, named_b.name, 'debug names may be shared')
+local named_a = Flow.new(1):label('shared-debug-name')
+local named_b = Flow.new(1):label('shared-debug-name')
+eq(named_a:label(), named_b:label(), 'debug labels may be shared')
 eq(named_a._fibers_id == named_b._fibers_id, false, 'Flow identity must not depend on its debug name')
 
 local rt = Runtime.new()
-local flow = Flow.new(8, 'flow-negative-refresh')
+local flow = Flow.new(8):label('flow-negative-refresh')
 local got, written
 local reader = rt:spawn_raw(function()
   got = rt:perform(flow:outlet():read_exactly_op(1):or_else(Op.always('empty')))
-end, 'reader')
+end):label('reader')
 rt:_resume_fiber(reader)
 local reader_request = rt.engine.pending[#rt.engine.pending]
 local fallback = assert(rt.engine:find_candidate(reader_request))
@@ -35,7 +35,7 @@ eq(fallback:is_fallback(), true, 'read should initially plan fallback')
 
 local writer = rt:spawn_raw(function()
   written = rt:perform(flow:inlet():write_op('x'))
-end, 'writer')
+end):label('writer')
 rt:_resume_fiber(writer)
 local writer_request = rt.engine.pending[#rt.engine.pending]
 local write_plan = assert(rt.engine:find_candidate(writer_request))

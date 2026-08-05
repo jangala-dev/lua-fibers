@@ -64,7 +64,7 @@ do
       assert_truthy(connection:local_address())
       assert_truthy(connection:peer_address())
       connection:close('server complete')
-    end, 'audited-server')
+    end):label('audited-server')
     local dial = socket.dial(address, { name = 'audited-dial' })
     local client = assert(dial:result())
     assert_truthy(client:peer_address())

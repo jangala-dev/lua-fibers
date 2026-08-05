@@ -48,7 +48,7 @@ local function echo_once(host, address)
       connection:flush()
       connection:close('server complete')
       server_result = line
-    end, 'socket-conformance-server')
+    end):label('socket-conformance-server')
 
     local dial = socket.dial(actual)
     local connection, dial_err = dial:result()
@@ -85,7 +85,7 @@ local reuse = fibers.try_run(function(scope)
       connection:flush()
       connection:close('reuse server complete')
     end
-  end, 'socket-reuse-server')
+  end):label('socket-reuse-server')
 
   for i = 1, count do
     local dial = socket.dial(address)

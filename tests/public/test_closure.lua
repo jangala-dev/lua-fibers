@@ -57,10 +57,10 @@ end
 do
   local got, child
   local r = fibers.try_run(function(scope)
-    local ch = FibersRendezvous.new('closure-rendezvous')
+    local ch = FibersRendezvous.new():label('closure-rendezvous')
     child = fibers.spawn(function()
       fibers.perform(ch:put_op('hello'))
-    end, 'sender')
+    end):label('sender')
     got = fibers.perform(ch:get_op())
     assert_truthy(scope:lifetime(), 'root Scope should expose its Lifetime to compound authors')
   end, { closure = FibersClosure.nursery() })
@@ -74,10 +74,10 @@ end
 do
   local task
   local r = fibers.try_run(function()
-    local src = FibersSignal.new('closure-cancel-source')
+    local src = FibersSignal.new():label('closure-cancel-source')
     task = fibers.spawn(function()
       fibers.perform(src:wait_op())
-    end, 'waiter')
+    end):label('waiter')
     fibers.perform(task:request_cancel_op('stop'))
     local exit = fibers.perform(task:body_result_op())
     assert_truthy(
@@ -92,10 +92,10 @@ end
 do
   local child
   local r = fibers.try_run(function()
-    local src = FibersSignal.new('closure-body-failure-source')
+    local src = FibersSignal.new():label('closure-body-failure-source')
     child = fibers.spawn(function()
       fibers.perform(src:wait_op())
-    end, 'owned-waiter')
+    end):label('owned-waiter')
     error('body failed')
   end, { closure = FibersClosure.nursery() })
   assert_eq(r.ok, false)

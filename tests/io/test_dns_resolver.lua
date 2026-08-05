@@ -67,7 +67,7 @@ do
         assert(server:flush())
       end
       server:close('DNS fixture complete')
-    end, 'dns-address-server')
+    end):label('dns-address-server')
 
     local resolver = socket.dns_resolver({
       host = host,
@@ -140,7 +140,7 @@ do
       ))
       assert(server:flush())
       server:close('family fixture complete')
-    end, 'dns-family-server')
+    end):label('dns-family-server')
 
     local resolver = socket.dns_resolver({
       host = host,
@@ -186,7 +186,7 @@ do
       ))
       assert(server:flush())
       server:close('CNAME fixture complete')
-    end, 'dns-cname-server')
+    end):label('dns-cname-server')
 
     local resolver = socket.dns_resolver({
       host = host,
@@ -228,7 +228,7 @@ do
       ))
       assert(udp:flush())
       udp:close('UDP fallback fixture complete')
-    end, 'dns-truncated-udp')
+    end):label('dns-truncated-udp')
 
     local tcp_service = scope:spawn(function()
       local connection = assert(listener:accept())
@@ -247,7 +247,7 @@ do
       assert(connection:flush())
       connection:close('TCP fallback fixture complete')
       listener:close('TCP fallback fixture complete')
-    end, 'dns-tcp-server')
+    end):label('dns-tcp-server')
 
     local resolver = socket.dns_resolver({
       host = host,
@@ -293,7 +293,7 @@ do
       ))
       assert(working:flush())
       working:close('retry fixture complete')
-    end, 'dns-second-server')
+    end):label('dns-second-server')
 
     local resolver = socket.dns_resolver({
       host = host,
@@ -347,7 +347,7 @@ do
       ))
       assert(server:flush())
       server:close('NXDOMAIN fixture complete')
-    end, 'dns-nxdomain-server')
+    end):label('dns-nxdomain-server')
 
     local resolver = socket.dns_resolver({
       host = host,
@@ -447,7 +447,7 @@ do
       ))
       assert(server:flush())
       server:close('entropy fixture complete')
-    end, 'dns-file-entropy-server')
+    end):label('dns-file-entropy-server')
 
     local resolver = socket.dns_resolver({
       host = host,

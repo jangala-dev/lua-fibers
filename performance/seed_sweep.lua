@@ -42,11 +42,11 @@ for fanout = min_size, max_size do
     local total = 0
     local started = Clock.now()
     local result = fibers.try_run(function()
-      local ch = Rendezvous.new('seed-sweep-' .. tostring(fanout) .. '-' .. tostring(seed))
+      local ch = Rendezvous.new():label('seed-sweep-' .. tostring(fanout) .. '-' .. tostring(seed))
       for i = 1, fanout do
         fibers.spawn(function()
           fibers.perform(ch:put_op(i))
-        end, 'seed-child-' .. tostring(i))
+        end):label('seed-child-' .. tostring(i))
       end
       for _ = 1, fanout do
         total = total + fibers.perform(ch:get_op())

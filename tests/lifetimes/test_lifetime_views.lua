@@ -19,7 +19,7 @@ do
     task = fibers.perform(scope:spawn_op(function(child)
       body_scope = child
       return 42
-    end, 'shared-view'))
+    end, { label = 'shared-view' }))
     value = fibers.perform(task:await_op())
   end)
   truthy(Task.is(task))
@@ -33,7 +33,7 @@ end
 do
   local task, body_exit, outcome
   fibers.run(function(scope)
-    task = fibers.perform(scope:spawn_op(function() return 'value' end, 'outcomes'))
+    task = fibers.perform(scope:spawn_op(function() return 'value' end, { label = 'outcomes' }))
     body_exit = fibers.perform(task:body_result_op())
     outcome = fibers.perform(task:outcome_op())
   end)
@@ -46,7 +46,7 @@ end
 -- either capability object.
 do
   local value = { name = 'domain-view' }
-  local node = Lifetime.new('domain-view', { value = value })
+  local node = Lifetime.new( { value = value }):label('domain-view')
   eq(Lifetime.of(value), node)
 end
 

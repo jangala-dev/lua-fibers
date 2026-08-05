@@ -137,8 +137,8 @@ local function compile_transition(location, resource, transition, options)
   })
 end
 
-function Machine.new(value, name)
-  local machine = Facility.identity(setmetatable({}, Machine), Kind, name)
+function Machine.new(value)
+  local machine = Facility.identity(setmetatable({}, Machine), Kind)
   Cell._init(machine, value, 'machine')
   machine._transition_specs = setmetatable({}, { __mode = 'kv' })
   return machine

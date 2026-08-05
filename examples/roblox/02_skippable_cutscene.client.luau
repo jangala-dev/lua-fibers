@@ -27,8 +27,8 @@ Roblox.run(function()
       name = 'skip-observatory-arrival',
     })
 
-    local camera = scene:spawn(playCameraTrack, 'camera-track')
-    local dialogue = scene:spawn(playDialogue, 'dialogue')
+    local camera = scene:spawn(playCameraTrack):label('camera-track')
+    local dialogue = scene:spawn(playDialogue):label('dialogue')
 
     local selected = fibers.perform(Op.named_choice({
       completed = Op.each({

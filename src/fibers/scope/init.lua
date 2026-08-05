@@ -14,6 +14,7 @@ local ScopeReport, ScopeResult = ScopeOutcome.Report, ScopeOutcome.Result
 local Closure = require('fibers.closure')
 local ScopeClosure = require('fibers.scope.closure')
 local Lifetime = require('fibers.lifetime')
+local Label = require('fibers.internal.label')
 
 local unpack_ = table.unpack or unpack
 local function pack(...)
@@ -85,12 +86,15 @@ local function item_kind(item)
   return life.has_body and 'task' or 'resource'
 end
 
-local function new_offers(name)
-  return Rendezvous.new(name)
+local function new_offers()
+  return Rendezvous.new()
 end
 
-function Scope.new(name, opts)
+function Scope.new(opts)
   opts = opts or {}
+  if type(opts) ~= 'table' then
+    error('Scope.new expects an options table or nil', 2)
+  end
   next_id = next_id + 1
   local id = 'scope-' .. tostring(next_id)
   if opts.parent ~= nil and not is_scope(opts.parent) then
@@ -101,18 +105,20 @@ function Scope.new(name, opts)
     error('Scope.new expects opts.lifetime to be a Lifetime', 2)
   end
   if not lifetime then
-    lifetime = Lifetime.new(name or id, {
+    lifetime = Lifetime.new({
       parent = opts.parent and opts.parent._lifetime or nil,
       closure = opts.closure,
       cancellation = opts.cancellation,
       interrupt = opts.interrupt,
       outcome = opts.done,
       standalone_boundary = true,
+      label = opts.label,
     })
   end
   if opts.runtime then lifetime:bind_runtime(opts.runtime) end
   lifetime.closure = Closure.combine(lifetime.closure, opts.closure)
-  lifetime.offers = lifetime.offers or opts.offers or new_offers((name or id) .. '-offers')
+  lifetime.offers = lifetime.offers or opts.offers or new_offers()
+  Label.child(lifetime.offers, lifetime, 'offers')
   return setmetatable({
     mask_depth = opts.mask_depth or 0,
     _lifetime = lifetime,
@@ -149,6 +155,19 @@ end
 function Scope:lifetime()
   return self._lifetime
 end
+
+function Scope:label(...)
+  if select('#', ...) == 0 then
+    return Label.get(self._lifetime)
+  end
+  Label.set(self._lifetime, select(1, ...), 2)
+  return self
+end
+
+function Scope:diagnostic_label()
+  return Label.describe(self._lifetime, self.name)
+end
+
 
 function Scope:_bind_runtime(runtime)
   runtime = runtime or self._lifetime.runtime or Runtime.current()
@@ -206,7 +225,7 @@ function Scope:_run_child_body(fn, task, opts)
   if not task or not task._lifetime then
     error('Scope:_run_child_body expects a Task Lifetime', 2)
   end
-  local child = Scope.new(opts.name or task.name or 'child', {
+  local child = Scope.new({
     parent = self,
     closure = opts.closure or self.closure,
     runtime = self.runtime or Runtime.current(),
@@ -221,11 +240,15 @@ function Scope:spawn_op(fn, opts)
   if type(fn) ~= 'function' then
     error('Scope:spawn_op expects a function', 2)
   end
-  opts = type(opts) == 'string' and { name = opts } or (opts or {})
+  opts = opts or {}
+  if type(opts) ~= 'table' then
+    error('Scope:spawn_op expects an options table or nil; label the returned Task', 2)
+  end
   local parent = self
   local task = Task._new(function(task_handle)
     return parent:_run_child_body(fn, task_handle, opts)
-  end, opts.name, self, {
+  end, self, {
+    label = opts.label,
     closure = Closure.running(opts.closure or self.closure),
   })
   return self
@@ -269,7 +292,7 @@ function Scope:offer_op(item, target, terms)
     task = item,
     item_kind = item_kind(item),
     terms = terms,
-    name = item and item.name or nil,
+    name = item and Label.describe(item, item.name) or nil,
   }
   local put_offer = target_sc.offers:put_op(offer)
   return self:move_op(item, target_sc):and_then(put_offer:map(function()
@@ -362,7 +385,7 @@ function Scope:grant_op(item, holder, rights, opts)
     error('Scope:grant_op requires both Scopes to belong to the same Runtime', 2)
   end
   local grant = Grant._new(self, holder, item, rights, {
-    name = opts.name,
+    label = opts.label,
     meta = opts.meta,
     terms = opts.terms,
   })
@@ -507,7 +530,7 @@ function Scope:inspect_op()
         local done = type(outcome_state) == 'table' and outcome_state.status == 'done'
         local result = done and outcome_state.result or nil
         return {
-          name = self.name,
+          name = Label.describe(self._lifetime, self.name),
           phase = state.closure_phase,
           close_reason = state.closure_reason,
           close_error = state.closure_error,

@@ -24,7 +24,7 @@ local rt = Runtime.new({ host = host })
 
 rt:spawn_raw(function()
   -- embedded root fibre
-end, 'root')
+end):label('root')
 ```
 
 The driver methods are:

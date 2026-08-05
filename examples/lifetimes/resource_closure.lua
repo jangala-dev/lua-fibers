@@ -12,7 +12,7 @@ local Lifetime = require('fibers.lifetime')
 local Cell = require('fibers.resource.cell')
 local Closure = require('fibers.closure')
 
-local closed = Cell.new(false, 'demo-handle-closed')
+local closed = Cell.new(false):label('demo-handle-closed')
 local handle = { name = 'demo-handle' }
 Lifetime.define(handle, {
   role = 'demo-handle',

@@ -85,20 +85,32 @@ local function require_open(pool)
   end))
 end
 
-function Pool.new(opts, name)
+function Pool.new(opts)
   opts = opts or {}
   next_id = next_id + 1
   local id = 'pool-' .. tostring(next_id)
-  local pname = opts.name or name or id
   return setmetatable({
-    name = pname,
     _fibers_id = id,
-    open = opts.open or StateMachine.new(true, pname .. ':open'),
-    idle = opts.idle or Index.new(pname .. ':idle'),
-    items = opts.items or Keyed.new(pname .. ':items'),
-    leases = opts.leases or Lease.new({ lease = {} }, pname .. ':leases'),
+    open = opts.open or StateMachine.new(true),
+    idle = opts.idle or Index.new(),
+    items = opts.items or Keyed.new(),
+    leases = opts.leases or Lease.new({ lease = {} }),
     retire = opts.retire,
   }, Pool)
+end
+
+function Pool:label(...)
+  if select('#', ...) == 0 then return self._label end
+  local value = select(1, ...)
+  if value ~= nil and (type(value) ~= 'string' or value == '') then
+    error('Pool:label expects a non-empty string or nil', 2)
+  end
+  self._label = value
+  self.open:label(value and value .. ':open' or nil)
+  self.idle:label(value and value .. ':idle' or nil)
+  self.items:label(value and value .. ':items' or nil)
+  self.leases:label(value and value .. ':leases' or nil)
+  return self
 end
 
 function Pool:add_op(key, item)

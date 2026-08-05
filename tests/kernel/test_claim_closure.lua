@@ -27,14 +27,14 @@ end
 -- The closure candidate should discover a direct same-location hand-off
 -- without requiring a fixed source-order guess.
 local rt = Runtime.new({ instrumentation = true })
-local index = Index.new('claim-closure-index')
+local index = Index.new():label('claim-closure-index')
 local rows
 rt:spawn_raw(function()
   rows = rt:perform(Op.together({
     index:pop_first_op(),
     index:append_op('value'),
   }))
-end, 'claim-closure-handoff')
+end):label('claim-closure-handoff')
 
 eq(rt:run().tag, 'found')
 eq(rows[1][1].value, 'value')
@@ -45,7 +45,7 @@ eq(rows[2][1], true)
 -- fails, the same machine must retain singleton alternatives and discover a
 -- different valid order.
 local backtrack_rt = Runtime.new({ instrumentation = true })
-local counter = Counter.new(1, 'claim-closure-counter')
+local counter = Counter.new(1):label('claim-closure-counter')
 local observe_positive = Facility.op(Facility.rule.inspect({
     location = counter._location,
     resource = counter,
@@ -63,7 +63,7 @@ backtrack_rt:spawn_raw(function()
     counter:take_op(1),
     observe_positive,
   }))
-end, 'claim-closure-backtrack')
+end):label('claim-closure-backtrack')
 
 eq(backtrack_rt:run().tag, 'found')
 eq(backtrack_rows[1][1], true)

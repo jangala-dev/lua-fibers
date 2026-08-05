@@ -25,8 +25,9 @@ local rt = Runtime.new({ host = {
   end,
 } })
 
-local clock = Clock.new('clock')
-local signal, signal_feed = External.signal(rt, 'reload-signal')
+local clock = Clock.new():label('clock')
+local signal, signal_feed = External.signal(rt)
+signal:label('reload-signal')
 local result
 
 rt:spawn_raw(function()
@@ -38,7 +39,7 @@ rt:spawn_raw(function()
       return 'timeout'
     end)
   ))
-end, 'waiter')
+end):label('waiter')
 
 local st = rt:run()
 print('initial status:', st.tag)

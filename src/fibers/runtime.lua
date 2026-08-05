@@ -5,6 +5,8 @@ local Values = require('fibers.internal.values')
 local Protected = require('fibers.internal.protected')
 local Context = require('fibers.internal.context')
 local Engine = require('fibers.internal.engine')
+local Execution = require('fibers.internal.execution')
+local Label = require('fibers.internal.label')
 
 local function require_optional(module_name, feature)
   local ok, module = pcall(require, module_name)
@@ -41,6 +43,7 @@ end
 
 local Runtime = {}
 local PERFORM_YIELD = {}
+local next_runtime_id = 0
 
 Runtime.__index = Runtime
 function Runtime.current()
@@ -90,6 +93,9 @@ function Runtime:_make_error(kind, err, fields)
     message = fields.message or tostring(err),
     cause = err,
   }
+  for key, value in pairs(fields) do
+    if out[key] == nil then out[key] = value end
+  end
   return setmetatable(out, RuntimeError)
 end
 
@@ -203,7 +209,9 @@ function Runtime.new(opts)
       instrumentation = Instrumentation.new(opts.instrumentation)
     end
   end
-  local runtime = setmetatable({
+  next_runtime_id = next_runtime_id + 1
+  local runtime = Label.attach(setmetatable({
+    _fibers_id = 'runtime-' .. tostring(next_runtime_id),
     host = opts.host or {},
     _phase = 'external',
     _failed = nil,
@@ -211,8 +219,9 @@ function Runtime.new(opts)
     _ready_head = 1,
     _ready_tail = 0,
     _live_fibers = 0,
+    _next_fiber_id = 0,
     instrumentation = instrumentation,
-  }, Runtime)
+  }, Runtime))
   runtime.engine = Engine.new(runtime, opts)
   return runtime
 end
@@ -272,18 +281,22 @@ function Runtime:now()
 end
 
 
-local function spawn_unchecked(self, fn, name, scope)
+local function spawn_unchecked(self, fn, scope, subject)
   if type(fn) ~= 'function' then
     error('spawn expects a function', 3)
   end
-  local fiber = {
-    name = name,
+  self._next_fiber_id = self._next_fiber_id + 1
+  local id = 'fiber-' .. tostring(self._next_fiber_id)
+  local fiber = Label.attach({
+    name = id,
+    _fibers_id = id,
+    _fibers_label_subject = subject,
     co = coroutine.create(fn),
     started = false,
     done = false,
     scope = scope,
     scope_stack = scope and { scope } or nil,
-  }
+  })
   self._ready_tail = self._ready_tail + 1
   self._ready_fibers[self._ready_tail] = fiber
   self._live_fibers = self._live_fibers + 1
@@ -296,20 +309,39 @@ local function spawn_unchecked(self, fn, name, scope)
   return fiber
 end
 
-function Runtime:spawn_raw(fn, name, scope)
+function Runtime:spawn_raw(fn)
   self:_check_not_failed(2)
   self:_require_spawn_allowed(2)
-  return spawn_unchecked(self, fn, name, scope)
+  return spawn_unchecked(self, fn)
 end
 
-function Runtime:_spawn_committed(fn, name, scope)
+function Runtime:_spawn_raw(fn, scope, subject)
   self:_check_not_failed(2)
-  return spawn_unchecked(self, fn, name, scope)
+  self:_require_spawn_allowed(2)
+  return spawn_unchecked(self, fn, scope, subject)
+end
+
+function Runtime:_spawn_committed(fn, scope, subject)
+  self:_check_not_failed(2)
+  return spawn_unchecked(self, fn, scope, subject)
 end
 
 function Runtime:_discharge_interrupt(token, reason)
   raise_interrupt(token, reason)
   return self.engine:interrupt(token, Runtime.cancelled(reason, token))
+end
+
+function Runtime:_enter_execution_contract(spec)
+  self:_require_perform_allowed(2)
+  return Execution.enter(self, spec)
+end
+
+function Runtime:_leave_execution_contract(token)
+  return Execution.leave(self, token)
+end
+
+function Runtime:_suspension_contract(fiber)
+  return Execution.suspension_contract(fiber or self._current_fiber)
 end
 
 function Runtime:_perform_current(op, interrupt, masked)
@@ -383,6 +415,9 @@ function Runtime:_resume_fiber(fiber, a, b, c)
     error('runtime received an unsupported coroutine yield', 0)
   end
   self.engine:admit(fiber, yielded_op, yielded_interrupt)
+  if Execution.suspension_forbidden(fiber) then
+    self.engine:resolve_without_suspension(fiber)
+  end
 end
 
 function Runtime:_start_one()

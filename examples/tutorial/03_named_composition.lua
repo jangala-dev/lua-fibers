@@ -22,7 +22,7 @@ local selected, position, drive_ready
 fibers.run(function(scope)
   scope:spawn(function()
     position_fixes:put('aisle 7, bay 3')
-  end, 'vision-localiser')
+  end):label('vision-localiser')
 
   selected, position = fibers.perform(Op.named_choice({
     vision = position_fixes:get_op(),

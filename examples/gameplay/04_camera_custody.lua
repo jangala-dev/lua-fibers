@@ -22,9 +22,9 @@ local director_end, gameplay_end = Stream.memory_pair({
   name = 'camera-control-link',
   capacity = 128,
 })
-local cinematic = Scope.new('opening-cinematic')
-local gameplay = Scope.new('player-gameplay')
-local camera_mode = Cell.new('cinematic', 'camera-mode')
+local cinematic = Scope.new():label('opening-cinematic')
+local gameplay = Scope.new():label('player-gameplay')
+local camera_mode = Cell.new('cinematic'):label('camera-mode')
 local acknowledgement, gameplay_has_custody
 
 local result = fibers.try_run(function()

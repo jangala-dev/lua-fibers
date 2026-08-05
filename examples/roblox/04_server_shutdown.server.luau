@@ -27,7 +27,7 @@ local result = Roblox.try_run(function(root)
     end,
   })
 
-  root:spawn(runWorldSimulation, 'world-simulation')
+  root:spawn(runWorldSimulation):label('world-simulation')
   fibers.perform(Op.never())
 end, {
   name = 'game-server',

@@ -28,7 +28,7 @@ end
 -- Re-driving an unchanged Retry should reuse the persistent frontier.
 do
   local rt = Runtime.new({ instrumentation = true })
-  local ch = Rendezvous.new('frontier-bench-retry')
+  local ch = Rendezvous.new():label('frontier-bench-retry')
   rt:spawn_raw(function() rt:perform(ch:get_op()) end)
   assert(blocked(rt:run()))
   local first_calls = counter(rt, 'search_calls')
@@ -49,7 +49,7 @@ do
   local rt = Runtime.new({ instrumentation = true })
   local cells, ids = {}, {}
   for i = 1, 64 do
-    cells[i] = Cell.new(0, 'frontier-bench-cell-' .. i)
+    cells[i] = Cell.new(0):label('frontier-bench-cell-' .. i)
     rt:spawn_raw(function() rt:perform(cells[i]:expect_op(1)) end)
   end
   assert(blocked(rt:run()))
@@ -72,7 +72,7 @@ local function dispatch(count, max_work)
   local rt = Runtime.new({ choice_seed = 7, instrumentation = true })
   local workers = {}
   for i = 1, count do
-    workers[i] = Rendezvous.new('frontier-bench-worker-' .. count .. '-' .. i)
+    workers[i] = Rendezvous.new():label('frontier-bench-worker-' .. count .. '-' .. i)
     local worker = workers[i]
     rt:spawn_raw(function() rt:perform(worker:get_op()) end)
   end

@@ -16,8 +16,8 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 
-local intruder_visible = Cell.new(false, 'intruder-visible')
-local cover_available = Cell.new(true, 'cover-available')
+local intruder_visible = Cell.new(false):label('intruder-visible')
+local cover_available = Cell.new(true):label('cover-available')
 local first_decision, second_decision
 
 local function choose_intention_op()

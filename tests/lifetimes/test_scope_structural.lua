@@ -87,10 +87,10 @@ do
   local h = { name = 'post-suspend-owned' }; Lifetime.inert(h)
   local owned_inside
   fibers.run(function()
-    local ch = FibersRendezvous.new('scope-stack-check')
+    local ch = FibersRendezvous.new():label('scope-stack-check')
     fibers.spawn(function()
       fibers.perform(ch:put_op('go'))
-    end, 'scope-stack-sender')
+    end):label('scope-stack-sender')
     fibers.scope(function(scope)
       fibers.perform(ch:get_op())
       fibers.perform(scope:admit_op(h))

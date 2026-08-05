@@ -204,15 +204,15 @@ function Module.listen_op(address, opts)
     kind = 'socket_listener',
     name = name,
     address = address,
-    lifecycle = ListenerLifecycle.new(name, address),
-    host_hold = HostHold.new(name .. ':host-hold'),
-    accepted_hold = HostHold.new(name .. ':accepted-host-hold'),
+    lifecycle = ListenerLifecycle.new(address):label(name),
+    host_hold = HostHold.new():label(name .. ':host-hold'),
+    accepted_hold = HostHold.new():label(name .. ':accepted-host-hold'),
     accepted_seq = 0,
     options = opts,
   }, Listener)
 
   Lifetime.define(listener, {
-    name = name,
+    label = name,
     role = 'socket_listener',
     closure = listener_closure(listener),
     children = { listener.host_hold, listener.accepted_hold },

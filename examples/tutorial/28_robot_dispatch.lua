@@ -31,20 +31,20 @@ local outcome
 
 fibers.run(function()
   local field_unit = {
-    online = Cell.new(unit_is_online, 'water-survey-unit:online'),
+    online = Cell.new(unit_is_online):label('water-survey-unit:online'),
     commands = channel.new(),
     reports = channel.new(),
   }
   local stop_requests = channel.new()
-  local safety_interlock = Cell.new('clear', 'deployment-safety')
-  local battery_reserve = Counter.new(1, 'battery-reserve')
+  local safety_interlock = Cell.new('clear'):label('deployment-safety')
+  local battery_reserve = Counter.new(1):label('battery-reserve')
 
   if unit_is_online then
     spawn(function()
       perform(field_unit.commands:get_op():and_then(Op.guard(function(mission)
         return field_unit.reports:put_op('completed ' .. mission)
       end)))
-    end, 'water-survey-unit')
+    end):label('water-survey-unit')
   end
 
   local dispatch = Op.each({

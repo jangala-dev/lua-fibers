@@ -40,11 +40,11 @@ end
 
 local function test_counter_each_allocates_existing_stock()
   local rt = new_runtime()
-  local c = Counter.new(2, 'ctr-each-take')
+  local c = Counter.new(2):label('ctr-each-take')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({ c:take_op(1), c:take_op(1) }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], true)
@@ -53,14 +53,14 @@ end
 
 local function test_counter_each_give_does_not_supply_sibling_take()
   local rt = new_runtime()
-  local c = Counter.new(0, 'ctr-each-give-take')
+  local c = Counter.new(0):label('ctr-each-give-take')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({
       c:give_op(1),
       c:take_op(1):or_else(Op.always('none')),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'none')
@@ -69,14 +69,14 @@ end
 
 local function test_counter_together_give_supplies_sibling_take()
   local rt = new_runtime()
-  local c = Counter.new(0, 'ctr-together-give-take')
+  local c = Counter.new(0):label('ctr-together-give-take')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
       c:give_op(1),
       c:take_op(1),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], true)
@@ -85,10 +85,10 @@ end
 
 local function test_counter_overdraw_fails_as_one_world()
   local rt = new_runtime({ quiet_deadlock = true })
-  local c = Counter.new(1, 'ctr-overdraw')
+  local c = Counter.new(1):label('ctr-overdraw')
   rt:spawn_raw(function()
     rt:perform(Op.together({ c:take_op(1), c:take_op(1) }))
-  end, 'root')
+  end):label('root')
   local status = rt:run()
   if status and status.tag == 'found' then
     fail('overdrawn counter together should not commit')
@@ -97,7 +97,7 @@ local function test_counter_overdraw_fails_as_one_world()
 end
 
 local function test_counter_add_is_positive_and_adjust_is_signed()
-  local c = Counter.new(2, 'ctr-api')
+  local c = Counter.new(2):label('ctr-api')
   local ok = pcall(function()
     c:add_op(-1)
   end)
@@ -108,21 +108,21 @@ local function test_counter_add_is_positive_and_adjust_is_signed()
   local rt = new_runtime()
   rt:spawn_raw(function()
     rt:perform(c:adjust_op(-1))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(c.value, 1)
 end
 
 local function test_fifo_together_put_supplies_get()
   local rt = new_runtime()
-  local q = FIFO.new(math.huge, 'q-together')
+  local q = FIFO.new(math.huge):label('q-together')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
       q:put_op('x'),
       q:get_op(),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'x')
@@ -130,21 +130,21 @@ local function test_fifo_together_put_supplies_get()
   local rt2 = new_runtime()
   rt2:spawn_raw(function()
     empty = rt2:perform(q:get_op():or_else(Op.always('empty')))
-  end, 'empty-check')
+  end):label('empty-check')
   assert_status(rt2:run(), 'found')
   assert_eq(empty, 'empty')
 end
 
 local function test_fifo_each_put_does_not_supply_get()
   local rt = new_runtime()
-  local q = FIFO.new(math.huge, 'q-each')
+  local q = FIFO.new(math.huge):label('q-each')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({
       q:put_op('x'),
       q:get_op():or_else(Op.always('empty')),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'empty')
@@ -152,20 +152,20 @@ local function test_fifo_each_put_does_not_supply_get()
   local rt2 = new_runtime()
   rt2:spawn_raw(function()
     stored = rt2:perform(q:get_op())
-  end, 'stored-get')
+  end):label('stored-get')
   assert_status(rt2:run(), 'found')
   assert_eq(stored, 'x')
 end
 
 local function test_fifo_each_gets_allocate_existing_stock()
   local rt = new_runtime()
-  local q = FIFO.new(math.huge, 'q-each-existing')
+  local q = FIFO.new(math.huge):label('q-each-existing')
   local rows
   rt:spawn_raw(function()
     rt:perform(q:put_op('a'))
     rt:perform(q:put_op('b'))
     rows = rt:perform(Op.each({ q:get_op(), q:get_op() }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'a')
   assert_eq(rows[2][1], 'b')
@@ -173,14 +173,14 @@ end
 
 local function test_bounded_fifo_capacity_and_release()
   local rt = new_runtime()
-  local q = FIFO.new(1, 'q-bounded')
+  local q = FIFO.new(1):label('q-bounded')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
       q:put_op('x'),
       q:get_op(),
     }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'x')
   local round_trip
@@ -188,39 +188,39 @@ local function test_bounded_fifo_capacity_and_release()
   rt2:spawn_raw(function()
     rt2:perform(q:put_op('y'))
     round_trip = rt2:perform(q:get_op())
-  end, 'capacity-reused')
+  end):label('capacity-reused')
   assert_status(rt2:run(), 'found')
   assert_eq(round_trip, 'y', 'put/get handoff should release capacity')
 end
 
 local function test_fifo_put_op_construction_does_not_mutate_state()
-  local q = FIFO.new(math.huge, 'q-construction')
+  local q = FIFO.new(math.huge):label('q-construction')
   local op1 = q:put_op('lost')
   local op2 = q:put_op('won')
   local rt = new_runtime({ choice_seed = 2 })
   local out
   rt:spawn_raw(function()
     out = rt:perform(Op.choice({ Op.always('skip'), op1 }))
-  end, 'root')
+  end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(out, 'skip')
 
   local rt2 = new_runtime()
   rt2:spawn_raw(function()
     rt2:perform(op2)
-  end, 'root')
+  end):label('root')
   assert_status(rt2:run(), 'found')
   local only
   local rt3 = new_runtime()
   rt3:spawn_raw(function()
     only = rt3:perform(q:get_op())
-  end, 'won-get')
+  end):label('won-get')
   assert_status(rt3:run(), 'found')
   assert_eq(only, 'won')
 end
 
 local function test_fifo_capacity_surface()
-  local unbounded = FIFO.new(math.huge, 'unbounded')
+  local unbounded = FIFO.new(math.huge):label('unbounded')
   assert_eq(unbounded.capacity, math.huge)
 
   if pcall(FIFO.new, -1) then

@@ -351,7 +351,7 @@ function Provider:_submit(setup, keep)
   u64(self.ffi, sqe, 32)[0] = id
   self.sq_array[index] = index
   self.sq_tail[0] = tail + 1
-  local req = { id = id, completion = Completion.new('file-uring-' .. id), keep = keep }
+  local req = { id = id, completion = Completion.new():label('file-uring-' .. id), keep = keep }
   self.pending[id] = req
   local submitted = enter_ring(self.ffi, self.C, self.enter_nr, self.fd, 1)
   if not submitted or submitted < 1 then

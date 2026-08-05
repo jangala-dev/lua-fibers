@@ -128,15 +128,17 @@ local function copy_list(xs)
   return out
 end
 
-local function annotated(inner, post, defeat)
-  local base, existing_post, defeats
+local function annotated(inner, post, defeat, label)
+  local base, existing_post, defeats, labels
   if inner.kind == 'annotated' then
     base = inner.p
     existing_post = inner.post
     defeats = copy_list(inner.defeats)
+    labels = copy_list(inner.labels)
   else
     base = inner
     defeats = {}
+    labels = {}
   end
 
   if post and existing_post then
@@ -151,10 +153,14 @@ local function annotated(inner, post, defeat)
   if defeat then
     table.insert(defeats, 1, defeat)
   end
+  if label then
+    table.insert(labels, 1, label)
+  end
   local node = op('annotated', {
     p = base,
     post = post,
     defeats = #defeats > 0 and defeats or nil,
+    labels = #labels > 0 and labels or nil,
   })
   return node
 end
@@ -309,6 +315,15 @@ function Op:wrap(fn)
     error('wrap expects a function', 2)
   end
   return annotated(self, fn, nil)
+end
+
+-- Attach semantically inert diagnostic metadata. Options are immutable values,
+-- so labelling returns a fresh option and leaves the original unchanged.
+function Op:label(value)
+  if type(value) ~= 'string' or value == '' then
+    error('Op:label expects a non-empty string', 2)
+  end
+  return annotated(self, nil, nil, value)
 end
 
 Op.is_op = is_op

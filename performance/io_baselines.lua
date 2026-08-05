@@ -95,7 +95,7 @@ add('memory-stream-throughput', 'bytes', function()
         writer:write(chunk)
       end
       writer:shutdown_write('benchmark complete')
-    end, 'io-baseline-writer')
+    end):label('io-baseline-writer')
 
     local parts = {}
     local total = 0
@@ -130,7 +130,7 @@ add('socket-accept', 'connections', function()
         accepted = accepted + 1
         connection:close('benchmark accepted')
       end
-    end, 'io-baseline-acceptor')
+    end):label('io-baseline-acceptor')
 
     for _ = 1, count do
       local dial = Socket.dial(address)

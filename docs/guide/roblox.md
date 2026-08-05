@@ -123,7 +123,7 @@ local Roblox = require(FibersPackage.roblox)
 Roblox.run(function(scope)
     scope:spawn(function()
         playCameraTrack("ObservatoryEntrance")
-    end, "camera-track")
+    end):label("camera-track")
 
     showDialogue("The stars have been waiting for you.")
     Sleep.sleep(1.5)
@@ -189,9 +189,9 @@ Put that work under one scene scope:
 
 ```luau
 local outcome = fibers.scope({ name = "opening-cinematic" }, function(scene)
-    local camera = scene:spawn(playOpeningCamera, "camera")
-    local dialogue = scene:spawn(playOpeningDialogue, "dialogue")
-    local blocking = scene:spawn(runNpcBlocking, "npc-blocking")
+    local camera = scene:spawn(playOpeningCamera):label("camera")
+    local dialogue = scene:spawn(playOpeningDialogue):label("dialogue")
+    local blocking = scene:spawn(runNpcBlocking):label("npc-blocking")
 
     local selected, reason = fibers.perform(Op.named_choice({
         completed = sceneFinished:get_op(),
@@ -259,15 +259,15 @@ local function servePlayer(player: Player)
     return fibers.scope({ name = `player:{player.UserId}` }, function(session)
         session:spawn(function()
             refreshProfileLockUntilSessionEnds(player)
-        end, "profile-lock")
+        end):label("profile-lock")
 
         session:spawn(function()
             followCharacterRespawns(player)
-        end, "character-lifetime")
+        end):label("character-lifetime")
 
         session:spawn(function()
             deliverQuestUpdates(player)
-        end, "quest-delivery")
+        end):label("quest-delivery")
 
         local reason = playerRemoving:get_for(player)
         sessionEnding:close(reason)
@@ -304,7 +304,7 @@ local function admitMatch_op(scope, party, arena)
         :and_then(scope:spawn_op(function()
             return runMatch(party, arena)
         end, {
-            name = `match:{party.id}`,
+            label = `match:{party.id}`,
         }))
 end
 ```
@@ -411,9 +411,9 @@ local eventResult = fibers.try_scope({
     name = "eclipse-festival",
     closure = Closure.supervisor({ child_failure = "collect" }),
 }, function(event)
-    event:spawn(runMoonrise, "headline-moonrise")
-    event:spawn(runFireworks, "optional-fireworks")
-    event:spawn(runCrowdAmbience, "crowd-ambience")
+    event:spawn(runMoonrise):label("headline-moonrise")
+    event:spawn(runFireworks):label("optional-fireworks")
+    event:spawn(runCrowdAmbience):label("crowd-ambience")
 
     return festivalFinished:get()
 end)
@@ -545,7 +545,7 @@ Roblox.run(function(root)
         end,
     })
 
-    root:spawn(runWorldSimulation, "world-simulation")
+    root:spawn(runWorldSimulation):label("world-simulation")
     fibers.perform(Op.never())
 end, {
     name = "game-server",

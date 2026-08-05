@@ -29,20 +29,20 @@ local function test_resource_observation_retries_independent_cell_updates()
   local opts, tags = H.tagging_host()
   local rt = Runtime.new(opts)
   rt._test_tags = tags
-  local cell = Cell.new(0, 'observation-cell')
+  local cell = Cell.new(0):label('observation-cell')
   local a, b
 
   rt:spawn_raw(function()
     a = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
-  end, 'observation-updater-a')
+  end):label('observation-updater-a')
 
   rt:spawn_raw(function()
     b = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
-  end, 'observation-updater-b')
+  end):label('observation-updater-b')
 
   H.assert_status(rt:run(), 'found', 'both contending cell updates eventually commit')
   H.assert_eq(cell.value, 2, 'stale resource attempt is retried against the fresh cell state')
@@ -54,14 +54,14 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
   local opts, tags = H.tagging_host()
   local rt = Runtime.new(opts)
   rt._test_tags = tags
-  local cell = Cell.new(0, 'observation-or-else-cell')
+  local cell = Cell.new(0):label('observation-or-else-cell')
   local first, second
 
   rt:spawn_raw(function()
     first = rt:perform(update_cell(cell, function(v)
       return v + 1
     end))
-  end, 'observation-or-else-first')
+  end):label('observation-or-else-first')
 
   rt:spawn_raw(function()
     second = rt:perform(update_cell(cell, function(v)
@@ -71,7 +71,7 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
         return 'primary:' .. tostring(v)
       end)
       :or_else(Op.emit(TC.tag('observation.bad-fallback')):and_then(Op.always('fallback'))))
-  end, 'observation-or-else-second')
+  end):label('observation-or-else-second')
 
   H.assert_status(rt:run(), 'found', 'stale primary is retried, not treated as absent')
   H.assert_eq(cell.value, 2)
@@ -82,7 +82,7 @@ end
 
 local function test_wait_until_and_match_contracts()
   local rt = Runtime.new()
-  local cell = Cell.new({ state = 'idle', value = 0 }, 'wait-and-match-cell')
+  local cell = Cell.new({ state = 'idle', value = 0 }):label('wait-and-match-cell')
   local observed, projected, label
 
   rt:spawn_raw(function()
@@ -94,11 +94,11 @@ local function test_wait_until_and_match_contracts()
         return true, value.value, value.state
       end
     end))
-  end, 'wait-and-match-observer')
+  end):label('wait-and-match-observer')
 
   rt:spawn_raw(function()
     rt:perform(cell:write_op({ state = 'ready', value = 7 }))
-  end, 'wait-and-match-writer')
+  end):label('wait-and-match-writer')
 
   H.assert_status(rt:run(), 'found')
   H.assert_eq(observed.state, 'ready')
@@ -111,23 +111,23 @@ end
 local function test_shared_version_leaf_keeps_occurrence_state_separate()
   local Rendezvous = require('fibers.resource.rendezvous')
   local rt = Runtime.new()
-  local cell = Cell.new(0, 'shared-version-leaf-cell')
-  local first_done = Rendezvous.new('shared-version-leaf-first-done')
+  local cell = Cell.new(0):label('shared-version-leaf-cell')
+  local first_done = Rendezvous.new():label('shared-version-leaf-first-done')
   local first_value, first_version, second_value, second_version
 
   rt:spawn_raw(function()
     first_value, first_version = rt:perform(cell:changed_op(0))
     rt:perform(first_done:put_op(true))
-  end, 'shared-version-leaf-first')
+  end):label('shared-version-leaf-first')
 
   rt:spawn_raw(function()
     second_value, second_version = rt:perform(cell:changed_op(1))
-  end, 'shared-version-leaf-second')
+  end):label('shared-version-leaf-second')
 
   rt:spawn_raw(function()
     rt:perform(cell:write_op(1))
     rt:perform(first_done:get_op())
-  end, 'shared-version-leaf-writer')
+  end):label('shared-version-leaf-writer')
 
   H.assert_status(rt:run(), 'found')
   H.assert_eq(first_value, 1)

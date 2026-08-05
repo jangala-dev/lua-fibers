@@ -15,8 +15,8 @@ local function finite_number(value, name)
   return value
 end
 
-function Clock.new(name)
-  local c = Facility.identity(setmetatable({}, Clock), Kind, name)
+function Clock.new()
+  local c = Facility.identity(setmetatable({}, Clock), Kind)
   c._location = Facility.location(c, 'observation', {
     algebra = 'machine',
     domain = 'external-clock',
@@ -27,7 +27,7 @@ function Clock.new(name)
 end
 
 function Clock.default()
-  if not default_clock then default_clock = Clock.new('default-clock') end
+  if not default_clock then default_clock = Clock.new():label('default-clock') end
   return default_clock
 end
 

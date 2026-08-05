@@ -52,7 +52,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-v6-server')
+    end):label('happy-eyeballs-v6-server')
 
     local connection, report = socket.connect(socket.name_endpoint('dual.test', actual.port))
     assert_truthy(connection, tostring(report))
@@ -118,7 +118,7 @@ do
       connection:close('IPv4-first fixture complete')
       listener4:close('IPv4-first fixture complete')
       listener6:close('IPv4-first fixture complete')
-    end, 'happy-eyeballs-v4-first-server')
+    end):label('happy-eyeballs-v4-first-server')
 
     local connection, report = socket.connect(socket.name_endpoint('ipv4-first.test', port), {
       order_destinations = function(addresses)
@@ -155,7 +155,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-v4-server')
+    end):label('happy-eyeballs-v4-server')
 
     local connection, report = socket.connect(socket.name_endpoint('fallback.test', actual.port), {
       attempt_delay = 1.0,
@@ -185,7 +185,7 @@ local function dynamic_resolution_case(aaaa_delay, resolution_delay, expected_fa
     local server = scope:spawn(function()
       local connection = assert(expected_listener:accept())
       connection:close('dynamic Happy Eyeballs fixture complete')
-    end, 'happy-eyeballs-expected-server')
+    end):label('happy-eyeballs-expected-server')
 
     local resolver = {
       resolve = function()
@@ -262,7 +262,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-stagger-server')
+    end):label('happy-eyeballs-stagger-server')
     local resolver = {
       resolve = function()
         error('combined resolution is not used by Happy Eyeballs')
@@ -314,7 +314,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-first-family-server')
+    end):label('happy-eyeballs-first-family-server')
 
     local connection, report = socket.connect(socket.name_endpoint('first-family.test', port), {
       first_family_count = 2,
@@ -350,7 +350,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-sorted-server')
+    end):label('happy-eyeballs-sorted-server')
 
     local connection, report = socket.connect(socket.name_endpoint('sorted.test', port), {
       order_destinations = function(addresses)
@@ -380,7 +380,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-inert-timeout-server')
+    end):label('happy-eyeballs-inert-timeout-server')
     local resolver = {
       resolve = function()
         error('combined resolution is not used by Happy Eyeballs')
@@ -431,7 +431,7 @@ do
     fibers.spawn(function()
       Sleep.sleep(0.250)
       handle:mark_writable()
-    end, 'happy-eyeballs-boundary-readiness')
+    end):label('happy-eyeballs-boundary-readiness')
     function handle:finish_connect()
       self._connect_pending = false
       self._connect_complete = true
@@ -452,7 +452,7 @@ do
       local connection = assert(listener6:accept())
       connection:close('boundary fixture complete')
       listener6:close('boundary fixture complete')
-    end, 'happy-eyeballs-boundary-server')
+    end):label('happy-eyeballs-boundary-server')
 
     local connection, report = socket.connect(socket.name_endpoint('boundary.test', port), {
       attempt_delay = 0.250,
@@ -538,7 +538,7 @@ do
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       close_server(listener, connection)
-    end, 'happy-eyeballs-stable-order-server')
+    end):label('happy-eyeballs-stable-order-server')
 
     local connection, report = socket.connect(socket.name_endpoint('stable-order.test', port), {
       order_destinations = function(addresses)

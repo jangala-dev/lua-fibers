@@ -27,10 +27,10 @@ fibers.run(function(root)
     -- Keep departure between refresh ticks: choice is unordered when both are ready.
     Sleep.sleep(3.5)
     player_left:put('Mira left the server')
-  end, 'simulate-player-leaving')
+  end):label('simulate-player-leaving')
 
   session_reason = fibers.scope({ name = 'player:Mira' }, function(scope)
-    local session_ending = Pulse.new(0, 'player:Mira:ending')
+    local session_ending = Pulse.new(0):label('player:Mira:ending')
 
     local function run_until_session_ends(name, on_tick)
       scope:spawn(function()
@@ -44,7 +44,7 @@ fibers.run(function(root)
           end
           on_tick()
         end
-      end, name)
+      end):label(name)
     end
 
     run_until_session_ends('profile-lock-refresh', function()

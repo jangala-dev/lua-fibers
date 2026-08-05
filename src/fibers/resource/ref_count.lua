@@ -2,31 +2,38 @@ local Counter = require('fibers.resource.counter')
 local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local RefCount = {}
 local Handle = {}
+local next_id = 0
 
 RefCount.__index = RefCount
 Handle.__index = Handle
 
-local function child_name(name, suffix)
-  return name and name .. ':' .. suffix or nil
-end
-
 local function handle(group, active)
   group._next_id = group._next_id + 1
-  return setmetatable({
+  local id = group._fibers_id .. ':handle-' .. tostring(group._next_id)
+  local value = Label.attach(setmetatable({
+    _fibers_id = id,
     _group = group,
-    _active = Cell.new(active, child_name(group._name, 'handle-' .. group._next_id)),
-  }, Handle)
+    _active = Cell.new(active),
+  }, Handle))
+  Label.child(value, group, 'handle-' .. tostring(group._next_id))
+  Label.child(value._active, value, 'active')
+  return value
 end
 
-function RefCount.new(name)
-  local group = setmetatable({
-    _name = name,
-    _count = Counter.new(1, child_name(name, 'count')),
+function RefCount.new()
+  next_id = next_id + 1
+  local id = 'ref-count-' .. tostring(next_id)
+  local group = Label.attach(setmetatable({
+    _fibers_id = id,
+    name = id,
+    _count = Counter.new(1),
     _next_id = 0,
-  }, RefCount)
+  }, RefCount))
+  Label.child(group._count, group, 'count')
   return group, handle(group, true)
 end
 

@@ -2,6 +2,7 @@
 
 local Op = require('fibers.op')
 local StateMachine = require('fibers.resource.machine')
+local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
 local Common = require('fibers.socket.lifecycle')
 
@@ -125,14 +126,15 @@ local Closed = StateMachine.isolated_update('socket.dial.closed', function(curre
   return Ready.write(next_state, true, next_state)
 end)
 
-function Dial.new(name, address)
-  return setmetatable({
-    name = name,
+function Dial.new(address)
+  local value = Label.attach(setmetatable({
     state = StateMachine.new({
       kind = 'starting',
       address = address,
-    }, name .. ':lifecycle'),
-  }, Dial)
+    }),
+  }, Dial))
+  Label.child(value.state, value, 'lifecycle')
+  return value
 end
 
 function Dial:state_value()

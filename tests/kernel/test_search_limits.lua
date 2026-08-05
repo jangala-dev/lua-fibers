@@ -37,9 +37,9 @@ local function atomic_dispatch(opts, n)
   opts.choice_seed = opts.choice_seed or 2
   local rt, workers = Runtime.new(opts), {}
   for worker = 1, n do
-    workers[worker] = Rendezvous.new('search-limit-worker-' .. worker)
+    workers[worker] = Rendezvous.new():label('search-limit-worker-' .. worker)
     local id = worker
-    rt:spawn_raw(function() rt:perform(workers[id]:get_op()) end, 'worker-' .. id)
+    rt:spawn_raw(function() rt:perform(workers[id]:get_op()) end):label('worker-' .. id)
   end
   rt:spawn_raw(function()
     local jobs = {}
@@ -49,7 +49,7 @@ local function atomic_dispatch(opts, n)
       jobs[job] = Op.choice(alternatives)
     end
     rt:perform(Op.each(jobs))
-  end, 'dispatcher')
+  end):label('dispatcher')
   return rt, rt:run()
 end
 
@@ -80,8 +80,8 @@ eq(st.reason, 'cycle_work_limit')
 do
   local focus_rt = Runtime.new({ cycle_focus_limit = 2 })
   for i = 1, 8 do
-    local blocked = Rendezvous.new('cycle-focus-' .. i)
-    focus_rt:spawn_raw(function() focus_rt:perform(blocked:get_op()) end, 'focus-' .. i)
+    local blocked = Rendezvous.new():label('cycle-focus-' .. i)
+    focus_rt:spawn_raw(function() focus_rt:perform(blocked:get_op()) end):label('focus-' .. i)
   end
   local focus_status = focus_rt:run()
   eq(focus_status.tag, 'pending')
@@ -91,7 +91,7 @@ end
 
 do
   local bounded, result = Runtime.new(), nil
-  bounded:spawn_raw(function() result = bounded:perform(Op.choice(Op.always('a'), Op.always('b'))) end, 'bounded')
+  bounded:spawn_raw(function() result = bounded:perform(Op.choice(Op.always('a'), Op.always('b'))) end):label('bounded')
   eq(bounded:step({ max_work = 1 }).kind, 'started')
   local budget = bounded:step({ max_work = 1 })
   eq(budget.tag, 'pending')

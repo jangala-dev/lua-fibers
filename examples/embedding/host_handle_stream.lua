@@ -41,7 +41,7 @@ local handle = Handle.new({
   end,
 })
 local runtime = Runtime.new({ host = host })
-local scope = Scope.new('handle-example-scope', { runtime = runtime })
+local scope = Scope.new({ runtime = runtime }):label('handle-example-scope')
 local got, flushed
 
 runtime:spawn_raw(function()
@@ -54,7 +54,7 @@ runtime:spawn_raw(function()
   got = runtime:perform(stream:reader():read_exactly_op(5))
   runtime:perform(stream:writer():write_op('pong'))
   flushed = runtime:perform(stream:writer():flush_op())
-end, 'example-user')
+end):label('example-user')
 
 assert(input_writer:write('hello') == 5)
 External.drive(runtime, { host = host, max_iterations = 80 })

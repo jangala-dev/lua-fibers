@@ -16,7 +16,7 @@ end
 
 local function perform(build)
   local rt, result = Runtime.new({ choice_seed = 1 }), nil
-  rt:spawn_raw(function() result = rt:perform(build()) end, 'regression-root')
+  rt:spawn_raw(function() result = rt:perform(build()) end):label('regression-root')
   eq(rt:run().tag, 'found')
   return result
 end
@@ -36,7 +36,7 @@ end
 
 -- The public evaluator preserves the same invariant across and_then.
 do
-  local counter = Counter.new(5, 'join-continuation')
+  local counter = Counter.new(5):label('join-continuation')
   local result = perform(function()
     return Op.each({ counter:take_op(2), counter:read_op() }):and_then(counter:read_op())
   end)
@@ -45,7 +45,7 @@ do
 end
 
 local function observed_with(mode, lane_order, sibling_kind)
-  local counter = Counter.new(5, table.concat({ 'active-order', mode, lane_order, sibling_kind }, '-'))
+  local counter = Counter.new(5):label(table.concat({ 'active-order', mode, lane_order, sibling_kind }, '-'))
   local take, observe = counter:take_op(1), counter:at_least_op(1)
   local inner = Op.each(lane_order == 'take-observe' and { take, observe } or { observe, take })
   local sibling

@@ -14,6 +14,7 @@ local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local ScopeResult = require('fibers.scope.outcome').Result
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local unpack_ = table.unpack or unpack
 
@@ -85,7 +86,7 @@ Task.__index = function(self, key)
   return nil
 end
 
-function Task._new(fn, name, parent_scope, opts)
+function Task._new(fn, parent_scope, opts)
   if type(fn) ~= 'function' then error('Task creation expects a function', 2) end
   opts = opts or {}
   local life = opts.lifetime
@@ -94,7 +95,7 @@ function Task._new(fn, name, parent_scope, opts)
   end
   if not life then
     life = Lifetime.task(fn, {
-      name = name,
+      label = opts.label,
       closure = Closure.running(opts.closure or (parent_scope and parent_scope.closure)),
     })
   else
@@ -118,6 +119,19 @@ end
 function Task:lifetime()
   return self._lifetime
 end
+
+function Task:label(...)
+  if select('#', ...) == 0 then
+    return Label.get(self._lifetime)
+  end
+  Label.set(self._lifetime, select(1, ...), 2)
+  return self
+end
+
+function Task:diagnostic_label()
+  return Label.describe(self._lifetime, self.name)
+end
+
 
 function Task:_spawn_body(fn)
   local task = self
@@ -146,7 +160,7 @@ end
 -- runnable fibre frame.
 function Task:_spawn_effect()
   local life = self._lifetime
-  return Effect.spawn(nil, life.name, life._fibers_id, nil, self)
+  return Effect.spawn(nil, life._fibers_id, nil, self)
 end
 
 function Task:_take_spawn_body(runtime)

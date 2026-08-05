@@ -10,6 +10,7 @@ local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
 local ScopeOutcome = require('fibers.scope.outcome')
+local Execution = require('fibers.internal.execution')
 
 local M = { perform = perform }
 
@@ -45,17 +46,18 @@ function M.try_run(fn, opts)
   local ScopeResult = ScopeOutcome.Result
   local host = default_host(opts)
   local rt = Runtime.new(runtime_options(opts, host))
-  local scope = Scope.new(
-    opts.name or 'root',
-    { runtime = rt, closure = opts.closure or Closure.nursery({ name = opts.name or 'root' }) }
-  )
+  local root_label = opts.label or 'root'
+  local scope = Scope.new({
+    runtime = rt,
+    closure = opts.closure or Closure.nursery({ name = root_label }),
+  }):label(root_label)
   local result
   local runtime_status
   local ok, err = Protected.pcall(function()
-    rt:spawn_raw(function()
+    rt:_spawn_raw(function()
       result = scope:try_run(fn)
       return result
-    end, opts.name or 'root', scope)
+    end, scope, scope)
     runtime_status = External.drive(rt, {
       host = host,
       run = opts.run,
@@ -131,7 +133,7 @@ function M.now()
   return rt:now()
 end
 
-function M.spawn_raw(fn, name)
+function M.spawn_raw(fn)
   local rt = Runtime.current()
   if not rt then
     error('fibers.spawn_raw must be called from a running fibre', 2)
@@ -141,7 +143,7 @@ function M.spawn_raw(fn, name)
     local closure = scope.closure
     local allowed = closure and closure.permit_unstructured == true
     if closure and type(closure.allow_unstructured) == 'function' then
-      allowed = closure:allow_unstructured(scope, fn, name) ~= false
+      allowed = closure:allow_unstructured(scope, fn) ~= false
     end
     if not allowed then
       error(
@@ -151,20 +153,44 @@ function M.spawn_raw(fn, name)
       )
     end
   end
-  return rt:spawn_raw(fn, name, scope)
+  return rt:_spawn_raw(fn, scope)
 end
 
-function M.spawn(fn, name)
+function M.spawn(fn, opts)
   local scope = current_scope()
   if not scope or type(scope.spawn) ~= 'function' then
     error('fibers.spawn requires a current scope; use Runtime:spawn_raw for unstructured fibres', 2)
   end
-  return scope:spawn(fn, name)
+  return scope:spawn(fn, opts)
 end
 
 local unpack_ = table.unpack or unpack
 local function pack(...)
   return { n = select('#', ...), ... }
+end
+
+-- Assert that fn completes without the current fibre relinquishing its
+-- scheduler turn. Immediate performs are permitted; an operation which would
+-- park the fibre or allow another fibre to run raises before that hand-off.
+function M.without_suspension(fn, ...)
+  if type(fn) ~= 'function' then
+    error('fibers.without_suspension expects a function', 2)
+  end
+  local rt = Runtime.current()
+  if not rt then
+    error('fibers.without_suspension must be called from a running fibre', 2)
+  end
+  local token = rt:_enter_execution_contract({
+    suspension = 'forbidden',
+    kind = 'without_suspension',
+    source = Execution.capture_source(2),
+  })
+  local result = pack(Protected.pcall(fn, ...))
+  rt:_leave_execution_contract(token)
+  if not result[1] then
+    error(result[2], 0)
+  end
+  return unpack_(result, 2, result.n)
 end
 
 function M.mask(fn, ...)
@@ -197,10 +223,12 @@ function M.try_scope(opts, fn)
     error('fibers.try_scope must be called from a running fibre', 2)
   end
   local parent = current_scope()
-  local scope = Scope.new(
-    opts.name or 'scope',
-    { runtime = rt, parent = parent, closure = opts.closure or (parent and parent.closure) }
-  )
+  local scope = Scope.new({
+    runtime = rt,
+    parent = parent,
+    closure = opts.closure or (parent and parent.closure),
+  })
+  if opts.label ~= nil then scope:label(opts.label) end
   return scope:try_run(fn)
 end
 

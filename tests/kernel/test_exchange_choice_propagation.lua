@@ -21,9 +21,9 @@ local function dispatch(wrapper, label, count)
   local rt = Runtime.new({ choice_seed = 2, instrumentation = true })
   local channels, received = {}, {}
   for worker = 1, count do
-    channels[worker] = Rendezvous.new(label .. '-worker-' .. worker)
+    channels[worker] = Rendezvous.new():label(label .. '-worker-' .. worker)
     local id = worker
-    rt:spawn_raw(function() received[id] = rt:perform(channels[id]:get_op()) end, label .. '-worker-' .. id)
+    rt:spawn_raw(function() received[id] = rt:perform(channels[id]:get_op()) end):label(label .. '-worker-' .. id)
   end
   rt:spawn_raw(function()
     local jobs = {}
@@ -35,7 +35,7 @@ local function dispatch(wrapper, label, count)
       jobs[job] = Op.choice(alternatives)
     end
     rt:perform(Op.each(jobs))
-  end, label .. '-dispatcher')
+  end):label(label .. '-dispatcher')
   eq(rt:run().tag, 'found')
   eq(rt:run().tag, 'idle')
   local seen = {}
@@ -55,11 +55,11 @@ dispatch(function(op) return op:wrap(function(value) return value end) end, 'wra
 -- still need its non-supplying alternative elsewhere in the same product.
 do
   local rt = Runtime.new({ choice_seed = 1 })
-  local a = Rendezvous.new('guard-supplier-completeness-a')
-  local b = Rendezvous.new('guard-supplier-completeness-b')
+  local a = Rendezvous.new():label('guard-supplier-completeness-a')
+  local b = Rendezvous.new():label('guard-supplier-completeness-b')
   local got_a, got_b
-  rt:spawn_raw(function() got_a = rt:perform(a:get_op()) end, 'get-a')
-  rt:spawn_raw(function() got_b = rt:perform(b:get_op()) end, 'get-b')
+  rt:spawn_raw(function() got_a = rt:perform(a:get_op()) end):label('get-a')
+  rt:spawn_raw(function() got_b = rt:perform(b:get_op()) end):label('get-b')
   rt:spawn_raw(function()
     rt:perform(Op.each({
       Op.choice(
@@ -71,7 +71,7 @@ do
         Op.never()
       ),
     }))
-  end, 'guard-supplier-completeness-dispatcher')
+  end):label('guard-supplier-completeness-dispatcher')
   eq(rt:run().tag, 'found')
   eq(rt:run().tag, 'idle')
   eq(got_a, 'a-from-second')

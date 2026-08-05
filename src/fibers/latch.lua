@@ -1,11 +1,13 @@
 local Cell = require('fibers.resource.cell')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Latch = {}
 Latch.__index = Latch
 
 local EMPTY = {}
 local NIL = {}
+local next_id = 0
 
 local function encode(value)
   return value == nil and NIL or value
@@ -15,8 +17,16 @@ local function decode(value)
   return value == NIL and nil or value
 end
 
-function Latch.new(name)
-  return setmetatable({ _state = Cell.new(EMPTY, name) }, Latch)
+function Latch.new()
+  next_id = next_id + 1
+  local id = 'latch-' .. tostring(next_id)
+  local latch = Label.attach(setmetatable({
+    _fibers_id = id,
+    name = id,
+    _state = Cell.new(EMPTY),
+  }, Latch))
+  Label.child(latch._state, latch, 'state')
+  return latch
 end
 
 function Latch:set_op(value)

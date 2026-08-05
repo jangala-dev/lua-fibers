@@ -12,6 +12,7 @@ local Op = require('fibers.op')
 local Errors = require('fibers.resource.flow.errors')
 local Rope = require('fibers.resource.flow.rope')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Ready, Wait = Machine.Ready, Machine.Wait
 local INF = math.huge
@@ -716,13 +717,24 @@ end
 
 -- Flow ----------------------------------------------------------------------
 
-function Flow.new(limit, name)
-  local flow = Facility.identity(setmetatable({ capacity = capacity(limit) }, Flow), Kind, name)
-  flow._state = Machine.new(new_state(), flow.name .. ':state')
-  flow._inlet = setmetatable({ name = flow.name .. ':inlet', flow = flow }, Inlet)
-  flow._outlet = setmetatable({ name = flow.name .. ':outlet', flow = flow }, Outlet)
+function Flow.new(limit)
+  local flow = Facility.identity(setmetatable({ capacity = capacity(limit) }, Flow), Kind)
+  flow._state = Machine.new(new_state())
+  Label.child(flow._state, flow, 'state')
+  flow._inlet = Label.attach(setmetatable({
+    name = flow.name .. ':inlet',
+    _fibers_id = flow._fibers_id .. ':inlet',
+    flow = flow,
+  }, Inlet))
+  flow._outlet = Label.attach(setmetatable({
+    name = flow.name .. ':outlet',
+    _fibers_id = flow._fibers_id .. ':outlet',
+    flow = flow,
+  }, Outlet))
   define_endpoint(flow._inlet, 'flow_inlet', 'write')
   define_endpoint(flow._outlet, 'flow_outlet', 'read')
+  Label.child(Lifetime.of(flow._inlet), flow, 'inlet')
+  Label.child(Lifetime.of(flow._outlet), flow, 'outlet')
   return flow
 end
 

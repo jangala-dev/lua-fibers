@@ -38,7 +38,7 @@ end
 
 -- peek observes without consuming, even when the selected world commits.
 do
-  local flow = Flow.new(16, 'peek-flow')
+  local flow = Flow.new(16):label('peek-flow')
   local p, later
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -53,7 +53,7 @@ end
 -- read_until excludes the delimiter; read_including includes it. Both consume
 -- through the delimiter only when the selected world commits.
 do
-  local flow = Flow.new(32, 'until-flow')
+  local flow = Flow.new(32):label('until-flow')
   local before, including, tail
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abc--def--tail'))
@@ -69,7 +69,7 @@ end
 
 -- read_until default terminal partial policy reports eof and the partial.
 do
-  local flow = Flow.new(16, 'until-partial-flow')
+  local flow = Flow.new(16):label('until-partial-flow')
   local got, err, partial, after_err
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('unterminated'))
@@ -87,7 +87,7 @@ end
 
 -- read_line is a small consumer of read_until with partial return semantics.
 do
-  local flow = Flow.new(16, 'line-derived-flow')
+  local flow = Flow.new(16):label('line-derived-flow')
   local line, eof, eof_err
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('tail'))
@@ -103,7 +103,7 @@ end
 
 -- drop is derived from exact read and does not return bytes.
 do
-  local flow = Flow.new(16, 'drop-flow')
+  local flow = Flow.new(16):label('drop-flow')
   local dropped, tail
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcdef'))
@@ -118,8 +118,8 @@ end
 -- splice_to is algebraically derived: losing splice branches leave both flows
 -- unchanged, while selected splice moves bytes as one committed world.
 do
-  local src = Flow.new(16, 'splice-src')
-  local dst = Flow.new(16, 'splice-dst')
+  local src = Flow.new(16):label('splice-src')
+  local dst = Flow.new(16):label('splice-dst')
   local choice, moved, src_left, dst_got
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abcdef'))
@@ -144,8 +144,8 @@ end
 -- splice_to must not consume source bytes when the destination cannot accept
 -- the bytes.  The derived law is peek -> write -> drop, not read -> write.
 do
-  local src = Flow.new(16, 'splice-too-large-src')
-  local dst = Flow.new(2, 'splice-too-large-dst')
+  local src = Flow.new(16):label('splice-too-large-src')
+  local dst = Flow.new(2):label('splice-too-large-dst')
   local moved, err, src_left, dst_queued
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
@@ -163,8 +163,8 @@ end
 -- Destination closure is another write-side failure; it must also leave the
 -- source untouched.
 do
-  local src = Flow.new(16, 'splice-closed-src')
-  local dst = Flow.new(16, 'splice-closed-dst')
+  local src = Flow.new(16):label('splice-closed-src')
+  local dst = Flow.new(16):label('splice-closed-dst')
   local moved, err, src_left, dst_queued
   local st = fibers.try_run(function()
     fibers.perform(src:inlet():write_op('abc'))
@@ -184,23 +184,23 @@ end
 -- may still become the terminator.  A non-prefix byte past the limit is too
 -- large and does not consume.
 do
-  local flow = Flow.new(16, 'until-multibyte-prefix-flow')
+  local flow = Flow.new(16):label('until-multibyte-prefix-flow')
   local got, err
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
     rt:perform(flow:inlet():write_op('abc\r'))
-  end, 'seed')
+  end):label('seed')
   assert_status(rt:run(), 'found')
   rt:spawn_raw(function()
     got, err = rt:perform(flow:outlet():read_until_op('\r\n', { max = 3 }))
-  end, 'reader')
+  end):label('reader')
   local st = rt:run()
   assert_status(st, 'quiescent', 'terminator prefix at limit should have no external wake interest')
   assert_nil(got)
   assert_nil(err)
   rt:spawn_raw(function()
     rt:perform(flow:inlet():write_op('\n'))
-  end, 'finish')
+  end):label('finish')
   st = rt:run()
   if got == nil then
     st = rt:run()
@@ -210,7 +210,7 @@ do
 end
 
 do
-  local flow = Flow.new(16, 'until-multibyte-too-large-flow')
+  local flow = Flow.new(16):label('until-multibyte-too-large-flow')
   local got, err, left
   local st = fibers.try_run(function()
     fibers.perform(flow:inlet():write_op('abcd'))
@@ -225,7 +225,7 @@ end
 
 -- Direct writes and flushes use the canonical Flow vocabulary.
 do
-  local flow = Flow.new(16, 'canonical-flow')
+  local flow = Flow.new(16):label('canonical-flow')
   local n, drained, got
   local st = fibers.try_run(function()
     n = fibers.perform(flow:inlet():write_op('xy'))
@@ -242,7 +242,7 @@ end
 -- effect.  Blocked or losing mutations do not produce a notification, and Flow
 -- no longer patches Cell's private location apply function.
 do
-  local flow = Flow.new(8, 'flow-change-effect')
+  local flow = Flow.new(8):label('flow-change-effect')
   assert_nil(flow._state_observers)
   assert_nil(flow._subscribe_state)
   local notified = 0
@@ -255,13 +255,13 @@ do
   }
   rt:spawn_raw(function()
     rt:perform(flow:inlet():write_op('x'))
-  end, 'flow-change')
+  end):label('flow-change')
   assert_status(rt:run(), 'found')
   assert_eq(notified, 1, 'committed Flow mutation should discharge one notification')
 end
 
 do
-  local flow = Flow.new(0, 'losing-flow-change-effect')
+  local flow = Flow.new(0):label('losing-flow-change-effect')
   local notified = 0
   local rt = FibersRuntime.new()
   rt.host_reactor = {
@@ -277,7 +277,7 @@ do
       end),
       Op.always('fallback')
     ))
-  end, 'losing-flow-change')
+  end):label('losing-flow-change')
   assert_status(rt:run(), 'found')
   assert_eq(winner, 'fallback')
   assert_eq(notified, 0, 'unselected Flow mutation must not notify the reactor')
@@ -316,7 +316,7 @@ do
     error('delimiter search must not flatten the Rope', 0)
   end
   local ok, err = pcall(function()
-    local flow = Flow.new(32, 'incremental-delimiter-flow')
+    local flow = Flow.new(32):label('incremental-delimiter-flow')
     local got
     local st = fibers.try_run(function()
       fibers.perform(flow:inlet():write_op('header\r'))
