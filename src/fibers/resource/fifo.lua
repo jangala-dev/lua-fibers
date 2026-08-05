@@ -8,61 +8,84 @@ local Direct = require('fibers.internal.direct')
 local FIFO = {}
 FIFO.__index = FIFO
 
-local function truth()
+local function return_true()
   return true
 end
 
-local function value(entry)
+local function entry_value(entry)
   return entry.value
 end
 
-local function create(name)
-  return setmetatable({
-    _items = Index.new(name and name .. ':items'),
-  }, FIFO)
+local function child_name(name, suffix)
+  return name and (name .. ':' .. suffix)
 end
 
-local function finish(fifo)
-  return fifo
-end
-
-function FIFO.new(capacity, name)
+local function validate_capacity(capacity)
   if type(capacity) ~= 'number'
     or capacity < 0
     or capacity ~= capacity
     or (capacity ~= math.huge and capacity % 1 ~= 0)
   then
-    error('fifo capacity must be a non-negative integer or math.huge', 2)
+    error('fifo capacity must be a non-negative integer or math.huge', 3)
   end
-
-  local fifo = create(name)
-  fifo.capacity = capacity
-
-  if capacity ~= math.huge then
-    fifo._slots = Counter.bounded(capacity, name and name .. ':slots')
-  end
-
-  return finish(fifo)
 end
 
-function FIFO:put_op(item)
-  local put = self._items:append_op(item)
-  if not self._slots then return put end
-  return Op.together({ self._slots:take_op(), put }):map(truth)
-end
+function FIFO.new(capacity, name)
+  validate_capacity(capacity)
 
-function FIFO:get_op()
-  local get = self._items:pop_first_op()
-  if not self._slots then return get:map(value) end
+  local items = Index.new(child_name(name, 'items'))
+  local fifo = setmetatable({
+    capacity = capacity,
+    _items = items,
+  }, FIFO)
 
-  return get:and_then(Op.guard(function(entry)
-    return self._slots:give_op():map(function()
+  local take_item = items:pop_first_op()
+
+  if capacity == math.huge then
+    fifo._get_op = take_item:map(entry_value)
+    return fifo
+  end
+
+  local slots = Counter.bounded(
+    capacity,
+    child_name(name, 'slots')
+  )
+
+  local take_slot = slots:take_op()
+  local give_slot = slots:give_op()
+
+  fifo._slots = slots
+  fifo._take_slot_op = take_slot
+
+  -- The outer operation is immutable and can be reused. The guard residual
+  -- remains request-local because it depends on the provisional entry.
+  fifo._get_op = take_item:and_then(Op.guard(function(entry)
+    return give_slot:map(function()
       return entry.value
     end)
   end))
+
+  return fifo
 end
 
+function FIFO:put_op(item)
+  local append = self._items:append_op(item)
 
+  if self._take_slot_op == nil then
+    return append
+  end
+
+  -- Passing fixed lanes directly avoids constructing and validating an
+  -- intermediate array.
+  return Op.together(
+    self._take_slot_op,
+    append
+  ):map(return_true)
+end
+
+function FIFO:get_op()
+  return self._get_op
+end
 
 Direct.install(FIFO, { 'put', 'get' })
 
